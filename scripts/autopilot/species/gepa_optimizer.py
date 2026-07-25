@@ -189,9 +189,15 @@ class OrchestratorGEPAAdapter:
                 dataset[comp] = items
         return dataset
 
-    def propose_new_texts(self, *args, **kwargs):
-        """Not used — GEPA handles proposal internally via reflective mutation."""
-        raise NotImplementedError("Use GEPA's built-in proposer")
+    # GEPA's reflective mutation dispatches on PRESENCE, not None-ness:
+    # `if self.adapter.propose_new_texts is not None` (reflective_mutation.py:66).
+    # A bound method is never None, so defining this as a method that raises made
+    # every reflection step fail before any LM call — GEPA's built-in proposer was
+    # never reached. Declare it None (matching GEPAAdapter's protocol default at
+    # gepa/core/adapter.py:180) so the built-in proposer runs. Do NOT delete the
+    # attribute: this class does not inherit the protocol, so a missing attribute
+    # would turn the same check into an AttributeError.
+    propose_new_texts = None
 
 
 class GEPAPromptOptimizer:
@@ -205,13 +211,21 @@ class GEPAPromptOptimizer:
         self,
         eval_tower,
         prompt_forge,
-        reflection_lm: str = "openai/local",
-        reflection_lm_url: str = "http://localhost:8082/v1",
+        reflection_lm: str | None = None,
+        reflection_lm_url: str | None = None,
     ):
+        import os
+
         self.tower = eval_tower
         self.forge = prompt_forge
-        self.reflection_lm = reflection_lm
-        self.reflection_lm_url = reflection_lm_url
+        # Env-overridable so the reflection endpoint can follow the live stack without
+        # touching call sites (prompt_forge constructs this with defaults).
+        self.reflection_lm = reflection_lm or os.environ.get(
+            "ORCHESTRATOR_GEPA_REFLECTION_LM", "openai/local"
+        )
+        self.reflection_lm_url = reflection_lm_url or os.environ.get(
+            "ORCHESTRATOR_GEPA_REFLECTION_URL", "http://localhost:8082/v1"
+        )
 
     def run(
         self,
@@ -260,15 +274,32 @@ class GEPAPromptOptimizer:
 
         start = time.time()
         try:
-            # Configure reflection LM via litellm (GEPA uses litellm internally)
+            # Configure reflection LM via litellm (GEPA uses litellm internally).
+            # Pass a CALLABLE, not the model-id string: GEPA's str path builds its
+            # own wrapper that calls litellm WITHOUT api_base (gepa/api.py:242-244),
+            # so a bare model id always resolves to api.openai.com and can never
+            # reach our local server. The callable is where reflection_lm_url
+            # actually becomes load-bearing.
             import os
+            import litellm
             os.environ.setdefault("OPENAI_API_KEY", "not-needed")
+
+            reflection_model = self.reflection_lm
+            reflection_url = self.reflection_lm_url
+
+            def _reflection_lm(prompt: str) -> str:
+                completion = litellm.completion(
+                    model=reflection_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    api_base=reflection_url,
+                )
+                return completion.choices[0].message.content
 
             result = gepa.optimize(
                 seed_candidate=seed_candidate,
                 trainset=sentinels,
                 adapter=adapter,
-                reflection_lm=self.reflection_lm,
+                reflection_lm=_reflection_lm,
                 max_metric_calls=max_evals,
                 stop_callbacks=MaxMetricCallsStopper(max_evals),
                 candidate_selection_strategy="pareto",
@@ -300,6 +331,19 @@ class GEPAPromptOptimizer:
 
         improvement = best_score - baseline_score
         n_evals = max_evals  # GEPA doesn't expose actual eval count directly
+
+        # A run that spends the full eval budget and returns the seed unchanged is a
+        # no-op, not a null result. That is what the NotImplementedError proposer bug
+        # produced for months: 633s and 50 evals per invocation, logged at INFO as a
+        # 0.718 -> 0.000 "completion". Surface it loudly so it cannot hide again.
+        if best_content == original_content:
+            log.error(
+                "GEPA produced NO mutation for %s — seed returned unchanged after %.0fs (%d evals). "
+                "The reflective proposer emitted nothing; check the reflection LM at %s and the "
+                "preceding log for 'Reflective mutation did not propose a new candidate'.",
+                target_file, elapsed, n_evals, self.reflection_lm_url,
+            )
+            return None
 
         log.info(
             "GEPA optimization complete: %.3f → %.3f (%+.3f) in %.0fs (%d evals)",

@@ -38,16 +38,6 @@ blacklist:
   notes: Manual recovery entry — remove after restarting the autopilot (loads 2cb4096
     and clears the cached baseline).
 - pattern:
-    type: gepa_optimize
-    file: frontdoor.md
-  reason: 'MANUAL FREEZE (companion to the entry above): freeze all frontdoor.md mutation
-    while extractor fix 2cb4096 is pending a restart. frontdoor.md has documented
-    catastrophic blast radius (#185 / #190 / #191 / #536).'
-  added: '2026-06-05T03:05:00Z'
-  severity: corruption
-  source_trial: -1
-  notes: Manual recovery entry — remove after restarting the autopilot.
-- pattern:
     type: structural_experiment
     flags:
       generalized_interrupts: true
