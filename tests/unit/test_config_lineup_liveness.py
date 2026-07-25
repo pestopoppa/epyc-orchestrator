@@ -12,6 +12,8 @@ All liveness is injected/mocked: these tests never open a real socket.
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 import types
 
@@ -39,6 +41,18 @@ def _all_dead(_port: int) -> bool:
 
 def _server(port: int, *roles: str) -> dict:
     return {"port": port, "roles": list(roles)}
+
+
+def _runtime_facts(mode: str, servers: list[dict]) -> dict:
+    return {
+        "schema": "epyc.orchestrator.runtime_facts",
+        "schema_version": 1,
+        "runtime_stack": {
+            "stack_numa_mode": mode,
+            "selected_ports": [server["port"] for server in servers],
+            "selected_servers": servers,
+        },
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -117,6 +131,7 @@ def test_env_full_with_full_ports_live_resolves_full(monkeypatch) -> None:
     """env=full + full ports live → the full manifest lineup is returned."""
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
     monkeypatch.setattr(models, "_port_listening", _fulls_live)
+    _patch_runtime_facts(monkeypatch, None)
 
     result = models._runtime_or_env_selected_servers()
 
@@ -126,9 +141,12 @@ def test_env_full_with_full_ports_live_resolves_full(monkeypatch) -> None:
     assert 8070 in ports
 
 
-def test_env_unset_manifest_dead_ports_rejected(monkeypatch, caplog) -> None:
+def test_env_unset_manifest_dead_ports_rejected(tmp_path, monkeypatch, caplog) -> None:
     """env unset + runtime-facts naming dead host ports → rejected → None."""
     monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    # Keep the generic bootstrap reader from consuming this host's facts; this
+    # test exercises the legacy runtime-manifest producer below.
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setattr(models, "_port_listening", _quarters_live)
     _patch_runtime_facts(
         monkeypatch,
@@ -146,9 +164,10 @@ def test_env_unset_manifest_dead_ports_rejected(monkeypatch, caplog) -> None:
     assert any("runtime-facts lineup rejected" in rec.message for rec in caplog.records)
 
 
-def test_env_unset_manifest_live_ports_returned(monkeypatch) -> None:
+def test_env_unset_manifest_live_ports_returned(tmp_path, monkeypatch) -> None:
     """env unset + runtime-facts naming live quarter host ports → returned."""
     monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setattr(models, "_port_listening", _quarters_live)
     live_lineup = [
         _server(8082, "worker_general"),
@@ -177,3 +196,90 @@ def test_env_branch_importerror_is_logged_not_swallowed(monkeypatch, caplog) -> 
 
     assert result is None
     assert any("env-filter branch failed" in rec.message for rec in caplog.records)
+
+
+def test_bootstrap_runtime_facts_accepts_quarter_without_scripts_server_imports(tmp_path, monkeypatch) -> None:
+    servers = [
+        _server(8080, "frontdoor"),
+        _server(8082, "worker_general"),
+        _server(8185, "ingest_long_context"),
+    ]
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(models, "_bootstrap_port_listening", _quarters_live)
+    (tmp_path / "orchestrator_runtime_facts.json").write_text(
+        json.dumps(_runtime_facts("quarter", servers)),
+        encoding="utf-8",
+    )
+
+    assert models._runtime_or_env_selected_servers() == servers
+
+
+@pytest.mark.parametrize(
+    ("mode", "servers"),
+    [
+        ("full", [_server(8070, "frontdoor"), _server(8072, "worker_general"), _server(8085, "ingest_long_context")]),
+        ("both", [_server(8070, "frontdoor"), _server(8080, "frontdoor"), _server(8072, "worker_general"), _server(8082, "worker_general"), _server(8085, "ingest_long_context"), _server(8185, "ingest_long_context")]),
+    ],
+)
+def test_bootstrap_runtime_facts_preserves_realized_full_and_both_modes(tmp_path, monkeypatch, mode, servers) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", mode)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(models, "_bootstrap_port_listening", _fulls_live)
+    # A partially initialized scripts.server module must not affect the
+    # stdlib-only bootstrap reader.
+    monkeypatch.setitem(sys.modules, "scripts.server.runtime_facts_manifest", types.ModuleType("partial"))
+    (tmp_path / "orchestrator_runtime_facts.json").write_text(
+        json.dumps(_runtime_facts(mode, servers)), encoding="utf-8"
+    )
+
+    assert models._bootstrap_runtime_selected_servers() == servers
+
+
+def test_bootstrap_runtime_facts_rejects_stale_or_dead_facts(tmp_path, monkeypatch) -> None:
+    servers = [
+        _server(8080, "frontdoor"),
+        _server(8082, "worker_general"),
+        _server(8185, "ingest_long_context"),
+    ]
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    facts = tmp_path / "orchestrator_runtime_facts.json"
+    facts.write_text(json.dumps(_runtime_facts("quarter", servers)), encoding="utf-8")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    state = log_dir / "orchestrator_state.json"
+    state.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("ORCHESTRATOR_PATHS_LOG_DIR", str(log_dir))
+    os.utime(facts, (100, 100))
+    os.utime(state, (101, 101))
+    assert models._bootstrap_runtime_selected_servers() is None
+
+    # Make facts fresh, then prove the rejection is caused by the bare TCP
+    # liveness check rather than the stale-artifact guard above.
+    os.utime(facts, (102, 102))
+    probed: list[int] = []
+
+    def dead_probe(port: int) -> bool:
+        probed.append(port)
+        return _all_dead(port)
+
+    monkeypatch.setattr(models, "_bootstrap_port_listening", dead_probe)
+    assert models._bootstrap_runtime_selected_servers() is None
+    assert len(probed) == 1
+    assert probed[0] in {8080, 8082, 8185}
+
+
+def test_runtime_selected_aliases_do_not_fall_back_to_dead_static_ports() -> None:
+    urls = models._selected_server_url_values(
+        [
+            _server(8080, "frontdoor"),
+            _server(8082, "worker_general"),
+            _server(8182, "worker_explore"),
+        ]
+    )
+
+    assert urls["coder_escalation"] == "http://localhost:8080"
+    assert urls["worker_summarize"] == "http://localhost:8080"
+    assert urls["toolrunner"] == "http://localhost:8082,http://localhost:8182"
+    assert urls["worker_math"] == "http://localhost:8082,http://localhost:8182"

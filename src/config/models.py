@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import socket
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -313,6 +315,21 @@ _CANONICAL_SERVER_URL_ALIASES: dict[str, str] = {
     "coder": "coder_escalation",
     "worker": "worker_general",
 }
+# The runtime-facts writer records primary live roles.  Alias rows can retain a
+# stale PID after an API-only restart, so complete these stable same-process
+# aliases before static priors get a chance to reintroduce dead full ports.
+_RUNTIME_SELECTED_ROLE_ALIASES: dict[str, str] = {
+    "coder_escalation": "frontdoor",
+    "worker_summarize": "frontdoor",
+    "worker_explore": "worker_general",
+    "worker_math": "worker_general",
+    "toolrunner": "worker_general",
+}
+_BOOTSTRAP_QUARTERABLE_HOST_ROLES = frozenset(
+    {"frontdoor", "worker_general", "ingest_long_context"}
+)
+_BOOTSTRAP_RUNTIME_FACTS_SCHEMA_VERSION = 1
+_BOOTSTRAP_PORT_PROBE_TIMEOUT_S = 0.15
 
 
 def _localhost_url_from_port(port: Any) -> str | None:
@@ -433,6 +450,97 @@ def _selected_servers_are_live(
     return any(is_live(port) for port in sorted(all_ports))
 
 
+def _bootstrap_port_listening(port: int) -> bool:
+    """Bare localhost probe kept independent of the scripts.server import graph."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), _BOOTSTRAP_PORT_PROBE_TIMEOUT_S):
+            return True
+    except OSError:
+        return False
+
+
+def _bootstrap_runtime_selected_servers() -> list[dict[str, Any]] | None:
+    """Read fresh realized facts without importing ``scripts.server``.
+
+    During API module bootstrap, importing the canonical runtime-facts reader
+    can recurse through ``stack_paths -> src.config``.  This small stdlib-only
+    reader accepts full, quarter, and both manifests, validates their declared
+    mode against launch intent, and probes every quarterable host-role group.
+    """
+    declared_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "").strip().lower()
+    if declared_mode and declared_mode not in {"full", "quarter", "both"}:
+        return None
+    llm_root = os.environ.get("ORCHESTRATOR_PATHS_LLM_ROOT", "/mnt/raid0/llm")
+    tmp_dir = Path(os.environ.get("TMPDIR", f"{llm_root}/tmp"))
+    path = tmp_dir / "orchestrator_runtime_facts.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        runtime_stack = payload.get("runtime_stack")
+        if (
+            payload.get("schema") != "epyc.orchestrator.runtime_facts"
+            or payload.get("schema_version") != _BOOTSTRAP_RUNTIME_FACTS_SCHEMA_VERSION
+            or not isinstance(runtime_stack, dict)
+        ):
+            return None
+        manifest_mode = runtime_stack.get("stack_numa_mode")
+        if manifest_mode not in {"full", "quarter", "both"}:
+            return None
+        if declared_mode and manifest_mode != declared_mode:
+            return None
+        selected_ports = runtime_stack.get("selected_ports")
+        selected_servers = runtime_stack.get("selected_servers")
+        if not isinstance(selected_ports, list) or not isinstance(selected_servers, list):
+            return None
+        if any(isinstance(port, bool) or not isinstance(port, int) or port <= 0 for port in selected_ports):
+            return None
+        declared_ports = set(selected_ports)
+        if len(declared_ports) != len(selected_ports):
+            return None
+        normalized: list[dict[str, Any]] = []
+        observed_ports: set[int] = set()
+        host_ports: dict[str, set[int]] = {
+            role: set() for role in _BOOTSTRAP_QUARTERABLE_HOST_ROLES
+        }
+        for server in selected_servers:
+            if not isinstance(server, dict):
+                return None
+            port = server.get("port")
+            roles = server.get("roles")
+            if (
+                isinstance(port, bool)
+                or not isinstance(port, int)
+                or port <= 0
+                or port in observed_ports
+                or not isinstance(roles, list)
+                or not roles
+                or any(not isinstance(role, str) or not role for role in roles)
+            ):
+                return None
+            observed_ports.add(port)
+            for role in roles:
+                canonical_role = _RUNTIME_SELECTED_ROLE_ALIASES.get(role, role)
+                if canonical_role in host_ports:
+                    host_ports[canonical_role].add(port)
+            normalized.append(dict(server))
+        if observed_ports != declared_ports:
+            return None
+        log_dir = Path(
+            os.environ.get(
+                "ORCHESTRATOR_PATHS_LOG_DIR",
+                f"{os.environ.get('ORCHESTRATOR_PATHS_PROJECT_ROOT', f'{llm_root}/epyc-orchestrator')}/logs",
+            )
+        )
+        state_file = log_dir / "orchestrator_state.json"
+        if state_file.exists() and path.stat().st_mtime < state_file.stat().st_mtime:
+            return None
+        for ports in host_ports.values():
+            if not ports or not any(_bootstrap_port_listening(port) for port in ports):
+                return None
+        return normalized
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _runtime_or_env_selected_servers() -> list[dict[str, Any]] | None:
     """Return launcher-selected servers for the active NUMA mode.
 
@@ -447,50 +555,18 @@ def _runtime_or_env_selected_servers() -> list[dict[str, Any]] | None:
     quarters-only fleet, or a poisoned valid full manifest) is rejected and we
     fall through to the next producer (ultimately stack priors).
     """
-    # Producer 1: env-declared mode → static stack-manifest filter.
-    mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
-    if mode:
-        candidate: list[dict[str, Any]] | None = None
-        try:
-            from scripts.server.stack_manifest import (
-                HOT_SERVERS,
-                WARM_SERVERS,
-                _filter_by_numa_mode,
-            )
-            from scripts.server.stack_numa_mode import normalize_stack_numa_mode
-
-            candidate = _filter_by_numa_mode(
-                HOT_SERVERS + WARM_SERVERS,
-                normalize_stack_numa_mode(mode),
-            )
-        except Exception as exc:
-            # Fix 5(b): during uvicorn app startup this branch dies on a circular
-            # import (src.api -> stack_paths.get_config -> ServerURLsConfig ->
-            # stack_manifest still initializing). Swallowing it is currently the
-            # only thing keeping production routed to quarters — log it at WARNING
-            # so a change that stops it firing is visible instead of silent.
-            _LOGGER.warning(
-                "ORCHESTRATOR_STACK_NUMA_MODE=%s env-filter branch failed "
-                "(%s: %s); falling through to runtime-facts/stack-priors",
-                mode,
-                type(exc).__name__,
-                exc,
-            )
-            candidate = None
-        if candidate is not None:
-            if _selected_servers_are_live(candidate):
-                return candidate
-            _LOGGER.warning(
-                "ORCHESTRATOR_STACK_NUMA_MODE=%s lineup rejected: host-role ports "
-                "not listening (dead full ports on a quarters-only fleet?); "
-                "falling through to runtime-facts/stack-priors",
-                mode,
-            )
-
     if os.environ.get("ORCHESTRATOR_IGNORE_RUNTIME_STACK_FACTS") == "1":
         return None
 
-    # Producer 2: validated runtime-facts manifest.
+    # Bootstrap producer: an API starts while scripts.server modules can
+    # still be partially initialized.  Prefer the fresh launcher artifact over
+    # importing that cycle; full-mode behavior remains on the normal chain.
+    bootstrap_candidate = _bootstrap_runtime_selected_servers()
+    if bootstrap_candidate is not None:
+        return bootstrap_candidate
+
+    # Producer 1: validated runtime-facts manifest.  Launcher facts describe
+    # realized ports; an inherited env value is launch intent only.
     try:
         from scripts.server.runtime_facts_manifest import read_runtime_stack_selected_servers
 
@@ -507,8 +583,44 @@ def _runtime_or_env_selected_servers() -> list[dict[str, Any]] | None:
             return candidate
         _LOGGER.warning(
             "runtime-facts lineup rejected: host-role ports not listening; "
-            "falling through to stack priors"
+            "falling through to env/stack priors"
         )
+
+    # Producer 2: env-declared mode → static stack-manifest filter.  This is a
+    # startup fallback only; it must never outrank validated realized facts.
+    mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
+    if mode:
+        candidate: list[dict[str, Any]] | None = None
+        try:
+            from scripts.server.stack_manifest import (
+                HOT_SERVERS,
+                WARM_SERVERS,
+                _filter_by_numa_mode,
+            )
+            from scripts.server.stack_numa_mode import normalize_stack_numa_mode
+
+            candidate = _filter_by_numa_mode(
+                HOT_SERVERS + WARM_SERVERS,
+                normalize_stack_numa_mode(mode),
+            )
+        except Exception as exc:
+            _LOGGER.warning(
+                "ORCHESTRATOR_STACK_NUMA_MODE=%s env-filter branch failed "
+                "(%s: %s); falling through to stack-priors",
+                mode,
+                type(exc).__name__,
+                exc,
+            )
+            candidate = None
+        if candidate is not None:
+            if _selected_servers_are_live(candidate):
+                return candidate
+            _LOGGER.warning(
+                "ORCHESTRATOR_STACK_NUMA_MODE=%s lineup rejected: host-role ports "
+                "not listening (dead full ports on a quarters-only fleet?); "
+                "falling through to stack priors",
+                mode,
+            )
     return None
 
 
@@ -535,18 +647,19 @@ def _selected_server_url_values(selected_servers: list[dict[str, Any]] | None) -
         for role in roles:
             if not isinstance(role, str) or not role:
                 continue
-            seen = seen_by_role.setdefault(role, set())
+            canonical_role = _RUNTIME_SELECTED_ROLE_ALIASES.get(role, role)
+            seen = seen_by_role.setdefault(canonical_role, set())
             if port in seen:
                 continue
             seen.add(port)
-            cfg = NUMA_CONFIG.get(role) if isinstance(NUMA_CONFIG, dict) else None
+            cfg = NUMA_CONFIG.get(canonical_role) if isinstance(NUMA_CONFIG, dict) else None
             full_idx = cfg.get("full_instance_idx") if isinstance(cfg, dict) else None
             is_full = (
                 isinstance(full_idx, int)
                 and isinstance(server.get("numa_instance"), int)
                 and server.get("numa_instance") == full_idx
             )
-            ports_by_role.setdefault(role, []).append((port, is_full))
+            ports_by_role.setdefault(canonical_role, []).append((port, is_full))
 
     urls: dict[str, str] = {}
     for role, entries in ports_by_role.items():
@@ -559,6 +672,10 @@ def _selected_server_url_values(selected_servers: list[dict[str, Any]] | None) -
         if full_ports and len(role_urls) > 1:
             role_urls[0] = f"full:{role_urls[0]}"
         urls[role] = ",".join(role_urls)
+
+    for alias, primary_role in _RUNTIME_SELECTED_ROLE_ALIASES.items():
+        if alias not in urls and primary_role in urls:
+            urls[alias] = urls[primary_role]
     return urls
 
 

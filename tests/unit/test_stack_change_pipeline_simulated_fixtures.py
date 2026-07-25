@@ -64,6 +64,10 @@ def _pin_realized_compile_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     from scripts.validate import stack_change_guard
     from src.registry import stack_priors
 
+    # The promotion gate inherits the caller's environment. These simulated
+    # fixtures define a full-topology launch view, so prevent a live quarter
+    # selector from changing their data-only compile fallback.
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
     monkeypatch.setattr(stack_priors, "_realized_compile_numa_mode", lambda **_kw: "full")
     monkeypatch.setattr(stack_change_guard, "_realized_launch_numa_mode", lambda: None)
 

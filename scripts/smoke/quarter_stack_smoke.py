@@ -1,8 +1,8 @@
-"""Deterministic post-promotion smoke for the quarter production stack.
+"""Deterministic post-promotion smoke for the both-mode production stack.
 
-The probe deliberately targets the fourteen quarter/vision chat endpoints and
-the six production BGE endpoints.  It does not probe the deprecated
-qwen3.5-122B lane on port 8083.
+The probe targets the three full chat instances, their twelve quarter
+instances, the architect and vision chat lanes, and the six production BGE
+endpoints.
 """
 
 from __future__ import annotations
@@ -27,12 +27,17 @@ from scripts.server.stack_manifest import EMBEDDER_PORTS, PORT_MAP  # noqa: E402
 from scripts.server.stack_numa import NUMA_CONFIG  # noqa: E402
 
 
-EXPECTED_CHAT_PORTS = (8080, 8180, 8280, 8380, 8082, 8182, 8282, 8382, 8185, 8285, 8385, 8485, 8086, 8087)
+EXPECTED_CHAT_PORTS = (
+    8070, 8080, 8180, 8280, 8380,
+    8072, 8082, 8182, 8282, 8382,
+    8085, 8185, 8285, 8385, 8485,
+    8083, 8086, 8087,
+)
 EXPECTED_EMBEDDER_PORTS = (8090, 8091, 8092, 8093, 8094, 8095)
 EMBEDDING_DIMENSION = 1024
 TIMEOUT_SECONDS = 30.0
 
-_QUARTER_ROLES = ("frontdoor", "worker_general", "ingest_long_context")
+_BOTH_MODE_ROLES = ("frontdoor", "worker_general", "ingest_long_context")
 _SINGLE_CHAT_ROLES = ("worker_vision", "vision_escalation")
 
 
@@ -48,7 +53,7 @@ def topology_errors() -> list[str]:
     errors: list[str] = []
     derived_chat: list[int] = []
 
-    for role in _QUARTER_ROLES:
+    for role in _BOTH_MODE_ROLES:
         try:
             ports = _ports_for_role(role)
         except ValueError as exc:
@@ -57,7 +62,17 @@ def topology_errors() -> list[str]:
         if not ports or PORT_MAP.get(role) != ports[0]:
             errors.append(f"{role}: PORT_MAP primary does not match NUMA_CONFIG")
             continue
-        derived_chat.extend(ports[1:])
+        derived_chat.extend(ports)
+
+    try:
+        architect_ports = _ports_for_role("architect_general")
+    except ValueError as exc:
+        errors.append(str(exc))
+    else:
+        if architect_ports != [8083] or PORT_MAP.get("architect_general") != 8083:
+            errors.append("architect_general must be a single PORT_MAP-aligned NUMA instance on 8083")
+        else:
+            derived_chat.append(8083)
 
     for role in _SINGLE_CHAT_ROLES:
         try:
@@ -74,10 +89,6 @@ def topology_errors() -> list[str]:
         errors.append(
             f"chat topology mismatch: expected {list(EXPECTED_CHAT_PORTS)}, got {derived_chat}"
         )
-    if PORT_MAP.get("architect_general") != 8083:
-        errors.append("architect_general port is no longer the explicitly excluded 8083")
-    if 8083 in derived_chat:
-        errors.append("deprecated qwen3.5-122B port 8083 is included in chat smoke")
     if tuple(EMBEDDER_PORTS) != EXPECTED_EMBEDDER_PORTS:
         errors.append(
             f"embedder topology mismatch: expected {list(EXPECTED_EMBEDDER_PORTS)}, got {EMBEDDER_PORTS}"

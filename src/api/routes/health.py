@@ -21,6 +21,13 @@ from src.registry.stack_priors import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_RUNTIME_SELECTED_ROLE_ALIASES = {
+    "coder_escalation": "frontdoor",
+    "worker_summarize": "frontdoor",
+    "worker_explore": "worker_general",
+    "worker_math": "worker_general",
+    "toolrunner": "worker_general",
+}
 _DEFAULT_STACK_PRIORS_PATH = (
     Path(__file__).resolve().parents[3] / "orchestration" / "derived" / "stack_priors.yaml"
 )
@@ -155,6 +162,71 @@ def _stack_prior_backend_urls(
     }
 
 
+def _runtime_selected_backend_urls(
+    stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
+) -> tuple[dict[str, str], set[str]] | None:
+    """Resolve live role probes from the validated launcher runtime facts.
+
+    Generated stack priors describe the declared full topology.  When a
+    quarters-only fleet is running, select each role's first realized port from
+    that role's declared port list instead.  Missing live-stack roles are
+    returned separately so callers report them as not realized, never healthy.
+    """
+    try:
+        from scripts.server.runtime_facts_manifest import read_runtime_stack_selected_servers
+
+        selected_servers = read_runtime_stack_selected_servers()
+    except Exception as exc:  # bootstrap/import failures retain legacy fallback
+        logger.warning("runtime-facts health resolution unavailable: %s", exc)
+        return None
+    if not selected_servers:
+        return None
+    selected_ports_by_role: dict[str, list[int]] = {}
+    for server in selected_servers:
+        if not isinstance(server, dict):
+            continue
+        port = server.get("port")
+        roles = server.get("roles")
+        if isinstance(port, bool) or not isinstance(port, int) or not isinstance(roles, list):
+            continue
+        for role in roles:
+            if not isinstance(role, str) or not role:
+                continue
+            canonical_role = _RUNTIME_SELECTED_ROLE_ALIASES.get(role, role)
+            ports = selected_ports_by_role.setdefault(canonical_role, [])
+            if port not in ports:
+                ports.append(port)
+    if not selected_ports_by_role:
+        return None
+
+    roles = live_stack_role_records(stack_priors_path)
+    if not roles:
+        return None
+    roles_by_url: dict[str, list[str]] = {}
+    missing: set[str] = set()
+    for role, record in roles.items():
+        serving = stack_prior_serving(record)
+        canonical_role = _RUNTIME_SELECTED_ROLE_ALIASES.get(role, role)
+        role_ports = selected_ports_by_role.get(canonical_role, [])
+        declared_ports = stack_prior_serving_ports(serving)
+        realized_port = next(
+            (port for port in role_ports if not declared_ports or port in declared_ports),
+            None,
+        )
+        if realized_port is None:
+            missing.add(role)
+            continue
+        url = f"http://localhost:{realized_port}"
+        roles_by_url.setdefault(url, []).append(role)
+    return (
+        {
+            "/".join(sorted(role_names)): url
+            for url, role_names in sorted(roles_by_url.items(), key=lambda item: item[0])
+        },
+        missing,
+    )
+
+
 def _fallback_backend_role_names() -> tuple[str, ...]:
     """Return the manifest-owned hot role set used for degraded health probes."""
     try:
@@ -185,7 +257,12 @@ async def _probe_core_backends(
     stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
 ) -> dict[str, Any]:
     """Probe live backend roles for liveness."""
-    backend_urls = _stack_prior_backend_urls(stack_priors_path) or _fallback_backend_urls()
+    runtime_resolution = _runtime_selected_backend_urls(stack_priors_path)
+    missing_roles: set[str] = set()
+    if runtime_resolution is not None:
+        backend_urls, missing_roles = runtime_resolution
+    else:
+        backend_urls = _stack_prior_backend_urls(stack_priors_path) or _fallback_backend_urls()
     probes: dict[str, Any] = {}
     tasks = []
     role_list = []
@@ -208,6 +285,15 @@ async def _probe_core_backends(
             }
         else:
             probes[role] = result
+    for role in sorted(missing_roles):
+        probes[role] = {
+            "ok": False,
+            "latency_ms": None,
+            "url": None,
+            "status_code": None,
+            "failure_reason": "not_realized",
+            "failure_detail": "live stack-prior role has no runtime-selected endpoint",
+        }
     return probes
 
 
@@ -246,7 +332,9 @@ async def health(
 
     return HealthResponse(
         status=status,
-        models_loaded=backends_healthy if backends_total else probe_healthy,
+        # The tracker only includes backends that have received traffic. Once
+        # live probes are available they are the authoritative fleet count.
+        models_loaded=probe_healthy if backend_probes else backends_healthy,
         mock_mode_available=True,
         version="0.1.0",
         backend_health=backend_health,
