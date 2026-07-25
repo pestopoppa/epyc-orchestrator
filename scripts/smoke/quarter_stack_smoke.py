@@ -130,6 +130,8 @@ def _embedding_vector(body: Any) -> Any:
         return vector[0] if isinstance(vector, list) and vector and isinstance(vector[0], list) else vector
     if isinstance(body, dict) and isinstance(body.get("data"), list) and body["data"]:
         return body["data"][0].get("embedding")
+    if isinstance(body, list) and body and isinstance(body[0], dict):
+        return body[0].get("embedding")
     return None
 
 

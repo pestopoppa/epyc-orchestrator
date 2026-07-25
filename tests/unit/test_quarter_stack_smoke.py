@@ -49,6 +49,21 @@ def test_run_smoke_is_sequential_and_writes_twenty_rows(tmp_path, monkeypatch) -
     assert seen == [row["url"] for row in rows]
 
 
+def test_embedding_row_accepts_llama_cpp_array_envelope(monkeypatch) -> None:
+    monkeypatch.setattr(
+        smoke.httpx,
+        "post",
+        lambda *_args, **_kwargs: FakeResponse(
+            [{"index": 0, "embedding": [0.0] * smoke.EMBEDDING_DIMENSION}]
+        ),
+    )
+
+    row = smoke._embedding_row(8090, 1.0)
+
+    assert row["ok"] is True
+    assert row["dimension"] == smoke.EMBEDDING_DIMENSION
+
+
 def test_endpoint_failure_is_recorded_without_fail_fast(tmp_path, monkeypatch) -> None:
     calls: list[str] = []
 
