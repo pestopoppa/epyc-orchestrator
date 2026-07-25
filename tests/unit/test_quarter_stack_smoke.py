@@ -54,7 +54,7 @@ def test_embedding_row_accepts_llama_cpp_array_envelope(monkeypatch) -> None:
         smoke.httpx,
         "post",
         lambda *_args, **_kwargs: FakeResponse(
-            [{"index": 0, "embedding": [0.0] * smoke.EMBEDDING_DIMENSION}]
+            [{"index": 0, "embedding": [[0.0] * smoke.EMBEDDING_DIMENSION]}]
         ),
     )
 
