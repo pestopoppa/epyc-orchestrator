@@ -4206,11 +4206,11 @@ async function updatePareto() {
         const url = '/dashboard/api/pareto?scope=' + encodeURIComponent(paretoScope)
             + (paretoScope === 'all_eras' ? '&max_dominated=5000' : '');
         const d = await fetchJSON(url);
+        const activeEras = d.active_instrument_eras || {};
+        const activeSpeedEra = activeEras.autopilot_speed || '';
+        const activeCpuEra = activeEras.cpu_bench || '';
         const noteEl = document.getElementById('pareto-era-note');
         if (noteEl) {
-            const activeEras = d.active_instrument_eras || {};
-            const activeSpeedEra = activeEras.autopilot_speed || '';
-            const activeCpuEra = activeEras.cpu_bench || '';
             const rerunMarker = d.frontier_rerun_required || {};
             const eraParts = [];
             if (activeSpeedEra) eraParts.push(`current speed era ${activeSpeedEra}`);
@@ -4221,10 +4221,7 @@ async function updatePareto() {
                 const progress = Number.isFinite(completed) && Number.isFinite(minTrials)
                     ? ` ${completed}/${minTrials}`
                     : '';
-                const reason = String(rerunMarker.reason || '');
-                const eraLabel = activeSpeedEra.includes('E6') || reason.includes('production-consolidated-v7')
-                    ? 'v7 testing era'
-                    : 'testing era';
+                const eraLabel = activeSpeedEra || 'current testing era';
                 eraParts.push(`${eraLabel}: frontier rebuild${progress} required`);
             }
             if (d.available && Array.isArray(d.eras) && d.eras.length) {
@@ -4262,7 +4259,7 @@ async function updatePareto() {
                     const progress = Number.isFinite(completed) && Number.isFinite(minTrials)
                         ? ` ${completed}/${minTrials}`
                         : '';
-                    txt += ` · v7 testing era rebuild${progress}`;
+                    txt += ` · ${activeSpeedEra || 'current speed era'} rebuild${progress}`;
                 }
                 const bugExcl = d.exclusions && d.exclusions.bug_corrupted;
                 if (bugExcl && bugExcl.count) {

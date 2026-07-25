@@ -505,9 +505,9 @@ def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> No
     assert "paretoEraLegend(eras, PAD.l + 6, PAD.t + 12)" in body
     assert "setPanelFreshness('pareto', d._freshness || {" in body
     assert "Pareto panel rendered successfully" in body
-    assert "v7 testing era" in body
+    assert "const eraLabel = activeSpeedEra || 'current testing era';" in body
     assert "frontier rebuild${progress} required" in body
-    assert "v7 testing era rebuild${progress}" in body
+    assert "${activeSpeedEra || 'current speed era'} rebuild${progress}" in body
 
 
 def test_dashboard_gepa_and_pareto_surface_real_suite_metrics() -> None:
