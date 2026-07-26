@@ -274,6 +274,7 @@ def test_validate_numeric_trial_rejects_suppressed_surface() -> None:
         )
         assert err and "surface must be one of" in err
         assert "kv_compaction" not in controller_io._NUMERIC_SURFACES
+        assert controller_io.suppressed_numeric_surfaces() == {"kv_compaction"}
     finally:
         controller_io.set_suppressed_numeric_surfaces(set())
 

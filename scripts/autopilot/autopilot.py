@@ -376,6 +376,17 @@ _PLANNER_HINTS_ENABLED = os.environ.get("AUTOPILOT_PLANNER_HINTS", "").strip().l
 }
 _PLANNER_SUPPRESSED_NUMERIC_SURFACES: set[str] = set()
 _PLANNER_DENYLISTED_FEATURE_FLAGS: set[str] = set()
+
+
+def _operator_suppressed_numeric_surfaces() -> set[str]:
+    """Return launch-scoped numeric surfaces the operator has explicitly withheld."""
+    return {
+        surface.strip()
+        for surface in os.environ.get("AUTOPILOT_SUPPRESSED_NUMERIC_SURFACES", "").split(",")
+        if surface.strip()
+    }
+
+
 _PLANNER_STRATEGY_HINT_QUERIES: tuple[tuple[str, str], ...] = (
     (
         "structural_lab",
@@ -474,8 +485,9 @@ def _refresh_planner_convention_bindings(
     previous_surfaces = set(_PLANNER_SUPPRESSED_NUMERIC_SURFACES)
     _PLANNER_DENYLISTED_FEATURE_FLAGS.clear()
     _PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+    _PLANNER_SUPPRESSED_NUMERIC_SURFACES.update(_operator_suppressed_numeric_surfaces())
     if not _PLANNER_HINTS_ENABLED:
-        controller_io.set_suppressed_numeric_surfaces(set())
+        controller_io.set_suppressed_numeric_surfaces(_PLANNER_SUPPRESSED_NUMERIC_SURFACES)
         return
 
     _PLANNER_DENYLISTED_FEATURE_FLAGS.update(

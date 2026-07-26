@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
-from controller_io import validate_single_variable
+from controller_io import suppressed_numeric_surfaces, validate_single_variable
 from safety_gate import EvalResult, SafetyGate
 from species.prompt_forge import diversity_coverage_penalty
 from src.autopilot_core.tier_specs import objectives_from
@@ -613,6 +613,7 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
     surface = action.get("surface", "memrl_retrieval")
     explicit_params = _normalize_numeric_trial_params(surface, action.get("params", {}) or {})
     suppressed_surfaces = _planner_convention_bindings(ctx, species="numeric_swarm")
+    suppressed_surfaces.update(suppressed_numeric_surfaces())
     if surface in suppressed_surfaces:
         return (
             SkipOutcome(
@@ -2497,6 +2498,12 @@ def dispatch_action(
             )
             log.warning("Live-loop allowlist: %s", reason)
             return SkipOutcome("skipped", reason, action_type), action_type
+
+    if action_type == "numeric_trial" and action.get("surface") in suppressed_numeric_surfaces():
+        surface = action.get("surface")
+        reason = f"operator suppresses numeric surface: {surface}"
+        log.warning("Numeric surface suppression: %s", reason)
+        return SkipOutcome("skipped", reason, action_type), action_type
 
     # AP-9: Single-variable scope enforcement. Forced W8 candidate replays are
     # exact re-measurements of a journaled NumericSwarm candidate, not a new

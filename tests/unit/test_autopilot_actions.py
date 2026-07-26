@@ -147,6 +147,41 @@ def test_dispatcher_allows_current_forced_seq_candidate_replay(monkeypatch) -> N
     assert species == "numeric_swarm"
 
 
+def test_dispatcher_rejects_suppressed_forced_seq_candidate_replay(monkeypatch) -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "kv_compaction",
+        "params": {"kv.keep_ratio": 0.5},
+    }
+
+    def fail_handler(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("suppressed forced replay must not reach its handler")
+
+    monkeypatch.setitem(actions._ACTION_HANDLERS, "numeric_trial", fail_handler)
+    monkeypatch.setattr(actions, "suppressed_numeric_surfaces", lambda: {"kv_compaction"})
+
+    result, species = actions.dispatch_action(
+        action,
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={
+            "trial_counter": 1213,
+            "seq_candidate_replay_forced": {"trial_id": 1213, "action": action},
+        },
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "operator suppresses" in result.reason
+    assert species == "numeric_trial"
+
+
 def test_dispatcher_rejects_deep_eval_sampling_knobs(monkeypatch) -> None:
     def fail_handler(action, ctx):  # noqa: ANN001, ARG001
         raise AssertionError("deep_eval handler should not run for invalid schema")

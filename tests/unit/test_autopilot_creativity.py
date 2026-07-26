@@ -776,6 +776,25 @@ def test_planner_convention_bindings_refresh_without_restart(monkeypatch) -> Non
         autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
 
 
+def test_operator_numeric_surface_suppression_applies_without_hints(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", False)
+    monkeypatch.setenv("AUTOPILOT_SUPPRESSED_NUMERIC_SURFACES", "kv_compaction")
+    suppressed_calls: list[set[str]] = []
+    monkeypatch.setattr(
+        autopilot.controller_io,
+        "set_suppressed_numeric_surfaces",
+        lambda surfaces: suppressed_calls.append(set(surfaces)),
+    )
+
+    try:
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+        autopilot._refresh_planner_convention_bindings(None, None, reason="startup")
+        assert autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES == {"kv_compaction"}
+        assert suppressed_calls == [{"kv_compaction"}]
+    finally:
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+
+
 def test_planner_strategy_hints_default_off_does_not_read_store(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", False)
 

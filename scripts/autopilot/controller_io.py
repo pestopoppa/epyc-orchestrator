@@ -108,6 +108,11 @@ def set_suppressed_numeric_surfaces(surfaces: set[str] | list[str] | tuple[str, 
     _ACTION_SCHEMAS["numeric_trial"]["enums"]["surface"] = _NUMERIC_SURFACES
 
 
+def suppressed_numeric_surfaces() -> set[str]:
+    """Return a snapshot of numeric surfaces withheld from live dispatch."""
+    return set(_SUPPRESSED_NUMERIC_SURFACES)
+
+
 def _write_planner_subprocess_status(
     *,
     status: str,
