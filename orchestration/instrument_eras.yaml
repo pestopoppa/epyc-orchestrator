@@ -137,6 +137,32 @@ eras:
       are RETIRED VIEWS under this era - no cross-era T1 dominance; re-measure within era.
       Pairs with the E7-eval-instrument (scope eval_quality) scorer/pool boundary.
 
+  - id: E8-cpu-kernel
+    from: "2026-07-25T18:38:43Z"
+    scope: cpu_bench
+    note: >
+      v8 production cutover. Single kernel: production-consolidated-v8 at
+      llama.cpp commit 67a433bf45a8a091d83b4ea0b32ff0735fd51800
+      (binary version 10107 / 67a433bf4), promoted from the fully validated
+      experimental-v8-refresh-20260724 lineage. RECONCILIATION: pre-boundary
+      CPU throughput and quality/eval rows measured on v7 or experimental-v8
+      are historical priors for decisions about the production-consolidated-v8
+      stack. Do not rescale across this boundary; re-measure within era under
+      P-BENCH/P-QUAL/P-GPU protocols with host attestation. The campaign-scoped
+      WAIVE-Q8 decision means this eligibility fence makes no Q8 performance or
+      non-regression claim.
+
+  - id: E8-autopilot-speed
+    from: "2026-07-25T18:38:43Z"
+    scope: autopilot_speed
+    note: >
+      AutoPilot Pareto/frontier speed boundary for the v8 production kernel
+      cutover. orchestration/autopilot_state.json:pareto_epoch_ts is advanced
+      to this timestamp so pre-v8 speed rows cannot silently define the current
+      production-consolidated-v8 frontier. Treat pre-boundary AutoPilot
+      speed/frontier rows as historical priors until a controlled v8-only
+      frontier rerun/rebuild clears the frontier_rerun_required state marker.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.
