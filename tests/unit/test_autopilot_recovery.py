@@ -601,7 +601,10 @@ def test_empty_current_era_bootstrap_keeps_rebase_flag_until_a_point_exists(
             return 0
 
     monkeypatch.setattr(autopilot, "ParetoArchive", lambda: EmptyArchive())
-    state = {"_allow_empty_frontier_rebase": True}
+    state = {
+        "_allow_empty_frontier_rebase": True,
+        "e8_empty_frontier_bootstrap": {"status": "active"},
+    }
 
     archive, rebase_completed = autopilot._startup_archive_from_current_era_payload(
         state,
@@ -611,6 +614,7 @@ def test_empty_current_era_bootstrap_keeps_rebase_flag_until_a_point_exists(
     assert isinstance(archive, EmptyArchive)
     assert rebase_completed is False
     assert state["_allow_empty_frontier_rebase"] is True
+    assert state["e8_empty_frontier_bootstrap"]["status"] == "active"
 
 
 def test_restart_after_first_current_era_point_loads_payload_and_clears_rebase(
@@ -619,7 +623,15 @@ def test_restart_after_first_current_era_point_loads_payload_and_clears_rebase(
     journal.record(_make_entry(1, quality=1.2))
     payload = autopilot._journal_archive_payload_for_authority(journal)
     assert payload is not None
-    state = {"_allow_empty_frontier_rebase": True}
+    state = {
+        "_allow_empty_frontier_rebase": True,
+        "e8_empty_frontier_bootstrap": {
+            "status": "active",
+            "required_clear_condition": (
+                "next AutoPilot startup observes at least one current-era Pareto point"
+            ),
+        },
+    }
 
     archive, rebase_completed = autopilot._startup_archive_from_current_era_payload(
         state,
@@ -629,6 +641,15 @@ def test_restart_after_first_current_era_point_loads_payload_and_clears_rebase(
     assert [entry.trial_id for entry in archive.frontier(tier=2)] == [1]
     assert rebase_completed is True
     assert "_allow_empty_frontier_rebase" not in state
+    assert state["e8_empty_frontier_bootstrap"] == {
+        "status": "completed",
+        "required_clear_condition": (
+            "next AutoPilot startup observes at least one current-era Pareto point"
+        ),
+        "completion_condition": (
+            "next AutoPilot startup observed at least one current-era Pareto point"
+        ),
+    }
 
 
 def test_save_state_with_journal_archive_authority_removes_state_cache(

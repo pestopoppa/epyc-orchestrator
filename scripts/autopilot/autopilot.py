@@ -6447,6 +6447,19 @@ def _startup_archive_from_current_era_payload(
     )
     if rebase_completed:
         state.pop("_allow_empty_frontier_rebase", None)
+        bootstrap = state.get("e8_empty_frontier_bootstrap")
+        if isinstance(bootstrap, dict):
+            bootstrap["status"] = "completed"
+            bootstrap["completion_condition"] = (
+                "next AutoPilot startup observed at least one current-era Pareto point"
+            )
+        else:
+            state["e8_empty_frontier_bootstrap"] = {
+                "status": "completed",
+                "completion_condition": (
+                    "next AutoPilot startup observed at least one current-era Pareto point"
+                ),
+            }
     return archive, rebase_completed
 
 
