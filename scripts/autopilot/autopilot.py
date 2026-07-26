@@ -6427,6 +6427,29 @@ def _make_eval_progress_callback(
     return _callback
 
 
+def _startup_archive_from_current_era_payload(
+    state: dict[str, Any],
+    archive_payload: dict[str, Any] | None,
+) -> tuple[ParetoArchive, bool]:
+    """Load current-era journal authority and retire a completed empty rebase.
+
+    A deliberate rebase is only a bootstrap escape hatch while the current-era
+    journal has no archive-bearing rows. Once its first point exists, journal
+    authority wins over the stale flag so a later restart cannot discard it.
+    """
+    if archive_payload is not None:
+        archive = ParetoArchive.from_archive_payload(archive_payload, read_only=False)
+    else:
+        archive = ParetoArchive()
+    rebase_completed = bool(
+        state.get("_allow_empty_frontier_rebase")
+        and any(archive.frontier_size(tier) > 0 for tier in archive.tiers())
+    )
+    if rebase_completed:
+        state.pop("_allow_empty_frontier_rebase", None)
+    return archive, rebase_completed
+
+
 def _make_eval_batch_progress_callback(
     *,
     phase: PhaseTracker,
@@ -6476,20 +6499,16 @@ def _run_loop_inner(
         deinflate_factor=_deinfl_factor,
         exclude_before_ts=_exclude_ts,
     )
-    if archive_payload is not None and not state.get("_allow_empty_frontier_rebase"):
-        archive = ParetoArchive.from_archive_payload(archive_payload, read_only=False)
-    else:
-        archive = ParetoArchive()
+    archive, rebase_completed = _startup_archive_from_current_era_payload(
+        state,
+        archive_payload,
+    )
     # Clear the deliberate-rebase bypass ONLY once the frontier has actually rebuilt
     # (a prior run admitted >=1 point). Clearing it at startup while the frontier is
     # still empty would re-arm the frontier-lost guard before the bootstrap lands —
     # crash-looping any restart that happens before the first trial is admitted. Once
     # a point exists the guard never fires anyway, so this safely re-arms it.
-    if (
-        state.get("_allow_empty_frontier_rebase")
-        and archive.frontier_size(DEFAULT_FRONTIER_TIER) > 0
-    ):
-        state.pop("_allow_empty_frontier_rebase", None)
+    if rebase_completed:
         save_state(state)
         log.info(
             "Rebase complete (frontier rebuilt) — cleared _allow_empty_frontier_rebase; guard re-armed."
