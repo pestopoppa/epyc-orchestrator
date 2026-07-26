@@ -960,6 +960,7 @@ body.insight-fullscreen-open { overflow: hidden; }
         .rl-ready   { background: rgba(52,211,153,0.18); color: var(--good, #34d399); }
         .rl-inactive { background: rgba(148,163,184,0.12); color: var(--muted, #94a3b8); }
         .rl-na      { background: rgba(100,100,100,0.10); color: var(--dim, #6b7280); font-style: italic; }
+        .rl-nolock  { background: rgba(100,116,139,0.12); color: var(--muted, #94a3b8); font-style: italic; font-size: 10px; }
         /* Uniform per-panel freshness badge (dashboard_freshness contract). */
         .freshness-badge { display:inline-block; margin-left:8px; padding:1px 6px; border-radius:8px;
           font-size:10px; font-weight:600; font-family:var(--font-mono,ui-monospace,monospace);
@@ -2724,9 +2725,18 @@ function renderRegionLocksDisplayMatrix(grid, d) {
     for (const col of columns) {
         rows.push(`<div style="color:var(--muted);font-size:10px;text-align:center;font-weight:600">${escapeHTML(col.label || col.key || '')}</div>`);
     }
-    const stateClass = { active: 'rl-active', blocked: 'rl-blocked', ready: 'rl-ready', inactive: 'rl-inactive', na: 'rl-na' };
+    const stateClass = { active: 'rl-active', blocked: 'rl-blocked', ready: 'rl-ready', inactive: 'rl-inactive', na: 'rl-na', nolock: 'rl-nolock' };
+    // Roles the GPU/extern device rows below already render — skip their
+    // matching "no lock domain" completeness rows to avoid duplicates.
+    const deviceRoles = new Set(
+        (((_latestSnapshot || {}).topology || {}).nodes || [])
+            .filter(n => n.kind === 'gpu-llama-server' || n.kind === 'external-llama-server')
+            .map(n => String(n.role || '').split('.')[0])
+    );
     for (const row of rowsIn) {
-        rows.push(`<div style="overflow:hidden;text-overflow:ellipsis;color:var(--fg);font-size:11px;line-height:1.3" title="${escapeHTML(row.label || row.role || '')}">${escapeHTML(row.label || row.role || '')}</div>`);
+        if (row.no_lock_domain && deviceRoles.has(String(row.role || '').split('.')[0])) continue;
+        const labelColor = row.no_lock_domain ? 'var(--muted)' : 'var(--fg)';
+        rows.push(`<div style="overflow:hidden;text-overflow:ellipsis;color:${labelColor};font-size:11px;line-height:1.3" title="${escapeHTML((row.label || row.role || '') + (row.no_lock_domain ? ' — ' + (row.lock_state || 'n/a (no lock domain)') : ''))}">${escapeHTML(row.label || row.role || '')}</div>`);
         for (const cell of (row.cells || [])) {
             const state = String(cell.state || 'na');
             const cls = stateClass[state] || 'rl-na';
@@ -2741,7 +2751,7 @@ function renderRegionLocksDisplayMatrix(grid, d) {
     const launchMode = matrix && matrix.launch_mode ? ` · launch ${escapeHTML(matrix.launch_mode)}` : '';
     const rowKind = matrix && matrix.row_kind === 'instance' ? 'instance' : 'role';
     const roleCount = rowKind === 'instance' && matrix && Number.isFinite(Number(matrix.role_count)) ? ` across ${Number(matrix.role_count)} role(s)` : '';
-    footer.innerHTML = `${rowsIn.length} ${rowKind}(s) from backend display matrix${roleCount}${launchMode} · Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ configured and free</span> · <span style="color:var(--dim)">— shape not configured for this role</span>.`;
+    footer.innerHTML = `${rowsIn.length} ${rowKind}(s) from backend display matrix${roleCount}${launchMode} · Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ configured and free</span> · <span style="color:var(--muted)">n/a — serving instance with no lock domain (display-only)</span> · <span style="color:var(--dim)">— shape not configured for this role</span>.`;
     grid.appendChild(footer);
     return true;
 }
@@ -4094,7 +4104,24 @@ async function updateGepa() {
         const d = await fetchJSON('/dashboard/api/gepa');
         const el = document.getElementById('gepa-lines');
         const st = d.state || {};
+        // GEPA provenance windows (2026-07-25 no-op incident): trials inside a
+        // window ran while the reflective-mutation path was a guaranteed no-op —
+        // hatch/grey them and show a caveat badge. Display-only.
+        const provWindows = Array.isArray(d.provenance_windows) ? d.provenance_windows : [];
+        const provFmt = ts => (ts == null ? '…' : new Date(ts * 1000).toISOString().slice(0, 10));
+        const rowTsOf = t => { const v = Date.parse(t && t.timestamp || ''); return Number.isFinite(v) ? v / 1000 : null; };
+        const inProvWindow = t => {
+            const ts = rowTsOf(t);
+            return ts != null && provWindows.some(w =>
+                (w.from_ts == null || ts >= w.from_ts) && (w.until_ts == null || ts < w.until_ts));
+        };
         let header = '';
+        if (provWindows.length) {
+            header += provWindows.map(w =>
+                `<div style="background:rgba(251,191,36,0.10);border-left:3px solid #fbbf24;padding:4px 10px;border-radius:4px;margin-bottom:6px;font-size:10px;color:#fbbf24">` +
+                `⚠ provenance caveat ${provFmt(w.from_ts)} → ${provFmt(w.until_ts)}: ${escapeHTML(w.label || '')} — hatched trials below carry broken optimizer provenance</div>`
+            ).join('');
+        }
         if (st.current_trial) {
             const prog = st.baseline_sentinels_total
                 ? `<span style="color:var(--accent)">${st.sentinels_completed||0}/${st.baseline_sentinels_total}</span>`
@@ -4102,7 +4129,7 @@ async function updateGepa() {
             const score = st.baseline_score != null
                 ? ` · baseline=<span style="color:var(--good)">${st.baseline_score.toFixed(3)}</span>`
                 : ' · evaluating…';
-            header = `
+            header += `
                 <div style="background:rgba(59,130,246,0.08); padding:6px 10px; border-radius:4px; margin-bottom:8px; border-left:3px solid var(--accent)">
                     <div style="font-weight:600">Trial ${st.current_trial} · ${st.current_action || '?'} · ${st.current_file || '?'}</div>
                     <div style="font-size:11px;color:var(--muted);margin-top:2px">sentinels ${prog}${score} · last: ${st.last_event || 'n/a'}</div>
@@ -4137,10 +4164,17 @@ async function updateGepa() {
                     ? (exclusionLabel || 'excluded')
                     : (t.pareto_status||'').replace('pareto_','');
                 const tierColor = (t.tier != null && !paretoIsAuditTier(t.tier)) ? paretoTierColor(t.tier) : '#64748b';
-                const rowStyle = killed ? 'opacity:0.5' : '';
+                const inNoopWindow = inProvWindow(t);
+                let rowStyle = killed ? 'opacity:0.5' : '';
+                let rowTitle = '';
+                if (inNoopWindow) {
+                    // Hatch + grey: trial ran inside the GEPA no-op provenance window.
+                    rowStyle += (rowStyle ? ';' : '') + 'opacity:0.55;background:repeating-linear-gradient(45deg,transparent,transparent 5px,rgba(148,163,184,0.14) 5px,rgba(148,163,184,0.14) 10px)';
+                    rowTitle = (provWindows[0] && provWindows[0].label) || 'optimizer provenance broken';
+                }
                 const statusTitle = killed ? String(t.bug_corrupted_by) :
                                     excluded ? String(t.learning_excluded_by || t.keep_revert_decision || '') : '';
-                trialsTable += `<div style="display:grid;grid-template-columns:${gepaCols};gap:6px;padding:1px 0;${rowStyle}">
+                trialsTable += `<div title="${escapeHTML(rowTitle)}" style="display:grid;grid-template-columns:${gepaCols};gap:6px;padding:1px 0;${rowStyle}">
                     <div>${t.trial_id||'-'}</div>
                     <div style="color:${tierColor};font-weight:600">${t.tier!=null?('T'+t.tier):'-'}</div>
                     <div>${realSuiteBadge(t.real_suite_v1)}</div>
@@ -4378,15 +4412,23 @@ function convexHull2D(pts) {
     return lower.concat(upper);
 }
 function paretoEraLegend(eras, x, y) {
-    const shown = (eras || []).filter(e => e.n_points > 0);
+    // The CURRENT (latest) era region is always listed — even with 0 points yet
+    // (a fresh boundary like E8) — and tagged "current"; every other region is a
+    // historical instrument era whose points render faded (label-only honesty).
     const n = (eras || []).length;
-    return shown.map((e, i) => {
+    const latestIdx = n ? Math.max(...eras.map(e => Number(e.index) || 0)) : null;
+    const shown = (eras || []).filter(e => e.n_points > 0 || e.index === latestIdx);
+    const rows = shown.map((e, i) => {
         const cy = y + i * 12;
         const color = paretoEraColor(e.index);
         const a = paretoEraAlpha(e.index, n);
-        return `<rect x="${x}" y="${cy - 7}" width="7" height="7" rx="1.5" fill="${color}" opacity="${a.toFixed(2)}"/>`
-            + `<text class="axis-label" x="${x + 11}" y="${cy}" fill="#94a3b8">${e.id}</text>`;
-    }).join('');
+        const cur = e.index === latestIdx;
+        const tag = cur ? ' ← current' : '';
+        return `<rect x="${x}" y="${cy - 7}" width="7" height="7" rx="1.5" fill="${color}" opacity="${a.toFixed(2)}"${cur ? ' stroke="#e2e8f0" stroke-width="0.75"' : ''}/>`
+            + `<text class="axis-label" x="${x + 11}" y="${cy}" fill="${cur ? '#e2e8f0' : '#94a3b8'}">${e.id}${tag}</text>`;
+    });
+    rows.push(`<text class="axis-label" x="${x}" y="${y + shown.length * 12 + 2}" fill="#64748b" font-size="7.5">faded = historical prior (earlier instrument era)</text>`);
+    return rows.join('');
 }
 // Build the [tier, points] series list, falling back to the canonical projection if the
 // per-tier maps aren't present (back-compat).
@@ -4443,7 +4485,15 @@ function renderParetoScatter(d) {
     const eraCount = eras.length;
     const eraFillOf = p => paretoEraColor(p.era_index ?? (eraCount - 1));
     const eraAlphaOf = p => paretoEraAlpha(p.era_index ?? (eraCount - 1), eraCount);
-    const eraTip = p => (eraMode && p.era ? ` · ${p.era}` : '') + (p.speed_deinflated ? ' · sp×0.5' : '');
+    // Quality-axis era honesty (2026-07-26): points stamped historical_instrument
+    // were measured under an EARLIER instrument era — render them extra-faded
+    // (label-only; values are never rescaled) so the current-era series is
+    // visually distinct. Unknown-era points (null) are treated as historical.
+    const isHistorical = p => eraMode && p.historical_instrument !== false;
+    const histFade = (p, a) => (isHistorical(p) ? Math.max(0.12, a * 0.45) : a);
+    const eraTip = p => (eraMode && p.era ? ` · ${p.era}` : '')
+        + (p.speed_deinflated ? ' · sp×0.5' : '')
+        + (isHistorical(p) ? ' · historical prior (earlier instrument era)' : '');
     const suiteTip = p => {
         const rs = p.real_suite_v1;
         if (!rs || rs.quality == null) return '';
@@ -4558,7 +4608,9 @@ function renderParetoScatter(d) {
         const tier = p.eval_tier ?? d.canonical_tier ?? 1;
         const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${suiteTip(p)}${eraTip(p)}`;
         const fill = eraMode ? eraFillOf(p) : paretoTierFill(tier);
-        const op = eraMode ? Math.max(0.22, 0.5 * eraAlphaOf(p)).toFixed(2) : '0.4';
+        const op = eraMode
+            ? histFade(p, Math.max(0.22, 0.5 * eraAlphaOf(p))).toFixed(2)
+            : '0.4';
         parts.push(paretoMarker(tier, x, y, 2.5, `fill="${fill}" opacity="${op}"`, tip));
     });
     // Per-tier frontiers: each tier drawn as its own colored line + points.
@@ -4596,7 +4648,7 @@ function renderParetoScatter(d) {
             const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${suiteTip(p)}${eraTip(p)}${prod ? ' · PRODUCTION' : ''}`;
             const ring = prod ? ' stroke="var(--good)" stroke-width="1.5"' : '';
             const fill = eraMode ? eraFillOf(p) : color;
-            const op = eraMode ? ` opacity="${eraAlphaOf(p).toFixed(2)}"` : '';
+            const op = eraMode ? ` opacity="${histFade(p, eraAlphaOf(p)).toFixed(2)}"` : '';
             parts.push(paretoMarker(tier, x, y, prod ? 5 : 4, `fill="${fill}"${ring}${op}`, tip));
         });
     });
@@ -4660,6 +4712,20 @@ function renderHypervolumeTimeline(d) {
             const ly = PAD.t + 9 + (i % 2) * 10;
             parts.push(`<text x="${(sx(x0) + 3).toFixed(1)}" y="${ly}" font-size="8" style="font-family:var(--font-mono)" fill="${color}" opacity="0.85">${e.id}</text>`);
         });
+        // Era-boundary honesty (2026-07-26): every region boundary gets a
+        // vertical annotation, INCLUDING a fresh boundary with no in-era trials
+        // yet (e.g. E8 right after cutover) — that one is pinned to the right
+        // edge, so the operator always sees that everything plotted left of it
+        // is a historical prior from an earlier instrument era.
+        const lastPopulatedFirst = populated.length ? populated[populated.length - 1].first_trial_id : null;
+        eras.filter(e => e.from_ts != null && !(e.n_points > 0 && e.first_trial_id != null))
+            .forEach(e => {
+                if (lastPopulatedFirst != null && eras.some(p => p.index > e.index && p.n_points > 0)) return;
+                const color = paretoEraColor(e.index);
+                const bx = PAD.l + plotW;
+                parts.push(`<line x1="${bx}" y1="${PAD.t}" x2="${bx}" y2="${PAD.t + plotH}" stroke="${color}" stroke-opacity="0.6" stroke-width="1.5" stroke-dasharray="4,3"><title>${e.id} boundary — no in-era trials yet; all points left of this line are historical priors</title></line>`);
+                parts.push(`<text x="${(bx - 3).toFixed(1)}" y="${PAD.t + 9}" text-anchor="end" font-size="8" style="font-family:var(--font-mono)" fill="${color}" opacity="0.95">${e.id} →</text>`);
+            });
     }
     // Gridlines
     for (let i = 1; i < 5; i++) {
@@ -4848,10 +4914,25 @@ function renderOptimizationBrief(b) {
     }
     const auth = b.authority || {};
     const grade = !!auth.decision_grade_possible;
-    if (statusEl) statusEl.textContent = grade ? 'decision-grade' : 'observations only';
+    const holds = auth.holds || {};
+    const anyHold = !!holds.any_hold_active;
+    if (statusEl) statusEl.textContent = grade ? 'decision-grade' : (anyHold ? 'holds active — observations only' : 'observations only');
     const fmt = (v, d = 2) => (v == null ? '—' : (typeof v === 'number' ? v.toFixed(d) : v));
     const parts = [];
     parts.push(`<div class="ob-banner ${grade ? 'ob-grade' : 'ob-obs'}">${escapeHTML(auth.trust_note || '')}</div>`);
+    // E1 (2026-07-26): per-axis authority chips driven by the LIVE fail-closed
+    // holds (same state keys the safety gate enforces) — the banner can never
+    // again read "decision-grade" while archive.update is being skipped.
+    if (holds.quality_authority != null || holds.speed_authority != null) {
+        const chip = (label, text, held) =>
+            `<span style="display:inline-block;margin:2px 6px 2px 0;padding:1px 7px;border-radius:8px;font-size:10px;` +
+            `${held ? 'background:rgba(251,191,36,0.14);color:#fbbf24;border:1px solid rgba(251,191,36,0.4)' : 'background:rgba(52,211,153,0.10);color:var(--good,#34d399);border:1px solid rgba(52,211,153,0.3)'}">` +
+            `${label}: ${escapeHTML(text || '')}</span>`;
+        parts.push('<div style="margin:2px 0 6px 0">'
+            + chip('quality authority', holds.quality_authority, !!holds.quality_rebaseline_required)
+            + chip('speed authority', holds.speed_authority, !!holds.frontier_rerun_required)
+            + '</div>');
+    }
     if (b.narrative) parts.push(`<div class="ob-narrative">${escapeHTML(b.narrative)}</div>`);
     const bc = b.best_config || {};
     if (bc.available) {
@@ -4881,26 +4962,42 @@ function renderOptimizationBrief(b) {
         const maxCnt = Math.max(...fenced.map(f => f.count || 0), 1);
         fenced.slice(0, 6).forEach(f => {
             const pct = Math.round(100 * (f.count || 0) / maxCnt);
+            // E2: provenance ride-along — trial/timestamp the fence was minted
+            // at, plus a "pre-E8"-style tag for fences minted before the current
+            // pareto epoch. Labels only; fences are never dropped.
+            const minted = (f.minted_trial != null ? `t${f.minted_trial}` : '')
+                + (f.minted_at ? ` ${String(f.minted_at).slice(0, 10)}` : '');
+            const eraTag = f.era_tag
+                ? ` <span style="padding:0 5px;border-radius:7px;font-size:9px;background:rgba(148,163,184,0.15);color:var(--muted);border:1px solid rgba(148,163,184,0.3)">${escapeHTML(f.era_tag)}</span>`
+                : '';
+            // E3: GEPA rows carry the no-op-window provenance caveat.
+            const caveat = f.provenance_caveat
+                ? ` <span title="${escapeHTML(f.provenance_caveat)}" style="color:#fbbf24;font-size:10px">⚠</span>`
+                : '';
             parts.push(
-                `<div class="ob-lever"><span class="ob-name" title="${escapeHTML(f.why || '')}">${escapeHTML(f.label || '')}</span>` +
+                `<div class="ob-lever"><span class="ob-name" title="${escapeHTML(f.why || '')}">${escapeHTML(f.label || '')}${eraTag}${caveat}</span>` +
                 `<span class="ob-bar ob-bar-bad"><span style="width:${pct}%"></span></span>` +
-                `<span class="ob-rec ob-rec-bad">${f.count || 0}× rejected</span></div>` +
+                `<span class="ob-rec ob-rec-bad">${f.count || 0}× rejected${minted ? ` · ${escapeHTML(minted)}` : ''}</span></div>` +
                 `<div class="ob-why">${escapeHTML((f.why || '').slice(0, 160))}</div>`
             );
         });
+        // E3: any churn/corruption/stale count carrying the GEPA no-op caveat
+        // gets a ⚠ whose tooltip explains the broken-provenance window.
+        const churnEntry = c => `${escapeHTML(c.label)} ${c.count}×` +
+            (c.provenance_caveat ? `<span title="${escapeHTML(c.provenance_caveat)}" style="color:#fbbf24">⚠</span>` : '');
         const churn = Array.isArray(roe.invalid_by_surface) ? roe.invalid_by_surface : [];
         if (churn.length) {
-            const churnTxt = churn.slice(0, 6).map(c => `${escapeHTML(c.label)} ${c.count}×`).join(' · ');
+            const churnTxt = churn.slice(0, 6).map(churnEntry).join(' · ');
             parts.push(`<div class="ob-why" style="margin-top:4px">malformed-proposal churn by surface: ${churnTxt}</div>`);
         }
         const corrupted = Array.isArray(roe.corrupted_by_surface) ? roe.corrupted_by_surface : [];
         if (corrupted.length) {
-            const corrTxt = corrupted.slice(0, 6).map(c => `${escapeHTML(c.label)} ${c.count}×`).join(' · ');
+            const corrTxt = corrupted.slice(0, 6).map(churnEntry).join(' · ');
             parts.push(`<div class="ob-why" style="margin-top:4px">exogenous corruption / teardown by surface: ${corrTxt}</div>`);
         }
         const stale = Array.isArray(roe.stale_fenced_by_surface) ? roe.stale_fenced_by_surface : [];
         if (stale.length) {
-            const staleTxt = stale.slice(0, 6).map(c => `${escapeHTML(c.label)} ${c.count}×`).join(' · ');
+            const staleTxt = stale.slice(0, 6).map(churnEntry).join(' · ');
             parts.push(`<div class="ob-why" style="margin-top:4px">stale critic fences hidden from main list: ${staleTxt}</div>`);
         }
     }
@@ -4910,7 +5007,11 @@ function renderOptimizationBrief(b) {
     parts.push(`<div><span class="ob-pill">✗ ruled out ${ruled.length}</span><span class="ob-pill">◴ exploring ${expl.length}</span></div>`);
     const listOf = (arr) => arr.slice(0, 12).map(r => `<li>${escapeHTML((r.statement || '').slice(0, 140))}</li>`).join('');
     if (ruled.length) parts.push(`<details><summary>ruled-out guardrails</summary><ul style="margin:4px 0 0 16px;padding:0;color:var(--dim);font-size:10px">${listOf(ruled)}</ul></details>`);
-    if (expl.length) parts.push(`<details><summary>queued hypotheses</summary><ul style="margin:4px 0 0 16px;padding:0;color:var(--dim);font-size:10px">${listOf(expl)}</ul></details>`);
+    if (expl.length) {
+        // E4: content unchanged — prior-era-derived hypotheses are valid priors.
+        const explNote = escapeHTML(b.exploring_note || 'hypotheses may derive from prior-era evidence (valid as priors)');
+        parts.push(`<details><summary>queued hypotheses</summary><div style="margin:4px 0 0 16px;color:var(--dim);font-size:9px;font-style:italic">${explNote}</div><ul style="margin:4px 0 0 16px;padding:0;color:var(--dim);font-size:10px">${listOf(expl)}</ul></details>`);
+    }
     el.innerHTML = parts.join('');
 }
 

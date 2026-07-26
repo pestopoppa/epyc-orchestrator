@@ -294,3 +294,190 @@ def test_build_brief_end_to_end(tmp_path):
     # narrative is templated, not free-written: it must mention the top lever.
     assert "escalation.max_retries" in brief["narrative"]
     assert "observations" in brief["narrative"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# E1 (2026-07-26): the authority banner must consult the LIVE fail-closed era
+# holds — trial 1446 showed "kept configs are decision-grade" while the safety
+# gate was skipping archive.update on quality_rebaseline_required.
+# --------------------------------------------------------------------------- #
+def _consent(tmp_path, monkeypatch):
+    grant = tmp_path / "consent.json"
+    grant.write_text(json.dumps({"baseline_ledger": "allow"}))
+    monkeypatch.setenv("AUTOPILOT_AUTHORITY_CONSENT_PATH", str(grant))
+
+
+def _hold_state() -> dict:
+    return {
+        "baseline_ledger_authority_enabled": True,
+        "active_instrument_eras": {
+            "eval_quality": "E8",
+            "autopilot_speed": "E8-autopilot-speed",
+        },
+        "baseline_state": {"eval_quality_era": "E7-eval-instrument"},
+        "frontier_rerun_required": {
+            "required": True,
+            "completed_numeric_trials": 7,
+            "min_numeric_trials": 16,
+            "opened_at": "2026-07-25T18:38:43Z",
+        },
+    }
+
+
+def test_authority_banner_era_holds_override_decision_grade(tmp_path, monkeypatch):
+    _consent(tmp_path, monkeypatch)
+    banner = ob.authority_banner(_hold_state(), {"gaming_alarm": False}, seq_verdict_live=True)
+    # The authority MECHANISM is fully on…
+    assert banner["authority_mechanism_enabled"] is True
+    # …but the fail-closed holds veto decision-grade.
+    assert banner["decision_grade_possible"] is False
+    holds = banner["holds"]
+    assert holds["quality_rebaseline_required"] is True
+    assert holds["quality_authority"] == "HELD pending E8 baseline (fail-closed)"
+    assert holds["frontier_rerun_required"] is True
+    assert holds["speed_authority"] == "pending E8 numeric rerun (7/16)"
+    # The banner text carries both holds and NEVER the decision-grade claim.
+    assert "HELD pending E8 baseline (fail-closed)" in banner["trust_note"]
+    assert "pending E8 numeric rerun (7/16)" in banner["trust_note"]
+    assert "kept configs are decision-grade" not in banner["trust_note"]
+
+
+def test_authority_banner_quality_hold_alone_blocks(tmp_path, monkeypatch):
+    _consent(tmp_path, monkeypatch)
+    state = _hold_state()
+    del state["frontier_rerun_required"]
+    banner = ob.authority_banner(state, {"gaming_alarm": False}, seq_verdict_live=True)
+    assert banner["decision_grade_possible"] is False
+    assert banner["holds"]["quality_rebaseline_required"] is True
+    assert banner["holds"]["frontier_rerun_required"] is False
+    assert banner["holds"]["speed_authority"].startswith("OK")
+    assert "kept configs are decision-grade" not in banner["trust_note"]
+
+
+def test_authority_banner_holds_clear_restores_decision_grade(tmp_path, monkeypatch):
+    _consent(tmp_path, monkeypatch)
+    state = {
+        "baseline_ledger_authority_enabled": True,
+        "active_instrument_eras": {
+            "eval_quality": "E8",
+            "autopilot_speed": "E8-autopilot-speed",
+        },
+        # Baseline reseeded under the active era + no open rerun marker.
+        "baseline_state": {"eval_quality_era": "E8"},
+    }
+    banner = ob.authority_banner(state, {"gaming_alarm": False}, seq_verdict_live=True)
+    assert banner["holds"]["any_hold_active"] is False
+    assert banner["holds"]["quality_authority"].startswith("OK")
+    assert banner["decision_grade_possible"] is True
+    assert "kept configs are decision-grade" in banner["trust_note"]
+
+
+def test_narrative_tail_reflects_active_holds(tmp_path, monkeypatch):
+    _consent(tmp_path, monkeypatch)
+    banner = ob.authority_banner(_hold_state(), {"gaming_alarm": False}, seq_verdict_live=True)
+    narrative = ob._narrative(
+        trial_counter=1446,
+        levers=[],
+        best={"available": False},
+        ruled_out=[],
+        exploring=[],
+        ruled_out_exp={},
+        banner=banner,
+    )
+    assert "kept configs are decision-grade" not in narrative
+    assert "fail-closed era holds are active" in narrative
+
+
+# --------------------------------------------------------------------------- #
+# E2/E3 (2026-07-26): fence provenance + pre-era tag + GEPA no-op caveat.
+# --------------------------------------------------------------------------- #
+def test_fence_rows_carry_pre_epoch_era_tag():
+    state = {
+        "pareto_epoch_ts": 1785004723.0,  # E8 boundary
+        "active_instrument_eras": {"autopilot_speed": "E8-autopilot-speed"},
+        "critic_rejected_signatures": {
+            "old": {
+                "action": {"type": "structural_experiment", "flags": {"graph_router": True}},
+                "reason": "critic rejected: nope",
+                "count": 13,
+                "trial_id": 700,
+                "recorded_at": "2026-07-01T00:00:00+00:00",  # pre-E8
+            },
+            "new": {
+                "action": {"type": "numeric_trial", "surface": "chat_long_context"},
+                "reason": "critic rejected: nope",
+                "count": 1,
+                "trial_id": 1500,
+                "recorded_at": "2026-07-25T23:00:00+00:00",  # post-E8
+            },
+        },
+    }
+    ruled = ob.ruled_out_experiments(state, journal_rows=[])
+    by_kind = {f["kind"]: f for f in ruled["fenced"]}
+    old = by_kind["structural_experiment"]
+    assert old["pre_epoch"] is True
+    assert old["era_tag"] == "pre-E8"
+    assert old["minted_trial"] == 700
+    assert old["minted_at"] == "2026-07-01T00:00:00+00:00"
+    assert old["minted_ts"] is not None and old["minted_ts"] < 1785004723.0
+    new = by_kind["numeric_trial"]
+    assert new["pre_epoch"] is False
+    assert new["era_tag"] is None
+    # Fences are labeled, never dropped.
+    assert len(ruled["fenced"]) == 2
+
+
+def test_gepa_fence_and_churn_carry_noop_provenance_caveat():
+    state = {
+        "pareto_epoch_ts": 1785004723.0,
+        "active_instrument_eras": {"autopilot_speed": "E8-autopilot-speed"},
+        "critic_rejected_signatures": {
+            "g": {
+                "action": {"type": "gepa_optimize", "file": "frontdoor.md"},
+                "reason": "critic rejected: not selectable",
+                "count": 4,
+                "trial_id": 800,
+                "recorded_at": "2026-06-20T00:00:00+00:00",
+            },
+            "n": {
+                "action": {"type": "numeric_trial", "surface": "s"},
+                "reason": "critic rejected: nope",
+                "count": 1,
+                "trial_id": 801,
+                "recorded_at": "2026-06-21T00:00:00+00:00",
+            },
+        },
+    }
+    rows = [
+        {"trial_id": 5, "action_type": "gepa_optimize", "outcome_status": "invalid"},
+        {"trial_id": 6, "action_type": "seed_batch", "outcome_status": "invalid"},
+    ]
+    ruled = ob.ruled_out_experiments(state, journal_rows=rows)
+    by_kind = {f["kind"]: f for f in ruled["fenced"]}
+    assert by_kind["gepa_optimize"]["provenance_caveat"] == ob.GEPA_NOOP_CAVEAT
+    assert "provenance_caveat" not in by_kind["numeric_trial"]
+    churn = {c["kind"]: c for c in ruled["invalid_by_surface"]}
+    assert churn["gepa_optimize"]["provenance_caveat"] == ob.GEPA_NOOP_CAVEAT
+    assert "provenance_caveat" not in churn["seed_batch"]
+
+
+def test_brief_payload_carries_exploring_note_and_gepa_windows(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"trial_counter": 1}))
+    brief = ob.build_optimization_brief(
+        state_path=state,
+        journal_paths=[tmp_path / "missing.jsonl"],
+        strategy_db=tmp_path / "missing.db",
+        digest_text="",
+    )
+    # E4: constitutional note — content untouched, lineage labeled.
+    assert brief["exploring_note"] == (
+        "hypotheses may derive from prior-era evidence (valid as priors)"
+    )
+    assert brief["gepa_provenance_windows"] == [
+        {
+            "from_ts": 1780531200.0,
+            "until_ts": 1784978833.0,
+            "label": "reflective-mutation no-op — optimizer provenance broken",
+        }
+    ]

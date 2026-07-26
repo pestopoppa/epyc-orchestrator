@@ -776,3 +776,106 @@ class TestRegionLocksSnapshot:
         assert payload["by_role"]["worker_general"]["blocked_by_roles"] == ["worker_general"]
         assert payload["by_role"]["ingest_long_context"]["blocked_by_roles"] == []
         assert payload["by_role"]["architect_general"]["blocked_by_roles"] == ["worker_general"]
+
+
+class TestNonLockRoleCompleteness:
+    """Task D (2026-07-26): the panel must show ALL active serving instances,
+    not only lock-domain (matrix-measured) roles — roles with no lock domain
+    render display-only rows with lock state "n/a (no lock domain)"."""
+
+    @staticmethod
+    def _base_env(tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: []
+        )
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
+                ("worker_general", 1): frozenset({"q0"}),
+                ("architect_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
+            },
+        )
+        matrix = ContentionMatrix(
+            version=1,
+            measured_at="test",
+            host="test",
+            topology_hash="test",
+            default_floor=0.85,
+            same_role={"worker_general": SameRole(role="worker_general", verdict="allow")},
+            pairs={},
+        )
+        monkeypatch.setattr("src.scheduling.contention.load_contention_matrix", lambda: matrix)
+
+    @pytest.mark.asyncio
+    async def test_non_lock_roles_rendered_with_na_lock_state(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        self._base_env(tmp_path, monkeypatch)
+        import src.api.routes.dashboard as dash_mod
+
+        monkeypatch.setattr(
+            dash_mod,
+            "_port_roles_cached",
+            lambda: {
+                8080: "worker_general",
+                8081: "worker_general.q0",  # quarter lane folds onto its base role
+                8090: "embedder",
+                9101: "coder_escalation",
+            },
+        )
+
+        payload = json.loads((await region_locks_snapshot()).body)
+
+        # Lock-domain role keeps its normal lock row.
+        assert "worker_general" in payload["by_role"]
+        # Every other active/configured serving role appears as a non-lock row.
+        nlr = payload["non_lock_roles"]
+        assert set(nlr) == {"architect_general", "embedder", "coder_escalation"}
+        for info in nlr.values():
+            assert info["lock_state"] == "n/a (no lock domain)"
+        # Configured full instance rides along with its shape/regions.
+        assert [i["shape"] for i in nlr["architect_general"]["instances"]] == ["full"]
+        assert nlr["architect_general"]["instances"][0]["regions"] == ["q0", "q1", "q2", "q3"]
+        # Port-only roles (embedders, aliases) show their ports even with no NUMA shape.
+        assert nlr["embedder"]["ports"] == [8090]
+        assert nlr["embedder"]["instances"] == []
+        assert nlr["coder_escalation"]["ports"] == [9101]
+        # The quarter lane never spawns a duplicate row for a lock-domain role.
+        assert "worker_general.q0" not in nlr and "worker_general" not in nlr
+
+        rows = {r["role"]: r for r in payload["display_matrix"]["rows"]}
+        assert rows["embedder"]["no_lock_domain"] is True
+        assert rows["embedder"]["lock_state"] == "n/a (no lock domain)"
+        # Shapeless role: informative n/a cell in the Full column, "—" elsewhere.
+        emb_cells = rows["embedder"]["cells"]
+        assert emb_cells[0]["state"] == "nolock"
+        assert "no lock domain" in emb_cells[0]["title"]
+        assert {c["state"] for c in emb_cells[1:]} == {"na"}
+        # Shaped non-lock role: the n/a cell sits in its configured shape column.
+        arch_cells = rows["architect_general"]["cells"]
+        assert arch_cells[0]["state"] == "nolock"  # column 0 == "full"
+        assert "q0,q1,q2,q3" in arch_cells[0]["title"]
+        # Lock-domain display rows are untouched (no display-only marker).
+        assert "no_lock_domain" not in rows["worker_general"]
+
+    @pytest.mark.asyncio
+    async def test_non_lock_roles_fail_open_on_port_discovery_error(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Broken ps discovery must not break the panel: lock rows render,
+        and configured-but-unmatched roles still appear (with no ports)."""
+        self._base_env(tmp_path, monkeypatch)
+        import src.api.routes.dashboard as dash_mod
+
+        def _boom() -> dict[int, str]:
+            raise RuntimeError("ps scan failed")
+
+        monkeypatch.setattr(dash_mod, "_port_roles_cached", _boom)
+
+        payload = json.loads((await region_locks_snapshot()).body)
+
+        assert "worker_general" in payload["by_role"]
+        assert set(payload["non_lock_roles"]) == {"architect_general"}
+        assert payload["non_lock_roles"]["architect_general"]["ports"] == []

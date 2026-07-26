@@ -49,6 +49,31 @@ DEFAULT_STRATEGY_DB = (
 # orchestrator repo (matches the epyc-root paths dashboard.py already uses).
 DEFAULT_DIGEST_DIR = Path("/mnt/raid0/llm/epyc-root/progress")
 
+# --------------------------------------------------------------------------- #
+# GEPA optimizer-provenance no-op window (display-only honesty label).
+# Incident (progress/2026-07-25 GEPA no-op finding): the GEPA reflective-mutation
+# path was a GUARANTEED NO-OP — it silently produced no prompt mutation — from
+# 2026-06-04 (trial-521 evidence) until fix commit ed6288ea ("fix(autopilot):
+# GEPA reflective mutation was a guaranteed no-op; thread --numa-mode into stack
+# gate", author date 2026-07-25T11:27:13Z). Every gepa_optimize trial/fence/churn
+# row minted inside this window carries broken optimizer provenance. Label only —
+# never delete rows or rescale values across this window.
+# --------------------------------------------------------------------------- #
+GEPA_NOOP_WINDOW_FROM_TS = 1780531200.0  # 2026-06-04T00:00:00Z (trial-521 evidence)
+GEPA_NOOP_WINDOW_UNTIL_TS = 1784978833.0  # 2026-07-25T11:27:13Z (ed6288ea author date)
+GEPA_NOOP_WINDOW_LABEL = "reflective-mutation no-op — optimizer provenance broken"
+GEPA_PROVENANCE_WINDOWS: list[dict[str, Any]] = [
+    {
+        "from_ts": GEPA_NOOP_WINDOW_FROM_TS,
+        "until_ts": GEPA_NOOP_WINDOW_UNTIL_TS,
+        "label": GEPA_NOOP_WINDOW_LABEL,
+    }
+]
+GEPA_NOOP_CAVEAT = (
+    "GEPA reflective-mutation no-op window 2026-06-04 → 2026-07-25 — "
+    "optimizer provenance broken for rows minted in this window"
+)
+
 _UNTRUSTED_STATUSES = {"invalid", "skipped"}
 # AP-24 verdict records that disqualify a trial from "best config": a reverted
 # config is not running, and a learning-excluded measurement (mad_noise /
@@ -131,6 +156,72 @@ def _autopilot_seq_verdict_live() -> bool:
     return False
 
 
+def _era_short(era_id: Any) -> str:
+    """'E8-autopilot-speed' → 'E8' (mirrors the dashboard's short-label rule)."""
+    m = re.match(r"(E\d+[a-z]?)", str(era_id or ""))
+    return m.group(1) if m else str(era_id or "")
+
+
+def _live_era_holds(state: dict[str, Any]) -> dict[str, Any]:
+    """Read the SAME fail-closed era holds the safety gate enforces (E1, 2026-07-26).
+
+    Quality: ``SafetyGate.quality_rebaseline_required`` — the resident baseline's
+    ``eval_quality_era`` differs from ``active_instrument_eras.eval_quality``
+    (e.g. E7 baseline under an active E8 era). Speed: the state's open
+    ``frontier_rerun_required`` marker (``required`` not False), with its
+    completed/min numeric-trial counters. No new state is invented here — these
+    are exactly the keys the gate reads, so the banner can never contradict the
+    gate's "archive.update SKIPPED (safety verdict failed)" behaviour again.
+    """
+    active_eras = state.get("active_instrument_eras")
+    active_eras = active_eras if isinstance(active_eras, dict) else {}
+    active_quality_era = str(active_eras.get("eval_quality") or "").strip()
+    baseline_state = state.get("baseline_state")
+    baseline_state = baseline_state if isinstance(baseline_state, dict) else {}
+    baseline_quality_era = str(baseline_state.get("eval_quality_era") or "").strip()
+    quality_hold = bool(active_quality_era) and baseline_quality_era != active_quality_era
+
+    frr = state.get("frontier_rerun_required")
+    frr = frr if isinstance(frr, dict) else None
+    speed_hold = bool(frr) and frr.get("required") is not False
+    try:
+        completed = int((frr or {}).get("completed_numeric_trials") or 0)
+    except (TypeError, ValueError):
+        completed = 0
+    try:
+        minimum = int((frr or {}).get("min_numeric_trials") or 0)
+    except (TypeError, ValueError):
+        minimum = 0
+
+    q_short = _era_short(active_quality_era) or "current-era"
+    s_short = _era_short(active_eras.get("autopilot_speed")) or q_short
+    return {
+        "quality_rebaseline_required": quality_hold,
+        "quality_authority": (
+            f"HELD pending {q_short} baseline (fail-closed)"
+            if quality_hold
+            else "OK — baseline era matches active eval_quality era"
+            + (f" ({q_short})" if active_quality_era else "")
+        ),
+        "quality_hold_detail": {
+            "active_eval_quality_era": active_quality_era or None,
+            "baseline_eval_quality_era": baseline_quality_era or None,
+        },
+        "frontier_rerun_required": speed_hold,
+        "speed_authority": (
+            f"pending {s_short} numeric rerun ({completed}/{minimum})"
+            if speed_hold
+            else "OK — no frontier rerun marker open"
+        ),
+        "speed_hold_detail": {
+            "completed_numeric_trials": completed if frr else None,
+            "min_numeric_trials": minimum if frr else None,
+            "opened_at": (frr or {}).get("opened_at"),
+        },
+        "any_hold_active": quality_hold or speed_hold,
+    }
+
+
 def authority_banner(
     state: dict[str, Any],
     w6: dict[str, Any],
@@ -142,14 +233,45 @@ def authority_banner(
     Baseline authority = the **consent-gated** state flag (state flag AND the
     operator-owned consent file). Sequential authority = the live autopilot's
     ``AUTOPILOT_SEQ_VERDICT`` env (env-gated, not a state flag). Both must hold
-    and the W6 gaming alarm must be clear for findings to be decision-grade.
+    and the W6 gaming alarm must be clear — AND no fail-closed era hold may be
+    open (E8 quality rebaseline / frontier rerun) — for findings to be
+    decision-grade. The holds come from the live state via ``_live_era_holds``:
+    trial 1446 showed the old banner printing "kept configs are decision-grade"
+    while the gate was skipping ``archive.update`` on
+    ``quality_rebaseline_required`` — the banner must never contradict the gate.
     """
     baseline = baseline_ledger_authority_enabled(state)
     if seq_verdict_live is None:
         seq_verdict_live = _autopilot_seq_verdict_live()
     sequential = bool(seq_verdict_live)
     gaming_alarm = bool(w6.get("gaming_alarm"))
-    decision_grade_possible = baseline and sequential and not gaming_alarm
+    holds = _live_era_holds(state)
+    authority_mechanism_enabled = baseline and sequential and not gaming_alarm
+    decision_grade_possible = authority_mechanism_enabled and not holds["any_hold_active"]
+
+    if decision_grade_possible:
+        trust_note = (
+            "Authority ENABLED (baseline + sequential, W6 clear) — kept configs are decision-grade."
+        )
+    elif holds["any_hold_active"]:
+        hold_bits = []
+        if holds["quality_rebaseline_required"]:
+            hold_bits.append(f"quality: {holds['quality_authority']}")
+        if holds["frontier_rerun_required"]:
+            hold_bits.append(f"speed: {holds['speed_authority']}")
+        mech = "" if authority_mechanism_enabled else " Planner authority is also OFF."
+        trust_note = (
+            "Era holds ACTIVE — "
+            + "; ".join(hold_bits)
+            + ". Findings below are OBSERVATIONS (fail-closed); kept configs are "
+            "NOT decision-grade until the holds clear." + mech
+        )
+    else:
+        trust_note = (
+            "Authority OFF — every finding below is an OBSERVATION, not "
+            "decision-grade; no config can be promoted yet."
+        )
+
     return {
         "baseline_authority_enabled": baseline,
         "sequential_authority_enabled": sequential,
@@ -158,13 +280,10 @@ def authority_banner(
             "gaming_alarm_clearance_clean_trials_required"
         ),
         "current_era_audited_trials": w6.get("trusted_audited_trial_count"),
+        "authority_mechanism_enabled": authority_mechanism_enabled,
+        "holds": holds,
         "decision_grade_possible": decision_grade_possible,
-        "trust_note": (
-            "Authority ENABLED (baseline + sequential, W6 clear) — kept configs are decision-grade."
-            if decision_grade_possible
-            else "Authority OFF — every finding below is an OBSERVATION, not "
-            "decision-grade; no config can be promoted yet."
-        ),
+        "trust_note": trust_note,
     }
 
 
@@ -405,6 +524,45 @@ def ruled_out_experiments(
         base = _REJECT_TYPE_LABEL.get(atype, atype)
         return f"{base} · {detail}"[:80] if detail else base[:80]
 
+    # E2 (2026-07-26): era-scope the fence list. Fences are never deleted at an
+    # era boundary — but each row now carries the provenance it was minted at
+    # (trial id + timestamp) and a "pre-<era>" tag when minted before the
+    # current pareto_epoch_ts, so pre-E8 operational fences read as historical
+    # context rather than current-era findings. The data model does not
+    # distinguish durable engineering guardrails from era-scoped operational
+    # fences, so this is a per-row label, not a partition.
+    try:
+        epoch_ts = float(state.get("pareto_epoch_ts") or 0.0) or None
+    except (TypeError, ValueError):
+        epoch_ts = None
+    active_eras = state.get("active_instrument_eras")
+    active_eras = active_eras if isinstance(active_eras, dict) else {}
+    epoch_era_short = _era_short(active_eras.get("autopilot_speed")) or "epoch"
+    pre_epoch_tag = f"pre-{epoch_era_short}"
+
+    def _minted_ts(rec: dict[str, Any], trial_row: dict[str, Any] | None) -> float | None:
+        ts = _row_ts({"timestamp": rec.get("recorded_at")})
+        if ts:
+            return ts
+        if trial_row is not None:
+            ts = _row_ts(trial_row)
+            if ts:
+                return ts
+        return None
+
+    def _era_tags(item: dict[str, Any], minted_ts: float | None) -> None:
+        item["minted_ts"] = minted_ts
+        pre = bool(minted_ts is not None and epoch_ts is not None and minted_ts < epoch_ts)
+        item["pre_epoch"] = pre
+        item["era_tag"] = pre_epoch_tag if pre else None
+
+    def _gepa_caveat(item: dict[str, Any]) -> None:
+        # E3: GEPA rows share task C's no-op-window caveat — a gepa_optimize
+        # fence/churn count accumulated while the mutation path was a no-op
+        # says nothing about GEPA's real search behaviour.
+        if str(item.get("kind") or "") == "gepa_optimize":
+            item["provenance_caveat"] = GEPA_NOOP_CAVEAT
+
     fenced: list[dict[str, Any]] = []
     stale_fenced_by_surface: list[dict[str, Any]] = []
     trial_rows: dict[int, dict[str, Any]] = {}
@@ -432,24 +590,28 @@ def ruled_out_experiments(
                 trial_row = trial_rows.get(int(trial_id))
             except (TypeError, ValueError):
                 trial_row = None
+            minted_ts = _minted_ts(rec, trial_row)
             if trial_row and str(trial_row.get("bug_corrupted_by") or "").strip():
-                stale_fenced_by_surface.append(
-                    {
-                        "label": _label(atype, detail),
-                        "kind": atype,
-                        "count": int(rec.get("count") or 1),
-                    }
-                )
-                continue
-            fenced.append(
-                {
+                stale_item = {
                     "label": _label(atype, detail),
                     "kind": atype,
                     "count": int(rec.get("count") or 1),
-                    "why": _short_reason(rec.get("reason")),
-                    "last_trial": trial_id,
                 }
-            )
+                _gepa_caveat(stale_item)
+                stale_fenced_by_surface.append(stale_item)
+                continue
+            item = {
+                "label": _label(atype, detail),
+                "kind": atype,
+                "count": int(rec.get("count") or 1),
+                "why": _short_reason(rec.get("reason")),
+                "last_trial": trial_id,
+                "minted_trial": trial_id,
+                "minted_at": rec.get("recorded_at"),
+            }
+            _era_tags(item, minted_ts)
+            _gepa_caveat(item)
+            fenced.append(item)
     fenced.sort(key=lambda x: x["count"], reverse=True)
     stale_fenced_by_surface.sort(key=lambda x: (-x["count"], x["kind"]))
 
@@ -490,6 +652,8 @@ def ruled_out_experiments(
                 corrupted.items(), key=lambda kv: (-kv[1], kv[0])
             )
         ]
+        for churn_item in (*invalid_by_surface, *corrupted_by_surface):
+            _gepa_caveat(churn_item)
     else:
         inv = state.get("invalid_signature_counts")
         if isinstance(inv, dict):
@@ -505,6 +669,8 @@ def ruled_out_experiments(
                 {"label": _REJECT_TYPE_LABEL.get(a, a), "kind": a, "count": c}
                 for a, c in sorted(agg.items(), key=lambda kv: (-kv[1], kv[0]))
             ]
+            for churn_item in invalid_by_surface:
+                _gepa_caveat(churn_item)
 
     return {
         "fenced": fenced[:limit],
@@ -554,11 +720,17 @@ def _narrative(
         )
     parts.append(f"{len(exploring)} hypotheses are queued")
     lead = f"At trial {trial_counter}: " if trial_counter is not None else ""
-    tail = (
-        " Nothing is promoted — authority is off, so these are observations."
-        if not banner.get("decision_grade_possible")
-        else " Authority is on; kept configs are decision-grade."
-    )
+    holds = banner.get("holds") if isinstance(banner.get("holds"), dict) else {}
+    if banner.get("decision_grade_possible"):
+        tail = " Authority is on; kept configs are decision-grade."
+    elif holds.get("any_hold_active"):
+        # Never claim decision-grade while a fail-closed era hold is open.
+        tail = (
+            " Nothing is decision-grade — fail-closed era holds are active "
+            "(quality baseline reseed / speed numeric rerun pending)."
+        )
+    else:
+        tail = " Nothing is promoted — authority is off, so these are observations."
     return lead + "; ".join(parts) + "." + tail
 
 
@@ -631,6 +803,12 @@ def build_optimization_brief(
         "ruled_out_experiments": ruled_out_exp,
         "ruled_out": ruled_out,
         "exploring": exploring,
+        # E4 (2026-07-26): constitutionally, old-evidence hypotheses stay queued
+        # (priors are valid); this note keeps the section honest about lineage.
+        "exploring_note": "hypotheses may derive from prior-era evidence (valid as priors)",
+        # Task C twin: the GEPA no-op provenance window, so brief consumers see
+        # the same caveat window the gepa panel renders.
+        "gepa_provenance_windows": GEPA_PROVENANCE_WINDOWS,
     }
 
 

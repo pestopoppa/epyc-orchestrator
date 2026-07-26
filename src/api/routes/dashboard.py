@@ -1235,6 +1235,85 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
                 )
         display_rows.append({"role": role, "cells": cells})
 
+    # Panel COMPLETENESS (operator report 2026-07-26): the matrix gate above
+    # means only lock-domain roles (the quarter-split trio) ever got a row, so
+    # the panel read as "only frontdoor / ingest_long_context / worker_general
+    # exist". Append every OTHER active serving instance — live role set from
+    # the same ps(1)-based discovery the topology panel uses
+    # (`_port_roles_cached`), configured shapes from NUMA topology — as
+    # DISPLAY-ONLY rows with lock state "n/a (no lock domain)". Lock semantics
+    # are untouched: these roles have no cpu_region lock domain, and the rows
+    # exist so the operator sees the whole fleet, not to gate anything.
+    # Fail-open like the rest of this panel: discovery errors → no extra rows,
+    # never a broken panel.
+    non_lock_roles: dict[str, dict[str, Any]] = {}
+    try:
+        live_port_roles = _port_roles_cached()
+    except Exception:
+        live_port_roles = {}
+    role_ports: dict[str, list[int]] = {}
+    for port, port_role in (live_port_roles or {}).items():
+        # Quarter lanes are labeled "role.qN" by the port discovery — fold them
+        # onto the base role so a lock-domain role's quarters never spawn a
+        # duplicate "no lock domain" row.
+        base_role = str(port_role).split(".", 1)[0]
+        try:
+            role_ports.setdefault(base_role, []).append(int(port))
+        except (TypeError, ValueError):
+            continue
+    _NO_LOCK_STATE = "n/a (no lock domain)"
+    for role in sorted(set(role_ports) | set(instance_topology_all)):
+        if role in by_role:
+            continue
+        insts = list(instance_topology_all.get(role) or [])
+        ports = sorted(role_ports.get(role, []))
+        non_lock_roles[role] = {
+            "ports": ports,
+            "instances": insts,
+            "lock_state": _NO_LOCK_STATE,
+        }
+        ports_note = f" · ports {','.join(str(p) for p in ports)}" if ports else ""
+        inst_by_shape = {str(i.get("shape")): i for i in insts}
+        cells = []
+        for col in display_columns:
+            inst = inst_by_shape.get(col["key"])
+            if inst is not None:
+                regions = [str(r) for r in inst.get("regions", [])]
+                cells.append(
+                    {
+                        "state": "nolock",
+                        "label": "n/a",
+                        "title": (
+                            f"{role}.{col['label']} — regions {{{','.join(regions)}}}"
+                            f"{ports_note} · {_NO_LOCK_STATE}"
+                        ),
+                    }
+                )
+            elif inst_by_shape or col["key"] != "full":
+                cells.append(
+                    {"state": "na", "label": "—", "title": f"{role} has no {col['label']} shape"}
+                )
+            else:
+                # No NUMA shape at all (embedders / GPU-attached roles): the
+                # single informative cell rides in the Full column.
+                cells.append(
+                    {
+                        "state": "nolock",
+                        "label": "n/a",
+                        "title": f"{role} — no NUMA shape{ports_note} · {_NO_LOCK_STATE}",
+                    }
+                )
+        display_rows.append(
+            {
+                "role": role,
+                "label": f"{role}{ports_note.replace(' · ports ', ' :')}",
+                "cells": cells,
+                "no_lock_domain": True,
+                "lock_state": _NO_LOCK_STATE,
+                "ports": ports,
+            }
+        )
+
     feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
     return {
         "per_region_locks_enabled": feature_flag in {"1", "true", "yes", "on"},
@@ -1244,6 +1323,9 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         "tmp_dir": str(tmp_dir),
         "entries": out,
         "by_role": by_role,
+        # Display-only completeness rows: active/configured serving roles with
+        # NO cpu_region lock domain (full-span roles, aliases, embedders).
+        "non_lock_roles": non_lock_roles,
         "display_matrix": {
             "columns": display_columns,
             "rows": display_rows,
@@ -2396,11 +2478,25 @@ def _era_region_index_for_ts(regions: list[dict[str, Any]], ts: float | None) ->
 def _label_pareto_entries_with_eras(
     entries: list[dict[str, Any]], regions: list[dict[str, Any]]
 ) -> None:
-    """Stamp each shaped entry with the era region its timestamp falls in."""
+    """Stamp each shaped entry with the era region its timestamp falls in.
+
+    Era honesty (quality axis, 2026-07-26): entries from any region OTHER than
+    the latest one additionally carry ``historical_instrument: True`` — they
+    were measured under an earlier instrument era and are historical priors,
+    not comparable to current-era points. Label ONLY — values are NEVER
+    rescaled here (the sole rescale is the codified pre-E2 speed deinflation
+    applied upstream). Entries with no parsable timestamp get ``None`` (era
+    unknown), never ``False``, so the client cannot mistake them for
+    current-instrument points.
+    """
+    latest_index = max((r["index"] for r in regions), default=None)
     for entry in entries:
         idx = _era_region_index_for_ts(regions, _parse_journal_ts(entry.get("timestamp")))
         entry["era_index"] = idx
         entry["era"] = regions[idx]["id"] if idx is not None else None
+        entry["historical_instrument"] = (
+            (idx != latest_index) if idx is not None and latest_index is not None else None
+        )
 
 
 def _autopilot_journal_shards() -> list[Path]:
@@ -5909,6 +6005,17 @@ async def gepa_status() -> JSONResponse:
         except Exception:
             pass
 
+    # GEPA optimizer-provenance windows (display-only honesty labels, 2026-07-26).
+    # Canonical constant lives in scripts/autopilot/optimization_brief.py (cites
+    # the 2026-07-25 GEPA no-op incident); fail-open to [] so a scripts-path
+    # import problem can never break the panel.
+    try:
+        from scripts.autopilot.optimization_brief import GEPA_PROVENANCE_WINDOWS
+
+        provenance_windows = list(GEPA_PROVENANCE_WINDOWS)
+    except Exception:
+        provenance_windows = []
+
     return JSONResponse(
         _stamp(
             {
@@ -5916,6 +6023,10 @@ async def gepa_status() -> JSONResponse:
                 "lines": gepa_lines,
                 "state": trial_state,
                 "recent_trials": recent_trials,
+                # Trials timestamped inside any window carry broken optimizer
+                # provenance (the reflective-mutation path was a no-op); the
+                # client hatches/greys those rows + shows a caveat badge.
+                "provenance_windows": provenance_windows,
             },
             "gepa",
         )

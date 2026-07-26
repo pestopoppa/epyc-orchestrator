@@ -3337,3 +3337,42 @@ def test_health_probe_reports_timeout_and_error(monkeypatch) -> None:
     assert payload["probe"]["ok"] is False
     assert "serve path exploded" in payload["probe"]["error"]
     assert payload["status"] == "degraded"
+
+
+def test_gepa_status_ships_provenance_windows(tmp_path: Path, monkeypatch) -> None:
+    """Task C (2026-07-26): the gepa panel payload carries the GEPA no-op
+    provenance window (2026-06-04T00:00:00Z → fix commit ed6288ea author date
+    2026-07-25T11:27:13Z) so the client can hatch/grey in-window trials and
+    show the caveat badge. Display-only — trials are never dropped."""
+    log_path = tmp_path / "autopilot.log"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    log_path.write_text("2026-07-20 00:00:00,000 GEPA: Trial active\n")
+    journal_path.write_text(
+        json.dumps(
+            {
+                "trial_id": 900,
+                "timestamp": "2026-07-01T00:00:00+00:00",  # inside the no-op window
+                "species": "prompt_forge",
+                "quality": 1.0,
+                "speed": 10.0,
+                "cost": 0.5,
+                "reliability": 1.0,
+                "pareto_status": "dominated",
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", log_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    payload = json.loads(asyncio.run(dashboard.gepa_status()).body)
+
+    assert payload["provenance_windows"] == [
+        {
+            "from_ts": 1780531200.0,  # 2026-06-04T00:00:00Z (trial-521 evidence)
+            "until_ts": 1784978833.0,  # 2026-07-25T11:27:13Z (ed6288ea author date)
+            "label": "reflective-mutation no-op — optimizer provenance broken",
+        }
+    ]
+    # The in-window trial still ships (label-only honesty, no data loss).
+    assert [t["trial_id"] for t in payload["recent_trials"]] == [900]

@@ -178,6 +178,67 @@ def test_pareto_payload_surfaces_active_testing_era(tmp_path, monkeypatch):
     assert "production-consolidated-v8" in d["frontier_rerun_required"]["reason"]
 
 
+# v8 production cutover boundary (E8-autopilot-speed row, 2026-07-25T18:38:43Z).
+E8_TS = 1785004723.0
+
+
+def test_e8_boundary_region_from_repo_registry(monkeypatch):
+    """Task A pin (2026-07-26): against the REAL repo registry, the E8 cutover
+    must produce a region starting exactly at the E8-autopilot-speed boundary,
+    and a post-boundary entry must label as E8 (current, not historical)."""
+    monkeypatch.delenv("AUTOPILOT_INSTRUMENT_ERAS_PATH", raising=False)
+    regions, err = dash._autopilot_era_regions()
+    assert err is None
+    e8_regions = [r for r in regions if r["from_ts"] == E8_TS]
+    assert e8_regions, (
+        "E8 boundary (from_ts=1785004723.0) missing from instrument_eras.yaml "
+        "autopilot-scoped regions"
+    )
+    assert any("E8" in str(r["id"]) for r in e8_regions)
+    assert any("E8-autopilot-speed" in (r.get("era_ids") or []) for r in e8_regions)
+    # An entry timestamped just after the boundary lands in the E8 region.
+    entry = {"timestamp": E8_TS + 60.0}
+    dash._label_pareto_entries_with_eras([entry], regions)
+    assert "E8" in str(entry["era"])
+    e8_index = e8_regions[0]["index"]
+    assert entry["era_index"] == e8_index
+
+
+def test_historical_instrument_label_on_all_era_view(tmp_path, monkeypatch):
+    """Task B (quality-axis era honesty): every entry outside the LATEST era
+    region is flagged historical_instrument=True; latest-region entries get
+    False; values are labeled, NEVER rescaled by this flag."""
+    _eras_file(tmp_path, monkeypatch)
+    _journal(tmp_path, monkeypatch, ROWS)
+    _state(tmp_path, monkeypatch)
+    d = _call("all_eras")
+
+    pts = {e["trial_id"]: e for lst in ([d["frontier"], d["dominated"]]) for e in lst}
+    assert pts[4]["historical_instrument"] is False, "latest-era point must not be flagged"
+    assert pts[1]["historical_instrument"] is True
+    assert pts[2]["historical_instrument"] is True
+    assert pts[3]["historical_instrument"] is True
+    # Label-only contract: objectives untouched relative to the pre-existing
+    # behaviour (E5 speed intact; the ONLY rescale remains pre-E2 deinflation).
+    assert pts[4]["objectives"][1] == 70.0
+    assert pts[3]["objectives"][1] == 52.0
+    assert pts[1]["objectives"][1] == 40.0 and pts[1]["speed_deinflated"]
+
+
+def test_historical_instrument_unknown_ts_is_null(tmp_path, monkeypatch):
+    """Entries with no parsable timestamp get None (unknown), never False —
+    the client must not render them as current-instrument points."""
+    _eras_file(tmp_path, monkeypatch)
+    regions, err = dash._autopilot_era_regions()
+    assert err is None
+    entries = [{"timestamp": None}, {"timestamp": "2026-06-28T12:00:00+00:00"}]
+    dash._label_pareto_entries_with_eras(entries, regions)
+    assert entries[0]["era_index"] is None
+    assert entries[0]["historical_instrument"] is None
+    assert entries[1]["era"] == "E5"
+    assert entries[1]["historical_instrument"] is False
+
+
 def test_all_eras_without_registry_shows_unscaled_with_warning(tmp_path, monkeypatch):
     """Registry unreadable → fail open WITHOUT deinflation (the state's
     pareto_epoch_ts is a rebase marker, not the E2 boundary) + surfaced error."""
