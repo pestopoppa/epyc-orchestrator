@@ -893,8 +893,9 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         all_regions = ["q0", "q1", "q2", "q3"]
 
     # Role INCLUSION source of truth: the operator-curated contention matrix
-    # (`orchestration/contention_matrix.yaml`) — a role appears iff it has a
-    # `same_role` entry (keeps non-CPU-lock roles like eval_batch_frontdoor out).
+    # (`orchestration/contention_matrix.yaml`). Include every role whose topology
+    # it represents, whether it appears in same-role or cross-role measurements;
+    # this keeps non-CPU-lock roles like eval_batch_frontdoor out.
     # Visible SHAPES, however, are the role's actual configured/running instances
     # (built below), NOT the matrix `same_role.instance_pairs`. Those pairs encode
     # which within-role shapes can CO-PLACE (a measured contention property) —
@@ -932,19 +933,26 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         instance_topology_all[role].sort(key=lambda x: (-x["span"], x["regions"]))
 
     # Determine the panel rows + per-role visible shapes. A role is INCLUDED iff
-    # the matrix lists it (`same_role`); its VISIBLE SHAPES are its configured
-    # instances (numa-mode-filtered above), so every dispatchable instance shows —
-    # including heavy-role quarters that have no co-placement pairs.
+    # the matrix represents it; its VISIBLE SHAPES are its configured instances
+    # (numa-mode-filtered above), so every dispatchable instance shows.
     panel_roles: set[str] = set()
     role_allowed_shapes: dict[str, set[str]] = {}
-    if matrix is not None and matrix.same_role:
-        for role in matrix.same_role:
+    if matrix is not None:
+        try:
+            from src.scheduling.contention import matrix_measured_roles
+
+            measured_roles = matrix_measured_roles(matrix)
+        except (AttributeError, TypeError):
+            # Keep lightweight test/downgrade matrix objects compatible with the
+            # pre-existing same-role-only shape.
+            measured_roles = set(getattr(matrix, "same_role", {}))
+        for role in measured_roles:
             insts = instance_topology_all.get(role) or []
             if not insts:
                 continue  # matrix mentions a role we have no NUMA_CONFIG for
             role_allowed_shapes[role] = {i["shape"] for i in insts}
             panel_roles.add(role)
-    else:
+    if matrix is None:
         # Fallback: matrix missing/unreadable → every multi-instance role.
         for role, insts in instance_topology_all.items():
             if len(insts) >= 2:

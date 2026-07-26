@@ -540,6 +540,61 @@ class TestRegionLocksSnapshot:
         assert "frontdoor" in payload["by_role"]
 
     @pytest.mark.asyncio
+    async def test_pair_measured_roles_appear_without_same_role_entries(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Cross-role measurements establish panel membership for CPU roles."""
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: []
+        )
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                ("architect_general", 0): {"q0", "q1", "q2", "q3"},
+                ("worker_vision", 0): {"q1"},
+                ("vision_escalation", 0): {"q3"},
+                ("frontdoor", 0): {"q0", "q1"},
+            },
+        )
+        matrix = ContentionMatrix(
+            version=1,
+            measured_at="test",
+            host="test",
+            topology_hash="test",
+            default_floor=0.85,
+            same_role={},
+            pairs={
+                tuple(sorted(("architect_general", "worker_vision"))): Pair(
+                    roles=tuple(sorted(("architect_general", "worker_vision"))),
+                    ratio=1.0,
+                    verdict="allow",
+                ),
+                tuple(sorted(("vision_escalation", "worker_vision"))): Pair(
+                    roles=tuple(sorted(("vision_escalation", "worker_vision"))),
+                    ratio=1.0,
+                    verdict="allow",
+                ),
+            },
+        )
+        monkeypatch.setattr("src.scheduling.contention.load_contention_matrix", lambda: matrix)
+
+        payload = json.loads((await region_locks_snapshot()).body)
+
+        assert set(payload["by_role"]) == {
+            "architect_general",
+            "worker_vision",
+            "vision_escalation",
+        }
+        assert "frontdoor" not in payload["by_role"]
+        assert [inst["shape"] for inst in payload["by_role"]["architect_general"]["instances"]] == [
+            "full"
+        ]
+        assert [inst["shape"] for inst in payload["by_role"]["worker_vision"]["instances"]] == [
+            "q1"
+        ]
+
+    @pytest.mark.asyncio
     async def test_runtime_holder_outside_matrix_visible_shapes_resolves(
         self, tmp_path, monkeypatch
     ) -> None:
