@@ -495,6 +495,24 @@ dflash_drafters:
     format: safetensors
     status: downloaded
 deprecated_models:
+- model: Qwable-v1-GGUF (IQ4_XS)
+  path_was: /mnt/raid0/llm/models/Qwable-v1-GGUF/
+  size_gb: 53
+  reason: Failed all reviewer slates (RM-2.fast); never an active orchestrator role;
+    operator-approved disk cleanup for 27B Q8 bench downloads
+  deleted: 2026-07-26
+- model: longcat-flash-lite-q4km
+  path_was: /mnt/raid0/llm/models/longcat-flash-lite-q4km/
+  size_gb: 38
+  reason: Research probe only (llama.cpp-longcat-probe worktree); never registered as a role;
+    operator-approved disk cleanup
+  deleted: 2026-07-26
+- model: Qwen3.6-27B-MTP-f16-upcast
+  path_was: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-f16-upcast.gguf
+  size_gb: 51
+  reason: Conversion intermediate, zero consumers; regenerable from MTP source;
+    operator-approved disk cleanup
+  deleted: 2026-07-26
 - model: Meta-Llama-3-70B-Instruct-Q4_K_M
   path_was: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Meta-Llama-3-70B-Instruct-GGUF/
   size_gb: 40
