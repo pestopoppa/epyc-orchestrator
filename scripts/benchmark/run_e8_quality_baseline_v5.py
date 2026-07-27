@@ -48,6 +48,8 @@ GENERATION_TAIL_CONTRACT = {
     "sequential": True,
     "scorer_tail_is_separate": True,
     "clean_watcher_required_for_full_run_and_tail": True,
+    "pristine_full_run_snapshot": "before_any_v5_line_replacement",
+    "sidecar_replacement_allowlists": "recovered_scorer_tail_union_generation_tail",
 }
 
 
@@ -132,6 +134,7 @@ def classify_generation_failure(
     blank_or_sentinel = not answer.strip() or answer == error
     if (
         result.get("tokens_generated") == 0
+        and type(result.get("tokens_generated")) is int
         and result.get("error") is True
         and response_error == error
         and qid
@@ -227,20 +230,91 @@ def validate_clean_sidecar_result(
     )
 
 
-def reconcile_sidecar_with_responses(
+def write_bytes_create(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        V4._write_full_record(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    V4.fsync_dir(path.parent)
+
+
+def snapshot_pristine_full_run(
+    *,
+    tier: int,
+    repetition: int,
+    responses_path: Path,
+    sidecar_path: Path,
+    judge_trace_path: Path,
+    output_dir: Path,
+    published_dir: Path,
+) -> dict[str, Any]:
+    pristine_dir = output_dir / f"pristine_full_run.T{tier}.r{repetition}"
+    pristine_dir.mkdir(parents=True, exist_ok=False)
+    artifacts: dict[str, dict[str, str]] = {}
+    for source in (responses_path, sidecar_path, judge_trace_path):
+        destination = pristine_dir / source.name
+        write_bytes_create(destination, source.read_bytes())
+        artifacts[source.name] = {
+            "path": str(
+                V4.published_path(
+                    destination,
+                    staging_dir=output_dir,
+                    output_dir=published_dir,
+                )
+            ),
+            "sha256": V4.sha256_path(destination),
+        }
+    V4.fsync_dir(pristine_dir)
+    return {
+        "schema": "epyc.e8_quality_pristine_full_run.v1",
+        "path": str(
+            V4.published_path(
+                pristine_dir,
+                staging_dir=output_dir,
+                output_dir=published_dir,
+            )
+        ),
+        "artifacts": artifacts,
+    }
+
+
+def reconcile_scorer_tail_sidecar(
     sidecar_path: Path,
     responses: list[dict[str, Any]],
-) -> None:
+    scorer_tail: list[dict[str, Any]],
+) -> list[int]:
+    if not scorer_tail:
+        return []
     _parsed, sidecars = sidecar_question_rows(sidecar_path, expected_n=len(responses))
-    replacements = {
-        ordinal: _coherent_sidecar_row(
+    replacements: dict[int, dict[str, Any]] = {}
+    for record in scorer_tail:
+        ordinal = record.get("ordinal")
+        if (
+            not isinstance(ordinal, int)
+            or isinstance(ordinal, bool)
+            or not 0 <= ordinal < len(responses)
+            or ordinal in replacements
+            or record.get("qid") != responses[ordinal].get("qid")
+            or record.get("outcome") != "recovered"
+        ):
+            raise ValueError("scorer-tail sidecar replacement identity differs")
+        replacement = _coherent_sidecar_row(
             sidecars[ordinal][1],
-            response,
-            qid=str(response.get("qid") or ""),
+            responses[ordinal],
+            qid=str(responses[ordinal].get("qid") or ""),
         )
-        for ordinal, response in enumerate(responses)
-    }
+        if not validate_clean_sidecar_result(
+            responses[ordinal],
+            replacement,
+            qid=str(responses[ordinal]["qid"]),
+        ):
+            raise ValueError("scorer-tail sidecar replacement is not coherent")
+        replacements[ordinal] = replacement
     _replace_sidecar_lines(sidecar_path, replacements, expected_n=len(responses))
+    return sorted(replacements)
 
 
 def generation_failure_targets(
@@ -657,8 +731,24 @@ def run_repetition_v5(
     )
     responses_path = output_dir / f"responses.T{tier}.r{repetition}.jsonl"
     sidecar_path = sidecar_dir / f"question_results.e8-t{tier}-r{repetition}.jsonl"
-    reconcile_sidecar_with_responses(sidecar_path, V4.load_jsonl(responses_path))
-    detail["sidecar_sha256"] = V4.sha256_path(sidecar_path)
+    judge_trace_path = output_dir / f"judge_traces.T{tier}.r{repetition}.jsonl"
+    detail["pristine_full_run"] = snapshot_pristine_full_run(
+        tier=tier,
+        repetition=repetition,
+        responses_path=responses_path,
+        sidecar_path=sidecar_path,
+        judge_trace_path=judge_trace_path,
+        output_dir=output_dir,
+        published_dir=published_dir,
+    )
+    responses = V4.load_jsonl(responses_path)
+    detail["scorer_sidecar_replacement_ordinals"] = reconcile_scorer_tail_sidecar(
+        sidecar_path,
+        responses,
+        detail.get("scorer_tail_replay") or [],
+    )
+    if detail["scorer_sidecar_replacement_ordinals"]:
+        detail["sidecar_sha256"] = V4.sha256_path(sidecar_path)
     tail = run_generation_tail(
         tower,
         tier=tier,
@@ -666,7 +756,7 @@ def run_repetition_v5(
         questions=questions,
         responses_path=responses_path,
         sidecar_path=sidecar_path,
-        judge_trace_path=output_dir / f"judge_traces.T{tier}.r{repetition}.jsonl",
+        judge_trace_path=judge_trace_path,
         sidecar_dir=sidecar_dir,
         output_dir=output_dir,
         published_dir=published_dir,

@@ -96,6 +96,7 @@ def test_generation_classifier_accepts_only_evidence_bound_reviewed_errors(error
         ("", 0, True, "loop detected"),
         ("", 0, True, "code execution failed"),
         ("answer", 4, True, "scoring_unavailable: judge down"),
+        ("", False, True, "timed out"),
     ],
 )
 def test_generation_classifier_rejects_model_and_scorer_failures(
@@ -467,6 +468,129 @@ def test_merge_judge_trace_replaces_existing_target_only(tmp_path: Path) -> None
     )
 
 
+def test_duplicate_target_judge_trace_is_rejected_by_runner_and_validator(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "trace.jsonl"
+    focused = tmp_path / "focused.jsonl"
+    duplicate = [
+        {"fixed_vector_row": {"ordinal": 5, "qid": "q5"}, "outcome": "old-1"},
+        {"fixed_vector_row": {"ordinal": 5, "qid": "q5"}, "outcome": "old-2"},
+    ]
+    _jsonl(trace, duplicate)
+    _jsonl(
+        focused,
+        [{"fixed_vector_row": {"ordinal": 0, "qid": "focused"}, "outcome": "retry"}],
+    )
+    with pytest.raises(ValueError, match="not unique"):
+        runner._merge_judge_trace(
+            trace,
+            focused,
+            tier=2,
+            repetition=1,
+            ordinal=5,
+            qid="q5",
+        )
+    validator = _load_validator("e8_v5_validator_duplicate_trace_test")
+    with pytest.raises(ValueError, match="duplicate original"):
+        validator.validate_tail_trace_replacement(
+            original_trace_lines=trace.read_bytes().splitlines(keepends=True),
+            final_trace_lines=trace.read_bytes().splitlines(keepends=True),
+            retry_traces={5: runner.V4.load_jsonl(focused)},
+            target_ordinals={5},
+            scoring_questions=[{"scoring_method": "exact_match"} for _ordinal in range(5)]
+            + [{"scoring_method": "llm_judge"}],
+            expected_qids=[f"q{ordinal}" for ordinal in range(6)],
+            tier=2,
+            repetition=1,
+        )
+
+
+def test_scorer_tail_replaces_only_target_sidecar_line_and_preserves_batch_identity(
+    tmp_path: Path,
+) -> None:
+    sidecar = tmp_path / "question_results.e8-t1-r1.jsonl"
+    rows = _sidecar(["q0", "q1"], failure_ordinal=-1)
+    rows[1]["result"].update(
+        {
+            "error": True,
+            "error_detail": "scoring_unavailable: judge timeout",
+        }
+    )
+    _jsonl(sidecar, rows)
+    responses = [_response("q0", "a"), _response("q1", "a")]
+    before = sidecar.read_bytes().splitlines(keepends=True)
+    replaced = runner.reconcile_scorer_tail_sidecar(
+        sidecar,
+        responses,
+        [{"ordinal": 0, "qid": "q0", "outcome": "recovered"}],
+    )
+    after = sidecar.read_bytes().splitlines(keepends=True)
+    assert replaced == [0]
+    assert before[0] == after[0]
+    assert before[2:] == after[2:]
+    _parsed, indexed = runner.sidecar_question_rows(sidecar, expected_n=2)
+    target = indexed[0][1]
+    assert target["eval_batch_id"] == "full-batch"
+    assert target["label"] == "e8-t2-r1"
+    assert target["requested_n"] == 2
+    assert runner.validate_clean_sidecar_result(responses[0], target, qid="q0")
+
+
+def test_no_tail_repetition_does_not_rewrite_sidecar(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    responses = tmp_path / "responses.T1.r1.jsonl"
+    sidecar_dir = tmp_path / "eval_sidecars"
+    sidecar = sidecar_dir / "question_results.e8-t1-r1.jsonl"
+    trace = tmp_path / "judge_traces.T1.r1.jsonl"
+    response_rows = [_response("q0", "a")]
+    sidecar_rows = _sidecar(["q0"], failure_ordinal=-1)
+    _jsonl(responses, response_rows)
+    _jsonl(sidecar, sidecar_rows)
+    _jsonl(trace, [])
+    original_sidecar = sidecar.read_bytes()
+
+    def fake_repetition(*_args, **_kwargs):
+        return (
+            {"q": 3.0},
+            {
+                "sidecar_sha256": runner.V4.sha256_path(sidecar),
+                "scorer_tail_replay": [],
+            },
+        )
+
+    monkeypatch.setattr(runner.V4, "run_repetition", fake_repetition)
+    monkeypatch.setattr(
+        runner,
+        "run_generation_tail",
+        lambda *_args, **_kwargs: {
+            "schema": runner.TAIL_SCHEMA,
+            "targets": [],
+            "retry_count": 0,
+        },
+    )
+    _observation, detail = runner.run_repetition_v5(
+        object(),
+        tier=1,
+        repetition=1,
+        questions=[{"qid": "q0"}],
+        core_id="core",
+        output_dir=tmp_path,
+        expected_binding={},
+        args=SimpleNamespace(),
+        sidecar_dir=sidecar_dir,
+        published_dir=tmp_path,
+        watcher=object(),
+    )
+    assert sidecar.read_bytes() == original_sidecar
+    pristine = detail["pristine_full_run"]
+    pristine_sidecar = Path(pristine["artifacts"][sidecar.name]["path"])
+    assert pristine_sidecar.read_bytes() == original_sidecar
+    assert detail["scorer_sidecar_replacement_ordinals"] == []
+
+
 def test_v5_cli_pins_tail_timeout_and_disallows_execute_mode() -> None:
     args = runner.parse_args(
         ["--collect-candidate", "--output-dir", "/tmp/v5", "--evaltower-timeout-s", "300"]
@@ -554,6 +678,7 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
             sidecar_rows.append({"row_type": "batch_complete", "complete": True})
             _jsonl(sidecar, sidecar_rows)
             _jsonl(trace, [])
+            pristine_sources = (responses, sidecar, trace)
             tail = {"schema": runner.TAIL_SCHEMA, "targets": [], "retry_count": 0}
             if tier == 1 and repetition == 1:
                 original_dir = root / "generation_tail_original.T1.r1"
@@ -581,6 +706,11 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                 _jsonl(original_response, original_rows)
                 _jsonl(original_sidecar, original_sidecars)
                 _jsonl(original_trace, [])
+                pristine_sources = (
+                    original_response,
+                    original_sidecar,
+                    original_trace,
+                )
                 focused_sidecar = (
                     root / "eval_sidecars" / "question_results.e8-v5-tail-t1-r1-o0.jsonl"
                 )
@@ -650,6 +780,24 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                     "original_artifact_dir": str(original_dir),
                     "scoring_audit": {"matches": True},
                 }
+            pristine_dir = root / f"pristine_full_run.T{tier}.r{repetition}"
+            pristine_artifacts = {}
+            for source, final_name in zip(
+                pristine_sources,
+                (responses.name, sidecar.name, trace.name),
+            ):
+                destination = pristine_dir / final_name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(source.read_bytes())
+                pristine_artifacts[final_name] = {
+                    "path": str(destination),
+                    "sha256": validator.sha256_path(destination),
+                }
+            pristine = {
+                "schema": "epyc.e8_quality_pristine_full_run.v1",
+                "path": str(pristine_dir),
+                "artifacts": pristine_artifacts,
+            }
             raw = root / f"raw.T{tier}.r{repetition}.json"
             raw_payload = {
                 "q": 3.0,
@@ -685,6 +833,8 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                     "all_routes_frontdoor": True,
                     "error_classification": {},
                     "scoring_audit": {"matches": True},
+                    "scorer_tail_replay": [],
+                    "scorer_sidecar_replacement_ordinals": [],
                     "response_path": str(responses),
                     "response_sha256": validator.sha256_path(responses),
                     "sidecar_path": str(sidecar),
@@ -692,6 +842,7 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                     "judge_trace_path": str(trace),
                     "judge_trace_sha256": validator.sha256_path(trace),
                     "generation_tail": tail,
+                    "pristine_full_run": pristine,
                 }
             )
         summary = root / f"summary.T{tier}.json"
@@ -1072,6 +1223,17 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
     operator_root = Path("/mnt/raid0/llm/epyc-root/artifacts/operator")
     before_outputs = set(operator_root.glob(f"*{evidence_sha}*"))
+    lock_path = Path("/mnt/raid0/llm/tmp/e8-quality-baseline-v5-apply.lock")
+    lock_before = (
+        (
+            lock_path.stat().st_ino,
+            lock_path.stat().st_size,
+            lock_path.stat().st_mtime_ns,
+            lock_path.read_bytes(),
+        )
+        if lock_path.exists()
+        else None
+    )
     completed = subprocess.run(
         [
             "bash",
@@ -1108,3 +1270,14 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     assert "prevalidation passed" in completed.stdout
     assert state_path.read_bytes() == state_bytes
     assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
+    lock_after = (
+        (
+            lock_path.stat().st_ino,
+            lock_path.stat().st_size,
+            lock_path.stat().st_mtime_ns,
+            lock_path.read_bytes(),
+        )
+        if lock_path.exists()
+        else None
+    )
+    assert lock_after == lock_before

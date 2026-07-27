@@ -295,8 +295,81 @@ def validate(
                 or detail.get("judge_trace_sha256") != sha256_path(trace_path)
             ):
                 raise ValueError("repetition artifact hash differs")
+            pristine = detail.get("pristine_full_run")
+            pristine_artifacts = pristine.get("artifacts") if isinstance(pristine, dict) else None
+            if (
+                not isinstance(pristine, dict)
+                or pristine.get("schema") != "epyc.e8_quality_pristine_full_run.v1"
+                or not isinstance(pristine_artifacts, dict)
+                or set(pristine_artifacts)
+                != {response_path.name, sidecar_path.name, trace_path.name}
+            ):
+                raise ValueError("pristine full-run snapshot is missing")
+            pristine_dir = resolve_artifact(
+                evidence_root,
+                pristine.get("path"),
+                "pristine full-run directory",
+            )
+            if {path.name for path in pristine_dir.iterdir() if path.is_file()} != set(
+                pristine_artifacts
+            ) or any(path.is_dir() for path in pristine_dir.iterdir()):
+                raise ValueError("pristine full-run directory has an unexpected artifact set")
+            pristine_paths: dict[str, Path] = {}
+            for name, artifact in pristine_artifacts.items():
+                if not isinstance(artifact, dict):
+                    raise ValueError("pristine full-run artifact reference is malformed")
+                artifact_path = resolve_artifact(
+                    evidence_root,
+                    artifact.get("path"),
+                    "pristine full-run artifact",
+                )
+                if artifact_path != pristine_dir / name or artifact.get("sha256") != sha256_path(
+                    artifact_path
+                ):
+                    raise ValueError("pristine full-run artifact differs")
+                pristine_paths[name] = artifact_path
+            scorer_tail = detail.get("scorer_tail_replay")
+            scorer_replacements = detail.get("scorer_sidecar_replacement_ordinals")
+            if not isinstance(scorer_tail, list) or not isinstance(scorer_replacements, list):
+                raise ValueError("scorer-tail replacement disposition is missing")
+            scorer_targets: dict[int, str] = {}
+            for row in scorer_tail:
+                if (
+                    not isinstance(row, dict)
+                    or not isinstance(row.get("ordinal"), int)
+                    or isinstance(row.get("ordinal"), bool)
+                    or not 0 <= row["ordinal"] < expected_n
+                    or row.get("ordinal") in scorer_targets
+                    or row.get("outcome") != "recovered"
+                ):
+                    raise ValueError("scorer-tail replacement disposition differs")
+                scorer_targets[int(row["ordinal"])] = str(row.get("qid") or "")
+            if scorer_replacements != sorted(scorer_targets):
+                raise ValueError("scorer-tail sidecar replacement allowlist differs")
+            generation_targets = tail.get("targets")
+            if not isinstance(generation_targets, list):
+                raise ValueError("generation-tail target list differs")
+            generation_target_map: dict[int, str] = {}
+            for row in generation_targets:
+                if (
+                    not isinstance(row, dict)
+                    or not isinstance(row.get("ordinal"), int)
+                    or isinstance(row.get("ordinal"), bool)
+                    or not 0 <= row["ordinal"] < expected_n
+                    or row.get("ordinal") in generation_target_map
+                ):
+                    raise ValueError("generation-tail target identity differs")
+                generation_target_map[int(row["ordinal"])] = str(row.get("qid") or "")
+            generation_ordinals = set(generation_target_map)
+            scorer_ordinals = set(scorer_targets)
+            if generation_ordinals & scorer_ordinals:
+                raise ValueError("generation and scorer tail targets overlap")
             responses = runner.V4.load_jsonl(response_path)
             expected_qids = [row["qid"] for row in vectors[tier]["questions"]]
+            if any(expected_qids[ordinal] != qid for ordinal, qid in scorer_targets.items()) or any(
+                expected_qids[ordinal] != qid for ordinal, qid in generation_target_map.items()
+            ):
+                raise ValueError("tail target differs from fixed-vector identity")
             if [row.get("qid") for row in responses] != expected_qids or any(
                 row.get("error") is not None
                 or row.get("partial") is not False
@@ -318,6 +391,63 @@ def validate(
                 for ordinal in range(expected_n)
             ):
                 raise ValueError("final response and sidecar ledgers are not coherent")
+            pristine_response_lines = (
+                pristine_paths[response_path.name].read_bytes().splitlines(keepends=True)
+            )
+            final_response_lines = response_path.read_bytes().splitlines(keepends=True)
+            if (
+                len(pristine_response_lines) != expected_n
+                or len(final_response_lines) != expected_n
+                or any(
+                    pristine_line != final_line
+                    for ordinal, (pristine_line, final_line) in enumerate(
+                        zip(pristine_response_lines, final_response_lines)
+                    )
+                    if ordinal not in generation_ordinals
+                )
+                or any(
+                    pristine_response_lines[ordinal] == final_response_lines[ordinal]
+                    for ordinal in generation_ordinals
+                )
+            ):
+                raise ValueError("final response bytes exceed the generation-tail allowlist")
+            pristine_sidecar_path = pristine_paths[sidecar_path.name]
+            _pristine_parsed, pristine_sidecars = runner.sidecar_question_rows(
+                pristine_sidecar_path,
+                expected_n=expected_n,
+            )
+            pristine_sidecar_lines = pristine_sidecar_path.read_bytes().splitlines(keepends=True)
+            final_sidecar_lines = sidecar_path.read_bytes().splitlines(keepends=True)
+            allowed_sidecar_ordinals = scorer_ordinals | generation_ordinals
+            if (
+                len(pristine_sidecar_lines) != len(final_sidecar_lines)
+                or any(
+                    pristine_sidecars[ordinal][0] != final_sidecars[ordinal][0]
+                    for ordinal in range(expected_n)
+                )
+                or any(
+                    pristine_line != final_line
+                    for line_index, (pristine_line, final_line) in enumerate(
+                        zip(pristine_sidecar_lines, final_sidecar_lines)
+                    )
+                    if line_index
+                    not in {pristine_sidecars[ordinal][0] for ordinal in allowed_sidecar_ordinals}
+                )
+                or any(
+                    pristine_sidecar_lines[pristine_sidecars[ordinal][0]]
+                    == final_sidecar_lines[final_sidecars[ordinal][0]]
+                    for ordinal in allowed_sidecar_ordinals
+                )
+            ):
+                raise ValueError("final sidecar bytes exceed the declared tail allowlists")
+            pristine_trace_lines = (
+                pristine_paths[trace_path.name].read_bytes().splitlines(keepends=True)
+            )
+            if (
+                not generation_ordinals
+                and trace_path.read_bytes() != pristine_paths[trace_path.name].read_bytes()
+            ):
+                raise ValueError("no-generation-tail run changed judge-trace bytes")
             runner.V4.validate_response_scoring(
                 responses,
                 scoring[tier]["questions"],
@@ -438,12 +568,9 @@ def validate(
                         raise ValueError(
                             "generation-tail target is not bound to original artifacts"
                         )
-                original_trace_lines = (
-                    (original_dir / trace_path.name).read_bytes().splitlines(keepends=True)
-                )
                 final_trace_lines = trace_path.read_bytes().splitlines(keepends=True)
                 validate_tail_trace_replacement(
-                    original_trace_lines=original_trace_lines,
+                    original_trace_lines=pristine_trace_lines,
                     final_trace_lines=final_trace_lines,
                     retry_traces=retry_traces,
                     target_ordinals=target_ordinals,
