@@ -645,6 +645,34 @@
     }
   },
   "best_grouped_auc": 0.726166107448268,
-  "verdict": "SIGNAL \u2014 AUC>=0.65: RECOMMEND as a feature (do NOT enable live; handoff is frozen for expansion).",
-  "prior_context": "COMP_r (comp_region_probe.py, 2026-07-22) returned a clean NULL at pooled AUC 0.497 on a nearest-neighbour similarity formulation. This probe tests supervised decodability, a different question, but the prior is low."
+  "verdict": "REFUTED \u2014 see REFUTED block. Do not cite the per-role AUCs.",
+  "prior_context": "COMP_r (comp_region_probe.py, 2026-07-22) returned a clean NULL at pooled AUC 0.497 on a nearest-neighbour similarity formulation. This probe tests supervised decodability, a different question, but the prior is low.",
+  "REFUTED": {
+    "verified": "2026-07-27 independent adversarial verification, 3 of 6 attacks refute",
+    "do_not_cite": "The per-role AUCs in this file are exactly reproducible and mean nothing about task difficulty. They decode the benchmark suite and the writer pipeline, not the task.",
+    "refutations": {
+      "trivial_features_beat_the_embedding": "A 13-feature length/format model beats the 1024-d BGE probe on 4 of 5 roles; emb+trivial <= trivial on three roles.",
+      "headline_lives_in_size_1_groups": "74-82% of test groups are size 1. On objectives seen >1 time all four signal roles fall to 0.47-0.53; worker_general drops to 0.411 at size>=3. Per-objective failure-rate split-half reliability is -0.04 to 0.43.",
+      "outcome_is_a_suite_detector": "suite x task_type identity alone beats the embedding on all 5 roles (0.727-0.804). WITHIN suite strata the embedding falls to 0.5204-0.5822 - at or below this probe\u2019s own NULL gate of 0.55."
+    },
+    "honest_number": {
+      "metric": "within-suite group-weighted AUC",
+      "worker_general": 0.5521,
+      "ingest_long_context": 0.5822,
+      "coder_escalation": 0.525,
+      "architect_general": 0.5669,
+      "frontdoor": 0.5204,
+      "reading": "NULL side of the pre-declared 0.55 gate. N17 conditional-depth is UNSUPPORTED by this probe."
+    },
+    "label_defects_found": [
+      "EPD-1 outcome never updated after INSERT (episodic_store.py:723-725; max update_count 7888)",
+      "EPD-2 failure conflates errors with latency/escalation cost penalties on correct answers",
+      "EPD-3 index mixes >=3 embedding-text conventions; vector predicts writer path at ROW-AUC 0.906-0.940"
+    ],
+    "attacks_survived": [
+      "near-duplicate merging (AUC rises)",
+      "time-ordered split (AUC rises; but time axis is confounded with writer path)",
+      "controls are sound (shuffled + group-preserving permutation both at chance)"
+    ]
+  }
 }

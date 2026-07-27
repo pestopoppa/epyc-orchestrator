@@ -43,6 +43,16 @@ Decision gate (pre-declared, mirroring the COMP_r contract)
                             PROMOTING one is not.
     0.55 < AUC < 0.65    -> inconclusive; report and let the operator decide.
 
+RESULT STATUS (2026-07-27): the first run of this probe was **REFUTED** by independent adversarial
+verification. It reported group-weighted AUC 0.726 (worker_general) .. 0.575 (frontdoor); those
+numbers are exactly reproducible and mean nothing about task difficulty. Three refutations: a
+13-feature length/format model beats the 1024-d embedding on 4 of 5 roles; the headline lives
+entirely in objectives seen exactly once (size>=2 groups fall to 0.47-0.53); and suite x task_type
+identity alone beats the embedding on all 5 roles, with the within-suite AUC collapsing to
+0.520-0.582 — at or below this probe's own NULL gate. What it decodes is the benchmark suite and the
+writer pipeline. Root cause is the LABEL, not the probe: see EPD-1..3 in
+handoffs/active/learned-routing-controller.md. Do not re-run against the current `outcome` label.
+
 All numbers emitted are OBSERVATIONS per MEASUREMENT.md (no protocol-id, no attestation): usable to
 gate THIS research line's keep/close decision, never a production deploy/promote.
 
