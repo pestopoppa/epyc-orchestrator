@@ -1,0 +1,1086 @@
+from __future__ import annotations
+
+from contextlib import nullcontext
+import importlib.util
+import json
+import hashlib
+from pathlib import Path
+import subprocess
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODULE_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
+spec = importlib.util.spec_from_file_location("e8_v5", MODULE_PATH)
+assert spec is not None and spec.loader is not None
+runner = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = runner
+spec.loader.exec_module(runner)
+
+
+def _jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
+
+
+def _response(qid: str, answer: str, *, error: str | None = None, partial: bool = False) -> dict:
+    return {
+        "qid": qid,
+        "suite": "suite",
+        "scoring_method": "exact_match",
+        "answer": answer,
+        "correct": error is None,
+        "error": error,
+        "partial": partial,
+        "degraded": False,
+        "route_used": "frontdoor",
+        "scoring_config_sha256": runner.canonical_hash({}),
+    }
+
+
+def _sidecar(qids: list[str], *, failure_ordinal: int = 0) -> list[dict]:
+    rows = [{"row_type": "batch_start", "requested_n": len(qids)}]
+    for ordinal, qid in enumerate(qids):
+        result = {"qid": qid, "question_id": qid, "tokens_generated": 1, "error": False}
+        answer = "a"
+        if ordinal == failure_ordinal:
+            answer = "timed out"
+            result.update({"tokens_generated": 0, "error": True, "error_detail": "timed out"})
+        rows.append(
+            {
+                "row_type": "question_result",
+                "ordinal": ordinal,
+                "answer": answer,
+                "result": result,
+                "eval_batch_id": "full-batch",
+                "label": "e8-t2-r1",
+                "requested_n": len(qids),
+                "complete": False,
+                "started_at_s": 1.0,
+                "ended_at_s": 2.0,
+                "elapsed_s": 1.0,
+                "scored_at_s": 2.1,
+            }
+        )
+    rows.append({"row_type": "batch_complete", "complete": True})
+    return rows
+
+
+@pytest.mark.parametrize("error", sorted(runner.ACCEPTED_INFRA_ERRORS))
+def test_generation_classifier_accepts_only_evidence_bound_reviewed_errors(error: str) -> None:
+    response = _response("q", error, error=error)
+    sidecar = {
+        "result": {
+            "qid": "q",
+            "question_id": "q",
+            "tokens_generated": 0,
+            "error": True,
+            "error_detail": error,
+        }
+    }
+    assert runner.classify_generation_failure(response, sidecar) == error
+
+
+@pytest.mark.parametrize(
+    ("answer", "tokens", "result_error", "detail"),
+    [
+        ("", 0, False, "timed out"),
+        ("model output", 0, True, "timed out"),
+        ("", 1, True, "timed out"),
+        ("", 0, True, ""),
+        ("", 0, True, "empty model output"),
+        ("", 0, True, "truncated"),
+        ("", 0, True, "loop detected"),
+        ("", 0, True, "code execution failed"),
+        ("answer", 4, True, "scoring_unavailable: judge down"),
+    ],
+)
+def test_generation_classifier_rejects_model_and_scorer_failures(
+    answer: str, tokens: int, result_error: bool, detail: str
+) -> None:
+    assert (
+        runner.classify_generation_failure(
+            _response("q", answer, error=detail or None),
+            {
+                "result": {
+                    "qid": "q",
+                    "question_id": "q",
+                    "tokens_generated": tokens,
+                    "error": result_error,
+                    "error_detail": detail,
+                }
+            },
+        )
+        is None
+    )
+
+
+def test_generation_classifier_rejects_cross_ledger_mismatch() -> None:
+    sidecar = {
+        "result": {
+            "qid": "other",
+            "question_id": "other",
+            "tokens_generated": 0,
+            "error": True,
+            "error_detail": "timed out",
+        }
+    }
+    assert (
+        runner.classify_generation_failure(
+            _response("q", "timed out", error="request timed out"), sidecar
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "response_change",
+    [
+        {"partial": True},
+        {"degraded": True},
+        {"route_used": "worker_general"},
+    ],
+)
+def test_generation_classifier_rejects_nonclean_response_state(
+    response_change: dict,
+) -> None:
+    response = {
+        **_response("q", "timed out", error="timed out"),
+        **response_change,
+    }
+    sidecar = {
+        "result": {
+            "qid": "q",
+            "question_id": "q",
+            "tokens_generated": 0,
+            "error": True,
+            "error_detail": "timed out",
+        }
+    }
+    assert runner.classify_generation_failure(response, sidecar) is None
+
+
+class FakeTower:
+    def __init__(
+        self,
+        sidecar_dir: Path,
+        *,
+        fail: bool = False,
+        partial: bool = False,
+        malformed_success: str | None = None,
+    ) -> None:
+        self.sidecar_dir = sidecar_dir
+        self.fail = fail
+        self.partial = partial
+        self.malformed_success = malformed_success
+        self.calls = 0
+
+    def _eval_batch(self, questions, _client, *, log_every, label):
+        del log_every
+        self.calls += 1
+        qid = questions[0]["qid"]
+        error = "timed out" if self.fail else None
+        answer = error or "a"
+        result_row = {
+            "qid": qid,
+            "question_id": qid,
+            "tokens_generated": 0 if error else 1,
+            "error": bool(error),
+            "error_detail": error,
+        }
+        sidecar_answer = answer
+        if not error and self.malformed_success == "zero_tokens":
+            result_row["tokens_generated"] = 0
+        elif not error and self.malformed_success == "result_error":
+            result_row.update({"error": True, "error_detail": "model failed"})
+        elif not error and self.malformed_success == "qid":
+            result_row.update({"qid": "other", "question_id": "other"})
+        elif not error and self.malformed_success == "answer":
+            sidecar_answer = "different"
+        _jsonl(
+            self.sidecar_dir / f"question_results.{label}.jsonl",
+            [
+                {"row_type": "batch_start", "requested_n": 1},
+                {
+                    "row_type": "question_result",
+                    "ordinal": 0,
+                    "answer": sidecar_answer,
+                    "result": result_row,
+                    "complete": False,
+                    "started_at_s": 3.0,
+                    "ended_at_s": 3.25,
+                    "elapsed_s": 0.25,
+                },
+                {"row_type": "batch_complete", "complete": True},
+            ],
+        )
+        return [
+            SimpleNamespace(
+                qid=qid,
+                question_id=qid,
+                answer=answer,
+                correct=error is None,
+                error=error,
+                partial=self.partial,
+                degraded=False,
+                route_used="frontdoor",
+                eval_concurrency=1,
+                suite="suite",
+                prompt="",
+                eval_partition="core",
+                elapsed_s=0.25,
+                tokens_generated=0 if error else 1,
+                tools_used=0,
+                host_covariates={},
+                scoring_method="exact_match",
+                tools_called=[],
+                confidence_source="binary_correctness_proxy",
+                confidence=1.0,
+                exogenous_recovered=False,
+                exogenous_unrecovered=False,
+                external_restart=False,
+                retry_count=0,
+                rubric_scores={},
+                rubric_source=None,
+            )
+        ]
+
+
+def _tail_fixture(tmp_path: Path) -> tuple[list[dict], Path, Path, Path, Path]:
+    questions = [
+        {
+            "qid": "q0",
+            "suite": "suite",
+            "scoring_method": "exact_match",
+            "expected": "a",
+            "scoring_config": {},
+        },
+        {
+            "qid": "q1",
+            "suite": "suite",
+            "scoring_method": "exact_match",
+            "expected": "a",
+            "scoring_config": {},
+        },
+    ]
+    responses = tmp_path / "responses.T2.r1.jsonl"
+    sidecar_dir = tmp_path / "eval_sidecars"
+    sidecar = sidecar_dir / "question_results.e8-t2-r1.jsonl"
+    trace = tmp_path / "judge_traces.T2.r1.jsonl"
+    _jsonl(responses, [_response("q0", "timed out", error="timed out"), _response("q1", "a")])
+    _jsonl(sidecar, _sidecar(["q0", "q1"]))
+    _jsonl(trace, [])
+    return questions, responses, sidecar, trace, sidecar_dir
+
+
+def _patch_tail_runtime(monkeypatch) -> None:
+    monkeypatch.setattr(runner.V4, "require_clean_watcher", lambda _watcher: None)
+    monkeypatch.setattr(runner.V4.httpx, "Client", lambda **_kwargs: nullcontext())
+    monkeypatch.setattr(
+        runner.V4, "capture_llm_judge_traces", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
+        runner.V4, "bind_eval_tower_scorer_identities", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(runner.V4, "replay_llm_judge_scorer_tail_once", lambda *_args: [])
+
+
+def test_generation_tail_replaces_only_target_response_and_sidecar_bytes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _patch_tail_runtime(monkeypatch)
+    questions, responses, sidecar, trace, sidecar_dir = _tail_fixture(tmp_path)
+    original_responses = responses.read_bytes().splitlines(keepends=True)
+    original_sidecar = sidecar.read_bytes().splitlines(keepends=True)
+    tail = runner.run_generation_tail(
+        FakeTower(sidecar_dir),
+        tier=2,
+        repetition=1,
+        questions=questions,
+        responses_path=responses,
+        sidecar_path=sidecar,
+        judge_trace_path=trace,
+        sidecar_dir=sidecar_dir,
+        output_dir=tmp_path,
+        published_dir=tmp_path,
+        args=SimpleNamespace(api_url="http://127.0.0.1:8000"),
+        watcher=object(),
+    )
+    final_responses = responses.read_bytes().splitlines(keepends=True)
+    final_sidecar = sidecar.read_bytes().splitlines(keepends=True)
+    assert tail["retry_count"] == 1
+    assert final_responses[0] != original_responses[0]
+    assert final_responses[1] == original_responses[1]
+    assert final_sidecar[1] != original_sidecar[1]
+    assert final_sidecar[2:] == original_sidecar[2:]
+    _parsed, final_rows = runner.sidecar_question_rows(sidecar, expected_n=2)
+    repaired = final_rows[0][1]
+    assert repaired["eval_batch_id"] == "full-batch"
+    assert repaired["label"] == "e8-t2-r1"
+    assert repaired["requested_n"] == 2
+    assert repaired["started_at_s"] == 3.0
+    assert repaired["ended_at_s"] == 3.25
+    assert repaired["answer"] == "a"
+    assert "scored_at_s" not in repaired
+    assert repaired["result"]["qid"] == "q0"
+    assert repaired["result"]["question_id"] == "q0"
+    assert repaired["result"].get("error") is None
+    attempts = runner.V4.load_jsonl(tmp_path / "generation_tail_attempts.T2.r1.jsonl")
+    assert attempts[0]["outcome"] == "recovered"
+    assert attempts[0]["concurrency"] == 1
+    assert attempts[0]["request_timeout_s"] == 300
+
+
+@pytest.mark.parametrize(("fail", "partial"), [(True, False), (False, True)])
+def test_generation_tail_retry_failure_fails_whole_candidate_and_keeps_attempt(
+    tmp_path: Path, monkeypatch, fail: bool, partial: bool
+) -> None:
+    _patch_tail_runtime(monkeypatch)
+    questions, responses, sidecar, trace, sidecar_dir = _tail_fixture(tmp_path)
+    before = responses.read_bytes()
+    tower = FakeTower(sidecar_dir, fail=fail, partial=partial)
+    with pytest.raises(RuntimeError, match="failed closed"):
+        runner.run_generation_tail(
+            tower,
+            tier=2,
+            repetition=1,
+            questions=questions,
+            responses_path=responses,
+            sidecar_path=sidecar,
+            judge_trace_path=trace,
+            sidecar_dir=sidecar_dir,
+            output_dir=tmp_path,
+            published_dir=tmp_path,
+            args=SimpleNamespace(api_url="http://127.0.0.1:8000"),
+            watcher=object(),
+        )
+    assert tower.calls == 1
+    assert responses.read_bytes() == before
+    attempts = runner.V4.load_jsonl(tmp_path / "generation_tail_attempts.T2.r1.jsonl")
+    assert attempts == [{**attempts[0], "outcome": "failed_closed"}]
+
+
+@pytest.mark.parametrize(
+    "malformed_success",
+    ["zero_tokens", "result_error", "qid", "answer"],
+)
+def test_generation_tail_rejects_incoherent_success_sidecar(
+    tmp_path: Path,
+    monkeypatch,
+    malformed_success: str,
+) -> None:
+    _patch_tail_runtime(monkeypatch)
+    questions, responses, sidecar, trace, sidecar_dir = _tail_fixture(tmp_path)
+    with pytest.raises(RuntimeError, match="failed closed"):
+        runner.run_generation_tail(
+            FakeTower(sidecar_dir, malformed_success=malformed_success),
+            tier=2,
+            repetition=1,
+            questions=questions,
+            responses_path=responses,
+            sidecar_path=sidecar,
+            judge_trace_path=trace,
+            sidecar_dir=sidecar_dir,
+            output_dir=tmp_path,
+            published_dir=tmp_path,
+            args=SimpleNamespace(api_url="http://127.0.0.1:8000"),
+            watcher=object(),
+        )
+
+
+def test_merge_judge_trace_appends_missing_target_and_preserves_non_target_bytes(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "trace.jsonl"
+    focused = tmp_path / "focused.jsonl"
+    non_target = '{"fixed_vector_row":{"ordinal":2,"qid":"q2"},"outcome":"kept"}\n'.encode()
+    trace.write_bytes(non_target)
+    _jsonl(
+        focused,
+        [{"fixed_vector_row": {"ordinal": 0, "qid": "focused"}, "outcome": "retry"}],
+    )
+    runner._merge_judge_trace(
+        trace,
+        focused,
+        tier=2,
+        repetition=1,
+        ordinal=5,
+        qid="q5",
+    )
+    lines = trace.read_bytes().splitlines(keepends=True)
+    assert lines[0] == non_target
+    assert json.loads(lines[1])["fixed_vector_row"] == {
+        "tier": 2,
+        "repetition": 1,
+        "ordinal": 5,
+        "qid": "q5",
+    }
+
+
+def test_merge_judge_trace_replaces_existing_target_only(tmp_path: Path) -> None:
+    trace = tmp_path / "trace.jsonl"
+    focused = tmp_path / "focused.jsonl"
+    old_target = '{"fixed_vector_row":{"ordinal":5,"qid":"q5"},"outcome":"old"}\n'.encode()
+    non_target = '{"fixed_vector_row":{"ordinal":2,"qid":"q2"},"outcome":"kept"}\n'.encode()
+    trace.write_bytes(old_target + non_target)
+    _jsonl(
+        focused,
+        [{"fixed_vector_row": {"ordinal": 0, "qid": "focused"}, "outcome": "retry"}],
+    )
+    runner._merge_judge_trace(
+        trace,
+        focused,
+        tier=2,
+        repetition=1,
+        ordinal=5,
+        qid="q5",
+    )
+    lines = trace.read_bytes().splitlines(keepends=True)
+    assert json.loads(lines[0])["outcome"] == "retry"
+    assert lines[1] == non_target
+
+
+def test_v5_cli_pins_tail_timeout_and_disallows_execute_mode() -> None:
+    args = runner.parse_args(
+        ["--collect-candidate", "--output-dir", "/tmp/v5", "--evaltower-timeout-s", "300"]
+    )
+    assert args.evaltower_timeout_s == 300
+    with pytest.raises(SystemExit):
+        runner.parse_args(
+            ["--collect-candidate", "--output-dir", "/tmp/v5", "--evaltower-timeout-s", "301"]
+        )
+    with pytest.raises(SystemExit):
+        runner.parse_args(["--execute", "--output-dir", "/tmp/v5"])
+
+
+def _synthetic_candidate(tmp_path: Path) -> Path:
+    validator_path = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
+    validator_spec = importlib.util.spec_from_file_location(
+        "e8_v5_validator_fixture", validator_path
+    )
+    assert validator_spec is not None and validator_spec.loader is not None
+    validator = importlib.util.module_from_spec(validator_spec)
+    sys.modules[validator_spec.name] = validator
+    validator_spec.loader.exec_module(validator)
+    root = tmp_path / "candidate"
+    root.mkdir()
+    details: dict[str, list[dict]] = {"1": [], "2": []}
+    records = []
+    for tier, n in ((1, 50), (2, 500)):
+        questions = [
+            {
+                "qid": f"t{tier}-{ordinal}",
+                "suite": "suite",
+                "scoring_method": "exact_match",
+                "expected": "a",
+                "scoring_config": {},
+            }
+            for ordinal in range(n)
+        ]
+        vector = {
+            "schema": "epyc.e8_quality_question_vector.v1",
+            "era": "E8",
+            "tier": tier,
+            "core_id": f"core-{tier}",
+            "seed": 42,
+            "n": n,
+            "dataset_sha256": "0" * 64,
+            "per_suite_counts": {"suite": n},
+            "questions": [{"qid": row["qid"]} for row in questions],
+        }
+        scoring = {
+            "schema": "epyc.e8_quality_scoring_vector.v1",
+            "era": "E8",
+            "tier": tier,
+            "core_id": f"core-{tier}",
+            "seed": 42,
+            "n": n,
+            "dataset_sha256": "0" * 64,
+            "questions": questions,
+        }
+        (root / f"question_vector.T{tier}.json").write_text(json.dumps(vector) + "\n")
+        (root / f"scoring_vector.T{tier}.json").write_text(json.dumps(scoring) + "\n")
+        observations = []
+        for repetition in range(1, 4):
+            responses = root / f"responses.T{tier}.r{repetition}.jsonl"
+            sidecar = root / "eval_sidecars" / f"question_results.e8-t{tier}-r{repetition}.jsonl"
+            trace = root / f"judge_traces.T{tier}.r{repetition}.jsonl"
+            response_rows = [_response(row["qid"], "a") for row in questions]
+            _jsonl(responses, response_rows)
+            sidecar_rows = [{"row_type": "batch_start", "requested_n": n}]
+            sidecar_rows.extend(
+                {
+                    "row_type": "question_result",
+                    "ordinal": ordinal,
+                    "answer": "a",
+                    "result": {
+                        "qid": row["qid"],
+                        "question_id": row["qid"],
+                        "correct": True,
+                        "tokens_generated": 1,
+                        "route": "frontdoor",
+                        "answer_hash": runner._normalized_answer_hash("a"),
+                    },
+                }
+                for ordinal, row in enumerate(questions)
+            )
+            sidecar_rows.append({"row_type": "batch_complete", "complete": True})
+            _jsonl(sidecar, sidecar_rows)
+            _jsonl(trace, [])
+            tail = {"schema": runner.TAIL_SCHEMA, "targets": [], "retry_count": 0}
+            if tier == 1 and repetition == 1:
+                original_dir = root / "generation_tail_original.T1.r1"
+                original_response = original_dir / responses.name
+                original_sidecar = original_dir / sidecar.name
+                original_trace = original_dir / trace.name
+                original_rows = list(response_rows)
+                original_rows[0] = _response(
+                    questions[0]["qid"],
+                    "timed out",
+                    error="timed out",
+                )
+                original_sidecars = json.loads(json.dumps(sidecar_rows))
+                original_sidecars[1].update(
+                    {
+                        "answer": "timed out",
+                        "result": {
+                            "qid": questions[0]["qid"],
+                            "tokens_generated": 0,
+                            "error": True,
+                            "error_detail": "timed out",
+                        },
+                    }
+                )
+                _jsonl(original_response, original_rows)
+                _jsonl(original_sidecar, original_sidecars)
+                _jsonl(original_trace, [])
+                focused_sidecar = (
+                    root / "eval_sidecars" / "question_results.e8-v5-tail-t1-r1-o0.jsonl"
+                )
+                focused_rows = [
+                    {"row_type": "batch_start", "requested_n": 1},
+                    {
+                        "row_type": "question_result",
+                        "ordinal": 0,
+                        "answer": "a",
+                        "result": {
+                            "qid": questions[0]["qid"],
+                            "question_id": questions[0]["qid"],
+                            "correct": True,
+                            "tokens_generated": 1,
+                            "route": "frontdoor",
+                            "answer_hash": runner._normalized_answer_hash("a"),
+                        },
+                    },
+                    {"row_type": "batch_complete", "complete": True},
+                ]
+                _jsonl(focused_sidecar, focused_rows)
+                focused_trace = root / "generation_tail_judge_traces" / "T1.r1.o0.jsonl"
+                _jsonl(focused_trace, [])
+                source = {
+                    "ordinal": 0,
+                    "qid": questions[0]["qid"],
+                    "error": "timed out",
+                    "response_sha256": runner.canonical_hash(original_rows[0]),
+                    "sidecar_sha256": runner.canonical_hash(original_sidecars[1]),
+                }
+                target = {
+                    **source,
+                    "failure_fingerprint": runner.canonical_hash(source),
+                }
+                attempt_path = root / "generation_tail_attempts.T1.r1.jsonl"
+                _jsonl(
+                    attempt_path,
+                    [
+                        {
+                            "schema": runner.TAIL_SCHEMA,
+                            "tier": 1,
+                            "repetition": 1,
+                            "ordinal": 0,
+                            "qid": questions[0]["qid"],
+                            "failure_fingerprint": target["failure_fingerprint"],
+                            "original_response_sha256": target["response_sha256"],
+                            "original_sidecar_sha256": target["sidecar_sha256"],
+                            "retry_response_sha256": runner.canonical_hash(response_rows[0]),
+                            "retry_sidecar_sha256": runner.canonical_hash(focused_rows[1]),
+                            "merged_sidecar_sha256": runner.canonical_hash(sidecar_rows[1]),
+                            "retry_sidecar_path": str(focused_sidecar),
+                            "retry_judge_trace_sha256": validator.sha256_path(focused_trace),
+                            "retry_judge_trace_path": str(focused_trace),
+                            "request_timeout_s": 300,
+                            "concurrency": 1,
+                            "scorer_tail_replay": [],
+                            "outcome": "recovered",
+                        }
+                    ],
+                )
+                tail = {
+                    "schema": runner.TAIL_SCHEMA,
+                    "targets": [target],
+                    "retry_count": 1,
+                    "attempt_path": str(attempt_path),
+                    "attempt_sha256": validator.sha256_path(attempt_path),
+                    "original_artifact_dir": str(original_dir),
+                    "scoring_audit": {"matches": True},
+                }
+            raw = root / f"raw.T{tier}.r{repetition}.json"
+            raw_payload = {
+                "q": 3.0,
+                "ts": f"2026-07-27T00:00:0{repetition}Z",
+                "core_id": f"core-{tier}",
+                "protocol_id": runner.PROTOCOL_ID,
+                "n": n,
+                "era": "E8",
+                "per_suite_quality": {"suite": 3.0},
+                "per_suite_counts": {"suite": n},
+            }
+            raw.write_text(json.dumps(raw_payload) + "\n")
+            observations.append(
+                {
+                    "path": str(raw),
+                    "sha256": validator.sha256_path(raw),
+                    "q": raw_payload["q"],
+                    "ts": raw_payload["ts"],
+                    "core_id": raw_payload["core_id"],
+                    "protocol_id": runner.PROTOCOL_ID,
+                    "n": n,
+                    "era": "E8",
+                }
+            )
+            details[str(tier)].append(
+                {
+                    "tier": tier,
+                    "repetition": repetition,
+                    "n_results": n,
+                    "response_vector_matches_input": True,
+                    "per_suite_counts_match_input": True,
+                    "runtime_binding_matches_pre": True,
+                    "all_routes_frontdoor": True,
+                    "error_classification": {},
+                    "scoring_audit": {"matches": True},
+                    "response_path": str(responses),
+                    "response_sha256": validator.sha256_path(responses),
+                    "sidecar_path": str(sidecar),
+                    "sidecar_sha256": validator.sha256_path(sidecar),
+                    "judge_trace_path": str(trace),
+                    "judge_trace_sha256": validator.sha256_path(trace),
+                    "generation_tail": tail,
+                }
+            )
+        summary = root / f"summary.T{tier}.json"
+        summary.write_text(
+            json.dumps(
+                {
+                    "tier": tier,
+                    "core_id": f"core-{tier}",
+                    "n": n,
+                    "quality": 3.0,
+                    "per_suite_quality": {"suite": 3.0},
+                    "per_suite_counts": {"suite": n},
+                    "era": "E8",
+                    "decision_grade": True,
+                    "observations": observations,
+                    "question_vector_path": str(root / f"question_vector.T{tier}.json"),
+                    "question_vector_sha256": validator.sha256_path(
+                        root / f"question_vector.T{tier}.json"
+                    ),
+                    "scoring_vector_path": str(root / f"scoring_vector.T{tier}.json"),
+                    "scoring_vector_sha256": validator.sha256_path(
+                        root / f"scoring_vector.T{tier}.json"
+                    ),
+                    "response_artifacts": [],
+                }
+            )
+            + "\n"
+        )
+        records.append(
+            {
+                "tier": tier,
+                "path": str(summary),
+                "sha256": validator.sha256_path(summary),
+                "protocol_id": runner.PROTOCOL_ID,
+                "core_id": f"core-{tier}",
+                "n": n,
+                "timestamp": observations[-1]["ts"],
+                "era": "E8",
+                "instrument": "dedicated_full_pool_tier_baseline",
+                "quality": 3.0,
+                "question_vector_sha256": runner.V4.vector_sha256(vector),
+                "scoring_vector_sha256": runner.canonical_hash(scoring),
+            }
+        )
+    proposal = root / "protocol_candidate.json"
+    proposal.write_text(
+        json.dumps(
+            {
+                "schema": runner.PROPOSAL_SCHEMA,
+                "protocol": {
+                    "protocol_id": runner.PROTOCOL_ID,
+                    "generation_tail_contract": runner.GENERATION_TAIL_CONTRACT,
+                },
+            }
+        )
+        + "\n"
+    )
+    evidence = root / "e8_quality_baseline_evidence.json"
+    runner_sha = validator.sha256_path(runner.RUNNER_PATH)
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema": "epyc.e8_quality_baseline_evidence.v2",
+                "eval_quality_era": "E8",
+                "generation_tail_contract": runner.GENERATION_TAIL_CONTRACT,
+                "runner": {"path": str(runner.RUNNER_PATH), "sha256": runner_sha},
+                "protocol_candidate": {
+                    "path": str(proposal),
+                    "sha256": validator.sha256_path(proposal),
+                },
+                "source_records": records,
+                "replacement": {
+                    "baseline_state": {
+                        "eval_quality_era": "E8",
+                        "baselines_by_tier": {"1": 3.0, "2": 3.0},
+                        "per_suite_quality_by_tier": {
+                            "1": {"suite": 3.0},
+                            "2": {"suite": 3.0},
+                        },
+                        "per_suite_counts_by_tier": {
+                            "1": {"suite": 50},
+                            "2": {"suite": 500},
+                        },
+                    },
+                    "quality_history_by_tier": {
+                        "1": [3.0, 3.0, 3.0],
+                        "2": [3.0, 3.0, 3.0],
+                    },
+                    "quality_history_provenance_by_tier": {
+                        str(tier): [
+                            {
+                                "q": 3.0,
+                                "ts": f"2026-07-27T00:00:0{repetition}Z",
+                                "era": "E8",
+                                "core_id": f"core-{tier}",
+                            }
+                            for repetition in range(1, 4)
+                        ]
+                        for tier in (1, 2)
+                    },
+                },
+                "run_seal_path": str(root / "run_seal.json"),
+            }
+        )
+        + "\n"
+    )
+    watcher = root / "runtime_watch.jsonl"
+    watcher_rows = [
+        {
+            "started_at": "2026-07-27T00:00:00Z",
+            "finished_at": "2026-07-27T00:00:01Z",
+            "ok": True,
+        },
+        {
+            "started_at": "2026-07-27T00:00:05Z",
+            "finished_at": "2026-07-27T00:00:06Z",
+            "ok": True,
+        },
+    ]
+    _jsonl(watcher, watcher_rows)
+    report = root / "runner_report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "mode": "executed",
+                "protocol_id": runner.PROTOCOL_ID,
+                "decision_grade": True,
+                "observations": details,
+                "postconditions": {
+                    "checks": {name: True for name in validator.EXPECTED_CHECKS},
+                    "watcher_samples": watcher_rows,
+                    "watcher_path": str(watcher),
+                    "watcher_sha256": validator.sha256_path(watcher),
+                },
+            }
+        )
+        + "\n"
+    )
+    bundle = {
+        str(path): validator.sha256_path(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path.name != "run_seal.json"
+    }
+    seal = root / "run_seal.json"
+    seal.write_text(
+        json.dumps(
+            {
+                "schema": "epyc.e8_quality_baseline_run_seal.v1",
+                "status": "complete",
+                "manifest_sha256": validator.sha256_path(evidence),
+                "runner_report_sha256": validator.sha256_path(report),
+                "protocol_candidate_sha256": validator.sha256_path(proposal),
+                "runner_sha256": runner_sha,
+                "bundle_sha256": bundle,
+            }
+        )
+        + "\n"
+    )
+    return evidence
+
+
+def _load_validator(name: str):
+    validator_path = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
+    spec = importlib.util.spec_from_file_location(name, validator_path)
+    assert spec is not None and spec.loader is not None
+    validator = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = validator
+    spec.loader.exec_module(validator)
+    return validator
+
+
+def _reseal_candidate(evidence: Path, validator) -> None:
+    root = evidence.parent
+    seal_path = root / "run_seal.json"
+    seal = json.loads(seal_path.read_text())
+    seal["manifest_sha256"] = validator.sha256_path(evidence)
+    seal["runner_report_sha256"] = validator.sha256_path(root / "runner_report.json")
+    seal["protocol_candidate_sha256"] = validator.sha256_path(root / "protocol_candidate.json")
+    seal["bundle_sha256"] = {
+        str(path): validator.sha256_path(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path.name != "run_seal.json"
+    }
+    seal_path.write_text(json.dumps(seal) + "\n")
+
+
+def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator_path = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
+    validator = _load_validator("e8_v5_validator_test")
+    runner_sha = hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest()
+    base_runner_sha = hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest()
+    validator_sha = hashlib.sha256(validator_path.read_bytes()).hexdigest()
+    assert (
+        validator.validate(
+            evidence,
+            expected_runner_sha256=runner_sha,
+            expected_base_runner_sha256=base_runner_sha,
+        )["valid"]
+        is True
+    )
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
+    )
+    completed = subprocess.run(
+        ["bash", str(wrapper), "--validate-evidence", str(evidence)],
+        env={
+            **__import__("os").environ,
+            "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
+            "E8_V5_RUNNER_SHA256": runner_sha,
+            "E8_V5_BASE_RUNNER_SHA256": base_runner_sha,
+            "E8_V5_VALIDATOR_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+            "E8_V5_VALIDATOR_PY_SHA256": validator_sha,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    (evidence.parent / "unsealed_tamper.txt").write_text("tampered\n")
+    with pytest.raises(ValueError, match="exact artifact set"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=runner_sha,
+            expected_base_runner_sha256=base_runner_sha,
+        )
+
+
+def test_validator_rejects_failed_watcher_even_when_bundle_is_resealed(
+    tmp_path: Path,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_watcher_test")
+    report_path = evidence.parent / "runner_report.json"
+    report = json.loads(report_path.read_text())
+    report["postconditions"]["watcher_samples"][0]["ok"] = False
+    watcher_path = evidence.parent / "runtime_watch.jsonl"
+    _jsonl(watcher_path, report["postconditions"]["watcher_samples"])
+    report["postconditions"]["watcher_sha256"] = validator.sha256_path(watcher_path)
+    report_path.write_text(json.dumps(report) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="clean decision-grade"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_unreviewed_base_runner_pin(tmp_path: Path) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_base_pin_test")
+    with pytest.raises(ValueError, match="base runner differs"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256="0" * 64,
+        )
+
+
+def test_validator_rejects_resealed_incoherent_sidecar(tmp_path: Path) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_sidecar_test")
+    sidecar_path = evidence.parent / "eval_sidecars/question_results.e8-t1-r2.jsonl"
+    sidecar_rows = runner.V4.load_jsonl(sidecar_path)
+    sidecar_rows[1]["result"]["tokens_generated"] = 0
+    _jsonl(sidecar_path, sidecar_rows)
+    report_path = evidence.parent / "runner_report.json"
+    report = json.loads(report_path.read_text())
+    report["observations"]["1"][1]["sidecar_sha256"] = validator.sha256_path(sidecar_path)
+    report_path.write_text(json.dumps(report) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="not coherent"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_collect_wrapper_refuses_bad_runner_pin_without_creating_output(
+    tmp_path: Path,
+) -> None:
+    wrapper = (
+        PROJECT_ROOT / "scripts/benchmark/operator_candidates/collect_e8_quality_baseline_v5.sh"
+    )
+    output = tmp_path / "must-not-exist"
+    completed = subprocess.run(
+        ["bash", str(wrapper), "--output-dir", str(output)],
+        env={
+            **__import__("os").environ,
+            "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
+            "E8_V5_COLLECT_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+            "E8_V5_RUNNER_SHA256": "0" * 64,
+            "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
+            "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+            ).strip(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "externally reviewed hash" in completed.stderr
+    assert not output.exists()
+
+
+def test_v5_applier_adapter_plan_is_read_only(tmp_path: Path) -> None:
+    adapter = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    )
+    paths = [tmp_path / name for name in ("state", "evidence", "validator", "tx", "attest")]
+    completed = subprocess.run(
+        [
+            "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python",
+            str(adapter),
+            "--state",
+            str(paths[0]),
+            "--evidence",
+            str(paths[1]),
+            "--canonical-evidence",
+            str(paths[1]),
+            "--validator",
+            str(paths[2]),
+            "--transaction-dir",
+            str(paths[3]),
+            "--attestation",
+            str(paths[4]),
+            "--plan",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "E8 baseline-state apply plan" in completed.stdout
+    assert all(not path.exists() for path in paths)
+
+
+def test_final_wrapper_prevalidates_exact_transaction_without_writes(
+    tmp_path: Path,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    adapter = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    )
+    adapter_spec = importlib.util.spec_from_file_location(
+        "e8_v5_applier_prevalidation_test", adapter
+    )
+    assert adapter_spec is not None and adapter_spec.loader is not None
+    adapter_module = importlib.util.module_from_spec(adapter_spec)
+    sys.modules[adapter_spec.name] = adapter_module
+    adapter_spec.loader.exec_module(adapter_module)
+    canonical = adapter_module.module
+    state_path = Path("/mnt/raid0/llm/epyc-orchestrator") / "orchestration/autopilot_state.json"
+    state_bytes = state_path.read_bytes()
+    manifest = json.loads(evidence.read_text())
+    candidate = canonical.candidate_state(json.loads(state_bytes), manifest["replacement"])
+    candidate_bytes = (json.dumps(candidate, indent=2, sort_keys=True) + "\n").encode()
+    pre_sha = hashlib.sha256(state_bytes).hexdigest()
+    candidate_sha = hashlib.sha256(candidate_bytes).hexdigest()
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    validator_shell = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
+    )
+    validator_py = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
+    canonical_applier = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
+    )
+    evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    operator_root = Path("/mnt/raid0/llm/epyc-root/artifacts/operator")
+    before_outputs = set(operator_root.glob(f"*{evidence_sha}*"))
+    completed = subprocess.run(
+        [
+            "bash",
+            str(wrapper),
+            "--prevalidate",
+            "--evidence",
+            str(evidence),
+            "--expected-pre-state-sha256",
+            pre_sha,
+            "--expected-candidate-state-sha256",
+            candidate_sha,
+        ],
+        env={
+            **__import__("os").environ,
+            "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
+            "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+            "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
+            "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
+            "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
+            "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
+            "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+            "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(
+                canonical_applier.read_bytes()
+            ).hexdigest(),
+            "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+            ).strip(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "prevalidation passed" in completed.stdout
+    assert state_path.read_bytes() == state_bytes
+    assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
