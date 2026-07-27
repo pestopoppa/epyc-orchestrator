@@ -37,10 +37,131 @@ EXPECTED_CHECKS = {
     "all_clean_repetitions",
     "v5_semantic_replay",
 }
+RESPONSE_KEYS = {
+    "qid",
+    "suite",
+    "scoring_method",
+    "answer",
+    "correct",
+    "error",
+    "partial",
+    "degraded",
+    "route_used",
+    "scoring_config_sha256",
+}
+QUESTION_RESULT_ROW_KEYS = {
+    "schema_version",
+    "row_type",
+    "eval_batch_id",
+    "trial_id",
+    "label",
+    "requested_n",
+    "artifact_root_source",
+    "recovery_contract",
+    "ordinal",
+    "result",
+    "answer",
+    "complete",
+    "ended_at_s",
+    "elapsed_s",
+    "started_at_s",
+    "scored_at_s",
+}
+COMPACT_RESULT_KEYS = {
+    "qid",
+    "question_id",
+    "suite",
+    "partition",
+    "correct",
+    "latency_ms",
+    "tokens_generated",
+    "tools_used",
+    "host_covariates",
+    "answer_hash",
+    "scoring_method",
+    "route",
+    "tools_called",
+    "confidence",
+    "confidence_source",
+    "error",
+    "error_detail",
+    "partial",
+    "degraded",
+    "exogenous_recovered",
+    "exogenous_unrecovered",
+    "external_restart",
+    "retry_count",
+    "rubric_scores",
+    "rubric_source",
+}
+GENERATION_ATTEMPT_KEYS = {
+    "schema",
+    "tier",
+    "repetition",
+    "ordinal",
+    "qid",
+    "failure_fingerprint",
+    "original_response_sha256",
+    "original_sidecar_sha256",
+    "retry_response_sha256",
+    "retry_sidecar_sha256",
+    "merged_sidecar_sha256",
+    "retry_sidecar_path",
+    "retry_judge_trace_sha256",
+    "retry_judge_trace_path",
+    "request_timeout_s",
+    "concurrency",
+    "scorer_tail_replay",
+    "outcome",
+}
+ACCEPTED_GENERATION_ERRORS = {
+    "timed out",
+    "request timed out",
+    "[ERROR: Inference failed: timed out]",
+    "[ERROR: Inference failed: chat_completions failed: timed out]",
+}
 
 
 def sha256_path(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_hash(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def classify_pristine_generation_failure(
+    response: dict[str, Any],
+    sidecar_row: dict[str, Any],
+) -> str | None:
+    """Independently apply the exact v5 generation-retry admission rule."""
+    result = sidecar_row.get("result")
+    if not isinstance(result, dict):
+        return None
+    error = str(result.get("error_detail") or "")
+    response_error = str(response.get("error") or "")
+    answer = str(response.get("answer") or "")
+    qid = str(response.get("qid") or "")
+    question_id = result.get("question_id")
+    if (
+        type(result.get("tokens_generated")) is int
+        and result["tokens_generated"] == 0
+        and result.get("error") is True
+        and response_error == error
+        and qid
+        and str(result.get("qid") or "") == qid
+        and isinstance(question_id, str)
+        and bool(question_id.strip())
+        and (not answer.strip() or answer == error)
+        and error in ACCEPTED_GENERATION_ERRORS
+        and response.get("partial") is False
+        and response.get("degraded") is False
+        and response.get("route_used") == "frontdoor"
+    ):
+        return error
+    return None
 
 
 def load_json(path: Path, label: str) -> dict[str, Any]:
@@ -68,6 +189,138 @@ def resolve_artifact(root: Path, value: Any, label: str) -> Path:
     if not path.is_relative_to(root):
         raise ValueError(f"{label} escapes the sealed evidence directory")
     return path
+
+
+def expected_scorer_sidecar_row(
+    source: dict[str, Any],
+    response: dict[str, Any],
+    *,
+    qid: str,
+    runner: Any,
+) -> dict[str, Any]:
+    """Independently reconstruct the sole v5 mutation after scorer recovery."""
+    result = source.get("result")
+    if not isinstance(result, dict):
+        raise ValueError("pristine scorer-tail sidecar result is missing")
+    answer = str(response.get("answer") or "")
+    normalized = dict(result)
+    normalized.update(
+        {
+            "qid": qid,
+            "correct": bool(response.get("correct")),
+            "route": str(response.get("route_used") or ""),
+        }
+    )
+    normalized.pop("error", None)
+    normalized.pop("error_detail", None)
+    answer_hash = runner._normalized_answer_hash(answer)
+    if answer_hash is None:
+        normalized.pop("answer_hash", None)
+    else:
+        normalized["answer_hash"] = answer_hash
+    for key in ("partial", "degraded"):
+        if response.get(key) is True:
+            normalized[key] = True
+        else:
+            normalized.pop(key, None)
+    scoring_method = str(response.get("scoring_method") or "")
+    if scoring_method and scoring_method != "exact_match":
+        normalized["scoring_method"] = scoring_method
+    else:
+        normalized.pop("scoring_method", None)
+    return {**source, "answer": answer, "result": normalized}
+
+
+def expected_generation_sidecar_row(
+    source: dict[str, Any],
+    focused: dict[str, Any],
+) -> dict[str, Any]:
+    """Reconstruct the exact full-batch row emitted by the focused generation tail."""
+    if set(focused) - QUESTION_RESULT_ROW_KEYS:
+        raise ValueError("focused generation retry sidecar has unexpected fields")
+    focused_result = focused.get("result")
+    if not isinstance(focused_result, dict) or set(focused_result) - COMPACT_RESULT_KEYS:
+        raise ValueError("focused generation retry result has unexpected fields")
+    expected = dict(source)
+    for key in ("answer", "complete", "ended_at_s", "elapsed_s", "started_at_s"):
+        if key not in focused:
+            raise ValueError(f"focused generation retry sidecar has no {key}")
+        expected[key] = focused[key]
+    if "scored_at_s" in focused:
+        expected["scored_at_s"] = focused["scored_at_s"]
+    else:
+        expected.pop("scored_at_s", None)
+    expected["result"] = dict(focused_result)
+    return expected
+
+
+def derived_scorer_targets(
+    *,
+    pristine_trace_lines: list[bytes],
+    scoring_questions: list[dict[str, Any]],
+    expected_qids: list[str],
+    tier: int,
+    repetition: int,
+) -> dict[int, str]:
+    """Derive scorer-only recoveries from sealed two-attempt judge histories."""
+    targets: dict[int, str] = {}
+    for line in pristine_trace_lines:
+        trace = json.loads(line)
+        fixed = trace.get("fixed_vector_row")
+        if not isinstance(fixed, dict):
+            raise ValueError("pristine judge trace lacks fixed-vector identity")
+        ordinal = fixed.get("ordinal")
+        if (
+            not isinstance(ordinal, int)
+            or isinstance(ordinal, bool)
+            or not 0 <= ordinal < len(expected_qids)
+            or fixed
+            != {
+                "tier": tier,
+                "repetition": repetition,
+                "ordinal": ordinal,
+                "qid": expected_qids[ordinal],
+            }
+        ):
+            raise ValueError("pristine judge trace identity differs")
+        if trace.get("schema") != "epyc.e8_quality_llm_judge_trace.v2":
+            continue
+        if (
+            scoring_questions[ordinal].get("scoring_method") != "llm_judge"
+            or not is_recovered_scorer_trace(trace)
+            or ordinal in targets
+        ):
+            raise ValueError("pristine scorer-tail history is not one recovered judge retry")
+        targets[ordinal] = expected_qids[ordinal]
+    return targets
+
+
+def is_recovered_scorer_trace(trace: dict[str, Any]) -> bool:
+    attempts = trace.get("attempts")
+    return bool(
+        trace.get("schema") == "epyc.e8_quality_llm_judge_trace.v2"
+        and isinstance(attempts, list)
+        and len(attempts) == 2
+        and isinstance(attempts[0], dict)
+        and isinstance(attempts[1], dict)
+        and isinstance(attempts[0].get("error"), dict)
+        and attempts[0]["error"].get("type") == "ScoringUnavailableError"
+        and attempts[1].get("error") is None
+    )
+
+
+def replace_sidecar_rows_bytes(
+    source_path: Path,
+    replacements: dict[int, dict[str, Any]],
+    *,
+    expected_n: int,
+    runner: Any,
+) -> bytes:
+    lines = source_path.read_bytes().splitlines(keepends=True)
+    _parsed, indexed = runner.sidecar_question_rows(source_path, expected_n=expected_n)
+    for ordinal, replacement in replacements.items():
+        lines[indexed[ordinal][0]] = (json.dumps(replacement, sort_keys=True) + "\n").encode()
+    return b"".join(lines)
 
 
 def validate_tail_trace_replacement(
@@ -328,24 +581,31 @@ def validate(
                 ):
                     raise ValueError("pristine full-run artifact differs")
                 pristine_paths[name] = artifact_path
+            expected_qids = [row["qid"] for row in vectors[tier]["questions"]]
+            responses = runner.V4.load_jsonl(response_path)
+            if any(set(row) != RESPONSE_KEYS for row in responses):
+                raise ValueError("final response ledger has unexpected fields")
+            pristine_trace_lines = (
+                pristine_paths[trace_path.name].read_bytes().splitlines(keepends=True)
+            )
+            scorer_targets = derived_scorer_targets(
+                pristine_trace_lines=pristine_trace_lines,
+                scoring_questions=scoring[tier]["questions"],
+                expected_qids=expected_qids,
+                tier=tier,
+                repetition=repetition,
+            )
+            expected_scorer_tail = [
+                {"ordinal": ordinal, "qid": qid, "outcome": "recovered"}
+                for ordinal, qid in sorted(scorer_targets.items())
+            ]
             scorer_tail = detail.get("scorer_tail_replay")
             scorer_replacements = detail.get("scorer_sidecar_replacement_ordinals")
-            if not isinstance(scorer_tail, list) or not isinstance(scorer_replacements, list):
-                raise ValueError("scorer-tail replacement disposition is missing")
-            scorer_targets: dict[int, str] = {}
-            for row in scorer_tail:
-                if (
-                    not isinstance(row, dict)
-                    or not isinstance(row.get("ordinal"), int)
-                    or isinstance(row.get("ordinal"), bool)
-                    or not 0 <= row["ordinal"] < expected_n
-                    or row.get("ordinal") in scorer_targets
-                    or row.get("outcome") != "recovered"
-                ):
-                    raise ValueError("scorer-tail replacement disposition differs")
-                scorer_targets[int(row["ordinal"])] = str(row.get("qid") or "")
-            if scorer_replacements != sorted(scorer_targets):
-                raise ValueError("scorer-tail sidecar replacement allowlist differs")
+            if (
+                scorer_tail != expected_scorer_tail
+                or scorer_replacements != sorted(scorer_targets)
+            ):
+                raise ValueError("scorer-tail disposition is not derived from pristine traces")
             generation_targets = tail.get("targets")
             if not isinstance(generation_targets, list):
                 raise ValueError("generation-tail target list differs")
@@ -364,8 +624,6 @@ def validate(
             scorer_ordinals = set(scorer_targets)
             if generation_ordinals & scorer_ordinals:
                 raise ValueError("generation and scorer tail targets overlap")
-            responses = runner.V4.load_jsonl(response_path)
-            expected_qids = [row["qid"] for row in vectors[tier]["questions"]]
             if any(expected_qids[ordinal] != qid for ordinal, qid in scorer_targets.items()) or any(
                 expected_qids[ordinal] != qid for ordinal, qid in generation_target_map.items()
             ):
@@ -418,6 +676,39 @@ def validate(
             )
             pristine_sidecar_lines = pristine_sidecar_path.read_bytes().splitlines(keepends=True)
             final_sidecar_lines = sidecar_path.read_bytes().splitlines(keepends=True)
+            expected_scorer_rows: dict[int, dict[str, Any]] = {}
+            for ordinal, qid in scorer_targets.items():
+                source = pristine_sidecars[ordinal][1]
+                source_result = source.get("result")
+                source_error = (
+                    str(source_result.get("error_detail") or "")
+                    if isinstance(source_result, dict)
+                    else ""
+                )
+                if (
+                    not isinstance(source_result, dict)
+                    or source.get("answer") != responses[ordinal].get("answer")
+                    or source_result.get("qid") != qid
+                    or not isinstance(source_result.get("question_id"), str)
+                    or not source_result["question_id"].strip()
+                    or source_result.get("error") is not True
+                    or not source_error.startswith("scoring_unavailable:")
+                    or not isinstance(source_result.get("tokens_generated"), int)
+                    or isinstance(source_result.get("tokens_generated"), bool)
+                    or source_result["tokens_generated"] <= 0
+                ):
+                    raise ValueError(
+                        "pristine scorer-tail sidecar is not an unavailable-judge result"
+                    )
+                expected_row = expected_scorer_sidecar_row(
+                    source,
+                    responses[ordinal],
+                    qid=qid,
+                    runner=runner,
+                )
+                if final_sidecars[ordinal][1] != expected_row:
+                    raise ValueError("final scorer-tail sidecar is not the exact reconstruction")
+                expected_scorer_rows[ordinal] = expected_row
             allowed_sidecar_ordinals = scorer_ordinals | generation_ordinals
             if (
                 len(pristine_sidecar_lines) != len(final_sidecar_lines)
@@ -440,9 +731,6 @@ def validate(
                 )
             ):
                 raise ValueError("final sidecar bytes exceed the declared tail allowlists")
-            pristine_trace_lines = (
-                pristine_paths[trace_path.name].read_bytes().splitlines(keepends=True)
-            )
             if (
                 not generation_ordinals
                 and trace_path.read_bytes() != pristine_paths[trace_path.name].read_bytes()
@@ -467,7 +755,8 @@ def validate(
                     tail.get("attempt_sha256") != sha256_path(attempts_path)
                     or len(attempts) != tail["retry_count"]
                     or any(
-                        row.get("outcome") != "recovered"
+                        set(row) != GENERATION_ATTEMPT_KEYS
+                        or row.get("outcome") != "recovered"
                         or row.get("concurrency") != 1
                         or row.get("request_timeout_s") != 300
                         for row in attempts
@@ -499,16 +788,31 @@ def validate(
                     retry_sidecar_rows[ordinal] = retry_sidecars[0][1]
                     retry_trace_rows = runner.V4.load_jsonl(retry_trace_path)
                     retry_traces[ordinal] = retry_trace_rows
+                    recovered_retry_trace = (
+                        len(retry_trace_rows) == 1
+                        and is_recovered_scorer_trace(retry_trace_rows[0])
+                    )
+                    expected_retry_scorer_tail = (
+                        [{"ordinal": 0, "qid": str(attempt["qid"]), "outcome": "recovered"}]
+                        if recovered_retry_trace
+                        else []
+                    )
                     if (
-                        attempt.get("failure_fingerprint") != target.get("failure_fingerprint")
+                        attempt.get("schema") != runner.TAIL_SCHEMA
+                        or attempt.get("tier") != tier
+                        or attempt.get("repetition") != repetition
+                        or attempt.get("ordinal") != ordinal
+                        or attempt.get("qid") != target.get("qid")
+                        or attempt.get("scorer_tail_replay") != expected_retry_scorer_tail
+                        or attempt.get("failure_fingerprint") != target.get("failure_fingerprint")
                         or attempt.get("original_response_sha256") != target.get("response_sha256")
                         or attempt.get("original_sidecar_sha256") != target.get("sidecar_sha256")
                         or attempt.get("retry_response_sha256")
-                        != runner.canonical_hash(responses[ordinal])
+                        != canonical_hash(responses[ordinal])
                         or attempt.get("retry_sidecar_sha256")
-                        != runner.canonical_hash(retry_sidecars[0][1])
+                        != canonical_hash(retry_sidecars[0][1])
                         or attempt.get("merged_sidecar_sha256")
-                        != runner.canonical_hash(final_sidecars[ordinal][1])
+                        != canonical_hash(final_sidecars[ordinal][1])
                         or attempt.get("retry_judge_trace_sha256") != sha256_path(retry_trace_path)
                         or not runner.validate_clean_sidecar_result(
                             responses[ordinal],
@@ -524,7 +828,31 @@ def validate(
                     tail.get("original_artifact_dir"),
                     "generation-tail original artifact directory",
                 )
+                if {path.name for path in original_dir.iterdir() if path.is_file()} != {
+                    response_path.name,
+                    sidecar_path.name,
+                    trace_path.name,
+                } or any(path.is_dir() for path in original_dir.iterdir()):
+                    raise ValueError("generation-tail original directory has unexpected artifacts")
                 original_response_path = original_dir / response_path.name
+                original_sidecar_path = original_dir / sidecar_path.name
+                original_trace_path = original_dir / trace_path.name
+                expected_original_sidecar = replace_sidecar_rows_bytes(
+                    pristine_sidecar_path,
+                    expected_scorer_rows,
+                    expected_n=expected_n,
+                    runner=runner,
+                )
+                if (
+                    original_response_path.read_bytes()
+                    != pristine_paths[response_path.name].read_bytes()
+                    or original_trace_path.read_bytes()
+                    != pristine_paths[trace_path.name].read_bytes()
+                    or original_sidecar_path.read_bytes() != expected_original_sidecar
+                ):
+                    raise ValueError(
+                        "generation-tail source is not derived from the pristine full run"
+                    )
                 original_responses = original_response_path.read_bytes().splitlines(keepends=True)
                 final_response_lines = response_path.read_bytes().splitlines(keepends=True)
                 target_ordinals = {ordinal for ordinal, _qid in targets}
@@ -537,10 +865,30 @@ def validate(
                 ):
                     raise ValueError("generation tail changed non-target response bytes")
                 old_response_rows = runner.V4.load_jsonl(original_response_path)
-                original_sidecar_path = original_dir / sidecar_path.name
                 _old_parsed, old_sidecars = runner.sidecar_question_rows(
                     original_sidecar_path, expected_n=expected_n
                 )
+                derived_generation_targets: list[dict[str, Any]] = []
+                for ordinal, response in enumerate(old_response_rows):
+                    error = classify_pristine_generation_failure(
+                        response,
+                        old_sidecars[ordinal][1],
+                    )
+                    if error is None:
+                        continue
+                    source = {
+                        "ordinal": ordinal,
+                        "qid": response.get("qid"),
+                        "error": error,
+                        "response_sha256": canonical_hash(response),
+                        "sidecar_sha256": canonical_hash(old_sidecars[ordinal][1]),
+                    }
+                    source["failure_fingerprint"] = canonical_hash(source)
+                    derived_generation_targets.append(source)
+                if tail["targets"] != derived_generation_targets:
+                    raise ValueError(
+                        "generation-tail targets are not exhaustive pristine failures"
+                    )
                 original_sidecar_lines = original_sidecar_path.read_bytes().splitlines(
                     keepends=True
                 )
@@ -566,19 +914,27 @@ def validate(
                         or final_result.get("question_id") != old_result["question_id"]
                     ):
                         raise ValueError("generation-tail question identity differs")
+                    expected_final_row = expected_generation_sidecar_row(
+                        old_sidecars[ordinal][1],
+                        retry_sidecar_rows[ordinal],
+                    )
+                    if final_sidecars[ordinal][1] != expected_final_row:
+                        raise ValueError(
+                            "final generation-tail sidecar is not the exact reconstruction"
+                        )
                     source = {
                         "ordinal": ordinal,
                         "qid": qid,
-                        "error": runner.classify_generation_failure(
+                        "error": classify_pristine_generation_failure(
                             old_response_rows[ordinal],
                             old_sidecars[ordinal][1],
                         ),
-                        "response_sha256": runner.canonical_hash(old_response_rows[ordinal]),
-                        "sidecar_sha256": runner.canonical_hash(old_sidecars[ordinal][1]),
+                        "response_sha256": canonical_hash(old_response_rows[ordinal]),
+                        "sidecar_sha256": canonical_hash(old_sidecars[ordinal][1]),
                     }
                     if source["error"] is None or target != {
                         **source,
-                        "failure_fingerprint": runner.canonical_hash(source),
+                        "failure_fingerprint": canonical_hash(source),
                     }:
                         raise ValueError(
                             "generation-tail target is not bound to original artifacts"
@@ -624,7 +980,7 @@ def validate(
             or record.get("era") != "E8"
             or record.get("n") != expected_n
             or record.get("question_vector_sha256") != runner.V4.vector_sha256(vectors[tier])
-            or record.get("scoring_vector_sha256") != runner.canonical_hash(scoring[tier])
+            or record.get("scoring_vector_sha256") != canonical_hash(scoring[tier])
             or summary.get("tier") != tier
             or summary.get("core_id") != record.get("core_id")
             or summary.get("n") != expected_n
