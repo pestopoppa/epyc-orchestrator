@@ -1427,7 +1427,7 @@ sys.path.insert(0, str(_orch_root / "scripts" / "benchmark"))
 sys.path.insert(0, str(_orch_root))
 
 from seeding_orchestrator import call_orchestrator_forced  # noqa: E402
-from seeding_scoring import score_answer_deterministic  # noqa: E402
+from seeding_scoring import score_answer_deterministic, score_answer_or_error  # noqa: E402
 from rubric_scoring import (  # noqa: E402
     MINDDR_PROCESS_DIMENSIONS,
     aggregate_rubric_score,
@@ -2825,12 +2825,20 @@ class EvalTower:
                     # EV-11: guarantee math_verify actually runs; never let a
                     # missing library silently degrade to exact_match.
                     _require_math_verify()
-                correct = score_answer_deterministic(
+                verdict, scoring_error = score_answer_or_error(
                     answer=answer,
                     expected=expected,
                     scoring_method=scoring_method,
                     scoring_config=scoring_config,
                 )
+                if scoring_error is not None:
+                    # Generation completed successfully.  Preserve its answer,
+                    # token accounting, route, and timing as durable evidence;
+                    # only the verdict is unavailable.  This lets a caller
+                    # replay the scorer tail without regenerating model output.
+                    error = scoring_error
+                else:
+                    correct = bool(verdict)
 
         # EV-CONF: prefer model probability rows when requested/available.
         # Fall back to historical scoring-derived proxies for paths that do

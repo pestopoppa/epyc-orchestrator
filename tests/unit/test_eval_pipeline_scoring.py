@@ -22,8 +22,6 @@ import threading
 import time
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
@@ -109,6 +107,31 @@ def _fixture_questions(n: int = 8) -> list[dict]:
         }
         for i in range(n)
     ]
+
+
+def test_score_generation_preserves_completed_output_when_scorer_is_unavailable(monkeypatch) -> None:
+    tower = EvalTower()
+    question = {
+        "id": "q", "qid": "fixed-q", "suite": "unit", "prompt": "p",
+        "expected": "gold", "scoring_method": "llm_judge",
+    }
+    outcome = _mk_generate()(question, object())
+    outcome.answer = "completed answer"
+    outcome.tokens = 17
+    outcome.resp = {"answer": outcome.answer, "tokens_generated": 17, "routed_to": "frontdoor"}
+    monkeypatch.setattr(
+        eval_tower,
+        "score_answer_or_error",
+        lambda *_args, **_kwargs: (None, "scoring_unavailable: judge timeout"),
+    )
+
+    result = tower._score_generation(question, outcome, object())
+
+    assert result.error == "scoring_unavailable: judge timeout"
+    assert result.correct is False
+    assert result.answer == "completed answer"
+    assert result.tokens_generated == 17
+    assert result.route_used == "frontdoor"
 
 
 # ── (a) verdict / order parity: serial vs pipelined ────────────────────────────

@@ -14,6 +14,7 @@ import base64
 from collections import Counter
 from contextlib import contextmanager
 import ctypes
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -49,6 +50,7 @@ from eval_tower import (  # noqa: E402
 )
 from seeding_scoring import (  # noqa: E402
     _load_orchestrator_debug_scorer,
+    score_answer_or_error,
     score_answer_deterministic,
 )
 
@@ -334,6 +336,10 @@ def write_json(path: Path, value: Any) -> None:
             tmp.unlink()
 
 
+def write_json_create(path: Path, value: Any) -> None:
+    write_text_create(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -347,6 +353,19 @@ def write_text(path: Path, text: str) -> None:
     finally:
         if tmp.exists():
             tmp.unlink()
+
+
+def write_text_create(path: Path, text: str) -> None:
+    """Durably create an evidence artifact once; never replace prior evidence."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = text.encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        _write_full_record(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    fsync_dir(path.parent)
 
 
 def fsync_dir(path: Path) -> None:
@@ -509,6 +528,43 @@ def _append_trace_row(path: Path, row: dict[str, Any]) -> None:
 
 
 @contextmanager
+def judge_trace_fixed_vector_identity(qid: str) -> Iterator[None]:
+    """Bind one scorer call to its immutable E8 vector identity."""
+    previous = getattr(_JUDGE_TRACE_LOCAL, "fixed_vector_qid", None)
+    _JUDGE_TRACE_LOCAL.fixed_vector_qid = qid
+    try:
+        yield
+    finally:
+        if previous is None:
+            try:
+                del _JUDGE_TRACE_LOCAL.fixed_vector_qid
+            except AttributeError:
+                pass
+        else:
+            _JUDGE_TRACE_LOCAL.fixed_vector_qid = previous
+
+
+@contextmanager
+def bind_eval_tower_scorer_identities(tower: EvalTower) -> Iterator[None]:
+    """Propagate each scoring worker's vector qid into judge trace capture."""
+    if not hasattr(tower, "_score_generation"):
+        # Test doubles and legacy synchronous towers return already-scored rows.
+        yield
+        return
+    original = tower._score_generation
+
+    def score_with_identity(question: dict[str, Any], outcome: Any, client: Any) -> Any:
+        with judge_trace_fixed_vector_identity(_question_qid(question)):
+            return original(question, outcome, client)
+
+    tower._score_generation = score_with_identity  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        tower._score_generation = original  # type: ignore[method-assign]
+
+
+@contextmanager
 def capture_llm_judge_traces(
     path: Path, *, default_api_url: str, default_role: str = JUDGE_DEFAULT_ROLE
 ) -> Iterator[None]:
@@ -578,6 +634,9 @@ def capture_llm_judge_traces(
                 row = {
                     "schema": "epyc.e8_quality_llm_judge_trace.v1",
                     "correlation_sha256": judge_correlation_sha256(answer, expected, config),
+                    "fixed_vector_qid": getattr(
+                        _JUDGE_TRACE_LOCAL, "fixed_vector_qid", None
+                    ),
                     "scorer_answer": _normalized_scorer_answer(answer),
                     "expected": expected,
                     "scoring_config": config,
@@ -713,6 +772,107 @@ def validate_llm_judge_trace(
     return verdict
 
 
+def _validate_failed_llm_judge_trace(
+    answer: str,
+    expected: str,
+    config: dict[str, Any],
+    trace: dict[str, Any],
+    *,
+    default_api_url: str,
+    default_role: str = JUDGE_DEFAULT_ROLE,
+) -> None:
+    """Validate a sealed unavailable-judge attempt without treating it as a verdict."""
+    expected_sources = {
+        "debug_scorer": sha256_path(DEBUG_SCORER_SOURCE),
+        "seeding_scoring": sha256_path(SCORING_SOURCE),
+    }
+    normalized_answer = _normalized_scorer_answer(answer)
+    if not normalized_answer:
+        raise ValueError("failed llm_judge attempt cannot have a blank answer")
+    expected_call = expected_judge_request(
+        normalized_answer, str(expected), config,
+        default_api_url=default_api_url, default_role=default_role,
+    )
+    error = trace.get("error")
+    if (
+        trace.get("schema") != "epyc.e8_quality_llm_judge_trace.v1"
+        or trace.get("source_sha256") != expected_sources
+        or trace.get("correlation_sha256") != judge_correlation_sha256(answer, expected, config)
+        or trace.get("scorer_answer") != normalized_answer
+        or trace.get("expected") != str(expected)
+        or trace.get("scoring_config") != config
+        or trace.get("mode") != "network_judge"
+        or trace.get("request") != expected_call["request"]
+        or trace.get("candidate") != expected_call["candidate"]
+        or trace.get("judge_prompt") != expected_call["judge_prompt"]
+        or trace.get("judge_role") != expected_call["judge_role"]
+        or trace.get("parsed_verdict") is not None
+        or trace.get("response") is not None
+        or not isinstance(error, dict)
+        or error.get("type") != "ScoringUnavailableError"
+        or not isinstance(trace.get("http_error"), dict)
+    ):
+        raise ValueError("failed judge trace is inconsistent")
+
+
+def _judge_trace_api_url(trace: dict[str, Any], fallback: str) -> str:
+    """Use a sealed trace's own endpoint when replaying historical judge work."""
+    request = trace.get("request")
+    url = request.get("url") if isinstance(request, dict) else None
+    if not isinstance(url, str) or not url.endswith("/chat"):
+        return fallback
+    base = url.removesuffix("/chat")
+    return base if base else fallback
+
+
+def _validate_llm_judge_trace_history(
+    answer: str,
+    expected: str,
+    config: dict[str, Any],
+    trace: dict[str, Any],
+    *,
+    default_api_url: str,
+    default_role: str = JUDGE_DEFAULT_ROLE,
+) -> bool | None:
+    """Validate one sealed trace or the bounded scorer-tail attempt history."""
+    if trace.get("schema") == "epyc.e8_quality_llm_judge_trace.v1":
+        if trace.get("error") is not None:
+            _validate_failed_llm_judge_trace(
+                answer, expected, config, trace,
+                default_api_url=_judge_trace_api_url(trace, default_api_url), default_role=default_role,
+            )
+            return None
+        return validate_llm_judge_trace(
+            answer, expected, config, trace,
+            default_api_url=_judge_trace_api_url(trace, default_api_url), default_role=default_role,
+        )
+    if trace.get("schema") != "epyc.e8_quality_llm_judge_trace.v2":
+        raise ValueError("judge trace schema is invalid")
+    attempts = trace.get("attempts")
+    if not isinstance(attempts, list) or len(attempts) not in (1, 2):
+        raise ValueError("judge trace attempt history is not bounded")
+    for prior in attempts[:-1]:
+        if not isinstance(prior, dict):
+            raise ValueError("judge trace prior attempt is invalid")
+        _validate_failed_llm_judge_trace(
+            answer, expected, config, prior,
+            default_api_url=_judge_trace_api_url(prior, default_api_url), default_role=default_role,
+        )
+    final = attempts[-1]
+    if not isinstance(final, dict):
+        raise ValueError("judge trace final attempt is invalid")
+    if final.get("error") is not None:
+        _validate_failed_llm_judge_trace(
+            answer, expected, config, final,
+            default_api_url=_judge_trace_api_url(final, default_api_url), default_role=default_role,
+        )
+        return None
+    return validate_llm_judge_trace(
+        answer, expected, config, final,
+        default_api_url=_judge_trace_api_url(final, default_api_url), default_role=default_role,
+    )
+
+
 def independently_score_response(
     answer: str,
     expected: str,
@@ -798,10 +958,6 @@ def validate_response_scoring(
         if identity not in traces_by_identity:
             raise ValueError("llm_judge response has no matching fixed-vector trace")
     for ordinal, (response, question) in enumerate(zip(responses, questions)):
-        if response.get("error") is not None:
-            if response.get("correct") is not False:
-                raise ValueError("errored response is marked correct")
-            continue
         method = str(question.get("scoring_method") or "")
         config = question.get("scoring_config") or {}
         expected = question.get("expected", "")
@@ -809,6 +965,25 @@ def validate_response_scoring(
         trace = None
         if method == "llm_judge":
             trace = traces_by_identity.pop((tier, repetition, ordinal, _question_qid(question)))
+            replayed = _validate_llm_judge_trace_history(
+                answer, expected, config, trace,
+                default_api_url=default_api_url,
+            )
+            if response.get("error") is not None:
+                if response.get("correct") is not False or replayed is not None:
+                    raise ValueError("errored response does not end in a failed scorer attempt")
+                continue
+            if replayed is None:
+                raise ValueError("successful response has no successful scorer attempt")
+            if replayed is not response.get("correct"):
+                raise ValueError(
+                    f"independent score differs for response {response.get('qid')}"
+                )
+            continue
+        if response.get("error") is not None:
+            if response.get("correct") is not False:
+                raise ValueError("errored response is marked correct")
+            continue
         replayed = independently_score_response(
             answer,
             expected,
@@ -2050,6 +2225,825 @@ def response_rows(question_results: list[Any], questions: list[dict[str, Any]]) 
     ]
 
 
+def _is_llm_judge_scorer_unavailable(row: Any, question: dict[str, Any]) -> bool:
+    return (
+        str(question.get("scoring_method") or "") == "llm_judge"
+        and bool(str(getattr(row, "answer", "")).strip())
+        and str(getattr(row, "error", "")).startswith("scoring_unavailable:")
+    )
+
+
+def replay_llm_judge_scorer_tail_once(
+    results: list[Any], questions: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Retry only unavailable nonblank judge scoring once; never regenerate output."""
+    if len(results) != len(questions):
+        raise ValueError("scorer-tail replay result/question count mismatch")
+    replayed: list[dict[str, Any]] = []
+    for ordinal, (row, question) in enumerate(zip(results, questions)):
+        if (
+            getattr(row, "_e8_scorer_tail_replayed", False)
+            or not _is_llm_judge_scorer_unavailable(row, question)
+        ):
+            continue
+        setattr(row, "_e8_scorer_tail_replayed", True)
+        with judge_trace_fixed_vector_identity(_question_qid(question)):
+            verdict, error = score_answer_or_error(
+                str(getattr(row, "answer", "")),
+                str(question.get("expected") or ""),
+                "llm_judge",
+                question.get("scoring_config") or {},
+            )
+        row.correct = bool(verdict) if error is None else False
+        row.error = error
+        replayed.append({
+            "ordinal": ordinal,
+            "qid": _question_qid(question),
+            "outcome": "recovered" if error is None else "failed_closed",
+        })
+    return replayed
+
+
+LEGACY_T1_R1_MIGRATION_SCHEMA = "epyc.e8_quality_legacy_t1_r1_migration.v1"
+LEGACY_T1_R1_REQUIRED_FILES = (
+    "question_vector.T1.json",
+    "scoring_vector.T1.json",
+    "raw.T1.r1.json",
+    "responses.T1.r1.jsonl",
+    "judge_traces.T1.r1.jsonl",
+    "runtime_watch.jsonl",
+    "eval_sidecars/question_results.e8-t1-r1.jsonl",
+)
+
+
+@dataclass(frozen=True)
+class LegacyT1R1Migration:
+    """Validated historical T1/r1 evidence awaiting one focused replacement.
+
+    The object deliberately carries no generated replacement for the old blank
+    row.  A caller must provide that one fresh result explicitly, so a future
+    collection cannot accidentally turn this repair into a full T1 rerun.
+    """
+
+    legacy_dir: Path
+    questions: list[dict[str, Any]]
+    responses: list[dict[str, Any]]
+    traces_by_ordinal: dict[int, dict[str, Any]]
+    focused_generation_ordinal: int
+    provenance: dict[str, Any]
+
+
+def _legacy_t1_r1_artifacts(legacy_dir: Path) -> dict[str, Path]:
+    """Return the pinned legacy inputs, rejecting incomplete or mutable inputs."""
+    root = legacy_dir.resolve()
+    artifacts = {name: root / name for name in LEGACY_T1_R1_REQUIRED_FILES}
+    missing = [name for name, path in artifacts.items() if not path.is_file()]
+    if missing:
+        raise ValueError(f"legacy T1/r1 bundle is incomplete: {', '.join(missing)}")
+    return artifacts
+
+
+def _legacy_question_projection(question: dict[str, Any]) -> dict[str, Any]:
+    """The immutable scoring fields stored by the public T1 vector."""
+    config = question.get("scoring_config") or {}
+    if not isinstance(config, dict):
+        raise ValueError(f"legacy T1 source scoring config is not an object for {_question_qid(question)}")
+    return {
+        "qid": _question_qid(question),
+        "suite": str(question.get("suite") or ""),
+        "scoring_method": str(question.get("scoring_method") or ""),
+        "expected": str(question.get("expected") or ""),
+        "scoring_config": config,
+    }
+
+
+def _legacy_sidecar_rows(path: Path, *, expected_n: int) -> dict[int, dict[str, Any]]:
+    rows = load_jsonl(path)
+    by_ordinal: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        if row.get("row_type") != "question_result":
+            continue
+        ordinal = row.get("ordinal")
+        if not isinstance(ordinal, int) or ordinal < 0 or ordinal >= expected_n:
+            raise ValueError("legacy T1/r1 sidecar has an invalid ordinal")
+        if ordinal in by_ordinal:
+            raise ValueError("legacy T1/r1 sidecar has duplicate ordinals")
+        result = row.get("result")
+        if not isinstance(result, dict):
+            raise ValueError("legacy T1/r1 sidecar result is invalid")
+        by_ordinal[ordinal] = row
+    if sorted(by_ordinal) != list(range(expected_n)):
+        raise ValueError("legacy T1/r1 sidecar does not cover the fixed vector")
+    return by_ordinal
+
+
+def _legacy_fixed_vector_matches(
+    artifacts: dict[str, Path], questions: list[dict[str, Any]]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Bind historical outputs to the current full source rows before reuse."""
+    vector = load_json(artifacts["question_vector.T1.json"])
+    scoring = load_json(artifacts["scoring_vector.T1.json"])
+    if (
+        vector.get("schema") != "epyc.e8_quality_question_vector.v1"
+        or scoring.get("schema") != "epyc.e8_quality_scoring_vector.v1"
+        or vector.get("tier") != 1
+        or scoring.get("tier") != 1
+        or vector.get("n") != len(questions)
+        or scoring.get("n") != len(questions)
+    ):
+        raise ValueError("legacy T1/r1 vector metadata is not the pinned T1 contract")
+    vector_questions = vector.get("questions")
+    scoring_questions = scoring.get("questions")
+    if not isinstance(vector_questions, list) or not isinstance(scoring_questions, list):
+        raise ValueError("legacy T1/r1 vectors have no question lists")
+    if len(vector_questions) != len(questions) or len(scoring_questions) != len(questions):
+        raise ValueError("legacy T1/r1 vector cardinality differs from current T1")
+    for ordinal, question in enumerate(questions):
+        projection = _legacy_question_projection(question)
+        old_public = vector_questions[ordinal]
+        old_scoring = scoring_questions[ordinal]
+        if not isinstance(old_public, dict) or not isinstance(old_scoring, dict):
+            raise ValueError("legacy T1/r1 vector row is not an object")
+        if (
+            old_public.get("qid") != projection["qid"]
+            or old_public.get("suite") != projection["suite"]
+            or old_public.get("scoring_method") != projection["scoring_method"]
+            or old_public.get("scoring_config_sha256") != canonical_hash(projection["scoring_config"])
+            or old_scoring.get("qid") != projection["qid"]
+            or old_scoring.get("suite") != projection["suite"]
+            or old_scoring.get("scoring_method") != projection["scoring_method"]
+            or old_scoring.get("expected") != projection["expected"]
+            or old_scoring.get("scoring_config") != projection["scoring_config"]
+            or old_scoring.get("prompt_sha256")
+            != sha256_bytes(str(question.get("prompt") or "").encode())
+        ):
+            raise ValueError(f"legacy T1/r1 vector differs at ordinal {ordinal}")
+    return vector, scoring
+
+
+def _legacy_raw_and_watcher_match(
+    artifacts: dict[str, Path],
+    *,
+    vector: dict[str, Any],
+    questions: list[dict[str, Any]],
+    responses: list[dict[str, Any]],
+    sidecar: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    """Semantically validate the historical observation instead of trusting hashes."""
+    raw = load_json(artifacts["raw.T1.r1.json"])
+    scored = [row for row in responses if row.get("error") is None]
+    if not scored:
+        raise ValueError("legacy T1/r1 has no scored rows")
+    correct = sum(bool(row.get("correct")) for row in scored)
+    per_suite: dict[str, list[bool]] = {}
+    for row in scored:
+        per_suite.setdefault(str(row.get("suite") or ""), []).append(bool(row.get("correct")))
+    expected_quality = (correct / len(scored)) * 3.0
+    expected_suite_quality = {
+        suite: (sum(values) / len(values)) * 3.0 for suite, values in per_suite.items()
+    }
+    expected_suite_counts = {suite: len(values) for suite, values in per_suite.items()}
+    timestamp = raw.get("ts")
+    try:
+        ts_s = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).timestamp()
+    except ValueError as exc:
+        raise ValueError("legacy T1/r1 raw timestamp is invalid") from exc
+    if (
+        raw.get("n") != len(questions)
+        or raw.get("core_id") != vector.get("core_id")
+        or raw.get("protocol_id") != PROTOCOL_ID
+        or raw.get("era") != E8_ERA
+        or not isinstance(raw.get("q"), (int, float))
+        or abs(float(raw["q"]) - expected_quality) > 1e-12
+        or raw.get("per_suite_quality") != expected_suite_quality
+        or raw.get("per_suite_counts") != expected_suite_counts
+        or ts_s < E8_BOUNDARY
+    ):
+        raise ValueError("legacy T1/r1 raw observation does not reconcile with sealed responses")
+
+    intervals: dict[int, tuple[float, float]] = {}
+    batch_ids: set[str] = set()
+    pre_batch_timestamps: list[int] = []
+    for ordinal, row in sidecar.items():
+        started, ended = row.get("started_at_s"), row.get("ended_at_s")
+        if not isinstance(started, (int, float)) or not isinstance(ended, (int, float)) or ended < started:
+            raise ValueError(f"legacy T1/r1 sidecar timing is invalid at ordinal {ordinal}")
+        batch_id = row.get("eval_batch_id")
+        if not isinstance(batch_id, str):
+            raise ValueError(f"legacy T1/r1 sidecar has no batch id at ordinal {ordinal}")
+        batch_ids.add(batch_id)
+        intervals[ordinal] = (float(started), float(ended))
+    if len(batch_ids) != 1:
+        raise ValueError("legacy T1/r1 sidecar has multiple batch identities")
+    batch_id = next(iter(batch_ids))
+    match = re.fullmatch(r"evaltower-e8-t1-r1-(\d{13})-[0-9a-f]+-50q", batch_id)
+    if match is None:
+        raise ValueError("legacy T1/r1 sidecar batch identity is invalid")
+    generation_start = int(match.group(1)) / 1000.0
+    for ordinal, (started, _ended) in intervals.items():
+        if started < generation_start:
+            if (
+                str(questions[ordinal].get("scoring_method") or "") != "llm_judge"
+                or responses[ordinal].get("error") is None
+                or str(responses[ordinal].get("answer") or "") != ""
+            ):
+                raise ValueError("legacy T1/r1 has a non-judge or non-error pre-batch timestamp")
+            pre_batch_timestamps.append(ordinal)
+    if sorted(pre_batch_timestamps) != [32, 33, 38]:
+        raise ValueError("legacy T1/r1 pre-batch scorer timestamp disposition differs")
+    generation_end = max(ended for _started, ended in intervals.values())
+    samples = load_jsonl(artifacts["runtime_watch.jsonl"])
+    if not samples:
+        raise ValueError("legacy T1/r1 runtime watcher is empty")
+    sample_intervals: list[tuple[float, float]] = []
+    for sample in samples:
+        try:
+            started = datetime.fromisoformat(str(sample["started_at"]).replace("Z", "+00:00")).timestamp()
+            finished = datetime.fromisoformat(str(sample["finished_at"]).replace("Z", "+00:00")).timestamp()
+        except (KeyError, ValueError) as exc:
+            raise ValueError("legacy T1/r1 runtime watcher timestamp is invalid") from exc
+        active = sample.get("active_load")
+        active_ok = active is None or active == {"tier": 1, "repetition": 1}
+        if (
+            finished < started
+            or sample.get("binding_matches_pre") is not True
+            or sample.get("immutable_files_match_pre") is not True
+            or not active_ok
+            or sample.get("autopilot_active") is not False
+        ):
+            raise ValueError("legacy T1/r1 runtime watcher violates the ratified contract")
+        sample_intervals.append((started, finished))
+    failed_indices = [index for index, sample in enumerate(samples) if sample.get("ok") is not True]
+    if failed_indices:
+        expected_active = {"tier": 1, "repetition": 1}
+        def exact_six_timeout(sample: dict[str, Any]) -> bool:
+            return bool(
+                sample.get("api_failure_class") == "readiness_contract_failed"
+                and sample.get("api_probe_urls_match_preflight") is True
+                and isinstance(sample.get("api_probe_failures"), list)
+                and len(sample["api_probe_failures"]) == len(EXPECTED_PROBE_GROUPS)
+                and {row.get("group") for row in sample["api_probe_failures"]} == EXPECTED_PROBE_GROUPS
+                and all(row.get("failure_reason") == "connect_timeout" for row in sample["api_probe_failures"])
+            )
+
+        def transport_timeout(sample: dict[str, Any]) -> bool:
+            return bool(
+                sample.get("api_failure_class") == "api_transport_timeout"
+                and sample.get("api_probe_urls") == {}
+                and sample.get("api_probe_failures") == []
+                and sample.get("api_probe_urls_match_preflight") is False
+            )
+        if (
+            len(samples) != 172
+            or len(failed_indices) != 4
+            or any(samples[index].get("active_load") != expected_active for index in failed_indices)
+            or sum(transport_timeout(samples[index]) for index in failed_indices) != 1
+            or sum(exact_six_timeout(samples[index]) for index in failed_indices) != 3
+            or any(
+                index == 0 or index == len(samples) - 1
+                or samples[index - 1].get("ok") is not True
+                or samples[index + 1].get("ok") is not True
+                or samples[index - 1].get("active_load") != expected_active
+                or samples[index + 1].get("active_load") != expected_active
+                for index in failed_indices
+            )
+        ):
+            raise ValueError("legacy T1/r1 watcher failures do not match the reviewed saturation exception")
+        watcher_classification: dict[str, Any] = {
+            "classification": "protocol_candidate_active_load_probe_saturation",
+            "authoritative": False,
+            "total_samples": 172,
+            "clean_samples": 168,
+            "isolated_failures": {
+                "api_transport_timeout": 1,
+                "all_six_endpoint_connect_timeout": 3,
+            },
+            "failure_indices": failed_indices,
+            "watcher_sha256": sha256_path(artifacts["runtime_watch.jsonl"]),
+        }
+    else:
+        if any(sample.get("api_probe_urls_match_preflight") is not True for sample in samples):
+            raise ValueError("legacy T1/r1 clean watcher has a probe URL mismatch")
+        watcher_classification = {"classification": "all_samples_clean", "authoritative": True}
+    sample_intervals.sort()
+    if (
+        sample_intervals[0][0] > generation_start + 7.0
+        or sample_intervals[-1][1] < generation_end - 7.0
+        or any(next_started - previous_finished > 7.0 for (_previous_started, previous_finished), (next_started, _next_finished) in zip(sample_intervals, sample_intervals[1:]))
+        or not any(
+            sample.get("active_load") == {"tier": 1, "repetition": 1}
+            for sample in samples
+        )
+    ):
+        raise ValueError("legacy T1/r1 runtime watcher does not continuously cover generation")
+    return {
+        "raw_quality": expected_quality,
+        "raw_timestamp": timestamp,
+        "legacy_generation_window": {"started_at_s": generation_start, "ended_at_s": generation_end},
+        "sidecar_timestamp_contradiction": {
+            "batch_id": batch_id,
+            "batch_epoch_s": generation_start,
+            "pre_batch_scorer_ordinals": pre_batch_timestamps,
+            "classification": "legacy_scorer_path_timestamp_instrumentation_defect",
+        },
+        "watcher_samples": len(samples),
+        "watcher_exception": watcher_classification,
+    }
+
+
+def prepare_legacy_t1_r1_migration(
+    legacy_dir: Path,
+    questions: list[dict[str, Any]],
+    *,
+    default_api_url: str,
+) -> LegacyT1R1Migration:
+    """Validate and rehydrate the reusable portion of the failed historical T1/r1.
+
+    This performs no network request.  It reuses 46 clean generation results,
+    preserves three unavailable-judge attempts for deterministic scorer-tail
+    replay, and leaves exactly one blank timeout as a focused generation slot.
+    """
+    artifacts = _legacy_t1_r1_artifacts(legacy_dir)
+    vector, scoring = _legacy_fixed_vector_matches(artifacts, questions)
+    legacy_responses = load_jsonl(artifacts["responses.T1.r1.jsonl"])
+    if len(legacy_responses) != len(questions):
+        raise ValueError("legacy T1/r1 response ledger cardinality differs from fixed vector")
+    sidecar = _legacy_sidecar_rows(
+        artifacts["eval_sidecars/question_results.e8-t1-r1.jsonl"], expected_n=len(questions)
+    )
+    raw_watcher = _legacy_raw_and_watcher_match(
+        artifacts, vector=vector, questions=questions, responses=legacy_responses, sidecar=sidecar
+    )
+    legacy_traces = load_jsonl(artifacts["judge_traces.T1.r1.jsonl"])
+    judge_ordinals = [
+        ordinal for ordinal, question in enumerate(questions)
+        if str(question.get("scoring_method") or "") == "llm_judge"
+    ]
+    if len(legacy_traces) != len(judge_ordinals):
+        raise ValueError("legacy T1/r1 judge trace count differs from fixed vector")
+    traces_by_ordinal: dict[int, dict[str, Any]] = {}
+    unassigned = list(legacy_traces)
+    for ordinal in judge_ordinals:
+        question = questions[ordinal]
+        expected = str(question.get("expected") or "")
+        config = question.get("scoring_config") or {}
+        if not isinstance(config, dict):
+            raise ValueError("legacy T1/r1 judge config is invalid")
+        matches = [
+            trace for trace in unassigned
+            if trace.get("expected") == expected
+            and trace.get("scoring_config") == config
+            and isinstance(trace.get("scorer_answer"), str)
+        ]
+        if len(matches) != 1:
+            raise ValueError(f"legacy T1/r1 judge trace cannot be uniquely bound at ordinal {ordinal}")
+        trace = matches[0]
+        unassigned.remove(trace)
+        response = legacy_responses[ordinal]
+        if response.get("error") is None:
+            if str(response.get("answer") or "") != str(trace.get("scorer_answer") or ""):
+                raise ValueError(f"legacy T1/r1 successful judge answer differs at ordinal {ordinal}")
+            validate_llm_judge_trace(
+                str(response.get("answer") or ""), expected, config, trace,
+                default_api_url=_judge_trace_api_url(trace, default_api_url),
+            )
+        else:
+            _validate_failed_llm_judge_trace(
+                str(trace.get("scorer_answer") or ""), expected, config, trace,
+                default_api_url=_judge_trace_api_url(trace, default_api_url),
+            )
+        traces_by_ordinal[ordinal] = trace
+    if unassigned:
+        raise ValueError("legacy T1/r1 has unassigned judge traces")
+
+    focused_generation_ordinal: int | None = None
+    reusable = 0
+    scorer_unavailable = 0
+    rehydrated: list[dict[str, Any]] = []
+    for ordinal, (question, legacy) in enumerate(zip(questions, legacy_responses)):
+        projection = _legacy_question_projection(question)
+        sidecar_result = sidecar[ordinal]["result"]
+        if (
+            legacy.get("suite") != projection["suite"]
+            or legacy.get("scoring_method") != projection["scoring_method"]
+            or legacy.get("scoring_config_sha256") != canonical_hash(projection["scoring_config"])
+            or legacy.get("qid") != sidecar_result.get("qid")
+            or sidecar_result.get("question_id") != question.get("id")
+            or sidecar_result.get("suite") != projection["suite"]
+        ):
+            raise ValueError(f"legacy T1/r1 response identity differs at ordinal {ordinal}")
+        old_error = legacy.get("error")
+        old_answer = str(legacy.get("answer") or "")
+        if old_error is None:
+            if (
+                legacy.get("partial") is not False
+                or legacy.get("degraded") is not False
+                or legacy.get("route_used") != "frontdoor"
+                or sidecar_result.get("error") not in (None, False)
+                or sidecar_result.get("partial") not in (None, False)
+                or sidecar_result.get("degraded") not in (None, False)
+                or sidecar_result.get("route") != "frontdoor"
+            ):
+                raise ValueError(f"legacy T1/r1 clean row is not a clean frontdoor result at ordinal {ordinal}")
+            if ordinal not in traces_by_ordinal:
+                replayed = independently_score_response(
+                    old_answer, str(question.get("expected") or ""), projection["scoring_method"],
+                    projection["scoring_config"], default_api_url=default_api_url,
+                )
+                if replayed is not bool(legacy.get("correct")):
+                    raise ValueError(f"legacy T1/r1 non-judge score differs at ordinal {ordinal}")
+            reusable += 1
+            rehydrated.append({
+                **legacy,
+                "qid": projection["qid"],
+                "suite": projection["suite"],
+                "scoring_method": projection["scoring_method"],
+                "scoring_config_sha256": canonical_hash(projection["scoring_config"]),
+            })
+            continue
+        if old_answer == "" and str(old_error) == "timed out":
+            if focused_generation_ordinal is not None:
+                raise ValueError("legacy T1/r1 has more than one blank generation timeout")
+            focused_generation_ordinal = ordinal
+            rehydrated.append({"_focused_generation_required": True})
+            continue
+        if ordinal not in traces_by_ordinal:
+            raise ValueError(f"legacy T1/r1 non-generation failure is not a judge failure at ordinal {ordinal}")
+        trace = traces_by_ordinal[ordinal]
+        if not str(trace.get("scorer_answer") or "").strip():
+            raise ValueError(f"legacy T1/r1 scorer failure lost its generated answer at ordinal {ordinal}")
+        scorer_unavailable += 1
+        rehydrated.append({
+            **legacy,
+            "qid": projection["qid"],
+            "suite": projection["suite"],
+            "answer": str(trace["scorer_answer"]),
+            "correct": False,
+            "error": str(old_error),
+            "scoring_method": projection["scoring_method"],
+            "scoring_config_sha256": canonical_hash(projection["scoring_config"]),
+        })
+    if focused_generation_ordinal is None:
+        raise ValueError("legacy T1/r1 has no blank generation timeout to repair")
+    if reusable != 46 or scorer_unavailable != 3:
+        raise ValueError(
+            f"legacy T1/r1 expected 46 reusable rows and 3 scorer tails; got {reusable} and {scorer_unavailable}"
+        )
+    if _question_qid(questions[focused_generation_ordinal]) != "aime_2024-II-15":
+        raise ValueError("legacy T1/r1 focused generation slot is not the sealed AIME timeout")
+    provenance = {
+        "schema": LEGACY_T1_R1_MIGRATION_SCHEMA,
+        "legacy_dir": str(legacy_dir.resolve()),
+        "legacy_artifact_sha256": {str(path.relative_to(legacy_dir.resolve())): sha256_path(path)
+                                   for path in artifacts.values()},
+        "question_source_sha256_by_ordinal": {
+            str(ordinal): canonical_hash(question) for ordinal, question in enumerate(questions)
+        },
+        "legacy_vector_sha256": vector_sha256(vector),
+        "legacy_scoring_vector_sha256": canonical_hash(scoring),
+        "reused_clean_generation_rows": reusable,
+        "scorer_tail_replay_ordinals": sorted(
+            ordinal for ordinal in traces_by_ordinal if legacy_responses[ordinal].get("error") is not None
+        ),
+        "focused_generation": {
+            "ordinal": focused_generation_ordinal,
+            "qid": _question_qid(questions[focused_generation_ordinal]),
+            "reason": "legacy_blank_generation_timeout",
+        },
+        "runtime_window": {
+            "legacy_runtime_watch_sha256": sha256_path(artifacts["runtime_watch.jsonl"]),
+            "classification": "legacy_generation_window_preserved; focused_replacement_requires_separate_watched_window",
+            **raw_watcher,
+        },
+    }
+    return LegacyT1R1Migration(
+        legacy_dir=legacy_dir.resolve(),
+        questions=[dict(question) for question in questions],
+        responses=rehydrated,
+        traces_by_ordinal=traces_by_ordinal,
+        focused_generation_ordinal=focused_generation_ordinal,
+        provenance=provenance,
+    )
+
+
+def verify_legacy_t1_r1_source_unchanged(migration: LegacyT1R1Migration) -> None:
+    """Reject a source-bundle change between preflight and final evidence copy."""
+    expected = migration.provenance.get("legacy_artifact_sha256")
+    if not isinstance(expected, dict) or set(expected) != set(LEGACY_T1_R1_REQUIRED_FILES):
+        raise ValueError("legacy T1/r1 source provenance is incomplete")
+    for relative, digest in expected.items():
+        source = migration.legacy_dir / relative
+        if not source.is_file() or not isinstance(digest, str) or sha256_path(source) != digest:
+            raise ValueError(f"legacy T1/r1 source changed after preflight: {relative}")
+
+
+def verify_legacy_t1_r1_matches_candidate(
+    migration: LegacyT1R1Migration, candidate: dict[str, Any]
+) -> None:
+    """Bind the execution-time source preflight to the sealed candidate proposal."""
+    expected = candidate.get("legacy_t1_r1_migration_candidate")
+    if not isinstance(expected, dict):
+        raise ValueError("E8 v4 candidate has no legacy T1/r1 migration binding")
+    if (
+        expected.get("schema") != LEGACY_T1_R1_MIGRATION_SCHEMA
+        or expected.get("legacy_dir") != str(migration.legacy_dir)
+        or expected.get("provenance_sha256") != canonical_hash(migration.provenance)
+        or expected.get("watcher_exception")
+        != migration.provenance["runtime_window"]["watcher_exception"]
+        or expected.get("sidecar_timestamp_contradiction")
+        != migration.provenance["runtime_window"]["sidecar_timestamp_contradiction"]
+    ):
+        raise ValueError("E8 v4 candidate legacy T1/r1 binding changed after proposal")
+
+
+def replay_legacy_t1_r1_scorer_tails(
+    migration: LegacyT1R1Migration,
+    *,
+    trace_path: Path,
+    default_api_url: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Run the bounded scorer-only replay and retain both old and new attempts."""
+    verify_legacy_t1_r1_source_unchanged(migration)
+    if trace_path.exists():
+        raise FileExistsError(f"legacy T1/r1 scorer-tail evidence already exists: {trace_path}")
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    write_text_create(trace_path, "")
+    replayed_rows = [dict(row) for row in migration.responses]
+    replayed_ordinals = list(migration.provenance["scorer_tail_replay_ordinals"])
+    with capture_llm_judge_traces(trace_path, default_api_url=default_api_url):
+        for ordinal in replayed_ordinals:
+            question = migration.questions[ordinal]
+            row = replayed_rows[ordinal]
+            with judge_trace_fixed_vector_identity(_question_qid(question)):
+                verdict, error = score_answer_or_error(
+                    str(row["answer"]),
+                    str(question.get("expected") or ""),
+                    "llm_judge",
+                    question.get("scoring_config") or {},
+                )
+            row["correct"] = bool(verdict) if error is None else False
+            row["error"] = error
+    retry_traces = load_jsonl(trace_path)
+    retry_by_qid = {trace.get("fixed_vector_qid"): trace for trace in retry_traces}
+    expected_qids = {_question_qid(migration.questions[ordinal]) for ordinal in replayed_ordinals}
+    if set(retry_by_qid) != expected_qids or len(retry_by_qid) != len(replayed_ordinals):
+        raise ValueError("legacy T1/r1 scorer-tail replay did not capture exactly one trace per fixed qid")
+
+    sealed: list[dict[str, Any]] = []
+    for ordinal, question in enumerate(migration.questions):
+        if str(question.get("scoring_method") or "") != "llm_judge":
+            continue
+        initial = dict(migration.traces_by_ordinal[ordinal])
+        initial["fixed_vector_qid"] = _question_qid(question)
+        fixed_row = {"tier": 1, "repetition": 1, "ordinal": ordinal, "qid": _question_qid(question)}
+        if ordinal in replayed_ordinals:
+            retry = retry_by_qid[_question_qid(question)]
+            sealed.append({
+                "schema": "epyc.e8_quality_llm_judge_trace.v2",
+                "attempts": [initial, retry],
+                "fixed_vector_row": fixed_row,
+            })
+        else:
+            initial["fixed_vector_row"] = fixed_row
+            sealed.append(initial)
+    if len(sealed) != len(migration.traces_by_ordinal):
+        raise ValueError("legacy T1/r1 sealed judge trace cardinality changed")
+    pending = sum(1 for row in replayed_rows if row.get("_focused_generation_required"))
+    return replayed_rows, sealed, {
+        "scorer_tail_replay": [
+            {"ordinal": ordinal, "qid": _question_qid(migration.questions[ordinal]),
+             "outcome": "recovered" if replayed_rows[ordinal].get("error") is None else "failed_closed"}
+            for ordinal in replayed_ordinals
+        ],
+        "focused_generation_pending": pending,
+    }
+
+
+def run_focused_legacy_t1_r1_generation(
+    tower: EvalTower,
+    migration: LegacyT1R1Migration,
+    *,
+    args: argparse.Namespace,
+    sidecar_dir: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Generate only the sealed blank legacy row in its own watched window.
+
+    This is intentionally a one-question batch.  Its concurrency and sidecar
+    are reported separately from the historical full-T1 window; callers must
+    never represent the merged result as a fresh 50-question repetition.
+    """
+    ordinal = migration.focused_generation_ordinal
+    question = migration.questions[ordinal]
+    for key in ("force_role", "force_mode", "request_priority", "workload_class"):
+        source_value = question.get(key)
+        if source_value not in (None, "", FRONTDOOR_REQUEST_CONTRACT[key]):
+            raise ValueError(f"focused legacy T1 source rejects {key}={source_value!r}")
+    if question.get("allow_delegation") not in (None, False):
+        raise ValueError("focused legacy T1 source enables delegation")
+    if question.get("max_queue_wait_ms") not in (None, FRONTDOOR_REQUEST_CONTRACT["max_queue_wait_ms"]):
+        raise ValueError("focused legacy T1 source changes queue wait")
+    execution_question = {
+        **question,
+        "qid": _question_qid(question),
+        "_ordinal": ordinal,
+        **FRONTDOOR_REQUEST_CONTRACT,
+    }
+    previous_artifact_dir = getattr(tower, "_question_artifact_dir", None)
+    tower._question_artifact_dir = sidecar_dir
+    try:
+        with httpx.Client(timeout=tower.timeout) as client, fixed_baseline_environment(sidecar_dir, args.api_url):
+            results = tower._eval_batch(
+                [execution_question], client,
+                log_every=1, label="e8-t1-r1-focused-legacy-timeout-repair",
+            )
+    finally:
+        tower._question_artifact_dir = previous_artifact_dir
+    if len(results) != 1:
+        raise ValueError("focused legacy T1 generation did not return exactly one result")
+    response = response_rows(results, [question])[0]
+    sidecar_path = sidecar_dir / "question_results.e8-t1-r1-focused-legacy-timeout-repair.jsonl"
+    if not sidecar_path.is_file():
+        raise ValueError("focused legacy T1 generation did not persist a sidecar")
+    return response, {
+        "ordinal": ordinal,
+        "qid": _question_qid(question),
+        "n": 1,
+        "actual_eval_concurrency": int(getattr(results[0], "eval_concurrency", 0)),
+        "sidecar_path": str(sidecar_path),
+        "sidecar_sha256": sha256_path(sidecar_path),
+        "runtime_window_classification": "focused_replacement_window; not_a_fresh_full_t1_repetition",
+    }
+
+
+def finalize_legacy_t1_r1_migration(
+    migration: LegacyT1R1Migration,
+    responses: list[dict[str, Any]],
+    sealed_traces: list[dict[str, Any]],
+    focused_response: dict[str, Any],
+    *,
+    trace_path: Path,
+    default_api_url: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Splice exactly one clean focused generation result and replay all scores."""
+    if len(responses) != len(migration.questions):
+        raise ValueError("legacy T1/r1 migration response cardinality changed")
+    ordinal = migration.focused_generation_ordinal
+    question = migration.questions[ordinal]
+    required = {"qid", "suite", "scoring_method", "answer", "correct", "error", "partial", "degraded", "route_used", "scoring_config_sha256"}
+    if not required <= set(focused_response):
+        raise ValueError("focused generation response lacks required evidence fields")
+    if (
+        focused_response.get("qid") != _question_qid(question)
+        or focused_response.get("suite") != question.get("suite")
+        or focused_response.get("scoring_method") != question.get("scoring_method")
+        or focused_response.get("scoring_config_sha256") != canonical_hash(question.get("scoring_config") or {})
+        or focused_response.get("error") is not None
+        or bool(focused_response.get("partial"))
+        or bool(focused_response.get("degraded"))
+        or focused_response.get("route_used") != "frontdoor"
+        or not str(focused_response.get("answer") or "").strip()
+    ):
+        raise ValueError("focused generation response does not satisfy the sealed replacement contract")
+    expected_correct = independently_score_response(
+        str(focused_response["answer"]), str(question.get("expected") or ""),
+        str(question.get("scoring_method") or ""), question.get("scoring_config") or {},
+        default_api_url=default_api_url,
+    )
+    if bool(focused_response["correct"]) is not expected_correct:
+        raise ValueError("focused generation response score does not replay")
+    merged = [dict(row) for row in responses]
+    merged[ordinal] = dict(focused_response)
+    if any(row.get("_focused_generation_required") for row in merged):
+        raise ValueError("legacy T1/r1 migration retained an unresolved generation slot")
+    if trace_path.exists():
+        raise FileExistsError(f"legacy T1/r1 sealed trace already exists: {trace_path}")
+    write_text_create(trace_path, "".join(json.dumps(row, sort_keys=True) + "\n" for row in sealed_traces))
+    audit = validate_response_scoring(
+        merged, migration.questions, trace_path,
+        default_api_url=default_api_url, tier=1, repetition=1,
+    )
+    return merged, {
+        "scoring_audit": audit,
+        "focused_generation": {
+            **migration.provenance["focused_generation"],
+            "replacement_qid": focused_response["qid"],
+            "replacement_answer_sha256": sha256_bytes(str(focused_response["answer"]).encode()),
+        },
+    }
+
+
+def write_finalized_legacy_t1_r1_migration(
+    migration: LegacyT1R1Migration,
+    responses: list[dict[str, Any]],
+    sealed_traces: list[dict[str, Any]],
+    detail: dict[str, Any],
+    *,
+    output_dir: Path,
+) -> dict[str, str]:
+    """Persist a self-contained, auditable migrated T1/r1 bundle.
+
+    The original sidecar is retained byte-for-byte as historical evidence.  The
+    replacement generation must supply its own focused sidecar; this function
+    intentionally does not fabricate one from an old full-batch window.
+    """
+    verify_legacy_t1_r1_source_unchanged(migration)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    response_path = output_dir / "responses.T1.r1.jsonl"
+    trace_path = output_dir / "judge_traces.T1.r1.jsonl"
+    legacy_sidecar_path = output_dir / "legacy_question_results.T1.r1.jsonl"
+    provenance_path = output_dir / "migration_provenance.T1.r1.json"
+    if any(path.exists() for path in (response_path, trace_path, legacy_sidecar_path, provenance_path)):
+        raise FileExistsError("legacy T1/r1 finalized migration output already exists")
+    write_text_create(response_path, "".join(json.dumps(row, sort_keys=True) + "\n" for row in responses))
+    write_text_create(trace_path, "".join(json.dumps(row, sort_keys=True) + "\n" for row in sealed_traces))
+    legacy_sidecar_source = migration.legacy_dir / "eval_sidecars/question_results.e8-t1-r1.jsonl"
+    write_text_create(legacy_sidecar_path, legacy_sidecar_source.read_text(encoding="utf-8"))
+    provenance = {
+        **migration.provenance,
+        "new_artifacts": {
+            "responses": {"path": str(response_path), "sha256": sha256_path(response_path)},
+            "judge_trace_history": {"path": str(trace_path), "sha256": sha256_path(trace_path)},
+            "legacy_sidecar_snapshot": {
+                "path": str(legacy_sidecar_path), "sha256": sha256_path(legacy_sidecar_path),
+            },
+        },
+        "finalization": detail,
+    }
+    write_json_create(provenance_path, provenance)
+    return {
+        "responses": str(response_path),
+        "judge_trace_history": str(trace_path),
+        "legacy_sidecar_snapshot": str(legacy_sidecar_path),
+        "migration_provenance": str(provenance_path),
+    }
+
+
+def migrated_t1_r1_observation(
+    migration: LegacyT1R1Migration,
+    responses: list[dict[str, Any]],
+    finalized: dict[str, Any],
+    focused: dict[str, Any],
+    paths: dict[str, str],
+    *,
+    output_dir: Path,
+    published_dir: Path,
+    core_id: str,
+    expected_binding: dict[str, Any],
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Emit the explicitly mixed-window T1/r1 observation; never a normal batch detail."""
+    if len(responses) != len(migration.questions) or any(row.get("error") is not None for row in responses):
+        raise ValueError("migrated T1/r1 is not fully scored and clean")
+    suites: dict[str, list[bool]] = {}
+    for row in responses:
+        suites.setdefault(str(row["suite"]), []).append(bool(row["correct"]))
+    raw = {
+        "q": (sum(bool(row["correct"]) for row in responses) / len(responses)) * 3.0,
+        "ts": utc_now(), "core_id": core_id, "protocol_id": PROTOCOL_ID,
+        "n": len(responses), "era": E8_ERA,
+        "per_suite_quality": {suite: (sum(values) / len(values)) * 3.0 for suite, values in suites.items()},
+        "per_suite_counts": {suite: len(values) for suite, values in suites.items()},
+    }
+    raw_path = output_dir / "raw.T1.r1.json"
+    write_json_create(raw_path, raw)
+    response_path = Path(paths["responses"])
+    trace_path = Path(paths["judge_trace_history"])
+    focused_sidecar = Path(focused["sidecar_path"])
+    observation = {
+        "path": str(published_path(raw_path, staging_dir=output_dir, output_dir=published_dir)),
+        "sha256": sha256_path(raw_path), "q": raw["q"], "ts": raw["ts"],
+        "core_id": core_id, "protocol_id": PROTOCOL_ID, "n": len(responses), "era": E8_ERA,
+    }
+    detail = {
+        "tier": 1, "repetition": 1,
+        "started_at": migration.provenance["runtime_window"]["legacy_generation_window"],
+        "finished_at": raw["ts"],
+        "response_path": str(published_path(response_path, staging_dir=output_dir, output_dir=published_dir)),
+        "response_sha256": sha256_path(response_path),
+        "actual_eval_concurrency": [int(focused["actual_eval_concurrency"])],
+        "error_classification": {}, "n_results": len(responses),
+        "response_vector_matches_input": [row["qid"] for row in responses] == [_question_qid(q) for q in migration.questions],
+        "all_routes_frontdoor": all(row.get("route_used") == "frontdoor" for row in responses),
+        "runtime_binding_matches_pre": runtime_binding(args) == expected_binding,
+        "per_suite_counts_match_input": raw["per_suite_counts"] == Counter(str(q.get("suite") or "") for q in migration.questions),
+        "sidecar_path": str(published_path(focused_sidecar, staging_dir=output_dir, output_dir=published_dir)),
+        "sidecar_sha256": sha256_path(focused_sidecar),
+        "judge_trace_path": str(published_path(trace_path, staging_dir=output_dir, output_dir=published_dir)),
+        "judge_trace_sha256": sha256_path(trace_path),
+        "scoring_audit": finalized["scoring_audit"],
+        "mixed_window_contract": True,
+        "migration_paths": {
+            key: str(published_path(Path(value), staging_dir=output_dir, output_dir=published_dir))
+            for key, value in paths.items()
+        },
+        "migration_provenance_sha256": sha256_path(Path(paths["migration_provenance"])),
+        "focused_window": focused,
+        "legacy_watcher_exception": migration.provenance["runtime_window"]["watcher_exception"],
+        "sidecar_timestamp_contradiction": migration.provenance["runtime_window"]["sidecar_timestamp_contradiction"],
+    }
+    return observation, detail
+
+
 def seal_judge_trace_outcomes(
     trace_path: Path,
     responses: list[dict[str, Any]],
@@ -2064,11 +3058,19 @@ def seal_judge_trace_outcomes(
         raise ValueError("response ledger does not cover the fixed question vector")
     captured = load_jsonl(trace_path)
     captured_by_correlation: dict[str, list[dict[str, Any]]] = {}
+    captured_by_qid: dict[str, list[dict[str, Any]]] = {}
     for trace in captured:
         correlation = trace.get("correlation_sha256")
         if not isinstance(correlation, str):
             raise ValueError("captured judge trace has no correlation hash")
         captured_by_correlation.setdefault(correlation, []).append(trace)
+        captured_qid = trace.get("fixed_vector_qid")
+        if captured_qid is not None:
+            if not isinstance(captured_qid, str) or not captured_qid:
+                raise ValueError("captured judge trace has an invalid fixed-vector qid")
+            captured_by_qid.setdefault(captured_qid, []).append(trace)
+    if captured_by_qid and any(trace.get("fixed_vector_qid") is None for trace in captured):
+        raise ValueError("captured judge traces mix fixed-vector and legacy identities")
     source_sha256 = {
         "debug_scorer": sha256_path(DEBUG_SCORER_SOURCE),
         "seeding_scoring": sha256_path(SCORING_SOURCE),
@@ -2090,10 +3092,27 @@ def seal_judge_trace_outcomes(
             "qid": _question_qid(question),
         }
         if _normalized_scorer_answer(answer):
-            candidates = captured_by_correlation.get(correlation, [])
+            candidates = (
+                captured_by_qid.get(fixed_vector_row["qid"], [])
+                if captured_by_qid
+                else captured_by_correlation.get(correlation, [])
+            )
             if not candidates:
                 raise ValueError("nonblank fixed-vector llm_judge row has no captured outcome")
-            trace = candidates.pop(0)
+            # One generated answer may make exactly one recovery scorer call.
+            # Preserve both attempts rather than overwriting the unavailable
+            # initial call; an empty or third attempt is a fail-closed defect.
+            attempts = list(candidates)
+            if len(attempts) > 2:
+                raise ValueError("llm_judge scorer-tail replay exceeded one retry")
+            candidates.clear()
+            if len(attempts) == 1:
+                trace = attempts[0]
+            else:
+                trace = {
+                    "schema": "epyc.e8_quality_llm_judge_trace.v2",
+                    "attempts": attempts,
+                }
         else:
             expected_call = expected_judge_request(
                 answer,
@@ -2123,7 +3142,8 @@ def seal_judge_trace_outcomes(
             }
         trace["fixed_vector_row"] = fixed_vector_row
         sealed.append(trace)
-    unassigned = sum(len(rows) for rows in captured_by_correlation.values())
+    active_capture_map = captured_by_qid if captured_by_qid else captured_by_correlation
+    unassigned = sum(len(rows) for rows in active_capture_map.values())
     if unassigned:
         raise ValueError(f"{unassigned} captured judge trace rows have no fixed-vector judge row")
     write_text(
@@ -2170,15 +3190,24 @@ def run_repetition(
                 f"E8 direct-core protocol rejects source max_queue_wait_ms={source_queue_wait!r} "
                 f"for {_question_qid(question)}"
             )
-        execution_questions.append({**question, **FRONTDOOR_REQUEST_CONTRACT})
+        # EvalTower otherwise derives a prompt hash when the source row has no
+        # qid.  The E8 fixed vector is keyed by its dataset identity, so pass
+        # that identity through to every generated result and sidecar row.
+        execution_questions.append({
+            **question,
+            "qid": _question_qid(question),
+            **FRONTDOOR_REQUEST_CONTRACT,
+        })
     with (
         httpx.Client(timeout=tower.timeout) as client,
         fixed_baseline_environment(sidecar_dir, args.api_url),
         capture_llm_judge_traces(judge_trace_path, default_api_url=args.api_url),
+        bind_eval_tower_scorer_identities(tower),
     ):
         results = tower._eval_batch(
             execution_questions, client, log_every=25, label=f"e8-t{tier}-r{repetition}"
         )
+        scorer_tail_replay = replay_llm_judge_scorer_tail_once(results, execution_questions)
     result = tower._aggregate(results, tier=tier)
     finished = utc_now()
     per_suite_quality = dict(getattr(result, "per_suite_quality", {}) or {})
@@ -2255,6 +3284,7 @@ def run_repetition(
         ),
         "judge_trace_sha256": sha256_path(judge_trace_path),
         "scoring_audit": scoring_audit,
+        "scorer_tail_replay": scorer_tail_replay,
     }
     return observation, detail
 
@@ -2306,14 +3336,24 @@ def build_evidence(
             "per_suite_counts": per_suite_counts,
             "era": E8_ERA,
             "decision_grade": globally_eligible and all(
-                detail["n_results"] == vectors[tier]["n"]
-                and detail["actual_eval_concurrency"] == [CONCURRENCY]
-                and not detail["error_classification"]
-                and detail["response_vector_matches_input"]
-                and detail["per_suite_counts_match_input"]
-                and detail["all_routes_frontdoor"]
-                and detail["sidecar_sha256"] is not None
-                and detail["scoring_audit"]["matches"]
+                (
+                    detail.get("mixed_window_contract") is True
+                    and detail["n_results"] == vectors[tier]["n"]
+                    and detail["response_vector_matches_input"]
+                    and detail["per_suite_counts_match_input"]
+                    and detail["all_routes_frontdoor"]
+                    and detail["sidecar_sha256"] is not None
+                    and detail["scoring_audit"]["matches"]
+                ) or (
+                    detail["n_results"] == vectors[tier]["n"]
+                    and detail["actual_eval_concurrency"] == [CONCURRENCY]
+                    and not detail["error_classification"]
+                    and detail["response_vector_matches_input"]
+                    and detail["per_suite_counts_match_input"]
+                    and detail["all_routes_frontdoor"]
+                    and detail["sidecar_sha256"] is not None
+                    and detail["scoring_audit"]["matches"]
+                )
                 for detail in details[tier]
             ),
             "observations": rows,
@@ -2500,6 +3540,11 @@ def execute(
     *,
     candidate_mode: bool = False,
 ) -> tuple[dict[str, Any], int]:
+    if candidate_mode and args.legacy_t1_r1_dir is None:
+        report = prepare_report(args, candidate_proposal=protocol_proposal(args))
+        report["mode"] = "blocked"
+        report["blockers"] = ["E8 v4 repair candidate requires --legacy-t1-r1-dir"]
+        return report, 2
     candidate_proposal = protocol_proposal(args) if candidate_mode else None
     report = prepare_report(args, candidate_proposal=candidate_proposal)
     if report["blockers"]:
@@ -2544,6 +3589,7 @@ def execute(
     observations: dict[int, list[dict[str, Any]]] = {1: [], 2: []}
     details: dict[int, list[dict[str, Any]]] = {1: [], 2: []}
     watcher_samples: list[dict[str, Any]] = []
+    legacy_migration: LegacyT1R1Migration | None = None
     try:
         for tier, n in ((1, args.t1_n), (2, args.t2_n)):
             questions, core_id = question_vector(tower, tier=tier, t1_core_id=args.t1_core_id, n=n, seed=args.seed)
@@ -2567,24 +3613,54 @@ def execute(
                 published_path(scoring_path, staging_dir=staging_dir, output_dir=output_dir)
             )
         protocol_contract(args, receipt, vectors, scoring_vectors)
+        if candidate_mode:
+            assert args.legacy_t1_r1_dir is not None
+            legacy_migration = prepare_legacy_t1_r1_migration(
+                args.legacy_t1_r1_dir, question_sets[1], default_api_url=args.api_url
+            )
+            assert candidate_proposal is not None
+            verify_legacy_t1_r1_matches_candidate(legacy_migration, candidate_proposal)
         watcher.start()
         require_clean_watcher(watcher)
         for tier in (1, 2):
             for repetition in range(1, REPETITIONS + 1):
                 require_clean_watcher(watcher)
                 with watcher.active_load(tier=tier, repetition=repetition):
-                    observation, detail = run_repetition(
-                        tower,
-                        tier=tier,
-                        repetition=repetition,
-                        questions=question_sets[tier],
-                        core_id=vectors[tier]["core_id"],
-                        output_dir=staging_dir,
-                        expected_binding=pre_binding,
-                        args=args,
-                        sidecar_dir=staging_dir / "eval_sidecars",
-                        published_dir=output_dir,
-                    )
+                    if tier == 1 and repetition == 1 and legacy_migration is not None:
+                        retry_path = staging_dir / "migration.T1.r1" / "judge_retry_traces.T1.r1.jsonl"
+                        migrated_responses, sealed_traces, _replay = replay_legacy_t1_r1_scorer_tails(
+                            legacy_migration, trace_path=retry_path, default_api_url=args.api_url
+                        )
+                        focused_response, focused_detail = run_focused_legacy_t1_r1_generation(
+                            tower, legacy_migration, args=args, sidecar_dir=staging_dir / "eval_sidecars"
+                        )
+                        sealed_path = staging_dir / "migration.T1.r1" / "sealed_validation_trace.T1.r1.jsonl"
+                        merged, finalized = finalize_legacy_t1_r1_migration(
+                            legacy_migration, migrated_responses, sealed_traces, focused_response,
+                            trace_path=sealed_path, default_api_url=args.api_url,
+                        )
+                        paths = write_finalized_legacy_t1_r1_migration(
+                            legacy_migration, merged, sealed_traces, finalized,
+                            output_dir=staging_dir / "migration.T1.r1",
+                        )
+                        observation, detail = migrated_t1_r1_observation(
+                            legacy_migration, merged, finalized, focused_detail, paths,
+                            output_dir=staging_dir, published_dir=output_dir,
+                            core_id=vectors[1]["core_id"], expected_binding=pre_binding, args=args,
+                        )
+                    else:
+                        observation, detail = run_repetition(
+                            tower,
+                            tier=tier,
+                            repetition=repetition,
+                            questions=question_sets[tier],
+                            core_id=vectors[tier]["core_id"],
+                            output_dir=staging_dir,
+                            expected_binding=pre_binding,
+                            args=args,
+                            sidecar_dir=staging_dir / "eval_sidecars",
+                            published_dir=output_dir,
+                        )
                 observations[tier].append(observation)
                 details[tier].append(detail)
                 require_clean_watcher(watcher)
@@ -2621,16 +3697,28 @@ def execute(
         and monitor_no_gap
         and all(sample.get("ok") for sample in watcher_samples),
         "all_clean_repetitions": all(
-            not detail["error_classification"]
-            and detail["n_results"] == vectors[tier]["n"]
-            and detail["actual_eval_concurrency"] == [CONCURRENCY]
-            and detail["response_vector_matches_input"]
-            and detail["per_suite_counts_match_input"]
-            and detail["runtime_binding_matches_pre"]
-            and detail["all_routes_frontdoor"]
-            and detail["sidecar_sha256"] is not None
-            and detail["judge_trace_sha256"] is not None
-            and detail["scoring_audit"]["matches"]
+            (
+                detail.get("mixed_window_contract") is True
+                and detail["n_results"] == vectors[tier]["n"]
+                and detail["response_vector_matches_input"]
+                and detail["per_suite_counts_match_input"]
+                and detail["runtime_binding_matches_pre"]
+                and detail["all_routes_frontdoor"]
+                and detail["sidecar_sha256"] is not None
+                and detail["judge_trace_sha256"] is not None
+                and detail["scoring_audit"]["matches"]
+            ) or (
+                not detail["error_classification"]
+                and detail["n_results"] == vectors[tier]["n"]
+                and detail["actual_eval_concurrency"] == [CONCURRENCY]
+                and detail["response_vector_matches_input"]
+                and detail["per_suite_counts_match_input"]
+                and detail["runtime_binding_matches_pre"]
+                and detail["all_routes_frontdoor"]
+                and detail["sidecar_sha256"] is not None
+                and detail["judge_trace_sha256"] is not None
+                and detail["scoring_audit"]["matches"]
+            )
             for tier in (1, 2)
             for detail in details[tier]
         ),
@@ -2708,6 +3796,10 @@ def execute(
                     output_dir=output_dir,
                 )
             )
+            for migration_path in (detail.get("migration_paths") or {}).values():
+                bundle_paths.append(
+                    staging_path(Path(migration_path), staging_dir=staging_dir, output_dir=output_dir)
+                )
         bundle_paths.extend(
             staging_path(Path(observation["path"]), staging_dir=staging_dir, output_dir=output_dir)
             for observation in observations[tier]
@@ -2760,6 +3852,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--orchestrator-state-path", type=Path, default=PROJECT_ROOT / "logs/orchestrator_state.json")
     parser.add_argument("--journal-path", type=Path, default=PROJECT_ROOT / "orchestration/autopilot_journal.jsonl")
     parser.add_argument("--protocol-receipt", type=Path, default=PROTOCOL_RECEIPT)
+    parser.add_argument(
+        "--legacy-t1-r1-dir", type=Path,
+        help="required pinned failed T1/r1 bundle for the E8 v4 repair candidate",
+    )
     parser.add_argument("--t1-core-id", default="core_v2")
     parser.add_argument("--t1-n", type=int, default=50)
     parser.add_argument(
@@ -2823,6 +3919,19 @@ def protocol_proposal(args: argparse.Namespace) -> dict[str, Any]:
             "E8 fixed vector exceeds live frontdoor context under the v4 conservative admission contract: "
             + ", ".join(overflowing)
         )
+    legacy_candidate: dict[str, Any] | None = None
+    if args.legacy_t1_r1_dir is not None:
+        legacy = prepare_legacy_t1_r1_migration(
+            args.legacy_t1_r1_dir, question_sets[1], default_api_url=args.api_url
+        )
+        legacy_candidate = {
+            "schema": LEGACY_T1_R1_MIGRATION_SCHEMA,
+            "legacy_dir": str(args.legacy_t1_r1_dir.resolve()),
+            "provenance_sha256": canonical_hash(legacy.provenance),
+            "watcher_exception": legacy.provenance["runtime_window"]["watcher_exception"],
+            "sidecar_timestamp_contradiction": legacy.provenance["runtime_window"]["sidecar_timestamp_contradiction"],
+            "authority": "protocol_candidate_only_pending_final_human_attestation",
+        }
     return {
         "schema": "epyc.e8_quality_baseline_protocol_proposal.v3",
         "era": E8_ERA,
@@ -2876,6 +3985,7 @@ def protocol_proposal(args: argparse.Namespace) -> dict[str, Any]:
             "all_routes_frontdoor": True,
             "sealed_atomic_publish": True,
         },
+        "legacy_t1_r1_migration_candidate": legacy_candidate,
     }
 
 

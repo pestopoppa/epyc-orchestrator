@@ -7,7 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import stat
+import shutil
 import sys
 from types import SimpleNamespace
 
@@ -17,6 +17,10 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_reseed.py"
 VALIDATOR = Path("/mnt/raid0/llm/epyc-root/artifacts/operator/prepare_e8_quality_baseline_reseed_20260726.sh")
+LEGACY_T1_R1 = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+    ".e8_quality_baseline_candidate_v4_20260727.staging-e5812cb262dc4f4bb424f2a649defa1f"
+)
 
 spec = importlib.util.spec_from_file_location("e8_reseed", MODULE_PATH)
 assert spec is not None and spec.loader is not None
@@ -240,26 +244,132 @@ def test_candidate_collection_never_requires_or_mints_human_receipt(
 
     report, rc = runner.execute(args, candidate_mode=True)
 
+    assert rc == 2
+    assert report["blockers"] == ["E8 v4 repair candidate requires --legacy-t1-r1-dir"]
+
+
+def test_candidate_execute_uses_one_focused_t1r1_repair_and_never_full_reruns(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The legacy path is a 46+3 replay plus one request, never a 50-item rerun."""
+    _patch_clean_environment(monkeypatch)
+    args = _args(tmp_path)
+    args.legacy_t1_r1_dir = tmp_path / "sealed-legacy-t1-r1"
+    proposal = {
+        "schema": "epyc.e8_quality_baseline_protocol_proposal.v3",
+        "protocol": {"protocol_id": runner.PROTOCOL_ID},
+        "t1_core_file_sha256": "candidate-core",
+    }
+    monkeypatch.setattr(runner, "protocol_proposal", lambda _args: proposal)
+    migration = SimpleNamespace(
+        legacy_dir=args.legacy_t1_r1_dir.resolve(),
+        questions=[
+            {"qid": "t1-q1", "suite": "suite_a"},
+            {"qid": "t1-q2", "suite": "suite_a"},
+        ],
+        provenance={
+            "schema": runner.LEGACY_T1_R1_MIGRATION_SCHEMA,
+            "runtime_window": {
+                "legacy_generation_window": {"started_at_s": 1.0, "ended_at_s": 2.0},
+                "watcher_exception": {},
+                "sidecar_timestamp_contradiction": {},
+            },
+        },
+    )
+    proposal["legacy_t1_r1_migration_candidate"] = {
+        "schema": runner.LEGACY_T1_R1_MIGRATION_SCHEMA,
+        "legacy_dir": str(migration.legacy_dir),
+        "provenance_sha256": runner.canonical_hash(migration.provenance),
+        "watcher_exception": {},
+        "sidecar_timestamp_contradiction": {},
+    }
+    monkeypatch.setattr(runner, "prepare_legacy_t1_r1_migration", lambda *_args, **_kwargs: migration)
+    monkeypatch.setattr(
+        runner,
+        "replay_legacy_t1_r1_scorer_tails",
+        lambda *_args, **_kwargs: ([{"qid": "t1-q1"}, {"qid": "t1-q2"}], [], {"focused_generation_pending": 1}),
+    )
+    focused_calls = 0
+
+    def focused(_tower, _migration, *, sidecar_dir: Path, **_kwargs):
+        nonlocal focused_calls
+        focused_calls += 1
+        sidecar = sidecar_dir / "question_results.e8-t1-r1-focused-legacy-timeout-repair.jsonl"
+        runner.write_text(sidecar, '{"row_type":"question_result"}\n')
+        return {}, {
+            "actual_eval_concurrency": 1,
+            "sidecar_path": str(sidecar),
+            "sidecar_sha256": runner.sha256_path(sidecar),
+            "runtime_window_classification": "focused_replacement_window; not_a_fresh_full_t1_repetition",
+        }
+
+    monkeypatch.setattr(runner, "run_focused_legacy_t1_r1_generation", focused)
+    monkeypatch.setattr(
+        runner,
+        "finalize_legacy_t1_r1_migration",
+        lambda *_args, **_kwargs: ([
+            {"qid": "t1-q1", "suite": "suite_a", "correct": True, "route_used": "frontdoor"},
+            {"qid": "t1-q2", "suite": "suite_a", "correct": True, "route_used": "frontdoor"},
+        ], {"scoring_audit": {"matches": True}}),
+    )
+
+    def write_migration(_migration, _responses, _traces, _detail, *, output_dir: Path):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        paths = {}
+        for name in ("responses", "judge_trace_history", "legacy_sidecar_snapshot", "migration_provenance"):
+            path = output_dir / f"{name}.json"
+            runner.write_text_create(path, "{}\n")
+            paths[name] = str(path)
+        return paths
+
+    monkeypatch.setattr(runner, "write_finalized_legacy_t1_r1_migration", write_migration)
+
+    def migrated(_migration, _responses, finalized, focused_detail, paths, *, output_dir: Path, published_dir: Path, core_id: str, **_kwargs):
+        raw_path = output_dir / "raw.T1.r1.json"
+        runner.write_json_create(raw_path, {
+            "q": 3.0, "ts": runner.utc_now(), "core_id": core_id, "protocol_id": runner.PROTOCOL_ID,
+            "n": 2, "era": runner.E8_ERA, "per_suite_quality": {"suite_a": 3.0},
+            "per_suite_counts": {"suite_a": 2},
+        })
+        def published(value: str | Path) -> str:
+            return str(
+                runner.published_path(
+                    Path(value), staging_dir=output_dir, output_dir=published_dir
+                )
+            )
+        return ({"path": published(raw_path), "sha256": runner.sha256_path(raw_path), "q": 3.0,
+                 "ts": runner.load_json(raw_path)["ts"], "core_id": core_id, "protocol_id": runner.PROTOCOL_ID,
+                 "n": 2, "era": runner.E8_ERA}, {
+            "tier": 1, "repetition": 1, "response_path": published(paths["responses"]),
+            "response_sha256": runner.sha256_path(Path(paths["responses"])),
+            "actual_eval_concurrency": [1], "error_classification": {}, "n_results": 2,
+            "response_vector_matches_input": True, "all_routes_frontdoor": True,
+            "runtime_binding_matches_pre": True, "per_suite_counts_match_input": True,
+            "sidecar_path": published(focused_detail["sidecar_path"]),
+            "sidecar_sha256": focused_detail["sidecar_sha256"],
+            "judge_trace_path": published(paths["judge_trace_history"]),
+            "judge_trace_sha256": runner.sha256_path(Path(paths["judge_trace_history"])),
+            "scoring_audit": finalized["scoring_audit"], "mixed_window_contract": True,
+            "migration_paths": {key: published(value) for key, value in paths.items()},
+        })
+
+    monkeypatch.setattr(runner, "migrated_t1_r1_observation", migrated)
+    ordinary_calls: list[tuple[int, int]] = []
+    original = runner.run_repetition
+
+    def ordinary(*call_args, **kwargs):
+        ordinary_calls.append((kwargs["tier"], kwargs["repetition"]))
+        return original(*call_args, **kwargs)
+
+    monkeypatch.setattr(runner, "run_repetition", ordinary)
+
+    report, rc = runner.execute(args, candidate_mode=True)
+
     assert rc == 0
     assert report["decision_grade"] is True
-    evidence = json.loads(Path(report["evidence_manifest"]).read_text())
-    assert "protocol_receipt" not in evidence
-    assert evidence["protocol_candidate"]["sha256"] == runner.sha256_path(
-        Path(evidence["protocol_candidate"]["path"])
-    )
-    assert len(report["observations"][1]) == 3
-    assert len(report["observations"][2]) == 3
-    manifest = Path(report["evidence_manifest"])
-    seal = json.loads((manifest.parent / "run_seal.json").read_text())
-    assert seal["status"] == "complete"
-    assert stat.S_IMODE(manifest.parent.stat().st_mode) == 0o700
-    assert json.loads(manifest.read_text())["replacement"]["quality_history_by_tier"] == {"1": [3.0] * 3, "2": [3.0] * 3}
-    assert all(
-        question[key] == value
-        for question in FakeTower.last_questions
-        for key, value in runner.FRONTDOOR_REQUEST_CONTRACT.items()
-        if key != "verification"
-    )
+    assert focused_calls == 1
+    assert ordinary_calls == [(1, 2), (1, 3), (2, 1), (2, 2), (2, 3)]
+    assert (1, 1) not in ordinary_calls
 
 
 def test_runtime_watcher_receipt_scope_is_explicit_and_fail_closed(
@@ -1282,6 +1392,40 @@ def test_llm_judge_trace_is_total_for_blank_rows_and_row_identity_is_unique(
         )
 
 
+def test_llm_judge_trace_qid_binding_disambiguates_identical_correlations(
+    tmp_path: Path,
+) -> None:
+    scorer = runner._load_orchestrator_debug_scorer()
+    trace_path = tmp_path / "judge.jsonl"
+    runner.write_text(trace_path, "")
+    questions = [
+        {"id": "q1", "qid": "q1", "expected": "gold", "scoring_method": "llm_judge", "scoring_config": {}},
+        {"id": "q2", "qid": "q2", "expected": "gold", "scoring_method": "llm_judge", "scoring_config": {}},
+    ]
+    responses = [
+        {"qid": "q1", "answer": "contains gold", "correct": True, "error": None},
+        {"qid": "q2", "answer": "contains gold", "correct": True, "error": None},
+    ]
+    with runner.capture_llm_judge_traces(
+        trace_path, default_api_url="http://127.0.0.1:8000"
+    ):
+        for question in questions:
+            with runner.judge_trace_fixed_vector_identity(question["qid"]):
+                assert scorer._score_llm_judge("contains gold", "gold", {}) is True
+    runner.seal_judge_trace_outcomes(
+        trace_path,
+        responses,
+        questions,
+        tier=1,
+        repetition=1,
+        default_api_url="http://127.0.0.1:8000",
+    )
+
+    traces = runner.load_jsonl(trace_path)
+    assert [trace["fixed_vector_row"]["qid"] for trace in traces] == ["q1", "q2"]
+    assert [trace["fixed_vector_qid"] for trace in traces] == ["q1", "q2"]
+
+
 def test_llm_judge_trace_preserves_fast_and_network_scorer_behavior(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1470,3 +1614,241 @@ def test_atomic_publish_noreplace_preserves_racing_destination(tmp_path: Path) -
 
     assert (destination / "destination-marker").read_text() == "destination"
     assert (source / "source-marker").read_text() == "source"
+
+
+def test_scorer_tail_replay_is_once_only_and_preserves_failed_closed_result(monkeypatch) -> None:
+    row = SimpleNamespace(answer="generated", error="scoring_unavailable: judge down", correct=False)
+    question = {"qid": "q", "scoring_method": "llm_judge", "expected": "gold", "scoring_config": {}}
+    calls = 0
+
+    def unavailable(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return None, "scoring_unavailable: still down"
+
+    monkeypatch.setattr(runner, "score_answer_or_error", unavailable)
+    first = runner.replay_llm_judge_scorer_tail_once([row], [question])
+    second = runner.replay_llm_judge_scorer_tail_once([row], [question])
+
+    assert calls == 1
+    assert first == [{"ordinal": 0, "qid": "q", "outcome": "failed_closed"}]
+    assert second == []
+    assert row.answer == "generated"
+    assert row.error == "scoring_unavailable: still down"
+
+
+def _legacy_t1_questions() -> list[dict]:
+    tower = runner.EvalTower(url="http://localhost:8000", timeout=1)
+    questions, _core_id = runner.question_vector(
+        tower, tier=1, t1_core_id="core_v2", n=50, seed=runner.EVAL_SPEC_SEED
+    )
+    replacement_map = runner.load_json(runner.CONTEXT_REPLACEMENT_MAP)
+    replacements = {
+        row["old_id"]: row["new_row"]
+        for row in replacement_map["replacements"]
+        if row["tier"] == 1
+    }
+    return [dict(replacements.get(runner._question_qid(question), question)) for question in questions]
+
+
+def test_legacy_t1_migration_reuses_clean_rows_and_seals_two_attempt_judge_history(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        runner, "_legacy_raw_and_watcher_match",
+        lambda *_args, **_kwargs: {"legacy_generation_window": {}},
+    )
+    questions = _legacy_t1_questions()
+    migration = runner.prepare_legacy_t1_r1_migration(
+        LEGACY_T1_R1, questions, default_api_url="http://127.0.0.1:8000"
+    )
+    assert migration.focused_generation_ordinal == 2
+    assert migration.provenance["reused_clean_generation_rows"] == 46
+    assert migration.provenance["scorer_tail_replay_ordinals"] == [32, 33, 38]
+
+    def judge_post(url, *, json, timeout):
+        return runner.httpx.Response(
+            200,
+            json={"answer": "true"},
+            request=runner.httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(runner.httpx, "post", judge_post)
+    responses, traces, progress = runner.replay_legacy_t1_r1_scorer_tails(
+        migration,
+        trace_path=tmp_path / "retry.jsonl",
+        default_api_url="http://localhost:8000",
+    )
+    assert progress["focused_generation_pending"] == 1
+    assert all(row["outcome"] == "recovered" for row in progress["scorer_tail_replay"])
+    assert [trace["schema"] for trace in traces].count("epyc.e8_quality_llm_judge_trace.v2") == 3
+    assert all(
+        len(trace["attempts"]) == 2
+        for trace in traces
+        if trace["schema"] == "epyc.e8_quality_llm_judge_trace.v2"
+    )
+
+    focused = {
+        "qid": "aime_2024-II-15",
+        "suite": "aime",
+        "scoring_method": "exact_match",
+        "answer": "315",
+        "correct": True,
+        "error": None,
+        "partial": False,
+        "degraded": False,
+        "route_used": "frontdoor",
+        "scoring_config_sha256": runner.canonical_hash(questions[2]["scoring_config"]),
+    }
+    with pytest.raises(ValueError, match="sealed replacement contract"):
+        runner.finalize_legacy_t1_r1_migration(
+            migration,
+            responses,
+            traces,
+            {**focused, "answer": "", "correct": False, "error": "timed out"},
+            trace_path=tmp_path / "rejected-timeout.jsonl",
+            default_api_url="http://localhost:8000",
+        )
+    merged, detail = runner.finalize_legacy_t1_r1_migration(
+        migration,
+        responses,
+        traces,
+        focused,
+        trace_path=tmp_path / "sealed.jsonl",
+        default_api_url="http://localhost:8000",
+    )
+    assert len(merged) == 50
+    assert detail["scoring_audit"]["matches"] is True
+    assert detail["focused_generation"]["replacement_qid"] == "aime_2024-II-15"
+    paths = runner.write_finalized_legacy_t1_r1_migration(
+        migration, merged, traces, detail, output_dir=tmp_path / "migrated"
+    )
+    provenance = runner.load_json(Path(paths["migration_provenance"]))
+    assert provenance["runtime_window"]["classification"].startswith("legacy_generation_window")
+    assert provenance["new_artifacts"]["judge_trace_history"]["sha256"] == runner.sha256_path(
+        Path(paths["judge_trace_history"])
+    )
+
+
+def test_legacy_t1_migration_fails_closed_on_vector_or_timeout_tamper(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        runner, "_legacy_raw_and_watcher_match",
+        lambda *_args, **_kwargs: {"legacy_generation_window": {}},
+    )
+    questions = _legacy_t1_questions()
+    tampered = tmp_path / "legacy"
+    shutil.copytree(LEGACY_T1_R1, tampered)
+    scoring_path = tampered / "scoring_vector.T1.json"
+    scoring = runner.load_json(scoring_path)
+    scoring["questions"][32]["expected"] = "tampered"
+    runner.write_json(scoring_path, scoring)
+    with pytest.raises(ValueError, match="vector differs"):
+        runner.prepare_legacy_t1_r1_migration(
+            tampered, questions, default_api_url="http://127.0.0.1:8000"
+        )
+
+    shutil.rmtree(tampered)
+    shutil.copytree(LEGACY_T1_R1, tampered)
+    responses_path = tampered / "responses.T1.r1.jsonl"
+    responses = runner.load_jsonl(responses_path)
+    responses[2]["error"] = "unexpected generation failure"
+    runner.write_text(responses_path, "".join(json.dumps(row) + "\n" for row in responses))
+    with pytest.raises(ValueError, match="not a judge failure"):
+        runner.prepare_legacy_t1_r1_migration(
+            tampered, questions, default_api_url="http://127.0.0.1:8000"
+        )
+
+
+def test_focused_legacy_generation_is_one_question_and_separately_classified(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        runner, "_legacy_raw_and_watcher_match",
+        lambda *_args, **_kwargs: {"legacy_generation_window": {}},
+    )
+    migration = runner.prepare_legacy_t1_r1_migration(
+        LEGACY_T1_R1, _legacy_t1_questions(), default_api_url="http://127.0.0.1:8000"
+    )
+
+    class FocusedTower:
+        timeout = 1
+
+        def _eval_batch(self, questions, _client, **_kwargs):
+            assert len(questions) == 1
+            assert questions[0]["_ordinal"] == 2
+            sidecar = self._question_artifact_dir / (
+                "question_results.e8-t1-r1-focused-legacy-timeout-repair.jsonl"
+            )
+            runner.write_text(sidecar, '{"row_type":"question_result"}\n')
+            return [FakeQuestionResult(
+                "aime_2024-II-15", answer="315", concurrency=1
+            )]
+
+    response, detail = runner.run_focused_legacy_t1_r1_generation(
+        FocusedTower(), migration, args=SimpleNamespace(api_url="http://localhost:8000"),
+        sidecar_dir=tmp_path / "focused-sidecar",
+    )
+    assert response["qid"] == "aime_2024-II-15"
+    assert detail["n"] == 1
+    assert detail["actual_eval_concurrency"] == 1
+    assert detail["runtime_window_classification"].startswith("focused_replacement_window")
+
+
+def test_pinned_legacy_t1_watcher_uses_only_the_reviewed_candidate_exception() -> None:
+    migration = runner.prepare_legacy_t1_r1_migration(
+        LEGACY_T1_R1, _legacy_t1_questions(), default_api_url="http://127.0.0.1:8000"
+    )
+    exception = migration.provenance["runtime_window"]["watcher_exception"]
+    assert exception["classification"] == "protocol_candidate_active_load_probe_saturation"
+    assert exception["authoritative"] is False
+    assert migration.provenance["runtime_window"]["sidecar_timestamp_contradiction"][
+        "pre_batch_scorer_ordinals"
+    ] == [32, 33, 38]
+
+
+def test_legacy_raw_tamper_blocks_before_watcher(tmp_path: Path) -> None:
+    tampered = tmp_path / "legacy"
+    shutil.copytree(LEGACY_T1_R1, tampered)
+    raw_path = tampered / "raw.T1.r1.json"
+    raw = runner.load_json(raw_path)
+    raw["n"] = 999
+    runner.write_json(raw_path, raw)
+    with pytest.raises(ValueError, match="raw observation does not reconcile"):
+        runner.prepare_legacy_t1_r1_migration(
+            tampered, _legacy_t1_questions(), default_api_url="http://127.0.0.1:8000"
+        )
+
+
+def test_legacy_source_change_after_preflight_blocks_scorer_replay(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        runner, "_legacy_raw_and_watcher_match",
+        lambda *_args, **_kwargs: {"legacy_generation_window": {}},
+    )
+    copied = tmp_path / "legacy"
+    shutil.copytree(LEGACY_T1_R1, copied)
+    migration = runner.prepare_legacy_t1_r1_migration(
+        copied, _legacy_t1_questions(), default_api_url="http://127.0.0.1:8000"
+    )
+    source = copied / "eval_sidecars/question_results.e8-t1-r1.jsonl"
+    source.write_text(source.read_text() + "\n")
+
+    with pytest.raises(ValueError, match="source changed after preflight"):
+        runner.verify_legacy_t1_r1_source_unchanged(migration)
+
+
+def test_legacy_execution_preflight_must_match_the_sealed_candidate() -> None:
+    migration = runner.prepare_legacy_t1_r1_migration(
+        LEGACY_T1_R1, _legacy_t1_questions(), default_api_url="http://127.0.0.1:8000"
+    )
+    candidate = {
+        "legacy_t1_r1_migration_candidate": {
+            "schema": runner.LEGACY_T1_R1_MIGRATION_SCHEMA,
+            "legacy_dir": str(migration.legacy_dir),
+            "provenance_sha256": runner.canonical_hash(migration.provenance),
+            "watcher_exception": migration.provenance["runtime_window"]["watcher_exception"],
+            "sidecar_timestamp_contradiction": migration.provenance["runtime_window"]["sidecar_timestamp_contradiction"],
+        }
+    }
+    runner.verify_legacy_t1_r1_matches_candidate(migration, candidate)
+    candidate["legacy_t1_r1_migration_candidate"]["provenance_sha256"] = "tampered"
+
+    with pytest.raises(ValueError, match="binding changed after proposal"):
+        runner.verify_legacy_t1_r1_matches_candidate(migration, candidate)
