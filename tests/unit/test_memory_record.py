@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from orchestration.repl_memory.memory_record import (
     EMBED_TEXT_MAX_CHARS,
     RECORD_VERSION,
@@ -152,11 +150,16 @@ class TestLegacyAdaptation:
 
     def test_round_trip_through_the_contract_is_stable(self):
         original = build_memory_record(
-            objective="a task", task_type="chat", answer="an answer", source="seed"
+            objective="a task",
+            task_type="chat",
+            answer="an answer",
+            source="seed",
+            metrics={"elapsed_seconds": 1.5},
+            extra={"request_id": "abc"},
         )
         again = record_from_legacy_context(original.to_context())
-        assert again.objective == "a task"
-        assert again.answer == "an answer"
+        assert again.to_context() == original.to_context()
+        assert "record_version" not in again.metrics
         assert again.embedding_text() == original.embedding_text()
 
 

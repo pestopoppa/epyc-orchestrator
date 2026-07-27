@@ -35,6 +35,17 @@ def _embedding(url: str, text: str) -> np.ndarray:
     return vector / norm
 
 
+def _task_rows(rows: list[tuple]) -> list[tuple]:
+    """Return only rows that are expected to have an index entry."""
+    from orchestration.repl_memory.memory_record import record_from_legacy_context
+
+    return [
+        row
+        for row in rows
+        if record_from_legacy_context(json.loads(row[2])).is_task_memory()
+    ]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--sessions-dir", type=Path, default=DEFAULT_SESSIONS)
@@ -53,10 +64,11 @@ def main() -> int:
         rows = con.execute("SELECT id, embedding_idx, context FROM memories ORDER BY id").fetchall()
     finally:
         con.close()
-    expected_ids = {str(mid) for mid, _idx, _ctx in rows}
+    task_rows = _task_rows(rows)
+    expected_ids = {str(mid) for mid, _idx, _ctx in task_rows}
     structural = verify_persisted(args.sessions_dir, expected_ids)
     ranked = sorted(
-        rows, key=lambda row: (hashlib.sha256(str(row[0]).encode()).digest(), str(row[0]))
+        task_rows, key=lambda row: (hashlib.sha256(str(row[0]).encode()).digest(), str(row[0]))
     )
     sample = ranked[: min(args.sample_size, len(ranked))]
     index = faiss.read_index(str(args.sessions_dir / "embeddings.faiss"))

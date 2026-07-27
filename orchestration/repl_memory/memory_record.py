@@ -182,11 +182,21 @@ def record_from_legacy_context(context: dict[str, Any]) -> MemoryRecord:
     reach the embedding.
     """
     ctx = dict(context or {})
+    # Current-contract fields must be unwrapped before the remaining legacy
+    # bookkeeping keys are collected as metrics.  In particular, the schema
+    # marker is not telemetry and must not be nested into ``metrics``.
+    ctx.pop("record_version", None)
     objective = ctx.pop("objective", None) or ctx.pop("task_description", None)
     task_type = ctx.pop("task_type", None)
     priority = ctx.pop("priority", None)
     source = ctx.pop("source", "legacy")
     work = ctx.pop("work", {}) or {}
+    metrics = ctx.pop("metrics", {}) or {}
+    extra = ctx.pop("extra", {}) or {}
+    if not isinstance(metrics, dict):
+        metrics = {"legacy_metrics": metrics}
+    if not isinstance(extra, dict):
+        extra = {"legacy_extra": extra}
     return MemoryRecord(
         objective=objective or "",
         task_type=task_type,
@@ -196,8 +206,9 @@ def record_from_legacy_context(context: dict[str, Any]) -> MemoryRecord:
         repl_steps=list(work.get("repl_steps") or []),
         reasoning=work.get("reasoning"),
         source=source,
-        # everything left over is telemetry/bookkeeping — stored, not embedded
-        metrics=ctx,
+        # Unknown legacy keys are telemetry/bookkeeping — stored, not embedded.
+        metrics={**metrics, **ctx},
+        extra=extra,
     )
 
 
