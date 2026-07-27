@@ -70,6 +70,57 @@ def resolve_artifact(root: Path, value: Any, label: str) -> Path:
     return path
 
 
+def validate_tail_trace_replacement(
+    *,
+    original_trace_lines: list[bytes],
+    final_trace_lines: list[bytes],
+    retry_traces: dict[int, list[dict[str, Any]]],
+    target_ordinals: set[int],
+    scoring_questions: list[dict[str, Any]],
+    expected_qids: list[str],
+    tier: int,
+    repetition: int,
+) -> None:
+    old_traces: dict[int, bytes] = {}
+    final_traces: dict[int, bytes] = {}
+    for label, lines, destination in (
+        ("original", original_trace_lines, old_traces),
+        ("final", final_trace_lines, final_traces),
+    ):
+        for line in lines:
+            ordinal = int(json.loads(line)["fixed_vector_row"]["ordinal"])
+            if ordinal in destination:
+                raise ValueError(f"generation tail has duplicate {label} judge-trace identities")
+            destination[ordinal] = line
+    llm_target_ordinals = {
+        ordinal
+        for ordinal in target_ordinals
+        if scoring_questions[ordinal].get("scoring_method") == "llm_judge"
+    }
+    if set(final_traces) != set(old_traces) | llm_target_ordinals:
+        raise ValueError("generation tail changed judge-trace identities")
+    for ordinal, old_trace_line in old_traces.items():
+        if ordinal not in target_ordinals and final_traces.get(ordinal) != old_trace_line:
+            raise ValueError("generation tail changed a non-target judge trace")
+    for ordinal in target_ordinals:
+        focused = retry_traces[ordinal]
+        if ordinal in llm_target_ordinals:
+            if len(focused) != 1:
+                raise ValueError("LLM-judge generation tail lacks one focused trace")
+            expected_trace = dict(focused[0])
+            expected_trace["fixed_vector_row"] = {
+                "tier": tier,
+                "repetition": repetition,
+                "ordinal": ordinal,
+                "qid": expected_qids[ordinal],
+            }
+            expected_line = (json.dumps(expected_trace, sort_keys=True) + "\n").encode()
+            if final_traces.get(ordinal) != expected_line:
+                raise ValueError("final LLM-judge trace differs from focused retry")
+        elif focused or final_traces.get(ordinal) != old_traces.get(ordinal):
+            raise ValueError("non-judge generation tail changed judge-trace evidence")
+
+
 def validate(
     evidence_path: Path,
     *,
@@ -391,49 +442,16 @@ def validate(
                     (original_dir / trace_path.name).read_bytes().splitlines(keepends=True)
                 )
                 final_trace_lines = trace_path.read_bytes().splitlines(keepends=True)
-                old_traces: dict[int, bytes] = {}
-                final_traces: dict[int, bytes] = {}
-                for label, lines, destination in (
-                    ("original", original_trace_lines, old_traces),
-                    ("final", final_trace_lines, final_traces),
-                ):
-                    for line in lines:
-                        ordinal = int(json.loads(line)["fixed_vector_row"]["ordinal"])
-                        if ordinal in destination:
-                            raise ValueError(
-                                f"generation tail has duplicate {label} judge-trace identities"
-                            )
-                        destination[ordinal] = line
-                llm_target_ordinals = {
-                    ordinal
-                    for ordinal in target_ordinals
-                    if scoring[tier]["questions"][ordinal].get("scoring_method") == "llm_judge"
-                }
-                if set(final_traces) != set(old_traces) | llm_target_ordinals:
-                    raise ValueError("generation tail changed judge-trace identities")
-                for ordinal, old_trace_line in old_traces.items():
-                    if (
-                        ordinal not in target_ordinals
-                        and final_traces.get(ordinal) != old_trace_line
-                    ):
-                        raise ValueError("generation tail changed a non-target judge trace")
-                for ordinal in target_ordinals:
-                    focused = retry_traces[ordinal]
-                    if ordinal in llm_target_ordinals:
-                        if len(focused) != 1:
-                            raise ValueError("LLM-judge generation tail lacks one focused trace")
-                        expected_trace = dict(focused[0])
-                        expected_trace["fixed_vector_row"] = {
-                            "tier": tier,
-                            "repetition": repetition,
-                            "ordinal": ordinal,
-                            "qid": expected_qids[ordinal],
-                        }
-                        expected_line = (json.dumps(expected_trace, sort_keys=True) + "\n").encode()
-                        if final_traces.get(ordinal) != expected_line:
-                            raise ValueError("final LLM-judge trace differs from focused retry")
-                    elif focused or final_traces.get(ordinal) != old_traces.get(ordinal):
-                        raise ValueError("non-judge generation tail changed judge-trace evidence")
+                validate_tail_trace_replacement(
+                    original_trace_lines=original_trace_lines,
+                    final_trace_lines=final_trace_lines,
+                    retry_traces=retry_traces,
+                    target_ordinals=target_ordinals,
+                    scoring_questions=scoring[tier]["questions"],
+                    expected_qids=expected_qids,
+                    tier=tier,
+                    repetition=repetition,
+                )
     if total != 6:
         raise ValueError("v5 does not contain exactly six repetitions")
     records = evidence.get("source_records")

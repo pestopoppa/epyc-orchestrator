@@ -418,6 +418,18 @@ def test_merge_judge_trace_appends_missing_target_and_preserves_non_target_bytes
         "ordinal": 5,
         "qid": "q5",
     }
+    validator = _load_validator("e8_v5_validator_absent_trace_test")
+    validator.validate_tail_trace_replacement(
+        original_trace_lines=[non_target],
+        final_trace_lines=lines,
+        retry_traces={5: runner.V4.load_jsonl(focused)},
+        target_ordinals={5},
+        scoring_questions=[{"scoring_method": "exact_match"} for _ordinal in range(5)]
+        + [{"scoring_method": "llm_judge"}],
+        expected_qids=[f"q{ordinal}" for ordinal in range(6)],
+        tier=2,
+        repetition=1,
+    )
 
 
 def test_merge_judge_trace_replaces_existing_target_only(tmp_path: Path) -> None:
@@ -441,6 +453,18 @@ def test_merge_judge_trace_replaces_existing_target_only(tmp_path: Path) -> None
     lines = trace.read_bytes().splitlines(keepends=True)
     assert json.loads(lines[0])["outcome"] == "retry"
     assert lines[1] == non_target
+    validator = _load_validator("e8_v5_validator_existing_trace_test")
+    validator.validate_tail_trace_replacement(
+        original_trace_lines=[old_target, non_target],
+        final_trace_lines=lines,
+        retry_traces={5: runner.V4.load_jsonl(focused)},
+        target_ordinals={5},
+        scoring_questions=[{"scoring_method": "exact_match"} for _ordinal in range(5)]
+        + [{"scoring_method": "llm_judge"}],
+        expected_qids=[f"q{ordinal}" for ordinal in range(6)],
+        tier=2,
+        repetition=1,
+    )
 
 
 def test_v5_cli_pins_tail_timeout_and_disallows_execute_mode() -> None:
