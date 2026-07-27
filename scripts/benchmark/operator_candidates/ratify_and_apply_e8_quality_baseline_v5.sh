@@ -68,8 +68,10 @@ verify_reviewed_bindings
 [[ -z "$(git -C "$SOURCE_ROOT" status --porcelain)" ]] ||
     fail 'canonical orchestrator tracked worktree is not clean'
 
-exec 9>"$LOCK"
-flock -n 9 || fail 'another v5 apply owns the lock'
+if [[ "$MODE" == "attest" ]]; then
+    exec 9>"$LOCK"
+    flock -n 9 || fail 'another v5 apply owns the lock'
+fi
 bash "$VALIDATOR" --validate-evidence "$EVIDENCE"
 
 EVIDENCE_SHA256="$(sha "$EVIDENCE")"

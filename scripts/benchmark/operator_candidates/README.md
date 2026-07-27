@@ -15,6 +15,9 @@ by the evidence runner and do not alter the existing v4 operator artifacts.
   action. It validates the sealed evidence, checks reviewed state hashes, writes
   a no-replace protocol-ratification receipt outside the sealed bundle, and
   invokes the existing CAS state transaction through the v5 adapter.
+  Its `--prevalidate` mode is advisory and creates no lock, receipt, journal, or
+  state write; the final `--attest` action repeats validation while holding the
+  apply lock.
 
 All apply-time receipts, journals, backups, and attestations are written under
 `/mnt/raid0/llm/epyc-root/artifacts/operator/`, never into the sealed evidence
