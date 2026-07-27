@@ -1,0 +1,26 @@
+#!/bin/bash
+# region-lock — hold orchestrator CPU-region locks for the lifetime of a child command.
+#
+# Stable entry point for callers outside this repo (notably the bench recipes in
+# epyc-inference-research, which are bash and cannot import the module). Keeps a
+# SINGLE lock implementation in src/runtime/cpu_region_lock.py — this is only a
+# path/venv shim, never a second implementation.
+#
+#   region-lock run --cpu-list 0-95 -- llama-bench -m model.gguf ...
+#   region-lock run --regions q0,q1 --role bench-cpu -- ./some_bench.sh
+#   region-lock status
+#
+# Exit codes: child's status · 75 could not acquire · 64 usage/preflight refusal.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="${REPO_ROOT}/.venv/bin/python3"
+
+if [[ ! -x "$PY" ]]; then
+    printf 'region-lock: orchestrator venv python not found at %s\n' "$PY" >&2
+    exit 64
+fi
+
+# cwd must be the repo root so `-m src.runtime.region_lock_cli` resolves.
+cd "$REPO_ROOT"
+exec "$PY" -m src.runtime.region_lock_cli "$@"
