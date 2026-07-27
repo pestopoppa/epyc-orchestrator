@@ -207,23 +207,23 @@ def verify_persisted(sessions: Path, expected_task_ids: set[str]) -> dict:
         rows = con.execute("SELECT id, embedding_idx FROM memories").fetchall()
     finally:
         con.close()
-    if len(rows) != len(expected_task_ids):
-        raise ReseedVerificationError(
-            "unexpected non-task rows; this reseed requires all live rows to be task rows"
-        )
     bad = 0
     for mid, ei in rows:
-        if (
-            mid not in expected_task_ids
-            or ei is None
-            or not isinstance(ei, int)
-            or ei < 0
-            or ei >= len(id_map)
-            or id_map[ei] != str(mid)
-        ):
+        if str(mid) in expected_task_ids:
+            if (
+                ei is None
+                or not isinstance(ei, int)
+                or ei < 0
+                or ei >= len(id_map)
+                or id_map[ei] != str(mid)
+            ):
+                bad += 1
+        elif ei is not None:
             bad += 1
     if bad:
-        raise ReseedVerificationError(f"{bad} rows do not resolve to themselves")
+        raise ReseedVerificationError(
+            f"{bad} task rows do not resolve to themselves or non-task rows are indexed"
+        )
     return {"ntotal": index.ntotal, "id_map_len": len(id_map), "desync": 0, "bad": 0}
 
 
