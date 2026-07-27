@@ -2117,6 +2117,78 @@ def __getattr__(name: str):
     raise AttributeError(f"module 'scripts.server.orchestrator_stack' has no attribute {name!r}")
 
 
+
+# --------------------------------------------------------------------------- #
+# SS-BENCH-GATE: refuse a lifecycle action while a pinned CPU bench is running.
+# --------------------------------------------------------------------------- #
+#
+# 2026-07-27 incident: an operator-authorized `reload orchestrator` killed a
+# Laguna Q4 CPU bench 1h09m into a decision-gating run. The reload spawned an
+# accelerated sidecar on cores the bench had pinned, and the bench's own
+# campaign-continuity gate invalidated the run:
+#
+#   campaign continuity gate failed: production stack continuity invalid:
+#   accelerated sidecar 1202069 overlaps CPU bench cores: [0, 1, 2, ...]
+#
+# The precondition that WAS checked ("autopilot is down") is not the relevant
+# one — the gate keys on CORE OVERLAP with a pinned bench, an entirely separate
+# condition. This guard makes that check impossible to forget.
+
+_BENCH_PROCESS_MARKERS = (
+    "_bench_runner.py",
+    "bench_runner.py",
+    "v7_quality_gate_runner.py",
+    "llama-bench",
+    "run_e8_quality_baseline_reseed.py",
+)
+
+
+def detect_running_cpu_bench() -> list[tuple[int, str]]:
+    """Return [(pid, cmdline)] for any bench driver currently running."""
+    found: list[tuple[int, str]] = []
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid,args"], capture_output=True, text=True, timeout=10
+        ).stdout
+    except Exception:
+        return found
+    for line in out.splitlines()[1:]:
+        line = line.strip()
+        if not line:
+            continue
+        pid_str, _, cmd = line.partition(" ")
+        # Skip self, the probe, and supervisors that merely NAME bench binaries
+        # in their arguments (earlyoom carries `--prefer ^llama-bench$`).
+        if "orchestrator_stack.py" in cmd or "ps -eo" in cmd:
+            continue
+        if "earlyoom" in cmd or cmd.startswith("/usr/local/bin/earlyoom"):
+            continue
+        if any(marker in cmd for marker in _BENCH_PROCESS_MARKERS):
+            try:
+                found.append((int(pid_str), cmd[:160]))
+            except ValueError:
+                continue
+    return found
+
+
+def guard_against_running_bench(command: str, force: bool) -> bool:
+    """False when the caller should abort. Prints the reason."""
+    running = detect_running_cpu_bench()
+    if not running:
+        return True
+    print(f"REFUSING to `{command}`: a CPU benchmark is running.")
+    for pid, cmd in running:
+        print(f"    PID {pid}: {cmd}")
+    print(
+        "  A lifecycle action spawns stack processes that can overlap the bench's\n"
+        "  pinned cores, and the bench's campaign-continuity gate will invalidate\n"
+        "  the run (this destroyed 1h09m of decision-gating measurement on\n"
+        "  2026-07-27). Wait for the bench, or pass --allow-during-bench if the\n"
+        "  operator has accepted that the run may be invalidated."
+    )
+    return bool(force)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Orchestrator stack manager")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2251,6 +2323,16 @@ def main() -> int:
     )
 
     # Status command
+    for _lifecycle_parser in (start_parser, stop_parser, reload_parser):
+        _lifecycle_parser.add_argument(
+            "--allow-during-bench",
+            action="store_true",
+            help=(
+                "proceed even if a CPU benchmark is running — the bench's continuity "
+                "gate may invalidate its run (see SS-BENCH-GATE)"
+            ),
+        )
+
     subparsers.add_parser("status", help="Show status")
 
     args = parser.parse_args()
@@ -2264,6 +2346,12 @@ def main() -> int:
         cmd_reload,
         cmd_status,
     )
+
+    if args.command in ("start", "stop", "reload"):
+        if not guard_against_running_bench(
+            args.command, getattr(args, "allow_during_bench", False)
+        ):
+            return 2
 
     if args.command == "start":
         return cmd_start(args)

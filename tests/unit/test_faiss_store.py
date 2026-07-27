@@ -687,3 +687,42 @@ class TestDesyncCorruptionRegression:
 
         reopened = self._store(tmp_path)
         assert reopened._desync == 1
+
+
+class TestCorruptLoadDoesNotDestroyTheStore:
+    """A read failure must not silently replace a real store with an empty one.
+
+    The old `except Exception -> _create_new()` swallowed ANY load error and
+    produced an empty index; the next save() would publish it over the real
+    files, destroying the mapping for the whole store. Same class of defect as
+    the publish-order bug: a plausible recovery path that turns a transient
+    fault into permanent data loss.
+    """
+
+    def test_corrupt_index_with_files_present_raises_rather_than_wiping(self, tmp_path):
+        from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
+
+        store = FAISSEmbeddingStore(path=tmp_path, dim=8)
+        rng = np.random.default_rng(0)
+        for i in range(5):
+            store.add(f"m{i}", rng.random(8, dtype=np.float32))
+        store.save()
+        assert store.index_path.exists()
+
+        # Corrupt the index file, leaving both files present.
+        store.index_path.write_bytes(b"not a faiss index")
+
+        with pytest.raises(Exception):
+            FAISSEmbeddingStore(path=tmp_path, dim=8)
+
+        # The id_map must still be on disk — nothing was overwritten.
+        assert store.id_map_path.exists()
+        assert len(np.load(store.id_map_path, allow_pickle=True)) == 5
+
+    def test_fresh_directory_still_creates_a_new_index(self, tmp_path):
+        """The legitimate case must keep working."""
+        from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
+
+        store = FAISSEmbeddingStore(path=tmp_path / "brand-new", dim=8)
+        assert store.index.ntotal == 0
+        assert store.id_map == []

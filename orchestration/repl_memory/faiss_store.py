@@ -195,7 +195,27 @@ class FAISSEmbeddingStore:
                 self.index.ntotal, self.index_path,
             )
         except Exception as e:
-            logger.error("Failed to load FAISS index: %s. Creating new.", e)
+            # DO NOT silently create a new empty index here when files exist.
+            #
+            # This branch used to swallow ANY read failure — a transient I/O
+            # error, a partially-written index, a version mismatch — and replace
+            # a 700k-vector store with an empty one. The next save() would then
+            # publish that empty index over the real files, destroying the
+            # mapping irrecoverably. It is the same class of defect as the
+            # publish-order bug: a plausible-looking recovery path that converts
+            # a transient fault into permanent data loss.
+            #
+            # Creating fresh is only correct when there is genuinely nothing to
+            # load. If the files exist, fail loudly and let the caller decide.
+            if self.index_path.exists() or self.id_map_path.exists():
+                logger.error(
+                    "Failed to load FAISS index from %s: %s. REFUSING to replace the "
+                    "existing store with an empty index — that would destroy the mapping "
+                    "on the next save. Inspect the files or restore a backup.",
+                    self.index_path, e,
+                )
+                raise
+            logger.error("Failed to load FAISS index: %s. No files present; creating new.", e)
             self._create_new()
 
     def add(self, memory_id: str, embedding: np.ndarray) -> int:
