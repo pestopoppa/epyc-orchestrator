@@ -432,8 +432,8 @@ class EpisodicStore:
             conn.execute(
                 """
                 INSERT INTO memories
-                (id, embedding_idx, action, action_type, context, outcome, q_value, created_at, updated_at, model_id, assigned_role, sub_decision)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, embedding_idx, action, action_type, context, outcome, q_value, created_at, updated_at, update_count, model_id, assigned_role, sub_decision)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     memory_id,
@@ -445,6 +445,21 @@ class EpisodicStore:
                     initial_q,
                     now,
                     now,
+                    # Seed update_count EXPLICITLY rather than relying on the
+                    # column default. The CREATE TABLE above declares
+                    # `update_count INTEGER DEFAULT 0`, but the LIVE table does
+                    # not have it — a migration recreated the table (note the
+                    # quoted `CREATE TABLE "memories"` and the sibling
+                    # _q_consolidation_* tables) and dropped the column
+                    # defaults, leaving `update_count INT` with an implicit NULL.
+                    # The UPDATE then does `update_count + 1`, and NULL + 1 is
+                    # NULL in SQLite, so those rows stayed NULL forever however
+                    # many times they were updated. Not cosmetic: it feeds a LIVE
+                    # gate — should_use_learned() (retriever.py:392-396) treats
+                    # NULL as "never observed" and declines the learned value.
+                    # 22,949 of 54,960 rows were stuck this way. Passing 0
+                    # explicitly is correct regardless of the table definition.
+                    0,
                     model_id,
                     assigned_role,
                     sub_decision,
@@ -696,7 +711,7 @@ class EpisodicStore:
             if not row:
                 raise ValueError(f"Memory {memory_id} not found")
 
-            old_q, update_count, updated_at_str = row
+            old_q, _prev_update_count, updated_at_str = row
 
             # Elapsed days since last update, for temporal decay toward neutral.
             days_elapsed = 0.0
@@ -717,14 +732,30 @@ class EpisodicStore:
                 temporal_decay_rate=temporal_decay_rate,
             )
 
-            # Update database
+            # Update database.
+            #
+            # `outcome` is deliberately NOT recomputed here. It is a record of
+            # the FIRST observation, and a 2026-07-27 audit established that is
+            # the correct semantics rather than a bug: nothing in the live read
+            # path consumes it (retriever.py contains the string "outcome" zero
+            # times in 951 lines; there is no SQL WHERE on the column anywhere in
+            # the repo), and the value that DOES drive routing — q_value — is
+            # updated here correctly. Rewriting `outcome` from the running
+            # average would silently redefine a historical field that offline
+            # analyses treat as an observation record.
+            #
+            # What was genuinely broken is update_count: the live table lost its
+            # column default in a migration, the INSERT relied on that default,
+            # and NULL + 1 = NULL kept 22,949 rows permanently unobserved from
+            # should_use_learned()'s perspective. Seeded explicitly at insert
+            # now; COALESCE here repairs pre-existing NULL rows on next update.
             conn.execute(
                 """
                 UPDATE memories
-                SET q_value = ?, updated_at = ?, update_count = ?
+                SET q_value = ?, updated_at = ?, update_count = COALESCE(update_count, 0) + 1
                 WHERE id = ?
             """,
-                (new_q, now_iso, update_count + 1, memory_id),
+                (new_q, now_iso, memory_id),
             )
             conn.commit()
 
