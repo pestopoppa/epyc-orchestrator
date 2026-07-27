@@ -8,6 +8,7 @@ Provides ~70x faster retrieval at scale (500K entries: 70ms -> ~1ms).
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Protocol
@@ -18,6 +19,16 @@ logger = logging.getLogger(__name__)
 
 # Default paths (on RAID array per CLAUDE.md requirements)
 DEFAULT_FAISS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions")
+
+
+class FAISSDesyncError(RuntimeError):
+    """Raised when the FAISS index and id_map have diverged.
+
+    Fail-closed guard: writing into a desynced store silently mis-assigns every
+    subsequent embedding position and persists the error into
+    ``memories.embedding_idx``, which is what corrupted this store from
+    2026-07-05 onward.
+    """
 
 
 class StaleFAISSSaveError(RuntimeError):
@@ -93,6 +104,9 @@ class FAISSEmbeddingStore:
         self.index_path = self.path / index_filename
         self.id_map_path = self.path / id_map_filename
         self._dirty = False
+        #: index.ntotal - len(id_map). Non-zero means the pair diverged; >0 is
+        #: the unrecoverable direction and blocks writes (see add()).
+        self._desync = 0
         self._disk_signature: tuple[tuple[int, int] | None, tuple[int, int] | None] = (
             None,
             None,
@@ -124,6 +138,7 @@ class FAISSEmbeddingStore:
         self.id_map: list[str] = []
         self.id_to_idx: dict[str, int] = {}  # O(1) lookup
         self._dirty = False
+        self._desync = 0
         self._disk_signature = self._current_disk_signature()
         logger.info("Created new FAISS index at %s", self.index_path)
 
@@ -134,13 +149,41 @@ class FAISSEmbeddingStore:
             id_map_arr = np.load(self.id_map_path, allow_pickle=True)
             self.id_map = id_map_arr.tolist()
 
-            # Validate consistency
-            if self.index.ntotal != len(self.id_map):
+            # Validate consistency.
+            #
+            # The two directions are NOT symmetric and conflating them is what
+            # silently corrupted this store for three weeks (2026-07-05 onward):
+            #
+            #   id_map LONGER than index  -> recoverable. The extra ids have no
+            #       vector, so dropping them restores a consistent pair. This is
+            #       the shape a crash now produces, because save() publishes
+            #       id_map BEFORE the index (see save()).
+            #
+            #   index LONGER than id_map  -> NOT recoverable by truncation, and
+            #       the old code "handled" it with a slice that was a silent
+            #       no-op. Worse, add() then returned index.ntotal as the
+            #       position while appending the id at len(id_map), so every
+            #       subsequent write inherited the offset and persisted it into
+            #       memories.embedding_idx. The drift was permanent and
+            #       cumulative (+1 per interrupted publish; the live store
+            #       reached 42).
+            self._desync = self.index.ntotal - len(self.id_map)
+            if self._desync > 0:
+                logger.error(
+                    "FAISS index/id_map DESYNC: index has %d vectors, id_map has %d ids "
+                    "(index ahead by %d). Vector lookups through id_map positions are "
+                    "unaffected, but %d trailing vectors have no id and writes are BLOCKED "
+                    "until repaired. Run scripts/maintenance/repair_faiss_id_map.py.",
+                    self.index.ntotal, len(self.id_map), self._desync, self._desync,
+                )
+            elif self._desync < 0:
                 logger.warning(
-                    "Index/id_map mismatch: %d vs %d. Truncating id_map to match index.",
-                    self.index.ntotal, len(self.id_map),
+                    "Index/id_map mismatch: %d vs %d. Dropping %d trailing id(s) with no "
+                    "vector (recoverable direction, e.g. an interrupted publish).",
+                    self.index.ntotal, len(self.id_map), -self._desync,
                 )
                 self.id_map = self.id_map[: self.index.ntotal]
+                self._desync = 0
 
             # Build O(1) lookup dict
             self.id_to_idx = {mid: i for i, mid in enumerate(self.id_map)}
@@ -178,8 +221,22 @@ class FAISSEmbeddingStore:
         # L2 normalize for cosine similarity
         self._faiss.normalize_L2(embedding)
 
-        # Add to index
-        idx = self.index.ntotal
+        # Refuse to write into a desynced store. Previously this method took
+        # `idx = self.index.ntotal` while appending the id at `len(self.id_map)`;
+        # once those diverged, every returned position was wrong by the offset
+        # and got persisted into memories.embedding_idx forever. Failing closed
+        # keeps a recoverable outage from becoming permanent data corruption.
+        if self.index.ntotal != len(self.id_map):
+            raise FAISSDesyncError(
+                f"Refusing to add to a desynced FAISS store: index has "
+                f"{self.index.ntotal} vectors, id_map has {len(self.id_map)} ids. "
+                f"Run scripts/maintenance/repair_faiss_id_map.py before writing."
+            )
+
+        # id_map is the authoritative position: it is what lookups resolve
+        # through (see get_memory_id / faiss_store search callers), so deriving
+        # the index from it makes the two structurally unable to disagree.
+        idx = len(self.id_map)
         self.index.add(embedding)
         self.id_map.append(memory_id)
         self.id_to_idx[memory_id] = idx  # O(1) insert
@@ -288,8 +345,28 @@ class FAISSEmbeddingStore:
                     "Refusing to publish stale FAISS embedding store: persisted index/id_map "
                     "changed while temp files were being written. Reload before retrying."
                 )
-            index_tmp.replace(self.index_path)
+            # PUBLISH ORDER IS LOAD-BEARING. Two files cannot be renamed
+            # atomically as a pair on POSIX, so a crash between these lines
+            # always leaves them mismatched — the only choice is WHICH
+            # mismatch, and the two are not equally bad:
+            #
+            #   index first (the old order): index ahead of id_map. Trailing
+            #       vectors have no id, _load() cannot repair it, and add()
+            #       inherited the offset into every future embedding_idx.
+            #       Unrecoverable and cumulative — this produced a drift of 42
+            #       and mis-resolved 30,238 live rows.
+            #
+            #   id_map first (this order): id_map ahead of the index. The
+            #       trailing ids simply have no vector yet, and _load() drops
+            #       them. Self-healing.
+            #
+            # fsync each temp file before its rename so the rename cannot be
+            # reordered ahead of the data it publishes.
+            for tmp in (id_map_tmp, index_tmp):
+                with open(tmp, "rb") as fh:
+                    os.fsync(fh.fileno())
             id_map_tmp.replace(self.id_map_path)
+            index_tmp.replace(self.index_path)
         finally:
             for tmp in (index_tmp, id_map_tmp, id_map_tmp_alt):
                 try:

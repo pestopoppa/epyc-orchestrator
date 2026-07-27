@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from unittest.mock import patch
 
 
 class TestFAISSEmbeddingStore:
@@ -586,3 +587,103 @@ class TestBackendEquivalence:
         # Should have significant overlap (>80%)
         overlap = len(faiss_actions & numpy_actions) / 10
         assert overlap >= 0.8, f"Only {overlap * 100}% overlap between backends"
+
+
+class TestDesyncCorruptionRegression:
+    """Regression for the 2026-07-05 id_map/FAISS desync.
+
+    Root cause: save() published the index BEFORE the id_map with two separate
+    renames. A crash between them left the index ahead, _load()'s "truncate
+    id_map to match index" was a silent no-op in that direction, and add() then
+    returned index.ntotal as the position while appending the id at
+    len(id_map) — persisting the offset into memories.embedding_idx forever.
+    The live store reached a drift of 42 and mis-resolved 30,238 rows.
+    """
+
+    def _store(self, tmp_path):
+        from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
+
+        return FAISSEmbeddingStore(path=tmp_path, dim=8)
+
+    def _vec(self, seed):
+        rng = np.random.default_rng(seed)
+        return rng.random(8, dtype=np.float32)
+
+    def test_add_refuses_to_write_into_a_desynced_store(self, tmp_path):
+        """Fail closed: the old code silently mis-assigned every later position."""
+        from orchestration.repl_memory.faiss_store import FAISSDesyncError
+
+        store = self._store(tmp_path)
+        for i in range(3):
+            store.add(f"m{i}", self._vec(i))
+
+        # Simulate the crash aftermath: index ahead of id_map.
+        store.index.add(self._vec(99).reshape(1, -1))
+        assert store.index.ntotal == len(store.id_map) + 1
+
+        with pytest.raises(FAISSDesyncError, match="desynced"):
+            store.add("m-next", self._vec(4))
+
+    def test_add_position_is_derived_from_id_map_not_index(self, tmp_path):
+        """The returned position must be the id_map slot the id actually lands in."""
+        store = self._store(tmp_path)
+        for i in range(5):
+            idx = store.add(f"m{i}", self._vec(i))
+            assert idx == len(store.id_map) - 1
+            assert store.id_map[idx] == f"m{i}"
+            assert store.get_memory_id(idx) == f"m{i}"
+
+    def test_id_map_ahead_of_index_self_heals(self, tmp_path):
+        """The recoverable direction — the one the new publish order produces."""
+        store = self._store(tmp_path)
+        for i in range(4):
+            store.add(f"m{i}", self._vec(i))
+        store.save()
+
+        # Simulate a crash AFTER id_map was published but BEFORE the index:
+        # id_map carries one extra id with no vector.
+        id_map = np.load(store.id_map_path, allow_pickle=True).tolist()
+        id_map.append("orphan-id")
+        np.save(str(store.id_map_path), np.array(id_map, dtype=object), allow_pickle=True)
+
+        reopened = self._store(tmp_path)
+        assert reopened.index.ntotal == len(reopened.id_map) == 4
+        assert "orphan-id" not in reopened.id_map
+        # and it is writable again, at the correct position
+        assert reopened.add("m4", self._vec(4)) == 4
+
+    def test_publish_order_is_id_map_before_index(self, tmp_path):
+        """Ordering is the fix: a crash must land in the recoverable direction."""
+        store = self._store(tmp_path)
+        store.add("m0", self._vec(0))
+
+        renamed: list[str] = []
+        real_replace = Path.replace
+
+        def tracking_replace(self, target):
+            renamed.append(Path(target).name)
+            return real_replace(self, target)
+
+        with patch.object(Path, "replace", tracking_replace):
+            store.save()
+
+        assert renamed == ["id_map.npy", "embeddings.faiss"], (
+            f"publish order regressed to {renamed}; a crash between the two renames "
+            "would leave the index ahead of id_map, which is unrecoverable"
+        )
+
+    def test_desync_is_reported_not_hidden(self, tmp_path):
+        """_load() must surface the unrecoverable direction rather than no-op."""
+        store = self._store(tmp_path)
+        for i in range(3):
+            store.add(f"m{i}", self._vec(i))
+        store.save()
+
+        # Publish an index with one extra vector, leaving id_map behind.
+        store.index.add(self._vec(42).reshape(1, -1))
+        import faiss as _faiss
+
+        _faiss.write_index(store.index, str(store.index_path))
+
+        reopened = self._store(tmp_path)
+        assert reopened._desync == 1
