@@ -49,6 +49,7 @@ Usage:
     python scripts/maintenance/reseed_episodic_store.py --apply \
         --i-understand-this-re-embeds
 """
+
 from __future__ import annotations
 
 import argparse
@@ -65,6 +66,10 @@ import numpy as np
 
 SESSIONS = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions")
 BATCH = 256
+
+
+class ReseedVerificationError(RuntimeError):
+    """The published artifacts do not satisfy the reseed contract."""
 
 
 def log(msg: str) -> None:
@@ -123,9 +128,110 @@ def survey(sessions: Path) -> dict:
     }
 
 
+def _fsync(path: Path) -> None:
+    with path.open("rb") as fh:
+        import os
+
+        os.fsync(fh.fileno())
+
+
+def _write_receipt(path: Path, payload: dict) -> None:
+    """Atomically publish a durable recovery receipt."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    _fsync(tmp)
+    tmp.replace(path)
+
+
+def _backup_sqlite(source: Path, target: Path) -> None:
+    """Use SQLite's backup API; copying a WAL database file is not a backup."""
+    src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    dst = sqlite3.connect(target)
+    try:
+        src.backup(dst)
+        dst.commit()
+    finally:
+        dst.close()
+        src.close()
+    _fsync(target)
+
+
+def _strict_embedder():
+    """Return a BGE-server-only embedder; semantic fallback is forbidden here."""
+    from orchestration.repl_memory.embedder import EmbeddingConfig, TaskEmbedder
+    from orchestration.repl_memory.parallel_embedder import (
+        EmbedderPoolConfig,
+        ParallelEmbedderClient,
+    )
+
+    embedder = TaskEmbedder(
+        EmbeddingConfig(
+            use_server=True, use_parallel=True, use_fallback=False, allow_subprocess=False
+        )
+    )
+    # TaskEmbedder's normal pool defaults to a hash fallback.  Override it
+    # explicitly: a partial reseed must fail, never synthesize vectors.
+    embedder._parallel_client = ParallelEmbedderClient(EmbedderPoolConfig(use_fallback=False))
+    return embedder
+
+
+def _checked_batch(embedder, texts: list[str]) -> np.ndarray:
+    vecs = np.asarray(embedder.embed_batch(texts), dtype=np.float32)
+    if vecs.shape != (len(texts), 1024):
+        raise ReseedVerificationError(
+            f"embedding batch shape {vecs.shape}, expected {(len(texts), 1024)}"
+        )
+    if not np.isfinite(vecs).all():
+        raise ReseedVerificationError("embedding batch contains non-finite values")
+    norms = np.linalg.norm(vecs, axis=1)
+    if np.any(norms <= 0):
+        raise ReseedVerificationError("embedding batch contains a zero vector")
+    return vecs / norms[:, None]
+
+
+def verify_persisted(sessions: Path, expected_task_ids: set[str]) -> dict:
+    """Re-open disk artifacts and prove the complete DB/index bijection."""
+    import faiss
+
+    index = faiss.read_index(str(sessions / "embeddings.faiss"))
+    id_map = [str(mid) for mid in np.load(sessions / "id_map.npy", allow_pickle=True).tolist()]
+    if index.ntotal != len(id_map):
+        raise ReseedVerificationError(f"desync={index.ntotal - len(id_map)}")
+    if len(id_map) != len(set(id_map)):
+        raise ReseedVerificationError("id_map contains duplicate IDs")
+    if set(id_map) != expected_task_ids:
+        raise ReseedVerificationError("id_map membership differs from reseedable task rows")
+
+    con = sqlite3.connect(f"file:{sessions / 'episodic.db'}?mode=ro", uri=True)
+    try:
+        rows = con.execute("SELECT id, embedding_idx FROM memories").fetchall()
+    finally:
+        con.close()
+    if len(rows) != len(expected_task_ids):
+        raise ReseedVerificationError(
+            "unexpected non-task rows; this reseed requires all live rows to be task rows"
+        )
+    bad = 0
+    for mid, ei in rows:
+        if (
+            mid not in expected_task_ids
+            or ei is None
+            or not isinstance(ei, int)
+            or ei < 0
+            or ei >= len(id_map)
+            or id_map[ei] != str(mid)
+        ):
+            bad += 1
+    if bad:
+        raise ReseedVerificationError(f"{bad} rows do not resolve to themselves")
+    return {"ntotal": index.ntotal, "id_map_len": len(id_map), "desync": 0, "bad": 0}
+
+
 def reseed(sessions: Path, apply: bool, limit: int | None) -> int:
-    from orchestration.repl_memory.embedder import TaskEmbedder
     from orchestration.repl_memory.memory_record import record_from_legacy_context
+
+    if apply and limit is not None:
+        raise ValueError("--limit is unsafe for a live reseed and is disabled")
 
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     s = survey(sessions)
@@ -151,22 +257,44 @@ def reseed(sessions: Path, apply: bool, limit: int | None) -> int:
     import faiss
 
     with writer_lock(sessions / ".episodic_faiss.lock"):
+        receipt = sessions / f"reseed_episodic_store_{stamp}.in-progress.json"
+        backups = {
+            name: sessions / f"{name}.pre-reseed-{stamp}"
+            for name in ("embeddings.faiss", "id_map.npy", "episodic.db")
+        }
+        _write_receipt(
+            receipt,
+            {
+                "stamp": stamp,
+                "state": "started",
+                "backups": {k: str(v) for k, v in backups.items()},
+            },
+        )
         for name in ("embeddings.faiss", "id_map.npy", "episodic.db"):
             src = sessions / name
             if src.exists():
-                shutil.copy2(src, sessions / f"{name}.pre-reseed-{stamp}")
+                if name == "episodic.db":
+                    _backup_sqlite(src, backups[name])
+                else:
+                    shutil.copy2(src, backups[name])
+                    _fsync(backups[name])
                 log(f"[backup] {name} -> {name}.pre-reseed-{stamp}")
+        _write_receipt(
+            receipt,
+            {
+                "stamp": stamp,
+                "state": "backups_complete",
+                "backups": {k: str(v) for k, v in backups.items()},
+            },
+        )
 
         con = sqlite3.connect(sessions / "episodic.db")
-        rows = con.execute(
-            "SELECT id, context FROM memories ORDER BY created_at"
-        ).fetchall()
-        if limit:
-            rows = rows[:limit]
-
-        embedder = TaskEmbedder()
+        con.execute("BEGIN IMMEDIATE")
+        rows = con.execute("SELECT id, context FROM memories ORDER BY created_at").fetchall()
+        embedder = _strict_embedder()
         index = faiss.IndexFlatIP(1024)
         id_map: list[str] = []
+        task_ids: set[str] = set()
 
         pending: list[tuple[str, str, dict]] = []
         embedded = skipped = 0
@@ -175,11 +303,9 @@ def reseed(sessions: Path, apply: bool, limit: int | None) -> int:
             nonlocal embedded
             if not pending:
                 return
-            vecs = embedder.embed_batch([t for _, t, _ in pending])
-            arr = np.asarray(vecs, dtype=np.float32)
-            faiss.normalize_L2(arr)
+            arr = _checked_batch(embedder, [t for _, t, _ in pending])
             index.add(arr)
-            for (mid, _t, ctx) in pending:
+            for mid, _t, ctx in pending:
                 id_map.append(mid)
                 con.execute(
                     "UPDATE memories SET embedding_idx = ?, context = ?, "
@@ -206,38 +332,55 @@ def reseed(sessions: Path, apply: bool, limit: int | None) -> int:
                 skipped += 1
                 continue
             pending.append((mid, rec.embedding_text(), new_ctx))
+            task_ids.add(str(mid))
             if len(pending) >= BATCH:
                 flush()
                 log(f"  embedded {embedded} / {s['embeddings_required']}")
         flush()
-        con.commit()
-
         im_tmp = sessions / f".id_map.npy.reseed-{stamp}.tmp"
         ix_tmp = sessions / f".embeddings.faiss.reseed-{stamp}.tmp"
         np.save(str(im_tmp), np.array(id_map, dtype=object), allow_pickle=True)
         if not im_tmp.exists() and im_tmp.with_suffix(".tmp.npy").exists():
             im_tmp.with_suffix(".tmp.npy").rename(im_tmp)
         faiss.write_index(index, str(ix_tmp))
-        im_tmp.replace(sessions / "id_map.npy")   # id_map FIRST — recoverable direction
+        _fsync(im_tmp)
+        _fsync(ix_tmp)
+        im_tmp.replace(sessions / "id_map.npy")  # id_map FIRST — recoverable direction
         ix_tmp.replace(sessions / "embeddings.faiss")
-
-        bad = 0
-        for mid, ei in con.execute(
-            "SELECT id, embedding_idx FROM memories WHERE embedding_idx IS NOT NULL"
-        ):
-            if ei >= len(id_map) or str(id_map[ei]) != str(mid):
-                bad += 1
+        _write_receipt(
+            receipt,
+            {
+                "stamp": stamp,
+                "state": "faiss_published_db_uncommitted",
+                "backups": {k: str(v) for k, v in backups.items()},
+            },
+        )
+        con.commit()
         con.close()
+        _write_receipt(
+            receipt,
+            {
+                "stamp": stamp,
+                "state": "published",
+                "backups": {k: str(v) for k, v in backups.items()},
+            },
+        )
 
-    log(f"\n=== RESEEDED ===")
+        post = verify_persisted(sessions, task_ids)
+        receipt.replace(sessions / f"reseed_episodic_store_{stamp}.receipt.json")
+
+    log("\n=== RESEEDED ===")
     log(f"  embedded (in index): {embedded}")
     log(f"  telemetry rows kept, de-indexed: {skipped}")
-    log(f"  index/id_map: {index.ntotal} / {len(id_map)}  desync={index.ntotal - len(id_map)}")
-    log(f"  rows whose embedding_idx does not resolve to themselves: {bad}")
+    log(f"  index/id_map: {post['ntotal']} / {post['id_map_len']}  desync={post['desync']}")
+    log(f"  rows whose embedding_idx does not resolve to themselves: {post['bad']}")
     (sessions / f"reseed_episodic_store_{stamp}.json").write_text(
-        json.dumps({"survey": s, "embedded": embedded, "deindexed": skipped, "bad": bad}, indent=2)
+        json.dumps(
+            {"survey": s, "embedded": embedded, "deindexed": skipped, "verification": post},
+            indent=2,
+        )
     )
-    return 1 if bad else 0
+    return 0
 
 
 def main() -> int:
@@ -245,7 +388,9 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--sessions-dir", default=str(SESSIONS))
-    ap.add_argument("--limit", type=int, default=None, help="reseed only the first N rows (testing)")
+    ap.add_argument(
+        "--limit", type=int, default=None, help="reseed only the first N rows (testing)"
+    )
     ap.add_argument(
         "--i-understand-this-re-embeds",
         action="store_true",
