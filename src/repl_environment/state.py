@@ -123,6 +123,127 @@ class _StateMixin:
 
         return "\n".join(state_lines)
 
+    # ---- curation layer (D-d) ----
+
+    def remember(self, name: str, note: str | None = None) -> str:
+        """Agent-facing: annotate a variable so it survives as curated state.
+
+        Auto-save is the safety net; ``remember`` is curation. Marking a variable
+        records the agent's own description of WHY it matters, which is the part a
+        type-and-repr inventory cannot reconstruct, and pins it ahead of the
+        elision cap in resume summaries.
+
+        Args:
+            name: Name of a variable in the REPL namespace.
+            note: Optional short description of what the variable is for.
+
+        Returns:
+            A confirmation string (the REPL surfaces return values to the model).
+        """
+        if not isinstance(name, str) or not name:
+            return "[ERROR: remember(name) expects a variable name as a string]"
+
+        globals_dict = getattr(self, "_globals", {})
+        if name not in globals_dict:
+            available = [
+                k
+                for k in globals_dict
+                if not k.startswith("_")
+                and k not in getattr(self, "_builtin_global_keys", frozenset())
+            ]
+            return (
+                f"[ERROR: no variable named '{name}' in the REPL. "
+                f"Available: {', '.join(sorted(available)[:15]) or '(none)'}]"
+            )
+
+        if note is not None and not isinstance(note, str):
+            return "[ERROR: remember(name, note=...) expects note to be a string]"
+
+        marks = getattr(self, "_curated", None)
+        if marks is None:
+            marks = self._curated = {}
+        marks[name] = (note or "").strip()[:500]
+
+        value = globals_dict[name]
+        return (
+            f"Remembered '{name}' ({type(value).__name__})"
+            + (f": {marks[name]}" if marks[name] else "")
+        )
+
+    def get_curated(self) -> dict[str, str]:
+        """Variables the agent explicitly marked, name -> note."""
+        return dict(getattr(self, "_curated", {}) or {})
+
+    # ---- code log (D-c1 measurement input; NOT injected into any prompt) ----
+
+    #: Cap on retained code-log steps. Bounded so a long session cannot grow the
+    #: checkpoint without limit; the counterfactual sizing below stays honest by
+    #: reporting how many steps were elided.
+    CODE_LOG_MAX_STEPS = 200
+    #: Per-step source cap. Failed steps are compressed to their first line.
+    CODE_LOG_MAX_CHARS = 4000
+
+    def _record_code_log(self, code: str, ok: bool) -> None:
+        """Append one executed step to the bounded code log.
+
+        Recording only. Whether this belongs in the resume preamble is the open
+        question D-c/D-c1 exists to answer — do not wire it into a prompt without
+        that evidence.
+        """
+        log = getattr(self, "_code_log", None)
+        if log is None:
+            log = self._code_log = []
+
+        source = (code or "").strip()
+        if not ok:
+            # A failed step's value is "this was tried and did not work", which
+            # its first line carries; the body is noise.
+            first = source.split("\n")[0] if source else ""
+            source = first[:200]
+        elif len(source) > self.CODE_LOG_MAX_CHARS:
+            source = source[: self.CODE_LOG_MAX_CHARS] + "\n# ... [truncated]"
+
+        log.append(
+            {
+                "step": self._execution_count,
+                "ok": bool(ok),
+                "code": source,
+                "chars": len(code or ""),
+            }
+        )
+        if len(log) > self.CODE_LOG_MAX_STEPS:
+            elided = len(log) - self.CODE_LOG_MAX_STEPS
+            del log[:elided]
+            self._code_log_elided = getattr(self, "_code_log_elided", 0) + elided
+
+    def get_code_log(self) -> list[dict[str, Any]]:
+        """The bounded record of executed steps this session."""
+        return list(getattr(self, "_code_log", []) or [])
+
+    def code_log_metrics(self) -> dict[str, Any]:
+        """Counterfactual sizing for the resume code log (D-c1).
+
+        Answers "what WOULD a code-log preamble have cost?" without changing any
+        prompt. Chars are converted to a rough token estimate with the same //4
+        heuristic used elsewhere in this module.
+        """
+        log = getattr(self, "_code_log", []) or []
+        ok_steps = [e for e in log if e.get("ok")]
+        failed_steps = [e for e in log if not e.get("ok")]
+        # What a preamble would actually render: successful steps in full, failed
+        # steps compressed to a one-line comment (the fast-rlm shape).
+        rendered = sum(len(e.get("code", "")) for e in ok_steps)
+        rendered += sum(len(e.get("code", "")) + 24 for e in failed_steps)
+        return {
+            "steps": len(log),
+            "steps_ok": len(ok_steps),
+            "steps_failed": len(failed_steps),
+            "steps_elided": getattr(self, "_code_log_elided", 0),
+            "raw_chars": sum(e.get("chars", 0) for e in log),
+            "rendered_chars": rendered,
+            "rendered_tokens_est": rendered // 4,
+        }
+
     def get_exploration_log(self) -> ExplorationLog:
         """Get the detailed exploration log.
 
@@ -324,31 +445,46 @@ class _StateMixin:
         skipped_user_globals: list[str] = []
         skip_reasons: dict[str, str] = {}
 
-        def _lineage(value: Any, tier: str) -> dict[str, Any]:
-            return {
+        curated = self.get_curated()
+
+        def _lineage(value: Any, tier: str, key: str) -> dict[str, Any]:
+            entry = {
                 "role": getattr(self, "role", "unknown"),
                 "saved_at_execution_count": self._execution_count,
                 "saved_at_ts": time.time(),
                 "value_type": type(value).__name__,
                 "tier": tier,
             }
+            if key in curated:
+                entry["curated"] = True
+                if curated[key]:
+                    entry["note"] = curated[key]
+            return entry
 
         for key, value in globals_dict.items():
             if key in builtin_keys or key.startswith("_"):
                 continue
             if _is_json_serializable(value):
                 user_globals[key] = value
-                variable_lineage[key] = _lineage(value, "json")
+                variable_lineage[key] = _lineage(value, "json", key)
                 continue
             # JSON cannot hold it. Try the hardened pickle boundary (D-a):
             # signed, size-capped, and only loadable under an allowlist of
             # inert data types. Anything else is reported, never silently lost.
             try:
                 pickled_globals[key] = safe_pickle.dumps(value)
-                variable_lineage[key] = _lineage(value, "pickle")
+                variable_lineage[key] = _lineage(value, "pickle", key)
             except Exception as e:
                 skipped_user_globals.append(key)
                 skip_reasons[key] = str(e)[:200]
+
+        curated_lost = [k for k in skipped_user_globals if k in curated]
+        if curated_lost:
+            logger.warning(
+                "Checkpoint could not save %d CURATED variables the agent explicitly marked: %s",
+                len(curated_lost),
+                ", ".join(curated_lost),
+            )
 
         if skipped_user_globals:
             logger.warning(
@@ -370,6 +506,9 @@ class _StateMixin:
             "context_length": len(self.context),  # For verification, not full context
             "task_id": self.task_id,
             "research_context": research_context_data,
+            "curated": curated,
+            "code_log": self.get_code_log(),
+            "code_log_metrics": self.code_log_metrics(),
             "user_globals": user_globals,
             "pickled_globals": pickled_globals,
             "variable_lineage": variable_lineage,
@@ -424,6 +563,11 @@ class _StateMixin:
 
         # Restore grep hits buffer
         self._grep_hits_buffer = checkpoint.get("grep_hits_buffer", [])
+
+        # Restore the code log (measurement input only — never injected into a
+        # prompt; see D-c/D-c1).
+        self._code_log = list(checkpoint.get("code_log", []) or [])
+        self._curated = dict(checkpoint.get("curated", {}) or {})
 
         # Restore findings buffer
         self._findings_buffer = checkpoint.get("findings_buffer", [])

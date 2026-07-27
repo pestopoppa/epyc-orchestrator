@@ -474,12 +474,19 @@ class ResumeContext:
         if self.checkpoint and self.checkpoint.user_globals:
             lines.append("## Variables (from previous request)")
             items = list(self.checkpoint.user_globals.items())
+            # Curated variables (the agent explicitly called remember()) sort
+            # first, so the elision cap never drops something it was told matters.
+            lineage_all = self.checkpoint.variable_lineage
+            items.sort(key=lambda kv: not lineage_all.get(kv[0], {}).get("curated", False))
             shown = items if max_variables <= 0 else items[:max_variables]
             for key, value in shown:
                 lineage = self.checkpoint.variable_lineage.get(key, {})
                 role = lineage.get("role", "unknown")
                 value_type = type(value).__name__
-                lines.append(f"- `{key}` ({value_type}, role={role})")
+                mark = "★ " if lineage.get("curated") else ""
+                note = lineage.get("note")
+                suffix = f" — {note}" if note else ""
+                lines.append(f"- {mark}`{key}` ({value_type}, role={role}){suffix}")
             if len(items) > len(shown):
                 lines.append(f"... and {len(items) - len(shown)} more variables")
             skipped = self.checkpoint.skipped_user_globals

@@ -16,24 +16,43 @@ builtins and no AST security visitor. Note that ``pickle`` is itself listed in
 ``ASTSecurityVisitor.FORBIDDEN_MODULES``: the sandbox already treats it as
 unsafe for model code, and this module must not become a way around that.
 
-Three independent layers
-------------------------
+Layers
+------
 1. ``find_class`` allowlist (the load-bearing one). Unpickling can only resolve
    an explicit ``(module, name)`` pair from :data:`ALLOWED_GLOBALS`. A crafted
    ``__reduce__`` returning ``(__import__, ("os",))`` pickles fine but fails
    closed at load: ``builtins.__import__`` is not on the list. Model-defined
    classes live in ``__main__``, which is likewise absent, so they cannot be
-   reconstructed at all. The list contains inert data types only — no callables,
-   no ``operator``/``functools`` gadgets, no ``copyreg._reconstructor``.
-2. HMAC over the blob. Proves *we* wrote it, so a tampered SQLite row or state
+   reconstructed at all. No ``operator``/``functools`` gadgets, no
+   ``copyreg._reconstructor``.
+
+   **"Allowlisted" is not the same as "inert."** An adversarial review on
+   2026-07-27 demonstrated that ``numpy.ndarray`` — nominally a data type —
+   is a memory-corruption primitive in its constructor form: ``ndarray(shape,
+   dtype('O'), buffer=...)`` reinterprets the buffer bytes as raw ``PyObject*``
+   pointers with no validation, yielding an arbitrary-pointer dereference
+   (verified end-to-end: a signed checkpoint segfaulted a fresh restore).
+   Entries that are types are therefore *individually* assessed for
+   constructor-reachable primitives, not trusted for being types. See
+   :class:`_NDArrayTypeToken` and :func:`_guarded_numpy_scalar`.
+2. Constructor guards on the entries that need them, plus
+   :func:`_assert_array_safe` — a metadata-only structural check on every value
+   entering and leaving this module. It rejects object-dtype arrays (their
+   storage *is* a pointer array) and arrays whose LOGICAL size exceeds
+   :data:`MAX_ARRAY_BYTES`, since a stride-0 view is a ~100-byte pickle
+   describing a multi-gigabyte array.
+3. HMAC over the blob. Proves *we* wrote it, so a tampered SQLite row or state
    file is rejected. This addresses tampering at rest **only** — it does not
    establish that the content is safe, because we are the ones pickling
-   model-authored objects. Layer 1 is what makes the content safe.
-3. Size cap. Bounds both the stored payload and unpickle-time work.
+   model-authored objects. Layers 1-2 are what make the content safe.
+4. Size cap on the encoded payload. Bounds storage and unpickle-time work.
 
-A fourth layer lives in ``security.py``: the AST visitor now rejects REPL code
-that *defines* ``__reduce__``/``__reduce_ex__``/``__getstate__``/``__setstate__``,
-so the hostile object is refused before it can ever be constructed.
+A fifth layer lives in ``security.py``: the AST visitor rejects REPL code that
+binds a serialization hook. Note it can never be complete — a hook name can
+always be COMPUTED (``ns["__redu" + "ce__"]``) and no static check sees that.
+What *is* closed are the two routes that install such a dict as a class
+namespace (``type(n, b, d)`` and a custom metaclass), which makes computed keys
+inert. Treat this layer as depth, never as the guarantee.
 
 See ``handoffs/active/repl-session-memory-maturity.md`` D-a.
 """
@@ -125,6 +144,91 @@ class UnsafePickleError(Exception):
     """Raised when a payload fails an allowlist, HMAC, or size check."""
 
 
+#: Cap on the LOGICAL size of a reconstructed array. The byte cap bounds the
+#: encoded payload; a stride-0 view is a ~100-byte pickle describing a
+#: multi-gigabyte array, so the logical size needs its own bound.
+MAX_ARRAY_BYTES = 64_000_000
+
+
+class _NDArrayTypeToken:
+    """Stand-in for ``numpy.ndarray`` that cannot be called.
+
+    A legitimate numpy pickle never invokes ``ndarray`` as a constructor — it
+    passes the class as the ``subtype`` argument to ``multiarray._reconstruct``
+    and fills the data in via ``__setstate__`` (verified against the actual
+    opcode stream for int/float/str arrays and numpy scalars).
+
+    The constructor form is a memory-corruption primitive: ``ndarray(shape,
+    dtype('O'), buffer=...)`` reinterprets the raw buffer bytes as ``PyObject*``
+    pointers with NO validation, so a crafted ``__reduce__`` yields an
+    arbitrary-pointer dereference in the orchestrator process. Making the token
+    non-callable removes the primitive while keeping the legitimate path intact.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> Any:
+        # Reached only if a pickle stream tries to CALL numpy.ndarray. Raise our
+        # own error rather than leaning on an incidental TypeError, so the reason
+        # is unambiguous in logs and no argument shape can quietly succeed.
+        raise UnsafePickleError(
+            "direct numpy.ndarray construction is not allowed in a checkpoint "
+            "(the buffer form is an arbitrary-pointer primitive)"
+        )
+
+
+def _guarded_numpy_reconstruct(fn: Any) -> Any:
+    """Wrap ``multiarray._reconstruct`` to accept only the ndarray token."""
+
+    def _reconstruct(subtype: Any, *args: Any, **kwargs: Any) -> Any:
+        import numpy as _np
+
+        if isinstance(subtype, _NDArrayTypeToken) or subtype is _NDArrayTypeToken:
+            subtype = _np.ndarray
+        elif subtype is not _np.ndarray:
+            raise UnsafePickleError(
+                f"_reconstruct subtype must be numpy.ndarray, got {subtype!r}"
+            )
+        return fn(subtype, *args, **kwargs)
+
+    return _reconstruct
+
+
+def _assert_array_safe(value: Any, _seen: set[int] | None = None) -> None:
+    """Reject object-dtype and implausibly large arrays anywhere in a value.
+
+    Reads only array METADATA (``dtype``, ``nbytes``) — never an element — so it
+    is safe to run against a structure that may contain a forged pointer.
+    Object-dtype arrays are refused outright: their storage IS a pointer array,
+    which is the primitive this boundary exists to deny.
+    """
+    if _seen is None:
+        _seen = set()
+    if id(value) in _seen:
+        return
+    _seen.add(id(value))
+
+    cls_name = type(value).__name__
+    if cls_name == "ndarray" or hasattr(value, "dtype") and hasattr(value, "nbytes"):
+        dtype = getattr(value, "dtype", None)
+        if dtype is not None and getattr(dtype, "hasobject", False):
+            raise UnsafePickleError("object-dtype arrays are not allowed")
+        nbytes = getattr(value, "nbytes", 0)
+        if isinstance(nbytes, int) and nbytes > MAX_ARRAY_BYTES:
+            raise UnsafePickleError(
+                f"array logical size {nbytes} exceeds cap {MAX_ARRAY_BYTES}"
+            )
+        return
+
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _assert_array_safe(k, _seen)
+            _assert_array_safe(v, _seen)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            _assert_array_safe(item, _seen)
+
+
 def _guarded_numpy_scalar(fn: Any) -> Any:
     """Wrap ``numpy.*.multiarray.scalar`` to refuse object dtypes.
 
@@ -150,7 +254,12 @@ class _AllowlistUnpickler(pickle.Unpickler):
             raise UnsafePickleError(
                 f"blocked global during unpickle: {module}.{name} is not allowlisted"
             )
+        if name == "ndarray" and module == "numpy":
+            # Type token only — never callable. See _NDArrayTypeToken.
+            return _NDArrayTypeToken
         resolved = super().find_class(module, name)
+        if name == "_reconstruct":
+            return _guarded_numpy_reconstruct(resolved)
         if name == "scalar":
             # numpy's multiarray.scalar() historically deserialized an
             # object-dtype scalar by calling pickle.loads() on its raw data
@@ -266,7 +375,8 @@ def dumps(value: Any) -> dict[str, Any]:
     # Verify loadability under the allowlist NOW. This is what turns a hostile
     # __reduce__ into a save-time rejection instead of a restore-time surprise.
     try:
-        _AllowlistUnpickler(io.BytesIO(blob)).load()
+        _assert_array_safe(value)
+        _assert_array_safe(_AllowlistUnpickler(io.BytesIO(blob)).load())
     except UnsafePickleError:
         raise
     except Exception as e:
@@ -313,7 +423,11 @@ def loads(envelope: dict[str, Any]) -> Any:
         raise UnsafePickleError("HMAC mismatch: payload was not written by this orchestrator")
 
     try:
-        return _AllowlistUnpickler(io.BytesIO(blob)).load()
+        loaded = _AllowlistUnpickler(io.BytesIO(blob)).load()
+        # Metadata-only structural check BEFORE the value escapes this function,
+        # so a forged pointer is never handed to a caller that might deref it.
+        _assert_array_safe(loaded)
+        return loaded
     except UnsafePickleError:
         raise
     except Exception as e:

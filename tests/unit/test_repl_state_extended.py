@@ -517,3 +517,120 @@ class TestReset:
 
         assert len(env._exploration_log.events) == 0
         assert env._exploration_log.total_exploration_tokens == 0
+
+
+class TestCurationLayer:
+    """D-d — remember() is curation layered over auto-save."""
+
+    def _env(self):
+        env = MockREPLEnvironment()
+        env._globals = {"artifacts": env.artifacts}
+        return env
+
+    def test_remember_records_a_note(self):
+        env = self._env()
+        env._globals["idx"] = {"a": 1}
+        msg = env.remember("idx", note="inverted index over the corpus")
+        assert "idx" in msg
+        assert env.get_curated() == {"idx": "inverted index over the corpus"}
+
+    def test_remember_without_a_note_still_marks(self):
+        env = self._env()
+        env._globals["counts"] = [1, 2]
+        env.remember("counts")
+        assert env.get_curated() == {"counts": ""}
+
+    def test_remember_unknown_name_errors_and_lists_options(self):
+        env = self._env()
+        env._globals["present"] = 1
+        msg = env.remember("absent")
+        assert msg.startswith("[ERROR")
+        assert "present" in msg
+        assert env.get_curated() == {}
+
+    def test_remember_rejects_non_string_arguments(self):
+        env = self._env()
+        env._globals["x"] = 1
+        assert env.remember(None).startswith("[ERROR")
+        assert env.remember("x", note=123).startswith("[ERROR")
+
+    def test_curation_flows_into_lineage_and_survives_a_round_trip(self):
+        env = self._env()
+        env._globals["idx"] = {"a": 1}
+        env.remember("idx", note="the index")
+
+        cp = env.checkpoint()
+        assert cp["curated"] == {"idx": "the index"}
+        assert cp["variable_lineage"]["idx"]["curated"] is True
+        assert cp["variable_lineage"]["idx"]["note"] == "the index"
+
+        fresh = self._env()
+        fresh.restore(cp)
+        assert fresh.get_curated() == {"idx": "the index"}
+
+    def test_uncurated_variables_carry_no_curation_keys(self):
+        env = self._env()
+        env._globals["plain"] = 5
+        lineage = env.checkpoint()["variable_lineage"]["plain"]
+        assert "curated" not in lineage and "note" not in lineage
+
+
+class TestCodeLog:
+    """D-c1 — record executed steps and size the counterfactual preamble."""
+
+    def _env(self):
+        env = MockREPLEnvironment()
+        env._globals = {"artifacts": env.artifacts}
+        return env
+
+    def test_records_ok_and_failed_steps(self):
+        env = self._env()
+        env._record_code_log("x = 1", ok=True)
+        env._record_code_log("import os\nos.system('x')", ok=False)
+
+        log = env.get_code_log()
+        assert len(log) == 2
+        assert log[0]["ok"] is True and log[0]["code"] == "x = 1"
+        # A failed step keeps only its first line.
+        assert log[1]["ok"] is False and log[1]["code"] == "import os"
+
+    def test_metrics_size_the_counterfactual_without_touching_prompts(self):
+        env = self._env()
+        env._record_code_log("a = 1", ok=True)
+        env._record_code_log("b = 2", ok=True)
+        m = env.code_log_metrics()
+        assert m["steps"] == 2 and m["steps_ok"] == 2 and m["steps_failed"] == 0
+        assert m["rendered_chars"] == len("a = 1") + len("b = 2")
+        assert m["rendered_tokens_est"] == m["rendered_chars"] // 4
+
+    def test_log_is_bounded_and_reports_what_it_elided(self):
+        env = self._env()
+        for i in range(env.CODE_LOG_MAX_STEPS + 15):
+            env._record_code_log(f"v{i} = {i}", ok=True)
+        assert len(env.get_code_log()) == env.CODE_LOG_MAX_STEPS
+        assert env.code_log_metrics()["steps_elided"] == 15
+
+    def test_long_step_is_truncated_but_raw_size_is_retained(self):
+        env = self._env()
+        big = "x = '" + "a" * (env.CODE_LOG_MAX_CHARS + 500) + "'"
+        env._record_code_log(big, ok=True)
+        entry = env.get_code_log()[0]
+        assert len(entry["code"]) < len(big)
+        assert entry["chars"] == len(big)
+
+    def test_code_log_survives_a_checkpoint_round_trip(self):
+        env = self._env()
+        env._record_code_log("keep = 1", ok=True)
+        cp = env.checkpoint()
+        assert cp["code_log"][0]["code"] == "keep = 1"
+        assert cp["code_log_metrics"]["steps"] == 1
+
+        fresh = self._env()
+        fresh.restore(cp)
+        assert fresh.get_code_log()[0]["code"] == "keep = 1"
+
+    def test_code_log_is_not_injected_into_get_state(self):
+        """The whole point of D-c1 is measurement WITHOUT a prompt change."""
+        env = self._env()
+        env._record_code_log("secret_marker_xyz = 1", ok=True)
+        assert "secret_marker_xyz" not in env.get_state()

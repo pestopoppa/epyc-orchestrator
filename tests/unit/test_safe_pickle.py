@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import base64
 import pickle
+import struct
 
 import pytest
 
@@ -171,6 +172,27 @@ class TestAstLayer:
         visitor.visit(ast.parse(code))
         assert visitor.violations, f"layer 4 missed: {code!r}"
 
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "d = {'__reduce__': lambda s: (print, ())}\nC = type('C', (), d)\n",
+            "ns = dict()\nns['x'] = 1\nC = type('C', (), ns)\n",
+            "C = type('C', (), {})\n",
+        ],
+        ids=["dict-var-indirection", "built-namespace", "empty-namespace"],
+    )
+    def test_dynamic_class_creation_is_rejected(self, code):
+        """D-a4: the literal-dict-only check left variable indirection open."""
+        visitor = ASTSecurityVisitor()
+        visitor.visit(ast.parse(code))
+        assert visitor.violations, f"layer 4 missed: {code!r}"
+
+    def test_one_arg_type_is_still_allowed(self):
+        """type(x) is ubiquitous in analysis code and must not be flagged."""
+        visitor = ASTSecurityVisitor()
+        visitor.visit(ast.parse("kinds = [type(v).__name__ for v in [1, 'a', 2.0]]\n"))
+        assert visitor.violations == []
+
     def test_ordinary_analysis_code_is_not_flagged(self):
         """The new rule must not create false positives on normal REPL work."""
         code = (
@@ -298,3 +320,205 @@ class TestOversizeEnvelope:
         huge_b64 = "A" * (safe_pickle.MAX_PICKLED_BYTES * 2)
         with pytest.raises(UnsafePickleError, match="encoded"):
             safe_pickle.loads({"b64": huge_b64, "hmac": "x"})
+
+
+class TestAllowlistDriftGuard:
+    """D-a3 — the allowlist is a standing invariant, not a one-time check.
+
+    A spot check for known-bad entries cannot catch a NEW entry that is dangerous
+    in a way nobody thought to enumerate (numpy `scalar`'s nested unpickle was
+    exactly that shape). This pins the exact set, so any change to it is a
+    deliberate edit here and therefore reviewable in a diff.
+    """
+
+    GOLDEN = {
+        ("builtins", "list"),
+        ("builtins", "dict"),
+        ("builtins", "set"),
+        ("builtins", "frozenset"),
+        ("builtins", "tuple"),
+        ("builtins", "bytes"),
+        ("builtins", "bytearray"),
+        ("builtins", "str"),
+        ("builtins", "int"),
+        ("builtins", "float"),
+        ("builtins", "bool"),
+        ("builtins", "complex"),
+        ("collections", "OrderedDict"),
+        ("collections", "defaultdict"),
+        ("collections", "Counter"),
+        ("collections", "deque"),
+        ("datetime", "datetime"),
+        ("datetime", "date"),
+        ("datetime", "time"),
+        ("datetime", "timedelta"),
+        ("datetime", "timezone"),
+        ("decimal", "Decimal"),
+        ("fractions", "Fraction"),
+        ("numpy", "ndarray"),
+        ("numpy", "dtype"),
+        ("numpy.core.multiarray", "_reconstruct"),
+        ("numpy.core.multiarray", "scalar"),
+        ("numpy._core.multiarray", "_reconstruct"),
+        ("numpy._core.multiarray", "scalar"),
+    }
+
+    def test_allowlist_matches_the_reviewed_set_exactly(self):
+        added = safe_pickle.ALLOWED_GLOBALS - self.GOLDEN
+        removed = self.GOLDEN - safe_pickle.ALLOWED_GLOBALS
+        assert not added and not removed, (
+            "ALLOWED_GLOBALS drifted from the reviewed set.\n"
+            f"  ADDED (needs a security pass first): {sorted(added)}\n"
+            f"  REMOVED: {sorted(removed)}\n"
+            "Anything added must be an INERT DATA TYPE with no nested-deserialization "
+            "path. See handoffs/active/repl-session-memory-maturity.md D-a3."
+        )
+
+    def test_no_allowlisted_module_is_a_process_or_io_module(self):
+        """Structural guard: the allowlist must never reach a side-effecting module."""
+        banned_modules = {
+            "os", "sys", "subprocess", "socket", "shutil", "pathlib", "tempfile",
+            "importlib", "builtins.__import__", "ctypes", "pickle", "codecs",
+            "operator", "functools", "copyreg", "types", "typing",
+        }
+        offending = {
+            (m, n) for m, n in safe_pickle.ALLOWED_GLOBALS
+            if m.split(".")[0] in banned_modules and m != "builtins"
+        }
+        assert not offending, f"allowlist reaches a side-effecting module: {sorted(offending)}"
+
+    def test_builtins_entries_are_all_inert_types(self):
+        """Every builtins entry must resolve to a TYPE, never a function."""
+        import builtins as _b
+
+        for module, name in sorted(safe_pickle.ALLOWED_GLOBALS):
+            if module != "builtins":
+                continue
+            resolved = getattr(_b, name)
+            assert isinstance(resolved, type), (
+                f"builtins.{name} is not a type ({type(resolved).__name__}) — "
+                "a callable on the allowlist is a gadget"
+            )
+
+
+class TestNumpyPointerForgeGadget:
+    """Regression for the 2026-07-27 adversarial finding.
+
+    `numpy.ndarray(shape, dtype('O'), buffer=...)` reinterprets the buffer bytes
+    as raw PyObject* pointers with NO validation. An allowlisted-only pickle
+    could therefore mint an arbitrary-pointer dereference in the orchestrator
+    process — demonstrated end-to-end as a SIGSEGV on a fresh restore. The fix
+    makes `numpy.ndarray` a non-callable type token (legitimate pickles only ever
+    pass it as `_reconstruct`'s subtype) plus a metadata-only structural check.
+    """
+
+    def test_direct_ndarray_construction_is_refused(self):
+        np = pytest.importorskip("numpy")
+
+        class Forge:
+            def __reduce__(self):
+                return (
+                    np.ndarray,
+                    ((1,), np.dtype("O"), struct.pack("P", id("sentinel"))),
+                )
+
+        with pytest.raises(UnsafePickleError):
+            safe_pickle.dumps(Forge())
+
+    def test_stride_zero_view_cannot_evade_the_size_cap(self):
+        """A ~100-byte pickle describing a 4 GB array must not be accepted."""
+        np = pytest.importorskip("numpy")
+
+        class Bomb:
+            def __reduce__(self):
+                return (
+                    np.ndarray,
+                    ((4_000_000_000,), np.dtype("u1"), b"\x00", 0, (0,)),
+                )
+
+        with pytest.raises(UnsafePickleError):
+            safe_pickle.dumps(Bomb())
+
+    def test_object_dtype_array_is_refused_via_the_legitimate_route(self):
+        """Even the ordinary _reconstruct + __setstate__ path must fail closed."""
+        np = pytest.importorskip("numpy")
+        with pytest.raises(UnsafePickleError, match="object-dtype"):
+            safe_pickle.dumps(np.array([{"k": "v"}], dtype=object))
+
+    def test_oversize_logical_array_is_refused(self):
+        np = pytest.importorskip("numpy")
+        big = np.zeros(safe_pickle.MAX_ARRAY_BYTES // 8 + 1024, dtype="f8")
+        with pytest.raises(UnsafePickleError):
+            safe_pickle.dumps(big)
+
+    def test_ndarray_token_is_not_callable(self):
+        with pytest.raises(UnsafePickleError, match="direct numpy.ndarray"):
+            safe_pickle._NDArrayTypeToken()
+
+    @pytest.mark.parametrize(
+        "factory",
+        [
+            lambda np: np.arange(6),
+            lambda np: np.arange(6).reshape(2, 3),
+            lambda np: np.array([1.5, 2.5]),
+            lambda np: np.array(["a", "b"]),
+            lambda np: np.int64(7),
+            lambda np: np.float64(1.5),
+            lambda np: {"nested": np.arange(3)},
+        ],
+        ids=["1d", "2d", "float", "str", "int-scalar", "float-scalar", "nested"],
+    )
+    def test_legitimate_numpy_still_round_trips(self, factory):
+        """The fix must not cost us the capability D-a exists to provide."""
+        np = pytest.importorskip("numpy")
+        value = factory(np)
+        restored = safe_pickle.loads(safe_pickle.dumps(value))
+        if isinstance(value, dict):
+            assert np.array_equal(restored["nested"], value["nested"])
+        else:
+            assert np.array_equal(restored, value)
+
+
+class TestAstNamespaceInstallation:
+    """Regression for the layer-4 bypasses found 2026-07-27.
+
+    A hook name can always be COMPUTED (`"__redu" + "ce__"`), which no static key
+    check can see. The vulnerability is not the key computation — it is
+    installing the dict as a CLASS NAMESPACE, which has exactly two routes.
+    Both are now closed, which makes computed keys inert.
+    """
+
+    @pytest.mark.parametrize(
+        "code,label",
+        [
+            (
+                "class Meta(type):\n"
+                "    def __new__(mcs, n, b, ns):\n"
+                "        ns['__redu' + 'ce__'] = 1\n"
+                "        return super().__new__(mcs, n, b, ns)\n"
+                "class C(metaclass=Meta): pass\n",
+                "metaclass-computed-key",
+            ),
+            ("d = dict(__reduce__=lambda s: None)\n", "dict-kwargs"),
+            ("d = {}\nd['__reduce__'] = 1\n", "subscript-constant-key"),
+            ("C = type('C', (), {'__reduce__': 1})\n", "type-3arg"),
+        ],
+    )
+    def test_namespace_installation_routes_are_blocked(self, code, label):
+        visitor = ASTSecurityVisitor()
+        visitor.visit(ast.parse(code))
+        assert visitor.violations, f"layer 4 missed {label}: {code!r}"
+
+    def test_ordinary_dict_and_class_work_is_not_flagged(self):
+        code = (
+            "class Index:\n"
+            "    def __init__(self, docs): self.docs = docs\n"
+            "    def search(self, q): return [d for d in self.docs if q in d]\n"
+            "cfg = dict(alpha=1, beta=2)\n"
+            "m = {}\n"
+            "m['key'] = 5\n"
+            "kinds = [type(v).__name__ for v in [1, 'a']]\n"
+        )
+        visitor = ASTSecurityVisitor()
+        visitor.visit(ast.parse(code))
+        assert visitor.violations == []

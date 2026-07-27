@@ -418,6 +418,8 @@ class REPLEnvironment(
             "FINAL": self._final,
             "FINAL_VAR": self._final_var,
             "STUCK": self._stuck,
+            # Curation: mark a variable as worth keeping, with a note (D-d)
+            "remember": self.remember,
             # Document processing tools
             "ocr_document": self._ocr_document,
             "analyze_figure": self._analyze_figure,
@@ -1314,12 +1316,17 @@ class REPLEnvironment(
         try:
             self._validate_code(code)
         except REPLSecurityError as e:
+            self._record_code_log(code, ok=False)
             return ExecutionResult(
                 output="",
                 is_final=False,
                 error=str(e),
                 elapsed_seconds=time.perf_counter() - start_time,
             )
+
+        # Record the step for the resume code log (D-c1 measurement input).
+        # Recording only — the log is NOT injected into any prompt today.
+        self._record_code_log(code, ok=True)
 
         # Set up timeout handler
         def timeout_handler(signum, frame):

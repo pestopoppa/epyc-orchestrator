@@ -125,10 +125,46 @@ class ASTSecurityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        """Reject serialization hooks smuggled in via keyword bases or a dict.
+        """Reject custom metaclasses.
 
-        `type('C', (), {'__reduce__': fn})` is handled by visit_Call below.
+        A metaclass ``__new__`` receives the class namespace as an ordinary dict
+        and can install a serialization hook under a COMPUTED key
+        (``ns["__redu" + "ce__"] = fn``), which no static key check can see. The
+        key computation is not itself the vulnerability — installing the dict as
+        a class namespace is, and that has exactly two routes: ``type(n, b, d)``
+        (rejected in visit_Call) and a metaclass. Closing both makes computed
+        keys inert. Custom metaclasses have no legitimate use in analysis code.
         """
+        for keyword in node.keywords:
+            if keyword.arg == "metaclass":
+                self.violations.append("class ... (metaclass=...)")
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        """Extend dunder-subscript checks to serialization hooks."""
+        target = getattr(node, "slice", None)
+        if (
+            isinstance(target, ast.Constant)
+            and isinstance(target.value, str)
+            and target.value in self.FORBIDDEN_METHOD_DEFS
+        ):
+            self.violations.append(f"['{target.value}']")
+        return self._visit_subscript_forbidden_attrs(node)
+
+    def visit_Dict(self, node: ast.Dict) -> None:
+        """Reject any dict literal keyed by a serialization-hook name.
+
+        Closes the indirection path where the namespace is built first and only
+        later used to create a class, so the hook name never appears next to a
+        `type(...)` call: `d = {'__reduce__': fn}` … `type('C', (), d)`.
+        """
+        for key in node.keys:
+            if (
+                isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and key.value in self.FORBIDDEN_METHOD_DEFS
+            ):
+                self.violations.append(f"{{'{key.value}': ...}}")
         self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import) -> None:
@@ -159,19 +195,22 @@ class ASTSecurityVisitor(ast.NodeVisitor):
             if node.func.attr in self.FORBIDDEN_ATTRS:
                 self.violations.append(f".{node.func.attr}()")
 
-        # Dynamic class creation can bind a serialization hook without any
-        # FunctionDef or Assign: type('C', (), {'__reduce__': fn}).
+        # Dynamic class creation is a general sandbox-escape primitive and can
+        # bind a serialization hook with no FunctionDef and no Assign:
+        #   type('C', (), {'__reduce__': fn})        <- literal namespace
+        #   d = {...}; type('C', (), d)              <- namespace via variable
+        # Matching only the literal form left the variable form open, so the
+        # 3-argument form is rejected outright. The 1-argument form (`type(x)`,
+        # ubiquitous in analysis code) is untouched.
         if isinstance(node.func, ast.Name) and node.func.id == "type" and len(node.args) == 3:
-            for arg in node.args:
-                if not isinstance(arg, ast.Dict):
-                    continue
-                for key in arg.keys:
-                    if (
-                        isinstance(key, ast.Constant)
-                        and isinstance(key.value, str)
-                        and key.value in self.FORBIDDEN_METHOD_DEFS
-                    ):
-                        self.violations.append(f"type(..., {{'{key.value}': ...}})")
+            self.violations.append("type(name, bases, dict) dynamic class creation")
+
+        # dict(__reduce__=fn) builds a hook-bearing namespace with no ast.Dict
+        # node at all, so visit_Dict never sees it.
+        if isinstance(node.func, ast.Name) and node.func.id == "dict":
+            for keyword in node.keywords:
+                if keyword.arg in self.FORBIDDEN_METHOD_DEFS:
+                    self.violations.append(f"dict({keyword.arg}=...)")
 
         self.generic_visit(node)
 
@@ -181,7 +220,7 @@ class ASTSecurityVisitor(ast.NodeVisitor):
             self.violations.append(f".{node.attr}")
         self.generic_visit(node)
 
-    def visit_Subscript(self, node: ast.Subscript) -> None:
+    def _visit_subscript_forbidden_attrs(self, node: ast.Subscript) -> None:
         """Check subscript access for string-based dunder bypass attempts.
 
         Catches patterns like: obj['__class__'] or obj["__globals__"]
