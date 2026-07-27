@@ -19,6 +19,13 @@ from src.config import get_config
 
 logger = logging.getLogger(__name__)
 _lifecycle_cfg = get_config().session_lifecycle
+# Elision caps for the resume summary injected into the model's context.
+# Defaults preserve historical behaviour (12/8) — raising them changes live
+# prompt content, so that is a measured decision, not a default flip. See
+# handoffs/active/repl-session-memory-maturity.md D-e.
+MAX_RESUME_VARIABLES = 12
+MAX_RESUME_SKIPPED = 8
+
 _ACTIVE_TO_IDLE_HOURS = _lifecycle_cfg.active_to_idle_hours
 _IDLE_TO_STALE_HOURS = _lifecycle_cfg.idle_to_stale_days * 24.0
 
@@ -309,6 +316,9 @@ class Checkpoint:
     user_globals: dict[str, Any] = field(default_factory=dict)
     variable_lineage: dict[str, dict[str, Any]] = field(default_factory=dict)
     skipped_user_globals: list[str] = field(default_factory=list)
+    # Signed, allowlist-checked pickles for values JSON cannot hold (D-a).
+    # {name: envelope} — see src/repl_environment/safe_pickle.py.
+    pickled_globals: dict[str, Any] = field(default_factory=dict)
     # Session checkpoint payload protocol version for restore compatibility.
     # 0 indicates legacy payloads that did not persist explicit version metadata.
     protocol_version: int = 1
@@ -328,6 +338,7 @@ class Checkpoint:
             "user_globals": self.user_globals,
             "variable_lineage": self.variable_lineage,
             "skipped_user_globals": self.skipped_user_globals,
+            "pickled_globals": self.pickled_globals,
             "protocol_version": self.protocol_version,
         }
 
@@ -347,6 +358,7 @@ class Checkpoint:
             user_globals=data.get("user_globals", {}),
             variable_lineage=data.get("variable_lineage", {}),
             skipped_user_globals=data.get("skipped_user_globals", []),
+            pickled_globals=data.get("pickled_globals", {}) or {},
             protocol_version=int(data.get("protocol_version", 0) or 0),
         )
 
@@ -401,11 +413,21 @@ class ResumeContext:
             "last_exchanges": self.last_exchanges,
         }
 
-    def format_for_injection(self) -> str:
+    def format_for_injection(
+        self,
+        max_variables: int = MAX_RESUME_VARIABLES,
+        max_skipped: int = MAX_RESUME_SKIPPED,
+    ) -> str:
         """Format context for LLM context injection.
 
         Returns a markdown-formatted string suitable for prepending
         to the conversation context.
+
+        Args:
+            max_variables: Restored variables to list before eliding. Pass 0 for
+                no limit — a resumed agent that cannot see a variable it saved
+                will re-derive it, which costs more than the listing does.
+            max_skipped: Non-serializable variable names to list before eliding.
         """
         lines = [
             f"# Session Resumed: {self.session.name or self.session.id[:8]}",
@@ -452,16 +474,25 @@ class ResumeContext:
         if self.checkpoint and self.checkpoint.user_globals:
             lines.append("## Variables (from previous request)")
             items = list(self.checkpoint.user_globals.items())
-            for key, value in items[:12]:
+            shown = items if max_variables <= 0 else items[:max_variables]
+            for key, value in shown:
                 lineage = self.checkpoint.variable_lineage.get(key, {})
                 role = lineage.get("role", "unknown")
                 value_type = type(value).__name__
                 lines.append(f"- `{key}` ({value_type}, role={role})")
-            if len(items) > 12:
-                lines.append(f"... and {len(items) - 12} more variables")
-            if self.checkpoint.skipped_user_globals:
+            if len(items) > len(shown):
+                lines.append(f"... and {len(items) - len(shown)} more variables")
+            skipped = self.checkpoint.skipped_user_globals
+            if skipped:
+                shown_skipped = skipped if max_skipped <= 0 else skipped[:max_skipped]
+                suffix = (
+                    f" (and {len(skipped) - len(shown_skipped)} more)"
+                    if len(skipped) > len(shown_skipped)
+                    else ""
+                )
                 lines.append(
-                    f"Skipped non-serializable variables: {', '.join(self.checkpoint.skipped_user_globals[:8])}"
+                    "Skipped non-serializable variables: "
+                    f"{', '.join(shown_skipped)}{suffix}"
                 )
             lines.append("")
 

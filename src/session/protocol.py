@@ -59,6 +59,7 @@ CHECKPOINT_RESTORE_OPTIONAL_FIELDS = (
     "user_globals",
     "variable_lineage",
     "skipped_user_globals",
+    "pickled_globals",
 )
 
 
@@ -103,6 +104,7 @@ def normalize_checkpoint_for_repl_restore(
     normalized.setdefault("user_globals", {})
     normalized.setdefault("variable_lineage", {})
     normalized.setdefault("skipped_user_globals", [])
+    normalized.setdefault("pickled_globals", {})
 
     missing_required = [
         key for key in CHECKPOINT_RESTORE_REQUIRED_FIELDS

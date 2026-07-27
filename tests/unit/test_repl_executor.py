@@ -253,6 +253,14 @@ class TestBasicREPLExecution:
             mock_repl._tool_invocations = 0
             mock_repl.tool_registry = None
             mock_repl.log_exploration_completed = MagicMock()
+            # restore() returns a reconciliation of what actually landed in the
+            # live namespace; the executor reports that, not the claimed count.
+            mock_repl.restore.return_value = {
+                "restored": ["cached_df"],
+                "unavailable": {"tmp_fn": "not JSON-serializable at save time; never checkpointed"},
+                "claimed": 1,
+                "dropped_at_save": ["tmp_fn"],
+            }
             mock_repl.checkpoint.return_value = {
                 "artifacts": {},
                 "execution_count": 1,
@@ -286,6 +294,8 @@ class TestBasicREPLExecution:
         mock_state.session_store.save_checkpoint.assert_called_once()
         assert response.session_persistence["restore_success"] is True
         assert response.session_persistence["restored_globals"] == 1
+        assert response.session_persistence["claimed_globals"] == 1
+        assert "tmp_fn" in response.session_persistence["unavailable_globals"]
         assert response.session_persistence["checkpoint_saved"] is True
 
     @pytest.mark.asyncio

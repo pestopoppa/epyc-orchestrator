@@ -388,6 +388,70 @@ class TestRestore:
         assert env._globals["memo"] == [1, 2, 3]
 
 
+class TestRestoreReconciliation:
+    """restore() must report what ACTUALLY landed, not what the payload claimed."""
+
+    def _checkpoint(self, **overrides):
+        base = {
+            "version": 1,
+            "artifacts": {},
+            "execution_count": 0,
+            "exploration_calls": 0,
+            "exploration_tokens": 0,
+            "exploration_events": [],
+            "grep_hits_buffer": [],
+            "findings_buffer": [],
+            "user_globals": {},
+        }
+        base.update(overrides)
+        return base
+
+    def test_reconciliation_reports_restored_names(self):
+        env = MockREPLEnvironment()
+        result = env.restore(self._checkpoint(user_globals={"memo": [1, 2], "n": 3}))
+
+        assert sorted(result["restored"]) == ["memo", "n"]
+        assert result["claimed"] == 2
+        assert result["unavailable"] == {}
+        assert env._restore_reconciliation == result
+
+    def test_builtin_collision_is_reported_not_silently_dropped(self):
+        """A name colliding with an engine builtin never lands — say so."""
+        env = MockREPLEnvironment()
+        result = env.restore(self._checkpoint(user_globals={"artifacts": {"x": 1}, "ok": 5}))
+
+        assert result["restored"] == ["ok"]
+        assert result["claimed"] == 2
+        assert "artifacts" in result["unavailable"]
+        assert "builtin" in result["unavailable"]["artifacts"]
+
+    def test_save_time_drops_are_carried_into_reconciliation(self):
+        env = MockREPLEnvironment()
+        result = env.restore(
+            self._checkpoint(user_globals={"ok": 1}, skipped_user_globals=["helper_fn"])
+        )
+
+        assert result["restored"] == ["ok"]
+        assert result["dropped_at_save"] == ["helper_fn"]
+        assert "never checkpointed" in result["unavailable"]["helper_fn"]
+
+    def test_get_state_surfaces_unavailable_names_to_the_model(self):
+        env = MockREPLEnvironment()
+        env.restore(
+            self._checkpoint(user_globals={"kept": 1}, skipped_user_globals=["lost_fn"])
+        )
+
+        state = env.get_state()
+        assert "Not Restored" in state
+        assert "lost_fn" in state
+
+    def test_get_state_omits_section_when_nothing_missing(self):
+        env = MockREPLEnvironment()
+        env.restore(self._checkpoint(user_globals={"kept": 1}))
+
+        assert "Not Restored" not in env.get_state()
+
+
 class TestSerializationHelper:
     def test_is_json_serializable_callable_false(self):
         assert _is_json_serializable(lambda x: x) is False

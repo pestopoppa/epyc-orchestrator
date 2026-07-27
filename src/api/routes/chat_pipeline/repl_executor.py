@@ -352,6 +352,8 @@ async def _execute_repl(
         "restore_found_checkpoint": False,
         "restore_success": False,
         "restored_globals": 0,
+        "claimed_globals": 0,
+        "unavailable_globals": {},
         "skipped_globals": [],
         "restore_error": None,
         "checkpoint_saved": False,
@@ -371,10 +373,19 @@ async def _execute_repl(
                     checkpoint.to_dict()
                 )
                 session_persistence["restore_protocol"] = protocol_diag
-                repl.restore(restore_payload)
+                reconciliation = repl.restore(restore_payload) or {}
                 session_persistence["restore_success"] = True
+                # Report what ACTUALLY landed in the live namespace, not what the
+                # payload claimed — a name can be dropped at restore (builtin
+                # collision) and the claimed count would never show it.
                 session_persistence["restored_globals"] = len(
-                    restore_payload.get("user_globals", {})
+                    reconciliation.get("restored", [])
+                )
+                session_persistence["claimed_globals"] = reconciliation.get(
+                    "claimed", len(restore_payload.get("user_globals", {}))
+                )
+                session_persistence["unavailable_globals"] = dict(
+                    reconciliation.get("unavailable", {})
                 )
                 session_persistence["skipped_globals"] = list(
                     restore_payload.get("skipped_user_globals", []) or []

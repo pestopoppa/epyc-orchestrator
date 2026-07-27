@@ -35,6 +35,22 @@ from src.session.protocol import BaseSessionStore, WhereFilter
 
 logger = logging.getLogger(__name__)
 
+
+def _json_col(row: Any, name: str) -> dict:
+    """Read a JSON dict column, tolerating rows from before the column existed."""
+    try:
+        raw = row[name]
+    except (IndexError, KeyError):
+        return {}
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 # Default paths — sourced from centralized config (on RAID array per CLAUDE.md)
 from src.config import get_config as _get_config
 
@@ -171,7 +187,8 @@ class SQLiteSessionStore(BaseSessionStore):
                     trigger TEXT NOT NULL,
                     user_globals TEXT DEFAULT '{}',
                     variable_lineage TEXT DEFAULT '{}',
-                    skipped_user_globals TEXT DEFAULT '[]'
+                    skipped_user_globals TEXT DEFAULT '[]',
+                    pickled_globals TEXT DEFAULT '{}'
                 )
             """)
 
@@ -225,6 +242,8 @@ class SQLiteSessionStore(BaseSessionStore):
             conn.execute("ALTER TABLE checkpoints ADD COLUMN variable_lineage TEXT DEFAULT '{}'")
         if "skipped_user_globals" not in columns:
             conn.execute("ALTER TABLE checkpoints ADD COLUMN skipped_user_globals TEXT DEFAULT '[]'")
+        if "pickled_globals" not in columns:
+            conn.execute("ALTER TABLE checkpoints ADD COLUMN pickled_globals TEXT DEFAULT '{}'")
         conn.commit()
 
     def _load_embeddings(self) -> None:
@@ -719,8 +738,9 @@ class SQLiteSessionStore(BaseSessionStore):
                 INSERT INTO checkpoints (
                     id, session_id, created_at, context_hash, artifacts,
                     execution_count, exploration_calls, message_count, trigger,
-                    user_globals, variable_lineage, skipped_user_globals
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    user_globals, variable_lineage, skipped_user_globals,
+                    pickled_globals
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     checkpoint.id,
@@ -735,6 +755,7 @@ class SQLiteSessionStore(BaseSessionStore):
                     json.dumps(checkpoint.user_globals),
                     json.dumps(checkpoint.variable_lineage),
                     json.dumps(checkpoint.skipped_user_globals),
+                    json.dumps(checkpoint.pickled_globals),
                 ),
             )
             conn.commit()
@@ -780,6 +801,7 @@ class SQLiteSessionStore(BaseSessionStore):
             skipped_user_globals=(
                 json.loads(row["skipped_user_globals"]) if row["skipped_user_globals"] else []
             ),
+            pickled_globals=_json_col(row, "pickled_globals"),
         )
 
     def get_checkpoints(self, session_id: str, limit: int = 10) -> list[Checkpoint]:
@@ -813,6 +835,7 @@ class SQLiteSessionStore(BaseSessionStore):
                 skipped_user_globals=(
                     json.loads(row["skipped_user_globals"]) if row["skipped_user_globals"] else []
                 ),
+                pickled_globals=_json_col(row, "pickled_globals"),
             )
             for row in rows
         ]

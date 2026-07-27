@@ -11,6 +11,7 @@ import time
 import types
 from typing import Any, TYPE_CHECKING
 
+from src.repl_environment import safe_pickle
 from src.repl_environment.types import ExplorationEvent, ExplorationLog
 
 if TYPE_CHECKING:
@@ -50,6 +51,8 @@ class _StateMixin:
         _grep_hits_buffer: list — grep results buffer
         _findings_buffer: list — key findings buffer
         _globals: dict — restricted globals for REPL execution
+        _restore_reconciliation: dict | None — set by restore(); what actually
+            landed in the live namespace vs what the checkpoint claimed
         progress_logger: Any | None — progress tracking service
         task_id: str — task identifier for logging
         _build_globals: Callable[[], dict] — method to rebuild globals dict
@@ -99,6 +102,19 @@ class _StateMixin:
             state_lines.extend(user_vars[:20])
             if len(user_vars) > 20:
                 state_lines.append(f"  ... and {len(user_vars) - 20} more")
+
+        # Names a restore expected to bring back but could not. The live listing
+        # above is ground truth for what EXISTS; this is ground truth for what is
+        # MISSING, so the model does not silently reference a dead name.
+        reconciliation = getattr(self, "_restore_reconciliation", None)
+        unavailable = (reconciliation or {}).get("unavailable") or {}
+        if unavailable:
+            state_lines.append("")
+            state_lines.append("## Not Restored (do not reference these — rebuild if needed)")
+            for key in sorted(unavailable)[:20]:
+                state_lines.append(f"  {key}: {unavailable[key]}")
+            if len(unavailable) > 20:
+                state_lines.append(f"  ... and {len(unavailable) - 20} more")
 
         # Include research context if sufficient nodes exist
         if hasattr(self, "_research_context") and len(self._research_context.nodes) >= 3:
@@ -303,25 +319,41 @@ class _StateMixin:
         globals_dict = getattr(self, "_globals", {})
         builtin_keys = getattr(self, "_builtin_global_keys", frozenset())
         user_globals: dict[str, Any] = {}
+        pickled_globals: dict[str, Any] = {}
         variable_lineage: dict[str, dict[str, Any]] = {}
         skipped_user_globals: list[str] = []
+        skip_reasons: dict[str, str] = {}
+
+        def _lineage(value: Any, tier: str) -> dict[str, Any]:
+            return {
+                "role": getattr(self, "role", "unknown"),
+                "saved_at_execution_count": self._execution_count,
+                "saved_at_ts": time.time(),
+                "value_type": type(value).__name__,
+                "tier": tier,
+            }
+
         for key, value in globals_dict.items():
             if key in builtin_keys or key.startswith("_"):
                 continue
             if _is_json_serializable(value):
                 user_globals[key] = value
-                variable_lineage[key] = {
-                    "role": getattr(self, "role", "unknown"),
-                    "saved_at_execution_count": self._execution_count,
-                    "saved_at_ts": time.time(),
-                    "value_type": type(value).__name__,
-                }
-            else:
+                variable_lineage[key] = _lineage(value, "json")
+                continue
+            # JSON cannot hold it. Try the hardened pickle boundary (D-a):
+            # signed, size-capped, and only loadable under an allowlist of
+            # inert data types. Anything else is reported, never silently lost.
+            try:
+                pickled_globals[key] = safe_pickle.dumps(value)
+                variable_lineage[key] = _lineage(value, "pickle")
+            except Exception as e:
                 skipped_user_globals.append(key)
+                skip_reasons[key] = str(e)[:200]
 
         if skipped_user_globals:
             logger.warning(
-                "Checkpoint skipped %d non-serializable globals: %s",
+                "Checkpoint skipped %d globals that neither JSON nor the pickle allowlist could "
+                "hold: %s",
                 len(skipped_user_globals),
                 ", ".join(skipped_user_globals[:10]),
             )
@@ -339,11 +371,13 @@ class _StateMixin:
             "task_id": self.task_id,
             "research_context": research_context_data,
             "user_globals": user_globals,
+            "pickled_globals": pickled_globals,
             "variable_lineage": variable_lineage,
             "skipped_user_globals": skipped_user_globals,
+            "skip_reasons": skip_reasons,
         }
 
-    def restore(self, checkpoint: dict[str, Any]) -> None:
+    def restore(self, checkpoint: dict[str, Any]) -> dict[str, Any]:
         """Restore REPL state from a checkpoint.
 
         Note: Non-serializable artifacts remain as marker dicts.
@@ -351,6 +385,15 @@ class _StateMixin:
 
         Args:
             checkpoint: Dict from a previous checkpoint() call.
+
+        Returns:
+            A reconciliation dict describing what ACTUALLY landed in the live
+            namespace, as opposed to what the checkpoint claimed. Also stored on
+            ``self._restore_reconciliation`` for later readers. Keys:
+                restored: list[str] — names now present in _globals
+                unavailable: dict[str, str] — name -> reason it is not present
+                claimed: int — count of user_globals the checkpoint carried
+                dropped_at_save: list[str] — skipped_user_globals from save time
 
         Raises:
             ValueError: If checkpoint format is invalid.
@@ -405,20 +448,65 @@ class _StateMixin:
         # Rebuild globals with restored artifacts
         self._globals = self._build_globals()
         builtin_keys = set(getattr(self, "_builtin_global_keys", frozenset()))
-        restored = 0
-        skipped = 0
-        for key, value in checkpoint.get("user_globals", {}).items():
+        user_globals = checkpoint.get("user_globals", {}) or {}
+        unavailable: dict[str, str] = {}
+        for key, value in user_globals.items():
             if key in builtin_keys:
-                skipped += 1
+                unavailable[key] = "name collides with an engine-owned builtin; not restored"
                 continue
-            self._globals[key] = value
-            restored += 1
-        if restored or skipped:
-            logger.info(
-                "Restored %d globals from checkpoint (%d skipped due to builtin key collisions)",
-                restored,
-                skipped,
+            try:
+                self._globals[key] = value
+            except Exception as e:  # pragma: no cover - defensive
+                unavailable[key] = f"restore failed: {type(e).__name__}: {e}"[:200]
+
+        # Values JSON could not hold, carried through the hardened pickle
+        # boundary. Every failure mode here (HMAC mismatch, non-allowlisted
+        # global, oversize, corrupt) fails CLOSED: the name is reported
+        # unavailable, never partially applied.
+        pickled = checkpoint.get("pickled_globals", {}) or {}
+        for key, envelope in pickled.items():
+            if key in builtin_keys:
+                unavailable[key] = "name collides with an engine-owned builtin; not restored"
+                continue
+            try:
+                self._globals[key] = safe_pickle.loads(envelope)
+            except Exception as e:
+                unavailable[key] = f"{type(e).__name__}: {e}"[:200]
+
+        claimed_names = list(user_globals) + [k for k in pickled if k not in user_globals]
+
+        # Reconcile against the LIVE namespace rather than trusting the payload:
+        # a name the checkpoint claimed is only "restored" if it is actually here.
+        restored_names = [k for k in claimed_names if k in self._globals and k not in unavailable]
+        for key in claimed_names:
+            if key not in restored_names and key not in unavailable:
+                unavailable[key] = "absent from the live namespace after restore"
+
+        # Variables that never made it into the checkpoint in the first place.
+        skip_reasons = checkpoint.get("skip_reasons", {}) or {}
+        for key in checkpoint.get("skipped_user_globals", []) or []:
+            unavailable.setdefault(
+                key,
+                skip_reasons.get(key, "not storable at save time; never checkpointed"),
             )
+
+        reconciliation = {
+            "restored": restored_names,
+            "unavailable": unavailable,
+            "claimed": len(claimed_names),
+            "dropped_at_save": list(checkpoint.get("skipped_user_globals", []) or []),
+        }
+        self._restore_reconciliation = reconciliation
+
+        if restored_names or unavailable:
+            logger.info(
+                "Restored %d/%d globals from checkpoint (%d unavailable: %s)",
+                len(restored_names),
+                len(claimed_names),
+                len(unavailable),
+                ", ".join(sorted(unavailable)[:10]) or "none",
+            )
+        return reconciliation
 
     def get_checkpoint_metadata(self) -> dict[str, Any]:
         """Get metadata about current state for checkpoint decision.
