@@ -19,7 +19,7 @@ import hashlib
 import json
 import logging
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -49,6 +49,7 @@ class EmbeddingConfig:
     server_url: str = DEFAULT_SERVER_URL  # Embedding server URL
     use_server: bool = True  # Try HTTP server first (40x faster)
     use_parallel: bool = True  # Use parallel embedder client (probe-first to 6 servers)
+    allow_subprocess: bool = True  # Maintenance jobs can require server-only embeddings
 
 
 class TaskEmbedder:
@@ -76,10 +77,7 @@ class TaskEmbedder:
 
     def _check_model(self) -> bool:
         """Check if embedding model and binary are available."""
-        return (
-            self.config.model_path.exists()
-            and self.config.embedding_binary.exists()
-        )
+        return self.config.model_path.exists() and self.config.embedding_binary.exists()
 
     def _check_server(self) -> bool:
         """Check if embedding server is available (lazy, cached)."""
@@ -92,6 +90,7 @@ class TaskEmbedder:
 
         try:
             import httpx
+
             with httpx.Client(timeout=2.0) as client:
                 resp = client.get(f"{self.config.server_url}/health")
                 self._server_available = resp.status_code == 200
@@ -110,6 +109,7 @@ class TaskEmbedder:
         """Get or create httpx client (lazy initialization)."""
         if self._http_client is None:
             import httpx
+
             self._http_client = httpx.Client(timeout=10.0)
         return self._http_client
 
@@ -256,10 +256,14 @@ class TaskEmbedder:
             result = subprocess.run(
                 [
                     str(self.config.embedding_binary),
-                    "-m", str(self.config.model_path),
-                    "-p", text,
-                    "-t", str(self.config.threads),
-                    "--embd-output-format", "json",
+                    "-m",
+                    str(self.config.model_path),
+                    "-p",
+                    text,
+                    "-t",
+                    str(self.config.threads),
+                    "--embd-output-format",
+                    "json",
                 ],
                 capture_output=True,
                 text=True,
@@ -382,6 +386,7 @@ class TaskEmbedder:
         """Get or create parallel embedder client (lazy initialization)."""
         if self._parallel_client is None:
             from orchestration.repl_memory.parallel_embedder import ParallelEmbedderClient
+
             self._parallel_client = ParallelEmbedderClient()
         return self._parallel_client
 
@@ -403,13 +408,11 @@ class TaskEmbedder:
                 try:
                     return self._generate_embedding_http(text)
                 except Exception as e:
-                    logger.warning(
-                        "Embedding server failed (%s), falling back to subprocess", e
-                    )
+                    logger.warning("Embedding server failed (%s), falling back to subprocess", e)
                     self._server_available = False  # Reset to retry later
 
             # Try subprocess (50-200ms)
-            if self._model_available:
+            if self.config.allow_subprocess and self._model_available:
                 try:
                     return self._generate_embedding_llama(text)
                 except Exception as e:
