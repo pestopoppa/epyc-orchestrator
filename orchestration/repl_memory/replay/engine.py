@@ -27,6 +27,7 @@ from ..q_scorer import QScorer, ScoringConfig
 from ..retriever import RetrievalConfig, TwoPhaseRetriever
 from .metrics import ReplayMetrics
 from .trajectory import Trajectory
+from orchestration.repl_memory.memory_record import build_memory_record
 
 logger = logging.getLogger(__name__)
 
@@ -284,16 +285,17 @@ class ReplayEngine:
         q_value = max(0.0, min(1.0, q_value))
 
         if embedding is not None:
-            context = {
-                "task_type": trajectory.task_type,
-                "objective": trajectory.objective,
-                "role": trajectory.routing_decision,
-            }
+            record = build_memory_record(
+                objective=trajectory.objective,
+                task_type=trajectory.task_type,
+                source="replay",
+                extra={"role": trajectory.routing_decision},
+            )
             store.store(
                 embedding=embedding,
                 action=trajectory.routing_decision,
                 action_type="routing",
-                context=context,
+                context=record.to_context(),
                 outcome=trajectory.outcome,
                 initial_q=q_value,
             )

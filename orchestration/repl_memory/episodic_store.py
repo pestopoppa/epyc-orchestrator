@@ -368,6 +368,21 @@ class EpisodicStore:
         memory_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
 
+        # Contract chokepoint. Every write site is expected to build its context
+        # through memory_record.build_memory_record(), which stamps
+        # record_version. A context arriving without it means a write site has
+        # drifted back to a hand-rolled dict — the condition that produced four
+        # incompatible record shapes and put 27,123 telemetry rows into the
+        # semantic index. Warn rather than raise so an unknown caller degrades
+        # instead of failing, but make the drift visible.
+        if isinstance(context, dict) and "record_version" not in context:
+            logger.warning(
+                "Episodic write with a non-contract context (no record_version); "
+                "action_type=%s keys=%s. Build it via memory_record.build_memory_record().",
+                action_type,
+                sorted(context.keys())[:8],
+            )
+
         if self.use_faiss and self._faiss_lock_path is not None:
             with _exclusive_file_lock(self._faiss_lock_path):
                 # Multiple API/worker processes can keep EpisodicStore instances

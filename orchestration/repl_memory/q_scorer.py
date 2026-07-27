@@ -54,6 +54,7 @@ Q_TD_MATCH_K = int(os.environ.get("ORCHESTRATOR_Q_TD_MATCH_K", "10"))
 
 from .embedder import TaskEmbedder
 from .episodic_store import EpisodicStore
+from .memory_record import build_memory_record
 from .progress_logger import EventType, ProgressEntry, ProgressLogger, ProgressReader
 from .staged_scorer import StagedQScorer
 
@@ -1181,11 +1182,20 @@ class QScorer:
                 # Initial Q-value based on first observation
                 initial_q = 0.5 + (reward * 0.5)  # Map reward to [0, 1]
 
+                # One record contract for every write site (memory_record.py):
+                # full untruncated objective + the work, telemetry excluded from
+                # the embedding text.
+                record = build_memory_record(
+                    objective=task_context.get("objective"),
+                    task_type=task_context.get("task_type"),
+                    priority=task_context.get("priority"),
+                    source="progress_log",
+                )
                 memory_id = self.store.store(
                     embedding=embedding,
                     action=action,
                     action_type="routing",
-                    context=task_context,
+                    context=record.to_context(),
                     outcome="success" if reward > 0 else "failure",
                     initial_q=initial_q,
                 )
@@ -1266,11 +1276,23 @@ class QScorer:
 
             initial_q = 0.5 + (reward * 0.5)
 
+            # Escalation memories: the "objective" is the failure reason, and the
+            # tier transition is structural metadata rather than task text, so it
+            # rides in `extra` and stays out of the embedding.
+            record = build_memory_record(
+                objective=escalation.data.get("reason"),
+                task_type="escalation",
+                source="progress_log",
+                extra={
+                    "from_tier": escalation.data.get("from_tier"),
+                    "to_tier": escalation.data.get("to_tier"),
+                },
+            )
             memory_id = self.store.store(
                 embedding=embedding,
                 action=action,
                 action_type="escalation",
-                context=failure_context,
+                context=record.to_context(),
                 outcome="success" if reward > 0 else "failure",
                 initial_q=initial_q,
             )
@@ -1323,7 +1345,9 @@ class QScorer:
         else:
             task_ir = {
                 "task_type": context.get("task_type", "chat"),
-                "objective": task_description[:200],
+                # Untruncated: the 200-char cap destroyed text at write time.
+                # memory_record.embedding_text() bounds the EMBEDDER input only.
+                "objective": task_description,
             }
             emb_array = self.embedder.embed_task_ir(task_ir)
 
@@ -1358,14 +1382,28 @@ class QScorer:
         # Create new memory if no similar one found
         if not updated:
             initial_q = 0.5 + (reward * 0.5)
-            context["task_description"] = task_description
-            context["source"] = "external"
+            # THIS is the site that put telemetry into the semantic index.
+            # `context` arrives carrying elapsed_seconds / tokens_generated /
+            # predicted_tps / question_id and was stored verbatim AND used as
+            # embedding input, which is how 27,123 of 54,960 rows came to be
+            # number-blobs with no task text. build_memory_record routes those
+            # keys into `metrics`, where they are stored but never embedded.
+            record = build_memory_record(
+                objective=task_description,
+                task_type=context.get("task_type", "chat"),
+                source="external",
+                metrics={
+                    k: v
+                    for k, v in context.items()
+                    if k not in ("task_type", "objective", "priority", "task_description", "source")
+                },
+            )
 
             memory_id = self.store.store(
                 embedding=emb_array,
                 action=action,
                 action_type="routing",
-                context=context,
+                context=record.to_context(),
                 outcome="success" if reward > 0 else "failure",
                 initial_q=initial_q,
             )

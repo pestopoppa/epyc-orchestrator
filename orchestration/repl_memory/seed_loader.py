@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from orchestration.repl_memory.embedder import TaskEmbedder
 from orchestration.repl_memory.episodic_store import EpisodicStore
+from orchestration.repl_memory.memory_record import record_from_legacy_context
 
 logger = logging.getLogger(__name__)
 
@@ -469,11 +470,17 @@ def seed_memory(force: bool = False, init: bool = False) -> dict:
             embedding = embedder.embed_text(task)
 
             # Store in episodic memory
+            # Seeds go through the same record contract as live writes, so a
+            # reseeded store is shaped identically to an organically grown one.
+            record = record_from_legacy_context(context)
+            record.source = "seed"
+            if not record.objective:
+                record.objective = task
             store.store(
                 embedding=embedding,
                 action=action,
                 action_type=action_type,
-                context=context,
+                context=record.to_context(),
                 outcome=seed.get("outcome", "success"),
                 initial_q=seed["initial_q"],
             )

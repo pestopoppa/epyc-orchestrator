@@ -6,9 +6,13 @@ A 2026-07-27 audit of the episodic store found that its six write sites had each
 grown their own record shape and their own embedding text, with four measurable
 consequences:
 
-1. **Half the store was not memory.** 27,123 of 54,960 "routing" rows carried
-   ``{question_id, elapsed_seconds, tokens_generated, predicted_tps, ...}`` and
-   NO task text — performance telemetry embedded as text into a semantic index.
+1. **Two incompatible key names for the same field.** 30,571 rows put the task
+   text in ``objective``; 27,562 put it in ``task_description`` alongside
+   telemetry (``question_id``, ``elapsed_seconds``, ``tokens_generated``, ...).
+   Both are real task memories — an earlier reading of this split as "half the
+   store is telemetry with no task text" was WRONG and is corrected here — but a
+   consumer that reads only one key silently sees half the store, which is
+   exactly how that misreading happened. The contract has one field name.
 2. **Objectives were truncated to 200 chars at write time**, so the text was
    *gone*, not merely unindexed. 12.6% of rows sat exactly at the cap, and only
    2,639 distinct objectives existed across 54,960 rows (96.9% collision).
@@ -40,7 +44,7 @@ THE ONE INVARIANT
                          Never fed to the embedder.
 
 Telemetry rides in ``metrics`` and is excluded from the embedding text by
-construction, which is what keeps number-blobs out of the semantic index.
+construction, so performance fields can never influence similarity search.
 """
 from __future__ import annotations
 
@@ -127,9 +131,11 @@ class MemoryRecord:
     def is_task_memory(self) -> bool:
         """True when this row belongs in the semantic index at all.
 
-        A record with no objective text is telemetry. Embedding it produces a
-        vector of a number-blob, which is how half the store came to be
-        unsearchable noise.
+        A record with no task text under EITHER historical key is pure telemetry;
+        embedding it would produce a vector of a number-blob. Measured on the
+        2026-07-27 store this is 0 rows — both writer paths do carry task text,
+        just under different key names — so this is a guard against future drift
+        rather than a cleanup of an existing population.
         """
         return bool((self.objective or "").strip())
 
@@ -171,9 +177,9 @@ def record_from_legacy_context(context: dict[str, Any]) -> MemoryRecord:
       path B (external):     ``{task_description, source, question_id,
                                 elapsed_seconds, tokens_generated, ...}``
 
-    Path B's non-task keys are routed into ``metrics`` rather than being
-    embedded, which is the whole point — it is what stops telemetry entering the
-    semantic index.
+    Both carry real task text; only the key name differs. Path B's remaining
+    non-task keys are routed into ``metrics``, so they are stored but can never
+    reach the embedding.
     """
     ctx = dict(context or {})
     objective = ctx.pop("objective", None) or ctx.pop("task_description", None)
