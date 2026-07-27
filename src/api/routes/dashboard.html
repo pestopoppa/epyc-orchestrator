@@ -1027,11 +1027,19 @@ body.insight-fullscreen-open { overflow: hidden; }
       <details class="section-accordion" style="margin-top:14px" open>
         <summary>GEPA + Pareto frontier <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px;font-size:10px" id="pareto-summary"></span></summary>
         <div id="pareto-container">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <!-- W3b-C dual-report banner: dominance stays legacy; task_rate is visible telemetry. -->
+          <div id="pareto-dual-report-banner" style="color:var(--dim);font-size:10px;margin-bottom:6px">dominance = legacy t/s · task_rate telemetry live (W3b-C, flip armed on divergence)</div>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
             <div id="pareto-scope-toggle" style="display:inline-flex;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden">
               <button type="button" class="pareto-scope-btn" data-scope="all_eras" onclick="setParetoScope('all_eras')">all eras</button>
               <button type="button" class="pareto-scope-btn" data-scope="current" onclick="setParetoScope('current')">current era</button>
             </div>
+            <div id="pareto-speed-axis-toggle" style="display:inline-flex;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden">
+              <button type="button" class="pareto-scope-btn" data-axis="legacy" onclick="setParetoSpeedAxis('legacy')">median request t/s (end-to-end)</button>
+              <button type="button" class="pareto-scope-btn" data-axis="task_rate" onclick="setParetoSpeedAxis('task_rate')">task_rate (quality-units/h)</button>
+            </div>
+            <span id="pareto-divergence-badge" style="display:none;background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid #f59e0b;border-radius:6px;padding:1px 6px;font-size:10px"></span>
+            <span id="pareto-task-rate-note" style="color:var(--dim);font-size:10px"></span>
             <span id="pareto-era-note" style="color:var(--dim);font-size:10px"></span>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
@@ -4232,9 +4240,31 @@ function syncParetoScopeButtons() {
         b.classList.toggle('active', b.dataset.scope === paretoScope));
 }
 
+// W3b-C dual-report speed-axis toggle: 'legacy' plots objectives[1]
+// (median request t/s, end-to-end — the LIVE dominance axis); 'task_rate'
+// re-plots y from per-entry task_rate_qph (quality-units/h) telemetry.
+// Display-only: frontier membership/lines always reflect legacy dominance.
+let paretoSpeedAxis = (() => {
+    try { return localStorage.getItem('paretoSpeedAxis') || 'legacy'; }
+    catch (e) { return 'legacy'; }
+})();
+let lastParetoData = null;   // cache so the axis toggle re-plots without refetch
+function setParetoSpeedAxis(a) {
+    paretoSpeedAxis = a === 'task_rate' ? 'task_rate' : 'legacy';
+    try { localStorage.setItem('paretoSpeedAxis', paretoSpeedAxis); } catch (e) {}
+    syncParetoSpeedAxisButtons();
+    if (lastParetoData) renderParetoScatter(lastParetoData);
+    else updatePareto();
+}
+function syncParetoSpeedAxisButtons() {
+    document.querySelectorAll('#pareto-speed-axis-toggle .pareto-scope-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.axis === paretoSpeedAxis));
+}
+
 async function updatePareto() {
     try {
         syncParetoScopeButtons();
+        syncParetoSpeedAxisButtons();
         // All-era view lifts the dominated-point cap: the whole point is seeing
         // the full historical cloud, and the journal is bounded (~1k rows).
         const url = '/dashboard/api/pareto?scope=' + encodeURIComponent(paretoScope)
@@ -4304,13 +4334,32 @@ async function updatePareto() {
                 sumEl.textContent = '(no autopilot_state.json yet)';
             }
         }
+        // W3b-C divergence tripwire badge (display-only): amber when >=2 legacy
+        // frontier points fall off under the task-rate policy — the pre-registered
+        // criterion that puts the W3 live-vector flip decision in front of the operator.
+        const divEl = document.getElementById('pareto-divergence-badge');
+        if (divEl) {
+            const div = d.task_rate_divergence || null;
+            const dropped = div ? Number(div.dropped_legacy_count) : NaN;
+            const met = !!(div && (div.divergence_criterion_met === true
+                || (Number.isFinite(dropped) && dropped >= 2)));
+            if (met) {
+                divEl.style.display = 'inline-block';
+                divEl.textContent = `⚠ divergence criterion met — W3 flip decision live (${dropped} legacy frontier points drop under task-rate)`;
+            } else {
+                divEl.style.display = 'none';
+                divEl.textContent = '';
+            }
+        }
         if (!d.available) {
             const qs = document.getElementById('pareto-plot-qs');
             const hv = document.getElementById('pareto-plot-hv');
             if (qs) qs.innerHTML = '<text x="200" y="140" text-anchor="middle" fill="#64748b" font-size="11">Pareto archive empty</text>';
             if (hv) hv.innerHTML = '';
+            lastParetoData = null;
             return;
         }
+        lastParetoData = d;
         renderParetoScatter(d);
         renderHypervolumeTimeline(d);
         setPanelFreshness('pareto', d._freshness || {
@@ -4460,15 +4509,19 @@ function paretoFrontierOf(points) {
 // projection can collapse to a SINGLE point that cannot form a line — this is
 // the visible quality×speed trade-off edge and is drawable from >=2 points, so
 // every tier with enough data shows an actual frontier line over its cloud.
-function paretoEnvelope2D(points) {
+function paretoEnvelope2D(points, yOf) {
+    // Optional yOf accessor (W3b-C speed-axis toggle): defaults to the legacy
+    // speed objective. Points whose y is null/non-finite are excluded.
+    const y = yOf || (p => p.objectives[1]);
     const pts = (points || []).filter(
         p => p && Array.isArray(p.objectives) && p.objectives.length >= 2
+            && Number.isFinite(Number(y(p)))
     );
     const nd = pts.filter(p => !pts.some(q =>
         q !== p
         && q.objectives[0] >= p.objectives[0]
-        && q.objectives[1] >= p.objectives[1]
-        && (q.objectives[0] > p.objectives[0] || q.objectives[1] > p.objectives[1])
+        && y(q) >= y(p)
+        && (q.objectives[0] > p.objectives[0] || y(q) > y(p))
     ));
     return nd.slice().sort((a, b) => a.objectives[0] - b.objectives[0]);
 }
@@ -4494,6 +4547,25 @@ function renderParetoScatter(d) {
     const eraTip = p => (eraMode && p.era ? ` · ${p.era}` : '')
         + (p.speed_deinflated ? ' · sp×0.5' : '')
         + (isHistorical(p) ? ' · historical prior (earlier instrument era)' : '');
+    // W3b-C speed-axis toggle: y = legacy median request t/s (objectives[1],
+    // the live dominance axis) or per-entry task_rate_qph telemetry. Points
+    // lacking task_rate return null and are SKIPPED in task-rate mode (no y
+    // coordinate exists for them) with a count note beside the toggle.
+    const axisTaskRate = paretoSpeedAxis === 'task_rate';
+    const speedOf = p => {
+        if (!axisTaskRate) return (p && Array.isArray(p.objectives)) ? p.objectives[1] : null;
+        const v = Number(p && p.task_rate_qph);
+        return Number.isFinite(v) ? v : null;
+    };
+    const hasY = p => Number.isFinite(Number(speedOf(p)));
+    // Dual-report tooltip: BOTH speed metrics + tokens/solved on every point,
+    // whichever axis is selected.
+    const taskRateTip = p => {
+        const tr = Number(p.task_rate_qph), gp = Number(p.goodput_qph), tok = Number(p.tokens_per_solved);
+        return ` · task_rate=${Number.isFinite(tr) ? tr.toFixed(1) + ' q/h' : 'n/a'}`
+            + ` · goodput=${Number.isFinite(gp) ? gp.toFixed(1) + ' q/h' : 'n/a'}`
+            + ` · tok/solved=${Number.isFinite(tok) ? tok.toFixed(0) : 'n/a'}`;
+    };
     const suiteTip = p => {
         const rs = p.real_suite_v1;
         if (!rs || rs.quality == null) return '';
@@ -4509,16 +4581,29 @@ function renderParetoScatter(d) {
     const plotH = VB.h - PAD.t - PAD.b;
 
     const tierFront = Object.values(d.frontiers_by_tier || {}).flat();
-    const allPts = (tierFront.length ? tierFront : (d.frontier || []))
+    const allPtsRaw = (tierFront.length ? tierFront : (d.frontier || []))
         .concat(d.dominated || [])
         .concat(d.t0_audit || []);
+    // Task-rate mode: points lacking task_rate carry no y coordinate — skip
+    // them and surface how many were skipped (they are NOT hidden silently).
+    const allPts = axisTaskRate ? allPtsRaw.filter(hasY) : allPtsRaw;
+    const noteEl2 = document.getElementById('pareto-task-rate-note');
+    if (noteEl2) {
+        const skipped = allPtsRaw.length - allPts.length;
+        noteEl2.textContent = axisTaskRate && skipped > 0
+            ? `${skipped} of ${allPtsRaw.length} points lack task_rate (skipped)`
+            : '';
+    }
     if (!allPts.length) {
-        svg.innerHTML = '<text x="200" y="140" text-anchor="middle" fill="#64748b" font-size="11">no trial data yet</text>';
+        const msg = axisTaskRate && allPtsRaw.length
+            ? 'no points carry task_rate telemetry yet'
+            : 'no trial data yet';
+        svg.innerHTML = `<text x="200" y="140" text-anchor="middle" fill="#64748b" font-size="11">${msg}</text>`;
         return;
     }
     // Find data ranges with a small margin.
     const xs = allPts.map(p => p.objectives[0]);
-    const ys = allPts.map(p => p.objectives[1]);
+    const ys = allPts.map(p => speedOf(p));
     const xMin = Math.min(...xs), xMax = Math.max(...xs);
     const yMin = Math.min(...ys), yMax = Math.max(...ys);
     const xRange = (xMax - xMin) || 1;
@@ -4553,7 +4638,12 @@ function renderParetoScatter(d) {
     }
     // Axis titles — own lane below/left of the tick numbers, never fused.
     parts.push(`<text class="axis-label" x="${PAD.l + plotW / 2}" y="${VB.h - 4}" text-anchor="middle" font-size="10" fill="#94a3b8">quality →</text>`);
-    parts.push(`<text class="axis-label" x="9" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 9 ${PAD.t + plotH / 2})">speed (t/s) →</text>`);
+    // Axis title per E8-PANELS-a relabel: the legacy axis is explicitly the
+    // end-to-end median request rate (the live dominance axis under W3b-C).
+    const yAxisTitle = axisTaskRate
+        ? 'task_rate (quality-units/h) →'
+        : 'median request t/s (end-to-end) →';
+    parts.push(`<text class="axis-label" x="9" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 9 ${PAD.t + plotH / 2})">${yAxisTitle}</text>`);
 
     // Era clouds FIRST so every mark paints on top of them: per era, the convex
     // hull of its frontier-tier points (T0 audit excluded — it keeps its own
@@ -4562,13 +4652,13 @@ function renderParetoScatter(d) {
     if (eraMode) {
         const byEra = {};
         (tierFront.length ? tierFront : (d.frontier || [])).concat(d.dominated || []).forEach(p => {
-            if (p.era_index == null) return;
+            if (p.era_index == null || !hasY(p)) return;
             (byEra[p.era_index] = byEra[p.era_index] || []).push(p);
         });
         Object.keys(byEra).map(Number).sort((a, b) => a - b).forEach(k => {
             const color = paretoEraColor(k);
             const eraId = (eras[k] && eras[k].id) || `era ${k}`;
-            const px = byEra[k].map(p => [sx(p.objectives[0]), sy(p.objectives[1])]);
+            const px = byEra[k].map(p => [sx(p.objectives[0]), sy(speedOf(p))]);
             const hull = convexHull2D(px);
             if (hull.length < 3) {
                 // 1-2 points can't enclose a region — a soft halo marks the era spot.
@@ -4585,28 +4675,29 @@ function renderParetoScatter(d) {
     // then the tier frontiers (so frontiers paint on top).
     // T0 is audit-only: its frontier is drawn dashed for shape visibility but it
     // never enters the real archive/hypervolume. Frontier audit points are brighter.
-    const t0pts = d.t0_audit || [];
+    const t0pts = (d.t0_audit || []).filter(p => !axisTaskRate || hasY(p));
     const t0front = paretoFrontierOf(t0pts);
     const t0frontSet = new Set(t0front);
     const t0sorted = t0front.slice().sort((a, b) => a.objectives[0] - b.objectives[0]);
     if (t0sorted.length > 1) {
         const path = t0sorted.map((p, i) =>
-            `${i === 0 ? 'M' : 'L'} ${sx(p.objectives[0]).toFixed(1)} ${sy(p.objectives[1]).toFixed(1)}`
+            `${i === 0 ? 'M' : 'L'} ${sx(p.objectives[0]).toFixed(1)} ${sy(speedOf(p)).toFixed(1)}`
         ).join(' ');
         parts.push(`<path class="frontier-line" style="stroke:${PARETO_AUDIT_FILL};stroke-dasharray:3 2;opacity:0.75" d="${path}"/>`);
     }
     t0pts.forEach(p => {
-        const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
+        const x = sx(p.objectives[0]), y = sy(speedOf(p));
         const onFront = t0frontSet.has(p);
-        const tip = `T${p.eval_tier ?? 0} audit${onFront ? ' · frontier' : ''} · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${suiteTip(p)}${eraTip(p)}`;
+        const tip = `T${p.eval_tier ?? 0} audit${onFront ? ' · frontier' : ''} · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${taskRateTip(p)}${suiteTip(p)}${eraTip(p)}`;
         parts.push(paretoMarker(p.eval_tier ?? 0, x, y, onFront ? 3.5 : 3, `fill="${PARETO_AUDIT_FILL}" opacity="${onFront ? 0.85 : 0.4}"`, tip));
     });
     // Dominated points: colored by their own tier (dimmed via opacity), shaped
     // by tier. Era mode: colored by ERA instead, alpha ramped oldest→newest.
     (d.dominated || []).forEach(p => {
-        const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
+        if (axisTaskRate && !hasY(p)) return;
+        const x = sx(p.objectives[0]), y = sy(speedOf(p));
         const tier = p.eval_tier ?? d.canonical_tier ?? 1;
-        const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${suiteTip(p)}${eraTip(p)}`;
+        const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${taskRateTip(p)}${suiteTip(p)}${eraTip(p)}`;
         const fill = eraMode ? eraFillOf(p) : paretoTierFill(tier);
         const op = eraMode
             ? histFade(p, Math.max(0.22, 0.5 * eraAlphaOf(p))).toFixed(2)
@@ -4633,19 +4724,23 @@ function renderParetoScatter(d) {
         // carry the region shape, and a cross-era envelope would imply a
         // decision-grade cross-era frontier.
         if (!eraMode) {
-            const envelope = paretoEnvelope2D(ptsByTier[String(tier)] || front || []);
+            // Envelope follows the selected y-axis (null-y points excluded by
+            // paretoEnvelope2D). In task-rate mode it is a telemetry trade-off
+            // edge, not a dominance frontier — dominance stays legacy (W3b-C).
+            const envelope = paretoEnvelope2D(ptsByTier[String(tier)] || front || [], speedOf);
             if (envelope.length > 1) {
                 const path = envelope.map((p, i) =>
-                    `${i === 0 ? 'M' : 'L'} ${sx(p.objectives[0]).toFixed(1)} ${sy(p.objectives[1]).toFixed(1)}`
+                    `${i === 0 ? 'M' : 'L'} ${sx(p.objectives[0]).toFixed(1)} ${sy(speedOf(p)).toFixed(1)}`
                 ).join(' ');
                 parts.push(`<path class="frontier-line" style="stroke:${color}" d="${path}"/>`);
             }
         }
         const sorted = (front || []).slice().sort((a, b) => a.objectives[0] - b.objectives[0]);
         sorted.forEach(p => {
-            const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
+            if (axisTaskRate && !hasY(p)) return;
+            const x = sx(p.objectives[0]), y = sy(speedOf(p));
             const prod = p.is_production_best;
-            const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${suiteTip(p)}${eraTip(p)}${prod ? ' · PRODUCTION' : ''}`;
+            const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${taskRateTip(p)}${suiteTip(p)}${eraTip(p)}${prod ? ' · PRODUCTION' : ''}`;
             const ring = prod ? ' stroke="var(--good)" stroke-width="1.5"' : '';
             const fill = eraMode ? eraFillOf(p) : color;
             const op = eraMode ? ` opacity="${histFade(p, eraAlphaOf(p)).toFixed(2)}"` : '';

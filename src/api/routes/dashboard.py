@@ -29,7 +29,7 @@ import sqlite3
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import httpx
 import yaml
@@ -110,7 +110,23 @@ from src.autopilot_core.pareto_math import (
     dominates as core_pareto_dominates,
     hypervolume as _pareto_hypervolume_impl,
 )
-from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
+from src.autopilot_core.tier_specs import (
+    DEFAULT_FRONTIER_TIER,
+    LEGACY_OBJECTIVE_POLICY,
+    TASK_RATE_OBJECTIVE_POLICY,
+    goodput_qph_from_row,
+    task_rate_qph_from_row,
+)
+
+# W3b-C dual-report interim (2026-07-27, objective-task-rate-goodput.md): the
+# replay tool owns the canonical task-rate archive/frontier pass and the
+# tokens-per-solved derivation — REUSE them rather than reimplementing the math
+# here, so the panel's telemetry can never drift from the replay reports.
+from scripts.analysis.task_rate_goodput_replay import (
+    _archive as _task_rate_replay_archive,
+    _frontier_for as _task_rate_replay_frontier,
+    _tokens_per_solved_task as _task_rate_tokens_per_solved,
+)
 from scripts.autopilot.phase_status import (
     build_phase_health_report,
 )
@@ -2392,6 +2408,159 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ── W3b-C dual-report task-rate telemetry (display-only) ────────────────────
+# Operator decision W3b-C (2026-07-27, objective-task-rate-goodput.md): legacy
+# `median_request_tps` REMAINS the live dominance vector; task_rate/goodput
+# become VISIBLE telemetry on the Pareto panel immediately, with the live-vector
+# flip armed on first observed divergence. Everything below is display-only —
+# it never feeds the archive, safety gate, or any keep/revert decision.
+
+_TASK_RATE_NULL_FIELDS: dict[str, Any] = {
+    "task_rate_qph": None,
+    "goodput_qph": None,
+    "tokens_per_solved": None,
+    "offered_load": None,
+}
+
+
+def _offered_load_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Offered-load descriptor for one journal row, or None when not recorded.
+
+    W5 future-proofing (objective-task-rate-goodput.md): the next instrument era
+    plans multi-profile evals (sparse-1 / steady-3 / burst-N offered load), and
+    `task_rate` is only meaningful AT a given offered load — the same config can
+    win closed-loop concurrency-3 while losing sparse single-request traffic.
+    Shipping the descriptor per entry now means historical points remain
+    attributable to their operating point once profiles diverge, instead of
+    silently mixing task_rate numbers measured under different arrival patterns.
+    """
+    eval_details = row.get("eval_details")
+    if not isinstance(eval_details, dict):
+        return None
+    details = eval_details.get("details")
+    if not isinstance(details, dict):
+        details = {}
+    out: dict[str, Any] = {}
+    concurrency = eval_details.get("eval_concurrency", details.get("eval_concurrency"))
+    try:
+        if concurrency is not None:
+            out["eval_concurrency"] = int(concurrency)
+    except (TypeError, ValueError):
+        pass
+    profile = details.get("test_profile")
+    if isinstance(profile, str) and profile:
+        out["profile"] = profile
+    return out or None
+
+
+def _task_rate_fields_from_row(row: dict[str, Any] | None) -> dict[str, Any]:
+    """Canonical task-rate telemetry fields for one folded journal row.
+
+    Null-safe: rows lacking the wall/n inputs (the canonical helpers return 0.0
+    for those) ship explicit ``None`` so the client renders them as
+    "lacks task_rate" instead of plotting a fake 0 q/h point.
+    """
+    if not isinstance(row, dict):
+        return dict(_TASK_RATE_NULL_FIELDS)
+    try:
+        task_rate = task_rate_qph_from_row(row)
+    except Exception:
+        return dict(_TASK_RATE_NULL_FIELDS)
+    has_rate = task_rate > 0.0
+    return {
+        "task_rate_qph": round(task_rate, 2) if has_rate else None,
+        "goodput_qph": round(goodput_qph_from_row(row), 2) if has_rate else None,
+        "tokens_per_solved": _task_rate_tokens_per_solved(row),
+        "offered_load": _offered_load_from_row(row),
+    }
+
+
+def _attach_task_rate_telemetry(
+    entry_lists: Iterable[list[dict[str, Any]]],
+    rows_by_tid: dict[int, dict[str, Any]],
+) -> None:
+    """Stamp shaped Pareto entries with W3b-C task-rate telemetry, in place.
+
+    Shaped journal-reconstruction entries carry only objectives + identity, so
+    the rate fields are re-joined from the SAME folded journal rows the panel
+    already reconstructs from, keyed by trial_id (exactly how the replay tool
+    joins its report tables).
+    """
+    for entries in entry_lists:
+        for entry in entries:
+            try:
+                tid = int(entry.get("trial_id"))
+            except (TypeError, ValueError):
+                tid = None
+            entry.update(_task_rate_fields_from_row(rows_by_tid.get(tid) if tid is not None else None))
+
+
+def _task_rate_divergence_summary(
+    rows: list[dict[str, Any]] | None,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Cheap server-side divergence tripwire between the two objective policies.
+
+    Reuses the replay tool's archive pass to rebuild the current-era canonical
+    -tier frontier under BOTH policies and reports which legacy frontier trials
+    fall off under task-rate. `dropped_legacy_count >= 2` is the pre-registered
+    W3 divergence criterion (amber badge client-side; the flip itself stays an
+    operator decision). Display-only — never gates anything.
+    """
+    out: dict[str, Any] = {
+        "legacy_policy": LEGACY_OBJECTIVE_POLICY,
+        "task_rate_policy": TASK_RATE_OBJECTIVE_POLICY,
+        "canonical_tier": DEFAULT_FRONTIER_TIER,
+        "legacy_frontier_trial_ids": [],
+        "task_rate_frontier_trial_ids": [],
+        "dropped_legacy_count": 0,
+        "divergence_criterion_met": False,
+        "error": None,
+    }
+    if not rows:
+        out["error"] = "no journal rows available"
+        return out
+    try:
+        legacy = _task_rate_replay_archive(
+            rows,
+            state,
+            objective_policy=LEGACY_OBJECTIVE_POLICY,
+            current_run_only=True,
+        )
+        task_rate = _task_rate_replay_archive(
+            rows,
+            state,
+            objective_policy=TASK_RATE_OBJECTIVE_POLICY,
+            current_run_only=True,
+        )
+    except (Exception, SystemExit) as exc:  # SystemExit: replay raises on empty archive
+        out["error"] = f"divergence replay failed: {exc}"
+        return out
+
+    def _frontier_ids(archive: dict[str, Any]) -> list[int]:
+        ids: set[int] = set()
+        for entry in _task_rate_replay_frontier(archive):
+            try:
+                ids.add(int(entry.get("trial_id")))
+            except (TypeError, ValueError):
+                continue
+        return sorted(ids)
+
+    legacy_ids = _frontier_ids(legacy)
+    task_rate_ids = _frontier_ids(task_rate)
+    dropped = sorted(set(legacy_ids) - set(task_rate_ids))
+    out.update(
+        {
+            "legacy_frontier_trial_ids": legacy_ids,
+            "task_rate_frontier_trial_ids": task_rate_ids,
+            "dropped_legacy_trial_ids": dropped,
+            "dropped_legacy_count": len(dropped),
+            "divergence_criterion_met": len(dropped) >= 2,
+        }
+    )
+    return out
+
+
 # ── Instrument-era display regions (all-era Pareto view) ────────────────────
 # The append-only era registry (orchestration/instrument_eras.yaml, human-owned)
 # is the source of truth for metric-comparability boundaries. The all-era Pareto
@@ -4264,6 +4433,27 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             except (TypeError, ValueError):
                 continue
 
+    # W3b-C dual-report telemetry: join task_rate/goodput/tokens-per-solved (+
+    # offered_load) back onto every shipped point from the SAME folded journal
+    # rows this panel already reconstructs from. Display-only; dominance and
+    # frontier membership above remain purely legacy-policy.
+    rows_by_tid: dict[int, dict[str, Any]] = {}
+    for row in _effective_journal_trial_rows(journal_rows or []):
+        try:
+            rows_by_tid[int(row.get("trial_id"))] = row
+        except (TypeError, ValueError):
+            continue
+    _attach_task_rate_telemetry(
+        (
+            frontier,
+            dominated_shaped,
+            t0_audit_shaped,
+            *frontiers_by_tier.values(),
+        ),
+        rows_by_tid,
+    )
+    task_rate_divergence = _task_rate_divergence_summary(journal_rows, data)
+
     # All-era view: stamp every shipped point with its era region, and report
     # per-region trial ranges so the client can shade era bands on the timeline.
     eras_payload: list[dict[str, Any]] | None = None
@@ -4332,6 +4522,8 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
                     "state_error": state_error,
                     "using_legacy_state_archive": source == "state_archive",
                 },
+                # W3b-C dual-report tripwire (display-only; dominance unchanged).
+                "task_rate_divergence": task_rate_divergence,
                 "state_trial_counter": state_trial_counter,
                 "journal_max_trial_id": archive.get("journal_max_trial_id")
                 if isinstance(archive, dict)
