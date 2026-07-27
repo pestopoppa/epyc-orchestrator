@@ -542,6 +542,38 @@ def test_duplicate_target_judge_trace_is_rejected_by_runner_and_validator(
         )
 
 
+def test_validator_derives_scorer_tail_only_from_recovered_judge_history() -> None:
+    validator = _load_validator("e8_v5_validator_scorer_derivation_test")
+    recovered = {
+        "schema": "epyc.e8_quality_llm_judge_trace.v2",
+        "attempts": [
+            {"error": {"type": "ScoringUnavailableError"}},
+            {"error": None},
+        ],
+        "fixed_vector_row": {
+            "tier": 1,
+            "repetition": 2,
+            "ordinal": 0,
+            "qid": "q0",
+        },
+    }
+    assert validator.derived_scorer_targets(
+        pristine_trace_lines=[(json.dumps(recovered) + "\n").encode()],
+        scoring_questions=[{"scoring_method": "llm_judge"}],
+        expected_qids=["q0"],
+        tier=1,
+        repetition=2,
+    ) == {0: "q0"}
+    with pytest.raises(ValueError, match="recovered judge retry"):
+        validator.derived_scorer_targets(
+            pristine_trace_lines=[(json.dumps(recovered) + "\n").encode()],
+            scoring_questions=[{"scoring_method": "exact_match"}],
+            expected_qids=["q0"],
+            tier=1,
+            repetition=2,
+        )
+
+
 def test_scorer_tail_replaces_only_target_sidecar_line_and_preserves_batch_identity(
     tmp_path: Path,
 ) -> None:
@@ -702,6 +734,10 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                     "row_type": "question_result",
                     "ordinal": ordinal,
                     "answer": "a",
+                    "complete": False,
+                    "ended_at_s": 3.25,
+                    "elapsed_s": 0.25,
+                    "started_at_s": 3.0,
                     "result": {
                         "qid": row["qid"],
                         "question_id": (
@@ -763,6 +799,10 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                         "row_type": "question_result",
                         "ordinal": 0,
                         "answer": "a",
+                        "complete": False,
+                        "ended_at_s": 3.25,
+                        "elapsed_s": 0.25,
+                        "started_at_s": 3.0,
                         "result": {
                             "qid": questions[0]["qid"],
                             "question_id": "unknown",
@@ -1160,6 +1200,61 @@ def test_validator_rejects_resealed_incoherent_sidecar(tmp_path: Path) -> None:
     report_path.write_text(json.dumps(report) + "\n")
     _reseal_candidate(evidence, validator)
     with pytest.raises(ValueError, match="not coherent"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_forged_scorer_allowlist_and_question_identity(
+    tmp_path: Path,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_forged_scorer_test")
+    sidecar_path = evidence.parent / "eval_sidecars/question_results.e8-t1-r2.jsonl"
+    sidecar_rows = runner.V4.load_jsonl(sidecar_path)
+    sidecar_rows[1]["result"]["question_id"] = "forged-source-id"
+    _jsonl(sidecar_path, sidecar_rows)
+    report_path = evidence.parent / "runner_report.json"
+    report = json.loads(report_path.read_text())
+    detail = report["observations"]["1"][1]
+    detail["scorer_tail_replay"] = [
+        {"ordinal": 0, "qid": "t1-0", "outcome": "recovered"}
+    ]
+    detail["scorer_sidecar_replacement_ordinals"] = [0]
+    detail["sidecar_sha256"] = validator.sha256_path(sidecar_path)
+    report_path.write_text(json.dumps(report) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="not derived from pristine traces"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_extra_generation_target_row_mutation(
+    tmp_path: Path,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_generation_row_test")
+    sidecar_path = evidence.parent / "eval_sidecars/question_results.e8-t1-r1.jsonl"
+    sidecar_rows = runner.V4.load_jsonl(sidecar_path)
+    sidecar_rows[1]["unexpected_mutation"] = "accepted-before-exact-reconstruction"
+    _jsonl(sidecar_path, sidecar_rows)
+    attempt_path = evidence.parent / "generation_tail_attempts.T1.r1.jsonl"
+    attempts = runner.V4.load_jsonl(attempt_path)
+    attempts[0]["merged_sidecar_sha256"] = runner.canonical_hash(sidecar_rows[1])
+    _jsonl(attempt_path, attempts)
+    report_path = evidence.parent / "runner_report.json"
+    report = json.loads(report_path.read_text())
+    detail = report["observations"]["1"][0]
+    detail["sidecar_sha256"] = validator.sha256_path(sidecar_path)
+    detail["generation_tail"]["attempt_sha256"] = validator.sha256_path(attempt_path)
+    report_path.write_text(json.dumps(report) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="not the exact reconstruction"):
         validator.validate(
             evidence,
             expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
