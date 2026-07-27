@@ -2670,6 +2670,8 @@ class EvalTower:
             eval_batch_id = str(q.get("_eval_batch_id") or "").strip()
             if eval_batch_id:
                 call_kwargs["batch_id"] = eval_batch_id
+            if q.get("allow_delegation") is not None:
+                call_kwargs["allow_delegation"] = q["allow_delegation"]
             if "tools" in q:
                 call_kwargs["tools"] = q.get("tools")
             if "tool_choice" in q:

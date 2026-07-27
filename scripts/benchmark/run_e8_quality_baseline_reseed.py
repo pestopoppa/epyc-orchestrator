@@ -59,17 +59,70 @@ FROZEN_V8_LLAMA_VERSION = "10107"
 FROZEN_V8_LLAMA_TREE = Path("/mnt/raid0/llm/llama.cpp")
 FROZEN_V8_LLAMA_BRANCH = "production-consolidated-v8"
 FROZEN_V8_LLAMA_HEAD = "67a433bf45a8a091d83b4ea0b32ff0735fd51800"
-PROTOCOL_ID = "e8_quality_full_pool_tier_baseline.v2"
+PROTOCOL_ID = "e8_quality_full_pool_tier_baseline.v4"
 INSTRUMENT = "dedicated_full_pool_tier_baseline"
 REPETITIONS = 3
 CONCURRENCY = 3
 SCORING_CONCURRENCY = 3
-PROTOCOL_RECEIPT = ROOT / "artifacts/operator/ratify_e8_quality_baseline_protocol_20260726.json"
-PROTOCOL_DECISION = "RATIFY-E8-QUALITY-BASELINE-PROTOCOL"
+# The client budget covers the admitted queue wait as well as generation.  The
+# orchestrator can hold a request for 90s before dispatch, so the former 120s
+# budget could expire before a 2,048-token frontdoor completion began.
+E8_EVAL_REQUEST_TIMEOUT_S = 300
+E8_CONTEXT_COVERAGE_SCHEMA = "epyc.e8_quality_context_coverage.v2"
+E8_TEMPLATE_SENTINEL = "E8 context-template identity sentinel."
+CONTEXT_COVERAGE_CONTRACT = {
+    "schema": E8_CONTEXT_COVERAGE_SCHEMA,
+    "request_path": "direct_frontdoor_chat_completions_v1",
+    "template_accounting": "live_apply_template_then_live_tokenize",
+    # The server-side admission failure at 62,515 tokens showed that the
+    # tokenizer endpoint alone can under-count a specific fully admitted
+    # request. Bind that authoritative observation by stable qid; all other
+    # rows use their live server tokenization rather than a lossy char proxy.
+    "authoritative_admission_overrides": "sealed_server_rejection_by_qid",
+    "fit_rule": "every_live_frontdoor:max(live_tokenize,sealed_server_admission)+direct_max_tokens<=live_context",
+}
+SEALED_SERVER_ADMISSION_TOKENS = {
+    "longbench_671b3fa1bb02136c067d5353": 62_515,
+}
+PROTOCOL_RECEIPT = ROOT / "artifacts/operator/ratify_e8_quality_baseline_protocol_context_repair_20260727.json"
+PROTOCOL_DECISION = "RATIFY-E8-QUALITY-BASELINE-PROTOCOL-CONTEXT-REPAIR-20260727"
+V3_PROTOCOL_RECEIPT = ROOT / "artifacts/operator/ratify_e8_quality_baseline_protocol_repair_20260727.json"
+V3_PROTOCOL_RECEIPT_SHA256 = "ec72b53d1d4371bcc1a1fd848140ab2fb114e0293a7714db04423d79d17c2bae"
+CONTEXT_ABORTED_CLASSIFICATION = (
+    ROOT
+    / "artifacts/operator/aborted-e8-quality-baseline-evidence-20260727T1324Z-fixed-vector-context-overflow/failure_classification.json"
+)
+CONTEXT_ABORTED_CLASSIFICATION_SHA256 = "b7b4ddf7e3855aaef139413f367d7379a00c8c82d354a56e041ee2ce588aa899"
+CONTEXT_ABORTED_CHECKSUMS = (
+    ROOT
+    / "artifacts/operator/aborted-e8-quality-baseline-evidence-20260727T1324Z-fixed-vector-context-overflow/CHECKSUMS.sha256"
+)
+CONTEXT_ABORTED_CHECKSUMS_SHA256 = "9910c07c9e99479266f1f626768aaf350723a42a55b7a665d710dfe59e453cc1"
+CONTEXT_REPLACEMENT_MAP = (
+    ROOT / "artifacts/operator/e8_context_replacement_map_candidate_relaxed_20260727.json"
+)
+CONTEXT_REPLACEMENT_MAP_SHA256 = "168ec8bd82e97deaf76943c65ba0c923848a5bda1ee14d4ce9bedcf2a3f12b95"
+CONTEXT_COVERAGE_REPORT = ROOT / "artifacts/operator/e8_quality_context_coverage_v4_r2_20260727.json"
+CONTEXT_COVERAGE_REPORT_SHA256 = "7ef88865c5aa7315143b19cc3d40c153c59e981db7eba9bcbb2ab6ea774fe983"
+REPAIR_SUPERSEDES = {
+    "v3_receipt": {
+        "path": str(V3_PROTOCOL_RECEIPT.resolve()),
+        "sha256": V3_PROTOCOL_RECEIPT_SHA256,
+    },
+    "context_overflow_classification": {
+        "path": str(CONTEXT_ABORTED_CLASSIFICATION.resolve()),
+        "sha256": CONTEXT_ABORTED_CLASSIFICATION_SHA256,
+    },
+    "context_overflow_checksum_ledger": {
+        "path": str(CONTEXT_ABORTED_CHECKSUMS.resolve()),
+        "sha256": CONTEXT_ABORTED_CHECKSUMS_SHA256,
+    },
+}
 RUNNER_PATH = Path(__file__).resolve()
 EVAL_TOWER_SOURCE = Path(sys.modules[EvalTower.__module__].__file__).resolve()
 SCORING_SOURCE = PROJECT_ROOT / "scripts/benchmark/seeding_scoring.py"
 DEBUG_SCORER_SOURCE = PROJECT_ROOT / "scripts/benchmark/debug_scorer.py"
+DIRECT_STAGE_SOURCE = PROJECT_ROOT / "src/api/routes/chat_pipeline/direct_stage.py"
 QUESTION_POOL_SOURCE = RESEARCH_ROOT / "scripts/benchmark/question_pool.py"
 QUESTION_POOL_DATA = RESEARCH_ROOT / "benchmarks/prompts/question_pool.jsonl"
 INDEPENDENTLY_REPRODUCIBLE_SCORERS = {
@@ -95,6 +148,24 @@ EXPECTED_PROBE_GROUPS = {
     "toolrunner/worker_general/worker_math",
     "vision_escalation",
     "worker_vision",
+}
+FRONTDOOR_REQUEST_CONTRACT = {
+    "force_role": "frontdoor",
+    "force_mode": "direct",
+    "allow_delegation": False,
+    "request_priority": "background",
+    "workload_class": "eval_batch",
+    "max_queue_wait_ms": 90_000,
+    "verification": "all_routes_frontdoor",
+}
+WATCHER_CONTRACT = {
+    "active_load_scope": "per_tier_repetition",
+    "allowed_probe_failure_reason": "read_timeout",
+    "requires_http_200": True,
+    "requires_models_loaded": 6,
+    "requires_status": "degraded",
+    "requires_exact_preflight_probe_urls": True,
+    "preserves_binding_immutability_autopilot_checks": True,
 }
 
 
@@ -122,6 +193,128 @@ def staging_path(path: Path, *, staging_dir: Path, output_dir: Path) -> Path:
 
 def canonical_hash(value: Any) -> str:
     return sha256_bytes(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
+
+
+def context_replacement_map_identity(args: argparse.Namespace) -> dict[str, Any]:
+    """Load the explicitly ratified-via-receipt source-vector amendment candidate."""
+    path = Path(getattr(args, "context_replacement_map", CONTEXT_REPLACEMENT_MAP)).resolve()
+    if path != CONTEXT_REPLACEMENT_MAP.resolve():
+        raise ValueError("E8 context replacement map must use the reviewed canonical path")
+    if sha256_path(path) != CONTEXT_REPLACEMENT_MAP_SHA256:
+        raise ValueError("E8 context replacement map hash differs from the reviewed candidate")
+    payload = load_json(path)
+    replacements = payload.get("replacements")
+    coverage = payload.get("source_vector_coverage")
+    if (
+        payload.get("schema") != "epyc.e8_context_replacement_map.v2"
+        or payload.get("source_pool_tier_relaxation") is not True
+        or not isinstance(replacements, list)
+        or len(replacements) != 16
+        or not isinstance(coverage, dict)
+        or coverage.get("infeasible_occurrence_count") != 16
+        or coverage.get("infeasible_unique_qid_count") != 16
+        or coverage.get("path") != str(CONTEXT_COVERAGE_REPORT.resolve())
+        or coverage.get("sha256") != CONTEXT_COVERAGE_REPORT_SHA256
+    ):
+        raise ValueError("E8 context replacement map structure is invalid")
+    old_ids = [str(row.get("old_id") or "") for row in replacements if isinstance(row, dict)]
+    new_ids = [str(row.get("new_id") or "") for row in replacements if isinstance(row, dict)]
+    if len(old_ids) != 16 or len(set(old_ids)) != 16 or len(new_ids) != 16 or len(set(new_ids)) != 16:
+        raise ValueError("E8 context replacement map must contain 16 unique old and new ids")
+    if (
+        not CONTEXT_COVERAGE_REPORT.is_file()
+        or sha256_path(CONTEXT_COVERAGE_REPORT) != CONTEXT_COVERAGE_REPORT_SHA256
+    ):
+        raise ValueError("E8 context coverage report hash differs from sealed predecessor evidence")
+    report = load_json(CONTEXT_COVERAGE_REPORT)
+    report_overflows = report.get("overflows")
+    if not isinstance(report_overflows, list):
+        raise ValueError("E8 context coverage report overflows are invalid")
+    report_ids = [str(item.get("qid") or "") for item in report_overflows if isinstance(item, dict)]
+    report_tiers = [str(item.get("tier") or "") for item in report_overflows if isinstance(item, dict)]
+    mapped_tiers = [str(row.get("tier") or "") for row in replacements if isinstance(row, dict)]
+    if (
+        len(report_ids) != 16
+        or len(set(report_ids)) != 16
+        or set(report_ids) != set(old_ids)
+        or sorted(report_tiers) != ["1", *(["2"] * 15)]
+        or sorted(mapped_tiers) != ["1", *(["2"] * 15)]
+    ):
+        raise ValueError("E8 context replacement map does not cover the exact sealed overflow multiset")
+    live_frontdoor_ports = sorted(
+        row["port"] for row in runtime_topology(args) if "frontdoor" in row["roles"]
+    )
+    if len(live_frontdoor_ports) != 5:
+        raise ValueError("E8 context replacement map requires exactly five live frontdoors")
+    for row in replacements:
+        if not isinstance(row, dict) or row.get("tier") not in (1, 2):
+            raise ValueError("E8 context replacement map tier is invalid")
+        old, new = row.get("old_row"), row.get("new_row")
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            raise ValueError("E8 context replacement map row is missing source records")
+        if row.get("old_id") != _question_qid(old) or row.get("new_id") != _question_qid(new):
+            raise ValueError("E8 context replacement map identity differs from source records")
+        if row.get("old_row_sha256") != canonical_hash(old) or row.get("new_row_sha256") != canonical_hash(new):
+            raise ValueError("E8 context replacement map source-record hash differs")
+        if (
+            row.get("suite") != str(old.get("suite") or "")
+            or str(new.get("suite") or "") != row.get("suite")
+            or row.get("scoring_method") != str(old.get("scoring_method") or "")
+            or str(new.get("scoring_method") or "") != row.get("scoring_method")
+            or row.get("source_pool_tier") != old.get("tier")
+            or row.get("candidate_source_pool_tier") != new.get("tier")
+            or row.get("source_pool_tier_changed") != (old.get("tier") != new.get("tier"))
+        ):
+            raise ValueError("E8 context replacement map changes an unratified source contract")
+        qualification = row.get("qualification")
+        ports = qualification.get("all_frontdoors") if isinstance(qualification, dict) else None
+        if (
+            not isinstance(ports, list)
+            or len(ports) != 5
+            or not all(isinstance(item, dict) and item.get("fits") is True for item in ports)
+        ):
+            raise ValueError("E8 context replacement map lacks five-frontdoor qualification")
+        if sorted(item.get("port") for item in ports) != live_frontdoor_ports:
+            raise ValueError("E8 context replacement map qualification ports differ from the live frontdoors")
+    return {
+        "path": str(path),
+        "sha256": sha256_path(path),
+        "schema": payload["schema"],
+        "replacements": replacements,
+    }
+
+
+def apply_context_replacement_map(
+    args: argparse.Namespace, questions: list[dict[str, Any]], *, tier: int
+) -> list[dict[str, Any]]:
+    """Overlay only the reviewed map rows for this fixed T1/T2 vector."""
+    identity = context_replacement_map_identity(args)
+    mapped = [row for row in identity["replacements"] if row["tier"] == tier]
+    by_qid = {_question_qid(question): index for index, question in enumerate(questions)}
+    if len(by_qid) != len(questions):
+        raise ValueError(f"T{tier} context amendment input vector has duplicate ids")
+    result = [dict(question) for question in questions]
+    for row in mapped:
+        old_id, new_id = row["old_id"], row["new_id"]
+        index = by_qid.get(old_id)
+        source_row = dict(questions[index]) if index is not None else {}
+        # The sampler adds partition provenance after reading the immutable
+        # source row; it is not part of the reviewed map-record hash.
+        source_row.pop("partition", None)
+        source_row.pop("eval_partition", None)
+        if index is None or canonical_hash(source_row) != row["old_row_sha256"]:
+            raise ValueError(f"T{tier} context amendment old source row no longer matches {old_id}")
+        if new_id in by_qid and new_id != old_id:
+            raise ValueError(f"T{tier} context amendment would duplicate {new_id}")
+        replacement = dict(row["new_row"])
+        for provenance_field in ("partition", "eval_partition"):
+            if provenance_field in questions[index]:
+                replacement[provenance_field] = questions[index][provenance_field]
+        result[index] = replacement
+    result_ids = [_question_qid(question) for question in result]
+    if len(result_ids) != len(set(result_ids)):
+        raise ValueError(f"T{tier} context amendment produced duplicate ids")
+    return result
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -661,17 +854,78 @@ def api_health(url: str, timeout_s: float) -> dict[str, Any]:
     health_url = url.rstrip("/") + "/health"
     try:
         response = httpx.get(health_url, timeout=timeout_s)
-        payload = response.json()
+    except httpx.TimeoutException as exc:
+        return {
+            "ok": False,
+            "url": health_url,
+            "failure_class": "api_transport_timeout",
+            "error": str(exc),
+        }
+    except httpx.RequestError as exc:
+        return {
+            "ok": False,
+            "url": health_url,
+            "failure_class": "api_transport_error",
+            "error": str(exc),
+        }
     except Exception as exc:  # noqa: BLE001 - this is a preflight report
-        return {"ok": False, "url": health_url, "error": str(exc)}
+        return {
+            "ok": False,
+            "url": health_url,
+            "failure_class": "api_request_error",
+            "error": str(exc),
+        }
+    try:
+        payload = response.json()
+    except (ValueError, json.JSONDecodeError) as exc:
+        return {
+            "ok": False,
+            "url": health_url,
+            "status_code": response.status_code,
+            "failure_class": "api_invalid_payload",
+            "error": str(exc),
+        }
     probes = payload.get("backend_probes") if isinstance(payload, dict) else None
+    probe_map = probes if isinstance(probes, dict) else {}
+    probe_urls = {
+        name: probe.get("url") if isinstance(probe.get("url"), str) else None
+        for name, probe in sorted(probe_map.items())
+        if isinstance(probe, dict)
+    }
+    probe_failures = [
+        {
+            "group": name,
+            "failure_reason": probe.get("failure_reason"),
+            "status_code": probe.get("status_code"),
+            "url": probe.get("url"),
+        }
+        for name, probe in sorted(probe_map.items())
+        if isinstance(probe, dict) and probe.get("ok") is not True
+    ]
+    exact_probe_groups = isinstance(probes, dict) and set(probes) == EXPECTED_PROBE_GROUPS
+    read_timeout_saturation = (
+        response.status_code == 200
+        and isinstance(payload, dict)
+        and exact_probe_groups
+        and payload.get("models_loaded") == 6
+        and payload.get("status") == "degraded"
+        and bool(probe_failures)
+        and all(
+            isinstance(probe, dict)
+            and (
+                probe.get("ok") is True
+                or probe.get("failure_reason") == "read_timeout"
+            )
+            for probe in probe_map.values()
+        )
+    )
     both_mode_ok = (
-        isinstance(payload, dict)
+        response.status_code == 200
+        and isinstance(payload, dict)
         and payload.get("status") == "ok"
         and payload.get("models_loaded") == 6
-        and isinstance(probes, dict)
-        and set(probes) == EXPECTED_PROBE_GROUPS
-        and all(isinstance(item, dict) and item.get("ok") is True for item in probes.values())
+        and exact_probe_groups
+        and all(isinstance(item, dict) and item.get("ok") is True for item in probe_map.values())
     )
     endpoint_fingerprint = {
         "models_loaded": payload.get("models_loaded") if isinstance(payload, dict) else None,
@@ -681,7 +935,7 @@ def api_health(url: str, timeout_s: float) -> dict[str, Any]:
                 "status_code": probe.get("status_code"),
                 "ok": probe.get("ok"),
             }
-            for name, probe in sorted((probes or {}).items())
+            for name, probe in sorted(probe_map.items())
             if isinstance(probe, dict)
         },
     }
@@ -690,10 +944,31 @@ def api_health(url: str, timeout_s: float) -> dict[str, Any]:
         "url": health_url,
         "status_code": response.status_code,
         "payload": payload,
+        "failure_class": (
+            None
+            if both_mode_ok
+            else "backend_probe_read_timeout"
+            if read_timeout_saturation
+            else "readiness_contract_failed"
+        ),
+        "probe_urls": probe_urls,
+        "probe_failures": probe_failures,
         # Probe latency is expected to vary while serving.  Identity, URL, and
         # status are the frozen both-mode endpoint contract.
         "payload_sha256": canonical_hash(endpoint_fingerprint),
     }
+
+
+def probe_url_mapping(health: dict[str, Any]) -> dict[str, str]:
+    """Return the complete backend identity map from a strict clean preflight."""
+    probe_urls = health.get("probe_urls")
+    if (
+        not isinstance(probe_urls, dict)
+        or set(probe_urls) != EXPECTED_PROBE_GROUPS
+        or not all(isinstance(url, str) and url for url in probe_urls.values())
+    ):
+        raise ValueError("both-mode health response has no complete backend probe URL map")
+    return dict(sorted(probe_urls.items()))
 
 
 def state_preconditions(state: dict[str, Any]) -> list[str]:
@@ -791,15 +1066,22 @@ def receipt_payload(args: argparse.Namespace) -> dict[str, Any]:
         "acceptance",
         "sha256",
         "repository_heads",
+        "supersedes",
     }
     if set(receipt) != required_keys:
         raise ValueError("E8 protocol receipt structure is invalid")
-    if receipt.get("schema") != "epyc.operator_e8_quality_baseline_protocol.v1":
+    if receipt.get("schema") != "epyc.operator_e8_quality_baseline_protocol.v3":
         raise ValueError("E8 protocol receipt schema is invalid")
     if receipt.get("decision") != PROTOCOL_DECISION or receipt.get("era") != E8_ERA:
         raise ValueError("E8 protocol receipt is not the required E8 baseline ratification")
     if not isinstance(receipt.get("operator_attestation"), str) or not receipt["operator_attestation"].strip():
         raise ValueError("E8 protocol receipt lacks an operator attestation")
+    if receipt.get("supersedes") != REPAIR_SUPERSEDES:
+        raise ValueError("E8 repair receipt predecessor evidence differs")
+    for predecessor in REPAIR_SUPERSEDES.values():
+        predecessor_path = Path(predecessor["path"])
+        if not predecessor_path.is_file() or sha256_path(predecessor_path) != predecessor["sha256"]:
+            raise ValueError("E8 repair receipt predecessor evidence hash mismatch")
     protocol = receipt.get("protocol")
     if not isinstance(protocol, dict) or protocol.get("protocol_id") != PROTOCOL_ID:
         raise ValueError("E8 protocol receipt does not ratify this runner protocol")
@@ -868,9 +1150,11 @@ def measurement_source_paths(args: argparse.Namespace) -> list[Path]:
         EVAL_TOWER_SOURCE,
         SCORING_SOURCE,
         DEBUG_SCORER_SOURCE,
+        DIRECT_STAGE_SOURCE,
         QUESTION_POOL_SOURCE,
         QUESTION_POOL_DATA,
         tower._core_path(args.t1_core_id),
+        Path(getattr(args, "context_replacement_map", CONTEXT_REPLACEMENT_MAP)),
     ]
     return list(dict.fromkeys(path.resolve() for path in paths))
 
@@ -879,8 +1163,8 @@ def measurement_source_fingerprints(args: argparse.Namespace) -> dict[str, str]:
     return file_fingerprints(measurement_source_paths(args))
 
 
-def immutable_paths(args: argparse.Namespace) -> list[Path]:
-    return list(dict.fromkeys([
+def immutable_paths(args: argparse.Namespace, *, include_receipt: bool = True) -> list[Path]:
+    paths = [
         *measurement_source_paths(args),
         args.state_path,
         args.registry_path,
@@ -889,8 +1173,10 @@ def immutable_paths(args: argparse.Namespace) -> list[Path]:
         args.stack_priors_path,
         args.orchestrator_state_path,
         args.journal_path,
-        args.protocol_receipt,
-    ]))
+    ]
+    if include_receipt:
+        paths.append(args.protocol_receipt)
+    return list(dict.fromkeys(paths))
 
 
 def file_fingerprints(paths: list[Path]) -> dict[str, str]:
@@ -944,12 +1230,16 @@ def runtime_artifact_identities(
             "st_size": stat.st_size,
             "st_mtime_ns": stat.st_mtime_ns,
         }
-        if include_sha256:
-            identity["sha256"] = sha256_path(path)
         previous = identities.get(key)
         if previous is not None and previous != identity:
             raise ValueError(f"runtime artifact identity changed while binding {key}")
         identities[key] = identity
+    if include_sha256:
+        # Multiple endpoints commonly bind the same GGUF.  Stat every occurrence
+        # above so duplicate-path replacement races still fail closed, then read
+        # each canonical file only once for the expensive content identity.
+        for key, identity in identities.items():
+            identity["sha256"] = sha256_path(Path(key))
     return dict(sorted(identities.items()))
 
 
@@ -1073,6 +1363,191 @@ def runtime_binding(args: argparse.Namespace, *, include_binary_hash: bool = Fal
     return binding
 
 
+def _frontdoor_context_contract(args: argparse.Namespace, binding: dict[str, Any]) -> dict[str, Any]:
+    """Bind E8 prompt accounting to every live frontdoor server before inference."""
+    ports = sorted(
+        row["port"]
+        for row in binding.get("runtime_topology", [])
+        if isinstance(row, dict) and "frontdoor" in row.get("roles", [])
+    )
+    if not ports:
+        raise ValueError("live runtime has no frontdoor server for E8 context coverage")
+    cmdlines = binding.get("server_cmdlines")
+    if not isinstance(cmdlines, dict):
+        raise ValueError("live runtime binding lacks server command lines")
+    contexts: dict[int, int] = {}
+    for port in ports:
+        values = _cmdline_flag_values(cmdlines.get(str(port), []), "-c", "--ctx-size")
+        if len(values) != 1:
+            raise ValueError(f"frontdoor port {port} has no unambiguous context limit")
+        try:
+            context_length = int(values[0])
+        except ValueError as exc:
+            raise ValueError(f"frontdoor port {port} context limit is invalid") from exc
+        if context_length <= 0:
+            raise ValueError(f"frontdoor port {port} context limit is invalid")
+        contexts[port] = context_length
+    if len(set(contexts.values())) != 1:
+        raise ValueError(f"frontdoor context limits differ: {contexts}")
+
+    template_hashes = {
+        port: _frontdoor_template_metrics(port, E8_TEMPLATE_SENTINEL, args.http_timeout_s)[1]
+        for port in ports
+    }
+    if len(set(template_hashes.values())) != 1:
+        raise ValueError("frontdoor chat templates differ across live servers")
+    return {
+        "ports": ports,
+        "context_length": next(iter(contexts.values())),
+        "template_sha256": next(iter(template_hashes.values())),
+        "count_port": ports[0],
+    }
+
+
+def _frontdoor_template_metrics(port: int, prompt: str, timeout_s: float) -> tuple[int, str, int]:
+    """Use the live server template and tokenizer; no generation endpoint is called."""
+    try:
+        from src.registry.registry_loader import chat_template_kwargs_for_role
+
+        chat_template_kwargs = chat_template_kwargs_for_role("frontdoor")
+    except Exception as exc:  # noqa: BLE001 - template provenance must fail closed
+        raise ValueError(f"cannot resolve frontdoor chat-template kwargs: {exc}") from exc
+    template_payload: dict[str, Any] = {
+        "messages": [{"role": "user", "content": prompt}],
+        "add_generation_prompt": True,
+    }
+    if chat_template_kwargs:
+        template_payload["chat_template_kwargs"] = chat_template_kwargs
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        rendered_response = httpx.post(
+            f"{base_url}/apply-template", json=template_payload, timeout=timeout_s
+        )
+        rendered_response.raise_for_status()
+        rendered = rendered_response.json().get("prompt")
+        if not isinstance(rendered, str) or not rendered:
+            raise ValueError("apply-template returned no prompt")
+        token_response = httpx.post(
+            f"{base_url}/tokenize", json={"content": rendered}, timeout=timeout_s
+        )
+        token_response.raise_for_status()
+        tokens = token_response.json().get("tokens")
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise ValueError(f"frontdoor port {port} cannot provide exact template token count: {exc}") from exc
+    if not isinstance(tokens, list) or not all(isinstance(token, int) for token in tokens):
+        raise ValueError(f"frontdoor port {port} tokenize response is invalid")
+    rendered_bytes = rendered.encode("utf-8")
+    return len(tokens), sha256_bytes(rendered_bytes), len(rendered_bytes)
+
+
+def _direct_prompt_and_max_tokens(question: dict[str, Any]) -> tuple[str, int]:
+    """Mirror the fixed direct-stage prompt and cap contract without executing it."""
+    try:
+        from src.api.routes.chat_pipeline.direct_stage import (
+            _CODE_MAX_TOKENS,
+            _CODE_TASK_RE,
+            _MCQ_MAX_TOKENS,
+            _MCQ_RE,
+        )
+    except Exception as exc:  # noqa: BLE001 - this source is a measurement dependency
+        raise ValueError(f"cannot load direct-stage token contract: {exc}") from exc
+    prompt = question.get("prompt")
+    if not isinstance(prompt, str) or not prompt:
+        raise ValueError(f"E8 question {_question_qid(question)} has no prompt for context coverage")
+    is_mcq = bool(_MCQ_RE.search(prompt))
+    is_code_task = bool(_CODE_TASK_RE.search(prompt))
+    if is_mcq:
+        max_tokens = _MCQ_MAX_TOKENS
+    elif is_code_task:
+        max_tokens = _CODE_MAX_TOKENS
+        prompt = (
+            "Respond with ONLY valid Python code. No explanations, no markdown formatting. "
+            "Start directly with imports or function definitions.\n\n" + prompt
+        )
+    else:
+        max_tokens = 2048
+    return prompt, max_tokens
+
+
+def frontdoor_context_coverage(
+    args: argparse.Namespace,
+    questions: list[dict[str, Any]],
+    binding: dict[str, Any],
+    *,
+    fail_closed: bool = True,
+) -> dict[str, Any]:
+    """Reject fixed-vector prompts that the exact live frontdoor cannot admit."""
+    contract = _frontdoor_context_contract(args, binding)
+    rows: list[dict[str, Any]] = []
+    over_limit: list[str] = []
+    for question in questions:
+        prompt, max_tokens = _direct_prompt_and_max_tokens(question)
+        sealed_server_admission_tokens = SEALED_SERVER_ADMISSION_TOKENS.get(
+            _question_qid(question)
+        )
+        per_frontdoor: list[dict[str, Any]] = []
+        for port in contract["ports"]:
+            prompt_tokens, rendered_prompt_sha256, rendered_utf8_bytes = _frontdoor_template_metrics(
+                int(port), prompt, args.http_timeout_s
+            )
+            tokenizer_required_tokens = prompt_tokens + max_tokens
+            server_required_tokens = (
+                sealed_server_admission_tokens + max_tokens
+                if sealed_server_admission_tokens is not None
+                else tokenizer_required_tokens
+            )
+            required_tokens = max(tokenizer_required_tokens, server_required_tokens)
+            per_frontdoor.append(
+                {
+                    "port": int(port),
+                    "prompt_tokens": prompt_tokens,
+                    "rendered_prompt_sha256": rendered_prompt_sha256,
+                    "rendered_utf8_bytes": rendered_utf8_bytes,
+                    "tokenizer_required_tokens": tokenizer_required_tokens,
+                    "server_required_tokens": server_required_tokens,
+                    "required_tokens": required_tokens,
+                    "context_length": contract["context_length"],
+                    "fits": required_tokens <= contract["context_length"],
+                }
+            )
+        # Preserve compact top-level fields for existing report readers while
+        # making their value explicitly conservative across every live route.
+        worst = max(per_frontdoor, key=lambda item: int(item["required_tokens"]))
+        row = {
+            "qid": _question_qid(question),
+            "prompt_tokens": worst["prompt_tokens"],
+            "rendered_utf8_bytes": worst["rendered_utf8_bytes"],
+            "max_tokens": max_tokens,
+            "tokenizer_required_tokens": worst["tokenizer_required_tokens"],
+            "sealed_server_admission_tokens": sealed_server_admission_tokens,
+            "server_required_tokens": worst["server_required_tokens"],
+            "required_tokens": worst["required_tokens"],
+            "context_length": contract["context_length"],
+            "fits": all(item["fits"] for item in per_frontdoor),
+            "per_frontdoor": per_frontdoor,
+        }
+        rows.append(row)
+        if not row["fits"]:
+            over_limit.append(row["qid"])
+    _sentinel_tokens, ending_template_sha256, _sentinel_bytes = _frontdoor_template_metrics(
+        int(contract["count_port"]), E8_TEMPLATE_SENTINEL, args.http_timeout_s
+    )
+    if ending_template_sha256 != contract["template_sha256"]:
+        raise ValueError("frontdoor template changed during E8 context coverage")
+    coverage = {
+        "schema": E8_CONTEXT_COVERAGE_SCHEMA,
+        "contract": CONTEXT_COVERAGE_CONTRACT,
+        "frontdoor": contract,
+        "rows": rows,
+    }
+    if over_limit and fail_closed:
+        raise ValueError(
+            "E8 fixed vector exceeds live frontdoor context under the v4 conservative admission contract: "
+            + ", ".join(over_limit)
+        )
+    return coverage
+
+
 def _ss_listener_identities(output: str) -> dict[int, set[int]]:
     """Parse exact port-to-PID ownership from ss listener rows."""
     identities: dict[int, set[int]] = {}
@@ -1169,28 +1644,76 @@ class RuntimeWatcher:
     """Continuously fail closed; monitor persistence failures are terminal."""
 
     def __init__(
-        self, args: argparse.Namespace, expected_binding: dict[str, Any], artifact_path: Path | None = None
+        self,
+        args: argparse.Namespace,
+        expected_binding: dict[str, Any],
+        artifact_path: Path | None = None,
+        *,
+        expected_probe_urls: dict[str, str] | None = None,
+        include_receipt: bool = True,
     ) -> None:
         self.args = args
         self.expected_binding = expected_binding
-        self.expected_fingerprints = file_fingerprints(immutable_paths(args))
+        self.include_receipt = include_receipt
+        self.expected_probe_urls = (
+            dict(sorted(expected_probe_urls.items())) if expected_probe_urls is not None else None
+        )
+        self.expected_fingerprints = file_fingerprints(
+            immutable_paths(args, include_receipt=self.include_receipt)
+        )
         self.samples: list[dict[str, Any]] = []
         self.artifact_path = artifact_path
         self.fatal_error: str | None = None
         self._stop = threading.Event()
+        self._load_lock = threading.Lock()
+        self._active_load: dict[str, int] | None = None
         self._thread = threading.Thread(target=self._watch, daemon=False)
+
+    @contextmanager
+    def active_load(self, *, tier: int, repetition: int) -> Iterator[None]:
+        """Mark the bounded inference batch where backend probe reads may saturate."""
+        with self._load_lock:
+            if self._active_load is not None:
+                raise RuntimeError("runtime watcher load windows must not overlap")
+            self._active_load = {"tier": tier, "repetition": repetition}
+        try:
+            yield
+        finally:
+            with self._load_lock:
+                self._active_load = None
+
+    def _active_load_snapshot(self) -> dict[str, int] | None:
+        with self._load_lock:
+            return dict(self._active_load) if self._active_load is not None else None
 
     def sample(self) -> None:
         started_at = utc_now()
         sample: dict[str, Any] = {"started_at": started_at, "finished_at": None, "ok": False}
         try:
+            active_load = self._active_load_snapshot()
             health = api_health(self.args.api_url, self.args.http_timeout_s)
             binding = runtime_binding(self.args)
             active = autopilot_processes()
-            fingerprints = file_fingerprints(immutable_paths(self.args))
+            fingerprints = file_fingerprints(
+                immutable_paths(self.args, include_receipt=self.include_receipt)
+            )
+            api_saturation_during_active_load = bool(
+                active_load is not None
+                and health.get("failure_class") == "backend_probe_read_timeout"
+                and self.expected_probe_urls is not None
+                and health.get("probe_urls") == self.expected_probe_urls
+            )
+            api_ready_for_monitor = bool(health.get("ok")) or api_saturation_during_active_load
             sample.update(
                 {
                     "api_6_of_6": bool(health.get("ok")),
+                    "api_ready_or_busy_saturated": api_ready_for_monitor,
+                    "api_saturation_during_active_load": api_saturation_during_active_load,
+                    "api_failure_class": health.get("failure_class"),
+                    "api_probe_urls": health.get("probe_urls", {}),
+                    "api_probe_urls_match_preflight": health.get("probe_urls") == self.expected_probe_urls,
+                    "api_probe_failures": health.get("probe_failures", []),
+                    "active_load": active_load,
                     "autopilot_active": bool(active),
                     "binding_matches_pre": binding == self.expected_binding,
                     "immutable_files_match_pre": fingerprints == self.expected_fingerprints,
@@ -1198,7 +1721,7 @@ class RuntimeWatcher:
                 }
             )
             sample["ok"] = bool(
-                sample["api_6_of_6"]
+                sample["api_ready_or_busy_saturated"]
                 and not sample["autopilot_active"]
                 and sample["binding_matches_pre"]
                 and sample["immutable_files_match_pre"]
@@ -1381,6 +1904,10 @@ def protocol_contract(
         "repetitions",
         "generation_concurrency",
         "scoring_concurrency",
+        "request_timeout_s",
+        "frontdoor_request_contract",
+        "watcher_contract",
+        "context_coverage_contract",
         "baseline_mode",
         "route_policy",
         "selected_ports",
@@ -1389,6 +1916,7 @@ def protocol_contract(
         "runtime_binding",
         "llama_source_provenance",
         "measurement_source_sha256",
+        "context_replacement_map",
         "judge_defaults",
         "expected_probe_groups",
         "tiers",
@@ -1404,11 +1932,20 @@ def protocol_contract(
         "repetitions": REPETITIONS,
         "generation_concurrency": CONCURRENCY,
         "scoring_concurrency": SCORING_CONCURRENCY,
+        "request_timeout_s": args.evaltower_timeout_s,
+        "frontdoor_request_contract": FRONTDOOR_REQUEST_CONTRACT,
+        "watcher_contract": WATCHER_CONTRACT,
+        "context_coverage_contract": CONTEXT_COVERAGE_CONTRACT,
         "baseline_mode": "direct_core_only_v1",
         "route_policy": "frontdoor_only",
         "judge_defaults": {
             "orchestrator_api_url": args.api_url.rstrip("/"),
             "role": JUDGE_DEFAULT_ROLE,
+        },
+        "context_replacement_map": {
+            key: value
+            for key, value in context_replacement_map_identity(args).items()
+            if key != "replacements"
         },
     }
     for key, value in required.items():
@@ -1436,7 +1973,7 @@ def protocol_contract(
     if t2_decision != {
         "n": args.t2_n,
         "recommended_default": 500,
-        "alternatives": [500, 50],
+        "alternatives": [500],
     }:
         raise ValueError("E8 protocol receipt T2 operator decision does not match the request")
     _questions, _metadata, core_path = EvalTower(url=args.api_url.rstrip("/"), timeout=args.evaltower_timeout_s)._load_designed_core(args.t1_core_id)
@@ -1611,12 +2148,37 @@ def run_repetition(
     started = utc_now()
     judge_trace_path = output_dir / f"judge_traces.T{tier}.r{repetition}.jsonl"
     write_text(judge_trace_path, "")
+    execution_questions: list[dict[str, Any]] = []
+    for question in questions:
+        for key in ("force_role", "force_mode", "request_priority", "workload_class"):
+            source_value = question.get(key)
+            expected_value = FRONTDOOR_REQUEST_CONTRACT[key]
+            if source_value not in (None, "", expected_value):
+                raise ValueError(
+                    f"E8 direct-core protocol rejects source {key}={source_value!r} "
+                    f"for {_question_qid(question)}"
+                )
+        source_delegation = question.get("allow_delegation")
+        if source_delegation not in (None, False):
+            raise ValueError(
+                f"E8 direct-core protocol rejects source allow_delegation={source_delegation!r} "
+                f"for {_question_qid(question)}"
+            )
+        source_queue_wait = question.get("max_queue_wait_ms")
+        if source_queue_wait not in (None, FRONTDOOR_REQUEST_CONTRACT["max_queue_wait_ms"]):
+            raise ValueError(
+                f"E8 direct-core protocol rejects source max_queue_wait_ms={source_queue_wait!r} "
+                f"for {_question_qid(question)}"
+            )
+        execution_questions.append({**question, **FRONTDOOR_REQUEST_CONTRACT})
     with (
         httpx.Client(timeout=tower.timeout) as client,
         fixed_baseline_environment(sidecar_dir, args.api_url),
         capture_llm_judge_traces(judge_trace_path, default_api_url=args.api_url),
     ):
-        results = tower._eval_batch(questions, client, log_every=25, label=f"e8-t{tier}-r{repetition}")
+        results = tower._eval_batch(
+            execution_questions, client, log_every=25, label=f"e8-t{tier}-r{repetition}"
+        )
     result = tower._aggregate(results, tier=tier)
     finished = utc_now()
     per_suite_quality = dict(getattr(result, "per_suite_quality", {}) or {})
@@ -1814,7 +2376,24 @@ def build_evidence(
     }}
 
 
-def prepare_report(args: argparse.Namespace) -> dict[str, Any]:
+def candidate_contract_from_proposal(proposal: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    """Adapt a read-only proposal to the subset consumed by protocol_contract."""
+    return {
+        "protocol": proposal["protocol"],
+        "t2_decision": {
+            "n": args.t2_n,
+            "recommended_default": 500,
+            "alternatives": [500],
+        },
+        "t1_core_file_sha256": proposal["t1_core_file_sha256"],
+    }
+
+
+def prepare_report(
+    args: argparse.Namespace,
+    *,
+    candidate_proposal: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     state = load_json(args.state_path)
     blockers = state_preconditions(state)
     numeric: dict[str, int] = {}
@@ -1827,10 +2406,13 @@ def prepare_report(args: argparse.Namespace) -> dict[str, Any]:
     except ValueError as exc:
         blockers.append(str(exc))
     receipt: dict[str, Any] = {}
-    try:
-        receipt = receipt_payload(args)
-    except ValueError as exc:
-        blockers.append(str(exc))
+    if candidate_proposal is None:
+        try:
+            receipt = receipt_payload(args)
+        except ValueError as exc:
+            blockers.append(str(exc))
+    else:
+        receipt = candidate_contract_from_proposal(candidate_proposal, args)
     autopilot = autopilot_processes()
     if autopilot:
         blockers.append("AutoPilot is active; E8 evidence requires a clean window")
@@ -1838,7 +2420,9 @@ def prepare_report(args: argparse.Namespace) -> dict[str, Any]:
     if not health.get("ok"):
         blockers.append("current both-mode endpoints are not healthy 6/6")
     try:
-        fingerprints = file_fingerprints(immutable_paths(args))
+        fingerprints = file_fingerprints(
+            immutable_paths(args, include_receipt=candidate_proposal is None)
+        )
     except ValueError as exc:
         blockers.append(str(exc))
         fingerprints = {}
@@ -1848,6 +2432,7 @@ def prepare_report(args: argparse.Namespace) -> dict[str, Any]:
         blockers.append(str(exc))
         binding = {}
     vector_contract: dict[str, Any] = {}
+    context_coverage: dict[str, Any] = {}
     vectors: dict[int, dict[str, Any]] = {}
     scoring_vectors: dict[int, dict[str, Any]] = {}
     try:
@@ -1861,6 +2446,8 @@ def prepare_report(args: argparse.Namespace) -> dict[str, Any]:
                 seed=args.seed,
             )
             validate_source_vector_scorer_config(questions, tier=tier)
+            questions = apply_context_replacement_map(args, questions, tier=tier)
+            validate_source_vector_scorer_config(questions, tier=tier)
             vector_contract[str(tier)] = {
                 "core_id": core_id,
                 "n": len(questions),
@@ -1870,6 +2457,7 @@ def prepare_report(args: argparse.Namespace) -> dict[str, Any]:
             scoring_vectors[tier] = scoring_vector(
                 questions, tier=tier, core_id=core_id, seed=args.seed
             )
+            context_coverage[str(tier)] = frontdoor_context_coverage(args, questions, binding)
         if receipt:
             protocol_contract(args, receipt, vectors, scoring_vectors)
     except Exception as exc:  # noqa: BLE001 - a current-pool mismatch is a hard blocker
@@ -1887,9 +2475,17 @@ def prepare_report(args: argparse.Namespace) -> dict[str, Any]:
             "file_sha256": fingerprints,
             "runtime_binding": binding,
             "vector_contract": vector_contract,
+            "context_coverage": context_coverage,
             "numeric_rerun": numeric,
-            "protocol_receipt": str(args.protocol_receipt),
-            "protocol_receipt_sha256": sha256_path(args.protocol_receipt) if args.protocol_receipt.is_file() else None,
+            "protocol_receipt": str(args.protocol_receipt) if candidate_proposal is None else None,
+            "protocol_receipt_sha256": (
+                sha256_path(args.protocol_receipt)
+                if candidate_proposal is None and args.protocol_receipt.is_file()
+                else None
+            ),
+            "protocol_candidate_sha256": (
+                canonical_hash(candidate_proposal) if candidate_proposal is not None else None
+            ),
             "runner_path": str(RUNNER_PATH),
             "runner_sha256": sha256_path(RUNNER_PATH),
         },
@@ -1899,8 +2495,13 @@ def prepare_report(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    report = prepare_report(args)
+def execute(
+    args: argparse.Namespace,
+    *,
+    candidate_mode: bool = False,
+) -> tuple[dict[str, Any], int]:
+    candidate_proposal = protocol_proposal(args) if candidate_mode else None
+    report = prepare_report(args, candidate_proposal=candidate_proposal)
     if report["blockers"]:
         report["mode"] = "blocked"
         return report, 75
@@ -1914,18 +2515,31 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     staging_dir.chmod(0o700)
     fsync_dir(staging_dir.parent)
     pre_fingerprints = report["preconditions"]["file_sha256"]
-    pre_health_hash = report["preconditions"]["health"]["payload_sha256"]
+    pre_health = report["preconditions"]["health"]
+    pre_health_hash = pre_health["payload_sha256"]
     pre_binding = runtime_binding(args)
     pre_binary = runtime_binding(args, include_binary_hash=True)
     tower = EvalTower(url=args.api_url.rstrip("/"), timeout=args.evaltower_timeout_s)
     tower._question_artifact_dir = staging_dir / "eval_sidecars"  # baseline-owned sidecars only
     watcher_path = staging_dir / "runtime_watch.jsonl"
-    watcher = RuntimeWatcher(args, pre_binding, watcher_path)
-    receipt = receipt_payload(args)
+    pre_probe_urls = probe_url_mapping(pre_health)
+    watcher = RuntimeWatcher(
+        args,
+        pre_binding,
+        watcher_path,
+        expected_probe_urls=pre_probe_urls,
+        include_receipt=not candidate_mode,
+    )
+    receipt = (
+        candidate_contract_from_proposal(candidate_proposal, args)
+        if candidate_proposal is not None
+        else receipt_payload(args)
+    )
     vectors: dict[int, dict[str, Any]] = {}
     scoring_vectors: dict[int, dict[str, Any]] = {}
     vector_paths: dict[str, str] = {}
     scoring_vector_paths: dict[str, str] = {}
+    context_coverage: dict[str, Any] = {}
     question_sets: dict[int, list[dict[str, Any]]] = {}
     observations: dict[int, list[dict[str, Any]]] = {1: [], 2: []}
     details: dict[int, list[dict[str, Any]]] = {1: [], 2: []}
@@ -1933,6 +2547,8 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     try:
         for tier, n in ((1, args.t1_n), (2, args.t2_n)):
             questions, core_id = question_vector(tower, tier=tier, t1_core_id=args.t1_core_id, n=n, seed=args.seed)
+            validate_source_vector_scorer_config(questions, tier=tier)
+            questions = apply_context_replacement_map(args, questions, tier=tier)
             validate_source_vector_scorer_config(questions, tier=tier)
             vector = public_vector(questions, tier=tier, core_id=core_id, seed=args.seed)
             scoring = scoring_vector(questions, tier=tier, core_id=core_id, seed=args.seed)
@@ -1946,6 +2562,7 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 str(published_path(vector_path, staging_dir=staging_dir, output_dir=output_dir)),
             )
             scoring_vectors[tier] = scoring
+            context_coverage[str(tier)] = frontdoor_context_coverage(args, questions, pre_binding)
             scoring_vector_paths[str(tier)] = str(
                 published_path(scoring_path, staging_dir=staging_dir, output_dir=output_dir)
             )
@@ -1955,18 +2572,19 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         for tier in (1, 2):
             for repetition in range(1, REPETITIONS + 1):
                 require_clean_watcher(watcher)
-                observation, detail = run_repetition(
-                    tower,
-                    tier=tier,
-                    repetition=repetition,
-                    questions=question_sets[tier],
-                    core_id=vectors[tier]["core_id"],
-                    output_dir=staging_dir,
-                    expected_binding=pre_binding,
-                    args=args,
-                    sidecar_dir=staging_dir / "eval_sidecars",
-                    published_dir=output_dir,
-                )
+                with watcher.active_load(tier=tier, repetition=repetition):
+                    observation, detail = run_repetition(
+                        tower,
+                        tier=tier,
+                        repetition=repetition,
+                        questions=question_sets[tier],
+                        core_id=vectors[tier]["core_id"],
+                        output_dir=staging_dir,
+                        expected_binding=pre_binding,
+                        args=args,
+                        sidecar_dir=staging_dir / "eval_sidecars",
+                        published_dir=output_dir,
+                    )
                 observations[tier].append(observation)
                 details[tier].append(detail)
                 require_clean_watcher(watcher)
@@ -1974,7 +2592,9 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         if watcher._thread.is_alive() or watcher.samples:
             watcher_samples = watcher.stop()
     post_health = api_health(args.api_url, args.http_timeout_s)
-    post_fingerprints = file_fingerprints(immutable_paths(args))
+    post_fingerprints = file_fingerprints(
+        immutable_paths(args, include_receipt=not candidate_mode)
+    )
     post_binding = runtime_binding(args)
     post_binary = runtime_binding(args, include_binary_hash=True)
     post_numeric = numeric_rerun_status(args, load_json(args.state_path))
@@ -2024,10 +2644,19 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         details=details,
         globally_eligible=all(checks.values()),
     )
-    evidence["protocol_receipt"] = {
-        "path": str(args.protocol_receipt),
-        "sha256": sha256_path(args.protocol_receipt),
-    }
+    candidate_path: Path | None = None
+    if candidate_proposal is not None:
+        candidate_path = staging_dir / "protocol_candidate.json"
+        write_json(candidate_path, candidate_proposal)
+        evidence["protocol_candidate"] = {
+            "path": str(published_path(candidate_path, staging_dir=staging_dir, output_dir=output_dir)),
+            "sha256": sha256_path(candidate_path),
+        }
+    else:
+        evidence["protocol_receipt"] = {
+            "path": str(args.protocol_receipt),
+            "sha256": sha256_path(args.protocol_receipt),
+        }
     evidence["runner"] = {
         "path": str(RUNNER_PATH),
         "sha256": sha256_path(RUNNER_PATH),
@@ -2041,6 +2670,7 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "evidence_manifest": str(output_dir / evidence_path.name),
         "evidence_manifest_sha256": sha256_path(evidence_path),
         "question_vectors": vector_paths,
+        "context_coverage": context_coverage,
         "scoring_vectors": scoring_vector_paths,
         "observations": details,
         "aggregates": aggregates,
@@ -2059,6 +2689,8 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     report_path = staging_dir / "runner_report.json"
     write_json(report_path, report)
     bundle_paths = [evidence_path, report_path, watcher_path]
+    if candidate_path is not None:
+        bundle_paths.append(candidate_path)
     bundle_paths.extend(staging_dir / f"question_vector.T{tier}.json" for tier in (1, 2))
     bundle_paths.extend(staging_dir / f"scoring_vector.T{tier}.json" for tier in (1, 2))
     for tier in (1, 2):
@@ -2088,7 +2720,12 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "status": "complete" if report["decision_grade"] else "failed",
         "manifest_sha256": sha256_path(evidence_path),
         "runner_report_sha256": sha256_path(report_path),
-        "protocol_receipt_sha256": sha256_path(args.protocol_receipt),
+        "protocol_receipt_sha256": (
+            None if candidate_mode else sha256_path(args.protocol_receipt)
+        ),
+        "protocol_candidate_sha256": (
+            sha256_path(candidate_path) if candidate_path is not None else None
+        ),
         "runner_sha256": sha256_path(RUNNER_PATH),
         "bundle_sha256": bundle,
         "completed_at": utc_now(),
@@ -2107,6 +2744,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--prepare", action="store_true", help="read-only preflight; default safe mode")
     mode.add_argument("--execute", action="store_true", help="collect exactly six E8 evidence observations")
+    mode.add_argument(
+        "--collect-candidate",
+        action="store_true",
+        help="collect sealed v4 candidate evidence without a human receipt or state write",
+    )
     mode.add_argument("--protocol-proposal", action="store_true", help="read-only receipt input proposal")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts/operator/e8_quality_baseline_evidence_20260726")
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
@@ -2120,10 +2762,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--protocol-receipt", type=Path, default=PROTOCOL_RECEIPT)
     parser.add_argument("--t1-core-id", default="core_v2")
     parser.add_argument("--t1-n", type=int, default=50)
-    parser.add_argument("--t2-n", type=int, default=EVAL_T2_SPEC_N)
+    parser.add_argument(
+        "--t2-n",
+        type=int,
+        choices=(EVAL_T2_SPEC_N,),
+        default=EVAL_T2_SPEC_N,
+    )
     parser.add_argument("--seed", type=int, default=EVAL_SPEC_SEED)
     parser.add_argument("--http-timeout-s", type=float, default=10.0)
-    parser.add_argument("--evaltower-timeout-s", type=int, default=120)
+    parser.add_argument(
+        "--evaltower-timeout-s",
+        type=int,
+        choices=(E8_EVAL_REQUEST_TIMEOUT_S,),
+        default=E8_EVAL_REQUEST_TIMEOUT_S,
+    )
     return parser.parse_args(argv)
 
 
@@ -2133,26 +2785,58 @@ def protocol_proposal(args: argparse.Namespace) -> dict[str, Any]:
     vectors: dict[int, dict[str, Any]] = {}
     scoring_vectors: dict[int, dict[str, Any]] = {}
     core_paths: dict[str, str] = {}
+    question_sets: dict[int, list[dict[str, Any]]] = {}
+    raw_question_sets: dict[int, tuple[list[dict[str, Any]], str]] = {}
     for tier, n in ((1, args.t1_n), (2, args.t2_n)):
         questions, core_id = question_vector(tower, tier=tier, t1_core_id=args.t1_core_id, n=n, seed=args.seed)
+        validate_source_vector_scorer_config(questions, tier=tier)
+        raw_question_sets[tier] = (questions, core_id)
+    for tier in (1, 2):
+        questions, core_id = raw_question_sets[tier]
+        questions = apply_context_replacement_map(args, questions, tier=tier)
         validate_source_vector_scorer_config(questions, tier=tier)
         vectors[tier] = public_vector(questions, tier=tier, core_id=core_id, seed=args.seed)
         scoring_vectors[tier] = scoring_vector(
             questions, tier=tier, core_id=core_id, seed=args.seed
         )
+        question_sets[tier] = questions
         if tier == 1:
             _questions, _metadata, core_path = tower._load_designed_core(args.t1_core_id)
             core_paths[str(tier)] = str(core_path)
     live_binding = runtime_binding(args, include_binary_hash=True)
+    # This read-only scan is required before a successor receipt can be
+    # minted: the ratified vector must be proven admissible before any run.
+    context_coverage = {
+        str(tier): frontdoor_context_coverage(
+            args, question_sets[tier], live_binding, fail_closed=False
+        )
+        for tier in (1, 2)
+    }
+    overflowing = [
+        row["qid"]
+        for coverage in context_coverage.values()
+        for row in coverage["rows"]
+        if not row["fits"]
+    ]
+    if overflowing:
+        raise ValueError(
+            "E8 fixed vector exceeds live frontdoor context under the v4 conservative admission contract: "
+            + ", ".join(overflowing)
+        )
     return {
-        "schema": "epyc.e8_quality_baseline_protocol_proposal.v1",
+        "schema": "epyc.e8_quality_baseline_protocol_proposal.v3",
         "era": E8_ERA,
+        "context_coverage": context_coverage,
         "protocol": {
             "protocol_id": PROTOCOL_ID,
             "seed": args.seed,
             "repetitions": REPETITIONS,
             "generation_concurrency": CONCURRENCY,
             "scoring_concurrency": SCORING_CONCURRENCY,
+            "request_timeout_s": args.evaltower_timeout_s,
+            "frontdoor_request_contract": FRONTDOOR_REQUEST_CONTRACT,
+            "watcher_contract": WATCHER_CONTRACT,
+            "context_coverage_contract": CONTEXT_COVERAGE_CONTRACT,
             "baseline_mode": "direct_core_only_v1",
             "route_policy": "frontdoor_only",
             "judge_defaults": {
@@ -2165,6 +2849,11 @@ def protocol_proposal(args: argparse.Namespace) -> dict[str, Any]:
             "runtime_binding": live_binding,
             "llama_source_provenance": frozen_llama_source_provenance(),
             "measurement_source_sha256": measurement_source_fingerprints(args),
+            "context_replacement_map": {
+                key: value
+                for key, value in context_replacement_map_identity(args).items()
+                if key != "replacements"
+            },
             "expected_probe_groups": sorted(EXPECTED_PROBE_GROUPS),
             "tiers": {
                 str(tier): {
@@ -2195,7 +2884,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.protocol_proposal:
         print(json.dumps(protocol_proposal(args), indent=2, sort_keys=True))
         return 0
-    report, rc = (execute(args) if args.execute else (prepare_report(args), 0))
+    report, rc = (
+        execute(args, candidate_mode=args.collect_candidate)
+        if args.execute or args.collect_candidate
+        else (prepare_report(args), 0)
+    )
     print(json.dumps(report, indent=2, sort_keys=True))
     return rc
 

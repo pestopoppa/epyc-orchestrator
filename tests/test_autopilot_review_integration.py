@@ -11,6 +11,7 @@ import importlib
 import json
 import sys
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -376,13 +377,22 @@ def test_ap3_live_role_restart_requires_operator_env(monkeypatch) -> None:
 
 def test_ap3_role_restart_builds_registry_overrides_and_groups_by_role(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
+    ordering: list[str] = []
     monkeypatch.setenv("AUTOPILOT_AP3_ROLE_RESTART_ENABLE", "1")
 
     def fake_restart_role(**kwargs):
+        ordering.append("restart")
         calls.append(kwargs)
         return {"status": "ok", "role": kwargs["role"], "registry_overrides": kwargs["registry_overrides"]}
 
     monkeypatch.setattr(ca, "restart_role", fake_restart_role)
+    monkeypatch.setattr(
+        ca,
+        "_ap3_prewarm_role_targets",
+        lambda *args, **kwargs: ordering.append("prewarm") or {
+            "status": "ok", "targets": [], "policy": "test",
+        },
+    )
 
     res = ca.apply_role_restart_params(
         {
@@ -398,9 +408,13 @@ def test_ap3_role_restart_builds_registry_overrides_and_groups_by_role(monkeypat
 
     assert res["status"] == "ok"
     assert len(calls) == 1
+    assert ordering == ["prewarm", "restart"]
     assert calls[0]["role"] == "worker_general"
     assert calls[0]["pause_dispatch"] is True
     assert calls[0]["require_smoke_check"] is True
+    assert calls[0]["boundary_evidence"] == {
+        "ap3_prewarm": {"status": "ok", "targets": [], "policy": "test"}
+    }
     assert calls[0]["registry_overrides"] == {
         "server_mode.worker.acceleration.draft_max": 4,
         "server_mode.worker.acceleration.draft_min": 1,
@@ -408,6 +422,197 @@ def test_ap3_role_restart_builds_registry_overrides_and_groups_by_role(monkeypat
         "server_mode.worker.acceleration.draft_p_split": 0.25,
         "server_mode.worker.acceleration.ngram_mod_n_match": 16,
         "server_mode.worker.kv_quant": {"k": "f16", "v": "f16"},
+    }
+
+
+def test_ap3_prewarm_failure_prevents_registry_restart(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_AP3_ROLE_RESTART_ENABLE", "1")
+    monkeypatch.setattr(
+        ca,
+        "_ap3_prewarm_role_targets",
+        lambda *args, **kwargs: {"status": "error", "error": "unreadable model", "targets": []},
+    )
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(ca, "restart_role", lambda **kwargs: calls.append(kwargs) or {"status": "ok"})
+
+    result = ca.apply_role_restart_params({"role_restart.worker_draft_max": 4})
+
+    assert result["status"] == "error"
+    assert calls == []
+    assert result["per_role"]["worker_general"]["ap3_prewarm"]["error"] == "unreadable model"
+
+
+def test_ap3_readiness_probe_is_one_token_and_failure_is_strict(monkeypatch) -> None:
+    prewarm = {"status": "ok", "targets": [{"ports": [8072], "path": "/m.gguf"}]}
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            raise RuntimeError("not ready")
+
+    def fake_post(url: str, *, json: dict[str, object], timeout: int):
+        calls.append((url, json))
+        return Response()
+
+    monkeypatch.setattr(ca.httpx, "post", fake_post)
+    check = ca._ap3_strict_smoke_with_readiness(smoke_check=lambda *_: {"status": "ok"}, prewarm=prewarm)
+
+    result = check("worker_general", ["worker_general"])
+
+    assert result["status"] == "error"
+    assert calls == [("http://127.0.0.1:8072/completion", {"prompt": "ready", "n_predict": 1, "temperature": 0})]
+    assert result["readiness"][0]["timing_excluded"] is True
+    assert result["readiness"][0]["error_type"] == "RuntimeError"
+    assert result["base_smoke"]["status"] == "ok"
+
+
+def test_ap3_readiness_skips_probe_when_smoke_fails(monkeypatch) -> None:
+    prewarm = {"status": "ok", "targets": [{"ports": [8072]}]}
+    monkeypatch.setattr(ca.httpx, "post", lambda *args, **kwargs: pytest.fail("must not probe after smoke failure"))
+    check = ca._ap3_strict_smoke_with_readiness(smoke_check=lambda *_: False, prewarm=prewarm)
+
+    result = check("worker_general", ["worker_general"])
+
+    assert result["status"] == "error"
+
+
+def test_ap3_readiness_dedupes_ports_and_returns_evidence_reference(monkeypatch) -> None:
+    prewarm = {
+        "status": "ok",
+        "evidence_ref": "ap3-numa-prewarm:worker_general:2026-07-27T00:00:00+00:00",
+        "targets": [{"ports": [8072, 8072]}, {"ports": [8072, 8085]}],
+    }
+    calls: list[str] = []
+
+    class Response:
+        status_code = 200
+        content = b'{"tokens_predicted":1,"content":"x"}'
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"tokens_predicted": 1, "content": "x"}
+
+    def fake_post(url: str, **_kwargs: object) -> Response:
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr(ca.httpx, "post", fake_post)
+    check = ca._ap3_strict_smoke_with_readiness(
+        smoke_check=lambda *_: {"status": "ok"}, prewarm=prewarm
+    )
+
+    result = check("worker_general", ["worker_general"])
+
+    assert result["status"] == "ok"
+    assert calls == [
+        "http://127.0.0.1:8072/completion",
+        "http://127.0.0.1:8085/completion",
+    ]
+    assert result["prewarm_evidence_ref"] == prewarm["evidence_ref"]
+    assert all(probe["timing_excluded"] for probe in result["readiness"])
+    assert all(probe["token_count"] == 1 for probe in result["readiness"])
+    assert all(probe["http_status"] == 200 for probe in result["readiness"])
+    assert all(probe["prompt_sha256"] == sha256(b"ready").hexdigest() for probe in result["readiness"])
+    assert all(probe["response_sha256"] == sha256(Response.content).hexdigest() for probe in result["readiness"])
+    assert all(probe["elapsed_s"] >= 0 for probe in result["readiness"])
+    assert result["base_smoke"]["status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    ("payload", "error_type"),
+    [
+        ({"tokens_predicted": 0}, "ValueError"),
+        ({"tokens_predicted": "one"}, "ValueError"),
+    ],
+)
+def test_ap3_readiness_rejects_200_without_one_generated_token(
+    monkeypatch, payload: dict[str, object], error_type: str
+) -> None:
+    class Response:
+        status_code = 200
+        content = b"bounded-response"
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return payload
+
+    monkeypatch.setattr(ca.httpx, "post", lambda *_args, **_kwargs: Response())
+    check = ca._ap3_strict_smoke_with_readiness(
+        smoke_check=lambda *_: {"status": "ok"},
+        prewarm={"status": "ok", "targets": [{"ports": [8072]}]},
+    )
+
+    result = check("worker_general", ["worker_general"])
+
+    assert result["status"] == "error"
+    assert result["base_smoke"]["status"] == "ok"
+    probe = result["readiness"][0]
+    assert probe["port"] == 8072
+    assert probe["prompt_sha256"] == sha256(b"ready").hexdigest()
+    assert probe["http_status"] == 200
+    assert probe["response_sha256"] == sha256(b"bounded-response").hexdigest()
+    assert probe["status"] == "error"
+    assert probe["error_type"] == error_type
+    assert probe["elapsed_s"] >= 0
+
+
+def test_ap3_readiness_rejects_malformed_json_with_bounded_evidence(monkeypatch) -> None:
+    class Response:
+        status_code = 200
+        content = b"not-json"
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            raise json.JSONDecodeError("bad", "not-json", 0)
+
+    monkeypatch.setattr(ca.httpx, "post", lambda *_args, **_kwargs: Response())
+    check = ca._ap3_strict_smoke_with_readiness(
+        smoke_check=lambda *_: {"status": "ok"},
+        prewarm={"status": "ok", "targets": [{"ports": [8072]}]},
+    )
+
+    result = check("worker_general", ["worker_general"])
+
+    assert result["status"] == "error"
+    probe = result["readiness"][0]
+    assert probe["error_type"] == "JSONDecodeError"
+    assert probe["response_sha256"] == sha256(b"not-json").hexdigest()
+    assert "not-json" not in str(probe)
+
+
+def test_ap3_prewarm_failure_writes_pre_reload_boundary_evidence(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_AP3_ROLE_RESTART_ENABLE", "1")
+    monkeypatch.setattr(
+        ca,
+        "_ap3_prewarm_role_targets",
+        lambda *args, **kwargs: {
+            "status": "error",
+            "error": "unreadable model",
+            "affected_roles": ["worker_general"],
+            "targets": [],
+        },
+    )
+    events: list[dict[str, object]] = []
+
+    class Journal:
+        def append_role_restart_boundary_event(self, **kwargs: object) -> dict[str, object]:
+            events.append(kwargs)
+            return kwargs
+
+    result = ca.apply_role_restart_params(
+        {"role_restart.worker_draft_max": 4}, journal=Journal()
+    )
+
+    assert result["status"] == "error"
+    assert events[0]["command"] == "ap3-numa-prewarm"
+    assert events[0]["evidence"] == {
+        "ap3_prewarm": result["per_role"]["worker_general"]["ap3_prewarm"]
     }
 
 

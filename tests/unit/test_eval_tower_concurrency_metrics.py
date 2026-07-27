@@ -1776,6 +1776,7 @@ def test_eval_question_stamps_eval_batch_request_metadata(monkeypatch) -> None:
                 "prompt": "Say ok.",
                 "expected": "ok",
                 "_eval_batch_id": "evaltower-T1-123-1q",
+                "allow_delegation": False,
             },
             client,
         )
@@ -1783,6 +1784,7 @@ def test_eval_question_stamps_eval_batch_request_metadata(monkeypatch) -> None:
     assert calls[0]["request_priority"] == "background"
     assert calls[0]["workload_class"] == "eval_batch"
     assert calls[0]["batch_id"] == "evaltower-T1-123-1q"
+    assert calls[0]["allow_delegation"] is False
 
 
 def test_eval_question_forwards_prompt_root_when_present(monkeypatch) -> None:

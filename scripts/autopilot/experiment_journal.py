@@ -327,6 +327,7 @@ class RoleRestartBoundaryEvent:
     actor: str
     boundary_trial_id: int | None = None
     command: str = ""
+    evidence: dict[str, Any] | None = None
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -699,6 +700,7 @@ class ExperimentJournal:
         actor: str = "config_applicator.restart_role",
         boundary_trial_id: int | None = None,
         command: str = "",
+        evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Append an intentional role-restart boundary event."""
         return self.append_ledger_event(asdict(
@@ -714,6 +716,7 @@ class ExperimentJournal:
                 actor=actor,
                 boundary_trial_id=boundary_trial_id,
                 command=command,
+                evidence=copy.deepcopy(evidence) if evidence is not None else None,
             )
         ))
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import importlib.util
 import json
 import os
@@ -55,6 +56,7 @@ class FakeAggregate:
 
 class FakeTower:
     calls = 0
+    last_questions: list[dict] = []
     error_on_call: int | None = None
     wrong_vector_on_call: int | None = None
     concurrency = 3
@@ -64,6 +66,7 @@ class FakeTower:
 
     def _eval_batch(self, questions: list[dict], *_args: object, **_kwargs: object) -> list[FakeQuestionResult]:
         type(self).calls += 1
+        type(self).last_questions = [dict(question) for question in questions]
         error = "backend failed" if type(self).calls == type(self).error_on_call else None
         rows = [
             FakeQuestionResult(
@@ -111,12 +114,30 @@ def _args(tmp_path: Path, *extra: str):
     ])
 
 
+def test_cli_accepts_only_the_canonical_t2_size() -> None:
+    args = runner.parse_args(["--protocol-proposal", "--t2-n", "500"])
+    assert args.t2_n == 500
+
+    with pytest.raises(SystemExit):
+        runner.parse_args(["--protocol-proposal", "--t2-n", "50"])
+
+
+def test_cli_accepts_only_the_ratified_e8_request_timeout() -> None:
+    args = runner.parse_args(["--protocol-proposal", "--evaltower-timeout-s", "300"])
+    assert args.evaltower_timeout_s == runner.E8_EVAL_REQUEST_TIMEOUT_S
+
+    with pytest.raises(SystemExit):
+        runner.parse_args(["--protocol-proposal", "--evaltower-timeout-s", "120"])
+
+
 def _patch_clean_environment(monkeypatch, *, mutate: Path | None = None) -> None:
     FakeTower.calls = 0
+    FakeTower.last_questions = []
     FakeTower.error_on_call = None
     FakeTower.wrong_vector_on_call = None
     FakeTower.concurrency = 3
     monkeypatch.setattr(runner, "EvalTower", FakeTower)
+    monkeypatch.setattr(runner, "apply_context_replacement_map", lambda _args, questions, **_kwargs: questions)
     monkeypatch.setattr(
         runner,
         "measurement_source_paths",
@@ -129,7 +150,7 @@ def _patch_clean_environment(monkeypatch, *, mutate: Path | None = None) -> None
         runner,
         "receipt_payload",
         lambda *_args: {
-            "schema": "epyc.operator_e8_quality_baseline_protocol.v1",
+            "schema": "epyc.operator_e8_quality_baseline_protocol.v3",
             "decision": runner.PROTOCOL_DECISION,
             "era": "E8",
             "operator_attestation": "test",
@@ -137,6 +158,11 @@ def _patch_clean_environment(monkeypatch, *, mutate: Path | None = None) -> None
         },
     )
     monkeypatch.setattr(runner, "protocol_contract", lambda *_args: {})
+    monkeypatch.setattr(
+        runner,
+        "frontdoor_context_coverage",
+        lambda *_args, **_kwargs: {"schema": runner.E8_CONTEXT_COVERAGE_SCHEMA, "rows": []},
+    )
     monkeypatch.setattr(
         runner,
         "runtime_binding",
@@ -157,7 +183,15 @@ def _patch_clean_environment(monkeypatch, *, mutate: Path | None = None) -> None
         detail["sidecar_sha256"] = runner.sha256_path(sidecar)
         return observation, detail
     monkeypatch.setattr(runner, "run_repetition", with_sidecar)
-    health = {"ok": True, "payload_sha256": "same", "payload": {"status": "ok"}}
+    health = {
+        "ok": True,
+        "payload_sha256": "same",
+        "payload": {"status": "ok"},
+        "probe_urls": {
+            group: f"http://127.0.0.1/{index}"
+            for index, group in enumerate(sorted(runner.EXPECTED_PROBE_GROUPS), 1)
+        },
+    }
     monkeypatch.setattr(runner, "api_health", lambda *_args, **_kwargs: dict(health))
     monkeypatch.setattr(
         runner,
@@ -183,6 +217,36 @@ def test_execute_seals_and_atomically_publishes_six_observation_evidence(tmp_pat
 
     assert rc == 0
     assert report["decision_grade"] is True
+
+
+def test_candidate_collection_never_requires_or_mints_human_receipt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _patch_clean_environment(monkeypatch)
+    args = _args(tmp_path)
+    args.protocol_receipt = tmp_path / "missing-human-receipt.json"
+    assert not args.protocol_receipt.exists()
+    proposal = {
+        "schema": "epyc.e8_quality_baseline_protocol_proposal.v3",
+        "protocol": {"protocol_id": runner.PROTOCOL_ID},
+        "t1_core_file_sha256": "candidate-core",
+    }
+    monkeypatch.setattr(runner, "protocol_proposal", lambda _args: proposal)
+    monkeypatch.setattr(
+        runner,
+        "receipt_payload",
+        lambda *_args: pytest.fail("candidate collection must not read a human receipt"),
+    )
+
+    report, rc = runner.execute(args, candidate_mode=True)
+
+    assert rc == 0
+    assert report["decision_grade"] is True
+    evidence = json.loads(Path(report["evidence_manifest"]).read_text())
+    assert "protocol_receipt" not in evidence
+    assert evidence["protocol_candidate"]["sha256"] == runner.sha256_path(
+        Path(evidence["protocol_candidate"]["path"])
+    )
     assert len(report["observations"][1]) == 3
     assert len(report["observations"][2]) == 3
     manifest = Path(report["evidence_manifest"])
@@ -190,6 +254,200 @@ def test_execute_seals_and_atomically_publishes_six_observation_evidence(tmp_pat
     assert seal["status"] == "complete"
     assert stat.S_IMODE(manifest.parent.stat().st_mode) == 0o700
     assert json.loads(manifest.read_text())["replacement"]["quality_history_by_tier"] == {"1": [3.0] * 3, "2": [3.0] * 3}
+    assert all(
+        question[key] == value
+        for question in FakeTower.last_questions
+        for key, value in runner.FRONTDOOR_REQUEST_CONTRACT.items()
+        if key != "verification"
+    )
+
+
+def test_runtime_watcher_receipt_scope_is_explicit_and_fail_closed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _patch_clean_environment(monkeypatch)
+    args = _args(tmp_path)
+    args.protocol_receipt = tmp_path / "missing-human-receipt.json"
+    binding = runner.runtime_binding(args)
+
+    with pytest.raises(ValueError, match="immutable prerequisite is missing"):
+        runner.RuntimeWatcher(args, binding)
+
+    watcher = runner.RuntimeWatcher(args, binding, include_receipt=False)
+    watcher.sample()
+
+    assert watcher.samples[-1]["ok"] is True
+    assert str(args.protocol_receipt) not in watcher.expected_fingerprints
+
+
+def test_frontdoor_context_coverage_rejects_fixed_item_over_live_context(monkeypatch, tmp_path: Path) -> None:
+    args = _args(tmp_path)
+    binding = {
+        "runtime_topology": [{"port": 8070, "roles": ["frontdoor"]}],
+        "server_cmdlines": {"8070": ["llama-server", "--port", "8070", "-c", "32768"]},
+    }
+
+    def exact_metrics(_port: int, prompt: str, _timeout: float) -> tuple[int, str, int]:
+        return (4, "template", 4) if prompt == runner.E8_TEMPLATE_SENTINEL else (30_721, "template", 30_721)
+
+    monkeypatch.setattr(runner, "_frontdoor_template_metrics", exact_metrics)
+    questions = [{
+        "id": "longbench_671b3fa1bb02136c067d5353",
+        "qid": "longbench_671b3fa1bb02136c067d5353",
+        "prompt": "summarize this long document",
+    }]
+
+    with pytest.raises(ValueError, match="longbench_671b3fa1bb02136c067d5353"):
+        runner.frontdoor_context_coverage(args, questions, binding)
+
+
+def test_context_coverage_uses_sealed_server_admission_when_tokenize_undercounts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    args = _args(tmp_path)
+    binding = {
+        "runtime_topology": [{"port": 8070, "roles": ["frontdoor"]}],
+        "server_cmdlines": {"8070": ["llama-server", "--port", "8070", "-c", "32768"]},
+    }
+    monkeypatch.setattr(
+        runner, "_frontdoor_template_metrics", lambda *_args: (100, "template", 100)
+    )
+    question = {
+        "id": "longbench_671b3fa1bb02136c067d5353",
+        "qid": "longbench_671b3fa1bb02136c067d5353",
+        "prompt": "small according to tokenize",
+    }
+
+    coverage = runner.frontdoor_context_coverage(args, [question], binding, fail_closed=False)
+
+    row = coverage["rows"][0]
+    assert row["tokenizer_required_tokens"] == 2148
+    assert row["sealed_server_admission_tokens"] == 62_515
+    assert row["server_required_tokens"] == 64_563
+    assert row["fits"] is False
+
+
+def test_frontdoor_context_coverage_records_exact_template_and_output_budget(monkeypatch, tmp_path: Path) -> None:
+    args = _args(tmp_path)
+    binding = {
+        "runtime_topology": [{"port": 8070, "roles": ["frontdoor"]}],
+        "server_cmdlines": {"8070": ["llama-server", "--port", "8070", "-c", "32768"]},
+    }
+    monkeypatch.setattr(
+        runner, "_frontdoor_template_metrics", lambda *_args: (100, "template", 100)
+    )
+
+    coverage = runner.frontdoor_context_coverage(
+        args, [{"id": "q", "qid": "q", "prompt": "explain"}], binding
+    )
+
+    assert coverage["frontdoor"]["context_length"] == 32768
+    assert coverage["rows"] == [{
+        "qid": "q",
+        "prompt_tokens": 100,
+        "rendered_utf8_bytes": 100,
+        "max_tokens": 2048,
+        "tokenizer_required_tokens": 2148,
+        "sealed_server_admission_tokens": None,
+        "server_required_tokens": 2148,
+        "required_tokens": 2148,
+        "context_length": 32768,
+        "fits": True,
+        "per_frontdoor": [{
+            "port": 8070,
+            "prompt_tokens": 100,
+            "rendered_prompt_sha256": "template",
+            "rendered_utf8_bytes": 100,
+            "tokenizer_required_tokens": 2148,
+            "server_required_tokens": 2148,
+            "required_tokens": 2148,
+            "context_length": 32768,
+            "fits": True,
+        }],
+    }]
+
+
+def test_frontdoor_context_coverage_checks_real_prompt_on_every_frontdoor(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A common sentinel template does not prove a real prompt fits every route."""
+    args = _args(tmp_path)
+    binding = {
+        "runtime_topology": [
+            {"port": 8070, "roles": ["frontdoor"]},
+            {"port": 8080, "roles": ["frontdoor"]},
+        ],
+        "server_cmdlines": {
+            "8070": ["llama-server", "--port", "8070", "-c", "32768"],
+            "8080": ["llama-server", "--port", "8080", "-c", "32768"],
+        },
+    }
+
+    def metrics(port: int, prompt: str, _timeout: float) -> tuple[int, str, int]:
+        if prompt == runner.E8_TEMPLATE_SENTINEL:
+            return 4, "same-sentinel-template", 4
+        return (100 if port == 8070 else 31_000), "route-template", 100
+
+    monkeypatch.setattr(runner, "_frontdoor_template_metrics", metrics)
+    coverage = runner.frontdoor_context_coverage(
+        args, [{"id": "q", "qid": "q", "prompt": "real prompt"}], binding, fail_closed=False
+    )
+
+    row = coverage["rows"][0]
+    assert row["fits"] is False
+    assert row["required_tokens"] == 33_048
+    assert [item["fits"] for item in row["per_frontdoor"]] == [True, False]
+
+
+def test_prepare_blocks_before_inference_when_context_coverage_fails(tmp_path: Path, monkeypatch) -> None:
+    _patch_clean_environment(monkeypatch)
+    monkeypatch.setattr(
+        runner,
+        "frontdoor_context_coverage",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("E8 fixed vector exceeds live frontdoor context after exact template and output cap: longbench")
+        ),
+    )
+
+    report = runner.prepare_report(_args(tmp_path))
+
+    assert report["decision_grade"] is False
+    assert any("exceeds live frontdoor context" in blocker for blocker in report["blockers"])
+    assert FakeTower.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("force_mode", "repl"), ("allow_delegation", True)],
+)
+def test_run_repetition_rejects_conflicting_direct_core_source_fields(
+    tmp_path: Path, monkeypatch, field: str, value: object
+) -> None:
+    _patch_clean_environment(monkeypatch)
+    args = _args(tmp_path)
+    question = {
+        "id": "q1",
+        "qid": "q1",
+        "suite": "suite_a",
+        "prompt": "p",
+        "expected": "e",
+        "scoring_method": "exact_match",
+        field: value,
+    }
+
+    with pytest.raises(ValueError, match=f"source {field}"):
+        runner.run_repetition(
+            FakeTower(),
+            tier=1,
+            repetition=1,
+            questions=[question],
+            core_id="core",
+            output_dir=tmp_path,
+            expected_binding={},
+            args=args,
+            sidecar_dir=tmp_path / "sidecars",
+            published_dir=tmp_path,
+        )
 
 
 def test_execute_refuses_active_autopilot_before_any_evaluation(tmp_path: Path, monkeypatch) -> None:
@@ -255,11 +513,171 @@ def test_monitor_persistence_failure_is_sticky_and_fails_closed(tmp_path: Path, 
     assert watcher.samples[-1]["ok"] is False
 
 
+def _health_payload(*, failed_reason: str | None = None) -> dict:
+    probes = {
+        group: {"ok": True, "url": f"http://127.0.0.1/{index}", "status_code": 200}
+        for index, group in enumerate(sorted(runner.EXPECTED_PROBE_GROUPS), 1)
+    }
+    if failed_reason is not None:
+        probes["architect_general"] = {
+            "ok": False,
+            "url": "http://127.0.0.1/architect",
+            "status_code": None,
+            "failure_reason": failed_reason,
+        }
+    return {
+        "status": "ok" if failed_reason is None else "degraded",
+        "models_loaded": 6,
+        "backend_probes": probes,
+    }
+
+
+def test_api_health_classifies_only_exact_backend_read_timeout_saturation(monkeypatch) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return _health_payload(failed_reason="read_timeout")
+
+    monkeypatch.setattr(runner.httpx, "get", lambda *_args, **_kwargs: Response())
+
+    health = runner.api_health("http://127.0.0.1:8000", 1.0)
+
+    assert health["ok"] is False
+    assert health["failure_class"] == "backend_probe_read_timeout"
+    assert health["probe_failures"] == [{
+        "group": "architect_general",
+        "failure_reason": "read_timeout",
+        "status_code": None,
+        "url": "http://127.0.0.1/architect",
+    }]
+
+
+def test_runtime_watcher_accepts_readiness_saturation_only_inside_active_load(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _patch_clean_environment(monkeypatch)
+    args = _args(tmp_path)
+    health = {
+        "ok": False,
+        "failure_class": "backend_probe_read_timeout",
+        "probe_urls": {
+            group: f"http://127.0.0.1/{index}"
+            for index, group in enumerate(sorted(runner.EXPECTED_PROBE_GROUPS), 1)
+        },
+        "probe_failures": [{"group": "architect_general", "failure_reason": "read_timeout"}],
+    }
+    monkeypatch.setattr(runner, "api_health", lambda *_args, **_kwargs: dict(health))
+    watcher = runner.RuntimeWatcher(
+        args,
+        runner.runtime_binding(args),
+        tmp_path / "watch.jsonl",
+        expected_probe_urls=health["probe_urls"],
+    )
+
+    watcher.sample()
+    assert watcher.samples[-1]["ok"] is False
+    assert watcher.samples[-1]["api_saturation_during_active_load"] is False
+
+    with watcher.active_load(tier=1, repetition=2):
+        watcher.sample()
+    accepted = watcher.samples[-1]
+    assert accepted["ok"] is True
+    assert accepted["api_saturation_during_active_load"] is True
+    assert accepted["active_load"] == {"tier": 1, "repetition": 2}
+    assert accepted["api_probe_urls_match_preflight"] is True
+
+
+def test_runtime_watcher_rejects_non_timeout_backend_failure_during_active_load(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _patch_clean_environment(monkeypatch)
+    args = _args(tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "api_health",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "failure_class": "readiness_contract_failed",
+            "probe_urls": {
+                group: f"http://127.0.0.1/{index}"
+                for index, group in enumerate(sorted(runner.EXPECTED_PROBE_GROUPS), 1)
+            },
+            "probe_failures": [{"group": "architect_general", "failure_reason": "connect_error"}],
+        },
+    )
+    watcher = runner.RuntimeWatcher(args, runner.runtime_binding(args), tmp_path / "watch.jsonl")
+
+    with watcher.active_load(tier=1, repetition=1):
+        watcher.sample()
+
+    assert watcher.samples[-1]["ok"] is False
+    assert watcher.samples[-1]["api_saturation_during_active_load"] is False
+
+
+def test_runtime_watcher_rejects_read_timeout_with_changed_probe_url_during_active_load(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _patch_clean_environment(monkeypatch)
+    args = _args(tmp_path)
+    expected_urls = {
+        group: f"http://127.0.0.1/{index}"
+        for index, group in enumerate(sorted(runner.EXPECTED_PROBE_GROUPS), 1)
+    }
+    observed_urls = {**expected_urls, "architect_general": "http://127.0.0.1/stale-architect"}
+    monkeypatch.setattr(
+        runner,
+        "api_health",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "failure_class": "backend_probe_read_timeout",
+            "probe_urls": observed_urls,
+            "probe_failures": [{"group": "architect_general", "failure_reason": "read_timeout"}],
+        },
+    )
+    watcher = runner.RuntimeWatcher(
+        args,
+        runner.runtime_binding(args),
+        tmp_path / "watch.jsonl",
+        expected_probe_urls=expected_urls,
+    )
+
+    with watcher.active_load(tier=1, repetition=1):
+        watcher.sample()
+
+    assert watcher.samples[-1]["ok"] is False
+    assert watcher.samples[-1]["api_saturation_during_active_load"] is False
+    assert watcher.samples[-1]["api_probe_urls_match_preflight"] is False
+
+
+def test_runtime_watcher_rejects_read_timeout_without_a_preflight_probe_map(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _patch_clean_environment(monkeypatch)
+    args = _args(tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "api_health",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "failure_class": "backend_probe_read_timeout",
+            "probe_failures": [{"group": "architect_general", "failure_reason": "read_timeout"}],
+        },
+    )
+    watcher = runner.RuntimeWatcher(args, runner.runtime_binding(args), tmp_path / "watch.jsonl")
+
+    with watcher.active_load(tier=1, repetition=1):
+        watcher.sample()
+
+    assert watcher.samples[-1]["ok"] is False
+    assert watcher.samples[-1]["api_saturation_during_active_load"] is False
+
+
 def test_delayed_monitor_samples_prevent_atomic_publish(tmp_path: Path, monkeypatch) -> None:
     _patch_clean_environment(monkeypatch)
 
     class DelayedWatcher:
-        def __init__(self, _args, _binding, artifact_path):
+        def __init__(self, _args, _binding, artifact_path, **_kwargs):
             self._thread = type("Thread", (), {"is_alive": lambda self: False})()
             self.samples = []
             self.fatal_error = None
@@ -271,6 +689,9 @@ def test_delayed_monitor_samples_prevent_atomic_publish(tmp_path: Path, monkeypa
                 {"started_at": "2026-07-26T00:00:00Z", "finished_at": "2026-07-26T00:00:00Z", "ok": True},
                 {"started_at": "2026-07-26T00:00:10Z", "finished_at": "2026-07-26T00:00:10Z", "ok": True},
             ]
+
+        def active_load(self, **_kwargs):
+            return nullcontext()
 
         def stop(self):
             return self.samples
@@ -319,10 +740,19 @@ def test_tampered_sealed_bundle_is_no_longer_hash_consistent(tmp_path: Path, mon
 def test_terminal_stack_or_health_drift_never_publishes_acceptable_manifest(tmp_path: Path, monkeypatch) -> None:
     _patch_clean_environment(monkeypatch)
     calls = 0
+
     def drifting_health(*_args, **_kwargs):
         nonlocal calls
         calls += 1
-        return {"ok": calls < 3, "payload_sha256": "stable" if calls < 3 else "changed", "payload": {}}
+        return {
+            "ok": calls < 3,
+            "payload_sha256": "stable" if calls < 3 else "changed",
+            "payload": {},
+            "probe_urls": {
+                group: f"http://127.0.0.1/{index}"
+                for index, group in enumerate(sorted(runner.EXPECTED_PROBE_GROUPS), 1)
+            },
+        }
     monkeypatch.setattr(runner, "api_health", drifting_health)
     report, rc = runner.execute(_args(tmp_path))
     assert rc == 2
@@ -560,7 +990,7 @@ def test_watcher_failure_aborts_before_next_repetition(tmp_path: Path, monkeypat
     class FailingWatcher:
         latest = None
 
-        def __init__(self, _args, _binding, artifact_path):
+        def __init__(self, _args, _binding, artifact_path, **_kwargs):
             type(self).latest = self
             self._thread = SimpleNamespace(is_alive=lambda: False)
             self.samples = [{"ok": True}]
@@ -569,6 +999,9 @@ def test_watcher_failure_aborts_before_next_repetition(tmp_path: Path, monkeypat
 
         def start(self):
             runner.write_text(self.artifact_path, '{"ok":true}\n')
+
+        def active_load(self, **_kwargs):
+            return nullcontext()
 
         def stop(self):
             return self.samples
@@ -605,7 +1038,7 @@ def test_receipt_requires_canonical_path_and_current_runner_hash(
     canonical_receipt.write_text(
         json.dumps(
             {
-                "schema": "epyc.operator_e8_quality_baseline_protocol.v1",
+                "schema": "epyc.operator_e8_quality_baseline_protocol.v3",
                 "decision": runner.PROTOCOL_DECISION,
                 "era": "E8",
                 "ratified_at": "2026-07-26T00:00:00+00:00",
@@ -627,6 +1060,7 @@ def test_receipt_requires_canonical_path_and_current_runner_hash(
                     "epyc_orchestrator": "b" * 40,
                     "epyc_inference_research": "c" * 40,
                 },
+                "supersedes": runner.REPAIR_SUPERSEDES,
             }
         )
     )
@@ -634,6 +1068,113 @@ def test_receipt_requires_canonical_path_and_current_runner_hash(
     with pytest.raises(ValueError, match="runner hash"):
         runner.receipt_payload(args)
     assert runner.RUNNER_PATH in runner.immutable_paths(args)
+
+
+def test_receipt_rejects_wrong_predecessor_evidence_before_runner_hash(
+    tmp_path: Path, monkeypatch
+) -> None:
+    args = _args(tmp_path)
+    canonical_receipt = tmp_path / "canonical-receipt.json"
+    monkeypatch.setattr(runner, "PROTOCOL_RECEIPT", canonical_receipt)
+    args.protocol_receipt = canonical_receipt
+    receipt = {
+        "schema": "epyc.operator_e8_quality_baseline_protocol.v3",
+        "decision": runner.PROTOCOL_DECISION,
+        "era": "E8",
+        "ratified_at": "2026-07-26T00:00:00+00:00",
+        "operator_attestation": "test",
+        "t2_decision": {},
+        "protocol": {"protocol_id": runner.PROTOCOL_ID},
+        "t1_core_file_sha256": "0" * 64,
+        "expected_probe_groups": sorted(runner.EXPECTED_PROBE_GROUPS),
+        "acceptance": {},
+        "sha256": {"runner": "0" * 64},
+        "repository_heads": {},
+        "supersedes": {**runner.REPAIR_SUPERSEDES, "historical_receipt": {"path": "/wrong", "sha256": "0" * 64}},
+    }
+    canonical_receipt.write_text(json.dumps(receipt))
+
+    with pytest.raises(ValueError, match="predecessor evidence differs"):
+        runner.receipt_payload(args)
+
+
+def test_protocol_contract_rejects_request_timeout_mismatch(tmp_path: Path, monkeypatch) -> None:
+    args = _args(tmp_path)
+    core_path = tmp_path / "core.jsonl"
+    core_path.write_text("{}\n")
+    vectors = {
+        tier: {
+            "core_id": f"core-{tier}",
+            "n": args.t1_n if tier == 1 else args.t2_n,
+            "dataset_sha256": f"dataset-{tier}",
+        }
+        for tier in (1, 2)
+    }
+    scoring_vectors = {tier: {"tier": tier} for tier in (1, 2)}
+    binding = {"binding": "live"}
+    topology = [{"port": 8070, "roles": ["frontdoor"]}]
+
+    class CoreTower:
+        def __init__(self, **_kwargs):
+            pass
+
+        def _load_designed_core(self, _core_id):
+            return [], {}, core_path
+
+    monkeypatch.setattr(runner, "EvalTower", CoreTower)
+    monkeypatch.setattr(runner, "sha256_path", lambda _path: "hash")
+    monkeypatch.setattr(runner, "runtime_binding", lambda *_args, **_kwargs: binding)
+    monkeypatch.setattr(runner, "runtime_topology", lambda *_args, **_kwargs: topology)
+    monkeypatch.setattr(runner, "frozen_llama_source_provenance", lambda: {"llama": "frozen"})
+    monkeypatch.setattr(runner, "measurement_source_fingerprints", lambda _args: {"runner": "hash"})
+    monkeypatch.setattr(
+        runner,
+        "context_replacement_map_identity",
+        lambda _args: {"path": "map", "sha256": "map-hash", "schema": "map-v2", "replacements": []},
+    )
+    protocol = {
+        "protocol_id": runner.PROTOCOL_ID,
+        "seed": args.seed,
+        "repetitions": runner.REPETITIONS,
+        "generation_concurrency": runner.CONCURRENCY,
+        "scoring_concurrency": runner.SCORING_CONCURRENCY,
+        "request_timeout_s": runner.E8_EVAL_REQUEST_TIMEOUT_S - 1,
+        "frontdoor_request_contract": runner.FRONTDOOR_REQUEST_CONTRACT,
+        "watcher_contract": runner.WATCHER_CONTRACT,
+        "context_coverage_contract": runner.CONTEXT_COVERAGE_CONTRACT,
+        "baseline_mode": "direct_core_only_v1",
+        "route_policy": "frontdoor_only",
+        "selected_ports": [],
+        "runtime_topology": topology,
+        "runtime_facts_sha256": "hash",
+        "runtime_binding": binding,
+        "llama_source_provenance": {"llama": "frozen"},
+        "measurement_source_sha256": {"runner": "hash"},
+        "context_replacement_map": {"path": "map", "sha256": "map-hash", "schema": "map-v2"},
+        "judge_defaults": {
+            "orchestrator_api_url": args.api_url.rstrip("/"),
+            "role": runner.JUDGE_DEFAULT_ROLE,
+        },
+        "expected_probe_groups": sorted(runner.EXPECTED_PROBE_GROUPS),
+        "tiers": {
+            str(tier): {
+                "core_id": vectors[tier]["core_id"],
+                "n": vectors[tier]["n"],
+                "dataset_sha256": vectors[tier]["dataset_sha256"],
+                "scoring_vector_sha256": runner.canonical_hash(scoring_vectors[tier]),
+                "vector_sha256": runner.vector_sha256(vectors[tier]),
+            }
+            for tier in (1, 2)
+        },
+    }
+    receipt = {
+        "protocol": protocol,
+        "t2_decision": {"n": args.t2_n, "recommended_default": 500, "alternatives": [500]},
+        "t1_core_file_sha256": "hash",
+    }
+
+    with pytest.raises(ValueError, match="request_timeout_s"):
+        runner.protocol_contract(args, receipt, vectors, scoring_vectors)
 
 
 def test_fixed_t2_source_vector_fails_closed_on_zero_group_extract_patterns() -> None:
@@ -654,14 +1195,20 @@ def test_fixed_t2_source_vector_fails_closed_on_zero_group_extract_patterns() ->
     )
     assert sum(question["scoring_method"] == "llm_judge" for question in t1_questions) == 4
     assert sum(question["scoring_method"] == "llm_judge" for question in questions) == 38
+    invalid_questions = []
+    for question in questions:
+        scoring_config = dict(question.get("scoring_config") or {})
+        if question["id"] in {"real_suite_v1_0043", "needle_039"}:
+            scoring_config["extract_pattern"] = r"\d+"
+        invalid_questions.append({**question, "scoring_config": scoring_config})
     invalid = {
         question["id"]: question["scoring_config"]["extract_pattern"]
-        for question in questions
+        for question in invalid_questions
         if question["id"] in {"real_suite_v1_0043", "needle_039"}
     }
     assert invalid == {"real_suite_v1_0043": r"\d+", "needle_039": r"\d+"}
     with pytest.raises(ValueError, match="one capture group.*real_suite_v1_0043"):
-        runner.validate_source_vector_scorer_config(questions, tier=2)
+        runner.validate_source_vector_scorer_config(invalid_questions, tier=2)
 
 
 def test_protocol_proposal_rejects_invalid_source_vector_before_runtime_or_receipt_binding(
@@ -846,6 +1393,68 @@ def test_runtime_artifact_identity_detects_same_path_mutation(tmp_path: Path) ->
         [str(artifact)], include_sha256=True
     )
     assert full_after[str(artifact.resolve())]["sha256"] != full_before[str(artifact.resolve())]["sha256"]
+
+
+def test_runtime_artifact_identities_hashes_duplicate_canonical_path_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    artifact = tmp_path / "model.gguf"
+    artifact.write_bytes(b"model")
+    calls: list[Path] = []
+    original = runner.sha256_path
+
+    def counted_hash(path: Path) -> str:
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(runner, "sha256_path", counted_hash)
+    identities = runner.runtime_artifact_identities(
+        [str(artifact), str(artifact)], include_sha256=True
+    )
+
+    canonical = str(artifact.resolve())
+    assert list(identities) == [canonical]
+    assert identities[canonical]["sha256"] == original(artifact)
+    assert calls == [artifact.resolve()]
+
+
+def test_runtime_artifact_identities_rejects_duplicate_path_stat_race(
+    tmp_path: Path, monkeypatch
+) -> None:
+    artifact = tmp_path / "model.gguf"
+    artifact.write_bytes(b"model")
+    canonical = str(artifact.resolve())
+    original_stat = Path.stat
+    calls = 0
+
+    def changing_stat(path: Path, *args, **kwargs):
+        nonlocal calls
+        result = original_stat(path, *args, **kwargs)
+        if str(path) == canonical:
+            calls += 1
+            # The duplicate's identity read must fail before content hashing.
+            if calls == 2:
+                return os.stat_result((
+                    result.st_mode,
+                    result.st_ino,
+                    result.st_dev,
+                    result.st_nlink,
+                    result.st_uid,
+                    result.st_gid,
+                    result.st_size + 1,
+                    result.st_atime,
+                    result.st_mtime,
+                    result.st_ctime,
+                ))
+        return result
+
+    monkeypatch.setattr(Path, "stat", changing_stat)
+    monkeypatch.setattr(
+        runner, "sha256_path", lambda _path: pytest.fail("hash must not run after identity race")
+    )
+
+    with pytest.raises(ValueError, match="identity changed while binding"):
+        runner.runtime_artifact_identities([str(artifact), str(artifact)], include_sha256=True)
 
 
 def test_atomic_publish_noreplace_preserves_racing_destination(tmp_path: Path) -> None:

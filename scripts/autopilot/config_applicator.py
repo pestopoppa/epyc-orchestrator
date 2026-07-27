@@ -8,11 +8,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import time
+from hashlib import sha256
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1287,18 +1290,52 @@ def apply_role_restart_params(
     result_errors: list[str] = []
     for role in sorted(groups):
         overrides = groups[role]
+        prewarm = _ap3_prewarm_role_targets(
+            role,
+            registry_path=registry_path,
+        )
+        if prewarm.get("status") != "ok":
+            role_result = {
+                "status": "error",
+                "role": role,
+                "error": "AP-3 NUMA prewarm failed before registry mutation",
+                "ap3_prewarm": prewarm,
+            }
+            _attach_restart_boundary_event(
+                role_result,
+                journal=journal,
+                role=role,
+                affected_roles=prewarm.get("affected_roles") or [role],
+                env_keys=[],
+                registry_override_keys=sorted(overrides),
+                trial_id=trial_id,
+                reason="AP-3 NUMA prewarm failed before role restart",
+                evidence={"ap3_prewarm": prewarm},
+                actor=actor,
+                command="ap3-numa-prewarm",
+            )
+            per_role[role] = role_result
+            result_errors.append(f"{role}: {role_result['error']}")
+            break
+
+        strict_smoke = _ap3_strict_smoke_with_readiness(
+            smoke_check=smoke_check,
+            prewarm=prewarm,
+        )
         role_result = restart_role(
             role=role,
             registry_overrides=overrides,
             registry_path=registry_path,
             journal=journal,
-            smoke_check=smoke_check,
+            smoke_check=strict_smoke,
             require_smoke_check=require_smoke_check,
             pause_dispatch=pause_dispatch,
             trial_id=trial_id,
             boundary_reason="AP-3 launch role-restart trial",
+            boundary_evidence={"ap3_prewarm": prewarm},
             actor=actor,
         )
+        role_result["ap3_prewarm"] = prewarm
         per_role[role] = role_result
         if role_result.get("status") == "error" or role_result.get("error"):
             result_errors.append(f"{role}: {role_result.get('error') or 'role restart failed'}")
@@ -1314,6 +1351,179 @@ def apply_role_restart_params(
     if result_errors:
         result["errors"] = result_errors
     return result
+
+
+def _ap3_prewarm_role_targets(
+    role: str,
+    *,
+    registry_path: Path,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> dict[str, Any]:
+    """Resolve and warm the exact AP-3 reload files before registry mutation.
+
+    This deliberately lives in the AP-3 wrapper rather than ``restart_role``:
+    a manual generic restart must retain its existing behavior.  Stack priors
+    provide the live role/port scope; launch argv provides model and draft
+    paths.  Resolution is strict because an unreadable target must never turn
+    into a cold, unmeasured role restart.
+    """
+    started = datetime.now(timezone.utc).isoformat()
+    evidence: dict[str, Any] = {
+        "policy": "ap3-numa-prewarm-v1",
+        "started_at": started,
+        "evidence_ref": f"ap3-numa-prewarm:{role}:{started}",
+        "role": role,
+        "targets": [],
+    }
+    try:
+        from scripts.lib.registry import load_registry
+        from scripts.server.orchestrator_stack import build_server_command
+        from scripts.server import stack_prewarm
+        from src.registry.stack_priors import live_stack_role_records, stack_prior_launch_entries
+
+        records = live_stack_role_records(stack_priors_path)
+        target = records.get(role)
+        if target is None:
+            raise RuntimeError(f"live stack-priors record missing for role {role!r}")
+        affinity = _launch_affinity_keys(target, launch_entries=stack_prior_launch_entries)
+        scoped = {
+            name: record for name, record in records.items()
+            if affinity & _launch_affinity_keys(record, launch_entries=stack_prior_launch_entries)
+        }
+        if not scoped:
+            raise RuntimeError(f"no live launch scope resolved for role {role!r}")
+        registry = load_registry(str(registry_path))
+        by_inode: dict[tuple[int, int], dict[str, Any]] = {}
+        for scoped_role, record in sorted(scoped.items()):
+            for entry in stack_prior_launch_entries(record):
+                port = entry.get("port")
+                primary = entry.get("primary_role")
+                if not isinstance(port, int) or not isinstance(primary, str) or not primary:
+                    raise RuntimeError(f"invalid live launch entry for {scoped_role!r}: {entry!r}")
+                role_config = registry.get_role(primary)
+                cmd = build_server_command(
+                    role_config, port,
+                    worker_pool_mode=entry.get("mode") == "worker_pool",
+                    worker_type=entry.get("worker_type"),
+                    vision_mode=entry.get("mode") == "vision",
+                    vision_type=entry.get("vision_type"),
+                    numa_instance=int(entry.get("numa_instance", 0)),
+                )
+                for raw_path in stack_prewarm._extract_paths_from_cmd(cmd):
+                    path = Path(raw_path).resolve(strict=True)
+                    if not path.is_file() or not os.access(path, os.R_OK):
+                        raise RuntimeError(f"unreadable model/draft path: {path}")
+                    stat = path.stat()
+                    key = (stat.st_dev, stat.st_ino)
+                    target_entry = by_inode.setdefault(key, {
+                        "path": path, "dev": stat.st_dev, "inode": stat.st_ino,
+                        "size_bytes": stat.st_size, "roles": set(), "ports": set(),
+                    })
+                    target_entry["roles"].add(scoped_role)
+                    target_entry["ports"].add(port)
+        if not by_inode:
+            raise RuntimeError(f"no model/draft paths resolved for role {role!r}")
+        evidence["affected_roles"] = sorted(
+            {name for target_entry in by_inode.values() for name in target_entry["roles"]}
+        )
+        evidence["affected_ports"] = sorted(
+            {port for target_entry in by_inode.values() for port in target_entry["ports"]}
+        )
+        for target_entry in sorted(by_inode.values(), key=lambda item: str(item["path"])):
+            item_started = datetime.now(timezone.utc).isoformat()
+            ok, elapsed_s, message = stack_prewarm.prewarm_file(target_entry["path"])
+            item = {
+                "path": str(target_entry["path"]), "dev": target_entry["dev"],
+                "inode": target_entry["inode"], "size_bytes": target_entry["size_bytes"],
+                "roles": sorted(target_entry["roles"]), "ports": sorted(target_entry["ports"]),
+                "started_at": item_started, "finished_at": datetime.now(timezone.utc).isoformat(),
+                "elapsed_s": elapsed_s, "result": "ok" if ok else "error", "detail": message,
+            }
+            evidence["targets"].append(item)
+            if not ok:
+                evidence.update(status="error", error=f"prewarm failed for {item['path']}: {message}")
+                return evidence
+    except Exception as exc:
+        evidence.update(status="error", error=str(exc))
+        return evidence
+    evidence["finished_at"] = datetime.now(timezone.utc).isoformat()
+    evidence["status"] = "ok"
+    return evidence
+
+
+def _ap3_strict_smoke_with_readiness(
+    *,
+    smoke_check: RoleSmokeCheck | None,
+    prewarm: dict[str, Any],
+) -> RoleSmokeCheck:
+    """Compose AP-3 smoke with a verified one-token, untimed readiness probe."""
+    def check(role: str, affected_roles: list[str]) -> dict[str, Any]:
+        base = _run_role_smoke_check(role=role, affected_roles=affected_roles, smoke_check=smoke_check)
+        if base.failed:
+            result = base.to_dict()
+            result["base_smoke"] = base.to_dict()
+            return result
+        probes: list[dict[str, Any]] = []
+        for port in sorted({port for target in prewarm["targets"] for port in target["ports"]}):
+            started_at = datetime.now(timezone.utc)
+            response: Any | None = None
+            probe: dict[str, Any] = {
+                "port": port,
+                "prompt_sha256": sha256(b"ready").hexdigest(),
+                "started_at": started_at.isoformat(),
+                "timing_excluded": True,
+                "http_status": None,
+                "response_sha256": None,
+                "token_count": None,
+            }
+            try:
+                response = httpx.post(
+                    f"http://127.0.0.1:{port}/completion",
+                    json={"prompt": "ready", "n_predict": 1, "temperature": 0}, timeout=30,
+                )
+                response.raise_for_status()
+                raw_body = response.content
+                probe["http_status"] = response.status_code
+                probe["response_sha256"] = sha256(raw_body).hexdigest()
+                payload = response.json()
+                token_count = payload.get("tokens_predicted")
+                if not isinstance(token_count, int) or isinstance(token_count, bool):
+                    raise ValueError("completion response missing integer tokens_predicted")
+                probe["token_count"] = token_count
+                if token_count < 1:
+                    raise ValueError("completion response generated zero tokens")
+                probe["status"] = "ok"
+            except Exception as exc:
+                probe["status"] = "error"
+                probe["error_type"] = type(exc).__name__
+                probe["http_status"] = probe["http_status"] or getattr(
+                    response, "status_code", None
+                )
+                probes.append(_finish_ap3_readiness_probe(probe, started_at))
+                return {
+                    "status": "error",
+                    "error": f"AP-3 readiness failed on port {port}: {type(exc).__name__}",
+                    "base_smoke": base.to_dict(),
+                    "readiness": probes,
+                }
+            probes.append(_finish_ap3_readiness_probe(probe, started_at))
+        return {
+            "status": "ok",
+            "base_smoke": base.to_dict(),
+            "readiness": probes,
+            "prewarm_evidence_ref": prewarm["evidence_ref"],
+        }
+    return check
+
+
+def _finish_ap3_readiness_probe(
+    probe: dict[str, Any], started_at: datetime
+) -> dict[str, Any]:
+    """Record bounded readiness evidence without retaining request/response text."""
+    finished_at = datetime.now(timezone.utc)
+    probe["finished_at"] = finished_at.isoformat()
+    probe["elapsed_s"] = (finished_at - started_at).total_seconds()
+    return probe
 
 
 def resolve_restart_affected_roles(
@@ -1677,6 +1887,7 @@ def restart_role(
     affected_roles: list[str] | None = None,
     trial_id: int | None = None,
     boundary_reason: str = "intentional role restart",
+    boundary_evidence: dict[str, Any] | None = None,
     actor: str = "config_applicator.restart_role",
     smoke_check: RoleSmokeCheck | None = None,
     require_smoke_check: bool = False,
@@ -1796,6 +2007,9 @@ def restart_role(
                             registry_override_keys=sorted(registry_overrides),
                             trial_id=trial_id,
                             reason=boundary_reason,
+                            evidence=_restart_boundary_evidence(
+                                boundary_evidence, smoke.to_dict()
+                            ),
                             actor=actor,
                         )
                         return first
@@ -1826,6 +2040,9 @@ def restart_role(
                         registry_override_keys=sorted(registry_overrides),
                         trial_id=trial_id,
                         reason=boundary_reason,
+                        evidence=_restart_boundary_evidence(
+                            boundary_evidence, smoke.to_dict()
+                        ),
                         actor=actor,
                     )
                     return first
@@ -1868,12 +2085,28 @@ def restart_role(
             registry_override_keys=sorted(registry_overrides),
             trial_id=trial_id,
             reason=boundary_reason,
+            evidence=_restart_boundary_evidence(
+                boundary_evidence, first.get("smoke_check")
+            ),
             actor=actor,
         )
         return first
     finally:
         if dispatch_pause is not None:
             dispatch_pause["restore"] = _restore_autopilot_dispatch_pause(dispatch_pause)
+
+
+def _restart_boundary_evidence(
+    evidence: dict[str, Any] | None,
+    smoke_check: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Embed AP-3 readiness evidence without changing generic restart events."""
+    if evidence is None:
+        return None
+    result = dict(evidence)
+    if smoke_check is not None:
+        result["smoke_check"] = smoke_check
+    return result
 
 
 def _attach_restart_boundary_event(
@@ -1886,6 +2119,8 @@ def _attach_restart_boundary_event(
     registry_override_keys: list[str],
     trial_id: int | None,
     reason: str,
+    evidence: dict[str, Any] | None = None,
+    command: str | None = None,
     actor: str,
 ) -> None:
     """Attach an append-only restart-boundary event when a journal is provided."""
@@ -1896,18 +2131,21 @@ def _attach_restart_boundary_event(
         result["restart_boundary_error"] = "journal lacks append_role_restart_boundary_event"
         return
     try:
-        result["restart_boundary_event"] = append(
-            role=role,
-            affected_roles=list(affected_roles or [role]),
-            env_keys=env_keys,
-            registry_override_keys=registry_override_keys,
-            status=str(result.get("status", "")),
-            rollback_status=str((result.get("rollback") or {}).get("status", "")),
-            reason=reason,
-            actor=actor,
-            boundary_trial_id=trial_id,
-            command=f"orchestrator_stack.py reload {role}",
-        )
+        payload = {
+            "role": role,
+            "affected_roles": list(affected_roles or [role]),
+            "env_keys": env_keys,
+            "registry_override_keys": registry_override_keys,
+            "status": str(result.get("status", "")),
+            "rollback_status": str((result.get("rollback") or {}).get("status", "")),
+            "reason": reason,
+            "actor": actor,
+            "boundary_trial_id": trial_id,
+            "command": command or f"orchestrator_stack.py reload {role}",
+        }
+        if evidence is not None:
+            payload["evidence"] = evidence
+        result["restart_boundary_event"] = append(**payload)
     except Exception as exc:
         result["restart_boundary_error"] = str(exc)
 

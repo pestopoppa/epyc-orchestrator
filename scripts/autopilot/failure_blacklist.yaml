@@ -573,3 +573,83 @@ blacklist:
   reason_class: safety_failure
   ttl_days: 30
   expires_at: '2026-08-15T08:21:14.435952+00:00'
+- pattern:
+    type: numeric_trial
+    surface: escalation
+    params:
+      escalation.max_retries: 2
+      escalation.max_escalations: 5
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1438'
+  added: '2026-07-26T18:08:42.175179+00:00'
+  source_trial: 1438
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-25T18:08:42.175179+00:00'
+- pattern:
+    type: numeric_trial
+    surface: gpu_placement_policy
+    params:
+      placement_policy.long_running_trigger_tokens: 554
+      placement_policy.rate_window_tokens: 438
+      placement_policy.min_resident_remaining_tokens: 804
+      placement_policy.min_speedup: 1.4180300137637354
+      placement_policy.lease_interactive_weight: 3.0049221069664944
+      placement_policy.lease_batch_weight: 2.671413253908404
+      placement_policy.lease_eval_weight: 1.8541375488743737
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1441'
+  added: '2026-07-26T20:05:28.530079+00:00'
+  source_trial: 1441
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-25T20:05:28.530079+00:00'
+- pattern:
+    type: numeric_trial
+    surface: chat_pipeline
+    params:
+      chat.try_cheap_first_q_threshold: 0.6331419937277378
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1445'
+  added: '2026-07-26T21:53:26.781612+00:00'
+  source_trial: 1445
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-25T21:53:26.781612+00:00'
+- pattern:
+    type: numeric_trial
+    surface: chat_review_low
+    params:
+      chat.review_low_q_threshold: 0.5932544709557395
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1448'
+  added: '2026-07-26T23:40:59.116363+00:00'
+  source_trial: 1448
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-25T23:40:59.116363+00:00'
+- pattern:
+    type: numeric_trial
+    surface: escalation
+    params:
+      escalation.max_retries: 4
+      escalation.max_escalations: 3
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1451'
+  added: '2026-07-27T01:35:16.783517+00:00'
+  source_trial: 1451
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-26T01:35:16.783517+00:00'
+- pattern:
+    type: numeric_trial
+    surface: gpu_placement_policy
+    params:
+      placement_policy.long_running_trigger_tokens: 496
+      placement_policy.rate_window_tokens: 27
+      placement_policy.min_resident_remaining_tokens: 841
+      placement_policy.min_speedup: 1.1253243862734865
+      placement_policy.lease_interactive_weight: 2.460283428371719
+      placement_policy.lease_batch_weight: 1.6970704334690296
+      placement_policy.lease_eval_weight: 3.2179544689375463
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1454'
+  added: '2026-07-27T03:41:32.402605+00:00'
+  source_trial: 1454
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-26T03:41:32.402605+00:00'

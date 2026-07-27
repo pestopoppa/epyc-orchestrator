@@ -163,6 +163,14 @@ eras:
       speed/frontier rows as historical priors until a controlled v8-only
       frontier rerun/rebuild clears the frontier_rerun_required state marker.
 
+  - id: E8
+    from: "2026-07-25T18:38:43Z"
+    scope: eval_quality
+    note: >
+      v8 production quality-boundary. This opens a fail-closed E8 AutoPilot rebaseline hold:
+      pre-v8/E7 baseline and MAD observations are historical priors until an operator-ratified
+      E8 quality-baseline reseed writes fresh values and windows. No model-lineup or model-registry change.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.

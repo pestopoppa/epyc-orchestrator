@@ -9,13 +9,13 @@ Do not use `eval_batch_serving_evaltower_window.py` for this work.
 1. Keep the current frozen-v8 both-mode lineup unchanged and stop AutoPilot.
 2. After the E8 numeric rerun reaches 16 completed trials, have the operator review
    `ratify_e8_quality_baseline_protocol_20260726.sh --plan` and explicitly ratify
-   either T2=500 (default) or T2=50. The receipt must remain at the canonical
-   operator path and its runner hash must match the executable Python source.
+   the canonical T2=500 protocol. The receipt must remain at the canonical operator
+   path and its runner hash must match the executable Python source.
 3. Confirm the E8 quality hold is still open and run the read-only preflight:
 
 ```bash
 cd /mnt/raid0/llm/epyc-orchestrator
-.venv/bin/python scripts/benchmark/run_e8_quality_baseline_reseed.py --prepare
+.venv/bin/python scripts/benchmark/run_e8_quality_baseline_reseed.py --prepare --t2-n 500
 ```
 
 The report must have no blockers. It checks the E8 hold, numeric-rerun count,
@@ -43,6 +43,7 @@ During a clean window, collect the fixed workload exactly once:
 
 ```bash
 .venv/bin/python scripts/benchmark/run_e8_quality_baseline_reseed.py --execute \
+  --t2-n 500 \
   --output-dir /mnt/raid0/llm/epyc-root/artifacts/operator/e8_quality_baseline_evidence_20260726
 ```
 
