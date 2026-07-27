@@ -131,6 +131,7 @@ def classify_generation_failure(
     response_error = str(response.get("error") or "")
     answer = str(response.get("answer") or "")
     qid = str(response.get("qid") or "")
+    question_id = result.get("question_id")
     blank_or_sentinel = not answer.strip() or answer == error
     if (
         result.get("tokens_generated") == 0
@@ -139,7 +140,8 @@ def classify_generation_failure(
         and response_error == error
         and qid
         and str(result.get("qid") or "") == qid
-        and str(result.get("question_id") or qid) == qid
+        and isinstance(question_id, str)
+        and bool(question_id.strip())
         and blank_or_sentinel
         and error in ACCEPTED_INFRA_ERRORS
         and response.get("partial") is False
@@ -169,7 +171,6 @@ def _coherent_sidecar_row(
     normalized.update(
         {
             "qid": qid,
-            "question_id": qid,
             "correct": bool(response.get("correct")),
             "route": str(response.get("route_used") or ""),
         }
@@ -218,7 +219,8 @@ def validate_clean_sidecar_result(
         and answer.strip()
         and sidecar_row.get("answer") == answer
         and result.get("qid") == qid
-        and result.get("question_id") == qid
+        and isinstance(result.get("question_id"), str)
+        and bool(result["question_id"].strip())
         and isinstance(tokens, int)
         and not isinstance(tokens, bool)
         and tokens > 0
@@ -418,7 +420,6 @@ def _merged_retry_sidecar(
     """Keep the full-batch identity while replacing the measured retry outcome."""
     compact_result = sys.modules[V4.EvalTower.__module__]._compact_question_result(result)
     compact_result["qid"] = qid
-    compact_result["question_id"] = qid
     merged = dict(original)
     for key in ("answer", "complete", "ended_at_s", "elapsed_s", "started_at_s"):
         if key not in focused:
@@ -489,6 +490,10 @@ def run_generation_tail(
         _focused_parsed, focused_rows = sidecar_question_rows(focused_sidecar, expected_n=1)
         focused_row = dict(focused_rows[0][1])
         focused_result = focused_row.get("result")
+        original_result = sidecars[ordinal][1].get("result")
+        original_question_id = (
+            original_result.get("question_id") if isinstance(original_result, dict) else None
+        )
         retry_error = classify_generation_failure(retry, focused_row)
         scorer_recovered = bool(scorer_tail) and all(
             row.get("outcome") == "recovered" for row in scorer_tail
@@ -501,7 +506,9 @@ def run_generation_tail(
         focused_generation_matches = bool(
             isinstance(focused_result, dict)
             and focused_result.get("qid") == target["qid"]
-            and str(focused_result.get("question_id") or target["qid"]) == target["qid"]
+            and isinstance(original_question_id, str)
+            and bool(original_question_id.strip())
+            and focused_result.get("question_id") == original_question_id
             and isinstance(focused_result.get("tokens_generated"), int)
             and not isinstance(focused_result.get("tokens_generated"), bool)
             and focused_result["tokens_generated"] > 0

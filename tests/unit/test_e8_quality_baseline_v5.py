@@ -84,6 +84,33 @@ def test_generation_classifier_accepts_only_evidence_bound_reviewed_errors(error
     assert runner.classify_generation_failure(response, sidecar) == error
 
 
+def test_generation_classifier_preserves_distinct_eval_tower_question_id() -> None:
+    response = _response("stable-qid", "timed out", error="timed out")
+    sidecar = {
+        "result": {
+            "qid": "stable-qid",
+            "question_id": "unknown",
+            "tokens_generated": 0,
+            "error": True,
+            "error_detail": "timed out",
+        }
+    }
+    assert runner.classify_generation_failure(response, sidecar) == "timed out"
+
+
+def test_generation_classifier_rejects_missing_eval_tower_question_id() -> None:
+    response = _response("stable-qid", "timed out", error="timed out")
+    sidecar = {
+        "result": {
+            "qid": "stable-qid",
+            "tokens_generated": 0,
+            "error": True,
+            "error_detail": "timed out",
+        }
+    }
+    assert runner.classify_generation_failure(response, sidecar) is None
+
+
 @pytest.mark.parametrize(
     ("answer", "tokens", "result_error", "detail"),
     [
@@ -172,22 +199,25 @@ class FakeTower:
         fail: bool = False,
         partial: bool = False,
         malformed_success: str | None = None,
+        question_id: str | None = None,
     ) -> None:
         self.sidecar_dir = sidecar_dir
         self.fail = fail
         self.partial = partial
         self.malformed_success = malformed_success
+        self.question_id = question_id
         self.calls = 0
 
     def _eval_batch(self, questions, _client, *, log_every, label):
         del log_every
         self.calls += 1
         qid = questions[0]["qid"]
+        question_id = self.question_id or qid
         error = "timed out" if self.fail else None
         answer = error or "a"
         result_row = {
             "qid": qid,
-            "question_id": qid,
+            "question_id": question_id,
             "tokens_generated": 0 if error else 1,
             "error": bool(error),
             "error_detail": error,
@@ -221,7 +251,7 @@ class FakeTower:
         return [
             SimpleNamespace(
                 qid=qid,
-                question_id=qid,
+                question_id=question_id,
                 answer=answer,
                 correct=error is None,
                 error=error,
@@ -250,7 +280,9 @@ class FakeTower:
         ]
 
 
-def _tail_fixture(tmp_path: Path) -> tuple[list[dict], Path, Path, Path, Path]:
+def _tail_fixture(
+    tmp_path: Path, *, target_question_id: str = "q0"
+) -> tuple[list[dict], Path, Path, Path, Path]:
     questions = [
         {
             "qid": "q0",
@@ -272,7 +304,9 @@ def _tail_fixture(tmp_path: Path) -> tuple[list[dict], Path, Path, Path, Path]:
     sidecar = sidecar_dir / "question_results.e8-t2-r1.jsonl"
     trace = tmp_path / "judge_traces.T2.r1.jsonl"
     _jsonl(responses, [_response("q0", "timed out", error="timed out"), _response("q1", "a")])
-    _jsonl(sidecar, _sidecar(["q0", "q1"]))
+    sidecar_rows = _sidecar(["q0", "q1"])
+    sidecar_rows[1]["result"]["question_id"] = target_question_id
+    _jsonl(sidecar, sidecar_rows)
     _jsonl(trace, [])
     return questions, responses, sidecar, trace, sidecar_dir
 
@@ -293,11 +327,13 @@ def test_generation_tail_replaces_only_target_response_and_sidecar_bytes(
     tmp_path: Path, monkeypatch
 ) -> None:
     _patch_tail_runtime(monkeypatch)
-    questions, responses, sidecar, trace, sidecar_dir = _tail_fixture(tmp_path)
+    questions, responses, sidecar, trace, sidecar_dir = _tail_fixture(
+        tmp_path, target_question_id="unknown"
+    )
     original_responses = responses.read_bytes().splitlines(keepends=True)
     original_sidecar = sidecar.read_bytes().splitlines(keepends=True)
     tail = runner.run_generation_tail(
-        FakeTower(sidecar_dir),
+        FakeTower(sidecar_dir, question_id="unknown"),
         tier=2,
         repetition=1,
         questions=questions,
@@ -327,7 +363,7 @@ def test_generation_tail_replaces_only_target_response_and_sidecar_bytes(
     assert repaired["answer"] == "a"
     assert "scored_at_s" not in repaired
     assert repaired["result"]["qid"] == "q0"
-    assert repaired["result"]["question_id"] == "q0"
+    assert repaired["result"]["question_id"] == "unknown"
     assert repaired["result"].get("error") is None
     attempts = runner.V4.load_jsonl(tmp_path / "generation_tail_attempts.T2.r1.jsonl")
     assert attempts[0]["outcome"] == "recovered"
@@ -513,6 +549,7 @@ def test_scorer_tail_replaces_only_target_sidecar_line_and_preserves_batch_ident
     rows = _sidecar(["q0", "q1"], failure_ordinal=-1)
     rows[1]["result"].update(
         {
+            "question_id": "unknown",
             "error": True,
             "error_detail": "scoring_unavailable: judge timeout",
         }
@@ -534,6 +571,7 @@ def test_scorer_tail_replaces_only_target_sidecar_line_and_preserves_batch_ident
     assert target["eval_batch_id"] == "full-batch"
     assert target["label"] == "e8-t2-r1"
     assert target["requested_n"] == 2
+    assert target["result"]["question_id"] == "unknown"
     assert runner.validate_clean_sidecar_result(responses[0], target, qid="q0")
 
 
@@ -666,7 +704,11 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                     "answer": "a",
                     "result": {
                         "qid": row["qid"],
-                        "question_id": row["qid"],
+                        "question_id": (
+                            "unknown"
+                            if tier == 1 and repetition == 1 and ordinal == 0
+                            else row["qid"]
+                        ),
                         "correct": True,
                         "tokens_generated": 1,
                         "route": "frontdoor",
@@ -697,6 +739,7 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                         "answer": "timed out",
                         "result": {
                             "qid": questions[0]["qid"],
+                            "question_id": "unknown",
                             "tokens_generated": 0,
                             "error": True,
                             "error_detail": "timed out",
@@ -722,7 +765,7 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                         "answer": "a",
                         "result": {
                             "qid": questions[0]["qid"],
-                            "question_id": questions[0]["qid"],
+                            "question_id": "unknown",
                             "correct": True,
                             "tokens_generated": 1,
                             "route": "frontdoor",
