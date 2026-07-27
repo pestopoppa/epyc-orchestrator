@@ -478,6 +478,7 @@ def validate(
                 if set(targets) != {(int(row["ordinal"]), str(row["qid"])) for row in attempts}:
                     raise ValueError("generation-tail attempts do not cover exact targets")
                 retry_traces: dict[int, list[dict[str, Any]]] = {}
+                retry_sidecar_rows: dict[int, dict[str, Any]] = {}
                 for attempt in attempts:
                     ordinal = int(attempt["ordinal"])
                     target = targets[(ordinal, str(attempt["qid"]))]
@@ -495,6 +496,7 @@ def validate(
                         retry_sidecar_path,
                         expected_n=1,
                     )
+                    retry_sidecar_rows[ordinal] = retry_sidecars[0][1]
                     retry_trace_rows = runner.V4.load_jsonl(retry_trace_path)
                     retry_traces[ordinal] = retry_trace_rows
                     if (
@@ -551,6 +553,19 @@ def validate(
                     ):
                         raise ValueError("generation tail changed a non-target sidecar row")
                 for (ordinal, qid), target in targets.items():
+                    old_result = old_sidecars[ordinal][1].get("result")
+                    retry_result = retry_sidecar_rows[ordinal].get("result")
+                    final_result = final_sidecars[ordinal][1].get("result")
+                    if (
+                        not isinstance(old_result, dict)
+                        or not isinstance(retry_result, dict)
+                        or not isinstance(final_result, dict)
+                        or not isinstance(old_result.get("question_id"), str)
+                        or not old_result["question_id"].strip()
+                        or retry_result.get("question_id") != old_result["question_id"]
+                        or final_result.get("question_id") != old_result["question_id"]
+                    ):
+                        raise ValueError("generation-tail question identity differs")
                     source = {
                         "ordinal": ordinal,
                         "qid": qid,
