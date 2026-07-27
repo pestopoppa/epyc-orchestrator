@@ -24,6 +24,7 @@ import uuid
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+RUNTIME_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
 V4_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_reseed.py"
 RUNNER_PATH = Path(__file__).resolve()
 PROTOCOL_ID = "e8_quality_full_pool_tier_baseline.v5"
@@ -1124,15 +1125,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=False)
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument(
-        "--state-path", type=Path, default=PROJECT_ROOT / "orchestration/autopilot_state.json"
+        "--state-path", type=Path, default=RUNTIME_ROOT / "orchestration/autopilot_state.json"
     )
     parser.add_argument(
-        "--registry-path", type=Path, default=PROJECT_ROOT / "orchestration/model_registry.yaml"
+        "--registry-path", type=Path, default=RUNTIME_ROOT / "orchestration/model_registry.yaml"
     )
     parser.add_argument(
         "--lean-registry-path",
         type=Path,
-        default=PROJECT_ROOT / "orchestration/model_registry_lean.yaml",
+        default=RUNTIME_ROOT / "orchestration/model_registry_lean.yaml",
     )
     parser.add_argument(
         "--runtime-facts-path",
@@ -1142,15 +1143,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--stack-priors-path",
         type=Path,
-        default=PROJECT_ROOT / "orchestration/derived/stack_priors.yaml",
+        default=RUNTIME_ROOT / "orchestration/derived/stack_priors.yaml",
     )
     parser.add_argument(
         "--orchestrator-state-path",
         type=Path,
-        default=PROJECT_ROOT / "logs/orchestrator_state.json",
+        default=RUNTIME_ROOT / "logs/orchestrator_state.json",
     )
     parser.add_argument(
-        "--journal-path", type=Path, default=PROJECT_ROOT / "orchestration/autopilot_journal.jsonl"
+        "--journal-path", type=Path, default=RUNTIME_ROOT / "orchestration/autopilot_journal.jsonl"
     )
     parser.add_argument("--protocol-receipt", type=Path, default=V4.PROTOCOL_RECEIPT)
     parser.add_argument("--t1-core-id", default="core_v2")

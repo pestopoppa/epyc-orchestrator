@@ -674,6 +674,19 @@ def test_v5_cli_pins_tail_timeout_and_disallows_execute_mode() -> None:
         runner.parse_args(["--execute", "--output-dir", "/tmp/v5"])
 
 
+def test_v5_cli_separates_reviewed_source_from_live_runtime_paths() -> None:
+    args = runner.parse_args(["--prepare"])
+    runtime_root = Path("/mnt/raid0/llm/epyc-orchestrator")
+    assert args.state_path == runtime_root / "orchestration/autopilot_state.json"
+    assert args.registry_path == runtime_root / "orchestration/model_registry.yaml"
+    assert args.lean_registry_path == runtime_root / "orchestration/model_registry_lean.yaml"
+    assert args.stack_priors_path == runtime_root / "orchestration/derived/stack_priors.yaml"
+    assert args.orchestrator_state_path == runtime_root / "logs/orchestrator_state.json"
+    assert args.journal_path == runtime_root / "orchestration/autopilot_journal.jsonl"
+    assert args.runtime_facts_path == Path("/mnt/raid0/llm/tmp/orchestrator_runtime_facts.json")
+    assert runner.V4_PATH.is_relative_to(runner.PROJECT_ROOT)
+
+
 def _synthetic_candidate(tmp_path: Path) -> Path:
     validator_path = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
     validator_spec = importlib.util.spec_from_file_location(
