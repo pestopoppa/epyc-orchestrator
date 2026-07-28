@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from typing import Any, Iterator
 import uuid
 
@@ -1841,7 +1842,9 @@ class RuntimeWatcher:
         self.fatal_error: str | None = None
         self._stop = threading.Event()
         self._load_lock = threading.Lock()
+        self._sample_lock = threading.Lock()
         self._active_load: dict[str, int] | None = None
+        self._last_sample_started_monotonic: float | None = None
         self._thread = threading.Thread(target=self._watch, daemon=False)
 
     @contextmanager
@@ -1862,53 +1865,68 @@ class RuntimeWatcher:
             return dict(self._active_load) if self._active_load is not None else None
 
     def sample(self) -> None:
-        started_at = utc_now()
-        sample: dict[str, Any] = {"started_at": started_at, "finished_at": None, "ok": False}
-        try:
-            active_load = self._active_load_snapshot()
-            health = api_health(self.args.api_url, self.args.http_timeout_s)
-            binding = runtime_binding(self.args)
-            active = autopilot_processes()
-            fingerprints = file_fingerprints(
-                immutable_paths(self.args, include_receipt=self.include_receipt)
-            )
-            api_saturation_during_active_load = bool(
-                active_load is not None
-                and health.get("failure_class") == "backend_probe_read_timeout"
-                and self.expected_probe_urls is not None
-                and health.get("probe_urls") == self.expected_probe_urls
-            )
-            api_ready_for_monitor = bool(health.get("ok")) or api_saturation_during_active_load
-            sample.update(
-                {
-                    "api_6_of_6": bool(health.get("ok")),
-                    "api_ready_or_busy_saturated": api_ready_for_monitor,
-                    "api_saturation_during_active_load": api_saturation_during_active_load,
-                    "api_failure_class": health.get("failure_class"),
-                    "api_probe_urls": health.get("probe_urls", {}),
-                    "api_probe_urls_match_preflight": health.get("probe_urls") == self.expected_probe_urls,
-                    "api_probe_failures": health.get("probe_failures", []),
-                    "active_load": active_load,
-                    "autopilot_active": bool(active),
-                    "binding_matches_pre": binding == self.expected_binding,
-                    "immutable_files_match_pre": fingerprints == self.expected_fingerprints,
-                    "runtime_artifacts": binding["runtime_artifacts"],
-                }
-            )
-            sample["ok"] = bool(
-                sample["api_ready_or_busy_saturated"]
-                and not sample["autopilot_active"]
-                and sample["binding_matches_pre"]
-                and sample["immutable_files_match_pre"]
-            )
-        except Exception as exc:  # noqa: BLE001 - durable failure evidence
-            sample["error"] = str(exc)
-        sample["finished_at"] = utc_now()
-        self.samples.append(sample)
-        if self.artifact_path is not None:
+        with self._sample_lock:
+            self._last_sample_started_monotonic = time.monotonic()
+            started_at = utc_now()
+            sample: dict[str, Any] = {
+                "started_at": started_at,
+                "finished_at": None,
+                "ok": False,
+            }
+            try:
+                active_load = self._active_load_snapshot()
+                health = api_health(self.args.api_url, self.args.http_timeout_s)
+                binding = runtime_binding(self.args)
+                active = autopilot_processes()
+                fingerprints = file_fingerprints(
+                    immutable_paths(self.args, include_receipt=self.include_receipt)
+                )
+                api_saturation_during_active_load = bool(
+                    active_load is not None
+                    and health.get("failure_class") == "backend_probe_read_timeout"
+                    and self.expected_probe_urls is not None
+                    and health.get("probe_urls") == self.expected_probe_urls
+                )
+                api_ready_for_monitor = (
+                    bool(health.get("ok")) or api_saturation_during_active_load
+                )
+                sample.update(
+                    {
+                        "api_6_of_6": bool(health.get("ok")),
+                        "api_ready_or_busy_saturated": api_ready_for_monitor,
+                        "api_saturation_during_active_load": api_saturation_during_active_load,
+                        "api_failure_class": health.get("failure_class"),
+                        "api_probe_urls": health.get("probe_urls", {}),
+                        "api_probe_urls_match_preflight": (
+                            health.get("probe_urls") == self.expected_probe_urls
+                        ),
+                        "api_probe_failures": health.get("probe_failures", []),
+                        "active_load": active_load,
+                        "autopilot_active": bool(active),
+                        "binding_matches_pre": binding == self.expected_binding,
+                        "immutable_files_match_pre": (
+                            fingerprints == self.expected_fingerprints
+                        ),
+                        "runtime_artifacts": binding["runtime_artifacts"],
+                    }
+                )
+                sample["ok"] = bool(
+                    sample["api_ready_or_busy_saturated"]
+                    and not sample["autopilot_active"]
+                    and sample["binding_matches_pre"]
+                    and sample["immutable_files_match_pre"]
+                )
+            except Exception as exc:  # noqa: BLE001 - durable failure evidence
+                sample["error"] = str(exc)
+            sample["finished_at"] = utc_now()
+            self.samples.append(sample)
+            if self.artifact_path is None:
+                return
             try:
                 data = (json.dumps(sample, sort_keys=True) + "\n").encode("utf-8")
-                fd = os.open(self.artifact_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+                fd = os.open(
+                    self.artifact_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600
+                )
                 try:
                     _write_full_record(fd, data)
                     os.fsync(fd)
@@ -1919,7 +1937,16 @@ class RuntimeWatcher:
                 sample["ok"] = False
 
     def _watch(self) -> None:
-        while not self._stop.wait(5):
+        while not self._stop.is_set():
+            with self._sample_lock:
+                last_started = self._last_sample_started_monotonic
+            delay = (
+                0.0
+                if last_started is None
+                else max(0.0, last_started + 5.0 - time.monotonic())
+            )
+            if self._stop.wait(delay):
+                return
             try:
                 self.sample()
             except Exception as exc:  # noqa: BLE001 - a watcher exception is evidence failure
