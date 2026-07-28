@@ -65,6 +65,11 @@ if (( override_count == 3 )); then
 elif (( override_count != 0 )); then
     fail 'test sandbox requires all of E8_V5_OPERATOR_ROOT, E8_V5_STATE, and E8_V5_LOCK_PATH'
 fi
+if [[ -n "${E8_V5_TEST_APPLIER:-}" ]]; then
+    [[ "$TEST_SANDBOX" == "1" && "${E8_V5_TEST_MODE:-}" == "1" && "$E8_V5_TEST_APPLIER" = /tmp/* && -f "$E8_V5_TEST_APPLIER" && ! -L "$E8_V5_TEST_APPLIER" ]] ||
+        fail 'test applier is pytest-only and must be a regular file below /tmp'
+    APPLIER="$(realpath -e -- "$E8_V5_TEST_APPLIER")"
+fi
 TEST_REVIEW_PATH="${E8_V5_TEST_REVIEW_PATH:-}"
 if [[ -n "$TEST_REVIEW_PATH" ]]; then
     [[ "${E8_V5_TEST_MODE:-}" == "1" && -n "${PYTEST_CURRENT_TEST:-}" && "$TEST_REVIEW_PATH" = /tmp/* ]] ||
@@ -398,18 +403,22 @@ mint_protocol_receipt() {
 verify_reviewed_bindings
 verify_state_review_pin
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 PYTHONOPTIMIZE=0 "$PYTHON" -I - \
-    "$PROTOCOL_RECEIPT" "$EVIDENCE" "$WRAPPER" "$PRODUCER" "$RUNNER" "$RESUME_RUNNER" "$BASE_RUNNER" \
+    "$PROTOCOL_RECEIPT" "$TRANSACTION" "$ATTESTATION" "$EVIDENCE" "$WRAPPER" "$PRODUCER" "$RUNNER" "$RESUME_RUNNER" "$BASE_RUNNER" \
     "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$RACE_RETRY_RUNNER" "$VALIDATOR" "$VALIDATOR_PY" "$APPLIER" "$CANONICAL_APPLIER" "$STATE_REVIEW" \
     "$SOURCE_ROOT" "$E8_V5_ORCHESTRATOR_HEAD" "$EXPECTED_PRE" "$EXPECTED_CANDIDATE" "$STATE_REVIEW_SHA256" "$TOKEN" <<'PY'
 import hashlib, json, os
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
-output, evidence, wrapper, producer, runner, resume_runner, base_runner, recovery_runner, finalizer_runner, successor_runner, race_retry_runner, validator, validator_py, applier, canonical_applier, state_review, source_root = map(
-    Path, sys.argv[1:18]
+output, transaction, canonical_attestation, evidence, wrapper, producer, runner, resume_runner, base_runner, recovery_runner, finalizer_runner, successor_runner, race_retry_runner, validator, validator_py, applier, canonical_applier, state_review, source_root = map(
+    Path, sys.argv[1:20]
 )
-source_head, pre, candidate, state_review_sha256, token = sys.argv[18:]
+source_head, pre, candidate, state_review_sha256, token = sys.argv[20:]
 sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+if not transaction.is_dir() or not (transaction / "transaction.json").is_file():
+    raise RuntimeError("canonical state transaction is absent after CAS")
+if not canonical_attestation.is_file():
+    raise RuntimeError("canonical apply attestation is absent after CAS")
 manifest = json.loads(evidence.read_text())
 protocol = Path(manifest["protocol_candidate"]["path"])
 payload = {
@@ -423,6 +432,10 @@ payload = {
     "source_head": source_head,
     "state_candidate_review": str(state_review.resolve()),
     "state_candidate_review_sha256": state_review_sha256,
+    "canonical_transaction": str(transaction.resolve()),
+    "canonical_transaction_journal_sha256": sha(transaction / "transaction.json"),
+    "canonical_apply_attestation": str(canonical_attestation.resolve()),
+    "canonical_apply_attestation_sha256": sha(canonical_attestation),
     "reviewed_artifact_sha256": {
         "wrapper": sha(wrapper),
         "producer": sha(producer),

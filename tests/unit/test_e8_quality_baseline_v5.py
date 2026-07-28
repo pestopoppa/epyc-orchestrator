@@ -1743,7 +1743,66 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     )
     assert sandbox_attest.returncode == 0, sandbox_attest.stderr
     assert sandbox_state.read_bytes() != state_bytes
-    assert list((sandbox_root / "artifacts" / "operator").glob("*.ratification.json"))
+    receipts = list((sandbox_root / "artifacts" / "operator").glob("*.ratification.json"))
+    assert receipts
+    receipt = json.loads(receipts[0].read_text())
+    assert receipt["candidate_state_sha256"] == hashlib.sha256(
+        sandbox_state.read_bytes()
+    ).hexdigest()
+    transaction = Path(receipt["canonical_transaction"])
+    attestation = Path(receipt["canonical_apply_attestation"])
+    assert transaction.is_dir()
+    assert (transaction / "transaction.json").is_file()
+    assert receipt["canonical_transaction_journal_sha256"] == hashlib.sha256(
+        (transaction / "transaction.json").read_bytes()
+    ).hexdigest()
+    assert attestation.is_file()
+    assert receipt["canonical_apply_attestation_sha256"] == hashlib.sha256(
+        attestation.read_bytes()
+    ).hexdigest()
+
+    failing_root = tmp_path / "failing-attest-root"
+    (failing_root / "artifacts" / "operator").mkdir(parents=True)
+    failing_state = tmp_path / "failing-attest-state.json"
+    shutil.copyfile(state_path, failing_state)
+    failing_lock = tmp_path / "failing-locks" / "e8.lock"
+    failing_lock.parent.mkdir()
+    failing_applier = tmp_path / "failing-applier.py"
+    failing_applier.write_text(
+        "import importlib.util, sys\n"
+        "if '--attest' in sys.argv: raise SystemExit('forced attest failure')\n"
+        f"spec = importlib.util.spec_from_file_location('adapter', {str(adapter)!r})\n"
+        "adapter = importlib.util.module_from_spec(spec)\n"
+        "sys.modules[spec.name] = adapter\n"
+        "spec.loader.exec_module(adapter)\n"
+        "module = adapter.module\n"
+        "if __name__ == '__main__': raise SystemExit(module.main())\n"
+    )
+    failing_env = dict(sandbox_env)
+    failing_env.update(
+        {
+            "E8_V5_OPERATOR_ROOT": str(failing_root),
+            "E8_V5_STATE": str(failing_state),
+            "E8_V5_LOCK_PATH": str(failing_lock),
+            "E8_V5_TEST_APPLIER": str(failing_applier),
+            "E8_V5_APPLIER_SHA256": hashlib.sha256(failing_applier.read_bytes()).hexdigest(),
+        }
+    )
+    failing_stage = subprocess.run(
+        ["bash", str(wrapper), "--stage-state-review", "--evidence", str(evidence)],
+        env=failing_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert failing_stage.returncode == 0, failing_stage.stderr
+    failing_attest = subprocess.run(
+        attest, env=failing_env, capture_output=True, text=True, check=False
+    )
+    assert failing_attest.returncode != 0
+    assert "forced attest failure" in failing_attest.stderr
+    assert failing_state.read_bytes() == state_bytes
+    assert not list((failing_root / "artifacts" / "operator").glob("*.ratification.json"))
     assert state_path.read_bytes() == state_bytes
     assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
     bad_lock_after = (
