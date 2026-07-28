@@ -28,6 +28,7 @@ MIXED_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2
 RECOVERY_PATH = ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
 SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v1"
 TRANSITION_NAME = "terminalization_transition.json"
+COMPLETION_NAME = "terminalization_complete.json"
 REWRITTEN_SOURCE_PATHS = (
     "source_snapshot/source_binding.json",
     "partial_r2_plan.json",
@@ -140,6 +141,47 @@ def _rename_noreplace(source: Path, destination: Path) -> None:
         if error == errno.EEXIST:
             raise FileExistsError(f"terminal bridge output namespace already exists: {destination}")
         raise OSError(error, os.strerror(error), destination)
+
+
+def _write_completion_seal(output: Path, transition: dict[str, Any]) -> None:
+    """Create the sole consumption marker after the directory publication is durable."""
+    path = output / COMPLETION_NAME
+    if path.exists() or path.is_symlink():
+        raise FileExistsError("terminal bridge completion seal already exists")
+    value = {
+        "schema": SCHEMA,
+        "status": "published_complete",
+        "transition": {
+            "path": TRANSITION_NAME,
+            "sha256": sha256_path(output / TRANSITION_NAME),
+        },
+        "terminalizer_runner": transition["terminalizer_runner"],
+        "source_tree_sha256": transition["source_tree_sha256"],
+        "output_payload_tree_sha256": transition["output_payload_tree_sha256"],
+    }
+    temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
+    data = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        V4._write_full_record(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    linked = False
+    try:
+        os.link(temporary, path)
+        linked = True
+        _fsync_dir(output)
+    except Exception:
+        if linked:
+            path.unlink(missing_ok=True)
+            try:
+                _fsync_dir(output)
+            except Exception:
+                pass
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _load_binding(snapshot: Path) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
@@ -375,7 +417,9 @@ def terminalize(source_dir: Path, output_dir: Path, expected_source_tree_sha256:
         if RACE.source_hashes(source) != source_sha256:
             raise ValueError("terminal bridge source changed before publication")
         terminal_hash = canonical_hash(RACE.source_hashes(staging))
-        MIXED.build_plan(staging, terminal_hash)
+        # Validate the unpublished staging payload, but never let a consumer
+        # use it: only publication creates the completion seal.
+        MIXED._validate_predecessor(staging, terminal_hash, require_completion=False)
         if output.exists() or output.is_symlink():
             raise FileExistsError(f"terminal bridge output namespace already exists: {output}")
         _rename_noreplace(staging, output)
@@ -389,6 +433,7 @@ def terminalize(source_dir: Path, output_dir: Path, expected_source_tree_sha256:
             except Exception:
                 pass
             raise
+        _write_completion_seal(output, transition)
         return output
     except Exception:
         if not published:

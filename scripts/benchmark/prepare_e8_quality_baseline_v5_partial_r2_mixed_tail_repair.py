@@ -32,6 +32,7 @@ REPAIR_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_repair.v1"
 PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_repair_proposal.v1"
 EVIDENCE_NAME = "mixed_tail_repair.json"
 TERMINALIZATION_NAME = "terminalization_transition.json"
+TERMINALIZATION_COMPLETE_NAME = "terminalization_complete.json"
 TERMINALIZATION_SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v1"
 N = 500
 TIMEOUT_ERROR = "[ERROR: Inference failed: chat_completions failed: timed out]"
@@ -263,13 +264,18 @@ def _require_predecessor_provenance(root: Path, plan: dict[str, Any]) -> dict[st
     return {"path": path.name, "sha256": sha256_path(path)}
 
 
-def _terminalization_transition(root: Path) -> dict[str, Any] | None:
+def _terminalization_transition(
+    root: Path, *, require_completion: bool = True
+) -> dict[str, Any] | None:
     """Recompute an optional terminal bridge; metadata alone is not evidence."""
     path = root / TERMINALIZATION_NAME
     if not path.exists():
         return None
     if path.is_symlink() or not path.is_file():
         raise ValueError("mixed-tail terminalization transition is not a real file")
+    completion_path = root / TERMINALIZATION_COMPLETE_NAME
+    if require_completion and (completion_path.is_symlink() or not completion_path.is_file()):
+        raise ValueError("mixed-tail terminalization completion seal is missing")
     value = V4.load_json(path)
     runner = value.get("terminalizer_runner")
     sidecar = value.get("saved_sidecar_byte_preservation")
@@ -301,6 +307,7 @@ def _terminalization_transition(root: Path) -> dict[str, Any] | None:
         raise ValueError("mixed-tail terminalization manifest is malformed")
     actual_payload = source_hashes(root)
     actual_payload.pop(TERMINALIZATION_NAME, None)
+    actual_payload.pop(TERMINALIZATION_COMPLETE_NAME, None)
     if actual_payload != payload or set(payload) != set(source) | {"generation_failed_attempts.T2.r2.jsonl"}:
         raise ValueError("mixed-tail terminalization payload has an unlisted mutation")
     for relative, record in rewritten.items():
@@ -389,6 +396,17 @@ def _terminalization_transition(root: Path) -> dict[str, Any] | None:
     ):
         raise ValueError("mixed-tail terminalization failure ledger or append order differs")
     RACE._validate_predecessor_journal(root, plan, questions, classified["clean"])
+    if require_completion:
+        completion = V4.load_json(completion_path)
+        if (
+            completion.get("schema") != TERMINALIZATION_SCHEMA
+            or completion.get("status") != "published_complete"
+            or completion.get("transition") != {"path": TERMINALIZATION_NAME, "sha256": sha256_path(path)}
+            or completion.get("terminalizer_runner") != runner
+            or completion.get("source_tree_sha256") != source_tree
+            or completion.get("output_payload_tree_sha256") != value.get("output_payload_tree_sha256")
+        ):
+            raise ValueError("mixed-tail terminalization completion seal differs")
     return {
         "path": path.name,
         "sha256": sha256_path(path),
@@ -432,7 +450,9 @@ def _terminal_failures(
     ]
 
 
-def _validate_predecessor(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, Any]:
+def _validate_predecessor(
+    source_dir: Path, expected_source_tree_sha256: str, *, require_completion: bool = True
+) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{64}", expected_source_tree_sha256):
         raise ValueError("mixed-tail repair requires an explicit terminal predecessor tree SHA-256")
     root = source_dir.resolve(strict=True)
@@ -465,7 +485,7 @@ def _validate_predecessor(source_dir: Path, expected_source_tree_sha256: str) ->
     ):
         raise ValueError("mixed-tail predecessor is not the reviewed v1 successor disposition")
     predecessor_provenance = _require_predecessor_provenance(root, plan)
-    terminalization = _terminalization_transition(root)
+    terminalization = _terminalization_transition(root, require_completion=require_completion)
     base_hashes, base = _bound_snapshot(root, "source_snapshot")
     failed_hashes, _failed = _bound_snapshot(root, "failed_source_snapshot")
     if plan.get("source_sha256") != base_hashes or plan.get("failed_source_sha256") != failed_hashes:
