@@ -130,6 +130,8 @@ def test_focused_sidecar_path_uses_real_eval_tower_explicit_artifact_contract(
     path = RUNNER._focused_sidecar_path(sidecar_dir, label=label)
     assert path.parent == sidecar_dir
     assert path.name == f"question_results.{label}.jsonl"
+    rows = RUNNER.V4.load_jsonl(path)
+    assert len([row for row in rows if row.get("row_type") == "batch_complete" and row.get("complete") is True]) == 1
     _line, row = RUNNER._focused_sidecar_row(path, ordinal=138)
     recorded = row["result"]
     assert actual.question_id == qid

@@ -328,11 +328,17 @@ def _focused_sidecar_path(sidecar_dir: Path, *, label: str) -> Path:
     for path in sorted(sidecar_dir.rglob("question_results*.jsonl")):
         rows = V4.load_jsonl(path)
         starts = [row for row in rows if row.get("row_type") == "batch_start"]
+        completes = [row for row in rows if row.get("row_type") == "batch_complete"]
+        start = starts[0] if len(starts) == 1 else None
         if (
-            len(starts) == 1
-            and starts[0].get("label") == label
-            and starts[0].get("requested_n") == 1
-            and starts[0].get("concurrency") == 1
+            start is not None
+            and start.get("label") == label
+            and start.get("requested_n") == 1
+            and start.get("concurrency") == 1
+            and len(completes) == 1
+            and completes[0].get("complete") is True
+            and completes[0].get("completed_n") == 1
+            and completes[0].get("eval_batch_id") == start.get("eval_batch_id")
         ):
             candidates.append(path)
     if len(candidates) != 1:
