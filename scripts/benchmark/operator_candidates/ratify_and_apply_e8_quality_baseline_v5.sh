@@ -23,6 +23,7 @@ BASE_RUNNER="$SOURCE_ROOT/scripts/benchmark/run_e8_quality_baseline_reseed.py"
 RECOVERY_RUNNER="$SOURCE_ROOT/scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
 FINALIZER_RUNNER="$SOURCE_ROOT/scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
 SUCCESSOR_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
+RACE_RETRY_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
 VALIDATOR="$SOURCE_ROOT/scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
 VALIDATOR_PY="$SOURCE_ROOT/scripts/benchmark/validate_e8_quality_baseline_v5.py"
 APPLIER="$SOURCE_ROOT/scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
@@ -78,7 +79,7 @@ fi
 reviewed_artifact_bindings_json() {
     env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 PYTHONOPTIMIZE=0 "$PYTHON" -I - \
         "$WRAPPER" "$PRODUCER" "$RUNNER" "$RESUME_RUNNER" "$BASE_RUNNER" \
-        "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$VALIDATOR" \
+        "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$RACE_RETRY_RUNNER" "$VALIDATOR" \
         "$VALIDATOR_PY" "$APPLIER" "$CANONICAL_APPLIER" <<'PY'
 import hashlib
 import json
@@ -87,7 +88,7 @@ import sys
 
 names = (
     "wrapper", "producer", "runner", "resume_runner", "base_runner",
-    "recovery_runner", "finalizer_runner", "successor_runner", "validator",
+    "recovery_runner", "finalizer_runner", "successor_runner", "race_retry_runner", "validator",
     "validator_python", "applier_adapter", "canonical_applier",
 )
 print(json.dumps({name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -119,6 +120,7 @@ verify_reviewed_bindings() {
         "E8_V5_RECOVERY_RUNNER_SHA256:$RECOVERY_RUNNER" \
         "E8_V5_FINALIZER_RUNNER_SHA256:$FINALIZER_RUNNER" \
         "E8_V5_SUCCESSOR_RUNNER_SHA256:$SUCCESSOR_RUNNER" \
+        "E8_V5_RACE_RETRY_RUNNER_SHA256:$RACE_RETRY_RUNNER" \
         "E8_V5_VALIDATOR_SHA256:$VALIDATOR" \
         "E8_V5_VALIDATOR_PY_SHA256:$VALIDATOR_PY" \
         "E8_V5_APPLIER_SHA256:$APPLIER" \
@@ -214,7 +216,7 @@ interpreter = Path(interpreter_raw)
 bindings = json.loads(bindings_json)
 if not isinstance(bindings, dict) or set(bindings) != {
     "wrapper", "producer", "runner", "resume_runner", "base_runner",
-    "recovery_runner", "finalizer_runner", "successor_runner", "validator",
+    "recovery_runner", "finalizer_runner", "successor_runner", "race_retry_runner", "validator",
     "validator_python", "applier_adapter", "canonical_applier",
 } or not all(isinstance(value, str) and len(value) == 64 for value in bindings.values()):
     raise SystemExit("ERROR: reviewed artifact binding set is malformed")
@@ -396,16 +398,16 @@ verify_reviewed_bindings
 verify_state_review_pin
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 PYTHONOPTIMIZE=0 "$PYTHON" -I - \
     "$PROTOCOL_RECEIPT" "$EVIDENCE" "$WRAPPER" "$PRODUCER" "$RUNNER" "$RESUME_RUNNER" "$BASE_RUNNER" \
-    "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$VALIDATOR" "$VALIDATOR_PY" "$APPLIER" "$CANONICAL_APPLIER" "$STATE_REVIEW" \
+    "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$RACE_RETRY_RUNNER" "$VALIDATOR" "$VALIDATOR_PY" "$APPLIER" "$CANONICAL_APPLIER" "$STATE_REVIEW" \
     "$SOURCE_ROOT" "$E8_V5_ORCHESTRATOR_HEAD" "$EXPECTED_PRE" "$EXPECTED_CANDIDATE" "$STATE_REVIEW_SHA256" "$TOKEN" <<'PY'
 import hashlib, json, os
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
-output, evidence, wrapper, producer, runner, resume_runner, base_runner, recovery_runner, finalizer_runner, successor_runner, validator, validator_py, applier, canonical_applier, state_review, source_root = map(
-    Path, sys.argv[1:17]
+output, evidence, wrapper, producer, runner, resume_runner, base_runner, recovery_runner, finalizer_runner, successor_runner, race_retry_runner, validator, validator_py, applier, canonical_applier, state_review, source_root = map(
+    Path, sys.argv[1:18]
 )
-source_head, pre, candidate, state_review_sha256, token = sys.argv[17:]
+source_head, pre, candidate, state_review_sha256, token = sys.argv[18:]
 sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 manifest = json.loads(evidence.read_text())
 protocol = Path(manifest["protocol_candidate"]["path"])
@@ -429,6 +431,7 @@ payload = {
         "recovery_runner": sha(recovery_runner),
         "finalizer_runner": sha(finalizer_runner),
         "successor_runner": sha(successor_runner),
+        "race_retry_runner": sha(race_retry_runner),
         "validator": sha(validator),
         "validator_python": sha(validator_py),
         "applier_adapter": sha(applier),
