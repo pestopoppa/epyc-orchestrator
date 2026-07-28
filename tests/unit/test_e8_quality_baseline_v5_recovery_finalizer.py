@@ -43,6 +43,15 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 def _context(tmp_path: Path) -> tuple[dict, dict]:
     root = tmp_path / "bundle"
     snapshot = root / "intermediate/source_snapshot"
+    _write_json(
+        snapshot / "question_vector.T1.json",
+        {
+            "tier": 1,
+            "n": 1,
+            "core_id": "sealed-t1-core",
+            "questions": [{"qid": "t1-q"}],
+        },
+    )
     _write_json(snapshot / "question_vector.T2.json", {"fixed": "source"})
     scoring_questions = [
         {
@@ -101,6 +110,7 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         "repetition": 2,
         "n": 500,
         "generation_concurrency": 3,
+        "t1_core_id": "sealed-t1-core",
         "reuse_ordinals": reuse,
         "scorer_replay_ordinals": replay,
         "generation_ordinals": generation,
@@ -134,10 +144,10 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         "application": "requires_separate_human_finalizer",
     }
     _write_json(root / "intermediate/recovery_proposal.json", proposal)
-    response = root / "responses.T2.r2.jsonl"
-    sidecar = root / "eval_sidecars/question_results.e8-t2-r2.jsonl"
-    trace = root / "judge_traces.T2.r2.jsonl"
-    raw = root / "raw.T2.r2.json"
+    response = root / "intermediate/responses.T2.r2.jsonl"
+    sidecar = root / "intermediate/eval_sidecars/question_results.e8-t2-r2.jsonl"
+    trace = root / "intermediate/judge_traces.T2.r2.jsonl"
+    raw = root / "intermediate/raw.T2.r2.json"
     _write_jsonl(response, [])
     _write_jsonl(sidecar, [])
     _write_jsonl(trace, [])
@@ -276,6 +286,40 @@ def test_recovery_r2_context_accepts_hash_bound_59_3_438_bundle(tmp_path: Path) 
     accepted = _validate(root, context)
     assert accepted is not None
     assert len(accepted["plan"]["generation_ordinals"]) == 438
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema", "epyc.e8_quality_v5_partial_r2_plan.v1"),
+        ("t1_core_id", None),
+        ("t1_core_id", "wrong-core"),
+    ],
+)
+def test_finalizer_rejects_legacy_or_unbound_t1_plan(
+    tmp_path: Path, field: str, value: str | None
+) -> None:
+    root, _context_value = _context(tmp_path)
+    plan_path = root / "intermediate/partial_r2_plan.json"
+    plan = json.loads(plan_path.read_text())
+    if value is None:
+        plan.pop(field)
+    else:
+        plan[field] = value
+    _write_json(plan_path, plan)
+    with pytest.raises(ValueError, match="plan differs"):
+        finalizer.validate_intermediate(root / "intermediate")
+
+
+def test_independent_validator_rejects_mismatched_t1_plan(tmp_path: Path) -> None:
+    root, context = _context(tmp_path)
+    plan_path = Path(context["plan_path"])
+    plan = json.loads(plan_path.read_text())
+    plan["t1_core_id"] = "wrong-core"
+    _write_json(plan_path, plan)
+    context["plan_sha256"] = _sha(plan_path)
+    with pytest.raises(ValueError, match="T1 core binding"):
+        _validate(root, context)
 
 
 @pytest.mark.parametrize("field", ["schema", "plan_sha256", "source_tree_sha256"])

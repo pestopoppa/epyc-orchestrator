@@ -144,6 +144,10 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
     plan = V4.load_json(plan_path)
     source = V4.load_json(source_binding)
     source_hashes = source.get("source_sha256")
+    try:
+        sealed_t1_core_id = RECOVERY._load_t1_core_id(source_binding.parent)
+    except (OSError, ValueError) as exc:
+        raise ValueError("recovery intermediate lacks a valid sealed T1 core binding") from exc
     actual_hashes = {
         str(item.relative_to(source_binding.parent)): sha256_path(item)
         for item in sorted(source_binding.parent.rglob("*"))
@@ -159,6 +163,7 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
         or plan.get("protocol_id") != RECOVERY.PROTOCOL_ID
         or (plan.get("tier"), plan.get("repetition"), plan.get("n")) != (2, 2, 500)
         or plan.get("generation_concurrency") != V4.CONCURRENCY
+        or plan.get("t1_core_id") != sealed_t1_core_id
         or not isinstance(source_hashes, dict)
         or source_hashes != actual_hashes
         or plan.get("source_sha256") != source_hashes

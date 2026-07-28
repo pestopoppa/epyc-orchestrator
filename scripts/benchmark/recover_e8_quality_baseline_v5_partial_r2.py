@@ -28,7 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 V5_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
 RESUME_PATH = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
 PROTOCOL_ID = "e8_quality_full_pool_tier_baseline.v5"
-PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_plan.v1"
+PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_plan.v2"
 PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_proposal.v1"
 SCORER_ATTEMPT_SCHEMA = "epyc.e8_quality_v5_partial_r2_scorer_attempt.v1"
 TIER = 2
@@ -82,6 +82,7 @@ def _source_hashes(source: Path) -> dict[str, str]:
     if source.is_symlink() or not source.is_dir():
         raise ValueError("partial-r2 source must be a real directory")
     required = (
+        "question_vector.T1.json",
         "question_vector.T2.json",
         "scoring_vector.T2.json",
         "eval_sidecars/question_results.e8-t2-r2.jsonl",
@@ -111,6 +112,22 @@ def _load_vector(source: Path, name: str) -> dict[str, Any]:
     ):
         raise ValueError(f"partial-r2 {name} differs from the sealed T2 n=500 vector")
     return value
+
+
+def _load_t1_core_id(source: Path) -> str:
+    value = V4.load_json(source / "question_vector.T1.json")
+    questions = value.get("questions")
+    core_id = value.get("core_id")
+    if (
+        value.get("tier") != 1
+        or not isinstance(core_id, str)
+        or not core_id
+        or not isinstance(questions, list)
+        or value.get("n") != len(questions)
+        or not questions
+    ):
+        raise ValueError("partial-r2 question_vector.T1.json has no sealed T1 core identity")
+    return core_id
 
 
 def _result_qid(row: dict[str, Any]) -> str:
@@ -190,6 +207,7 @@ def build_plan(source_dir: Path) -> dict[str, Any]:
         raise ValueError("partial-r2 source must not be a symlink")
     source = source_dir.resolve(strict=True)
     hashes = _source_hashes(source)
+    t1_core_id = _load_t1_core_id(source)
     public = _load_vector(source, "question_vector.T2.json")
     scoring = _load_vector(source, "scoring_vector.T2.json")
     public_rows = public["questions"]
@@ -239,6 +257,7 @@ def build_plan(source_dir: Path) -> dict[str, Any]:
         "repetition": REPETITION,
         "n": N,
         "core_id": public.get("core_id"),
+        "t1_core_id": t1_core_id,
         "generation_concurrency": V4.CONCURRENCY,
         "reuse_ordinals": [ordinal for ordinal, kind in classified.items() if kind == "reuse"],
         "scorer_replay_ordinals": [
@@ -496,18 +515,20 @@ def _record(
     rows[ordinal] = value
 
 
-def _sealed_scoring_question_sha256(
-    scoring_questions: list[dict[str, Any]], ordinal: int
-) -> str:
+def _sealed_scoring_question_sha256(scoring_questions: list[dict[str, Any]], ordinal: int) -> str:
     return canonical_hash(scoring_questions[ordinal])
 
 
 def _reconstruct_questions(
-    args: argparse.Namespace, public: dict[str, Any], scoring: dict[str, Any]
+    args: argparse.Namespace,
+    public: dict[str, Any],
+    scoring: dict[str, Any],
+    *,
+    t1_core_id: str,
 ) -> list[dict[str, Any]]:
     tower = V4.EvalTower(url=args.api_url.rstrip("/"), timeout=V5.REQUEST_TIMEOUT_S)
     questions, core_id = V4.question_vector(
-        tower, tier=TIER, t1_core_id=str(public["core_id"]), n=N, seed=int(public["seed"])
+        tower, tier=TIER, t1_core_id=t1_core_id, n=N, seed=int(public["seed"])
     )
     questions = V4.apply_context_replacement_map(args, questions, tier=TIER)
     if V5.canonical_hash(
@@ -908,9 +929,7 @@ def _scorer_attempts_evidence(
             "ordinal": ordinal,
             "qid": V4._question_qid(questions[ordinal]),
             "saved_sidecar_sha256": canonical_hash(_SAVED_ROWS[ordinal]),
-            "scoring_question_sha256": _sealed_scoring_question_sha256(
-                scoring_questions, ordinal
-            ),
+            "scoring_question_sha256": _sealed_scoring_question_sha256(scoring_questions, ordinal),
         }
         for ordinal in expected_ordinals
     }
@@ -1069,12 +1088,23 @@ def execute(args: argparse.Namespace) -> Path:
     output = args.output_dir.absolute()
     if output.is_symlink() or (output.exists() and not output.is_dir()):
         raise ValueError("partial-r2 output namespace is not a directory")
-    output.mkdir(parents=True, exist_ok=True)
     runner_args = V5.parse_args(
         ["--collect-candidate", "--output-dir", str(output), "--api-url", args.api_url]
     )
     binding = V4.runtime_binding(runner_args)
     frontdoor_capacity = preflight_frontdoor_capacity(binding, required=V4.CONCURRENCY, claim=claim)
+    public = _load_vector(source, "question_vector.T2.json")
+    scoring = _load_vector(source, "scoring_vector.T2.json")
+    questions = _reconstruct_questions(
+        runner_args,
+        public,
+        scoring,
+        t1_core_id=str(plan["t1_core_id"]),
+    )
+    if _source_hashes(source.resolve(strict=True)) != plan["source_sha256"]:
+        raise ValueError("partial-r2 source changed during pre-write validation")
+
+    output.mkdir(parents=True, exist_ok=True)
     proposal = _recovery_proposal(
         plan,
         output,
@@ -1095,10 +1125,8 @@ def execute(args: argparse.Namespace) -> Path:
         for row in V4.load_jsonl(snapshot / "eval_sidecars/question_results.e8-t2-r2.jsonl")
         if row.get("row_type") == "question_result"
     }
-    public = _load_vector(snapshot, "question_vector.T2.json")
     scoring = _load_vector(snapshot, "scoring_vector.T2.json")
     scoring_questions = scoring["questions"]
-    questions = _reconstruct_questions(runner_args, public, scoring)
     journal = output / "recovery_rows.T2.r2.jsonl"
     rows = _load_journal(journal)
     _refuse_failed_generation_history(output)
@@ -1221,9 +1249,7 @@ def execute(args: argparse.Namespace) -> Path:
     _complete_r2(output, snapshot, plan, rows, questions, args.api_url)
     if _source_hashes(source.resolve(strict=True)) != plan["source_sha256"]:
         raise ValueError("partial-r2 source changed during collection")
-    scorer_attempts = _scorer_attempts_evidence(
-        output, rows, plan, questions, scoring_questions
-    )
+    scorer_attempts = _scorer_attempts_evidence(output, rows, plan, questions, scoring_questions)
     marker = V4.load_json(output / "r2_complete.json")
     marker.update(
         {
@@ -1249,11 +1275,27 @@ def preflight(args: argparse.Namespace) -> dict[str, Any]:
         ["--collect-candidate", "--output-dir", str(args.output_dir), "--api-url", args.api_url]
     )
     claim = _capture_recovery_claim(args)
+    public = _load_vector(args.source_dir, "question_vector.T2.json")
+    scoring = _load_vector(args.source_dir, "scoring_vector.T2.json")
+    questions = _reconstruct_questions(
+        runner_args,
+        public,
+        scoring,
+        t1_core_id=str(plan["t1_core_id"]),
+    )
     return {
         "schema": "epyc.e8_quality_v5_partial_r2_preflight.v1",
         "source_tree_sha256": plan["source_tree_sha256"],
         "generation_ordinals_sha256": canonical_hash(plan["generation_ordinals"]),
         "scorer_replay_ordinals_sha256": canonical_hash(plan["scorer_replay_ordinals"]),
+        "reconstructed_question_vector_sha256": canonical_hash(
+            V4.public_vector(
+                questions,
+                tier=TIER,
+                core_id=str(plan["core_id"]),
+                seed=int(public["seed"]),
+            )
+        ),
         "frontdoor_capacity": preflight_frontdoor_capacity(
             V4.runtime_binding(runner_args), required=V4.CONCURRENCY, claim=claim
         ),

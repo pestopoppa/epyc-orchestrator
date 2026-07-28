@@ -138,7 +138,7 @@ PARTIAL_RESUME_SCHEMA = "epyc.e8_quality_v5_partial_resume.v2"
 PARTIAL_RESUME_SOURCE_SCHEMA = "epyc.e8_quality_v5_partial_resume_source.v1"
 PARTIAL_RESUME_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_resume_plan.v1"
 RECOVERY_R2_CONTEXT_SCHEMA = "epyc.e8_quality_v5_recovery_r2_finalizer.v1"
-RECOVERY_R2_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_plan.v1"
+RECOVERY_R2_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_plan.v2"
 RECOVERY_R2_COMPLETE_SCHEMA = "epyc.e8_quality_partial_r2_complete.v1"
 RECOVERY_R2_PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_proposal.v1"
 RECOVERY_R2_EXPECTED_COUNTS = {"reuse": 59, "scorer_replay": 3, "generation": 438}
@@ -518,6 +518,8 @@ def _expected_recovery_plan(plan: dict[str, Any]) -> None:
         or plan.get("protocol_id") != "e8_quality_full_pool_tier_baseline.v5"
         or (plan.get("tier"), plan.get("repetition"), plan.get("n")) != (2, 2, 500)
         or plan.get("generation_concurrency") != 3
+        or not isinstance(plan.get("t1_core_id"), str)
+        or not plan["t1_core_id"]
         or not all(isinstance(value, list) for value in (reuse, replay, generation))
         or {"reuse": len(reuse), "scorer_replay": len(replay), "generation": len(generation)}
         != RECOVERY_R2_EXPECTED_COUNTS
@@ -733,6 +735,21 @@ def validate_recovery_r2_context(
         or context.get("source_tree_sha256") != source_binding.get("source_tree_sha256")
     ):
         raise ValueError("recovery-r2 immutable source binding differs")
+    try:
+        t1_vector = load_json(snapshot / "question_vector.T1.json", "recovery-r2 T1 vector")
+    except (OSError, ValueError) as exc:
+        raise ValueError("recovery-r2 sealed T1 core binding differs") from exc
+    t1_questions = t1_vector.get("questions")
+    if (
+        t1_vector.get("tier") != 1
+        or not isinstance(t1_vector.get("core_id"), str)
+        or not t1_vector["core_id"]
+        or not isinstance(t1_questions, list)
+        or not t1_questions
+        or t1_vector.get("n") != len(t1_questions)
+        or plan.get("t1_core_id") != t1_vector["core_id"]
+    ):
+        raise ValueError("recovery-r2 sealed T1 core binding differs")
     complete = load_json(complete_path, "recovery-r2 completion")
     r2_response = resolve_artifact(
         evidence_root, context.get("response_path"), "recovery-r2 response"

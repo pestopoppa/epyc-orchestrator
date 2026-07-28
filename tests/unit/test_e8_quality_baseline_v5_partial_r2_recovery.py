@@ -49,6 +49,17 @@ def _source(tmp_path: Path) -> Path:
     for name, rows in (("question_vector.T2.json", public), ("scoring_vector.T2.json", questions)):
         (source / name).parent.mkdir(parents=True, exist_ok=True)
         (source / name).write_text(json.dumps({"tier": 2, "n": 500, "questions": rows}) + "\n")
+    (source / "question_vector.T1.json").write_text(
+        json.dumps(
+            {
+                "tier": 1,
+                "n": 1,
+                "core_id": "sealed-t1-core",
+                "questions": [{"qid": "t1-q"}],
+            }
+        )
+        + "\n"
+    )
     sidecar = [
         {
             "row_type": "batch_start",
@@ -91,8 +102,114 @@ def test_plan_reuses_only_clean_rows_and_bounds_generation(tmp_path: Path) -> No
     assert len(plan["reuse_ordinals"]) == 59
     assert plan["scorer_replay_ordinals"] == [6, 24, 44]
     assert len(plan["generation_ordinals"]) == 438
+    assert plan["t1_core_id"] == "sealed-t1-core"
     assert set(plan["scorer_replay_ordinals"]).isdisjoint(plan["generation_ordinals"])
     assert plan["generation_concurrency"] == recovery.V4.CONCURRENCY
+
+
+def test_reconstruction_uses_sealed_t1_core_not_synthetic_t2_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    questions = [
+        {
+            "qid": "q-0",
+            "suite": "suite",
+            "prompt": "prompt",
+            "expected": "answer",
+            "scoring_method": "exact_match",
+            "scoring_config": {},
+        }
+    ]
+    public = recovery.V4.public_vector(
+        questions,
+        tier=2,
+        core_id="legacy_pool_t2_seed_42_n500",
+        seed=42,
+    )
+    scoring = recovery.V4.scoring_vector(
+        questions,
+        tier=2,
+        core_id="legacy_pool_t2_seed_42_n500",
+        seed=42,
+    )
+    seen: list[str] = []
+
+    monkeypatch.setattr(recovery.V4, "EvalTower", lambda **_kwargs: object())
+
+    def question_vector(_tower, *, tier, t1_core_id, n, seed):
+        assert (tier, n, seed) == (2, recovery.N, 42)
+        seen.append(t1_core_id)
+        return questions, "legacy_pool_t2_seed_42_n500"
+
+    monkeypatch.setattr(recovery.V4, "question_vector", question_vector)
+    monkeypatch.setattr(
+        recovery.V4,
+        "apply_context_replacement_map",
+        lambda _args, rows, *, tier: rows,
+    )
+
+    assert (
+        recovery._reconstruct_questions(
+            SimpleNamespace(api_url="http://test"),
+            public,
+            scoring,
+            t1_core_id="core_v2",
+        )
+        == questions
+    )
+    assert seen == ["core_v2"]
+
+
+def test_preflight_binds_reconstructed_vector_to_sealed_t1_core(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _source(tmp_path)
+    public = recovery.V4.load_json(source / "question_vector.T2.json")
+    public["seed"] = 42
+    (source / "question_vector.T2.json").write_text(json.dumps(public) + "\n")
+    scoring = recovery.V4.load_json(source / "scoring_vector.T2.json")
+    seen: list[str] = []
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", str(recovery.V4.CONCURRENCY))
+    monkeypatch.setattr(
+        recovery.V5,
+        "parse_args",
+        lambda _argv: SimpleNamespace(api_url="http://test", http_timeout_s=1),
+    )
+    monkeypatch.setattr(recovery, "_capture_recovery_claim", lambda _args: {"claim": "held"})
+    monkeypatch.setattr(recovery.V4, "runtime_binding", lambda _args: {"runtime_topology": []})
+    monkeypatch.setattr(
+        recovery,
+        "preflight_frontdoor_capacity",
+        lambda _binding, **_kwargs: {"capacity": recovery.V4.CONCURRENCY},
+    )
+
+    def reconstruct(_args, _public, _scoring, *, t1_core_id):
+        seen.append(t1_core_id)
+        return scoring["questions"]
+
+    monkeypatch.setattr(recovery, "_reconstruct_questions", reconstruct)
+    monkeypatch.setattr(
+        recovery.V4,
+        "public_vector",
+        lambda _questions, **_kwargs: public,
+    )
+    result = recovery.preflight(
+        SimpleNamespace(
+            source_dir=source,
+            output_dir=tmp_path / "never-created",
+            api_url="http://test",
+        )
+    )
+    assert seen == ["sealed-t1-core"]
+    assert result["reconstructed_question_vector_sha256"] == recovery.canonical_hash(public)
+    assert not (tmp_path / "never-created").exists()
+
+
+def test_plan_rejects_missing_t1_core_binding(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    (source / "question_vector.T1.json").unlink()
+    with pytest.raises(ValueError, match="question_vector.T1.json"):
+        recovery.build_plan(source)
 
 
 def test_plan_rejects_unapproved_saved_error(tmp_path: Path) -> None:
@@ -113,6 +230,44 @@ def test_collect_fails_closed_without_creating_an_output_bundle(tmp_path: Path) 
     with pytest.raises(ValueError, match="held GLOBAL recovery claim"):
         recovery.execute(type("Args", (), {"source_dir": source, "output_dir": output})())
     assert not output.exists()
+
+
+def test_collect_reconstruction_failure_writes_nothing_and_sends_no_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _source(tmp_path)
+    output = tmp_path / "would-be-recovery"
+    requests: list[object] = []
+    monkeypatch.setattr(recovery, "_capture_recovery_claim", lambda _args: {"claim": "held"})
+    monkeypatch.setattr(
+        recovery.V5,
+        "parse_args",
+        lambda _argv: SimpleNamespace(api_url="http://test", http_timeout_s=1),
+    )
+    monkeypatch.setattr(recovery.V4, "runtime_binding", lambda _args: {"runtime_topology": []})
+    monkeypatch.setattr(
+        recovery,
+        "preflight_frontdoor_capacity",
+        lambda _binding, **_kwargs: {"capacity": recovery.V4.CONCURRENCY},
+    )
+
+    def fail_reconstruction(*_args, **_kwargs):
+        raise ValueError("reconstructed public vector differs")
+
+    monkeypatch.setattr(recovery, "_reconstruct_questions", fail_reconstruction)
+    monkeypatch.setattr(
+        recovery, "_generate_with_watcher", lambda *_args: requests.append(object())
+    )
+    with pytest.raises(ValueError, match="reconstructed public vector differs"):
+        recovery.execute(
+            SimpleNamespace(
+                source_dir=source,
+                output_dir=output,
+                api_url="http://test",
+            )
+        )
+    assert not output.exists()
+    assert requests == []
 
 
 def test_compact_exact_match_omission_is_allowed_but_llm_judge_omission_is_not(
@@ -243,6 +398,17 @@ def _small_source(tmp_path: Path) -> Path:
             json.dumps({"tier": 2, "n": 5, "core_id": "small-core", "seed": 7, "questions": rows})
             + "\n"
         )
+    (source / "question_vector.T1.json").write_text(
+        json.dumps(
+            {
+                "tier": 1,
+                "n": 1,
+                "core_id": "small-t1-core",
+                "questions": [{"qid": "t1-q"}],
+            }
+        )
+        + "\n"
+    )
     race_lost = "[ERROR: placement timeout role=frontdoor reason=race_lost holders=[0] after 90.0s]"
     scorer_error = "scoring_unavailable: judge unavailable"
     sidecar = [
@@ -387,7 +553,7 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
     monkeypatch.setattr(
         recovery,
         "_reconstruct_questions",
-        lambda _args, _public, scoring: [
+        lambda _args, _public, scoring, *, t1_core_id: [
             {**question, "_reconstructed_only": True} for question in scoring["questions"]
         ],
     )
@@ -549,9 +715,9 @@ def test_execute_uses_original_ordinals_reconciles_scorer_and_stops_at_r2(
     }
     assert marker["scorer_attempts_sha256"] == marker["scorer_attempts"]["sha256"]
     scorer_attempts = recovery.V4.load_jsonl(output / "scorer_attempts.T2.r2.jsonl")
-    sealed_scoring_question = recovery.V4.load_json(source / "scoring_vector.T2.json")[
-        "questions"
-    ][2]
+    sealed_scoring_question = recovery.V4.load_json(source / "scoring_vector.T2.json")["questions"][
+        2
+    ]
     assert scorer_attempts[0]["scoring_question_sha256"] == recovery.canonical_hash(
         sealed_scoring_question
     )
