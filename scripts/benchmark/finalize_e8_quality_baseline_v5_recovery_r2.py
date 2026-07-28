@@ -124,6 +124,7 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
         or proposal["frontdoor_capacity"].get("capacity", 0) < V4.CONCURRENCY
         or not isinstance(proposal.get("output_namespace"), str)
         or proposal.get("application") != "requires_separate_human_finalizer"
+        or not isinstance(proposal.get("instrument", {}).get("measurement_source_sha256"), dict)
     ):
         raise ValueError("recovery intermediate proposal differs from the sealed plan")
     complete = V4.load_json(complete_path)
@@ -135,10 +136,12 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
         or complete.get("sidecar_sha256") != sha256_path(required["sidecar"])
         or complete.get("trace_sha256") != sha256_path(required["trace"])
         or complete.get("raw_sha256") != sha256_path(intermediate / "raw.T2.r2.json")
+        or complete.get("journal_sha256") != sha256_path(required["journal"])
         or not isinstance(complete.get("watcher"), dict)
         or not isinstance(complete.get("claim"), dict)
         or complete["watcher"].get("claim_before") != complete["claim"]
         or complete["watcher"].get("claim_after") != complete["claim"]
+        or complete["watcher"].get("proposal_sha256") != sha256_path(required["proposal"])
     ):
         raise ValueError("recovery intermediate completion evidence differs")
     watcher_rows = V4.load_jsonl(required["watcher"])

@@ -496,6 +496,9 @@ def _expected_recovery_plan(plan: dict[str, Any]) -> None:
 def validate_recovery_r2_context(
     report: dict[str, Any], *, evidence_root: Path, expected_recovery_runner_sha256: str | None,
     expected_finalizer_runner_sha256: str | None = None,
+    expected_v5_runner_sha256: str | None = None,
+    expected_base_runner_sha256: str | None = None,
+    expected_resume_runner_sha256: str | None = None,
 ) -> dict[str, Any] | None:
     """Bind a completed partial-r2 repair without calling it a pristine run.
 
@@ -526,6 +529,8 @@ def validate_recovery_r2_context(
         or set(dependencies) != {"v5", "resume", "recovery"}
         or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value) for value in dependencies.values())
         or dependencies["recovery"] != expected_recovery_runner_sha256
+        or dependencies["v5"] != expected_v5_runner_sha256
+        or dependencies["resume"] != expected_resume_runner_sha256
     ):
         raise ValueError("recovery-r2 finalizer instrument differs from the reviewed hash")
     plan_path = resolve_artifact(evidence_root, context.get("plan_path"), "recovery-r2 plan")
@@ -580,6 +585,11 @@ def validate_recovery_r2_context(
         )
     ):
         raise ValueError("recovery-r2 proposal measurement-source binding differs")
+    if (
+        instrument.get("runner_sha256") != expected_recovery_runner_sha256
+        or not {expected_v5_runner_sha256, expected_resume_runner_sha256, expected_base_runner_sha256, expected_recovery_runner_sha256}.issubset(set(measurement.values()))
+    ):
+        raise ValueError("recovery-r2 proposal does not bind the reviewed measurement sources")
     source_binding = load_json(source_binding_path, "recovery-r2 source binding")
     source_hashes = source_binding.get("source_sha256")
     snapshot = source_binding_path.parent
@@ -851,7 +861,7 @@ def validate_segmented_monitor(
         if (
             not isinstance(segment, dict)
             or not isinstance(segment.get("sample_indexes"), list)
-            or segment.get("source") not in {"historical", "resume"}
+            or segment.get("source") not in {"historical", "recovery_r2", "resume"}
             or not isinstance(segment.get("binding_sha256"), str)
             or not re.fullmatch(r"[0-9a-f]{64}", segment["binding_sha256"])
         ):
@@ -1080,6 +1090,9 @@ def validate(
         evidence_root=evidence_root,
         expected_recovery_runner_sha256=expected_recovery_runner_sha256,
         expected_finalizer_runner_sha256=expected_finalizer_runner_sha256,
+        expected_v5_runner_sha256=expected_runner_sha256,
+        expected_base_runner_sha256=expected_base_runner_sha256,
+        expected_resume_runner_sha256=expected_resume_runner_sha256,
     )
     if partial_context is not None and recovery_context is not None:
         raise ValueError("partial-resume and recovery-r2 contexts are mutually exclusive")

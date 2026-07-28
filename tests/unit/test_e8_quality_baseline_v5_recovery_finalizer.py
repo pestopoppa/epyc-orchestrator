@@ -75,7 +75,7 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         "generation_concurrency": 3,
         "generation_ordinals_sha256": validator.canonical_hash(generation),
         "scorer_replay_ordinals_sha256": validator.canonical_hash(replay),
-        "instrument": {"commit": "c", "runner_sha256": "r", "measurement_source_sha256": {"/a": "1" * 64, "/b": "2" * 64, "/c": "3" * 64}},
+        "instrument": {"commit": "c", "runner_sha256": "a" * 64, "measurement_source_sha256": {"/a": "a" * 64, "/b": "b" * 64, "/c": "c" * 64, "/d": "d" * 64}},
         "output_namespace": "/tmp/recovery",
         "region_claim": {"tag": "e8", "regions": ["q0"]},
         "frontdoor_capacity": {"capacity": 3},
@@ -156,6 +156,9 @@ def _validate(root: Path, context: dict) -> dict:
     return validator.validate_recovery_r2_context(
         {"recovery_r2": context}, evidence_root=root, expected_recovery_runner_sha256="a" * 64,
         expected_finalizer_runner_sha256="b" * 64,
+        expected_v5_runner_sha256="c" * 64,
+        expected_base_runner_sha256="b" * 64,
+        expected_resume_runner_sha256="d" * 64,
     )
 
 
