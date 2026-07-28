@@ -300,6 +300,8 @@ PY
     # The canonical applier owns lifecycle/state locks, durable preimage,
     # evidence re-validation, CAS, rollback, and the transaction-local receipt.
     if E8_BASELINE_APPLY_TOKEN="$CONFIRMATION" EPYC_MEASUREMENT_TRUST_LOCK_FD=8 \
+        EPYC_MEASUREMENT_TRUST_LOCK_PATH="$TRUST_LOCK" \
+        EPYC_MEASUREMENT_TRUST_LOCK_TEST_MODE="$TEST_SANDBOX" \
         PYTHONOPTIMIZE=0 "$PYTHON" "$APPLIER" \
         "${COMMON[@]}" --attest "$CONFIRMATION"; then
         :
