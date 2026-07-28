@@ -1,0 +1,178 @@
+"""Tests for the episodic store integrity gate.
+
+Each test builds a store exhibiting one of the defects measured during the
+2026-07-05 -> 2026-07-27 incident and asserts the corresponding check fires. The
+point is not to test the happy path — a monitor that only ever passes is
+indistinguishable from no monitor, which is exactly what we had for 22 days.
+"""
+from __future__ import annotations
+
+import json
+import sqlite3
+import subprocess
+import sys
+from pathlib import Path
+
+import faiss
+import numpy as np
+import pytest
+
+CHECKER = Path(__file__).resolve().parents[2] / "scripts/maintenance/check_episodic_integrity.py"
+
+
+def _unit_rows(n: int, dim: int = 16, *, seed: int = 0) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    v = rng.standard_normal((n, dim)).astype(np.float32)
+    return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+
+def build_store(
+    d: Path,
+    *,
+    n: int = 40,
+    id_map_len: int | None = None,
+    idx_shift: int = 0,
+    collapse: bool = False,
+) -> Path:
+    """Write a minimal but structurally faithful store.
+
+    id_map_len < n reproduces the index-ahead desync; idx_shift reproduces the
+    mis-resolving mapping; collapse reproduces distinct objectives sharing a
+    vector.
+    """
+    d.mkdir(parents=True, exist_ok=True)
+    vecs = _unit_rows(n)
+    if collapse:
+        vecs = np.tile(vecs[0], (n, 1))
+
+    index = faiss.IndexFlatIP(vecs.shape[1])
+    index.add(vecs)
+    faiss.write_index(index, str(d / "embeddings.faiss"))
+
+    ids = [str(i) for i in range(n)]
+    np.save(d / "id_map.npy", np.array(ids[: id_map_len if id_map_len is not None else n], dtype=object))
+
+    con = sqlite3.connect(d / "episodic.db")
+    con.execute("CREATE TABLE memories (id TEXT, embedding_idx INT, context TEXT, created_at TEXT)")
+    con.executemany(
+        "INSERT INTO memories VALUES (?,?,?,?)",
+        [
+            (ids[i], (i + idx_shift) % n, json.dumps({"objective": f"distinct objective {i}"}), f"2026-07-28T00:{i:02d}:00")
+            for i in range(id_map_len if id_map_len is not None else n)
+        ],
+    )
+    con.commit()
+    con.close()
+    return d
+
+
+def run_checker(store: Path, *extra: str) -> tuple[int, dict]:
+    proc = subprocess.run(
+        [sys.executable, str(CHECKER), "--sessions-dir", str(store), "--json", *extra],
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode, json.loads(proc.stdout)
+
+
+def by_name(report: dict) -> dict[str, dict]:
+    return {c["check"]: c for c in report["checks"]}
+
+
+class TestHealthyStorePasses:
+    def test_clean_store_exits_zero(self, tmp_path):
+        rc, report = run_checker(build_store(tmp_path / "clean"))
+        assert rc == 0
+        assert report["ok"] is True
+        assert all(c["pass"] for c in report["checks"])
+
+
+class TestEachDefectIsCaught:
+    """One test per defect the incident actually exhibited."""
+
+    def test_index_ahead_desync_fails(self, tmp_path):
+        """The unrecoverable direction: index has vectors id_map cannot name."""
+        rc, report = run_checker(build_store(tmp_path / "desync", id_map_len=35))
+        assert rc == 1
+        c = by_name(report)["index_id_map_sync"]
+        assert c["pass"] is False
+        assert c["desync"] == 5
+        assert "UNRECOVERABLE" in c["detail"]
+
+    def test_mis_resolving_mapping_fails(self, tmp_path):
+        """The incident itself: embedding_idx resolves to some OTHER row."""
+        rc, report = run_checker(build_store(tmp_path / "shift", idx_shift=7))
+        assert rc == 1
+        c = by_name(report)["embedding_idx_roundtrip"]
+        assert c["pass"] is False
+        assert c["failed"] == c["checked"]
+
+    def test_vector_collapse_fails(self, tmp_path):
+        """Distinct objectives sharing one vector — 47 did during the incident."""
+        rc, report = run_checker(build_store(tmp_path / "collapse", collapse=True))
+        assert rc == 1
+        c = by_name(report)["vector_diversity"]
+        assert c["pass"] is False
+        assert c["distinct_vectors"] == 1
+        assert c["distinct_objectives"] == 40
+
+
+class TestDiversityDenominator:
+    """The check's own bug, pinned.
+
+    First version divided distinct vectors by ROW COUNT. Benchmark traffic
+    replays the same objectives constantly (500 recent rows carried 57 distinct
+    objectives), so that denominator flagged a perfectly healthy store as
+    collapsing. The denominator must be distinct objectives.
+    """
+
+    def test_repeated_objectives_are_not_flagged_as_collapse(self, tmp_path):
+        d = tmp_path / "replay"
+        d.mkdir()
+        # 3 distinct objectives, each repeated 20x, each with its own vector
+        base = _unit_rows(3)
+        vecs = np.vstack([base[i % 3] for i in range(60)])
+        index = faiss.IndexFlatIP(vecs.shape[1])
+        index.add(vecs)
+        faiss.write_index(index, str(d / "embeddings.faiss"))
+        np.save(d / "id_map.npy", np.array([str(i) for i in range(60)], dtype=object))
+        con = sqlite3.connect(d / "episodic.db")
+        con.execute("CREATE TABLE memories (id TEXT, embedding_idx INT, context TEXT, created_at TEXT)")
+        con.executemany(
+            "INSERT INTO memories VALUES (?,?,?,?)",
+            [(str(i), i, json.dumps({"objective": f"objective {i % 3}"}), f"2026-07-28T00:{i:02d}:00")
+             for i in range(60)],
+        )
+        con.commit()
+        con.close()
+
+        rc, report = run_checker(d)
+        c = by_name(report)["vector_diversity"]
+        assert c["distinct_vectors"] == 3
+        assert c["distinct_objectives"] == 3
+        assert c["diversity"] == 1.0, "healthy replay must not read as collapse"
+        assert c["pass"] is True
+        assert rc == 0
+
+
+class TestSemanticSkipIsLoudNotSilent:
+    def test_unreachable_embedder_skips_without_passing_silently(self, tmp_path):
+        rc, report = run_checker(
+            build_store(tmp_path / "noembed"), "--semantic",
+            "--embedder-url", "http://127.0.0.1:9/embedding",
+        )
+        c = by_name(report)["semantic_self_match"]
+        assert c["skipped"] is True
+        assert c["pass"] is None
+        assert "unreachable" in c["detail"]
+        # a skip must not fail the gate — BGE may still be booting — but it is visible
+        assert rc == 0
+
+
+class TestAutopilotGateBlocks:
+    """The gate must refuse to start AutoPilot on a broken store."""
+
+    @pytest.mark.parametrize("kwargs", [{"id_map_len": 35}, {"idx_shift": 7}, {"collapse": True}])
+    def test_broken_store_exits_nonzero(self, tmp_path, kwargs):
+        rc, _ = run_checker(build_store(tmp_path / "b", **kwargs))
+        assert rc == 1, "a non-zero exit is what _enforce_episodic_integrity_gate keys on"

@@ -4562,6 +4562,73 @@ def _enforce_startup_gate_env() -> None:
     raise SystemExit(2)
 
 
+EPISODIC_INTEGRITY_CHECK = (
+    Path(__file__).resolve().parents[2] / "scripts/maintenance/check_episodic_integrity.py"
+)
+
+
+def _enforce_episodic_integrity_gate() -> None:
+    """Fail closed if the episodic store cannot be shown to be sound.
+
+    WHY THIS GATE EXISTS
+    --------------------
+    From 2026-07-05 to 2026-07-27 the store's vector resolution was silently
+    wrong and AutoPilot ran on it the whole time: every trial that consulted
+    episodic memory received semantically random neighbours, and every component
+    reported healthy because each was internally consistent. Twenty-two days of
+    trials were conducted through a broken instrument without a single alarm.
+
+    The store is now repaired and reseeded, so this gate is the part that keeps
+    it that way. It runs the metadata assertions (0.2 s, no inference) plus the
+    decisive re-embed check when the embedders are reachable. A failure blocks
+    the run rather than degrading it, because a trial run on a broken store is
+    worse than no trial — it produces evidence that looks valid.
+
+    Override with ``AUTOPILOT_SKIP_EPISODIC_GATE=1`` for a deliberate run on a
+    known-degraded store. It is logged loudly and is an operator decision.
+    """
+    if os.environ.get("AUTOPILOT_SKIP_EPISODIC_GATE") == "1":
+        log.warning(
+            "EPISODIC INTEGRITY GATE BYPASSED via AUTOPILOT_SKIP_EPISODIC_GATE=1 — "
+            "memory-derived results from this run are NOT trustworthy"
+        )
+        return
+    if not EPISODIC_INTEGRITY_CHECK.exists():
+        log.warning("episodic integrity checker missing at %s; store is UNVERIFIED",
+                    EPISODIC_INTEGRITY_CHECK)
+        return
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(EPISODIC_INTEGRITY_CHECK), "--semantic", "--json"],
+            capture_output=True, text=True, timeout=300,
+        )
+        report = json.loads(proc.stdout)
+    except Exception as exc:
+        log.warning("episodic integrity check could not run (%s); store is UNVERIFIED", exc)
+        return
+
+    for c in report.get("checks", []):
+        if c.get("skipped"):
+            log.warning("episodic %s SKIPPED: %s", c["check"], c["detail"])
+        elif not c["pass"]:
+            log.error("episodic %s FAILED: %s", c["check"], c["detail"])
+
+    if not report.get("ok"):
+        failed = [c for c in report.get("checks", []) if c.get("pass") is False]
+        print(
+            "ERROR: episodic memory integrity check FAILED; refusing to start AutoPilot.\n"
+            + "\n".join(f"  [FAIL] {c['check']}: {c['detail']}" for c in failed)
+            + "\n\nA trial run on a broken store produces evidence that looks valid.\n"
+            "Repair first: scripts/maintenance/repair_faiss_id_map.py (desync) or\n"
+            "scripts/maintenance/reseed_episodic_store.py (mapping/vector defects).\n"
+            "See handoffs/active/episodic-memory-integrity.md.\n"
+            "To run anyway on a known-degraded store: AUTOPILOT_SKIP_EPISODIC_GATE=1",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    log.info("episodic integrity gate: PASS (%d checks)", len(report.get("checks", [])))
+
+
 def _format_deep_eval_tier_options() -> str:
     tiers = [str(tier) for tier in sorted(controller_io.DEEP_EVAL_TIERS)]
     if not tiers:
@@ -8871,6 +8938,7 @@ def _git_tag(tag: str, message: str) -> None:
 def cmd_start(args: argparse.Namespace) -> None:
     """Start the optimization loop."""
     _enforce_startup_gate_env()
+    _enforce_episodic_integrity_gate()
 
     # Process lock
     lock_file = open(LOCK_PATH, "w")
