@@ -157,6 +157,98 @@ def test_plan_rejects_any_extra_or_missing_target(tmp_path: Path) -> None:
         resume.build_plan(root)
 
 
+def test_generation_inputs_are_reconstructed_not_taken_from_scorer_vector(monkeypatch) -> None:
+    full_questions = {
+        tier: [
+            {
+                "id": f"t{tier}-q0",
+                "prompt": f"full prompt for tier {tier}",
+                "suite": "suite",
+                "scoring_method": "exact_match",
+                "expected": "answer",
+                "scoring_config": {},
+            }
+        ]
+        for tier in (1, 2)
+    }
+    vectors = {
+        tier: resume.V4.public_vector(
+            full_questions[tier], tier=tier, core_id="sealed-t1", seed=17
+        )
+        for tier in (1, 2)
+    }
+    scoring = {
+        tier: resume.V4.scoring_vector(
+            full_questions[tier], tier=tier, core_id="sealed-t1", seed=17
+        )
+        for tier in (1, 2)
+    }
+    # Sealed scoring vectors intentionally omit both the prompt and EvalTower's
+    # `id`/`question_id` identity.  They are valid for scoring but not generation.
+    assert "prompt" not in scoring[2]["questions"][0]
+    assert "id" not in scoring[2]["questions"][0]
+
+    seen: list[tuple[int, str]] = []
+
+    def fake_question_vector(_tower, *, tier, t1_core_id, n, seed):
+        seen.append((tier, t1_core_id))
+        assert n == 1
+        assert seed == 17
+        return [dict(question) for question in full_questions[tier]], "sealed-t1"
+
+    monkeypatch.setattr(resume.V4, "question_vector", fake_question_vector)
+    monkeypatch.setattr(
+        resume.V4,
+        "apply_context_replacement_map",
+        lambda _args, questions, *, tier: questions,
+    )
+    rebuilt = resume._reconstruct_generation_questions(
+        object(), SimpleNamespace(), vectors, scoring
+    )
+    assert seen == [(1, "sealed-t1"), (2, "sealed-t1")]
+    assert rebuilt[2][0]["prompt"] == "full prompt for tier 2"
+    assert rebuilt[2][0]["id"] == "t2-q0"
+
+
+def test_generation_reconstruction_rejects_prompt_drift(monkeypatch) -> None:
+    questions = {
+        tier: [
+            {
+                "id": f"t{tier}-q0",
+                "prompt": f"sealed prompt {tier}",
+                "suite": "suite",
+                "scoring_method": "exact_match",
+                "expected": "answer",
+                "scoring_config": {},
+            }
+        ]
+        for tier in (1, 2)
+    }
+    vectors = {
+        tier: resume.V4.public_vector(questions[tier], tier=tier, core_id="sealed-t1", seed=17)
+        for tier in (1, 2)
+    }
+    scoring = {
+        tier: resume.V4.scoring_vector(questions[tier], tier=tier, core_id="sealed-t1", seed=17)
+        for tier in (1, 2)
+    }
+
+    def fake_question_vector(_tower, *, tier, **_kwargs):
+        rows = [dict(question) for question in questions[tier]]
+        if tier == 2:
+            rows[0]["prompt"] = "drifted prompt"
+        return rows, "sealed-t1"
+
+    monkeypatch.setattr(resume.V4, "question_vector", fake_question_vector)
+    monkeypatch.setattr(
+        resume.V4,
+        "apply_context_replacement_map",
+        lambda _args, rows, *, tier: rows,
+    )
+    with pytest.raises(ValueError, match="question vector differs"):
+        resume._reconstruct_generation_questions(object(), SimpleNamespace(), vectors, scoring)
+
+
 def test_immutable_copy_hashes_every_source_file_and_never_edits_source(tmp_path: Path) -> None:
     source = _source(tmp_path)
     before = {

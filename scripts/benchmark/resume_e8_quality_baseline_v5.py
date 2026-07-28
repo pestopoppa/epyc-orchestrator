@@ -124,11 +124,49 @@ def _safe_source_files(source: Path) -> dict[str, str]:
 
 
 def _questions(source: Path, tier: int) -> list[dict[str, Any]]:
+    """Load the sealed scorer-only rows used for ledger reconciliation."""
     value = json.loads((source / f"scoring_vector.T{tier}.json").read_text())
     rows = value.get("questions")
     if not isinstance(rows, list) or value.get("tier") != tier or value.get("n") != len(rows):
         raise ValueError(f"T{tier} scoring vector is invalid")
     return rows
+
+
+def _reconstruct_generation_questions(
+    tower: Any,
+    runner_args: argparse.Namespace,
+    vectors: dict[int, dict[str, Any]],
+    scoring_vectors: dict[int, dict[str, Any]],
+) -> dict[int, list[dict[str, Any]]]:
+    """Recover full prompt-bearing inputs and bind them to the sealed vectors."""
+    t1_core_id = str(vectors[1].get("core_id") or "")
+    if not t1_core_id:
+        raise ValueError("T1 source vector lacks core identity")
+    reconstructed: dict[int, list[dict[str, Any]]] = {}
+    for tier in (1, 2):
+        vector = vectors[tier]
+        questions, core_id = V4.question_vector(
+            tower,
+            tier=tier,
+            t1_core_id=t1_core_id,
+            n=int(vector["n"]),
+            seed=int(vector["seed"]),
+        )
+        questions = V4.apply_context_replacement_map(runner_args, questions, tier=tier)
+        V4.validate_source_vector_scorer_config(questions, tier=tier)
+        public = V4.public_vector(questions, tier=tier, core_id=core_id, seed=int(vector["seed"]))
+        scoring = V4.scoring_vector(questions, tier=tier, core_id=core_id, seed=int(vector["seed"]))
+        if canonical_hash(public) != canonical_hash(vector):
+            raise ValueError(f"T{tier} reconstructed public question vector differs from source")
+        if canonical_hash(scoring) != canonical_hash(scoring_vectors[tier]):
+            raise ValueError(f"T{tier} reconstructed scoring vector differs from source")
+        for question in questions:
+            if not str(question.get("prompt") or "").strip():
+                raise ValueError(f"T{tier} reconstructed generation input lacks prompt")
+            if not str(question.get("id") or question.get("question_id") or "").strip():
+                raise ValueError(f"T{tier} reconstructed generation input lacks question identity")
+        reconstructed[tier] = questions
+    return reconstructed
 
 
 def _validate_ledger(source: Path, tier: int, repetition: int) -> None:
@@ -682,9 +720,9 @@ def execute(args: argparse.Namespace) -> Path:
         scoring_vectors = {
             tier: V4.load_json(staging / f"scoring_vector.T{tier}.json") for tier in (1, 2)
         }
-        question_sets = {tier: _questions(staging, tier) for tier in (1, 2)}
+        scorer_question_sets = {tier: _questions(staging, tier) for tier in (1, 2)}
         for tier in (1, 2):
-            V4.validate_source_vector_scorer_config(question_sets[tier], tier=tier)
+            V4.validate_source_vector_scorer_config(scorer_question_sets[tier], tier=tier)
         V5.protocol_contract(
             runner_args,
             V4.candidate_contract_from_proposal(proposal, runner_args),
@@ -698,6 +736,9 @@ def execute(args: argparse.Namespace) -> Path:
         claim_before = _capture_held_region_claim(args)
         tower = V4.EvalTower(url=args.api_url.rstrip("/"), timeout=V5.REQUEST_TIMEOUT_S)
         tower._question_artifact_dir = staging / "eval_sidecars"
+        question_sets = _reconstruct_generation_questions(
+            tower, runner_args, vectors, scoring_vectors
+        )
         resume_watch_path = staging / "resume_runtime_watch.jsonl"
         watcher = V4.RuntimeWatcher(
             runner_args,
