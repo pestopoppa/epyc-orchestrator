@@ -53,12 +53,13 @@ def test_schedule_binds_c1_without_relabeling_c3(tmp_path: Path) -> None:
         "workspace": workspace,
         "watcher": {"sha256": "1" * 64},
         "source": tmp_path,
-        "serial_reference": {"sha256": "2" * 64},
+        "banked_clean_reference": {"sha256": "2" * 64, "generation_concurrency": 3},
     }
 
     schedule = RUNNER._schedule(state, SimpleNamespace(api_url="http://127.0.0.1:8000/"))
 
     assert schedule["canonical_c3_claim_unchanged"] is True
+    assert schedule["frozen_source"]["banked_clean_reference"]["generation_concurrency"] == 3
     assert schedule["amendment"] == {
         "kind": "tail_scheduling_only",
         "concurrency": 1,
