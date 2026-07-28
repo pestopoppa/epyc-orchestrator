@@ -30,41 +30,91 @@ APPLIER="$SOURCE_ROOT/scripts/benchmark/operator_candidates/apply_e8_quality_bas
 CANONICAL_APPLIER="$CANONICAL_ROOT/artifacts/operator/apply_e8_quality_baseline_state.py"
 STATE="${E8_V5_STATE:-$ORCH/orchestration/autopilot_state.json}"
 LOCK="${E8_V5_LOCK_PATH:-/mnt/raid0/llm/tmp/e8-quality-baseline-v5-apply.lock}"
+TRUST_LOCK="${E8_V5_TRUST_LOCK:-/run/lock/epyc-measurement-trust-boundary.lock}"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 sha() { sha256sum -- "$1" | awk '{print $1}'; }
 
 TEST_SANDBOX=0
 override_count=0
-for variable in E8_V5_OPERATOR_ROOT E8_V5_STATE E8_V5_LOCK_PATH; do
+for variable in E8_V5_OPERATOR_ROOT E8_V5_STATE E8_V5_LOCK_PATH E8_V5_TRUST_LOCK; do
     [[ -n "${!variable:-}" ]] && ((override_count += 1))
 done
-if (( override_count == 3 )); then
+if (( override_count == 4 )); then
     [[ "${E8_V5_TEST_MODE:-}" == "1" && -n "${PYTEST_CURRENT_TEST:-}" ]] ||
         fail 'noncanonical state/artifact paths are pytest-only'
-    [[ -d "$ROOT" && -f "$STATE" && -d "$(dirname -- "$LOCK")" ]] ||
-        fail 'pytest-only root, state, and lock parent must already exist'
-    [[ ! -L "$ROOT" && ! -L "$STATE" && ! -L "$(dirname -- "$LOCK")" && ! -L "$LOCK" ]] ||
+    [[ -d "$ROOT" && -f "$STATE" && -d "$(dirname -- "$LOCK")" && -d "$(dirname -- "$TRUST_LOCK")" ]] ||
+        fail 'pytest-only root, state, and lock parents must already exist'
+    [[ ! -L "$ROOT" && ! -L "$STATE" && ! -L "$(dirname -- "$LOCK")" && ! -L "$LOCK" &&
+       ! -L "$(dirname -- "$TRUST_LOCK")" && ! -L "$TRUST_LOCK" ]] ||
         fail 'pytest-only paths must not be symlinks'
     ROOT_LEXICAL="$(realpath -ms -- "$ROOT")"
     STATE_LEXICAL="$(realpath -ms -- "$STATE")"
     LOCK_PARENT_LEXICAL="$(realpath -ms -- "$(dirname -- "$LOCK")")"
+    TRUST_LOCK_PARENT_LEXICAL="$(realpath -ms -- "$(dirname -- "$TRUST_LOCK")")"
     ROOT_RESOLVED="$(realpath -e -- "$ROOT")"
     STATE_RESOLVED="$(realpath -e -- "$STATE")"
     LOCK_PARENT_RESOLVED="$(realpath -e -- "$(dirname -- "$LOCK")")"
-    [[ "$ROOT_LEXICAL" == "$ROOT_RESOLVED" && "$STATE_LEXICAL" == "$STATE_RESOLVED" && "$LOCK_PARENT_LEXICAL" == "$LOCK_PARENT_RESOLVED" ]] ||
+    TRUST_LOCK_PARENT_RESOLVED="$(realpath -e -- "$(dirname -- "$TRUST_LOCK")")"
+    [[ "$ROOT_LEXICAL" == "$ROOT_RESOLVED" && "$STATE_LEXICAL" == "$STATE_RESOLVED" &&
+       "$LOCK_PARENT_LEXICAL" == "$LOCK_PARENT_RESOLVED" &&
+       "$TRUST_LOCK_PARENT_LEXICAL" == "$TRUST_LOCK_PARENT_RESOLVED" ]] ||
         fail 'pytest-only paths must not traverse symlinked components'
-    [[ "$ROOT_RESOLVED" == /tmp/* && "$STATE_RESOLVED" == /tmp/* && "$LOCK_PARENT_RESOLVED" == /tmp/* ]] ||
+    [[ "$ROOT_RESOLVED" == /tmp/* && "$STATE_RESOLVED" == /tmp/* &&
+       "$LOCK_PARENT_RESOLVED" == /tmp/* && "$TRUST_LOCK_PARENT_RESOLVED" == /tmp/* ]] ||
         fail 'pytest-only resolved paths must remain below /tmp'
     [[ "$(stat -c '%d:%i' -- "$STATE_RESOLVED")" != "$(stat -c '%d:%i' -- "$ORCH/orchestration/autopilot_state.json")" ]] ||
         fail 'pytest-only state must not resolve to the canonical production state inode'
     ROOT="$ROOT_RESOLVED"
     STATE="$STATE_RESOLVED"
     LOCK="$LOCK_PARENT_RESOLVED/$(basename -- "$LOCK")"
+    TRUST_LOCK="$TRUST_LOCK_PARENT_RESOLVED/$(basename -- "$TRUST_LOCK")"
     TEST_SANDBOX=1
 elif (( override_count != 0 )); then
-    fail 'test sandbox requires all of E8_V5_OPERATOR_ROOT, E8_V5_STATE, and E8_V5_LOCK_PATH'
+    fail 'test sandbox requires E8_V5_OPERATOR_ROOT, E8_V5_STATE, E8_V5_LOCK_PATH, and E8_V5_TRUST_LOCK'
 fi
+
+acquire_trust_boundary_lock() {
+    /usr/bin/python3 - "$TRUST_LOCK" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+parent = os.path.dirname(path)
+nofollow = getattr(os, "O_NOFOLLOW", 0)
+dirfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | nofollow)
+try:
+    fd = os.open(os.path.basename(path), os.O_RDWR | os.O_CREAT | nofollow, 0o660, dir_fd=dirfd)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise SystemExit("measurement trust-boundary lock is not a regular file")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.fsync(dirfd)
+finally:
+    os.close(dirfd)
+PY
+    exec 8<>"$TRUST_LOCK"
+    /usr/bin/flock -n 8 ||
+        fail "measurement trust-boundary lock is already held: $TRUST_LOCK"
+    /usr/bin/python3 - "$TRUST_LOCK" "/proc/$$/fd/8" <<'PY'
+import os
+import stat
+import sys
+
+named = os.stat(sys.argv[1], follow_symlinks=False)
+held = os.stat(sys.argv[2])
+if not stat.S_ISREG(named.st_mode) or (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino):
+    raise SystemExit("measurement trust-boundary lock inode changed during acquisition")
+PY
+    if (( TEST_SANDBOX == 1 )) && [[ "${E8_V5_TEST_HOLD_TRUST_LOCK_SECONDS:-0}" != 0 ]]; then
+        [[ "${E8_V5_TEST_HOLD_TRUST_LOCK_SECONDS}" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+            fail 'invalid test-only trust-lock hold duration'
+        sleep "${E8_V5_TEST_HOLD_TRUST_LOCK_SECONDS}"
+    fi
+}
 
 verify_reviewed_bindings() {
     for binding in \
@@ -113,10 +163,12 @@ EXPECTED_CANDIDATE="$7"
 [[ "$EVIDENCE" = /* && -f "$EVIDENCE" ]] || fail 'evidence must be an existing absolute path'
 [[ "$EXPECTED_PRE" =~ ^[0-9a-f]{64}$ && "$EXPECTED_CANDIDATE" =~ ^[0-9a-f]{64}$ ]] ||
     fail 'reviewed state hashes must be lowercase SHA-256'
+acquire_trust_boundary_lock
 verify_reviewed_bindings
 
-# Validator runs before any state inspection or lock acquisition.  It is a
-# sealed-bundle reader and never writes the evidence or AutoPilot state.
+# The outer campaign lock now covers validation, review, and any subsequent
+# state/receipt transaction. The validator itself remains a sealed-bundle
+# reader and never writes the evidence or AutoPilot state.
 bash "$VALIDATOR" --validate-evidence "$EVIDENCE"
 
 EVIDENCE_SHA256="$(sha "$EVIDENCE")"
@@ -247,7 +299,8 @@ PY
     )
     # The canonical applier owns lifecycle/state locks, durable preimage,
     # evidence re-validation, CAS, rollback, and the transaction-local receipt.
-    if E8_BASELINE_APPLY_TOKEN="$CONFIRMATION" PYTHONOPTIMIZE=0 "$PYTHON" "$APPLIER" \
+    if E8_BASELINE_APPLY_TOKEN="$CONFIRMATION" EPYC_MEASUREMENT_TRUST_LOCK_FD=8 \
+        PYTHONOPTIMIZE=0 "$PYTHON" "$APPLIER" \
         "${COMMON[@]}" --attest "$CONFIRMATION"; then
         :
     else

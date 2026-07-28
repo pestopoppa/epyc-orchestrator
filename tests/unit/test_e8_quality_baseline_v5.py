@@ -1721,6 +1721,7 @@ def _v5_wrapper_integration_fixture(tmp_path: Path) -> tuple[Path, dict[str, str
         "E8_V5_OPERATOR_ROOT": str(operator_root),
         "E8_V5_STATE": str(state),
         "E8_V5_LOCK_PATH": str(tmp_path / "apply.lock"),
+        "E8_V5_TRUST_LOCK": str(tmp_path / "measurement-trust.lock"),
         "E8_V5_TEST_MODE": "1",
         "E8_V5_TEST_AUTO_CONFIRM": "1",
         "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
@@ -1768,6 +1769,90 @@ def test_final_wrapper_integration_commits_temp_state_then_creates_bound_receipt
     assert value["transaction"]["canonical_attestation_path"].endswith(
         "canonical_apply_attestation.json"
     )
+
+
+def test_final_wrapper_shared_trust_lock_blocks_before_transaction(
+    tmp_path: Path,
+) -> None:
+    wrapper, env, state, root, evidence, pre_sha, candidate_sha = _v5_wrapper_integration_fixture(
+        tmp_path
+    )
+    trust_lock = Path(env["E8_V5_TRUST_LOCK"])
+    trust_lock.touch()
+    before_state = state.read_bytes()
+    before_outputs = set((root / "artifacts/operator").iterdir())
+    with trust_lock.open("r+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        blocked = subprocess.run(
+            _v5_wrapper_command(
+                wrapper, "--prevalidate", evidence, pre_sha, candidate_sha
+            ),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    assert blocked.returncode != 0
+    assert "measurement trust-boundary lock is already held" in blocked.stderr
+    assert state.read_bytes() == before_state
+    assert set((root / "artifacts/operator").iterdir()) == before_outputs
+
+
+def test_v5_direct_applier_honors_shared_and_inherited_trust_lock(
+    tmp_path: Path,
+) -> None:
+    adapter = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    )
+    trust_lock = tmp_path / "measurement-trust.lock"
+    trust_lock.touch()
+    env = {
+        **__import__("os").environ,
+        "E8_V5_TRUST_LOCK": str(trust_lock),
+        "E8_V5_TEST_MODE": "1",
+    }
+    with trust_lock.open("r+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        blocked = subprocess.run(
+            [sys.executable, str(adapter), "--plan"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        inherited_env = {
+            **env,
+            "EPYC_MEASUREMENT_TRUST_LOCK_FD": str(handle.fileno()),
+        }
+        inherited = subprocess.run(
+            [
+                sys.executable,
+                str(adapter),
+                "--state",
+                str(tmp_path / "state"),
+                "--evidence",
+                str(tmp_path / "evidence"),
+                "--canonical-evidence",
+                str(tmp_path / "evidence"),
+                "--validator",
+                str(tmp_path / "validator"),
+                "--transaction-dir",
+                str(tmp_path / "transaction"),
+                "--attestation",
+                str(tmp_path / "attestation"),
+                "--plan",
+            ],
+            env=inherited_env,
+            pass_fds=(handle.fileno(),),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    assert blocked.returncode != 0
+    assert "measurement trust-boundary lock is already held" in blocked.stderr
+    assert inherited.returncode == 0, inherited.stderr
+    assert "E8 baseline-state apply plan" in inherited.stdout
 
 
 def test_final_wrapper_integration_apply_failure_rolls_back_without_receipt(
@@ -1931,6 +2016,7 @@ def test_final_wrapper_rejects_symlinked_test_sandbox_state_escape(tmp_path: Pat
             "E8_V5_OPERATOR_ROOT": str(root),
             "E8_V5_STATE": str(state_link),
             "E8_V5_LOCK_PATH": str(lock),
+            "E8_V5_TRUST_LOCK": str(tmp_path / "measurement-trust.lock"),
             "E8_V5_TEST_MODE": "1",
             "PYTEST_CURRENT_TEST": "forged",
         },
