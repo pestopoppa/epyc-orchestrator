@@ -27,7 +27,6 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 from safety_gate import (  # type: ignore[import-not-found]
     EvalResult,
     SafetyGate,
-    PER_SUITE_BINDING_MIN_COUNT,
     PER_SUITE_REGRESSION,
     per_suite_regression_threshold,
 )
@@ -103,19 +102,56 @@ def test_sparse_baseline_moderate_drop_is_advisory_not_terminal(tmp_path):
     assert verdict.passed
     assert "per_suite_regression" not in verdict.categories
     assert "per_suite_regression_advisory" in verdict.categories
-    assert any(
-        f"below n={PER_SUITE_BINDING_MIN_COUNT}" in warning
-        for warning in verdict.warnings
-    )
+    # The n=2 baseline now takes the small-sample-baseline annotation path
+    # (2026-07-16 thrash guard) rather than the generic low-support wording.
+    assert any("small-sample baseline" in warning for warning in verdict.warnings)
 
 
-def test_total_collapse_at_n2_still_regresses(tmp_path):
-    """A real signal (every question in the suite now wrong) must still fire."""
+def test_total_collapse_at_tiny_baseline_n_is_advisory_not_hard(tmp_path):
+    """2026-07-16 rollback thrash (trials 1404-1433, resume-precondition in
+    autopilot-continuous-optimization.md): a debugbench baseline measured on
+    only n=2 scored 3.0, so a 0.0 trial looked like a -3.0 catastrophic
+    collapse and hard-failed via the low-support catastrophic escape, feeding
+    consecutive_failures into ~10 straight rollbacks. A baseline sampled below
+    PER_SUITE_BASELINE_HARD_MIN_N can no longer certify a HARD rollback — the
+    drop stays visible as an annotated advisory warning."""
     g = _gate(tmp_path)
-    g.baseline.per_suite_quality_by_tier = {1: {"hotpotqa": 3.0}}
-    g.baseline.per_suite_counts_by_tier = {1: {"hotpotqa": 2}}
-    verdict = g.check(_trial({"hotpotqa": 0.0}, {"hotpotqa": 2}))
+    g.baseline.per_suite_quality_by_tier = {1: {"debugbench": 3.0}}
+    g.baseline.per_suite_counts_by_tier = {1: {"debugbench": 2}}
+    verdict = g.check(_trial({"debugbench": 0.0}, {"debugbench": 2}))
+    assert verdict.passed
+    assert "per_suite_regression" not in verdict.categories
+    assert "per_suite_regression_advisory" in verdict.categories
+    assert any("small-sample baseline" in warning for warning in verdict.warnings)
+
+
+def test_same_collapse_with_adequate_baseline_n_still_hard_fails(tmp_path):
+    """The same -3.0 collapse against a baseline with n >= the minimum keeps
+    its teeth: hard violation, not advisory."""
+    g = _gate(tmp_path)
+    g.baseline.per_suite_quality_by_tier = {1: {"debugbench": 3.0}}
+    g.baseline.per_suite_counts_by_tier = {1: {"debugbench": 5}}
+    verdict = g.check(_trial({"debugbench": 0.0}, {"debugbench": 5}))
+    assert not verdict.passed
     assert "per_suite_regression" in verdict.categories
+
+
+def test_small_baseline_guard_min_n_is_env_configurable(tmp_path, monkeypatch):
+    """AUTOPILOT_PER_SUITE_BASELINE_MIN_N=2 re-arms the catastrophic escape at
+    n_baseline=2 (operator opt-in), while a malformed override is ignored."""
+    g = _gate(tmp_path)
+    g.baseline.per_suite_quality_by_tier = {1: {"debugbench": 3.0}}
+    g.baseline.per_suite_counts_by_tier = {1: {"debugbench": 2}}
+    monkeypatch.setenv("AUTOPILOT_PER_SUITE_BASELINE_MIN_N", "2")
+    verdict = g.check(_trial({"debugbench": 0.0}, {"debugbench": 2}))
+    assert "per_suite_regression" in verdict.categories
+
+    from safety_gate import _per_suite_regression_binding, PER_SUITE_BASELINE_HARD_MIN_N
+    monkeypatch.setenv("AUTOPILOT_PER_SUITE_BASELINE_MIN_N", "banana")
+    assert PER_SUITE_BASELINE_HARD_MIN_N == 5
+    assert _per_suite_regression_binding(-3.0, 5, 2) is False  # falls back to 5
+    monkeypatch.setenv("AUTOPILOT_PER_SUITE_BASELINE_MIN_N", "-3")
+    assert _per_suite_regression_binding(-3.0, 5, 2) is False  # falls back to 5
 
 
 def test_small_drop_at_high_n_still_regresses(tmp_path):

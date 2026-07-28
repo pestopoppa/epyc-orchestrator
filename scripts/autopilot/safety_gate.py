@@ -102,6 +102,18 @@ PER_SUITE_REGRESSION = -0.1  # Max per-suite quality drop (fixed floor; see belo
 # adequate support or a catastrophic drop before failing the trial.)
 PER_SUITE_BINDING_MIN_COUNT = 5
 PER_SUITE_LOW_SUPPORT_CATASTROPHIC_DROP = 2.5
+# (2026-07-16 rollback thrash, trials 1404-1433; resume-precondition in epyc-root
+# handoffs/active/autopilot-continuous-optimization.md: a debugbench baseline
+# measured on only n=2 scored 3.0, so a 0.0 trial read as a -3.0 "catastrophic"
+# collapse and the low-support escape above still hard-failed the trial, feeding
+# consecutive_failures into ~10 straight rollbacks.) A baseline sampled below
+# this minimum has no resolution to certify ANY hard per-suite rollback — its
+# score is quantized to multiples of 3/n, so a collapse is indistinguishable
+# from a couple of unlucky draws. Threshold-crossing drops against such a
+# baseline stay visible as advisory warnings (the suite is NOT dropped from
+# scoring); they just never bind. Env-overridable via
+# AUTOPILOT_PER_SUITE_BASELINE_MIN_N (malformed/non-positive values ignored).
+PER_SUITE_BASELINE_HARD_MIN_N = 5
 # tool_use sentinel suite (5 questions, REPL-mode, substring scoring) is inherently
 # flaky — models invoke the tool correctly but don't reliably echo the returned secret.
 # A single-question drop is -0.6 on the 0-3 scale, enough to trip the per-suite regression
@@ -242,6 +254,34 @@ def per_suite_regression_threshold(result_n: int | None, baseline_n: int | None)
     return -max(quanta)
 
 
+def _per_suite_baseline_min_n() -> int:
+    """Resolve the minimum baseline sample for a BINDING per-suite regression.
+
+    Env-overridable via AUTOPILOT_PER_SUITE_BASELINE_MIN_N. A missing/malformed/
+    non-positive override is ignored (falls back to PER_SUITE_BASELINE_HARD_MIN_N)
+    and logged, so a fat-fingered env var can never silently disarm the guard."""
+    raw = os.environ.get("AUTOPILOT_PER_SUITE_BASELINE_MIN_N", "").strip()
+    if not raw:
+        return PER_SUITE_BASELINE_HARD_MIN_N
+    try:
+        val = int(raw)
+    except ValueError:
+        log.warning(
+            "Ignoring non-integer AUTOPILOT_PER_SUITE_BASELINE_MIN_N=%r; using %d",
+            raw,
+            PER_SUITE_BASELINE_HARD_MIN_N,
+        )
+        return PER_SUITE_BASELINE_HARD_MIN_N
+    if val < 1:
+        log.warning(
+            "Ignoring non-positive AUTOPILOT_PER_SUITE_BASELINE_MIN_N=%r; using %d",
+            raw,
+            PER_SUITE_BASELINE_HARD_MIN_N,
+        )
+        return PER_SUITE_BASELINE_HARD_MIN_N
+    return val
+
+
 def _per_suite_regression_binding(
     suite_delta: float, result_n: int | None, baseline_n: int | None
 ) -> bool:
@@ -250,6 +290,12 @@ def _per_suite_regression_binding(
         return True
     if result_n <= 0 or baseline_n <= 0:
         return True
+    if baseline_n < _per_suite_baseline_min_n():
+        # 2026-07-16 thrash guard: a baseline this sparse cannot certify a hard
+        # rollback, however catastrophic the apparent drop (see
+        # PER_SUITE_BASELINE_HARD_MIN_N). The caller keeps the drop visible as
+        # an advisory warning.
+        return False
     if min(result_n, baseline_n) >= PER_SUITE_BINDING_MIN_COUNT:
         return True
     return suite_delta < -PER_SUITE_LOW_SUPPORT_CATASTROPHIC_DROP
@@ -1649,11 +1695,23 @@ class SafetyGate:
                             if "per_suite_regression" not in categories:
                                 categories.append("per_suite_regression")
                         else:
-                            warnings.append(
-                                f"{msg} treated as advisory because per-suite support "
-                                f"is below n={PER_SUITE_BINDING_MIN_COUNT} and the "
-                                "drop is not catastrophic."
-                            )
+                            min_baseline_n = _per_suite_baseline_min_n()
+                            if baseline_n is not None and 0 < baseline_n < min_baseline_n:
+                                # 2026-07-16 thrash: tiny-n baseline (debugbench
+                                # n=2 @ 3.0) — annotate the small-sample condition
+                                # explicitly; the suite still counts in aggregate
+                                # scoring, it just cannot trigger a HARD rollback.
+                                warnings.append(
+                                    f"{msg} treated as advisory (small-sample baseline): "
+                                    f"baseline n={baseline_n} < {min_baseline_n} is too "
+                                    "sparse to certify a hard rollback."
+                                )
+                            else:
+                                warnings.append(
+                                    f"{msg} treated as advisory because per-suite support "
+                                    f"is below n={PER_SUITE_BINDING_MIN_COUNT} and the "
+                                    "drop is not catastrophic."
+                                )
                             if "per_suite_regression_advisory" not in categories:
                                 categories.append("per_suite_regression_advisory")
 
