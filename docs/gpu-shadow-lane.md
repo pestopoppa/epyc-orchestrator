@@ -2,9 +2,16 @@
 
 **Filed**: 2026-07-28, gpu-serving-tie-in-program task P0-7 (scaffolding; zero-inference).
 **Status**: SCAFFOLD — nothing here is active. The feature flag
-(`ORCHESTRATOR_FEATURE_GPU_SHADOW_LANE`) is default-off in test AND prod, the
-registry is FROZEN (no role exists), and no launch-layer file references the
-lane (witnessed by `tests/unit/test_gpu_shadow_lane.py::test_orchestrator_stack_has_no_lane_coupling`).
+(`ORCHESTRATOR_FEATURE_GPU_SHADOW_LANE`) is default-off in test AND prod and
+the registry is FROZEN (no role exists). Since the 2026-07-28 P2-4 punch-list
+landed, the launch layer contains **gated** lane plumbing (a `gpu_shadow_lane`
+launch mode + a `tenant_role` compile contract) that can only fire once the
+registry proposal's manifest entries exist — State-A inertness is witnessed
+structurally by
+`tests/unit/test_gpu_shadow_lane.py::test_orchestrator_stack_has_no_lane_coupling`
+(no manifest/NUMA/port/server entry for the lane; compile outputs byte-identical
+to the pre-lane state) plus
+`tests/unit/test_gpu_shadow_lane_compile_contract.py` (per-stage witnesses).
 **Program authority**: `epyc-root/handoffs/active/gpu-serving-tie-in-program.md`
 (ratified decisions D1–D10).
 **Pattern template**: `epyc-root/docs/runbooks/vision-escalation-minicpmo-promotion.md`
@@ -35,9 +42,10 @@ sampling, duty bindings — is **registry data**:
 ## 2. Registry states (the State-A/B choreography)
 
 - **State A (current / rollback state)** = lane absent. No registry role, no
-  `stack_manifest` wiring, feature flag off, port 18100 unbound, MI210 free
-  for bench windows. This document plus the proposal file ARE State A's
-  artifacts.
+  `stack_manifest`/`stack_numa` ENTRIES (the gated launch-mode plumbing landed
+  by the P2-4 punch-list is present but structurally unreachable), feature flag
+  off, port 18100 unbound, MI210 free for bench windows. This document plus the
+  proposal file ARE State A's artifacts.
 - **State B (active state)** = lane resident with tenant *T*: master-registry
   role block applied (Step 1), lean recompiled, `gpu_shadow_lane` launched via
   `orchestrator_stack.py start --only gpu_shadow_lane`, preflight attestation
@@ -46,6 +54,16 @@ sampling, duty bindings — is **registry data**:
   1–6 run with the new registry data; **rollback is the same runbook run
   toward State A** (Step 7). Every strategic pivot is a config change with a
   rehearsed rollback, never a rebuild.
+
+**What is data-driven today vs a code change (truth table, P2-5):**
+
+| Change | Mechanism |
+|---|---|
+| Tenant model (path/quant/sha) | **Data** — registry role block §1 of the proposal (+ Steps 1–6) |
+| Serving shape (`-np` × per-slot ctx) | **Data** — `serving_shape` block of `gpu_shadow_lane_np_ceiling.yaml`, compiled through stack-priors into the builder's `-np`/`-c` |
+| np admission ceilings (per mode) | **Data** — np_ceiling tenant rows (loader-enforced) |
+| Device / reasoning / KV types | **Data** — registry `server:`/`kv_cache:` fields flowing through compiled priors (builder falls back to lane constants) |
+| MTP mode toggle | **Launch-bound (D6) and CODE-defaulted**: the production `_build_gpu_shadow_lane_command` emits NO speculative args by construction. Ceiling data is mode-aware (`mtp_on` rows exist), but flipping the lane to MTP requires a deliberate builder change + drained relaunch — that is intentional, not an omission. |
 
 ## 3. Admission policy (program decision D1 — design provision)
 
@@ -77,7 +95,7 @@ MI210 = 64 GB HBM2e, `ROCm0`.
 
 | Resident tenant | VRAM |
 |---|---|
-| dense 27B Q8_0 (stock `Qwen_Qwen3.6-27B-Q8_0.gguf`, 28,665,067,072 B; FF alternative has identical footprint) | **28.7 GB** |
+| dense 27B Q8_0 (stock `Qwen_Qwen3.6-27B-Q8_0.gguf`, 28,665,067,072 B = 26.70 GiB; the FF alternative is **larger**: 29,787,701,792 B = 27.74 GiB, and the FF-MTP build 30,239,022,560 B = 28.16 GiB — per-tenant rows in the np_ceiling policy, P1-4 correction) | **28.7 GB** (stock; FF ≈ 29.8 GB) |
 | MiniCPM-o 4.5 Q4 + vision projector (vision-escalation runbook, 8087) | **~7 GB** (K35 measured ~11% band) |
 | whisper STT | **~1.6 GB** |
 | **Resident total** | **≈ 37 GB** |
@@ -98,14 +116,69 @@ read-only aggregator; `A3_ff_fable_non_mtp_q8` = same dense-27B architecture,
 MTP OFF; `A4_35b_a3b_v8_bridge` = the sequential bake-off control arm).
 
 Key facts encoded there:
+- Ceilings are **per launch mode** (`mtp_off` / `mtp_on`). MTP moves the
+  capacity frontier: the FF arm's `np16×L32768` cell FITS with MTP off and is a
+  capacity skip with MTP on. A mode with no rows **refuses**; it never falls
+  back to the other mode's frontier.
 - Aggregate decode **saturates at np16** (np32 regresses −20% at L2048);
-  ceilings are capped at 16 everywhere.
+  ceilings are capped at 16 everywhere, and the cap is now **enforced by the
+  loader** rather than asserted in a comment.
 - Solo anchors: `np16×L32768` (f16 KV = 32 GiB) measured fit;
   `np32×L16384` (same total ctx) hit `allocation_failure` — the per-sequence
   recurrent-state + graph overhead is real and encoded conservatively.
 - Phase-2 rows are **VRAM arithmetic over solo anchors, not co-resident
   measurements** — observation-grade; re-certify at P2-3 Stage-0 hardening.
 - A null ceiling = no validated operating point = refuse.
+- **Every tenant owns its own row.** Stock (26.70 GiB) and FF (27.74 GiB) are
+  different artifacts and no longer share one; the FF **MTP build is a separate
+  GGUF** (28.16 GiB, 851 base + 15 MTP tensors), not the non-MTP file with a
+  flag. The tenancy loader refuses a tenant with no row of its own, so a tenant
+  swap cannot silently inherit another model's VRAM arithmetic.
+- The measured grid is the **FF** arm. Stock's row is a **conservative
+  transfer** (same architecture and KV geometry, smaller footprint → strictly
+  more headroom) and is labelled `derived_conservative_transfer` with no
+  throughput table of its own: capacity transfers in that direction, throughput
+  does not transfer at all.
+- The **A4 bridge grid ran MTP ON at `n_max=4`**, so its ceilings live under
+  `mtp_on` and it has no MTP-off rows.
+
+## 6a. Tenancy as data (P2-1)
+
+`orchestration/gpu_shadow_lane_tenancy.yaml`, loaded by
+`scripts/server/gpu_shadow_lane_tenancy.py` behind the same default-off flag.
+The slot's properties (device, port, host cpuset, binary pin, region claim) are
+lane data; model path, hash, launch mode and duty bindings are tenant data.
+Swapping a tenant is an edit there plus Steps 1–6 — never a code change.
+
+Invariants the loader ENFORCES, so they cannot be reviewed away:
+
+| Invariant | Refusal |
+|---|---|
+| `resident_state` must be `state_a` | a data file cannot declare the lane resident |
+| every tenant names an existing np_ceiling row, with matching bytes/sha | no silent reuse of another tenant's budget |
+| every role binding is `shadow: true` and is **not** a production role name | D3 enforced at the data layer |
+| admission classes 3–4 (shed batch, degraded overflow) may not be bound | reserving a name in §3 is not building it |
+| `mtp: true` requires an explicit `draft_n_max` | the measured depth is part of the identity |
+| unattested artifact hash | loadable for planning, **not activatable** |
+
+There is deliberately **no apply path in the module** — D3 is enforced by the
+absence of the function, not by a flag guarding one. `render_registry_proposal`
+emits a diff for human review.
+
+## 6b. Claims and leases (P2-1)
+
+`scripts/server/gpu_shadow_lane_lease.py`. Two physical resources, two facts:
+
+- **Host CPU slice** → `q3`'s flock via `src.runtime.cpu_region_lock`, the same
+  lock production roles take, so the lane cannot be invisible to them.
+- **The GPU device** → its own flock (`gpu_device.ROCm0.lock`), acquired
+  NON-BLOCKING. ROCm0 is not a CPU region and is never modelled as one.
+
+The advisory `LaneLease` sits **above** the flocks (fabric axiom 1) and
+implements reclaim as quiesce-and-drain only: `request_revoke()` stops new work
+admission, `at_boundary()` is the sole path that releases, and `force_release()`
+raises by construction. An ignored revocation surfaces as `lease.overdue` — a
+defect to report, never a seizure.
 
 MEASUREMENT discipline: the grids are observations (no promotion-gating
 protocol attestation). They bound lane admission; they never gate a
@@ -154,14 +227,61 @@ production HIP binary, `--device ROCm0`, `-fa on`, `--reasoning off`, `-np`/`-c`
 within the np_ceiling policy, taskset 184-191; `rocm-smi` shows the expected
 residency; every other port preserved (compare PIDs before/after).
 
+Page-cache prewarm note (P2-4): the start path's `[1.5]` NUMA prewarm
+**automatically skips** the lane's server entry (`stack_prewarm.collect_targets`
+excludes `gpu_shadow_lane`-mode servers) — the tenant loads into VRAM, so an
+interleaved CPU page-cache read of its ~28 GiB GGUF would cost minutes for no
+serving benefit. No `--skip-page-cache-prewarm` is needed, and passing it would
+wrongly skip prewarm for every OTHER server in the start-set.
+
+### Step 3a — Orchestrator API-only reload (P1-3)
+
+The lane role exists in the recompiled lean registry/priors, but the running
+orchestrator API (uvicorn, :8000) still holds the pre-Step-1 registry in
+memory — eval-path forced-role routing to `coder_escalation_shadow` (Step 6)
+needs a reload. **API-only reload; never a full stack reload** (which would
+restart llama-servers/embedders):
+
+1. **SIGSTOP any in-flight eval runner first** (vision-runbook P3 rule):
+   `pkill -STOP -f eval_tower` (or the runner's PID) so a mid-batch request
+   doesn't hit the API during the bounce.
+2. `orchestrator_stack.py reload orchestrator` — do **NOT** stop autopilot;
+   it reconnects to the new API (API-only reload contract).
+3. `SIGCONT` the eval runner; verify `/health` on 8000 and that a
+   `route_explain` for the shadow role resolves to port 18100.
+
 ### Step 4 — Contention recert (the step the 2026-07-17 rebind skipped)
 
-The lane's host slice 184-191 is inside `NUMA_Q1B`'s SMT range — static
-co-tenants: frontdoor quarter 8380, worker_general quarter 8382, ingest
-quarter 8485, vision_escalation 8087 (the preflight probe enumerates these).
-Re-bench every contention pair containing the lane + those roles
-(`contention_matrix.py --roles …`), validate + freshness-gate. The topology
-hash will NOT catch this change.
+The lane's host slice 184-191 is the SMT sibling range of **physical cores
+88-95**, i.e. atomic region **`q3`**. Two classes of co-tenant follow, and the
+second is the one a naive check misses:
+
+| Basis | Instances | Why it contends |
+|---|---|---|
+| `smt_sibling_overlap` — the instance's own cpuset literally lists 168-191 | frontdoor q3 **8380**, worker_general q3 **8382**, ingest_long_context q3 **8485**, vision_escalation **8087** | direct string overlap; any check finds these |
+| `physical_core_overlap` — the instance lists physical cores only | **architect_general 8083** (`0-95`), **worker_general 8072** (`0-95`) | shares cores 88-95 with the lane's siblings while sharing **no literal CPU id**. A raw string overlap of "184-191" vs "0-95" returns EMPTY. |
+
+**P2-3 correction (2026-07-28):** the second row was missing from this spec and
+from the recert set. `architect_general` occupies all 96 physical cores — it is
+the role most certain to contend with the lane — and a string-overlap check
+reported it as disjoint. The complete set is now generated, never hand-listed:
+
+```bash
+uv run python scripts/server/gpu_shadow_lane_stage0.py --summary-only recert
+# -> uv run python scripts/server/contention_matrix.py run --roles \
+#      architect_general frontdoor gpu_shadow_lane ingest_long_context \
+#      vision_escalation worker_general
+```
+
+Re-bench every contention pair containing the lane + those roles, validate +
+freshness-gate. **The topology hash will NOT catch this change**, and neither
+will a cpuset string comparison — fold SMT siblings onto physical cores first
+(`gpu_shadow_lane_lease.fold_smt_to_physical`).
+
+Note the scheduling consequence, surfaced 2026-07-28: because the lane needs
+`q3`, an **idle MI210 does not imply a startable lane**. If `region-lock status`
+shows `q3` HELD (e.g. by a CPU bench campaign), activation must wait for that
+holder to drain at its own boundary — never be forced (fabric axiom 4).
 
 ### Step 5 — Live-affinity + GPU residency attestation
 
@@ -183,7 +303,11 @@ or roll back.
 
 `git revert` the Step-1 commits in both repos, recompile lean, re-run Step 2,
 `orchestrator_stack.py stop gpu_shadow_lane` (drain at boundary), confirm port
-18100 free + VRAM released, Step 4 recert (a rollback is also a lane change).
+18100 free + VRAM released, then the **Step-3a API-only reload mirrored**
+(P1-3): SIGSTOP any in-flight eval runner → `orchestrator_stack.py reload
+orchestrator` (do NOT stop autopilot; do NOT full-stack reload) → SIGCONT —
+so the running API drops the shadow role from its in-memory registry. Finish
+with Step 4 recert (a rollback is also a lane change).
 Rollback triggers: Step-3 health/cmdline mismatch; Step-6 error rows or >20%
 below band; VRAM/KFD anomalies; any contention pair below the 0.65 floor.
 

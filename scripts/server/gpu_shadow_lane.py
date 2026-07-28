@@ -53,7 +53,7 @@ LANE_BINARY_COMMIT = "67a433bf4"
 
 # First tenant candidate (program D2). Proposal default only: at activation the
 # master-registry role block (tenancy as data) is the source of truth.
-TENANT_CANDIDATE_ID = "qwen36_27b_q8"
+TENANT_CANDIDATE_ID = "qwen36_27b_stock_q8"
 TENANT_CANDIDATE_MODEL = "/mnt/raid0/llm/models/Qwen_Qwen3.6-27B-Q8_0.gguf"
 
 DEFAULT_NP_CEILING_POLICY_PATH = (
@@ -61,6 +61,21 @@ DEFAULT_NP_CEILING_POLICY_PATH = (
 )
 
 _VALID_NP_LEVELS = (1, 2, 4, 8, 16, 32)
+
+# Launch modes. MTP is a LAUNCH property of v8 (program decision D6:
+# ``params.speculative`` is global, there is no per-request override), and it
+# moves the validated capacity frontier — the FF arm's np16 x L32768 cell fits
+# with MTP off and is a capacity skip with MTP on. Ceilings are therefore
+# resolved per mode, and a mode with no rows REFUSES rather than falling back
+# to the other mode's frontier.
+MODE_MTP_OFF = "mtp_off"
+MODE_MTP_ON = "mtp_on"
+VALID_MODES = (MODE_MTP_OFF, MODE_MTP_ON)
+
+
+def mode_for(*, mtp: bool) -> str:
+    """Map the tenancy ``mode.mtp`` boolean onto a policy mode key."""
+    return MODE_MTP_ON if mtp else MODE_MTP_OFF
 
 
 class GpuShadowLaneDisabled(RuntimeError):
@@ -87,6 +102,16 @@ class BudgetRow:
 
 
 @dataclass(frozen=True)
+class ModePolicy:
+    """Budget rows validated for ONE launch mode (mtp_off / mtp_on)."""
+
+    mode: str
+    evidence_arm: str
+    evidence_basis: str
+    budgets: tuple[BudgetRow, ...]
+
+
+@dataclass(frozen=True)
 class TenantPolicy:
     """Per-tenant np/context policy derived from the measured grids."""
 
@@ -99,6 +124,19 @@ class TenantPolicy:
     compute_reserve_gib: float
     np_throughput_saturation: int
     budgets: tuple[BudgetRow, ...]
+    # Per-mode rows. Always contains MODE_MTP_OFF (built from ``budgets``);
+    # contains MODE_MTP_ON only when the tenant declares mode_overrides.mtp_on.
+    modes: dict[str, ModePolicy]
+    evidence_basis: str = "measured"
+    model_bytes: int | None = None
+    model_sha256: str | None = None
+    # Self-draft depth the grid was measured at. Part of the measured identity:
+    # a different depth is a different, unmeasured operating point.
+    draft_n_max: int | None = None
+
+    def mode_policy(self, mode: str) -> ModePolicy | None:
+        """Rows for ``mode``, or None when that mode has no validated frontier."""
+        return self.modes.get(mode)
 
 
 @dataclass(frozen=True)
@@ -118,7 +156,7 @@ def _require_mapping(value: Any, label: str) -> dict:
     return value
 
 
-def _parse_ceilings(raw: Any, label: str) -> dict[int, int | None]:
+def _parse_ceilings(raw: Any, label: str, *, saturation: int) -> dict[int, int | None]:
     ceilings: dict[int, int | None] = {}
     for key, value in _require_mapping(raw, label).items():
         bucket = int(key)
@@ -133,41 +171,119 @@ def _parse_ceilings(raw: Any, label: str) -> dict[int, int | None]:
                 f"np_ceiling policy: {label} bucket {bucket} ceiling {np_value} "
                 f"is not a measured np level {_VALID_NP_LEVELS}"
             )
+        # The saturation cap is ENFORCED, not merely annotated: a ceiling above
+        # the tenant's measured throughput-saturation point would authorise a
+        # launch that is slower AND more VRAM-hungry than the capped one. P0-7
+        # documented the cap in a comment; a comment cannot fail a load.
+        if np_value > saturation:
+            raise ValueError(
+                f"np_ceiling policy: {label} bucket {bucket} ceiling {np_value} "
+                f"exceeds np_throughput_saturation {saturation}"
+            )
         ceilings[bucket] = np_value
     if not ceilings:
         raise ValueError(f"np_ceiling policy: {label} has no context buckets")
     return ceilings
 
 
-def _parse_tenant(tenant_id: str, raw: Any) -> TenantPolicy:
-    record = _require_mapping(raw, f"tenants.{tenant_id}")
-    budgets: list[BudgetRow] = []
-    raw_budgets = record.get("budgets")
-    if not isinstance(raw_budgets, list) or not raw_budgets:
-        raise ValueError(f"np_ceiling policy: tenants.{tenant_id}.budgets must be a non-empty list")
-    for idx, raw_row in enumerate(raw_budgets):
-        row = _require_mapping(raw_row, f"tenants.{tenant_id}.budgets[{idx}]")
-        budgets.append(
+def _parse_budgets(
+    raw: Any, label: str, *, saturation: int, allow_empty: bool = False
+) -> tuple[BudgetRow, ...]:
+    if raw is None or (allow_empty and isinstance(raw, list) and not raw):
+        # An explicitly empty list means "this mode has no validated frontier".
+        # That is a REFUSAL, encoded as data — e.g. the A4 bridge, which was
+        # only ever measured with MTP on, declares no mtp_off rows.
+        return ()
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"np_ceiling policy: {label} must be a non-empty list")
+    rows: list[BudgetRow] = []
+    for idx, raw_row in enumerate(raw):
+        row = _require_mapping(raw_row, f"{label}[{idx}]")
+        rows.append(
             BudgetRow(
                 name=str(row["name"]),
                 dynamic_budget_gib=float(row["dynamic_budget_gib"]),
                 ceilings=_parse_ceilings(
-                    row.get("ceilings"), f"tenants.{tenant_id}.budgets[{idx}].ceilings"
+                    row.get("ceilings"), f"{label}[{idx}].ceilings", saturation=saturation
                 ),
             )
         )
+    return tuple(rows)
+
+
+def _parse_tenant(tenant_id: str, raw: Any) -> TenantPolicy:
+    record = _require_mapping(raw, f"tenants.{tenant_id}")
+    saturation = int(record["np_throughput_saturation"])
+    if saturation not in _VALID_NP_LEVELS:
+        raise ValueError(
+            f"np_ceiling policy: tenants.{tenant_id}.np_throughput_saturation "
+            f"{saturation} is not a measured np level {_VALID_NP_LEVELS}"
+        )
+    evidence_arm = str(record["evidence_arm"])
+    evidence_basis = str(record.get("evidence_basis", "measured"))
+    budgets = _parse_budgets(
+        record.get("budgets"),
+        f"tenants.{tenant_id}.budgets",
+        saturation=saturation,
+        allow_empty=True,
+    )
+    modes: dict[str, ModePolicy] = {}
+    if budgets:
+        modes[MODE_MTP_OFF] = ModePolicy(
+            mode=MODE_MTP_OFF,
+            evidence_arm=evidence_arm,
+            evidence_basis=evidence_basis,
+            budgets=budgets,
+        )
+    for mode, raw_override in _require_mapping(
+        record.get("mode_overrides") or {}, f"tenants.{tenant_id}.mode_overrides"
+    ).items():
+        mode_key = str(mode)
+        if mode_key not in VALID_MODES:
+            raise ValueError(
+                f"np_ceiling policy: tenants.{tenant_id}.mode_overrides has unknown "
+                f"mode {mode_key!r} (valid: {VALID_MODES})"
+            )
+        override = _require_mapping(
+            raw_override, f"tenants.{tenant_id}.mode_overrides.{mode_key}"
+        )
+        modes[mode_key] = ModePolicy(
+            mode=mode_key,
+            evidence_arm=str(override.get("evidence_arm", evidence_arm)),
+            evidence_basis=str(override.get("evidence_basis", evidence_basis)),
+            budgets=_parse_budgets(
+                override.get("budgets"),
+                f"tenants.{tenant_id}.mode_overrides.{mode_key}.budgets",
+                saturation=saturation,
+            ),
+        )
+    if not modes:
+        raise ValueError(
+            f"np_ceiling policy: tenants.{tenant_id} declares no validated mode "
+            "(both budgets and mode_overrides are empty)"
+        )
     kv_bytes = record.get("kv_bytes_per_token_f16")
     per_seq = record.get("per_seq_overhead_gib")
+    model_bytes = record.get("model_bytes")
     return TenantPolicy(
         tenant_id=tenant_id,
-        evidence_arm=str(record["evidence_arm"]),
+        evidence_arm=evidence_arm,
         model_path=str(record["model_path"]),
         model_vram_gib=float(record["model_vram_gib"]),
         kv_bytes_per_token_f16=int(kv_bytes) if kv_bytes is not None else None,
         per_seq_overhead_gib=float(per_seq) if per_seq is not None else None,
         compute_reserve_gib=float(record.get("compute_reserve_gib", 0.0)),
-        np_throughput_saturation=int(record["np_throughput_saturation"]),
-        budgets=tuple(budgets),
+        np_throughput_saturation=saturation,
+        budgets=budgets,
+        modes=modes,
+        evidence_basis=evidence_basis,
+        model_bytes=int(model_bytes) if model_bytes is not None else None,
+        model_sha256=(
+            str(record["model_sha256"]) if record.get("model_sha256") is not None else None
+        ),
+        draft_n_max=(
+            int(record["draft_n_max"]) if record.get("draft_n_max") is not None else None
+        ),
     )
 
 
@@ -212,14 +328,61 @@ def load_np_ceiling_policy(
     )
 
 
+def load_serving_shape(path: Path | None = None) -> dict[str, int]:
+    """Load the lane's default serving shape (POLICY AS DATA; P0-1c).
+
+    Reads ONLY the ``serving_shape`` block of the np_ceiling policy file and
+    returns ``{"np_slots", "slot_context_tokens", "context_tokens"}`` (the
+    last = np_slots * slot_context_tokens, the total ``-c`` value).
+
+    Deliberately NOT feature-flag-gated (unlike ``load_np_ceiling_policy``):
+    the stack-priors compiler must resolve the shape for a ``gpu_shadow_lane``
+    launcher-tenant record during the activation Step-2 pipeline gates, which
+    run before the flag is flipped (same rationale as the preflight probe's
+    explicit Features override). It is still inert-by-construction: the only
+    caller is the mode-gated ``gpu_shadow_lane`` branch of the priors
+    compiler, and no launch-meta entry carries that mode today.
+
+    Raises ValueError when the block is missing or invalid — callers must
+    refuse (surface a gap), never fall back to CPU-mode serving defaults.
+    """
+    policy_path = path or DEFAULT_NP_CEILING_POLICY_PATH
+    payload = _require_mapping(
+        yaml.safe_load(policy_path.read_text(encoding="utf-8")), "document"
+    )
+    lane = str(payload.get("lane", ""))
+    if lane != LANE_NAME:
+        raise ValueError(f"np_ceiling policy: lane {lane!r} != {LANE_NAME!r}")
+    shape = _require_mapping(payload.get("serving_shape"), "serving_shape")
+    np_slots = int(shape["np_slots"])
+    slot_context = int(shape["slot_context_tokens"])
+    if np_slots not in _VALID_NP_LEVELS:
+        raise ValueError(
+            f"serving_shape.np_slots {np_slots} is not a measured np level {_VALID_NP_LEVELS}"
+        )
+    if slot_context <= 0:
+        raise ValueError("serving_shape.slot_context_tokens must be positive")
+    return {
+        "np_slots": np_slots,
+        "slot_context_tokens": slot_context,
+        "context_tokens": np_slots * slot_context,
+    }
+
+
 def np_ceiling(
     policy: NpCeilingPolicy,
     tenant_id: str,
     *,
     dynamic_budget_gib: float,
     slot_context_tokens: int,
+    mode: str = MODE_MTP_OFF,
 ) -> int | None:
-    """Return the validated -np ceiling for a tenant, or None (= refuse).
+    """Return the validated -np ceiling for a tenant+mode, or None (= refuse).
+
+    Mode selection first: MTP on/off are different capacity frontiers (D6), so a
+    mode the tenant has no rows for returns None. It NEVER falls back to the
+    other mode — that fallback is exactly how an np16 x 32k launch validated
+    only under MTP-off would get authorised under MTP-on.
 
     Row selection: the most permissive budget row whose dynamic_budget_gib does
     not exceed the budget actually available (rows are evidence "safe at >=
@@ -229,10 +392,17 @@ def np_ceiling(
     """
     if slot_context_tokens <= 0:
         raise ValueError("slot_context_tokens must be positive")
+    if mode not in VALID_MODES:
+        raise ValueError(f"unknown mode {mode!r} (valid: {VALID_MODES})")
     tenant = policy.tenants.get(tenant_id)
     if tenant is None:
         raise KeyError(f"unknown tenant {tenant_id!r}")
-    eligible = [row for row in tenant.budgets if row.dynamic_budget_gib <= dynamic_budget_gib]
+    mode_policy = tenant.mode_policy(mode)
+    if mode_policy is None:
+        return None
+    eligible = [
+        row for row in mode_policy.budgets if row.dynamic_budget_gib <= dynamic_budget_gib
+    ]
     if not eligible:
         return None
     row = max(eligible, key=lambda item: item.dynamic_budget_gib)
@@ -268,21 +438,47 @@ def build_tenant_launch_plan(
     np_slots: int,
     slot_context_tokens: int,
     port: int = LANE_PORT,
+    host_cpuset: str = LANE_HOST_CPUSET,
+    host_threads: int = LANE_HOST_THREADS,
+    device: str = LANE_DEVICE,
+    binary: Path = LANE_BINARY,
+    mtp: bool = False,
+    draft_n_max: int | None = None,
+    reasoning: bool = False,
 ) -> list[str]:
     """Informational argv for the lane, mirroring the measured grid shape.
 
     Matches the np_context_study_v8 server argv (production HIP binary,
-    taskset 184-191, -t/-tb 8, -fa on, f16 KV, reasoning off) with MTP OFF per
-    program decision D6 (launch-bound; drained-lane relaunch to toggle). Used
-    by the preflight probe's report and by the activation proposal; nothing in
-    this repo executes it until the operator runs the activation choreography.
+    taskset 184-191, -t/-tb 8, -fa on, f16 KV, reasoning off). Every lane and
+    tenant property is a PARAMETER, not a literal: P2-1's contract is that
+    swapping tenant, mode, port or host slice is a data edit, and an argv
+    builder with those values baked in would quietly break that contract.
+
+    ``mtp`` is launch-bound (program decision D6 — ``params.speculative`` is
+    global in v8, with no per-request override), so it appears here and
+    nowhere else; toggling it is a drained-lane relaunch, never a hot mutation.
+    The self-draft spelling is ``--spec-type draft-mtp --spec-draft-n-max N``,
+    verbatim from the study driver that produced the grids
+    (np_context_study_v8_20260727/driver/run_model_block.sh). ``draft_n_max``
+    is REQUIRED when mtp is on: the depth is part of the measured identity
+    (the FF MTP arm ran n_max=1, the A4 bridge n_max=4), so defaulting it would
+    silently launch a shape no grid cell covers.
+
+    Nothing in this repo executes this argv. It feeds the preflight report and
+    the activation PROPOSAL; the operator runs the choreography.
     """
+    if np_slots <= 0:
+        raise ValueError("np_slots must be positive")
+    if slot_context_tokens <= 0:
+        raise ValueError("slot_context_tokens must be positive")
+    if mtp and (draft_n_max is None or draft_n_max <= 0):
+        raise ValueError("draft_n_max must be a positive int when mtp is enabled")
     total_ctx = np_slots * slot_context_tokens
-    return [
+    argv = [
         "taskset",
         "-c",
-        LANE_HOST_CPUSET,
-        str(LANE_BINARY),
+        host_cpuset,
+        str(binary),
         "-m",
         model_path,
         "--host",
@@ -293,7 +489,7 @@ def build_tenant_launch_plan(
         "--slots",
         "--jinja",
         "--device",
-        LANE_DEVICE,
+        device,
         "-ngl",
         "all",
         "-fa",
@@ -303,9 +499,9 @@ def build_tenant_launch_plan(
         "-c",
         str(total_ctx),
         "-t",
-        str(LANE_HOST_THREADS),
+        str(host_threads),
         "-tb",
-        str(LANE_HOST_THREADS),
+        str(host_threads),
         "-b",
         "2048",
         "-ub",
@@ -315,5 +511,11 @@ def build_tenant_launch_plan(
         "-ctv",
         "f16",
         "--reasoning",
-        "off",
+        "on" if reasoning else "off",
     ]
+    if mtp:
+        # v8 self-draft (NEXTN/MTP), spelled exactly as the study driver did.
+        # Deliberately the LAST argv group so a mode diff is visually obvious
+        # in the proposal.
+        argv.extend(["--spec-type", "draft-mtp", "--spec-draft-n-max", str(draft_n_max)])
+    return argv
