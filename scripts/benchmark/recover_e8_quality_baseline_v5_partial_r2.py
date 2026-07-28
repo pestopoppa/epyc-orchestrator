@@ -353,14 +353,21 @@ def preflight_frontdoor_capacity(
     return proof
 
 
-def _instrument_identity() -> dict[str, str]:
+def _instrument_identity(runner_args: argparse.Namespace) -> dict[str, Any]:
     commit = subprocess.run(
         ["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"],
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
-    return {"commit": commit, "runner_sha256": sha256_path(Path(__file__))}
+    sources = [*V5.measurement_source_paths(runner_args), RESUME_PATH, Path(__file__)]
+    return {
+        "commit": commit,
+        "runner_sha256": sha256_path(Path(__file__)),
+        "measurement_source_sha256": V4.file_fingerprints(
+            list(dict.fromkeys(path.resolve() for path in sources))
+        ),
+    }
 
 
 def _recovery_proposal(
@@ -369,6 +376,7 @@ def _recovery_proposal(
     *,
     claim: dict[str, Any],
     frontdoor_capacity: dict[str, Any],
+    instrument: dict[str, Any],
 ) -> dict[str, Any]:
     """Bind autonomous collection to its immutable observation-grade contract."""
     return {
@@ -379,7 +387,7 @@ def _recovery_proposal(
         "generation_concurrency": V4.CONCURRENCY,
         "generation_ordinals_sha256": canonical_hash(plan["generation_ordinals"]),
         "scorer_replay_ordinals_sha256": canonical_hash(plan["scorer_replay_ordinals"]),
-        "instrument": _instrument_identity(),
+        "instrument": instrument,
         "output_namespace": str(output),
         "region_claim": {
             "tag": str(claim["claims"][0]["payload"]["request_tag"]),
@@ -687,13 +695,20 @@ def _watcher_evidence(
         raise ValueError("partial-r2 watcher claim differs from its sealed proposal")
     samples = V4.load_jsonl(path)
     expected_load = {"tier": TIER, "repetition": REPETITION}
+    bindings = {
+        RESUME._monitor_binding_sha256(sample) for sample in samples if isinstance(sample, dict)
+    }
+    gap_count, max_gap_s = RESUME._monitor_stats(samples)
     if (
-        not samples
+        len(samples) < 2
         or any(not isinstance(sample, dict) or sample.get("ok") is not True for sample in samples)
         or any(sample.get("active_load") not in (None, expected_load) for sample in samples)
         or not any(sample.get("active_load") == expected_load for sample in samples)
+        or len(bindings) != 1
+        or gap_count != 0
+        or max_gap_s > 7.0
     ):
-        raise ValueError("partial-r2 runtime watcher is not clean and load-bound")
+        raise ValueError("partial-r2 runtime watcher is not clean, bound, and cadence-valid")
     return {
         "path": str(path),
         "sha256": sha256_path(path),
@@ -701,6 +716,9 @@ def _watcher_evidence(
         "claim_before": claim_before,
         "claim_after": claim_after,
         "proposal_sha256": sha256_path(path.parent / "recovery_proposal.json"),
+        "binding_sha256": next(iter(bindings)),
+        "observed_gap_count_over_7s": gap_count,
+        "observed_max_gap_s": max_gap_s,
     }
 
 
@@ -846,6 +864,8 @@ def _complete_r2(
             "responses_sha256": sha256_path(output / "responses.T2.r2.jsonl"),
             "sidecar_sha256": sha256_path(sidecar_path),
             "trace_sha256": sha256_path(trace_path),
+            "raw_sha256": sha256_path(output / "raw.T2.r2.json"),
+            "journal_sha256": sha256_path(output / "recovery_rows.T2.r2.jsonl"),
             "scoring_audit": audit,
             "plan_sha256": sha256_path(output / "partial_r2_plan.json"),
         },
@@ -865,7 +885,13 @@ def execute(args: argparse.Namespace) -> Path:
     )
     binding = V4.runtime_binding(runner_args)
     frontdoor_capacity = preflight_frontdoor_capacity(binding, required=V4.CONCURRENCY, claim=claim)
-    proposal = _recovery_proposal(plan, output, claim=claim, frontdoor_capacity=frontdoor_capacity)
+    proposal = _recovery_proposal(
+        plan,
+        output,
+        claim=claim,
+        frontdoor_capacity=frontdoor_capacity,
+        instrument=_instrument_identity(runner_args),
+    )
     plan_path = output / "partial_r2_plan.json"
     if plan_path.exists() and V4.load_json(plan_path) != plan:
         raise ValueError("partial-r2 output namespace belongs to another plan")

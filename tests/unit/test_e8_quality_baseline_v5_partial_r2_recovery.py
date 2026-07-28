@@ -143,17 +143,36 @@ def test_proposal_binds_instrument_claim_and_output_namespace(tmp_path: Path, mo
     plan = recovery.build_plan(source)
     claim = {"claims": [{"payload": {"request_tag": "tag", "region": "q2"}}], "global_claims": [{}]}
     monkeypatch.setattr(
-        recovery, "_instrument_identity", lambda: {"commit": "c", "runner_sha256": "r"}
+        recovery,
+        "_instrument_identity",
+        lambda _args: {"commit": "c", "runner_sha256": "r", "measurement_source_sha256": {}},
     )
     output = tmp_path / "observation"
     output.mkdir()
     proposal = recovery._recovery_proposal(
-        plan, output, claim=claim, frontdoor_capacity={"capacity": 3}
+        plan,
+        output,
+        claim=claim,
+        frontdoor_capacity={"capacity": 3},
+        instrument=recovery._instrument_identity(SimpleNamespace()),
     )
     recovery._bind_recovery_proposal(output, proposal)
     assert recovery.V4.load_json(output / "recovery_proposal.json") == proposal
     assert proposal["status"] == "observation_only"
     assert proposal["application"] == "requires_separate_human_finalizer"
+
+
+def test_instrument_identity_binds_v5_resume_and_recovery_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(recovery.V5, "measurement_source_paths", lambda _args: [recovery.V5_PATH])
+    identity = recovery._instrument_identity(SimpleNamespace())
+    fingerprints = identity["measurement_source_sha256"]
+    assert fingerprints[str(recovery.V5_PATH.resolve())] == recovery.sha256_path(recovery.V5_PATH)
+    assert fingerprints[str(recovery.RESUME_PATH.resolve())] == recovery.sha256_path(
+        recovery.RESUME_PATH
+    )
+    assert fingerprints[str(MODULE_PATH.resolve())] == recovery.sha256_path(MODULE_PATH)
 
 
 def test_snapshot_rejects_source_mutation_before_copy(tmp_path: Path) -> None:
@@ -306,7 +325,15 @@ class _FakeWatcher:
         self._active_load: dict[str, int] | None = None
 
     def sample(self) -> None:
-        sample = {"ok": True, "active_load": self._active_load}
+        offset = len(self.samples)
+        sample = {
+            "ok": True,
+            "active_load": self._active_load,
+            "api_probe_urls": {},
+            "runtime_artifacts": {},
+            "started_at": f"2026-07-28T00:00:{offset:02d}Z",
+            "finished_at": f"2026-07-28T00:00:{offset:02d}Z",
+        }
         self.samples.append(sample)
         _write(self.path, self.samples)
 
@@ -335,7 +362,13 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
     }
     monkeypatch.setattr(recovery, "_capture_recovery_claim", lambda _args: claim)
     monkeypatch.setattr(
-        recovery, "_instrument_identity", lambda: {"commit": "test", "runner_sha256": "runner"}
+        recovery,
+        "_instrument_identity",
+        lambda _args: {
+            "commit": "test",
+            "runner_sha256": "runner",
+            "measurement_source_sha256": {},
+        },
     )
     monkeypatch.setattr(
         recovery.V5,
@@ -457,7 +490,14 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
             ),
         )
         recovery._write_json(output / "raw.T2.r2.json", {"q": 1.0, "n": len(rows)})
-        recovery._write_json(output / "r2_complete.json", {"status": "complete"})
+        recovery._write_json(
+            output / "r2_complete.json",
+            {
+                "status": "complete",
+                "raw_sha256": recovery.sha256_path(output / "raw.T2.r2.json"),
+                "journal_sha256": recovery.sha256_path(output / "recovery_rows.T2.r2.jsonl"),
+            },
+        )
 
     monkeypatch.setattr(recovery, "_complete_r2", complete)
 
@@ -485,13 +525,53 @@ def test_execute_uses_original_ordinals_reconciles_scorer_and_stops_at_r2(
     scorer_row = next(row for row in generated_sidecar if row.get("ordinal") == 4)
     assert scorer_row["result"].get("error") is None
     assert scorer_row["result"]["correct"] is True
-    assert (
-        recovery.V4.load_json(output / "r2_complete.json")["status"] == "intermediate_r2_complete"
+    marker = recovery.V4.load_json(output / "r2_complete.json")
+    assert marker["status"] == "intermediate_r2_complete"
+    assert marker["raw_sha256"] == recovery.sha256_path(output / "raw.T2.r2.json")
+    assert marker["journal_sha256"] == recovery.sha256_path(output / "recovery_rows.T2.r2.jsonl")
+    assert marker["watcher"]["proposal_sha256"] == recovery.sha256_path(
+        output / "recovery_proposal.json"
     )
+    (output / "raw.T2.r2.json").write_text('{"q": 0}\n')
+    assert marker["raw_sha256"] != recovery.sha256_path(output / "raw.T2.r2.json")
     assert (output / "r3_complete.json").exists() is False
     assert (output / "run_seal.json").exists() is False
     assert (output / "responses.T2.r2.jsonl").is_file()
     assert (output / "raw.T2.r2.json").is_file()
+
+
+@pytest.mark.parametrize("failure", ("binding", "cadence"))
+def test_watcher_evidence_rejects_inconsistent_binding_or_cadence(
+    tmp_path: Path, failure: str
+) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    claim = {"claims": [{"payload": {"request_tag": "tag", "region": "q0"}}]}
+    recovery._write_json(
+        output / "recovery_proposal.json", {"region_claim": {"tag": "tag", "regions": ["q0"]}}
+    )
+    seconds = (0, 8) if failure == "cadence" else (0, 1)
+    rows = [
+        {
+            "ok": True,
+            "active_load": {"tier": 2, "repetition": 2},
+            "api_probe_urls": {
+                "frontdoor": "http://test" if failure != "binding" or index == 0 else "http://other"
+            },
+            "runtime_artifacts": {},
+            "started_at": f"2026-07-28T00:00:{second:02d}Z",
+            "finished_at": f"2026-07-28T00:00:{second:02d}Z",
+        }
+        for index, second in enumerate(seconds)
+    ]
+    _write(output / "runtime_watch.r2.jsonl", rows)
+    with pytest.raises(ValueError, match="cadence-valid"):
+        recovery._watcher_evidence(
+            output / "runtime_watch.r2.jsonl",
+            {"region_claim": {"tag": "tag", "regions": ["q0"]}},
+            claim_before=claim,
+            claim_after=claim,
+        )
 
 
 def test_resume_after_durable_generation_reuses_complete_watcher_evidence(
