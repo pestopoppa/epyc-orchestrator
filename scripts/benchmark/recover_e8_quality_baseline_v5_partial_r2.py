@@ -4,8 +4,8 @@
 This instrument is intentionally narrower than ``resume_e8_quality_baseline_v5``.
 It accepts one incomplete T2/r2 sidecar only, freezes its entire source tree,
 replays exactly the saved scorer failures, and generates exactly the remaining
-ordinals at the original ratified concurrency.  A completed r2 seal is the
-only continuation input for a subsequent r3 collection.
+ordinals at the original ratified concurrency. It stops at a sealed,
+intermediate r2 repair for a separate recovery-aware finalizer.
 """
 
 from __future__ import annotations
@@ -235,13 +235,14 @@ def build_plan(source_dir: Path) -> dict[str, Any]:
         "tier": TIER,
         "repetition": REPETITION,
         "n": N,
+        "core_id": public.get("core_id"),
         "generation_concurrency": V4.CONCURRENCY,
         "reuse_ordinals": [ordinal for ordinal, kind in classified.items() if kind == "reuse"],
         "scorer_replay_ordinals": [
             ordinal for ordinal, kind in classified.items() if kind == "rescore"
         ],
         "generation_ordinals": regenerate,
-        "r3_requires": "complete_r2_seal",
+        "downstream_finalizer_requires": "intermediate_r2_complete",
     }
 
 
@@ -536,9 +537,10 @@ def _harvest_generation_sidecar(
     journal: Path,
     questions: list[dict[str, Any]],
     permitted: set[int],
-) -> None:
+) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
     if not path.exists():
-        return
+        return failures
     for row in V4.load_jsonl(path):
         if row.get("row_type") != "question_result":
             continue
@@ -547,10 +549,10 @@ def _harvest_generation_sidecar(
             raise ValueError("partial-r2 generation sidecar has an unexpected ordinal")
         response = _response_from_sidecar(row, questions[ordinal])
         if not V5.validate_clean_sidecar_result(response, row, qid=response["qid"]):
-            raise RuntimeError(
-                "partial-r2 generated row is not clean; no automatic retry is authorized"
-            )
+            failures.append({"ordinal": ordinal, "sidecar_sha256": canonical_hash(row)})
+            continue
         _record(journal, rows, ordinal, response, "generation")
+    return failures
 
 
 def _generation_targets(plan: dict[str, Any], rows: dict[int, dict[str, Any]]) -> list[int]:
@@ -658,7 +660,7 @@ def _complete_r2(
         {
             "q": float(aggregate.quality),
             "ts": V4.utc_now(),
-            "core_id": str(plan.get("core_id") or "recovered"),
+            "core_id": str(plan["core_id"]),
             "protocol_id": PROTOCOL_ID,
             "n": N,
             "era": V4.E8_ERA,
@@ -726,6 +728,7 @@ def execute(args: argparse.Namespace) -> Path:
         generation_sidecar, rows, journal, questions, set(plan["generation_ordinals"])
     )
     targets = _generation_targets(plan, rows)
+    r2_watch_evidence: dict[str, Any] | None = None
     if targets:
         if os.environ.get("AUTOPILOT_EVAL_CONCURRENCY") != str(V4.CONCURRENCY):
             raise RuntimeError(
@@ -748,97 +751,75 @@ def execute(args: argparse.Namespace) -> Path:
         ]
         trace = output / "generation_judge_traces.T2.r2.jsonl"
         trace.touch(exist_ok=True)
+        health = V4.api_health(runner_args.api_url, runner_args.http_timeout_s)
+        watcher = V4.RuntimeWatcher(
+            runner_args,
+            binding,
+            output / "runtime_watch.r2.jsonl",
+            expected_probe_urls=V4.probe_url_mapping(health),
+            include_receipt=False,
+        )
+        watcher.start()
         with (
             httpx.Client(timeout=tower.timeout) as client,
             V4.fixed_baseline_environment(output / "eval_sidecars", args.api_url),
             V4.capture_llm_judge_traces(trace, default_api_url=args.api_url),
             V4.bind_eval_tower_scorer_identities(tower),
         ):
-            results = tower._eval_batch(execution, client, log_every=25, label="e8-t2-r2-recovery")
-            V4.replay_llm_judge_scorer_tail_once(results, execution)
+            try:
+                V4.require_clean_watcher(watcher)
+                with watcher.active_load(tier=TIER, repetition=REPETITION):
+                    results = tower._eval_batch(
+                        execution, client, log_every=25, label="e8-t2-r2-recovery"
+                    )
+                    replayed = V4.replay_llm_judge_scorer_tail_once(results, execution)
+                V4.require_clean_watcher(watcher)
+            finally:
+                samples = watcher.stop()
+        if _capture_recovery_claim(args) != claim:
+            raise ValueError("partial-r2 held recovery claim changed during generation")
+        r2_watch_evidence = {
+            "path": str(output / "runtime_watch.r2.jsonl"),
+            "sha256": sha256_path(output / "runtime_watch.r2.jsonl"),
+            "samples": len(samples),
+            "claim_before": claim,
+            "claim_after": _capture_recovery_claim(args),
+        }
         fresh = V4.response_rows(results, execution)
         if [row["qid"] for row in fresh] != [
             V4._question_qid(question) for question in execution
         ] or any(
-            row["error"] is not None
-            or row["route_used"] != "frontdoor"
-            or not row["answer"].strip()
+            row["route_used"] != "frontdoor"
             or getattr(result, "eval_concurrency", 0) != V4.CONCURRENCY
             for row, result in zip(fresh, results)
         ):
-            raise RuntimeError("partial-r2 generation returned a non-clean or non-c3 result")
-        _harvest_generation_sidecar(
+            raise RuntimeError("partial-r2 generation returned a non-c3 or wrong-vector result")
+        replaced = V5.reconcile_scorer_tail_sidecar(generation_sidecar, fresh, replayed)
+        if replaced != [row["ordinal"] for row in replayed]:
+            raise ValueError("partial-r2 scorer replay did not reconcile its compact sidecar rows")
+        failures = _harvest_generation_sidecar(
             generation_sidecar, rows, journal, questions, set(plan["generation_ordinals"])
         )
+        if failures:
+            _append_jsonl(
+                output / "generation_failed_attempts.T2.r2.jsonl",
+                {"failures": failures, "disposition": "failed_closed_no_automatic_retry"},
+            )
+            raise RuntimeError(
+                "partial-r2 generation has durable failed attempts; a new receipt is required"
+            )
     if _generation_targets(plan, rows):
         raise RuntimeError(
             "partial-r2 collection stopped before every permitted generation ordinal was durable"
         )
     _complete_r2(output, snapshot, plan, rows, questions, args.api_url)
-    r3_marker = output / "r3_complete.json"
-    if not r3_marker.exists():
-        binding = V4.runtime_binding(runner_args)
-        preflight_frontdoor_capacity(
-            binding, required=V4.CONCURRENCY, claim=_capture_recovery_claim(args)
-        )
-        health = V4.api_health(runner_args.api_url, runner_args.http_timeout_s)
-        watcher = V4.RuntimeWatcher(
-            runner_args,
-            binding,
-            output / "runtime_watch.r3.jsonl",
-            expected_probe_urls=V4.probe_url_mapping(health),
-            include_receipt=False,
-        )
-        tower = V4.EvalTower(url=args.api_url.rstrip("/"), timeout=V5.REQUEST_TIMEOUT_S)
-        tower._question_artifact_dir = output / "eval_sidecars"
-        watcher.start()
-        try:
-            V4.require_clean_watcher(watcher)
-            with watcher.active_load(tier=TIER, repetition=3):
-                observation, detail = V5.run_repetition_v5(
-                    tower,
-                    tier=TIER,
-                    repetition=3,
-                    questions=questions,
-                    core_id=str(public["core_id"]),
-                    output_dir=output,
-                    expected_binding=binding,
-                    args=runner_args,
-                    sidecar_dir=output / "eval_sidecars",
-                    published_dir=output,
-                    watcher=watcher,
-                )
-            V4.require_clean_watcher(watcher)
-        finally:
-            samples = watcher.stop()
-        V5.validate_repetition_artifacts(
-            output, details={1: [], 2: [detail]}, question_sets={1: [], 2: questions}
-        )
-        _write_json(
-            r3_marker,
-            {
-                "schema": "epyc.e8_quality_partial_r2_r3.v1",
-                "status": "complete",
-                "observation": observation,
-                "detail": detail,
-                "watcher_sha256": sha256_path(output / "runtime_watch.r3.jsonl"),
-                "watcher_samples": len(samples),
-                "claim": _capture_recovery_claim(args),
-            },
-        )
     if _source_hashes(source.resolve(strict=True)) != plan["source_sha256"]:
         raise ValueError("partial-r2 source changed during collection")
-    _write_json(
-        output / "run_seal.json",
-        {
-            "schema": "epyc.e8_quality_partial_r2_run_seal.v1",
-            "status": "complete",
-            "r2_complete_sha256": sha256_path(output / "r2_complete.json"),
-            "r3_complete_sha256": sha256_path(r3_marker),
-            "source_tree_sha256": plan["source_tree_sha256"],
-            "receipt_sha256": sha256_path(output / "human_recovery_receipt.json"),
-        },
+    marker = V4.load_json(output / "r2_complete.json")
+    marker.update(
+        {"status": "intermediate_r2_complete", "watcher": r2_watch_evidence, "claim": claim}
     )
+    _write_json(output / "r2_complete.json", marker)
     return output
 
 
