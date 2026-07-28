@@ -353,6 +353,54 @@ class TestServingShapeLoaderGate:
         assert not set(admitting) & set(refusing)
 
 
+class TestAdmissionDesignProvision:
+    """P2-5: D1's admission provision, pinned where it can actually drift.
+
+    The spec is prose and the loader is code; the failure mode is one being
+    edited without the other. These tests are the link.
+    """
+
+    def _spec(self) -> str:
+        return (
+            Path(lane.__file__).resolve().parents[2] / "docs" / "gpu-shadow-lane.md"
+        ).read_text(encoding="utf-8")
+
+    def test_priority_order_matches_the_spec(self):
+        spec = self._spec()
+        order = list(tenancy_mod.ADMISSION_CLASSES)
+        assert order == [
+            "escalations",
+            "distillation_backfill",
+            "shed_batch",
+            "degraded_frontdoor_overflow",
+        ]
+        # Every reserved class name appears in the spec's admission section.
+        section = spec.split("## 3. Admission policy")[1].split("## 4.")[0]
+        for name in order:
+            assert name in section or name.replace("_", " ") in section.lower(), name
+
+    def test_unbuilt_classes_are_exactly_3_and_4(self):
+        reserved = set(tenancy_mod.ADMISSION_CLASSES) - tenancy_mod.IMPLEMENTED_ADMISSION_CLASSES
+        assert reserved == {"shed_batch", "degraded_frontdoor_overflow"}
+
+    def test_reserved_flags_are_not_registered(self):
+        """Named in the spec, deliberately absent from the flag registry — a
+        flag for an unbuilt feature reads as 'someone can turn this on'."""
+        from src.features import Features
+
+        for field in ("gpu_lane_shed_batch", "gpu_lane_frontdoor_overflow"):
+            assert not hasattr(Features(), field), field
+
+    def test_no_preemption_path_exists_at_any_priority(self):
+        """§3.2: priority orders admission, never eviction."""
+        item = lease.LaneLease(lane="gpu_shadow_lane", regions=frozenset({"q3"}), device=None)
+        with pytest.raises(lease.LaneLeaseError):
+            item.force_release()
+        source = Path(lease.__file__).read_text(encoding="utf-8")
+        for forbidden in ("SIGKILL", "SIGTERM", "os.kill", "terminate("):
+            assert forbidden not in source, forbidden
+
+
 class TestLaunchPlanIsDataDriven:
     def test_argv_uses_tenancy_values_not_module_constants(self, tenancy, policy):
         plan = tenancy_mod.resolve_lane_plan(

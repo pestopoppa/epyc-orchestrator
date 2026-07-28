@@ -65,20 +65,83 @@ sampling, duty bindings — is **registry data**:
 | Device / reasoning / KV types | **Data** — registry `server:`/`kv_cache:` fields flowing through compiled priors (builder falls back to lane constants) |
 | MTP mode toggle | **Launch-bound (D6) and CODE-defaulted**: the production `_build_gpu_shadow_lane_command` emits NO speculative args by construction. Ceiling data is mode-aware (`mtp_on` rows exist), but flipping the lane to MTP requires a deliberate builder change + drained relaunch — that is intentional, not an omission. |
 
-## 3. Admission policy (program decision D1 — design provision)
+## 3. Admission policy (program decision D1 — design provision, P2-5)
+
+This section is a **design provision**: it fixes the decisions that are
+expensive to change later (the ordering, the flag names, what priority is
+allowed to mean) while leaving classes 3 and 4 unbuilt. Nothing here authorises
+traffic — §4's shadow-only invariant still governs.
+
+### 3.1 Priority order
 
 Priority-ordered lane admission, highest first:
 
-| # | Class | Status |
-|---|---|---|
-| 1 | **Escalations** (coder-escalation-shaped, CPU→GPU chains) | Phase-3 bake-off subject; first implemented consumer |
-| 2 | **Distillation backfill** (teacher calls riding continuous batching, D8) | Post-reboot wiring; rides the same lane admission |
-| 3 | **Shed batch** (worker_general-class batched work under CPU stress, ~135 t/s aggregate class) | **Named here, MAY REMAIN UNIMPLEMENTED** until after lane hardening |
-| 4 | **Degraded frontdoor overflow** | **Named here, exists only as an explicit, flagged, telemetered degraded mode; MAY REMAIN UNIMPLEMENTED.** Frontdoor stays single-model on CPU. |
+| # | Class | Flag (default-off) | Status |
+|---|---|---|---|
+| 1 | **Escalations** — coder-escalation-shaped CPU→GPU chains | *(no flag; the lane's reason to exist)* | Phase-3 bake-off subject; first implemented consumer |
+| 2 | **Distillation backfill** — teacher calls riding continuous batching (D8) | *(no separate flag; rides the teacher policy's existing switch)* | Post-P3 wiring; same lane admission |
+| 3 | **Shed batch** — worker_general-class batched work under CPU stress (~135 t/s aggregate class) | `ORCHESTRATOR_FEATURE_GPU_LANE_SHED_BATCH` | **Named, NOT built.** May stay unimplemented indefinitely |
+| 4 | **Degraded frontdoor overflow** | `ORCHESTRATOR_FEATURE_GPU_LANE_FRONTDOOR_OVERFLOW` | **Named, NOT built.** Explicit, flagged and telemetered *degraded* mode only. Frontdoor stays single-model on CPU |
 
-Admission classes 3 and 4 get their own default-off flags when (if) they are
-built; declaring them here reserves the ordering so later implementation is a
-policy fill-in, not a redesign.
+The class-3/4 flag names are **reserved, not registered**: they deliberately do
+NOT exist in `src/features.py` yet, because a flag for an unbuilt feature is
+surface that reads as "someone can turn this on". Naming them here is the point
+of the provision — when class 3 or 4 is eventually built, the argument is about
+the policy inside it, not about what to call it or where it sits in the order.
+
+### 3.2 What "priority" is allowed to mean — and what it must never mean
+
+Priority orders **admission**, never **eviction**.
+
+- A higher-priority class **may** be admitted ahead of a queued lower-priority
+  request, and **may** cause the lane to stop accepting new lower-priority work.
+- A higher-priority class **may not** interrupt a request already decoding.
+  There is no preemption path, at any priority, for any class (fabric axiom 4;
+  `LaneLease` in `scripts/server/gpu_shadow_lane_lease.py` has no forcible
+  release by construction — `force_release()` raises).
+- Reclaiming the lane from a lower-priority tenant is therefore always
+  quiesce-and-drain at a request boundary, exactly as for any other holder.
+
+This is the clause most likely to be violated by a naive implementation, since
+"priority queue" ordinarily implies preemption. Here it does not.
+
+### 3.3 The reservation is enforced in code, not just documented
+
+`scripts/server/gpu_shadow_lane_tenancy.py` carries `ADMISSION_CLASSES` (the
+order above) and `IMPLEMENTED_ADMISSION_CLASSES` (classes 1–2 only). A tenancy
+role binding that claims `shed_batch` or `degraded_frontdoor_overflow` is
+**refused at load** with "reserved by D1 but not implemented". Reserving a name
+is not the same as having built it, and the loader is what keeps those two
+things from being confused during an activation window.
+
+### 3.4 Shed-batch is partially self-defeating — size it before building it
+
+Class 3's premise is "CPU is under stress, so move batched work to the GPU".
+But the lane is **not a pure GPU resource**: its host threads occupy SMT
+siblings 184-191, whose physical cores 88-95 are atomic region **`q3`** (§7
+Step 4). Shedding CPU work to the lane therefore *consumes CPU* in the very
+region that is likely contended when CPU is stressed:
+
+- The lane needs 8 host threads on q3's physical cores, not a whole 48-thread
+  quarter — so the contention is real but bounded, and it is *concentrated*
+  rather than spread.
+- The roles sharing those cores are the q3 quarter instances (frontdoor 8380,
+  worker_general 8382, ingest 8485, vision_escalation 8087) and the full-machine
+  instances (architect_general 8083, worker_general 8072).
+
+So the net benefit of shedding is **(GPU aggregate throughput gained) − (q3 CPU
+throughput lost)**, not the GPU throughput alone. That difference has never been
+measured. **Before class 3 is built, measure it**: the Step-4 contention recert
+already produces the pairwise numbers for exactly these roles, so the input
+exists — what is missing is the shed-specific comparison. If the CPU loss under
+stress exceeds the GPU gain, class 3 should stay unbuilt, and this provision is
+what lets that be a measurement outcome rather than a reversal of a shipped
+feature.
+
+Class 4 (degraded frontdoor overflow) inherits the same caveat and adds a
+second: frontdoor is latency-critical and single-model on CPU by decision D1, so
+overflow trades a latency cliff for a throughput floor. It stays a *degraded*
+mode — flagged, telemetered, and never a silent fallback.
 
 ## 4. Shadow-only invariant (program decision D3)
 
