@@ -29,9 +29,13 @@ V5_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
 RESUME_PATH = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
 PROTOCOL_ID = "e8_quality_full_pool_tier_baseline.v5"
 PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_plan.v1"
+PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_proposal.v1"
 TIER = 2
 REPETITION = 2
 N = 500
+SAVED_PREFIX_N = 79
+EXPECTED_SAVED_DISPOSITIONS = Counter({"reuse": 59, "regenerate": 17, "rescore": 3})
+EXPECTED_GENERATION_N = 438
 RACE_LOST_PREFIX = "[ERROR: placement timeout role=frontdoor reason=race_lost holders="
 SCORER_UNAVAILABLE_PREFIX = "scoring_unavailable:"
 
@@ -208,24 +212,22 @@ def build_plan(source_dir: Path) -> dict[str, Any]:
         if not isinstance(ordinal, int) or ordinal in by_ordinal or not 0 <= ordinal < N:
             raise ValueError("partial-r2 sidecar ordinal is invalid")
         by_ordinal[ordinal] = row
-    if sorted(by_ordinal) != list(range(79)):
-        raise ValueError("partial-r2 source must contain exactly ordinals 0..78")
+    if sorted(by_ordinal) != list(range(SAVED_PREFIX_N)):
+        raise ValueError(f"partial-r2 source must contain exactly ordinals 0..{SAVED_PREFIX_N - 1}")
     classified = {
         ordinal: _classify_saved_row(row, scoring_rows[ordinal])
         for ordinal, row in by_ordinal.items()
     }
     counts = Counter(classified.values())
-    if counts != Counter({"reuse": 59, "regenerate": 17, "rescore": 3}):
+    if counts != EXPECTED_SAVED_DISPOSITIONS:
         raise ValueError(f"partial-r2 saved-row classification differs: {dict(counts)!r}")
     # A scorer replay has saved generation output, so it must never enter the
     # generation set.  All 421 absent ordinals do.
     regenerate = [
         ordinal for ordinal in range(N) if classified.get(ordinal) not in {"reuse", "rescore"}
     ]
-    if len(regenerate) != 438:
-        raise ValueError(
-            "partial-r2 generation set is not exactly 17 sentinels plus 421 absent rows"
-        )
+    if len(regenerate) != EXPECTED_GENERATION_N:
+        raise ValueError("partial-r2 generation set differs from the sealed recovery contract")
     return {
         "schema": PLAN_SCHEMA,
         "protocol_id": PROTOCOL_ID,
@@ -361,33 +363,40 @@ def _instrument_identity() -> dict[str, str]:
     return {"commit": commit, "runner_sha256": sha256_path(Path(__file__))}
 
 
-def validate_receipt(
-    path: Path | None, plan: dict[str, Any], *, claim: dict[str, Any]
+def _recovery_proposal(
+    plan: dict[str, Any],
+    output: Path,
+    *,
+    claim: dict[str, Any],
+    frontdoor_capacity: dict[str, Any],
 ) -> dict[str, Any]:
-    if path is None or not path.is_file() or path.is_symlink():
-        raise ValueError("partial-r2 collection requires a human recovery receipt")
-    receipt = V4.load_json(path)
-    expected = {
-        "schema": "epyc.operator_e8_quality_partial_r2_recovery.v1",
+    """Bind autonomous collection to its immutable observation-grade contract."""
+    return {
+        "schema": PROPOSAL_SCHEMA,
+        "status": "observation_only",
         "protocol_id": PROTOCOL_ID,
         "source_tree_sha256": plan["source_tree_sha256"],
         "generation_concurrency": V4.CONCURRENCY,
         "generation_ordinals_sha256": canonical_hash(plan["generation_ordinals"]),
         "scorer_replay_ordinals_sha256": canonical_hash(plan["scorer_replay_ordinals"]),
         "instrument": _instrument_identity(),
+        "output_namespace": str(output),
         "region_claim": {
             "tag": str(claim["claims"][0]["payload"]["request_tag"]),
             "regions": sorted(str(row["payload"]["region"]) for row in claim["claims"]),
         },
+        "frontdoor_capacity": frontdoor_capacity,
+        "application": "requires_separate_human_finalizer",
     }
-    if any(receipt.get(key) != value for key, value in expected.items()):
-        raise ValueError("partial-r2 recovery receipt differs from the sealed instrument plan")
-    if (
-        not isinstance(receipt.get("operator_attestation"), str)
-        or not receipt["operator_attestation"].strip()
-    ):
-        raise ValueError("partial-r2 recovery receipt lacks operator attestation")
-    return receipt
+
+
+def _bind_recovery_proposal(output: Path, proposal: dict[str, Any]) -> None:
+    path = output / "recovery_proposal.json"
+    if path.exists():
+        if path.is_symlink() or V4.load_json(path) != proposal:
+            raise ValueError("partial-r2 output namespace belongs to another proposal")
+        return
+    _write_json(path, proposal)
 
 
 def _append_jsonl(path: Path, value: dict[str, Any]) -> None:
@@ -555,6 +564,103 @@ def _harvest_generation_sidecar(
     return failures
 
 
+def _reconcile_generation_scorer_sidecar(
+    path: Path,
+    fresh: list[dict[str, Any]],
+    execution: list[dict[str, Any]],
+    scorer_tail: list[dict[str, Any]],
+) -> list[int]:
+    """Reconcile scorer-tail rows whose sidecar ordinals are full-vector ordinals.
+
+    ``reconcile_scorer_tail_sidecar`` in the v5 runner is intentionally bound
+    to contiguous full-run ordinals. This recovery sends a subset, while the
+    EvalTower sidecar preserves the subset rows' original ``_ordinal`` values.
+    """
+    if not scorer_tail:
+        return []
+    if len(fresh) != len(execution):
+        raise ValueError("partial-r2 scorer replay result/execution count differs")
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    indexed: dict[int, tuple[int, dict[str, Any]]] = {}
+    expected_ordinals: set[int] = set()
+    for position, question in enumerate(execution):
+        ordinal = question.get("_ordinal")
+        if (
+            not isinstance(ordinal, int)
+            or isinstance(ordinal, bool)
+            or ordinal in expected_ordinals
+        ):
+            raise ValueError("partial-r2 execution ordinal is invalid")
+        if fresh[position].get("qid") != V4._question_qid(question):
+            raise ValueError("partial-r2 scorer replay result differs from execution vector")
+        expected_ordinals.add(ordinal)
+    for line_index, line in enumerate(lines):
+        row = json.loads(line)
+        if not isinstance(row, dict) or row.get("row_type") != "question_result":
+            continue
+        ordinal = row.get("ordinal")
+        if (
+            not isinstance(ordinal, int)
+            or isinstance(ordinal, bool)
+            or ordinal in indexed
+            or ordinal not in expected_ordinals
+        ):
+            raise ValueError("partial-r2 generation sidecar ordinal is invalid")
+        indexed[ordinal] = (line_index, row)
+    if set(indexed) != expected_ordinals:
+        raise ValueError("partial-r2 generation sidecar does not cover the requested ordinals")
+    replacements: dict[int, dict[str, Any]] = {}
+    for record in scorer_tail:
+        position = record.get("ordinal")
+        if (
+            not isinstance(position, int)
+            or isinstance(position, bool)
+            or not 0 <= position < len(execution)
+            or record.get("outcome") != "recovered"
+        ):
+            raise ValueError("partial-r2 scorer-tail replay identity differs")
+        ordinal = int(execution[position]["_ordinal"])
+        response = fresh[position]
+        line_index, source = indexed[ordinal]
+        result = source.get("result")
+        qid = str(response.get("qid") or "")
+        if (
+            ordinal in replacements
+            or record.get("qid") != qid
+            or not isinstance(result, dict)
+            or result.get("qid") != qid
+        ):
+            raise ValueError("partial-r2 scorer-tail sidecar identity differs")
+        replacement = V5._coherent_sidecar_row(source, response, qid=qid)
+        if not V5.validate_clean_sidecar_result(response, replacement, qid=qid):
+            raise ValueError("partial-r2 scorer-tail sidecar replacement is not coherent")
+        replacements[ordinal] = replacement
+        lines[line_index] = json.dumps(replacement, sort_keys=True) + "\n"
+    V4.write_text(path, "".join(lines))
+    return sorted(replacements)
+
+
+def _record_failed_generation_attempts(output: Path, failures: list[dict[str, Any]]) -> None:
+    _append_jsonl(
+        output / "generation_failed_attempts.T2.r2.jsonl",
+        {
+            "failures": failures,
+            "disposition": "failed_closed_no_automatic_retry",
+        },
+    )
+
+
+def _refuse_failed_generation_history(output: Path) -> None:
+    path = output / "generation_failed_attempts.T2.r2.jsonl"
+    if not path.exists():
+        return
+    if path.is_symlink() or not V4.load_jsonl(path):
+        raise ValueError("partial-r2 failed-attempt history is invalid")
+    raise RuntimeError(
+        "partial-r2 has failed generation-attempt history; no automatic retry is authorized"
+    )
+
+
 def _generation_targets(plan: dict[str, Any], rows: dict[int, dict[str, Any]]) -> list[int]:
     targets = [ordinal for ordinal in plan["generation_ordinals"] if ordinal not in rows]
     if any(
@@ -686,17 +792,22 @@ def execute(args: argparse.Namespace) -> Path:
     source = args.source_dir
     plan = build_plan(source)
     claim = _capture_recovery_claim(args)
-    receipt = validate_receipt(args.receipt, plan, claim=claim)
     output = args.output_dir.absolute()
-    if output.exists() and not output.is_dir():
+    if output.is_symlink() or (output.exists() and not output.is_dir()):
         raise ValueError("partial-r2 output namespace is not a directory")
     output.mkdir(parents=True, exist_ok=True)
+    runner_args = V5.parse_args(
+        ["--collect-candidate", "--output-dir", str(output), "--api-url", args.api_url]
+    )
+    binding = V4.runtime_binding(runner_args)
+    frontdoor_capacity = preflight_frontdoor_capacity(binding, required=V4.CONCURRENCY, claim=claim)
+    proposal = _recovery_proposal(plan, output, claim=claim, frontdoor_capacity=frontdoor_capacity)
     plan_path = output / "partial_r2_plan.json"
     if plan_path.exists() and V4.load_json(plan_path) != plan:
         raise ValueError("partial-r2 output namespace belongs to another plan")
     if not plan_path.exists():
         _write_json(plan_path, plan)
-        _write_json(output / "human_recovery_receipt.json", receipt)
+    _bind_recovery_proposal(output, proposal)
     snapshot = _snapshot_source(source.resolve(strict=True), output, plan)
     global _SAVED_ROWS
     _SAVED_ROWS = {
@@ -706,12 +817,10 @@ def execute(args: argparse.Namespace) -> Path:
     }
     public = _load_vector(snapshot, "question_vector.T2.json")
     scoring = _load_vector(snapshot, "scoring_vector.T2.json")
-    runner_args = V5.parse_args(
-        ["--collect-candidate", "--output-dir", str(output), "--api-url", args.api_url]
-    )
     questions = _reconstruct_questions(runner_args, public, scoring)
     journal = output / "recovery_rows.T2.r2.jsonl"
     rows = _load_journal(journal)
+    _refuse_failed_generation_history(output)
     for ordinal in plan["reuse_ordinals"]:
         _record(
             journal,
@@ -724,9 +833,14 @@ def execute(args: argparse.Namespace) -> Path:
         rows, journal, plan, questions, output / "scorer_replay_traces.T2.r2.jsonl", args.api_url
     )
     generation_sidecar = output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
-    _harvest_generation_sidecar(
+    failures = _harvest_generation_sidecar(
         generation_sidecar, rows, journal, questions, set(plan["generation_ordinals"])
     )
+    if failures:
+        _record_failed_generation_attempts(output, failures)
+        raise RuntimeError(
+            "partial-r2 generation has durable failed attempts; no automatic retry is authorized"
+        )
     targets = _generation_targets(plan, rows)
     r2_watch_evidence: dict[str, Any] | None = None
     if targets:
@@ -734,8 +848,6 @@ def execute(args: argparse.Namespace) -> Path:
             raise RuntimeError(
                 "AUTOPILOT_EVAL_CONCURRENCY must equal ratified c3 before generation"
             )
-        binding = V4.runtime_binding(runner_args)
-        preflight_frontdoor_capacity(binding, required=V4.CONCURRENCY, claim=claim)
         import httpx
 
         tower = V4.EvalTower(url=args.api_url.rstrip("/"), timeout=V5.REQUEST_TIMEOUT_S)
@@ -794,19 +906,21 @@ def execute(args: argparse.Namespace) -> Path:
             for row, result in zip(fresh, results)
         ):
             raise RuntimeError("partial-r2 generation returned a non-c3 or wrong-vector result")
-        replaced = V5.reconcile_scorer_tail_sidecar(generation_sidecar, fresh, replayed)
-        if replaced != [row["ordinal"] for row in replayed]:
+        replaced = _reconcile_generation_scorer_sidecar(
+            generation_sidecar, fresh, execution, replayed
+        )
+        expected_replaced = sorted(
+            int(execution[int(row["ordinal"])]["_ordinal"]) for row in replayed
+        )
+        if replaced != expected_replaced:
             raise ValueError("partial-r2 scorer replay did not reconcile its compact sidecar rows")
         failures = _harvest_generation_sidecar(
             generation_sidecar, rows, journal, questions, set(plan["generation_ordinals"])
         )
         if failures:
-            _append_jsonl(
-                output / "generation_failed_attempts.T2.r2.jsonl",
-                {"failures": failures, "disposition": "failed_closed_no_automatic_retry"},
-            )
+            _record_failed_generation_attempts(output, failures)
             raise RuntimeError(
-                "partial-r2 generation has durable failed attempts; a new receipt is required"
+                "partial-r2 generation has durable failed attempts; no automatic retry is authorized"
             )
     if _generation_targets(plan, rows):
         raise RuntimeError(
@@ -854,7 +968,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--receipt", type=Path)
     parser.add_argument("--region-claim-tag", default="")
     parser.add_argument("--region-claim-regions", default="")
     parser.add_argument("--region-claim-dir", type=Path, default=Path("/mnt/raid0/llm/tmp"))
