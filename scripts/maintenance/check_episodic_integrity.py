@@ -26,7 +26,14 @@ CHECKS
    vector, so a row denominator flags healthy replay as collapse. During the
    incident 47 unrelated objectives shared one vector — that is what this ratio
    catches.
-4. **semantic self-match (the decisive one)** — re-embed a row's own objective
+4. **degenerate vectors** — all-zero or non-finite. These are what an embedder
+   outage writes: `use_fallback` defaults to True everywhere, so a BGE outage
+   silently substitutes a SHA-256 pseudo-vector, which measures 89.0% all-zero
+   and 2.8% NaN over real task text. Crucially this check needs **no embedder**,
+   so it still works in exactly the condition that produces the corruption —
+   closing the blind spot where the only detector required the thing that was
+   down.
+5. **semantic self-match (the decisive one)** — re-embed a row's own objective
    and cosine it against its stored vector. This is the check that no amount of
    internal consistency can fake. During the incident: mean **0.5505**. After
    repair: **1.0**. Requires the BGE servers, so it is opt-in via
@@ -147,7 +154,31 @@ def main() -> int:
             diversity=round(diversity, 4),
         )
 
-    # 4. semantic self-match — the check internal consistency cannot fake
+    # 4. degenerate vectors — the embedder-outage signature, detectable WITHOUT
+    # an embedder. This is the check that works when semantic_self_match cannot.
+    if rows:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent))
+        try:
+            from orchestration.repl_memory.embedder import is_degenerate_embedding
+        except Exception:
+            is_degenerate_embedding = None
+        if is_degenerate_embedding is not None:
+            bad_vecs: dict[str, int] = {}
+            for _mid, idx, _ctx in rows:
+                reason = is_degenerate_embedding(index.reconstruct(int(idx)))
+                if reason:
+                    bad_vecs[reason] = bad_vecs.get(reason, 0) + 1
+            total_bad = sum(bad_vecs.values())
+            record(
+                "degenerate_vectors",
+                total_bad == 0,
+                f"{total_bad}/{len(rows)} sampled vectors are degenerate"
+                + (f" {bad_vecs}  <- an embedder outage wrote hash pseudo-vectors; "
+                   "these rows are not semantically retrievable" if total_bad else ""),
+                counts=bad_vecs,
+            )
+
+    # 5. semantic self-match — the check internal consistency cannot fake
     if args.semantic:
         import httpx
 

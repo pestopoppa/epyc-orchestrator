@@ -4567,8 +4567,32 @@ EPISODIC_INTEGRITY_CHECK = (
 )
 
 
+EPISODIC_GATE_WAIT_S = float(os.environ.get("AUTOPILOT_EPISODIC_GATE_WAIT_S", "180"))
+EPISODIC_GATE_POLL_S = 15.0
+
+
+def _run_episodic_check(semantic: bool) -> dict | None:
+    """Run the integrity checker; None if it could not run at all."""
+    argv = [sys.executable, str(EPISODIC_INTEGRITY_CHECK), "--json"]
+    if semantic:
+        argv.append("--semantic")
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=600)
+        return json.loads(proc.stdout)
+    except Exception as exc:
+        log.warning("episodic integrity check could not run (%s)", exc)
+        return None
+
+
+def _semantic_was_skipped(report: dict) -> bool:
+    return any(
+        c.get("check") == "semantic_self_match" and c.get("skipped")
+        for c in report.get("checks", [])
+    )
+
+
 def _enforce_episodic_integrity_gate() -> None:
-    """Fail closed if the episodic store cannot be shown to be sound.
+    """Fail closed if the episodic store cannot be SHOWN to be sound.
 
     WHY THIS GATE EXISTS
     --------------------
@@ -4576,16 +4600,28 @@ def _enforce_episodic_integrity_gate() -> None:
     wrong and AutoPilot ran on it the whole time: every trial that consulted
     episodic memory received semantically random neighbours, and every component
     reported healthy because each was internally consistent. Twenty-two days of
-    trials were conducted through a broken instrument without a single alarm.
+    trials ran through a broken instrument without one alarm.
 
-    The store is now repaired and reseeded, so this gate is the part that keeps
-    it that way. It runs the metadata assertions (0.2 s, no inference) plus the
-    decisive re-embed check when the embedders are reachable. A failure blocks
-    the run rather than degrading it, because a trial run on a broken store is
-    worse than no trial — it produces evidence that looks valid.
+    WHY IT WAITS FOR THE EMBEDDERS RATHER THAN SHRUGGING
+    ----------------------------------------------------
+    An embedder outage is not a neutral "cannot verify" state — it is the
+    condition that *causes* the corruption. ``use_fallback`` defaults to True in
+    EmbeddingConfig and EmbedderPoolConfig, and every live site builds a bare
+    ``TaskEmbedder()``, so with BGE down a write does not fail: it silently
+    stores a SHA-256 pseudo-vector (measured 89.0% all-zero, 2.8% NaN, 8.1%
+    well-formed-but-meaningless). Worse, until the ``degenerate_vectors`` check
+    existed the *only* detector for the well-formed ones was semantic
+    self-match, which needs the very embedders that were down.
 
-    Override with ``AUTOPILOT_SKIP_EPISODIC_GATE=1`` for a deliberate run on a
-    known-degraded store. It is logged loudly and is an operator decision.
+    So: wait out a boot window, then refuse. A trial run on an unverifiable
+    store produces evidence that looks valid — which is exactly what the last 22
+    days of trials were. The write path now also raises
+    ``DegenerateEmbeddingError`` at the chokepoint, so with BGE down AutoPilot
+    could not record memories anyway.
+
+    Overrides (both logged loudly):
+      ``AUTOPILOT_SKIP_EPISODIC_GATE=1``     skip entirely
+      ``AUTOPILOT_EPISODIC_GATE_WAIT_S=N``   change the embedder boot window
     """
     if os.environ.get("AUTOPILOT_SKIP_EPISODIC_GATE") == "1":
         log.warning(
@@ -4597,36 +4633,75 @@ def _enforce_episodic_integrity_gate() -> None:
         log.warning("episodic integrity checker missing at %s; store is UNVERIFIED",
                     EPISODIC_INTEGRITY_CHECK)
         return
-    try:
-        proc = subprocess.run(
-            [sys.executable, str(EPISODIC_INTEGRITY_CHECK), "--semantic", "--json"],
-            capture_output=True, text=True, timeout=300,
-        )
-        report = json.loads(proc.stdout)
-    except Exception as exc:
-        log.warning("episodic integrity check could not run (%s); store is UNVERIFIED", exc)
+
+    report = _run_episodic_check(semantic=True)
+    if report is None:
+        log.warning("episodic integrity check unavailable; store is UNVERIFIED")
         return
 
+    # Metadata failures are structural — retrying cannot help, so fail now
+    # rather than burning the embedder boot window first.
+    hard_failures = [
+        c for c in report.get("checks", [])
+        if c.get("pass") is False and c.get("check") != "semantic_self_match"
+    ]
+    if hard_failures:
+        _episodic_gate_fail(hard_failures)
+
+    # Only the semantic check can be transiently unavailable. Give the
+    # embedders a boot window before treating it as terminal.
+    deadline = time.monotonic() + EPISODIC_GATE_WAIT_S
+    while _semantic_was_skipped(report) and time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        log.warning(
+            "episodic gate: embedders unreachable, the DECISIVE check cannot run; "
+            "retrying in %.0fs (%.0fs of the boot window left)",
+            min(EPISODIC_GATE_POLL_S, remaining), remaining,
+        )
+        time.sleep(min(EPISODIC_GATE_POLL_S, max(remaining, 0)))
+        retried = _run_episodic_check(semantic=True)
+        if retried is not None:
+            report = retried
+
     for c in report.get("checks", []):
-        if c.get("skipped"):
-            log.warning("episodic %s SKIPPED: %s", c["check"], c["detail"])
-        elif not c["pass"]:
+        if c.get("pass") is False:
             log.error("episodic %s FAILED: %s", c["check"], c["detail"])
 
-    if not report.get("ok"):
-        failed = [c for c in report.get("checks", []) if c.get("pass") is False]
+    if _semantic_was_skipped(report):
         print(
-            "ERROR: episodic memory integrity check FAILED; refusing to start AutoPilot.\n"
-            + "\n".join(f"  [FAIL] {c['check']}: {c['detail']}" for c in failed)
-            + "\n\nA trial run on a broken store produces evidence that looks valid.\n"
-            "Repair first: scripts/maintenance/repair_faiss_id_map.py (desync) or\n"
-            "scripts/maintenance/reseed_episodic_store.py (mapping/vector defects).\n"
-            "See handoffs/active/episodic-memory-integrity.md.\n"
-            "To run anyway on a known-degraded store: AUTOPILOT_SKIP_EPISODIC_GATE=1",
+            "ERROR: the episodic embedders stayed unreachable for "
+            f"{EPISODIC_GATE_WAIT_S:.0f}s; refusing to start AutoPilot.\n\n"
+            "This is not merely 'cannot verify'. With the embedders down, every\n"
+            "episodic write falls back to a SHA-256 pseudo-vector (89% all-zero,\n"
+            "2.8% NaN), so running now would actively corrupt the store — and the\n"
+            "write path will raise DegenerateEmbeddingError anyway.\n\n"
+            "Start the embedders (ports 8090-8095), then retry.\n"
+            "  orchestrator_stack.py status\n"
+            "Wait longer: AUTOPILOT_EPISODIC_GATE_WAIT_S=<seconds>\n"
+            "Run anyway on an unverified store: AUTOPILOT_SKIP_EPISODIC_GATE=1",
             file=sys.stderr,
         )
         raise SystemExit(2)
-    log.info("episodic integrity gate: PASS (%d checks)", len(report.get("checks", [])))
+
+    if not report.get("ok"):
+        _episodic_gate_fail([c for c in report.get("checks", []) if c.get("pass") is False])
+
+    log.info("episodic integrity gate: PASS (%d checks, semantic verified)",
+             len(report.get("checks", [])))
+
+
+def _episodic_gate_fail(failed: list) -> None:
+    print(
+        "ERROR: episodic memory integrity check FAILED; refusing to start AutoPilot.\n"
+        + "\n".join(f"  [FAIL] {c['check']}: {c['detail']}" for c in failed)
+        + "\n\nA trial run on a broken store produces evidence that looks valid.\n"
+        "Repair first: scripts/maintenance/repair_faiss_id_map.py (desync) or\n"
+        "scripts/maintenance/reseed_episodic_store.py (mapping/vector defects).\n"
+        "See handoffs/active/episodic-memory-integrity.md.\n"
+        "To run anyway on a known-degraded store: AUTOPILOT_SKIP_EPISODIC_GATE=1",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 
 
 def _format_deep_eval_tier_options() -> str:

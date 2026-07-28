@@ -19,6 +19,7 @@ import asyncio
 import fcntl
 import json
 import logging
+import os
 import re
 import sqlite3
 import uuid
@@ -91,6 +92,38 @@ def _exclusive_file_lock(path: Path):
             yield
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+
+class DegenerateEmbeddingError(ValueError):
+    """Raised when a write would persist an unusable embedding vector."""
+
+
+def _embedding_rejection_reason(embedding, context) -> Optional[str]:
+    """Why this embedding must not be persisted, or None if it is fine.
+
+    Text-independent degeneracy first (all-zero / non-finite), then the
+    text-dependent exact hash-fallback match, which only the ~8% well-formed
+    fallbacks need. Detection is exact rather than heuristic: measured 0 false
+    positives over 3,000 live BGE vectors and 2,000 random unit vectors.
+    """
+    from orchestration.repl_memory.embedder import (
+        is_degenerate_embedding,
+        is_hash_fallback_embedding,
+    )
+
+    reason = is_degenerate_embedding(embedding)
+    if reason is not None:
+        return reason
+    try:
+        from orchestration.repl_memory.memory_record import record_from_legacy_context
+
+        text = record_from_legacy_context(context).embedding_text() if isinstance(context, dict) else ""
+    except Exception:  # never let the guard itself break a write
+        return None
+    if text and is_hash_fallback_embedding(text, embedding):
+        return "hash_fallback"
+    return None
 
 
 class _ClosingSQLiteConnection(sqlite3.Connection):
@@ -382,6 +415,43 @@ class EpisodicStore:
                 action_type,
                 sorted(context.keys())[:8],
             )
+
+        # Embedding chokepoint. `use_fallback` defaults to True in both
+        # EmbeddingConfig and EmbedderPoolConfig, and every live site builds a
+        # bare TaskEmbedder() — so an embedder outage does NOT fail a write, it
+        # silently substitutes a SHA-256 pseudo-vector. Measured over 5,000 real
+        # task texts, that fallback yields 89.0% all-zero (float32 norm
+        # overflows to inf, and v/inf == 0), 2.8% NaN-bearing (permanently
+        # unretrievable — FAISS scores the row -inf), and 8.1% well-formed but
+        # semantically meaningless.
+        #
+        # This is the corruption mode the 2026-07-05 incident taught us to fear:
+        # such rows pass index/id_map sync and the embedding_idx round-trip, so
+        # only a semantic re-embed catches the well-formed ones — and that check
+        # needs the very embedders whose absence produced them. Refuse at the
+        # single chokepoint instead of at the ~8 constructor sites, so the
+        # guarantee cannot be lost by a new caller.
+        #
+        # Raising is deliberate: store() already raises FAISSDesyncError, and a
+        # write that cannot be embedded is better lost than persisted wrong.
+        _degenerate = _embedding_rejection_reason(embedding, context)
+        if _degenerate is not None:
+            if os.environ.get("EPISODIC_ALLOW_DEGRADED_EMBEDDINGS") == "1":
+                logger.error(
+                    "Persisting a DEGENERATE embedding (%s) because "
+                    "EPISODIC_ALLOW_DEGRADED_EMBEDDINGS=1; this row is not "
+                    "semantically retrievable. action_type=%s",
+                    _degenerate,
+                    action_type,
+                )
+            else:
+                raise DegenerateEmbeddingError(
+                    f"refusing to persist a degenerate embedding ({_degenerate}); "
+                    "the embedding servers are probably down and TaskEmbedder fell "
+                    "back to a SHA-256 pseudo-vector. Fix the embedders, or set "
+                    "EPISODIC_ALLOW_DEGRADED_EMBEDDINGS=1 to accept an "
+                    "unretrievable row on purpose."
+                )
 
         if self.use_faiss and self._faiss_lock_path is not None:
             with _exclusive_file_lock(self._faiss_lock_path):

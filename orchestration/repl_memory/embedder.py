@@ -36,6 +36,91 @@ DEFAULT_EMBEDDING_BINARY = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-embedd
 DEFAULT_SERVER_URL = "http://127.0.0.1:8090"
 
 
+# ── Degenerate-embedding detection ───────────────────────────────────────────
+#
+# The hash fallback below (`TaskEmbedder._generate_embedding_fallback`) is not a
+# usable embedding by any reading, and measurement is worse than its docstring
+# admits. Over 5,000 real task texts:
+#
+#     all-zero          89.0%   norm overflows float32 -> inf; v/inf == 0
+#     contains NaN       2.8%   permanently unretrievable (FAISS scores it -inf)
+#     unit-normalised     8.1%   well-formed but semantically meaningless
+#
+# `np.frombuffer(sha256_bytes, float32)` reinterprets hash bytes as floats with
+# exponents up to ~1e38, so `np.linalg.norm` overflows; `norm > 0` is True for
+# inf, and the divide silently yields zeros.
+#
+# `use_fallback` defaults to **True** in both EmbeddingConfig and
+# EmbedderPoolConfig, and every live site that builds a TaskEmbedder uses the
+# bare constructor. So an embedder outage does not fail a write — it fills the
+# episodic store with these. These helpers exist so the episodic write
+# chokepoint can refuse them; detection is exact rather than heuristic because
+# the fallback is a pure function of the text.
+
+
+def hash_fallback_embedding(text: str, embedding_dim: int = 1024) -> np.ndarray:
+    """Reproduce the hash pseudo-embedding for ``text``, bug-for-bug.
+
+    Deliberately mirrors ``TaskEmbedder._generate_embedding_fallback`` including
+    its float32 norm overflow — the point is to reproduce what was *actually
+    stored*, not what a correct implementation would store.
+    """
+    hash_bytes = hashlib.sha256(text.encode()).digest()
+    repeats = (embedding_dim * 4 // len(hash_bytes)) + 1
+    expanded = (hash_bytes * repeats)[: embedding_dim * 4]
+    embedding = np.frombuffer(expanded, dtype=np.float32)[:embedding_dim].copy()
+    with np.errstate(over="ignore", invalid="ignore"):
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            embedding = embedding / norm
+    return embedding
+
+
+def is_hash_fallback_embedding(text: str, vec: np.ndarray) -> bool:
+    """True if ``vec`` is exactly the hash pseudo-embedding of ``text``.
+
+    Exact comparison, not cosine: the fallback is deterministic, so an exact
+    match is both available and far safer. A cosine test at 0.99 gave a **45%
+    false-positive rate** against random unit vectors, because the unnormalised
+    (overflowed) reference vector has a huge magnitude and dots high with
+    anything.
+
+    Note this only catches the 8.1% well-formed case; the all-zero and NaN
+    cases are text-independent and are caught by ``is_degenerate_embedding``.
+    """
+    if vec is None or not text:
+        return False
+    vec = np.asarray(vec, dtype=np.float32).ravel()
+    if vec.size == 0:
+        return False
+    ref = hash_fallback_embedding(text, embedding_dim=vec.shape[0])
+    with np.errstate(over="ignore", invalid="ignore"):
+        return bool(np.allclose(vec, ref, rtol=1e-5, atol=1e-6, equal_nan=True))
+
+
+def is_degenerate_embedding(vec: np.ndarray) -> str | None:
+    """Return a reason string if ``vec`` must never be persisted, else None.
+
+    Text-independent checks, so they hold at any write site regardless of which
+    embedder produced the vector:
+
+    * ``non_finite`` — NaN/Inf. FAISS scores the row -inf, so it exists in
+      SQLite with a valid ``embedding_idx`` and can never be retrieved.
+    * ``all_zero`` — carries no information and, being identical across rows,
+      collapses distinct tasks onto one point. This is the 89% case above.
+    """
+    if vec is None:
+        return "missing"
+    v = np.asarray(vec, dtype=np.float32).ravel()
+    if v.size == 0:
+        return "empty"
+    if not np.all(np.isfinite(v)):
+        return "non_finite"
+    if not np.any(v):
+        return "all_zero"
+    return None
+
+
 @dataclass
 class EmbeddingConfig:
     """Configuration for embedding generation."""

@@ -122,7 +122,11 @@ def test_replay_equivalence_matches_update_q_value(tmp_path):
     # Oracle: drive the real live update path with the recovered rewards.
     store = EpisodicStore(db_path=tmp_path / "oracle", use_faiss=True)
     import numpy as np
-    mid = store.store(np.zeros(1024, dtype=np.float32), "worker_general", "routing",
+    # A non-degenerate placeholder: this test is about Q-value replay, so the
+    # vector is irrelevant to what it asserts — but store() now refuses all-zero
+    # embeddings, since that is exactly what an embedder outage writes.
+    placeholder = np.full(1024, 1.0 / 32.0, dtype=np.float32)
+    mid = store.store(placeholder, "worker_general", "routing",
                       {"objective": "obj"}, initial_q=qs[0])
     for q in qs[1:]:
         store.update_q_value(mid, 2.0 * q - 1.0, 0.1, temporal_decay_rate=None)
