@@ -44,7 +44,44 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
     root = tmp_path / "bundle"
     snapshot = root / "intermediate/source_snapshot"
     _write_json(snapshot / "question_vector.T2.json", {"fixed": "source"})
-    source_hashes = {"question_vector.T2.json": _sha(snapshot / "question_vector.T2.json")}
+    scoring_questions = [
+        {
+            "qid": f"q{ordinal}",
+            "suite": "thinking",
+            "scoring_method": "exact_match",
+            "scoring_config": {},
+            "expected": str(ordinal),
+            "prompt_sha256": hashlib.sha256(f"prompt-{ordinal}".encode()).hexdigest(),
+        }
+        for ordinal in range(500)
+    ]
+    _write_json(
+        snapshot / "scoring_vector.T2.json",
+        {
+            "schema": "epyc.e8_quality_scoring_vector.v1",
+            "tier": 2,
+            "n": 500,
+            "questions": scoring_questions,
+        },
+    )
+    saved_rows = [
+        {
+            "row_type": "question_result",
+            "ordinal": ordinal,
+            "answer": str(ordinal),
+            "result": {"qid": f"q{ordinal}"},
+        }
+        for ordinal in (59, 60, 61)
+    ]
+    _write_jsonl(
+        snapshot / "eval_sidecars/question_results.e8-t2-r2.jsonl",
+        saved_rows,
+    )
+    source_hashes = {
+        str(path.relative_to(snapshot)): _sha(path)
+        for path in sorted(snapshot.rglob("*"))
+        if path.is_file()
+    }
     _write_json(
         snapshot / "source_binding.json",
         {
@@ -160,8 +197,8 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
             "schema": validator.RECOVERY_R2_SCORER_ATTEMPTS_SCHEMA,
             "ordinal": ordinal,
             "qid": f"q{ordinal}",
-            "saved_sidecar_sha256": "c" * 64,
-            "scoring_question_sha256": "d" * 64,
+            "saved_sidecar_sha256": validator.canonical_hash(saved_rows[ordinal - 59]),
+            "scoring_question_sha256": validator.canonical_hash(scoring_questions[ordinal]),
             "state": state,
         }
         for ordinal in replay
@@ -179,11 +216,26 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         "terminal_states": {"succeeded": 3},
     }
     _write_json(root / "intermediate/r2_complete.json", complete)
+    _write_json(root / "partial_resume_plan.json", {"schema": "partial"})
+    _write_jsonl(
+        root / "generation_tail_attempts.T2.r1.jsonl",
+        [{"schema": "attempt", "ordinal": 98}],
+    )
     context = {
         "schema": validator.RECOVERY_R2_CONTEXT_SCHEMA,
         "recovery_runner": {"path": "/reviewed/recovery.py", "sha256": "a" * 64},
         "finalizer_runner": {"path": "/reviewed/finalizer.py", "sha256": "b" * 64},
         "dependency_sha256": {"v5": "c" * 64, "resume": "d" * 64, "recovery": "a" * 64},
+        "banked_t2_r1_repair_history": {
+            "partial_resume_plan.json": {
+                "path": str(root / "partial_resume_plan.json"),
+                "sha256": _sha(root / "partial_resume_plan.json"),
+            },
+            "generation_tail_attempts.T2.r1.jsonl": {
+                "path": str(root / "generation_tail_attempts.T2.r1.jsonl"),
+                "sha256": _sha(root / "generation_tail_attempts.T2.r1.jsonl"),
+            },
+        },
         "source_binding": str(snapshot / "source_binding.json"),
         "source_binding_sha256": _sha(snapshot / "source_binding.json"),
         "source_tree_sha256": plan["source_tree_sha256"],
@@ -260,6 +312,65 @@ def test_recovery_r2_context_rejects_failed_or_extra_scorer_attempts(tmp_path: P
     _write_json(complete_path, complete)
     context["complete_sha256"] = _sha(complete_path)
     with pytest.raises(ValueError, match="scorer-attempt record differs"):
+        _validate(root, context)
+
+
+@pytest.mark.parametrize("field", ["saved_sidecar_sha256", "scoring_question_sha256"])
+def test_recovery_r2_context_derives_scorer_attempt_hashes_from_snapshot(
+    tmp_path: Path, field: str
+) -> None:
+    root, context = _context(tmp_path)
+    attempts_path = Path(context["scorer_attempts_path"])
+    attempts = [json.loads(line) for line in attempts_path.read_text().splitlines()]
+    attempts[0][field] = "0" * 64
+    attempts[1][field] = "0" * 64
+    _write_jsonl(attempts_path, attempts)
+    digest = _sha(attempts_path)
+    context["scorer_attempts_sha256"] = digest
+    complete_path = Path(context["complete_path"])
+    complete = json.loads(complete_path.read_text())
+    complete["scorer_attempts_sha256"] = digest
+    complete["scorer_attempts"]["sha256"] = digest
+    _write_json(complete_path, complete)
+    context["complete_sha256"] = _sha(complete_path)
+
+    with pytest.raises(ValueError, match="scorer-attempt record differs"):
+        _validate(root, context)
+
+
+def test_finalizer_scorer_contract_uses_producer_canonical_source_semantics(
+    tmp_path: Path,
+) -> None:
+    root, context = _context(tmp_path)
+    snapshot = Path(context["source_binding"]).parent
+    plan = json.loads(Path(context["plan_path"]).read_text())
+    expected = finalizer._expected_scorer_attempt_inputs(
+        snapshot, plan["scorer_replay_ordinals"], expected_n=plan["n"]
+    )
+    saved = [
+        row
+        for row in finalizer.V4.load_jsonl(
+            snapshot / "eval_sidecars/question_results.e8-t2-r2.jsonl"
+        )
+        if row.get("row_type") == "question_result"
+    ]
+    scoring = finalizer.V4.load_json(snapshot / "scoring_vector.T2.json")["questions"]
+
+    for ordinal in plan["scorer_replay_ordinals"]:
+        assert expected[ordinal] == {
+            "qid": f"q{ordinal}",
+            "saved_sidecar_sha256": finalizer.RECOVERY.canonical_hash(
+                next(row for row in saved if row["ordinal"] == ordinal)
+            ),
+            "scoring_question_sha256": finalizer.RECOVERY.canonical_hash(scoring[ordinal]),
+        }
+
+
+def test_recovery_r2_context_rejects_nonexistent_repair_history(tmp_path: Path) -> None:
+    root, context = _context(tmp_path)
+    entry = context["banked_t2_r1_repair_history"]["partial_resume_plan.json"]
+    entry["path"] = str(root / "missing-partial-plan.json")
+    with pytest.raises(ValueError, match="repair-history"):
         _validate(root, context)
 
 
@@ -348,24 +459,13 @@ def test_real_source_tail_rejects_broadened_ordinals(tmp_path: Path) -> None:
         finalizer._canonical_t2r1_tail(staging, tmp_path / "published")
 
 
-def test_layered_context_is_limited_to_the_exact_composite_source(tmp_path: Path) -> None:
-    source_plan = {
-        "schema": "epyc.e8_quality_v5_recovery_finalizer_source.v1",
-        "protocol_id": "e8_quality_full_pool_tier_baseline.v5",
-        "source": str(validator.COMPOSITE_SOURCE_DIR),
-        "source_tree_sha256": validator.COMPOSITE_SOURCE_TREE_SHA256,
-        "source_sha256": {},
-        "banked": {"tiers": [1], "t2_r1": True},
-        "fresh_collection": [{"tier": 2, "repetition": 3}],
-        "t2_r1_repair_history": {
-            "partial_resume_plan": {
-                "sha256": "9dbb2fd7daf9d807e41257dab08358bd9abae411032d0b5331246d32fa76ef66"
-            },
-            "generation_tail_attempts.T2.r1.jsonl": {
-                "sha256": "d6ff6c16f0c5d4baf6fdfd320c6e4ff52284681ce4749c6ba71943eb4576f46e"
-            },
-        },
-    }
+def test_layered_context_is_limited_to_the_exact_composite_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_plan = finalizer.build_plan(validator.COMPOSITE_SOURCE_DIR)
+    assert validator.canonical_hash(source_plan["source_sha256"]) == (
+        validator.COMPOSITE_SOURCE_TREE_SHA256
+    )
     source_plan_path = tmp_path / "recovery_finalizer_source_plan.json"
     _write_json(source_plan_path, source_plan)
     context = {
@@ -375,11 +475,47 @@ def test_layered_context_is_limited_to_the_exact_composite_source(tmp_path: Path
         }
     }
     validator.validate_composite_context(context, evidence_root=tmp_path)
-    source_plan["source_tree_sha256"] = "0" * 64
+    recycled_source = tmp_path / "recycled-source"
+    monkeypatch.setattr(validator, "COMPOSITE_SOURCE_DIR", recycled_source)
+    source_plan["source"] = str(recycled_source)
+    for name, entry in source_plan["t2_r1_repair_history"].items():
+        entry["path"] = str(recycled_source / name)
+    _write_json(source_plan_path, source_plan)
+    context["context"]["composite_source_plan_sha256"] = _sha(source_plan_path)
+    validator.validate_composite_context(context, evidence_root=tmp_path)
+    source_plan["source_sha256"] = {}
     _write_json(source_plan_path, source_plan)
     context["context"]["composite_source_plan_sha256"] = _sha(source_plan_path)
     with pytest.raises(ValueError, match="exact reviewed composite"):
         validator.validate_composite_context(context, evidence_root=tmp_path)
+
+
+def test_composite_context_requires_both_recovery_layers() -> None:
+    partial = {"partial": {"plan_sha256": validator.COMPOSITE_PARTIAL_RESUME_PLAN_SHA256}}
+    ordinary_partial = {"partial": {"plan_sha256": "0" * 64}}
+    ordinary_recovery = {"context": {}}
+    composite_recovery = {
+        "context": {
+            "composite_source_plan_path": "/bundle/recovery_finalizer_source_plan.json",
+            "composite_source_plan_sha256": "a" * 64,
+        }
+    }
+    assert validator.composite_context_state(None, ordinary_recovery) is False
+    assert validator.composite_context_state(ordinary_partial, None) is False
+    assert validator.composite_context_state(partial, composite_recovery) is True
+    with pytest.raises(ValueError, match="requires recovery-r2"):
+        validator.composite_context_state(partial, None)
+    with pytest.raises(ValueError, match="requires the partial-resume"):
+        validator.composite_context_state(None, composite_recovery)
+    with pytest.raises(ValueError, match="exact reviewed partial-resume"):
+        validator.composite_context_state(ordinary_partial, composite_recovery)
+    with pytest.raises(ValueError, match="require the composite source plan"):
+        validator.composite_context_state(partial, ordinary_recovery)
+    incomplete = {
+        "context": {"composite_source_plan_path": "/bundle/recovery_finalizer_source_plan.json"}
+    }
+    with pytest.raises(ValueError, match="incomplete"):
+        validator.composite_context_state(None, incomplete)
 
 
 def test_four_monitor_segments_pin_the_source_resume_gap_and_order(tmp_path: Path) -> None:
