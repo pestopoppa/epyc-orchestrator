@@ -309,6 +309,43 @@ def is_recovered_scorer_trace(trace: dict[str, Any]) -> bool:
     )
 
 
+def validate_segmented_monitor(samples: list[dict[str, Any]], segments: Any) -> None:
+    """Validate an explicit resume boundary without treating it as coverage.
+
+    Normal v5 remains one continuous watcher.  A partial resume may name a
+    stopped historical segment and a fresh segment, but each segment must have
+    independently clean, gap-free samples and no sample may be reused.
+    """
+    if not isinstance(segments, list) or not segments:
+        raise ValueError("segmented runtime monitor has no segments")
+    assigned: set[int] = set()
+    for segment in segments:
+        if not isinstance(segment, dict) or not isinstance(segment.get("sample_indexes"), list):
+            raise ValueError("segmented runtime monitor segment is malformed")
+        indexes = segment["sample_indexes"]
+        if len(indexes) < 2 or any(not isinstance(index, int) for index in indexes):
+            raise ValueError("segmented runtime monitor segment is too short")
+        if len(set(indexes)) != len(indexes) or assigned.intersection(indexes):
+            raise ValueError("segmented runtime monitor reuses a sample")
+        if any(index < 0 or index >= len(samples) for index in indexes):
+            raise ValueError("segmented runtime monitor index is invalid")
+        rows = [samples[index] for index in indexes]
+        if any(row.get("ok") is not True for row in rows):
+            raise ValueError("segmented runtime monitor is not clean")
+        try:
+            times = [
+                datetime.fromisoformat(str(row["started_at"]).replace("Z", "+00:00"))
+                for row in rows
+            ]
+        except (KeyError, ValueError) as exc:
+            raise ValueError("segmented runtime monitor timestamps are invalid") from exc
+        if any((later - earlier).total_seconds() > 7.0 for earlier, later in zip(times, times[1:])):
+            raise ValueError("segmented runtime monitor has a sampling gap")
+        assigned.update(indexes)
+    if assigned != set(range(len(samples))):
+        raise ValueError("segmented runtime monitor leaves samples unclaimed")
+
+
 def replace_sidecar_rows_bytes(
     source_path: Path,
     replacements: dict[int, dict[str, Any]],
@@ -455,18 +492,22 @@ def validate(
         or runner.V4.load_jsonl(watcher_path) != samples
     ):
         raise ValueError("runtime watcher ledger differs from the runner report")
-    try:
-        watcher_started = [
-            datetime.fromisoformat(str(sample["started_at"]).replace("Z", "+00:00"))
-            for sample in samples
-        ]
-    except (KeyError, ValueError) as exc:
-        raise ValueError("runtime watcher timestamps are invalid") from exc
-    if any(
-        (later - earlier).total_seconds() > 7.0
-        for earlier, later in zip(watcher_started, watcher_started[1:])
-    ):
-        raise ValueError("runtime watcher has a sampling gap")
+    monitor_segments = postconditions.get("segmented_monitor")
+    if monitor_segments is not None:
+        validate_segmented_monitor(samples, monitor_segments)
+    else:
+        try:
+            watcher_started = [
+                datetime.fromisoformat(str(sample["started_at"]).replace("Z", "+00:00"))
+                for sample in samples
+            ]
+        except (KeyError, ValueError) as exc:
+            raise ValueError("runtime watcher timestamps are invalid") from exc
+        if any(
+            (later - earlier).total_seconds() > 7.0
+            for earlier, later in zip(watcher_started, watcher_started[1:])
+        ):
+            raise ValueError("runtime watcher has a sampling gap")
     details = report.get("observations")
     if not isinstance(details, dict) or set(details) != {"1", "2"}:
         raise ValueError("runner report does not contain both tiers")
@@ -601,10 +642,7 @@ def validate(
             ]
             scorer_tail = detail.get("scorer_tail_replay")
             scorer_replacements = detail.get("scorer_sidecar_replacement_ordinals")
-            if (
-                scorer_tail != expected_scorer_tail
-                or scorer_replacements != sorted(scorer_targets)
-            ):
+            if scorer_tail != expected_scorer_tail or scorer_replacements != sorted(scorer_targets):
                 raise ValueError("scorer-tail disposition is not derived from pristine traces")
             generation_targets = tail.get("targets")
             if not isinstance(generation_targets, list):
@@ -788,10 +826,9 @@ def validate(
                     retry_sidecar_rows[ordinal] = retry_sidecars[0][1]
                     retry_trace_rows = runner.V4.load_jsonl(retry_trace_path)
                     retry_traces[ordinal] = retry_trace_rows
-                    recovered_retry_trace = (
-                        len(retry_trace_rows) == 1
-                        and is_recovered_scorer_trace(retry_trace_rows[0])
-                    )
+                    recovered_retry_trace = len(
+                        retry_trace_rows
+                    ) == 1 and is_recovered_scorer_trace(retry_trace_rows[0])
                     expected_retry_scorer_tail = (
                         [{"ordinal": 0, "qid": str(attempt["qid"]), "outcome": "recovered"}]
                         if recovered_retry_trace
@@ -886,9 +923,7 @@ def validate(
                     source["failure_fingerprint"] = canonical_hash(source)
                     derived_generation_targets.append(source)
                 if tail["targets"] != derived_generation_targets:
-                    raise ValueError(
-                        "generation-tail targets are not exhaustive pristine failures"
-                    )
+                    raise ValueError("generation-tail targets are not exhaustive pristine failures")
                 original_sidecar_lines = original_sidecar_path.read_bytes().splitlines(
                     keepends=True
                 )
