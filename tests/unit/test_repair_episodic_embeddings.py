@@ -148,6 +148,95 @@ def test_diagnose_flags_stale_extra_id_when_live_coverage_complete(
     assert not report.healthy
 
 
+def test_diagnose_keeps_live_store_healthy_with_stale_training_artifact(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db_path = tmp_path / "episodic.db"
+    faiss_path = tmp_path / "embeddings.faiss"
+    id_map_path = tmp_path / "id_map.npy"
+    reembedded_path = tmp_path / "reembedded.npz"
+    live_ids = ["m1", "m2", "m3"]
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, action_type TEXT)")
+        conn.executemany(
+            "INSERT INTO memories (id, action_type) VALUES (?, 'routing')",
+            [(memory_id,) for memory_id in live_ids],
+        )
+
+    faiss_path.touch()
+    monkeypatch.setitem(
+        sys.modules,
+        "faiss",
+        types.SimpleNamespace(read_index=lambda _path: types.SimpleNamespace(ntotal=3)),
+    )
+    np.save(id_map_path, np.array(live_ids, dtype=object))
+    np.savez(
+        reembedded_path,
+        ids=np.array(["m1", "legacy-1", "legacy-2"], dtype=object),
+        embeddings=np.ones((3, 1024), dtype=np.float32),
+    )
+
+    report = repair.diagnose(db_path, faiss_path, reembedded_path, id_map_path)
+
+    assert report.faiss_coverage == 1.0
+    assert report.id_map_overlap_live == 1.0
+    assert report.missing_id_count == 0
+    assert report.stale_id_count == 0
+    assert report.orphan_count == 0
+    assert report.healthy
+    assert report.overlap_live == pytest.approx(1 / 3)
+    assert report.reembedded_missing_count == 2
+    assert report.reembedded_stale_count == 2
+
+
+def test_main_passes_explicit_id_map_to_pre_and_post_repair_diagnostics(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db_path = tmp_path / "episodic.db"
+    faiss_path = tmp_path / "embeddings.faiss"
+    id_map_path = tmp_path / "custom-id-map.npy"
+    reembedded_path = tmp_path / "reembedded.npz"
+    calls: list[tuple[Path, Path, Path, Path]] = []
+    reports = iter(
+        [
+            repair.HealthReport(1, 0, 0, 0.0, 0.0, False, 1),
+            repair.HealthReport(1, 1, 0, 0.0, 1.0, True, 0),
+        ]
+    )
+
+    def fake_diagnose(
+        db: Path, faiss: Path, reembedded: Path, id_map: Path
+    ) -> repair.HealthReport:
+        calls.append((db, faiss, reembedded, id_map))
+        return next(reports)
+
+    monkeypatch.setattr(repair, "diagnose", fake_diagnose)
+    monkeypatch.setattr(repair, "print_report", lambda _report: None)
+    monkeypatch.setattr(repair, "run_repair", lambda **_kwargs: 1)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "repair_episodic_embeddings.py",
+            "--repair",
+            "--db",
+            str(db_path),
+            "--faiss",
+            str(faiss_path),
+            "--id-map",
+            str(id_map_path),
+            "--reembedded",
+            str(reembedded_path),
+            "--min-orphans",
+            "0",
+        ],
+    )
+
+    assert repair.main() == 0
+    assert calls == [(db_path, faiss_path, reembedded_path, id_map_path)] * 2
+
+
 def test_run_repair_refuses_stale_snapshot(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         repair,

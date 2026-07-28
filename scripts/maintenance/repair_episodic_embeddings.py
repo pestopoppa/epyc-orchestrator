@@ -17,14 +17,18 @@ Health definition:
     n_id_map           = number of IDs in id_map.npy
     n_reembedded_npz   = number of IDs in reembedded.npz (if present)
     id_map_overlap     = |id_map_ids ∩ live_indexed_ids| / n_db_indexed
-    overlap_live       = |reembedded_ids ∩ live_indexed_ids| / n_db_indexed
+    reembedded_overlap = |reembedded_ids ∩ live_indexed_ids| / n_db_indexed
 
-A store is "orphaned" if n_faiss_vectors / n_db_indexed < 0.99,
+A live store is "orphaned" if n_faiss_vectors / n_db_indexed < 0.99,
 id_map.npy does not match embeddings.faiss, id_map lacks any live indexed IDs,
-id_map has stale/duplicate IDs, OR reembedded.npz falls materially behind live db.
-These conditions fire if FAISS was reset, id_map.npy is stale/wrong,
-reembedded.npz is stale relative to live db, or an indexed action type falls
-outside the headline routing count.
+or id_map has stale/duplicate IDs. These conditions fire if FAISS was reset,
+id_map.npy is stale/wrong, or an indexed action type falls outside the
+headline routing count.
+
+``reembedded.npz`` is an offline training artifact, not a retrieval backend.
+Its coverage is reported separately and never changes live-store health. This
+matters after a live-only reseed: retained historical embeddings deliberately
+do not match the rebuilt live ``memories`` table.
 
 Usage:
     python3 scripts/maintenance/repair_episodic_embeddings.py --diagnose-only
@@ -80,8 +84,8 @@ REEMBED_SCRIPT = PROJECT_ROOT / "scripts/graph_router/reembed_episodic_store.py"
 INDEXED_ACTION_TYPES = ("routing", "escalation")
 
 # Retrieval is materially degraded well before catastrophic 50% coverage loss.
-# Keep a small append-lag allowance for live writers, but require the mirror to
-# cover nearly all live routing rows before startup/status calls it healthy.
+# Keep a small append-lag allowance for live writers, but require the live
+# FAISS/id_map mirror to cover nearly all live routing rows before health passes.
 HEALTH_THRESHOLD = 0.99
 MIN_ORPHANS_TO_REPAIR = 1000  # don't repair if delta is small (< this many orphans)
 DEFAULT_EMBEDDER_SERVERS = len(EMBEDDER_PORTS)
@@ -267,8 +271,6 @@ def diagnose(
         and (id_map_overlap_live >= HEALTH_THRESHOLD)
         and missing_id_count == 0
         and stale_id_count == 0
-        and (n_reembedded == 0 or overlap_live >= HEALTH_THRESHOLD)
-        and reembedded_stale_count == 0
     )
     faiss_orphan_count = max(0, n_db_indexed - n_faiss_vectors)
     id_map_orphan_count = missing_id_count if n_db_indexed else stale_id_count
@@ -276,8 +278,6 @@ def diagnose(
         faiss_orphan_count,
         id_map_orphan_count,
         stale_id_count,
-        reembedded_missing_count if n_reembedded else 0,
-        reembedded_stale_count,
     )
 
     return HealthReport(
@@ -313,11 +313,12 @@ def print_report(report: HealthReport) -> None:
     print(f"  id_map ⋂ live db:            {report.id_map_overlap_live:>10.1%}  (threshold ≥ {HEALTH_THRESHOLD:.0%})")
     print(f"  id_map missing live IDs:     {report.missing_id_count:>10,}")
     print(f"  id_map stale/duplicate IDs:  {report.stale_id_count:>10,}")
-    print(f"  reembedded ⋂ live db:        {report.overlap_live:>10.1%}  (threshold ≥ {HEALTH_THRESHOLD:.0%})")
-    print(f"  reembedded missing live IDs: {report.reembedded_missing_count:>10,}")
-    print(f"  reembedded stale/duplicates: {report.reembedded_stale_count:>10,}")
-    print(f"  Repairable lag/stale count:  {report.orphan_count:>10,}")
-    print(f"  Status:                      {'HEALTHY' if report.healthy else 'ORPHANED — repair recommended'}")
+    print(f"  Live repairable lag/stale:   {report.orphan_count:>10,}")
+    print(f"  Live status:                 {'HEALTHY' if report.healthy else 'ORPHANED — repair recommended'}")
+    print("  Training artifact diagnostic (non-blocking):")
+    print(f"    reembedded ⋂ live db:      {report.overlap_live:>10.1%}")
+    print(f"    missing live IDs:          {report.reembedded_missing_count:>10,}")
+    print(f"    stale/duplicates:          {report.reembedded_stale_count:>10,}")
     print("=" * 72)
 
 
@@ -821,7 +822,7 @@ def main() -> int:
     id_map_path = Path(args.id_map)
     reembedded_path = Path(args.reembedded)
 
-    report = diagnose(db_path, faiss_path, reembedded_path)
+    report = diagnose(db_path, faiss_path, reembedded_path, id_map_path)
     print_report(report)
 
     if args.diagnose_only:
@@ -853,7 +854,7 @@ def main() -> int:
         incremental=not args.full_rebuild,
     )
     print("\nRepair complete. Re-running diagnostic to verify:")
-    report2 = diagnose(db_path, faiss_path, reembedded_path)
+    report2 = diagnose(db_path, faiss_path, reembedded_path, id_map_path)
     print_report(report2)
     return 0 if report2.healthy else 2
 

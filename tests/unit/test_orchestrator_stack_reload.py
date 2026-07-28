@@ -1136,7 +1136,37 @@ def test_cmd_status_prints_episodic_embedding_health(monkeypatch, capsys) -> Non
     out = capsys.readouterr().out
     assert "Episodic FAISS: ORPHANED" in out
     assert "10/100 indexed vectors" in out
-    assert "90 repairable lag/stale" in out
+    assert "90 live repairable lag/stale" in out
+
+
+def test_episodic_status_keeps_legacy_training_artifact_non_blocking(monkeypatch) -> None:
+    from scripts.maintenance import repair_episodic_embeddings as repair
+
+    monkeypatch.setattr(
+        repair,
+        "diagnose",
+        lambda *_args, **_kwargs: repair.HealthReport(
+            n_db_routing=100,
+            n_faiss_vectors=100,
+            n_reembedded=900,
+            overlap_live=0.42,
+            faiss_coverage=1.0,
+            healthy=True,
+            orphan_count=0,
+            n_id_map=100,
+            id_map_overlap_live=1.0,
+            id_map_matches_faiss=True,
+            n_db_indexed=100,
+            reembedded_stale_count=800,
+        ),
+    )
+
+    line = stack_commands._episodic_embedding_status_line()
+
+    assert line.startswith("Episodic FAISS: healthy")
+    assert "ORPHANED" not in line
+    assert "0 live repairable lag/stale" in line
+    assert "training artifact reembedded overlap 42.0% (non-blocking, 800 stale)" in line
 
 
 def test_cmd_status_prints_mmproj_attestation_warning(monkeypatch, capsys) -> None:

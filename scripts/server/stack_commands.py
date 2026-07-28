@@ -668,8 +668,9 @@ def _episodic_embedding_status_line() -> str:
         f"id_map {report.n_id_map:,} ids / overlap {report.id_map_overlap_live:.1%} "
         f"missing {getattr(report, 'missing_id_count', 0):,} "
         f"stale {getattr(report, 'stale_id_count', 0):,}, "
-        f"{report.orphan_count:,} repairable lag/stale, "
-        f"reembedded overlap {report.overlap_live:.1%}"
+        f"{report.orphan_count:,} live repairable lag/stale; "
+        f"training artifact reembedded overlap {report.overlap_live:.1%} "
+        f"(non-blocking, {getattr(report, 'reembedded_stale_count', 0):,} stale)"
     )
 
 
@@ -990,7 +991,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     # Detects the orphan-FAISS condition where the live episodic.db has many more
     # routing memories than FAISS vectors — e.g. after a FAISS reset or a BGE
     # outage during write. KNN fallback (DAR-2 contrastive sharpening, low-confidence
-    # routing fallback) silently degrades in that state.
+    # routing fallback) silently degrades only when this live FAISS/id_map contract fails.
     #
     # Read-only by default — does not block startup. To repair, run:
     #   python3 scripts/maintenance/repair_episodic_embeddings.py --repair
@@ -1045,7 +1046,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                         print("[!] WARNING: repair did not restore health — proceeding anyway.")
                 else:
                     print(
-                        "[!] Episodic store is ORPHANED. KNN fallback path will silently degrade."
+                        "[!] Live episodic FAISS/id_map store is ORPHANED. KNN fallback may degrade."
                     )
                     print(
                         "    Repair: python3 scripts/maintenance/repair_episodic_embeddings.py --repair"
