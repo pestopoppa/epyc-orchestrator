@@ -714,6 +714,9 @@ def execute(args: argparse.Namespace) -> Path:
     health = V4.api_health(runner_args.api_url, runner_args.http_timeout_s)
     watcher = V4.RuntimeWatcher(runner_args, binding, watcher_path, expected_probe_urls=V4.probe_url_mapping(health), include_receipt=False)
     workspace = output / ".generation_workspace"
+    # RECOVERY owns files below the artifact root but expects its caller to
+    # create that root.  The mixed bridge passes a nested workspace instead.
+    workspace.mkdir(mode=0o700)
     watcher.start()
     try:
         V4.require_clean_watcher(watcher)

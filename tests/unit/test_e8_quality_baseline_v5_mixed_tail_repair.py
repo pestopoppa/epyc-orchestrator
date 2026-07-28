@@ -180,6 +180,14 @@ def test_sidecar_rewrite_preserves_every_unrelated_byte(tmp_path: Path) -> None:
     assert json.loads(output[1])["answer"] == "new"
 
 
+def test_generation_workspace_is_created_before_recovery_helper_runs() -> None:
+    source = PATH.read_text(encoding="utf-8")
+    workspace_creation = source.index("workspace.mkdir(mode=0o700)")
+    helper_call = source.index("RECOVERY._generate_with_watcher(")
+
+    assert workspace_creation < helper_call
+
+
 def test_journal_copy_removes_only_replaced_ordinals(tmp_path: Path) -> None:
     source = tmp_path / "source.jsonl"
     original = [
