@@ -90,6 +90,7 @@ reviewed_artifact_bindings_json() {
         "$VALIDATOR_PY" "$APPLIER" "$CANONICAL_APPLIER" <<'PY'
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -99,8 +100,11 @@ names = (
     "mixed_tail_repair_runner", "terminalizer_runner", "validator",
     "validator_python", "applier_adapter", "canonical_applier",
 )
-print(json.dumps({name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
-                  for name, path in zip(names, sys.argv[1:], strict=True)}, sort_keys=True))
+bindings = {name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            for name, path in zip(names, sys.argv[1:], strict=True)}
+if not os.environ.get("E8_V5_TERMINALIZER_RUNNER_SHA256"):
+    bindings.pop("terminalizer_runner")
+print(json.dumps(bindings, sort_keys=True))
 PY
 }
 
@@ -140,6 +144,10 @@ verify_reviewed_bindings() {
         [[ "$expected" =~ ^[0-9a-f]{64}$ && -f "$path" && "$(sha "$path")" == "$expected" ]] ||
             fail "reviewed artifact pin differs: $name"
     done
+    if [[ -n "${E8_V5_TERMINALIZER_RUNNER_SHA256:-}" ]]; then
+        [[ "$E8_V5_TERMINALIZER_RUNNER_SHA256" =~ ^[0-9a-f]{64}$ && "$(sha "$TERMINALIZER_RUNNER")" == "$E8_V5_TERMINALIZER_RUNNER_SHA256" ]] ||
+            fail 'reviewed artifact pin differs: E8_V5_TERMINALIZER_RUNNER_SHA256'
+    fi
 }
 case "${1:-}" in
     --stage-state-review)
@@ -232,12 +240,17 @@ output_path = Path(output_raw)
 source_root = Path(source_root_raw)
 interpreter = Path(interpreter_raw)
 bindings = json.loads(bindings_json)
-if not isinstance(bindings, dict) or set(bindings) != {
+required_bindings = {
     "wrapper", "producer", "runner", "resume_runner", "base_runner",
     "recovery_runner", "finalizer_runner", "successor_runner", "race_retry_runner",
     "mixed_tail_repair_runner", "validator",
     "validator_python", "applier_adapter", "canonical_applier",
-} or not all(isinstance(value, str) and len(value) == 64 for value in bindings.values()):
+}
+if os.environ.get("E8_V5_TERMINALIZER_RUNNER_SHA256"):
+    required_bindings.add("terminalizer_runner")
+if not isinstance(bindings, dict) or set(bindings) != required_bindings or not all(
+    isinstance(value, str) and len(value) == 64 for value in bindings.values()
+):
     raise SystemExit("ERROR: reviewed artifact binding set is malformed")
 spec = importlib.util.spec_from_file_location("e8_v5_state_review_adapter", adapter_path)
 if spec is None or spec.loader is None:
@@ -513,7 +526,6 @@ payload = {
         "successor_runner": sha(successor_runner),
         "race_retry_runner": sha(race_retry_runner),
         "mixed_tail_repair_runner": sha(mixed_tail_repair_runner),
-        "terminalizer_runner": sha(terminalizer_runner),
         "validator": sha(validator),
         "validator_python": sha(validator_py),
         "applier_adapter": sha(applier),
@@ -521,6 +533,8 @@ payload = {
     },
     "pre_state_sha256": pre, "candidate_state_sha256": candidate,
 }
+if os.environ.get("E8_V5_TERMINALIZER_RUNNER_SHA256"):
+    payload["reviewed_artifact_sha256"]["terminalizer_runner"] = sha(terminalizer_runner)
 def verify_existing() -> None:
     try:
         existing = json.loads(output.read_text())
