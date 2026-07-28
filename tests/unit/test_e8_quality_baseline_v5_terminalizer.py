@@ -80,3 +80,50 @@ def test_post_publish_fsync_failure_removes_terminal_output(
     with pytest.raises(OSError, match="injected post-publish"):
         TERMINALIZER.terminalize(FAILED_SOURCE, output, SOURCE_HASH)
     assert not output.exists()
+
+
+@pytest.mark.skipif(not FAILED_SOURCE.is_dir(), reason="sealed E8 failed source is host evidence")
+def test_cleanup_failure_leaves_an_unconsumable_unsealed_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "terminalized"
+    original_rename = TERMINALIZER._rename_noreplace
+    original_fsync = TERMINALIZER._fsync_dir
+    published = False
+
+    def rename(source: Path, destination: Path) -> None:
+        nonlocal published
+        original_rename(source, destination)
+        published = True
+
+    def fsync(path: Path) -> None:
+        if published and path == output.parent:
+            raise OSError("injected post-publish fsync failure")
+        original_fsync(path)
+
+    monkeypatch.setattr(TERMINALIZER, "_rename_noreplace", rename)
+    monkeypatch.setattr(TERMINALIZER, "_fsync_dir", fsync)
+    monkeypatch.setattr(TERMINALIZER.shutil, "rmtree", lambda *_args, **_kwargs: None)
+    with pytest.raises(OSError, match="injected post-publish"):
+        TERMINALIZER.terminalize(FAILED_SOURCE, output, SOURCE_HASH)
+    assert output.is_dir()
+    with pytest.raises(ValueError, match="completion seal"):
+        TERMINALIZER.MIXED.build_plan(
+            output, TERMINALIZER.canonical_hash(TERMINALIZER.RACE.source_hashes(output))
+        )
+
+
+@pytest.mark.skipif(not FAILED_SOURCE.is_dir(), reason="sealed E8 failed source is host evidence")
+@pytest.mark.parametrize("tamper", ["unlink", "rewrite"])
+def test_completion_seal_is_required_and_tamper_evident(tmp_path: Path, tamper: str) -> None:
+    output = tmp_path / "terminalized"
+    TERMINALIZER.terminalize(FAILED_SOURCE, output, SOURCE_HASH)
+    seal = output / TERMINALIZER.COMPLETION_NAME
+    if tamper == "unlink":
+        seal.unlink()
+    else:
+        seal.write_text("{}\n")
+    with pytest.raises(ValueError, match="completion seal"):
+        TERMINALIZER.MIXED.build_plan(
+            output, TERMINALIZER.canonical_hash(TERMINALIZER.RACE.source_hashes(output))
+        )
