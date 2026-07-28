@@ -211,12 +211,21 @@ def test_segmented_monitor_requires_gap_free_clean_claimed_segments() -> None:
         {"started_at": "2026-07-28T04:00:00Z", "ok": True},
         {"started_at": "2026-07-28T04:00:05Z", "ok": True},
     ]
-    validator.validate_segmented_monitor(
-        samples, [{"sample_indexes": [0, 1]}, {"sample_indexes": [2, 3]}]
-    )
-    with pytest.raises(ValueError, match="sampling gap"):
+    segments = [
+        {"source": "historical", "binding_sha256": "a" * 64, "sample_indexes": [0, 1]},
+        {"source": "resume", "binding_sha256": "b" * 64, "sample_indexes": [2, 3]},
+    ]
+    validator.validate_segmented_monitor(samples, segments)
+    with pytest.raises(ValueError, match="contiguous"):
         validator.validate_segmented_monitor(
-            samples, [{"sample_indexes": [0, 2]}, {"sample_indexes": [1, 3]}]
+            samples,
+            [
+                {"source": "historical", "binding_sha256": "a" * 64, "sample_indexes": [0, 2]},
+                {"source": "resume", "binding_sha256": "b" * 64, "sample_indexes": [1, 3]},
+            ],
         )
     with pytest.raises(ValueError, match="unclaimed"):
-        validator.validate_segmented_monitor(samples, [{"sample_indexes": [0, 1]}])
+        validator.validate_segmented_monitor(samples, segments[:1])
+    reversed_samples = [samples[1], samples[0], samples[2], samples[3]]
+    with pytest.raises(ValueError, match="sampling gap"):
+        validator.validate_segmented_monitor(reversed_samples, segments)
