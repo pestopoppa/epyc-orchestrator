@@ -385,7 +385,11 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
         lambda _binding, **_kwargs: {"capacity": recovery.V4.CONCURRENCY, "proof": "test"},
     )
     monkeypatch.setattr(
-        recovery, "_reconstruct_questions", lambda _args, _public, scoring: scoring["questions"]
+        recovery,
+        "_reconstruct_questions",
+        lambda _args, _public, scoring: [
+            {**question, "_reconstructed_only": True} for question in scoring["questions"]
+        ],
     )
     monkeypatch.setattr(
         recovery.V4, "capture_llm_judge_traces", lambda *_args, **_kwargs: nullcontext()
@@ -515,7 +519,8 @@ def test_execute_uses_original_ordinals_reconciles_scorer_and_stops_at_r2(
     _small_contract(monkeypatch)
     requests: list[list[int]] = []
     _patch_execute_environment(monkeypatch, requests)
-    output = recovery.execute(_args(_small_source(tmp_path), tmp_path / "output"))
+    source = _small_source(tmp_path)
+    output = recovery.execute(_args(source, tmp_path / "output"))
 
     assert requests == [[1, 3, 4]]
     journal = recovery.V4.load_jsonl(output / "recovery_rows.T2.r2.jsonl")
@@ -543,6 +548,16 @@ def test_execute_uses_original_ordinals_reconciles_scorer_and_stops_at_r2(
         "terminal_states": {"succeeded": 1},
     }
     assert marker["scorer_attempts_sha256"] == marker["scorer_attempts"]["sha256"]
+    scorer_attempts = recovery.V4.load_jsonl(output / "scorer_attempts.T2.r2.jsonl")
+    sealed_scoring_question = recovery.V4.load_json(source / "scoring_vector.T2.json")[
+        "questions"
+    ][2]
+    assert scorer_attempts[0]["scoring_question_sha256"] == recovery.canonical_hash(
+        sealed_scoring_question
+    )
+    assert scorer_attempts[0]["scoring_question_sha256"] != recovery.canonical_hash(
+        {**sealed_scoring_question, "_reconstructed_only": True}
+    )
     (output / "raw.T2.r2.json").write_text('{"q": 0}\n')
     assert marker["raw_sha256"] != recovery.sha256_path(output / "raw.T2.r2.json")
     assert (output / "r3_complete.json").exists() is False

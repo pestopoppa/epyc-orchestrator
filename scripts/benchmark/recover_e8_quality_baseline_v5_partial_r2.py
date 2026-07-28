@@ -496,6 +496,12 @@ def _record(
     rows[ordinal] = value
 
 
+def _sealed_scoring_question_sha256(
+    scoring_questions: list[dict[str, Any]], ordinal: int
+) -> str:
+    return canonical_hash(scoring_questions[ordinal])
+
+
 def _reconstruct_questions(
     args: argparse.Namespace, public: dict[str, Any], scoring: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -520,6 +526,7 @@ def _recover_saved_scorers(
     journal: Path,
     plan: dict[str, Any],
     questions: list[dict[str, Any]],
+    scoring_questions: list[dict[str, Any]],
     trace_path: Path,
     attempts_path: Path,
     api_url: str,
@@ -537,7 +544,9 @@ def _recover_saved_scorers(
                 "ordinal": ordinal,
                 "qid": response["qid"],
                 "saved_sidecar_sha256": canonical_hash(_SAVED_ROWS[ordinal]),
-                "scoring_question_sha256": canonical_hash(questions[ordinal]),
+                "scoring_question_sha256": _sealed_scoring_question_sha256(
+                    scoring_questions, ordinal
+                ),
             }
             _append_jsonl(attempts_path, {**attempt, "state": "started"})
             try:
@@ -810,6 +819,7 @@ def _refuse_unresolved_scorer_history(
     rows: dict[int, dict[str, Any]],
     plan: dict[str, Any],
     questions: list[dict[str, Any]],
+    scoring_questions: list[dict[str, Any]],
 ) -> None:
     """Reject scorer calls that cannot be proven not to have already occurred."""
     path = output / "scorer_attempts.T2.r2.jsonl"
@@ -821,7 +831,7 @@ def _refuse_unresolved_scorer_history(
         ordinal: (
             V4._question_qid(questions[ordinal]),
             canonical_hash(_SAVED_ROWS[ordinal]),
-            canonical_hash(questions[ordinal]),
+            _sealed_scoring_question_sha256(scoring_questions, ordinal),
         )
         for ordinal in plan["scorer_replay_ordinals"]
     }
@@ -877,6 +887,7 @@ def _scorer_attempts_evidence(
     rows: dict[int, dict[str, Any]],
     plan: dict[str, Any],
     questions: list[dict[str, Any]],
+    scoring_questions: list[dict[str, Any]],
 ) -> dict[str, Any]:
     path = output / "scorer_attempts.T2.r2.jsonl"
     expected_ordinals = list(plan["scorer_replay_ordinals"])
@@ -889,7 +900,7 @@ def _scorer_attempts_evidence(
         }
     if not path.is_file() or path.is_symlink():
         raise ValueError("partial-r2 scorer-attempt ledger is missing")
-    _refuse_unresolved_scorer_history(output, rows, plan, questions)
+    _refuse_unresolved_scorer_history(output, rows, plan, questions, scoring_questions)
     attempt_rows = V4.load_jsonl(path)
     expected = {
         ordinal: {
@@ -897,7 +908,9 @@ def _scorer_attempts_evidence(
             "ordinal": ordinal,
             "qid": V4._question_qid(questions[ordinal]),
             "saved_sidecar_sha256": canonical_hash(_SAVED_ROWS[ordinal]),
-            "scoring_question_sha256": canonical_hash(questions[ordinal]),
+            "scoring_question_sha256": _sealed_scoring_question_sha256(
+                scoring_questions, ordinal
+            ),
         }
         for ordinal in expected_ordinals
     }
@@ -1084,11 +1097,12 @@ def execute(args: argparse.Namespace) -> Path:
     }
     public = _load_vector(snapshot, "question_vector.T2.json")
     scoring = _load_vector(snapshot, "scoring_vector.T2.json")
+    scoring_questions = scoring["questions"]
     questions = _reconstruct_questions(runner_args, public, scoring)
     journal = output / "recovery_rows.T2.r2.jsonl"
     rows = _load_journal(journal)
     _refuse_failed_generation_history(output)
-    _refuse_unresolved_scorer_history(output, rows, plan, questions)
+    _refuse_unresolved_scorer_history(output, rows, plan, questions, scoring_questions)
     for ordinal in plan["reuse_ordinals"]:
         _record(
             journal,
@@ -1134,6 +1148,7 @@ def execute(args: argparse.Namespace) -> Path:
                         journal,
                         plan,
                         questions,
+                        scoring_questions,
                         output / "scorer_replay_traces.T2.r2.jsonl",
                         output / "scorer_attempts.T2.r2.jsonl",
                         args.api_url,
@@ -1206,7 +1221,9 @@ def execute(args: argparse.Namespace) -> Path:
     _complete_r2(output, snapshot, plan, rows, questions, args.api_url)
     if _source_hashes(source.resolve(strict=True)) != plan["source_sha256"]:
         raise ValueError("partial-r2 source changed during collection")
-    scorer_attempts = _scorer_attempts_evidence(output, rows, plan, questions)
+    scorer_attempts = _scorer_attempts_evidence(
+        output, rows, plan, questions, scoring_questions
+    )
     marker = V4.load_json(output / "r2_complete.json")
     marker.update(
         {
