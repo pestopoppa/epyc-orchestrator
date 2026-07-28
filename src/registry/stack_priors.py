@@ -271,6 +271,34 @@ def live_stack_role_records(path: Path = DEFAULT_OUTPUT) -> dict[str, dict[str, 
     return live
 
 
+def launcher_tenant_role_records(path: Path = DEFAULT_OUTPUT) -> dict[str, dict[str, Any]]:
+    """Return launcher-tenant stack-prior role records keyed by role name.
+
+    gpu-serving-tie-in P2-6 (P0-1): TENANT roles named by ``launcher_only``
+    launch-meta entries (``tenant_role`` key) compile with
+    ``deployment_status: launcher_tenant``. They are deliberately EXCLUDED from
+    ``live_stack_role_records`` so routing/lock/attestation consumers never see
+    them; only an explicitly-requested launcher-only start resolves them (via
+    ``orchestrator_stack._stack_prior_launch``). Empty today: no production
+    launch-meta entry carries ``tenant_role``.
+    """
+    artifact = load_stack_priors_artifact(path)
+    if artifact is None:
+        return {}
+    roles = artifact.get("roles")
+    if not isinstance(roles, dict):
+        return {}
+
+    tenants: dict[str, dict[str, Any]] = {}
+    for role, record in roles.items():
+        if not isinstance(role, str):
+            continue
+        if not isinstance(record, dict) or record.get("deployment_status") != "launcher_tenant":
+            continue
+        tenants[role] = record
+    return tenants
+
+
 def canonical_stack_role_id(role_name: str) -> str | None:
     """Return the canonical role ID for a known stack role or alias."""
     from src.roles import Role
@@ -912,6 +940,45 @@ def _stack_manifest_info(
                 launch_requirements,
             ),
         }
+        # gpu-serving-tie-in P2-6 (P0-1): a launcher-only entry may name a
+        # registry TENANT role (``tenant_role``). Synthesize a stack-role record
+        # for it so the priors compile can emit a resolvable launch record —
+        # marked ``launcher_only_tenant`` so ``_role_record`` classifies it
+        # ``launcher_tenant`` (NEVER ``live_stack``). Inert today: no production
+        # launch-meta entry carries ``tenant_role``.
+        if meta.get("launcher_only") is True:
+            tenant = meta.get("tenant_role")
+            if isinstance(tenant, str) and tenant and tenant not in roles:
+                tenant_mode = str(meta.get("mode") or "default")
+                shape = (
+                    _gpu_shadow_lane_serving_shape()
+                    if tenant_mode == "gpu_shadow_lane"
+                    else None
+                )
+                tenant_entries = (
+                    [
+                        {
+                            "port": port,
+                            "primary_role": str(primary),
+                            "mode": tenant_mode,
+                            "alias": False,
+                        }
+                    ]
+                    if isinstance(port, int)
+                    else []
+                )
+                roles[tenant] = {
+                    "tier": meta.get("tier"),
+                    "port": port,
+                    "ports": [port] if isinstance(port, int) else [],
+                    "url": f"http://localhost:{port}" if isinstance(port, int) else None,
+                    "effective_context_tokens": (
+                        shape.get("context_tokens") if isinstance(shape, dict) else None
+                    ),
+                    "launcher_only_tenant": True,
+                    "launcher_role": str(primary),
+                    "launch": _launch_record(tenant_entries),
+                }
         shared = meta.get("shared_with_first_n") if isinstance(meta, dict) else None
         if isinstance(shared, list):
             # WP-13 fleet convergence: an alias role (shared_with_first_n) is not a
@@ -950,6 +1017,25 @@ def _stack_manifest_info(
                         ),
                     }
     return aliases, roles
+
+
+def _gpu_shadow_lane_serving_shape() -> dict[str, int] | None:
+    """Resolve the GPU shadow lane's serving shape from POLICY DATA.
+
+    gpu-serving-tie-in P2-6 (P0-1c): slots/-np and context for a
+    ``gpu_shadow_lane``-mode launcher tenant come from the ``serving_shape``
+    block of ``orchestration/gpu_shadow_lane_np_ceiling.yaml`` — NEVER from the
+    CPU-mode launcher defaults (SERIAL_ROLES 2-slot, 32768-token context),
+    which are wrong for the lane. Returns None when the shape is missing or
+    invalid; callers surface that as a known_gap / null slots (refuse — the
+    pipeline gates catch it), never by guessing a shape.
+    """
+    try:
+        from scripts.server.gpu_shadow_lane import load_serving_shape
+
+        return load_serving_shape()
+    except Exception:
+        return None
 
 
 def _first_string(values: Any) -> str | None:
@@ -1285,12 +1371,21 @@ def _launch_runtime_record(
     if not binary_dir and primary_role in _V2_ROLES and LLAMA_SERVER_V2.exists():
         binary_path = str(LLAMA_SERVER_V2)
 
+    lane_shape: dict[str, int] | None = None
     if mode == "worker_pool":
         slots = 4 if worker_type == "fast" else 1
     elif mode == "vision":
         slots = 1 if vision_type == "escalation" else 2
     elif mode == "embedding":
         slots = 4
+    elif mode == "gpu_shadow_lane":
+        # gpu-serving-tie-in P2-6 (P0-1c): lane serving shape is DATA from the
+        # np_ceiling policy's serving_shape block — the CPU-mode defaults
+        # (SERIAL_ROLES -> 2 slots, 32768-token context) are wrong for the
+        # lane. Missing/invalid shape -> slots None (refused downstream via
+        # the launcher-tenant known_gap), never a guessed CPU default.
+        lane_shape = _gpu_shadow_lane_serving_shape()
+        slots = lane_shape.get("np_slots") if isinstance(lane_shape, dict) else None
     else:
         slots = 1 if primary_role in SERIAL_ROLES else 2
 
@@ -1454,6 +1549,12 @@ def _launch_runtime_record(
         context_tokens = DEFAULT_EFFECTIVE_CONTEXT_TOKENS
     if mode == "worker_pool" and worker_type == "explore":
         context_tokens = _worker_context_prior(role_cfg, fallback=context_tokens)
+    elif mode == "gpu_shadow_lane" and isinstance(lane_shape, dict):
+        # P0-1c: total -c = np_slots * slot_context_tokens from the serving_shape
+        # block (policy data), not the launcher's CPU-mode context default.
+        shape_context = lane_shape.get("context_tokens")
+        if isinstance(shape_context, int) and shape_context > 0:
+            context_tokens = shape_context
     worker_ubatch = _positive_int_prior(
         acceleration,
         key="ubatch",
@@ -1818,9 +1919,29 @@ def _role_record(
         launch_cfg,
     )
 
+    # gpu-serving-tie-in P2-6 (P0-1): a launcher-only entry's TENANT role
+    # (tenant_role meta key) compiles with its own deployment_status so
+    # live_stack consumers (routing, locks, attestation) never classify it
+    # live; only an explicitly-requested launcher-only start resolves it.
+    launcher_tenant = bool(
+        isinstance(launch_cfg, dict) and launch_cfg.get("launcher_only_tenant")
+    )
+    if launcher_tenant:
+        launch_runtime = stack_prior_launch({"serving": serving_record}).get("runtime")
+        runtime_cache = (
+            launch_runtime.get("cache") if isinstance(launch_runtime, dict) else None
+        )
+        if not isinstance(runtime_cache, dict) or not runtime_cache.get("slots"):
+            gaps.append(
+                "Missing launcher-tenant serving shape "
+                "(np_ceiling policy serving_shape block unresolved)"
+            )
+
     return {
         "role": role,
-        "deployment_status": "live_stack"
+        "deployment_status": "launcher_tenant"
+        if launcher_tenant
+        else "live_stack"
         if role in stack_roles
         else "benchmark_or_candidate",
         "status": "compiled_with_gaps" if gaps else "compiled",

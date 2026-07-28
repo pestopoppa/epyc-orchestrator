@@ -62,6 +62,14 @@ def collect_targets(
     for server in servers:
         port = server["port"]
         roles = list(server.get("roles") or [])
+        if server.get("gpu_shadow_lane"):
+            # gpu-serving-tie-in P2-6 (P2-4): the GPU shadow lane tenant loads
+            # into VRAM — a NUMA-interleaved page-cache prewarm of its ~28 GiB
+            # GGUF costs minutes and pins CPU page cache for no serving benefit.
+            # Inert today: no server entry carries this flag until the lane
+            # proposal is applied.
+            print(f"  [prewarm] skip port {port} (gpu_shadow_lane: VRAM-resident tenant)")
+            continue
         try:
             role_config = registry.get_role(roles[0]) if roles else None
         except Exception:

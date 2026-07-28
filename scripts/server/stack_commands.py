@@ -83,12 +83,20 @@ def _descriptor_active_roles() -> set[str]:
 
     `write_model_descriptors()` expands shared aliases from registry state on its
     own, so the launch helper only needs the canonical launch-role keys here.
+
+    gpu-serving-tie-in P2-6 (P0-1): launcher-only entries stay excluded, but a
+    registry TENANT role they name via the optional ``tenant_role`` meta key
+    compiles through (empty set today — no entry carries the key).
     """
-    return {
+    from src.registry.registry_compiler import launcher_tenant_roles
+
+    roles = {
         role
         for role, meta in ROLE_LAUNCH_META.items()
         if not (isinstance(meta, dict) and meta.get("launcher_only") is True)
     }
+    roles.update(launcher_tenant_roles(ROLE_LAUNCH_META))
+    return roles
 
 
 def wait_for_health(
@@ -1227,6 +1235,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         vision_mode = server.get("vision", False)
         vision_type = server.get("vision_type")
         eval_batch_frontdoor_mode = server.get("eval_batch_frontdoor", False)
+        # P2-6/P0-2: flag set only by a ROLE_LAUNCH_META entry with mode
+        # "gpu_shadow_lane" — absent until the lane proposal is applied.
+        gpu_shadow_lane_mode = server.get("gpu_shadow_lane", False)
         numa_instance = server.get("numa_instance", 0)
 
         info = start_server(
@@ -1240,6 +1251,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             vision_mode=vision_mode,
             vision_type=vision_type,
             eval_batch_frontdoor_mode=eval_batch_frontdoor_mode,
+            gpu_shadow_lane_mode=gpu_shadow_lane_mode,
             numa_instance=numa_instance,
         )
         if info:
@@ -1256,6 +1268,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                 or worker_pool_mode
                 or vision_mode
                 or eval_batch_frontdoor_mode
+                or gpu_shadow_lane_mode
             )
             if not args.dev and not is_optional:
                 return 1
@@ -1664,6 +1677,9 @@ def cmd_reload(args: argparse.Namespace) -> int:
             vision_mode = False
             vision_type = None
             eval_batch_frontdoor_mode = False
+            # P2-6/P0-2: set only by a gpu_shadow_lane-mode server entry —
+            # absent until the lane proposal is applied.
+            gpu_shadow_lane_mode = False
 
             numa_instance = 0
             for server in HOT_SERVERS + WARM_SERVERS:
@@ -1675,6 +1691,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                     vision_mode = server.get("vision", False)
                     vision_type = server.get("vision_type")
                     eval_batch_frontdoor_mode = server.get("eval_batch_frontdoor", False)
+                    gpu_shadow_lane_mode = server.get("gpu_shadow_lane", False)
                     numa_instance = server.get(
                         "numa_instance", 0
                     )  # fix: reload must preserve per-quarter -t
@@ -1699,6 +1716,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 vision_mode=vision_mode,
                 vision_type=vision_type,
                 eval_batch_frontdoor_mode=eval_batch_frontdoor_mode,
+                gpu_shadow_lane_mode=gpu_shadow_lane_mode,
                 numa_instance=numa_instance,
             )
             if info:

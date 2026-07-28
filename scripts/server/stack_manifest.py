@@ -329,6 +329,27 @@ LAUNCH_KV_QUANT_CONFIGS = {
 NO_SPEC_DECODE_ROLES: set[str] = set()
 KV_HADAMARD_ROLES = set(_V2_ROLES)
 
+# =============================================================================
+# GPU shadow lane launch constants (docs/gpu-shadow-lane.md; gpu-serving-tie-in
+# P2-6/P0-2). Tenancy is registry data: the launcher borrows priors from the
+# registry role below (eval_batch_frontdoor source_role pattern). Duty swap =
+# repoint the ONE tenant-role constant. These constants are INERT until the
+# registry proposal adds the `gpu_shadow_lane` ROLE_LAUNCH_META + NUMA_CONFIG +
+# PORT_MAP entries — no code path reaches them before then (the mode branch in
+# _build_servers_from_classification only fires for an entry with mode
+# "gpu_shadow_lane", and none exists).
+# =============================================================================
+
+GPU_SHADOW_LANE_TENANT_ROLE = "coder_escalation_shadow"
+GPU_SHADOW_LANE_DEVICE = "ROCm0"
+GPU_SHADOW_LANE_REASONING = "off"
+# Fallback serving shape ONLY (priors override at launch; the authoritative
+# source is the serving_shape block of orchestration/gpu_shadow_lane_np_ceiling.yaml,
+# compiled into the tenant's stack-prior cache by src/registry/stack_priors.py).
+# These mirror the phase2_resident_set default: -np 8 x 8192-token slots.
+GPU_SHADOW_LANE_FALLBACK_SLOTS = 8
+GPU_SHADOW_LANE_FALLBACK_CONTEXT_TOKENS = 65536
+
 DEV_MODEL = "Qwen2.5-Coder-0.5B-Instruct-Q8_0.gguf"
 DEV_MODEL_PATH = str(_PATHS["models_dir"] / DEV_MODEL)
 
@@ -528,6 +549,14 @@ def _build_servers_from_classification() -> tuple[list[dict], list[dict]]:
             mode_flags["embedding"] = True
         elif mode == "eval_batch_frontdoor":
             mode_flags["eval_batch_frontdoor"] = True
+        elif mode == "gpu_shadow_lane":
+            # gpu-serving-tie-in P2-6 (P0-2): mode branch for the GPU shadow
+            # lane launcher (docs/gpu-shadow-lane.md). INERT today — no
+            # ROLE_LAUNCH_META entry carries this mode until the registry
+            # proposal (docs/proposals/gpu-shadow-lane-registry-proposal.md)
+            # is applied at the operator-gated activation. Witnessed by
+            # tests/unit/test_gpu_shadow_lane.py (State-A inertness witness).
+            mode_flags["gpu_shadow_lane"] = True
 
         if meta.get("no_numa"):
             # Single port, no NUMA pinning (embedders, worker_fast, etc.)

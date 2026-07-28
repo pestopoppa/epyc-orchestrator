@@ -388,12 +388,17 @@ def _descriptor_policy_errors(generated: dict[str, Any]) -> list[str]:
 
 def _roles_from_stack_manifest() -> set[str]:
     from scripts.server.stack_manifest import ROLE_LAUNCH_META
+    from src.registry.registry_compiler import launcher_tenant_roles
 
     roles = set(ROLE_LAUNCH_META.keys())
     for meta in ROLE_LAUNCH_META.values():
         aliases = meta.get("shared_with_first_n") if isinstance(meta, dict) else None
         if isinstance(aliases, list):
             roles.update(str(alias) for alias in aliases)
+    # gpu-serving-tie-in P2-6 (P0-1): registry TENANT roles named by
+    # launcher-only entries (tenant_role meta key) must flow through the
+    # descriptor/priors pipeline too (empty today — no entry carries the key).
+    roles.update(launcher_tenant_roles(ROLE_LAUNCH_META))
     return roles
 
 

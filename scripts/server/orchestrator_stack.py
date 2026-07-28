@@ -78,6 +78,11 @@ from scripts.server.stack_manifest import (
     EMBEDDING_MODEL_PATH,
     EMBEDDING_SERVER_RECIPES,
     EXPLORE_DRAFT_MODEL,
+    GPU_SHADOW_LANE_DEVICE,
+    GPU_SHADOW_LANE_FALLBACK_CONTEXT_TOKENS,
+    GPU_SHADOW_LANE_FALLBACK_SLOTS,
+    GPU_SHADOW_LANE_REASONING,
+    GPU_SHADOW_LANE_TENANT_ROLE,
     LAUNCH_CONTEXT_TOKENS,
     LAUNCH_KV_QUANT_CONFIGS,
     NO_SPEC_DECODE_ROLES,
@@ -175,10 +180,25 @@ def _repo_short_sha(path: Path | None = None) -> str | None:
 
 
 def _stack_prior_launch(role_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return generated launch requirements/runtime for a live role, if usable."""
-    from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
+    """Return generated launch requirements/runtime for a live role, if usable.
+
+    gpu-serving-tie-in P2-6 (P0-1b): falls back to LAUNCHER-TENANT records
+    (``deployment_status: launcher_tenant`` — registry roles named by a
+    launcher-only entry's ``tenant_role`` meta key) so an explicitly-requested
+    launcher-only start (e.g. ``start --only gpu_shadow_lane``) can resolve its
+    launch record WITHOUT the role being classified live. Live records always
+    win on a name collision; routing consumers keep using
+    ``live_stack_role_records`` and never see tenant records.
+    """
+    from src.registry.stack_priors import (
+        launcher_tenant_role_records,
+        live_stack_role_records,
+        stack_prior_serving,
+    )
 
     record = live_stack_role_records(STACK_PRIORS_PATH).get(role_name)
+    if not isinstance(record, dict):
+        record = launcher_tenant_role_records(STACK_PRIORS_PATH).get(role_name)
     if not isinstance(record, dict):
         return {}, {}
     serving = stack_prior_serving(record)
@@ -892,6 +912,76 @@ def _build_eval_batch_frontdoor_command(port: int, numa_instance: int = 0) -> li
     return cmd
 
 
+def _build_gpu_shadow_lane_command(port: int, numa_instance: int = 0) -> list[str]:
+    """Role-agnostic GPU shadow lane (docs/gpu-shadow-lane.md; P2-6/P0-2).
+
+    INERT today: only reachable via the ``gpu_shadow_lane`` launch mode, which
+    no ROLE_LAUNCH_META entry carries until the registry proposal
+    (docs/proposals/gpu-shadow-lane-registry-proposal.md) is applied.
+
+    Tenant priors come from the registry role named by
+    GPU_SHADOW_LANE_TENANT_ROLE (tenancy as data; resolved through the
+    launcher-tenant stack-prior record). Serving shape (-np / -c) flows from
+    orchestration/gpu_shadow_lane_np_ceiling.yaml's serving_shape block via the
+    compiled priors cache — never from the CPU-mode launcher defaults. The
+    fallback literals mirror that same phase2 shape and exist only for the
+    degraded no-priors case; the preflight probe
+    (scripts/server/gpu_shadow_lane_preflight.py) verifies -np/-c against the
+    np_ceiling policy before any activation. MTP OFF per program decision D6:
+    no speculative args.
+    """
+    source_role = GPU_SHADOW_LANE_TENANT_ROLE
+    requirements, runtime = _stack_prior_launch(source_role)
+    cache = _runtime_cache(runtime)
+    flags = _runtime_flags(runtime)
+    cmd = [
+        _runtime_string(
+            runtime,
+            "binary_path",
+            "/mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server",
+        ),
+        "-m",
+        _runtime_string(requirements, "model_path", ""),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--metrics",
+        "--slots",
+        "--jinja",
+        "--device",
+        str(flags.get("device") or GPU_SHADOW_LANE_DEVICE),
+        "-ngl",
+        "all",
+        "-fa",
+        "on",
+        "-np",
+        _runtime_positive_int(cache, "slots", GPU_SHADOW_LANE_FALLBACK_SLOTS),
+        "-c",
+        _runtime_positive_int(
+            cache, "context_tokens", GPU_SHADOW_LANE_FALLBACK_CONTEXT_TOKENS
+        ),
+        "-t",
+        _resolve_thread_count("gpu_shadow_lane", numa_instance),
+        "-tb",
+        _resolve_thread_count("gpu_shadow_lane", numa_instance),
+        "-b",
+        "2048",
+        "-ub",
+        "2048",
+        "-ctk",
+        _runtime_string(cache, "kv_type_k", "f16"),
+        "-ctv",
+        _runtime_string(cache, "kv_type_v", "f16"),
+        "--log-colors",
+        "off",
+    ]
+    reasoning = flags.get("reasoning") or GPU_SHADOW_LANE_REASONING
+    if isinstance(reasoning, str) and reasoning:
+        cmd.extend(["--reasoning", reasoning])
+    return cmd
+
+
 # -----------------------------------------------------------------------------
 # Default-role builder sub-helpers (called by _build_role_command).
 # -----------------------------------------------------------------------------
@@ -1155,6 +1245,7 @@ def build_server_command(
     vision_mode: bool = False,
     vision_type: str = None,
     eval_batch_frontdoor_mode: bool = False,
+    gpu_shadow_lane_mode: bool = False,
     binary_override: str | None = None,
     numa_instance: int = 0,
 ) -> list[str]:
@@ -1175,6 +1266,11 @@ def build_server_command(
         cmd = _build_embedding_command(port)
     elif eval_batch_frontdoor_mode:
         cmd = _build_eval_batch_frontdoor_command(port, numa_instance)
+    elif gpu_shadow_lane_mode:
+        # P2-6/P0-2: fires only for a server entry carrying the gpu_shadow_lane
+        # mode flag — absent from every entry until the registry proposal is
+        # applied (State-A inertness witness in tests/unit/test_gpu_shadow_lane.py).
+        cmd = _build_gpu_shadow_lane_command(port, numa_instance)
     elif worker_pool_mode and worker_type:
         model_path = WORKER_POOL_MODELS.get(worker_type)
         if not model_path:
@@ -1202,6 +1298,7 @@ def start_server(
     vision_mode: bool = False,
     vision_type: str = None,
     eval_batch_frontdoor_mode: bool = False,
+    gpu_shadow_lane_mode: bool = False,
     numa_instance: int = 0,
 ) -> ProcessInfo | None:
     """Start a llama-server for the given roles."""
@@ -1264,6 +1361,73 @@ def start_server(
             )
 
         print("    [FAIL] Eval-batch frontdoor did not become healthy")
+        print(f"    Check log: {log_file}")
+        kill_process(proc.pid)
+        return None
+
+    # gpu-serving-tie-in P2-6/P0-2: GPU shadow lane (docs/gpu-shadow-lane.md).
+    # INERT today — reachable only when a server entry carries the
+    # gpu_shadow_lane mode flag, which no entry does until the registry
+    # proposal is applied. Explicit-only warm lane; never part of a normal
+    # `start` (same contract as eval_batch_frontdoor).
+    if gpu_shadow_lane_mode:
+        primary_role = roles[0]
+        source_role = GPU_SHADOW_LANE_TENANT_ROLE
+        log_file = LOG_DIR / f"gpu-shadow-lane-{port}.log"
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+        cmd = build_server_command(
+            None,
+            port,
+            gpu_shadow_lane_mode=True,
+            numa_instance=numa_instance,
+        )
+        requirements, _runtime = _stack_prior_launch(source_role)
+        model_path = _runtime_string(requirements, "model_path", "")
+        model_name = Path(model_path).name if model_path else "gpu shadow lane tenant"
+        binary_override, ld_paths = _stack_prior_runtime_overrides(source_role)
+
+        print(f"  Starting GPU shadow lane on port {port}: {model_name}")
+        print(f"    Roles: {', '.join(roles)} (tenant priors: {source_role})")
+        print(f"    Command: {' '.join(cmd[:6])}...")
+
+        try:
+            _write_llama_marker(port, roles, source=_FLEET_SRC_STACK, tmp_dir=_PATHS["tmp_dir"])
+        except Exception as exc:
+            print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
+
+        with open(log_file, "w") as log:
+            env = build_launch_env(source_role, os.environ.copy())
+            # HIP tree binary + LD paths come from the tenant's compiled priors
+            # (binary_dir/ld_library_path -> env_policy binary_override_strip_ggml).
+            _apply_runtime_requirements_env(
+                env,
+                binary_override=binary_override,
+                ld_paths=ld_paths,
+            )
+            proc = subprocess.Popen(
+                _numa_prefix(primary_role, numa_instance) + cmd,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                env=env,
+                **detached_stdio,
+            )
+
+        print(f"    PID: {proc.pid}")
+        print("    Waiting for health...")
+
+        if wait_for_health(port, timeout=max(_HEALTH_SERVER_STARTUP, 300)):
+            print("    [OK] GPU shadow lane ready")
+            return ProcessInfo(
+                role=primary_role,
+                pid=proc.pid,
+                port=port,
+                started_at=datetime.now().isoformat(),
+                model_path=model_path,
+                log_file=str(log_file),
+            )
+
+        print("    [FAIL] GPU shadow lane did not become healthy")
         print(f"    Check log: {log_file}")
         kill_process(proc.pid)
         return None

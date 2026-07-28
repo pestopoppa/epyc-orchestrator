@@ -161,6 +161,29 @@ def _resolve_role_dependencies(master: dict, active_roles: set[str]) -> set[str]
     return resolved
 
 
+def launcher_tenant_roles(launch_meta: dict[str, Any]) -> set[str]:
+    """Return registry TENANT roles named by launcher-only entries.
+
+    gpu-serving-tie-in P2-6 (P0-1 compile contract): a ``launcher_only`` entry
+    may name a registry role via the optional ``tenant_role`` meta key. The
+    launcher entry itself stays out of the compile inputs (it is a process
+    identity, not a model-routing role), but the named TENANT role must flow
+    through lean-registry / descriptor / stack-prior compilation so an
+    explicitly-requested launcher-only start can resolve its launch record.
+    No production ``ROLE_LAUNCH_META`` entry carries ``tenant_role`` today —
+    with the key absent everywhere this returns an empty set and every compile
+    output is byte-identical to the pre-key behavior (inert-by-construction).
+    """
+    tenants: set[str] = set()
+    for meta in launch_meta.values():
+        if not isinstance(meta, dict) or meta.get("launcher_only") is not True:
+            continue
+        tenant = meta.get("tenant_role")
+        if isinstance(tenant, str) and tenant:
+            tenants.add(tenant)
+    return tenants
+
+
 def active_roles_from_launch_meta(launch_meta: dict[str, Any]) -> set[str]:
     """Return compile input roles from launcher metadata, including aliases.
 
@@ -169,6 +192,11 @@ def active_roles_from_launch_meta(launch_meta: dict[str, Any]) -> set[str]:
     (`shared_with_first_n`), so they do not appear as top-level launch keys.
     The lean registry still needs their `roles.X` / `server_mode.X` records for
     routing, timeout, descriptor, and attestation consumers.
+
+    ``launcher_only`` entries are skipped (process identities, not roles), but
+    a launcher-only entry may name a registry TENANT role via the optional
+    ``tenant_role`` key (``launcher_tenant_roles``); the tenant compiles
+    through like an active role WITHOUT joining the live stack start-set.
     """
     active: set[str] = set()
     for role, meta in launch_meta.items():
@@ -181,6 +209,7 @@ def active_roles_from_launch_meta(launch_meta: dict[str, Any]) -> set[str]:
         aliases = meta.get("shared_with_first_n")
         if isinstance(aliases, list):
             active.update(str(alias) for alias in aliases)
+    active.update(launcher_tenant_roles(launch_meta))
     return active
 
 
