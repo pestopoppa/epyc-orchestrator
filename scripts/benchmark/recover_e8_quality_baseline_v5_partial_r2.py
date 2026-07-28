@@ -30,6 +30,7 @@ RESUME_PATH = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py
 PROTOCOL_ID = "e8_quality_full_pool_tier_baseline.v5"
 PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_plan.v1"
 PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_proposal.v1"
+SCORER_ATTEMPT_SCHEMA = "epyc.e8_quality_v5_partial_r2_scorer_attempt.v1"
 TIER = 2
 REPETITION = 2
 N = 500
@@ -520,6 +521,7 @@ def _recover_saved_scorers(
     plan: dict[str, Any],
     questions: list[dict[str, Any]],
     trace_path: Path,
+    attempts_path: Path,
     api_url: str,
 ) -> None:
     pending = [ordinal for ordinal in plan["scorer_replay_ordinals"] if ordinal not in rows]
@@ -530,18 +532,78 @@ def _recover_saved_scorers(
     with V4.capture_llm_judge_traces(trace_path, default_api_url=api_url):
         for ordinal in pending:
             response = _response_from_sidecar(_SAVED_ROWS[ordinal], questions[ordinal])
-            with V4.judge_trace_fixed_vector_identity(response["qid"]):
-                verdict, error = V4.score_answer_or_error(
-                    response["answer"],
-                    str(questions[ordinal].get("expected") or ""),
-                    "llm_judge",
-                    questions[ordinal].get("scoring_config") or {},
+            attempt = {
+                "schema": SCORER_ATTEMPT_SCHEMA,
+                "ordinal": ordinal,
+                "qid": response["qid"],
+                "saved_sidecar_sha256": canonical_hash(_SAVED_ROWS[ordinal]),
+                "scoring_question_sha256": canonical_hash(questions[ordinal]),
+            }
+            _append_jsonl(attempts_path, {**attempt, "state": "started"})
+            try:
+                with V4.judge_trace_fixed_vector_identity(response["qid"]):
+                    verdict, error = V4.score_answer_or_error(
+                        response["answer"],
+                        str(questions[ordinal].get("expected") or ""),
+                        "llm_judge",
+                        questions[ordinal].get("scoring_config") or {},
+                    )
+            except Exception as exc:
+                _append_jsonl(
+                    attempts_path,
+                    {**attempt, "state": "failed", "error": str(exc)},
                 )
+                raise
             if error is not None:
+                _append_jsonl(
+                    attempts_path,
+                    {**attempt, "state": "failed", "error": str(error)},
+                )
                 raise RuntimeError("partial-r2 scorer-only replay failed closed")
             response["correct"] = bool(verdict)
             response["error"] = None
             _record(journal, rows, ordinal, response, "scorer_replay")
+            _append_jsonl(attempts_path, {**attempt, "state": "succeeded"})
+
+
+def _generate_with_watcher(
+    watcher: Any,
+    output: Path,
+    args: argparse.Namespace,
+    questions: list[dict[str, Any]],
+    targets: list[int],
+) -> tuple[list[Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    import httpx
+
+    tower = V4.EvalTower(url=args.api_url.rstrip("/"), timeout=V5.REQUEST_TIMEOUT_S)
+    tower._question_artifact_dir = output / "eval_sidecars"
+    execution = [
+        {
+            **questions[ordinal],
+            "qid": V4._question_qid(questions[ordinal]),
+            "_ordinal": ordinal,
+            **V4.FRONTDOOR_REQUEST_CONTRACT,
+        }
+        for ordinal in targets
+    ]
+    trace = output / "generation_judge_traces.T2.r2.jsonl"
+    trace.touch(exist_ok=True)
+    with (
+        httpx.Client(timeout=tower.timeout) as client,
+        V4.fixed_baseline_environment(output / "eval_sidecars", args.api_url),
+        V4.capture_llm_judge_traces(trace, default_api_url=args.api_url),
+        V4.bind_eval_tower_scorer_identities(tower),
+    ):
+        V4.require_clean_watcher(watcher)
+        with watcher.active_load(tier=TIER, repetition=REPETITION):
+            watcher.sample()
+            V4.require_clean_watcher(watcher)
+            results = tower._eval_batch(execution, client, log_every=25, label="e8-t2-r2-recovery")
+            replayed = V4.replay_llm_judge_scorer_tail_once(results, execution)
+            watcher.sample()
+            V4.require_clean_watcher(watcher)
+        V4.require_clean_watcher(watcher)
+    return results, execution, replayed
 
 
 # Populated only inside collection after the immutable sidecar is validated.
@@ -743,6 +805,121 @@ def _refuse_failed_generation_history(output: Path) -> None:
     )
 
 
+def _refuse_unresolved_scorer_history(
+    output: Path,
+    rows: dict[int, dict[str, Any]],
+    plan: dict[str, Any],
+    questions: list[dict[str, Any]],
+) -> None:
+    """Reject scorer calls that cannot be proven not to have already occurred."""
+    path = output / "scorer_attempts.T2.r2.jsonl"
+    if not path.exists():
+        return
+    if path.is_symlink():
+        raise ValueError("partial-r2 scorer-attempt history is invalid")
+    expected = {
+        ordinal: (
+            V4._question_qid(questions[ordinal]),
+            canonical_hash(_SAVED_ROWS[ordinal]),
+            canonical_hash(questions[ordinal]),
+        )
+        for ordinal in plan["scorer_replay_ordinals"]
+    }
+    started: dict[tuple[int, str, str, str], dict[str, Any]] = {}
+    for row in V4.load_jsonl(path):
+        if not isinstance(row, dict) or row.get("schema") != SCORER_ATTEMPT_SCHEMA:
+            raise ValueError("partial-r2 scorer-attempt history is invalid")
+        ordinal = row.get("ordinal")
+        qid = row.get("qid")
+        sidecar_sha256 = row.get("saved_sidecar_sha256")
+        question_sha256 = row.get("scoring_question_sha256")
+        state = row.get("state")
+        if (
+            not isinstance(ordinal, int)
+            or not 0 <= ordinal < N
+            or not isinstance(qid, str)
+            or not qid
+            or not isinstance(sidecar_sha256, str)
+            or len(sidecar_sha256) != 64
+            or not isinstance(question_sha256, str)
+            or len(question_sha256) != 64
+            or state not in {"started", "succeeded", "failed"}
+        ):
+            raise ValueError("partial-r2 scorer-attempt history is invalid")
+        key = (ordinal, qid, sidecar_sha256, question_sha256)
+        if ordinal not in expected or key[1:] != expected[ordinal]:
+            raise ValueError("partial-r2 scorer-attempt history differs from sealed inputs")
+        if state == "started":
+            if key in started:
+                raise ValueError("partial-r2 scorer-attempt history has duplicate starts")
+            started[key] = row
+            continue
+        if key not in started:
+            raise ValueError("partial-r2 scorer-attempt history has an unpaired terminal record")
+        started.pop(key)
+        if state == "failed":
+            raise RuntimeError(
+                "partial-r2 has failed scorer-replay history; no automatic retry is authorized"
+            )
+        if rows.get(ordinal, {}).get("source") != "scorer_replay":
+            raise RuntimeError(
+                "partial-r2 scorer-replay success is missing its durable response; "
+                "no automatic retry is authorized"
+            )
+    if started:
+        raise RuntimeError(
+            "partial-r2 has unresolved scorer-replay history; no automatic retry is authorized"
+        )
+
+
+def _scorer_attempts_evidence(
+    output: Path,
+    rows: dict[int, dict[str, Any]],
+    plan: dict[str, Any],
+    questions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    path = output / "scorer_attempts.T2.r2.jsonl"
+    expected_ordinals = list(plan["scorer_replay_ordinals"])
+    if not expected_ordinals:
+        return {
+            "path": path.name,
+            "required": False,
+            "expected_terminal_count": 0,
+            "terminal_states": {},
+        }
+    if not path.is_file() or path.is_symlink():
+        raise ValueError("partial-r2 scorer-attempt ledger is missing")
+    _refuse_unresolved_scorer_history(output, rows, plan, questions)
+    attempt_rows = V4.load_jsonl(path)
+    expected = {
+        ordinal: {
+            "schema": SCORER_ATTEMPT_SCHEMA,
+            "ordinal": ordinal,
+            "qid": V4._question_qid(questions[ordinal]),
+            "saved_sidecar_sha256": canonical_hash(_SAVED_ROWS[ordinal]),
+            "scoring_question_sha256": canonical_hash(questions[ordinal]),
+        }
+        for ordinal in expected_ordinals
+    }
+    if len(attempt_rows) != 2 * len(expected):
+        raise ValueError("partial-r2 scorer-attempt ledger has an unexpected record count")
+    for ordinal, started in expected.items():
+        expected_records = [
+            {**started, "state": "started"},
+            {**started, "state": "succeeded"},
+        ]
+        actual_records = [row for row in attempt_rows if row.get("ordinal") == ordinal]
+        if actual_records != expected_records:
+            raise ValueError("partial-r2 scorer-attempt ledger lacks exact success evidence")
+    return {
+        "path": path.name,
+        "sha256": sha256_path(path),
+        "records": len(attempt_rows),
+        "expected_terminal_count": len(expected),
+        "terminal_states": {"succeeded": len(expected)},
+    }
+
+
 def _generation_targets(plan: dict[str, Any], rows: dict[int, dict[str, Any]]) -> list[int]:
     targets = [ordinal for ordinal in plan["generation_ordinals"] if ordinal not in rows]
     if any(
@@ -911,6 +1088,7 @@ def execute(args: argparse.Namespace) -> Path:
     journal = output / "recovery_rows.T2.r2.jsonl"
     rows = _load_journal(journal)
     _refuse_failed_generation_history(output)
+    _refuse_unresolved_scorer_history(output, rows, plan, questions)
     for ordinal in plan["reuse_ordinals"]:
         _record(
             journal,
@@ -919,9 +1097,6 @@ def execute(args: argparse.Namespace) -> Path:
             _response_from_sidecar(_SAVED_ROWS[ordinal], questions[ordinal]),
             "reuse",
         )
-    _recover_saved_scorers(
-        rows, journal, plan, questions, output / "scorer_replay_traces.T2.r2.jsonl", args.api_url
-    )
     generation_sidecar = output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
     failures = _harvest_generation_sidecar(
         generation_sidecar, rows, journal, questions, set(plan["generation_ordinals"])
@@ -932,27 +1107,13 @@ def execute(args: argparse.Namespace) -> Path:
             "partial-r2 generation has durable failed attempts; no automatic retry is authorized"
         )
     targets = _generation_targets(plan, rows)
+    pending_scorers = [ordinal for ordinal in plan["scorer_replay_ordinals"] if ordinal not in rows]
     r2_watch_evidence: dict[str, Any] | None = None
-    if targets:
+    if pending_scorers or targets:
         if os.environ.get("AUTOPILOT_EVAL_CONCURRENCY") != str(V4.CONCURRENCY):
             raise RuntimeError(
-                "AUTOPILOT_EVAL_CONCURRENCY must equal ratified c3 before generation"
+                "AUTOPILOT_EVAL_CONCURRENCY must equal ratified c3 before recovery inference"
             )
-        import httpx
-
-        tower = V4.EvalTower(url=args.api_url.rstrip("/"), timeout=V5.REQUEST_TIMEOUT_S)
-        tower._question_artifact_dir = output / "eval_sidecars"
-        execution = [
-            {
-                **questions[ordinal],
-                "qid": V4._question_qid(questions[ordinal]),
-                "_ordinal": ordinal,
-                **V4.FRONTDOOR_REQUEST_CONTRACT,
-            }
-            for ordinal in targets
-        ]
-        trace = output / "generation_judge_traces.T2.r2.jsonl"
-        trace.touch(exist_ok=True)
         health = V4.api_health(runner_args.api_url, runner_args.http_timeout_s)
         watcher = V4.RuntimeWatcher(
             runner_args,
@@ -962,65 +1123,72 @@ def execute(args: argparse.Namespace) -> Path:
             include_receipt=False,
         )
         watcher.start()
-        with (
-            httpx.Client(timeout=tower.timeout) as client,
-            V4.fixed_baseline_environment(output / "eval_sidecars", args.api_url),
-            V4.capture_llm_judge_traces(trace, default_api_url=args.api_url),
-            V4.bind_eval_tower_scorer_identities(tower),
-        ):
-            try:
-                V4.require_clean_watcher(watcher)
+        try:
+            V4.require_clean_watcher(watcher)
+            if pending_scorers:
                 with watcher.active_load(tier=TIER, repetition=REPETITION):
                     watcher.sample()
                     V4.require_clean_watcher(watcher)
-                    results = tower._eval_batch(
-                        execution, client, log_every=25, label="e8-t2-r2-recovery"
+                    _recover_saved_scorers(
+                        rows,
+                        journal,
+                        plan,
+                        questions,
+                        output / "scorer_replay_traces.T2.r2.jsonl",
+                        output / "scorer_attempts.T2.r2.jsonl",
+                        args.api_url,
                     )
-                    replayed = V4.replay_llm_judge_scorer_tail_once(results, execution)
                     watcher.sample()
                     V4.require_clean_watcher(watcher)
                 V4.require_clean_watcher(watcher)
-            finally:
-                watcher.stop()
+            if targets:
+                results, execution, replayed = _generate_with_watcher(
+                    watcher, output, args, questions, targets
+                )
+        finally:
+            watcher.stop()
         claim_after = _capture_recovery_claim(args)
         if claim_after != claim:
-            raise ValueError("partial-r2 held recovery claim changed during generation")
+            raise ValueError("partial-r2 held recovery claim changed during recovery inference")
         r2_watch_evidence = _watcher_evidence(
             output / "runtime_watch.r2.jsonl",
             proposal,
             claim_before=claim,
             claim_after=claim_after,
         )
-        fresh = V4.response_rows(results, execution)
-        if [row["qid"] for row in fresh] != [
-            V4._question_qid(question) for question in execution
-        ] or any(
-            row["route_used"] != "frontdoor"
-            or getattr(result, "eval_concurrency", 0) != V4.CONCURRENCY
-            for row, result in zip(fresh, results)
-        ):
-            raise RuntimeError("partial-r2 generation returned a non-c3 or wrong-vector result")
-        replaced = _reconcile_generation_scorer_sidecar(
-            generation_sidecar, fresh, execution, replayed
-        )
-        expected_replaced = sorted(
-            int(execution[int(row["ordinal"])]["_ordinal"]) for row in replayed
-        )
-        if replaced != expected_replaced:
-            raise ValueError("partial-r2 scorer replay did not reconcile its compact sidecar rows")
-        failures = _harvest_generation_sidecar(
-            generation_sidecar, rows, journal, questions, set(plan["generation_ordinals"])
-        )
-        if failures:
-            _record_failed_generation_attempts(output, failures)
-            raise RuntimeError(
-                "partial-r2 generation has durable failed attempts; no automatic retry is authorized"
+        if targets:
+            fresh = V4.response_rows(results, execution)
+            if [row["qid"] for row in fresh] != [
+                V4._question_qid(question) for question in execution
+            ] or any(
+                row["route_used"] != "frontdoor"
+                or getattr(result, "eval_concurrency", 0) != V4.CONCURRENCY
+                for row, result in zip(fresh, results)
+            ):
+                raise RuntimeError("partial-r2 generation returned a non-c3 or wrong-vector result")
+            replaced = _reconcile_generation_scorer_sidecar(
+                generation_sidecar, fresh, execution, replayed
             )
+            expected_replaced = sorted(
+                int(execution[int(row["ordinal"])]["_ordinal"]) for row in replayed
+            )
+            if replaced != expected_replaced:
+                raise ValueError(
+                    "partial-r2 scorer replay did not reconcile its compact sidecar rows"
+                )
+            failures = _harvest_generation_sidecar(
+                generation_sidecar, rows, journal, questions, set(plan["generation_ordinals"])
+            )
+            if failures:
+                _record_failed_generation_attempts(output, failures)
+                raise RuntimeError(
+                    "partial-r2 generation has durable failed attempts; no automatic retry is authorized"
+                )
     if _generation_targets(plan, rows):
         raise RuntimeError(
             "partial-r2 collection stopped before every permitted generation ordinal was durable"
         )
-    if r2_watch_evidence is None:
+    if r2_watch_evidence is None and (output / "runtime_watch.r2.jsonl").exists():
         claim_after = _capture_recovery_claim(args)
         if claim_after != claim:
             raise ValueError("partial-r2 held recovery claim changed before final sealing")
@@ -1030,12 +1198,24 @@ def execute(args: argparse.Namespace) -> Path:
             claim_before=claim,
             claim_after=claim_after,
         )
+    if r2_watch_evidence is None:
+        r2_watch_evidence = {
+            "required": False,
+            "reason": "no_pending_scorer_or_generation_request",
+        }
     _complete_r2(output, snapshot, plan, rows, questions, args.api_url)
     if _source_hashes(source.resolve(strict=True)) != plan["source_sha256"]:
         raise ValueError("partial-r2 source changed during collection")
+    scorer_attempts = _scorer_attempts_evidence(output, rows, plan, questions)
     marker = V4.load_json(output / "r2_complete.json")
     marker.update(
-        {"status": "intermediate_r2_complete", "watcher": r2_watch_evidence, "claim": claim}
+        {
+            "status": "intermediate_r2_complete",
+            "watcher": r2_watch_evidence,
+            "claim": claim,
+            "scorer_attempts": scorer_attempts,
+            "scorer_attempts_sha256": scorer_attempts.get("sha256"),
+        }
     )
     _write_json(output / "r2_complete.json", marker)
     return output
