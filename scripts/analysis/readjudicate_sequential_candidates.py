@@ -195,6 +195,23 @@ def main() -> int:
     log(f"  groups with only 1 trial: {sum(1 for k in ks if k == 1)}/{len(ks)}")
     log()
 
+    # SEQ-A: the persisted label vs what the policy's own pure function returns.
+    stuck = []
+    for (cand, core), rows_ in groups.items():
+        rows_.sort(key=lambda r: (r.get("k") or 0))
+        last = rows_[-1]
+        if last.get("state") == "refuted" and float(last["E_quality"]) >= pol.budget_min_e:
+            stuck.append((cand, last.get("k"), float(last["E_quality"])))
+    stuck.sort(key=lambda t: -t[2])
+    log("=== SEQ-A: STICKY REFUTED LABELS ===")
+    log(f"  candidates whose FINAL state is 'refuted' but whose E_quality >= budget_min_e"
+        f" ({pol.budget_min_e}): {len(stuck)}")
+    for c, k, e in stuck:
+        log(f"    {c}  k={k:>3}  E_quality={e:8.4f}")
+    log("  These are excluded from promotion AND positive strategy distillation")
+    log("  (learning_exclusions.py:111-119) by a condition they no longer meet.")
+    log()
+
     log("=== VERDICT ===")
     if confirmed:
         log("  A candidate CROSSES confirm_e on evidence already purchased. The")
