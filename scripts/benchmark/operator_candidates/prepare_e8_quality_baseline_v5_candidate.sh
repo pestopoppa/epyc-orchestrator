@@ -42,7 +42,8 @@ for binding in \
         fail "reviewed composite artifact pin differs: $name"
 done
 
-PYTHONOPTIMIZE=0 "$PYTHON" "$VALIDATOR" \
+env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 \
+    PYTHONOPTIMIZE=0 "$PYTHON" -I "$VALIDATOR" \
     --evidence "$2" \
     --expected-runner-sha256 "$E8_V5_RUNNER_SHA256" \
     --expected-base-runner-sha256 "$E8_V5_BASE_RUNNER_SHA256" \

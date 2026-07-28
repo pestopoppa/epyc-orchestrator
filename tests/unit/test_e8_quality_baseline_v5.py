@@ -4,7 +4,10 @@ from contextlib import nullcontext
 import importlib.util
 import json
 import hashlib
+import os
 from pathlib import Path
+import shlex
+import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -1517,9 +1520,13 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         "--expected-candidate-state-sha256",
         candidate_sha,
     ]
+    review_path = tmp_path / "state-candidate-review.json"
     env = {
-        **__import__("os").environ,
+        **os.environ,
         "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
+        "E8_V5_TEST_MODE": "1",
+        "E8_V5_TEST_REVIEW_PATH": str(review_path),
+        "PYTEST_CURRENT_TEST": os.environ.get("PYTEST_CURRENT_TEST", "e8-v5-review"),
         "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
         "E8_V5_PRODUCER_SHA256": hashlib.sha256(producer_path.read_bytes()).hexdigest(),
         "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
@@ -1544,6 +1551,17 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
             ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
         ).strip(),
     }
+    stage = subprocess.run(
+        ["bash", str(wrapper), "--stage-state-review", "--evidence", str(evidence)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert stage.returncode == 0, stage.stderr
+    review = json.loads(review_path.read_text())
+    assert review["state_candidate_review"]["pre_state_sha256"] == pre_sha
+    assert review["state_candidate_review"]["candidate_state_sha256"] == candidate_sha
     completed = subprocess.run(
         command,
         env=env,
@@ -1553,6 +1571,56 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     )
     assert completed.returncode == 0, completed.stderr
     assert "prevalidation passed" in completed.stdout
+
+    traversal_env = dict(env)
+    traversal_env["E8_V5_TEST_REVIEW_PATH"] = "/tmp/../etc/e8-v5-review.json"
+    traversal = subprocess.run(
+        command, env=traversal_env, capture_output=True, text=True, check=False
+    )
+    assert traversal.returncode != 0
+    assert "escapes /tmp after canonicalization" in traversal.stderr
+
+    symlink_path = tmp_path / "state-candidate-review-link.json"
+    symlink_path.symlink_to(review_path)
+    symlink_env = dict(env)
+    symlink_env["E8_V5_TEST_REVIEW_PATH"] = str(symlink_path)
+    symlink_rejected = subprocess.run(
+        command, env=symlink_env, capture_output=True, text=True, check=False
+    )
+    assert symlink_rejected.returncode != 0
+    assert "must have a real existing parent" in symlink_rejected.stderr
+
+    fifo_path = tmp_path / "state-candidate-review.fifo"
+    os.mkfifo(fifo_path)
+    fifo_env = dict(env)
+    fifo_env["E8_V5_TEST_REVIEW_PATH"] = str(fifo_path)
+    fifo_stage = subprocess.run(
+        ["bash", str(wrapper), "--stage-state-review", "--evidence", str(evidence)],
+        env=fifo_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert fifo_stage.returncode != 0
+    assert "regular non-symlink file" in fifo_stage.stderr
+    fifo_validation = subprocess.run(
+        command, env=fifo_env, capture_output=True, text=True, check=False
+    )
+    assert fifo_validation.returncode != 0
+    assert "regular non-symlink file" in fifo_validation.stderr
+
+    attest = [
+        "bash",
+        str(wrapper),
+        "--attest",
+        "ATTEST-E8-QUALITY-V5-GENERATION-TAIL-AND-BASELINE-APPLY-20260727",
+        *command[3:],
+    ]
+    attest_rejected = subprocess.run(
+        attest, env=env, capture_output=True, text=True, check=False
+    )
+    assert attest_rejected.returncode != 0
+    assert "not permitted for --attest" in attest_rejected.stderr
     assert state_path.read_bytes() == state_bytes
     assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
     lock_after = (
@@ -1578,6 +1646,95 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     )
     assert rejected.returncode != 0
     assert "reviewed artifact pin differs" in rejected.stderr
+
+    tampered = json.loads(review_path.read_text())
+    tampered["state_candidate_review"]["candidate_state_sha256"] = "0" * 64
+    review_path.write_text(json.dumps(tampered, indent=2, sort_keys=True) + "\n")
+    tamper_rejected = subprocess.run(
+        command, env=env, capture_output=True, text=True, check=False
+    )
+    assert tamper_rejected.returncode != 0
+    assert "state-candidate review differs" in tamper_rejected.stderr
+
+    review_path.unlink()
+    restage = subprocess.run(
+        ["bash", str(wrapper), "--stage-state-review", "--evidence", str(evidence)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert restage.returncode == 0, restage.stderr
+
+    wrong_source_env = dict(env)
+    wrong_source_env["E8_V5_SOURCE_ROOT"] = "/mnt/raid0/llm/epyc-orchestrator"
+    wrong_source = subprocess.run(
+        command, env=wrong_source_env, capture_output=True, text=True, check=False
+    )
+    assert wrong_source.returncode != 0
+    assert "source root does not own" in wrong_source.stderr
+
+    wrong_interpreter_env = dict(env)
+    wrong_interpreter_env["E8_V5_PYTHON"] = "/usr/bin/python3"
+    wrong_interpreter = subprocess.run(
+        command, env=wrong_interpreter_env, capture_output=True, text=True, check=False
+    )
+    assert wrong_interpreter.returncode != 0
+    assert "venv identity differs" in wrong_interpreter.stderr
+
+    fish_command = " ".join(
+        shlex.quote(part)
+        for part in ["bash", str(wrapper), *command[2:]]
+    )
+    fish = subprocess.run(
+        ["fish", "-c", fish_command],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert fish.returncode == 0, fish.stderr
+    assert "prevalidation passed" in fish.stdout
+
+    poison_dir = tmp_path / "poison"
+    poison_dir.mkdir()
+    (poison_dir / "sitecustomize.py").write_text("raise RuntimeError('poisoned import path')\n")
+    poison_env = dict(env)
+    poison_env["PYTHONPATH"] = str(poison_dir)
+    poison = subprocess.run(
+        command, env=poison_env, capture_output=True, text=True, check=False
+    )
+    assert poison.returncode == 0, poison.stderr
+
+    sandbox_root = tmp_path / "attest-root"
+    (sandbox_root / "artifacts" / "operator").mkdir(parents=True)
+    sandbox_state = tmp_path / "attest-state.json"
+    shutil.copyfile(state_path, sandbox_state)
+    sandbox_lock = tmp_path / "locks" / "e8.lock"
+    sandbox_lock.parent.mkdir()
+    sandbox_env = dict(env)
+    sandbox_env.pop("E8_V5_TEST_REVIEW_PATH")
+    sandbox_env.update(
+        {
+            "E8_V5_OPERATOR_ROOT": str(sandbox_root),
+            "E8_V5_STATE": str(sandbox_state),
+            "E8_V5_LOCK_PATH": str(sandbox_lock),
+        }
+    )
+    sandbox_stage = subprocess.run(
+        ["bash", str(wrapper), "--stage-state-review", "--evidence", str(evidence)],
+        env=sandbox_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert sandbox_stage.returncode == 0, sandbox_stage.stderr
+    sandbox_attest = subprocess.run(
+        attest, env=sandbox_env, capture_output=True, text=True, check=False
+    )
+    assert sandbox_attest.returncode == 0, sandbox_attest.stderr
+    assert sandbox_state.read_bytes() != state_bytes
+    assert list((sandbox_root / "artifacts" / "operator").glob("*.ratification.json"))
     assert state_path.read_bytes() == state_bytes
     assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
     bad_lock_after = (
