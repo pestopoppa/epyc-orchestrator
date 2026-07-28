@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import importlib.util
 import json
 from pathlib import Path
@@ -302,16 +302,29 @@ class _FakeWatcher:
     def __init__(self, _runner_args, _binding, path: Path, **_kwargs) -> None:
         self.started = False
         self.path = path
+        self.samples: list[dict] = recovery.V4.load_jsonl(path) if path.exists() else []
+        self._active_load: dict[str, int] | None = None
+
+    def sample(self) -> None:
+        sample = {"ok": True, "active_load": self._active_load}
+        self.samples.append(sample)
+        _write(self.path, self.samples)
 
     def start(self) -> None:
         self.started = True
-        _write(self.path, [{"event": "started"}])
+        self.sample()
 
     def stop(self) -> list[dict]:
-        return [{"ok": self.started}]
+        self.sample()
+        return list(self.samples)
 
+    @contextmanager
     def active_load(self, **_kwargs):
-        return nullcontext()
+        self._active_load = {"tier": _kwargs["tier"], "repetition": _kwargs["repetition"]}
+        try:
+            yield
+        finally:
+            self._active_load = None
 
 
 def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[list[int]]) -> None:
@@ -367,7 +380,18 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
             requests.append([int(row["_ordinal"]) for row in execution])
             assert self._question_artifact_dir is not None
             path = self._question_artifact_dir / "question_results.e8-t2-r2-recovery.jsonl"
-            rows = []
+            batch_id = f"batch-{len(requests)}"
+            rows = recovery.V4.load_jsonl(path) if path.exists() else []
+            rows.append(
+                {
+                    "row_type": "batch_start",
+                    "eval_batch_id": batch_id,
+                    "label": "e8-t2-r2-recovery",
+                    "requested_n": len(execution),
+                    "concurrency": recovery.V4.CONCURRENCY,
+                    "complete": False,
+                }
+            )
             for row in execution:
                 qid = row["qid"]
                 scorer_error = qid == "q-4"
@@ -386,11 +410,21 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
                 rows.append(
                     {
                         "row_type": "question_result",
+                        "eval_batch_id": batch_id,
                         "ordinal": row["_ordinal"],
                         "answer": answer,
                         "result": result,
                     }
                 )
+            rows.append(
+                {
+                    "row_type": "batch_complete",
+                    "eval_batch_id": batch_id,
+                    "label": "e8-t2-r2-recovery",
+                    "requested_n": len(execution),
+                    "complete": True,
+                }
+            )
             _write(path, rows)
             return [
                 _FakeResult(
@@ -460,6 +494,38 @@ def test_execute_uses_original_ordinals_reconciles_scorer_and_stops_at_r2(
     assert (output / "raw.T2.r2.json").is_file()
 
 
+def test_resume_after_durable_generation_reuses_complete_watcher_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _small_contract(monkeypatch)
+    requests: list[list[int]] = []
+    _patch_execute_environment(monkeypatch, requests)
+    source = _small_source(tmp_path)
+    output = tmp_path / "output"
+    complete = recovery._complete_r2
+    monkeypatch.setattr(
+        recovery,
+        "_complete_r2",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("crash before r2 complete")),
+    )
+    with pytest.raises(RuntimeError, match="crash before r2 complete"):
+        recovery.execute(_args(source, output))
+    watcher_rows = recovery.V4.load_jsonl(output / "runtime_watch.r2.jsonl")
+    assert watcher_rows and all(row["ok"] is True for row in watcher_rows)
+    assert any(row["active_load"] == {"tier": 2, "repetition": 2} for row in watcher_rows)
+
+    monkeypatch.setattr(recovery, "_complete_r2", complete)
+    recovery.execute(_args(source, output))
+
+    marker = recovery.V4.load_json(output / "r2_complete.json")
+    assert requests == [[1, 3, 4]]
+    assert marker["watcher"]["samples"] == len(watcher_rows)
+    assert marker["watcher"]["sha256"] == recovery.sha256_path(output / "runtime_watch.r2.jsonl")
+    assert marker["watcher"]["proposal_sha256"] == recovery.sha256_path(
+        output / "recovery_proposal.json"
+    )
+
+
 def test_interrupted_generation_harvests_clean_rows_and_requests_only_remaining(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -490,6 +556,20 @@ def test_interrupted_generation_harvests_clean_rows_and_requests_only_remaining(
     assert requests == [[1], [3, 4]]
     journal = recovery.V4.load_jsonl(output / "recovery_rows.T2.r2.jsonl")
     assert {row["ordinal"] for row in journal} == set(range(5))
+    sidecar = recovery.V4.load_jsonl(
+        output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
+    )
+    assert {row["ordinal"] for row in sidecar if row.get("row_type") == "question_result"} == {
+        1,
+        3,
+        4,
+    }
+    scorer_row = next(row for row in sidecar if row.get("ordinal") == 4)
+    assert scorer_row["result"].get("error") is None
+    watcher = recovery.V4.load_jsonl(output / "runtime_watch.r2.jsonl")
+    assert all(row["ok"] is True for row in watcher)
+    assert all(row["active_load"] in (None, {"tier": 2, "repetition": 2}) for row in watcher)
+    assert any(row["active_load"] == {"tier": 2, "repetition": 2} for row in watcher)
 
 
 def test_failed_attempt_history_fails_closed_before_any_request(

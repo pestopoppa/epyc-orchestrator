@@ -581,6 +581,24 @@ def _reconcile_generation_scorer_sidecar(
     if len(fresh) != len(execution):
         raise ValueError("partial-r2 scorer replay result/execution count differs")
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    parsed = [json.loads(line) for line in lines]
+    batch_starts = [
+        row
+        for row in parsed
+        if isinstance(row, dict)
+        and row.get("row_type") == "batch_start"
+        and row.get("label") == "e8-t2-r2-recovery"
+    ]
+    if not batch_starts:
+        raise ValueError("partial-r2 generation sidecar lacks a current batch start")
+    batch_id = batch_starts[-1].get("eval_batch_id")
+    if (
+        not isinstance(batch_id, str)
+        or not batch_id
+        or batch_starts[-1].get("requested_n") != len(execution)
+        or batch_starts[-1].get("concurrency") != V4.CONCURRENCY
+    ):
+        raise ValueError("partial-r2 generation sidecar current batch identity is invalid")
     indexed: dict[int, tuple[int, dict[str, Any]]] = {}
     expected_ordinals: set[int] = set()
     for position, question in enumerate(execution):
@@ -594,9 +612,12 @@ def _reconcile_generation_scorer_sidecar(
         if fresh[position].get("qid") != V4._question_qid(question):
             raise ValueError("partial-r2 scorer replay result differs from execution vector")
         expected_ordinals.add(ordinal)
-    for line_index, line in enumerate(lines):
-        row = json.loads(line)
-        if not isinstance(row, dict) or row.get("row_type") != "question_result":
+    for line_index, row in enumerate(parsed):
+        if (
+            not isinstance(row, dict)
+            or row.get("row_type") != "question_result"
+            or row.get("eval_batch_id") != batch_id
+        ):
             continue
         ordinal = row.get("ordinal")
         if (
@@ -638,6 +659,49 @@ def _reconcile_generation_scorer_sidecar(
         lines[line_index] = json.dumps(replacement, sort_keys=True) + "\n"
     V4.write_text(path, "".join(lines))
     return sorted(replacements)
+
+
+def _claim_binding(claim: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "tag": str(claim["claims"][0]["payload"]["request_tag"]),
+        "regions": sorted(str(row["payload"]["region"]) for row in claim["claims"]),
+    }
+
+
+def _watcher_evidence(
+    path: Path,
+    proposal: dict[str, Any],
+    *,
+    claim_before: dict[str, Any],
+    claim_after: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate the complete append-only r2 watcher before final sealing."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError("partial-r2 runtime watcher evidence is missing")
+    proposal_claim = proposal.get("region_claim")
+    if (
+        not isinstance(proposal_claim, dict)
+        or proposal_claim != _claim_binding(claim_before)
+        or _claim_binding(claim_after) != proposal_claim
+    ):
+        raise ValueError("partial-r2 watcher claim differs from its sealed proposal")
+    samples = V4.load_jsonl(path)
+    expected_load = {"tier": TIER, "repetition": REPETITION}
+    if (
+        not samples
+        or any(not isinstance(sample, dict) or sample.get("ok") is not True for sample in samples)
+        or any(sample.get("active_load") not in (None, expected_load) for sample in samples)
+        or not any(sample.get("active_load") == expected_load for sample in samples)
+    ):
+        raise ValueError("partial-r2 runtime watcher is not clean and load-bound")
+    return {
+        "path": str(path),
+        "sha256": sha256_path(path),
+        "samples": len(samples),
+        "claim_before": claim_before,
+        "claim_after": claim_after,
+        "proposal_sha256": sha256_path(path.parent / "recovery_proposal.json"),
+    }
 
 
 def _record_failed_generation_attempts(output: Path, failures: list[dict[str, Any]]) -> None:
@@ -881,22 +945,26 @@ def execute(args: argparse.Namespace) -> Path:
             try:
                 V4.require_clean_watcher(watcher)
                 with watcher.active_load(tier=TIER, repetition=REPETITION):
+                    watcher.sample()
+                    V4.require_clean_watcher(watcher)
                     results = tower._eval_batch(
                         execution, client, log_every=25, label="e8-t2-r2-recovery"
                     )
                     replayed = V4.replay_llm_judge_scorer_tail_once(results, execution)
+                    watcher.sample()
+                    V4.require_clean_watcher(watcher)
                 V4.require_clean_watcher(watcher)
             finally:
-                samples = watcher.stop()
-        if _capture_recovery_claim(args) != claim:
+                watcher.stop()
+        claim_after = _capture_recovery_claim(args)
+        if claim_after != claim:
             raise ValueError("partial-r2 held recovery claim changed during generation")
-        r2_watch_evidence = {
-            "path": str(output / "runtime_watch.r2.jsonl"),
-            "sha256": sha256_path(output / "runtime_watch.r2.jsonl"),
-            "samples": len(samples),
-            "claim_before": claim,
-            "claim_after": _capture_recovery_claim(args),
-        }
+        r2_watch_evidence = _watcher_evidence(
+            output / "runtime_watch.r2.jsonl",
+            proposal,
+            claim_before=claim,
+            claim_after=claim_after,
+        )
         fresh = V4.response_rows(results, execution)
         if [row["qid"] for row in fresh] != [
             V4._question_qid(question) for question in execution
@@ -925,6 +993,16 @@ def execute(args: argparse.Namespace) -> Path:
     if _generation_targets(plan, rows):
         raise RuntimeError(
             "partial-r2 collection stopped before every permitted generation ordinal was durable"
+        )
+    if r2_watch_evidence is None:
+        claim_after = _capture_recovery_claim(args)
+        if claim_after != claim:
+            raise ValueError("partial-r2 held recovery claim changed before final sealing")
+        r2_watch_evidence = _watcher_evidence(
+            output / "runtime_watch.r2.jsonl",
+            proposal,
+            claim_before=claim,
+            claim_after=claim_after,
         )
     _complete_r2(output, snapshot, plan, rows, questions, args.api_url)
     if _source_hashes(source.resolve(strict=True)) != plan["source_sha256"]:
