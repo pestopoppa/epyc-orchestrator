@@ -1,0 +1,5 @@
+{
+  "_comment": "Lane host threads on the SMT siblings 184-191 (GPU host-thread rule).",
+  "pid": 424242,
+  "cpus_allowed_list": "184-191"
+}

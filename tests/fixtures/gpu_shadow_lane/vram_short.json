@@ -1,0 +1,6 @@
+{
+  "_comment": "Negative fixture: a foreign tenant already holds most of the device, so weights+dynamic do not fit. Must FAIL.",
+  "total_gib": 40.0,
+  "used_gib": 3.2,
+  "compute_pids": [999001, 999002]
+}

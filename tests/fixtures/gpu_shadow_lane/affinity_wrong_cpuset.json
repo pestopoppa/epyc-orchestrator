@@ -1,0 +1,5 @@
+{
+  "_comment": "Negative fixture: pinned to the PHYSICAL cores 88-95 instead of their SMT siblings. Folds to the same physical cores, so a physical-core-only check passes it -- the exact-string check is what must fail. This is why judge_affinity reports both.",
+  "pid": 424243,
+  "cpus_allowed_list": "88-95"
+}

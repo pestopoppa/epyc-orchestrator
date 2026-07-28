@@ -1,0 +1,212 @@
+# Tenancy table for the GPU-resident shadow lane (gpu_shadow_lane).
+#
+# TENANCY AS DATA (gpu-serving-tie-in-program P2-1). The engineering
+# deliverable is the SLOT; which model serves on it, under which mode, bound to
+# which duty roles, is data in this file. Swapping tenants (e.g. stock-27B -> FF
+# after the P3 bake-off) is an edit here plus the State-A/State-B choreography
+# in docs/gpu-shadow-lane.md — never a code change.
+#
+# Loader: scripts/server/gpu_shadow_lane_tenancy.py, behind the default-off
+# ORCHESTRATOR_FEATURE_GPU_SHADOW_LANE flag. Nothing in the production launch or
+# routing path reads this file. The launch layer this file feeds emits PROPOSAL
+# DIFFS ONLY — the master registry is FROZEN (program decision D3).
+#
+# Invariants the loader ENFORCES (it refuses to load otherwise):
+#   1. resident_state must be `state_a` (lane absent). State B is reached only
+#      by the operator running the activation choreography; a data file cannot
+#      declare the lane resident.
+#   2. Every tenant names an np_policy_tenant that EXISTS in
+#      orchestration/gpu_shadow_lane_np_ceiling.yaml. A tenant without its own
+#      policy row is refused — never silently reuses another tenant's ceilings.
+#      (Motivating defect, P2-4 finding P1-4: the FF GGUF is 27.74 GiB, not
+#      "identical to stock's 26.70 GiB"; reusing one row across both would have
+#      mis-budgeted VRAM by ~1 GiB on a tenant swap.)
+#   3. model.bytes must match the policy row's model_bytes when that row
+#      declares one.
+#   4. Every role binding is shadow: true. A binding naming a production role
+#      (frontdoor, coder_escalation, worker_general, ...) is refused — D3 is
+#      enforced at the data layer, not by reviewer vigilance.
+#   5. A tenant whose sha256 is unattested is loadable for PLANNING but is not
+#      activatable (activation_blockers is non-empty).
+
+version: 1
+lane: gpu_shadow_lane
+
+# --------------------------------------------------------------------------
+# The slot itself. Every value here is a lane property, never a tenant one.
+# --------------------------------------------------------------------------
+slot:
+  device: ROCm0
+  port: 18100  # explicit-only high-port lane range; clear of operator-owned 18072
+  # GPU host-thread rule: host threads live on the SMT siblings 184-191, never
+  # on physical cores 88-95. The physical cores those siblings sit on are what
+  # the CPU region claim covers (see region_claim below).
+  host_cpuset: "184-191"
+  host_threads: 8
+  binary:
+    dir: /mnt/raid0/llm/llama.cpp/build-hip/bin
+    version: "10107"
+    commit: 67a433bf4
+    freeze: production-consolidated-v8 (2026-07-25 final freeze)
+  # ══════════════════════════════════════════════════════════════════════════
+  # PROGRAM CONSTRAINT (operator-accepted 2026-07-28): AN IDLE MI210 DOES NOT
+  # IMPLY A STARTABLE LANE.
+  #
+  # This lane is not a pure GPU resource. Its host threads pin to the SMT
+  # siblings 184-191, whose PHYSICAL cores are 88-95, which are atomic CPU
+  # region **q3**. Occupying the lane therefore requires holding q3's flock —
+  # the same lock the production CPU roles take.
+  #
+  # MEASURED, not inferred (`scripts/region-lock status`, 2026-07-28T16:2xZ):
+  #     q0  HELD   frontdoor[1]
+  #     q1  HELD   frontdoor[2]
+  #     q2  free
+  #     q3  HELD   bench-e8-quality   e8-v5-r2-cadencefix-20260728T160917Z
+  # Concurrently, `rocm-smi` reported VRAM 0% and no KFD PIDs — the GPU was
+  # completely idle while the lane was NOT startable.
+  #
+  # Consequence for anyone scheduling this lane: "the GPU looks free" is not a
+  # precondition, it is not exclusion, and it is not evidence. Activation needs
+  # a q3 claim that would force a deadline-bearing CPU campaign to yield, and a
+  # holder is only ever asked to quiesce-and-drain at its own boundary — never
+  # forced, never killed (fabric axiom 4 / BUS_PROTOCOL rule 8).
+  # ══════════════════════════════════════════════════════════════════════════
+  #
+  # Fabric axiom 1: ONE fact per physical resource — the flock. This block says
+  # which flocks the lane must HOLD (never observe) before occupying anything.
+  region_claim:
+    # Role name used for the CPU region lock files. Not a registry role.
+    lock_role: gpu_shadow_lane
+    # The host cpuset is SMT siblings; the atomic CPU regions are derived by
+    # folding sibling N -> physical core N-96, then mapping to q0..q3. Raw
+    # string overlap does NOT find this (184-191 shares no literal CPU id with
+    # architect_general's "0-95") — P2-4 finding P1-2.
+    cpu_regions_from: host_cpuset_smt_folded
+    # The GPU is a distinct physical resource and gets its OWN flock. It is not
+    # a CPU region and must never be modelled as one.
+    device_lock: true
+
+# --------------------------------------------------------------------------
+# Residency state. State A = lane absent (the rollback state AND the only state
+# this file may declare). See docs/gpu-shadow-lane.md §2.
+# --------------------------------------------------------------------------
+resident_state: state_a
+resident_tenant: null  # set by the operator's activation, never by an edit here
+
+# --------------------------------------------------------------------------
+# Tenants. Each is a candidate; none is resident (see resident_state).
+# --------------------------------------------------------------------------
+tenants:
+  # Bake-off arm 1 (program D7): stock dense-hybrid Qwen3.6-27B Q8_0.
+  qwen36_27b_stock_q8:
+    status: bake_off_arm  # P3-1 arm; tenancy decided by P3-2 + operator P3-3
+    description: Stock Qwen3.6-27B dense-hybrid Q8_0 — the D2 first tenant candidate.
+    np_policy_tenant: qwen36_27b_stock_q8
+    model:
+      path: /mnt/raid0/llm/models/Qwen_Qwen3.6-27B-Q8_0.gguf
+      bytes: 28665067072
+      sha256: 5927dc06c2b19f732fb6e2a6546dff4c130b552f2ab5f91feb3daafe43897b2a
+      sha256_status: attested  # docs/gpu-shadow-lane.md §7 Step 0 P4
+    mode:
+      # D6: MTP is a LAUNCH property of v8 (params.speculative is global; no
+      # request-level override). Toggling = drained-lane relaunch at a boundary.
+      mtp: false
+      reasoning: false
+    role_bindings:
+      - role: coder_escalation_shadow
+        shadow: true
+        duty: coder
+        admission_class: escalations  # docs/gpu-shadow-lane.md §3 class 1
+        note: >-
+          Shadow twin of coder_escalation. coder_escalation itself stays A4-bound
+          (D3); this role never appears in a production routing table until P3-3.
+      - role: co_critic_shadow
+        shadow: true
+        duty: co_critic
+        admission_class: escalations
+        note: Typed-verdict duty scored separately in the P3-1 bake-off.
+
+  # Bake-off arm 2 (program D7): the Fable-Fusion merge. THIS is the arm the v8
+  # np x context grid actually measured — see the np_ceiling policy.
+  qwen36_27b_ff_q8:
+    status: bake_off_arm
+    description: >-
+      Qwen3.6-27B Fable-Fusion-711 (UnHeretic-NM-DAU-NEO-MAX-NEO) Q8_0, non-MTP
+      build. Same base architecture and KV geometry as stock; LARGER on disk
+      (27.74 GiB vs 26.70 GiB) — the reason it holds its own np_ceiling row.
+    np_policy_tenant: qwen36_27b_ff_q8
+    model:
+      path: /mnt/raid0/llm/models/Qwen3.6-27B-Fable-Fusion-711-GGUF/Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-Q8_0.gguf
+      bytes: 29787701792
+      sha256: 2fff409d4a22e0cb11fb0ecfafed1c669b9808f7e6bc499036c6e85297f14f4d
+      # Provenance: the study's own pre-launch identity contract
+      # (np_context_study_v8_20260727/driver/run_model_block.sh:92), which
+      # refused to launch any cell whose GGUF did not match. Not a re-hash.
+      sha256_status: attested_by_instrument
+    mode:
+      mtp: false
+      reasoning: false
+    role_bindings:
+      - role: coder_escalation_shadow
+        shadow: true
+        duty: coder
+        admission_class: escalations
+      - role: co_critic_shadow
+        shadow: true
+        duty: co_critic
+        admission_class: escalations
+
+  # The FF MTP build. A DIFFERENT GGUF from the arm above (866 tensors = 851
+  # base + 15 MTP), not the same file with a launch flag — so it is its own
+  # tenant, with its own footprint and its own np_ceiling row. Present so the
+  # D6 mode question ("is MTP worth it for this duty mix?") can be planned
+  # against real evidence; the lane DEFAULT stays MTP off.
+  qwen36_27b_ff_mtp_q8:
+    status: mode_variant
+    description: >-
+      Qwen3.6-27B Fable-Fusion-711 Q8_0, MTP build, self-draft depth 1. Paired
+      with qwen36_27b_ff_q8 (same base weights) for the MTP on/off comparison.
+    np_policy_tenant: qwen36_27b_ff_mtp_q8
+    model:
+      path: /mnt/raid0/llm/models/Qwen3.6-27B-Fable-Fusion-711-GGUF/Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-MTP-Q8_0.gguf
+      bytes: 30239022560
+      sha256: 041c175f03b76adb70077ba470258f6b916ec4f5f066077377ef96396c3dd1d0
+      sha256_status: attested_by_instrument  # run_model_block.sh:93
+    mode:
+      mtp: true
+      draft_n_max: 1  # the measured depth; another depth is another operating point
+      reasoning: false
+    role_bindings:
+      - role: coder_escalation_shadow
+        shadow: true
+        duty: coder
+        admission_class: escalations
+
+  # Sequential control arm for the P3-1 bake-off. 35.2 GiB model + the D2
+  # resident set cannot co-fit in 64 GiB — bench windows only, never co-resident.
+  qwen36_35b_a3b_q8_bridge:
+    status: control_arm
+    description: >-
+      Qwen3.6-35B-A3B MTP Q8_0 on MI210 — the A4 control arm. Same GGUF the CPU
+      frontdoor/coder_escalation serves; here it measures what the incumbent
+      would do on the GPU.
+    np_policy_tenant: qwen36_35b_a3b_q8_bridge
+    model:
+      path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+      bytes: 37801097504
+      sha256: c1283d8b80c3e38b2735ddbc9766d3b3126f44d6c484be419d4e101d09a76131
+      sha256_status: attested_by_instrument  # run_model_block.sh:95
+    mode:
+      # The bridge grid ran MTP ON at depth 4 (queue_after_thinkingcap.sh:87 ->
+      # `--spec-type draft-mtp --spec-draft-n-max 4`). Declaring mtp:false here
+      # would plan a shape no cell measured — and the np_ceiling table has no
+      # mtp_off rows for this tenant, so it would refuse anyway.
+      mtp: true
+      draft_n_max: 4
+      reasoning: false
+    co_residency: forbidden  # 35.2 GiB + D2 resident set > 64 GiB
+    role_bindings:
+      - role: coder_escalation_shadow
+        shadow: true
+        duty: coder
+        admission_class: escalations

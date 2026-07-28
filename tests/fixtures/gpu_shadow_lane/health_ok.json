@@ -1,0 +1,10 @@
+{
+  "_comment": "Recorded shape of a healthy lane at np8. Fixture for gpu_shadow_lane_stage0 smoke; no live server was contacted to produce it.",
+  "health": {"status": "ok"},
+  "slots": [
+    {"id": 0, "is_processing": false}, {"id": 1, "is_processing": false},
+    {"id": 2, "is_processing": false}, {"id": 3, "is_processing": false},
+    {"id": 4, "is_processing": false}, {"id": 5, "is_processing": false},
+    {"id": 6, "is_processing": false}, {"id": 7, "is_processing": false}
+  ]
+}

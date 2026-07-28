@@ -1,0 +1,6 @@
+{
+  "_comment": "MI210 with the stock 27B tenant resident (26.7 GiB weights) and room for the phase2 np8 x 8192 dynamic estimate.",
+  "total_gib": 64.0,
+  "used_gib": 27.1,
+  "compute_pids": [424242]
+}

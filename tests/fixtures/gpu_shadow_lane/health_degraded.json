@@ -1,0 +1,8 @@
+{
+  "_comment": "Negative fixture: server up but loading, and only 4 of the planned 8 slots exist. Must FAIL, so that a lane launched with the wrong -np cannot attest clean.",
+  "health": {"status": "loading model"},
+  "slots": [
+    {"id": 0, "is_processing": true}, {"id": 1, "is_processing": false},
+    {"id": 2, "is_processing": false}, {"id": 3, "is_processing": false}
+  ]
+}
