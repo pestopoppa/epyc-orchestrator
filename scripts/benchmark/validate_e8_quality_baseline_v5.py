@@ -318,17 +318,25 @@ def validate_segmented_monitor(samples: list[dict[str, Any]], segments: Any) -> 
     """
     if not isinstance(segments, list) or not segments:
         raise ValueError("segmented runtime monitor has no segments")
-    assigned: set[int] = set()
+    next_index = 0
+    seen_sources: set[str] = set()
     for segment in segments:
-        if not isinstance(segment, dict) or not isinstance(segment.get("sample_indexes"), list):
+        if (
+            not isinstance(segment, dict)
+            or not isinstance(segment.get("sample_indexes"), list)
+            or segment.get("source") not in {"historical", "resume"}
+            or not isinstance(segment.get("binding_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", segment["binding_sha256"])
+        ):
             raise ValueError("segmented runtime monitor segment is malformed")
         indexes = segment["sample_indexes"]
         if len(indexes) < 2 or any(not isinstance(index, int) for index in indexes):
             raise ValueError("segmented runtime monitor segment is too short")
-        if len(set(indexes)) != len(indexes) or assigned.intersection(indexes):
-            raise ValueError("segmented runtime monitor reuses a sample")
-        if any(index < 0 or index >= len(samples) for index in indexes):
-            raise ValueError("segmented runtime monitor index is invalid")
+        if indexes != list(range(next_index, next_index + len(indexes))):
+            raise ValueError("segmented runtime monitor indexes are not contiguous and ordered")
+        if segment["source"] in seen_sources:
+            raise ValueError("segmented runtime monitor repeats a source identity")
+        seen_sources.add(segment["source"])
         rows = [samples[index] for index in indexes]
         if any(row.get("ok") is not True for row in rows):
             raise ValueError("segmented runtime monitor is not clean")
@@ -339,10 +347,13 @@ def validate_segmented_monitor(samples: list[dict[str, Any]], segments: Any) -> 
             ]
         except (KeyError, ValueError) as exc:
             raise ValueError("segmented runtime monitor timestamps are invalid") from exc
-        if any((later - earlier).total_seconds() > 7.0 for earlier, later in zip(times, times[1:])):
+        if any(
+            not 0 <= (later - earlier).total_seconds() <= 7.0
+            for earlier, later in zip(times, times[1:])
+        ):
             raise ValueError("segmented runtime monitor has a sampling gap")
-        assigned.update(indexes)
-    if assigned != set(range(len(samples))):
+        next_index += len(indexes)
+    if next_index != len(samples) or seen_sources != {"historical", "resume"}:
         raise ValueError("segmented runtime monitor leaves samples unclaimed")
 
 
