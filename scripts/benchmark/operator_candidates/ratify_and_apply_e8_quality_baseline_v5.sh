@@ -394,6 +394,7 @@ if [[ "$MODE" == "prevalidate" ]]; then
     exit 0
 fi
 
+mint_protocol_receipt() {
 verify_reviewed_bindings
 verify_state_review_pin
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 PYTHONOPTIMIZE=0 "$PYTHON" -I - \
@@ -466,8 +467,11 @@ try:
 finally:
     os.close(dir_fd)
 PY
+}
 
 verify_reviewed_bindings
 verify_state_review_pin
 E8_BASELINE_APPLY_TOKEN="$TOKEN" env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 \
     PYTHONOPTIMIZE=0 "$PYTHON" -I "$APPLIER" "${COMMON[@]}" --attest "$TOKEN"
+mint_protocol_receipt
+printf 'E8 v5 state CAS committed and protocol receipt created: %s\n' "$PROTOCOL_RECEIPT"
