@@ -47,7 +47,10 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
     source_hashes = {"question_vector.T2.json": _sha(snapshot / "question_vector.T2.json")}
     _write_json(
         snapshot / "source_binding.json",
-        {"source_sha256": source_hashes, "source_tree_sha256": validator.canonical_hash(source_hashes)},
+        {
+            "source_sha256": source_hashes,
+            "source_tree_sha256": validator.canonical_hash(source_hashes),
+        },
     )
     reuse = list(range(59))
     replay = [59, 60, 61]
@@ -66,7 +69,10 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         "generation_ordinals": generation,
     }
     _write_json(root / "intermediate/partial_r2_plan.json", plan)
-    claim = {"claims": [{"payload": {"request_tag": "e8", "region": "q0"}}], "global_claims": [{"region": "q0"}]}
+    claim = {
+        "claims": [{"payload": {"request_tag": "e8", "region": "q0"}}],
+        "global_claims": [{"region": "q0"}],
+    }
     proposal = {
         "schema": validator.RECOVERY_R2_PROPOSAL_SCHEMA,
         "status": "observation_only",
@@ -75,7 +81,16 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         "generation_concurrency": 3,
         "generation_ordinals_sha256": validator.canonical_hash(generation),
         "scorer_replay_ordinals_sha256": validator.canonical_hash(replay),
-        "instrument": {"commit": "c", "runner_sha256": "a" * 64, "measurement_source_sha256": {"/a": "a" * 64, "/b": "b" * 64, "/c": "c" * 64, "/d": "d" * 64}},
+        "instrument": {
+            "commit": "c",
+            "runner_sha256": "a" * 64,
+            "measurement_source_sha256": {
+                "/a": "a" * 64,
+                "/b": "b" * 64,
+                "/c": "c" * 64,
+                "/d": "d" * 64,
+            },
+        },
         "output_namespace": "/tmp/recovery",
         "region_claim": {"tag": "e8", "regions": ["q0"]},
         "frontdoor_capacity": {"capacity": 3},
@@ -92,8 +107,20 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
     _write_json(raw, {"q": 0.0})
     watcher_path = root / "intermediate/runtime_watch.r2.jsonl"
     watcher_rows = [
-        {"ok": True, "started_at": "2026-01-01T00:00:00Z", "active_load": {"tier": 2, "repetition": 2}, "api_probe_urls": {}, "runtime_artifacts": {}},
-        {"ok": True, "started_at": "2026-01-01T00:00:05Z", "active_load": None, "api_probe_urls": {}, "runtime_artifacts": {}},
+        {
+            "ok": True,
+            "started_at": "2026-01-01T00:00:00Z",
+            "active_load": {"tier": 2, "repetition": 2},
+            "api_probe_urls": {},
+            "runtime_artifacts": {},
+        },
+        {
+            "ok": True,
+            "started_at": "2026-01-01T00:00:05Z",
+            "active_load": None,
+            "api_probe_urls": {},
+            "runtime_artifacts": {},
+        },
     ]
     _write_jsonl(watcher_path, watcher_rows)
     complete = {
@@ -120,11 +147,37 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
     _write_json(root / "intermediate/r2_complete.json", complete)
     journal = [
         {"ordinal": ordinal, "source": source, "response": {"qid": f"q{ordinal}"}}
-        for source, ordinals in (("reuse", reuse), ("scorer_replay", replay), ("generation", generation))
+        for source, ordinals in (
+            ("reuse", reuse),
+            ("scorer_replay", replay),
+            ("generation", generation),
+        )
         for ordinal in ordinals
     ]
     _write_jsonl(root / "intermediate/recovery_rows.T2.r2.jsonl", journal)
+    scorer_attempts = [
+        {
+            "schema": validator.RECOVERY_R2_SCORER_ATTEMPTS_SCHEMA,
+            "ordinal": ordinal,
+            "qid": f"q{ordinal}",
+            "saved_sidecar_sha256": "c" * 64,
+            "scoring_question_sha256": "d" * 64,
+            "state": state,
+        }
+        for ordinal in replay
+        for state in ("started", "succeeded")
+    ]
+    scorer_attempts_path = root / "intermediate/scorer_attempts.T2.r2.jsonl"
+    _write_jsonl(scorer_attempts_path, scorer_attempts)
     complete["journal_sha256"] = _sha(root / "intermediate/recovery_rows.T2.r2.jsonl")
+    complete["scorer_attempts_sha256"] = _sha(scorer_attempts_path)
+    complete["scorer_attempts"] = {
+        "path": "scorer_attempts.T2.r2.jsonl",
+        "sha256": _sha(scorer_attempts_path),
+        "records": 6,
+        "expected_terminal_count": 3,
+        "terminal_states": {"succeeded": 3},
+    }
     _write_json(root / "intermediate/r2_complete.json", complete)
     context = {
         "schema": validator.RECOVERY_R2_CONTEXT_SCHEMA,
@@ -148,13 +201,17 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         "raw_path": str(raw),
         "journal_path": str(root / "intermediate/recovery_rows.T2.r2.jsonl"),
         "journal_sha256": _sha(root / "intermediate/recovery_rows.T2.r2.jsonl"),
+        "scorer_attempts_path": str(scorer_attempts_path),
+        "scorer_attempts_sha256": _sha(scorer_attempts_path),
     }
     return root, context
 
 
 def _validate(root: Path, context: dict) -> dict:
     return validator.validate_recovery_r2_context(
-        {"recovery_r2": context}, evidence_root=root, expected_recovery_runner_sha256="a" * 64,
+        {"recovery_r2": context},
+        evidence_root=root,
+        expected_recovery_runner_sha256="a" * 64,
         expected_finalizer_runner_sha256="b" * 64,
         expected_v5_runner_sha256="c" * 64,
         expected_base_runner_sha256="b" * 64,
@@ -185,6 +242,24 @@ def test_recovery_r2_context_rejects_ordinal_allowlist_drift(tmp_path: Path) -> 
     _write_json(plan_path, plan)
     context["plan_sha256"] = _sha(plan_path)
     with pytest.raises(ValueError, match="allowlist"):
+        _validate(root, context)
+
+
+def test_recovery_r2_context_rejects_failed_or_extra_scorer_attempts(tmp_path: Path) -> None:
+    root, context = _context(tmp_path)
+    attempts_path = Path(context["scorer_attempts_path"])
+    attempts = [json.loads(line) for line in attempts_path.read_text().splitlines()]
+    attempts[1]["state"] = "failed"
+    _write_jsonl(attempts_path, attempts)
+    digest = _sha(attempts_path)
+    context["scorer_attempts_sha256"] = digest
+    complete_path = Path(context["complete_path"])
+    complete = json.loads(complete_path.read_text())
+    complete["scorer_attempts_sha256"] = digest
+    complete["scorer_attempts"]["sha256"] = digest
+    _write_json(complete_path, complete)
+    context["complete_sha256"] = _sha(complete_path)
+    with pytest.raises(ValueError, match="scorer-attempt record differs"):
         _validate(root, context)
 
 
@@ -222,6 +297,181 @@ def test_finalizer_plan_accepts_the_preserved_completed_r1_source() -> None:
     assert plan["fresh_collection"] == [{"tier": 2, "repetition": 3}]
 
 
+def test_real_source_tail_is_rebound_to_the_new_bundle_without_regeneration(tmp_path: Path) -> None:
+    source = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+        ".e8_quality_baseline_v5_partial_resume_promptfix_20260728.staging-"
+        "b0d7ce62d6e04509a1cec7849aa68832"
+    )
+    plan = finalizer.build_plan(source)
+    staging = tmp_path / "staging"
+    destination = tmp_path / "published"
+    finalizer._copy_composite_source(source, staging, plan)
+    tail = finalizer._canonical_t2r1_tail(staging, destination)
+    attempts = finalizer.V4.load_jsonl(staging / "generation_tail_attempts.T2.r1.jsonl")
+
+    assert tail["retry_count"] == 2
+    assert [row["ordinal"] for row in attempts] == [98, 99]
+    assert [row["retry_sidecar_path"] for row in attempts] == [
+        str(destination / "eval_sidecars/question_results.e8-v5-tail-t2-r1-o98.jsonl"),
+        str(destination / "eval_sidecars/question_results.e8-v5-tail-t2-r1-o99.jsonl"),
+    ]
+    assert [row["retry_judge_trace_path"] for row in attempts] == [
+        str(destination / "generation_tail_judge_traces/T2.r1.o98.jsonl"),
+        str(destination / "generation_tail_judge_traces/T2.r1.o99.jsonl"),
+    ]
+    for ordinal in (98, 99):
+        assert (
+            staging / f"eval_sidecars/question_results.e8-v5-tail-t2-r1-o{ordinal}.jsonl"
+        ).read_bytes() == (
+            source / f"eval_sidecars/question_results.e8-v5-tail-t2-r1-o{ordinal}.jsonl"
+        ).read_bytes()
+        assert (staging / f"generation_tail_judge_traces/T2.r1.o{ordinal}.jsonl").read_bytes() == (
+            source / f"generation_tail_judge_traces/T2.r1.o{ordinal}.jsonl"
+        ).read_bytes()
+
+
+def test_real_source_tail_rejects_broadened_ordinals(tmp_path: Path) -> None:
+    source = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+        ".e8_quality_baseline_v5_partial_resume_promptfix_20260728.staging-"
+        "b0d7ce62d6e04509a1cec7849aa68832"
+    )
+    staging = tmp_path / "staging"
+    finalizer._copy_composite_source(source, staging, finalizer.build_plan(source))
+    plan_path = staging / "partial_resume_plan.json"
+    plan = json.loads(plan_path.read_text())
+    plan["generation_tail"]["targets"][1]["ordinal"] = 100
+    _write_json(plan_path, plan)
+
+    with pytest.raises(ValueError, match="tail targets"):
+        finalizer._canonical_t2r1_tail(staging, tmp_path / "published")
+
+
+def test_layered_context_is_limited_to_the_exact_composite_source(tmp_path: Path) -> None:
+    source_plan = {
+        "schema": "epyc.e8_quality_v5_recovery_finalizer_source.v1",
+        "protocol_id": "e8_quality_full_pool_tier_baseline.v5",
+        "source": str(validator.COMPOSITE_SOURCE_DIR),
+        "source_tree_sha256": validator.COMPOSITE_SOURCE_TREE_SHA256,
+        "source_sha256": {},
+        "banked": {"tiers": [1], "t2_r1": True},
+        "fresh_collection": [{"tier": 2, "repetition": 3}],
+        "t2_r1_repair_history": {
+            "partial_resume_plan": {
+                "sha256": "9dbb2fd7daf9d807e41257dab08358bd9abae411032d0b5331246d32fa76ef66"
+            },
+            "generation_tail_attempts.T2.r1.jsonl": {
+                "sha256": "d6ff6c16f0c5d4baf6fdfd320c6e4ff52284681ce4749c6ba71943eb4576f46e"
+            },
+        },
+    }
+    source_plan_path = tmp_path / "recovery_finalizer_source_plan.json"
+    _write_json(source_plan_path, source_plan)
+    context = {
+        "context": {
+            "composite_source_plan_path": str(source_plan_path),
+            "composite_source_plan_sha256": _sha(source_plan_path),
+        }
+    }
+    validator.validate_composite_context(context, evidence_root=tmp_path)
+    source_plan["source_tree_sha256"] = "0" * 64
+    _write_json(source_plan_path, source_plan)
+    context["context"]["composite_source_plan_sha256"] = _sha(source_plan_path)
+    with pytest.raises(ValueError, match="exact reviewed composite"):
+        validator.validate_composite_context(context, evidence_root=tmp_path)
+
+
+def test_four_monitor_segments_pin_the_source_resume_gap_and_order(tmp_path: Path) -> None:
+    source = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+        ".e8_quality_baseline_v5_partial_resume_promptfix_20260728.staging-"
+        "b0d7ce62d6e04509a1cec7849aa68832"
+    )
+    historical = finalizer.V4.load_jsonl(source / "historical_runtime_watch.jsonl")
+    source_resume = finalizer.V4.load_jsonl(source / "resume_runtime_watch.jsonl")
+    recovery = [dict(source_resume[0]), dict(source_resume[1])]
+    recovery[0]["active_load"] = {"tier": 2, "repetition": 2}
+    recovery[1]["active_load"] = None
+    final_resume = [dict(source_resume[index]) for index in range(3)]
+    for index, row in enumerate(final_resume):
+        row["started_at"] = f"2026-07-28T00:00:{index * 5:02d}Z"
+        row["active_load"] = {"tier": 2, "repetition": index + 1}
+    paths = {
+        "historical": tmp_path / "historical_runtime_watch.jsonl",
+        "source_resume": tmp_path / "source_resume_runtime_watch.jsonl",
+        "recovery_r2": tmp_path / "recovery_runtime_watch.jsonl",
+        "resume": tmp_path / "resume_runtime_watch.jsonl",
+    }
+    for name, rows in (
+        ("historical", historical),
+        ("source_resume", source_resume),
+        ("recovery_r2", recovery),
+        ("resume", final_resume),
+    ):
+        if name == "historical":
+            paths[name].write_bytes((source / "historical_runtime_watch.jsonl").read_bytes())
+        elif name == "source_resume":
+            paths[name].write_bytes((source / "resume_runtime_watch.jsonl").read_bytes())
+        else:
+            _write_jsonl(paths[name], rows)
+    recovery_gap_count, recovery_max_gap = validator._monitor_gap_stats(recovery)
+    final_gap_count, final_max_gap = validator._monitor_gap_stats(final_resume)
+    starts = 0
+    segments = []
+    for name, rows, maximum, gap_count, binding in (
+        (
+            "historical",
+            historical,
+            validator.HISTORICAL_MAX_GAP_S,
+            validator.HISTORICAL_EXPECTED_GAP_COUNT,
+            validator.HISTORICAL_BINDING_SHA256,
+        ),
+        (
+            "source_resume",
+            source_resume,
+            7.0,
+            1,
+            validator.SOURCE_RESUME_BINDING_SHA256,
+        ),
+        (
+            "recovery_r2",
+            recovery,
+            7.0,
+            recovery_gap_count,
+            validator._monitor_binding_sha256(recovery[0]),
+        ),
+        (
+            "resume",
+            final_resume,
+            7.0,
+            final_gap_count,
+            validator._monitor_binding_sha256(final_resume[0]),
+        ),
+    ):
+        segment = {
+            "source": name,
+            "source_path": str(paths[name]),
+            "source_sha256": _sha(paths[name]),
+            "binding_sha256": binding,
+            "sample_indexes": list(range(starts, starts + len(rows))),
+            "max_gap_s": maximum,
+            "observed_gap_count_over_7s": gap_count,
+            "observed_max_gap_s": validator._monitor_gap_stats(rows)[1],
+        }
+        if name == "source_resume":
+            segment["source_sha256"] = validator.SOURCE_RESUME_WATCHER_SHA256
+            segment["observed_max_gap_s"] = validator.SOURCE_RESUME_MAX_GAP_S
+            segment["pending_human_amendment"] = validator.source_resume_pending_amendment()
+        segments.append(segment)
+        starts += len(rows)
+    samples = [*historical, *source_resume, *recovery, *final_resume]
+    validator.validate_segmented_monitor(samples, segments, evidence_root=tmp_path)
+    segments[1]["observed_max_gap_s"] = 7.0
+    with pytest.raises(ValueError, match="source-resume"):
+        validator.validate_segmented_monitor(samples, segments, evidence_root=tmp_path)
+
+
 def test_install_recovered_r2_replaces_only_hash_bound_partial_source_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -241,6 +491,7 @@ def test_install_recovered_r2_replaces_only_hash_bound_partial_source_files(
         (staging / relative).write_bytes(payload)
         hashes[relative] = _sha(path)
     _write_json(snapshot / "source_binding.json", {"source_sha256": hashes})
+    _write_json(staging / "recovery_finalizer_source_plan.json", {"source_sha256": hashes})
     replacement = {
         "responses.T2.r2.jsonl": b"recovered-responses\n",
         "eval_sidecars/question_results.e8-t2-r2.jsonl": b"recovered-sidecar\n",
@@ -261,17 +512,24 @@ def test_install_recovered_r2_replaces_only_hash_bound_partial_source_files(
     monkeypatch.setattr(
         finalizer.RESUME,
         "_banked_observation_and_detail",
-        lambda **_: ({"q": 1}, {"scorer_tail_replay": ["old"], "scorer_sidecar_replacement_ordinals": [1]}),
+        lambda **_: (
+            {"q": 1},
+            {"scorer_tail_replay": ["old"], "scorer_sidecar_replacement_ordinals": [1]},
+        ),
     )
     observation, detail = finalizer._install_recovered_r2(
-        {"root": recovered, "plan": {"scorer_replay_ordinals": [1, 2, 3]}}, staging, tmp_path / "published", object()
+        {"root": recovered, "plan": {"scorer_replay_ordinals": [1, 2, 3]}},
+        staging,
+        tmp_path / "published",
+        object(),
     )
     assert observation == {"q": 1}
     assert detail["scorer_tail_replay"] == [
-        {"ordinal": ordinal, "qid": f"q{ordinal}", "outcome": "recovered"}
-        for ordinal in (1, 2, 3)
+        {"ordinal": ordinal, "qid": f"q{ordinal}", "outcome": "recovered"} for ordinal in (1, 2, 3)
     ]
-    assert all((staging / relative).read_bytes() == payload for relative, payload in replacement.items())
+    assert all(
+        (staging / relative).read_bytes() == payload for relative, payload in replacement.items()
+    )
 
 
 def test_install_recovered_r2_rejects_mutated_partial_source_file(tmp_path: Path) -> None:
@@ -282,6 +540,9 @@ def test_install_recovered_r2_rejects_mutated_partial_source_file(tmp_path: Path
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("sealed\n")
     _write_json(snapshot / "source_binding.json", {"source_sha256": {relative: _sha(source)}})
+    _write_json(
+        staging / "recovery_finalizer_source_plan.json", {"source_sha256": {relative: _sha(source)}}
+    )
     target = staging / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("tampered\n")
