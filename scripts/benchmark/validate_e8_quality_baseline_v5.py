@@ -24,6 +24,9 @@ SUCCESSOR_RUNNER_PATH = Path(__file__).with_name(
 RACE_RETRY_RUNNER_PATH = Path(__file__).with_name(
     "prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
 )
+MIXED_TAIL_REPAIR_RUNNER_PATH = Path(__file__).with_name(
+    "prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
+)
 FINALIZER_PATH = Path(__file__).with_name("finalize_e8_quality_baseline_v5_recovery_r2.py")
 EXPECTED_EVIDENCE_KEYS = {
     "schema",
@@ -887,8 +890,74 @@ def validate_successor_recovery_r2_context(
     }
 
 
+def validate_mixed_tail_repair_context(
+    context: dict[str, Any],
+    *,
+    evidence_root: Path,
+    race_root: Path,
+    mixed: dict[str, Any] | None,
+    expected_mixed_tail_repair_runner_sha256: str | None,
+) -> None:
+    mixed_context_keys = (
+        "mixed_tail_repair_runner",
+        "mixed_tail_repair_descriptor_sha256",
+        "mixed_tail_repair_evidence_path",
+        "mixed_tail_repair_evidence_sha256",
+        "mixed_tail_original_source_binding",
+        "mixed_tail_original_source_binding_sha256",
+        "mixed_tail_original_source_tree_sha256",
+    )
+    if mixed is None:
+        if any(context.get(key) is not None for key in mixed_context_keys):
+            raise ValueError("non-mixed race retry carries unexpected mixed-tail context")
+        return
+    if (
+        not isinstance(expected_mixed_tail_repair_runner_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_mixed_tail_repair_runner_sha256)
+        or sha256_path(MIXED_TAIL_REPAIR_RUNNER_PATH)
+        != expected_mixed_tail_repair_runner_sha256
+        or mixed.get("repair_runner_sha256")
+        != expected_mixed_tail_repair_runner_sha256
+        or context.get("mixed_tail_repair_runner")
+        != {
+            "path": str(MIXED_TAIL_REPAIR_RUNNER_PATH),
+            "sha256": expected_mixed_tail_repair_runner_sha256,
+        }
+        or context.get("mixed_tail_repair_descriptor_sha256")
+        != mixed.get("descriptor_sha256")
+    ):
+        raise ValueError("mixed-tail repair runner differs from the externally reviewed hash")
+    repair_evidence = resolve_artifact(
+        evidence_root,
+        context.get("mixed_tail_repair_evidence_path"),
+        "mixed-tail repair evidence",
+    )
+    original_binding = resolve_artifact(
+        evidence_root,
+        context.get("mixed_tail_original_source_binding"),
+        "mixed-tail original source binding",
+    )
+    if (
+        repair_evidence
+        != race_root / "predecessor_snapshot/mixed_tail_repair.json"
+        or original_binding
+        != race_root / "predecessor_snapshot/predecessor_snapshot/source_binding.json"
+        or context.get("mixed_tail_repair_evidence_sha256")
+        != sha256_path(repair_evidence)
+        or context.get("mixed_tail_original_source_binding_sha256")
+        != sha256_path(original_binding)
+        or context.get("mixed_tail_original_source_tree_sha256")
+        != mixed["original_source"]["tree_sha256"]
+    ):
+        raise ValueError("mixed-tail nested source or evidence binding differs")
+
+
 def validate_race_retry_recovery_r2_context(
-    context: dict[str, Any], *, evidence_root: Path, expected_race_retry_runner_sha256: str | None
+    context: dict[str, Any],
+    *,
+    evidence_root: Path,
+    expected_race_retry_runner_sha256: str | None,
+    expected_mixed_tail_repair_runner_sha256: str | None,
 ) -> dict[str, Any]:
     """Require the second successor's explicit runner pin and full audit chain."""
     if (
@@ -935,7 +1004,20 @@ def validate_race_retry_recovery_r2_context(
     accepted = finalizer._validate_race_retry_intermediate(root, load_json(paths["plan"], "race-retry plan"))
     if not accepted.get("race_retry"):
         raise ValueError("race-retry finalizer did not admit the sealed intermediate")
-    return {"context": context, "plan": accepted["plan"], "race_retry": True}
+    mixed = accepted.get("mixed_tail_repair")
+    validate_mixed_tail_repair_context(
+        context,
+        evidence_root=evidence_root,
+        race_root=root,
+        mixed=mixed,
+        expected_mixed_tail_repair_runner_sha256=expected_mixed_tail_repair_runner_sha256,
+    )
+    return {
+        "context": context,
+        "plan": accepted["plan"],
+        "race_retry": True,
+        "mixed_tail_repair": mixed,
+    }
 
 
 def validate_recovery_r2_context(
@@ -946,6 +1028,7 @@ def validate_recovery_r2_context(
     expected_finalizer_runner_sha256: str | None = None,
     expected_successor_runner_sha256: str | None = None,
     expected_race_retry_runner_sha256: str | None = None,
+    expected_mixed_tail_repair_runner_sha256: str | None = None,
     expected_v5_runner_sha256: str | None = None,
     expected_base_runner_sha256: str | None = None,
     expected_resume_runner_sha256: str | None = None,
@@ -1014,6 +1097,7 @@ def validate_recovery_r2_context(
             context,
             evidence_root=evidence_root,
             expected_race_retry_runner_sha256=expected_race_retry_runner_sha256,
+            expected_mixed_tail_repair_runner_sha256=expected_mixed_tail_repair_runner_sha256,
         )
     if plan.get("schema") == RECOVERY_R2_SUCCESSOR_PLAN_SCHEMA:
         return validate_successor_recovery_r2_context(
@@ -1695,6 +1779,7 @@ def validate(
     expected_finalizer_runner_sha256: str | None = None,
     expected_successor_runner_sha256: str | None = None,
     expected_race_retry_runner_sha256: str | None = None,
+    expected_mixed_tail_repair_runner_sha256: str | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{64}", expected_runner_sha256):
         raise ValueError("expected runner SHA-256 is malformed")
@@ -1755,6 +1840,7 @@ def validate(
         expected_finalizer_runner_sha256=expected_finalizer_runner_sha256,
         expected_successor_runner_sha256=expected_successor_runner_sha256,
         expected_race_retry_runner_sha256=expected_race_retry_runner_sha256,
+        expected_mixed_tail_repair_runner_sha256=expected_mixed_tail_repair_runner_sha256,
         expected_v5_runner_sha256=expected_runner_sha256,
         expected_base_runner_sha256=expected_base_runner_sha256,
         expected_resume_runner_sha256=expected_resume_runner_sha256,
@@ -2650,6 +2736,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-finalizer-runner-sha256")
     parser.add_argument("--expected-successor-runner-sha256")
     parser.add_argument("--expected-race-retry-runner-sha256")
+    parser.add_argument("--expected-mixed-tail-repair-runner-sha256")
     args = parser.parse_args(argv)
     print(
         json.dumps(
@@ -2662,6 +2749,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_finalizer_runner_sha256=args.expected_finalizer_runner_sha256,
                 expected_successor_runner_sha256=args.expected_successor_runner_sha256,
                 expected_race_retry_runner_sha256=args.expected_race_retry_runner_sha256,
+                expected_mixed_tail_repair_runner_sha256=args.expected_mixed_tail_repair_runner_sha256,
             ),
             sort_keys=True,
         )

@@ -27,6 +27,7 @@ RESUME_PATH = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py
 RECOVERY_PATH = PROJECT_ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
 SUCCESSOR_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
 RACE_RETRY_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
+MIXED_REPAIR_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
 CONTEXT_SCHEMA = "epyc.e8_quality_v5_recovery_r2_finalizer.v1"
 COMPOSITE_SOURCE_DIR = Path(
     "/mnt/raid0/llm/epyc-root/artifacts/operator/"
@@ -413,6 +414,24 @@ def _validate_successor_intermediate(root: Path, plan: dict[str, Any]) -> dict[s
     return {"root": root, "plan": plan, "proposal": proposal, "complete": complete, "successor": True}
 
 
+def _validate_optional_mixed_tail_chain(
+    predecessor_root: Path,
+    predecessor_plan: dict[str, Any],
+    questions: list[dict[str, Any]],
+    predecessor_sidecars: dict[int, dict[str, Any]],
+    race_plan: dict[str, Any],
+) -> dict[str, Any] | None:
+    mixed_tail_repair = RACE_RETRY.validate_mixed_predecessor(
+        predecessor_root,
+        predecessor_plan,
+        questions,
+        predecessor_sidecars,
+    )
+    if race_plan.get("mixed_tail_repair") != mixed_tail_repair:
+        raise ValueError("race-retry mixed-tail chain differs from its predecessor")
+    return mixed_tail_repair
+
+
 def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
     """Validate the second successor without treating its predecessor as clean.
 
@@ -503,6 +522,13 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
     predecessor_sidecars = RACE_RETRY._rows(required["predecessor_sidecar"])
     if set(predecessor_sidecars) != set(predecessor_plan["generation_ordinals"]):
         raise ValueError("race-retry predecessor sidecar ordinal set differs")
+    mixed_tail_repair = _validate_optional_mixed_tail_chain(
+        predecessor_root,
+        predecessor_plan,
+        questions,
+        predecessor_sidecars,
+        plan,
+    )
     retry_evidence = plan.get("race_retry_evidence")
     expected_evidence = [
         {"ordinal": ordinal, "qid": V4._question_qid(questions[ordinal]), "sidecar_sha256": RACE_RETRY.canonical_hash(predecessor_sidecars[ordinal]), "error_detail": str(predecessor_sidecars[ordinal]["result"].get("error_detail") or "")}
@@ -515,7 +541,10 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
     ):
         raise ValueError("race-retry eligibility is not exact zero-token race-lost evidence")
     failure_entries = V4.load_jsonl(required["predecessor_failures"])
-    expected_failure = [{"ordinal": ordinal, "sidecar_sha256": RACE_RETRY.canonical_hash(predecessor_sidecars[ordinal])} for ordinal in plan["race_retry_ordinals"]]
+    expected_failure = RACE_RETRY._failure_rows_in_sidecar_order(
+        predecessor_sidecars,
+        plan["race_retry_ordinals"],
+    )
     if (
         plan.get("predecessor_failed_attempts") != {"path": required["predecessor_failures"].name, "sha256": sha256_path(required["predecessor_failures"]), "eligibility": "exact_race_retry_authorization"}
         or len(failure_entries) != 1 or failure_entries[0].get("disposition") != "failed_closed_no_automatic_retry"
@@ -557,6 +586,7 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
         or proposal.get("predecessor_watcher") != plan["predecessor_watcher"]
         or proposal.get("predecessor_failed_attempts") != plan["predecessor_failed_attempts"]
         or proposal.get("race_retry_ordinals_sha256") != RACE_RETRY.canonical_hash(plan["race_retry_ordinals"])
+        or proposal.get("mixed_tail_repair") != mixed_tail_repair
         or proposal.get("region_claim") != expected_claim
         or proposal.get("frontdoor_capacity", {}).get("capacity", 0) < V4.CONCURRENCY
         or complete.get("status") != RACE_RETRY.COMPLETE_STATUS
@@ -568,6 +598,7 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
         or complete.get("journal_sha256") != sha256_path(required["journal"])
         or complete.get("predecessor_watcher") != plan["predecessor_watcher"]
         or complete.get("predecessor_failed_attempts") != plan["predecessor_failed_attempts"]
+        or complete.get("mixed_tail_repair") != mixed_tail_repair
         or not isinstance(complete.get("watcher"), dict)
         or complete["watcher"].get("sha256") != sha256_path(required["watcher"])
         or complete["watcher"].get("claim_before") != claim or complete["watcher"].get("claim_after") != claim
@@ -597,7 +628,14 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
         or any(not V5.validate_clean_sidecar_result(response, sidecars[ordinal][1], qid=response["qid"]) for ordinal, response in enumerate(responses))
     ):
         raise ValueError("race-retry finalized response or provenance differs")
-    return {"root": root, "plan": plan, "proposal": proposal, "complete": complete, "race_retry": True}
+    return {
+        "root": root,
+        "plan": plan,
+        "proposal": proposal,
+        "complete": complete,
+        "race_retry": True,
+        "mixed_tail_repair": mixed_tail_repair,
+    }
 
 
 def build_plan(source_dir: Path) -> dict[str, Any]:
@@ -962,6 +1000,31 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
             "predecessor_failed_attempts_path": str(destination / "recovery_r2_intermediate/predecessor_snapshot/generation_failed_attempts.T2.r2.jsonl"),
             "predecessor_failed_attempts_sha256": sha256_path(predecessor / "generation_failed_attempts.T2.r2.jsonl"),
         }
+    mixed_tail_context: dict[str, Any] = {}
+    if intermediate.get("mixed_tail_repair"):
+        mixed_root = copied / "predecessor_snapshot"
+        original_binding = mixed_root / "predecessor_snapshot/source_binding.json"
+        repair_evidence = mixed_root / RACE_RETRY.MIXED_EVIDENCE_NAME
+        chain = intermediate["mixed_tail_repair"]
+        mixed_tail_context = {
+            "mixed_tail_repair_runner": {
+                "path": str(MIXED_REPAIR_PATH),
+                "sha256": sha256_path(MIXED_REPAIR_PATH),
+            },
+            "mixed_tail_repair_descriptor_sha256": chain["descriptor_sha256"],
+            "mixed_tail_repair_evidence_path": str(
+                destination
+                / "recovery_r2_intermediate/predecessor_snapshot"
+                / RACE_RETRY.MIXED_EVIDENCE_NAME
+            ),
+            "mixed_tail_repair_evidence_sha256": sha256_path(repair_evidence),
+            "mixed_tail_original_source_binding": str(
+                destination
+                / "recovery_r2_intermediate/predecessor_snapshot/predecessor_snapshot/source_binding.json"
+            ),
+            "mixed_tail_original_source_binding_sha256": sha256_path(original_binding),
+            "mixed_tail_original_source_tree_sha256": chain["original_source"]["tree_sha256"],
+        }
     report["recovery_r2"] = {
         "schema": CONTEXT_SCHEMA,
         "recovery_runner": {"path": str(RECOVERY_PATH), "sha256": sha256_path(RECOVERY_PATH)},
@@ -1001,6 +1064,7 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
         ),
         **successor_context,
         **race_retry_context,
+        **mixed_tail_context,
     }
     report["pending_human_amendment"] = source_resume_segment["pending_human_amendment"]
     V4.write_json(report_path, report)

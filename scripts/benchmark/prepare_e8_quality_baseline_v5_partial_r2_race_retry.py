@@ -10,6 +10,7 @@ namespace identity is hard-coded here.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import importlib.util
 import json
@@ -24,8 +25,13 @@ ROOT = Path(__file__).resolve().parents[2]
 RECOVERY_PATH = ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
 SUCCESSOR_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
 RESUME_PATH = ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
+MIXED_REPAIR_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
 PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_race_retry_plan.v1"
 PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_race_retry_proposal.v1"
+MIXED_REPAIR_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_repair.v1"
+MIXED_PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_repair_proposal.v1"
+MIXED_CHAIN_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_chain.v1"
+MIXED_EVIDENCE_NAME = "mixed_tail_repair.json"
 COMPLETE_STATUS = "intermediate_r2_race_retry_complete"
 N = 500
 
@@ -117,13 +123,25 @@ def _load_bound_snapshot(root: Path, name: str) -> tuple[dict[str, str], Path]:
     return hashes, snapshot
 
 
+def _failure_rows_in_sidecar_order(
+    sidecars: dict[int, dict[str, Any]],
+    retry: list[int],
+) -> list[dict[str, Any]]:
+    retry_set = set(retry)
+    return [
+        {"ordinal": ordinal, "sidecar_sha256": canonical_hash(row)}
+        for ordinal, row in sidecars.items()
+        if ordinal in retry_set
+    ]
+
+
 def _terminal_failure_ledger(root: Path, sidecars: dict[int, dict[str, Any]], retry: list[int]) -> tuple[Path, str]:
     path = root / "generation_failed_attempts.T2.r2.jsonl"
     entries = V4.load_jsonl(path) if path.is_file() and not path.is_symlink() else []
     if len(entries) != 1 or entries[0].get("disposition") != "failed_closed_no_automatic_retry":
         raise ValueError("race-retry predecessor is not a terminal fail-closed namespace")
     failures = entries[0].get("failures")
-    expected = [{"ordinal": ordinal, "sidecar_sha256": canonical_hash(sidecars[ordinal])} for ordinal in retry]
+    expected = _failure_rows_in_sidecar_order(sidecars, retry)
     if failures != expected:
         raise ValueError("race-retry failure ledger differs from exact sidecar failures")
     return path, sha256_path(path)
@@ -146,6 +164,290 @@ def _require_clean_predecessor_watcher(path: Path) -> list[dict[str, Any]]:
     ):
         raise ValueError("race-retry predecessor watcher is contaminated")
     return rows
+
+
+def _mixed_watcher_evidence(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    rows = V4.load_jsonl(path)
+    try:
+        gaps, max_gap = RESUME._monitor_stats(rows)
+    except ValueError as exc:
+        raise ValueError("mixed-tail original watcher is malformed") from exc
+    failed = [
+        index
+        for index, row in enumerate(rows)
+        if isinstance(row, dict) and row.get("ok") is not True
+    ]
+    if not failed:
+        raise ValueError("mixed-tail original watcher lacks bounded transport failures")
+    groups: list[list[int]] = []
+    for index in failed:
+        if not groups or index != groups[-1][-1] + 1:
+            groups.append([index])
+        else:
+            groups[-1].append(index)
+    failure_intervals = [
+        {
+            "started_at": rows[group[0]]["started_at"],
+            "finished_at": rows[group[-1]]["finished_at"],
+        }
+        for group in groups
+    ]
+    durations = [
+        _mixed_timestamp(interval["finished_at"])
+        - _mixed_timestamp(interval["started_at"])
+        for interval in failure_intervals
+    ]
+    expected_load = {"tier": 2, "repetition": 2}
+    if (
+        len(rows) < 5
+        or any(group[0] == 0 or group[-1] == len(rows) - 1 for group in groups)
+        or any(not isinstance(row, dict) for row in rows)
+        or any(rows[index].get("ok") is not True for index in range(len(rows)) if index not in failed)
+        or any(rows[index].get("api_failure_class") != "api_transport_error" for index in failed)
+        or any(rows[index].get("api_probe_urls") != {} for index in failed)
+        or any(rows[index].get("active_load") != expected_load for index in failed)
+        or any(rows[index].get("binding_matches_pre") is not True for index in failed)
+        or any(rows[index].get("immutable_files_match_pre") is not True for index in failed)
+        or any(rows[index].get("autopilot_active") is not False for index in failed)
+        or any(row.get("active_load") not in (None, expected_load) for row in rows)
+        or any(duration < 0.0 or duration > 30.0 for duration in durations)
+        or gaps
+        or max_gap > 7.0
+    ):
+        raise ValueError("mixed-tail original watcher has unapproved contamination")
+    clean_bindings = {
+        RESUME._monitor_binding_sha256(row)
+        for index, row in enumerate(rows)
+        if index not in failed
+    }
+    if len(clean_bindings) != 1:
+        raise ValueError("mixed-tail original watcher has clean binding drift")
+    return {
+        "path": path.name,
+        "sha256": sha256_path(path),
+        "eligibility": "excluded_audit_evidence",
+        "status": "bounded_api_reload_interruption",
+        "failed_sample_indexes": failed,
+        "failed_sample_groups": groups,
+        "failure_class": "api_transport_error",
+        "failure_intervals": failure_intervals,
+    }, rows
+
+
+def _mixed_timestamp(value: Any) -> float:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError as exc:
+        raise ValueError("mixed-tail watcher timestamp is invalid") from exc
+
+
+def _mixed_overlap(row: dict[str, Any], watcher: dict[str, Any]) -> bool:
+    started, ended = row.get("started_at_s"), row.get("ended_at_s")
+    if type(started) not in (int, float) or type(ended) not in (int, float) or started > ended:
+        raise ValueError("mixed-tail original sidecar timing is invalid")
+    return any(
+        started <= _mixed_timestamp(interval["finished_at"])
+        and ended >= _mixed_timestamp(interval["started_at"])
+        for interval in watcher["failure_intervals"]
+    )
+
+
+def _mixed_class(row: dict[str, Any], question: dict[str, Any]) -> str:
+    result = row.get("result")
+    if not isinstance(result, dict):
+        raise ValueError("mixed-tail original sidecar result is invalid")
+    if _race_lost(row, question):
+        return "race_lost"
+    error = str(result.get("error_detail") or "")
+    answer = str(row.get("answer") or "")
+    if (
+        result.get("error") is True
+        and error == "[ERROR: Inference failed: chat_completions failed: timed out]"
+        and type(result.get("tokens_generated")) is int
+        and result.get("tokens_generated") == 0
+        and result.get("route") == "frontdoor"
+        and answer in ("", error)
+    ):
+        return "timeout"
+    if (
+        result.get("error") is True
+        and error.startswith(RECOVERY.SCORER_UNAVAILABLE_PREFIX)
+        and type(result.get("tokens_generated")) is int
+        and result.get("tokens_generated") > 0
+        and bool(answer.strip())
+        and result.get("route") == "frontdoor"
+        and result.get("scoring_method") == "llm_judge"
+        and question.get("scoring_method") == "llm_judge"
+    ):
+        return "scorer_replay"
+    if _clean(row, question):
+        return "clean"
+    raise ValueError("mixed-tail original sidecar has an unapproved class")
+
+
+def _mixed_ordinals(value: Any, label: str) -> list[int]:
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(item, int) or isinstance(item, bool) or not 0 <= item < N for item in value)
+        or value != sorted(set(value))
+    ):
+        raise ValueError(f"mixed-tail {label} ordinals are invalid")
+    return value
+
+
+def validate_mixed_predecessor(
+    root: Path,
+    predecessor_plan: dict[str, Any],
+    questions: list[dict[str, Any]],
+    current_sidecars: dict[int, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Recompute an optional mixed-tail chain from its nested original snapshot."""
+    descriptor = predecessor_plan.get("mixed_tail_repair")
+    if descriptor is None:
+        return None
+    evidence_path = root / MIXED_EVIDENCE_NAME
+    original_binding_path = root / "predecessor_snapshot/source_binding.json"
+    original_plan_path = root / "predecessor_snapshot/partial_r2_plan.json"
+    original_sidecar_path = (
+        root / "predecessor_snapshot/eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
+    )
+    original_watcher_path = root / "predecessor_snapshot/runtime_watch.r2.successor.jsonl"
+    original_proposal_path = root / "predecessor_snapshot/recovery_proposal.json"
+    mixed_proposal_path = root / "recovery_proposal.json"
+    required = (
+        evidence_path,
+        original_binding_path,
+        original_plan_path,
+        original_sidecar_path,
+        original_watcher_path,
+        original_proposal_path,
+        mixed_proposal_path,
+    )
+    if any(not path.is_file() or path.is_symlink() for path in required):
+        raise ValueError("mixed-tail predecessor lacks nested repair evidence")
+    if not isinstance(descriptor, dict) or descriptor.get("schema") != MIXED_REPAIR_SCHEMA:
+        raise ValueError("mixed-tail predecessor descriptor schema differs")
+    if (
+        descriptor.get("repair_runner_sha256") != sha256_path(MIXED_REPAIR_PATH)
+        or descriptor.get("predecessor_watcher") is None
+        or descriptor.get("predecessor_provenance")
+        != {"path": original_proposal_path.name, "sha256": sha256_path(original_proposal_path)}
+    ):
+        raise ValueError("mixed-tail predecessor runner or provenance differs")
+    original_hashes, original_root = _load_bound_snapshot(root, "predecessor_snapshot")
+    if (
+        descriptor.get("predecessor_sha256") != original_hashes
+        or descriptor.get("predecessor_tree_sha256") != canonical_hash(original_hashes)
+        or original_root != original_binding_path.parent
+    ):
+        raise ValueError("mixed-tail original source binding differs")
+    original_plan = V4.load_json(original_plan_path)
+    if (
+        original_plan.get("schema") != SUCCESSOR.PLAN_SCHEMA
+        or original_plan.get("mixed_tail_repair") is not None
+        or original_plan.get("generation_ordinals") != predecessor_plan.get("generation_ordinals")
+    ):
+        raise ValueError("mixed-tail nested original plan differs")
+    original_sidecars = _rows(original_sidecar_path)
+    generation = _mixed_ordinals(original_plan.get("generation_ordinals"), "original generation")
+    if set(original_sidecars) != set(generation):
+        raise ValueError("mixed-tail original sidecar coverage differs")
+    classified = {
+        kind: sorted(
+            ordinal
+            for ordinal in generation
+            if _mixed_class(original_sidecars[ordinal], questions[ordinal]) == kind
+        )
+        for kind in ("clean", "race_lost", "timeout", "scorer_replay")
+    }
+    if descriptor.get("allowed_class_ordinals") != classified:
+        raise ValueError("mixed-tail allowed classes differ from original sidecars")
+    expected_class_hashes = {
+        kind: canonical_hash(ordinals) for kind, ordinals in classified.items()
+    }
+    if (
+        descriptor.get("allowed_class_ordinals_sha256") != expected_class_hashes
+        or descriptor.get("classification_sha256") != canonical_hash(classified)
+    ):
+        raise ValueError("mixed-tail class hashes differ")
+    watcher_evidence, _watcher_rows = _mixed_watcher_evidence(original_watcher_path)
+    if descriptor.get("predecessor_watcher") != watcher_evidence:
+        raise ValueError("mixed-tail watcher descriptor differs")
+    overlap = sorted(
+        ordinal for ordinal in generation if _mixed_overlap(original_sidecars[ordinal], watcher_evidence)
+    )
+    race = classified["race_lost"]
+    generation_retry = sorted((set(classified["timeout"]) | set(overlap)) - set(race))
+    scorer_replay = sorted(set(classified["scorer_replay"]) - set(generation_retry))
+    if (
+        not generation_retry
+        or not scorer_replay
+        or not race
+        or descriptor.get("watcher_overlap_ordinals") != overlap
+        or descriptor.get("watcher_overlap_ordinals_sha256") != canonical_hash(overlap)
+        or descriptor.get("generation_retry_ordinals") != generation_retry
+        or descriptor.get("generation_retry_ordinals_sha256") != canonical_hash(generation_retry)
+        or descriptor.get("scorer_replay_ordinals") != scorer_replay
+        or descriptor.get("scorer_replay_ordinals_sha256") != canonical_hash(scorer_replay)
+        or descriptor.get("race_retry_ordinals") != race
+        or descriptor.get("race_retry_ordinals_sha256") != canonical_hash(race)
+    ):
+        raise ValueError("mixed-tail execution disposition differs")
+    evidence = V4.load_json(evidence_path)
+    if (
+        evidence.get("schema") != MIXED_REPAIR_SCHEMA
+        or evidence.get("descriptor_sha256") != canonical_hash(descriptor)
+        or any(evidence.get(key) != descriptor.get(key) for key in (
+            "predecessor_tree_sha256",
+            "repair_runner_sha256",
+            "allowed_class_ordinals",
+            "allowed_class_ordinals_sha256",
+            "classification_sha256",
+            "watcher_overlap_ordinals",
+            "watcher_overlap_ordinals_sha256",
+            "generation_retry_ordinals",
+            "generation_retry_ordinals_sha256",
+            "scorer_replay_ordinals",
+            "scorer_replay_ordinals_sha256",
+            "race_retry_ordinals",
+            "race_retry_ordinals_sha256",
+        ))
+        or evidence.get("remaining_race_retry_ordinals") != race
+    ):
+        raise ValueError("mixed-tail repair evidence differs from its descriptor")
+    for evidence_key, ordinals in (
+        ("generation_retry", generation_retry),
+        ("scorer_replay", scorer_replay),
+    ):
+        records = evidence.get(evidence_key)
+        if not isinstance(records, list) or [record.get("ordinal") for record in records] != ordinals:
+            raise ValueError("mixed-tail replacement evidence ordinal set differs")
+        for record in records:
+            ordinal = record["ordinal"]
+            if (
+                record.get("before_sha256") != canonical_hash(original_sidecars[ordinal])
+                or record.get("after_sha256") != canonical_hash(current_sidecars[ordinal])
+                or not _clean(current_sidecars[ordinal], questions[ordinal])
+            ):
+                raise ValueError("mixed-tail replacement hashes or result differ")
+    mixed_proposal = V4.load_json(mixed_proposal_path)
+    if (
+        mixed_proposal.get("schema") != MIXED_PROPOSAL_SCHEMA
+        or mixed_proposal.get("mixed_tail_repair") != descriptor
+    ):
+        raise ValueError("mixed-tail proposal differs from its descriptor")
+    return {
+        "schema": MIXED_CHAIN_SCHEMA,
+        "descriptor": descriptor,
+        "descriptor_sha256": canonical_hash(descriptor),
+        "repair_runner_sha256": descriptor["repair_runner_sha256"],
+        "evidence": {"path": MIXED_EVIDENCE_NAME, "sha256": sha256_path(evidence_path)},
+        "original_source": {
+            "binding_path": "predecessor_snapshot/source_binding.json",
+            "binding_sha256": sha256_path(original_binding_path),
+            "tree_sha256": descriptor["predecessor_tree_sha256"],
+        },
+    }
 
 
 def _validate_predecessor_journal(root: Path, plan: dict[str, Any], questions: list[dict[str, Any]], clean_generation: list[int]) -> dict[int, dict[str, Any]]:
@@ -183,7 +485,13 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
     predecessor = V4.load_json(root / "partial_r2_plan.json")
     categories = ("reuse_ordinals", "inherited_scorer_replay_ordinals", "imported_generation_ordinals", "scorer_replay_ordinals", "generation_ordinals")
     values = [predecessor.get(name) for name in categories]
-    if predecessor.get("schema") != SUCCESSOR.PLAN_SCHEMA or predecessor.get("protocol_id") != RECOVERY.PROTOCOL_ID or [len(value) if isinstance(value, list) else -1 for value in values] != [59, 3, 128, 12, 298] or sorted(ordinal for value in values for ordinal in value) != list(range(N)):
+    if (
+        predecessor.get("schema") != SUCCESSOR.PLAN_SCHEMA
+        or predecessor.get("protocol_id") != RECOVERY.PROTOCOL_ID
+        or any(not isinstance(value, list) for value in values)
+        or any(type(ordinal) is not int for value in values for ordinal in value)
+        or sorted(ordinal for value in values for ordinal in value) != list(range(N))
+    ):
         raise ValueError("race-retry predecessor is not the reviewed v1 successor disposition")
     base_hashes, base = _load_bound_snapshot(root, "source_snapshot")
     failed_hashes, _failed = _load_bound_snapshot(root, "failed_source_snapshot")
@@ -211,7 +519,8 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
     failure_path, failure_sha = _terminal_failure_ledger(root, sidecars, retry)
     journal = _validate_predecessor_journal(root, predecessor, questions, clean_generation)
     _require_clean_predecessor_watcher(root / "runtime_watch.r2.successor.jsonl")
-    return {
+    mixed_tail_repair = validate_mixed_predecessor(root, predecessor, questions, sidecars)
+    plan = {
         "schema": PLAN_SCHEMA, "protocol_id": RECOVERY.PROTOCOL_ID, "source": str(root),
         "predecessor_sha256": hashes, "predecessor_tree_sha256": canonical_hash(hashes),
         "retry_runner_sha256": sha256_path(Path(__file__)), "source_sha256": base_hashes,
@@ -228,6 +537,9 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
         "predecessor_failed_attempts": {"path": failure_path.name, "sha256": failure_sha, "eligibility": "exact_race_retry_authorization"},
         "retry_watcher_path": "runtime_watch.r2.race_retry.jsonl", "_journal": journal,
     }
+    if mixed_tail_repair is not None:
+        plan["mixed_tail_repair"] = mixed_tail_repair
+    return plan
 
 
 def _copy_tree(source: Path, destination: Path, hashes: dict[str, str]) -> None:
@@ -285,6 +597,8 @@ def execute(args: argparse.Namespace) -> Path:
     RECOVERY._write_json(output / "partial_r2_plan.json", persisted_plan)
     proposal = RECOVERY._recovery_proposal(persisted_plan, output, claim=claim, frontdoor_capacity=capacity, instrument=RECOVERY._instrument_identity(runner_args))
     proposal.update({"schema": PROPOSAL_SCHEMA, "retry_runner_sha256": persisted_plan["retry_runner_sha256"], "predecessor_tree_sha256": persisted_plan["predecessor_tree_sha256"], "predecessor_watcher": persisted_plan["predecessor_watcher"], "predecessor_failed_attempts": persisted_plan["predecessor_failed_attempts"], "race_retry_ordinals_sha256": canonical_hash(persisted_plan["race_retry_ordinals"])})
+    if "mixed_tail_repair" in persisted_plan:
+        proposal["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
     RECOVERY._bind_recovery_proposal(output, proposal)
     _copy_tree(base, output / "source_snapshot", persisted_plan["source_sha256"])
     _copy_tree(source, output / "predecessor_snapshot", persisted_plan["predecessor_sha256"])
@@ -324,6 +638,8 @@ def execute(args: argparse.Namespace) -> Path:
     RECOVERY._complete_r2(output, output / "source_snapshot", persisted_plan, rows, questions, args.api_url)
     marker = V4.load_json(output / "r2_complete.json")
     marker.update({"status": COMPLETE_STATUS, "watcher": evidence, "claim": claim, "predecessor_watcher": persisted_plan["predecessor_watcher"], "predecessor_failed_attempts": persisted_plan["predecessor_failed_attempts"]})
+    if "mixed_tail_repair" in persisted_plan:
+        marker["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
     RECOVERY._write_json(output / "r2_complete.json", marker)
     return output
 

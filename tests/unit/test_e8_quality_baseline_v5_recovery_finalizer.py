@@ -289,6 +289,103 @@ def test_recovery_r2_context_accepts_hash_bound_59_3_438_bundle(tmp_path: Path) 
     assert len(accepted["plan"]["generation_ordinals"]) == 438
 
 
+def test_finalizer_conditionally_recomputes_mixed_tail_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chain = {
+        "schema": "epyc.e8_quality_v5_partial_r2_mixed_tail_chain.v1",
+        "descriptor_sha256": "a" * 64,
+    }
+    monkeypatch.setattr(
+        finalizer.RACE_RETRY,
+        "validate_mixed_predecessor",
+        lambda *_args: chain,
+    )
+    race_plan = {"mixed_tail_repair": chain}
+
+    accepted = finalizer._validate_optional_mixed_tail_chain(
+        tmp_path,
+        {},
+        [],
+        {},
+        race_plan,
+    )
+
+    assert accepted == chain
+    with pytest.raises(ValueError, match="mixed-tail chain"):
+        finalizer._validate_optional_mixed_tail_chain(
+            tmp_path,
+            {},
+            [],
+            {},
+            {},
+        )
+
+
+def test_validator_requires_exact_mixed_runner_and_nested_bindings(
+    tmp_path: Path,
+) -> None:
+    race_root = tmp_path / "race"
+    evidence = race_root / "predecessor_snapshot/mixed_tail_repair.json"
+    binding = (
+        race_root
+        / "predecessor_snapshot/predecessor_snapshot/source_binding.json"
+    )
+    _write_json(evidence, {"sealed": True})
+    _write_json(binding, {"sealed": True})
+    runner_sha = _sha(validator.MIXED_TAIL_REPAIR_RUNNER_PATH)
+    mixed = {
+        "repair_runner_sha256": runner_sha,
+        "descriptor_sha256": "b" * 64,
+        "original_source": {"tree_sha256": "c" * 64},
+    }
+    context = {
+        "mixed_tail_repair_runner": {
+            "path": str(validator.MIXED_TAIL_REPAIR_RUNNER_PATH),
+            "sha256": runner_sha,
+        },
+        "mixed_tail_repair_descriptor_sha256": "b" * 64,
+        "mixed_tail_repair_evidence_path": str(evidence),
+        "mixed_tail_repair_evidence_sha256": _sha(evidence),
+        "mixed_tail_original_source_binding": str(binding),
+        "mixed_tail_original_source_binding_sha256": _sha(binding),
+        "mixed_tail_original_source_tree_sha256": "c" * 64,
+    }
+
+    with pytest.raises(ValueError, match="externally reviewed hash"):
+        validator.validate_mixed_tail_repair_context(
+            context,
+            evidence_root=tmp_path,
+            race_root=race_root,
+            mixed=mixed,
+            expected_mixed_tail_repair_runner_sha256=None,
+        )
+    with pytest.raises(ValueError, match="externally reviewed hash"):
+        validator.validate_mixed_tail_repair_context(
+            context,
+            evidence_root=tmp_path,
+            race_root=race_root,
+            mixed=mixed,
+            expected_mixed_tail_repair_runner_sha256="0" * 64,
+        )
+    validator.validate_mixed_tail_repair_context(
+        context,
+        evidence_root=tmp_path,
+        race_root=race_root,
+        mixed=mixed,
+        expected_mixed_tail_repair_runner_sha256=runner_sha,
+    )
+    context["mixed_tail_repair_evidence_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="nested source or evidence"):
+        validator.validate_mixed_tail_repair_context(
+            context,
+            evidence_root=tmp_path,
+            race_root=race_root,
+            mixed=mixed,
+            expected_mixed_tail_repair_runner_sha256=runner_sha,
+        )
+
+
 def test_completed_successor_context_reaches_external_validator(tmp_path: Path) -> None:
     """Exercise a completed successor through the final validator, not source text.
 

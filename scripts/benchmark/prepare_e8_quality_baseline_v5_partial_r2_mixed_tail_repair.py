@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Repair the one reviewed scorer tail and timeout before E8 race retry.
+"""Repair a terminal, evidence-derived mixed tail before E8 race retry.
 
 This is a deliberately one-use, fail-closed bridge.  It accepts only a
-terminal v1 successor with the reviewed mixed tail, deterministically replays
-the preserved scorer answer, and regenerates only the exact zero-token timeout.
+terminal v1 successor with only approved tail classes, deterministically replays
+preserved scorer answers, and regenerates only exact timeout/reload-overlap rows.
 The resulting terminal namespace retains only exact race-lost rows and is
 therefore accepted by ``prepare_e8_quality_baseline_v5_partial_r2_race_retry``.
 """
@@ -17,7 +17,6 @@ import os
 import re
 import shutil
 import sys
-from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,10 +28,11 @@ SUCCESSOR_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partia
 RACE_RETRY_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
 PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_successor_plan.v1"
 REPAIR_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_repair.v1"
+PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_repair_proposal.v1"
+EVIDENCE_NAME = "mixed_tail_repair.json"
 N = 500
-EXPECTED_COUNTS = Counter({"clean": 196, "race_lost": 97, "timeout": 1, "scorer_replay": 1, "reload_generation": 3})
-EXPECTED_RELOAD_GENERATION_ORDINALS = [246, 249, 250]
 TIMEOUT_ERROR = "[ERROR: Inference failed: chat_completions failed: timed out]"
+ALLOWED_CLASSES = ("clean", "race_lost", "timeout", "scorer_replay")
 
 
 def _load(path: Path, name: str) -> Any:
@@ -158,12 +158,26 @@ def _require_bounded_reload_watcher(path: Path) -> dict[str, Any]:
     failed = [index for index, row in enumerate(rows) if isinstance(row, dict) and row.get("ok") is not True]
     if not failed:
         raise ValueError("mixed-tail predecessor lacks the reviewed bounded reload interruption")
+    groups: list[list[int]] = []
+    for index in failed:
+        if not groups or index != groups[-1][-1] + 1:
+            groups.append([index])
+        else:
+            groups[-1].append(index)
+    failure_intervals = [
+        {
+            "started_at": rows[group[0]]["started_at"],
+            "finished_at": rows[group[-1]]["finished_at"],
+        }
+        for group in groups
+    ]
+    durations = [
+        _timestamp(interval["finished_at"]) - _timestamp(interval["started_at"])
+        for interval in failure_intervals
+    ]
     if (
         len(rows) < 5
-        or len(failed) != 3
-        or failed != list(range(failed[0], failed[0] + 3))
-        or failed[0] == 0
-        or failed[-1] == len(rows) - 1
+        or any(group[0] == 0 or group[-1] == len(rows) - 1 for group in groups)
         or any(not isinstance(row, dict) for row in rows)
         or any(rows[index].get("ok") is not True for index in range(len(rows)) if index not in failed)
         or any(rows[index].get("api_failure_class") != "api_transport_error" for index in failed)
@@ -173,6 +187,7 @@ def _require_bounded_reload_watcher(path: Path) -> dict[str, Any]:
         or any(rows[index].get("immutable_files_match_pre") is not True for index in failed)
         or any(rows[index].get("autopilot_active") is not False for index in failed)
         or any(row.get("active_load") not in (None, expected_load) for row in rows)
+        or any(duration < 0.0 or duration > 30.0 for duration in durations)
         or gaps != 0
         or max_gap > 7.0
     ):
@@ -190,11 +205,9 @@ def _require_bounded_reload_watcher(path: Path) -> dict[str, Any]:
         "eligibility": "excluded_audit_evidence",
         "status": "bounded_api_reload_interruption",
         "failed_sample_indexes": failed,
+        "failed_sample_groups": groups,
         "failure_class": "api_transport_error",
-        "failure_intervals": [
-            {"started_at": rows[index]["started_at"], "finished_at": rows[index]["finished_at"]}
-            for index in failed
-        ],
+        "failure_intervals": failure_intervals,
     }
 
 
@@ -239,6 +252,41 @@ def _require_predecessor_provenance(root: Path, plan: dict[str, Any]) -> dict[st
     return {"path": path.name, "sha256": sha256_path(path)}
 
 
+def _execution_sets(
+    classified: dict[str, list[int]],
+    watcher_overlap_ordinals: list[int],
+) -> tuple[list[int], list[int], list[int]]:
+    race = sorted(classified["race_lost"])
+    generation = sorted(
+        (set(classified["timeout"]) | set(watcher_overlap_ordinals)) - set(race)
+    )
+    scorer = sorted(set(classified["scorer_replay"]) - set(generation) - set(race))
+    if (
+        not generation
+        or not scorer
+        or not race
+        or set(generation) & set(scorer)
+        or set(generation) & set(race)
+        or set(scorer) & set(race)
+    ):
+        raise ValueError("mixed-tail predecessor lacks disjoint required repair classes")
+    return generation, scorer, race
+
+
+def _terminal_failures(
+    sidecars: dict[int, tuple[int, dict[str, Any]]],
+    kinds: dict[int, str],
+) -> list[dict[str, Any]]:
+    return [
+        {"ordinal": ordinal, "sidecar_sha256": canonical_hash(row)}
+        for ordinal, (_line_number, row) in sorted(
+            sidecars.items(),
+            key=lambda item: item[1][0],
+        )
+        if kinds[ordinal] != "clean"
+    ]
+
+
 def _validate_predecessor(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{64}", expected_source_tree_sha256):
         raise ValueError("mixed-tail repair requires an explicit terminal predecessor tree SHA-256")
@@ -266,7 +314,8 @@ def _validate_predecessor(source_dir: Path, expected_source_tree_sha256: str) ->
     if (
         plan.get("schema") != PLAN_SCHEMA
         or plan.get("protocol_id") != RECOVERY.PROTOCOL_ID
-        or [len(value) if isinstance(value, list) else -1 for value in values] != [59, 3, 128, 12, 298]
+        or any(not isinstance(value, list) for value in values)
+        or any(type(ordinal) is not int for value in values for ordinal in value)
         or sorted(ordinal for value in values for ordinal in value) != list(range(N))
     ):
         raise ValueError("mixed-tail predecessor is not the reviewed v1 successor disposition")
@@ -285,28 +334,22 @@ def _validate_predecessor(source_dir: Path, expected_source_tree_sha256: str) ->
         raise ValueError("mixed-tail predecessor must bank one sidecar per v1 generation ordinal")
     kinds = {ordinal: _classify(sidecars[ordinal][1], questions[ordinal]) for ordinal in generation}
     predecessor_watcher = _require_bounded_reload_watcher(root / "runtime_watch.r2.successor.jsonl")
-    overlap_ordinals = [
+    overlap_ordinals = sorted(
         ordinal for ordinal in generation
         if _overlaps_reload(sidecars[ordinal][1], predecessor_watcher)
-    ]
-    if overlap_ordinals != EXPECTED_RELOAD_GENERATION_ORDINALS or any(
-        kinds[ordinal] != "clean" for ordinal in overlap_ordinals
-    ):
-        raise ValueError("mixed-tail predecessor reload overlap differs from the reviewed in-flight rows")
-    for ordinal in overlap_ordinals:
-        kinds[ordinal] = "reload_generation"
-    if Counter(kinds.values()) != EXPECTED_COUNTS:
-        raise ValueError("mixed-tail predecessor disposition differs from the reviewed mixed tail")
-    timeout_ordinals = [ordinal for ordinal in generation if kinds[ordinal] == "timeout"]
-    scorer_ordinals = [ordinal for ordinal in generation if kinds[ordinal] == "scorer_replay"]
-    race_ordinals = [ordinal for ordinal in generation if kinds[ordinal] == "race_lost"]
-    clean_ordinals = [ordinal for ordinal in generation if kinds[ordinal] in {"clean", "reload_generation"}]
+    )
+    classified = {
+        kind: sorted(ordinal for ordinal in generation if kinds[ordinal] == kind)
+        for kind in ALLOWED_CLASSES
+    }
+    timeout_ordinals = classified["timeout"]
+    generation_retry_ordinals, scorer_ordinals, race_ordinals = _execution_sets(
+        classified,
+        overlap_ordinals,
+    )
+    clean_ordinals = classified["clean"]
     # The terminal source must attest every unresolved row, in sidecar order.
-    failures = [
-        {"ordinal": ordinal, "sidecar_sha256": canonical_hash(row)}
-        for ordinal, (_, row) in sorted(sidecars.items())
-        if kinds[ordinal] not in {"clean", "reload_generation"}
-    ]
+    failures = _terminal_failures(sidecars, kinds)
     _require_terminal_failure_ledger(root, failures)
     RACE._validate_predecessor_journal(root, plan, questions, clean_ordinals)
     return {
@@ -314,7 +357,8 @@ def _validate_predecessor(source_dir: Path, expected_source_tree_sha256: str) ->
         "base_hashes": base_hashes, "failed_hashes": failed_hashes, "questions": questions,
         "lines": lines, "sidecars": sidecars, "kinds": kinds, "timeout_ordinals": timeout_ordinals,
         "scorer_ordinals": scorer_ordinals, "race_ordinals": race_ordinals,
-        "clean_ordinals": clean_ordinals, "reload_generation_ordinals": overlap_ordinals,
+        "clean_ordinals": clean_ordinals, "watcher_overlap_ordinals": overlap_ordinals,
+        "generation_retry_ordinals": generation_retry_ordinals, "classified": classified,
         "predecessor_watcher": predecessor_watcher, "predecessor_provenance": predecessor_provenance,
     }
 
@@ -329,11 +373,20 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
         "predecessor": str(source),
         "predecessor_sha256": validated["hashes"],
         "predecessor_tree_sha256": canonical_hash(validated["hashes"]),
-        "timeout_ordinals": validated["timeout_ordinals"],
-        "reload_generation_ordinals": validated["reload_generation_ordinals"],
-        "generation_retry_ordinals": validated["timeout_ordinals"] + validated["reload_generation_ordinals"],
+        "allowed_class_ordinals": validated["classified"],
+        "allowed_class_ordinals_sha256": {
+            kind: canonical_hash(ordinals)
+            for kind, ordinals in validated["classified"].items()
+        },
+        "classification_sha256": canonical_hash(validated["classified"]),
+        "watcher_overlap_ordinals": validated["watcher_overlap_ordinals"],
+        "watcher_overlap_ordinals_sha256": canonical_hash(validated["watcher_overlap_ordinals"]),
+        "generation_retry_ordinals": validated["generation_retry_ordinals"],
+        "generation_retry_ordinals_sha256": canonical_hash(validated["generation_retry_ordinals"]),
         "scorer_replay_ordinals": validated["scorer_ordinals"],
+        "scorer_replay_ordinals_sha256": canonical_hash(validated["scorer_ordinals"]),
         "race_retry_ordinals": validated["race_ordinals"],
+        "race_retry_ordinals_sha256": canonical_hash(validated["race_ordinals"]),
         "predecessor_watcher": validated["predecessor_watcher"],
         "predecessor_provenance": validated["predecessor_provenance"],
     }
@@ -383,10 +436,15 @@ def _rewrite_target_rows(
 
 
 def _terminal_race_ledger(path: Path, sidecars: dict[int, tuple[int, dict[str, Any]]], race_ordinals: list[int]) -> None:
+    race = set(race_ordinals)
     RECOVERY._append_jsonl(path, {
         "failures": [
             {"ordinal": ordinal, "sidecar_sha256": canonical_hash(sidecars[ordinal][1])}
-            for ordinal in race_ordinals
+            for ordinal, (_line_number, _row) in sorted(
+                sidecars.items(),
+                key=lambda item: item[1][0],
+            )
+            if ordinal in race
         ],
         "disposition": "failed_closed_no_automatic_retry",
     })
@@ -396,19 +454,27 @@ def _repair_evidence(plan: dict[str, Any], replacements: dict[int, dict[str, Any
     repair = plan["mixed_tail_repair"]
     return {
         "schema": REPAIR_SCHEMA,
+        "descriptor_sha256": canonical_hash(repair),
         "predecessor_tree_sha256": repair["predecessor_tree_sha256"],
         "repair_runner_sha256": repair["repair_runner_sha256"],
+        "allowed_class_ordinals": repair["allowed_class_ordinals"],
+        "allowed_class_ordinals_sha256": repair["allowed_class_ordinals_sha256"],
+        "classification_sha256": repair["classification_sha256"],
+        "watcher_overlap_ordinals": repair["watcher_overlap_ordinals"],
+        "watcher_overlap_ordinals_sha256": repair["watcher_overlap_ordinals_sha256"],
+        "generation_retry_ordinals": repair["generation_retry_ordinals"],
+        "generation_retry_ordinals_sha256": repair["generation_retry_ordinals_sha256"],
+        "scorer_replay_ordinals": repair["scorer_replay_ordinals"],
+        "scorer_replay_ordinals_sha256": repair["scorer_replay_ordinals_sha256"],
+        "race_retry_ordinals": repair["race_retry_ordinals"],
+        "race_retry_ordinals_sha256": repair["race_retry_ordinals_sha256"],
         "scorer_replay": [
             {"ordinal": ordinal, "before_sha256": canonical_hash(source_rows[ordinal][1]), "after_sha256": canonical_hash(replacements[ordinal])}
             for ordinal in repair["scorer_replay_ordinals"]
         ],
-        "timeout_generation_retry": [
+        "generation_retry": [
             {"ordinal": ordinal, "before_sha256": canonical_hash(source_rows[ordinal][1]), "after_sha256": canonical_hash(replacements[ordinal])}
-            for ordinal in repair["timeout_ordinals"]
-        ],
-        "reload_overlap_generation_retry": [
-            {"ordinal": ordinal, "before_sha256": canonical_hash(source_rows[ordinal][1]), "after_sha256": canonical_hash(replacements[ordinal])}
-            for ordinal in repair["reload_generation_ordinals"]
+            for ordinal in repair["generation_retry_ordinals"]
         ],
         "remaining_race_retry_ordinals": repair["race_retry_ordinals"],
     }
@@ -439,7 +505,7 @@ def execute(args: argparse.Namespace) -> Path:
         _copy_then_append(source / name, output / name)
     _copy_journal_without_targets(
         source / "recovery_rows.T2.r2.jsonl", output / "recovery_rows.T2.r2.jsonl",
-        set(repair["generation_retry_ordinals"]),
+        set(repair["generation_retry_ordinals"]) | set(repair["scorer_replay_ordinals"]),
     )
     source_lines, source_rows = _rows_with_bytes(source / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl")
     journal = output / "recovery_rows.T2.r2.jsonl"
@@ -468,7 +534,7 @@ def execute(args: argparse.Namespace) -> Path:
     binding = V4.runtime_binding(runner_args)
     capacity = RECOVERY.preflight_frontdoor_capacity(binding, required=V4.CONCURRENCY, claim=claim)
     proposal = RECOVERY._recovery_proposal(plan, output, claim=claim, frontdoor_capacity=capacity, instrument=RECOVERY._instrument_identity(runner_args))
-    proposal.update({"schema": "epyc.e8_quality_v5_partial_r2_mixed_tail_repair_proposal.v1", "mixed_tail_repair": repair})
+    proposal.update({"schema": PROPOSAL_SCHEMA, "mixed_tail_repair": repair})
     RECOVERY._bind_recovery_proposal(output, proposal)
     watcher_path = output / "runtime_watch.r2.successor.jsonl"
     health = V4.api_health(runner_args.api_url, runner_args.http_timeout_s)
@@ -491,10 +557,10 @@ def execute(args: argparse.Namespace) -> Path:
     generation_replacements: dict[int, dict[str, Any]] = {}
     for ordinal in repair["generation_retry_ordinals"]:
         if ordinal not in generated_rows:
-            raise ValueError("mixed-tail generation sidecar lacks the requested timeout ordinal")
+            raise ValueError("mixed-tail generation sidecar lacks a requested repair ordinal")
         response = RECOVERY._response_from_sidecar(generated_rows[ordinal][1], questions[ordinal])
         if not V5.validate_clean_sidecar_result(response, generated_rows[ordinal][1], qid=response["qid"]):
-            raise RuntimeError("mixed-tail timeout retry did not produce a clean ordinal")
+            raise RuntimeError("mixed-tail generation retry did not produce a clean ordinal")
         RECOVERY._record(journal, rows, ordinal, response, "generation")
         generation_replacements[ordinal] = generated_rows[ordinal][1]
     trace = workspace / "generation_judge_traces.T2.r2.jsonl"
@@ -506,7 +572,7 @@ def execute(args: argparse.Namespace) -> Path:
     sidecar_path = output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
     _rewrite_target_rows(sidecar_path, source_lines, source_rows, replacements)
     _terminal_race_ledger(output / "generation_failed_attempts.T2.r2.jsonl", source_rows, repair["race_retry_ordinals"])
-    RECOVERY._write_json(output / "mixed_tail_repair.json", _repair_evidence(plan, replacements, source_rows))
+    RECOVERY._write_json(output / EVIDENCE_NAME, _repair_evidence(plan, replacements, source_rows))
     # The existing race-only runner is the final structural gate for this bridge.
     RACE.build_plan(output, canonical_hash(source_hashes(output)))
     return output

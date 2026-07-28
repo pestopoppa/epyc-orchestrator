@@ -1141,6 +1141,7 @@ def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path)
     finalizer_path = PROJECT_ROOT / "scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
     successor_path = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
     race_retry_path = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
+    mixed_tail_repair_path = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
     assert (
         validator.validate(
             evidence,
@@ -1173,6 +1174,9 @@ def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path)
             ).hexdigest(),
             "E8_V5_RACE_RETRY_RUNNER_SHA256": hashlib.sha256(
                 race_retry_path.read_bytes()
+            ).hexdigest(),
+            "E8_V5_MIXED_TAIL_REPAIR_RUNNER_SHA256": hashlib.sha256(
+                mixed_tail_repair_path.read_bytes()
             ).hexdigest(),
             "E8_V5_VALIDATOR_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
             "E8_V5_VALIDATOR_PY_SHA256": validator_sha,
@@ -1457,6 +1461,7 @@ def test_v5_applier_adapter_plan_is_read_only(tmp_path: Path) -> None:
         "E8_V5_RECOVERY_RUNNER_SHA256",
         "E8_V5_FINALIZER_RUNNER_SHA256",
         "E8_V5_RACE_RETRY_RUNNER_SHA256",
+        "E8_V5_MIXED_TAIL_REPAIR_RUNNER_SHA256",
     ],
 )
 def test_final_wrapper_prevalidates_exact_transaction_without_writes(
@@ -1498,6 +1503,7 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     finalizer_path = PROJECT_ROOT / "scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
     successor_path = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
     race_retry_path = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
+    mixed_tail_repair_path = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
     canonical_applier = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
     )
@@ -1550,6 +1556,9 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         "E8_V5_RACE_RETRY_RUNNER_SHA256": hashlib.sha256(
             race_retry_path.read_bytes()
         ).hexdigest(),
+        "E8_V5_MIXED_TAIL_REPAIR_RUNNER_SHA256": hashlib.sha256(
+            mixed_tail_repair_path.read_bytes()
+        ).hexdigest(),
         "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
         "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
         "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
@@ -1569,6 +1578,9 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     )
     assert stage.returncode == 0, stage.stderr
     review = json.loads(review_path.read_text())
+    assert review["reviewed_artifact_sha256"]["mixed_tail_repair_runner"] == hashlib.sha256(
+        mixed_tail_repair_path.read_bytes()
+    ).hexdigest()
     assert review["state_candidate_review"]["pre_state_sha256"] == pre_sha
     assert review["state_candidate_review"]["candidate_state_sha256"] == candidate_sha
     completed = subprocess.run(
@@ -1746,6 +1758,9 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     receipts = list((sandbox_root / "artifacts" / "operator").glob("*.ratification.json"))
     assert receipts
     receipt = json.loads(receipts[0].read_text())
+    assert receipt["reviewed_artifact_sha256"]["mixed_tail_repair_runner"] == hashlib.sha256(
+        mixed_tail_repair_path.read_bytes()
+    ).hexdigest()
     assert receipt["candidate_state_sha256"] == hashlib.sha256(
         sandbox_state.read_bytes()
     ).hexdigest()
@@ -1847,6 +1862,9 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     )
     assert len(recovered_receipts) == 1
     recovered_receipt = json.loads(recovered_receipts[0].read_text())
+    assert recovered_receipt["reviewed_artifact_sha256"][
+        "mixed_tail_repair_runner"
+    ] == hashlib.sha256(mixed_tail_repair_path.read_bytes()).hexdigest()
     assert recovered_receipt["canonical_transaction"] == str(transactions[0].resolve())
     assert recovered_receipt["canonical_apply_attestation"] == str(
         apply_attestations[0].resolve()
@@ -1917,5 +1935,10 @@ def test_final_wrapper_receipt_binds_composite_source_identity() -> None:
     source = wrapper.read_text()
     assert '"source_root": str(source_root.resolve())' in source
     assert '"source_head": source_head' in source
-    for field in ("producer", "recovery_runner", "finalizer_runner"):
+    for field in (
+        "producer",
+        "recovery_runner",
+        "finalizer_runner",
+        "mixed_tail_repair_runner",
+    ):
         assert f'"{field}": sha({field})' in source
