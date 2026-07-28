@@ -114,21 +114,26 @@ runbook documents).
   a dated activation observation appended to its history (append-only
   discipline).
 
-## 2. `stack_manifest.py` launch constants (the 3 lines)
+## 2. `stack_manifest.py` launch entries (what the activation diff ACTUALLY adds)
 
-Fallback constants in the `VISION_ESCALATION_*` style (priors override them at
-launch; they also feed the model-existence check, so they must not lie):
+> **2026-07-28 P2-6 punch-list amendment:** the lane constants
+> (`GPU_SHADOW_LANE_TENANT_ROLE` / `_DEVICE` / `_REASONING` / fallback shape)
+> and the gated `gpu_shadow_lane` mode branch in
+> `_build_servers_from_classification` are **ALREADY LANDED, inert**, in
+> `stack_manifest.py` — as are the mode dispatch in
+> `stack_commands.py` (cmd_start/reload), the builder + `start_server` branch
+> in `orchestrator_stack.py`, the prewarm exclusion in `stack_prewarm.py`, and
+> the `tenant_role` compile contract (registry_compiler / model-descriptor /
+> stack-priors path, P0-1). They fire only for an entry carrying the
+> `gpu_shadow_lane` mode / `tenant_role` key, and no entry exists until this
+> proposal is applied (witnesses:
+> `tests/unit/test_gpu_shadow_lane_compile_contract.py`,
+> `tests/unit/test_gpu_shadow_lane.py::test_orchestrator_stack_has_no_lane_coupling`).
+> The activation diff below is therefore SMALLER than the original P0-7
+> version of this file described: two dict entries + one port here, one
+> NUMA_CONFIG entry in `stack_numa.py`, nothing else.
 
-```python
-# GPU shadow lane (docs/gpu-shadow-lane.md). Tenancy is registry data: the
-# launcher borrows priors from the registry role below (eval_batch_frontdoor
-# source_role pattern). Duty swap = repoint this ONE constant.
-GPU_SHADOW_LANE_TENANT_ROLE = "coder_escalation_shadow"
-GPU_SHADOW_LANE_DEVICE = "ROCm0"
-GPU_SHADOW_LANE_REASONING = "off"
-```
-
-Plus the classification/wiring entries (two dicts + one port, same file):
+Classification/wiring entries to apply (two dicts + one port, same file):
 
 ```python
 # PORT_MAP addition:
@@ -137,11 +142,16 @@ Plus the classification/wiring entries (two dicts + one port, same file):
 # ROLE_LAUNCH_META addition (WARM tier — never started by a normal `start`):
     # gpu-serving-tie-in P2: role-agnostic MI210 shadow lane. launcher_only keeps
     # the process identity out of lean-registry/descriptor compile inputs; the
-    # TENANT is the registry role named by GPU_SHADOW_LANE_TENANT_ROLE.
+    # TENANT is the registry role named by tenant_role, which the P0-1 compile
+    # contract carries through lean/descriptor/stack-prior compilation as a
+    # `deployment_status: launcher_tenant` record (NEVER live_stack — routing
+    # and lock consumers do not see it; only an explicit
+    # `start --only gpu_shadow_lane` resolves it).
     "gpu_shadow_lane": {
         "tier": "warm",
         "mode": "gpu_shadow_lane",
         "launcher_only": True,
+        "tenant_role": GPU_SHADOW_LANE_TENANT_ROLE,
     },
 ```
 
@@ -159,67 +169,30 @@ in VRAM — no mlock):
     },
 ```
 
-## 3. `orchestrator_stack.py` builder (activation diff)
+## 3. `orchestrator_stack.py` builder (LANDED — no activation diff here)
 
-New mode-specific builder next to `_build_eval_batch_frontdoor_command`
-(same dispatcher wiring shape: a `gpu_shadow_lane_mode` branch in
-`build_server_command`/`start_server`). MTP OFF per D6: no speculative args.
+> **2026-07-28 P2-6 punch-list amendment:** `_build_gpu_shadow_lane_command`,
+> the `gpu_shadow_lane_mode` dispatch in `build_server_command`, and the
+> `start_server` lane branch are **landed and inert** in
+> `orchestrator_stack.py` (reachable only via the mode flag no server entry
+> carries). MTP OFF per D6: the builder emits no speculative args by
+> construction.
 
-```python
-def _build_gpu_shadow_lane_command(port: int, numa_instance: int = 0) -> list[str]:
-    """Role-agnostic GPU shadow lane (docs/gpu-shadow-lane.md).
+How the landed builder resolves its inputs:
 
-    Tenant priors come from the registry role named by
-    GPU_SHADOW_LANE_TENANT_ROLE (tenancy as data). Serving shape mirrors the
-    measured np_context_study_v8 argv; -np/-c must stay within
-    orchestration/gpu_shadow_lane_np_ceiling.yaml (verified by the preflight
-    probe, scripts/server/gpu_shadow_lane_preflight.py).
-    """
-    source_role = GPU_SHADOW_LANE_TENANT_ROLE
-    requirements, runtime = _stack_prior_launch(source_role)
-    cache = _runtime_cache(runtime)
-    flags = _runtime_flags(runtime)
-    cmd = [
-        _runtime_string(runtime, "binary_path", "/mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server"),
-        "-m",
-        _runtime_string(requirements, "model_path", ""),
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--metrics",
-        "--slots",
-        "--jinja",
-        "--device",
-        str(flags.get("device") or GPU_SHADOW_LANE_DEVICE),
-        "-ngl",
-        "all",
-        "-fa",
-        "on",
-        "-np",
-        _runtime_positive_int(cache, "slots", 8),
-        "-c",
-        _runtime_positive_int(cache, "context_tokens", 65536),
-        "-t",
-        _resolve_thread_count("gpu_shadow_lane", numa_instance),
-        "-tb",
-        _resolve_thread_count("gpu_shadow_lane", numa_instance),
-        "-b",
-        "2048",
-        "-ub",
-        "2048",
-        "-ctk",
-        _runtime_string(cache, "kv_type_k", "f16"),
-        "-ctv",
-        _runtime_string(cache, "kv_type_v", "f16"),
-        "--log-colors",
-        "off",
-    ]
-    reasoning = flags.get("reasoning") or GPU_SHADOW_LANE_REASONING
-    if isinstance(reasoning, str) and reasoning:
-        cmd.extend(["--reasoning", reasoning])
-    return cmd
-```
+- **Tenant priors**: `_stack_prior_launch(GPU_SHADOW_LANE_TENANT_ROLE)` — now
+  falls back to the role's `launcher_tenant` stack-prior record (P0-1b), so an
+  explicitly-requested launcher-only start resolves model path, HIP binary
+  dir/LD paths, device, reasoning, and KV types WITHOUT the role being
+  classified live.
+- **Serving shape** (P0-1c): `-np`/`-c` come from the compiled priors cache
+  (`slots`/`context_tokens`), which the stack-priors compiler fills from the
+  `serving_shape` block of `orchestration/gpu_shadow_lane_np_ceiling.yaml`
+  (`-np 8` × 8192-token slots ⇒ `-c 65536`) — NEVER from the CPU-mode launcher
+  defaults (SERIAL_ROLES 2-slot / 32768-ctx). The builder's literal fallbacks
+  (`GPU_SHADOW_LANE_FALLBACK_SLOTS/-CONTEXT_TOKENS`) mirror the same phase2
+  shape and exist only for the degraded no-priors case; the preflight probe
+  independently validates whatever is planned against the np_ceiling table.
 
 CPU pinning comes from `_numa_prefix("gpu_shadow_lane")` (taskset 184-191),
 applied by the launcher exactly as for every other role — the builder itself
@@ -228,26 +201,32 @@ never pins.
 Reference plan (default `-np 8` × 8192-token slots, `phase2_resident_set`
 row): `scripts/server/gpu_shadow_lane.py::build_tenant_launch_plan` emits the
 full measured-shape argv; the preflight probe prints it in every report for
-eyeball parity with this builder.
+eyeball parity, and
+`tests/unit/test_gpu_shadow_lane_compile_contract.py::TestGpuShadowLaneBuilder`
+asserts flag-level parity between the two.
 
 ## 4. Verification checklist for the Step-2 pipeline gates
 
-After applying §1–§3 + lean recompile, the regenerated
-`orchestration/derived/stack_priors.yaml` block for `coder_escalation_shadow`
-must show:
+After applying §1–§2 (+ the `stack_numa.py` entry) + lean recompile, the
+regenerated `orchestration/derived/stack_priors.yaml` block for
+`coder_escalation_shadow` must show:
+- [ ] `deployment_status: launcher_tenant` (P0-1 contract — NEVER `live_stack`; `live_stack_role_records` must not surface the role, `launcher_tenant_role_records` must)
 - [ ] `launch.requirements.model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-27B-Q8_0.gguf`
 - [ ] `runtime.binary_path: /mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server`; `binary_dir` + `ld_library_path` same dir
 - [ ] `runtime.env_policy: binary_override_strip_ggml`, `kmp_blocktime: 10` (derived — proves the binary override is active; the launcher strips `GGML_*` for non-canonical binaries)
 - [ ] `runtime.flags: {flash_attn: true, device: ROCm0, reasoning: 'off'}`
-- [ ] `runtime.cache: {context_tokens: 65536, slots: 8, kv_type_k: f16, kv_type_v: f16}` (= `-np 8` × 8192-token slots, within the np_ceiling `phase2_resident_set` row)
+- [ ] `runtime.cache: {context_tokens: 65536, slots: 8, kv_type_k: f16, kv_type_v: f16}` (= `-np 8` × 8192-token slots, sourced from the np_ceiling `serving_shape` block via the P0-1c compile path — if slots/context show the CPU defaults (2 / 32768), the serving-shape resolution failed: STOP)
+- [ ] no `known_gaps` entry `Missing launcher-tenant serving shape …` (that gap = the serving_shape block failed to load)
 - [ ] `stack_change_pipeline.py check --run-promotion-gate` green (new gaps are NOT acceptable; documented known-gaps are)
-- [ ] launch-parity witnesses in `tests/unit/test_build_server_command_helpers.py` extended to the new builder (designed witness mechanism, not a regression)
-- [ ] the zero-coupling witness `tests/unit/test_gpu_shadow_lane.py::test_orchestrator_stack_has_no_lane_coupling` flipped to its State-B expectation (launch files now legitimately reference the lane — update the witness to assert the wiring instead; same designed-witness mechanism)
-- [ ] `git diff` in orchestrator touches ONLY: lean/derived regenerations, `stack_manifest.py` (constants + two dict entries + port), `stack_numa.py` (one entry), `orchestrator_stack.py` (builder + dispatcher branch, plus its parity test). Anything else = stop.
+- [ ] the State-A inertness witnesses in `tests/unit/test_gpu_shadow_lane.py::test_orchestrator_stack_has_no_lane_coupling` flipped to their State-B expectation (the manifest/NUMA/port assertions now legitimately find the lane — update the witness to assert the applied wiring instead; same designed-witness mechanism). The per-stage contract witnesses in `tests/unit/test_gpu_shadow_lane_compile_contract.py` need NO flip (they test both key-present and key-absent behavior with fixtures).
+- [ ] **`git diff` in orchestrator touches ONLY**: lean/derived regenerations, `stack_manifest.py` (two dict entries + one PORT_MAP line), `stack_numa.py` (one NUMA_CONFIG entry). **Anything else = stop.** In particular the diff must NOT touch `orchestrator_stack.py`, `stack_commands.py`, or `stack_prewarm.py`: their lane plumbing (builder, `gpu_shadow_lane_mode` dispatch in cmd_start/reload, prewarm exclusion) was PRE-LANDED inert by the 2026-07-28 P2-6 punch-list commits, precisely so the activation diff stays minimal and pre-validated — a diff touching them means someone is re-implementing landed plumbing.
 
 ## 5. Rollback shape
 
 `git revert` of the two activation commits (research: master-registry block;
-orchestrator: constants + builder + regenerated lean/priors), lean recompile,
-Step-2 gates, `stop gpu_shadow_lane`, contention recert. Byte-for-byte the
-State-A shape — this file remains on disk as the dormant proposal either way.
+orchestrator: the §2 manifest entries + `stack_numa.py` entry + regenerated
+lean/priors — the pre-landed gated plumbing stays, returning to dormant),
+lean recompile, Step-2 gates, `stop gpu_shadow_lane`, the Step-3a API-only
+reload mirror (docs/gpu-shadow-lane.md §7 Step 7), contention recert.
+Byte-for-byte the State-A shape — this file remains on disk as the dormant
+proposal either way.
