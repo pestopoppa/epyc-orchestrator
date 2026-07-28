@@ -494,7 +494,8 @@ def _expected_recovery_plan(plan: dict[str, Any]) -> None:
 
 
 def validate_recovery_r2_context(
-    report: dict[str, Any], *, evidence_root: Path, expected_recovery_runner_sha256: str | None
+    report: dict[str, Any], *, evidence_root: Path, expected_recovery_runner_sha256: str | None,
+    expected_finalizer_runner_sha256: str | None = None,
 ) -> dict[str, Any] | None:
     """Bind a completed partial-r2 repair without calling it a pristine run.
 
@@ -514,6 +515,19 @@ def validate_recovery_r2_context(
         or runner_ref.get("sha256") != expected_recovery_runner_sha256
     ):
         raise ValueError("recovery-r2 runner differs from the externally reviewed hash")
+    finalizer_ref = context.get("finalizer_runner")
+    dependencies = context.get("dependency_sha256")
+    if (
+        not isinstance(expected_finalizer_runner_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_finalizer_runner_sha256)
+        or not isinstance(finalizer_ref, dict)
+        or finalizer_ref.get("sha256") != expected_finalizer_runner_sha256
+        or not isinstance(dependencies, dict)
+        or set(dependencies) != {"v5", "resume", "recovery"}
+        or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value) for value in dependencies.values())
+        or dependencies["recovery"] != expected_recovery_runner_sha256
+    ):
+        raise ValueError("recovery-r2 finalizer instrument differs from the reviewed hash")
     plan_path = resolve_artifact(evidence_root, context.get("plan_path"), "recovery-r2 plan")
     proposal_path = resolve_artifact(evidence_root, context.get("proposal_path"), "recovery-r2 proposal")
     complete_path = resolve_artifact(evidence_root, context.get("complete_path"), "recovery-r2 completion")
@@ -574,6 +588,7 @@ def validate_recovery_r2_context(
     r2_response = resolve_artifact(evidence_root, context.get("response_path"), "recovery-r2 response")
     r2_sidecar = resolve_artifact(evidence_root, context.get("sidecar_path"), "recovery-r2 sidecar")
     r2_trace = resolve_artifact(evidence_root, context.get("trace_path"), "recovery-r2 trace")
+    r2_raw = resolve_artifact(evidence_root, context.get("raw_path"), "recovery-r2 raw observation")
     if (
         complete.get("schema") != RECOVERY_R2_COMPLETE_SCHEMA
         or complete.get("status") != "intermediate_r2_complete"
@@ -581,6 +596,7 @@ def validate_recovery_r2_context(
         or complete.get("responses_sha256") != sha256_path(r2_response)
         or complete.get("sidecar_sha256") != sha256_path(r2_sidecar)
         or complete.get("trace_sha256") != sha256_path(r2_trace)
+        or complete.get("raw_sha256") != sha256_path(r2_raw)
     ):
         raise ValueError("recovery-r2 completion marker differs")
     watcher = complete.get("watcher")
@@ -594,6 +610,7 @@ def validate_recovery_r2_context(
         or watcher["samples"] < 1
         or watcher.get("claim_before") != claim
         or watcher.get("claim_after") != claim
+        or watcher.get("proposal_sha256") != sha256_path(proposal_path)
         or not isinstance(claim, dict)
         or not claim.get("claims")
         or not claim.get("global_claims")
@@ -608,7 +625,10 @@ def validate_recovery_r2_context(
     if proposal_claim != expected_claim:
         raise ValueError("recovery-r2 proposal claim differs from completion evidence")
     journal_path = resolve_artifact(evidence_root, context.get("journal_path"), "recovery-r2 journal")
+    if context.get("journal_sha256") != sha256_path(journal_path) or complete.get("journal_sha256") != sha256_path(journal_path):
+        raise ValueError("recovery-r2 journal hash differs")
     journal = load_jsonl(journal_path)
+    final_responses = load_jsonl(r2_response)
     sources: dict[str, list[int]] = {name: [] for name in RECOVERY_R2_EXPECTED_COUNTS}
     for row in journal:
         ordinal, source = row.get("ordinal"), row.get("source")
@@ -620,6 +640,8 @@ def validate_recovery_r2_context(
             or not isinstance(row.get("response"), dict)
         ):
             raise ValueError("recovery-r2 journal row differs")
+        if final_responses and (ordinal >= len(final_responses) or row["response"] != final_responses[ordinal]):
+            raise ValueError("recovery-r2 journal response differs from final ledger")
         sources[source].append(ordinal)
     if (
         {name: len(rows) for name, rows in sources.items()} != RECOVERY_R2_EXPECTED_COUNTS
@@ -970,6 +992,7 @@ def validate(
     expected_base_runner_sha256: str,
     expected_resume_runner_sha256: str | None = None,
     expected_recovery_runner_sha256: str | None = None,
+    expected_finalizer_runner_sha256: str | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{64}", expected_runner_sha256):
         raise ValueError("expected runner SHA-256 is malformed")
@@ -1027,6 +1050,7 @@ def validate(
         report,
         evidence_root=evidence_root,
         expected_recovery_runner_sha256=expected_recovery_runner_sha256,
+        expected_finalizer_runner_sha256=expected_finalizer_runner_sha256,
     )
     if partial_context is not None and recovery_context is not None:
         raise ValueError("partial-resume and recovery-r2 contexts are mutually exclusive")
@@ -1244,7 +1268,7 @@ def validate(
                 detail.get("judge_trace_path"),
                 "judge-trace ledger",
             )
-            if recovery_context is not None and (tier, repetition) in {(2, 1), (2, 2)}:
+            if recovery_context is not None and (tier, repetition) == (2, 2):
                 recovered = recovery_context
                 if (
                     response_path != recovered["response_path"]
@@ -1347,10 +1371,21 @@ def validate(
                 tier=tier,
                 repetition=repetition,
             )
-            if recovery_context is not None and (tier, repetition) == (2, 2):
+            recovered_r2 = recovery_context is not None and (tier, repetition) == (2, 2)
+            if recovered_r2:
                 # The repaired intermediate already sealed its scorer outcomes.
                 # Its journal is validated above; do not reinterpret it as a
                 # pristine v5 scorer-tail mutation.
+                replay_ordinals = recovery_context["plan"]["scorer_replay_ordinals"]
+                expected_replay = [
+                    {"ordinal": ordinal, "qid": expected_qids[ordinal], "outcome": "recovered"}
+                    for ordinal in replay_ordinals
+                ]
+                if (
+                    detail.get("scorer_tail_replay") != expected_replay
+                    or detail.get("scorer_sidecar_replacement_ordinals") != replay_ordinals
+                ):
+                    raise ValueError("recovery-r2 scorer replay differs from its sealed plan")
                 scorer_targets = {}
             expected_scorer_tail = [
                 {"ordinal": ordinal, "qid": qid, "outcome": "recovered"}
@@ -1358,7 +1393,10 @@ def validate(
             ]
             scorer_tail = detail.get("scorer_tail_replay")
             scorer_replacements = detail.get("scorer_sidecar_replacement_ordinals")
-            if scorer_tail != expected_scorer_tail or scorer_replacements != sorted(scorer_targets):
+            if not recovered_r2 and (
+                scorer_tail != expected_scorer_tail
+                or scorer_replacements != sorted(scorer_targets)
+            ):
                 raise ValueError("scorer-tail disposition is not derived from pristine traces")
             if partial_context is not None and (tier, repetition) == (2, 1):
                 validate_partial_scorer_recovery_binding(
@@ -1874,6 +1912,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-base-runner-sha256", required=True)
     parser.add_argument("--expected-resume-runner-sha256")
     parser.add_argument("--expected-recovery-runner-sha256")
+    parser.add_argument("--expected-finalizer-runner-sha256")
     args = parser.parse_args(argv)
     print(
         json.dumps(
@@ -1883,6 +1922,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_base_runner_sha256=args.expected_base_runner_sha256,
                 expected_resume_runner_sha256=args.expected_resume_runner_sha256,
                 expected_recovery_runner_sha256=args.expected_recovery_runner_sha256,
+                expected_finalizer_runner_sha256=args.expected_finalizer_runner_sha256,
             ),
             sort_keys=True,
         )
