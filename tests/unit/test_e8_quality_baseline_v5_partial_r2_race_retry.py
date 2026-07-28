@@ -285,6 +285,7 @@ def _mixed_chain_fixture(tmp_path: Path) -> tuple[Path, dict, list[dict], dict[i
         "clean": [3],
         "race_lost": [0],
         "timeout": [1],
+        "outer_timeout": [],
         "scorer_replay": [2],
     }
     descriptor = {

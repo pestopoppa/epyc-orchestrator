@@ -25,6 +25,7 @@ FINALIZER_RUNNER="$SOURCE_ROOT/scripts/benchmark/finalize_e8_quality_baseline_v5
 SUCCESSOR_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
 RACE_RETRY_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
 MIXED_TAIL_REPAIR_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
+TERMINALIZER_RUNNER="$SOURCE_ROOT/scripts/benchmark/terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
 VALIDATOR="$SOURCE_ROOT/scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
 VALIDATOR_PY="$SOURCE_ROOT/scripts/benchmark/validate_e8_quality_baseline_v5.py"
 APPLIER="$SOURCE_ROOT/scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
@@ -85,7 +86,7 @@ fi
 reviewed_artifact_bindings_json() {
     env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 PYTHONOPTIMIZE=0 "$PYTHON" -I - \
         "$WRAPPER" "$PRODUCER" "$RUNNER" "$RESUME_RUNNER" "$BASE_RUNNER" \
-        "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$RACE_RETRY_RUNNER" "$MIXED_TAIL_REPAIR_RUNNER" "$VALIDATOR" \
+        "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$RACE_RETRY_RUNNER" "$MIXED_TAIL_REPAIR_RUNNER" "$TERMINALIZER_RUNNER" "$VALIDATOR" \
         "$VALIDATOR_PY" "$APPLIER" "$CANONICAL_APPLIER" <<'PY'
 import hashlib
 import json
@@ -95,7 +96,7 @@ import sys
 names = (
     "wrapper", "producer", "runner", "resume_runner", "base_runner",
     "recovery_runner", "finalizer_runner", "successor_runner", "race_retry_runner",
-    "mixed_tail_repair_runner", "validator",
+    "mixed_tail_repair_runner", "terminalizer_runner", "validator",
     "validator_python", "applier_adapter", "canonical_applier",
 )
 print(json.dumps({name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -469,16 +470,16 @@ if [[ "${E8_V5_TEST_FAIL_RECEIPT_MINT:-}" == "1" ]]; then
 fi
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 PYTHONOPTIMIZE=0 "$PYTHON" -I - \
     "$PROTOCOL_RECEIPT" "$TRANSACTION" "$ATTESTATION" "$EVIDENCE" "$WRAPPER" "$PRODUCER" "$RUNNER" "$RESUME_RUNNER" "$BASE_RUNNER" \
-    "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$RACE_RETRY_RUNNER" "$MIXED_TAIL_REPAIR_RUNNER" "$VALIDATOR" "$VALIDATOR_PY" "$APPLIER" "$CANONICAL_APPLIER" "$STATE_REVIEW" \
+    "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$RACE_RETRY_RUNNER" "$MIXED_TAIL_REPAIR_RUNNER" "$TERMINALIZER_RUNNER" "$VALIDATOR" "$VALIDATOR_PY" "$APPLIER" "$CANONICAL_APPLIER" "$STATE_REVIEW" \
     "$SOURCE_ROOT" "$E8_V5_ORCHESTRATOR_HEAD" "$EXPECTED_PRE" "$EXPECTED_CANDIDATE" "$STATE_REVIEW_SHA256" "$TOKEN" <<'PY'
 import hashlib, json, os, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
-output, transaction, canonical_attestation, evidence, wrapper, producer, runner, resume_runner, base_runner, recovery_runner, finalizer_runner, successor_runner, race_retry_runner, mixed_tail_repair_runner, validator, validator_py, applier, canonical_applier, state_review, source_root = map(
-    Path, sys.argv[1:21]
+output, transaction, canonical_attestation, evidence, wrapper, producer, runner, resume_runner, base_runner, recovery_runner, finalizer_runner, successor_runner, race_retry_runner, mixed_tail_repair_runner, terminalizer_runner, validator, validator_py, applier, canonical_applier, state_review, source_root = map(
+    Path, sys.argv[1:22]
 )
-source_head, pre, candidate, state_review_sha256, token = sys.argv[21:]
+source_head, pre, candidate, state_review_sha256, token = sys.argv[22:]
 sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 if not transaction.is_dir() or not (transaction / "transaction.json").is_file():
     raise RuntimeError("canonical state transaction is absent after CAS")
@@ -512,6 +513,7 @@ payload = {
         "successor_runner": sha(successor_runner),
         "race_retry_runner": sha(race_retry_runner),
         "mixed_tail_repair_runner": sha(mixed_tail_repair_runner),
+        "terminalizer_runner": sha(terminalizer_runner),
         "validator": sha(validator),
         "validator_python": sha(validator_py),
         "applier_adapter": sha(applier),

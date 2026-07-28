@@ -28,6 +28,7 @@ RECOVERY_PATH = PROJECT_ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5
 SUCCESSOR_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
 RACE_RETRY_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
 MIXED_REPAIR_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
+TERMINALIZER_PATH = PROJECT_ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
 CONTEXT_SCHEMA = "epyc.e8_quality_v5_recovery_r2_finalizer.v1"
 COMPOSITE_SOURCE_DIR = Path(
     "/mnt/raid0/llm/epyc-root/artifacts/operator/"
@@ -162,7 +163,7 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
     actual_hashes = {
         str(item.relative_to(source_binding.parent)): sha256_path(item)
         for item in sorted(source_binding.parent.rglob("*"))
-        if item.is_file() and item.name != "source_binding.json"
+        if item.is_file() and item != source_binding
     }
     all_ordinals = [
         ordinal
@@ -483,7 +484,7 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
     actual_base = {
         str(path.relative_to(base_root)): sha256_path(path)
         for path in sorted(base_root.rglob("*"))
-        if path.is_file() and path.name != "source_binding.json"
+        if path.is_file() and path != required["base_binding"]
     }
     predecessor_binding = V4.load_json(required["predecessor_binding"])
     predecessor_hashes = predecessor_binding.get("source_sha256")
@@ -491,7 +492,7 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
     actual_predecessor = {
         str(path.relative_to(predecessor_root)): sha256_path(path)
         for path in sorted(predecessor_root.rglob("*"))
-        if path.is_file() and path.name != "source_binding.json"
+        if path.is_file() and path != required["predecessor_binding"]
     }
     if (
         not isinstance(base_hashes, dict) or base_hashes != actual_base
@@ -1025,6 +1026,20 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
             "mixed_tail_original_source_binding_sha256": sha256_path(original_binding),
             "mixed_tail_original_source_tree_sha256": chain["original_source"]["tree_sha256"],
         }
+        terminalization = chain.get("terminalization_transition")
+        if terminalization is not None:
+            transition = mixed_root / terminalization["path"]
+            mixed_tail_context.update({
+                "terminalization_transition": str(
+                    destination / "recovery_r2_intermediate/predecessor_snapshot" / terminalization["path"]
+                ),
+                "terminalization_transition_sha256": sha256_path(transition),
+                "terminalizer_runner": {
+                    "path": str(TERMINALIZER_PATH),
+                    "sha256": sha256_path(TERMINALIZER_PATH),
+                },
+                "terminalization_source_tree_sha256": terminalization["source_tree_sha256"],
+            })
     report["recovery_r2"] = {
         "schema": CONTEXT_SCHEMA,
         "recovery_runner": {"path": str(RECOVERY_PATH), "sha256": sha256_path(RECOVERY_PATH)},

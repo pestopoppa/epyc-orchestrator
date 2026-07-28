@@ -60,6 +60,44 @@ def test_exact_allowed_classes_are_disjoint() -> None:
     assert not REPAIR._scorer_only(timeout, QUESTION)
 
 
+def _outer_timeout_row(**overrides: object) -> dict:
+    row = _row(error="timed out", answer="", scoring_method=None)
+    row.pop("answer")
+    row["answer"] = ""
+    row.update({"started_at_s": 100.0, "ended_at_s": 400.01, "elapsed_s": 300.01})
+    row["result"] = {
+        "qid": "q0", "question_id": "q0", "error": True,
+        "error_detail": "timed out", "tokens_generated": 0, "latency_ms": 300010,
+    }
+    for key, value in overrides.items():
+        if key.startswith("result_"):
+            row["result"][key.removeprefix("result_")] = value
+        else:
+            row[key] = value
+    return row
+
+
+def test_outer_timeout_requires_the_sealed_unrouted_300_second_shape() -> None:
+    assert REPAIR._classify(_outer_timeout_row(), QUESTION) == "outer_timeout"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"result_tokens_generated": False},
+        {"result_route": None},
+        {"answer": "unexpected"},
+        {"elapsed_s": 299.0},
+        {"ended_at_s": 399.0},
+        {"result_latency_ms": 299000},
+        {"started_at_s": False},
+    ],
+)
+def test_outer_timeout_lookalikes_fail_closed(overrides: dict) -> None:
+    with pytest.raises(ValueError, match="unapproved"):
+        REPAIR._classify(_outer_timeout_row(**overrides), QUESTION)
+
+
 @pytest.mark.parametrize(
     "row",
     [
@@ -94,6 +132,7 @@ def test_terminal_execution_sets_are_derived_without_fixed_counts() -> None:
         "clean": [246, 249, 250, 281, 282, 400],
         "race_lost": [97, 203, 279, 401],
         "timeout": [138, 253, 402],
+        "outer_timeout": [],
         "scorer_replay": [224, 403],
     }
     overlap = [246, 249, 250, 279, 281, 282]
