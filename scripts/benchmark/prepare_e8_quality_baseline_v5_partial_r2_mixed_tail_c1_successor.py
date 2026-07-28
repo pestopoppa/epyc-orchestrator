@@ -127,25 +127,37 @@ def _workspace_rows(path: Path, questions: list[dict[str, Any]]) -> tuple[list[b
     return lines, rows
 
 
-def _serial_reference(root: Path, questions: list[dict[str, Any]]) -> dict[str, Any]:
+def _banked_clean_reference(root: Path, questions: list[dict[str, Any]]) -> dict[str, Any]:
     path = root / "source_snapshot/eval_sidecars/question_results.e8-t2-r1.jsonl"
     if not path.is_file() or path.is_symlink():
-        raise ValueError("mixed-tail c1 serial reference sidecar is missing")
+        raise ValueError("mixed-tail c1 banked clean reference sidecar is missing")
+    batch_starts = [
+        row
+        for row in V4.load_jsonl(path)
+        if row.get("row_type") == "batch_start"
+    ]
+    if (
+        len(batch_starts) != 1
+        or batch_starts[0].get("requested_n") != N
+        or batch_starts[0].get("concurrency") != V4.CONCURRENCY
+    ):
+        raise ValueError("mixed-tail c1 banked clean reference cadence differs from c3")
     rows = RACE._rows(path)
     if not set(C1_RETRY) <= set(rows):
-        raise ValueError("mixed-tail c1 serial reference lacks a retry ordinal")
+        raise ValueError("mixed-tail c1 banked clean reference lacks a retry ordinal")
     elapsed: dict[str, float] = {}
     for ordinal in C1_RETRY:
         response = RECOVERY._response_from_sidecar(rows[ordinal], questions[ordinal])
         if not V5.validate_clean_sidecar_result(response, rows[ordinal], qid=response["qid"]):
-            raise ValueError("mixed-tail c1 serial reference is not clean")
+            raise ValueError("mixed-tail c1 banked clean reference is not clean")
         value = rows[ordinal].get("elapsed_s")
         if type(value) not in (int, float) or not 0.0 < float(value) < float(V5.REQUEST_TIMEOUT_S):
-            raise ValueError("mixed-tail c1 serial reference duration is invalid")
+            raise ValueError("mixed-tail c1 banked clean reference duration is invalid")
         elapsed[str(ordinal)] = float(value)
     return {
         "path": str(path.relative_to(root)),
         "sha256": sha256_path(path),
+        "generation_concurrency": V4.CONCURRENCY,
         "retry_elapsed_s": elapsed,
     }
 
@@ -237,7 +249,7 @@ def _source_state(
         "workspace_rows": workspace_rows,
         "journal": journal,
         "watcher": watcher,
-        "serial_reference": _serial_reference(source, questions),
+        "banked_clean_reference": _banked_clean_reference(source, questions),
     }
 
 
@@ -267,7 +279,7 @@ def _schedule(state: dict[str, Any], runner_args: argparse.Namespace) -> dict[st
                 "path": "recovery_rows.T2.r2.jsonl",
                 "sha256": sha256_path(state["source"] / "recovery_rows.T2.r2.jsonl"),
             },
-            "serial_reference": state["serial_reference"],
+            "banked_clean_reference": state["banked_clean_reference"],
         },
         "runner": {
             "path": Path(__file__).name,
@@ -550,6 +562,7 @@ def execute(args: argparse.Namespace) -> Path:
         "protocol_id": RECOVERY.PROTOCOL_ID,
         "source_tree_sha256": plan["source_tree_sha256"],
         "generation_concurrency": V4.CONCURRENCY,
+        "tail_generation_concurrency": 1,
         "mixed_tail_repair": state["descriptor"],
         "proposed_tail_cadence": {"path": SCHEDULE_NAME, "sha256": sha256_path(output / SCHEDULE_NAME)},
         "region_claim": RECOVERY._claim_binding(claim),
