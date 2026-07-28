@@ -384,6 +384,37 @@ class TestSmtFolding:
     def test_disjoint_quarter_does_not_share(self):
         assert lease.cpuset_shares_physical_cores("0-23,96-119", "184-191") == set()
 
+    def test_preflight_and_lease_agree_on_co_tenancy(self):
+        """P2-1a: the fold math has one implementation, and this pins it.
+
+        The probe reports the sibling CLOSURE (both hyperthreads, because an
+        operator reading a blocker wants the mask that collided) while the lease
+        module answers in PHYSICAL cores. Different ids, same predicate — so
+        assert the predicate, across every real cpuset in the fleet plus the
+        adversarial cases. If someone re-forks the math, this fails.
+        """
+        from scripts.server import gpu_shadow_lane_preflight as probe
+        from scripts.server.stack_numa import NUMA_CONFIG
+
+        specs = ["184-191", "88-95", "0-95", "0-191", "72-95,168-191", "0-47,96-143", "48-71"]
+        for cfg in NUMA_CONFIG.values():
+            for cpu_list, _port, _threads in cfg.get("instances", []):
+                specs.append(cpu_list)
+
+        for spec in specs:
+            probe_says = bool(probe.folded_overlap(spec, "184-191"))
+            lease_says = bool(lease.cpuset_shares_physical_cores(spec, "184-191"))
+            assert probe_says == lease_says, spec
+
+    def test_closure_and_physical_fold_are_consistent(self):
+        """The closure is exactly the physical fold re-expanded to both threads."""
+        from scripts.server import gpu_shadow_lane_preflight as probe
+
+        for spec in ("184-191", "0-95", "72-95,168-191"):
+            physical = lease.fold_smt_to_physical(spec)
+            closure = probe.smt_fold(lease.parse_cpu_spec(spec))
+            assert closure == {c for core in physical for c in (core, core + 96)}
+
 
 class TestLease:
     def test_claim_refused_while_flag_off(self):

@@ -75,6 +75,10 @@ from scripts.server.gpu_shadow_lane import (
     load_np_ceiling_policy,
     np_ceiling,
 )
+from scripts.server.gpu_shadow_lane_lease import (
+    SMT_SIBLING_OFFSET as _SMT_SIBLING_OFFSET,
+    fold_cpus_to_physical,
+)
 from scripts.server.stack_numa import NUMA_CONFIG
 from src.features import Features
 
@@ -114,24 +118,28 @@ def cpuset_overlap(a: str, b: str) -> set[int]:
 # Overlap math folds siblings together because two hyperthreads of one physical
 # core contend for its execution resources — a process pinned to 88-95 and one
 # pinned to 184-191 are PHYSICAL co-tenants even though their masks are disjoint.
-# TODO(P2-1a unify): scripts/server/gpu_shadow_lane_lease.py (P2-1 lane-build
-# work, landing separately) carries the canonical fold helper
-# `fold_smt_to_physical`. Once that module is committed, replace the local
-# smt_fold/folded_overlap below with imports from it — one edit, same math.
+# P2-1a UNIFIED (2026-07-28): the fold math now has ONE implementation,
+# `gpu_shadow_lane_lease.fold_cpus_to_physical`, which this module re-expands to
+# the sibling closure for REPORTING. The two representations differ only in
+# which ids they return — the lease module answers in physical cores (88-95),
+# the probe reports both hyperthreads (88-95 + 184-191) because an operator
+# reading a blocker wants to see the mask that actually collided. The
+# co-tenancy PREDICATE is identical, and now provably so: it is computed once.
 HOST_CPU_COUNT = 192
-SMT_SIBLING_OFFSET = 96
+SMT_SIBLING_OFFSET = _SMT_SIBLING_OFFSET
 
 
 def smt_fold(cpus: set[int]) -> set[int]:
-    """Union of a cpu set with its SMT siblings (physical-core closure)."""
-    folded = set(cpus)
-    for cpu in cpus:
-        folded.add(
-            cpu + SMT_SIBLING_OFFSET
-            if cpu < SMT_SIBLING_OFFSET
-            else cpu - SMT_SIBLING_OFFSET
-        )
-    return folded
+    """Union of a cpu set with its SMT siblings (physical-core closure).
+
+    Delegates the fold to the canonical lease helper, then re-expands each
+    physical core to both of its hyperthreads.
+    """
+    return {
+        cpu
+        for core in fold_cpus_to_physical(cpus)
+        for cpu in (core, core + SMT_SIBLING_OFFSET)
+    }
 
 
 def folded_overlap(a: str, b: str) -> set[int]:

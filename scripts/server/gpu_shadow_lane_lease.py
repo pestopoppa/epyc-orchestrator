@@ -102,6 +102,24 @@ def parse_cpu_spec(spec: str) -> set[int]:
     return cpus
 
 
+def fold_cpus_to_physical(cpus: set[int]) -> set[int]:
+    """Fold logical CPU ids onto the physical cores they occupy.
+
+    THE canonical SMT fold for the lane (P2-1a unification). Everything that
+    reasons about lane/production co-tenancy resolves to this one function, so
+    "do these two cpusets contend?" has exactly one implementation and cannot
+    answer differently in two places. ``gpu_shadow_lane_preflight.smt_fold``
+    re-expands the result to the sibling closure for REPORTING; the predicate
+    is identical either way.
+    """
+    folded: set[int] = set()
+    for cpu in cpus:
+        core = cpu - SMT_SIBLING_OFFSET if cpu > MAX_PHYSICAL_CORE else cpu
+        if 0 <= core <= MAX_PHYSICAL_CORE:
+            folded.add(core)
+    return folded
+
+
 def fold_smt_to_physical(spec: str) -> set[int]:
     """Fold a logical-CPU spec onto the PHYSICAL cores it actually occupies.
 
@@ -117,12 +135,7 @@ def fold_smt_to_physical(spec: str) -> set[int]:
     Either way the lane looks free of a role that is physically sharing its
     cores. Folding first is what makes both questions answerable.
     """
-    folded: set[int] = set()
-    for cpu in parse_cpu_spec(spec):
-        core = cpu - SMT_SIBLING_OFFSET if cpu > MAX_PHYSICAL_CORE else cpu
-        if 0 <= core <= MAX_PHYSICAL_CORE:
-            folded.add(core)
-    return folded
+    return fold_cpus_to_physical(parse_cpu_spec(spec))
 
 
 def physical_cores_to_regions(cores: set[int]) -> frozenset[str]:
