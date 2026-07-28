@@ -7,6 +7,7 @@ ROOT="/mnt/raid0/llm/epyc-root"
 SOURCE_ROOT="${E8_V5_SOURCE_ROOT:-$ORCH}"
 PYTHON="$ORCH/.venv/bin/python"
 RUNNER="$SOURCE_ROOT/scripts/benchmark/run_e8_quality_baseline_v5.py"
+RESUME_RUNNER="$SOURCE_ROOT/scripts/benchmark/resume_e8_quality_baseline_v5.py"
 BASE_RUNNER="$SOURCE_ROOT/scripts/benchmark/run_e8_quality_baseline_reseed.py"
 VALIDATOR="$SOURCE_ROOT/scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
 VALIDATOR_PY="$SOURCE_ROOT/scripts/benchmark/validate_e8_quality_baseline_v5.py"
@@ -22,6 +23,7 @@ verify_reviewed_bindings() {
     for binding in \
         "E8_V5_WRAPPER_SHA256:$0" \
         "E8_V5_RUNNER_SHA256:$RUNNER" \
+        "E8_V5_RESUME_RUNNER_SHA256:$RESUME_RUNNER" \
         "E8_V5_BASE_RUNNER_SHA256:$BASE_RUNNER" \
         "E8_V5_VALIDATOR_SHA256:$VALIDATOR" \
         "E8_V5_VALIDATOR_PY_SHA256:$VALIDATOR_PY" \
@@ -96,17 +98,17 @@ if [[ "$MODE" == "prevalidate" ]]; then
 fi
 
 PYTHONOPTIMIZE=0 "$PYTHON" - \
-    "$PROTOCOL_RECEIPT" "$EVIDENCE" "$0" "$RUNNER" "$BASE_RUNNER" "$VALIDATOR" \
+    "$PROTOCOL_RECEIPT" "$EVIDENCE" "$0" "$RUNNER" "$RESUME_RUNNER" "$BASE_RUNNER" "$VALIDATOR" \
     "$VALIDATOR_PY" "$APPLIER" "$CANONICAL_APPLIER" \
     "$EXPECTED_PRE" "$EXPECTED_CANDIDATE" "$TOKEN" <<'PY'
 import hashlib, json, os
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
-output, evidence, wrapper, runner, base_runner, validator, validator_py, applier, canonical_applier = map(
-    Path, sys.argv[1:10]
+output, evidence, wrapper, runner, resume_runner, base_runner, validator, validator_py, applier, canonical_applier = map(
+    Path, sys.argv[1:11]
 )
-pre, candidate, token = sys.argv[10:]
+pre, candidate, token = sys.argv[11:]
 sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 manifest = json.loads(evidence.read_text())
 protocol = Path(manifest["protocol_candidate"]["path"])
@@ -120,6 +122,7 @@ payload = {
     "reviewed_artifact_sha256": {
         "wrapper": sha(wrapper),
         "runner": sha(runner),
+        "resume_runner": sha(resume_runner),
         "base_runner": sha(base_runner),
         "validator": sha(validator),
         "validator_python": sha(validator_py),
