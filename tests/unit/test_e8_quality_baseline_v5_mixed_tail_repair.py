@@ -89,6 +89,25 @@ def test_timeout_and_scorer_repairs_have_separate_execution_sets() -> None:
     assert set(scorer_targets).isdisjoint(generation_targets)
 
 
+def test_terminal_execution_sets_are_derived_without_fixed_counts() -> None:
+    classified = {
+        "clean": [246, 249, 250, 281, 282, 400],
+        "race_lost": [97, 203, 279, 401],
+        "timeout": [138, 253, 402],
+        "scorer_replay": [224, 403],
+    }
+    overlap = [246, 249, 250, 279, 281, 282]
+
+    generation, scorer, race = REPAIR._execution_sets(classified, overlap)
+
+    assert generation == [138, 246, 249, 250, 253, 281, 282, 402]
+    assert scorer == [224, 403]
+    assert race == [97, 203, 279, 401]
+    assert set(generation).isdisjoint(scorer)
+    assert set(generation).isdisjoint(race)
+    assert set(scorer).isdisjoint(race)
+
+
 def test_reload_overlap_is_derived_from_sealed_execution_times() -> None:
     watcher = {
         "failure_intervals": [
@@ -126,15 +145,16 @@ def test_journal_copy_removes_only_replaced_ordinals(tmp_path: Path) -> None:
     source = tmp_path / "source.jsonl"
     original = [
         b'{"ordinal":1, "response":"keep"}\r\n',
-        b'{"ordinal":246, "response":"replace"}\n',
+        b'{"ordinal":224, "response":"replace-scorer"}\n',
+        b'{"ordinal":246, "response":"replace-generation"}\n',
         b'{"ordinal":2, "response":"keep"}\n',
     ]
     source.write_bytes(b"".join(original))
     destination = tmp_path / "destination.jsonl"
 
-    REPAIR._copy_journal_without_targets(source, destination, {246})
+    REPAIR._copy_journal_without_targets(source, destination, {224, 246})
 
-    assert destination.read_bytes() == original[0] + original[2]
+    assert destination.read_bytes() == original[0] + original[3]
 
 
 def test_wrong_tree_hash_is_refused_before_artifact_reads(tmp_path: Path) -> None:
@@ -196,6 +216,107 @@ def test_bounded_reload_watcher_is_audited_but_admitted(tmp_path: Path) -> None:
 
     assert evidence["status"] == "bounded_api_reload_interruption"
     assert evidence["failed_sample_indexes"] == [1, 2, 3]
+
+
+def test_multiple_bounded_reload_groups_are_derived(tmp_path: Path) -> None:
+    watcher = tmp_path / "runtime_watch.r2.successor.jsonl"
+    states = [
+        (True, None),
+        (False, "api_transport_error"),
+        (False, "api_transport_error"),
+        (True, None),
+        (False, "api_transport_error"),
+        (False, "api_transport_error"),
+        (False, "api_transport_error"),
+        (True, None),
+    ]
+    rows = [
+        _watcher_row(
+            f"2026-01-01T00:00:{index * 5:02d}Z",
+            ok=ok,
+            failure_class=failure_class,
+        )
+        for index, (ok, failure_class) in enumerate(states)
+    ]
+    _write_jsonl(watcher, rows)
+
+    evidence = REPAIR._require_bounded_reload_watcher(watcher)
+
+    assert evidence["failed_sample_groups"] == [[1, 2], [4, 5, 6]]
+    assert evidence["failure_intervals"] == [
+        {
+            "started_at": "2026-01-01T00:00:05Z",
+            "finished_at": "2026-01-01T00:00:10Z",
+        },
+        {
+            "started_at": "2026-01-01T00:00:20Z",
+            "finished_at": "2026-01-01T00:00:30Z",
+        },
+    ]
+    gap_row = {
+        "started_at_s": REPAIR._timestamp("2026-01-01T00:00:07Z"),
+        "ended_at_s": REPAIR._timestamp("2026-01-01T00:00:08Z"),
+    }
+    assert REPAIR._overlaps_reload(gap_row, evidence)
+
+
+def test_reload_group_over_thirty_seconds_is_rejected(tmp_path: Path) -> None:
+    watcher = tmp_path / "runtime_watch.r2.successor.jsonl"
+    rows = [
+        _watcher_row("2026-01-01T00:00:00Z", ok=True),
+        _watcher_row(
+            "2026-01-01T00:00:05Z",
+            ok=False,
+            failure_class="api_transport_error",
+        ),
+        _watcher_row(
+            "2026-01-01T00:00:10Z",
+            ok=False,
+            failure_class="api_transport_error",
+        ),
+        _watcher_row("2026-01-01T00:00:15Z", ok=True),
+        _watcher_row("2026-01-01T00:00:20Z", ok=True),
+    ]
+    rows[2]["finished_at"] = "2026-01-01T00:00:36Z"
+    _write_jsonl(watcher, rows)
+
+    with pytest.raises(ValueError, match="unapproved contamination"):
+        REPAIR._require_bounded_reload_watcher(watcher)
+
+
+def test_terminal_failure_ledger_uses_sidecar_completion_order() -> None:
+    first = _row(error=SCORER, tokens=3, answer="preserved")
+    first["ordinal"] = 224
+    second = _row(error=REPAIR.TIMEOUT_ERROR, answer=REPAIR.TIMEOUT_ERROR)
+    second["ordinal"] = 138
+    sidecars = {138: (11, second), 224: (4, first)}
+    kinds = {138: "timeout", 224: "scorer_replay"}
+
+    failures = REPAIR._terminal_failures(sidecars, kinds)
+
+    assert [row["ordinal"] for row in failures] == [224, 138]
+    assert failures == [
+        {"ordinal": 224, "sidecar_sha256": REPAIR.canonical_hash(first)},
+        {"ordinal": 138, "sidecar_sha256": REPAIR.canonical_hash(second)},
+    ]
+
+
+def test_repaired_race_ledger_uses_sidecar_completion_order(tmp_path: Path) -> None:
+    first = _row(error=REPAIR.RACE.RECOVERY.RACE_LOST_PREFIX + "x", answer="")
+    first["ordinal"] = 279
+    second = _row(error=REPAIR.RACE.RECOVERY.RACE_LOST_PREFIX + "y", answer="")
+    second["ordinal"] = 97
+    sidecars = {97: (11, second), 279: (4, first)}
+    ledger = tmp_path / "generation_failed_attempts.T2.r2.jsonl"
+
+    REPAIR._terminal_race_ledger(ledger, sidecars, [97, 279])
+
+    entries = REPAIR.V4.load_jsonl(ledger)
+    assert [row["ordinal"] for row in entries[0]["failures"]] == [279, 97]
+    assert entries[0]["failures"] == [
+        {"ordinal": 279, "sidecar_sha256": REPAIR.canonical_hash(first)},
+        {"ordinal": 97, "sidecar_sha256": REPAIR.canonical_hash(second)},
+    ]
 
 
 def test_unapproved_watcher_failure_is_rejected_by_predecessor_contract(tmp_path: Path) -> None:
