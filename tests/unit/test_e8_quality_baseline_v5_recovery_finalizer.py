@@ -1203,3 +1203,44 @@ def test_validate_intermediate_rejects_lexical_symlink(tmp_path: Path) -> None:
     link.symlink_to(real, target_is_directory=True)
     with pytest.raises(ValueError, match="must not be a symlink"):
         finalizer.validate_intermediate(link)
+
+
+def test_final_c1_intermediate_requires_complete_and_preserves_mixed_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "final-c1"
+    (root / "predecessor_snapshot").mkdir(parents=True)
+    mixed = {"schema": "mixed-tail"}
+    (root / "predecessor_snapshot/partial_r2_plan.json").write_text(
+        json.dumps({"mixed_tail_repair": mixed}) + "\n", encoding="utf-8"
+    )
+    plan = {"schema": finalizer.FINAL_C1_RETRY.PLAN_SCHEMA, "mixed_tail_repair": mixed}
+    seen: list[bool] = []
+
+    def validate_output(path: Path, *, require_complete: bool = False) -> dict:
+        assert path == root
+        seen.append(require_complete)
+        return {"proposal": {"sealed": True}, "complete": {"status": "complete"}}
+
+    monkeypatch.setattr(finalizer.FINAL_C1_RETRY, "validate_output", validate_output)
+    validated = finalizer._validate_final_c1_intermediate(root, plan)
+    assert seen == [True]
+    assert validated["final_c1_retry"] is True
+    assert validated["mixed_tail_repair"] == mixed
+
+
+def test_final_c1_terminal_output_cannot_enter_finalizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "terminal"
+    (root / "predecessor_snapshot").mkdir(parents=True)
+
+    def reject_terminal(_path: Path, *, require_complete: bool = False) -> dict:
+        assert require_complete is True
+        raise ValueError("terminal final-c1 output is not complete")
+
+    monkeypatch.setattr(finalizer.FINAL_C1_RETRY, "validate_output", reject_terminal)
+    with pytest.raises(ValueError, match="not complete"):
+        finalizer._validate_final_c1_intermediate(
+            root, {"schema": finalizer.FINAL_C1_RETRY.PLAN_SCHEMA}
+        )

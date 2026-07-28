@@ -9,11 +9,13 @@ terminalizes the new namespace as ``terminal_failed_no_admission``.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,15 @@ import httpx
 
 
 ROOT = Path(__file__).resolve().parents[2]
+CANONICAL_REPOSITORY = Path("/mnt/raid0/llm/epyc-orchestrator")
+CANONICAL_RECEIPT = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+    "ratify_e8_final_c1_retry_amendment_20260728.json"
+)
+CANONICAL_RATIFIER = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+    "ratify_e8_final_c1_retry_amendment_20260728.sh"
+)
 RACE_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
 RECOVERY_PATH = ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
 V5_PATH = ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
@@ -48,6 +59,12 @@ REGIONS = ("q3",)
 WATCHER_NAME = "runtime_watch.r2.final_c1_retry.jsonl"
 ATTEMPTS_NAME = "generation_final_c1_attempts.T2.r2.jsonl"
 TERMINAL_NAME = "final_c1_terminal.json"
+PROTOCOL_ID = "e8_quality_full_pool_tier_baseline.v5/final-c1-retry"
+FAILED_RACE_FILES = {
+    "partial_r2_plan.json": "81198338c01a8532e6134333e9fdcca33a9061c54eadbfaed5745c8b032184fc",
+    "recovery_proposal.json": "3b15e3ce5025cd758422f468fdf029269bf9a2fed4b7132798a99f2d2925eeb8",
+    "generation_failed_attempts.T2.r2.jsonl": "3bf22a12c91a3639992d7db782664a4ed1f580147bf7aacd2cfdb9f69d748385",
+}
 
 
 def _load(path: Path, name: str) -> Any:
@@ -89,7 +106,7 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def _receipt_contract() -> dict[str, Any]:
-    return {
+    plan = {
         "tier": 2,
         "repetition": 2,
         "ordinals": list(RETRY_ORDINALS),
@@ -104,10 +121,45 @@ def _receipt_contract() -> dict[str, Any]:
         "no_auto_retry": True,
         "no_timeout_increase": True,
     }
+    return plan
+
+
+def _git_output(root: Path, *args: str) -> str:
+    return subprocess.check_output(
+        ["git", "-C", str(root), *args], text=True, stderr=subprocess.DEVNULL
+    ).strip()
+
+
+def _runtime_git_identity(repository: Path) -> dict[str, Any]:
+    """Bind this checkout to the canonical Git object store and a clean tree."""
+    runtime_top = Path(_git_output(ROOT, "rev-parse", "--show-toplevel")).resolve()
+    canonical_top = Path(
+        _git_output(repository, "rev-parse", "--show-toplevel")
+    ).resolve()
+    runtime_common = Path(_git_output(ROOT, "rev-parse", "--git-common-dir"))
+    canonical_common = Path(_git_output(repository, "rev-parse", "--git-common-dir"))
+    if not runtime_common.is_absolute():
+        runtime_common = runtime_top / runtime_common
+    if not canonical_common.is_absolute():
+        canonical_common = canonical_top / canonical_common
+    return {
+        "runtime_top": str(runtime_top),
+        "canonical_top": str(canonical_top),
+        "same_repository": runtime_common.resolve() == canonical_common.resolve(),
+        "commit": _git_output(ROOT, "rev-parse", "HEAD"),
+        "tree": _git_output(ROOT, "rev-parse", "HEAD^{tree}"),
+        "clean": not _git_output(
+            ROOT, "status", "--porcelain", "--untracked-files=all"
+        ),
+    }
 
 
 def validate_receipt(path: Path) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file():
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.resolve(strict=True) != CANONICAL_RECEIPT
+    ):
         raise ValueError("final-c1 amendment receipt is missing or unsafe")
     receipt = V4.load_json(path)
     source = receipt.get("source")
@@ -115,10 +167,72 @@ def validate_receipt(path: Path) -> dict[str, Any]:
     runner = instrument.get("runner") if isinstance(instrument, dict) else None
     validator = instrument.get("validator") if isinstance(instrument, dict) else None
     non_authorizations = receipt.get("non_authorizations")
+    repository = Path(str(instrument.get("repository") or "")) if isinstance(
+        instrument, dict
+    ) else Path()
+    try:
+        git_identity = _runtime_git_identity(repository)
+    except (OSError, subprocess.SubprocessError):
+        git_identity = {}
+    amendment_script = receipt.get("amendment_script")
+    failed_race = receipt.get("failed_race_evidence")
+    ratified_at = receipt.get("ratified_at")
+    try:
+        parsed_ratified_at = datetime.fromisoformat(
+            str(ratified_at).replace("Z", "+00:00")
+        )
+    except ValueError:
+        parsed_ratified_at = None
     if (
-        receipt.get("schema") != RECEIPT_SCHEMA
+        set(receipt)
+        != {
+            "schema",
+            "status",
+            "protocol_id",
+            "ratified_at",
+            "human_attestation",
+            "amendment_script",
+            "failed_race_evidence",
+            "source",
+            "instrument",
+            "authorization",
+            "non_authorizations",
+        }
+        or receipt.get("schema") != RECEIPT_SCHEMA
         or receipt.get("status") != "ratified"
+        or receipt.get("protocol_id") != PROTOCOL_ID
         or receipt.get("human_attestation") != ATTESTATION
+        or not isinstance(ratified_at, str)
+        or not ratified_at.endswith("Z")
+        or parsed_ratified_at is None
+        or parsed_ratified_at.utcoffset() is None
+        or not isinstance(amendment_script, dict)
+        or set(amendment_script) != {"path", "sha256"}
+        or amendment_script.get("path") != str(CANONICAL_RATIFIER)
+        or not CANONICAL_RATIFIER.is_file()
+        or amendment_script.get("sha256") != sha256_path(CANONICAL_RATIFIER)
+        or not isinstance(failed_race, dict)
+        or set(failed_race)
+        != {
+            "namespace",
+            "canonical",
+            "files",
+            "recorded_trees",
+            "failed_timeout_sidecars",
+        }
+        or failed_race.get("namespace") != str(SOURCE)
+        or failed_race.get("canonical") is not True
+        or failed_race.get("files") != FAILED_RACE_FILES
+        or failed_race.get("recorded_trees")
+        != {
+            "plan_failed_source_tree_sha256": "92241f793c254dcf71dfca452f8cc50416d2fb1410698584b514ff3c14c5571a",
+            "proposal_source_tree_sha256": "b821900094e866027d9a1561b21d91eb09f6a02ff92b8d91b133df57c7d5ce2d",
+        }
+        or failed_race.get("failed_timeout_sidecars")
+        != (
+            "97:a550c07752f8dedc0fdf5c4582b587c90f3b624405ed1454f628e523c100cae9,"
+            "279:a41be1b012bb33475a5d8c9fd2e810c5b6dab651d123e3006f07cfc3f7fc835e"
+        )
         or source != {"path": str(SOURCE), "tree_sha256": SOURCE_TREE_SHA256}
         or receipt.get("authorization") != _receipt_contract()
         or non_authorizations
@@ -128,10 +242,29 @@ def validate_receipt(path: Path) -> dict[str, Any]:
             "no_state_write": True,
         }
         or not isinstance(instrument, dict)
+        or set(instrument)
+        != {
+            "repository",
+            "commit",
+            "tree",
+            "ratifier_interpreter",
+            "runner",
+            "validator",
+        }
+        or instrument.get("ratifier_interpreter") != "/usr/bin/python3"
+        or instrument.get("repository") != str(CANONICAL_REPOSITORY)
+        or repository.resolve() != CANONICAL_REPOSITORY.resolve()
+        or git_identity.get("canonical_top") != str(CANONICAL_REPOSITORY.resolve())
+        or git_identity.get("same_repository") is not True
+        or git_identity.get("commit") != instrument.get("commit")
+        or git_identity.get("tree") != instrument.get("tree")
+        or git_identity.get("clean") is not True
         or not isinstance(runner, dict)
+        or set(runner) != {"path", "sha256"}
         or runner.get("path") != "scripts/benchmark/final_c1_retry.py"
         or runner.get("sha256") != sha256_path(Path(__file__))
         or not isinstance(validator, dict)
+        or set(validator) != {"path", "sha256"}
         or validator.get("path") != "scripts/benchmark/final_c1_validator.py"
         or validator.get("sha256") != sha256_path(VALIDATOR_PATH)
     ):
@@ -264,7 +397,7 @@ def build_plan(source: Path, receipt_path: Path) -> dict[str, Any]:
     validated = validate_failed_source(source)
     receipt = validate_receipt(receipt_path)
     source_plan = validated["plan"]
-    return {
+    plan = {
         "schema": PLAN_SCHEMA,
         "protocol_id": RECOVERY.PROTOCOL_ID,
         "source": str(SOURCE),
@@ -304,6 +437,9 @@ def build_plan(source: Path, receipt_path: Path) -> dict[str, Any]:
         "repeated_failure_disposition": "terminal_failed_no_admission",
         "no_auto_retry": True,
     }
+    if "mixed_tail_repair" in source_plan:
+        plan["mixed_tail_repair"] = source_plan["mixed_tail_repair"]
+    return plan
 
 
 def _copy_tree(source: Path, destination: Path, hashes: dict[str, str]) -> None:
@@ -318,6 +454,48 @@ def _claim_is_exact_q3(claim: dict[str, Any]) -> bool:
         and claim["claims"][0].get("payload", {}).get("region") == "q3"
         and claim["global_claims"][0].get("region") == "q3"
     )
+
+
+def _discover_focused_sidecar(
+    focused_dir: Path, *, label: str, qid: str
+) -> tuple[Path, dict[str, Any]]:
+    """Select the one focused sidecar by its batch contract, not its filename."""
+    matches: list[tuple[Path, dict[str, Any]]] = []
+    for candidate in sorted(focused_dir.glob("question_results.*.jsonl")):
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        try:
+            parsed, indexed = V5.sidecar_question_rows(candidate, expected_n=1)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        starts = [row for row in parsed if row.get("row_type") == "batch_start"]
+        completes = [row for row in parsed if row.get("row_type") == "batch_complete"]
+        result = indexed[0][1]
+        if (
+            len(parsed) == 3
+            and len(starts) == 1
+            and len(completes) == 1
+            and starts[0].get("label") == label
+            and starts[0].get("requested_n") == 1
+            and starts[0].get("concurrency") == CONCURRENCY
+            and starts[0].get("complete") is False
+            and completes[0].get("label") == label
+            and completes[0].get("requested_n") == 1
+            and completes[0].get("completed_n") == 1
+            and completes[0].get("complete") is True
+            and result.get("label") == label
+            and result.get("ordinal") == 0
+            and result.get("requested_n") == 1
+            and isinstance(result.get("result"), dict)
+            and result["result"].get("qid") == qid
+        ):
+            matches.append((candidate, result))
+    if len(matches) != 1:
+        raise ValueError(
+            "final-c1 focused sidecar discovery did not find exactly one "
+            "content-matching artifact"
+        )
+    return matches[0]
 
 
 def _generate_one(
@@ -362,11 +540,12 @@ def _generate_one(
     if len(results) != 1:
         raise ValueError("final-c1 generated an unexpected result count")
     fresh = V4.response_rows(results, [execution])
-    focused_sidecar = focused_dir / f"question_results.{label}.jsonl"
-    _parsed, focused_rows = V5.sidecar_question_rows(focused_sidecar, expected_n=1)
+    _focused_sidecar, focused_row = _discover_focused_sidecar(
+        focused_dir, label=label, qid=V4._question_qid(question)
+    )
     merged = V5._merged_retry_sidecar(
         original_sidecar,
-        focused_rows[0][1],
+        focused_row,
         results[0],
         qid=V4._question_qid(question),
     )

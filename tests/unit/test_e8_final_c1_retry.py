@@ -19,19 +19,60 @@ sys.modules[SPEC.name] = RUNNER
 SPEC.loader.exec_module(RUNNER)
 
 
+@pytest.fixture(autouse=True)
+def _clean_pinned_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ratifier = tmp_path / "ratifier.sh"
+    ratifier.write_text("#!/bin/bash\n", encoding="utf-8")
+    monkeypatch.setattr(RUNNER, "CANONICAL_RATIFIER", ratifier)
+    monkeypatch.setattr(
+        RUNNER,
+        "_runtime_git_identity",
+        lambda _repository: {
+            "runtime_top": str(RUNNER.ROOT),
+            "canonical_top": str(RUNNER.CANONICAL_REPOSITORY),
+            "same_repository": True,
+            "commit": "a" * 40,
+            "tree": "b" * 40,
+            "clean": True,
+        },
+    )
+
+
 def _receipt() -> dict:
     return {
         "schema": RUNNER.RECEIPT_SCHEMA,
         "status": "ratified",
+        "protocol_id": RUNNER.PROTOCOL_ID,
+        "ratified_at": "2026-07-28T20:00:00Z",
         "human_attestation": RUNNER.ATTESTATION,
+        "amendment_script": {
+            "path": str(RUNNER.CANONICAL_RATIFIER),
+            "sha256": RUNNER.sha256_path(RUNNER.CANONICAL_RATIFIER),
+        },
+        "failed_race_evidence": {
+            "namespace": str(RUNNER.SOURCE),
+            "canonical": True,
+            "files": RUNNER.FAILED_RACE_FILES,
+            "recorded_trees": {
+                "plan_failed_source_tree_sha256": "92241f793c254dcf71dfca452f8cc50416d2fb1410698584b514ff3c14c5571a",
+                "proposal_source_tree_sha256": "b821900094e866027d9a1561b21d91eb09f6a02ff92b8d91b133df57c7d5ce2d",
+            },
+            "failed_timeout_sidecars": (
+                "97:a550c07752f8dedc0fdf5c4582b587c90f3b624405ed1454f628e523c100cae9,"
+                "279:a41be1b012bb33475a5d8c9fd2e810c5b6dab651d123e3006f07cfc3f7fc835e"
+            ),
+        },
         "source": {
             "path": str(RUNNER.SOURCE),
             "tree_sha256": RUNNER.SOURCE_TREE_SHA256,
         },
         "instrument": {
-            "repository": "/mnt/raid0/llm/epyc-orchestrator",
+            "repository": str(RUNNER.CANONICAL_REPOSITORY),
             "commit": "a" * 40,
             "tree": "b" * 40,
+            "ratifier_interpreter": "/usr/bin/python3",
             "runner": {
                 "path": "scripts/benchmark/final_c1_retry.py",
                 "sha256": RUNNER.sha256_path(PATH),
@@ -52,6 +93,7 @@ def _receipt() -> dict:
 
 def _write_receipt(path: Path, receipt: dict | None = None) -> Path:
     path.write_text(json.dumps(receipt or _receipt()) + "\n", encoding="utf-8")
+    RUNNER.CANONICAL_RECEIPT = path
     return path
 
 
@@ -97,6 +139,100 @@ def test_receipt_rejects_source_or_instrument_drift(tmp_path: Path) -> None:
     receipt["instrument"]["runner"]["sha256"] = "0" * 64
     with pytest.raises(ValueError, match="exact authorization"):
         RUNNER.validate_receipt(_write_receipt(tmp_path / "runner.json", receipt))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("repository", "/tmp/unrelated-orchestrator"),
+        ("commit", "0" * 40),
+        ("tree", "0" * 40),
+    ],
+)
+def test_receipt_rejects_wrong_repository_commit_or_tree(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    receipt = _receipt()
+    receipt["instrument"][field] = value
+    with pytest.raises(ValueError, match="exact authorization"):
+        RUNNER.validate_receipt(_write_receipt(tmp_path / f"{field}.json", receipt))
+
+
+def test_receipt_rejects_dirty_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity = {
+        "runtime_top": str(RUNNER.ROOT),
+        "canonical_top": str(RUNNER.CANONICAL_REPOSITORY),
+        "same_repository": True,
+        "commit": "a" * 40,
+        "tree": "b" * 40,
+        "clean": False,
+    }
+    monkeypatch.setattr(RUNNER, "_runtime_git_identity", lambda _repository: identity)
+    with pytest.raises(ValueError, match="exact authorization"):
+        RUNNER.validate_receipt(_write_receipt(tmp_path / "dirty.json"))
+
+
+def test_receipt_accepts_exact_clean_linked_worktree(tmp_path: Path) -> None:
+    receipt = RUNNER.validate_receipt(_write_receipt(tmp_path / "linked.json"))
+    assert receipt["instrument"]["commit"] == "a" * 40
+    assert receipt["instrument"]["tree"] == "b" * 40
+
+
+def test_receipt_rejects_unrelated_repo_even_with_same_files_and_pins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        RUNNER,
+        "_runtime_git_identity",
+        lambda _repository: {
+            "runtime_top": "/tmp/copied-repository",
+            "canonical_top": str(RUNNER.CANONICAL_REPOSITORY),
+            "same_repository": False,
+            "commit": "a" * 40,
+            "tree": "b" * 40,
+            "clean": True,
+        },
+    )
+    with pytest.raises(ValueError, match="exact authorization"):
+        RUNNER.validate_receipt(_write_receipt(tmp_path / "unrelated.json"))
+
+
+def test_receipt_rejects_copy_outside_canonical_namespace(tmp_path: Path) -> None:
+    canonical = _write_receipt(tmp_path / "canonical.json")
+    copied = tmp_path / "copied.json"
+    copied.write_bytes(canonical.read_bytes())
+    RUNNER.CANONICAL_RECEIPT = canonical
+    with pytest.raises(ValueError, match="missing or unsafe"):
+        RUNNER.validate_receipt(copied)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("protocol_id", "wrong"),
+        ("ratified_at", "not-a-timestamp"),
+    ],
+)
+def test_receipt_rejects_protocol_or_timestamp_mutation(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    receipt = _receipt()
+    receipt[field] = value
+    with pytest.raises(ValueError, match="exact authorization"):
+        RUNNER.validate_receipt(_write_receipt(tmp_path / f"{field}.json", receipt))
+
+
+def test_receipt_rejects_extra_top_level_or_instrument_keys(tmp_path: Path) -> None:
+    receipt = _receipt()
+    receipt["ignored"] = True
+    with pytest.raises(ValueError, match="exact authorization"):
+        RUNNER.validate_receipt(_write_receipt(tmp_path / "extra-top.json", receipt))
+    receipt = _receipt()
+    receipt["instrument"]["ignored"] = True
+    with pytest.raises(ValueError, match="exact authorization"):
+        RUNNER.validate_receipt(_write_receipt(tmp_path / "extra-instrument.json", receipt))
 
 
 def _questions() -> list[dict]:
@@ -226,3 +362,62 @@ def test_cli_exposes_no_timeout_or_concurrency_override() -> None:
                 "301",
             ]
         )
+
+
+def _focused_sidecar_rows(*, label: str, qid: str) -> list[dict]:
+    return [
+        {
+            "row_type": "batch_start",
+            "label": label,
+            "requested_n": 1,
+            "concurrency": 1,
+            "complete": False,
+        },
+        {
+            "row_type": "question_result",
+            "label": label,
+            "requested_n": 1,
+            "ordinal": 0,
+            "result": {"qid": qid},
+        },
+        {
+            "row_type": "batch_complete",
+            "label": label,
+            "requested_n": 1,
+            "completed_n": 1,
+            "complete": True,
+        },
+    ]
+
+
+def test_focused_sidecar_is_discovered_by_validated_content(tmp_path: Path) -> None:
+    label = "e8-final-c1-t2-r2-o97"
+    qid = RUNNER.RETRY_QIDS[0]
+    path = tmp_path / "question_results.unexpected-upstream-name.jsonl"
+    path.write_text(
+        "".join(json.dumps(row) + "\n" for row in _focused_sidecar_rows(label=label, qid=qid)),
+        encoding="utf-8",
+    )
+    selected, row = RUNNER._discover_focused_sidecar(tmp_path, label=label, qid=qid)
+    assert selected == path
+    assert row["result"]["qid"] == qid
+
+
+def test_focused_sidecar_rejects_ambiguous_or_wrong_contract(tmp_path: Path) -> None:
+    label = "e8-final-c1-t2-r2-o97"
+    qid = RUNNER.RETRY_QIDS[0]
+    wrong = _focused_sidecar_rows(label=label, qid=qid)
+    wrong[0]["concurrency"] = 3
+    (tmp_path / "question_results.wrong.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in wrong), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="exactly one"):
+        RUNNER._discover_focused_sidecar(tmp_path, label=label, qid=qid)
+
+    rows = _focused_sidecar_rows(label=label, qid=qid)
+    for name in ("first", "second"):
+        (tmp_path / f"question_results.{name}.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+    with pytest.raises(ValueError, match="exactly one"):
+        RUNNER._discover_focused_sidecar(tmp_path, label=label, qid=qid)

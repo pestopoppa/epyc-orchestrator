@@ -21,6 +21,8 @@ SUCCESSOR_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_
 RACE_RETRY_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
 MIXED_TAIL_REPAIR_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
 TERMINALIZER_RUNNER="$SOURCE_ROOT/scripts/benchmark/terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
+FINAL_C1_RETRY_RUNNER="$SOURCE_ROOT/scripts/benchmark/final_c1_retry.py"
+FINAL_C1_VALIDATOR="$SOURCE_ROOT/scripts/benchmark/final_c1_validator.py"
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd -P)"
 VALIDATOR="$SCRIPT_DIR/prepare_e8_quality_baseline_v5_candidate.sh"
 VALIDATOR_PY="$SOURCE_ROOT/scripts/benchmark/validate_e8_quality_baseline_v5.py"
@@ -76,6 +78,8 @@ verify_reviewed_bindings() {
         "E8_V5_SUCCESSOR_RUNNER_SHA256:$SUCCESSOR_RUNNER" \
         "E8_V5_RACE_RETRY_RUNNER_SHA256:$RACE_RETRY_RUNNER" \
         "E8_V5_MIXED_TAIL_REPAIR_RUNNER_SHA256:$MIXED_TAIL_REPAIR_RUNNER" \
+        "E8_V5_FINAL_C1_RETRY_RUNNER_SHA256:$FINAL_C1_RETRY_RUNNER" \
+        "E8_V5_FINAL_C1_VALIDATOR_SHA256:$FINAL_C1_VALIDATOR" \
         "E8_V5_VALIDATOR_SHA256:$VALIDATOR" \
         "E8_V5_VALIDATOR_PY_SHA256:$VALIDATOR_PY" \
         "E8_V5_APPLIER_SHA256:$APPLIER" \
@@ -260,7 +264,7 @@ fi
 PYTHONOPTIMIZE=0 "$PYTHON" - "$APPLIER" "$STATE" "$EVIDENCE" "$VALIDATOR" "$REVIEW_RECORD" \
     "$TRANSACTION" "$CANONICAL_ATTESTATION" "$RECEIPT" "$0" "$PRODUCER" "$RUNNER" "$BASE_RUNNER" \
     "$RESUME_RUNNER" "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$RACE_RETRY_RUNNER" \
-    "$MIXED_TAIL_REPAIR_RUNNER" "$TERMINALIZER_RUNNER" "$VALIDATOR_PY" "$CANONICAL_APPLIER" \
+    "$MIXED_TAIL_REPAIR_RUNNER" "$TERMINALIZER_RUNNER" "$FINAL_C1_RETRY_RUNNER" "$FINAL_C1_VALIDATOR" "$VALIDATOR_PY" "$CANONICAL_APPLIER" \
     "$EXPECTED_PRE" "$EXPECTED_CANDIDATE" "$CONFIRMATION" <<'PY'
 import hashlib
 import importlib.util
@@ -275,10 +279,11 @@ from pathlib import Path
     transaction_path, canonical_attestation_path, receipt_path, wrapper_path,
     producer_path, runner_path, base_runner_path, resume_runner_path,
     recovery_runner_path, finalizer_runner_path, successor_runner_path,
-    race_retry_runner_path, mixed_tail_repair_runner_path, terminalizer_runner_path, validator_py_path,
+    race_retry_runner_path, mixed_tail_repair_runner_path, terminalizer_runner_path, final_c1_retry_runner_path,
+    final_c1_validator_path, validator_py_path,
     canonical_applier_path,
-) = [Path(value) for value in sys.argv[1:22]]
-expected_pre, expected_candidate, confirmation = sys.argv[22:25]
+) = [Path(value) for value in sys.argv[1:24]]
+expected_pre, expected_candidate, confirmation = sys.argv[24:27]
 
 spec = importlib.util.spec_from_file_location("e8_v5_consolidated_receipt_adapter", adapter_path)
 if spec is None or spec.loader is None:
@@ -369,6 +374,8 @@ payload = {
         "successor_runner": sha(successor_runner_path),
         "race_retry_runner": sha(race_retry_runner_path),
         "mixed_tail_repair_runner": sha(mixed_tail_repair_runner_path),
+        "final_c1_retry_runner": sha(final_c1_retry_runner_path),
+        "final_c1_validator": sha(final_c1_validator_path),
         "validator_wrapper": sha(validator_path),
         "validator_python": sha(validator_py_path),
         "applier_adapter": sha(adapter_path),

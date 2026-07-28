@@ -58,6 +58,8 @@ def _integrated_e8_pins(*, wrapper: Path | None = None, validator_wrapper: Path 
         "E8_V5_TERMINALIZER_RUNNER_SHA256": _sha(
             benchmark / "terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
         ),
+        "E8_V5_FINAL_C1_RETRY_RUNNER_SHA256": _sha(benchmark / "final_c1_retry.py"),
+        "E8_V5_FINAL_C1_VALIDATOR_SHA256": _sha(benchmark / "final_c1_validator.py"),
         "E8_V5_VALIDATOR_PY_SHA256": _sha(benchmark / "validate_e8_quality_baseline_v5.py"),
     }
     if wrapper is not None:
@@ -1495,7 +1497,7 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
             canonical_applier.read_bytes()
         ).hexdigest(),
     }
-    bad_env["E8_V5_RACE_RETRY_RUNNER_SHA256"] = "0" * 64
+    bad_env["E8_V5_FINAL_C1_VALIDATOR_SHA256"] = "0" * 64
     rejected = subprocess.run(
         [
             "bash",
@@ -1514,7 +1516,7 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         check=False,
     )
     assert rejected.returncode != 0
-    assert "E8_V5_RACE_RETRY_RUNNER_SHA256" in rejected.stderr
+    assert "E8_V5_FINAL_C1_VALIDATOR_SHA256" in rejected.stderr
     assert state_path.read_bytes() == state_bytes
     assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
 
@@ -1667,6 +1669,8 @@ def test_final_wrapper_integration_commits_temp_state_then_creates_bound_receipt
         "race_retry_runner": "prepare_e8_quality_baseline_v5_partial_r2_race_retry.py",
         "mixed_tail_repair_runner": "prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py",
         "terminalizer_runner": "terminalize_e8_quality_baseline_v5_partial_r2_successor.py",
+        "final_c1_retry_runner": "final_c1_retry.py",
+        "final_c1_validator": "final_c1_validator.py",
     }.items():
         assert value["code_sha256"][key] == _sha(benchmark / filename)
     assert value["transaction"]["canonical_attestation_path"].endswith(

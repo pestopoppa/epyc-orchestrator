@@ -27,6 +27,8 @@ RESUME_PATH = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py
 RECOVERY_PATH = PROJECT_ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
 SUCCESSOR_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
 RACE_RETRY_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
+FINAL_C1_RETRY_PATH = PROJECT_ROOT / "scripts/benchmark/final_c1_retry.py"
+FINAL_C1_VALIDATOR_PATH = PROJECT_ROOT / "scripts/benchmark/final_c1_validator.py"
 MIXED_REPAIR_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
 TERMINALIZER_PATH = PROJECT_ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
 CONTEXT_SCHEMA = "epyc.e8_quality_v5_recovery_r2_finalizer.v1"
@@ -57,6 +59,7 @@ RESUME = _load(RESUME_PATH, "e8_v5_recovery_finalizer_resume")
 RECOVERY = _load(RECOVERY_PATH, "e8_v5_recovery_finalizer_r2")
 SUCCESSOR = _load(SUCCESSOR_PATH, "e8_v5_recovery_finalizer_successor")
 RACE_RETRY = _load(RACE_RETRY_PATH, "e8_v5_recovery_finalizer_race_retry")
+FINAL_C1_RETRY = _load(FINAL_C1_RETRY_PATH, "e8_v5_recovery_finalizer_final_c1")
 V4 = V5.V4
 
 
@@ -147,6 +150,8 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
     if any(not item.is_file() for item in required.values()):
         raise ValueError("recovery intermediate lacks a required sealed artifact")
     plan = V4.load_json(plan_path)
+    if plan.get("schema") == FINAL_C1_RETRY.PLAN_SCHEMA:
+        return _validate_final_c1_intermediate(intermediate, plan)
     if plan.get("schema") == RACE_RETRY.PLAN_SCHEMA:
         return _validate_race_retry_intermediate(intermediate, plan)
     if plan.get("schema") == SUCCESSOR.PLAN_SCHEMA:
@@ -642,6 +647,23 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
     }
 
 
+def _validate_final_c1_intermediate(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    """Admit only the complete two-row amended retry; terminal outputs never finalize."""
+    validated = FINAL_C1_RETRY.validate_output(root, require_complete=True)
+    predecessor_plan = V4.load_json(root / "predecessor_snapshot/partial_r2_plan.json")
+    mixed_tail_repair = predecessor_plan.get("mixed_tail_repair")
+    if plan.get("mixed_tail_repair") != mixed_tail_repair:
+        raise ValueError("final-c1 mixed-tail chain differs from its sealed predecessor")
+    return {
+        "root": root,
+        "plan": plan,
+        "proposal": validated["proposal"],
+        "complete": validated["complete"],
+        "final_c1_retry": True,
+        "mixed_tail_repair": mixed_tail_repair,
+    }
+
+
 def build_plan(source_dir: Path) -> dict[str, Any]:
     """Bind the already-complete banked source; never re-open T2/r1."""
     if source_dir.is_symlink():
@@ -827,6 +849,7 @@ def _copy_bound_intermediate(root: Path, destination: Path) -> None:
     schema = V4.load_json(root / "partial_r2_plan.json").get("schema")
     successor = schema == SUCCESSOR.PLAN_SCHEMA
     race_retry = schema == RACE_RETRY.PLAN_SCHEMA
+    final_c1_retry = schema == FINAL_C1_RETRY.PLAN_SCHEMA
     for relative in (
         "partial_r2_plan.json",
         "recovery_proposal.json",
@@ -839,11 +862,14 @@ def _copy_bound_intermediate(root: Path, destination: Path) -> None:
     ):
         _copy_file(root / relative, destination / relative)
     watcher = (
-        "runtime_watch.r2.race_retry.jsonl" if race_retry
+        FINAL_C1_RETRY.WATCHER_NAME if final_c1_retry
+        else "runtime_watch.r2.race_retry.jsonl" if race_retry
         else "runtime_watch.r2.successor.jsonl" if successor
         else "runtime_watch.r2.jsonl"
     )
     _copy_file(root / watcher, destination / "runtime_watch.r2.jsonl")
+    if final_c1_retry:
+        _copy_file(root / watcher, destination / FINAL_C1_RETRY.WATCHER_NAME)
     if successor:
         binding = V4.load_json(root / "failed_source_snapshot/source_binding.json")
         hashes = binding.get("source_sha256")
@@ -855,7 +881,7 @@ def _copy_bound_intermediate(root: Path, destination: Path) -> None:
                 raise ValueError("successor failed audit changed before finalization")
             _copy_file(source, destination / "failed_source_snapshot" / relative)
         _copy_file(root / "failed_source_snapshot/source_binding.json", destination / "failed_source_snapshot/source_binding.json")
-    if race_retry:
+    if race_retry or final_c1_retry:
         binding = V4.load_json(root / "predecessor_snapshot/source_binding.json")
         hashes = binding.get("source_sha256")
         if not isinstance(hashes, dict):
@@ -866,6 +892,16 @@ def _copy_bound_intermediate(root: Path, destination: Path) -> None:
                 raise ValueError("race-retry predecessor audit changed before finalization")
             _copy_file(source, destination / "predecessor_snapshot" / relative)
         _copy_file(root / "predecessor_snapshot/source_binding.json", destination / "predecessor_snapshot/source_binding.json")
+    if final_c1_retry:
+        _copy_file(
+            root / FINAL_C1_RETRY.ATTEMPTS_NAME,
+            destination / FINAL_C1_RETRY.ATTEMPTS_NAME,
+        )
+        receipt_ref = V4.load_json(root / "partial_r2_plan.json")["amendment_receipt"]
+        receipt = Path(receipt_ref["path"]).resolve(strict=True)
+        if receipt_ref["sha256"] != sha256_path(receipt):
+            raise ValueError("final-c1 amendment receipt changed before finalization")
+        _copy_file(receipt, destination / "amendment_receipt.json")
 
 
 def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[str, Any]) -> None:
@@ -1004,9 +1040,57 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
             "predecessor_failed_attempts_path": str(destination / "recovery_r2_intermediate/predecessor_snapshot/generation_failed_attempts.T2.r2.jsonl"),
             "predecessor_failed_attempts_sha256": sha256_path(predecessor / "generation_failed_attempts.T2.r2.jsonl"),
         }
+    final_c1_context: dict[str, Any] = {}
+    if intermediate.get("final_c1_retry"):
+        predecessor = copied / "predecessor_snapshot"
+        final_c1_context = {
+            "final_c1_retry_runner": {
+                "path": str(FINAL_C1_RETRY_PATH),
+                "sha256": sha256_path(FINAL_C1_RETRY_PATH),
+            },
+            "final_c1_validator": {
+                "path": str(FINAL_C1_VALIDATOR_PATH),
+                "sha256": sha256_path(FINAL_C1_VALIDATOR_PATH),
+            },
+            "predecessor_binding": str(
+                destination
+                / "recovery_r2_intermediate/predecessor_snapshot/source_binding.json"
+            ),
+            "predecessor_binding_sha256": sha256_path(predecessor / "source_binding.json"),
+            "predecessor_watcher_path": str(
+                destination
+                / "recovery_r2_intermediate/predecessor_snapshot/runtime_watch.r2.race_retry.jsonl"
+            ),
+            "predecessor_watcher_sha256": sha256_path(
+                predecessor / "runtime_watch.r2.race_retry.jsonl"
+            ),
+            "predecessor_failed_attempts_path": str(
+                destination
+                / "recovery_r2_intermediate/predecessor_snapshot/generation_failed_attempts.T2.r2.jsonl"
+            ),
+            "predecessor_failed_attempts_sha256": sha256_path(
+                predecessor / "generation_failed_attempts.T2.r2.jsonl"
+            ),
+            "amendment_receipt_path": str(
+                destination / "recovery_r2_intermediate/amendment_receipt.json"
+            ),
+            "amendment_receipt_sha256": sha256_path(copied / "amendment_receipt.json"),
+            "final_c1_attempts_path": str(
+                destination
+                / "recovery_r2_intermediate"
+                / FINAL_C1_RETRY.ATTEMPTS_NAME
+            ),
+            "final_c1_attempts_sha256": sha256_path(
+                copied / FINAL_C1_RETRY.ATTEMPTS_NAME
+            ),
+        }
     mixed_tail_context: dict[str, Any] = {}
     if intermediate.get("mixed_tail_repair"):
         mixed_root = copied / "predecessor_snapshot"
+        mixed_destination = destination / "recovery_r2_intermediate/predecessor_snapshot"
+        if intermediate.get("final_c1_retry"):
+            mixed_root /= "predecessor_snapshot"
+            mixed_destination /= "predecessor_snapshot"
         original_binding = mixed_root / "predecessor_snapshot/source_binding.json"
         repair_evidence = mixed_root / RACE_RETRY.MIXED_EVIDENCE_NAME
         chain = intermediate["mixed_tail_repair"]
@@ -1017,14 +1101,11 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
             },
             "mixed_tail_repair_descriptor_sha256": chain["descriptor_sha256"],
             "mixed_tail_repair_evidence_path": str(
-                destination
-                / "recovery_r2_intermediate/predecessor_snapshot"
-                / RACE_RETRY.MIXED_EVIDENCE_NAME
+                mixed_destination / RACE_RETRY.MIXED_EVIDENCE_NAME
             ),
             "mixed_tail_repair_evidence_sha256": sha256_path(repair_evidence),
             "mixed_tail_original_source_binding": str(
-                destination
-                / "recovery_r2_intermediate/predecessor_snapshot/predecessor_snapshot/source_binding.json"
+                mixed_destination / "predecessor_snapshot/source_binding.json"
             ),
             "mixed_tail_original_source_binding_sha256": sha256_path(original_binding),
             "mixed_tail_original_source_tree_sha256": chain["original_source"]["tree_sha256"],
@@ -1034,7 +1115,7 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
             transition = mixed_root / terminalization["path"]
             mixed_tail_context.update({
                 "terminalization_transition": str(
-                    destination / "recovery_r2_intermediate/predecessor_snapshot" / terminalization["path"]
+                    mixed_destination / terminalization["path"]
                 ),
                 "terminalization_transition_sha256": sha256_path(transition),
                 "terminalizer_runner": {
@@ -1082,6 +1163,7 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
         ),
         **successor_context,
         **race_retry_context,
+        **final_c1_context,
         **mixed_tail_context,
     }
     report["pending_human_amendment"] = source_resume_segment["pending_human_amendment"]

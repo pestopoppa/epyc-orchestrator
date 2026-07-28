@@ -16,12 +16,14 @@ SUCCESSOR_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_
 RACE_RETRY_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
 MIXED_TAIL_REPAIR_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
 TERMINALIZER_RUNNER="$SOURCE_ROOT/scripts/benchmark/terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
+FINAL_C1_RETRY_RUNNER="$SOURCE_ROOT/scripts/benchmark/final_c1_retry.py"
+FINAL_C1_VALIDATOR="$SOURCE_ROOT/scripts/benchmark/final_c1_validator.py"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 sha() { sha256sum -- "$1" | awk '{print $1}'; }
 [[ $# -eq 2 && "$1" == "--validate-evidence" ]] ||
     fail 'usage: prepare_e8_quality_baseline_v5_candidate.sh --validate-evidence EVIDENCE'
-[[ -x "$PYTHON" && -f "$VALIDATOR" && -f "$PRODUCER" && -f "$RUNNER" && -f "$BASE_RUNNER" && -f "$RESUME_RUNNER" && -f "$RECOVERY_RUNNER" && -f "$FINALIZER_RUNNER" && -f "$SUCCESSOR_RUNNER" && -f "$RACE_RETRY_RUNNER" && -f "$MIXED_TAIL_REPAIR_RUNNER" && -f "$TERMINALIZER_RUNNER" ]] ||
+[[ -x "$PYTHON" && -f "$VALIDATOR" && -f "$PRODUCER" && -f "$RUNNER" && -f "$BASE_RUNNER" && -f "$RESUME_RUNNER" && -f "$RECOVERY_RUNNER" && -f "$FINALIZER_RUNNER" && -f "$SUCCESSOR_RUNNER" && -f "$RACE_RETRY_RUNNER" && -f "$MIXED_TAIL_REPAIR_RUNNER" && -f "$TERMINALIZER_RUNNER" && -f "$FINAL_C1_RETRY_RUNNER" && -f "$FINAL_C1_VALIDATOR" ]] ||
     fail 'v5 composite validator prerequisite is missing'
 [[ "$(readlink -f -- "$PYTHON")" == "$(readlink -f -- "$ORCH/.venv/bin/python")" ]] ||
     fail 'canonical orchestrator venv identity differs'
@@ -39,6 +41,8 @@ for binding in \
     "E8_V5_SUCCESSOR_RUNNER_SHA256:$SUCCESSOR_RUNNER" \
     "E8_V5_RACE_RETRY_RUNNER_SHA256:$RACE_RETRY_RUNNER" \
     "E8_V5_MIXED_TAIL_REPAIR_RUNNER_SHA256:$MIXED_TAIL_REPAIR_RUNNER" \
+    "E8_V5_FINAL_C1_RETRY_RUNNER_SHA256:$FINAL_C1_RETRY_RUNNER" \
+    "E8_V5_FINAL_C1_VALIDATOR_SHA256:$FINAL_C1_VALIDATOR" \
     "E8_V5_VALIDATOR_PY_SHA256:$VALIDATOR"; do
     name="${binding%%:*}"
     path="${binding#*:}"
@@ -63,4 +67,6 @@ PYTHONOPTIMIZE=0 "$PYTHON" "$VALIDATOR" \
     --expected-successor-runner-sha256 "$E8_V5_SUCCESSOR_RUNNER_SHA256" \
     --expected-race-retry-runner-sha256 "$E8_V5_RACE_RETRY_RUNNER_SHA256" \
     --expected-mixed-tail-repair-runner-sha256 "$E8_V5_MIXED_TAIL_REPAIR_RUNNER_SHA256" \
+    --expected-final-c1-retry-runner-sha256 "$E8_V5_FINAL_C1_RETRY_RUNNER_SHA256" \
+    --expected-final-c1-validator-sha256 "$E8_V5_FINAL_C1_VALIDATOR_SHA256" \
     "${terminalizer_args[@]}"
