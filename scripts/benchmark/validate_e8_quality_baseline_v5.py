@@ -21,6 +21,10 @@ RESUME_RUNNER_PATH = Path(__file__).with_name("resume_e8_quality_baseline_v5.py"
 SUCCESSOR_RUNNER_PATH = Path(__file__).with_name(
     "prepare_e8_quality_baseline_v5_partial_r2_successor.py"
 )
+RACE_RETRY_RUNNER_PATH = Path(__file__).with_name(
+    "prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
+)
+FINALIZER_PATH = Path(__file__).with_name("finalize_e8_quality_baseline_v5_recovery_r2.py")
 EXPECTED_EVIDENCE_KEYS = {
     "schema",
     "eval_quality_era",
@@ -150,6 +154,7 @@ RECOVERY_R2_SUCCESSOR_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_successor_pla
 RECOVERY_R2_SUCCESSOR_PROPOSAL_SCHEMA = (
     "epyc.e8_quality_v5_partial_r2_successor_proposal.v1"
 )
+RECOVERY_R2_RACE_RETRY_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_race_retry_plan.v1"
 RECOVERY_R2_SUCCESSOR_EXPECTED_COUNTS = {
     "reuse_ordinals": 59,
     "inherited_scorer_replay_ordinals": 3,
@@ -882,6 +887,57 @@ def validate_successor_recovery_r2_context(
     }
 
 
+def validate_race_retry_recovery_r2_context(
+    context: dict[str, Any], *, evidence_root: Path, expected_race_retry_runner_sha256: str | None
+) -> dict[str, Any]:
+    """Require the second successor's explicit runner pin and full audit chain."""
+    if (
+        not isinstance(expected_race_retry_runner_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_race_retry_runner_sha256)
+        or sha256_path(RACE_RETRY_RUNNER_PATH) != expected_race_retry_runner_sha256
+        or context.get("race_retry_runner") != {
+            "path": str(RACE_RETRY_RUNNER_PATH), "sha256": expected_race_retry_runner_sha256
+        }
+    ):
+        raise ValueError("race-retry runner differs from the externally reviewed hash")
+    paths = {
+        name: resolve_artifact(evidence_root, context.get(f"{name}_path"), f"race-retry {name}")
+        for name in ("plan", "proposal", "complete", "watcher", "response", "sidecar", "trace", "raw", "journal", "scorer_attempts")
+    }
+    root = paths["plan"].parent
+    if (
+        paths["plan"].name != "partial_r2_plan.json"
+        or paths["proposal"].name != "recovery_proposal.json"
+        or paths["complete"].name != "r2_complete.json"
+        or paths["watcher"].name != "runtime_watch.r2.race_retry.jsonl"
+        or any(path.parent != root for path in paths.values())
+        or any(context.get(f"{name}_sha256") != sha256_path(path) for name, path in paths.items() if name not in {"response", "sidecar", "trace", "raw"})
+    ):
+        raise ValueError("race-retry artifact hash binding differs")
+    predecessor_binding = resolve_artifact(evidence_root, context.get("predecessor_binding"), "race-retry predecessor binding")
+    predecessor_watcher = resolve_artifact(evidence_root, context.get("predecessor_watcher_path"), "race-retry predecessor watcher")
+    predecessor_failures = resolve_artifact(evidence_root, context.get("predecessor_failed_attempts_path"), "race-retry predecessor failures")
+    if (
+        predecessor_binding != root / "predecessor_snapshot/source_binding.json"
+        or predecessor_watcher != root / "predecessor_snapshot/runtime_watch.r2.successor.jsonl"
+        or predecessor_failures != root / "predecessor_snapshot/generation_failed_attempts.T2.r2.jsonl"
+        or context.get("predecessor_binding_sha256") != sha256_path(predecessor_binding)
+        or context.get("predecessor_watcher_sha256") != sha256_path(predecessor_watcher)
+        or context.get("predecessor_failed_attempts_sha256") != sha256_path(predecessor_failures)
+    ):
+        raise ValueError("race-retry predecessor audit binding differs")
+    spec = importlib.util.spec_from_file_location("e8_race_retry_external_finalizer", FINALIZER_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load race-retry finalizer")
+    finalizer = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = finalizer
+    spec.loader.exec_module(finalizer)
+    accepted = finalizer._validate_race_retry_intermediate(root, load_json(paths["plan"], "race-retry plan"))
+    if not accepted.get("race_retry"):
+        raise ValueError("race-retry finalizer did not admit the sealed intermediate")
+    return {"context": context, "plan": accepted["plan"], "race_retry": True}
+
+
 def validate_recovery_r2_context(
     report: dict[str, Any],
     *,
@@ -889,6 +945,7 @@ def validate_recovery_r2_context(
     expected_recovery_runner_sha256: str | None,
     expected_finalizer_runner_sha256: str | None = None,
     expected_successor_runner_sha256: str | None = None,
+    expected_race_retry_runner_sha256: str | None = None,
     expected_v5_runner_sha256: str | None = None,
     expected_base_runner_sha256: str | None = None,
     expected_resume_runner_sha256: str | None = None,
@@ -952,6 +1009,12 @@ def validate_recovery_r2_context(
         raise ValueError("recovery-r2 artifact hash binding differs")
     _validate_banked_t2_r1_repair_history(context, evidence_root=evidence_root)
     plan = load_json(plan_path, "recovery-r2 plan")
+    if plan.get("schema") == RECOVERY_R2_RACE_RETRY_PLAN_SCHEMA:
+        return validate_race_retry_recovery_r2_context(
+            context,
+            evidence_root=evidence_root,
+            expected_race_retry_runner_sha256=expected_race_retry_runner_sha256,
+        )
     if plan.get("schema") == RECOVERY_R2_SUCCESSOR_PLAN_SCHEMA:
         return validate_successor_recovery_r2_context(
             context,
@@ -1631,6 +1694,7 @@ def validate(
     expected_recovery_runner_sha256: str | None = None,
     expected_finalizer_runner_sha256: str | None = None,
     expected_successor_runner_sha256: str | None = None,
+    expected_race_retry_runner_sha256: str | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{64}", expected_runner_sha256):
         raise ValueError("expected runner SHA-256 is malformed")
@@ -1690,6 +1754,7 @@ def validate(
         expected_recovery_runner_sha256=expected_recovery_runner_sha256,
         expected_finalizer_runner_sha256=expected_finalizer_runner_sha256,
         expected_successor_runner_sha256=expected_successor_runner_sha256,
+        expected_race_retry_runner_sha256=expected_race_retry_runner_sha256,
         expected_v5_runner_sha256=expected_runner_sha256,
         expected_base_runner_sha256=expected_base_runner_sha256,
         expected_resume_runner_sha256=expected_resume_runner_sha256,
@@ -2584,6 +2649,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-recovery-runner-sha256")
     parser.add_argument("--expected-finalizer-runner-sha256")
     parser.add_argument("--expected-successor-runner-sha256")
+    parser.add_argument("--expected-race-retry-runner-sha256")
     args = parser.parse_args(argv)
     print(
         json.dumps(
@@ -2595,6 +2661,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_recovery_runner_sha256=args.expected_recovery_runner_sha256,
                 expected_finalizer_runner_sha256=args.expected_finalizer_runner_sha256,
                 expected_successor_runner_sha256=args.expected_successor_runner_sha256,
+                expected_race_retry_runner_sha256=args.expected_race_retry_runner_sha256,
             ),
             sort_keys=True,
         )
