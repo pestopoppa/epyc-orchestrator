@@ -1,0 +1,110 @@
+# np_ceiling policy table for the GPU-resident shadow lane (gpu_shadow_lane).
+#
+# POLICY AS DATA (gpu-serving-tie-in-program P0-7 / P2-3): this file is the
+# single source for "how many parallel slots (-np) may the lane run at a given
+# per-slot context depth under a given dynamic-VRAM budget". The loader lives
+# in scripts/server/gpu_shadow_lane.py behind the default-off
+# ORCHESTRATOR_FEATURE_GPU_SHADOW_LANE flag. Nothing in the production launch
+# or routing path reads this file.
+#
+# Evidence: measured v8 np×context grids,
+#   /mnt/raid0/llm/epyc-inference-research/artifacts/np_context_study_v8_20260727/
+# read via the study's own read-only aggregator (driver/aggregate_np_context_v8.py,
+# surfaces terminal/publishable). The A3_ff arms ran the FF merge of the SAME
+# dense-hybrid Qwen3.6-27B architecture (identical GGUF KV geometry and 28.7 GB
+# Q8_0 footprint as stock), single-tenant on ROCm0, production HIP binary
+# (build 10107 @ 67a433bf4), taskset 184-191, -t 8 -tb 8, -fa on, -ctk/-ctv f16,
+# MTP OFF (non_mtp arm — matches lane default per program decision D6).
+#
+# MEASUREMENT discipline: these grids are observation-grade throughput surfaces
+# (no protocol-id attestation for promotion decisions). They inform lane np
+# admission; they never gate keep/revert/deploy/promote decisions on their own.
+# Phase-2 co-resident rows are VRAM arithmetic over the measured solo anchors
+# (the grids ran single-tenant); re-certify at P2-3 Stage-0 hardening before
+# any co-resident duty relies on them.
+#
+# Ceiling semantics (implemented by scripts/server/gpu_shadow_lane.py::np_ceiling):
+#   - Pick the budget row with the LARGEST dynamic_budget_gib <= the budget you
+#     actually have (rows are evidence "safe at >= this budget"). No row fits
+#     -> no validated ceiling -> refuse (null).
+#   - Within a row, pick the smallest context bucket >= the requested per-slot
+#     context. Requested context above the largest bucket -> null (unmeasured).
+#   - A null ceiling means "no validated operating point" — callers must
+#     refuse, never guess upward.
+
+version: 1
+lane: gpu_shadow_lane
+device: ROCm0
+vram_total_gib: 64
+policy_source:
+  instrument: np_context_study_v8_20260727
+  aggregator: driver/aggregate_np_context_v8.py (read-only; surfaces terminal)
+  root: /mnt/raid0/llm/epyc-inference-research/artifacts/np_context_study_v8_20260727
+  measured_at: "2026-07-27"
+  grade: observation  # informs np admission; never a promotion gate alone
+
+tenants:
+  # First tenant candidate (program D2): stock Qwen3.6-27B dense-hybrid Q8_0.
+  qwen36_27b_q8:
+    evidence_arm: A3_ff_fable_non_mtp_q8  # FF merge — same base arch/KV geometry as stock
+    model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-27B-Q8_0.gguf
+    model_bytes: 28665067072
+    model_vram_gib: 26.7
+    # GGUF header (arch qwen35, hybrid gated-delta-net): 64 blocks with
+    # full_attention_interval 4 -> 16 full-attention layers; head_count_kv 4,
+    # key/value length 256. f16 KV per token = 16 * 2(K+V) * 4 * 256 * 2B.
+    kv_bytes_per_token_f16: 65536
+    # Recurrent (delta-net) per-sequence state + slot bookkeeping, estimated
+    # conservatively from the np32/L16384 allocation failure vs the np16/L32768
+    # measured fit at identical total ctx (524288 tokens).
+    per_seq_overhead_gib: 0.15
+    compute_reserve_gib: 2.0  # -b/-ub 2048 graph + scratch, conservative
+    # Aggregate decode saturates at np16; np32 regresses -20% at L2048
+    # (81.5 vs 102.0 t/s) and is noise-level at L8192 (+2.5%) while doubling
+    # per-request latency. Cap all ceilings at 16.
+    np_throughput_saturation: 16
+    measured_aggregate_decode_tok_s:
+      "2048":  {"1": 26.5, "2": 29.8, "4": 51.4, "8": 79.7, "16": 102.0, "32": 81.5}
+      "8192":  {"1": 25.1, "2": 29.6, "4": 45.2, "8": 47.2, "16": 52.5, "32": 53.8}
+      "16384": {"1": 26.0, "2": 29.6, "4": 44.6, "8": 52.8, "16": 60.0, "32": null}  # np32: capacity skip (allocation_failure)
+      "32768": {"1": 26.3, "2": 28.2, "4": 50.7, "8": 52.5, "16": 57.2, "32": null}  # np32: capacity skip (allocation_failure)
+    budgets:
+      # Solo residency (bench windows; the shape the grid actually measured).
+      # Anchors: np16 x L32768 (ctx 524288, f16 KV = 32 GiB) measured fit;
+      # np32 x L16384 (same total ctx, +16 seq states + larger graph)
+      # allocation_failure -> the np16 rows are the validated frontier.
+      - name: solo_resident
+        dynamic_budget_gib: 37.3  # 64 - 26.7 model
+        ceilings: {"2048": 16, "8192": 16, "16384": 16, "32768": 16}
+      # Phase-2 resident set (program D2): 27B tenant + MiniCPM-o (~7 GB) +
+      # whisper (~1.6 GB) ~= 37 GB resident, ~27 GB dynamic. Row bound at the
+      # program's conservative 27 GiB. Derived by KV arithmetic from the solo
+      # anchors (NOT re-measured co-resident — recert at P2-3):
+      #   np16 x L16384: 16 GiB KV + 2.4 state + 2.0 reserve = 20.4 <= 27  OK
+      #   np16 x L32768: 32 GiB KV alone > 27                             NO
+      #   np8  x L32768: 16 GiB KV + 1.2 state + 2.0 reserve = 19.2 <= 27 OK
+      - name: phase2_resident_set
+        dynamic_budget_gib: 27.0
+        ceilings: {"2048": 16, "8192": 16, "16384": 16, "32768": 8}
+
+  # A4 bridge arm: Qwen3.6-35B-A3B Q8 (the frontdoor/coder_escalation MoE) on
+  # MI210 — the sequential control arm for the P3-1 bake-off. Measured cells
+  # only; no KV arithmetic derived (different MoE geometry, not needed yet).
+  # Phase-2 co-residency row deliberately absent: 37.8 GB model + the D2
+  # resident set cannot co-fit in 64 GB (program P3-1: sequential bench
+  # windows only).
+  qwen36_35b_a3b_q8_bridge:
+    evidence_arm: A4_35b_a3b_v8_bridge
+    model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+    model_vram_gib: 35.2
+    kv_bytes_per_token_f16: null  # not derived; ceilings rest on measured cells only
+    per_seq_overhead_gib: null
+    compute_reserve_gib: 2.0
+    np_throughput_saturation: 16  # np32 regresses at L2048 (231.6 vs 269.8 t/s)
+    measured_aggregate_decode_tok_s:
+      "2048": {"1": 97.6, "2": 123.1, "4": 173.2, "8": 226.0, "16": 269.8, "32": 231.6}
+      "8192": {"1": 98.1, "2": 119.1, "4": 158.4, "8": 183.7, "16": 191.6}
+    budgets:
+      - name: solo_resident
+        dynamic_budget_gib: 28.8  # 64 - 35.2 model
+        ceilings: {"2048": 16, "8192": 16, "16384": null, "32768": null}  # deeper cells unmeasured in the bridge grid

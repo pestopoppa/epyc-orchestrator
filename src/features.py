@@ -213,6 +213,12 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # of both flags; these gate only the extra shadow processing / (blocked) enforcement.
     FeatureSpec("review_decision_shadow", False, False, "REVIEW_DECISION_SHADOW", "RD-5: emit + trace review-plane decisions (verifier precedence, reject-admissibility, warn-only downgrade) WITHOUT acting. Decoupled from plan_review→memrl (no dependencies)."),
     FeatureSpec("review_decision_enforce", False, False, "REVIEW_DECISION_ENFORCE", "RD-5: ACT on review-plane decisions. Default OFF and BLOCKED on the H-LB LB-6 latency/sampling budget gate — do not enable until that gate passes."),
+    # gpu-serving-tie-in-program P0-7: role-agnostic GPU-resident shadow lane
+    # (MI210). Default-off in BOTH test and prod. Gates only the lane's
+    # scaffolding surfaces (np_ceiling policy loader + preflight tooling); the
+    # lane serves NO production traffic until the P3-3 three-gates sign-off
+    # (shadow-only invariant, program decision D3).
+    FeatureSpec("gpu_shadow_lane", False, False, "GPU_SHADOW_LANE", "GPU-resident shadow serving lane (MI210): tenant-as-data scaffolding, shadow-only"),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
 )
@@ -565,6 +571,11 @@ class Features:
     #   the H-LB LB-6 latency/sampling budget gate — do not enable until it passes.
     review_decision_shadow: bool = False
     review_decision_enforce: bool = False
+
+    # GPU shadow lane (gpu-serving-tie-in-program P0-7): default OFF everywhere.
+    # Gates the np_ceiling policy loader + preflight scaffolding only; no
+    # production routing or launch path reads this flag (D3 shadow-only).
+    gpu_shadow_lane: bool = False
 
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety
