@@ -1432,3 +1432,74 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         else None
     )
     assert lock_after == lock_before
+
+
+def test_final_wrapper_uses_dynamic_confirmation_and_post_commit_receipt_only() -> None:
+    """The human boundary cannot be satisfied by a reusable static token."""
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    source = wrapper.read_text()
+    assert "--apply" in source
+    assert '[[ -t 0 && -t 1 ]]' in source
+    assert 'CONFIRMATION="APPLY-E8-V5:${EVIDENCE_SHA256}:${EXPECTED_CANDIDATE}"' in source
+    assert "PROTOCOL_RECEIPT" not in source
+    assert "canonical.write_json_create_only(receipt_path, payload)" in source
+    assert source.index('"${COMMON[@]}" --attest "$CONFIRMATION"') < source.index(
+        "canonical.write_json_create_only(receipt_path, payload)"
+    )
+    assert source.index('"${COMMON[@]}" --attest "$CONFIRMATION"') < source.index(
+        "E8 v5 state CAS committed and consolidated receipt created"
+    )
+
+
+def test_final_wrapper_prevalidation_rejects_stale_reviewed_hashes_without_writes(
+    tmp_path: Path,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    validator_shell = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
+    )
+    validator_py = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
+    adapter = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    )
+    canonical_applier = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
+    )
+    state_path = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json")
+    state_before = state_path.read_bytes()
+    completed = subprocess.run(
+        [
+            "bash", str(wrapper), "--prevalidate", "--evidence", str(evidence),
+            "--expected-pre-state-sha256", "0" * 64,
+            "--expected-candidate-state-sha256", "1" * 64,
+        ],
+        env={
+            **__import__("os").environ,
+            "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
+            "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+            "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
+            "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
+            "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
+            "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
+            "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+            "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
+            "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+            ).strip(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "reviewed pre-state" in completed.stderr
+    assert state_path.read_bytes() == state_before
