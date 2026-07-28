@@ -235,7 +235,10 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
     context = {
         "schema": validator.RECOVERY_R2_CONTEXT_SCHEMA,
         "recovery_runner": {"path": "/reviewed/recovery.py", "sha256": "a" * 64},
-        "finalizer_runner": {"path": "/reviewed/finalizer.py", "sha256": "b" * 64},
+        "finalizer_runner": {
+            "path": "/reviewed/finalizer.py",
+            "sha256": _sha(validator.FINALIZER_PATH),
+        },
         "dependency_sha256": {"v5": "c" * 64, "resume": "d" * 64, "recovery": "a" * 64},
         "banked_t2_r1_repair_history": {
             "partial_resume_plan.json": {
@@ -275,7 +278,7 @@ def _validate(root: Path, context: dict) -> dict:
         {"recovery_r2": context},
         evidence_root=root,
         expected_recovery_runner_sha256="a" * 64,
-        expected_finalizer_runner_sha256="b" * 64,
+        expected_finalizer_runner_sha256=_sha(validator.FINALIZER_PATH),
         expected_v5_runner_sha256="c" * 64,
         expected_base_runner_sha256="b" * 64,
         expected_resume_runner_sha256="d" * 64,
@@ -287,6 +290,17 @@ def test_recovery_r2_context_accepts_hash_bound_59_3_438_bundle(tmp_path: Path) 
     accepted = _validate(root, context)
     assert accepted is not None
     assert len(accepted["plan"]["generation_ordinals"]) == 438
+
+
+def test_recovery_r2_context_rejects_changed_on_disk_finalizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, context = _context(tmp_path)
+    changed = tmp_path / "changed-finalizer.py"
+    changed.write_text("# unreviewed finalizer\n")
+    monkeypatch.setattr(validator, "FINALIZER_PATH", changed)
+    with pytest.raises(ValueError, match="finalizer instrument differs"):
+        _validate(root, context)
 
 
 def test_finalizer_conditionally_recomputes_mixed_tail_chain(

@@ -1197,6 +1197,7 @@ def validate_recovery_r2_context(
     if (
         not isinstance(expected_finalizer_runner_sha256, str)
         or not re.fullmatch(r"[0-9a-f]{64}", expected_finalizer_runner_sha256)
+        or sha256_path(FINALIZER_PATH) != expected_finalizer_runner_sha256
         or not isinstance(finalizer_ref, dict)
         or finalizer_ref.get("sha256") != expected_finalizer_runner_sha256
         or not isinstance(dependencies, dict)
@@ -2198,6 +2199,7 @@ def validate(
         ):
             raise ValueError(f"T{tier} fixed/scoring vector differs")
     total = 0
+    derived_raw: dict[tuple[int, int], dict[str, Any]] = {}
     for tier_text, expected_n in (("1", 50), ("2", 500)):
         rows = details[tier_text]
         if (
@@ -2522,6 +2524,23 @@ def validate(
                 tier=tier,
                 repetition=repetition,
             )
+            suites: dict[str, list[bool]] = {}
+            for response in responses:
+                suites.setdefault(str(response["suite"]), []).append(
+                    bool(response["correct"])
+                )
+            derived_raw[(tier, repetition)] = {
+                "q": sum(bool(response["correct"]) for response in responses)
+                * 3.0
+                / len(responses),
+                "per_suite_quality": {
+                    suite: sum(values) * 3.0 / len(values)
+                    for suite, values in suites.items()
+                },
+                "per_suite_counts": {
+                    suite: len(values) for suite, values in suites.items()
+                },
+            }
             if tail["retry_count"]:
                 attempts_path = resolve_artifact(
                     evidence_root,
@@ -2785,8 +2804,10 @@ def validate(
                 "raw observation",
             )
             raw = load_json(raw_path, "raw observation")
+            recomputed = derived_raw[(tier, repetition)]
             if (
-                raw_path.name != f"raw.T{tier}.r{repetition}.json"
+                raw_path
+                != evidence_path.parent / f"raw.T{tier}.r{repetition}.json"
                 or observation.get("sha256") != sha256_path(raw_path)
                 or observation
                 != {
@@ -2805,6 +2826,9 @@ def validate(
                 or not isinstance(raw.get("q"), (int, float))
                 or not isinstance(raw.get("per_suite_quality"), dict)
                 or not isinstance(raw.get("per_suite_counts"), dict)
+                or raw.get("q") != recomputed["q"]
+                or raw.get("per_suite_quality") != recomputed["per_suite_quality"]
+                or raw.get("per_suite_counts") != recomputed["per_suite_counts"]
             ):
                 raise ValueError("raw observation differs from its summary")
             raw_rows.append(raw)

@@ -213,6 +213,35 @@ def test_generation_classifier_rejects_cross_ledger_mismatch() -> None:
 
 
 @pytest.mark.parametrize(
+    "result_change",
+    [
+        {"question_id": "unknown"},
+        {"question_id": "other"},
+        {"partial": True},
+        {"degraded": True},
+    ],
+)
+def test_clean_sidecar_rejects_unbound_or_incomplete_result(
+    result_change: dict,
+) -> None:
+    response = _response("q", "answer")
+    result = {
+        "qid": "q",
+        "question_id": "q",
+        "correct": True,
+        "tokens_generated": 1,
+        "route": "frontdoor",
+        "answer_hash": runner._normalized_answer_hash("answer"),
+        **result_change,
+    }
+    assert not runner.validate_clean_sidecar_result(
+        response,
+        {"answer": "answer", "result": result},
+        qid="q",
+    )
+
+
+@pytest.mark.parametrize(
     "response_change",
     [
         {"partial": True},
@@ -375,13 +404,11 @@ def test_generation_tail_replaces_only_target_response_and_sidecar_bytes(
     tmp_path: Path, monkeypatch
 ) -> None:
     _patch_tail_runtime(monkeypatch)
-    questions, responses, sidecar, trace, sidecar_dir = _tail_fixture(
-        tmp_path, target_question_id="unknown"
-    )
+    questions, responses, sidecar, trace, sidecar_dir = _tail_fixture(tmp_path)
     original_responses = responses.read_bytes().splitlines(keepends=True)
     original_sidecar = sidecar.read_bytes().splitlines(keepends=True)
     tail = runner.run_generation_tail(
-        FakeTower(sidecar_dir, question_id="unknown"),
+        FakeTower(sidecar_dir),
         tier=2,
         repetition=1,
         questions=questions,
@@ -411,7 +438,7 @@ def test_generation_tail_replaces_only_target_response_and_sidecar_bytes(
     assert repaired["answer"] == "a"
     assert "scored_at_s" not in repaired
     assert repaired["result"]["qid"] == "q0"
-    assert repaired["result"]["question_id"] == "unknown"
+    assert repaired["result"]["question_id"] == "q0"
     assert repaired["result"].get("error") is None
     attempts = runner.V4.load_jsonl(tmp_path / "generation_tail_attempts.T2.r1.jsonl")
     assert attempts[0]["outcome"] == "recovered"
@@ -629,7 +656,7 @@ def test_scorer_tail_replaces_only_target_sidecar_line_and_preserves_batch_ident
     rows = _sidecar(["q0", "q1"], failure_ordinal=-1)
     rows[1]["result"].update(
         {
-            "question_id": "unknown",
+            "question_id": "q0",
             "error": True,
             "error_detail": "scoring_unavailable: judge timeout",
         }
@@ -651,7 +678,7 @@ def test_scorer_tail_replaces_only_target_sidecar_line_and_preserves_batch_ident
     assert target["eval_batch_id"] == "full-batch"
     assert target["label"] == "e8-t2-r1"
     assert target["requested_n"] == 2
-    assert target["result"]["question_id"] == "unknown"
+    assert target["result"]["question_id"] == "q0"
     assert runner.validate_clean_sidecar_result(responses[0], target, qid="q0")
 
 
@@ -801,11 +828,7 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                     "started_at_s": 3.0,
                     "result": {
                         "qid": row["qid"],
-                        "question_id": (
-                            "unknown"
-                            if tier == 1 and repetition == 1 and ordinal == 0
-                            else row["qid"]
-                        ),
+                        "question_id": row["qid"],
                         "correct": True,
                         "tokens_generated": 1,
                         "route": "frontdoor",
@@ -836,7 +859,7 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                         "answer": "timed out",
                         "result": {
                             "qid": questions[0]["qid"],
-                            "question_id": "unknown",
+                            "question_id": questions[0]["qid"],
                             "tokens_generated": 0,
                             "error": True,
                             "error_detail": "timed out",
@@ -866,7 +889,7 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                         "started_at_s": 3.0,
                         "result": {
                             "qid": questions[0]["qid"],
-                            "question_id": "unknown",
+                            "question_id": questions[0]["qid"],
                             "correct": True,
                             "tokens_generated": 1,
                             "route": "frontdoor",
@@ -1278,6 +1301,75 @@ def test_validator_rejects_resealed_incoherent_sidecar(tmp_path: Path) -> None:
     report_path.write_text(json.dumps(report) + "\n")
     _reseal_candidate(evidence, validator)
     with pytest.raises(ValueError, match="not coherent"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+@pytest.mark.parametrize("field", ["q", "per_suite_quality", "per_suite_counts"])
+def test_validator_recomputes_raw_aggregates_from_response_ledgers(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator(f"e8_v5_validator_raw_{field}_test")
+    summary_path = evidence.parent / "summary.T1.json"
+    summary = json.loads(summary_path.read_text())
+    repetitions = range(1, 4) if field == "per_suite_counts" else (1,)
+    for repetition in repetitions:
+        raw_path = evidence.parent / f"raw.T1.r{repetition}.json"
+        raw = json.loads(raw_path.read_text())
+        if field == "q":
+            raw["q"] = 0.0
+            summary["observations"][repetition - 1]["q"] = 0.0
+        elif field == "per_suite_quality":
+            raw["per_suite_quality"] = {"suite": 0.0}
+        else:
+            raw["per_suite_counts"] = {"suite": 51}
+        raw_path.write_text(json.dumps(raw) + "\n")
+        summary["observations"][repetition - 1]["sha256"] = validator.sha256_path(
+            raw_path
+        )
+    if field == "per_suite_counts":
+        summary["per_suite_counts"] = {"suite": 51}
+    summary_path.write_text(json.dumps(summary) + "\n")
+    manifest = json.loads(evidence.read_text())
+    manifest["source_records"][0]["sha256"] = validator.sha256_path(summary_path)
+    if field == "per_suite_counts":
+        manifest["replacement"]["baseline_state"]["per_suite_counts_by_tier"]["1"] = {
+            "suite": 51
+        }
+    evidence.write_text(json.dumps(manifest) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="raw observation differs"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_same_basename_raw_outside_evidence_root_level(
+    tmp_path: Path,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_nested_raw_test")
+    source = evidence.parent / "raw.T1.r1.json"
+    nested = evidence.parent / "nested/raw.T1.r1.json"
+    nested.parent.mkdir()
+    nested.write_bytes(source.read_bytes())
+    summary_path = evidence.parent / "summary.T1.json"
+    summary = json.loads(summary_path.read_text())
+    summary["observations"][0]["path"] = str(nested)
+    summary["observations"][0]["sha256"] = validator.sha256_path(nested)
+    summary_path.write_text(json.dumps(summary) + "\n")
+    manifest = json.loads(evidence.read_text())
+    manifest["source_records"][0]["sha256"] = validator.sha256_path(summary_path)
+    evidence.write_text(json.dumps(manifest) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="raw observation differs"):
         validator.validate(
             evidence,
             expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),

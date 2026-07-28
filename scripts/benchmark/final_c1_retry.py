@@ -51,6 +51,7 @@ TERMINAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_final_c1_terminal.v1"
 RECEIPT_SCHEMA = "epyc.operator_e8_quality_final_c1_retry_amendment.v1"
 ATTESTATION = "RATIFY-E8-FINAL-C1-RETRY-20260728"
 RETRY_ORDINALS = (97, 279)
+RACE_RETRY_ORDINALS = (97, 203, 279)
 RETRY_QIDS = ("leval_codeU_269", "leval_review_summ_382")
 IMPORTED_CLEAN_QID = "longcot_mini_HM_easy_5"
 REQUEST_TIMEOUT_S = 300
@@ -333,12 +334,14 @@ def validate_failed_source(source: Path = SOURCE) -> dict[str, Any]:
     proposal = V4.load_json(source / "recovery_proposal.json")
     if (
         plan.get("schema") != RACE.PLAN_SCHEMA
-        or plan.get("generation_ordinals") != [97, 203, 279]
-        or plan.get("race_retry_ordinals") != [97, 203, 279]
+        or plan.get("generation_ordinals") != list(RACE_RETRY_ORDINALS)
+        or plan.get("race_retry_ordinals") != list(RACE_RETRY_ORDINALS)
         or plan.get("generation_concurrency") != V4.CONCURRENCY
         or proposal.get("schema") != RACE.PROPOSAL_SCHEMA
-        or proposal.get("generation_ordinals_sha256") != canonical_hash([97, 203, 279])
-        or proposal.get("race_retry_ordinals_sha256") != canonical_hash([97, 203, 279])
+        or proposal.get("generation_ordinals_sha256")
+        != canonical_hash(list(RACE_RETRY_ORDINALS))
+        or proposal.get("race_retry_ordinals_sha256")
+        != canonical_hash(list(RACE_RETRY_ORDINALS))
     ):
         raise ValueError("final-c1 source plan/proposal differs from the failed race")
     base_hashes, base = RACE._load_bound_snapshot(source, "source_snapshot")
@@ -346,9 +349,13 @@ def validate_failed_source(source: Path = SOURCE) -> dict[str, Any]:
     questions = scoring.get("questions")
     if not isinstance(questions, list) or len(questions) != 500:
         raise ValueError("final-c1 source scoring vector is invalid")
-    sidecars = RACE._rows(
-        source / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
+    sidecar_path = source / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
+    RECOVERY._validate_generation_sidecar_envelope(
+        sidecar_path,
+        source / "runtime_watch.r2.race_retry.jsonl",
+        set(RACE_RETRY_ORDINALS),
     )
+    sidecars = RACE._rows(sidecar_path)
     if set(sidecars) != {97, 203, 279}:
         raise ValueError("final-c1 source sidecar does not contain the exact race batch")
     if (
