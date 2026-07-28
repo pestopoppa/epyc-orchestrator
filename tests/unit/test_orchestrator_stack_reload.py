@@ -7,10 +7,18 @@ import sys
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
 import yaml
 
 from scripts.server import orchestrator_stack as stack
 from scripts.server import stack_commands
+
+
+@pytest.fixture
+def isolated_runtime_facts_tmp(monkeypatch, tmp_path: Path) -> Path:
+    """Keep direct stack lifecycle tests away from the host runtime manifest."""
+    monkeypatch.setitem(stack_commands._PATHS, "tmp_dir", tmp_path)
+    return tmp_path
 
 
 def _stack_gate_args(**overrides) -> Namespace:
@@ -155,7 +163,9 @@ def test_start_parser_accepts_no_compile_registry(monkeypatch) -> None:
     assert captured["compile_registry"] is False
 
 
-def test_cmd_start_compiles_registry_by_default_arg_absence(monkeypatch) -> None:
+def test_cmd_start_compiles_registry_by_default_arg_absence(
+    monkeypatch, isolated_runtime_facts_tmp: Path
+) -> None:
     calls: list[dict[str, object]] = []
 
     def fake_load_or_compile(**kwargs):
@@ -177,9 +187,12 @@ def test_cmd_start_compiles_registry_by_default_arg_absence(monkeypatch) -> None
     assert len(calls) == 1
     assert calls[0]["output_path"].name == "model_registry.yaml"
     assert calls[0]["cache_key_path"].name == ".lean_cache_key"
+    assert not (isolated_runtime_facts_tmp / "orchestrator_runtime_facts.json").exists()
 
 
-def test_cmd_start_infers_missing_numa_mode_from_realized_fleet(monkeypatch) -> None:
+def test_cmd_start_infers_missing_numa_mode_from_realized_fleet(
+    monkeypatch, isolated_runtime_facts_tmp: Path
+) -> None:
     # ESC-8 Fix 4: with no --numa-mode, cmd_start infers the mode from the
     # running fleet (quarters-only production) instead of defaulting to "full".
     from scripts.server import realized_fleet
@@ -231,9 +244,12 @@ def test_cmd_start_infers_missing_numa_mode_from_realized_fleet(monkeypatch) -> 
     assert stack_commands.cmd_start(args) == 0
     assert modes == ["quarter"]
     assert saved
+    assert (isolated_runtime_facts_tmp / "orchestrator_runtime_facts.json").is_file()
 
 
-def test_cmd_start_repair_embeddings_uses_configured_embedder_pool(monkeypatch) -> None:
+def test_cmd_start_repair_embeddings_uses_configured_embedder_pool(
+    monkeypatch, isolated_runtime_facts_tmp: Path
+) -> None:
     from scripts.maintenance import repair_episodic_embeddings as repair
 
     class FakeRegistryLoader:
@@ -269,6 +285,7 @@ def test_cmd_start_repair_embeddings_uses_configured_embedder_pool(monkeypatch) 
     assert repair_calls[0]["servers"] == repair.DEFAULT_EMBEDDER_SERVERS
     assert repair_calls[0]["base_port"] == repair.DEFAULT_EMBEDDER_BASE_PORT
     assert repair_calls[0]["max_db_growth"] == repair.DEFAULT_MAX_DB_GROWTH
+    assert not (isolated_runtime_facts_tmp / "orchestrator_runtime_facts.json").exists()
 
 
 def test_stack_change_launch_gate_failure_blocks_launch(monkeypatch, capsys) -> None:
