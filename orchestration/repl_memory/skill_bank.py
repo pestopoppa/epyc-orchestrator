@@ -33,6 +33,37 @@ DEFAULT_SKILLBANK_PATH = Path(
     "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions"
 )
 
+def skill_embedding_text(
+    title: str,
+    when_to_apply: str | None,
+    task_types: "str | list | None",
+) -> str:
+    """THE canonical skill embedding text. Place the skill in TASK space,
+    because a task embedding is what it is matched against at retrieval
+    (SkillRetriever.retrieve_for_task passes the task's vector as the query).
+
+    Single definition on purpose: the 2026-07-05 episodic incident began with
+    four write-site conventions coexisting, so the vector encoded its writer.
+    The distillation pipeline previously embedded ``f"{title}: {principle}"`` —
+    a different text space from what the backfill wrote and retrieval queried.
+    Every skill writer must import this function; do not inline a variant.
+    """
+    parts = [f"skill:{(title or '').strip()}"]
+    if when_to_apply:
+        parts.append(f"when:{when_to_apply.strip()}")
+    if task_types:
+        types = task_types
+        if isinstance(types, str):
+            try:
+                types = json.loads(types)
+            except Exception:
+                parts.append(f"task_types:{types}")
+                types = None
+        if isinstance(types, list) and types:
+            parts.append(f"task_types:{','.join(str(t) for t in types)}")
+    return " | ".join(parts)
+
+
 SKILL_TYPES = ("general", "routing", "escalation", "failure_lesson")
 
 # Limits

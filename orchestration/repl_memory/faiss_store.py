@@ -35,6 +35,21 @@ class StaleFAISSSaveError(RuntimeError):
     """Raised when a dirty FAISS store would overwrite newer disk files."""
 
 
+class DegenerateVectorError(ValueError):
+    """Raised when a vector that can never be retrieved would enter the index.
+
+    An all-zero vector L2-normalizes to zero and inner-products to 0.0 with
+    everything; a NaN/Inf vector scores -inf. Either way the row exists in the
+    id_map/SQLite with a valid position and is permanently unretrievable — the
+    signature of an embedder outage, where TaskEmbedder's default hash fallback
+    yields 89.0% all-zero and 2.8% NaN vectors (measured 2026-07-28 over 5,000
+    real task texts). This guard sits in add() because add() is the single
+    function every vector must pass to reach ANY index — episodic, skill, or
+    strategy — so no store can lose the guarantee independently.
+    Override for a deliberate degraded write: EPISODIC_ALLOW_DEGRADED_EMBEDDINGS=1.
+    """
+
+
 class EmbeddingStoreProtocol(Protocol):
     """Protocol for embedding storage backends (FAISS, NumPy, ChromaDB)."""
 
@@ -237,6 +252,29 @@ class FAISSEmbeddingStore:
             raise ValueError(
                 f"Embedding dimension mismatch: got {embedding.shape[1]}, expected {self.dim}"
             )
+
+        # Refuse vectors that can never be retrieved (see DegenerateVectorError).
+        if not np.all(np.isfinite(embedding)):
+            reason = "non_finite"
+        elif not np.any(embedding):
+            reason = "all_zero"
+        else:
+            reason = None
+        if reason is not None:
+            if os.environ.get("EPISODIC_ALLOW_DEGRADED_EMBEDDINGS") == "1":
+                logger.error(
+                    "Adding a DEGENERATE (%s) vector for %s because "
+                    "EPISODIC_ALLOW_DEGRADED_EMBEDDINGS=1; this row will never "
+                    "be retrievable by similarity.", reason, memory_id,
+                )
+            else:
+                raise DegenerateVectorError(
+                    f"refusing to index a {reason} vector for {memory_id}; the "
+                    "embedding servers are probably down and a hash fallback was "
+                    "substituted. Fix the embedders, or set "
+                    "EPISODIC_ALLOW_DEGRADED_EMBEDDINGS=1 to accept an "
+                    "unretrievable row on purpose."
+                )
 
         # L2 normalize for cosine similarity
         self._faiss.normalize_L2(embedding)

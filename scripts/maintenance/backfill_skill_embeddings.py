@@ -53,19 +53,8 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def skill_embedding_text(title: str, when_to_apply: str | None, task_types: str | None) -> str:
-    """Place the skill in TASK space, because that is what it is matched against."""
-    parts = [f"skill:{(title or '').strip()}"]
-    if when_to_apply:
-        parts.append(f"when:{when_to_apply.strip()}")
-    if task_types:
-        try:
-            types = json.loads(task_types)
-            if isinstance(types, list) and types:
-                parts.append(f"task_types:{','.join(str(t) for t in types)}")
-        except Exception:
-            parts.append(f"task_types:{task_types}")
-    return " | ".join(parts)
+# Canonical convention lives with the store so every writer shares it.
+from orchestration.repl_memory.skill_bank import skill_embedding_text  # noqa: E402
 
 
 def main() -> int:

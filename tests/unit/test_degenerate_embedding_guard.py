@@ -184,3 +184,133 @@ class TestChokepointRefuses:
         mid = store.store(unit_vector(), "route", "routing", {"not": "a record"})
         store.flush()
         assert mid and store.count() == 1
+
+
+class TestUniversalFAISSGuard:
+    """F1 (2026-07-28 audit): the guard must hold at FAISSEmbeddingStore.add —
+    the single function every vector passes to reach ANY index — so the skill
+    and strategy stores (which bypass EpisodicStore.store entirely) are covered
+    by construction, not by convention."""
+
+    def _store(self, tmp_path, dim=64):
+        from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
+
+        return FAISSEmbeddingStore(path=tmp_path, dim=dim)
+
+    def test_zero_and_nonfinite_vectors_are_refused_at_add(self, tmp_path):
+        from orchestration.repl_memory.faiss_store import DegenerateVectorError
+
+        st = self._store(tmp_path)
+        for bad in (np.zeros(64, dtype=np.float32), np.full(64, np.nan, dtype=np.float32)):
+            with pytest.raises(DegenerateVectorError):
+                st.add("id-x", bad)
+        assert st.index.ntotal == 0 and len(st.id_map) == 0, "a refused add must not desync"
+
+    def test_real_vector_still_adds(self, tmp_path):
+        st = self._store(tmp_path)
+        v = np.random.default_rng(0).standard_normal(64).astype(np.float32)
+        assert st.add("id-ok", v) == 0
+        assert st.index.ntotal == 1 == len(st.id_map)
+
+    def test_override_env_permits_with_loud_error(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        monkeypatch.setenv("EPISODIC_ALLOW_DEGRADED_EMBEDDINGS", "1")
+        st = self._store(tmp_path)
+        with caplog.at_level(logging.ERROR):
+            st.add("id-z", np.zeros(64, dtype=np.float32))
+        assert any("DEGENERATE" in r.message for r in caplog.records)
+
+
+class TestStrategyStoreFailsClosed:
+    """F2: the strategy store's own two fallback paths are refused at the source."""
+
+    def test_no_embedder_refuses_hash_pseudo_embedding(self, tmp_path, monkeypatch):
+        from orchestration.repl_memory.strategy_store import StrategyStore
+
+        monkeypatch.delenv("EPISODIC_ALLOW_DEGRADED_EMBEDDINGS", raising=False)
+        s = StrategyStore(path=tmp_path / "strat", embedding_dim=64, embedder=None)
+        s._embedder = None  # simulate TaskEmbedder construction failure
+        with pytest.raises(RuntimeError, match="hash pseudo-embeddings are refused"):
+            s._embed("some strategy text")
+
+    def test_owned_embedder_hash_fallback_output_is_refused(self, tmp_path, monkeypatch):
+        from orchestration.repl_memory.strategy_store import StrategyStore
+
+        monkeypatch.delenv("EPISODIC_ALLOW_DEGRADED_EMBEDDINGS", raising=False)
+
+        class FallbackOnlyEmbedder:
+            def embed_text(self, text):
+                return hash_fallback_embedding(text)
+
+        s = StrategyStore(path=tmp_path / "strat", embedding_dim=1024,
+                          embedder=FallbackOnlyEmbedder())
+        s._owns_embedder = True  # what a bare TaskEmbedder() during a BGE outage is
+        # find a text whose fallback is the dangerous well-formed kind
+        text = next(t for t in (f"strategy {i}" for i in range(4000))
+                    if is_degenerate_embedding(hash_fallback_embedding(t)) is None)
+        with pytest.raises(RuntimeError, match="hash fallback"):
+            s._embed(text)
+
+    def test_injected_test_embedder_is_untouched(self, tmp_path):
+        from orchestration.repl_memory.strategy_store import StrategyStore
+
+        class MockEmbedder:
+            def embed_text(self, text):
+                v = np.random.default_rng(abs(hash(text)) % 2**32).standard_normal(64)
+                return (v / np.linalg.norm(v)).astype(np.float32)
+
+        s = StrategyStore(path=tmp_path / "strat", embedding_dim=64, embedder=MockEmbedder())
+        assert s._embed("anything").shape == (64,)
+
+
+class TestSkillEmbeddingConvention:
+    """F3: one skill-embedding convention, shared by every writer."""
+
+    def test_canonical_convention_shape(self):
+        from orchestration.repl_memory.skill_bank import skill_embedding_text
+
+        assert (
+            skill_embedding_text("Use grep first", "searching code", ["coder", "chat"])
+            == "skill:Use grep first | when:searching code | task_types:coder,chat"
+        )
+
+    def test_backfill_imports_the_canonical_one(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "backfill_skill_embeddings",
+            "scripts/maintenance/backfill_skill_embeddings.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        from orchestration.repl_memory.skill_bank import skill_embedding_text
+
+        assert mod.skill_embedding_text is skill_embedding_text
+
+    def test_pipeline_embeds_canonical_text_and_refuses_fallback(self):
+        from orchestration.repl_memory.distillation.pipeline import DistillationPipeline
+        from orchestration.repl_memory.skill_bank import Skill, skill_embedding_text
+
+        seen = {}
+
+        class Recorder:
+            def embed_text(self, text):
+                seen["text"] = text
+                v = np.random.default_rng(0).standard_normal(1024)
+                return (v / np.linalg.norm(v)).astype(np.float32)
+
+        class FallbackEmbedder:
+            def embed_text(self, text):
+                return np.zeros(1024, dtype=np.float32)
+
+        skill = Skill(id="gen_001", title="Use grep first", skill_type="general",
+                      principle="p", when_to_apply="searching code",
+                      task_types=["coder"])
+        pipe = DistillationPipeline(teacher=None, skill_bank=None, embedder=Recorder())
+        vec = pipe._embed_skill(skill)
+        assert vec is not None
+        assert seen["text"] == skill_embedding_text("Use grep first", "searching code", ["coder"])
+
+        pipe_bad = DistillationPipeline(teacher=None, skill_bank=None, embedder=FallbackEmbedder())
+        assert pipe_bad._embed_skill(skill) is None, "fallback vectors must not be indexed"

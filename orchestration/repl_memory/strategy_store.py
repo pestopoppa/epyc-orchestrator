@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 import uuid
@@ -912,10 +913,55 @@ class StrategyStore:
         }
 
     def _embed(self, text: str) -> np.ndarray:
-        """Generate embedding for text."""
+        """Generate embedding for text. FAILS CLOSED on fallback vectors.
+
+        Two poisoning paths existed here (audited 2026-07-28):
+
+        1. The owned ``TaskEmbedder()`` is built with default config, where
+           ``use_fallback=True`` — so a BGE outage silently returns a SHA-256
+           pseudo-vector (89.0% all-zero, 2.8% NaN, 8.1% well-formed-but-
+           meaningless, measured over 5,000 real texts). The well-formed 8.1%
+           are caught here by exact comparison since the fallback is a pure
+           function of the text; the rest are also caught by the
+           degenerate-vector guard in ``FAISSEmbeddingStore.add``.
+        2. ``_hash_embed`` — this class's own documented "no model available"
+           fallback, which produces well-formed random vectors that no
+           after-the-fact detector could distinguish from real ones. It is now
+           refused at the source: a strategy stored under it would be
+           semantically unretrievable while looking healthy forever.
+
+        Injected test embedders (``embedder=`` in the constructor) are
+        unaffected. Override for a deliberate degraded write:
+        ``EPISODIC_ALLOW_DEGRADED_EMBEDDINGS=1``.
+        """
+        allow_degraded = os.environ.get("EPISODIC_ALLOW_DEGRADED_EMBEDDINGS") == "1"
         if self._embedder is not None and hasattr(self._embedder, "embed_text"):
-            return self._embedder.embed_text(text)
-        # Hash fallback
+            vec = self._embedder.embed_text(text)
+            if self._owns_embedder and not allow_degraded:
+                from orchestration.repl_memory.embedder import is_hash_fallback_embedding
+
+                if is_hash_fallback_embedding(text, vec):
+                    raise RuntimeError(
+                        "TaskEmbedder returned its hash fallback (the embedding "
+                        "servers are down); refusing to store a semantically "
+                        "meaningless strategy vector. Fix the embedders, or set "
+                        "EPISODIC_ALLOW_DEGRADED_EMBEDDINGS=1."
+                    )
+            return vec
+        # Hash fallback — only reachable when TaskEmbedder could not even be
+        # constructed. Persisting these would poison the index undetectably.
+        if not allow_degraded:
+            raise RuntimeError(
+                "No embedder available and hash pseudo-embeddings are refused "
+                "(they are well-formed but semantically random, so the "
+                "corruption would be permanent and invisible). Provide an "
+                "embedder, or set EPISODIC_ALLOW_DEGRADED_EMBEDDINGS=1."
+            )
+        logger.error(
+            "Persisting a HASH pseudo-embedding because "
+            "EPISODIC_ALLOW_DEGRADED_EMBEDDINGS=1; this strategy will not be "
+            "semantically retrievable."
+        )
         return self._hash_embed(text)
 
     def _refresh_faiss_if_changed(self, *, force: bool = False) -> None:

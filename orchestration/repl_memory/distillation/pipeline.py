@@ -280,14 +280,38 @@ class DistillationPipeline:
         )
 
     def _embed_skill(self, skill: Skill) -> Optional[np.ndarray]:
-        """Embed a skill's principle text for FAISS indexing."""
+        """Embed a skill for FAISS indexing, in the canonical task-space text.
+
+        Two defects fixed 2026-07-28: this called ``self.embedder.embed(text)``
+        — a method TaskEmbedder does not have — so with a real embedder every
+        skill silently landed without a vector (the AttributeError was swallowed
+        below); and it embedded ``f"{title}: {principle}"``, a different text
+        space from what the backfill wrote and retrieval queries. Fallback
+        pseudo-vectors are refused: an unindexed skill is backfillable later, a
+        poisoned one is invisible.
+        """
         if self.embedder is None:
             return None
         try:
-            text = f"{skill.title}: {skill.principle}"
-            return self.embedder.embed(text)
+            from orchestration.repl_memory.skill_bank import skill_embedding_text
+            from orchestration.repl_memory.embedder import (
+                is_degenerate_embedding,
+                is_hash_fallback_embedding,
+            )
+
+            text = skill_embedding_text(skill.title, skill.when_to_apply, skill.task_types)
+            vec = self.embedder.embed_text(text)
+            if is_degenerate_embedding(vec) or is_hash_fallback_embedding(text, vec):
+                logger.warning(
+                    "Embedder returned a fallback/degenerate vector for skill %s "
+                    "(embedders down?); storing WITHOUT an index entry — run "
+                    "scripts/maintenance/backfill_skill_embeddings.py once they are up.",
+                    skill.id,
+                )
+                return None
+            return vec
         except Exception as e:
-            logger.debug("Embedding failed for skill %s: %s", skill.id, e)
+            logger.warning("Embedding failed for skill %s: %s", skill.id, e)
             return None
 
     def _deduplicate_and_store(
