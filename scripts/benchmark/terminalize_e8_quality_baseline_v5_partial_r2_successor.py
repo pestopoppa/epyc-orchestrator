@@ -29,6 +29,7 @@ RECOVERY_PATH = ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial
 SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v1"
 TRANSITION_NAME = "terminalization_transition.json"
 COMPLETION_NAME = "terminalization_complete.json"
+INCOMPLETE_NAME = "terminalization_incomplete.json"
 REWRITTEN_SOURCE_PATHS = (
     "source_snapshot/source_binding.json",
     "partial_r2_plan.json",
@@ -167,21 +168,24 @@ def _write_completion_seal(output: Path, transition: dict[str, Any]) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
-    linked = False
     try:
         os.link(temporary, path)
-        linked = True
         _fsync_dir(output)
-    except Exception:
-        if linked:
-            path.unlink(missing_ok=True)
-            try:
-                _fsync_dir(output)
-            except Exception:
-                pass
-        raise
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _activate_terminalization(output: Path) -> None:
+    """Remove the durable incomplete marker as the one-way activation point.
+
+    There is intentionally no fsync after unlink.  A crash that loses this
+    unlink merely restores the marker and therefore causes a safe false reject;
+    all positive evidence (payload and completion seal) was fsynced first.
+    """
+    marker = output / INCOMPLETE_NAME
+    if marker.is_symlink() or not marker.is_file():
+        raise ValueError("terminal bridge incomplete marker is absent or unsafe")
+    marker.unlink()
 
 
 def _load_binding(snapshot: Path) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
@@ -420,20 +424,17 @@ def terminalize(source_dir: Path, output_dir: Path, expected_source_tree_sha256:
         # Validate the unpublished staging payload, but never let a consumer
         # use it: only publication creates the completion seal.
         MIXED._validate_predecessor(staging, terminal_hash, require_completion=False)
+        _write_json(
+            staging / INCOMPLETE_NAME,
+            {"schema": SCHEMA, "status": "published_incomplete", "transition": TRANSITION_NAME},
+        )
         if output.exists() or output.is_symlink():
             raise FileExistsError(f"terminal bridge output namespace already exists: {output}")
         _rename_noreplace(staging, output)
         published = True
-        try:
-            _fsync_dir(output.parent)
-        except Exception:
-            shutil.rmtree(output, ignore_errors=True)
-            try:
-                _fsync_dir(output.parent)
-            except Exception:
-                pass
-            raise
+        _fsync_dir(output.parent)
         _write_completion_seal(output, transition)
+        _activate_terminalization(output)
         return output
     except Exception:
         if not published:

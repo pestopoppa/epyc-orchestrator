@@ -33,6 +33,7 @@ PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_repair_proposal.v1"
 EVIDENCE_NAME = "mixed_tail_repair.json"
 TERMINALIZATION_NAME = "terminalization_transition.json"
 TERMINALIZATION_COMPLETE_NAME = "terminalization_complete.json"
+TERMINALIZATION_INCOMPLETE_NAME = "terminalization_incomplete.json"
 TERMINALIZATION_SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v1"
 N = 500
 TIMEOUT_ERROR = "[ERROR: Inference failed: chat_completions failed: timed out]"
@@ -274,6 +275,9 @@ def _terminalization_transition(
     if path.is_symlink() or not path.is_file():
         raise ValueError("mixed-tail terminalization transition is not a real file")
     completion_path = root / TERMINALIZATION_COMPLETE_NAME
+    incomplete_path = root / TERMINALIZATION_INCOMPLETE_NAME
+    if incomplete_path.exists() or incomplete_path.is_symlink():
+        raise ValueError("mixed-tail terminalization remains incomplete")
     if require_completion and (completion_path.is_symlink() or not completion_path.is_file()):
         raise ValueError("mixed-tail terminalization completion seal is missing")
     value = V4.load_json(path)
@@ -308,6 +312,7 @@ def _terminalization_transition(
     actual_payload = source_hashes(root)
     actual_payload.pop(TERMINALIZATION_NAME, None)
     actual_payload.pop(TERMINALIZATION_COMPLETE_NAME, None)
+    actual_payload.pop(TERMINALIZATION_INCOMPLETE_NAME, None)
     if actual_payload != payload or set(payload) != set(source) | {"generation_failed_attempts.T2.r2.jsonl"}:
         raise ValueError("mixed-tail terminalization payload has an unlisted mutation")
     for relative, record in rewritten.items():

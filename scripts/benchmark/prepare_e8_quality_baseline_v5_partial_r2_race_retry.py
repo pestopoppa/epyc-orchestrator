@@ -35,6 +35,7 @@ MIXED_CHAIN_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_chain.v1"
 MIXED_EVIDENCE_NAME = "mixed_tail_repair.json"
 TERMINALIZATION_NAME = "terminalization_transition.json"
 TERMINALIZATION_COMPLETE_NAME = "terminalization_complete.json"
+TERMINALIZATION_INCOMPLETE_NAME = "terminalization_incomplete.json"
 TERMINALIZATION_SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v1"
 TERMINALIZER_PATH = ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
 COMPLETE_STATUS = "intermediate_r2_race_retry_complete"
@@ -376,6 +377,7 @@ def validate_mixed_predecessor(
     original_proposal_path = root / "predecessor_snapshot/recovery_proposal.json"
     original_transition_path = root / "predecessor_snapshot" / TERMINALIZATION_NAME
     original_completion_path = root / "predecessor_snapshot" / TERMINALIZATION_COMPLETE_NAME
+    original_incomplete_path = root / "predecessor_snapshot" / TERMINALIZATION_INCOMPLETE_NAME
     mixed_proposal_path = root / "recovery_proposal.json"
     required = (
         evidence_path,
@@ -407,6 +409,8 @@ def validate_mixed_predecessor(
             or original_transition_path.is_symlink()
             or not original_completion_path.is_file()
             or original_completion_path.is_symlink()
+            or original_incomplete_path.exists()
+            or original_incomplete_path.is_symlink()
             or not isinstance(terminalization, dict)
             or terminalization.get("path") != TERMINALIZATION_NAME
             or terminalization.get("sha256") != sha256_path(original_transition_path)

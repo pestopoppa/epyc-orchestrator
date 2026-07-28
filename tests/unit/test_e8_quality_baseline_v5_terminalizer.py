@@ -57,7 +57,7 @@ def test_original_failed_artifact_is_rejected_and_terminalized_output_is_accepte
 
 
 @pytest.mark.skipif(not FAILED_SOURCE.is_dir(), reason="sealed E8 failed source is host evidence")
-def test_post_publish_fsync_failure_removes_terminal_output(
+def test_post_publish_fsync_failure_leaves_incomplete_namespace_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output = tmp_path / "terminalized"
@@ -79,11 +79,15 @@ def test_post_publish_fsync_failure_removes_terminal_output(
     monkeypatch.setattr(TERMINALIZER, "_fsync_dir", fsync)
     with pytest.raises(OSError, match="injected post-publish"):
         TERMINALIZER.terminalize(FAILED_SOURCE, output, SOURCE_HASH)
-    assert not output.exists()
+    assert (output / TERMINALIZER.INCOMPLETE_NAME).is_file()
+    with pytest.raises(ValueError, match="remains incomplete"):
+        TERMINALIZER.MIXED.build_plan(
+            output, TERMINALIZER.canonical_hash(TERMINALIZER.RACE.source_hashes(output))
+        )
 
 
 @pytest.mark.skipif(not FAILED_SOURCE.is_dir(), reason="sealed E8 failed source is host evidence")
-def test_cleanup_failure_leaves_an_unconsumable_unsealed_namespace(
+def test_completion_fsync_failure_leaves_an_unconsumable_namespace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output = tmp_path / "terminalized"
@@ -97,17 +101,36 @@ def test_cleanup_failure_leaves_an_unconsumable_unsealed_namespace(
         published = True
 
     def fsync(path: Path) -> None:
-        if published and path == output.parent:
-            raise OSError("injected post-publish fsync failure")
+        if published and path == output:
+            raise OSError("injected completion fsync failure")
         original_fsync(path)
 
     monkeypatch.setattr(TERMINALIZER, "_rename_noreplace", rename)
     monkeypatch.setattr(TERMINALIZER, "_fsync_dir", fsync)
-    monkeypatch.setattr(TERMINALIZER.shutil, "rmtree", lambda *_args, **_kwargs: None)
-    with pytest.raises(OSError, match="injected post-publish"):
+    with pytest.raises(OSError, match="injected completion"):
         TERMINALIZER.terminalize(FAILED_SOURCE, output, SOURCE_HASH)
     assert output.is_dir()
-    with pytest.raises(ValueError, match="completion seal"):
+    assert (output / TERMINALIZER.INCOMPLETE_NAME).is_file()
+    with pytest.raises(ValueError, match="remains incomplete"):
+        TERMINALIZER.MIXED.build_plan(
+            output, TERMINALIZER.canonical_hash(TERMINALIZER.RACE.source_hashes(output))
+        )
+
+
+@pytest.mark.skipif(not FAILED_SOURCE.is_dir(), reason="sealed E8 failed source is host evidence")
+def test_activation_unlink_failure_leaves_incomplete_namespace_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "terminalized"
+    monkeypatch.setattr(
+        TERMINALIZER,
+        "_activate_terminalization",
+        lambda _output: (_ for _ in ()).throw(OSError("injected activation unlink failure")),
+    )
+    with pytest.raises(OSError, match="activation unlink"):
+        TERMINALIZER.terminalize(FAILED_SOURCE, output, SOURCE_HASH)
+    assert (output / TERMINALIZER.INCOMPLETE_NAME).is_file()
+    with pytest.raises(ValueError, match="remains incomplete"):
         TERMINALIZER.MIXED.build_plan(
             output, TERMINALIZER.canonical_hash(TERMINALIZER.RACE.source_hashes(output))
         )
