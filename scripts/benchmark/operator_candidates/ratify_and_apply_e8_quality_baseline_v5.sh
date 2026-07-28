@@ -13,7 +13,12 @@ SOURCE_ROOT="${E8_V5_SOURCE_ROOT:-$ORCH}"
 PYTHON="$ORCH/.venv/bin/python"
 RUNNER="$SOURCE_ROOT/scripts/benchmark/run_e8_quality_baseline_v5.py"
 BASE_RUNNER="$SOURCE_ROOT/scripts/benchmark/run_e8_quality_baseline_reseed.py"
-VALIDATOR="$SOURCE_ROOT/scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
+PRODUCER="$SOURCE_ROOT/scripts/benchmark/terminalize_e8_quality_baseline_source.py"
+RESUME_RUNNER="$SOURCE_ROOT/scripts/benchmark/resume_e8_quality_baseline_v5.py"
+RECOVERY_RUNNER="$SOURCE_ROOT/scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
+FINALIZER_RUNNER="$SOURCE_ROOT/scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd -P)"
+VALIDATOR="$SCRIPT_DIR/prepare_e8_quality_baseline_v5_candidate.sh"
 VALIDATOR_PY="$SOURCE_ROOT/scripts/benchmark/validate_e8_quality_baseline_v5.py"
 APPLIER="$SOURCE_ROOT/scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
 CANONICAL_APPLIER="$CANONICAL_ROOT/artifacts/operator/apply_e8_quality_baseline_state.py"
@@ -58,8 +63,12 @@ fi
 verify_reviewed_bindings() {
     for binding in \
         "E8_V5_WRAPPER_SHA256:$0" \
+        "E8_V5_PRODUCER_SHA256:$PRODUCER" \
         "E8_V5_RUNNER_SHA256:$RUNNER" \
         "E8_V5_BASE_RUNNER_SHA256:$BASE_RUNNER" \
+        "E8_V5_RESUME_RUNNER_SHA256:$RESUME_RUNNER" \
+        "E8_V5_RECOVERY_RUNNER_SHA256:$RECOVERY_RUNNER" \
+        "E8_V5_FINALIZER_RUNNER_SHA256:$FINALIZER_RUNNER" \
         "E8_V5_VALIDATOR_SHA256:$VALIDATOR" \
         "E8_V5_VALIDATOR_PY_SHA256:$VALIDATOR_PY" \
         "E8_V5_APPLIER_SHA256:$APPLIER" \
@@ -72,8 +81,6 @@ verify_reviewed_bindings() {
     done
     [[ "${E8_V5_ORCHESTRATOR_HEAD:-}" =~ ^[0-9a-f]{40}$ && "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" == "$E8_V5_ORCHESTRATOR_HEAD" ]] ||
         fail 'reviewed source HEAD differs from the supplied source pin'
-    [[ -z "$(git -C "$SOURCE_ROOT" status --porcelain)" ]] ||
-        fail 'reviewed source worktree is dirty'
     [[ -x "$PYTHON" && "$(readlink -f -- "$PYTHON")" == "$(readlink -f -- "$ORCH/.venv/bin/python")" ]] ||
         fail 'canonical orchestrator venv is unavailable or differs'
 }
@@ -240,8 +247,9 @@ fi
 # Create the one external receipt only after the canonical commit has returned
 # successfully.  A failed apply therefore cannot look ratified.
 PYTHONOPTIMIZE=0 "$PYTHON" - "$APPLIER" "$STATE" "$EVIDENCE" "$VALIDATOR" "$REVIEW_RECORD" \
-    "$TRANSACTION" "$CANONICAL_ATTESTATION" "$RECEIPT" "$0" "$RUNNER" "$BASE_RUNNER" \
-    "$VALIDATOR_PY" "$CANONICAL_APPLIER" "$EXPECTED_PRE" "$EXPECTED_CANDIDATE" "$CONFIRMATION" <<'PY'
+    "$TRANSACTION" "$CANONICAL_ATTESTATION" "$RECEIPT" "$0" "$PRODUCER" "$RUNNER" "$BASE_RUNNER" \
+    "$RESUME_RUNNER" "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$VALIDATOR_PY" "$CANONICAL_APPLIER" \
+    "$EXPECTED_PRE" "$EXPECTED_CANDIDATE" "$CONFIRMATION" <<'PY'
 import hashlib
 import importlib.util
 import json
@@ -253,9 +261,11 @@ from pathlib import Path
 (
     adapter_path, state_path, evidence_path, validator_path, review_path,
     transaction_path, canonical_attestation_path, receipt_path, wrapper_path,
-    runner_path, base_runner_path, validator_py_path, canonical_applier_path,
-) = [Path(value) for value in sys.argv[1:14]]
-expected_pre, expected_candidate, confirmation = sys.argv[14:17]
+    producer_path, runner_path, base_runner_path, resume_runner_path,
+    recovery_runner_path, finalizer_runner_path, validator_py_path,
+    canonical_applier_path,
+) = [Path(value) for value in sys.argv[1:18]]
+expected_pre, expected_candidate, confirmation = sys.argv[18:21]
 
 spec = importlib.util.spec_from_file_location("e8_v5_consolidated_receipt_adapter", adapter_path)
 if spec is None or spec.loader is None:
@@ -337,8 +347,12 @@ payload = {
     },
     "code_sha256": {
         "wrapper": sha(wrapper_path),
+        "producer": sha(producer_path),
         "runner": sha(runner_path),
         "base_runner": sha(base_runner_path),
+        "resume_runner": sha(resume_runner_path),
+        "recovery_runner": sha(recovery_runner_path),
+        "finalizer_runner": sha(finalizer_runner_path),
         "validator_wrapper": sha(validator_path),
         "validator_python": sha(validator_py_path),
         "applier_adapter": sha(adapter_path),

@@ -14,12 +14,43 @@ import pytest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+INTEGRATED_E8_ROOT = Path("/mnt/raid0/llm/worktrees/e8-recovery-integration-v2-20260728")
+INTEGRATED_E8_HEAD = "65a09c3f6d50b6207ac003a228bdc533c99956cf"
 MODULE_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
 spec = importlib.util.spec_from_file_location("e8_v5", MODULE_PATH)
 assert spec is not None and spec.loader is not None
 runner = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = runner
 spec.loader.exec_module(runner)
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _integrated_e8_pins(*, wrapper: Path | None = None, validator_wrapper: Path | None = None) -> dict[str, str]:
+    """Pins used by the final wrapper's exact integration-source contract."""
+    benchmark = INTEGRATED_E8_ROOT / "scripts/benchmark"
+    pins = {
+        "E8_V5_SOURCE_ROOT": str(INTEGRATED_E8_ROOT),
+        "E8_V5_ORCHESTRATOR_HEAD": INTEGRATED_E8_HEAD,
+        "E8_V5_PRODUCER_SHA256": _sha(benchmark / "terminalize_e8_quality_baseline_source.py"),
+        "E8_V5_RUNNER_SHA256": _sha(benchmark / "run_e8_quality_baseline_v5.py"),
+        "E8_V5_BASE_RUNNER_SHA256": _sha(benchmark / "run_e8_quality_baseline_reseed.py"),
+        "E8_V5_RESUME_RUNNER_SHA256": _sha(benchmark / "resume_e8_quality_baseline_v5.py"),
+        "E8_V5_RECOVERY_RUNNER_SHA256": _sha(
+            benchmark / "recover_e8_quality_baseline_v5_partial_r2.py"
+        ),
+        "E8_V5_FINALIZER_RUNNER_SHA256": _sha(
+            benchmark / "finalize_e8_quality_baseline_v5_recovery_r2.py"
+        ),
+        "E8_V5_VALIDATOR_PY_SHA256": _sha(benchmark / "validate_e8_quality_baseline_v5.py"),
+    }
+    if wrapper is not None:
+        pins["E8_V5_WRAPPER_SHA256"] = _sha(wrapper)
+    if validator_wrapper is not None:
+        pins["E8_V5_VALIDATOR_SHA256"] = _sha(validator_wrapper)
+    return pins
 
 
 def _jsonl(path: Path, rows: list[dict]) -> None:
@@ -1111,6 +1142,25 @@ def _load_validator(name: str):
     return validator
 
 
+def _bind_synthetic_candidate_to_integrated_source(evidence: Path) -> Path:
+    """Keep the sealed fixture synthetic while exercising the composite source root."""
+    integrated_runner = INTEGRATED_E8_ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
+    manifest = json.loads(evidence.read_text())
+    manifest["runner"] = {"path": str(integrated_runner), "sha256": _sha(integrated_runner)}
+    evidence.write_text(json.dumps(manifest) + "\n")
+    seal_path = evidence.parent / "run_seal.json"
+    seal = json.loads(seal_path.read_text())
+    seal["manifest_sha256"] = _sha(evidence)
+    seal["runner_sha256"] = _sha(integrated_runner)
+    seal["bundle_sha256"] = {
+        str(path): _sha(path)
+        for path in sorted(evidence.parent.rglob("*"))
+        if path.is_file() and path.name != "run_seal.json"
+    }
+    seal_path.write_text(json.dumps(seal) + "\n")
+    return evidence
+
+
 def _reseal_candidate(evidence: Path, validator) -> None:
     root = evidence.parent
     seal_path = root / "run_seal.json"
@@ -1128,11 +1178,9 @@ def _reseal_candidate(evidence: Path, validator) -> None:
 
 def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path) -> None:
     evidence = _synthetic_candidate(tmp_path)
-    validator_path = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
     validator = _load_validator("e8_v5_validator_test")
     runner_sha = hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest()
     base_runner_sha = hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest()
-    validator_sha = hashlib.sha256(validator_path.read_bytes()).hexdigest()
     assert (
         validator.validate(
             evidence,
@@ -1145,21 +1193,21 @@ def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path)
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
     )
+    _bind_synthetic_candidate_to_integrated_source(evidence)
     completed = subprocess.run(
         ["bash", str(wrapper), "--validate-evidence", str(evidence)],
         env={
             **__import__("os").environ,
-            "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
-            "E8_V5_RUNNER_SHA256": runner_sha,
-            "E8_V5_BASE_RUNNER_SHA256": base_runner_sha,
-            "E8_V5_VALIDATOR_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
-            "E8_V5_VALIDATOR_PY_SHA256": validator_sha,
+            **_integrated_e8_pins(validator_wrapper=wrapper),
         },
         capture_output=True,
         text=True,
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+    unsealed_root = tmp_path / "unsealed"
+    unsealed_root.mkdir()
+    evidence = _synthetic_candidate(unsealed_root)
     (evidence.parent / "unsealed_tamper.txt").write_text("tampered\n")
     with pytest.raises(ValueError, match="exact artifact set"):
         validator.validate(
@@ -1340,7 +1388,7 @@ def test_v5_applier_adapter_plan_is_read_only(tmp_path: Path) -> None:
 def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     tmp_path: Path,
 ) -> None:
-    evidence = _synthetic_candidate(tmp_path)
+    evidence = _bind_synthetic_candidate_to_integrated_source(_synthetic_candidate(tmp_path))
     adapter = (
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
@@ -1368,7 +1416,6 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
     )
-    validator_py = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
     canonical_applier = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
     )
@@ -1400,19 +1447,11 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         ],
         env={
             **__import__("os").environ,
-            "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
-            "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
-            "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
-            "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
-            "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
-            "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
+            **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
             "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
             "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(
                 canonical_applier.read_bytes()
             ).hexdigest(),
-            "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
-            ).strip(),
         },
         capture_output=True,
         text=True,
@@ -1458,7 +1497,7 @@ def test_final_wrapper_uses_dynamic_confirmation_and_post_commit_receipt_only() 
 def test_final_wrapper_prevalidation_rejects_stale_reviewed_hashes_without_writes(
     tmp_path: Path,
 ) -> None:
-    evidence = _synthetic_candidate(tmp_path)
+    evidence = _bind_synthetic_candidate_to_integrated_source(_synthetic_candidate(tmp_path))
     wrapper = (
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
@@ -1467,7 +1506,6 @@ def test_final_wrapper_prevalidation_rejects_stale_reviewed_hashes_without_write
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
     )
-    validator_py = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
     adapter = (
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
@@ -1485,17 +1523,9 @@ def test_final_wrapper_prevalidation_rejects_stale_reviewed_hashes_without_write
         ],
         env={
             **__import__("os").environ,
-            "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
-            "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
-            "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
-            "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
-            "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
-            "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
+            **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
             "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
             "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
-            "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
-            ).strip(),
         },
         capture_output=True,
         text=True,
@@ -1510,7 +1540,7 @@ def _v5_wrapper_integration_fixture(tmp_path: Path) -> tuple[Path, dict[str, str
     """Build a full sealed transaction against a temporary state/artifact root."""
     evidence_root = tmp_path / "evidence"
     evidence_root.mkdir()
-    evidence = _synthetic_candidate(evidence_root)
+    evidence = _bind_synthetic_candidate_to_integrated_source(_synthetic_candidate(evidence_root))
     wrapper = (
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
@@ -1519,7 +1549,6 @@ def _v5_wrapper_integration_fixture(tmp_path: Path) -> tuple[Path, dict[str, str
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
     )
-    validator_py = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
     adapter = (
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
@@ -1549,22 +1578,14 @@ def _v5_wrapper_integration_fixture(tmp_path: Path) -> tuple[Path, dict[str, str
     (operator_root / "artifacts/operator").mkdir(parents=True)
     env = {
         **__import__("os").environ,
-        "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
+        **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
         "E8_V5_OPERATOR_ROOT": str(operator_root),
         "E8_V5_STATE": str(state),
         "E8_V5_LOCK_PATH": str(tmp_path / "apply.lock"),
         "E8_V5_TEST_MODE": "1",
         "E8_V5_TEST_AUTO_CONFIRM": "1",
-        "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
-        "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
-        "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
-        "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
-        "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
         "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
         "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
-        "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
-        ).strip(),
     }
     return wrapper, env, state, operator_root, evidence, pre_sha, candidate_sha
 
@@ -1685,7 +1706,7 @@ def test_final_wrapper_integration_recovers_only_missing_post_commit_receipt(
 def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
     tmp_path: Path,
 ) -> None:
-    evidence = _synthetic_candidate(tmp_path)
+    evidence = _bind_synthetic_candidate_to_integrated_source(_synthetic_candidate(tmp_path))
     wrapper = (
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
@@ -1712,7 +1733,6 @@ def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
     )
-    validator_py = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
     canonical_applier = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
     )
@@ -1726,21 +1746,13 @@ def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
         ),
         env={
             **__import__("os").environ,
-            "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
+            **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
             "E8_V5_TEST_MODE": "1",
             "E8_V5_TEST_AUTO_CONFIRM": "1",
             "E8_V5_TEST_SKIP_AUTOPILOT": "1",
             "PYTEST_CURRENT_TEST": "forged",
-            "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
-            "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
-            "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
-            "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
-            "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
             "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
             "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
-            "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
-            ).strip(),
         },
         capture_output=True,
         text=True,

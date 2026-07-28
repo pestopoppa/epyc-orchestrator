@@ -6,22 +6,44 @@ ORCH="/mnt/raid0/llm/epyc-orchestrator"
 SOURCE_ROOT="${E8_V5_SOURCE_ROOT:-$ORCH}"
 PYTHON="$ORCH/.venv/bin/python"
 VALIDATOR="$SOURCE_ROOT/scripts/benchmark/validate_e8_quality_baseline_v5.py"
+PRODUCER="$SOURCE_ROOT/scripts/benchmark/terminalize_e8_quality_baseline_source.py"
+RUNNER="$SOURCE_ROOT/scripts/benchmark/run_e8_quality_baseline_v5.py"
+BASE_RUNNER="$SOURCE_ROOT/scripts/benchmark/run_e8_quality_baseline_reseed.py"
+RESUME_RUNNER="$SOURCE_ROOT/scripts/benchmark/resume_e8_quality_baseline_v5.py"
+RECOVERY_RUNNER="$SOURCE_ROOT/scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
+FINALIZER_RUNNER="$SOURCE_ROOT/scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 sha() { sha256sum -- "$1" | awk '{print $1}'; }
 [[ $# -eq 2 && "$1" == "--validate-evidence" ]] ||
     fail 'usage: prepare_e8_quality_baseline_v5_candidate.sh --validate-evidence EVIDENCE'
-[[ -x "$PYTHON" && -f "$VALIDATOR" ]] || fail 'v5 validator prerequisite is missing'
+[[ -x "$PYTHON" && -f "$VALIDATOR" && -f "$PRODUCER" && -f "$RUNNER" && -f "$BASE_RUNNER" && -f "$RESUME_RUNNER" && -f "$RECOVERY_RUNNER" && -f "$FINALIZER_RUNNER" ]] ||
+    fail 'v5 composite validator prerequisite is missing'
+[[ "$(readlink -f -- "$PYTHON")" == "$(readlink -f -- "$ORCH/.venv/bin/python")" ]] ||
+    fail 'canonical orchestrator venv identity differs'
+[[ "${E8_V5_ORCHESTRATOR_HEAD:-}" =~ ^[0-9a-f]{40}$ && "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" == "$E8_V5_ORCHESTRATOR_HEAD" ]] ||
+    fail 'reviewed source HEAD differs from the supplied source pin'
 [[ "${E8_V5_VALIDATOR_SHA256:-}" =~ ^[0-9a-f]{64}$ && "$(sha "$0")" == "$E8_V5_VALIDATOR_SHA256" ]] ||
     fail 'v5 validator wrapper differs from the externally reviewed hash'
-[[ "${E8_V5_RUNNER_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] ||
-    fail 'E8_V5_RUNNER_SHA256 must externally pin the reviewed runner'
-[[ "${E8_V5_BASE_RUNNER_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] ||
-    fail 'E8_V5_BASE_RUNNER_SHA256 must externally pin the reviewed v4 base runner'
-[[ "${E8_V5_VALIDATOR_PY_SHA256:-}" =~ ^[0-9a-f]{64}$ && "$(sha "$VALIDATOR")" == "$E8_V5_VALIDATOR_PY_SHA256" ]] ||
-    fail 'v5 Python validator differs from the externally reviewed hash'
+for binding in \
+    "E8_V5_PRODUCER_SHA256:$PRODUCER" \
+    "E8_V5_RUNNER_SHA256:$RUNNER" \
+    "E8_V5_BASE_RUNNER_SHA256:$BASE_RUNNER" \
+    "E8_V5_RESUME_RUNNER_SHA256:$RESUME_RUNNER" \
+    "E8_V5_RECOVERY_RUNNER_SHA256:$RECOVERY_RUNNER" \
+    "E8_V5_FINALIZER_RUNNER_SHA256:$FINALIZER_RUNNER" \
+    "E8_V5_VALIDATOR_PY_SHA256:$VALIDATOR"; do
+    name="${binding%%:*}"
+    path="${binding#*:}"
+    expected="${!name:-}"
+    [[ "$expected" =~ ^[0-9a-f]{64}$ && "$(sha "$path")" == "$expected" ]] ||
+        fail "reviewed composite artifact pin differs: $name"
+done
 
 PYTHONOPTIMIZE=0 "$PYTHON" "$VALIDATOR" \
     --evidence "$2" \
     --expected-runner-sha256 "$E8_V5_RUNNER_SHA256" \
-    --expected-base-runner-sha256 "$E8_V5_BASE_RUNNER_SHA256"
+    --expected-base-runner-sha256 "$E8_V5_BASE_RUNNER_SHA256" \
+    --expected-resume-runner-sha256 "$E8_V5_RESUME_RUNNER_SHA256" \
+    --expected-recovery-runner-sha256 "$E8_V5_RECOVERY_RUNNER_SHA256" \
+    --expected-finalizer-runner-sha256 "$E8_V5_FINALIZER_RUNNER_SHA256"
