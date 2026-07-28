@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import posixpath
 import re
 import sys
 import tempfile
@@ -148,6 +149,12 @@ COMPOSITE_SOURCE_DIR = Path(
     "b0d7ce62d6e04509a1cec7849aa68832"
 )
 COMPOSITE_SOURCE_TREE_SHA256 = "b821900094e866027d9a1561b21d91eb09f6a02ff92b8d91b133df57c7d5ce2d"
+COMPOSITE_PARTIAL_RESUME_PLAN_SHA256 = (
+    "9dbb2fd7daf9d807e41257dab08358bd9abae411032d0b5331246d32fa76ef66"
+)
+COMPOSITE_GENERATION_ATTEMPTS_SHA256 = (
+    "d6ff6c16f0c5d4baf6fdfd320c6e4ff52284681ce4749c6ba71943eb4576f46e"
+)
 SOURCE_RESUME_WATCHER_SHA256 = "448a955286c1527b7920bfa5f802de4aa9a426d591f90ebed6f072b21ccb99e2"
 SOURCE_RESUME_BINDING_SHA256 = "d50ce9bec4ab59d180377a989a573c4ed17bbe9fd0638ce5793a42c9468f5d8b"
 SOURCE_RESUME_MAX_GAP_S = 7.0472118854522705
@@ -529,6 +536,74 @@ def _expected_recovery_plan(plan: dict[str, Any]) -> None:
         raise ValueError("recovery-r2 plan differs from the reviewed 59/3/438 allowlist")
 
 
+def _expected_recovery_scorer_inputs(
+    snapshot: Path, plan: dict[str, Any]
+) -> dict[int, dict[str, str]]:
+    """Independently derive scorer replay identities from immutable source rows."""
+    sidecar_rows: dict[int, dict[str, Any]] = {}
+    for row in load_jsonl(snapshot / "eval_sidecars/question_results.e8-t2-r2.jsonl"):
+        if not isinstance(row, dict) or row.get("row_type") != "question_result":
+            continue
+        ordinal = row.get("ordinal")
+        if (
+            not isinstance(ordinal, int)
+            or isinstance(ordinal, bool)
+            or not 0 <= ordinal < plan["n"]
+            or ordinal in sidecar_rows
+        ):
+            raise ValueError("recovery-r2 source scorer sidecar identity is malformed")
+        sidecar_rows[ordinal] = row
+    scoring = load_json(snapshot / "scoring_vector.T2.json", "recovery-r2 scoring vector")
+    scoring_rows = scoring.get("questions")
+    if (
+        scoring.get("schema") != "epyc.e8_quality_scoring_vector.v1"
+        or scoring.get("tier") != 2
+        or scoring.get("n") != plan["n"]
+        or not isinstance(scoring_rows, list)
+        or len(scoring_rows) != plan["n"]
+    ):
+        raise ValueError("recovery-r2 source scoring vector is malformed")
+    expected: dict[int, dict[str, str]] = {}
+    for ordinal in plan["scorer_replay_ordinals"]:
+        saved = sidecar_rows.get(ordinal)
+        question = scoring_rows[ordinal]
+        saved_result = saved.get("result") if isinstance(saved, dict) else None
+        qid = question.get("qid") if isinstance(question, dict) else None
+        if (
+            not isinstance(saved, dict)
+            or not isinstance(saved_result, dict)
+            or not isinstance(question, dict)
+            or not isinstance(qid, str)
+            or not qid
+            or saved_result.get("qid") != qid
+        ):
+            raise ValueError("recovery-r2 source scorer replay identity differs")
+        expected[ordinal] = {
+            "qid": qid,
+            "saved_sidecar_sha256": canonical_hash(saved),
+            "scoring_question_sha256": canonical_hash(question),
+        }
+    return expected
+
+
+def _validate_banked_t2_r1_repair_history(context: dict[str, Any], *, evidence_root: Path) -> None:
+    history = context.get("banked_t2_r1_repair_history")
+    expected_names = {"partial_resume_plan.json", "generation_tail_attempts.T2.r1.jsonl"}
+    if not isinstance(history, dict) or set(history) != expected_names:
+        raise ValueError("banked T2/r1 repair-history binding differs")
+    root = evidence_root.resolve(strict=True)
+    for name in expected_names:
+        entry = history[name]
+        if not isinstance(entry, dict) or set(entry) != {"path", "sha256"}:
+            raise ValueError("banked T2/r1 repair-history binding differs")
+        try:
+            path = resolve_artifact(root, entry.get("path"), f"banked T2/r1 {name}")
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("banked T2/r1 repair-history binding differs") from exc
+        if path != root / name or path.name != name or entry.get("sha256") != sha256_path(path):
+            raise ValueError("banked T2/r1 repair-history binding differs")
+
+
 def validate_recovery_r2_context(
     report: dict[str, Any],
     *,
@@ -596,6 +671,7 @@ def validate_recovery_r2_context(
         or context.get("source_binding_sha256") != sha256_path(source_binding_path)
     ):
         raise ValueError("recovery-r2 artifact hash binding differs")
+    _validate_banked_t2_r1_repair_history(context, evidence_root=evidence_root)
     plan = load_json(plan_path, "recovery-r2 plan")
     _expected_recovery_plan(plan)
     proposal = load_json(proposal_path, "recovery-r2 proposal")
@@ -766,6 +842,7 @@ def validate_recovery_r2_context(
     ):
         raise ValueError("recovery-r2 scorer-attempt binding differs")
     scorer_attempts = load_jsonl(scorer_attempts_path)
+    expected_attempts = _expected_recovery_scorer_inputs(snapshot, plan)
     scorer_qids = {
         ordinal: str(
             next(row["response"].get("qid") for row in journal if row["ordinal"] == ordinal)
@@ -774,8 +851,10 @@ def validate_recovery_r2_context(
     }
     pairs: dict[int, list[dict[str, Any]]] = {}
     for row in scorer_attempts:
+        expected = expected_attempts.get(row.get("ordinal")) if isinstance(row, dict) else None
         if (
-            set(row)
+            not isinstance(row, dict)
+            or set(row)
             != {
                 "schema",
                 "ordinal",
@@ -786,13 +865,12 @@ def validate_recovery_r2_context(
             }
             or row.get("schema") != RECOVERY_R2_SCORER_ATTEMPTS_SCHEMA
             or not isinstance(row.get("ordinal"), int)
-            or row["ordinal"] not in scorer_qids
-            or row.get("qid") != scorer_qids[row["ordinal"]]
+            or expected is None
+            or row.get("qid") != expected["qid"]
+            or row.get("qid") != scorer_qids.get(row["ordinal"])
             or row.get("state") not in {"started", "succeeded"}
-            or not isinstance(row.get("saved_sidecar_sha256"), str)
-            or not re.fullmatch(r"[0-9a-f]{64}", row["saved_sidecar_sha256"])
-            or not isinstance(row.get("scoring_question_sha256"), str)
-            or not re.fullmatch(r"[0-9a-f]{64}", row["scoring_question_sha256"])
+            or row.get("saved_sidecar_sha256") != expected["saved_sidecar_sha256"]
+            or row.get("scoring_question_sha256") != expected["scoring_question_sha256"]
         ):
             raise ValueError("recovery-r2 scorer-attempt record differs")
         pairs.setdefault(row["ordinal"], []).append(row)
@@ -830,23 +908,66 @@ def validate_composite_context(recovery_context: dict[str, Any], *, evidence_roo
     ) != sha256_path(source_plan_path):
         raise ValueError("composite recovery source-plan binding differs")
     source_plan = load_json(source_plan_path, "composite recovery source plan")
+    source_value = source_plan.get("source")
+    normalized_source = (
+        Path(posixpath.normpath(source_value))
+        if isinstance(source_value, str) and Path(source_value).is_absolute()
+        else None
+    )
+    source_hashes = source_plan.get("source_sha256")
+    expected_history = {
+        "partial_resume_plan.json": {
+            "path": str(COMPOSITE_SOURCE_DIR / "partial_resume_plan.json"),
+            "sha256": COMPOSITE_PARTIAL_RESUME_PLAN_SHA256,
+        },
+        "generation_tail_attempts.T2.r1.jsonl": {
+            "path": str(COMPOSITE_SOURCE_DIR / "generation_tail_attempts.T2.r1.jsonl"),
+            "sha256": COMPOSITE_GENERATION_ATTEMPTS_SHA256,
+        },
+    }
     if (
         source_plan.get("schema") != "epyc.e8_quality_v5_recovery_finalizer_source.v1"
         or source_plan.get("protocol_id") != "e8_quality_full_pool_tier_baseline.v5"
-        or Path(str(source_plan.get("source") or "")).resolve(strict=True)
-        != COMPOSITE_SOURCE_DIR.resolve(strict=True)
+        or normalized_source != COMPOSITE_SOURCE_DIR
         or source_plan.get("source_tree_sha256") != COMPOSITE_SOURCE_TREE_SHA256
+        or not isinstance(source_hashes, dict)
+        or canonical_hash(source_hashes) != COMPOSITE_SOURCE_TREE_SHA256
         or source_plan.get("banked") != {"tiers": [1], "t2_r1": True}
         or source_plan.get("fresh_collection") != [{"tier": 2, "repetition": 3}]
-        or not isinstance(source_plan.get("source_sha256"), dict)
-        or source_plan.get("t2_r1_repair_history", {}).get("partial_resume_plan", {}).get("sha256")
-        != "9dbb2fd7daf9d807e41257dab08358bd9abae411032d0b5331246d32fa76ef66"
-        or source_plan.get("t2_r1_repair_history", {})
-        .get("generation_tail_attempts.T2.r1.jsonl", {})
-        .get("sha256")
-        != "d6ff6c16f0c5d4baf6fdfd320c6e4ff52284681ce4749c6ba71943eb4576f46e"
+        or source_plan.get("t2_r1_repair_history") != expected_history
     ):
         raise ValueError("layered recovery contexts are not the exact reviewed composite")
+
+
+def composite_context_state(
+    partial_context: dict[str, Any] | None,
+    recovery_context: dict[str, Any] | None,
+) -> bool:
+    """Fail closed when a composite recovery context is incomplete or unpaired."""
+    exact_partial = (
+        isinstance(partial_context, dict)
+        and isinstance(partial_context.get("partial"), dict)
+        and partial_context["partial"].get("plan_sha256") == COMPOSITE_PARTIAL_RESUME_PLAN_SHA256
+    )
+    if recovery_context is None:
+        if exact_partial:
+            raise ValueError("reviewed composite partial resume requires recovery-r2 context")
+        return False
+    context = recovery_context.get("context")
+    if not isinstance(context, dict):
+        raise ValueError("recovery-r2 validated context is malformed")
+    keys = {"composite_source_plan_path", "composite_source_plan_sha256"}
+    present = keys & set(context)
+    if present and present != keys:
+        raise ValueError("composite recovery source-plan binding is incomplete")
+    composite = present == keys
+    if composite and partial_context is None:
+        raise ValueError("composite recovery requires the partial-resume context")
+    if composite and not exact_partial:
+        raise ValueError("composite recovery requires the exact reviewed partial-resume plan")
+    if partial_context is not None and not composite:
+        raise ValueError("layered recovery contexts require the composite source plan")
+    return composite
 
 
 def expected_scorer_sidecar_row(
@@ -1271,7 +1392,7 @@ def validate(
         expected_base_runner_sha256=expected_base_runner_sha256,
         expected_resume_runner_sha256=expected_resume_runner_sha256,
     )
-    composite_context = partial_context is not None and recovery_context is not None
+    composite_context = composite_context_state(partial_context, recovery_context)
     if composite_context:
         validate_composite_context(recovery_context, evidence_root=evidence_root)
     postconditions = report.get("postconditions")
@@ -1317,6 +1438,18 @@ def validate(
     ):
         raise ValueError("segmented monitor and recovery context must be present together")
     if monitor_segments is not None:
+        if composite_context and (
+            not isinstance(monitor_segments, list)
+            or any(not isinstance(segment, dict) for segment in monitor_segments)
+            or [segment.get("source") for segment in monitor_segments]
+            != [
+                "historical",
+                "source_resume",
+                "recovery_r2",
+                "resume",
+            ]
+        ):
+            raise ValueError("composite candidate requires the exact four monitor segments")
         validate_segmented_monitor(samples, monitor_segments, evidence_root=evidence_root)
         claim = postconditions.get("held_region_claim")
         validate_held_region_claim_uniqueness(claim)

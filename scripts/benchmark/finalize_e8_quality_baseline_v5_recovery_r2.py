@@ -68,6 +68,56 @@ def _no_symlinks(root: Path) -> None:
         raise ValueError("recovery intermediate must be a real symlink-free directory")
 
 
+def _expected_scorer_attempt_inputs(
+    snapshot: Path, replay_ordinals: list[int], *, expected_n: int
+) -> dict[int, dict[str, str]]:
+    """Derive scorer replay identities only from the sealed recovery snapshot."""
+    sidecar_rows: dict[int, dict[str, Any]] = {}
+    for row in V4.load_jsonl(snapshot / "eval_sidecars/question_results.e8-t2-r2.jsonl"):
+        if not isinstance(row, dict) or row.get("row_type") != "question_result":
+            continue
+        ordinal = row.get("ordinal")
+        if (
+            not isinstance(ordinal, int)
+            or isinstance(ordinal, bool)
+            or not 0 <= ordinal < expected_n
+            or ordinal in sidecar_rows
+        ):
+            raise ValueError("recovery source scorer sidecar identity is malformed")
+        sidecar_rows[ordinal] = row
+    scoring = V4.load_json(snapshot / "scoring_vector.T2.json")
+    scoring_rows = scoring.get("questions")
+    if (
+        scoring.get("schema") != "epyc.e8_quality_scoring_vector.v1"
+        or scoring.get("tier") != 2
+        or scoring.get("n") != expected_n
+        or not isinstance(scoring_rows, list)
+        or len(scoring_rows) != expected_n
+    ):
+        raise ValueError("recovery source scoring vector is malformed")
+    expected: dict[int, dict[str, str]] = {}
+    for ordinal in replay_ordinals:
+        saved = sidecar_rows.get(ordinal)
+        question = scoring_rows[ordinal]
+        saved_result = saved.get("result") if isinstance(saved, dict) else None
+        qid = question.get("qid") if isinstance(question, dict) else None
+        if (
+            not isinstance(saved, dict)
+            or not isinstance(saved_result, dict)
+            or not isinstance(question, dict)
+            or not isinstance(qid, str)
+            or not qid
+            or saved_result.get("qid") != qid
+        ):
+            raise ValueError("recovery source scorer replay identity differs")
+        expected[ordinal] = {
+            "qid": qid,
+            "saved_sidecar_sha256": RECOVERY.canonical_hash(saved),
+            "scoring_question_sha256": RECOVERY.canonical_hash(question),
+        }
+    return expected
+
+
 def validate_intermediate(path: Path) -> dict[str, Any]:
     """Return immutable r2 inputs, failing before the resume finalizer runs."""
     if path.is_symlink():
@@ -199,8 +249,12 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
         or scorer_summary.get("terminal_states") != {"succeeded": 3}
     ):
         raise ValueError("recovery intermediate scorer-attempt completion binding differs")
+    expected_attempts = _expected_scorer_attempt_inputs(
+        source_binding.parent, replay, expected_n=plan["n"]
+    )
     pairs: dict[int, list[dict[str, Any]]] = {}
     for row in scorer_attempts:
+        expected = expected_attempts.get(row.get("ordinal")) if isinstance(row, dict) else None
         if (
             not isinstance(row, dict)
             or set(row)
@@ -214,9 +268,10 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
             }
             or row.get("schema") != SCORER_ATTEMPTS_SCHEMA
             or not isinstance(row.get("ordinal"), int)
-            or not isinstance(row.get("qid"), str)
-            or not isinstance(row.get("saved_sidecar_sha256"), str)
-            or not isinstance(row.get("scoring_question_sha256"), str)
+            or expected is None
+            or row.get("qid") != expected["qid"]
+            or row.get("saved_sidecar_sha256") != expected["saved_sidecar_sha256"]
+            or row.get("scoring_question_sha256") != expected["scoring_question_sha256"]
             or row.get("state") not in {"started", "succeeded"}
         ):
             raise ValueError("recovery intermediate scorer-attempt ledger is malformed")
@@ -525,6 +580,18 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
     }
     if sha256_path(partial_binding) != sha256_path(staging / "source_snapshot/source_binding.json"):
         raise ValueError("composite partial-resume source binding changed during finalization")
+    repair_names = ("partial_resume_plan.json", "generation_tail_attempts.T2.r1.jsonl")
+    if any(
+        not (staging / name).is_file() or (staging / name).is_symlink() for name in repair_names
+    ):
+        raise ValueError("published T2/r1 repair history is missing")
+    repair_history = {
+        name: {
+            "path": str(destination / name),
+            "sha256": sha256_path(staging / name),
+        }
+        for name in repair_names
+    }
     report["recovery_r2"] = {
         "schema": CONTEXT_SCHEMA,
         "recovery_runner": {"path": str(RECOVERY_PATH), "sha256": sha256_path(RECOVERY_PATH)},
@@ -534,7 +601,7 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
             "resume": sha256_path(RESUME_PATH),
             "recovery": sha256_path(RECOVERY_PATH),
         },
-        "banked_t2_r1_repair_history": intermediate.get("source_history", {}),
+        "banked_t2_r1_repair_history": repair_history,
         "source_binding": str(
             destination / "recovery_r2_intermediate/source_snapshot/source_binding.json"
         ),
@@ -831,10 +898,6 @@ def execute(args: argparse.Namespace) -> Path:
                 "completed_at": V4.utc_now(),
             },
         )
-        intermediate["source_history"] = {
-            name: {"path": str(destination / "source_snapshot" / name), "sha256": entry["sha256"]}
-            for name, entry in plan["t2_r1_repair_history"].items()
-        }
         _rewrite_for_recovery(staging, destination, intermediate)
         if RESUME._safe_source_files(source) != plan["source_sha256"]:
             raise ValueError("banked source changed during recovery finalization")
