@@ -196,3 +196,27 @@ def test_atomic_publication_never_replaces_existing_destination(tmp_path: Path) 
     with pytest.raises(FileExistsError):
         resume.V4.atomic_publish_noreplace(staging, destination)
     assert (destination / "existing").read_text() == "immutable\n"
+
+
+def test_segmented_monitor_requires_gap_free_clean_claimed_segments() -> None:
+    validator_path = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
+    spec = importlib.util.spec_from_file_location("e8_v5_segmented_validator", validator_path)
+    assert spec is not None and spec.loader is not None
+    validator = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = validator
+    spec.loader.exec_module(validator)
+    samples = [
+        {"started_at": "2026-07-28T00:00:00Z", "ok": True},
+        {"started_at": "2026-07-28T00:00:05Z", "ok": True},
+        {"started_at": "2026-07-28T04:00:00Z", "ok": True},
+        {"started_at": "2026-07-28T04:00:05Z", "ok": True},
+    ]
+    validator.validate_segmented_monitor(
+        samples, [{"sample_indexes": [0, 1]}, {"sample_indexes": [2, 3]}]
+    )
+    with pytest.raises(ValueError, match="sampling gap"):
+        validator.validate_segmented_monitor(
+            samples, [{"sample_indexes": [0, 2]}, {"sample_indexes": [1, 3]}]
+        )
+    with pytest.raises(ValueError, match="unclaimed"):
+        validator.validate_segmented_monitor(samples, [{"sample_indexes": [0, 1]}])
