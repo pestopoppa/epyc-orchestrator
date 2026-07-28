@@ -617,7 +617,11 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
                     {
                         "row_type": "question_result",
                         "eval_batch_id": batch_id,
+                        "label": "e8-t2-r2-recovery",
+                        "requested_n": len(execution),
                         "ordinal": row["_ordinal"],
+                        "started_at_s": 1785196802.25,
+                        "ended_at_s": 1785196802.75,
                         "answer": answer,
                         "result": result,
                     }
@@ -677,6 +681,54 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
 
 def _args(source: Path, output: Path) -> SimpleNamespace:
     return SimpleNamespace(source_dir=source, output_dir=output, api_url="http://test")
+
+
+@pytest.mark.parametrize("defect", ["concurrency", "batch_id", "watcher_bracket"])
+def test_generation_harvest_requires_c3_batch_and_clean_watcher_bracket(
+    tmp_path: Path,
+    defect: str,
+) -> None:
+    batch_id = "batch-reviewed"
+    sidecar = tmp_path / "question_results.jsonl"
+    watcher = tmp_path / "watcher.jsonl"
+    rows = [
+        {
+            "row_type": "batch_start",
+            "eval_batch_id": batch_id,
+            "label": "e8-t2-r2-recovery",
+            "requested_n": 1,
+            "concurrency": 1 if defect == "concurrency" else recovery.V4.CONCURRENCY,
+        },
+        {
+            "row_type": "question_result",
+            "eval_batch_id": "stale" if defect == "batch_id" else batch_id,
+            "label": "e8-t2-r2-recovery",
+            "requested_n": 1,
+            "ordinal": 7,
+            "started_at_s": 1785196801.0,
+            "ended_at_s": 1785196806.0 if defect == "watcher_bracket" else 1785196804.0,
+            "answer": "answer",
+            "result": {"qid": "q7", "question_id": "q7"},
+        },
+    ]
+    _write(sidecar, rows)
+    watcher_rows = [
+        {
+            "ok": True,
+            "active_load": {"tier": 2, "repetition": 2},
+            "started_at": "2026-07-28T00:00:00Z",
+            "finished_at": "2026-07-28T00:00:00Z",
+        },
+        {
+            "ok": True,
+            "active_load": {"tier": 2, "repetition": 2},
+            "started_at": "2026-07-28T00:00:05Z",
+            "finished_at": "2026-07-28T00:00:05Z",
+        },
+    ]
+    _write(watcher, watcher_rows)
+    with pytest.raises(ValueError, match="batch|watcher"):
+        recovery._validate_generation_sidecar_envelope(sidecar, watcher, {7})
 
 
 def test_execute_uses_original_ordinals_reconciles_scorer_and_stops_at_r2(

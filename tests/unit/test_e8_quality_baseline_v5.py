@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import fcntl
 import importlib.util
 import json
 import hashlib
@@ -13,12 +14,59 @@ import pytest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+INTEGRATED_E8_ROOT = PROJECT_ROOT
+INTEGRATED_E8_HEAD = subprocess.check_output(
+    ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+).strip()
 MODULE_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
 spec = importlib.util.spec_from_file_location("e8_v5", MODULE_PATH)
 assert spec is not None and spec.loader is not None
 runner = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = runner
 spec.loader.exec_module(runner)
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _integrated_e8_pins(*, wrapper: Path | None = None, validator_wrapper: Path | None = None) -> dict[str, str]:
+    """Pins used by the final wrapper's exact integration-source contract."""
+    benchmark = INTEGRATED_E8_ROOT / "scripts/benchmark"
+    pins = {
+        "E8_V5_SOURCE_ROOT": str(INTEGRATED_E8_ROOT),
+        "E8_V5_ORCHESTRATOR_HEAD": INTEGRATED_E8_HEAD,
+        "E8_V5_PRODUCER_SHA256": _sha(benchmark / "terminalize_e8_quality_baseline_source.py"),
+        "E8_V5_RUNNER_SHA256": _sha(benchmark / "run_e8_quality_baseline_v5.py"),
+        "E8_V5_BASE_RUNNER_SHA256": _sha(benchmark / "run_e8_quality_baseline_reseed.py"),
+        "E8_V5_RESUME_RUNNER_SHA256": _sha(benchmark / "resume_e8_quality_baseline_v5.py"),
+        "E8_V5_RECOVERY_RUNNER_SHA256": _sha(
+            benchmark / "recover_e8_quality_baseline_v5_partial_r2.py"
+        ),
+        "E8_V5_FINALIZER_RUNNER_SHA256": _sha(
+            benchmark / "finalize_e8_quality_baseline_v5_recovery_r2.py"
+        ),
+        "E8_V5_SUCCESSOR_RUNNER_SHA256": _sha(
+            benchmark / "prepare_e8_quality_baseline_v5_partial_r2_successor.py"
+        ),
+        "E8_V5_RACE_RETRY_RUNNER_SHA256": _sha(
+            benchmark / "prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
+        ),
+        "E8_V5_MIXED_TAIL_REPAIR_RUNNER_SHA256": _sha(
+            benchmark / "prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
+        ),
+        "E8_V5_TERMINALIZER_RUNNER_SHA256": _sha(
+            benchmark / "terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
+        ),
+        "E8_V5_FINAL_C1_RETRY_RUNNER_SHA256": _sha(benchmark / "final_c1_retry.py"),
+        "E8_V5_FINAL_C1_VALIDATOR_SHA256": _sha(benchmark / "final_c1_validator.py"),
+        "E8_V5_VALIDATOR_PY_SHA256": _sha(benchmark / "validate_e8_quality_baseline_v5.py"),
+    }
+    if wrapper is not None:
+        pins["E8_V5_WRAPPER_SHA256"] = _sha(wrapper)
+    if validator_wrapper is not None:
+        pins["E8_V5_VALIDATOR_SHA256"] = _sha(validator_wrapper)
+    return pins
 
 
 def _jsonl(path: Path, rows: list[dict]) -> None:
@@ -161,6 +209,35 @@ def test_generation_classifier_rejects_cross_ledger_mismatch() -> None:
             _response("q", "timed out", error="request timed out"), sidecar
         )
         is None
+    )
+
+
+@pytest.mark.parametrize(
+    "result_change",
+    [
+        {"question_id": "unknown"},
+        {"question_id": "other"},
+        {"partial": True},
+        {"degraded": True},
+    ],
+)
+def test_clean_sidecar_rejects_unbound_or_incomplete_result(
+    result_change: dict,
+) -> None:
+    response = _response("q", "answer")
+    result = {
+        "qid": "q",
+        "question_id": "q",
+        "correct": True,
+        "tokens_generated": 1,
+        "route": "frontdoor",
+        "answer_hash": runner._normalized_answer_hash("answer"),
+        **result_change,
+    }
+    assert not runner.validate_clean_sidecar_result(
+        response,
+        {"answer": "answer", "result": result},
+        qid="q",
     )
 
 
@@ -327,13 +404,11 @@ def test_generation_tail_replaces_only_target_response_and_sidecar_bytes(
     tmp_path: Path, monkeypatch
 ) -> None:
     _patch_tail_runtime(monkeypatch)
-    questions, responses, sidecar, trace, sidecar_dir = _tail_fixture(
-        tmp_path, target_question_id="unknown"
-    )
+    questions, responses, sidecar, trace, sidecar_dir = _tail_fixture(tmp_path)
     original_responses = responses.read_bytes().splitlines(keepends=True)
     original_sidecar = sidecar.read_bytes().splitlines(keepends=True)
     tail = runner.run_generation_tail(
-        FakeTower(sidecar_dir, question_id="unknown"),
+        FakeTower(sidecar_dir),
         tier=2,
         repetition=1,
         questions=questions,
@@ -363,7 +438,7 @@ def test_generation_tail_replaces_only_target_response_and_sidecar_bytes(
     assert repaired["answer"] == "a"
     assert "scored_at_s" not in repaired
     assert repaired["result"]["qid"] == "q0"
-    assert repaired["result"]["question_id"] == "unknown"
+    assert repaired["result"]["question_id"] == "q0"
     assert repaired["result"].get("error") is None
     attempts = runner.V4.load_jsonl(tmp_path / "generation_tail_attempts.T2.r1.jsonl")
     assert attempts[0]["outcome"] == "recovered"
@@ -581,7 +656,7 @@ def test_scorer_tail_replaces_only_target_sidecar_line_and_preserves_batch_ident
     rows = _sidecar(["q0", "q1"], failure_ordinal=-1)
     rows[1]["result"].update(
         {
-            "question_id": "unknown",
+            "question_id": "q0",
             "error": True,
             "error_detail": "scoring_unavailable: judge timeout",
         }
@@ -603,7 +678,7 @@ def test_scorer_tail_replaces_only_target_sidecar_line_and_preserves_batch_ident
     assert target["eval_batch_id"] == "full-batch"
     assert target["label"] == "e8-t2-r1"
     assert target["requested_n"] == 2
-    assert target["result"]["question_id"] == "unknown"
+    assert target["result"]["question_id"] == "q0"
     assert runner.validate_clean_sidecar_result(responses[0], target, qid="q0")
 
 
@@ -753,11 +828,7 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                     "started_at_s": 3.0,
                     "result": {
                         "qid": row["qid"],
-                        "question_id": (
-                            "unknown"
-                            if tier == 1 and repetition == 1 and ordinal == 0
-                            else row["qid"]
-                        ),
+                        "question_id": row["qid"],
                         "correct": True,
                         "tokens_generated": 1,
                         "route": "frontdoor",
@@ -788,7 +859,7 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                         "answer": "timed out",
                         "result": {
                             "qid": questions[0]["qid"],
-                            "question_id": "unknown",
+                            "question_id": questions[0]["qid"],
                             "tokens_generated": 0,
                             "error": True,
                             "error_detail": "timed out",
@@ -818,7 +889,7 @@ def _synthetic_candidate(tmp_path: Path) -> Path:
                         "started_at_s": 3.0,
                         "result": {
                             "qid": questions[0]["qid"],
-                            "question_id": "unknown",
+                            "question_id": questions[0]["qid"],
                             "correct": True,
                             "tokens_generated": 1,
                             "route": "frontdoor",
@@ -1110,6 +1181,25 @@ def _load_validator(name: str):
     return validator
 
 
+def _bind_synthetic_candidate_to_integrated_source(evidence: Path) -> Path:
+    """Keep the sealed fixture synthetic while exercising the composite source root."""
+    integrated_runner = INTEGRATED_E8_ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
+    manifest = json.loads(evidence.read_text())
+    manifest["runner"] = {"path": str(integrated_runner), "sha256": _sha(integrated_runner)}
+    evidence.write_text(json.dumps(manifest) + "\n")
+    seal_path = evidence.parent / "run_seal.json"
+    seal = json.loads(seal_path.read_text())
+    seal["manifest_sha256"] = _sha(evidence)
+    seal["runner_sha256"] = _sha(integrated_runner)
+    seal["bundle_sha256"] = {
+        str(path): _sha(path)
+        for path in sorted(evidence.parent.rglob("*"))
+        if path.is_file() and path.name != "run_seal.json"
+    }
+    seal_path.write_text(json.dumps(seal) + "\n")
+    return evidence
+
+
 def _reseal_candidate(evidence: Path, validator) -> None:
     root = evidence.parent
     seal_path = root / "run_seal.json"
@@ -1127,16 +1217,9 @@ def _reseal_candidate(evidence: Path, validator) -> None:
 
 def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path) -> None:
     evidence = _synthetic_candidate(tmp_path)
-    validator_path = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
     validator = _load_validator("e8_v5_validator_test")
     runner_sha = hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest()
     base_runner_sha = hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest()
-    validator_sha = hashlib.sha256(validator_path.read_bytes()).hexdigest()
-    producer_path = PROJECT_ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_source.py"
-    resume_path = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
-    recovery_path = PROJECT_ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
-    finalizer_path = PROJECT_ROOT / "scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
-    successor_path = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
     assert (
         validator.validate(
             evidence,
@@ -1149,35 +1232,21 @@ def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path)
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
     )
+    _bind_synthetic_candidate_to_integrated_source(evidence)
     completed = subprocess.run(
         ["bash", str(wrapper), "--validate-evidence", str(evidence)],
         env={
             **__import__("os").environ,
-            "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
-            "E8_V5_PRODUCER_SHA256": hashlib.sha256(producer_path.read_bytes()).hexdigest(),
-            "E8_V5_RUNNER_SHA256": runner_sha,
-            "E8_V5_BASE_RUNNER_SHA256": base_runner_sha,
-            "E8_V5_RESUME_RUNNER_SHA256": hashlib.sha256(resume_path.read_bytes()).hexdigest(),
-            "E8_V5_RECOVERY_RUNNER_SHA256": hashlib.sha256(
-                recovery_path.read_bytes()
-            ).hexdigest(),
-            "E8_V5_FINALIZER_RUNNER_SHA256": hashlib.sha256(
-                finalizer_path.read_bytes()
-            ).hexdigest(),
-            "E8_V5_SUCCESSOR_RUNNER_SHA256": hashlib.sha256(
-                successor_path.read_bytes()
-            ).hexdigest(),
-            "E8_V5_VALIDATOR_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
-            "E8_V5_VALIDATOR_PY_SHA256": validator_sha,
-            "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
-            ).strip(),
+            **_integrated_e8_pins(validator_wrapper=wrapper),
         },
         capture_output=True,
         text=True,
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+    unsealed_root = tmp_path / "unsealed"
+    unsealed_root.mkdir()
+    evidence = _synthetic_candidate(unsealed_root)
     (evidence.parent / "unsealed_tamper.txt").write_text("tampered\n")
     with pytest.raises(ValueError, match="exact artifact set"):
         validator.validate(
@@ -1208,94 +1277,6 @@ def test_validator_rejects_failed_watcher_even_when_bundle_is_resealed(
         )
 
 
-def _attach_valid_partial_context(evidence: Path, validator) -> str:
-    root = evidence.parent
-    snapshot = root / "source_snapshot"
-    snapshot.mkdir()
-    source = snapshot / "source.bin"
-    source.write_bytes(b"immutable failed run\n")
-    source_hashes = {"source.bin": validator.sha256_path(source)}
-    source_tree_sha256 = validator.canonical_hash(source_hashes)
-    (snapshot / "source_binding.json").write_text(
-        json.dumps(
-            {
-                "schema": validator.PARTIAL_RESUME_SOURCE_SCHEMA,
-                "source": "/immutable/failed-run",
-                "source_sha256": source_hashes,
-                "source_tree_sha256": source_tree_sha256,
-            }
-        )
-        + "\n"
-    )
-    plan = {
-        "schema": validator.PARTIAL_RESUME_PLAN_SCHEMA,
-        "protocol_id": runner.PROTOCOL_ID,
-        "source": "/immutable/failed-run",
-        "source_sha256": source_hashes,
-        "source_tree_sha256": source_tree_sha256,
-        "replay_only": {"tiers": [1], "banked_t2_r1_vector": True},
-        "generation_tail": {
-            "tier": 2,
-            "repetition": 1,
-            "request_timeout_s": 300,
-            "concurrency": 1,
-            "targets": [
-                {"ordinal": 98, "qid": "physreason_cal_problem_00351_sq2"},
-                {"ordinal": 99, "qid": "aime_2024-I-12"},
-            ],
-        },
-        "fresh_collection": [{"tier": 2, "repetition": 2}, {"tier": 2, "repetition": 3}],
-    }
-    plan_path = root / "partial_resume_plan.json"
-    plan_path.write_text(json.dumps(plan) + "\n")
-    resume_runner = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
-    resume_sha = validator.sha256_path(resume_runner)
-    report_path = root / "runner_report.json"
-    report = json.loads(report_path.read_text())
-    report["partial_resume"] = {
-        "schema": validator.PARTIAL_RESUME_SCHEMA,
-        "source_binding": str(snapshot / "source_binding.json"),
-        "source_tree_sha256": source_tree_sha256,
-        "plan_path": str(plan_path),
-        "plan_sha256": validator.sha256_path(plan_path),
-        "resume_runner": {"path": str(resume_runner), "sha256": resume_sha},
-        "t2_r1_generation_tail_ordinals": [98, 99],
-        "t2_r1_scorer_recovery_ordinals": list(range(15)),
-    }
-    report_path.write_text(json.dumps(report) + "\n")
-    return resume_sha
-
-
-def test_validator_rejects_segmented_monitor_without_partial_resume_context(tmp_path: Path) -> None:
-    evidence = _synthetic_candidate(tmp_path)
-    validator = _load_validator("e8_v5_validator_unbound_segments_test")
-    report_path = evidence.parent / "runner_report.json"
-    report = json.loads(report_path.read_text())
-    report["postconditions"]["segmented_monitor"] = []
-    report_path.write_text(json.dumps(report) + "\n")
-    _reseal_candidate(evidence, validator)
-    with pytest.raises(ValueError, match="must be present together"):
-        validator.validate(
-            evidence,
-            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
-            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
-        )
-
-
-def test_validator_rejects_partial_resume_context_without_segmented_monitor(tmp_path: Path) -> None:
-    evidence = _synthetic_candidate(tmp_path)
-    validator = _load_validator("e8_v5_validator_unsegmented_partial_test")
-    resume_sha = _attach_valid_partial_context(evidence, validator)
-    _reseal_candidate(evidence, validator)
-    with pytest.raises(ValueError, match="must be present together"):
-        validator.validate(
-            evidence,
-            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
-            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
-            expected_resume_runner_sha256=resume_sha,
-        )
-
-
 def test_validator_rejects_unreviewed_base_runner_pin(tmp_path: Path) -> None:
     evidence = _synthetic_candidate(tmp_path)
     validator = _load_validator("e8_v5_validator_base_pin_test")
@@ -1320,6 +1301,75 @@ def test_validator_rejects_resealed_incoherent_sidecar(tmp_path: Path) -> None:
     report_path.write_text(json.dumps(report) + "\n")
     _reseal_candidate(evidence, validator)
     with pytest.raises(ValueError, match="not coherent"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+@pytest.mark.parametrize("field", ["q", "per_suite_quality", "per_suite_counts"])
+def test_validator_recomputes_raw_aggregates_from_response_ledgers(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator(f"e8_v5_validator_raw_{field}_test")
+    summary_path = evidence.parent / "summary.T1.json"
+    summary = json.loads(summary_path.read_text())
+    repetitions = range(1, 4) if field == "per_suite_counts" else (1,)
+    for repetition in repetitions:
+        raw_path = evidence.parent / f"raw.T1.r{repetition}.json"
+        raw = json.loads(raw_path.read_text())
+        if field == "q":
+            raw["q"] = 0.0
+            summary["observations"][repetition - 1]["q"] = 0.0
+        elif field == "per_suite_quality":
+            raw["per_suite_quality"] = {"suite": 0.0}
+        else:
+            raw["per_suite_counts"] = {"suite": 51}
+        raw_path.write_text(json.dumps(raw) + "\n")
+        summary["observations"][repetition - 1]["sha256"] = validator.sha256_path(
+            raw_path
+        )
+    if field == "per_suite_counts":
+        summary["per_suite_counts"] = {"suite": 51}
+    summary_path.write_text(json.dumps(summary) + "\n")
+    manifest = json.loads(evidence.read_text())
+    manifest["source_records"][0]["sha256"] = validator.sha256_path(summary_path)
+    if field == "per_suite_counts":
+        manifest["replacement"]["baseline_state"]["per_suite_counts_by_tier"]["1"] = {
+            "suite": 51
+        }
+    evidence.write_text(json.dumps(manifest) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="raw observation differs"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_same_basename_raw_outside_evidence_root_level(
+    tmp_path: Path,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_nested_raw_test")
+    source = evidence.parent / "raw.T1.r1.json"
+    nested = evidence.parent / "nested/raw.T1.r1.json"
+    nested.parent.mkdir()
+    nested.write_bytes(source.read_bytes())
+    summary_path = evidence.parent / "summary.T1.json"
+    summary = json.loads(summary_path.read_text())
+    summary["observations"][0]["path"] = str(nested)
+    summary["observations"][0]["sha256"] = validator.sha256_path(nested)
+    summary_path.write_text(json.dumps(summary) + "\n")
+    manifest = json.loads(evidence.read_text())
+    manifest["source_records"][0]["sha256"] = validator.sha256_path(summary_path)
+    evidence.write_text(json.dumps(manifest) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="raw observation differs"):
         validator.validate(
             evidence,
             expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
@@ -1443,19 +1493,10 @@ def test_v5_applier_adapter_plan_is_read_only(tmp_path: Path) -> None:
     assert all(not path.exists() for path in paths)
 
 
-@pytest.mark.parametrize(
-    "bad_pin",
-    [
-        "E8_V5_PRODUCER_SHA256",
-        "E8_V5_RECOVERY_RUNNER_SHA256",
-        "E8_V5_FINALIZER_RUNNER_SHA256",
-    ],
-)
 def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     tmp_path: Path,
-    bad_pin: str,
 ) -> None:
-    evidence = _synthetic_candidate(tmp_path)
+    evidence = _bind_synthetic_candidate_to_integrated_source(_synthetic_candidate(tmp_path))
     adapter = (
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
@@ -1483,12 +1524,6 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
     )
-    validator_py = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
-    producer_path = PROJECT_ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_source.py"
-    resume_path = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
-    recovery_path = PROJECT_ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
-    finalizer_path = PROJECT_ROOT / "scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
-    successor_path = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
     canonical_applier = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
     )
@@ -1506,47 +1541,26 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         if lock_path.exists()
         else None
     )
-    command = [
-        "bash",
-        str(wrapper),
-        "--prevalidate",
-        "--evidence",
-        str(evidence),
-        "--expected-pre-state-sha256",
-        pre_sha,
-        "--expected-candidate-state-sha256",
-        candidate_sha,
-    ]
-    env = {
-        **__import__("os").environ,
-        "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
-        "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
-        "E8_V5_PRODUCER_SHA256": hashlib.sha256(producer_path.read_bytes()).hexdigest(),
-        "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
-        "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
-        "E8_V5_RESUME_RUNNER_SHA256": hashlib.sha256(resume_path.read_bytes()).hexdigest(),
-        "E8_V5_RECOVERY_RUNNER_SHA256": hashlib.sha256(
-            recovery_path.read_bytes()
-        ).hexdigest(),
-        "E8_V5_FINALIZER_RUNNER_SHA256": hashlib.sha256(
-            finalizer_path.read_bytes()
-        ).hexdigest(),
-        "E8_V5_SUCCESSOR_RUNNER_SHA256": hashlib.sha256(
-            successor_path.read_bytes()
-        ).hexdigest(),
-        "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
-        "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
-        "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
-        "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(
-            canonical_applier.read_bytes()
-        ).hexdigest(),
-        "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
-        ).strip(),
-    }
     completed = subprocess.run(
-        command,
-        env=env,
+        [
+            "bash",
+            str(wrapper),
+            "--prevalidate",
+            "--evidence",
+            str(evidence),
+            "--expected-pre-state-sha256",
+            pre_sha,
+            "--expected-candidate-state-sha256",
+            candidate_sha,
+        ],
+        env={
+            **__import__("os").environ,
+            **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
+            "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+            "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(
+                canonical_applier.read_bytes()
+            ).hexdigest(),
+        },
         capture_output=True,
         text=True,
         check=False,
@@ -1567,39 +1581,446 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     )
     assert lock_after == lock_before
 
-    bad_env = dict(env)
-    bad_env[bad_pin] = "0" * 64
+    bad_env = {
+        **__import__("os").environ,
+        **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
+        "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+        "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(
+            canonical_applier.read_bytes()
+        ).hexdigest(),
+    }
+    bad_env["E8_V5_FINAL_C1_VALIDATOR_SHA256"] = "0" * 64
     rejected = subprocess.run(
-        command,
+        [
+            "bash",
+            str(wrapper),
+            "--prevalidate",
+            "--evidence",
+            str(evidence),
+            "--expected-pre-state-sha256",
+            pre_sha,
+            "--expected-candidate-state-sha256",
+            candidate_sha,
+        ],
         env=bad_env,
         capture_output=True,
         text=True,
         check=False,
     )
     assert rejected.returncode != 0
-    assert "reviewed artifact pin differs" in rejected.stderr
+    assert "E8_V5_FINAL_C1_VALIDATOR_SHA256" in rejected.stderr
     assert state_path.read_bytes() == state_bytes
     assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
-    bad_lock_after = (
-        (
-            lock_path.stat().st_ino,
-            lock_path.stat().st_size,
-            lock_path.stat().st_mtime_ns,
-            lock_path.read_bytes(),
-        )
-        if lock_path.exists()
-        else None
-    )
-    assert bad_lock_after == lock_before
 
 
-def test_final_wrapper_receipt_binds_composite_source_identity() -> None:
+def test_final_wrapper_uses_dynamic_confirmation_and_post_commit_receipt_only() -> None:
+    """The human boundary cannot be satisfied by a reusable static token."""
     wrapper = (
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
     )
     source = wrapper.read_text()
-    assert '"source_root": str(source_root.resolve())' in source
-    assert '"source_head": source_head' in source
-    for field in ("producer", "recovery_runner", "finalizer_runner"):
-        assert f'"{field}": sha({field})' in source
+    assert "--apply" in source
+    assert '[[ -t 0 && -t 1 ]]' in source
+    assert 'CONFIRMATION="APPLY-E8-V5:${EVIDENCE_SHA256}:${EXPECTED_CANDIDATE}"' in source
+    assert "PROTOCOL_RECEIPT" not in source
+    assert "canonical.write_json_create_only(receipt_path, payload)" in source
+    assert source.index('"${COMMON[@]}" --attest "$CONFIRMATION"') < source.index(
+        "canonical.write_json_create_only(receipt_path, payload)"
+    )
+    assert source.index('"${COMMON[@]}" --attest "$CONFIRMATION"') < source.index(
+        "E8 v5 state CAS committed and consolidated receipt created"
+    )
+
+
+def test_final_wrapper_prevalidation_rejects_stale_reviewed_hashes_without_writes(
+    tmp_path: Path,
+) -> None:
+    evidence = _bind_synthetic_candidate_to_integrated_source(_synthetic_candidate(tmp_path))
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    validator_shell = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
+    )
+    adapter = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    )
+    canonical_applier = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
+    )
+    state_path = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json")
+    state_before = state_path.read_bytes()
+    completed = subprocess.run(
+        [
+            "bash", str(wrapper), "--prevalidate", "--evidence", str(evidence),
+            "--expected-pre-state-sha256", "0" * 64,
+            "--expected-candidate-state-sha256", "1" * 64,
+        ],
+        env={
+            **__import__("os").environ,
+            **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
+            "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+            "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "reviewed pre-state" in completed.stderr
+    assert state_path.read_bytes() == state_before
+
+
+def _v5_wrapper_integration_fixture(tmp_path: Path) -> tuple[Path, dict[str, str], Path, Path, Path, str, str]:
+    """Build a full sealed transaction against a temporary state/artifact root."""
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    evidence = _bind_synthetic_candidate_to_integrated_source(_synthetic_candidate(evidence_root))
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    validator_shell = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
+    )
+    adapter = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    )
+    canonical_applier = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
+    )
+    adapter_spec = importlib.util.spec_from_file_location(
+        f"e8_v5_integration_adapter_{tmp_path.name}", adapter
+    )
+    assert adapter_spec is not None and adapter_spec.loader is not None
+    adapter_module = importlib.util.module_from_spec(adapter_spec)
+    sys.modules[adapter_spec.name] = adapter_module
+    adapter_spec.loader.exec_module(adapter_module)
+    canonical = adapter_module.module
+
+    state = tmp_path / "state.json"
+    state.write_bytes(
+        Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json").read_bytes()
+    )
+    manifest = json.loads(evidence.read_text())
+    candidate = canonical.candidate_state(json.loads(state.read_text()), manifest["replacement"])
+    candidate_bytes = (json.dumps(candidate, indent=2, sort_keys=True) + "\n").encode()
+    pre_sha = hashlib.sha256(state.read_bytes()).hexdigest()
+    candidate_sha = hashlib.sha256(candidate_bytes).hexdigest()
+    operator_root = tmp_path / "operator-root"
+    (operator_root / "artifacts/operator").mkdir(parents=True)
+    env = {
+        **__import__("os").environ,
+        **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
+        "E8_V5_OPERATOR_ROOT": str(operator_root),
+        "E8_V5_STATE": str(state),
+        "E8_V5_LOCK_PATH": str(tmp_path / "apply.lock"),
+        "E8_V5_TRUST_LOCK": str(tmp_path / "measurement-trust.lock"),
+        "E8_V5_TEST_MODE": "1",
+        "E8_V5_TEST_AUTO_CONFIRM": "1",
+        "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+        "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
+    }
+    return wrapper, env, state, operator_root, evidence, pre_sha, candidate_sha
+
+
+def _v5_wrapper_command(
+    wrapper: Path, mode: str, evidence: Path, pre_sha: str, candidate_sha: str
+) -> list[str]:
+    return [
+        "bash", str(wrapper), mode, "--evidence", str(evidence),
+        "--expected-pre-state-sha256", pre_sha,
+        "--expected-candidate-state-sha256", candidate_sha,
+    ]
+
+
+def test_final_wrapper_integration_commits_temp_state_then_creates_bound_receipt(
+    tmp_path: Path,
+) -> None:
+    wrapper, env, state, root, evidence, pre_sha, candidate_sha = _v5_wrapper_integration_fixture(tmp_path)
+    completed = subprocess.run(
+        _v5_wrapper_command(wrapper, "--apply", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    receipt = root / f"artifacts/operator/e8_quality_baseline_state_v5_{evidence_sha}.consolidated_receipt.json"
+    value = json.loads(receipt.read_text())
+    assert hashlib.sha256(state.read_bytes()).hexdigest() == candidate_sha
+    assert value["state_review"]["pre_state_sha256"] == pre_sha
+    assert value["state_review"]["candidate_state_sha256"] == candidate_sha
+    assert len(value["state_review"]["exact_state_diff"]) == 6
+    benchmark = PROJECT_ROOT / "scripts/benchmark"
+    for key, filename in {
+        "successor_runner": "prepare_e8_quality_baseline_v5_partial_r2_successor.py",
+        "race_retry_runner": "prepare_e8_quality_baseline_v5_partial_r2_race_retry.py",
+        "mixed_tail_repair_runner": "prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py",
+        "terminalizer_runner": "terminalize_e8_quality_baseline_v5_partial_r2_successor.py",
+        "final_c1_retry_runner": "final_c1_retry.py",
+        "final_c1_validator": "final_c1_validator.py",
+    }.items():
+        assert value["code_sha256"][key] == _sha(benchmark / filename)
+    assert value["transaction"]["canonical_attestation_path"].endswith(
+        "canonical_apply_attestation.json"
+    )
+
+
+def test_final_wrapper_shared_trust_lock_blocks_before_transaction(
+    tmp_path: Path,
+) -> None:
+    wrapper, env, state, root, evidence, pre_sha, candidate_sha = _v5_wrapper_integration_fixture(
+        tmp_path
+    )
+    trust_lock = Path(env["E8_V5_TRUST_LOCK"])
+    trust_lock.touch()
+    before_state = state.read_bytes()
+    before_outputs = set((root / "artifacts/operator").iterdir())
+    with trust_lock.open("r+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        blocked = subprocess.run(
+            _v5_wrapper_command(
+                wrapper, "--prevalidate", evidence, pre_sha, candidate_sha
+            ),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    assert blocked.returncode != 0
+    assert "measurement trust-boundary lock is already held" in blocked.stderr
+    assert state.read_bytes() == before_state
+    assert set((root / "artifacts/operator").iterdir()) == before_outputs
+
+
+def test_v5_direct_applier_honors_shared_and_inherited_trust_lock(
+    tmp_path: Path,
+) -> None:
+    adapter = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    )
+    trust_lock = tmp_path / "measurement-trust.lock"
+    trust_lock.touch()
+    env = {
+        **__import__("os").environ,
+        "E8_V5_TRUST_LOCK": str(trust_lock),
+        "E8_V5_TEST_MODE": "1",
+    }
+    with trust_lock.open("r+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        blocked = subprocess.run(
+            [sys.executable, str(adapter), "--plan"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        inherited_env = {**env, "EPYC_MEASUREMENT_TRUST_LOCK_FD": str(handle.fileno())}
+        inherited = subprocess.run(
+            [
+                sys.executable,
+                str(adapter),
+                "--state",
+                str(tmp_path / "state"),
+                "--evidence",
+                str(tmp_path / "evidence"),
+                "--canonical-evidence",
+                str(tmp_path / "evidence"),
+                "--validator",
+                str(tmp_path / "validator"),
+                "--transaction-dir",
+                str(tmp_path / "transaction"),
+                "--attestation",
+                str(tmp_path / "attestation"),
+                "--plan",
+            ],
+            env=inherited_env,
+            pass_fds=(handle.fileno(),),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    assert blocked.returncode != 0
+    assert "measurement trust-boundary lock is already held" in blocked.stderr
+    assert inherited.returncode == 0, inherited.stderr
+    assert "E8 baseline-state apply plan" in inherited.stdout
+
+
+def test_final_wrapper_integration_apply_failure_rolls_back_without_receipt(
+    tmp_path: Path,
+) -> None:
+    wrapper, env, state, root, evidence, pre_sha, candidate_sha = _v5_wrapper_integration_fixture(tmp_path)
+    before = state.read_bytes()
+    lifecycle_lock = state.parent / ".autopilot.lock"
+    with lifecycle_lock.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        completed = subprocess.run(
+            _v5_wrapper_command(wrapper, "--apply", evidence, pre_sha, candidate_sha),
+            env=env, capture_output=True, text=True, check=False,
+        )
+    assert completed.returncode != 0
+    evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    assert state.read_bytes() == before
+    review = root / f"artifacts/operator/e8_quality_baseline_state_v5_{evidence_sha}.six_row_review.json"
+    assert not review.exists()
+    assert not (
+        root / f"artifacts/operator/e8_quality_baseline_state_v5_{evidence_sha}.consolidated_receipt.json"
+    ).exists()
+    retry = subprocess.run(
+        _v5_wrapper_command(wrapper, "--apply", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert retry.returncode == 0, retry.stderr
+    assert hashlib.sha256(state.read_bytes()).hexdigest() == candidate_sha
+
+
+def test_final_wrapper_integration_recovers_only_missing_post_commit_receipt(
+    tmp_path: Path,
+) -> None:
+    wrapper, env, state, root, evidence, pre_sha, candidate_sha = _v5_wrapper_integration_fixture(tmp_path)
+    committed = subprocess.run(
+        _v5_wrapper_command(wrapper, "--apply", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert committed.returncode == 0, committed.stderr
+    assert hashlib.sha256(state.read_bytes()).hexdigest() == candidate_sha
+    evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    receipt = root / f"artifacts/operator/e8_quality_baseline_state_v5_{evidence_sha}.consolidated_receipt.json"
+    assert receipt.exists()
+    receipt.unlink()  # Simulate only the post-commit external receipt loss.
+    lifecycle_lock = state.parent / ".autopilot.lock"
+    with lifecycle_lock.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        locked = subprocess.run(
+            _v5_wrapper_command(wrapper, "--finalize-receipt", evidence, pre_sha, candidate_sha),
+            env=env, capture_output=True, text=True, check=False,
+        )
+    assert locked.returncode != 0
+    assert "lifecycle/state lock is held" in locked.stderr
+    assert not receipt.exists()
+    stale = subprocess.run(
+        _v5_wrapper_command(wrapper, "--finalize-receipt", evidence, pre_sha, "0" * 64),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert stale.returncode != 0
+    assert "retained review candidate differs" in stale.stderr
+    assert not receipt.exists()
+    repaired = subprocess.run(
+        _v5_wrapper_command(wrapper, "--finalize-receipt", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert repaired.returncode == 0, repaired.stderr
+    first = receipt.read_bytes()
+    duplicate = subprocess.run(
+        _v5_wrapper_command(wrapper, "--finalize-receipt", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert duplicate.returncode != 0
+    assert "consolidated receipt already exists" in duplicate.stderr
+    assert receipt.read_bytes() == first
+    receipt.write_text('{"conflicting": true}\n')
+    conflicting = subprocess.run(
+        _v5_wrapper_command(wrapper, "--finalize-receipt", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert conflicting.returncode != 0
+    assert "consolidated receipt already exists" in conflicting.stderr
+    assert receipt.read_text() == '{"conflicting": true}\n'
+
+
+def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
+    tmp_path: Path,
+) -> None:
+    evidence = _bind_synthetic_candidate_to_integrated_source(_synthetic_candidate(tmp_path))
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    adapter = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    )
+    spec = importlib.util.spec_from_file_location("e8_v5_canonical_tty_adapter", adapter)
+    assert spec is not None and spec.loader is not None
+    adapter_module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = adapter_module
+    spec.loader.exec_module(adapter_module)
+    canonical = adapter_module.module
+    state_path = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json")
+    state_before = state_path.read_bytes()
+    candidate = canonical.candidate_state(
+        json.loads(state_before), json.loads(evidence.read_text())["replacement"]
+    )
+    candidate_sha = hashlib.sha256(
+        (json.dumps(candidate, indent=2, sort_keys=True) + "\n").encode()
+    ).hexdigest()
+    validator_shell = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
+    )
+    canonical_applier = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
+    )
+    completed = subprocess.run(
+        _v5_wrapper_command(
+            wrapper,
+            "--apply",
+            evidence,
+            hashlib.sha256(state_before).hexdigest(),
+            candidate_sha,
+        ),
+        env={
+            **__import__("os").environ,
+            **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
+            "E8_V5_TEST_MODE": "1",
+            "E8_V5_TEST_AUTO_CONFIRM": "1",
+            "E8_V5_TEST_SKIP_AUTOPILOT": "1",
+            "PYTEST_CURRENT_TEST": "forged",
+            "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+            "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "interactive terminal confirmation" in completed.stderr
+    assert state_path.read_bytes() == state_before
+
+
+def test_final_wrapper_rejects_symlinked_test_sandbox_state_escape(tmp_path: Path) -> None:
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    root = tmp_path / "operator-root"
+    root.mkdir()
+    canonical_state = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json")
+    state_link = tmp_path / "state.json"
+    state_link.symlink_to(canonical_state)
+    lock = tmp_path / "apply.lock"
+    before = canonical_state.read_bytes()
+    completed = subprocess.run(
+        ["bash", str(wrapper), "--prevalidate"],
+        env={
+            **__import__("os").environ,
+            "E8_V5_OPERATOR_ROOT": str(root),
+            "E8_V5_STATE": str(state_link),
+            "E8_V5_LOCK_PATH": str(lock),
+            "E8_V5_TRUST_LOCK": str(tmp_path / "measurement-trust.lock"),
+            "E8_V5_TEST_MODE": "1",
+            "PYTEST_CURRENT_TEST": "forged",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "paths must not be symlinks" in completed.stderr
+    assert canonical_state.read_bytes() == before

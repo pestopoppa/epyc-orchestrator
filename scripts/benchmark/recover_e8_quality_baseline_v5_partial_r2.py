@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from datetime import datetime
 import fcntl
 import hashlib
 import importlib.util
@@ -640,22 +641,104 @@ def _generate_with_watcher(
 _SAVED_ROWS: dict[int, dict[str, Any]] = {}
 
 
+def _watcher_timestamp(value: Any) -> float:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError as exc:
+        raise ValueError("partial-r2 watcher timestamp is invalid") from exc
+
+
+def _validate_generation_sidecar_envelope(
+    path: Path,
+    watcher_path: Path,
+    permitted: set[int],
+) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    parsed = V4.load_jsonl(path)
+    question_rows = [
+        row
+        for row in parsed
+        if isinstance(row, dict) and row.get("row_type") == "question_result"
+    ]
+    if not question_rows:
+        return []
+    starts: dict[str, dict[str, Any]] = {}
+    for row in parsed:
+        if not isinstance(row, dict) or row.get("row_type") != "batch_start":
+            continue
+        batch_id = row.get("eval_batch_id")
+        if (
+            not isinstance(batch_id, str)
+            or not batch_id
+            or batch_id in starts
+            or row.get("label") != "e8-t2-r2-recovery"
+            or row.get("concurrency") != V4.CONCURRENCY
+            or not isinstance(row.get("requested_n"), int)
+            or isinstance(row.get("requested_n"), bool)
+            or not 0 < row["requested_n"] <= len(permitted)
+        ):
+            raise ValueError("partial-r2 generation batch identity is invalid")
+        starts[batch_id] = row
+    if not starts:
+        raise ValueError("partial-r2 generation sidecar has no c3 batch identity")
+    if not watcher_path.is_file() or watcher_path.is_symlink():
+        raise ValueError("partial-r2 generation sidecar lacks watcher evidence")
+    watcher = V4.load_jsonl(watcher_path)
+    expected_load = {"tier": TIER, "repetition": REPETITION}
+    active = [
+        row
+        for row in watcher
+        if isinstance(row, dict) and row.get("active_load") == expected_load
+    ]
+    gaps, max_gap = RESUME._monitor_stats(watcher)
+    if (
+        len(watcher) < 2
+        or not active
+        or any(not isinstance(row, dict) or row.get("ok") is not True for row in watcher)
+        or gaps
+        or max_gap > 7.0
+    ):
+        raise ValueError("partial-r2 generation watcher is not clean and cadence-valid")
+    active_start = min(_watcher_timestamp(row.get("started_at")) for row in active)
+    active_end = max(_watcher_timestamp(row.get("finished_at")) for row in active)
+    seen: set[int] = set()
+    for row in question_rows:
+        ordinal = row.get("ordinal")
+        batch = starts.get(row.get("eval_batch_id"))
+        started = row.get("started_at_s")
+        ended = row.get("ended_at_s")
+        if (
+            not isinstance(ordinal, int)
+            or isinstance(ordinal, bool)
+            or ordinal not in permitted
+            or ordinal in seen
+            or batch is None
+            or row.get("label") != batch["label"]
+            or row.get("requested_n") != batch["requested_n"]
+            or type(started) not in (int, float)
+            or type(ended) not in (int, float)
+            or not active_start <= float(started) <= float(ended) <= active_end
+        ):
+            raise ValueError(
+                "partial-r2 generation row is not bound to its c3 batch and watcher"
+            )
+        seen.add(ordinal)
+    return question_rows
+
+
 def _harvest_generation_sidecar(
     path: Path,
+    watcher_path: Path,
     rows: dict[int, dict[str, Any]],
     journal: Path,
     questions: list[dict[str, Any]],
     permitted: set[int],
 ) -> list[dict[str, Any]]:
     failures: list[dict[str, Any]] = []
-    if not path.exists():
-        return failures
-    for row in V4.load_jsonl(path):
-        if row.get("row_type") != "question_result":
-            continue
+    for row in _validate_generation_sidecar_envelope(path, watcher_path, permitted):
         ordinal = row.get("ordinal")
-        if not isinstance(ordinal, int) or ordinal not in permitted:
-            raise ValueError("partial-r2 generation sidecar has an unexpected ordinal")
+        assert isinstance(ordinal, int)
         response = _response_from_sidecar(row, questions[ordinal])
         if not V5.validate_clean_sidecar_result(response, row, qid=response["qid"]):
             failures.append({"ordinal": ordinal, "sidecar_sha256": canonical_hash(row)})
@@ -1141,7 +1224,12 @@ def execute(args: argparse.Namespace) -> Path:
         )
     generation_sidecar = output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
     failures = _harvest_generation_sidecar(
-        generation_sidecar, rows, journal, questions, set(plan["generation_ordinals"])
+        generation_sidecar,
+        output / "runtime_watch.r2.jsonl",
+        rows,
+        journal,
+        questions,
+        set(plan["generation_ordinals"]),
     )
     if failures:
         _record_failed_generation_attempts(output, failures)
@@ -1220,7 +1308,12 @@ def execute(args: argparse.Namespace) -> Path:
                     "partial-r2 scorer replay did not reconcile its compact sidecar rows"
                 )
             failures = _harvest_generation_sidecar(
-                generation_sidecar, rows, journal, questions, set(plan["generation_ordinals"])
+                generation_sidecar,
+                output / "runtime_watch.r2.jsonl",
+                rows,
+                journal,
+                questions,
+                set(plan["generation_ordinals"]),
             )
             if failures:
                 _record_failed_generation_attempts(output, failures)

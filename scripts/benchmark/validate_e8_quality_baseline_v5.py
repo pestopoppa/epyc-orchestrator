@@ -21,6 +21,18 @@ RESUME_RUNNER_PATH = Path(__file__).with_name("resume_e8_quality_baseline_v5.py"
 SUCCESSOR_RUNNER_PATH = Path(__file__).with_name(
     "prepare_e8_quality_baseline_v5_partial_r2_successor.py"
 )
+RACE_RETRY_RUNNER_PATH = Path(__file__).with_name(
+    "prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
+)
+MIXED_TAIL_REPAIR_RUNNER_PATH = Path(__file__).with_name(
+    "prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
+)
+TERMINALIZER_RUNNER_PATH = Path(__file__).with_name(
+    "terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
+)
+FINAL_C1_RETRY_RUNNER_PATH = Path(__file__).with_name("final_c1_retry.py")
+FINAL_C1_VALIDATOR_PATH = Path(__file__).with_name("final_c1_validator.py")
+FINALIZER_PATH = Path(__file__).with_name("finalize_e8_quality_baseline_v5_recovery_r2.py")
 EXPECTED_EVIDENCE_KEYS = {
     "schema",
     "eval_quality_era",
@@ -150,6 +162,8 @@ RECOVERY_R2_SUCCESSOR_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_successor_pla
 RECOVERY_R2_SUCCESSOR_PROPOSAL_SCHEMA = (
     "epyc.e8_quality_v5_partial_r2_successor_proposal.v1"
 )
+RECOVERY_R2_RACE_RETRY_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_race_retry_plan.v1"
+RECOVERY_R2_FINAL_C1_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_final_c1_retry_plan.v1"
 RECOVERY_R2_SUCCESSOR_EXPECTED_COUNTS = {
     "reuse_ordinals": 59,
     "inherited_scorer_replay_ordinals": 3,
@@ -296,7 +310,7 @@ def validate_partial_resume_context(
     actual_hashes = {
         str(path.relative_to(snapshot)): sha256_path(path)
         for path in sorted(snapshot.rglob("*"))
-        if path.is_file() and path.name != "source_binding.json"
+        if path.is_file() and path != source_binding_path
     }
     if actual_hashes != source_hashes:
         raise ValueError("partial-resume immutable source snapshot differs")
@@ -686,7 +700,7 @@ def validate_successor_recovery_r2_context(
     actual_source_hashes = {
         str(path.relative_to(snapshot)): sha256_path(path)
         for path in sorted(snapshot.rglob("*"))
-        if path.is_file() and path.name != "source_binding.json"
+        if path.is_file() and path != source_binding_path
     }
     if (
         context.get("source_binding_sha256") != sha256_path(source_binding_path)
@@ -722,7 +736,7 @@ def validate_successor_recovery_r2_context(
     actual_failed_hashes = {
         str(path.relative_to(failed_root)): sha256_path(path)
         for path in sorted(failed_root.rglob("*"))
-        if path.is_file() and path.name != "source_binding.json"
+        if path.is_file() and path != failed_binding_path
     }
     failed_watcher_path = resolve_artifact(
         evidence_root, context.get("failed_watcher_path"), "successor failed watcher"
@@ -882,6 +896,268 @@ def validate_successor_recovery_r2_context(
     }
 
 
+def validate_mixed_tail_repair_context(
+    context: dict[str, Any],
+    *,
+    evidence_root: Path,
+    race_root: Path,
+    mixed: dict[str, Any] | None,
+    expected_mixed_tail_repair_runner_sha256: str | None,
+    expected_terminalizer_runner_sha256: str | None = None,
+) -> None:
+    mixed_context_keys = (
+        "mixed_tail_repair_runner",
+        "mixed_tail_repair_descriptor_sha256",
+        "mixed_tail_repair_evidence_path",
+        "mixed_tail_repair_evidence_sha256",
+        "mixed_tail_original_source_binding",
+        "mixed_tail_original_source_binding_sha256",
+        "mixed_tail_original_source_tree_sha256",
+        "terminalization_transition",
+        "terminalization_transition_sha256",
+        "terminalizer_runner",
+        "terminalization_source_tree_sha256",
+    )
+    if mixed is None:
+        if any(context.get(key) is not None for key in mixed_context_keys):
+            raise ValueError("non-mixed race retry carries unexpected mixed-tail context")
+        return
+    if (
+        not isinstance(expected_mixed_tail_repair_runner_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_mixed_tail_repair_runner_sha256)
+        or sha256_path(MIXED_TAIL_REPAIR_RUNNER_PATH)
+        != expected_mixed_tail_repair_runner_sha256
+        or mixed.get("repair_runner_sha256")
+        != expected_mixed_tail_repair_runner_sha256
+        or context.get("mixed_tail_repair_runner")
+        != {
+            "path": str(MIXED_TAIL_REPAIR_RUNNER_PATH),
+            "sha256": expected_mixed_tail_repair_runner_sha256,
+        }
+        or context.get("mixed_tail_repair_descriptor_sha256")
+        != mixed.get("descriptor_sha256")
+    ):
+        raise ValueError("mixed-tail repair runner differs from the externally reviewed hash")
+    repair_evidence = resolve_artifact(
+        evidence_root,
+        context.get("mixed_tail_repair_evidence_path"),
+        "mixed-tail repair evidence",
+    )
+    original_binding = resolve_artifact(
+        evidence_root,
+        context.get("mixed_tail_original_source_binding"),
+        "mixed-tail original source binding",
+    )
+    if (
+        repair_evidence
+        != race_root / "predecessor_snapshot/mixed_tail_repair.json"
+        or original_binding
+        != race_root / "predecessor_snapshot/predecessor_snapshot/source_binding.json"
+        or context.get("mixed_tail_repair_evidence_sha256")
+        != sha256_path(repair_evidence)
+        or context.get("mixed_tail_original_source_binding_sha256")
+        != sha256_path(original_binding)
+        or context.get("mixed_tail_original_source_tree_sha256")
+        != mixed["original_source"]["tree_sha256"]
+    ):
+        raise ValueError("mixed-tail nested source or evidence binding differs")
+    terminalization = mixed.get("terminalization_transition")
+    terminalization_keys = (
+        "terminalization_transition",
+        "terminalization_transition_sha256",
+        "terminalizer_runner",
+        "terminalization_source_tree_sha256",
+    )
+    if terminalization is None:
+        if any(context.get(key) is not None for key in terminalization_keys):
+            raise ValueError("non-terminalized mixed repair carries terminalization context")
+        return
+    transition = resolve_artifact(
+        evidence_root, context.get("terminalization_transition"), "terminalization transition"
+    )
+    if (
+        not isinstance(expected_terminalizer_runner_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_terminalizer_runner_sha256)
+        or sha256_path(TERMINALIZER_RUNNER_PATH) != expected_terminalizer_runner_sha256
+        or transition != race_root / "predecessor_snapshot/terminalization_transition.json"
+        or context.get("terminalization_transition_sha256") != sha256_path(transition)
+        or context.get("terminalizer_runner") != {
+            "path": str(TERMINALIZER_RUNNER_PATH),
+            "sha256": expected_terminalizer_runner_sha256,
+        }
+        or context.get("terminalization_source_tree_sha256")
+        != terminalization.get("source_tree_sha256")
+    ):
+        raise ValueError("terminalization transition differs from the externally reviewed hash")
+
+
+def validate_race_retry_recovery_r2_context(
+    context: dict[str, Any],
+    *,
+    evidence_root: Path,
+    expected_race_retry_runner_sha256: str | None,
+    expected_mixed_tail_repair_runner_sha256: str | None,
+    expected_terminalizer_runner_sha256: str | None,
+) -> dict[str, Any]:
+    """Require the second successor's explicit runner pin and full audit chain."""
+    if (
+        not isinstance(expected_race_retry_runner_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_race_retry_runner_sha256)
+        or sha256_path(RACE_RETRY_RUNNER_PATH) != expected_race_retry_runner_sha256
+        or context.get("race_retry_runner") != {
+            "path": str(RACE_RETRY_RUNNER_PATH), "sha256": expected_race_retry_runner_sha256
+        }
+    ):
+        raise ValueError("race-retry runner differs from the externally reviewed hash")
+    paths = {
+        name: resolve_artifact(evidence_root, context.get(f"{name}_path"), f"race-retry {name}")
+        for name in ("plan", "proposal", "complete", "watcher", "response", "sidecar", "trace", "raw", "journal", "scorer_attempts")
+    }
+    root = paths["plan"].parent
+    if (
+        paths["plan"].name != "partial_r2_plan.json"
+        or paths["proposal"].name != "recovery_proposal.json"
+        or paths["complete"].name != "r2_complete.json"
+        or paths["watcher"].name != "runtime_watch.r2.race_retry.jsonl"
+        or any(path.parent != root for path in paths.values())
+        or any(context.get(f"{name}_sha256") != sha256_path(path) for name, path in paths.items() if name not in {"response", "sidecar", "trace", "raw"})
+    ):
+        raise ValueError("race-retry artifact hash binding differs")
+    predecessor_binding = resolve_artifact(evidence_root, context.get("predecessor_binding"), "race-retry predecessor binding")
+    predecessor_watcher = resolve_artifact(evidence_root, context.get("predecessor_watcher_path"), "race-retry predecessor watcher")
+    predecessor_failures = resolve_artifact(evidence_root, context.get("predecessor_failed_attempts_path"), "race-retry predecessor failures")
+    if (
+        predecessor_binding != root / "predecessor_snapshot/source_binding.json"
+        or predecessor_watcher != root / "predecessor_snapshot/runtime_watch.r2.successor.jsonl"
+        or predecessor_failures != root / "predecessor_snapshot/generation_failed_attempts.T2.r2.jsonl"
+        or context.get("predecessor_binding_sha256") != sha256_path(predecessor_binding)
+        or context.get("predecessor_watcher_sha256") != sha256_path(predecessor_watcher)
+        or context.get("predecessor_failed_attempts_sha256") != sha256_path(predecessor_failures)
+    ):
+        raise ValueError("race-retry predecessor audit binding differs")
+    spec = importlib.util.spec_from_file_location("e8_race_retry_external_finalizer", FINALIZER_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load race-retry finalizer")
+    finalizer = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = finalizer
+    spec.loader.exec_module(finalizer)
+    accepted = finalizer._validate_race_retry_intermediate(root, load_json(paths["plan"], "race-retry plan"))
+    if not accepted.get("race_retry"):
+        raise ValueError("race-retry finalizer did not admit the sealed intermediate")
+    mixed = accepted.get("mixed_tail_repair")
+    validate_mixed_tail_repair_context(
+        context,
+        evidence_root=evidence_root,
+        race_root=root,
+        mixed=mixed,
+        expected_mixed_tail_repair_runner_sha256=expected_mixed_tail_repair_runner_sha256,
+        expected_terminalizer_runner_sha256=expected_terminalizer_runner_sha256,
+    )
+    return {
+        "context": context,
+        "plan": accepted["plan"],
+        "race_retry": True,
+        "mixed_tail_repair": mixed,
+    }
+
+
+def validate_final_c1_recovery_r2_context(
+    context: dict[str, Any],
+    *,
+    evidence_root: Path,
+    expected_final_c1_retry_runner_sha256: str | None,
+    expected_final_c1_validator_sha256: str | None,
+    expected_mixed_tail_repair_runner_sha256: str | None,
+    expected_terminalizer_runner_sha256: str | None,
+) -> dict[str, Any]:
+    """Admit only a completed, human-amended final-C1 retry namespace."""
+    runner_ref = {"path": str(FINAL_C1_RETRY_RUNNER_PATH), "sha256": expected_final_c1_retry_runner_sha256}
+    validator_ref = {"path": str(FINAL_C1_VALIDATOR_PATH), "sha256": expected_final_c1_validator_sha256}
+    if (
+        not isinstance(expected_final_c1_retry_runner_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_final_c1_retry_runner_sha256)
+        or sha256_path(FINAL_C1_RETRY_RUNNER_PATH) != expected_final_c1_retry_runner_sha256
+        or context.get("final_c1_retry_runner") != runner_ref
+        or not isinstance(expected_final_c1_validator_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_final_c1_validator_sha256)
+        or sha256_path(FINAL_C1_VALIDATOR_PATH) != expected_final_c1_validator_sha256
+        or context.get("final_c1_validator") != validator_ref
+    ):
+        raise ValueError("final-c1 runner or validator differs from the externally reviewed hash")
+    plan_path = resolve_artifact(evidence_root, context.get("plan_path"), "final-c1 plan")
+    root = plan_path.parent
+    receipt_path = resolve_artifact(
+        evidence_root, context.get("amendment_receipt_path"), "final-c1 amendment receipt"
+    )
+    attempts_path = resolve_artifact(
+        evidence_root, context.get("final_c1_attempts_path"), "final-c1 attempts"
+    )
+    predecessor_binding = resolve_artifact(
+        evidence_root, context.get("predecessor_binding"), "final-c1 predecessor binding"
+    )
+    predecessor_watcher = resolve_artifact(
+        evidence_root, context.get("predecessor_watcher_path"), "final-c1 predecessor watcher"
+    )
+    predecessor_failures = resolve_artifact(
+        evidence_root,
+        context.get("predecessor_failed_attempts_path"),
+        "final-c1 predecessor failures",
+    )
+    if (
+        plan_path.name != "partial_r2_plan.json"
+        or receipt_path.is_symlink()
+        or attempts_path != root / "generation_final_c1_attempts.T2.r2.jsonl"
+        or predecessor_binding != root / "predecessor_snapshot/source_binding.json"
+        or predecessor_watcher != root / "predecessor_snapshot/runtime_watch.r2.race_retry.jsonl"
+        or predecessor_failures
+        != root / "predecessor_snapshot/generation_failed_attempts.T2.r2.jsonl"
+        or context.get("amendment_receipt_sha256") != sha256_path(receipt_path)
+        or context.get("final_c1_attempts_sha256") != sha256_path(attempts_path)
+        or context.get("predecessor_binding_sha256") != sha256_path(predecessor_binding)
+        or context.get("predecessor_watcher_sha256") != sha256_path(predecessor_watcher)
+        or context.get("predecessor_failed_attempts_sha256") != sha256_path(predecessor_failures)
+    ):
+        raise ValueError("final-c1 receipt, attempts, or predecessor audit binding differs")
+    spec = importlib.util.spec_from_file_location("e8_final_c1_external_validator", FINAL_C1_VALIDATOR_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load final-c1 validator")
+    final_c1_validator = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = final_c1_validator
+    spec.loader.exec_module(final_c1_validator)
+    accepted = final_c1_validator.validate(root, require_complete=True)
+    if accepted.get("status") != "intermediate_r2_final_c1_retry_complete":
+        raise ValueError("terminal_failed_no_admission is not finalizer-admissible")
+    plan = accepted.get("plan")
+    predecessor_plan = load_json(
+        root / "predecessor_snapshot/partial_r2_plan.json", "final-c1 predecessor plan"
+    )
+    descriptor = plan.get("mixed_tail_repair") if isinstance(plan, dict) else None
+    nested_evidence = root / "predecessor_snapshot/predecessor_snapshot/mixed_tail_repair.json"
+    nested_binding = (
+        root / "predecessor_snapshot/predecessor_snapshot/predecessor_snapshot/source_binding.json"
+    )
+    if (
+        not isinstance(plan, dict)
+        or plan.get("schema") != RECOVERY_R2_FINAL_C1_PLAN_SCHEMA
+        or descriptor is None
+        or descriptor != predecessor_plan.get("mixed_tail_repair")
+        or not nested_evidence.is_file()
+        or nested_evidence.is_symlink()
+        or not nested_binding.is_file()
+        or nested_binding.is_symlink()
+    ):
+        raise ValueError("final-c1 nested mixed-tail provenance differs")
+    validate_mixed_tail_repair_context(
+        context,
+        evidence_root=evidence_root,
+        race_root=root / "predecessor_snapshot",
+        mixed=descriptor,
+        expected_mixed_tail_repair_runner_sha256=expected_mixed_tail_repair_runner_sha256,
+        expected_terminalizer_runner_sha256=expected_terminalizer_runner_sha256,
+    )
+    return {"context": context, "plan": plan, "final_c1": True, "mixed_tail_repair": descriptor}
+
+
 def validate_recovery_r2_context(
     report: dict[str, Any],
     *,
@@ -889,6 +1165,11 @@ def validate_recovery_r2_context(
     expected_recovery_runner_sha256: str | None,
     expected_finalizer_runner_sha256: str | None = None,
     expected_successor_runner_sha256: str | None = None,
+    expected_race_retry_runner_sha256: str | None = None,
+    expected_mixed_tail_repair_runner_sha256: str | None = None,
+    expected_terminalizer_runner_sha256: str | None = None,
+    expected_final_c1_retry_runner_sha256: str | None = None,
+    expected_final_c1_validator_sha256: str | None = None,
     expected_v5_runner_sha256: str | None = None,
     expected_base_runner_sha256: str | None = None,
     expected_resume_runner_sha256: str | None = None,
@@ -916,6 +1197,7 @@ def validate_recovery_r2_context(
     if (
         not isinstance(expected_finalizer_runner_sha256, str)
         or not re.fullmatch(r"[0-9a-f]{64}", expected_finalizer_runner_sha256)
+        or sha256_path(FINALIZER_PATH) != expected_finalizer_runner_sha256
         or not isinstance(finalizer_ref, dict)
         or finalizer_ref.get("sha256") != expected_finalizer_runner_sha256
         or not isinstance(dependencies, dict)
@@ -952,6 +1234,23 @@ def validate_recovery_r2_context(
         raise ValueError("recovery-r2 artifact hash binding differs")
     _validate_banked_t2_r1_repair_history(context, evidence_root=evidence_root)
     plan = load_json(plan_path, "recovery-r2 plan")
+    if plan.get("schema") == RECOVERY_R2_RACE_RETRY_PLAN_SCHEMA:
+        return validate_race_retry_recovery_r2_context(
+            context,
+            evidence_root=evidence_root,
+            expected_race_retry_runner_sha256=expected_race_retry_runner_sha256,
+            expected_mixed_tail_repair_runner_sha256=expected_mixed_tail_repair_runner_sha256,
+            expected_terminalizer_runner_sha256=expected_terminalizer_runner_sha256,
+        )
+    if plan.get("schema") == RECOVERY_R2_FINAL_C1_PLAN_SCHEMA:
+        return validate_final_c1_recovery_r2_context(
+            context,
+            evidence_root=evidence_root,
+            expected_final_c1_retry_runner_sha256=expected_final_c1_retry_runner_sha256,
+            expected_final_c1_validator_sha256=expected_final_c1_validator_sha256,
+            expected_mixed_tail_repair_runner_sha256=expected_mixed_tail_repair_runner_sha256,
+            expected_terminalizer_runner_sha256=expected_terminalizer_runner_sha256,
+        )
     if plan.get("schema") == RECOVERY_R2_SUCCESSOR_PLAN_SCHEMA:
         return validate_successor_recovery_r2_context(
             context,
@@ -1007,7 +1306,7 @@ def validate_recovery_r2_context(
     actual_hashes = {
         str(path.relative_to(snapshot)): sha256_path(path)
         for path in sorted(snapshot.rglob("*"))
-        if path.is_file() and path.name != "source_binding.json"
+        if path.is_file() and path != source_binding_path
     }
     if (
         not isinstance(source_hashes, dict)
@@ -1631,6 +1930,11 @@ def validate(
     expected_recovery_runner_sha256: str | None = None,
     expected_finalizer_runner_sha256: str | None = None,
     expected_successor_runner_sha256: str | None = None,
+    expected_race_retry_runner_sha256: str | None = None,
+    expected_mixed_tail_repair_runner_sha256: str | None = None,
+    expected_terminalizer_runner_sha256: str | None = None,
+    expected_final_c1_retry_runner_sha256: str | None = None,
+    expected_final_c1_validator_sha256: str | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{64}", expected_runner_sha256):
         raise ValueError("expected runner SHA-256 is malformed")
@@ -1690,6 +1994,11 @@ def validate(
         expected_recovery_runner_sha256=expected_recovery_runner_sha256,
         expected_finalizer_runner_sha256=expected_finalizer_runner_sha256,
         expected_successor_runner_sha256=expected_successor_runner_sha256,
+        expected_race_retry_runner_sha256=expected_race_retry_runner_sha256,
+        expected_mixed_tail_repair_runner_sha256=expected_mixed_tail_repair_runner_sha256,
+        expected_terminalizer_runner_sha256=expected_terminalizer_runner_sha256,
+        expected_final_c1_retry_runner_sha256=expected_final_c1_retry_runner_sha256,
+        expected_final_c1_validator_sha256=expected_final_c1_validator_sha256,
         expected_v5_runner_sha256=expected_runner_sha256,
         expected_base_runner_sha256=expected_base_runner_sha256,
         expected_resume_runner_sha256=expected_resume_runner_sha256,
@@ -1890,6 +2199,7 @@ def validate(
         ):
             raise ValueError(f"T{tier} fixed/scoring vector differs")
     total = 0
+    derived_raw: dict[tuple[int, int], dict[str, Any]] = {}
     for tier_text, expected_n in (("1", 50), ("2", 500)):
         rows = details[tier_text]
         if (
@@ -2214,6 +2524,23 @@ def validate(
                 tier=tier,
                 repetition=repetition,
             )
+            suites: dict[str, list[bool]] = {}
+            for response in responses:
+                suites.setdefault(str(response["suite"]), []).append(
+                    bool(response["correct"])
+                )
+            derived_raw[(tier, repetition)] = {
+                "q": sum(bool(response["correct"]) for response in responses)
+                * 3.0
+                / len(responses),
+                "per_suite_quality": {
+                    suite: sum(values) * 3.0 / len(values)
+                    for suite, values in suites.items()
+                },
+                "per_suite_counts": {
+                    suite: len(values) for suite, values in suites.items()
+                },
+            }
             if tail["retry_count"]:
                 attempts_path = resolve_artifact(
                     evidence_root,
@@ -2477,8 +2804,10 @@ def validate(
                 "raw observation",
             )
             raw = load_json(raw_path, "raw observation")
+            recomputed = derived_raw[(tier, repetition)]
             if (
-                raw_path.name != f"raw.T{tier}.r{repetition}.json"
+                raw_path
+                != evidence_path.parent / f"raw.T{tier}.r{repetition}.json"
                 or observation.get("sha256") != sha256_path(raw_path)
                 or observation
                 != {
@@ -2497,6 +2826,9 @@ def validate(
                 or not isinstance(raw.get("q"), (int, float))
                 or not isinstance(raw.get("per_suite_quality"), dict)
                 or not isinstance(raw.get("per_suite_counts"), dict)
+                or raw.get("q") != recomputed["q"]
+                or raw.get("per_suite_quality") != recomputed["per_suite_quality"]
+                or raw.get("per_suite_counts") != recomputed["per_suite_counts"]
             ):
                 raise ValueError("raw observation differs from its summary")
             raw_rows.append(raw)
@@ -2584,6 +2916,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-recovery-runner-sha256")
     parser.add_argument("--expected-finalizer-runner-sha256")
     parser.add_argument("--expected-successor-runner-sha256")
+    parser.add_argument("--expected-race-retry-runner-sha256")
+    parser.add_argument("--expected-mixed-tail-repair-runner-sha256")
+    parser.add_argument("--expected-terminalizer-runner-sha256")
+    parser.add_argument("--expected-final-c1-retry-runner-sha256")
+    parser.add_argument("--expected-final-c1-validator-sha256")
     args = parser.parse_args(argv)
     print(
         json.dumps(
@@ -2595,6 +2932,11 @@ def main(argv: list[str] | None = None) -> int:
                 expected_recovery_runner_sha256=args.expected_recovery_runner_sha256,
                 expected_finalizer_runner_sha256=args.expected_finalizer_runner_sha256,
                 expected_successor_runner_sha256=args.expected_successor_runner_sha256,
+                expected_race_retry_runner_sha256=args.expected_race_retry_runner_sha256,
+                expected_mixed_tail_repair_runner_sha256=args.expected_mixed_tail_repair_runner_sha256,
+                expected_terminalizer_runner_sha256=args.expected_terminalizer_runner_sha256,
+                expected_final_c1_retry_runner_sha256=args.expected_final_c1_retry_runner_sha256,
+                expected_final_c1_validator_sha256=args.expected_final_c1_validator_sha256,
             ),
             sort_keys=True,
         )

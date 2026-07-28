@@ -220,8 +220,10 @@ def validate_clean_sidecar_result(
         and answer.strip()
         and sidecar_row.get("answer") == answer
         and result.get("qid") == qid
-        and isinstance(result.get("question_id"), str)
-        and bool(result["question_id"].strip())
+        and qid != "unknown"
+        and result.get("question_id") == qid
+        and (result.get("partial") is None or result.get("partial") is False)
+        and (result.get("degraded") is None or result.get("degraded") is False)
         and isinstance(tokens, int)
         and not isinstance(tokens, bool)
         and tokens > 0

@@ -235,7 +235,10 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
     context = {
         "schema": validator.RECOVERY_R2_CONTEXT_SCHEMA,
         "recovery_runner": {"path": "/reviewed/recovery.py", "sha256": "a" * 64},
-        "finalizer_runner": {"path": "/reviewed/finalizer.py", "sha256": "b" * 64},
+        "finalizer_runner": {
+            "path": "/reviewed/finalizer.py",
+            "sha256": _sha(validator.FINALIZER_PATH),
+        },
         "dependency_sha256": {"v5": "c" * 64, "resume": "d" * 64, "recovery": "a" * 64},
         "banked_t2_r1_repair_history": {
             "partial_resume_plan.json": {
@@ -275,7 +278,7 @@ def _validate(root: Path, context: dict) -> dict:
         {"recovery_r2": context},
         evidence_root=root,
         expected_recovery_runner_sha256="a" * 64,
-        expected_finalizer_runner_sha256="b" * 64,
+        expected_finalizer_runner_sha256=_sha(validator.FINALIZER_PATH),
         expected_v5_runner_sha256="c" * 64,
         expected_base_runner_sha256="b" * 64,
         expected_resume_runner_sha256="d" * 64,
@@ -287,6 +290,114 @@ def test_recovery_r2_context_accepts_hash_bound_59_3_438_bundle(tmp_path: Path) 
     accepted = _validate(root, context)
     assert accepted is not None
     assert len(accepted["plan"]["generation_ordinals"]) == 438
+
+
+def test_recovery_r2_context_rejects_changed_on_disk_finalizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, context = _context(tmp_path)
+    changed = tmp_path / "changed-finalizer.py"
+    changed.write_text("# unreviewed finalizer\n")
+    monkeypatch.setattr(validator, "FINALIZER_PATH", changed)
+    with pytest.raises(ValueError, match="finalizer instrument differs"):
+        _validate(root, context)
+
+
+def test_finalizer_conditionally_recomputes_mixed_tail_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chain = {
+        "schema": "epyc.e8_quality_v5_partial_r2_mixed_tail_chain.v1",
+        "descriptor_sha256": "a" * 64,
+    }
+    monkeypatch.setattr(
+        finalizer.RACE_RETRY,
+        "validate_mixed_predecessor",
+        lambda *_args: chain,
+    )
+    race_plan = {"mixed_tail_repair": chain}
+
+    accepted = finalizer._validate_optional_mixed_tail_chain(
+        tmp_path,
+        {},
+        [],
+        {},
+        race_plan,
+    )
+
+    assert accepted == chain
+    with pytest.raises(ValueError, match="mixed-tail chain"):
+        finalizer._validate_optional_mixed_tail_chain(
+            tmp_path,
+            {},
+            [],
+            {},
+            {},
+        )
+
+
+def test_validator_requires_exact_mixed_runner_and_nested_bindings(
+    tmp_path: Path,
+) -> None:
+    race_root = tmp_path / "race"
+    evidence = race_root / "predecessor_snapshot/mixed_tail_repair.json"
+    binding = (
+        race_root
+        / "predecessor_snapshot/predecessor_snapshot/source_binding.json"
+    )
+    _write_json(evidence, {"sealed": True})
+    _write_json(binding, {"sealed": True})
+    runner_sha = _sha(validator.MIXED_TAIL_REPAIR_RUNNER_PATH)
+    mixed = {
+        "repair_runner_sha256": runner_sha,
+        "descriptor_sha256": "b" * 64,
+        "original_source": {"tree_sha256": "c" * 64},
+    }
+    context = {
+        "mixed_tail_repair_runner": {
+            "path": str(validator.MIXED_TAIL_REPAIR_RUNNER_PATH),
+            "sha256": runner_sha,
+        },
+        "mixed_tail_repair_descriptor_sha256": "b" * 64,
+        "mixed_tail_repair_evidence_path": str(evidence),
+        "mixed_tail_repair_evidence_sha256": _sha(evidence),
+        "mixed_tail_original_source_binding": str(binding),
+        "mixed_tail_original_source_binding_sha256": _sha(binding),
+        "mixed_tail_original_source_tree_sha256": "c" * 64,
+    }
+
+    with pytest.raises(ValueError, match="externally reviewed hash"):
+        validator.validate_mixed_tail_repair_context(
+            context,
+            evidence_root=tmp_path,
+            race_root=race_root,
+            mixed=mixed,
+            expected_mixed_tail_repair_runner_sha256=None,
+        )
+    with pytest.raises(ValueError, match="externally reviewed hash"):
+        validator.validate_mixed_tail_repair_context(
+            context,
+            evidence_root=tmp_path,
+            race_root=race_root,
+            mixed=mixed,
+            expected_mixed_tail_repair_runner_sha256="0" * 64,
+        )
+    validator.validate_mixed_tail_repair_context(
+        context,
+        evidence_root=tmp_path,
+        race_root=race_root,
+        mixed=mixed,
+        expected_mixed_tail_repair_runner_sha256=runner_sha,
+    )
+    context["mixed_tail_repair_evidence_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="nested source or evidence"):
+        validator.validate_mixed_tail_repair_context(
+            context,
+            evidence_root=tmp_path,
+            race_root=race_root,
+            mixed=mixed,
+            expected_mixed_tail_repair_runner_sha256=runner_sha,
+        )
 
 
 def test_completed_successor_context_reaches_external_validator(tmp_path: Path) -> None:
@@ -1106,3 +1217,44 @@ def test_validate_intermediate_rejects_lexical_symlink(tmp_path: Path) -> None:
     link.symlink_to(real, target_is_directory=True)
     with pytest.raises(ValueError, match="must not be a symlink"):
         finalizer.validate_intermediate(link)
+
+
+def test_final_c1_intermediate_requires_complete_and_preserves_mixed_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "final-c1"
+    (root / "predecessor_snapshot").mkdir(parents=True)
+    mixed = {"schema": "mixed-tail"}
+    (root / "predecessor_snapshot/partial_r2_plan.json").write_text(
+        json.dumps({"mixed_tail_repair": mixed}) + "\n", encoding="utf-8"
+    )
+    plan = {"schema": finalizer.FINAL_C1_RETRY.PLAN_SCHEMA, "mixed_tail_repair": mixed}
+    seen: list[bool] = []
+
+    def validate_output(path: Path, *, require_complete: bool = False) -> dict:
+        assert path == root
+        seen.append(require_complete)
+        return {"proposal": {"sealed": True}, "complete": {"status": "complete"}}
+
+    monkeypatch.setattr(finalizer.FINAL_C1_RETRY, "validate_output", validate_output)
+    validated = finalizer._validate_final_c1_intermediate(root, plan)
+    assert seen == [True]
+    assert validated["final_c1_retry"] is True
+    assert validated["mixed_tail_repair"] == mixed
+
+
+def test_final_c1_terminal_output_cannot_enter_finalizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "terminal"
+    (root / "predecessor_snapshot").mkdir(parents=True)
+
+    def reject_terminal(_path: Path, *, require_complete: bool = False) -> dict:
+        assert require_complete is True
+        raise ValueError("terminal final-c1 output is not complete")
+
+    monkeypatch.setattr(finalizer.FINAL_C1_RETRY, "validate_output", reject_terminal)
+    with pytest.raises(ValueError, match="not complete"):
+        finalizer._validate_final_c1_intermediate(
+            root, {"schema": finalizer.FINAL_C1_RETRY.PLAN_SCHEMA}
+        )
