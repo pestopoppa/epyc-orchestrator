@@ -11,10 +11,12 @@ import json
 from pathlib import Path
 import re
 import sys
+import tempfile
 from typing import Any
 
 
 RUNNER_PATH = Path(__file__).with_name("run_e8_quality_baseline_v5.py")
+RESUME_RUNNER_PATH = Path(__file__).with_name("resume_e8_quality_baseline_v5.py")
 EXPECTED_EVIDENCE_KEYS = {
     "schema",
     "eval_quality_era",
@@ -121,6 +123,20 @@ ACCEPTED_GENERATION_ERRORS = {
     "[ERROR: Inference failed: chat_completions failed: timed out]",
 }
 
+# A single crashed E8 source has an immutable, clean watcher whose scheduler
+# intervals exceeded 7s seven times (maximum 7.206749s).  This amendment is
+# intentionally source-identity-bound.  It does not alter normal v5 monitoring
+# and it does not relax the resumed segment's <=7.0s requirement.
+HISTORICAL_WATCHER_SHA256 = "89f37d444c7965448987f3d23b14caedf7519316138e88faf4ce3f053631e3c8"
+HISTORICAL_BINDING_SHA256 = "d50ce9bec4ab59d180377a989a573c4ed17bbe9fd0638ce5793a42c9468f5d8b"
+HISTORICAL_MAX_GAP_S = 7.25
+HISTORICAL_EXPECTED_GAP_COUNT = 7
+HISTORICAL_EXPECTED_MAX_GAP_S = 7.206749
+HELD_REGION_CLAIM_SCHEMA = "epyc.e8_quality_partial_resume_region_claim.v1"
+PARTIAL_RESUME_SCHEMA = "epyc.e8_quality_v5_partial_resume.v2"
+PARTIAL_RESUME_SOURCE_SCHEMA = "epyc.e8_quality_v5_partial_resume_source.v1"
+PARTIAL_RESUME_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_resume_plan.v1"
+
 
 def sha256_path(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -172,6 +188,259 @@ def load_json(path: Path, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} is not an object")
     return value
+
+
+def load_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}:{line_number} is not valid JSON") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"{path}:{line_number} is not an object")
+        rows.append(value)
+    return rows
+
+
+def validate_partial_resume_context(
+    report: dict[str, Any],
+    *,
+    evidence_root: Path,
+    expected_resume_runner_sha256: str | None,
+) -> dict[str, Any] | None:
+    """Bind the exceptional resume path before accepting its canonical v5 output."""
+    partial = report.get("partial_resume")
+    if partial is None:
+        return None
+    if not isinstance(partial, dict) or partial.get("schema") != PARTIAL_RESUME_SCHEMA:
+        raise ValueError("partial-resume report context differs")
+    if (
+        not isinstance(expected_resume_runner_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_resume_runner_sha256)
+        or sha256_path(RESUME_RUNNER_PATH) != expected_resume_runner_sha256
+        or partial.get("resume_runner")
+        != {"path": str(RESUME_RUNNER_PATH), "sha256": expected_resume_runner_sha256}
+    ):
+        raise ValueError("partial-resume runner differs from the externally reviewed hash")
+    source_binding_path = resolve_artifact(
+        evidence_root, partial.get("source_binding"), "partial-resume source binding"
+    )
+    if source_binding_path.name != "source_binding.json" or source_binding_path.parent.name != "source_snapshot":
+        raise ValueError("partial-resume source binding path differs")
+    source_binding = load_json(source_binding_path, "partial-resume source binding")
+    source_hashes = source_binding.get("source_sha256")
+    if (
+        source_binding.get("schema") != PARTIAL_RESUME_SOURCE_SCHEMA
+        or not isinstance(source_hashes, dict)
+        or any(
+            not isinstance(relative, str)
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            for relative, digest in source_hashes.items()
+        )
+        or source_binding.get("source_tree_sha256") != canonical_hash(source_hashes)
+        or partial.get("source_tree_sha256") != source_binding.get("source_tree_sha256")
+    ):
+        raise ValueError("partial-resume source-tree binding differs")
+    snapshot = source_binding_path.parent
+    actual_hashes = {
+        str(path.relative_to(snapshot)): sha256_path(path)
+        for path in sorted(snapshot.rglob("*"))
+        if path.is_file() and path.name != "source_binding.json"
+    }
+    if actual_hashes != source_hashes:
+        raise ValueError("partial-resume immutable source snapshot differs")
+    plan_path = resolve_artifact(evidence_root, partial.get("plan_path"), "partial-resume plan")
+    if (
+        plan_path.name != "partial_resume_plan.json"
+        or partial.get("plan_sha256") != sha256_path(plan_path)
+    ):
+        raise ValueError("partial-resume plan binding differs")
+    plan = load_json(plan_path, "partial-resume plan")
+    if (
+        plan.get("schema") != PARTIAL_RESUME_PLAN_SCHEMA
+        or plan.get("protocol_id") != "e8_quality_full_pool_tier_baseline.v5"
+        or plan.get("source_sha256") != source_hashes
+        or plan.get("source_tree_sha256") != partial.get("source_tree_sha256")
+        or plan.get("replay_only") != {"tiers": [1], "banked_t2_r1_vector": True}
+        or plan.get("fresh_collection")
+        != [{"tier": 2, "repetition": 2}, {"tier": 2, "repetition": 3}]
+    ):
+        raise ValueError("partial-resume collection plan differs")
+    tail = plan.get("generation_tail")
+    if not isinstance(tail, dict) or (
+        tail.get("tier"),
+        tail.get("repetition"),
+        tail.get("request_timeout_s"),
+        tail.get("concurrency"),
+    ) != (2, 1, 300, 1) or [
+        (row.get("ordinal"), row.get("qid")) for row in tail.get("targets", []) if isinstance(row, dict)
+    ] != [
+        (98, "physreason_cal_problem_00351_sq2"),
+        (99, "aime_2024-I-12"),
+    ]:
+        raise ValueError("partial-resume generation tail differs")
+    if partial.get("t2_r1_generation_tail_ordinals") != [98, 99]:
+        raise ValueError("partial-resume generation-tail ordinal binding differs")
+    scorer_ordinals = partial.get("t2_r1_scorer_recovery_ordinals")
+    if (
+        not isinstance(scorer_ordinals, list)
+        or len(scorer_ordinals) != 15
+        or sorted(scorer_ordinals) != scorer_ordinals
+        or len(set(scorer_ordinals)) != 15
+        or any(not isinstance(ordinal, int) or isinstance(ordinal, bool) for ordinal in scorer_ordinals)
+    ):
+        raise ValueError("partial-resume scorer-recovery binding differs")
+    return {"partial": partial, "snapshot": snapshot, "plan": plan}
+
+
+def validate_partial_resume_source_links(
+    context: dict[str, Any] | None,
+    *,
+    evidence_root: Path,
+    vectors: dict[int, dict[str, Any]],
+    scoring: dict[int, dict[str, Any]],
+    details: Any,
+) -> None:
+    """Prove replay-only T1 metadata was copied byte-for-byte from the source."""
+    if context is None:
+        return
+    snapshot = context["snapshot"]
+    for tier in (1, 2):
+        for kind, value in (("question", vectors[tier]), ("scoring", scoring[tier])):
+            path = evidence_root / f"{kind}_vector.T{tier}.json"
+            source = snapshot / path.name
+            if not source.is_file() or path.read_bytes() != source.read_bytes():
+                raise ValueError("partial-resume final vector differs from immutable source")
+            if load_json(path, f"T{tier} {kind} vector") != value:
+                raise ValueError("partial-resume vector parse differs")
+    if not isinstance(details, dict) or not isinstance(details.get("1"), list):
+        raise ValueError("partial-resume T1 detail set differs")
+    for repetition in (1, 2, 3):
+        matching = [
+            detail
+            for detail in details["1"]
+            if isinstance(detail, dict) and detail.get("repetition") == repetition
+        ]
+        if len(matching) != 1:
+            raise ValueError("partial-resume T1 repetition linkage differs")
+        source = snapshot / f"raw.T1.r{repetition}.json"
+        raw_path = evidence_root / source.name
+        if "raw_path" in matching[0] and resolve_artifact(
+            evidence_root, matching[0]["raw_path"], "T1 raw observation"
+        ) != raw_path:
+            raise ValueError("partial-resume T1 raw observation path differs")
+        if (
+            raw_path != (evidence_root / source.name)
+            or not source.is_file()
+            or raw_path.read_bytes() != source.read_bytes()
+        ):
+                raise ValueError("partial-resume banked T1 raw observation differs from immutable source")
+
+
+def reconstruct_partial_t2r1_normalized_trace(
+    *,
+    pristine_trace_path: Path,
+    normalized_trace_path: Path,
+    pristine_response_path: Path,
+    pristine_sidecar_path: Path,
+    questions: list[dict[str, Any]],
+    runner: Any,
+) -> bytes:
+    """Recreate the sole permitted pre-tail trace transformation byte-for-byte."""
+    responses = runner.V4.load_jsonl(pristine_response_path)
+    _parsed, sidecars = runner.sidecar_question_rows(
+        pristine_sidecar_path, expected_n=len(responses)
+    )
+    blank_ordinals = {
+        ordinal
+        for ordinal, (response, question) in enumerate(zip(responses, questions))
+        if str(question.get("scoring_method") or "") == "llm_judge"
+        and classify_pristine_generation_failure(response, sidecars[ordinal][1]) is not None
+    }
+    normalized_rows = runner.V4.load_jsonl(normalized_trace_path)
+    normalized_by_ordinal: dict[int, dict[str, Any]] = {}
+    for row in normalized_rows:
+        fixed = row.get("fixed_vector_row")
+        if not isinstance(fixed, dict) or not isinstance(fixed.get("ordinal"), int):
+            raise ValueError("normalized T2/r1 trace lacks fixed-vector identity")
+        ordinal = fixed["ordinal"]
+        if ordinal in normalized_by_ordinal:
+            raise ValueError("normalized T2/r1 trace duplicates a fixed-vector ordinal")
+        normalized_by_ordinal[ordinal] = row
+    blank_timestamps: list[str] = []
+    for ordinal in sorted(blank_ordinals):
+        row = normalized_by_ordinal.get(ordinal)
+        if (
+            not isinstance(row, dict)
+            or row.get("schema") != "epyc.e8_quality_llm_judge_trace.v1"
+            or row.get("mode") != "blank_fast_failure"
+            or row.get("scorer_answer") != ""
+            or not isinstance(row.get("started_at"), str)
+            or row.get("finished_at") != row["started_at"]
+        ):
+            raise ValueError("normalized T2/r1 blank trace differs from the sealing contract")
+        blank_timestamps.append(row["started_at"])
+    sealed_responses = [dict(response) for response in responses]
+    for ordinal in blank_ordinals:
+        sealed_responses[ordinal]["answer"] = ""
+    timestamps = iter(blank_timestamps)
+    original_utc_now = runner.V4.utc_now
+    try:
+        runner.V4.utc_now = lambda: next(timestamps)
+        with tempfile.TemporaryDirectory(prefix="e8-v5-partial-seal-") as temporary:
+            reconstructed = Path(temporary) / "judge_traces.T2.r1.jsonl"
+            reconstructed.write_bytes(pristine_trace_path.read_bytes())
+            runner.V4.seal_judge_trace_outcomes(
+                reconstructed,
+                sealed_responses,
+                questions,
+                tier=2,
+                repetition=1,
+                default_api_url="http://127.0.0.1:8000",
+            )
+            try:
+                next(timestamps)
+            except StopIteration:
+                pass
+            else:
+                raise ValueError("normalized T2/r1 blank trace timestamp mapping differs")
+            return reconstructed.read_bytes()
+    except StopIteration as exc:
+        raise ValueError("normalized T2/r1 blank trace timestamp mapping is incomplete") from exc
+    finally:
+        runner.V4.utc_now = original_utc_now
+
+
+def validate_partial_scorer_recovery_binding(
+    partial: dict[str, Any], scorer_targets: dict[int, str]
+) -> None:
+    if partial.get("t2_r1_scorer_recovery_ordinals") != sorted(scorer_targets):
+        raise ValueError("partial-resume scorer-recovery ordinals differ from normalized trace")
+
+
+def validate_held_region_claim_uniqueness(claim: Any) -> None:
+    """Reject duplicate lock identities before accepting sealed claim evidence."""
+    if not isinstance(claim, dict):
+        return
+    regions = claim.get("regions")
+    globals_ = claim.get("global_claims")
+    if not isinstance(regions, list) or not isinstance(globals_, list):
+        return
+    if len(set(regions)) != len(regions):
+        raise ValueError("held CPU-region claim repeats a region")
+    paths = [item.get("path") for item in globals_ if isinstance(item, dict)]
+    global_regions = [item.get("region") for item in globals_ if isinstance(item, dict)]
+    if (
+        len(paths) != len(globals_)
+        or len(set(paths)) != len(paths)
+        or len(global_regions) != len(globals_)
+        or len(set(global_regions)) != len(global_regions)
+        or set(global_regions) != set(regions)
+        or len(globals_) != len(regions)
+    ):
+        raise ValueError("held CPU-region GLOBAL claim cardinality differs")
 
 
 def load_runner() -> Any:
@@ -309,7 +578,34 @@ def is_recovered_scorer_trace(trace: dict[str, Any]) -> bool:
     )
 
 
-def validate_segmented_monitor(samples: list[dict[str, Any]], segments: Any) -> None:
+def _monitor_binding_sha256(sample: dict[str, Any]) -> str:
+    try:
+        return canonical_hash(
+            {
+                "api_probe_urls": sample["api_probe_urls"],
+                "runtime_artifacts": sample["runtime_artifacts"],
+            }
+        )
+    except KeyError as exc:
+        raise ValueError("segmented runtime monitor lacks binding evidence") from exc
+
+
+def _monitor_gap_stats(rows: list[dict[str, Any]]) -> tuple[int, float]:
+    try:
+        times = [
+            datetime.fromisoformat(str(row["started_at"]).replace("Z", "+00:00")) for row in rows
+        ]
+    except (KeyError, ValueError) as exc:
+        raise ValueError("segmented runtime monitor timestamps are invalid") from exc
+    gaps = [(later - earlier).total_seconds() for earlier, later in zip(times, times[1:])]
+    if any(gap < 0 for gap in gaps):
+        raise ValueError("segmented runtime monitor has a sampling gap (timestamps are not monotonic)")
+    return sum(gap > 7.0 for gap in gaps), max(gaps, default=0.0)
+
+
+def validate_segmented_monitor(
+    samples: list[dict[str, Any]], segments: Any, *, evidence_root: Path | None = None
+) -> None:
     """Validate an explicit resume boundary without treating it as coverage.
 
     Normal v5 remains one continuous watcher.  A partial resume may name a
@@ -320,7 +616,7 @@ def validate_segmented_monitor(samples: list[dict[str, Any]], segments: Any) -> 
         raise ValueError("segmented runtime monitor has no segments")
     next_index = 0
     seen_sources: set[str] = set()
-    for segment in segments:
+    for position, segment in enumerate(segments):
         if (
             not isinstance(segment, dict)
             or not isinstance(segment.get("sample_indexes"), list)
@@ -336,22 +632,65 @@ def validate_segmented_monitor(samples: list[dict[str, Any]], segments: Any) -> 
             raise ValueError("segmented runtime monitor indexes are not contiguous and ordered")
         if segment["source"] in seen_sources:
             raise ValueError("segmented runtime monitor repeats a source identity")
+        if (position, segment["source"]) not in {(0, "historical"), (1, "resume")}:
+            raise ValueError("segmented runtime monitor source order differs")
         seen_sources.add(segment["source"])
         rows = [samples[index] for index in indexes]
         if any(row.get("ok") is not True for row in rows):
             raise ValueError("segmented runtime monitor is not clean")
-        try:
-            times = [
-                datetime.fromisoformat(str(row["started_at"]).replace("Z", "+00:00"))
+        gap_count, max_gap = _monitor_gap_stats(rows)
+        if evidence_root is None:
+            if gap_count or max_gap > 7.0:
+                raise ValueError("segmented runtime monitor has a sampling gap")
+        else:
+            source_path = resolve_artifact(
+                evidence_root, segment.get("source_path"), "segmented monitor source"
+            )
+            if segment.get("source_sha256") != sha256_path(source_path):
+                raise ValueError("segmented monitor source hash differs")
+            if load_jsonl(source_path) != rows:
+                raise ValueError("segmented monitor source rows differ from the combined ledger")
+            if {_monitor_binding_sha256(row) for row in rows} != {segment["binding_sha256"]}:
+                raise ValueError("segmented monitor binding differs from its samples")
+            if segment["source"] == "historical":
+                if (
+                    segment.get("source_sha256") != HISTORICAL_WATCHER_SHA256
+                    or segment.get("binding_sha256") != HISTORICAL_BINDING_SHA256
+                    or segment.get("max_gap_s") != HISTORICAL_MAX_GAP_S
+                    or segment.get("observed_gap_count_over_7s") != HISTORICAL_EXPECTED_GAP_COUNT
+                    or abs(
+                        float(segment.get("observed_max_gap_s", -1)) - HISTORICAL_EXPECTED_MAX_GAP_S
+                    )
+                    > 0.000001
+                    or gap_count != HISTORICAL_EXPECTED_GAP_COUNT
+                    or abs(max_gap - HISTORICAL_EXPECTED_MAX_GAP_S) > 0.000001
+                    or max_gap > HISTORICAL_MAX_GAP_S
+                ):
+                    raise ValueError("historical monitor jitter amendment differs")
+                if not {
+                    (int(load["tier"]), int(load["repetition"]))
+                    for row in rows
+                    if isinstance((load := row.get("active_load")), dict)
+                    and isinstance(load.get("tier"), int)
+                    and isinstance(load.get("repetition"), int)
+                } >= {(1, 1), (1, 2), (1, 3), (2, 1)}:
+                    raise ValueError("historical monitor lacks banked load coverage")
+            elif (
+                segment.get("max_gap_s") != 7.0
+                or segment.get("observed_gap_count_over_7s") != 0
+                or gap_count
+                or max_gap > 7.0
+                or abs(float(segment.get("observed_max_gap_s", -1)) - max_gap) > 0.000001
+            ):
+                raise ValueError("resumed monitor is not under the normal cadence")
+            elif not {
+                (int(load["tier"]), int(load["repetition"]))
                 for row in rows
-            ]
-        except (KeyError, ValueError) as exc:
-            raise ValueError("segmented runtime monitor timestamps are invalid") from exc
-        if any(
-            not 0 <= (later - earlier).total_seconds() <= 7.0
-            for earlier, later in zip(times, times[1:])
-        ):
-            raise ValueError("segmented runtime monitor has a sampling gap")
+                if isinstance((load := row.get("active_load")), dict)
+                and isinstance(load.get("tier"), int)
+                and isinstance(load.get("repetition"), int)
+            } >= {(2, 1), (2, 2), (2, 3)}:
+                raise ValueError("resumed monitor lacks collection load coverage")
         next_index += len(indexes)
     if next_index != len(samples) or seen_sources != {"historical", "resume"}:
         raise ValueError("segmented runtime monitor leaves samples unclaimed")
@@ -427,6 +766,7 @@ def validate(
     *,
     expected_runner_sha256: str,
     expected_base_runner_sha256: str,
+    expected_resume_runner_sha256: str | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{64}", expected_runner_sha256):
         raise ValueError("expected runner SHA-256 is malformed")
@@ -475,6 +815,11 @@ def validate(
     ):
         raise ValueError("v5 protocol candidate differs")
     report = load_json(evidence_path.parent / "runner_report.json", "runner report")
+    partial_context = validate_partial_resume_context(
+        report,
+        evidence_root=evidence_root,
+        expected_resume_runner_sha256=expected_resume_runner_sha256,
+    )
     postconditions = report.get("postconditions")
     if not isinstance(postconditions, dict):
         raise ValueError("runner report postconditions are missing")
@@ -504,8 +849,94 @@ def validate(
     ):
         raise ValueError("runtime watcher ledger differs from the runner report")
     monitor_segments = postconditions.get("segmented_monitor")
+    if (monitor_segments is not None) != (partial_context is not None):
+        raise ValueError("segmented monitor and partial-resume context must be present together")
     if monitor_segments is not None:
-        validate_segmented_monitor(samples, monitor_segments)
+        validate_segmented_monitor(samples, monitor_segments, evidence_root=evidence_root)
+        claim = postconditions.get("held_region_claim")
+        validate_held_region_claim_uniqueness(claim)
+        if (
+            not isinstance(claim, dict)
+            or claim.get("schema") != HELD_REGION_CLAIM_SCHEMA
+            or not isinstance(claim.get("tag"), str)
+            or not claim["tag"]
+            or not isinstance(claim.get("claim_dir"), str)
+            or not Path(claim["claim_dir"]).is_dir()
+            or not isinstance(claim.get("regions"), list)
+            or not claim["regions"]
+            or not isinstance(claim.get("claims"), list)
+            or not isinstance(claim.get("global_claims"), list)
+            or len(claim["global_claims"]) != len(claim["regions"])
+            or any(
+                not isinstance(item, dict) or not isinstance(item.get("payload"), dict)
+                for item in claim["claims"]
+            )
+            or any(
+                not isinstance(item, dict)
+                or item.get("region") not in claim["regions"]
+                or not isinstance(item.get("holder_pids"), list)
+                or not item["holder_pids"]
+                or any(
+                    not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1
+                    for pid in item["holder_pids"]
+                )
+                or not isinstance(item.get("path"), str)
+                or Path(item["path"]).resolve().parent != Path(claim["claim_dir"]).resolve()
+                or Path(item["path"]).name
+                != f"cpu_region.GLOBAL.{item.get('region')}.lock"
+                for item in claim["global_claims"]
+            )
+            or any(
+                item["payload"].get("request_tag") != claim["tag"]
+                or item["payload"].get("region") not in claim["regions"]
+                or not isinstance(item["payload"].get("role"), str)
+                or not item["payload"]["role"]
+                or item["payload"]["role"] == "GLOBAL"
+                or not isinstance(item["payload"].get("pid"), int)
+                or item["payload"]["pid"] <= 1
+                or not isinstance(item.get("path"), str)
+                or Path(item["path"]).resolve().parent != Path(claim["claim_dir"]).resolve()
+                or Path(item["path"]).name
+                != f"cpu_region.{item['payload'].get('role')}.{item['payload'].get('region')}.lock"
+                for item in claim["claims"]
+            )
+            or {
+                str(item["payload"].get("region") or "")
+                for item in claim["claims"]
+                if isinstance(item, dict) and isinstance(item.get("payload"), dict)
+            }
+            != set(claim["regions"])
+            or len(claim["claims"]) != len(claim["regions"])
+            or len({item["path"] for item in claim["claims"]}) != len(claim["claims"])
+            or {
+                str(item.get("region") or "")
+                for item in claim["global_claims"]
+                if isinstance(item, dict)
+            }
+            != set(claim["regions"])
+            or any(
+                item["payload"].get("pid")
+                not in next(
+                    (
+                        global_item.get("holder_pids", [])
+                        for global_item in claim["global_claims"]
+                        if isinstance(global_item, dict)
+                        and global_item.get("region") == item["payload"].get("region")
+                    ),
+                    [],
+                )
+                for item in claim["claims"]
+                if isinstance(item, dict) and isinstance(item.get("payload"), dict)
+            )
+            or claim.get("sha256")
+            != canonical_hash({key: value for key, value in claim.items() if key != "sha256"})
+        ):
+            raise ValueError("segmented resume lacks a valid held CPU-region claim")
+        if partial_context is not None and (
+            partial_context["partial"].get("held_region_claim_before") != claim
+            or partial_context["partial"].get("held_region_claim_after") != claim
+        ):
+            raise ValueError("partial-resume held CPU-region claim changed during collection")
     else:
         try:
             watcher_started = [
@@ -532,6 +963,13 @@ def validate(
         )
         for tier in (1, 2)
     }
+    validate_partial_resume_source_links(
+        partial_context,
+        evidence_root=evidence_root,
+        vectors=vectors,
+        scoring=scoring,
+        details=details,
+    )
     for tier, expected_n in ((1, 50), (2, 500)):
         vector_questions = vectors[tier].get("questions")
         scoring_questions = scoring[tier].get("questions")
@@ -633,6 +1071,26 @@ def validate(
                 ):
                     raise ValueError("pristine full-run artifact differs")
                 pristine_paths[name] = artifact_path
+            if partial_context is not None and (tier, repetition) in {
+                (1, 1),
+                (1, 2),
+                (1, 3),
+                (2, 1),
+            }:
+                snapshot = partial_context["snapshot"]
+                source_artifacts = {
+                    response_path.name: snapshot / f"responses.T{tier}.r{repetition}.jsonl",
+                    sidecar_path.name: snapshot
+                    / "eval_sidecars"
+                    / f"question_results.e8-t{tier}-r{repetition}.jsonl",
+                    trace_path.name: snapshot / f"judge_traces.T{tier}.r{repetition}.jsonl",
+                }
+                if any(
+                    not source_path.is_file()
+                    or source_path.read_bytes() != pristine_paths[name].read_bytes()
+                    for name, source_path in source_artifacts.items()
+                ):
+                    raise ValueError("partial-resume pristine artifacts are not source-linked")
             expected_qids = [row["qid"] for row in vectors[tier]["questions"]]
             responses = runner.V4.load_jsonl(response_path)
             if any(set(row) != RESPONSE_KEYS for row in responses):
@@ -640,8 +1098,28 @@ def validate(
             pristine_trace_lines = (
                 pristine_paths[trace_path.name].read_bytes().splitlines(keepends=True)
             )
+            scorer_trace_lines = pristine_trace_lines
+            if partial_context is not None and (tier, repetition) == (2, 1):
+                normalized_dir = resolve_artifact(
+                    evidence_root,
+                    tail.get("original_artifact_dir"),
+                    "partial-resume scorer-normalized artifact directory",
+                )
+                normalized_trace_path = normalized_dir / trace_path.name
+                if not normalized_trace_path.is_file():
+                    raise ValueError("partial-resume scorer-normalized trace is missing")
+                scorer_trace_lines = normalized_trace_path.read_bytes().splitlines(keepends=True)
+                if normalized_trace_path.read_bytes() != reconstruct_partial_t2r1_normalized_trace(
+                    pristine_trace_path=pristine_paths[trace_path.name],
+                    normalized_trace_path=normalized_trace_path,
+                    pristine_response_path=pristine_paths[response_path.name],
+                    pristine_sidecar_path=pristine_paths[sidecar_path.name],
+                    questions=scoring[tier]["questions"],
+                    runner=runner,
+                ):
+                    raise ValueError("normalized T2/r1 trace is not the deterministic seal output")
             scorer_targets = derived_scorer_targets(
-                pristine_trace_lines=pristine_trace_lines,
+                pristine_trace_lines=scorer_trace_lines,
                 scoring_questions=scoring[tier]["questions"],
                 expected_qids=expected_qids,
                 tier=tier,
@@ -655,6 +1133,10 @@ def validate(
             scorer_replacements = detail.get("scorer_sidecar_replacement_ordinals")
             if scorer_tail != expected_scorer_tail or scorer_replacements != sorted(scorer_targets):
                 raise ValueError("scorer-tail disposition is not derived from pristine traces")
+            if partial_context is not None and (tier, repetition) == (2, 1):
+                validate_partial_scorer_recovery_binding(
+                    partial_context["partial"], scorer_targets
+                )
             generation_targets = tail.get("targets")
             if not isinstance(generation_targets, list):
                 raise ValueError("generation-tail target list differs")
@@ -670,6 +1152,15 @@ def validate(
                     raise ValueError("generation-tail target identity differs")
                 generation_target_map[int(row["ordinal"])] = str(row.get("qid") or "")
             generation_ordinals = set(generation_target_map)
+            if partial_context is not None:
+                if (tier, repetition) == (2, 1):
+                    if [(ordinal, generation_target_map[ordinal]) for ordinal in sorted(generation_ordinals)] != [
+                        (98, "physreason_cal_problem_00351_sq2"),
+                        (99, "aime_2024-I-12"),
+                    ]:
+                        raise ValueError("partial-resume T2/r1 generation is not the exact two-row tail")
+                elif generation_ordinals:
+                    raise ValueError("partial-resume generated outside the exact T2/r1 tail")
             scorer_ordinals = set(scorer_targets)
             if generation_ordinals & scorer_ordinals:
                 raise ValueError("generation and scorer tail targets overlap")
@@ -891,12 +1382,20 @@ def validate(
                     expected_n=expected_n,
                     runner=runner,
                 )
+                original_trace_bytes = original_trace_path.read_bytes()
                 if (
                     original_response_path.read_bytes()
                     != pristine_paths[response_path.name].read_bytes()
-                    or original_trace_path.read_bytes()
-                    != pristine_paths[trace_path.name].read_bytes()
                     or original_sidecar_path.read_bytes() != expected_original_sidecar
+                    or (
+                        partial_context is None
+                        and original_trace_bytes != pristine_paths[trace_path.name].read_bytes()
+                    )
+                    or (
+                        partial_context is not None
+                        and (tier, repetition) == (2, 1)
+                        and original_trace_bytes == pristine_paths[trace_path.name].read_bytes()
+                    )
                 ):
                     raise ValueError(
                         "generation-tail source is not derived from the pristine full run"
@@ -987,7 +1486,7 @@ def validate(
                         )
                 final_trace_lines = trace_path.read_bytes().splitlines(keepends=True)
                 validate_tail_trace_replacement(
-                    original_trace_lines=pristine_trace_lines,
+                    original_trace_lines=scorer_trace_lines,
                     final_trace_lines=final_trace_lines,
                     retry_traces=retry_traces,
                     target_ordinals=target_ordinals,
@@ -1146,6 +1645,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--expected-runner-sha256", required=True)
     parser.add_argument("--expected-base-runner-sha256", required=True)
+    parser.add_argument("--expected-resume-runner-sha256")
     args = parser.parse_args(argv)
     print(
         json.dumps(
@@ -1153,6 +1653,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.evidence,
                 expected_runner_sha256=args.expected_runner_sha256,
                 expected_base_runner_sha256=args.expected_base_runner_sha256,
+                expected_resume_runner_sha256=args.expected_resume_runner_sha256,
             ),
             sort_keys=True,
         )

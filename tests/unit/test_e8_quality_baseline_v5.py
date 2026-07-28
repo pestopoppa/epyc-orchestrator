@@ -1151,6 +1151,9 @@ def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path)
             "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
             "E8_V5_RUNNER_SHA256": runner_sha,
             "E8_V5_BASE_RUNNER_SHA256": base_runner_sha,
+            "E8_V5_RESUME_RUNNER_SHA256": hashlib.sha256(
+                (PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py").read_bytes()
+            ).hexdigest(),
             "E8_V5_VALIDATOR_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
             "E8_V5_VALIDATOR_PY_SHA256": validator_sha,
         },
@@ -1186,6 +1189,94 @@ def test_validator_rejects_failed_watcher_even_when_bundle_is_resealed(
             evidence,
             expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
             expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def _attach_valid_partial_context(evidence: Path, validator) -> str:
+    root = evidence.parent
+    snapshot = root / "source_snapshot"
+    snapshot.mkdir()
+    source = snapshot / "source.bin"
+    source.write_bytes(b"immutable failed run\n")
+    source_hashes = {"source.bin": validator.sha256_path(source)}
+    source_tree_sha256 = validator.canonical_hash(source_hashes)
+    (snapshot / "source_binding.json").write_text(
+        json.dumps(
+            {
+                "schema": validator.PARTIAL_RESUME_SOURCE_SCHEMA,
+                "source": "/immutable/failed-run",
+                "source_sha256": source_hashes,
+                "source_tree_sha256": source_tree_sha256,
+            }
+        )
+        + "\n"
+    )
+    plan = {
+        "schema": validator.PARTIAL_RESUME_PLAN_SCHEMA,
+        "protocol_id": runner.PROTOCOL_ID,
+        "source": "/immutable/failed-run",
+        "source_sha256": source_hashes,
+        "source_tree_sha256": source_tree_sha256,
+        "replay_only": {"tiers": [1], "banked_t2_r1_vector": True},
+        "generation_tail": {
+            "tier": 2,
+            "repetition": 1,
+            "request_timeout_s": 300,
+            "concurrency": 1,
+            "targets": [
+                {"ordinal": 98, "qid": "physreason_cal_problem_00351_sq2"},
+                {"ordinal": 99, "qid": "aime_2024-I-12"},
+            ],
+        },
+        "fresh_collection": [{"tier": 2, "repetition": 2}, {"tier": 2, "repetition": 3}],
+    }
+    plan_path = root / "partial_resume_plan.json"
+    plan_path.write_text(json.dumps(plan) + "\n")
+    resume_runner = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
+    resume_sha = validator.sha256_path(resume_runner)
+    report_path = root / "runner_report.json"
+    report = json.loads(report_path.read_text())
+    report["partial_resume"] = {
+        "schema": validator.PARTIAL_RESUME_SCHEMA,
+        "source_binding": str(snapshot / "source_binding.json"),
+        "source_tree_sha256": source_tree_sha256,
+        "plan_path": str(plan_path),
+        "plan_sha256": validator.sha256_path(plan_path),
+        "resume_runner": {"path": str(resume_runner), "sha256": resume_sha},
+        "t2_r1_generation_tail_ordinals": [98, 99],
+        "t2_r1_scorer_recovery_ordinals": list(range(15)),
+    }
+    report_path.write_text(json.dumps(report) + "\n")
+    return resume_sha
+
+
+def test_validator_rejects_segmented_monitor_without_partial_resume_context(tmp_path: Path) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_unbound_segments_test")
+    report_path = evidence.parent / "runner_report.json"
+    report = json.loads(report_path.read_text())
+    report["postconditions"]["segmented_monitor"] = []
+    report_path.write_text(json.dumps(report) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="must be present together"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_partial_resume_context_without_segmented_monitor(tmp_path: Path) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_unsegmented_partial_test")
+    resume_sha = _attach_valid_partial_context(evidence, validator)
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="must be present together"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+            expected_resume_runner_sha256=resume_sha,
         )
 
 
@@ -1403,6 +1494,9 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
             "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
             "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
             "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
+            "E8_V5_RESUME_RUNNER_SHA256": hashlib.sha256(
+                (PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py").read_bytes()
+            ).hexdigest(),
             "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
             "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
             "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
