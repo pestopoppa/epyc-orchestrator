@@ -85,9 +85,11 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
     response = root / "responses.T2.r2.jsonl"
     sidecar = root / "eval_sidecars/question_results.e8-t2-r2.jsonl"
     trace = root / "judge_traces.T2.r2.jsonl"
+    raw = root / "raw.T2.r2.json"
     _write_jsonl(response, [])
     _write_jsonl(sidecar, [])
     _write_jsonl(trace, [])
+    _write_json(raw, {"q": 0.0})
     watcher_path = root / "intermediate/runtime_watch.r2.jsonl"
     _write_jsonl(watcher_path, [{"ok": True}])
     complete = {
@@ -97,12 +99,14 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         "responses_sha256": _sha(response),
         "sidecar_sha256": _sha(sidecar),
         "trace_sha256": _sha(trace),
+        "raw_sha256": _sha(raw),
         "watcher": {
             "path": str(watcher_path),
             "sha256": _sha(watcher_path),
             "samples": 1,
             "claim_before": claim,
             "claim_after": claim,
+            "proposal_sha256": _sha(root / "intermediate/recovery_proposal.json"),
         },
         "claim": claim,
     }
@@ -113,9 +117,13 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         for ordinal in ordinals
     ]
     _write_jsonl(root / "intermediate/recovery_rows.T2.r2.jsonl", journal)
+    complete["journal_sha256"] = _sha(root / "intermediate/recovery_rows.T2.r2.jsonl")
+    _write_json(root / "intermediate/r2_complete.json", complete)
     context = {
         "schema": validator.RECOVERY_R2_CONTEXT_SCHEMA,
         "recovery_runner": {"path": "/reviewed/recovery.py", "sha256": "a" * 64},
+        "finalizer_runner": {"path": "/reviewed/finalizer.py", "sha256": "b" * 64},
+        "dependency_sha256": {"v5": "c" * 64, "resume": "d" * 64, "recovery": "a" * 64},
         "source_binding": str(snapshot / "source_binding.json"),
         "source_binding_sha256": _sha(snapshot / "source_binding.json"),
         "source_tree_sha256": plan["source_tree_sha256"],
@@ -130,14 +138,17 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         "response_path": str(response),
         "sidecar_path": str(sidecar),
         "trace_path": str(trace),
+        "raw_path": str(raw),
         "journal_path": str(root / "intermediate/recovery_rows.T2.r2.jsonl"),
+        "journal_sha256": _sha(root / "intermediate/recovery_rows.T2.r2.jsonl"),
     }
     return root, context
 
 
 def _validate(root: Path, context: dict) -> dict:
     return validator.validate_recovery_r2_context(
-        {"recovery_r2": context}, evidence_root=root, expected_recovery_runner_sha256="a" * 64
+        {"recovery_r2": context}, evidence_root=root, expected_recovery_runner_sha256="a" * 64,
+        expected_finalizer_runner_sha256="b" * 64,
     )
 
 
@@ -231,6 +242,10 @@ def test_install_recovered_r2_replaces_only_hash_bound_partial_source_files(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
     _write_json(staging / "question_vector.T2.json", {"core_id": "core"})
+    _write_json(
+        staging / "scoring_vector.T2.json",
+        {"questions": [{"qid": f"q{ordinal}"} for ordinal in range(500)]},
+    )
     monkeypatch.setattr(finalizer.RESUME, "_pristine_reference", lambda **_: {"artifacts": {}})
     monkeypatch.setattr(finalizer.RESUME, "_questions", lambda *_: [])
     monkeypatch.setattr(
@@ -239,10 +254,13 @@ def test_install_recovered_r2_replaces_only_hash_bound_partial_source_files(
         lambda **_: ({"q": 1}, {"scorer_tail_replay": ["old"], "scorer_sidecar_replacement_ordinals": [1]}),
     )
     observation, detail = finalizer._install_recovered_r2(
-        {"root": recovered}, staging, tmp_path / "published", object()
+        {"root": recovered, "plan": {"scorer_replay_ordinals": [1, 2, 3]}}, staging, tmp_path / "published", object()
     )
     assert observation == {"q": 1}
-    assert detail["scorer_tail_replay"] == []
+    assert detail["scorer_tail_replay"] == [
+        {"ordinal": ordinal, "qid": f"q{ordinal}", "outcome": "recovered"}
+        for ordinal in (1, 2, 3)
+    ]
     assert all((staging / relative).read_bytes() == payload for relative, payload in replacement.items())
 
 

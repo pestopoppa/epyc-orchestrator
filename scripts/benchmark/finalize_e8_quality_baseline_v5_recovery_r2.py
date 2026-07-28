@@ -134,6 +134,7 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
         or complete.get("responses_sha256") != sha256_path(required["responses"])
         or complete.get("sidecar_sha256") != sha256_path(required["sidecar"])
         or complete.get("trace_sha256") != sha256_path(required["trace"])
+        or complete.get("raw_sha256") != sha256_path(intermediate / "raw.T2.r2.json")
         or not isinstance(complete.get("watcher"), dict)
         or not isinstance(complete.get("claim"), dict)
         or complete["watcher"].get("claim_before") != complete["claim"]
@@ -185,6 +186,13 @@ def build_plan(source_dir: Path) -> dict[str, Any]:
     )
     if V5.generation_failure_targets(responses, sidecars):
         raise ValueError("recovery finalizer source has an unfinished T2/r1 generation tail")
+    history = {
+        name: {"path": str(source / name), "sha256": sha256_path(source / name)}
+        for name in ("partial_resume_plan.json", "generation_tail_attempts.T2.r1.jsonl")
+        if (source / name).is_file()
+    }
+    if set(history) != {"partial_resume_plan.json", "generation_tail_attempts.T2.r1.jsonl"}:
+        raise ValueError("completed T2/r1 source lacks its repair provenance")
     return {
         "schema": "epyc.e8_quality_v5_recovery_finalizer_source.v1",
         "protocol_id": RECOVERY.PROTOCOL_ID,
@@ -193,6 +201,7 @@ def build_plan(source_dir: Path) -> dict[str, Any]:
         "source_tree_sha256": RECOVERY.canonical_hash(hashes),
         "banked": {"tiers": [1], "t2_r1": True},
         "fresh_collection": [{"tier": 2, "repetition": 3}],
+        "t2_r1_repair_history": history,
     }
 
 
@@ -236,10 +245,13 @@ def _install_recovered_r2(intermediate: dict[str, Any], staging: Path, destinati
         pristine=pristine,
         tail={"schema": V5.TAIL_SCHEMA, "targets": [], "retry_count": 0},
     )
-    # The intermediate journal, rather than the normal pristine-tail contract,
-    # is the provenance authority for its three scorer replays.
-    detail["scorer_tail_replay"] = []
-    detail["scorer_sidecar_replacement_ordinals"] = []
+    replay = intermediate["plan"]["scorer_replay_ordinals"]
+    scoring = V4.load_json(staging / "scoring_vector.T2.json")["questions"]
+    detail["scorer_tail_replay"] = [
+        {"ordinal": ordinal, "qid": scoring[ordinal]["qid"], "outcome": "recovered"}
+        for ordinal in replay
+    ]
+    detail["scorer_sidecar_replacement_ordinals"] = replay
     return observation, detail
 
 
@@ -298,6 +310,13 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
     report["recovery_r2"] = {
         "schema": CONTEXT_SCHEMA,
         "recovery_runner": {"path": str(RECOVERY_PATH), "sha256": sha256_path(RECOVERY_PATH)},
+        "finalizer_runner": {"path": str(Path(__file__)), "sha256": sha256_path(Path(__file__))},
+        "dependency_sha256": {
+            "v5": sha256_path(V5_PATH),
+            "resume": sha256_path(RESUME_PATH),
+            "recovery": sha256_path(RECOVERY_PATH),
+        },
+        "banked_t2_r1_repair_history": intermediate.get("source_history", {}),
         "source_binding": str(destination / "recovery_r2_intermediate/source_snapshot/source_binding.json"),
         "source_binding_sha256": sha256_path(copied / "source_snapshot/source_binding.json"),
         "source_tree_sha256": intermediate["plan"]["source_tree_sha256"],
@@ -312,7 +331,9 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
         "response_path": str(destination / "responses.T2.r2.jsonl"),
         "sidecar_path": str(destination / "eval_sidecars/question_results.e8-t2-r2.jsonl"),
         "trace_path": str(destination / "judge_traces.T2.r2.jsonl"),
+        "raw_path": str(destination / "raw.T2.r2.json"),
         "journal_path": str(destination / "recovery_r2_intermediate/recovery_rows.T2.r2.jsonl"),
+        "journal_sha256": sha256_path(copied / "recovery_rows.T2.r2.jsonl"),
     }
     V4.write_json(report_path, report)
     evidence_path = staging / "e8_quality_baseline_evidence.json"
@@ -473,6 +494,10 @@ def execute(args: argparse.Namespace) -> Path:
         V4.write_json(report_path, report)
         bundle = {RESUME._published(path, staging=staging, destination=destination): sha256_path(path) for path in sorted(staging.rglob("*")) if path.is_file() and path.name != "run_seal.json"}
         V4.write_json(staging / "run_seal.json", {"schema": "epyc.e8_quality_baseline_run_seal.v1", "status": "complete", "manifest_sha256": sha256_path(evidence_path), "runner_report_sha256": sha256_path(report_path), "protocol_receipt_sha256": None, "protocol_candidate_sha256": sha256_path(candidate_path), "runner_sha256": sha256_path(V5.RUNNER_PATH), "bundle_sha256": bundle, "completed_at": V4.utc_now()})
+        intermediate["source_history"] = {
+            name: {"path": str(destination / "source_snapshot" / name), "sha256": entry["sha256"]}
+            for name, entry in plan["t2_r1_repair_history"].items()
+        }
         _rewrite_for_recovery(staging, destination, intermediate)
         if RESUME._safe_source_files(source) != plan["source_sha256"]:
             raise ValueError("banked source changed during recovery finalization")
@@ -501,9 +526,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    intermediate = validate_intermediate(args.recovery_dir)
     if args.plan:
-        print(json.dumps({"resume": RESUME.build_plan(args.source_dir), "recovery_r2": intermediate["plan"]}, indent=2, sort_keys=True))
+        print(json.dumps({"source": build_plan(args.source_dir)}, indent=2, sort_keys=True))
         return 0
     print(execute(args))
     return 0
