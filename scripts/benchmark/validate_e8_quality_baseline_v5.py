@@ -136,6 +136,11 @@ HELD_REGION_CLAIM_SCHEMA = "epyc.e8_quality_partial_resume_region_claim.v1"
 PARTIAL_RESUME_SCHEMA = "epyc.e8_quality_v5_partial_resume.v2"
 PARTIAL_RESUME_SOURCE_SCHEMA = "epyc.e8_quality_v5_partial_resume_source.v1"
 PARTIAL_RESUME_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_resume_plan.v1"
+RECOVERY_R2_CONTEXT_SCHEMA = "epyc.e8_quality_v5_recovery_r2_finalizer.v1"
+RECOVERY_R2_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_plan.v1"
+RECOVERY_R2_COMPLETE_SCHEMA = "epyc.e8_quality_partial_r2_complete.v1"
+RECOVERY_R2_PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_proposal.v1"
+RECOVERY_R2_EXPECTED_COUNTS = {"reuse": 59, "scorer_replay": 3, "generation": 438}
 
 
 def sha256_path(path: Path) -> str:
@@ -460,6 +465,181 @@ def resolve_artifact(root: Path, value: Any, label: str) -> Path:
     return path
 
 
+def _expected_recovery_plan(plan: dict[str, Any]) -> None:
+    """Validate the narrow T2/r2 repair allowlist independently of finalization."""
+    reuse = plan.get("reuse_ordinals")
+    replay = plan.get("scorer_replay_ordinals")
+    generation = plan.get("generation_ordinals")
+    if (
+        plan.get("schema") != RECOVERY_R2_PLAN_SCHEMA
+        or plan.get("protocol_id") != "e8_quality_full_pool_tier_baseline.v5"
+        or (plan.get("tier"), plan.get("repetition"), plan.get("n")) != (2, 2, 500)
+        or plan.get("generation_concurrency") != 3
+        or not all(isinstance(value, list) for value in (reuse, replay, generation))
+        or {"reuse": len(reuse), "scorer_replay": len(replay), "generation": len(generation)}
+        != RECOVERY_R2_EXPECTED_COUNTS
+        or any(
+            not isinstance(ordinal, int) or isinstance(ordinal, bool) or not 0 <= ordinal < 500
+            for ordinal in [*reuse, *replay, *generation]
+        )
+        or len(set(reuse)) != len(reuse)
+        or len(set(replay)) != len(replay)
+        or len(set(generation)) != len(generation)
+        or set(reuse) & set(replay)
+        or set(reuse) & set(generation)
+        or set(replay) & set(generation)
+        or set(reuse) | set(replay) | set(generation) != set(range(500))
+    ):
+        raise ValueError("recovery-r2 plan differs from the reviewed 59/3/438 allowlist")
+
+
+def validate_recovery_r2_context(
+    report: dict[str, Any], *, evidence_root: Path, expected_recovery_runner_sha256: str | None
+) -> dict[str, Any] | None:
+    """Bind a completed partial-r2 repair without calling it a pristine run.
+
+    The normal partial-resume path has no authority to generate T2/r2 rows.
+    This separate context is the only admission path for the 438 repaired rows.
+    """
+    context = report.get("recovery_r2")
+    if context is None:
+        return None
+    if not isinstance(context, dict) or context.get("schema") != RECOVERY_R2_CONTEXT_SCHEMA:
+        raise ValueError("recovery-r2 context schema differs")
+    runner_ref = context.get("recovery_runner")
+    if (
+        not isinstance(expected_recovery_runner_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_recovery_runner_sha256)
+        or not isinstance(runner_ref, dict)
+        or runner_ref.get("sha256") != expected_recovery_runner_sha256
+    ):
+        raise ValueError("recovery-r2 runner differs from the externally reviewed hash")
+    plan_path = resolve_artifact(evidence_root, context.get("plan_path"), "recovery-r2 plan")
+    proposal_path = resolve_artifact(evidence_root, context.get("proposal_path"), "recovery-r2 proposal")
+    complete_path = resolve_artifact(evidence_root, context.get("complete_path"), "recovery-r2 completion")
+    source_binding_path = resolve_artifact(
+        evidence_root, context.get("source_binding"), "recovery-r2 source binding"
+    )
+    if (
+        plan_path.name != "partial_r2_plan.json"
+        or proposal_path.name != "recovery_proposal.json"
+        or complete_path.name != "r2_complete.json"
+        or source_binding_path.name != "source_binding.json"
+        or context.get("plan_sha256") != sha256_path(plan_path)
+        or context.get("proposal_sha256") != sha256_path(proposal_path)
+        or context.get("complete_sha256") != sha256_path(complete_path)
+        or context.get("source_binding_sha256") != sha256_path(source_binding_path)
+    ):
+        raise ValueError("recovery-r2 artifact hash binding differs")
+    plan = load_json(plan_path, "recovery-r2 plan")
+    _expected_recovery_plan(plan)
+    proposal = load_json(proposal_path, "recovery-r2 proposal")
+    proposal_claim = proposal.get("region_claim")
+    if (
+        proposal.get("schema") != RECOVERY_R2_PROPOSAL_SCHEMA
+        or proposal.get("status") != "observation_only"
+        or proposal.get("protocol_id") != "e8_quality_full_pool_tier_baseline.v5"
+        or proposal.get("source_tree_sha256") != plan.get("source_tree_sha256")
+        or proposal.get("generation_concurrency") != 3
+        or proposal.get("generation_ordinals_sha256") != canonical_hash(plan["generation_ordinals"])
+        or proposal.get("scorer_replay_ordinals_sha256")
+        != canonical_hash(plan["scorer_replay_ordinals"])
+        or not isinstance(proposal.get("instrument"), dict)
+        or not isinstance(proposal_claim, dict)
+        or not isinstance(proposal.get("frontdoor_capacity"), dict)
+        or proposal["frontdoor_capacity"].get("capacity", 0) < 3
+        or not isinstance(proposal.get("output_namespace"), str)
+        or not proposal["output_namespace"]
+        or proposal.get("application") != "requires_separate_human_finalizer"
+    ):
+        raise ValueError("recovery-r2 proposal differs from the sealed recovery plan")
+    source_binding = load_json(source_binding_path, "recovery-r2 source binding")
+    source_hashes = source_binding.get("source_sha256")
+    snapshot = source_binding_path.parent
+    actual_hashes = {
+        str(path.relative_to(snapshot)): sha256_path(path)
+        for path in sorted(snapshot.rglob("*"))
+        if path.is_file() and path.name != "source_binding.json"
+    }
+    if (
+        not isinstance(source_hashes, dict)
+        or source_hashes != actual_hashes
+        or source_binding.get("source_tree_sha256") != canonical_hash(source_hashes)
+        or plan.get("source_sha256") != source_hashes
+        or plan.get("source_tree_sha256") != source_binding.get("source_tree_sha256")
+        or context.get("source_tree_sha256") != source_binding.get("source_tree_sha256")
+    ):
+        raise ValueError("recovery-r2 immutable source binding differs")
+    complete = load_json(complete_path, "recovery-r2 completion")
+    r2_response = resolve_artifact(evidence_root, context.get("response_path"), "recovery-r2 response")
+    r2_sidecar = resolve_artifact(evidence_root, context.get("sidecar_path"), "recovery-r2 sidecar")
+    r2_trace = resolve_artifact(evidence_root, context.get("trace_path"), "recovery-r2 trace")
+    if (
+        complete.get("schema") != RECOVERY_R2_COMPLETE_SCHEMA
+        or complete.get("status") != "intermediate_r2_complete"
+        or complete.get("plan_sha256") != sha256_path(plan_path)
+        or complete.get("responses_sha256") != sha256_path(r2_response)
+        or complete.get("sidecar_sha256") != sha256_path(r2_sidecar)
+        or complete.get("trace_sha256") != sha256_path(r2_trace)
+    ):
+        raise ValueError("recovery-r2 completion marker differs")
+    watcher = complete.get("watcher")
+    claim = complete.get("claim")
+    watcher_path = resolve_artifact(evidence_root, context.get("watcher_path"), "r2 watcher")
+    if (
+        not isinstance(watcher, dict)
+        or context.get("watcher_sha256") != sha256_path(watcher_path)
+        or watcher.get("sha256") != context.get("watcher_sha256")
+        or not isinstance(watcher.get("samples"), int)
+        or watcher["samples"] < 1
+        or watcher.get("claim_before") != claim
+        or watcher.get("claim_after") != claim
+        or not isinstance(claim, dict)
+        or not claim.get("claims")
+        or not claim.get("global_claims")
+    ):
+        raise ValueError("recovery-r2 watcher or held-claim provenance differs")
+    expected_claim = {
+        "tag": str(claim["claims"][0]["payload"].get("request_tag") or ""),
+        "regions": sorted(
+            str(item["payload"].get("region") or "") for item in claim["claims"]
+        ),
+    }
+    if proposal_claim != expected_claim:
+        raise ValueError("recovery-r2 proposal claim differs from completion evidence")
+    journal_path = resolve_artifact(evidence_root, context.get("journal_path"), "recovery-r2 journal")
+    journal = load_jsonl(journal_path)
+    sources: dict[str, list[int]] = {name: [] for name in RECOVERY_R2_EXPECTED_COUNTS}
+    for row in journal:
+        ordinal, source = row.get("ordinal"), row.get("source")
+        if (
+            not isinstance(ordinal, int)
+            or isinstance(ordinal, bool)
+            or not 0 <= ordinal < 500
+            or source not in sources
+            or not isinstance(row.get("response"), dict)
+        ):
+            raise ValueError("recovery-r2 journal row differs")
+        sources[source].append(ordinal)
+    if (
+        {name: len(rows) for name, rows in sources.items()} != RECOVERY_R2_EXPECTED_COUNTS
+        or any(len(set(rows)) != len(rows) for rows in sources.values())
+        or sorted(sources["reuse"]) != plan["reuse_ordinals"]
+        or sorted(sources["scorer_replay"]) != plan["scorer_replay_ordinals"]
+        or sorted(sources["generation"]) != plan["generation_ordinals"]
+    ):
+        raise ValueError("recovery-r2 journal exceeds the sealed ordinal allowlist")
+    return {
+        "context": context,
+        "plan": plan,
+        "complete": complete,
+        "response_path": r2_response,
+        "sidecar_path": r2_sidecar,
+        "trace_path": r2_trace,
+        "journal_path": journal_path,
+    }
+
+
 def expected_scorer_sidecar_row(
     source: dict[str, Any],
     response: dict[str, Any],
@@ -632,7 +812,12 @@ def validate_segmented_monitor(
             raise ValueError("segmented runtime monitor indexes are not contiguous and ordered")
         if segment["source"] in seen_sources:
             raise ValueError("segmented runtime monitor repeats a source identity")
-        if (position, segment["source"]) not in {(0, "historical"), (1, "resume")}:
+        expected_order = (
+            ((0, "historical"), (1, "resume"))
+            if len(segments) == 2
+            else ((0, "historical"), (1, "recovery_r2"), (2, "resume"))
+        )
+        if (position, segment["source"]) not in expected_order:
             raise ValueError("segmented runtime monitor source order differs")
         seen_sources.add(segment["source"])
         rows = [samples[index] for index in indexes]
@@ -675,6 +860,20 @@ def validate_segmented_monitor(
                     and isinstance(load.get("repetition"), int)
                 } >= {(1, 1), (1, 2), (1, 3), (2, 1)}:
                     raise ValueError("historical monitor lacks banked load coverage")
+            elif segment["source"] == "recovery_r2":
+                if (
+                    segment.get("max_gap_s") != 7.0
+                    or segment.get("observed_gap_count_over_7s") != 0
+                    or gap_count
+                    or max_gap > 7.0
+                    or abs(float(segment.get("observed_max_gap_s", -1)) - max_gap) > 0.000001
+                    or not any(
+                        isinstance((load := row.get("active_load")), dict)
+                        and (load.get("tier"), load.get("repetition")) == (2, 2)
+                        for row in rows
+                    )
+                ):
+                    raise ValueError("recovery-r2 monitor is not clean and load-bound")
             elif (
                 segment.get("max_gap_s") != 7.0
                 or segment.get("observed_gap_count_over_7s") != 0
@@ -692,7 +891,10 @@ def validate_segmented_monitor(
             } >= {(2, 1), (2, 2), (2, 3)}:
                 raise ValueError("resumed monitor lacks collection load coverage")
         next_index += len(indexes)
-    if next_index != len(samples) or seen_sources != {"historical", "resume"}:
+    expected_sources = {"historical", "resume"}
+    if len(segments) == 3:
+        expected_sources.add("recovery_r2")
+    if next_index != len(samples) or seen_sources != expected_sources:
         raise ValueError("segmented runtime monitor leaves samples unclaimed")
 
 
@@ -767,6 +969,7 @@ def validate(
     expected_runner_sha256: str,
     expected_base_runner_sha256: str,
     expected_resume_runner_sha256: str | None = None,
+    expected_recovery_runner_sha256: str | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{64}", expected_runner_sha256):
         raise ValueError("expected runner SHA-256 is malformed")
@@ -820,6 +1023,13 @@ def validate(
         evidence_root=evidence_root,
         expected_resume_runner_sha256=expected_resume_runner_sha256,
     )
+    recovery_context = validate_recovery_r2_context(
+        report,
+        evidence_root=evidence_root,
+        expected_recovery_runner_sha256=expected_recovery_runner_sha256,
+    )
+    if partial_context is not None and recovery_context is not None:
+        raise ValueError("partial-resume and recovery-r2 contexts are mutually exclusive")
     postconditions = report.get("postconditions")
     if not isinstance(postconditions, dict):
         raise ValueError("runner report postconditions are missing")
@@ -849,8 +1059,10 @@ def validate(
     ):
         raise ValueError("runtime watcher ledger differs from the runner report")
     monitor_segments = postconditions.get("segmented_monitor")
-    if (monitor_segments is not None) != (partial_context is not None):
-        raise ValueError("segmented monitor and partial-resume context must be present together")
+    if (monitor_segments is not None) != (
+        partial_context is not None or recovery_context is not None
+    ):
+        raise ValueError("segmented monitor and recovery context must be present together")
     if monitor_segments is not None:
         validate_segmented_monitor(samples, monitor_segments, evidence_root=evidence_root)
         claim = postconditions.get("held_region_claim")
@@ -1032,6 +1244,16 @@ def validate(
                 detail.get("judge_trace_path"),
                 "judge-trace ledger",
             )
+            if recovery_context is not None and (tier, repetition) == (2, 2):
+                recovered = recovery_context
+                if (
+                    response_path != recovered["response_path"]
+                    or sidecar_path != recovered["sidecar_path"]
+                    or trace_path != recovered["trace_path"]
+                    or tail.get("targets") != []
+                    or tail.get("retry_count") != 0
+                ):
+                    raise ValueError("final T2/r2 differs from the sealed recovery context")
             if (
                 detail.get("response_sha256") != sha256_path(response_path)
                 or detail.get("sidecar_sha256") != sha256_path(sidecar_path)
@@ -1125,6 +1347,11 @@ def validate(
                 tier=tier,
                 repetition=repetition,
             )
+            if recovery_context is not None and (tier, repetition) == (2, 2):
+                # The repaired intermediate already sealed its scorer outcomes.
+                # Its journal is validated above; do not reinterpret it as a
+                # pristine v5 scorer-tail mutation.
+                scorer_targets = {}
             expected_scorer_tail = [
                 {"ordinal": ordinal, "qid": qid, "outcome": "recovered"}
                 for ordinal, qid in sorted(scorer_targets.items())
@@ -1646,6 +1873,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-runner-sha256", required=True)
     parser.add_argument("--expected-base-runner-sha256", required=True)
     parser.add_argument("--expected-resume-runner-sha256")
+    parser.add_argument("--expected-recovery-runner-sha256")
     args = parser.parse_args(argv)
     print(
         json.dumps(
@@ -1654,6 +1882,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_runner_sha256=args.expected_runner_sha256,
                 expected_base_runner_sha256=args.expected_base_runner_sha256,
                 expected_resume_runner_sha256=args.expected_resume_runner_sha256,
+                expected_recovery_runner_sha256=args.expected_recovery_runner_sha256,
             ),
             sort_keys=True,
         )
