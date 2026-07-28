@@ -287,26 +287,22 @@ def _parse_tenant(tenant_id: str, raw: Any) -> TenantPolicy:
     )
 
 
-def load_np_ceiling_policy(
-    path: Path | None = None,
-    *,
-    feats: Features | None = None,
-) -> NpCeilingPolicy:
-    """Load + validate the np_ceiling policy table.
-
-    Raises GpuShadowLaneDisabled unless the gpu_shadow_lane feature flag is on
-    (default-off in both test and prod), so no production code path can consume
-    the policy accidentally.
-    """
-    if not lane_enabled(feats):
-        raise GpuShadowLaneDisabled(
-            "gpu_shadow_lane feature flag is off (set ORCHESTRATOR_FEATURE_GPU_SHADOW_LANE=1 "
-            "or pass an explicit Features override)"
-        )
+def _read_policy_payload(path: Path | None) -> dict:
     policy_path = path or DEFAULT_NP_CEILING_POLICY_PATH
-    payload = _require_mapping(
+    return _require_mapping(
         yaml.safe_load(policy_path.read_text(encoding="utf-8")), "document"
     )
+
+
+def _parse_policy_payload(payload: dict) -> NpCeilingPolicy:
+    """Parse + validate a policy document. NO feature gate.
+
+    Split out of ``load_np_ceiling_policy`` so ``load_serving_shape`` can reach
+    the tenant rows without the flag (P2-3d). The GATE belongs on the public
+    consumer entry point, not on the parsing — otherwise the ungated caller
+    would need its own second parser, which is exactly how the two blocks in
+    this file drifted apart in the first place.
+    """
     version = int(payload.get("version", 0))
     if version != 1:
         raise ValueError(f"np_ceiling policy: unsupported version {version}")
@@ -328,6 +324,56 @@ def load_np_ceiling_policy(
     )
 
 
+def load_np_ceiling_policy(
+    path: Path | None = None,
+    *,
+    feats: Features | None = None,
+) -> NpCeilingPolicy:
+    """Load + validate the np_ceiling policy table.
+
+    Raises GpuShadowLaneDisabled unless the gpu_shadow_lane feature flag is on
+    (default-off in both test and prod), so no production code path can consume
+    the policy accidentally.
+    """
+    if not lane_enabled(feats):
+        raise GpuShadowLaneDisabled(
+            "gpu_shadow_lane feature flag is off (set ORCHESTRATOR_FEATURE_GPU_SHADOW_LANE=1 "
+            "or pass an explicit Features override)"
+        )
+    return _parse_policy_payload(_read_policy_payload(path))
+
+
+def shape_admissibility(
+    policy: NpCeilingPolicy, *, np_slots: int, slot_context_tokens: int
+) -> tuple[list[str], list[str]]:
+    """Where a serving shape is validated, and where it is not.
+
+    Returns ``(admitting, refusing)`` as ``"tenant/mode/profile"`` labels over
+    every tenant x mode x budget row in the table. A shape admitted NOWHERE is
+    unusable by construction: no tenant could serve it in any mode under any
+    budget, so it cannot be a sane default for whichever tenant becomes
+    resident.
+    """
+    admitting: list[str] = []
+    refusing: list[str] = []
+    for tenant_id, tenant in policy.tenants.items():
+        for mode, mode_policy in tenant.modes.items():
+            for budget in mode_policy.budgets:
+                label = f"{tenant_id}/{mode}/{budget.name}"
+                ceiling = np_ceiling(
+                    policy,
+                    tenant_id,
+                    dynamic_budget_gib=budget.dynamic_budget_gib,
+                    slot_context_tokens=slot_context_tokens,
+                    mode=mode,
+                )
+                if ceiling is not None and np_slots <= ceiling:
+                    admitting.append(label)
+                else:
+                    refusing.append(label)
+    return admitting, refusing
+
+
 def load_serving_shape(path: Path | None = None) -> dict[str, int]:
     """Load the lane's default serving shape (POLICY AS DATA; P0-1c).
 
@@ -345,11 +391,36 @@ def load_serving_shape(path: Path | None = None) -> dict[str, int]:
 
     Raises ValueError when the block is missing or invalid — callers must
     refuse (surface a gap), never fall back to CPU-mode serving defaults.
+
+    P2-3d — THE SHAPE IS CHECKED AGAINST THE CEILING ROWS IN THE SAME FILE.
+    Until 2026-07-28 this function validated only that ``np_slots`` was a
+    measured np LEVEL and that the context was positive, and never consulted
+    the ceiling table sitting a few lines below it in the same document. So
+    ``np_slots: 32, slot_context_tokens: 32768`` was accepted and would have
+    compiled straight into the builder's real ``-np``/``-c`` while every
+    tenant's ceiling refused it. Two blocks in one file with no relation
+    enforced between them is a drift hazard whose failure mode is a launch that
+    LOOKS authorised and is not.
+
+    Two conditions are enforced here, both chosen to be universally necessary —
+    the loader cannot know which tenant will actually be resident (that is the
+    registry's business at activation), so it must not assume one:
+
+    1. ``np_slots`` may not exceed ANY tenant's measured throughput-saturation
+       point. Past saturation a launch is slower AND more VRAM-hungry, so this
+       is never right for any tenant.
+    2. The (np, per-slot context) cell must be admissible for at least ONE
+       tenant/mode/budget row. A shape admitted nowhere is unusable by
+       construction and cannot be a sane default for whichever tenant lands.
+
+    The tighter, program-specific check — that the shape works for every
+    Phase-3 bake-off arm specifically — stays in Stage-0 smoke
+    (``gpu_shadow_lane_stage0.py::smoke_checks``), which knows the tenancy
+    table. The two layers are complementary: this one cannot be skipped because
+    it is on the resolution path itself; that one is stricter but only runs
+    when invoked.
     """
-    policy_path = path or DEFAULT_NP_CEILING_POLICY_PATH
-    payload = _require_mapping(
-        yaml.safe_load(policy_path.read_text(encoding="utf-8")), "document"
-    )
+    payload = _read_policy_payload(path)
     lane = str(payload.get("lane", ""))
     if lane != LANE_NAME:
         raise ValueError(f"np_ceiling policy: lane {lane!r} != {LANE_NAME!r}")
@@ -362,6 +433,35 @@ def load_serving_shape(path: Path | None = None) -> dict[str, int]:
         )
     if slot_context <= 0:
         raise ValueError("serving_shape.slot_context_tokens must be positive")
+
+    # Parsed WITHOUT the feature gate on purpose: this function runs during the
+    # Step-2 pipeline gates, before the flag is flipped. Parsing is not
+    # consuming — the gate stays on load_np_ceiling_policy.
+    policy = _parse_policy_payload(payload)
+
+    oversaturated = sorted(
+        f"{tenant_id} (saturation {tenant.np_throughput_saturation})"
+        for tenant_id, tenant in policy.tenants.items()
+        if np_slots > tenant.np_throughput_saturation
+    )
+    if oversaturated:
+        raise ValueError(
+            f"serving_shape.np_slots {np_slots} exceeds the measured throughput "
+            f"saturation of: {', '.join(oversaturated)}. Past saturation a launch is "
+            "slower AND uses more VRAM — refuse, never round up."
+        )
+
+    admitting, refusing = shape_admissibility(
+        policy, np_slots=np_slots, slot_context_tokens=slot_context
+    )
+    if not admitting:
+        raise ValueError(
+            f"serving_shape -np {np_slots} x {slot_context} has no validated operating "
+            f"point in this policy: refused by every tenant/mode/budget row "
+            f"({', '.join(refusing)}). Refuse, never extrapolate — pick a shape the "
+            "grids actually measured, or measure the cell first."
+        )
+
     return {
         "np_slots": np_slots,
         "slot_context_tokens": slot_context,

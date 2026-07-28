@@ -281,6 +281,78 @@ tenants:
                             assert ceiling <= tenant.np_throughput_saturation
 
 
+class TestServingShapeLoaderGate:
+    """P2-3d: the ceiling check lives on the RESOLUTION PATH, not only in smoke.
+
+    Stage-0's equivalent gate can be skipped by simply not running Stage-0.
+    These cannot: load_serving_shape() is what stack-priors calls to produce the
+    builder's real -np/-c, so a shape that fails here cannot be compiled at all.
+    """
+
+    def _with_shape(self, tmp_path: Path, np_slots: int, slot_context: int) -> Path:
+        src = (
+            Path(lane.__file__).resolve().parents[2]
+            / "orchestration"
+            / "gpu_shadow_lane_np_ceiling.yaml"
+        ).read_text(encoding="utf-8")
+        patched = src.replace(
+            "np_slots: 8\n  slot_context_tokens: 8192",
+            f"np_slots: {np_slots}\n  slot_context_tokens: {slot_context}",
+        )
+        assert patched != src, "serving_shape block not found — fixture is stale"
+        target = tmp_path / "policy.yaml"
+        target.write_text(patched, encoding="utf-8")
+        return target
+
+    def test_committed_shape_resolves(self):
+        shape = lane.load_serving_shape()
+        assert shape == {
+            "np_slots": 8,
+            "slot_context_tokens": 8192,
+            "context_tokens": 65536,
+        }
+
+    def test_shape_is_not_feature_gated(self, monkeypatch):
+        """Must resolve with the flag OFF — the Step-2 pipeline gates run before
+        the flag is flipped, and gating this would break the compile path."""
+        monkeypatch.delenv("ORCHESTRATOR_FEATURE_GPU_SHADOW_LANE", raising=False)
+        assert lane.load_serving_shape()["np_slots"] == 8
+
+    def test_refuses_shape_above_saturation(self, tmp_path: Path):
+        bad = self._with_shape(tmp_path, 32, 32768)
+        with pytest.raises(ValueError, match="exceeds the measured throughput saturation"):
+            lane.load_serving_shape(bad)
+
+    def test_refuses_shape_no_tenant_admits(self, tmp_path: Path):
+        """np16 is within saturation, but 131072-token slots were never measured."""
+        bad = self._with_shape(tmp_path, 16, 131072)
+        with pytest.raises(ValueError, match="no validated operating point"):
+            lane.load_serving_shape(bad)
+
+    def test_refusal_names_the_refusing_rows(self, tmp_path: Path):
+        bad = self._with_shape(tmp_path, 16, 131072)
+        with pytest.raises(ValueError) as excinfo:
+            lane.load_serving_shape(bad)
+        message = str(excinfo.value)
+        assert "qwen36_27b_stock_q8/mtp_off/phase2_resident_set" in message
+
+    def test_accepts_a_shape_some_tenant_admits(self, tmp_path: Path):
+        ok = self._with_shape(tmp_path, 16, 16384)
+        assert lane.load_serving_shape(ok)["context_tokens"] == 16 * 16384
+
+    def test_shape_admissibility_partitions_every_row(self, policy):
+        admitting, refusing = lane.shape_admissibility(
+            policy, np_slots=8, slot_context_tokens=8192
+        )
+        total = sum(
+            len(mode_policy.budgets)
+            for tenant in policy.tenants.values()
+            for mode_policy in tenant.modes.values()
+        )
+        assert len(admitting) + len(refusing) == total
+        assert not set(admitting) & set(refusing)
+
+
 class TestLaunchPlanIsDataDriven:
     def test_argv_uses_tenancy_values_not_module_constants(self, tenancy, policy):
         plan = tenancy_mod.resolve_lane_plan(
