@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import importlib.util
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +19,9 @@ assert spec is not None and spec.loader is not None
 recovery = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = recovery
 spec.loader.exec_module(recovery)
+_normalized_answer_hash = getattr(
+    sys.modules[recovery.V4.EvalTower.__module__], "normalized_answer_hash"
+)
 
 
 def _write(path: Path, rows: list[dict]) -> None:
@@ -133,17 +138,22 @@ def test_plan_rejects_a_symlink_source(tmp_path: Path) -> None:
         recovery.build_plan(link)
 
 
-def test_receipt_rejection_precedes_any_output_write(tmp_path: Path, monkeypatch) -> None:
+def test_proposal_binds_instrument_claim_and_output_namespace(tmp_path: Path, monkeypatch) -> None:
     source = _source(tmp_path)
     plan = recovery.build_plan(source)
     claim = {"claims": [{"payload": {"request_tag": "tag", "region": "q2"}}], "global_claims": [{}]}
     monkeypatch.setattr(
         recovery, "_instrument_identity", lambda: {"commit": "c", "runner_sha256": "r"}
     )
-    receipt = tmp_path / "receipt.json"
-    receipt.write_text(json.dumps({"operator_attestation": "yes"}))
-    with pytest.raises(ValueError, match="receipt differs"):
-        recovery.validate_receipt(receipt, plan, claim=claim)
+    output = tmp_path / "observation"
+    output.mkdir()
+    proposal = recovery._recovery_proposal(
+        plan, output, claim=claim, frontdoor_capacity={"capacity": 3}
+    )
+    recovery._bind_recovery_proposal(output, proposal)
+    assert recovery.V4.load_json(output / "recovery_proposal.json") == proposal
+    assert proposal["status"] == "observation_only"
+    assert proposal["application"] == "requires_separate_human_finalizer"
 
 
 def test_snapshot_rejects_source_mutation_before_copy(tmp_path: Path) -> None:
@@ -179,3 +189,346 @@ def test_capacity_selects_only_mutually_disjoint_free_instances() -> None:
     capacity, selected = recovery.compatible_frontdoor_capacity(regions, {0, 1, 2, 3}, set())
     assert capacity == 3
     assert [row["topology_idx"] for row in selected] == [1, 2, 3]
+
+
+def _small_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shrink only this module's frozen contract for execute-path tests."""
+    monkeypatch.setattr(recovery, "N", 5)
+    monkeypatch.setattr(recovery, "SAVED_PREFIX_N", 3)
+    monkeypatch.setattr(
+        recovery,
+        "EXPECTED_SAVED_DISPOSITIONS",
+        recovery.Counter({"reuse": 1, "regenerate": 1, "rescore": 1}),
+    )
+    monkeypatch.setattr(recovery, "EXPECTED_GENERATION_N", 3)
+
+
+def _small_source(tmp_path: Path) -> Path:
+    source = tmp_path / "aborted-small"
+    questions = [
+        {
+            "qid": f"q-{ordinal}",
+            "suite": "suite",
+            "scoring_method": "llm_judge" if ordinal == 2 else "exact_match",
+            "expected": "expected",
+            "scoring_config": {},
+        }
+        for ordinal in range(5)
+    ]
+    for name, rows in (
+        ("question_vector.T2.json", [{"qid": row["qid"]} for row in questions]),
+        ("scoring_vector.T2.json", questions),
+    ):
+        (source / name).parent.mkdir(parents=True, exist_ok=True)
+        (source / name).write_text(
+            json.dumps({"tier": 2, "n": 5, "core_id": "small-core", "seed": 7, "questions": rows})
+            + "\n"
+        )
+    race_lost = "[ERROR: placement timeout role=frontdoor reason=race_lost holders=[0] after 90.0s]"
+    scorer_error = "scoring_unavailable: judge unavailable"
+    sidecar = [
+        {
+            "row_type": "batch_start",
+            "requested_n": 5,
+            "concurrency": recovery.V4.CONCURRENCY,
+            "complete": False,
+        },
+        {
+            "row_type": "question_result",
+            "ordinal": 0,
+            "answer": "saved-clean",
+            "result": {
+                "qid": "q-0",
+                "question_id": "q-0",
+                "suite": "suite",
+                "route": "frontdoor",
+                "tokens_generated": 1,
+                "correct": True,
+                "answer_hash": _normalized_answer_hash("saved-clean"),
+            },
+        },
+        {
+            "row_type": "question_result",
+            "ordinal": 1,
+            "answer": "",
+            "result": {
+                "qid": "q-1",
+                "question_id": "q-1",
+                "suite": "suite",
+                "scoring_method": "exact_match",
+                "route": "frontdoor",
+                "tokens_generated": 0,
+                "correct": False,
+                "error": True,
+                "error_detail": race_lost,
+            },
+        },
+        {
+            "row_type": "question_result",
+            "ordinal": 2,
+            "answer": "saved-scorer-output",
+            "result": {
+                "qid": "q-2",
+                "question_id": "q-2",
+                "suite": "suite",
+                "scoring_method": "llm_judge",
+                "route": "frontdoor",
+                "tokens_generated": 1,
+                "correct": False,
+                "error": True,
+                "error_detail": scorer_error,
+            },
+        },
+    ]
+    _write(source / "eval_sidecars/question_results.e8-t2-r2.jsonl", sidecar)
+    _write(source / "judge_traces.T2.r2.jsonl", [])
+    return source
+
+
+class _FakeResult:
+    def __init__(self, qid: str, *, answer: str, error: str | None = None) -> None:
+        self.qid = qid
+        self.question_id = qid
+        self.answer = answer
+        self.correct = error is None
+        self.error = error
+        self.partial = False
+        self.degraded = False
+        self.route_used = "frontdoor"
+        self.eval_concurrency = recovery.V4.CONCURRENCY
+
+
+class _FakeWatcher:
+    def __init__(self, _runner_args, _binding, path: Path, **_kwargs) -> None:
+        self.started = False
+        self.path = path
+
+    def start(self) -> None:
+        self.started = True
+        _write(self.path, [{"event": "started"}])
+
+    def stop(self) -> list[dict]:
+        return [{"ok": self.started}]
+
+    def active_load(self, **_kwargs):
+        return nullcontext()
+
+
+def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[list[int]]) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", str(recovery.V4.CONCURRENCY))
+    claim = {
+        "claims": [{"payload": {"request_tag": "claim", "region": "q0"}}],
+        "global_claims": [{"region": "q0"}],
+    }
+    monkeypatch.setattr(recovery, "_capture_recovery_claim", lambda _args: claim)
+    monkeypatch.setattr(
+        recovery, "_instrument_identity", lambda: {"commit": "test", "runner_sha256": "runner"}
+    )
+    monkeypatch.setattr(
+        recovery.V5,
+        "parse_args",
+        lambda _argv: SimpleNamespace(api_url="http://test", http_timeout_s=1),
+    )
+    monkeypatch.setattr(recovery.V4, "runtime_binding", lambda _args: {"runtime_topology": []})
+    monkeypatch.setattr(
+        recovery,
+        "preflight_frontdoor_capacity",
+        lambda _binding, **_kwargs: {"capacity": recovery.V4.CONCURRENCY, "proof": "test"},
+    )
+    monkeypatch.setattr(
+        recovery, "_reconstruct_questions", lambda _args, _public, scoring: scoring["questions"]
+    )
+    monkeypatch.setattr(
+        recovery.V4, "capture_llm_judge_traces", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
+        recovery.V4, "judge_trace_fixed_vector_identity", lambda *_args: nullcontext()
+    )
+    monkeypatch.setattr(
+        recovery.V4, "score_answer_or_error", lambda *_args, **_kwargs: (True, None)
+    )
+    monkeypatch.setattr(
+        recovery.V4, "fixed_baseline_environment", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
+        recovery.V4, "bind_eval_tower_scorer_identities", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(recovery.V4, "api_health", lambda *_args: {"ok": True})
+    monkeypatch.setattr(recovery.V4, "probe_url_mapping", lambda _health: {})
+    monkeypatch.setattr(recovery.V4, "RuntimeWatcher", _FakeWatcher)
+    monkeypatch.setattr(recovery.V4, "require_clean_watcher", lambda _watcher: None)
+
+    class FakeTower:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.timeout = 1
+            self._question_artifact_dir: Path | None = None
+
+        def _eval_batch(self, execution, _client, **_kwargs):
+            requests.append([int(row["_ordinal"]) for row in execution])
+            assert self._question_artifact_dir is not None
+            path = self._question_artifact_dir / "question_results.e8-t2-r2-recovery.jsonl"
+            rows = []
+            for row in execution:
+                qid = row["qid"]
+                scorer_error = qid == "q-4"
+                answer = f"answer-{qid}"
+                result = {
+                    "qid": qid,
+                    "question_id": qid,
+                    "suite": "suite",
+                    "route": "frontdoor",
+                    "tokens_generated": 1,
+                    "correct": not scorer_error,
+                    "answer_hash": _normalized_answer_hash(answer),
+                }
+                if scorer_error:
+                    result.update({"error": True, "error_detail": "scoring_unavailable: transient"})
+                rows.append(
+                    {
+                        "row_type": "question_result",
+                        "ordinal": row["_ordinal"],
+                        "answer": answer,
+                        "result": result,
+                    }
+                )
+            _write(path, rows)
+            return [
+                _FakeResult(
+                    row["qid"],
+                    answer=f"answer-{row['qid']}",
+                    error=("scoring_unavailable: transient" if row["qid"] == "q-4" else None),
+                )
+                for row in execution
+            ]
+
+    setattr(sys.modules[FakeTower.__module__], "normalized_answer_hash", _normalized_answer_hash)
+
+    def replay(results, execution):
+        for position, (result, question) in enumerate(zip(results, execution)):
+            if question["qid"] == "q-4":
+                result.error = None
+                result.correct = True
+                return [{"ordinal": position, "qid": result.qid, "outcome": "recovered"}]
+        return []
+
+    monkeypatch.setattr(recovery.V4, "EvalTower", FakeTower)
+    monkeypatch.setattr(recovery.V4, "replay_llm_judge_scorer_tail_once", replay)
+
+    def complete(output, _snapshot, _plan, rows, _questions, _api_url):
+        recovery.V4.write_text(
+            output / "responses.T2.r2.jsonl",
+            "".join(
+                json.dumps(rows[ordinal]["response"], sort_keys=True) + "\n"
+                for ordinal in sorted(rows)
+            ),
+        )
+        recovery._write_json(output / "raw.T2.r2.json", {"q": 1.0, "n": len(rows)})
+        recovery._write_json(output / "r2_complete.json", {"status": "complete"})
+
+    monkeypatch.setattr(recovery, "_complete_r2", complete)
+
+
+def _args(source: Path, output: Path) -> SimpleNamespace:
+    return SimpleNamespace(source_dir=source, output_dir=output, api_url="http://test")
+
+
+def test_execute_uses_original_ordinals_reconciles_scorer_and_stops_at_r2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _small_contract(monkeypatch)
+    requests: list[list[int]] = []
+    _patch_execute_environment(monkeypatch, requests)
+    output = recovery.execute(_args(_small_source(tmp_path), tmp_path / "output"))
+
+    assert requests == [[1, 3, 4]]
+    journal = recovery.V4.load_jsonl(output / "recovery_rows.T2.r2.jsonl")
+    assert {row["ordinal"] for row in journal} == set(range(5))
+    assert next(row for row in journal if row["ordinal"] == 2)["source"] == "scorer_replay"
+    assert next(row for row in journal if row["ordinal"] == 4)["source"] == "generation"
+    generated_sidecar = recovery.V4.load_jsonl(
+        output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
+    )
+    scorer_row = next(row for row in generated_sidecar if row.get("ordinal") == 4)
+    assert scorer_row["result"].get("error") is None
+    assert scorer_row["result"]["correct"] is True
+    assert (
+        recovery.V4.load_json(output / "r2_complete.json")["status"] == "intermediate_r2_complete"
+    )
+    assert (output / "r3_complete.json").exists() is False
+    assert (output / "run_seal.json").exists() is False
+    assert (output / "responses.T2.r2.jsonl").is_file()
+    assert (output / "raw.T2.r2.json").is_file()
+
+
+def test_interrupted_generation_harvests_clean_rows_and_requests_only_remaining(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _small_contract(monkeypatch)
+    requests: list[list[int]] = []
+    _patch_execute_environment(monkeypatch, requests)
+    source = _small_source(tmp_path)
+    output = tmp_path / "output"
+    original_tower = recovery.V4.EvalTower
+    first = True
+
+    class InterruptingTower(original_tower):
+        def _eval_batch(self, execution, client, **kwargs):
+            nonlocal first
+            if first:
+                first = False
+                partial = execution[:1]
+                super()._eval_batch(partial, client, **kwargs)
+                raise RuntimeError("interrupted")
+            return super()._eval_batch(execution, client, **kwargs)
+
+    monkeypatch.setattr(recovery.V4, "EvalTower", InterruptingTower)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        recovery.execute(_args(source, output))
+    monkeypatch.setattr(recovery.V4, "EvalTower", original_tower)
+
+    recovery.execute(_args(source, output))
+    assert requests == [[1], [3, 4]]
+    journal = recovery.V4.load_jsonl(output / "recovery_rows.T2.r2.jsonl")
+    assert {row["ordinal"] for row in journal} == set(range(5))
+
+
+def test_failed_attempt_history_fails_closed_before_any_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _small_contract(monkeypatch)
+    requests: list[list[int]] = []
+    _patch_execute_environment(monkeypatch, requests)
+    source = _small_source(tmp_path)
+    output = tmp_path / "output"
+    output.mkdir()
+    _write(
+        output / "generation_failed_attempts.T2.r2.jsonl",
+        [{"failures": [{"ordinal": 1}], "disposition": "failed_closed_no_automatic_retry"}],
+    )
+    with pytest.raises(RuntimeError, match="failed generation-attempt history"):
+        recovery.execute(_args(source, output))
+    assert requests == []
+
+
+@pytest.mark.parametrize("failure", ("claim", "preflight"))
+def test_claim_or_preflight_failure_happens_before_any_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    _small_contract(monkeypatch)
+    requests: list[list[int]] = []
+    _patch_execute_environment(monkeypatch, requests)
+    if failure == "claim":
+        monkeypatch.setattr(
+            recovery,
+            "_capture_recovery_claim",
+            lambda _args: (_ for _ in ()).throw(ValueError("claim failed")),
+        )
+    else:
+        monkeypatch.setattr(
+            recovery,
+            "preflight_frontdoor_capacity",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("preflight failed")),
+        )
+    with pytest.raises(ValueError, match=f"{failure} failed"):
+        recovery.execute(_args(_small_source(tmp_path), tmp_path / "output"))
+    assert requests == []
