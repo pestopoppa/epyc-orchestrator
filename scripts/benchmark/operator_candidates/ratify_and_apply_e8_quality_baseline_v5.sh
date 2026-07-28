@@ -103,6 +103,13 @@ verify_clean_source_root() {
 }
 
 verify_reviewed_bindings() {
+    [[ "$WRAPPER" == "$(readlink -f -- "$EXPECTED_WRAPPER")" ]] ||
+        fail 'reviewed source root does not own the invoked wrapper'
+    [[ -d "$SOURCE_ROOT/.git" || -f "$SOURCE_ROOT/.git" ]] ||
+        fail 'reviewed source root is not a git worktree'
+    [[ -x "$PYTHON" && "$PYTHON" == "$CANONICAL_PYTHON" ]] ||
+        fail 'canonical orchestrator venv identity differs'
+    verify_clean_source_root
     for binding in \
         "E8_V5_WRAPPER_SHA256:$WRAPPER" \
         "E8_V5_PRODUCER_SHA256:$PRODUCER" \
@@ -122,13 +129,6 @@ verify_reviewed_bindings() {
         [[ "$expected" =~ ^[0-9a-f]{64}$ && -f "$path" && "$(sha "$path")" == "$expected" ]] ||
             fail "reviewed artifact pin differs: $name"
     done
-    [[ "$WRAPPER" == "$(readlink -f -- "$EXPECTED_WRAPPER")" ]] ||
-        fail 'reviewed source root does not own the invoked wrapper'
-    [[ -d "$SOURCE_ROOT/.git" || -f "$SOURCE_ROOT/.git" ]] ||
-        fail 'reviewed source root is not a git worktree'
-    [[ -x "$PYTHON" && "$PYTHON" == "$CANONICAL_PYTHON" ]] ||
-        fail 'canonical orchestrator venv identity differs'
-    verify_clean_source_root
 }
 case "${1:-}" in
     --stage-state-review)
