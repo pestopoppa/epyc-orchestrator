@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import fcntl
 import importlib.util
 import json
 import hashlib
@@ -1503,3 +1504,279 @@ def test_final_wrapper_prevalidation_rejects_stale_reviewed_hashes_without_write
     assert completed.returncode != 0
     assert "reviewed pre-state" in completed.stderr
     assert state_path.read_bytes() == state_before
+
+
+def _v5_wrapper_integration_fixture(tmp_path: Path) -> tuple[Path, dict[str, str], Path, Path, Path, str, str]:
+    """Build a full sealed transaction against a temporary state/artifact root."""
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    evidence = _synthetic_candidate(evidence_root)
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    validator_shell = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
+    )
+    validator_py = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
+    adapter = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    )
+    canonical_applier = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
+    )
+    adapter_spec = importlib.util.spec_from_file_location(
+        f"e8_v5_integration_adapter_{tmp_path.name}", adapter
+    )
+    assert adapter_spec is not None and adapter_spec.loader is not None
+    adapter_module = importlib.util.module_from_spec(adapter_spec)
+    sys.modules[adapter_spec.name] = adapter_module
+    adapter_spec.loader.exec_module(adapter_module)
+    canonical = adapter_module.module
+
+    state = tmp_path / "state.json"
+    state.write_bytes(
+        Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json").read_bytes()
+    )
+    manifest = json.loads(evidence.read_text())
+    candidate = canonical.candidate_state(json.loads(state.read_text()), manifest["replacement"])
+    candidate_bytes = (json.dumps(candidate, indent=2, sort_keys=True) + "\n").encode()
+    pre_sha = hashlib.sha256(state.read_bytes()).hexdigest()
+    candidate_sha = hashlib.sha256(candidate_bytes).hexdigest()
+    operator_root = tmp_path / "operator-root"
+    (operator_root / "artifacts/operator").mkdir(parents=True)
+    env = {
+        **__import__("os").environ,
+        "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
+        "E8_V5_OPERATOR_ROOT": str(operator_root),
+        "E8_V5_STATE": str(state),
+        "E8_V5_LOCK_PATH": str(tmp_path / "apply.lock"),
+        "E8_V5_TEST_MODE": "1",
+        "E8_V5_TEST_AUTO_CONFIRM": "1",
+        "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+        "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
+        "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
+        "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
+        "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
+        "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+        "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
+        "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+        ).strip(),
+    }
+    return wrapper, env, state, operator_root, evidence, pre_sha, candidate_sha
+
+
+def _v5_wrapper_command(
+    wrapper: Path, mode: str, evidence: Path, pre_sha: str, candidate_sha: str
+) -> list[str]:
+    return [
+        "bash", str(wrapper), mode, "--evidence", str(evidence),
+        "--expected-pre-state-sha256", pre_sha,
+        "--expected-candidate-state-sha256", candidate_sha,
+    ]
+
+
+def test_final_wrapper_integration_commits_temp_state_then_creates_bound_receipt(
+    tmp_path: Path,
+) -> None:
+    wrapper, env, state, root, evidence, pre_sha, candidate_sha = _v5_wrapper_integration_fixture(tmp_path)
+    completed = subprocess.run(
+        _v5_wrapper_command(wrapper, "--apply", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    receipt = root / f"artifacts/operator/e8_quality_baseline_state_v5_{evidence_sha}.consolidated_receipt.json"
+    value = json.loads(receipt.read_text())
+    assert hashlib.sha256(state.read_bytes()).hexdigest() == candidate_sha
+    assert value["state_review"]["pre_state_sha256"] == pre_sha
+    assert value["state_review"]["candidate_state_sha256"] == candidate_sha
+    assert len(value["state_review"]["exact_state_diff"]) == 6
+    assert value["transaction"]["canonical_attestation_path"].endswith(
+        "canonical_apply_attestation.json"
+    )
+
+
+def test_final_wrapper_integration_apply_failure_rolls_back_without_receipt(
+    tmp_path: Path,
+) -> None:
+    wrapper, env, state, root, evidence, pre_sha, candidate_sha = _v5_wrapper_integration_fixture(tmp_path)
+    before = state.read_bytes()
+    lifecycle_lock = state.parent / ".autopilot.lock"
+    with lifecycle_lock.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        completed = subprocess.run(
+            _v5_wrapper_command(wrapper, "--apply", evidence, pre_sha, candidate_sha),
+            env=env, capture_output=True, text=True, check=False,
+        )
+    assert completed.returncode != 0
+    evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    assert state.read_bytes() == before
+    review = root / f"artifacts/operator/e8_quality_baseline_state_v5_{evidence_sha}.six_row_review.json"
+    assert not review.exists()
+    assert not (
+        root / f"artifacts/operator/e8_quality_baseline_state_v5_{evidence_sha}.consolidated_receipt.json"
+    ).exists()
+    retry = subprocess.run(
+        _v5_wrapper_command(wrapper, "--apply", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert retry.returncode == 0, retry.stderr
+    assert hashlib.sha256(state.read_bytes()).hexdigest() == candidate_sha
+
+
+def test_final_wrapper_integration_recovers_only_missing_post_commit_receipt(
+    tmp_path: Path,
+) -> None:
+    wrapper, env, state, root, evidence, pre_sha, candidate_sha = _v5_wrapper_integration_fixture(tmp_path)
+    committed = subprocess.run(
+        _v5_wrapper_command(wrapper, "--apply", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert committed.returncode == 0, committed.stderr
+    assert hashlib.sha256(state.read_bytes()).hexdigest() == candidate_sha
+    evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    receipt = root / f"artifacts/operator/e8_quality_baseline_state_v5_{evidence_sha}.consolidated_receipt.json"
+    assert receipt.exists()
+    receipt.unlink()  # Simulate only the post-commit external receipt loss.
+    lifecycle_lock = state.parent / ".autopilot.lock"
+    with lifecycle_lock.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        locked = subprocess.run(
+            _v5_wrapper_command(wrapper, "--finalize-receipt", evidence, pre_sha, candidate_sha),
+            env=env, capture_output=True, text=True, check=False,
+        )
+    assert locked.returncode != 0
+    assert "lifecycle/state lock is held" in locked.stderr
+    assert not receipt.exists()
+    stale = subprocess.run(
+        _v5_wrapper_command(wrapper, "--finalize-receipt", evidence, pre_sha, "0" * 64),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert stale.returncode != 0
+    assert "retained review candidate differs" in stale.stderr
+    assert not receipt.exists()
+    repaired = subprocess.run(
+        _v5_wrapper_command(wrapper, "--finalize-receipt", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert repaired.returncode == 0, repaired.stderr
+    first = receipt.read_bytes()
+    duplicate = subprocess.run(
+        _v5_wrapper_command(wrapper, "--finalize-receipt", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert duplicate.returncode != 0
+    assert "consolidated receipt already exists" in duplicate.stderr
+    assert receipt.read_bytes() == first
+    receipt.write_text('{"conflicting": true}\n')
+    conflicting = subprocess.run(
+        _v5_wrapper_command(wrapper, "--finalize-receipt", evidence, pre_sha, candidate_sha),
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert conflicting.returncode != 0
+    assert "consolidated receipt already exists" in conflicting.stderr
+    assert receipt.read_text() == '{"conflicting": true}\n'
+
+
+def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
+    tmp_path: Path,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    adapter = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    )
+    spec = importlib.util.spec_from_file_location("e8_v5_canonical_tty_adapter", adapter)
+    assert spec is not None and spec.loader is not None
+    adapter_module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = adapter_module
+    spec.loader.exec_module(adapter_module)
+    canonical = adapter_module.module
+    state_path = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json")
+    state_before = state_path.read_bytes()
+    candidate = canonical.candidate_state(
+        json.loads(state_before), json.loads(evidence.read_text())["replacement"]
+    )
+    candidate_sha = hashlib.sha256(
+        (json.dumps(candidate, indent=2, sort_keys=True) + "\n").encode()
+    ).hexdigest()
+    validator_shell = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
+    )
+    validator_py = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
+    canonical_applier = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
+    )
+    completed = subprocess.run(
+        _v5_wrapper_command(
+            wrapper,
+            "--apply",
+            evidence,
+            hashlib.sha256(state_before).hexdigest(),
+            candidate_sha,
+        ),
+        env={
+            **__import__("os").environ,
+            "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
+            "E8_V5_TEST_MODE": "1",
+            "E8_V5_TEST_AUTO_CONFIRM": "1",
+            "E8_V5_TEST_SKIP_AUTOPILOT": "1",
+            "PYTEST_CURRENT_TEST": "forged",
+            "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+            "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
+            "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
+            "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
+            "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
+            "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+            "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
+            "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+            ).strip(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "interactive terminal confirmation" in completed.stderr
+    assert state_path.read_bytes() == state_before
+
+
+def test_final_wrapper_rejects_symlinked_test_sandbox_state_escape(tmp_path: Path) -> None:
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    root = tmp_path / "operator-root"
+    root.mkdir()
+    canonical_state = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json")
+    state_link = tmp_path / "state.json"
+    state_link.symlink_to(canonical_state)
+    lock = tmp_path / "apply.lock"
+    before = canonical_state.read_bytes()
+    completed = subprocess.run(
+        ["bash", str(wrapper), "--prevalidate"],
+        env={
+            **__import__("os").environ,
+            "E8_V5_OPERATOR_ROOT": str(root),
+            "E8_V5_STATE": str(state_link),
+            "E8_V5_LOCK_PATH": str(lock),
+            "E8_V5_TEST_MODE": "1",
+            "PYTEST_CURRENT_TEST": "forged",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "paths must not be symlinks" in completed.stderr
+    assert canonical_state.read_bytes() == before
