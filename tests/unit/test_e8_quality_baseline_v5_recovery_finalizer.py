@@ -75,7 +75,7 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         "generation_concurrency": 3,
         "generation_ordinals_sha256": validator.canonical_hash(generation),
         "scorer_replay_ordinals_sha256": validator.canonical_hash(replay),
-        "instrument": {"commit": "c", "runner_sha256": "r"},
+        "instrument": {"commit": "c", "runner_sha256": "r", "measurement_source_sha256": {"/a": "1" * 64, "/b": "2" * 64, "/c": "3" * 64}},
         "output_namespace": "/tmp/recovery",
         "region_claim": {"tag": "e8", "regions": ["q0"]},
         "frontdoor_capacity": {"capacity": 3},
@@ -91,7 +91,11 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
     _write_jsonl(trace, [])
     _write_json(raw, {"q": 0.0})
     watcher_path = root / "intermediate/runtime_watch.r2.jsonl"
-    _write_jsonl(watcher_path, [{"ok": True}])
+    watcher_rows = [
+        {"ok": True, "started_at": "2026-01-01T00:00:00Z", "active_load": {"tier": 2, "repetition": 2}, "api_probe_urls": {}, "runtime_artifacts": {}},
+        {"ok": True, "started_at": "2026-01-01T00:00:05Z", "active_load": None, "api_probe_urls": {}, "runtime_artifacts": {}},
+    ]
+    _write_jsonl(watcher_path, watcher_rows)
     complete = {
         "schema": validator.RECOVERY_R2_COMPLETE_SCHEMA,
         "status": "intermediate_r2_complete",
@@ -103,10 +107,13 @@ def _context(tmp_path: Path) -> tuple[dict, dict]:
         "watcher": {
             "path": str(watcher_path),
             "sha256": _sha(watcher_path),
-            "samples": 1,
+            "samples": 2,
             "claim_before": claim,
             "claim_after": claim,
             "proposal_sha256": _sha(root / "intermediate/recovery_proposal.json"),
+            "binding_sha256": validator._monitor_binding_sha256(watcher_rows[0]),
+            "observed_gap_count_over_7s": 0,
+            "observed_max_gap_s": 5.0,
         },
         "claim": claim,
     }
