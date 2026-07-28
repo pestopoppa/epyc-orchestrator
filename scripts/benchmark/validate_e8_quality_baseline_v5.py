@@ -549,6 +549,7 @@ def validate_recovery_r2_context(
     _expected_recovery_plan(plan)
     proposal = load_json(proposal_path, "recovery-r2 proposal")
     proposal_claim = proposal.get("region_claim")
+    instrument = proposal.get("instrument")
     if (
         proposal.get("schema") != RECOVERY_R2_PROPOSAL_SCHEMA
         or proposal.get("status") != "observation_only"
@@ -567,6 +568,18 @@ def validate_recovery_r2_context(
         or proposal.get("application") != "requires_separate_human_finalizer"
     ):
         raise ValueError("recovery-r2 proposal differs from the sealed recovery plan")
+    measurement = instrument.get("measurement_source_sha256") if isinstance(instrument, dict) else None
+    if (
+        not isinstance(measurement, dict)
+        or len(measurement) < 3
+        or any(
+            not isinstance(path, str)
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            for path, digest in measurement.items()
+        )
+    ):
+        raise ValueError("recovery-r2 proposal measurement-source binding differs")
     source_binding = load_json(source_binding_path, "recovery-r2 source binding")
     source_hashes = source_binding.get("source_sha256")
     snapshot = source_binding_path.parent
@@ -602,6 +615,12 @@ def validate_recovery_r2_context(
     watcher = complete.get("watcher")
     claim = complete.get("claim")
     watcher_path = resolve_artifact(evidence_root, context.get("watcher_path"), "r2 watcher")
+    watcher_rows = load_jsonl(watcher_path)
+    try:
+        watcher_bindings = {_monitor_binding_sha256(row) for row in watcher_rows}
+        watcher_gaps, watcher_max_gap = _monitor_gap_stats(watcher_rows)
+    except ValueError as exc:
+        raise ValueError("recovery-r2 watcher rows are malformed") from exc
     if (
         not isinstance(watcher, dict)
         or context.get("watcher_sha256") != sha256_path(watcher_path)
@@ -614,6 +633,16 @@ def validate_recovery_r2_context(
         or not isinstance(claim, dict)
         or not claim.get("claims")
         or not claim.get("global_claims")
+        or len(watcher_rows) != watcher.get("samples")
+        or any(row.get("ok") is not True for row in watcher_rows)
+        or any(row.get("active_load") not in (None, {"tier": 2, "repetition": 2}) for row in watcher_rows)
+        or not any(row.get("active_load") == {"tier": 2, "repetition": 2} for row in watcher_rows)
+        or len(watcher_bindings) != 1
+        or watcher.get("binding_sha256") != next(iter(watcher_bindings), None)
+        or watcher.get("observed_gap_count_over_7s") != watcher_gaps
+        or abs(float(watcher.get("observed_max_gap_s", -1)) - watcher_max_gap) > 0.000001
+        or watcher_gaps
+        or watcher_max_gap > 7.0
     ):
         raise ValueError("recovery-r2 watcher or held-claim provenance differs")
     expected_claim = {
