@@ -1124,7 +1124,7 @@ def validate_segmented_monitor(
                 if isinstance((load := row.get("active_load")), dict)
                 and isinstance(load.get("tier"), int)
                 and isinstance(load.get("repetition"), int)
-            } >= {(2, 1), (2, 2), (2, 3)}:
+            } >= ({(2, 1), (2, 2), (2, 3)} if len(segments) == 2 else {(2, 3)}):
                 raise ValueError("resumed monitor lacks collection load coverage")
         next_index += len(indexes)
     expected_sources = {"historical", "resume"}

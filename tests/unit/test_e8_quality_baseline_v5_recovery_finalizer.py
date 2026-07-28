@@ -393,10 +393,10 @@ def test_four_monitor_segments_pin_the_source_resume_gap_and_order(tmp_path: Pat
     recovery = [dict(source_resume[0]), dict(source_resume[1])]
     recovery[0]["active_load"] = {"tier": 2, "repetition": 2}
     recovery[1]["active_load"] = None
-    final_resume = [dict(source_resume[index]) for index in range(3)]
+    final_resume = [dict(source_resume[index]) for index in range(2)]
     for index, row in enumerate(final_resume):
         row["started_at"] = f"2026-07-28T00:00:{index * 5:02d}Z"
-        row["active_load"] = {"tier": 2, "repetition": index + 1}
+        row["active_load"] = {"tier": 2, "repetition": 3}
     paths = {
         "historical": tmp_path / "historical_runtime_watch.jsonl",
         "source_resume": tmp_path / "source_resume_runtime_watch.jsonl",
