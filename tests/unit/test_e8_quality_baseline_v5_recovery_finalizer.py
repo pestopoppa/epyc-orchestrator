@@ -1,0 +1,185 @@
+"""Focused contract tests for the separate E8 recovered-r2 validator context."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+import pytest
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+VALIDATOR_PATH = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
+spec = importlib.util.spec_from_file_location("e8_recovery_context_validator", VALIDATOR_PATH)
+assert spec is not None and spec.loader is not None
+validator = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = validator
+spec.loader.exec_module(validator)
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, sort_keys=True) + "\n")
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
+
+
+def _context(tmp_path: Path) -> tuple[dict, dict]:
+    root = tmp_path / "bundle"
+    snapshot = root / "intermediate/source_snapshot"
+    _write_json(snapshot / "question_vector.T2.json", {"fixed": "source"})
+    source_hashes = {"question_vector.T2.json": _sha(snapshot / "question_vector.T2.json")}
+    _write_json(
+        snapshot / "source_binding.json",
+        {"source_sha256": source_hashes, "source_tree_sha256": validator.canonical_hash(source_hashes)},
+    )
+    reuse = list(range(59))
+    replay = [59, 60, 61]
+    generation = list(range(62, 500))
+    plan = {
+        "schema": validator.RECOVERY_R2_PLAN_SCHEMA,
+        "protocol_id": "e8_quality_full_pool_tier_baseline.v5",
+        "source_sha256": source_hashes,
+        "source_tree_sha256": validator.canonical_hash(source_hashes),
+        "tier": 2,
+        "repetition": 2,
+        "n": 500,
+        "generation_concurrency": 3,
+        "reuse_ordinals": reuse,
+        "scorer_replay_ordinals": replay,
+        "generation_ordinals": generation,
+    }
+    _write_json(root / "intermediate/partial_r2_plan.json", plan)
+    claim = {"claims": [{"payload": {"request_tag": "e8", "region": "q0"}}], "global_claims": [{"region": "q0"}]}
+    proposal = {
+        "schema": validator.RECOVERY_R2_PROPOSAL_SCHEMA,
+        "status": "observation_only",
+        "protocol_id": "e8_quality_full_pool_tier_baseline.v5",
+        "source_tree_sha256": plan["source_tree_sha256"],
+        "generation_concurrency": 3,
+        "generation_ordinals_sha256": validator.canonical_hash(generation),
+        "scorer_replay_ordinals_sha256": validator.canonical_hash(replay),
+        "instrument": {"commit": "c", "runner_sha256": "r"},
+        "output_namespace": "/tmp/recovery",
+        "region_claim": {"tag": "e8", "regions": ["q0"]},
+        "frontdoor_capacity": {"capacity": 3},
+        "application": "requires_separate_human_finalizer",
+    }
+    _write_json(root / "intermediate/recovery_proposal.json", proposal)
+    response = root / "responses.T2.r2.jsonl"
+    sidecar = root / "eval_sidecars/question_results.e8-t2-r2.jsonl"
+    trace = root / "judge_traces.T2.r2.jsonl"
+    _write_jsonl(response, [])
+    _write_jsonl(sidecar, [])
+    _write_jsonl(trace, [])
+    watcher_path = root / "intermediate/runtime_watch.r2.jsonl"
+    _write_jsonl(watcher_path, [{"ok": True}])
+    complete = {
+        "schema": validator.RECOVERY_R2_COMPLETE_SCHEMA,
+        "status": "intermediate_r2_complete",
+        "plan_sha256": _sha(root / "intermediate/partial_r2_plan.json"),
+        "responses_sha256": _sha(response),
+        "sidecar_sha256": _sha(sidecar),
+        "trace_sha256": _sha(trace),
+        "watcher": {
+            "path": str(watcher_path),
+            "sha256": _sha(watcher_path),
+            "samples": 1,
+            "claim_before": claim,
+            "claim_after": claim,
+        },
+        "claim": claim,
+    }
+    _write_json(root / "intermediate/r2_complete.json", complete)
+    journal = [
+        {"ordinal": ordinal, "source": source, "response": {"qid": f"q{ordinal}"}}
+        for source, ordinals in (("reuse", reuse), ("scorer_replay", replay), ("generation", generation))
+        for ordinal in ordinals
+    ]
+    _write_jsonl(root / "intermediate/recovery_rows.T2.r2.jsonl", journal)
+    context = {
+        "schema": validator.RECOVERY_R2_CONTEXT_SCHEMA,
+        "recovery_runner": {"path": "/reviewed/recovery.py", "sha256": "a" * 64},
+        "source_binding": str(snapshot / "source_binding.json"),
+        "source_binding_sha256": _sha(snapshot / "source_binding.json"),
+        "source_tree_sha256": plan["source_tree_sha256"],
+        "plan_path": str(root / "intermediate/partial_r2_plan.json"),
+        "plan_sha256": _sha(root / "intermediate/partial_r2_plan.json"),
+        "proposal_path": str(root / "intermediate/recovery_proposal.json"),
+        "proposal_sha256": _sha(root / "intermediate/recovery_proposal.json"),
+        "complete_path": str(root / "intermediate/r2_complete.json"),
+        "complete_sha256": _sha(root / "intermediate/r2_complete.json"),
+        "watcher_path": str(watcher_path),
+        "watcher_sha256": _sha(watcher_path),
+        "response_path": str(response),
+        "sidecar_path": str(sidecar),
+        "trace_path": str(trace),
+        "journal_path": str(root / "intermediate/recovery_rows.T2.r2.jsonl"),
+    }
+    return root, context
+
+
+def _validate(root: Path, context: dict) -> dict:
+    return validator.validate_recovery_r2_context(
+        {"recovery_r2": context}, evidence_root=root, expected_recovery_runner_sha256="a" * 64
+    )
+
+
+def test_recovery_r2_context_accepts_hash_bound_59_3_438_bundle(tmp_path: Path) -> None:
+    root, context = _context(tmp_path)
+    accepted = _validate(root, context)
+    assert accepted is not None
+    assert len(accepted["plan"]["generation_ordinals"]) == 438
+
+
+@pytest.mark.parametrize("field", ["schema", "plan_sha256", "source_tree_sha256"])
+def test_recovery_r2_context_rejects_schema_or_hash_drift(tmp_path: Path, field: str) -> None:
+    root, context = _context(tmp_path)
+    context[field] = "wrong" if field == "schema" else "0" * 64
+    with pytest.raises(ValueError):
+        _validate(root, context)
+
+
+def test_recovery_r2_context_rejects_ordinal_allowlist_drift(tmp_path: Path) -> None:
+    root, context = _context(tmp_path)
+    plan_path = Path(context["plan_path"])
+    plan = json.loads(plan_path.read_text())
+    plan["generation_ordinals"][-1] = 61
+    _write_json(plan_path, plan)
+    context["plan_sha256"] = _sha(plan_path)
+    with pytest.raises(ValueError, match="allowlist"):
+        _validate(root, context)
+
+
+def test_recovery_r2_context_rejects_source_watcher_and_claim_drift(tmp_path: Path) -> None:
+    root, context = _context(tmp_path)
+    source = Path(context["source_binding"]).parent / "question_vector.T2.json"
+    source.write_text("tampered\n")
+    with pytest.raises(ValueError, match="source binding"):
+        _validate(root, context)
+    root, context = _context(tmp_path / "watcher")
+    complete_path = Path(context["complete_path"])
+    complete = json.loads(complete_path.read_text())
+    complete["watcher"]["sha256"] = "0" * 64
+    _write_json(complete_path, complete)
+    context["complete_sha256"] = _sha(complete_path)
+    with pytest.raises(ValueError, match="watcher"):
+        _validate(root, context)
+    root, context = _context(tmp_path / "claim")
+    complete_path = Path(context["complete_path"])
+    complete = json.loads(complete_path.read_text())
+    complete["watcher"]["claim_after"] = {"changed": True}
+    _write_json(complete_path, complete)
+    context["complete_sha256"] = _sha(complete_path)
+    with pytest.raises(ValueError, match="claim"):
+        _validate(root, context)
