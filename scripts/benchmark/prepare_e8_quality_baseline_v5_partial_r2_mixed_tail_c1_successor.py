@@ -169,6 +169,7 @@ def _source_state(
     expected_workspace_sidecar_sha256: str,
     expected_watcher_sha256: str,
     expected_journal_sha256: str,
+    api_url: str,
 ) -> dict[str, Any]:
     for value, label in (
         (expected_source_tree_sha256, "source tree"),
@@ -214,9 +215,19 @@ def _source_state(
         or descriptor.get("predecessor_tree_sha256") != canonical_hash(original_hashes)
     ):
         raise ValueError("mixed-tail c1 source snapshot bindings differ")
-    questions = V4.load_json(base / "scoring_vector.T2.json").get("questions")
-    if not isinstance(questions, list) or len(questions) != N:
-        raise ValueError("mixed-tail c1 source scoring vector is invalid")
+    runner_args = V5.parse_args(
+        ["--collect-candidate", "--output-dir", "/dev/null", "--api-url", api_url]
+    )
+    public = RECOVERY._load_vector(base, "question_vector.T2.json")
+    scoring = RECOVERY._load_vector(base, "scoring_vector.T2.json")
+    questions = RECOVERY._reconstruct_questions(
+        runner_args,
+        public,
+        scoring,
+        t1_core_id=str(plan["t1_core_id"]),
+    )
+    if len(questions) != N:
+        raise ValueError("mixed-tail c1 reconstructed question vector is incomplete")
     source_lines, source_rows = MIXED._rows_with_bytes(
         original / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
     )
@@ -305,6 +316,55 @@ def _c1_environment(sidecar_dir: Path, api_url: str) -> Iterator[None]:
         yield
 
 
+def _focused_sidecar_path(sidecar_dir: Path, *, label: str) -> Path:
+    """Find EvalTower's actual per-arm sidecar, verifying its batch identity.
+
+    The public ``set_question_artifact_dir`` contract normally creates
+    ``question_results.<label>.jsonl``.  Discovering the writer's output after
+    the call, rather than reconstructing that filename here, keeps this bridge
+    fail-closed if EvalTower's path layout changes.
+    """
+    candidates: list[Path] = []
+    for path in sorted(sidecar_dir.rglob("question_results*.jsonl")):
+        rows = V4.load_jsonl(path)
+        starts = [row for row in rows if row.get("row_type") == "batch_start"]
+        if (
+            len(starts) == 1
+            and starts[0].get("label") == label
+            and starts[0].get("requested_n") == 1
+            and starts[0].get("concurrency") == 1
+        ):
+            candidates.append(path)
+    if len(candidates) != 1:
+        raise ValueError(
+            "mixed-tail c1 could not resolve exactly one EvalTower focused sidecar "
+            f"for {label!r}: {[str(path) for path in candidates]}"
+        )
+    return candidates[0]
+
+
+def _focused_sidecar_row(path: Path, *, ordinal: int) -> tuple[int, dict[str, Any]]:
+    """Read the one subset row using its original fixed-vector ordinal."""
+    matches: list[tuple[int, dict[str, Any]]] = []
+    for line_index, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
+        row = json.loads(line)
+        if row.get("row_type") == "question_result" and row.get("ordinal") == ordinal:
+            matches.append((line_index, row))
+    if len(matches) != 1:
+        raise ValueError(
+            f"mixed-tail c1 sidecar must contain exactly one result for ordinal {ordinal}"
+        )
+    return matches[0]
+
+
+def _replace_focused_sidecar_row(path: Path, *, line_index: int, replacement: dict[str, Any]) -> None:
+    lines = path.read_bytes().splitlines(keepends=True)
+    if not 0 <= line_index < len(lines):
+        raise ValueError("mixed-tail c1 focused sidecar line is invalid")
+    lines[line_index] = (json.dumps(replacement, sort_keys=True) + "\n").encode()
+    V4.write_text(path, b"".join(lines).decode("utf-8"))
+
+
 def _coherent_scorer_replacements(
     state: dict[str, Any], journal: dict[int, dict[str, Any]]
 ) -> dict[int, dict[str, Any]]:
@@ -387,6 +447,7 @@ def _run_c1_tail(
 
     tower = V4.EvalTower(url=args.api_url.rstrip("/"), timeout=V5.REQUEST_TIMEOUT_S)
     sidecar_dir = output / ".c1_generation_workspace" / "eval_sidecars"
+    tower.set_question_artifact_dir(sidecar_dir)
     trace_root = output / "c1_generation_judge_traces"
     attempts = output / "c1_generation_tail_attempts.T2.r2.jsonl"
     combined_trace = output / "generation_judge_traces.T2.r2.jsonl"
@@ -419,9 +480,9 @@ def _run_c1_tail(
             if len(results) != 1 or int(getattr(results[0], "eval_concurrency", 0)) != 1:
                 raise RuntimeError("mixed-tail c1 request did not execute at sequential cadence")
             response = V4.response_rows(results, [question])[0]
-            focused_path = sidecar_dir / f"question_results.{label}.jsonl"
-            _parsed, focused_rows = V5.sidecar_question_rows(focused_path, expected_n=1)
-            focused = dict(focused_rows[0][1])
+            focused_path = _focused_sidecar_path(sidecar_dir, label=label)
+            focused_line, focused_row = _focused_sidecar_row(focused_path, ordinal=ordinal)
+            focused = dict(focused_row)
             original = state["source_rows"][ordinal][1]
             retry_error = V5.classify_generation_failure(response, focused)
             scorer_recovered = bool(scorer_tail) and all(row.get("outcome") == "recovered" for row in scorer_tail)
@@ -455,7 +516,7 @@ def _run_c1_tail(
                 normalized = {**focused, "answer": merged["answer"], "result": dict(merged["result"])}
                 clean = V5.validate_clean_sidecar_result(response, normalized, qid=question["qid"]) and V5.validate_clean_sidecar_result(response, merged, qid=question["qid"])
                 if clean:
-                    V5._replace_sidecar_lines(focused_path, {0: normalized}, expected_n=1)
+                    _replace_focused_sidecar_row(focused_path, line_index=focused_line, replacement=normalized)
                     if str(question.get("scoring_method") or "") == "llm_judge":
                         V4.seal_judge_trace_outcomes(focused_trace, [response], [question], tier=2, repetition=2, default_api_url=args.api_url)
             attempt = {
@@ -500,6 +561,7 @@ def build_plan(
         expected_workspace_sidecar_sha256=expected_workspace_sidecar_sha256,
         expected_watcher_sha256=expected_watcher_sha256,
         expected_journal_sha256=expected_journal_sha256,
+        api_url=api_url,
     )
     runner_args = V5.parse_args(["--collect-candidate", "--output-dir", "/dev/null", "--api-url", api_url])
     schedule = _schedule(state, runner_args)
