@@ -36,7 +36,8 @@ def _mem_to_trajectory(mem) -> dict:
     return {
         "task_id": mem.id,
         "task_type": ctx.get("task_type", "general"),
-        "objective": ctx.get("task_description", mem.action),
+        # contract key first, legacy key second — contract rows carry "objective"
+        "objective": ctx.get("objective") or ctx.get("task_description") or mem.action,
         "routing_decision": mem.action,
         "outcome": mem.outcome or "unknown",
         "escalations": [],

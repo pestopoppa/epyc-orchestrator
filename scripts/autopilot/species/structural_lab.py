@@ -302,22 +302,127 @@ class StructuralLab:
         self,
         teacher: str = "claude",
         categories: list[str] | None = None,
+        max_trajectories: int = 200,
+        min_q_value: float = 0.7,
+        skill_db_path: "Path | None" = None,
     ) -> dict[str, Any]:
-        """Run SkillBank distillation pipeline."""
-        try:
-            import sys
-            sys.path.insert(0, str(ORCH_ROOT / "orchestration" / "repl_memory" / "distillation"))
-            from pipeline import DistillationPipeline
+        """Run the SkillBank distillation pipeline over high-Q episodic memories.
 
-            pipeline = DistillationPipeline(
-                teacher_model=teacher,
-                categories=categories or ["routing", "escalation", "tool_selection"],
+        REPAIRED 2026-07-28. Since it was written this constructed
+        ``DistillationPipeline(teacher_model=..., categories=...)`` — kwargs the
+        class has never accepted — and sync-called its async ``run()``, so every
+        autopilot ``distill_skillbank`` action returned ``{"status": "error"}``
+        and the surface never once distilled. Now mirrors the working reference
+        flow in ``scripts/skillbank/seed_skills.py``: teacher resolution,
+        high-Q trajectory extraction from the episodic store, and
+        ``asyncio.run`` (the autopilot loop is synchronous). ``categories`` is
+        accepted for action-schema compatibility but the pipeline groups by
+        trajectory OUTCOME (success/failure/escalation), not by these labels.
+
+        Requires inference: the teacher LLM writes the skills. ``teacher`` is
+        one of claude | codex | local | mock (mock = wiring test, stores
+        nothing unless preloaded with responses).
+        """
+        try:
+            import asyncio
+
+            import numpy as np
+
+            from orchestration.repl_memory.distillation.pipeline import DistillationPipeline
+            from orchestration.repl_memory.distillation.teachers import (
+                ClaudeTeacher,
+                CodexTeacher,
+                LocalLlamaTeacher,
+                MockTeacher,
             )
-            result = pipeline.run()
-            return {"status": "ok", "result": result}
-        except ImportError:
-            log.warning("DistillationPipeline not available")
+            from orchestration.repl_memory.embedder import TaskEmbedder
+            from orchestration.repl_memory.episodic_store import EpisodicStore
+            from orchestration.repl_memory.skill_bank import SkillBank
+        except ImportError as e:
+            log.warning("DistillationPipeline not available: %s", e)
             return {"status": "not_available"}
+        try:
+            teachers = {
+                "claude": ClaudeTeacher,
+                "codex": CodexTeacher,
+                "local": LocalLlamaTeacher,
+                "mock": MockTeacher,
+            }
+            if teacher not in teachers:
+                return {
+                    "status": "error",
+                    "error": f"unknown teacher {teacher!r}; use one of {sorted(teachers)}",
+                }
+            teacher_obj = teachers[teacher]()
+            if categories:
+                log.info(
+                    "distill_skillbank: categories=%s noted; pipeline groups by outcome",
+                    categories,
+                )
+
+            store = EpisodicStore()
+            # Zero-vector query = "any k, ranked by Q" (all IP scores are 0.0,
+            # so ordering falls to the Q filter) — same idiom as seed_skills.py.
+            memories = store.retrieve_by_similarity(
+                np.zeros(1024, dtype=np.float32),
+                k=max_trajectories,
+                min_q_value=min_q_value,
+            )
+            trajectories = []
+            for mem in memories:
+                ctx_d = mem.context if isinstance(mem.context, dict) else {}
+                trajectories.append(
+                    {
+                        "task_id": mem.id,
+                        "task_type": ctx_d.get("task_type", "general"),
+                        # contract key first, legacy key second (seed_skills.py
+                        # still reads only the legacy one and silently falls
+                        # back to the routing label for contract rows)
+                        "objective": ctx_d.get("objective")
+                        or ctx_d.get("task_description")
+                        or mem.action,
+                        "routing_decision": mem.action,
+                        "outcome": mem.outcome or "unknown",
+                        "escalations": [],
+                        "cost_metrics": {},
+                    }
+                )
+            if not trajectories:
+                return {
+                    "status": "ok",
+                    "report": {"total_trajectories": 0, "skills_stored": 0},
+                    "note": f"no memories with Q >= {min_q_value}; nothing to distill",
+                }
+
+            # Pair faiss_path with db_path: SkillBank defaults faiss_path to the
+            # LIVE sessions dir, so a custom db_path alone would split the pair
+            # (db in one place, vectors written into production).
+            sb = SkillBank(
+                db_path=skill_db_path,
+                faiss_path=Path(skill_db_path).parent if skill_db_path else None,
+            )
+            try:
+                pipeline = DistillationPipeline(
+                    teacher=teacher_obj,
+                    skill_bank=sb,
+                    embedder=TaskEmbedder(),  # write path refuses fallback vectors
+                )
+                report = asyncio.run(pipeline.run(trajectories))
+            finally:
+                sb.close()
+            return {
+                "status": "ok",
+                "report": {
+                    "teacher": teacher_obj.model_id,
+                    "total_trajectories": report.total_trajectories,
+                    "skills_proposed": report.skills_proposed,
+                    "skills_stored": report.skills_stored,
+                    "skills_merged": report.skills_merged,
+                    "skills_rejected": report.skills_rejected,
+                    "duration_seconds": round(report.duration_seconds, 1),
+                    "errors": report.errors[:5],
+                },
+            }
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
