@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import shutil
 import subprocess
@@ -342,10 +343,23 @@ class StructuralLab:
             log.warning("DistillationPipeline not available: %s", e)
             return {"status": "not_available"}
         try:
+            def _local_teacher():
+                # LocalLlamaTeacher's class default (port 8083, qwen3-235b) is a
+                # dead endpoint from an old lineup. Default to the always-resident
+                # frontdoor and let env retarget it when the stack reshapes.
+                return LocalLlamaTeacher(
+                    base_url=os.environ.get(
+                        "AUTOPILOT_DISTILL_LOCAL_URL", "http://127.0.0.1:8080"
+                    ),
+                    model_id=os.environ.get(
+                        "AUTOPILOT_DISTILL_LOCAL_MODEL", "qwen3.6-35b-a3b-frontdoor"
+                    ),
+                )
+
             teachers = {
                 "claude": ClaudeTeacher,
                 "codex": CodexTeacher,
-                "local": LocalLlamaTeacher,
+                "local": _local_teacher,
                 "mock": MockTeacher,
             }
             if teacher not in teachers:

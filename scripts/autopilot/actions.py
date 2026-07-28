@@ -1846,7 +1846,11 @@ def _action_train_routing_models(action: dict[str, Any], ctx: _ActionContext):
 
 
 def _action_distill_skillbank(action: dict[str, Any], ctx: _ActionContext):
-    teacher = action.get("teacher", "claude")
+    # Autonomous-teacher policy (operator, 2026-07-28): default is the metered
+    # Claude CLI; the planned shift to the local teacher is ONE env line on the
+    # supervisor — AUTOPILOT_DISTILL_TEACHER=local — no code change. An explicit
+    # "teacher" in the action still wins.
+    teacher = action.get("teacher") or os.environ.get("AUTOPILOT_DISTILL_TEACHER", "claude")
     categories = action.get("categories", ["routing"])
     ctx.lab.checkpoint_state(
         trial_id=ctx.state.get("trial_counter", 0),
