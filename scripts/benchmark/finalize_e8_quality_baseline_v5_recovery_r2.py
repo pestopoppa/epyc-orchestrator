@@ -474,6 +474,7 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
         or sorted(ordinal for value in values for ordinal in value) != list(range(500))
         or sorted(values[-2] + values[-1]) != sorted(set(values[-2] + values[-1]))
         or len(values[-2]) + len(values[-1]) != 298
+        or plan.get("generation_ordinals") != plan.get("race_retry_ordinals")
         or plan.get("retry_runner_sha256") != sha256_path(RACE_RETRY_PATH)
         or plan.get("retry_watcher_path") != required["watcher"].name
     ):
@@ -586,6 +587,8 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
         or proposal.get("predecessor_tree_sha256") != plan["predecessor_tree_sha256"]
         or proposal.get("predecessor_watcher") != plan["predecessor_watcher"]
         or proposal.get("predecessor_failed_attempts") != plan["predecessor_failed_attempts"]
+        or proposal.get("generation_ordinals_sha256")
+        != RACE_RETRY.canonical_hash(plan["generation_ordinals"])
         or proposal.get("race_retry_ordinals_sha256") != RACE_RETRY.canonical_hash(plan["race_retry_ordinals"])
         or proposal.get("mixed_tail_repair") != mixed_tail_repair
         or proposal.get("region_claim") != expected_claim
