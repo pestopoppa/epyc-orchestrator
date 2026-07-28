@@ -16,7 +16,6 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import shutil
 import sys
 from typing import Any
 
@@ -60,22 +59,24 @@ def _no_symlinks(root: Path) -> None:
 
 def validate_intermediate(path: Path) -> dict[str, Any]:
     """Return immutable r2 inputs, failing before the resume finalizer runs."""
+    if path.is_symlink():
+        raise ValueError("recovery intermediate must not be a symlink")
     intermediate = path.resolve(strict=True)
     _no_symlinks(intermediate)
     plan_path = intermediate / "partial_r2_plan.json"
     complete_path = intermediate / "r2_complete.json"
     source_binding = intermediate / "source_snapshot/source_binding.json"
-    required = (
-        plan_path,
-        intermediate / "recovery_proposal.json",
-        complete_path,
-        source_binding,
-        intermediate / "responses.T2.r2.jsonl",
-        intermediate / "eval_sidecars/question_results.e8-t2-r2.jsonl",
-        intermediate / "judge_traces.T2.r2.jsonl",
-        intermediate / "recovery_rows.T2.r2.jsonl",
-        intermediate / "runtime_watch.r2.jsonl",
-    )
+    required = {
+        "plan": plan_path,
+        "proposal": intermediate / "recovery_proposal.json",
+        "complete": complete_path,
+        "source_binding": source_binding,
+        "responses": intermediate / "responses.T2.r2.jsonl",
+        "sidecar": intermediate / "eval_sidecars/question_results.e8-t2-r2.jsonl",
+        "trace": intermediate / "judge_traces.T2.r2.jsonl",
+        "journal": intermediate / "recovery_rows.T2.r2.jsonl",
+        "watcher": intermediate / "runtime_watch.r2.jsonl",
+    }
     if any(not item.is_file() for item in required):
         raise ValueError("recovery intermediate lacks a required sealed artifact")
     plan = V4.load_json(plan_path)
@@ -129,9 +130,9 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
         complete.get("schema") != "epyc.e8_quality_partial_r2_complete.v1"
         or complete.get("status") != "intermediate_r2_complete"
         or complete.get("plan_sha256") != sha256_path(plan_path)
-        or complete.get("responses_sha256") != sha256_path(required[3])
-        or complete.get("sidecar_sha256") != sha256_path(required[4])
-        or complete.get("trace_sha256") != sha256_path(required[5])
+        or complete.get("responses_sha256") != sha256_path(required["responses"])
+        or complete.get("sidecar_sha256") != sha256_path(required["sidecar"])
+        or complete.get("trace_sha256") != sha256_path(required["trace"])
         or not isinstance(complete.get("watcher"), dict)
         or not isinstance(complete.get("claim"), dict)
         or complete["watcher"].get("claim_before") != complete["claim"]
@@ -141,14 +142,56 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
     return {"root": intermediate, "plan": plan, "proposal": proposal, "complete": complete}
 
 
+def build_plan(source_dir: Path) -> dict[str, Any]:
+    """Bind the already-complete banked source; never re-open T2/r1."""
+    if source_dir.is_symlink():
+        raise ValueError("recovery finalizer source must not be a symlink")
+    source = source_dir.resolve(strict=True)
+    hashes = RESUME._safe_source_files(source)
+    for tier, repetitions in ((1, (1, 2, 3)), (2, (1,))):
+        for repetition in repetitions:
+            RESUME._validate_ledger(source, tier, repetition)
+    responses = V4.load_jsonl(source / "responses.T2.r1.jsonl")
+    _parsed, sidecars = V5.sidecar_question_rows(
+        source / "eval_sidecars/question_results.e8-t2-r1.jsonl", expected_n=len(responses)
+    )
+    if V5.generation_failure_targets(responses, sidecars):
+        raise ValueError("recovery finalizer source has an unfinished T2/r1 generation tail")
+    return {
+        "schema": "epyc.e8_quality_v5_recovery_finalizer_source.v1",
+        "protocol_id": RECOVERY.PROTOCOL_ID,
+        "source": str(source),
+        "source_sha256": hashes,
+        "source_tree_sha256": RECOVERY.canonical_hash(hashes),
+        "banked": {"tiers": [1], "t2_r1": True},
+        "fresh_collection": [{"tier": 2, "repetition": 3}],
+    }
+
+
 def _install_recovered_r2(intermediate: dict[str, Any], staging: Path, destination: Path, args: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     root = intermediate["root"]
+    source_binding = V4.load_json(staging / "source_snapshot/source_binding.json")
+    source_hashes = source_binding.get("source_sha256")
+    if not isinstance(source_hashes, dict):
+        raise ValueError("resume source snapshot has no immutable hash binding")
     for relative in (
         "responses.T2.r2.jsonl",
         "eval_sidecars/question_results.e8-t2-r2.jsonl",
         "judge_traces.T2.r2.jsonl",
         "raw.T2.r2.json",
     ):
+        destination_path = staging / relative
+        source_path = staging / "source_snapshot" / relative
+        if destination_path.exists():
+            expected = source_hashes.get(relative)
+            if (
+                not source_path.is_file()
+                or not isinstance(expected, str)
+                or sha256_path(source_path) != expected
+                or sha256_path(destination_path) != expected
+            ):
+                raise ValueError("pre-existing partial r2 artifact differs from immutable source")
+            destination_path.unlink()
         _copy_file(root / relative, staging / relative)
     pristine = RESUME._pristine_reference(
         staging=staging, destination=destination, tier=2, repetition=2
@@ -172,10 +215,35 @@ def _install_recovered_r2(intermediate: dict[str, Any], staging: Path, destinati
     return observation, detail
 
 
+def _copy_bound_intermediate(root: Path, destination: Path) -> None:
+    """Copy only files that the recovery schema subsequently validates."""
+    binding = V4.load_json(root / "source_snapshot/source_binding.json")
+    hashes = binding.get("source_sha256")
+    if not isinstance(hashes, dict):
+        raise ValueError("recovery source snapshot has no hash map")
+    for relative, digest in hashes.items():
+        source = root / "source_snapshot" / relative
+        if not isinstance(relative, str) or not isinstance(digest, str) or sha256_path(source) != digest:
+            raise ValueError("recovery source snapshot changed before finalization")
+        _copy_file(source, destination / "source_snapshot" / relative)
+    _copy_file(root / "source_snapshot/source_binding.json", destination / "source_snapshot/source_binding.json")
+    for relative in (
+        "partial_r2_plan.json",
+        "recovery_proposal.json",
+        "r2_complete.json",
+        "responses.T2.r2.jsonl",
+        "eval_sidecars/question_results.e8-t2-r2.jsonl",
+        "judge_traces.T2.r2.jsonl",
+        "recovery_rows.T2.r2.jsonl",
+        "runtime_watch.r2.jsonl",
+    ):
+        _copy_file(root / relative, destination / relative)
+
+
 def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[str, Any]) -> None:
     """Replace the ordinary resume context before its atomic publish call."""
     copied = staging / "recovery_r2_intermediate"
-    shutil.copytree(intermediate["root"], copied, copy_function=shutil.copyfile)
+    _copy_bound_intermediate(intermediate["root"], copied)
     report_path = staging / "runner_report.json"
     report = V4.load_json(report_path)
     post = report["postconditions"]
