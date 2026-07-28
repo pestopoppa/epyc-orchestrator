@@ -13,11 +13,17 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR_PATH = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
+FINALIZER_PATH = PROJECT_ROOT / "scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
 spec = importlib.util.spec_from_file_location("e8_recovery_context_validator", VALIDATOR_PATH)
 assert spec is not None and spec.loader is not None
 validator = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = validator
 spec.loader.exec_module(validator)
+finalizer_spec = importlib.util.spec_from_file_location("e8_recovery_finalizer", FINALIZER_PATH)
+assert finalizer_spec is not None and finalizer_spec.loader is not None
+finalizer = importlib.util.module_from_spec(finalizer_spec)
+sys.modules[finalizer_spec.name] = finalizer
+finalizer_spec.loader.exec_module(finalizer)
 
 
 def _sha(path: Path) -> str:
@@ -183,3 +189,90 @@ def test_recovery_r2_context_rejects_source_watcher_and_claim_drift(tmp_path: Pa
     context["complete_sha256"] = _sha(complete_path)
     with pytest.raises(ValueError, match="claim"):
         _validate(root, context)
+
+
+def test_finalizer_plan_accepts_the_preserved_completed_r1_source() -> None:
+    source = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+        ".e8_quality_baseline_v5_partial_resume_promptfix_20260728.staging-b0d7ce62d6e04509a1cec7849aa68832"
+    )
+    plan = finalizer.build_plan(source)
+    assert plan["banked"] == {"tiers": [1], "t2_r1": True}
+    assert plan["fresh_collection"] == [{"tier": 2, "repetition": 3}]
+
+
+def test_install_recovered_r2_replaces_only_hash_bound_partial_source_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staging = tmp_path / "staging"
+    snapshot = staging / "source_snapshot"
+    recovered = tmp_path / "recovered"
+    partial = {
+        "eval_sidecars/question_results.e8-t2-r2.jsonl": b"partial-sidecar\n",
+        "judge_traces.T2.r2.jsonl": b"partial-trace\n",
+    }
+    hashes: dict[str, str] = {}
+    for relative, payload in partial.items():
+        path = snapshot / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        (staging / relative).parent.mkdir(parents=True, exist_ok=True)
+        (staging / relative).write_bytes(payload)
+        hashes[relative] = _sha(path)
+    _write_json(snapshot / "source_binding.json", {"source_sha256": hashes})
+    replacement = {
+        "responses.T2.r2.jsonl": b"recovered-responses\n",
+        "eval_sidecars/question_results.e8-t2-r2.jsonl": b"recovered-sidecar\n",
+        "judge_traces.T2.r2.jsonl": b"recovered-trace\n",
+        "raw.T2.r2.json": b"recovered-raw\n",
+    }
+    for relative, payload in replacement.items():
+        path = recovered / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    _write_json(staging / "question_vector.T2.json", {"core_id": "core"})
+    monkeypatch.setattr(finalizer.RESUME, "_pristine_reference", lambda **_: {"artifacts": {}})
+    monkeypatch.setattr(finalizer.RESUME, "_questions", lambda *_: [])
+    monkeypatch.setattr(
+        finalizer.RESUME,
+        "_banked_observation_and_detail",
+        lambda **_: ({"q": 1}, {"scorer_tail_replay": ["old"], "scorer_sidecar_replacement_ordinals": [1]}),
+    )
+    observation, detail = finalizer._install_recovered_r2(
+        {"root": recovered}, staging, tmp_path / "published", object()
+    )
+    assert observation == {"q": 1}
+    assert detail["scorer_tail_replay"] == []
+    assert all((staging / relative).read_bytes() == payload for relative, payload in replacement.items())
+
+
+def test_install_recovered_r2_rejects_mutated_partial_source_file(tmp_path: Path) -> None:
+    staging = tmp_path / "staging"
+    snapshot = staging / "source_snapshot"
+    relative = "eval_sidecars/question_results.e8-t2-r2.jsonl"
+    source = snapshot / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("sealed\n")
+    _write_json(snapshot / "source_binding.json", {"source_sha256": {relative: _sha(source)}})
+    target = staging / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("tampered\n")
+    for name in ("responses.T2.r2.jsonl", "judge_traces.T2.r2.jsonl", "raw.T2.r2.json"):
+        path = tmp_path / "recovered" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("new\n")
+    (tmp_path / "recovered" / relative).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "recovered" / relative).write_text("new\n")
+    with pytest.raises(ValueError, match="pre-existing partial r2 artifact"):
+        finalizer._install_recovered_r2(
+            {"root": tmp_path / "recovered"}, staging, tmp_path / "published", object()
+        )
+
+
+def test_validate_intermediate_rejects_lexical_symlink(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        finalizer.validate_intermediate(link)
