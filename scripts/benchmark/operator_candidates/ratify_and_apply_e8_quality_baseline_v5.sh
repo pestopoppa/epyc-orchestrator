@@ -17,6 +17,10 @@ PRODUCER="$SOURCE_ROOT/scripts/benchmark/terminalize_e8_quality_baseline_source.
 RESUME_RUNNER="$SOURCE_ROOT/scripts/benchmark/resume_e8_quality_baseline_v5.py"
 RECOVERY_RUNNER="$SOURCE_ROOT/scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
 FINALIZER_RUNNER="$SOURCE_ROOT/scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
+SUCCESSOR_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
+RACE_RETRY_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
+MIXED_TAIL_REPAIR_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
+TERMINALIZER_RUNNER="$SOURCE_ROOT/scripts/benchmark/terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd -P)"
 VALIDATOR="$SCRIPT_DIR/prepare_e8_quality_baseline_v5_candidate.sh"
 VALIDATOR_PY="$SOURCE_ROOT/scripts/benchmark/validate_e8_quality_baseline_v5.py"
@@ -69,6 +73,9 @@ verify_reviewed_bindings() {
         "E8_V5_RESUME_RUNNER_SHA256:$RESUME_RUNNER" \
         "E8_V5_RECOVERY_RUNNER_SHA256:$RECOVERY_RUNNER" \
         "E8_V5_FINALIZER_RUNNER_SHA256:$FINALIZER_RUNNER" \
+        "E8_V5_SUCCESSOR_RUNNER_SHA256:$SUCCESSOR_RUNNER" \
+        "E8_V5_RACE_RETRY_RUNNER_SHA256:$RACE_RETRY_RUNNER" \
+        "E8_V5_MIXED_TAIL_REPAIR_RUNNER_SHA256:$MIXED_TAIL_REPAIR_RUNNER" \
         "E8_V5_VALIDATOR_SHA256:$VALIDATOR" \
         "E8_V5_VALIDATOR_PY_SHA256:$VALIDATOR_PY" \
         "E8_V5_APPLIER_SHA256:$APPLIER" \
@@ -79,6 +86,10 @@ verify_reviewed_bindings() {
         [[ "$expected" =~ ^[0-9a-f]{64}$ && -f "$path" && "$(sha "$path")" == "$expected" ]] ||
             fail "reviewed artifact pin differs: $name"
     done
+    if [[ -n "${E8_V5_TERMINALIZER_RUNNER_SHA256:-}" ]]; then
+        [[ "$E8_V5_TERMINALIZER_RUNNER_SHA256" =~ ^[0-9a-f]{64}$ && -f "$TERMINALIZER_RUNNER" && "$(sha "$TERMINALIZER_RUNNER")" == "$E8_V5_TERMINALIZER_RUNNER_SHA256" ]] ||
+            fail 'reviewed artifact pin differs: E8_V5_TERMINALIZER_RUNNER_SHA256'
+    fi
     [[ "${E8_V5_ORCHESTRATOR_HEAD:-}" =~ ^[0-9a-f]{40}$ && "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" == "$E8_V5_ORCHESTRATOR_HEAD" ]] ||
         fail 'reviewed source HEAD differs from the supplied source pin'
     [[ -x "$PYTHON" && "$(readlink -f -- "$PYTHON")" == "$(readlink -f -- "$ORCH/.venv/bin/python")" ]] ||
@@ -248,7 +259,8 @@ fi
 # successfully.  A failed apply therefore cannot look ratified.
 PYTHONOPTIMIZE=0 "$PYTHON" - "$APPLIER" "$STATE" "$EVIDENCE" "$VALIDATOR" "$REVIEW_RECORD" \
     "$TRANSACTION" "$CANONICAL_ATTESTATION" "$RECEIPT" "$0" "$PRODUCER" "$RUNNER" "$BASE_RUNNER" \
-    "$RESUME_RUNNER" "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$VALIDATOR_PY" "$CANONICAL_APPLIER" \
+    "$RESUME_RUNNER" "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$RACE_RETRY_RUNNER" \
+    "$MIXED_TAIL_REPAIR_RUNNER" "$TERMINALIZER_RUNNER" "$VALIDATOR_PY" "$CANONICAL_APPLIER" \
     "$EXPECTED_PRE" "$EXPECTED_CANDIDATE" "$CONFIRMATION" <<'PY'
 import hashlib
 import importlib.util
@@ -262,10 +274,11 @@ from pathlib import Path
     adapter_path, state_path, evidence_path, validator_path, review_path,
     transaction_path, canonical_attestation_path, receipt_path, wrapper_path,
     producer_path, runner_path, base_runner_path, resume_runner_path,
-    recovery_runner_path, finalizer_runner_path, validator_py_path,
+    recovery_runner_path, finalizer_runner_path, successor_runner_path,
+    race_retry_runner_path, mixed_tail_repair_runner_path, terminalizer_runner_path, validator_py_path,
     canonical_applier_path,
-) = [Path(value) for value in sys.argv[1:18]]
-expected_pre, expected_candidate, confirmation = sys.argv[18:21]
+) = [Path(value) for value in sys.argv[1:22]]
+expected_pre, expected_candidate, confirmation = sys.argv[22:25]
 
 spec = importlib.util.spec_from_file_location("e8_v5_consolidated_receipt_adapter", adapter_path)
 if spec is None or spec.loader is None:
@@ -353,6 +366,9 @@ payload = {
         "resume_runner": sha(resume_runner_path),
         "recovery_runner": sha(recovery_runner_path),
         "finalizer_runner": sha(finalizer_runner_path),
+        "successor_runner": sha(successor_runner_path),
+        "race_retry_runner": sha(race_retry_runner_path),
+        "mixed_tail_repair_runner": sha(mixed_tail_repair_runner_path),
         "validator_wrapper": sha(validator_path),
         "validator_python": sha(validator_py_path),
         "applier_adapter": sha(adapter_path),
@@ -365,6 +381,8 @@ payload = {
         "canonical_attestation_sha256": sha(canonical_attestation_path),
     },
 }
+if __import__("os").environ.get("E8_V5_TERMINALIZER_RUNNER_SHA256"):
+    payload["code_sha256"]["terminalizer_runner"] = sha(terminalizer_runner_path)
 if receipt_path.exists():
     raise SystemExit("ERROR: a consolidated receipt already exists; refusing to replace it")
 canonical.write_json_create_only(receipt_path, payload)

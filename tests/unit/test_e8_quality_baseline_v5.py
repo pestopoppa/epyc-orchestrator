@@ -14,8 +14,10 @@ import pytest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-INTEGRATED_E8_ROOT = Path("/mnt/raid0/llm/worktrees/e8-recovery-integration-v2-20260728")
-INTEGRATED_E8_HEAD = "65a09c3f6d50b6207ac003a228bdc533c99956cf"
+INTEGRATED_E8_ROOT = PROJECT_ROOT
+INTEGRATED_E8_HEAD = subprocess.check_output(
+    ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+).strip()
 MODULE_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
 spec = importlib.util.spec_from_file_location("e8_v5", MODULE_PATH)
 assert spec is not None and spec.loader is not None
@@ -43,6 +45,18 @@ def _integrated_e8_pins(*, wrapper: Path | None = None, validator_wrapper: Path 
         ),
         "E8_V5_FINALIZER_RUNNER_SHA256": _sha(
             benchmark / "finalize_e8_quality_baseline_v5_recovery_r2.py"
+        ),
+        "E8_V5_SUCCESSOR_RUNNER_SHA256": _sha(
+            benchmark / "prepare_e8_quality_baseline_v5_partial_r2_successor.py"
+        ),
+        "E8_V5_RACE_RETRY_RUNNER_SHA256": _sha(
+            benchmark / "prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
+        ),
+        "E8_V5_MIXED_TAIL_REPAIR_RUNNER_SHA256": _sha(
+            benchmark / "prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
+        ),
+        "E8_V5_TERMINALIZER_RUNNER_SHA256": _sha(
+            benchmark / "terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
         ),
         "E8_V5_VALIDATOR_PY_SHA256": _sha(benchmark / "validate_e8_quality_baseline_v5.py"),
     }
@@ -1473,6 +1487,37 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     )
     assert lock_after == lock_before
 
+    bad_env = {
+        **__import__("os").environ,
+        **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
+        "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+        "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(
+            canonical_applier.read_bytes()
+        ).hexdigest(),
+    }
+    bad_env["E8_V5_RACE_RETRY_RUNNER_SHA256"] = "0" * 64
+    rejected = subprocess.run(
+        [
+            "bash",
+            str(wrapper),
+            "--prevalidate",
+            "--evidence",
+            str(evidence),
+            "--expected-pre-state-sha256",
+            pre_sha,
+            "--expected-candidate-state-sha256",
+            candidate_sha,
+        ],
+        env=bad_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "E8_V5_RACE_RETRY_RUNNER_SHA256" in rejected.stderr
+    assert state_path.read_bytes() == state_bytes
+    assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
+
 
 def test_final_wrapper_uses_dynamic_confirmation_and_post_commit_receipt_only() -> None:
     """The human boundary cannot be satisfied by a reusable static token."""
@@ -1616,6 +1661,14 @@ def test_final_wrapper_integration_commits_temp_state_then_creates_bound_receipt
     assert value["state_review"]["pre_state_sha256"] == pre_sha
     assert value["state_review"]["candidate_state_sha256"] == candidate_sha
     assert len(value["state_review"]["exact_state_diff"]) == 6
+    benchmark = PROJECT_ROOT / "scripts/benchmark"
+    for key, filename in {
+        "successor_runner": "prepare_e8_quality_baseline_v5_partial_r2_successor.py",
+        "race_retry_runner": "prepare_e8_quality_baseline_v5_partial_r2_race_retry.py",
+        "mixed_tail_repair_runner": "prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py",
+        "terminalizer_runner": "terminalize_e8_quality_baseline_v5_partial_r2_successor.py",
+    }.items():
+        assert value["code_sha256"][key] == _sha(benchmark / filename)
     assert value["transaction"]["canonical_attestation_path"].endswith(
         "canonical_apply_attestation.json"
     )
