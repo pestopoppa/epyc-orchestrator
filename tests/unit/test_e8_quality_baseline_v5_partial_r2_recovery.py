@@ -105,9 +105,53 @@ def test_plan_rejects_unapproved_saved_error(tmp_path: Path) -> None:
 def test_collect_fails_closed_without_creating_an_output_bundle(tmp_path: Path) -> None:
     source = _source(tmp_path)
     output = tmp_path / "would-be-evidence"
-    with pytest.raises(RuntimeError, match="human-ratified wrapper"):
+    with pytest.raises(ValueError, match="held GLOBAL recovery claim"):
         recovery.execute(type("Args", (), {"source_dir": source, "output_dir": output})())
     assert not output.exists()
+
+
+def test_compact_exact_match_omission_is_allowed_but_llm_judge_omission_is_not(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    path = source / "eval_sidecars/question_results.e8-t2-r2.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    next(row for row in rows if row.get("ordinal") == 0)["result"].pop("scoring_method")
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    recovery.build_plan(source)
+    next(row for row in rows if row.get("ordinal") == 6)["result"].pop("scoring_method")
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(ValueError, match="scoring method"):
+        recovery.build_plan(source)
+
+
+def test_plan_rejects_a_symlink_source(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    link = tmp_path / "source-link"
+    link.symlink_to(source, target_is_directory=True)
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        recovery.build_plan(link)
+
+
+def test_receipt_rejection_precedes_any_output_write(tmp_path: Path, monkeypatch) -> None:
+    source = _source(tmp_path)
+    plan = recovery.build_plan(source)
+    claim = {"claims": [{"payload": {"request_tag": "tag", "region": "q2"}}], "global_claims": [{}]}
+    monkeypatch.setattr(
+        recovery, "_instrument_identity", lambda: {"commit": "c", "runner_sha256": "r"}
+    )
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps({"operator_attestation": "yes"}))
+    with pytest.raises(ValueError, match="receipt differs"):
+        recovery.validate_receipt(receipt, plan, claim=claim)
+
+
+def test_snapshot_rejects_source_mutation_before_copy(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    plan = recovery.build_plan(source)
+    (source / "question_vector.T2.json").write_text("{}\n")
+    with pytest.raises(ValueError, match="changed before snapshot"):
+        recovery._snapshot_source(source, tmp_path / "output", plan)
 
 
 def test_capacity_rejects_q2_q3_contention_before_generation() -> None:
