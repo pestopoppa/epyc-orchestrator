@@ -12,12 +12,13 @@ BASE_RUNNER="$SOURCE_ROOT/scripts/benchmark/run_e8_quality_baseline_reseed.py"
 RESUME_RUNNER="$SOURCE_ROOT/scripts/benchmark/resume_e8_quality_baseline_v5.py"
 RECOVERY_RUNNER="$SOURCE_ROOT/scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
 FINALIZER_RUNNER="$SOURCE_ROOT/scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
+SUCCESSOR_RUNNER="$SOURCE_ROOT/scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 sha() { sha256sum -- "$1" | awk '{print $1}'; }
 [[ $# -eq 2 && "$1" == "--validate-evidence" ]] ||
     fail 'usage: prepare_e8_quality_baseline_v5_candidate.sh --validate-evidence EVIDENCE'
-[[ -x "$PYTHON" && -f "$VALIDATOR" && -f "$PRODUCER" && -f "$RUNNER" && -f "$BASE_RUNNER" && -f "$RESUME_RUNNER" && -f "$RECOVERY_RUNNER" && -f "$FINALIZER_RUNNER" ]] ||
+[[ -x "$PYTHON" && -f "$VALIDATOR" && -f "$PRODUCER" && -f "$RUNNER" && -f "$BASE_RUNNER" && -f "$RESUME_RUNNER" && -f "$RECOVERY_RUNNER" && -f "$FINALIZER_RUNNER" && -f "$SUCCESSOR_RUNNER" ]] ||
     fail 'v5 composite validator prerequisite is missing'
 [[ "$(readlink -f -- "$PYTHON")" == "$(readlink -f -- "$ORCH/.venv/bin/python")" ]] ||
     fail 'canonical orchestrator venv identity differs'
@@ -32,6 +33,7 @@ for binding in \
     "E8_V5_RESUME_RUNNER_SHA256:$RESUME_RUNNER" \
     "E8_V5_RECOVERY_RUNNER_SHA256:$RECOVERY_RUNNER" \
     "E8_V5_FINALIZER_RUNNER_SHA256:$FINALIZER_RUNNER" \
+    "E8_V5_SUCCESSOR_RUNNER_SHA256:$SUCCESSOR_RUNNER" \
     "E8_V5_VALIDATOR_PY_SHA256:$VALIDATOR"; do
     name="${binding%%:*}"
     path="${binding#*:}"
@@ -46,4 +48,5 @@ PYTHONOPTIMIZE=0 "$PYTHON" "$VALIDATOR" \
     --expected-base-runner-sha256 "$E8_V5_BASE_RUNNER_SHA256" \
     --expected-resume-runner-sha256 "$E8_V5_RESUME_RUNNER_SHA256" \
     --expected-recovery-runner-sha256 "$E8_V5_RECOVERY_RUNNER_SHA256" \
-    --expected-finalizer-runner-sha256 "$E8_V5_FINALIZER_RUNNER_SHA256"
+    --expected-finalizer-runner-sha256 "$E8_V5_FINALIZER_RUNNER_SHA256" \
+    --expected-successor-runner-sha256 "$E8_V5_SUCCESSOR_RUNNER_SHA256"

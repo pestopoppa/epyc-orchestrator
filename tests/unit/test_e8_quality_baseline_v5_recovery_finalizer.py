@@ -7,6 +7,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -286,6 +287,366 @@ def test_recovery_r2_context_accepts_hash_bound_59_3_438_bundle(tmp_path: Path) 
     accepted = _validate(root, context)
     assert accepted is not None
     assert len(accepted["plan"]["generation_ordinals"]) == 438
+
+
+def test_completed_successor_context_reaches_external_validator(tmp_path: Path) -> None:
+    """Exercise a completed successor through the final validator, not source text.
+
+    This is deliberately synthetic, but every ledger/hash/watcher relation is
+    materialized.  It covers the successor's different 59/3/128/12/298
+    disposition and confirms the external gate accepts it only with a pinned
+    successor runner and an excluded failed-watcher snapshot.
+    """
+    root, _context_value = _context(tmp_path)
+    intermediate = root / "intermediate"
+    snapshot = intermediate / "source_snapshot"
+    scoring = json.loads((snapshot / "scoring_vector.T2.json").read_text())["questions"]
+    reuse = list(range(59))
+    inherited = list(range(59, 62))
+    defects = [97, 138]
+    imported = [ordinal for ordinal in range(62, 192) if ordinal not in defects]
+    replay = list(range(192, 204))
+    generation = [*defects, *range(204, 500)]
+    plan_path = intermediate / "partial_r2_plan.json"
+    plan = {
+        "schema": validator.RECOVERY_R2_SUCCESSOR_PLAN_SCHEMA,
+        "protocol_id": "e8_quality_full_pool_tier_baseline.v5",
+        "source_sha256": json.loads((snapshot / "source_binding.json").read_text())["source_sha256"],
+        "source_tree_sha256": json.loads((snapshot / "source_binding.json").read_text())["source_tree_sha256"],
+        "successor_runner_sha256": _sha(validator.SUCCESSOR_RUNNER_PATH),
+        "tier": 2,
+        "repetition": 2,
+        "n": 500,
+        "generation_concurrency": 3,
+        "t1_core_id": "sealed-t1-core",
+        "reuse_ordinals": reuse,
+        "inherited_scorer_replay_ordinals": inherited,
+        "imported_generation_ordinals": imported,
+        "scorer_replay_ordinals": replay,
+        "generation_defect_ordinals": defects,
+        "generation_ordinals": generation,
+        "successor_watcher_path": "runtime_watch.r2.successor.jsonl",
+    }
+    failed = intermediate / "failed_source_snapshot"
+    for ordinal in replay:
+        scoring[ordinal]["scoring_method"] = "llm_judge"
+    scoring_vector = json.loads((snapshot / "scoring_vector.T2.json").read_text())
+    scoring_vector["questions"] = scoring
+    _write_json(snapshot / "scoring_vector.T2.json", scoring_vector)
+    source_hashes = {
+        str(path.relative_to(snapshot)): _sha(path)
+        for path in sorted(snapshot.rglob("*"))
+        if path.is_file() and path.name != "source_binding.json"
+    }
+    _write_json(
+        snapshot / "source_binding.json",
+        {"source_sha256": source_hashes, "source_tree_sha256": validator.canonical_hash(source_hashes)},
+    )
+    plan["source_sha256"] = source_hashes
+    plan["source_tree_sha256"] = validator.canonical_hash(source_hashes)
+
+    def clean_sidecar(ordinal: int) -> dict:
+        answer = f"answer-{ordinal}"
+        return {
+            "row_type": "question_result",
+            "ordinal": ordinal,
+            "answer": answer,
+            "result": {
+                "qid": f"q{ordinal}",
+                "question_id": f"q{ordinal}",
+                "tokens_generated": 1,
+                "correct": False,
+                "route": "frontdoor",
+                "answer_hash": validator.load_runner()._normalized_answer_hash(answer),
+                "suite": "thinking",
+                **({"scoring_method": "llm_judge"} if ordinal in replay else {}),
+            },
+        }
+
+    failed_rows = [clean_sidecar(ordinal) for ordinal in imported]
+    failed_rows.extend(
+        {
+            **clean_sidecar(ordinal),
+            "result": {
+                **clean_sidecar(ordinal)["result"],
+                "error": True,
+                "error_detail": "scoring_unavailable: synthetic",
+            },
+        }
+        for ordinal in replay
+    )
+    failed_rows.extend(
+        {
+            "row_type": "question_result",
+            "ordinal": ordinal,
+            "answer": "",
+            "result": {
+                "qid": f"q{ordinal}", "question_id": f"q{ordinal}",
+                "tokens_generated": 0, "error": True, "error_detail": "timed out",
+                "route": "frontdoor", "suite": "thinking",
+            },
+        }
+        for ordinal in defects
+    )
+    _write_jsonl(failed / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl", failed_rows)
+    failed_watcher = failed / "runtime_watch.r2.jsonl"
+    _write_jsonl(failed_watcher, [{"ok": False, "started_at": "2026-01-01T00:00:00Z"}])
+    _write_json(
+        failed / "partial_r2_plan.json",
+        {
+            "schema": validator.RECOVERY_R2_PLAN_SCHEMA,
+            "protocol_id": plan["protocol_id"], "n": 500,
+            "reuse_ordinals": reuse, "scorer_replay_ordinals": inherited,
+        },
+    )
+    _write_jsonl(
+        failed / "recovery_rows.T2.r2.jsonl",
+        [
+            {"ordinal": ordinal, "source": source, "response": {"qid": scoring[ordinal]["qid"]}}
+            for source, ordinals in (("reuse", reuse), ("scorer_replay", inherited))
+            for ordinal in ordinals
+        ],
+    )
+    failed_hashes = {
+        str(path.relative_to(failed)): _sha(path)
+        for path in sorted(failed.rglob("*"))
+        if path.is_file()
+    }
+    _write_json(
+        failed / "source_binding.json",
+        {"source_sha256": failed_hashes, "source_tree_sha256": validator.canonical_hash(failed_hashes)},
+    )
+    plan["failed_source_sha256"] = failed_hashes
+    plan["failed_source_tree_sha256"] = validator.canonical_hash(failed_hashes)
+    plan["failed_watcher"] = {
+        "path": "runtime_watch.r2.jsonl",
+        "sha256": _sha(failed_watcher),
+        "eligibility": "excluded_audit_evidence",
+    }
+    _write_json(plan_path, plan)
+    claim = {
+        "claims": [{"payload": {"request_tag": "e8", "region": "q0"}}],
+        "global_claims": [{"region": "q0"}],
+    }
+    proposal_path = intermediate / "recovery_proposal.json"
+    _write_json(
+        proposal_path,
+        {
+            "schema": validator.RECOVERY_R2_SUCCESSOR_PROPOSAL_SCHEMA,
+            "status": "observation_only",
+            "protocol_id": plan["protocol_id"],
+            "source_tree_sha256": plan["source_tree_sha256"],
+            "failed_source_tree_sha256": plan["failed_source_tree_sha256"],
+            "failed_watcher": plan["failed_watcher"],
+            "successor_runner_sha256": plan["successor_runner_sha256"],
+            "generation_concurrency": 3,
+            "generation_ordinals_sha256": validator.canonical_hash(generation),
+            "scorer_replay_ordinals_sha256": validator.canonical_hash(replay),
+            "instrument": {},
+            "region_claim": {"tag": "e8", "regions": ["q0"]},
+            "frontdoor_capacity": {"capacity": 3},
+            "application": "requires_separate_human_finalizer",
+        },
+    )
+    journal = [
+        {"ordinal": ordinal, "source": source, "response": {"qid": scoring[ordinal]["qid"]}}
+        for source, ordinals in (
+            ("reuse", reuse),
+            ("scorer_replay", inherited),
+            ("imported_generation", imported),
+            ("scorer_replay", replay),
+            ("generation", generation),
+        )
+        for ordinal in ordinals
+    ]
+    journal_path = intermediate / "recovery_rows.T2.r2.jsonl"
+    _write_jsonl(journal_path, journal)
+    rows_by_ordinal = {row["ordinal"]: row for row in failed_rows}
+    responses = []
+    final_sidecars = []
+    for ordinal in range(500):
+        source_row = rows_by_ordinal.get(ordinal, clean_sidecar(ordinal))
+        answer = str(source_row.get("answer") or f"answer-{ordinal}")
+        response = {
+            "qid": scoring[ordinal]["qid"],
+            "suite": "thinking",
+            "scoring_method": scoring[ordinal]["scoring_method"],
+            "answer": answer,
+            "correct": False,
+            "error": None,
+            "partial": False,
+            "degraded": False,
+            "route_used": "frontdoor",
+            "scoring_config_sha256": validator.canonical_hash({}),
+        }
+        responses.append(response)
+        result = {
+            **source_row["result"],
+            "qid": response["qid"],
+            "question_id": response["qid"],
+            "tokens_generated": 1,
+            "correct": False,
+            "route": "frontdoor",
+            "answer_hash": validator.load_runner()._normalized_answer_hash(answer),
+        }
+        result.pop("error", None)
+        result.pop("error_detail", None)
+        final_sidecars.append(
+            {"row_type": "question_result", "ordinal": ordinal, "answer": answer, "result": result}
+        )
+    response = intermediate / "responses.T2.r2.jsonl"
+    sidecar = intermediate / "eval_sidecars/question_results.e8-t2-r2.jsonl"
+    trace = intermediate / "judge_traces.T2.r2.jsonl"
+    raw = intermediate / "raw.T2.r2.json"
+    _write_jsonl(response, responses)
+    _write_jsonl(sidecar, final_sidecars)
+    _write_jsonl(trace, [])
+    for row in journal:
+        row["response"] = responses[row["ordinal"]]
+    _write_jsonl(journal_path, journal)
+    _write_jsonl(
+        failed / "recovery_rows.T2.r2.jsonl",
+        [row for row in journal if row["ordinal"] in {*reuse, *inherited}],
+    )
+    failed_hashes = {
+        str(path.relative_to(failed)): _sha(path)
+        for path in sorted(failed.rglob("*"))
+        if path.is_file() and path.name != "source_binding.json"
+    }
+    _write_json(
+        failed / "source_binding.json",
+        {"source_sha256": failed_hashes, "source_tree_sha256": validator.canonical_hash(failed_hashes)},
+    )
+    plan["failed_source_sha256"] = failed_hashes
+    plan["failed_source_tree_sha256"] = validator.canonical_hash(failed_hashes)
+    _write_json(plan_path, plan)
+    proposal = json.loads(proposal_path.read_text())
+    proposal["failed_source_tree_sha256"] = plan["failed_source_tree_sha256"]
+    proposal["failed_watcher"] = plan["failed_watcher"]
+    _write_json(proposal_path, proposal)
+    attempts = [
+        {
+            "schema": validator.RECOVERY_R2_SCORER_ATTEMPTS_SCHEMA,
+            "ordinal": ordinal,
+            "qid": scoring[ordinal]["qid"],
+            "saved_sidecar_sha256": validator.canonical_hash(
+                next(row for row in failed_rows if row["ordinal"] == ordinal)
+            ),
+            "scoring_question_sha256": validator.canonical_hash(scoring[ordinal]),
+            "state": state,
+        }
+        for ordinal in replay
+        for state in ("started", "succeeded")
+    ]
+    attempts_path = intermediate / "scorer_attempts.T2.r2.jsonl"
+    _write_jsonl(attempts_path, attempts)
+    watcher_path = intermediate / "runtime_watch.r2.jsonl"
+    watcher_rows = [
+        {
+            "ok": True,
+            "started_at": "2026-01-01T00:00:00Z",
+            "active_load": {"tier": 2, "repetition": 2},
+            "api_probe_urls": {},
+            "runtime_artifacts": {},
+        },
+        {
+            "ok": True,
+            "started_at": "2026-01-01T00:00:05Z",
+            "active_load": None,
+            "api_probe_urls": {},
+            "runtime_artifacts": {},
+        },
+    ]
+    _write_jsonl(watcher_path, watcher_rows)
+    _write_jsonl(intermediate / "runtime_watch.r2.successor.jsonl", watcher_rows)
+    complete_path = intermediate / "r2_complete.json"
+    complete = {
+        "schema": validator.RECOVERY_R2_COMPLETE_SCHEMA,
+        "status": "intermediate_r2_successor_complete",
+        "plan_sha256": _sha(plan_path),
+        "responses_sha256": _sha(response), "sidecar_sha256": _sha(sidecar),
+        "trace_sha256": _sha(trace), "raw_sha256": _sha(raw),
+        "journal_sha256": _sha(journal_path), "scorer_attempts_sha256": _sha(attempts_path),
+        "failed_watcher": plan["failed_watcher"], "claim": claim,
+        "watcher": {
+            "sha256": _sha(watcher_path), "samples": 2,
+            "claim_before": claim, "claim_after": claim,
+            "proposal_sha256": _sha(proposal_path),
+            "binding_sha256": validator._monitor_binding_sha256(watcher_rows[0]),
+            "observed_gap_count_over_7s": 0, "observed_max_gap_s": 5.0,
+        },
+        "scorer_attempts": {
+            "path": attempts_path.name, "sha256": _sha(attempts_path),
+            "records": 24, "expected_terminal_count": 12,
+            "terminal_states": {"succeeded": 12},
+        },
+    }
+    _write_json(complete_path, complete)
+    finalized = finalizer.validate_intermediate(intermediate)
+    assert finalized["successor"] is True
+    staging = root / "finalizer-staging"
+    for source_path in snapshot.rglob("*"):
+        if source_path.is_file():
+            target = staging / "source_snapshot" / source_path.relative_to(snapshot)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source_path.read_bytes())
+    _write_json(staging / "partial_resume_plan.json", {"source_tree_sha256": "synthetic"})
+    _write_jsonl(staging / "generation_tail_attempts.T2.r1.jsonl", [])
+    _write_jsonl(staging / "judge_traces.T2.r1.jsonl", [])
+    _write_json(staging / "recovery_finalizer_source_plan.json", {"source": "synthetic"})
+    _write_json(staging / "e8_quality_baseline_evidence.json", {"schema": "synthetic"})
+    _write_json(staging / "run_seal.json", {"schema": "synthetic"})
+    base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    source_resume_rows = []
+    for ordinal in range(411):
+        elapsed = ordinal * 5 + (3 if ordinal >= 200 else 0)
+        source_resume_rows.append(
+            {
+                "ok": True,
+                "started_at": (base_time + timedelta(seconds=elapsed)).isoformat().replace("+00:00", "Z"),
+                "active_load": {"tier": 2, "repetition": 1 if ordinal == 0 else 2 if ordinal == 1 else 3},
+                "api_probe_urls": {},
+                "runtime_artifacts": {},
+            }
+        )
+    _write_jsonl(staging / "source_resume_runtime_watch.jsonl", source_resume_rows)
+    historical = {"source": "historical", "sample_indexes": [0]}
+    resume = {"source": "resume", "sample_indexes": [1]}
+    report = {
+        "postconditions": {
+            "watcher_samples": [source_resume_rows[0], source_resume_rows[-1]],
+            "segmented_monitor": [historical, resume],
+            "held_region_claim": claim,
+        }
+    }
+    _write_json(staging / "runner_report.json", report)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(finalizer, "SOURCE_RESUME_WATCHER_SHA256", _sha(staging / "source_resume_runtime_watch.jsonl"))
+    monkeypatch.setattr(finalizer, "SOURCE_RESUME_BINDING_SHA256", finalizer.RESUME._monitor_binding_sha256(source_resume_rows[0]))
+    monkeypatch.setattr(finalizer, "SOURCE_RESUME_MAX_GAP_S", 8.0)
+    monkeypatch.setattr(finalizer.RESUME, "_scorer_recovery_rows", lambda *_args, **_kwargs: [])
+    try:
+        finalizer._rewrite_for_recovery(staging, staging, finalized)
+    finally:
+        monkeypatch.undo()
+    for name in ("responses.T2.r2.jsonl", "judge_traces.T2.r2.jsonl", "raw.T2.r2.json"):
+        target = staging / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((intermediate / name).read_bytes())
+    sidecar_target = staging / "eval_sidecars/question_results.e8-t2-r2.jsonl"
+    sidecar_target.parent.mkdir(parents=True, exist_ok=True)
+    sidecar_target.write_bytes(sidecar.read_bytes())
+    emitted = json.loads((staging / "runner_report.json").read_text())["recovery_r2"]
+    accepted = validator.validate_recovery_r2_context(
+        {"recovery_r2": emitted}, evidence_root=staging,
+        expected_recovery_runner_sha256=_sha(finalizer.RECOVERY_PATH),
+        expected_finalizer_runner_sha256=_sha(finalizer.FINALIZER_PATH) if hasattr(finalizer, "FINALIZER_PATH") else _sha(FINALIZER_PATH),
+        expected_successor_runner_sha256=_sha(validator.SUCCESSOR_RUNNER_PATH),
+        expected_v5_runner_sha256=_sha(finalizer.V5_PATH),
+        expected_base_runner_sha256=_sha(finalizer.V5.V4_PATH),
+        expected_resume_runner_sha256=_sha(finalizer.RESUME_PATH),
+    )
+    assert accepted and accepted["successor"] is True
 
 
 @pytest.mark.parametrize(

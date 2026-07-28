@@ -1136,6 +1136,7 @@ def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path)
     resume_path = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
     recovery_path = PROJECT_ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
     finalizer_path = PROJECT_ROOT / "scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
+    successor_path = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
     assert (
         validator.validate(
             evidence,
@@ -1162,6 +1163,9 @@ def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path)
             ).hexdigest(),
             "E8_V5_FINALIZER_RUNNER_SHA256": hashlib.sha256(
                 finalizer_path.read_bytes()
+            ).hexdigest(),
+            "E8_V5_SUCCESSOR_RUNNER_SHA256": hashlib.sha256(
+                successor_path.read_bytes()
             ).hexdigest(),
             "E8_V5_VALIDATOR_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
             "E8_V5_VALIDATOR_PY_SHA256": validator_sha,
@@ -1484,6 +1488,7 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     resume_path = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
     recovery_path = PROJECT_ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
     finalizer_path = PROJECT_ROOT / "scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
+    successor_path = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
     canonical_applier = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
     )
@@ -1525,6 +1530,9 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         ).hexdigest(),
         "E8_V5_FINALIZER_RUNNER_SHA256": hashlib.sha256(
             finalizer_path.read_bytes()
+        ).hexdigest(),
+        "E8_V5_SUCCESSOR_RUNNER_SHA256": hashlib.sha256(
+            successor_path.read_bytes()
         ).hexdigest(),
         "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
         "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),

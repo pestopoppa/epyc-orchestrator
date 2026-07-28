@@ -25,6 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 V5_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
 RESUME_PATH = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
 RECOVERY_PATH = PROJECT_ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
+SUCCESSOR_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
 CONTEXT_SCHEMA = "epyc.e8_quality_v5_recovery_r2_finalizer.v1"
 COMPOSITE_SOURCE_DIR = Path(
     "/mnt/raid0/llm/epyc-root/artifacts/operator/"
@@ -51,6 +52,7 @@ def _load(path: Path, name: str) -> Any:
 V5 = _load(V5_PATH, "e8_v5_recovery_finalizer")
 RESUME = _load(RESUME_PATH, "e8_v5_recovery_finalizer_resume")
 RECOVERY = _load(RECOVERY_PATH, "e8_v5_recovery_finalizer_r2")
+SUCCESSOR = _load(SUCCESSOR_PATH, "e8_v5_recovery_finalizer_successor")
 V4 = V5.V4
 
 
@@ -137,11 +139,15 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
         "trace": intermediate / "judge_traces.T2.r2.jsonl",
         "journal": intermediate / "recovery_rows.T2.r2.jsonl",
         "scorer_attempts": intermediate / "scorer_attempts.T2.r2.jsonl",
-        "watcher": intermediate / "runtime_watch.r2.jsonl",
     }
     if any(not item.is_file() for item in required.values()):
         raise ValueError("recovery intermediate lacks a required sealed artifact")
     plan = V4.load_json(plan_path)
+    if plan.get("schema") == SUCCESSOR.PLAN_SCHEMA:
+        return _validate_successor_intermediate(intermediate, plan)
+    required["watcher"] = intermediate / "runtime_watch.r2.jsonl"
+    if not required["watcher"].is_file():
+        raise ValueError("recovery intermediate lacks a required sealed artifact")
     source = V4.load_json(source_binding)
     source_hashes = source.get("source_sha256")
     try:
@@ -291,6 +297,116 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
     ):
         raise ValueError("recovery intermediate scorer attempts differ from the sealed replay")
     return {"root": intermediate, "plan": plan, "proposal": proposal, "complete": complete}
+
+
+def _validate_successor_intermediate(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    """Validate the successor as one clean segment plus excluded failed audit."""
+    required = {
+        "proposal": root / "recovery_proposal.json",
+        "complete": root / "r2_complete.json",
+        "responses": root / "responses.T2.r2.jsonl",
+        "sidecar": root / "eval_sidecars/question_results.e8-t2-r2.jsonl",
+        "journal": root / "recovery_rows.T2.r2.jsonl",
+        "attempts": root / "scorer_attempts.T2.r2.jsonl",
+        "watcher": root / "runtime_watch.r2.successor.jsonl",
+        "base_binding": root / "source_snapshot/source_binding.json",
+        "failed_binding": root / "failed_source_snapshot/source_binding.json",
+        "failed_watcher": root / "failed_source_snapshot/runtime_watch.r2.jsonl",
+    }
+    if any(not value.is_file() for value in required.values()):
+        raise ValueError("successor intermediate lacks a required sealed artifact")
+    categories = ("reuse_ordinals", "inherited_scorer_replay_ordinals", "imported_generation_ordinals", "scorer_replay_ordinals", "generation_ordinals")
+    expected_counts = [59, 3, 128, 12, 298]
+    values = [plan.get(name) for name in categories]
+    if (
+        plan.get("protocol_id") != RECOVERY.PROTOCOL_ID
+        or (plan.get("tier"), plan.get("repetition"), plan.get("n")) != (2, 2, 500)
+        or plan.get("generation_concurrency") != V4.CONCURRENCY
+        or [len(value) if isinstance(value, list) else -1 for value in values] != expected_counts
+        or sorted(ordinal for value in values for ordinal in value) != list(range(500))
+        or plan.get("generation_defect_ordinals") != [97, 138]
+        or not set(plan["generation_defect_ordinals"]).issubset(plan["generation_ordinals"])
+    ):
+        raise ValueError("successor plan differs from the reviewed disposition contract")
+    failed_binding = V4.load_json(required["failed_binding"])
+    failed_hashes = failed_binding.get("source_sha256")
+    actual_failed = {
+        str(item.relative_to(required["failed_binding"].parent)): sha256_path(item)
+        for item in required["failed_binding"].parent.rglob("*")
+        if item.is_file() and item != required["failed_binding"]
+    }
+    if (
+        not isinstance(failed_hashes, dict)
+        or failed_hashes != actual_failed
+        or plan.get("failed_source_sha256") != failed_hashes
+        or plan.get("failed_source_tree_sha256") != SUCCESSOR.canonical_hash(failed_hashes)
+        or plan.get("successor_runner_sha256") != sha256_path(SUCCESSOR_PATH)
+        or plan.get("failed_watcher") != {"path": "runtime_watch.r2.jsonl", "sha256": sha256_path(required["failed_watcher"]), "eligibility": "excluded_audit_evidence"}
+    ):
+        raise ValueError("successor failed namespace audit binding differs")
+    failed_rows = V4.load_jsonl(required["failed_watcher"])
+    if not failed_rows or not any(row.get("ok") is False for row in failed_rows):
+        raise ValueError("successor failed watcher is not preserved as failed audit evidence")
+    base_binding = V4.load_json(required["base_binding"])
+    base_hashes = base_binding.get("source_sha256")
+    if not isinstance(base_hashes, dict) or plan.get("source_sha256") != base_hashes or plan.get("source_tree_sha256") != SUCCESSOR.canonical_hash(base_hashes):
+        raise ValueError("successor base source binding differs")
+    vectors = root / "source_snapshot"
+    questions = V4.load_json(vectors / "scoring_vector.T2.json").get("questions")
+    if not isinstance(questions, list) or len(questions) != 500:
+        raise ValueError("successor scoring vector is invalid")
+    imported = SUCCESSOR._rows(root / "failed_source_snapshot/eval_sidecars/question_results.e8-t2-r2-recovery.jsonl")
+    failed_root = root / "failed_source_snapshot"
+    parent_reuse, parent_replay = SUCCESSOR._parent_rows(failed_root, questions)
+    if [
+        len([ordinal for ordinal in plan[name] if ordinal in imported])
+        for name in ("imported_generation_ordinals", "scorer_replay_ordinals", "generation_defect_ordinals")
+    ] != [128, 12, 2]:
+        raise ValueError("successor imported disposition ordinals differ from failed source")
+    if any(SUCCESSOR._classify(imported[ordinal], questions[ordinal]) != "import" for ordinal in plan["imported_generation_ordinals"]) or any(SUCCESSOR._classify(imported[ordinal], questions[ordinal]) != "rescore" for ordinal in plan["scorer_replay_ordinals"]) or any(SUCCESSOR._classify(imported[ordinal], questions[ordinal]) != "generation_defect" for ordinal in plan["generation_defect_ordinals"]):
+        raise ValueError("successor imported row provenance differs from failed source")
+    journal = {row.get("ordinal"): row for row in V4.load_jsonl(required["journal"]) if isinstance(row, dict)}
+    expected_sources = {**{ordinal: "reuse" for ordinal in plan["reuse_ordinals"]}, **{ordinal: "scorer_replay" for ordinal in plan["inherited_scorer_replay_ordinals"]}, **{ordinal: "imported_generation" for ordinal in plan["imported_generation_ordinals"]}, **{ordinal: "scorer_replay" for ordinal in plan["scorer_replay_ordinals"]}, **{ordinal: "generation" for ordinal in plan["generation_ordinals"]}}
+    if set(journal) != set(range(500)) or any(journal[ordinal].get("source") != source or journal[ordinal].get("response", {}).get("qid") != V4._question_qid(questions[ordinal]) for ordinal, source in expected_sources.items()):
+        raise ValueError("successor journal row provenance differs from plan or vector")
+    parent_rows = {row["ordinal"]: row for row in V4.load_jsonl(failed_root / "recovery_rows.T2.r2.jsonl")}
+    if (
+        parent_reuse != plan["reuse_ordinals"]
+        or parent_replay != plan["inherited_scorer_replay_ordinals"]
+        or any(journal[ordinal]["response"] != parent_rows[ordinal]["response"] for ordinal in [*parent_reuse, *parent_replay])
+        or any(journal[ordinal]["response"] != RECOVERY._response_from_sidecar(imported[ordinal], questions[ordinal]) for ordinal in plan["imported_generation_ordinals"])
+        or any(journal[ordinal]["response"].get("answer") != imported[ordinal].get("answer") or journal[ordinal]["response"].get("error") is not None for ordinal in plan["scorer_replay_ordinals"])
+    ):
+        raise ValueError("successor journal does not preserve declared source provenance")
+    attempts = V4.load_jsonl(required["attempts"])
+    if len(attempts) != 24 or any(
+        attempts[index * 2 : index * 2 + 2]
+        != [
+            {"schema": SCORER_ATTEMPTS_SCHEMA, "ordinal": ordinal, "qid": V4._question_qid(questions[ordinal]), "saved_sidecar_sha256": RECOVERY.canonical_hash(imported[ordinal]), "scoring_question_sha256": RECOVERY.canonical_hash(questions[ordinal]), "state": "started"},
+            {"schema": SCORER_ATTEMPTS_SCHEMA, "ordinal": ordinal, "qid": V4._question_qid(questions[ordinal]), "saved_sidecar_sha256": RECOVERY.canonical_hash(imported[ordinal]), "scoring_question_sha256": RECOVERY.canonical_hash(questions[ordinal]), "state": "succeeded"},
+        ]
+        for index, ordinal in enumerate(plan["scorer_replay_ordinals"])
+    ):
+        raise ValueError("successor scorer-tail evidence differs from imported raw output")
+    responses = V4.load_jsonl(required["responses"])
+    _parsed, sidecars = V5.sidecar_question_rows(required["sidecar"], expected_n=500)
+    if (
+        len(responses) != 500
+        or any(response != journal[ordinal]["response"] for ordinal, response in enumerate(responses))
+        or any(not V5.validate_clean_sidecar_result(response, sidecars[ordinal][1], qid=response["qid"]) for ordinal, response in enumerate(responses))
+    ):
+        raise ValueError("successor finalized response or sidecar provenance is incoherent")
+    watcher = V4.load_jsonl(required["watcher"])
+    gaps, max_gap = RESUME._monitor_stats(watcher)
+    if not watcher or any(row.get("ok") is not True for row in watcher) or not any(row.get("active_load") == {"tier": 2, "repetition": 2} for row in watcher) or gaps or max_gap > 7.0:
+        raise ValueError("successor eligibility watcher is not a clean fresh segment")
+    complete = V4.load_json(required["complete"])
+    if complete.get("status") != "intermediate_r2_successor_complete" or complete.get("failed_watcher") != plan["failed_watcher"] or complete.get("watcher", {}).get("sha256") != sha256_path(required["watcher"]):
+        raise ValueError("successor completion does not bind the fresh/excluded watcher split")
+    proposal = V4.load_json(required["proposal"])
+    if proposal.get("schema") != "epyc.e8_quality_v5_partial_r2_successor_proposal.v1" or proposal.get("failed_watcher") != plan["failed_watcher"] or proposal.get("successor_runner_sha256") != plan["successor_runner_sha256"]:
+        raise ValueError("successor proposal differs from failed watcher audit binding")
+    return {"root": root, "plan": plan, "proposal": proposal, "complete": complete, "successor": True}
 
 
 def build_plan(source_dir: Path) -> dict[str, Any]:
@@ -475,6 +591,7 @@ def _copy_bound_intermediate(root: Path, destination: Path) -> None:
         root / "source_snapshot/source_binding.json",
         destination / "source_snapshot/source_binding.json",
     )
+    successor = V4.load_json(root / "partial_r2_plan.json").get("schema") == SUCCESSOR.PLAN_SCHEMA
     for relative in (
         "partial_r2_plan.json",
         "recovery_proposal.json",
@@ -484,9 +601,21 @@ def _copy_bound_intermediate(root: Path, destination: Path) -> None:
         "judge_traces.T2.r2.jsonl",
         "recovery_rows.T2.r2.jsonl",
         "scorer_attempts.T2.r2.jsonl",
-        "runtime_watch.r2.jsonl",
     ):
         _copy_file(root / relative, destination / relative)
+    watcher = "runtime_watch.r2.successor.jsonl" if successor else "runtime_watch.r2.jsonl"
+    _copy_file(root / watcher, destination / "runtime_watch.r2.jsonl")
+    if successor:
+        binding = V4.load_json(root / "failed_source_snapshot/source_binding.json")
+        hashes = binding.get("source_sha256")
+        if not isinstance(hashes, dict):
+            raise ValueError("successor failed audit has no hash map")
+        for relative, digest in hashes.items():
+            source = root / "failed_source_snapshot" / relative
+            if not isinstance(relative, str) or not isinstance(digest, str) or sha256_path(source) != digest:
+                raise ValueError("successor failed audit changed before finalization")
+            _copy_file(source, destination / "failed_source_snapshot" / relative)
+        _copy_file(root / "failed_source_snapshot/source_binding.json", destination / "failed_source_snapshot/source_binding.json")
 
 
 def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[str, Any]) -> None:
@@ -597,6 +726,19 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
         }
         for name in repair_names
     }
+    successor_context: dict[str, Any] = {}
+    if intermediate.get("successor"):
+        failed = copied / "failed_source_snapshot"
+        successor_context = {
+            "successor_runner": {
+                "path": str(SUCCESSOR_PATH),
+                "sha256": sha256_path(SUCCESSOR_PATH),
+            },
+            "failed_source_binding": str(destination / "recovery_r2_intermediate/failed_source_snapshot/source_binding.json"),
+            "failed_source_binding_sha256": sha256_path(failed / "source_binding.json"),
+            "failed_watcher_path": str(destination / "recovery_r2_intermediate/failed_source_snapshot/runtime_watch.r2.jsonl"),
+            "failed_watcher_sha256": sha256_path(failed / "runtime_watch.r2.jsonl"),
+        }
     report["recovery_r2"] = {
         "schema": CONTEXT_SCHEMA,
         "recovery_runner": {"path": str(RECOVERY_PATH), "sha256": sha256_path(RECOVERY_PATH)},
@@ -634,6 +776,7 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
         "composite_source_plan_sha256": sha256_path(
             staging / "recovery_finalizer_source_plan.json"
         ),
+        **successor_context,
     }
     report["pending_human_amendment"] = source_resume_segment["pending_human_amendment"]
     V4.write_json(report_path, report)

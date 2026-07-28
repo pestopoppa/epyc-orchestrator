@@ -18,6 +18,9 @@ from typing import Any
 
 RUNNER_PATH = Path(__file__).with_name("run_e8_quality_baseline_v5.py")
 RESUME_RUNNER_PATH = Path(__file__).with_name("resume_e8_quality_baseline_v5.py")
+SUCCESSOR_RUNNER_PATH = Path(__file__).with_name(
+    "prepare_e8_quality_baseline_v5_partial_r2_successor.py"
+)
 EXPECTED_EVIDENCE_KEYS = {
     "schema",
     "eval_quality_era",
@@ -143,6 +146,17 @@ RECOVERY_R2_COMPLETE_SCHEMA = "epyc.e8_quality_partial_r2_complete.v1"
 RECOVERY_R2_PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_proposal.v1"
 RECOVERY_R2_EXPECTED_COUNTS = {"reuse": 59, "scorer_replay": 3, "generation": 438}
 RECOVERY_R2_SCORER_ATTEMPTS_SCHEMA = "epyc.e8_quality_v5_partial_r2_scorer_attempt.v1"
+RECOVERY_R2_SUCCESSOR_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_successor_plan.v1"
+RECOVERY_R2_SUCCESSOR_PROPOSAL_SCHEMA = (
+    "epyc.e8_quality_v5_partial_r2_successor_proposal.v1"
+)
+RECOVERY_R2_SUCCESSOR_EXPECTED_COUNTS = {
+    "reuse_ordinals": 59,
+    "inherited_scorer_replay_ordinals": 3,
+    "imported_generation_ordinals": 128,
+    "scorer_replay_ordinals": 12,
+    "generation_ordinals": 298,
+}
 COMPOSITE_SOURCE_DIR = Path(
     "/mnt/raid0/llm/epyc-root/artifacts/operator/"
     ".e8_quality_baseline_v5_partial_resume_promptfix_20260728.staging-"
@@ -606,12 +620,275 @@ def _validate_banked_t2_r1_repair_history(context: dict[str, Any], *, evidence_r
             raise ValueError("banked T2/r1 repair-history binding differs")
 
 
+def validate_successor_recovery_r2_context(
+    context: dict[str, Any],
+    *,
+    evidence_root: Path,
+    expected_successor_runner_sha256: str | None,
+) -> dict[str, Any]:
+    """Validate the clean successor segment and its excluded failed predecessor.
+
+    The successor is intentionally not a relaxed instance of the legacy 59/3/438
+    repair.  It has a different disposition, a fresh watcher, and a full copy of
+    the failed namespace.  Keep every one of those facts independently bound here
+    because this validator is the last read-only gate before the human apply token.
+    """
+    if (
+        not isinstance(expected_successor_runner_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_successor_runner_sha256)
+        or sha256_path(SUCCESSOR_RUNNER_PATH) != expected_successor_runner_sha256
+    ):
+        raise ValueError("successor runner differs from the externally reviewed hash")
+    successor_ref = context.get("successor_runner")
+    if successor_ref != {
+        "path": str(SUCCESSOR_RUNNER_PATH),
+        "sha256": expected_successor_runner_sha256,
+    }:
+        raise ValueError("successor runner provenance differs")
+    paths = {
+        name: resolve_artifact(evidence_root, context.get(f"{name}_path"), f"successor {name}")
+        for name in ("plan", "proposal", "complete", "watcher", "response", "sidecar", "trace", "raw", "journal", "scorer_attempts")
+    }
+    if (
+        paths["plan"].name != "partial_r2_plan.json"
+        or paths["proposal"].name != "recovery_proposal.json"
+        or paths["complete"].name != "r2_complete.json"
+        or paths["watcher"].name != "runtime_watch.r2.jsonl"
+        or paths["journal"].name != "recovery_rows.T2.r2.jsonl"
+        or paths["scorer_attempts"].name != "scorer_attempts.T2.r2.jsonl"
+        or any(context.get(f"{name}_sha256") != sha256_path(path) for name, path in paths.items() if name not in {"response", "sidecar", "trace", "raw"})
+    ):
+        raise ValueError("successor artifact hash binding differs")
+    plan = load_json(paths["plan"], "successor plan")
+    categories = tuple(RECOVERY_R2_SUCCESSOR_EXPECTED_COUNTS)
+    category_rows = [plan.get(name) for name in categories]
+    if (
+        plan.get("schema") != RECOVERY_R2_SUCCESSOR_PLAN_SCHEMA
+        or plan.get("protocol_id") != "e8_quality_full_pool_tier_baseline.v5"
+        or (plan.get("tier"), plan.get("repetition"), plan.get("n")) != (2, 2, 500)
+        or plan.get("generation_concurrency") != 3
+        or plan.get("successor_runner_sha256") != expected_successor_runner_sha256
+        or [len(value) if isinstance(value, list) else -1 for value in category_rows]
+        != list(RECOVERY_R2_SUCCESSOR_EXPECTED_COUNTS.values())
+        or sorted(ordinal for value in category_rows for ordinal in value) != list(range(500))
+        or not isinstance(plan.get("generation_defect_ordinals"), list)
+        or len(plan["generation_defect_ordinals"]) != 2
+        or not set(plan["generation_defect_ordinals"]).issubset(plan["generation_ordinals"])
+        or plan.get("successor_watcher_path") != "runtime_watch.r2.successor.jsonl"
+    ):
+        raise ValueError("successor plan differs from its sealed disposition")
+    source_binding_path = resolve_artifact(
+        evidence_root, context.get("source_binding"), "successor source binding"
+    )
+    source_binding = load_json(source_binding_path, "successor source binding")
+    source_hashes = source_binding.get("source_sha256")
+    snapshot = source_binding_path.parent
+    actual_source_hashes = {
+        str(path.relative_to(snapshot)): sha256_path(path)
+        for path in sorted(snapshot.rglob("*"))
+        if path.is_file() and path.name != "source_binding.json"
+    }
+    if (
+        context.get("source_binding_sha256") != sha256_path(source_binding_path)
+        or not isinstance(source_hashes, dict)
+        or source_hashes != actual_source_hashes
+        or source_binding.get("source_tree_sha256") != canonical_hash(source_hashes)
+        or plan.get("source_sha256") != source_hashes
+        or plan.get("source_tree_sha256") != source_binding.get("source_tree_sha256")
+        or context.get("source_tree_sha256") != source_binding.get("source_tree_sha256")
+    ):
+        raise ValueError("successor immutable source binding differs")
+    t1 = load_json(snapshot / "question_vector.T1.json", "successor T1 vector")
+    scoring = load_json(snapshot / "scoring_vector.T2.json", "successor scoring vector")
+    questions = scoring.get("questions")
+    if (
+        t1.get("tier") != 1
+        or not isinstance(t1.get("core_id"), str)
+        or not t1["core_id"]
+        or plan.get("t1_core_id") != t1["core_id"]
+        or scoring.get("schema") != "epyc.e8_quality_scoring_vector.v1"
+        or scoring.get("tier") != 2
+        or scoring.get("n") != 500
+        or not isinstance(questions, list)
+        or len(questions) != 500
+    ):
+        raise ValueError("successor sealed vector binding differs")
+    failed_binding_path = resolve_artifact(
+        evidence_root, context.get("failed_source_binding"), "successor failed-source binding"
+    )
+    failed_binding = load_json(failed_binding_path, "successor failed-source binding")
+    failed_hashes = failed_binding.get("source_sha256")
+    failed_root = failed_binding_path.parent
+    actual_failed_hashes = {
+        str(path.relative_to(failed_root)): sha256_path(path)
+        for path in sorted(failed_root.rglob("*"))
+        if path.is_file() and path.name != "source_binding.json"
+    }
+    failed_watcher_path = resolve_artifact(
+        evidence_root, context.get("failed_watcher_path"), "successor failed watcher"
+    )
+    expected_failed_watcher = {
+        "path": "runtime_watch.r2.jsonl",
+        "sha256": sha256_path(failed_watcher_path),
+        "eligibility": "excluded_audit_evidence",
+    }
+    if (
+        failed_binding_path.name != "source_binding.json"
+        or context.get("failed_source_binding_sha256") != sha256_path(failed_binding_path)
+        or context.get("failed_watcher_sha256") != sha256_path(failed_watcher_path)
+        or not isinstance(failed_hashes, dict)
+        or failed_hashes != actual_failed_hashes
+        or failed_binding.get("source_tree_sha256") != canonical_hash(failed_hashes)
+        or plan.get("failed_source_sha256") != failed_hashes
+        or plan.get("failed_source_tree_sha256") != canonical_hash(failed_hashes)
+        or plan.get("failed_watcher") != expected_failed_watcher
+        or failed_watcher_path != failed_root / "runtime_watch.r2.jsonl"
+        or not any(row.get("ok") is False for row in load_jsonl(failed_watcher_path))
+    ):
+        raise ValueError("successor failed namespace audit binding differs")
+    proposal = load_json(paths["proposal"], "successor proposal")
+    claim = load_json(paths["complete"], "successor completion").get("claim")
+    expected_claim = (
+        {
+            "tag": str(claim["claims"][0]["payload"].get("request_tag") or ""),
+            "regions": sorted(str(item["payload"].get("region") or "") for item in claim["claims"]),
+        }
+        if isinstance(claim, dict) and isinstance(claim.get("claims"), list) and claim["claims"]
+        else None
+    )
+    if (
+        proposal.get("schema") != RECOVERY_R2_SUCCESSOR_PROPOSAL_SCHEMA
+        or proposal.get("status") != "observation_only"
+        or proposal.get("protocol_id") != plan["protocol_id"]
+        or proposal.get("source_tree_sha256") != plan["source_tree_sha256"]
+        or proposal.get("failed_source_tree_sha256") != plan["failed_source_tree_sha256"]
+        or proposal.get("failed_watcher") != plan["failed_watcher"]
+        or proposal.get("successor_runner_sha256") != expected_successor_runner_sha256
+        or proposal.get("generation_concurrency") != 3
+        or proposal.get("generation_ordinals_sha256") != canonical_hash(plan["generation_ordinals"])
+        or proposal.get("scorer_replay_ordinals_sha256") != canonical_hash(plan["scorer_replay_ordinals"])
+        or proposal.get("region_claim") != expected_claim
+        or proposal.get("application") != "requires_separate_human_finalizer"
+        or not isinstance(proposal.get("instrument"), dict)
+        or not isinstance(proposal.get("frontdoor_capacity"), dict)
+        or proposal["frontdoor_capacity"].get("capacity", 0) < 3
+    ):
+        raise ValueError("successor proposal differs from the sealed plan")
+    complete = load_json(paths["complete"], "successor completion")
+    watcher_rows = load_jsonl(paths["watcher"])
+    try:
+        watcher_bindings = {_monitor_binding_sha256(row) for row in watcher_rows}
+        watcher_gaps, watcher_max_gap = _monitor_gap_stats(watcher_rows)
+    except ValueError as exc:
+        raise ValueError("successor watcher rows are malformed") from exc
+    watcher = complete.get("watcher")
+    if (
+        complete.get("schema") != RECOVERY_R2_COMPLETE_SCHEMA
+        or complete.get("status") != "intermediate_r2_successor_complete"
+        or complete.get("plan_sha256") != sha256_path(paths["plan"])
+        or complete.get("responses_sha256") != sha256_path(paths["response"])
+        or complete.get("sidecar_sha256") != sha256_path(paths["sidecar"])
+        or complete.get("trace_sha256") != sha256_path(paths["trace"])
+        or complete.get("raw_sha256") != sha256_path(paths["raw"])
+        or complete.get("journal_sha256") != sha256_path(paths["journal"])
+        or complete.get("scorer_attempts_sha256") != sha256_path(paths["scorer_attempts"])
+        or complete.get("failed_watcher") != plan["failed_watcher"]
+        or not isinstance(watcher, dict)
+        or watcher.get("sha256") != sha256_path(paths["watcher"])
+        or watcher.get("samples") != len(watcher_rows)
+        or watcher.get("claim_before") != claim
+        or watcher.get("claim_after") != claim
+        or watcher.get("proposal_sha256") != sha256_path(paths["proposal"])
+        or watcher.get("binding_sha256") != next(iter(watcher_bindings), None)
+        or watcher.get("observed_gap_count_over_7s") != watcher_gaps
+        or abs(float(watcher.get("observed_max_gap_s", -1)) - watcher_max_gap) > 0.000001
+        or not watcher_rows
+        or any(row.get("ok") is not True for row in watcher_rows)
+        or any(row.get("active_load") not in (None, {"tier": 2, "repetition": 2}) for row in watcher_rows)
+        or not any(row.get("active_load") == {"tier": 2, "repetition": 2} for row in watcher_rows)
+        or len(watcher_bindings) != 1
+        or watcher_gaps
+        or watcher_max_gap > 7.0
+    ):
+        raise ValueError("successor completion or watcher provenance differs")
+    journal = {row.get("ordinal"): row for row in load_jsonl(paths["journal"]) if isinstance(row, dict)}
+    expected_sources = {
+        **{ordinal: "reuse" for ordinal in plan["reuse_ordinals"]},
+        **{ordinal: "scorer_replay" for ordinal in plan["inherited_scorer_replay_ordinals"]},
+        **{ordinal: "imported_generation" for ordinal in plan["imported_generation_ordinals"]},
+        **{ordinal: "scorer_replay" for ordinal in plan["scorer_replay_ordinals"]},
+        **{ordinal: "generation" for ordinal in plan["generation_ordinals"]},
+    }
+    if (
+        set(journal) != set(range(500))
+        or any(
+            journal[ordinal].get("source") != source
+            or journal[ordinal].get("response", {}).get("qid") != questions[ordinal].get("qid")
+            for ordinal, source in expected_sources.items()
+        )
+    ):
+        raise ValueError("successor journal differs from its sealed disposition")
+    scorer_attempts = load_jsonl(paths["scorer_attempts"])
+    failed_sidecars = {
+        row.get("ordinal"): row
+        for row in load_jsonl(failed_root / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl")
+        if row.get("row_type") == "question_result"
+    }
+    expected_attempts = {
+        ordinal: {
+            "qid": questions[ordinal].get("qid"),
+            "saved_sidecar_sha256": canonical_hash(failed_sidecars.get(ordinal)),
+            "scoring_question_sha256": canonical_hash(questions[ordinal]),
+        }
+        for ordinal in plan["scorer_replay_ordinals"]
+    }
+    pairs: dict[int, list[dict[str, Any]]] = {}
+    for row in scorer_attempts:
+        expected = expected_attempts.get(row.get("ordinal")) if isinstance(row, dict) else None
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"schema", "ordinal", "qid", "saved_sidecar_sha256", "scoring_question_sha256", "state"}
+            or row.get("schema") != RECOVERY_R2_SCORER_ATTEMPTS_SCHEMA
+            or expected is None
+            or row.get("qid") != expected["qid"]
+            or row.get("saved_sidecar_sha256") != expected["saved_sidecar_sha256"]
+            or row.get("scoring_question_sha256") != expected["scoring_question_sha256"]
+            or row.get("state") not in {"started", "succeeded"}
+        ):
+            raise ValueError("successor scorer-attempt record differs")
+        pairs.setdefault(row["ordinal"], []).append(row)
+    summary = complete.get("scorer_attempts")
+    if (
+        not isinstance(summary, dict)
+        or summary.get("path") != paths["scorer_attempts"].name
+        or summary.get("sha256") != sha256_path(paths["scorer_attempts"])
+        or summary.get("records") != 24
+        or summary.get("expected_terminal_count") != 12
+        or summary.get("terminal_states") != {"succeeded": 12}
+        or set(pairs) != set(plan["scorer_replay_ordinals"])
+        or any(len(rows) != 2 or [row["state"] for row in rows] != ["started", "succeeded"] for rows in pairs.values())
+    ):
+        raise ValueError("successor scorer-attempt completion binding differs")
+    return {
+        "context": context,
+        "plan": plan,
+        "complete": complete,
+        "response_path": paths["response"],
+        "sidecar_path": paths["sidecar"],
+        "trace_path": paths["trace"],
+        "journal_path": paths["journal"],
+        "scorer_attempts_path": paths["scorer_attempts"],
+        "successor": True,
+    }
+
+
 def validate_recovery_r2_context(
     report: dict[str, Any],
     *,
     evidence_root: Path,
     expected_recovery_runner_sha256: str | None,
     expected_finalizer_runner_sha256: str | None = None,
+    expected_successor_runner_sha256: str | None = None,
     expected_v5_runner_sha256: str | None = None,
     expected_base_runner_sha256: str | None = None,
     expected_resume_runner_sha256: str | None = None,
@@ -675,6 +952,12 @@ def validate_recovery_r2_context(
         raise ValueError("recovery-r2 artifact hash binding differs")
     _validate_banked_t2_r1_repair_history(context, evidence_root=evidence_root)
     plan = load_json(plan_path, "recovery-r2 plan")
+    if plan.get("schema") == RECOVERY_R2_SUCCESSOR_PLAN_SCHEMA:
+        return validate_successor_recovery_r2_context(
+            context,
+            evidence_root=evidence_root,
+            expected_successor_runner_sha256=expected_successor_runner_sha256,
+        )
     _expected_recovery_plan(plan)
     proposal = load_json(proposal_path, "recovery-r2 proposal")
     proposal_claim = proposal.get("region_claim")
@@ -1347,6 +1630,7 @@ def validate(
     expected_resume_runner_sha256: str | None = None,
     expected_recovery_runner_sha256: str | None = None,
     expected_finalizer_runner_sha256: str | None = None,
+    expected_successor_runner_sha256: str | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{64}", expected_runner_sha256):
         raise ValueError("expected runner SHA-256 is malformed")
@@ -1405,6 +1689,7 @@ def validate(
         evidence_root=evidence_root,
         expected_recovery_runner_sha256=expected_recovery_runner_sha256,
         expected_finalizer_runner_sha256=expected_finalizer_runner_sha256,
+        expected_successor_runner_sha256=expected_successor_runner_sha256,
         expected_v5_runner_sha256=expected_runner_sha256,
         expected_base_runner_sha256=expected_base_runner_sha256,
         expected_resume_runner_sha256=expected_resume_runner_sha256,
@@ -2298,6 +2583,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-resume-runner-sha256")
     parser.add_argument("--expected-recovery-runner-sha256")
     parser.add_argument("--expected-finalizer-runner-sha256")
+    parser.add_argument("--expected-successor-runner-sha256")
     args = parser.parse_args(argv)
     print(
         json.dumps(
@@ -2308,6 +2594,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_resume_runner_sha256=args.expected_resume_runner_sha256,
                 expected_recovery_runner_sha256=args.expected_recovery_runner_sha256,
                 expected_finalizer_runner_sha256=args.expected_finalizer_runner_sha256,
+                expected_successor_runner_sha256=args.expected_successor_runner_sha256,
             ),
             sort_keys=True,
         )
