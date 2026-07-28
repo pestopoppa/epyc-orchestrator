@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+from types import SimpleNamespace
 
 import pytest
 
@@ -229,11 +230,70 @@ def test_frozen_c1_source_is_directly_admitted_without_a_root_transition() -> No
     plan = RETRY.build_plan(FAILED_C1_SOURCE, FAILED_C1_TREE_SHA256)
 
     assert plan["predecessor_tree_sha256"] == FAILED_C1_TREE_SHA256
+    assert plan["generation_ordinals"] == plan["race_retry_ordinals"]
     assert plan["race_retry_ordinals"] == [97, 203, 279]
     assert (
         plan["mixed_tail_repair"]["terminalization_transition"]["sha256"]
         == "227bbd841f8fc3a4a58f2ef35d6452b63f7c34e21de4e75a407f21413d4409c6"
     )
+
+
+@pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
+def test_execute_binds_race_generation_targets_before_inference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class ProposalBound(Exception):
+        pass
+
+    captured: dict = {}
+    claim = {
+        "claims": [
+            {
+                "payload": {
+                    "request_tag": "test-race-proposal",
+                    "region": "q3",
+                }
+            }
+        ]
+    }
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", str(RETRY.V4.CONCURRENCY))
+    monkeypatch.setattr(RETRY.RECOVERY, "_capture_recovery_claim", lambda _args: claim)
+    monkeypatch.setattr(RETRY.V4, "runtime_binding", lambda _args: {})
+    monkeypatch.setattr(
+        RETRY.RECOVERY,
+        "preflight_frontdoor_capacity",
+        lambda *_args, **_kwargs: {"capacity": RETRY.V4.CONCURRENCY},
+    )
+    monkeypatch.setattr(RETRY.RECOVERY, "_load_vector", lambda *_args: {})
+    monkeypatch.setattr(
+        RETRY.RECOVERY,
+        "_reconstruct_questions",
+        lambda *_args, **_kwargs: [{"qid": f"q{ordinal}"} for ordinal in range(RETRY.N)],
+    )
+    monkeypatch.setattr(RETRY.RECOVERY, "_instrument_identity", lambda _args: {"test": True})
+
+    def bind_proposal(_output: Path, proposal: dict) -> None:
+        captured.update(proposal)
+        raise ProposalBound
+
+    monkeypatch.setattr(RETRY.RECOVERY, "_bind_recovery_proposal", bind_proposal)
+    args = SimpleNamespace(
+        source_dir=FAILED_C1_SOURCE,
+        expected_source_tree_sha256=FAILED_C1_TREE_SHA256,
+        output_dir=tmp_path / "race-retry",
+        api_url="http://127.0.0.1:8000",
+        region_claim_tag="test-race-proposal",
+        region_claim_regions="q3",
+        region_claim_dir=tmp_path,
+    )
+
+    with pytest.raises(ProposalBound):
+        RETRY.execute(args)
+
+    plan = RETRY.V4.load_json(args.output_dir / "partial_r2_plan.json")
+    assert plan["generation_ordinals"] == [97, 203, 279]
+    assert captured["generation_ordinals_sha256"] == RETRY.canonical_hash([97, 203, 279])
+    assert captured["race_retry_ordinals_sha256"] == captured["generation_ordinals_sha256"]
 
 
 @pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")

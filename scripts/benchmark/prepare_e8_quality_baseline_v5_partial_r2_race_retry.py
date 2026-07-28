@@ -753,7 +753,9 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
         "inherited_scorer_replay_ordinals": predecessor["inherited_scorer_replay_ordinals"],
         "imported_generation_ordinals": predecessor["imported_generation_ordinals"],
         "scorer_replay_ordinals": predecessor["scorer_replay_ordinals"],
-        "predecessor_generation_import_ordinals": clean_generation, "race_retry_ordinals": retry,
+        "predecessor_generation_import_ordinals": clean_generation,
+        "generation_ordinals": retry,
+        "race_retry_ordinals": retry,
         "race_retry_evidence": [{"ordinal": ordinal, "qid": V4._question_qid(questions[ordinal]), "sidecar_sha256": canonical_hash(sidecars[ordinal]), "error_detail": str(sidecars[ordinal]["result"]["error_detail"])} for ordinal in retry],
         "predecessor_watcher": {"path": "runtime_watch.r2.successor.jsonl", "sha256": sha256_path(root / "runtime_watch.r2.successor.jsonl"), "eligibility": "excluded_audit_evidence"},
         "predecessor_failed_attempts": {"path": failure_path.name, "sha256": failure_sha, "eligibility": "exact_race_retry_authorization"},
@@ -835,6 +837,8 @@ def execute(args: argparse.Namespace) -> Path:
     persisted_plan = {key: value for key, value in plan.items() if key != "_journal"}
     RECOVERY._write_json(output / "partial_r2_plan.json", persisted_plan)
     proposal = RECOVERY._recovery_proposal(persisted_plan, output, claim=claim, frontdoor_capacity=capacity, instrument=RECOVERY._instrument_identity(runner_args))
+    if proposal["generation_ordinals_sha256"] != canonical_hash(persisted_plan["race_retry_ordinals"]):
+        raise ValueError("race-retry proposal generation target binding differs")
     proposal.update({"schema": PROPOSAL_SCHEMA, "retry_runner_sha256": persisted_plan["retry_runner_sha256"], "predecessor_tree_sha256": persisted_plan["predecessor_tree_sha256"], "predecessor_watcher": persisted_plan["predecessor_watcher"], "predecessor_failed_attempts": persisted_plan["predecessor_failed_attempts"], "race_retry_ordinals_sha256": canonical_hash(persisted_plan["race_retry_ordinals"])})
     if "mixed_tail_repair" in persisted_plan:
         proposal["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
