@@ -623,6 +623,76 @@ def test_monitor_persistence_failure_is_sticky_and_fails_closed(tmp_path: Path, 
     assert watcher.samples[-1]["ok"] is False
 
 
+def test_runtime_watcher_schedules_from_sample_start_not_completion(monkeypatch) -> None:
+    clock = [0.0]
+    waits: list[float] = []
+    starts: list[float] = []
+
+    class Stop:
+        stopped = False
+
+        def is_set(self) -> bool:
+            return self.stopped
+
+        def wait(self, delay: float) -> bool:
+            waits.append(delay)
+            clock[0] += delay
+            return self.stopped
+
+    stop = Stop()
+    watcher = object.__new__(runner.RuntimeWatcher)
+    watcher._stop = stop
+    watcher._sample_lock = runner.threading.Lock()
+    watcher._last_sample_started_monotonic = 0.0
+
+    def slow_sample() -> None:
+        watcher._last_sample_started_monotonic = clock[0]
+        starts.append(clock[0])
+        clock[0] += 2.75
+        if len(starts) == 3:
+            stop.stopped = True
+
+    watcher.sample = slow_sample
+    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
+
+    watcher._watch()
+
+    assert starts == [5.0, 10.0, 15.0]
+    assert waits == [5.0, 2.25, 2.25]
+
+
+def test_runtime_watcher_serializes_explicit_and_background_samples(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _patch_clean_environment(monkeypatch)
+    args = _args(tmp_path)
+    clean_health = runner.api_health
+    counter_lock = runner.threading.Lock()
+    active = 0
+    max_active = 0
+
+    def delayed_health(*args, **kwargs):
+        nonlocal active, max_active
+        with counter_lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            runner.time.sleep(0.02)
+            return clean_health(*args, **kwargs)
+        finally:
+            with counter_lock:
+                active -= 1
+
+    monkeypatch.setattr(runner, "api_health", delayed_health)
+    watcher = runner.RuntimeWatcher(args, runner.runtime_binding(args))
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _index: watcher.sample(), range(4)))
+
+    assert len(watcher.samples) == 4
+    assert max_active == 1
+
+
 def _health_payload(*, failed_reason: str | None = None) -> dict:
     probes = {
         group: {"ok": True, "url": f"http://127.0.0.1/{index}", "status_code": 200}
