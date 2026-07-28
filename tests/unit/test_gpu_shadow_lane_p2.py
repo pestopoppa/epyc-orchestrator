@@ -526,6 +526,34 @@ class TestDeterministicSmoke:
         failed = [f"{c.name}: {c.detail}" for c in checks if not c.passed]
         assert not failed, failed
 
+    def test_serving_shape_gate_catches_drift(self, tenancy, policy, monkeypatch):
+        """The compiled serving shape must be inside the ceiling table.
+
+        P2-6's ``load_serving_shape`` validates only that np_slots is a measured
+        LEVEL and the context is positive — it never consults the ceiling rows
+        in the same file. So a shape like np32 x 32768 would compile into a live
+        -np/-c while every tenant's ceiling refuses it (32 also exceeds the
+        saturation cap of 16). This gate is what notices.
+        """
+        monkeypatch.setattr(
+            stage0,
+            "load_serving_shape",
+            lambda *a, **k: {
+                "np_slots": 32,
+                "slot_context_tokens": 32768,
+                "context_tokens": 32 * 32768,
+            },
+        )
+        checks = stage0.smoke_checks(tenancy, policy)
+        gate = next(c for c in checks if c.name == "serving_shape.within_ceiling")
+        assert not gate.passed
+        assert "REFUSED BY" in gate.detail
+
+    def test_serving_shape_gate_passes_on_committed_shape(self, tenancy, policy):
+        checks = stage0.smoke_checks(tenancy, policy)
+        gate = next(c for c in checks if c.name == "serving_shape.within_ceiling")
+        assert gate.passed, gate.detail
+
     def test_smoke_is_deterministic(self, tenancy, policy):
         first = [(c.name, c.passed) for c in stage0.smoke_checks(tenancy, policy)]
         second = [(c.name, c.passed) for c in stage0.smoke_checks(tenancy, policy)]

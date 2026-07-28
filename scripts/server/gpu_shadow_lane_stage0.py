@@ -49,6 +49,7 @@ from scripts.server.gpu_shadow_lane import (
     MODE_MTP_OFF,
     NpCeilingPolicy,
     load_np_ceiling_policy,
+    load_serving_shape,
 )
 from scripts.server.gpu_shadow_lane_lease import (
     cpuset_shares_physical_cores,
@@ -403,6 +404,55 @@ def smoke_checks(
             f"np32 x 32768 refusals: {list(guard.refusals) or 'NONE (BUG)'}",
         )
     )
+
+    # 6a. The compiled SERVING SHAPE is inside the ceiling table.
+    #
+    # P2-6's load_serving_shape() feeds orchestration/gpu_shadow_lane_np_ceiling
+    # .yaml's `serving_shape` block through stack-priors into the builder's real
+    # -np/-c. It validates only that np_slots is a measured np LEVEL and that
+    # the context is positive — it never consults the ceiling rows in the same
+    # file. So `np_slots: 32, slot_context_tokens: 32768` would compile into a
+    # live launch while every tenant's ceiling refuses it (32 also exceeds the
+    # saturation cap of 16). The two blocks can drift silently.
+    #
+    # Closing that from the Stage-0 side, because the loader lives in a file
+    # another session is actively editing. The right long-term home is the
+    # loader itself; tracked as a follow-up.
+    try:
+        shape = load_serving_shape()
+    except Exception as exc:  # noqa: BLE001 — any failure is a smoke failure
+        checks.append(Check("serving_shape.loadable", False, f"{type(exc).__name__}: {exc}"))
+    else:
+        offenders: list[str] = []
+        for tenant_id, tenant in tenancy.tenants.items():
+            if tenant.status != "bake_off_arm":
+                continue  # only arms that can actually become resident
+            profile = (
+                "solo_resident"
+                if tenant.co_residency == "forbidden"
+                else "phase2_resident_set"
+            )
+            plan = resolve_lane_plan(
+                tenancy,
+                policy,
+                tenant_id=tenant_id,
+                budget_profile=profile,
+                np_slots=shape["np_slots"],
+                slot_context_tokens=shape["slot_context_tokens"],
+            )
+            if not plan.admissible:
+                offenders.append(f"{tenant_id}: {'; '.join(plan.refusals)}")
+        checks.append(
+            Check(
+                "serving_shape.within_ceiling",
+                not offenders,
+                (
+                    f"-np {shape['np_slots']} x {shape['slot_context_tokens']} "
+                    f"(total -c {shape['context_tokens']})"
+                    + (f" REFUSED BY: {offenders}" if offenders else " admissible for every arm")
+                ),
+            )
+        )
 
     # 7. The recert set is complete — specifically, it contains at least one
     #    role a string-overlap check would have missed.
