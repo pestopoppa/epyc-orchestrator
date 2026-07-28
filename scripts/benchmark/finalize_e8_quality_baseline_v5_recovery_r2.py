@@ -11,13 +11,14 @@ human token.
 from __future__ import annotations
 
 import argparse
-from contextlib import nullcontext
+from datetime import datetime
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import sys
 from typing import Any
+import uuid
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -77,7 +78,7 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
         "journal": intermediate / "recovery_rows.T2.r2.jsonl",
         "watcher": intermediate / "runtime_watch.r2.jsonl",
     }
-    if any(not item.is_file() for item in required):
+    if any(not item.is_file() for item in required.values()):
         raise ValueError("recovery intermediate lacks a required sealed artifact")
     plan = V4.load_json(plan_path)
     source = V4.load_json(source_binding)
@@ -139,6 +140,33 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
         or complete["watcher"].get("claim_after") != complete["claim"]
     ):
         raise ValueError("recovery intermediate completion evidence differs")
+    watcher_rows = V4.load_jsonl(required["watcher"])
+    active = [row.get("active_load") for row in watcher_rows]
+    try:
+        gap_count, max_gap = RESUME._monitor_stats(watcher_rows)
+        bindings = {RESUME._monitor_binding_sha256(row) for row in watcher_rows}
+    except ValueError as exc:
+        raise ValueError("recovery intermediate watcher is malformed") from exc
+    expected_claim = {
+        "tag": str(complete["claim"]["claims"][0]["payload"].get("request_tag") or ""),
+        "regions": sorted(
+            str(item["payload"].get("region") or "") for item in complete["claim"]["claims"]
+        ),
+    }
+    if (
+        not watcher_rows
+        or len(watcher_rows) < 2
+        or complete["watcher"].get("sha256") != sha256_path(required["watcher"])
+        or complete["watcher"].get("samples") != len(watcher_rows)
+        or any(row.get("ok") is not True for row in watcher_rows)
+        or any(load not in (None, {"tier": 2, "repetition": 2}) for load in active)
+        or {"tier": 2, "repetition": 2} not in active
+        or gap_count
+        or max_gap > 7.0
+        or len(bindings) != 1
+        or proposal.get("region_claim") != expected_claim
+    ):
+        raise ValueError("recovery intermediate watcher or claim differs")
     return {"root": intermediate, "plan": plan, "proposal": proposal, "complete": complete}
 
 
@@ -301,36 +329,159 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
 
 
 def execute(args: argparse.Namespace) -> Path:
+    """Finalize completed banked ledgers plus one ordinary V5 T2/r3 collection."""
+    source = args.source_dir.resolve(strict=True)
+    plan = build_plan(source)
     intermediate = validate_intermediate(args.recovery_dir)
-    original_run = RESUME.V5.run_repetition_v5
-    original_segment = RESUME.active_segment
-    original_publish = RESUME.V4.atomic_publish_noreplace
-
-    def recovered_run(tower: Any, *, tier: int, repetition: int, output_dir: Path, published_dir: Path, args: Any, **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-        if (tier, repetition) != (2, 2):
-            return original_run(tower, tier=tier, repetition=repetition, output_dir=output_dir, published_dir=published_dir, args=args, **kwargs)
-        return _install_recovered_r2(intermediate, output_dir, published_dir, args)
-
-    def segment(watcher: Any, *, tier: int, repetition: int) -> Any:
-        return nullcontext() if (tier, repetition) == (2, 2) else original_segment(watcher, tier=tier, repetition=repetition)
-
-    def publish(staging: Path, destination: Path) -> None:
-        _rewrite_for_recovery(staging, destination, intermediate)
-        original_publish(staging, destination)
-
-    RESUME.V5.run_repetition_v5, RESUME.active_segment, RESUME.V4.atomic_publish_noreplace = (
-        recovered_run,
-        segment,
-        publish,
+    destination = args.output_dir.absolute()
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"recovery finalizer output already exists: {destination}")
+    if source == destination or source in destination.parents or destination in source.parents:
+        raise ValueError("recovery finalizer source and destination must not overlap")
+    runner_args = V5.parse_args(
+        ["--collect-candidate", "--output-dir", str(destination), "--api-url", args.api_url]
     )
+    proposal = V5.protocol_proposal(runner_args)
+    report = V4.prepare_report(runner_args, candidate_proposal=proposal)
+    if report["blockers"]:
+        raise RuntimeError("recovery finalizer preflight blocked: " + "; ".join(report["blockers"]))
+    staging = destination.with_name(f".{destination.name}.staging-{uuid.uuid4().hex}")
+    staging.mkdir(mode=0o700)
+    V4.fsync_dir(staging.parent)
     try:
-        return RESUME.execute(args)
-    finally:
-        RESUME.V5.run_repetition_v5, RESUME.active_segment, RESUME.V4.atomic_publish_noreplace = (
-            original_run,
-            original_segment,
-            original_publish,
+        RESUME.write_json_create(staging / "recovery_finalizer_source_plan.json", plan)
+        snapshot = staging / "source_snapshot"
+        RESUME.copy_source_immutable(source, snapshot, plan)
+        RESUME._copy_working_source(snapshot, staging, plan)
+        historical_samples, historical_segment = RESUME._historical_monitor(snapshot, staging, destination)
+        vectors = {tier: V4.load_json(staging / f"question_vector.T{tier}.json") for tier in (1, 2)}
+        scoring = {tier: V4.load_json(staging / f"scoring_vector.T{tier}.json") for tier in (1, 2)}
+        tower = V4.EvalTower(url=args.api_url.rstrip("/"), timeout=V5.REQUEST_TIMEOUT_S)
+        question_sets = RESUME._reconstruct_generation_questions(tower, runner_args, vectors, scoring)
+        V5.protocol_contract(
+            runner_args, V4.candidate_contract_from_proposal(proposal, runner_args), vectors, scoring
         )
+        observations: dict[int, list[dict[str, Any]]] = {1: [], 2: []}
+        details: dict[int, list[dict[str, Any]]] = {1: [], 2: []}
+        for tier, repetitions in ((1, (1, 2, 3)), (2, (1,))):
+            for repetition in repetitions:
+                pristine = RESUME._pristine_reference(
+                    staging=staging, destination=destination, tier=tier, repetition=repetition
+                )
+                observation, detail = RESUME._banked_observation_and_detail(
+                    staging=staging,
+                    destination=destination,
+                    tier=tier,
+                    repetition=repetition,
+                    questions=question_sets[tier],
+                    core_id=str(vectors[tier]["core_id"]),
+                    args=runner_args,
+                    pristine=pristine,
+                    tail={"schema": V5.TAIL_SCHEMA, "targets": [], "retry_count": 0},
+                )
+                if (tier, repetition) == (2, 1):
+                    detail["scorer_tail_replay"] = []
+                    detail["scorer_sidecar_replacement_ordinals"] = []
+                observations[tier].append(observation)
+                details[tier].append(detail)
+        observation, detail = _install_recovered_r2(intermediate, staging, destination, runner_args)
+        observations[2].append(observation)
+        details[2].append(detail)
+        pre_health = report["preconditions"]["health"]
+        pre_fingerprints = report["preconditions"]["file_sha256"]
+        pre_binding = V4.runtime_binding(runner_args)
+        pre_binary = V4.runtime_binding(runner_args, include_binary_hash=True)
+        claim_before = RESUME._capture_held_region_claim(args)
+        tower._question_artifact_dir = staging / "eval_sidecars"
+        watcher = V4.RuntimeWatcher(
+            runner_args,
+            pre_binding,
+            staging / "resume_runtime_watch.jsonl",
+            expected_probe_urls=V4.probe_url_mapping(pre_health),
+            include_receipt=False,
+        )
+        watcher.start()
+        try:
+            with RESUME.active_segment(watcher, tier=2, repetition=3):
+                observation, detail = V5.run_repetition_v5(
+                    tower,
+                    tier=2,
+                    repetition=3,
+                    questions=question_sets[2],
+                    core_id=str(vectors[2]["core_id"]),
+                    output_dir=staging,
+                    expected_binding=pre_binding,
+                    args=runner_args,
+                    sidecar_dir=staging / "eval_sidecars",
+                    published_dir=destination,
+                    watcher=watcher,
+                )
+            observations[2].append(observation)
+            details[2].append(detail)
+        finally:
+            resumed_samples = watcher.stop()
+        claim_after = RESUME._capture_held_region_claim(args)
+        if claim_before != claim_after:
+            raise ValueError("held CPU-region claim changed during recovery finalization")
+        resume_segment = RESUME._resume_monitor_segment(
+            resumed_samples, start=len(historical_samples), staging=staging, destination=destination
+        )
+        V4.write_text(
+            staging / "runtime_watch.jsonl",
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in [*historical_samples, *resumed_samples]),
+        )
+        semantic_error: str | None = None
+        try:
+            V5.validate_repetition_artifacts(staging, details=details, question_sets=question_sets)
+        except Exception as exc:  # noqa: BLE001
+            semantic_error = str(exc)
+        post_health = V4.api_health(runner_args.api_url, runner_args.http_timeout_s)
+        post_fingerprints = V4.file_fingerprints(V4.immutable_paths(runner_args, include_receipt=False))
+        post_binding = V4.runtime_binding(runner_args)
+        post_binary = V4.runtime_binding(runner_args, include_binary_hash=True)
+        post_numeric = V4.numeric_rerun_status(runner_args, V4.load_json(runner_args.state_path))
+        checks = {
+            "six_observations": sum(len(rows) for rows in observations.values()) == 6,
+            "all_vectors_identical_per_tier": all(detail["response_vector_matches_input"] for rows in details.values() for detail in rows),
+            "post_e8_timestamps": all(datetime.fromisoformat(str(row["ts"]).replace("Z", "+00:00")).timestamp() >= V4.E8_BOUNDARY for rows in observations.values() for row in rows),
+            "frozen_endpoints": post_health.get("ok") and post_health.get("payload_sha256") == pre_health.get("payload_sha256"),
+            "no_state_registry_lineup_mutation": post_fingerprints == pre_fingerprints,
+            "numeric_rerun_unchanged": post_numeric == report["preconditions"]["numeric_rerun"],
+            "frozen_runtime_binding": post_binding == pre_binding and post_binary == pre_binary,
+            "continuous_clean_monitor": bool(resumed_samples) and watcher.fatal_error is None and all(row.get("ok") is True for row in [*historical_samples, *resumed_samples]),
+            "all_clean_repetitions": all(detail["n_results"] == vectors[tier]["n"] and not detail["error_classification"] and detail["scoring_audit"]["matches"] for tier, rows in details.items() for detail in rows),
+            "v5_semantic_replay": semantic_error is None,
+        }
+        if not all(checks.values()):
+            raise RuntimeError("recovery finalization failed: " + json.dumps(checks, sort_keys=True))
+        evidence, aggregates = V4.build_evidence(
+            output_dir=staging,
+            published_dir=destination,
+            vectors=vectors,
+            scoring_vectors=scoring,
+            observations=observations,
+            details=details,
+            globally_eligible=True,
+        )
+        candidate_path = staging / "protocol_candidate.json"
+        V4.write_json(candidate_path, proposal)
+        evidence.update({"protocol_candidate": {"path": RESUME._published(candidate_path, staging=staging, destination=destination), "sha256": sha256_path(candidate_path)}, "runner": {"path": str(V5.RUNNER_PATH), "sha256": sha256_path(V5.RUNNER_PATH)}, "run_seal_path": str(destination / "run_seal.json"), "generation_tail_contract": V5.GENERATION_TAIL_CONTRACT})
+        evidence_path = staging / "e8_quality_baseline_evidence.json"
+        V4.write_json(evidence_path, evidence)
+        report.update({"mode": "executed", "protocol_id": RECOVERY.PROTOCOL_ID, "output_dir": str(destination), "evidence_manifest": str(destination / evidence_path.name), "evidence_manifest_sha256": sha256_path(evidence_path), "observations": {str(tier): details[tier] for tier in (1, 2)}, "aggregates": aggregates, "semantic_replay_error": semantic_error, "postconditions": {"health": post_health, "file_sha256": post_fingerprints, "runtime_binding": post_binary, "numeric_rerun": post_numeric, "watcher_samples": [*historical_samples, *resumed_samples], "watcher_path": str(destination / "runtime_watch.jsonl"), "watcher_sha256": sha256_path(staging / "runtime_watch.jsonl"), "segmented_monitor": [historical_segment, resume_segment], "held_region_claim": claim_after, "checks": checks}, "decision_grade": True})
+        report_path = staging / "runner_report.json"
+        V4.write_json(report_path, report)
+        bundle = {RESUME._published(path, staging=staging, destination=destination): sha256_path(path) for path in sorted(staging.rglob("*")) if path.is_file() and path.name != "run_seal.json"}
+        V4.write_json(staging / "run_seal.json", {"schema": "epyc.e8_quality_baseline_run_seal.v1", "status": "complete", "manifest_sha256": sha256_path(evidence_path), "runner_report_sha256": sha256_path(report_path), "protocol_receipt_sha256": None, "protocol_candidate_sha256": sha256_path(candidate_path), "runner_sha256": sha256_path(V5.RUNNER_PATH), "bundle_sha256": bundle, "completed_at": V4.utc_now()})
+        _rewrite_for_recovery(staging, destination, intermediate)
+        if RESUME._safe_source_files(source) != plan["source_sha256"]:
+            raise ValueError("banked source changed during recovery finalization")
+        V4.fsync_dir(staging)
+        V4.atomic_publish_noreplace(staging, destination)
+        V4.fsync_dir(destination.parent)
+        return destination
+    except Exception:
+        raise
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
