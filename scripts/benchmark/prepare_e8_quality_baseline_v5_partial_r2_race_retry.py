@@ -10,6 +10,7 @@ namespace identity is hard-coded here.
 from __future__ import annotations
 
 import argparse
+import math
 from datetime import datetime
 import hashlib
 import importlib.util
@@ -32,8 +33,13 @@ MIXED_REPAIR_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_repair.v1"
 MIXED_PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_repair_proposal.v1"
 MIXED_CHAIN_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_chain.v1"
 MIXED_EVIDENCE_NAME = "mixed_tail_repair.json"
+TERMINALIZATION_NAME = "terminalization_transition.json"
+TERMINALIZATION_SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v1"
+TERMINALIZER_PATH = ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
 COMPLETE_STATUS = "intermediate_r2_race_retry_complete"
 N = 500
+OUTER_TIMEOUT_TOLERANCE_S = 0.5
+OUTER_TIMEOUT_LATENCY_TOLERANCE_MS = 500.0
 
 
 def _load(path: Path, name: str) -> Any:
@@ -116,7 +122,7 @@ def _load_bound_snapshot(root: Path, name: str) -> tuple[dict[str, str], Path]:
     actual = {
         str(path.relative_to(snapshot)): sha256_path(path)
         for path in sorted(snapshot.rglob("*"))
-        if path.is_file() and path.name != "source_binding.json"
+        if path.is_file() and path != binding
     }
     if not isinstance(hashes, dict) or hashes != actual or data.get("source_tree_sha256") != canonical_hash(hashes):
         raise ValueError("race-retry predecessor snapshot binding differs")
@@ -252,6 +258,49 @@ def _mixed_overlap(row: dict[str, Any], watcher: dict[str, Any]) -> bool:
     )
 
 
+def _outer_timeout(row: dict[str, Any], question: dict[str, Any]) -> bool:
+    """Recognize only the sealed, unrouted 300-second outer timeout shape.
+
+    The successor recorded this transport failure outside the normal frontdoor
+    response path.  In particular, ``route`` was absent, not ``None``.  The
+    persisted wall-clock and result latency must agree with the ratified
+    request timeout; generic zero-token errors are not retryable evidence.
+    """
+    result = row.get("result")
+    if (
+        not isinstance(result, dict)
+        or result.get("qid") != V4._question_qid(question)
+        or result.get("question_id") != result.get("qid")
+    ):
+        raise ValueError("mixed-tail original sidecar identity differs from sealed vector")
+    started, ended, elapsed = (
+        row.get("started_at_s"),
+        row.get("ended_at_s"),
+        row.get("elapsed_s"),
+    )
+    latency = result.get("latency_ms")
+    numeric = (started, ended, elapsed, latency)
+    if any(type(value) not in (int, float) or not math.isfinite(float(value)) for value in numeric):
+        return False
+    timeout_s = float(V5.REQUEST_TIMEOUT_S)
+    elapsed_s = float(elapsed)
+    observed_delta = float(ended) - float(started)
+    latency_ms = float(latency)
+    return (
+        result.get("error") is True
+        and result.get("error_detail") == "timed out"
+        and type(result.get("tokens_generated")) is int
+        and result["tokens_generated"] == 0
+        and "route" not in result
+        and row.get("answer") == ""
+        and observed_delta >= 0.0
+        and abs(elapsed_s - timeout_s) <= OUTER_TIMEOUT_TOLERANCE_S
+        and abs(observed_delta - elapsed_s) <= OUTER_TIMEOUT_TOLERANCE_S
+        and abs(latency_ms - elapsed_s * 1000.0) <= OUTER_TIMEOUT_LATENCY_TOLERANCE_MS
+        and abs(latency_ms - timeout_s * 1000.0) <= OUTER_TIMEOUT_LATENCY_TOLERANCE_MS
+    )
+
+
 def _mixed_class(row: dict[str, Any], question: dict[str, Any]) -> str:
     result = row.get("result")
     if not isinstance(result, dict):
@@ -269,6 +318,8 @@ def _mixed_class(row: dict[str, Any], question: dict[str, Any]) -> str:
         and answer in ("", error)
     ):
         return "timeout"
+    if _outer_timeout(row, question):
+        return "outer_timeout"
     if (
         result.get("error") is True
         and error.startswith(RECOVERY.SCORER_UNAVAILABLE_PREFIX)
@@ -295,6 +346,15 @@ def _mixed_ordinals(value: Any, label: str) -> list[int]:
     return value
 
 
+def _validate_terminalization_transition_semantically(root: Path) -> dict[str, Any]:
+    """Reuse the bridge verifier rather than trusting a copied descriptor."""
+    module = _load(MIXED_REPAIR_PATH, "e8_r2_race_retry_terminalization_verifier")
+    transition = module._terminalization_transition(root)
+    if not isinstance(transition, dict):
+        raise ValueError("mixed-tail predecessor terminalization verification is absent")
+    return transition
+
+
 def validate_mixed_predecessor(
     root: Path,
     predecessor_plan: dict[str, Any],
@@ -313,6 +373,7 @@ def validate_mixed_predecessor(
     )
     original_watcher_path = root / "predecessor_snapshot/runtime_watch.r2.successor.jsonl"
     original_proposal_path = root / "predecessor_snapshot/recovery_proposal.json"
+    original_transition_path = root / "predecessor_snapshot" / TERMINALIZATION_NAME
     mixed_proposal_path = root / "recovery_proposal.json"
     required = (
         evidence_path,
@@ -334,6 +395,31 @@ def validate_mixed_predecessor(
         != {"path": original_proposal_path.name, "sha256": sha256_path(original_proposal_path)}
     ):
         raise ValueError("mixed-tail predecessor runner or provenance differs")
+    terminalization = descriptor.get("terminalization_transition")
+    if terminalization is None:
+        if original_transition_path.exists():
+            raise ValueError("mixed-tail predecessor omitted terminalization provenance")
+    else:
+        if (
+            not original_transition_path.is_file()
+            or original_transition_path.is_symlink()
+            or not isinstance(terminalization, dict)
+            or terminalization.get("path") != TERMINALIZATION_NAME
+            or terminalization.get("sha256") != sha256_path(original_transition_path)
+            or terminalization.get("terminalizer_runner")
+            != {"path": TERMINALIZER_PATH.name, "sha256": sha256_path(TERMINALIZER_PATH)}
+        ):
+            raise ValueError("mixed-tail predecessor terminalization provenance differs")
+        transition = V4.load_json(original_transition_path)
+        if (
+            transition.get("schema") != TERMINALIZATION_SCHEMA
+            or transition.get("status") != "terminal_failed"
+            or transition.get("source_tree_sha256") != terminalization.get("source_tree_sha256")
+            or transition.get("terminalizer_runner") != terminalization.get("terminalizer_runner")
+        ):
+            raise ValueError("mixed-tail predecessor terminalization evidence differs")
+        if _validate_terminalization_transition_semantically(original_binding_path.parent) != terminalization:
+            raise ValueError("mixed-tail predecessor terminalization semantics differ")
     original_hashes, original_root = _load_bound_snapshot(root, "predecessor_snapshot")
     if (
         descriptor.get("predecessor_sha256") != original_hashes
@@ -358,7 +444,7 @@ def validate_mixed_predecessor(
             for ordinal in generation
             if _mixed_class(original_sidecars[ordinal], questions[ordinal]) == kind
         )
-        for kind in ("clean", "race_lost", "timeout", "scorer_replay")
+        for kind in ("clean", "race_lost", "timeout", "outer_timeout", "scorer_replay")
     }
     if descriptor.get("allowed_class_ordinals") != classified:
         raise ValueError("mixed-tail allowed classes differ from original sidecars")
@@ -377,7 +463,7 @@ def validate_mixed_predecessor(
         ordinal for ordinal in generation if _mixed_overlap(original_sidecars[ordinal], watcher_evidence)
     )
     race = classified["race_lost"]
-    generation_retry = sorted((set(classified["timeout"]) | set(overlap)) - set(race))
+    generation_retry = sorted((set(classified["timeout"]) | set(classified["outer_timeout"]) | set(overlap)) - set(race))
     scorer_replay = sorted(set(classified["scorer_replay"]) - set(generation_retry))
     if (
         not generation_retry
@@ -436,7 +522,7 @@ def validate_mixed_predecessor(
         or mixed_proposal.get("mixed_tail_repair") != descriptor
     ):
         raise ValueError("mixed-tail proposal differs from its descriptor")
-    return {
+    result = {
         "schema": MIXED_CHAIN_SCHEMA,
         "descriptor": descriptor,
         "descriptor_sha256": canonical_hash(descriptor),
@@ -448,6 +534,9 @@ def validate_mixed_predecessor(
             "tree_sha256": descriptor["predecessor_tree_sha256"],
         },
     }
+    if terminalization is not None:
+        result["terminalization_transition"] = terminalization
+    return result
 
 
 def _validate_predecessor_journal(root: Path, plan: dict[str, Any], questions: list[dict[str, Any]], clean_generation: list[int]) -> dict[int, dict[str, Any]]:
@@ -467,6 +556,38 @@ def _validate_predecessor_journal(root: Path, plan: dict[str, Any], questions: l
     }
     if set(indexed) != set(expected) or any(indexed[o].get("source") != source or indexed[o].get("response", {}).get("qid") != V4._question_qid(questions[o]) for o, source in expected.items()):
         raise ValueError("race-retry predecessor journal differs from its clean sidecars")
+    saved = _authoritative_saved_responses(root, root / "source_snapshot", questions)
+    terminal_saved: dict[int, dict[str, Any]] = {}
+    transition_path = root / TERMINALIZATION_NAME
+    if transition_path.is_file() and not transition_path.is_symlink():
+        transition = V4.load_json(transition_path)
+        journal = transition.get("journal")
+        if not isinstance(journal, dict) or not isinstance(journal.get("before_byte_length"), int):
+            raise ValueError("race-retry terminalization journal descriptor is malformed")
+        raw = (root / "recovery_rows.T2.r2.jsonl").read_bytes()
+        prefix = raw[:journal["before_byte_length"]]
+        if hashlib.sha256(prefix).hexdigest() != journal.get("before_sha256"):
+            raise ValueError("race-retry terminalization journal prefix differs")
+        try:
+            prefix_rows = [json.loads(line) for line in prefix.decode("utf-8").splitlines()]
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("race-retry terminalization journal prefix is malformed") from exc
+        for row in prefix_rows:
+            if not isinstance(row, dict):
+                raise ValueError("race-retry terminalization journal prefix is malformed")
+            ordinal = row.get("ordinal")
+            if not isinstance(ordinal, int) or ordinal in terminal_saved:
+                raise ValueError("race-retry terminalization journal prefix is malformed")
+            terminal_saved[ordinal] = row
+    if any(
+        indexed[ordinal].get("response") not in saved.get(ordinal, [])
+        and (
+            ordinal in clean_generation
+            or indexed[ordinal] != terminal_saved.get(ordinal)
+        )
+        for ordinal in expected
+    ):
+        raise ValueError("race-retry predecessor journal response differs from sealed sidecar")
     return indexed
 
 
@@ -559,6 +680,23 @@ def _saved_rows(root: Path, base: Path) -> dict[int, dict[str, Any]]:
         if existing is not None and existing != row:
             raise ValueError("race-retry saved-row sources conflict on an ordinal")
         saved[ordinal] = row
+    return saved
+
+
+def _authoritative_saved_responses(
+    root: Path, base: Path, questions: list[dict[str, Any]]
+) -> dict[int, list[dict[str, Any]]]:
+    """Collect the immutable sidecars that can attest each journal response."""
+    paths = sorted(base.rglob("eval_sidecars/question_results*.jsonl"))
+    paths.append(root / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl")
+    saved: dict[int, list[dict[str, Any]]] = {}
+    for path in paths:
+        if not path.is_file() or path.is_symlink():
+            raise ValueError("race-retry authoritative sidecar is missing or unsafe")
+        for ordinal, row in _rows(path).items():
+            saved.setdefault(ordinal, []).append(
+                RECOVERY._response_from_sidecar(row, questions[ordinal])
+            )
     return saved
 
 

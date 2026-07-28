@@ -137,7 +137,13 @@ def build_plan(source_dir: Path) -> dict[str, Any]:
     generation = sorted(set(range(N)) - set(reuse) - set(inherited_replay) - {o for o, kind in kinds.items() if kind in {"import", "rescore"}})
     if len(generation) != 298 or not {o for o, kind in kinds.items() if kind == "generation_defect"} <= set(generation):
         raise ValueError("successor fresh generation set differs from the reviewed recovery contract")
-    base_hashes = RECOVERY._source_hashes(vectors)
+    # The snapshot publisher replaces its root binding; nested bindings remain
+    # immutable audit content and must remain hashed.
+    base_hashes = {
+        relative: digest
+        for relative, digest in RECOVERY._source_hashes(vectors).items()
+        if relative != "source_binding.json"
+    }
     return {"schema": PLAN_SCHEMA, "protocol_id": PROTOCOL_ID, "source": str(root), "source_sha256": base_hashes, "source_tree_sha256": canonical_hash(base_hashes), "failed_source_sha256": hashes, "failed_source_tree_sha256": canonical_hash(hashes), "successor_runner_sha256": sha256_path(Path(__file__)), "tier": 2, "repetition": 2, "n": N, "core_id": public.get("core_id"), "t1_core_id": V4.load_json(vectors / "question_vector.T1.json").get("core_id"), "generation_concurrency": V4.CONCURRENCY, "reuse_ordinals": reuse, "inherited_scorer_replay_ordinals": inherited_replay, "imported_generation_ordinals": sorted(o for o, kind in kinds.items() if kind == "import"), "scorer_replay_ordinals": sorted(o for o, kind in kinds.items() if kind == "rescore"), "generation_defect_ordinals": sorted(o for o, kind in kinds.items() if kind == "generation_defect"), "generation_ordinals": generation, "failed_watcher": {"path": "runtime_watch.r2.jsonl", "sha256": hashes["runtime_watch.r2.jsonl"], "eligibility": "excluded_audit_evidence"}, "successor_watcher_path": "runtime_watch.r2.successor.jsonl"}
 
 
