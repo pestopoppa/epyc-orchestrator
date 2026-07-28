@@ -27,6 +27,7 @@ RESUME_PATH = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py
 RECOVERY_PATH = PROJECT_ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
 SUCCESSOR_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
 RACE_RETRY_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
+FINAL_C1_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_final_c1_successor.py"
 MIXED_REPAIR_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
 TERMINALIZER_PATH = PROJECT_ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
 CONTEXT_SCHEMA = "epyc.e8_quality_v5_recovery_r2_finalizer.v1"
@@ -57,6 +58,7 @@ RESUME = _load(RESUME_PATH, "e8_v5_recovery_finalizer_resume")
 RECOVERY = _load(RECOVERY_PATH, "e8_v5_recovery_finalizer_r2")
 SUCCESSOR = _load(SUCCESSOR_PATH, "e8_v5_recovery_finalizer_successor")
 RACE_RETRY = _load(RACE_RETRY_PATH, "e8_v5_recovery_finalizer_race_retry")
+FINAL_C1 = _load(FINAL_C1_PATH, "e8_v5_recovery_finalizer_final_c1")
 V4 = V5.V4
 
 
@@ -149,6 +151,8 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
     plan = V4.load_json(plan_path)
     if plan.get("schema") == RACE_RETRY.PLAN_SCHEMA:
         return _validate_race_retry_intermediate(intermediate, plan)
+    if plan.get("schema") == FINAL_C1.PLAN_SCHEMA:
+        return _validate_final_c1_intermediate(intermediate, plan)
     if plan.get("schema") == SUCCESSOR.PLAN_SCHEMA:
         return _validate_successor_intermediate(intermediate, plan)
     required["watcher"] = intermediate / "runtime_watch.r2.jsonl"
@@ -640,6 +644,103 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
         "race_retry": True,
         "mixed_tail_repair": mixed_tail_repair,
     }
+
+
+def _validate_final_c1_intermediate(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    """Validate the final two-row C1 bridge without widening race admission."""
+    required = {
+        "proposal": root / "recovery_proposal.json",
+        "complete": root / "r2_complete.json",
+        "responses": root / "responses.T2.r2.jsonl",
+        "sidecar": root / "eval_sidecars/question_results.e8-t2-r2.jsonl",
+        "journal": root / "recovery_rows.T2.r2.jsonl",
+        "watcher": root / "runtime_watch.r2.race_retry.jsonl",
+        "attempts": root / "c1_generation_tail_attempts.T2.r2.jsonl",
+        "base_binding": root / "source_snapshot/source_binding.json",
+        "predecessor_binding": root / "predecessor_snapshot/source_binding.json",
+        "predecessor_failures": root / "predecessor_snapshot/generation_failed_attempts.T2.r2.jsonl",
+    }
+    if any(not path.is_file() or path.is_symlink() for path in required.values()):
+        raise ValueError("final-c1 intermediate lacks required sealed evidence")
+    retry = [97, 279]
+    schedule = {
+        "concurrency": 1, "request_timeout_s": V5.REQUEST_TIMEOUT_S,
+        "max_retries_per_target": 1, "sequential": True,
+        "targets": retry, "targets_sha256": FINAL_C1.canonical_hash(retry),
+    }
+    categories = (
+        "reuse_ordinals", "inherited_scorer_replay_ordinals", "imported_generation_ordinals",
+        "scorer_replay_ordinals", "predecessor_generation_import_ordinals", "final_c1_retry_ordinals",
+    )
+    values = [plan.get(name) for name in categories]
+    if (
+        plan.get("protocol_id") != RECOVERY.PROTOCOL_ID
+        or (plan.get("tier"), plan.get("repetition"), plan.get("n")) != (2, 2, 500)
+        or plan.get("generation_concurrency") != V4.CONCURRENCY
+        or plan.get("tail_generation_concurrency") != 1
+        or plan.get("tail_request_timeout_s") != V5.REQUEST_TIMEOUT_S
+        or plan.get("generation_ordinals") != retry
+        or plan.get("race_retry_ordinals") != retry
+        or plan.get("final_c1_retry_ordinals") != retry
+        or plan.get("final_c1_schedule") != schedule
+        or [len(value) if isinstance(value, list) else -1 for value in values] != [59, 3, 128, 12, 296, 2]
+        or sorted(ordinal for value in values for ordinal in value) != list(range(500))
+        or plan.get("final_c1_runner_sha256") != sha256_path(FINAL_C1_PATH)
+        or plan.get("retry_runner_sha256") != sha256_path(RACE_RETRY_PATH)
+    ):
+        raise ValueError("final-c1 plan differs from the fixed two-row C1 contract")
+    base_binding = V4.load_json(required["base_binding"])
+    predecessor_binding = V4.load_json(required["predecessor_binding"])
+    for binding, key, expected in (
+        (base_binding, "source_sha256", plan.get("source_sha256")),
+        (predecessor_binding, "predecessor_sha256", plan.get("predecessor_sha256")),
+    ):
+        hashes = binding.get("source_sha256")
+        root_path = required["base_binding"].parent if key == "source_sha256" else required["predecessor_binding"].parent
+        actual = {str(path.relative_to(root_path)): sha256_path(path) for path in root_path.rglob("*") if path.is_file() and path != root_path / "source_binding.json"}
+        if not isinstance(hashes, dict) or hashes != actual or hashes != expected or binding.get("source_tree_sha256") != FINAL_C1.canonical_hash(hashes):
+            raise ValueError("final-c1 snapshot binding differs")
+    questions = V4.load_json(required["base_binding"].parent / "scoring_vector.T2.json").get("questions")
+    if not isinstance(questions, list) or len(questions) != 500:
+        raise ValueError("final-c1 scoring vector is invalid")
+    journal = {row.get("ordinal"): row for row in V4.load_jsonl(required["journal"]) if isinstance(row, dict)}
+    expected_sources = {
+        **{ordinal: "reuse" for ordinal in plan["reuse_ordinals"]},
+        **{ordinal: "scorer_replay" for ordinal in plan["inherited_scorer_replay_ordinals"]},
+        **{ordinal: "imported_generation" for ordinal in plan["imported_generation_ordinals"]},
+        **{ordinal: "scorer_replay" for ordinal in plan["scorer_replay_ordinals"]},
+        **{ordinal: "predecessor_generation" for ordinal in plan["predecessor_generation_import_ordinals"]},
+        **{ordinal: "generation" for ordinal in retry},
+    }
+    responses = V4.load_jsonl(required["responses"])
+    _parsed, sidecars = V5.sidecar_question_rows(required["sidecar"], expected_n=500)
+    if (
+        set(journal) != set(range(500))
+        or any(journal[o].get("source") != source or journal[o].get("response", {}).get("qid") != V4._question_qid(questions[o]) for o, source in expected_sources.items())
+        or len(responses) != 500
+        or any(response != journal[o]["response"] for o, response in enumerate(responses))
+        or any(not V5.validate_clean_sidecar_result(response, sidecars[o][1], qid=response["qid"]) for o, response in enumerate(responses))
+    ):
+        raise ValueError("final-c1 responses or journal provenance differs")
+    attempts = V4.load_jsonl(required["attempts"])
+    if [row.get("ordinal") for row in attempts] != retry or any(row.get("outcome") != "recovered" or row.get("concurrency") != 1 or row.get("request_timeout_s") != V5.REQUEST_TIMEOUT_S for row in attempts):
+        raise ValueError("final-c1 attempt evidence differs from the sealed sequential schedule")
+    watcher = V4.load_jsonl(required["watcher"])
+    gaps, max_gap = RESUME._monitor_stats(watcher)
+    complete, proposal = V4.load_json(required["complete"]), V4.load_json(required["proposal"])
+    if (
+        not watcher or any(row.get("ok") is not True for row in watcher)
+        or not any(row.get("active_load") == {"tier": 2, "repetition": 2} for row in watcher)
+        or gaps or max_gap > 7.0
+        or complete.get("status") != FINAL_C1.COMPLETE_STATUS
+        or complete.get("final_c1_schedule") != schedule
+        or complete.get("final_c1_runner_sha256") != plan["final_c1_runner_sha256"]
+        or proposal.get("schema") != FINAL_C1.PROPOSAL_SCHEMA
+        or proposal.get("final_c1_schedule") != schedule
+        or proposal.get("tail_generation_concurrency") != 1
+    ):
+        raise ValueError("final-c1 completion, watcher, or proposal differs")
+    return {"root": root, "plan": plan, "proposal": proposal, "complete": complete, "final_c1": True}
 
 
 def build_plan(source_dir: Path) -> dict[str, Any]:
