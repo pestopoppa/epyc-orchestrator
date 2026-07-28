@@ -1761,6 +1761,97 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         attestation.read_bytes()
     ).hexdigest()
 
+    recovery_root = tmp_path / "recovery-attest-root"
+    (recovery_root / "artifacts" / "operator").mkdir(parents=True)
+    recovery_state = tmp_path / "recovery-attest-state.json"
+    shutil.copyfile(state_path, recovery_state)
+    recovery_lock = tmp_path / "recovery-locks" / "e8.lock"
+    recovery_lock.parent.mkdir()
+    recovery_env = dict(sandbox_env)
+    recovery_env.update(
+        {
+            "E8_V5_OPERATOR_ROOT": str(recovery_root),
+            "E8_V5_STATE": str(recovery_state),
+            "E8_V5_LOCK_PATH": str(recovery_lock),
+        }
+    )
+    recovery_stage = subprocess.run(
+        ["bash", str(wrapper), "--stage-state-review", "--evidence", str(evidence)],
+        env=recovery_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert recovery_stage.returncode == 0, recovery_stage.stderr
+    failed_mint_env = dict(recovery_env)
+    failed_mint_env["E8_V5_TEST_FAIL_RECEIPT_MINT"] = "1"
+    failed_mint = subprocess.run(
+        attest, env=failed_mint_env, capture_output=True, text=True, check=False
+    )
+    assert failed_mint.returncode != 0
+    assert "injected protocol receipt mint failure" in failed_mint.stderr
+    assert recovery_state.read_bytes() != state_bytes
+    recovery_state_before_finalize = (
+        recovery_state.stat().st_ino,
+        recovery_state.stat().st_mtime_ns,
+        recovery_state.stat().st_size,
+        recovery_state.read_bytes(),
+    )
+    assert not list((recovery_root / "artifacts" / "operator").glob("*.ratification.json"))
+    transactions = list((recovery_root / "artifacts" / "operator").glob("*.transaction"))
+    apply_attestations = list(
+        (recovery_root / "artifacts" / "operator").glob("*.apply_attestation.json")
+    )
+    assert len(transactions) == len(apply_attestations) == 1
+    transaction_before_finalize = (transactions[0] / "transaction.json").read_bytes()
+    apply_attestations[0].unlink()
+    assert not apply_attestations[0].exists()
+    recovery_reviews = list(
+        (recovery_root / "artifacts" / "operator").glob("*.state_candidate_review.json")
+    )
+    assert len(recovery_reviews) == 1
+    recovery_review_before_tamper = recovery_reviews[0].read_bytes()
+    finalize = [
+        "bash",
+        str(wrapper),
+        "--finalize-receipt",
+        "ATTEST-E8-QUALITY-V5-GENERATION-TAIL-AND-BASELINE-APPLY-20260727",
+        *command[3:],
+    ]
+    tampered_review = json.loads(recovery_review_before_tamper)
+    tampered_review["state_candidate_review"]["exact_state_diff"][0]["after"] = {
+        "tampered": True
+    }
+    recovery_reviews[0].write_text(json.dumps(tampered_review, indent=2, sort_keys=True) + "\n")
+    tampered_finalize = subprocess.run(
+        finalize, env=recovery_env, capture_output=True, text=True, check=False
+    )
+    assert tampered_finalize.returncode != 0
+    assert "retained state-candidate review differs" in tampered_finalize.stderr
+    assert not list((recovery_root / "artifacts" / "operator").glob("*.ratification.json"))
+    recovery_reviews[0].write_bytes(recovery_review_before_tamper)
+    finalized = subprocess.run(
+        finalize, env=recovery_env, capture_output=True, text=True, check=False
+    )
+    assert finalized.returncode == 0, finalized.stderr
+    assert recovery_state_before_finalize == (
+        recovery_state.stat().st_ino,
+        recovery_state.stat().st_mtime_ns,
+        recovery_state.stat().st_size,
+        recovery_state.read_bytes(),
+    )
+    assert transaction_before_finalize == (transactions[0] / "transaction.json").read_bytes()
+    assert apply_attestations[0].is_file()
+    recovered_receipts = list(
+        (recovery_root / "artifacts" / "operator").glob("*.ratification.json")
+    )
+    assert len(recovered_receipts) == 1
+    recovered_receipt = json.loads(recovered_receipts[0].read_text())
+    assert recovered_receipt["canonical_transaction"] == str(transactions[0].resolve())
+    assert recovered_receipt["canonical_apply_attestation"] == str(
+        apply_attestations[0].resolve()
+    )
+
     failing_root = tmp_path / "failing-attest-root"
     (failing_root / "artifacts" / "operator").mkdir(parents=True)
     failing_state = tmp_path / "failing-attest-state.json"

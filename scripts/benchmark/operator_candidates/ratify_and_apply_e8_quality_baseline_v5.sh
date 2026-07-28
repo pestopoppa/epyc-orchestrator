@@ -155,6 +155,15 @@ case "${1:-}" in
         EXPECTED_PRE="$6"
         EXPECTED_CANDIDATE="$8"
         ;;
+    --finalize-receipt)
+        [[ $# -eq 8 && "$3" == "--evidence" && "$5" == "--expected-pre-state-sha256" && "$7" == "--expected-candidate-state-sha256" ]] ||
+            fail 'usage: ratify_and_apply_e8_quality_baseline_v5.sh --finalize-receipt TOKEN --evidence EVIDENCE --expected-pre-state-sha256 SHA --expected-candidate-state-sha256 SHA'
+        [[ "$2" == "$TOKEN" ]] || fail "attestation token differs; use: $TOKEN"
+        MODE="finalize"
+        EVIDENCE="$4"
+        EXPECTED_PRE="$6"
+        EXPECTED_CANDIDATE="$8"
+        ;;
     --prevalidate)
         [[ $# -eq 7 && "$2" == "--evidence" && "$4" == "--expected-pre-state-sha256" && "$6" == "--expected-candidate-state-sha256" ]] ||
             fail 'usage: ratify_and_apply_e8_quality_baseline_v5.sh --prevalidate --evidence EVIDENCE --expected-pre-state-sha256 SHA --expected-candidate-state-sha256 SHA'
@@ -164,18 +173,18 @@ case "${1:-}" in
         EXPECTED_CANDIDATE="$7"
         ;;
     *)
-        fail 'first argument must be --stage-state-review, --attest, or --prevalidate'
+        fail 'first argument must be --stage-state-review, --prevalidate, --attest, or --finalize-receipt'
         ;;
 esac
-[[ -z "$TEST_REVIEW_PATH" || "$MODE" != "attest" ]] ||
-    fail 'pytest-only state-review path is not permitted for --attest'
+[[ -z "$TEST_REVIEW_PATH" || ( "$MODE" != "attest" && "$MODE" != "finalize" ) ]] ||
+    fail 'pytest-only state-review path is not permitted for --attest or --finalize-receipt'
 [[ "$EVIDENCE" = /* && -f "$EVIDENCE" ]] || fail 'evidence must be an existing absolute path'
 if [[ "$MODE" != "stage" ]]; then
     [[ "$EXPECTED_PRE" =~ ^[0-9a-f]{64}$ && "$EXPECTED_CANDIDATE" =~ ^[0-9a-f]{64}$ ]] ||
         fail 'reviewed state hashes must be lowercase SHA-256'
 fi
 verify_reviewed_bindings
-if [[ "$MODE" == "attest" ]]; then
+if [[ "$MODE" == "attest" || "$MODE" == "finalize" ]]; then
     exec 9>"$LOCK"
     flock -n 9 || fail 'another v5 apply owns the lock'
 fi
@@ -282,8 +291,8 @@ PY
 
 validate_state_review() {
     env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 PYTHONOPTIMIZE=0 "$PYTHON" -I - \
-        "$APPLIER" "$STATE" "$EVIDENCE" "$VALIDATOR" "$STATE_REVIEW" "$SOURCE_ROOT" \
-        "$E8_V5_ORCHESTRATOR_HEAD" "$PYTHON" "$REVIEWED_ARTIFACTS" "$EXPECTED_PRE" "$EXPECTED_CANDIDATE" <<'PY'
+        "$APPLIER" "$STATE" "$TRANSACTION" "$EVIDENCE" "$VALIDATOR" "$STATE_REVIEW" "$SOURCE_ROOT" \
+        "$E8_V5_ORCHESTRATOR_HEAD" "$PYTHON" "$REVIEWED_ARTIFACTS" "$EXPECTED_PRE" "$EXPECTED_CANDIDATE" "$MODE" <<'PY'
 import hashlib
 import importlib.util
 import json
@@ -294,6 +303,7 @@ import sys
 (
     adapter_raw,
     state_raw,
+    transaction_raw,
     evidence_raw,
     validator_raw,
     review_raw,
@@ -303,9 +313,11 @@ import sys
     bindings_json,
     expected_pre,
     expected_candidate,
+    mode,
 ) = sys.argv[1:]
 adapter_path = Path(adapter_raw)
 state_path = Path(state_raw)
+transaction_path = Path(transaction_raw)
 evidence_path = Path(evidence_raw)
 validator_path = Path(validator_raw)
 review_path = Path(review_raw)
@@ -347,20 +359,62 @@ environment = {
 }
 environment["PYTHONNOUSERSITE"] = "1"
 environment["PYTHONOPTIMIZE"] = "0"
-fresh = canonical.state_candidate_review_payload(
-    state_path,
-    evidence_path,
-    validator_path,
-    lambda: canonical.run_evidence_validator(validator_path, evidence_path, environment),
-)
-if stored.get("state_candidate_review") != fresh:
-    raise SystemExit("ERROR: state-candidate review differs from a fresh exact recomputation")
-if fresh["pre_state_sha256"] != expected_pre:
-    raise SystemExit("ERROR: live pre-state differs from the reviewed pre-state")
-if fresh["candidate_state_sha256"] != expected_candidate:
-    raise SystemExit("ERROR: derived candidate differs from the reviewed candidate")
-if len(fresh["exact_state_diff"]) != 6:
-    raise SystemExit("ERROR: candidate review is not the exact six-row state diff")
+review = stored.get("state_candidate_review")
+validation = review.get("validation_result") if isinstance(review, dict) else None
+expected_paths = ["/" + "/".join(path) for path in canonical.STATE_REVIEW_PATHS]
+exact_diff = review.get("exact_state_diff") if isinstance(review, dict) else None
+if (
+    not isinstance(review, dict)
+    or set(review) != canonical.STATE_REVIEW_KEYS
+    or review.get("schema") != canonical.STATE_REVIEW_SCHEMA
+    or review.get("state_path") != str(state_path.resolve())
+    or review.get("evidence_path") != str(evidence_path.resolve())
+    or review.get("evidence_sha256") != canonical.sha256_path(evidence_path)
+    or not isinstance(validation, dict)
+    or set(validation) != {"validator", "validator_sha256", "passed"}
+    or validation.get("validator") != str(validator_path.resolve())
+    or validation.get("validator_sha256") != canonical.sha256_path(validator_path)
+    or validation.get("passed") is not True
+    or review.get("pre_state_sha256") != expected_pre
+    or review.get("candidate_state_sha256") != expected_candidate
+    or not isinstance(exact_diff, list)
+    or len(exact_diff) != len(canonical.STATE_REVIEW_PATHS)
+    or not all(isinstance(row, dict) and set(row) == {"path", "before", "after"} for row in exact_diff)
+    or [row["path"] for row in exact_diff] != expected_paths
+):
+    raise SystemExit("ERROR: state-candidate review differs from the exact reviewed transaction")
+if mode == "finalize":
+    if canonical.sha256_path(state_path) != expected_candidate:
+        raise SystemExit("ERROR: live state is not the exact committed candidate")
+    journal_path = transaction_path / "transaction.json"
+    try:
+        journal = canonical.load_json(journal_path, "canonical state transaction journal")
+        record = journal["state_file"]
+        backup_path = Path(record["backup"])
+    except (canonical.ApplyError, KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"ERROR: canonical state transaction is not recoverable: {exc}") from exc
+    expected = canonical.state_candidate_review_payload(
+        backup_path,
+        evidence_path,
+        validator_path,
+        lambda: canonical.run_evidence_validator(validator_path, evidence_path, environment),
+    )
+    expected["state_path"] = str(state_path.resolve())
+    if review != expected:
+        raise SystemExit("ERROR: retained state-candidate review differs from the committed transaction")
+else:
+    fresh = canonical.state_candidate_review_payload(
+        state_path,
+        evidence_path,
+        validator_path,
+        lambda: canonical.run_evidence_validator(validator_path, evidence_path, environment),
+    )
+    if review != fresh:
+        raise SystemExit("ERROR: state-candidate review differs from a fresh exact recomputation")
+    if fresh["pre_state_sha256"] != expected_pre:
+        raise SystemExit("ERROR: live pre-state differs from the reviewed pre-state")
+    if fresh["candidate_state_sha256"] != expected_candidate:
+        raise SystemExit("ERROR: derived candidate differs from the reviewed candidate")
 PY
 }
 
@@ -392,8 +446,10 @@ COMMON=(
 )
 verify_reviewed_bindings
 verify_state_review_pin
-E8_BASELINE_APPLY_TOKEN="$TOKEN" env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 \
-    PYTHONOPTIMIZE=0 "$PYTHON" -I "$APPLIER" "${COMMON[@]}" --validate-only
+if [[ "$MODE" != "finalize" ]]; then
+    E8_BASELINE_APPLY_TOKEN="$TOKEN" env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 \
+        PYTHONOPTIMIZE=0 "$PYTHON" -I "$APPLIER" "${COMMON[@]}" --validate-only
+fi
 if [[ "$MODE" == "prevalidate" ]]; then
     printf 'E8 v5 ratify-and-apply prevalidation passed; no state or receipt changed.\n'
     exit 0
@@ -402,11 +458,16 @@ fi
 mint_protocol_receipt() {
 verify_reviewed_bindings
 verify_state_review_pin
+if [[ "${E8_V5_TEST_FAIL_RECEIPT_MINT:-}" == "1" ]]; then
+    [[ "$TEST_SANDBOX" == "1" && "${E8_V5_TEST_MODE:-}" == "1" && -n "${PYTEST_CURRENT_TEST:-}" ]] ||
+        fail 'receipt-mint fault injection is pytest-only'
+    fail 'injected protocol receipt mint failure after canonical state commit'
+fi
 env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 PYTHONOPTIMIZE=0 "$PYTHON" -I - \
     "$PROTOCOL_RECEIPT" "$TRANSACTION" "$ATTESTATION" "$EVIDENCE" "$WRAPPER" "$PRODUCER" "$RUNNER" "$RESUME_RUNNER" "$BASE_RUNNER" \
     "$RECOVERY_RUNNER" "$FINALIZER_RUNNER" "$SUCCESSOR_RUNNER" "$RACE_RETRY_RUNNER" "$VALIDATOR" "$VALIDATOR_PY" "$APPLIER" "$CANONICAL_APPLIER" "$STATE_REVIEW" \
     "$SOURCE_ROOT" "$E8_V5_ORCHESTRATOR_HEAD" "$EXPECTED_PRE" "$EXPECTED_CANDIDATE" "$STATE_REVIEW_SHA256" "$TOKEN" <<'PY'
-import hashlib, json, os
+import hashlib, json, os, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -453,8 +514,11 @@ payload = {
     },
     "pre_state_sha256": pre, "candidate_state_sha256": candidate,
 }
-if output.exists():
-    existing = json.loads(output.read_text())
+def verify_existing() -> None:
+    try:
+        existing = json.loads(output.read_text())
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("existing protocol ratification is malformed; manual recovery is required") from exc
     existing_without_time = dict(existing)
     ratified_at = existing_without_time.pop("ratified_at", None)
     expected_without_time = dict(payload)
@@ -462,18 +526,31 @@ if output.exists():
     if not isinstance(ratified_at, str) or existing_without_time != expected_without_time:
         raise RuntimeError("existing protocol ratification differs from this reviewed transaction")
     raise SystemExit(0)
+if output.exists() or output.is_symlink():
+    if output.is_symlink() or not output.is_file():
+        raise RuntimeError("existing protocol ratification is not a regular file")
+    verify_existing()
 data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
-fd = os.open(output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+temporary = output.with_name(f".{output.name}.tmp-{uuid.uuid4().hex}")
 try:
-    offset = 0
-    while offset < len(data):
-        written = os.write(fd, memoryview(data)[offset:])
-        if written <= 0 or written > len(data) - offset:
-            raise OSError(f"receipt write made invalid progress: {written}")
-        offset += written
-    os.fsync(fd)
+    fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        offset = 0
+        while offset < len(data):
+            written = os.write(fd, memoryview(data)[offset:])
+            if written <= 0 or written > len(data) - offset:
+                raise OSError(f"receipt write made invalid progress: {written}")
+            offset += written
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.link(temporary, output)
+except FileExistsError:
+    if output.is_symlink() or not output.is_file():
+        raise RuntimeError("racing protocol ratification is not a regular file")
+    verify_existing()
 finally:
-    os.close(fd)
+    temporary.unlink(missing_ok=True)
 dir_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
 try:
     os.fsync(dir_fd)
@@ -484,7 +561,14 @@ PY
 
 verify_reviewed_bindings
 verify_state_review_pin
-E8_BASELINE_APPLY_TOKEN="$TOKEN" env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 \
-    PYTHONOPTIMIZE=0 "$PYTHON" -I "$APPLIER" "${COMMON[@]}" --attest "$TOKEN"
+if [[ "$MODE" == "finalize" ]]; then
+    [[ -d "$TRANSACTION" ]] ||
+        fail 'receipt finalization requires an existing canonical transaction'
+    E8_BASELINE_APPLY_TOKEN="$TOKEN" env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 \
+        PYTHONOPTIMIZE=0 "$PYTHON" -I "$APPLIER" "${COMMON[@]}" --recover "$TOKEN"
+else
+    E8_BASELINE_APPLY_TOKEN="$TOKEN" env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 \
+        PYTHONOPTIMIZE=0 "$PYTHON" -I "$APPLIER" "${COMMON[@]}" --attest "$TOKEN"
+fi
 mint_protocol_receipt
-printf 'E8 v5 state CAS committed and protocol receipt created: %s\n' "$PROTOCOL_RECEIPT"
+printf 'E8 v5 canonical state is committed and protocol receipt finalized: %s\n' "$PROTOCOL_RECEIPT"
