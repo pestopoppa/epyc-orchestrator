@@ -1132,6 +1132,10 @@ def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path)
     runner_sha = hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest()
     base_runner_sha = hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest()
     validator_sha = hashlib.sha256(validator_path.read_bytes()).hexdigest()
+    producer_path = PROJECT_ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_source.py"
+    resume_path = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
+    recovery_path = PROJECT_ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
+    finalizer_path = PROJECT_ROOT / "scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
     assert (
         validator.validate(
             evidence,
@@ -1149,13 +1153,21 @@ def test_proposed_v5_validator_and_shell_replay_synthetic_bundle(tmp_path: Path)
         env={
             **__import__("os").environ,
             "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
+            "E8_V5_PRODUCER_SHA256": hashlib.sha256(producer_path.read_bytes()).hexdigest(),
             "E8_V5_RUNNER_SHA256": runner_sha,
             "E8_V5_BASE_RUNNER_SHA256": base_runner_sha,
-            "E8_V5_RESUME_RUNNER_SHA256": hashlib.sha256(
-                (PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py").read_bytes()
+            "E8_V5_RESUME_RUNNER_SHA256": hashlib.sha256(resume_path.read_bytes()).hexdigest(),
+            "E8_V5_RECOVERY_RUNNER_SHA256": hashlib.sha256(
+                recovery_path.read_bytes()
+            ).hexdigest(),
+            "E8_V5_FINALIZER_RUNNER_SHA256": hashlib.sha256(
+                finalizer_path.read_bytes()
             ).hexdigest(),
             "E8_V5_VALIDATOR_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
             "E8_V5_VALIDATOR_PY_SHA256": validator_sha,
+            "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+            ).strip(),
         },
         capture_output=True,
         text=True,
@@ -1427,8 +1439,17 @@ def test_v5_applier_adapter_plan_is_read_only(tmp_path: Path) -> None:
     assert all(not path.exists() for path in paths)
 
 
+@pytest.mark.parametrize(
+    "bad_pin",
+    [
+        "E8_V5_PRODUCER_SHA256",
+        "E8_V5_RECOVERY_RUNNER_SHA256",
+        "E8_V5_FINALIZER_RUNNER_SHA256",
+    ],
+)
 def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     tmp_path: Path,
+    bad_pin: str,
 ) -> None:
     evidence = _synthetic_candidate(tmp_path)
     adapter = (
@@ -1459,6 +1480,10 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
     )
     validator_py = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
+    producer_path = PROJECT_ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_source.py"
+    resume_path = PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
+    recovery_path = PROJECT_ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
+    finalizer_path = PROJECT_ROOT / "scripts/benchmark/finalize_e8_quality_baseline_v5_recovery_r2.py"
     canonical_applier = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
     )
@@ -1476,37 +1501,44 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         if lock_path.exists()
         else None
     )
+    command = [
+        "bash",
+        str(wrapper),
+        "--prevalidate",
+        "--evidence",
+        str(evidence),
+        "--expected-pre-state-sha256",
+        pre_sha,
+        "--expected-candidate-state-sha256",
+        candidate_sha,
+    ]
+    env = {
+        **__import__("os").environ,
+        "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
+        "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+        "E8_V5_PRODUCER_SHA256": hashlib.sha256(producer_path.read_bytes()).hexdigest(),
+        "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
+        "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
+        "E8_V5_RESUME_RUNNER_SHA256": hashlib.sha256(resume_path.read_bytes()).hexdigest(),
+        "E8_V5_RECOVERY_RUNNER_SHA256": hashlib.sha256(
+            recovery_path.read_bytes()
+        ).hexdigest(),
+        "E8_V5_FINALIZER_RUNNER_SHA256": hashlib.sha256(
+            finalizer_path.read_bytes()
+        ).hexdigest(),
+        "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
+        "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
+        "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+        "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(
+            canonical_applier.read_bytes()
+        ).hexdigest(),
+        "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+        ).strip(),
+    }
     completed = subprocess.run(
-        [
-            "bash",
-            str(wrapper),
-            "--prevalidate",
-            "--evidence",
-            str(evidence),
-            "--expected-pre-state-sha256",
-            pre_sha,
-            "--expected-candidate-state-sha256",
-            candidate_sha,
-        ],
-        env={
-            **__import__("os").environ,
-            "E8_V5_SOURCE_ROOT": str(PROJECT_ROOT),
-            "E8_V5_WRAPPER_SHA256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
-            "E8_V5_RUNNER_SHA256": hashlib.sha256(runner.RUNNER_PATH.read_bytes()).hexdigest(),
-            "E8_V5_BASE_RUNNER_SHA256": hashlib.sha256(runner.V4_PATH.read_bytes()).hexdigest(),
-            "E8_V5_RESUME_RUNNER_SHA256": hashlib.sha256(
-                (PROJECT_ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py").read_bytes()
-            ).hexdigest(),
-            "E8_V5_VALIDATOR_SHA256": hashlib.sha256(validator_shell.read_bytes()).hexdigest(),
-            "E8_V5_VALIDATOR_PY_SHA256": hashlib.sha256(validator_py.read_bytes()).hexdigest(),
-            "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
-            "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(
-                canonical_applier.read_bytes()
-            ).hexdigest(),
-            "E8_V5_ORCHESTRATOR_HEAD": subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
-            ).strip(),
-        },
+        command,
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -1526,3 +1558,40 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         else None
     )
     assert lock_after == lock_before
+
+    bad_env = dict(env)
+    bad_env[bad_pin] = "0" * 64
+    rejected = subprocess.run(
+        command,
+        env=bad_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "reviewed artifact pin differs" in rejected.stderr
+    assert state_path.read_bytes() == state_bytes
+    assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
+    bad_lock_after = (
+        (
+            lock_path.stat().st_ino,
+            lock_path.stat().st_size,
+            lock_path.stat().st_mtime_ns,
+            lock_path.read_bytes(),
+        )
+        if lock_path.exists()
+        else None
+    )
+    assert bad_lock_after == lock_before
+
+
+def test_final_wrapper_receipt_binds_composite_source_identity() -> None:
+    wrapper = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    source = wrapper.read_text()
+    assert '"source_root": str(source_root.resolve())' in source
+    assert '"source_head": source_head' in source
+    for field in ("producer", "recovery_runner", "finalizer_runner"):
+        assert f'"{field}": sha({field})' in source
