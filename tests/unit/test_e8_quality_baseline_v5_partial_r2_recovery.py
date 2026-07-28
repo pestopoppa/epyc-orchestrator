@@ -318,7 +318,10 @@ class _FakeResult:
 
 
 class _FakeWatcher:
+    last_instance: "_FakeWatcher | None" = None
+
     def __init__(self, _runner_args, _binding, path: Path, **_kwargs) -> None:
+        type(self).last_instance = self
         self.started = False
         self.path = path
         self.samples: list[dict] = recovery.V4.load_jsonl(path) if path.exists() else []
@@ -532,12 +535,76 @@ def test_execute_uses_original_ordinals_reconciles_scorer_and_stops_at_r2(
     assert marker["watcher"]["proposal_sha256"] == recovery.sha256_path(
         output / "recovery_proposal.json"
     )
+    assert marker["scorer_attempts"] == {
+        "path": "scorer_attempts.T2.r2.jsonl",
+        "sha256": recovery.sha256_path(output / "scorer_attempts.T2.r2.jsonl"),
+        "records": 2,
+        "expected_terminal_count": 1,
+        "terminal_states": {"succeeded": 1},
+    }
+    assert marker["scorer_attempts_sha256"] == marker["scorer_attempts"]["sha256"]
     (output / "raw.T2.r2.json").write_text('{"q": 0}\n')
     assert marker["raw_sha256"] != recovery.sha256_path(output / "raw.T2.r2.json")
     assert (output / "r3_complete.json").exists() is False
     assert (output / "run_seal.json").exists() is False
     assert (output / "responses.T2.r2.jsonl").is_file()
     assert (output / "raw.T2.r2.json").is_file()
+
+
+def test_scorer_replay_runs_inside_the_shared_active_load_watcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _small_contract(monkeypatch)
+    requests: list[list[int]] = []
+    _patch_execute_environment(monkeypatch, requests)
+    observed_active_load: list[dict[str, int] | None] = []
+
+    def score(*_args, **_kwargs):
+        assert _FakeWatcher.last_instance is not None
+        observed_active_load.append(_FakeWatcher.last_instance._active_load)
+        return True, None
+
+    monkeypatch.setattr(recovery.V4, "score_answer_or_error", score)
+    output = recovery.execute(_args(_small_source(tmp_path), tmp_path / "output"))
+
+    assert observed_active_load == [{"tier": 2, "repetition": 2}]
+    watcher = recovery.V4.load_jsonl(output / "runtime_watch.r2.jsonl")
+    assert any(row["active_load"] == {"tier": 2, "repetition": 2} for row in watcher)
+    assert requests == [[1, 3, 4]]
+
+
+def test_failed_scorer_attempt_is_durable_and_cannot_be_replayed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _small_contract(monkeypatch)
+    requests: list[list[int]] = []
+    _patch_execute_environment(monkeypatch, requests)
+    source = _small_source(tmp_path)
+    output = tmp_path / "output"
+    calls = 0
+
+    def fail_score(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        assert _FakeWatcher.last_instance is not None
+        assert _FakeWatcher.last_instance._active_load == {"tier": 2, "repetition": 2}
+        return False, "judge unavailable"
+
+    monkeypatch.setattr(recovery.V4, "score_answer_or_error", fail_score)
+    with pytest.raises(RuntimeError, match="scorer-only replay failed closed"):
+        recovery.execute(_args(source, output))
+
+    attempts = recovery.V4.load_jsonl(output / "scorer_attempts.T2.r2.jsonl")
+    assert [row["state"] for row in attempts] == ["started", "failed"]
+    assert attempts[0]["ordinal"] == attempts[1]["ordinal"] == 2
+    assert attempts[0]["qid"] == attempts[1]["qid"] == "q-2"
+    watcher = recovery.V4.load_jsonl(output / "runtime_watch.r2.jsonl")
+    assert any(row["active_load"] == {"tier": 2, "repetition": 2} for row in watcher)
+
+    with pytest.raises(RuntimeError, match="failed scorer-replay history"):
+        recovery.execute(_args(source, output))
+    assert calls == 1
+    assert requests == []
 
 
 @pytest.mark.parametrize("failure", ("binding", "cadence"))
