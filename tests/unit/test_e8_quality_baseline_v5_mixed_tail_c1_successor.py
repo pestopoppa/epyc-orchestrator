@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import importlib.util
 import os
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -92,3 +93,45 @@ def test_c1_environment_restores_callers_c3_value(monkeypatch: pytest.MonkeyPatc
     with RUNNER._c1_environment(tmp_path, "http://127.0.0.1:8000"):
         assert os.environ["AUTOPILOT_EVAL_CONCURRENCY"] == "1"
     assert os.environ["AUTOPILOT_EVAL_CONCURRENCY"] == "3"
+
+
+def test_focused_sidecar_path_uses_real_eval_tower_explicit_artifact_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Exercise EvalTower's writer, not a runner-invented filename convention."""
+    sidecar_dir = tmp_path / "sidecars"
+    label = "e8-mixed-c1-tail-t2-r2-o138"
+    qid = "needle_32768_0.75"
+    tower = RUNNER.V4.EvalTower(url="http://127.0.0.1:8000", timeout=1)
+    tower.set_question_artifact_dir(sidecar_dir)
+    eval_tower = sys.modules[RUNNER.V4.EvalTower.__module__]
+
+    result = eval_tower.QuestionResult(
+        question_id=qid,
+        qid=qid,
+        suite="needle_parameterized",
+        prompt="sealed prompt",
+        expected="needle",
+        answer="needle",
+        correct=True,
+        route_used="frontdoor",
+        tokens_generated=1,
+        elapsed_s=0.01,
+    )
+    monkeypatch.setattr(tower, "_eval_question", lambda _question, _client: result)
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
+
+    [actual] = tower._eval_batch(
+        [{"id": qid, "qid": qid, "_ordinal": 138, "suite": "needle_parameterized"}],
+        object(),
+        label=label,
+    )
+
+    path = RUNNER._focused_sidecar_path(sidecar_dir, label=label)
+    assert path.parent == sidecar_dir
+    assert path.name == f"question_results.{label}.jsonl"
+    _line, row = RUNNER._focused_sidecar_row(path, ordinal=138)
+    recorded = row["result"]
+    assert actual.question_id == qid
+    assert recorded["qid"] == qid
+    assert recorded["question_id"] == qid
