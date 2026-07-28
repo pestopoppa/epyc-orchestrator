@@ -1244,7 +1244,7 @@ def validate(
                 detail.get("judge_trace_path"),
                 "judge-trace ledger",
             )
-            if recovery_context is not None and (tier, repetition) == (2, 2):
+            if recovery_context is not None and (tier, repetition) in {(2, 1), (2, 2)}:
                 recovered = recovery_context
                 if (
                     response_path != recovered["response_path"]
