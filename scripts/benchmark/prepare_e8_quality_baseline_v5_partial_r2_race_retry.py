@@ -349,24 +349,73 @@ def _mixed_ordinals(value: Any, label: str) -> list[int]:
 
 
 def _validate_terminalization_transition_semantically(root: Path) -> dict[str, Any]:
-    """Reuse the bridge verifier rather than trusting a copied descriptor."""
+    """Reuse the bridge verifier through one exact nested-snapshot wrapper.
+
+    ``RACE._copy_tree`` adds ``source_binding.json`` when it nests a terminal
+    predecessor.  That wrapper was never part of the terminalizer's payload
+    manifest, so validate it independently and hide only that exact file from
+    the unchanged terminalization verifier.
+    """
     module = _load(MIXED_REPAIR_PATH, "e8_r2_race_retry_terminalization_verifier")
-    transition = module._terminalization_transition(root)
+    original_source_hashes = module.source_hashes
+    root_resolved = root.resolve(strict=True)
+
+    def source_hashes_without_exact_wrapper(candidate: Path) -> dict[str, str]:
+        hashes = original_source_hashes(candidate)
+        if candidate.resolve(strict=True) != root_resolved:
+            return hashes
+        binding_path = candidate / "source_binding.json"
+        if not binding_path.is_file() or binding_path.is_symlink():
+            return hashes
+        binding = V4.load_json(binding_path)
+        payload_hashes = dict(hashes)
+        payload_hashes.pop("source_binding.json", None)
+        if (
+            set(binding) != {"source_sha256", "source_tree_sha256"}
+            or binding.get("source_sha256") != payload_hashes
+            or binding.get("source_tree_sha256") != canonical_hash(payload_hashes)
+        ):
+            raise ValueError("mixed-tail predecessor enclosing source binding differs")
+        return payload_hashes
+
+    original_journal_verifier = module.RACE._validate_predecessor_journal
+
+    def journal_verifier_with_validated_transition(
+        candidate_root: Path,
+        plan: dict[str, Any],
+        questions: list[dict[str, Any]],
+        clean_generation: list[int],
+    ) -> dict[int, dict[str, Any]]:
+        return original_journal_verifier(
+            candidate_root,
+            plan,
+            questions,
+            clean_generation,
+            terminalization_transition_path=candidate_root / TERMINALIZATION_NAME,
+        )
+
+    module.source_hashes = source_hashes_without_exact_wrapper
+    module.RACE._validate_predecessor_journal = journal_verifier_with_validated_transition
+    try:
+        transition = module._terminalization_transition(root)
+    finally:
+        module.source_hashes = original_source_hashes
+        module.RACE._validate_predecessor_journal = original_journal_verifier
     if not isinstance(transition, dict):
         raise ValueError("mixed-tail predecessor terminalization verification is absent")
     return transition
 
 
-def validate_mixed_predecessor(
+def _validate_mixed_predecessor(
     root: Path,
     predecessor_plan: dict[str, Any],
     questions: list[dict[str, Any]],
     current_sidecars: dict[int, dict[str, Any]],
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, Path | None]:
     """Recompute an optional mixed-tail chain from its nested original snapshot."""
     descriptor = predecessor_plan.get("mixed_tail_repair")
     if descriptor is None:
-        return None
+        return None, None
     evidence_path = root / MIXED_EVIDENCE_NAME
     original_binding_path = root / "predecessor_snapshot/source_binding.json"
     original_plan_path = root / "predecessor_snapshot/partial_r2_plan.json"
@@ -544,10 +593,30 @@ def validate_mixed_predecessor(
     }
     if terminalization is not None:
         result["terminalization_transition"] = terminalization
+    return result, original_transition_path if terminalization is not None else None
+
+
+def validate_mixed_predecessor(
+    root: Path,
+    predecessor_plan: dict[str, Any],
+    questions: list[dict[str, Any]],
+    current_sidecars: dict[int, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Public compatibility wrapper returning only durable mixed-chain evidence."""
+    result, _transition_path = _validate_mixed_predecessor(
+        root, predecessor_plan, questions, current_sidecars
+    )
     return result
 
 
-def _validate_predecessor_journal(root: Path, plan: dict[str, Any], questions: list[dict[str, Any]], clean_generation: list[int]) -> dict[int, dict[str, Any]]:
+def _validate_predecessor_journal(
+    root: Path,
+    plan: dict[str, Any],
+    questions: list[dict[str, Any]],
+    clean_generation: list[int],
+    *,
+    terminalization_transition_path: Path | None = None,
+) -> dict[int, dict[str, Any]]:
     journal_rows = V4.load_jsonl(root / "recovery_rows.T2.r2.jsonl")
     indexed: dict[int, dict[str, Any]] = {}
     for row in journal_rows:
@@ -566,9 +635,25 @@ def _validate_predecessor_journal(root: Path, plan: dict[str, Any], questions: l
         raise ValueError("race-retry predecessor journal differs from its clean sidecars")
     saved = _authoritative_saved_responses(root, root / "source_snapshot", questions)
     terminal_saved: dict[int, dict[str, Any]] = {}
-    transition_path = root / TERMINALIZATION_NAME
-    if transition_path.is_file() and not transition_path.is_symlink():
-        transition = V4.load_json(transition_path)
+    if terminalization_transition_path is None:
+        # Compatibility for the immutable mixed-tail verifier: it calls this
+        # only after fully validating the terminalization manifest, but cannot
+        # pass the path without changing its banked runner hash.
+        candidate = root / TERMINALIZATION_NAME
+        if candidate.is_file() and not candidate.is_symlink():
+            terminalization_transition_path = candidate
+    if terminalization_transition_path is not None:
+        allowed_paths = {
+            root / TERMINALIZATION_NAME,
+            root / "predecessor_snapshot" / TERMINALIZATION_NAME,
+        }
+        if (
+            terminalization_transition_path not in allowed_paths
+            or not terminalization_transition_path.is_file()
+            or terminalization_transition_path.is_symlink()
+        ):
+            raise ValueError("race-retry validated terminalization transition path differs")
+        transition = V4.load_json(terminalization_transition_path)
         journal = transition.get("journal")
         if not isinstance(journal, dict) or not isinstance(journal.get("before_byte_length"), int):
             raise ValueError("race-retry terminalization journal descriptor is malformed")
@@ -646,9 +731,17 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
     if not retry:
         raise ValueError("race-retry predecessor has no exact zero-token race-lost failures")
     failure_path, failure_sha = _terminal_failure_ledger(root, sidecars, retry)
-    journal = _validate_predecessor_journal(root, predecessor, questions, clean_generation)
+    mixed_tail_repair, transition_path = _validate_mixed_predecessor(
+        root, predecessor, questions, sidecars
+    )
+    journal = _validate_predecessor_journal(
+        root,
+        predecessor,
+        questions,
+        clean_generation,
+        terminalization_transition_path=transition_path,
+    )
     _require_clean_predecessor_watcher(root / "runtime_watch.r2.successor.jsonl")
-    mixed_tail_repair = validate_mixed_predecessor(root, predecessor, questions, sidecars)
     plan = {
         "schema": PLAN_SCHEMA, "protocol_id": RECOVERY.PROTOCOL_ID, "source": str(root),
         "predecessor_sha256": hashes, "predecessor_tree_sha256": canonical_hash(hashes),

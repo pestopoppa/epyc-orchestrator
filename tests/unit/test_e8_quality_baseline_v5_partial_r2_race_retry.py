@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -18,6 +19,11 @@ SPEC.loader.exec_module(RETRY)
 
 QUESTION = {"qid": "q0"}
 RACE = "[ERROR: placement timeout role=frontdoor reason=race_lost holders=[0, 1, 2] after 90.0s]"
+FAILED_C1_SOURCE = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+    "e8_quality_baseline_v5_partial_r2_mixed_tail_c1_successor_20260728T194407Z"
+)
+FAILED_C1_TREE_SHA256 = "4b7e66bec01c4eb2f65e10b75b9b1219ff74afda79f02873972194eefca2e286"
 
 
 def _row(*, error: str = RACE, tokens: int = 0, answer: str | None = None) -> dict:
@@ -188,6 +194,70 @@ def _bind_tree(root: Path) -> dict[str, str]:
         },
     )
     return hashes
+
+
+def _rebind_terminal_snapshot(root: Path) -> None:
+    hashes = {
+        str(path.relative_to(root)): RETRY.sha256_path(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path != root / "source_binding.json"
+    }
+    RETRY.RECOVERY._write_json(
+        root / "source_binding.json",
+        {
+            "source_sha256": hashes,
+            "source_tree_sha256": RETRY.canonical_hash(hashes),
+        },
+    )
+
+
+@pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
+def test_nested_terminalization_accepts_only_the_exact_enclosing_binding(tmp_path: Path) -> None:
+    snapshot = tmp_path / "predecessor_snapshot"
+    shutil.copytree(FAILED_C1_SOURCE / "predecessor_snapshot", snapshot)
+    descriptor = RETRY.V4.load_json(FAILED_C1_SOURCE / "partial_r2_plan.json")[
+        "mixed_tail_repair"
+    ]["terminalization_transition"]
+
+    assert RETRY._validate_terminalization_transition_semantically(snapshot) == descriptor
+
+
+@pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
+def test_frozen_c1_source_is_directly_admitted_without_a_root_transition() -> None:
+    assert not (FAILED_C1_SOURCE / RETRY.TERMINALIZATION_NAME).exists()
+
+    plan = RETRY.build_plan(FAILED_C1_SOURCE, FAILED_C1_TREE_SHA256)
+
+    assert plan["predecessor_tree_sha256"] == FAILED_C1_TREE_SHA256
+    assert plan["race_retry_ordinals"] == [97, 203, 279]
+    assert (
+        plan["mixed_tail_repair"]["terminalization_transition"]["sha256"]
+        == "227bbd841f8fc3a4a58f2ef35d6452b63f7c34e21de4e75a407f21413d4409c6"
+    )
+
+
+@pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
+@pytest.mark.parametrize("tamper", ["wrapper", "payload", "transition", "journal"])
+def test_nested_terminalization_rejects_wrapper_or_terminal_evidence_tamper(
+    tmp_path: Path, tamper: str
+) -> None:
+    snapshot = tmp_path / "predecessor_snapshot"
+    shutil.copytree(FAILED_C1_SOURCE / "predecessor_snapshot", snapshot)
+    if tamper == "wrapper":
+        binding = RETRY.V4.load_json(snapshot / "source_binding.json")
+        binding["source_tree_sha256"] = "0" * 64
+        RETRY.RECOVERY._write_json(snapshot / "source_binding.json", binding)
+    else:
+        target = {
+            "payload": snapshot / "generation_judge_traces.T2.r2.jsonl",
+            "transition": snapshot / RETRY.TERMINALIZATION_NAME,
+            "journal": snapshot / "recovery_rows.T2.r2.jsonl",
+        }[tamper]
+        target.write_bytes(target.read_bytes() + b"\n")
+        _rebind_terminal_snapshot(snapshot)
+
+    with pytest.raises(ValueError):
+        RETRY._validate_terminalization_transition_semantically(snapshot)
 
 
 def _mixed_chain_fixture(tmp_path: Path) -> tuple[Path, dict, list[dict], dict[int, dict]]:
