@@ -891,6 +891,89 @@ def test_kv_compaction_applicator_honors_explicit_alias_role(
     assert calls == [8070]
 
 
+# ----- 2026-07-16 kv_compaction 500 thrash (resume-precondition) --------------
+# "Expected Attention compression failed" is llama-server's blanket 500 for a
+# scoring PRECONDITION failure (empty slot / unsupported memory layout) — a
+# per-role capability condition, not a trial failure. It must skip the role,
+# and an all-skip apply must report no_changes so the trial journals as a
+# benign no-change skip instead of a hard apply error.
+
+_EA_500_BODY = (
+    '{"error":{"code":500,"message":"Expected Attention compression failed",'
+    '"type":"server_error"}}'
+)
+
+
+def test_kv_compaction_uncompactable_500_is_per_role_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The trial-1422/1427 case: ingest_long_context 500s with the EA
+    precondition error while other roles compact fine — the role is skipped
+    (annotated) and the apply succeeds on the remaining roles."""
+    def fake_ports(*, include_aliases: bool = False) -> dict[str, int]:
+        return {"frontdoor": 8070, "ingest_long_context": 8074}
+
+    def fake_compress_slot(*, port: int, **_kwargs):
+        if port == 8074:
+            return kv_compress.CompressResult(success=False, port=port, error=_EA_500_BODY)
+        return kv_compress.CompressResult(success=True, port=port, n_evicted=100)
+
+    monkeypatch.setattr(kv_compress, "production_ports", fake_ports)
+    monkeypatch.setattr(kv_compress, "compress_slot", fake_compress_slot)
+
+    result = applicator.KvCompactionApplicator().apply({"kv.n_future": 256})
+
+    assert result.status == "ok"
+    assert result.errors == []
+    assert result.payload["per_role"]["frontdoor"]["success"] is True
+    skipped = result.payload["per_role"]["ingest_long_context"]
+    assert skipped["status"] == "skipped"
+    assert "not compactable" in skipped["reason"]
+    assert "Expected Attention compression failed" in skipped["detail"]
+
+
+def test_kv_compaction_all_roles_uncompactable_is_no_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If NO role was actually compacted, nothing changed live — report
+    no_changes so actions._numeric_apply_no_changes journals a benign skip
+    rather than evaluating a baseline masquerading as the trial params."""
+    def fake_ports(*, include_aliases: bool = False) -> dict[str, int]:
+        return {"ingest_long_context": 8074}
+
+    def fake_compress_slot(*, port: int, **_kwargs):
+        return kv_compress.CompressResult(success=False, port=port, error=_EA_500_BODY)
+
+    monkeypatch.setattr(kv_compress, "production_ports", fake_ports)
+    monkeypatch.setattr(kv_compress, "compress_slot", fake_compress_slot)
+
+    result = applicator.KvCompactionApplicator().apply({"kv.keep_ratio": 0.5})
+
+    assert result.status == "no_changes"
+    assert result.errors == []
+    assert not result.failed
+
+
+def test_kv_compaction_other_failures_still_hard_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the EA precondition 500 is a skip — any other failure (timeout,
+    connection refused, different 500) remains a hard apply error."""
+    def fake_ports(*, include_aliases: bool = False) -> dict[str, int]:
+        return {"frontdoor": 8070}
+
+    def fake_compress_slot(*, port: int, **_kwargs):
+        return kv_compress.CompressResult(success=False, port=port, error="Connection refused")
+
+    monkeypatch.setattr(kv_compress, "production_ports", fake_ports)
+    monkeypatch.setattr(kv_compress, "compress_slot", fake_compress_slot)
+
+    result = applicator.KvCompactionApplicator().apply({"kv.keep_ratio": 0.5})
+
+    assert result.status == "error"
+    assert result.errors == ["frontdoor: Connection refused"]
+
+
 # ----- no-op API restart guard (env already live → skip the restart) ---------
 
 

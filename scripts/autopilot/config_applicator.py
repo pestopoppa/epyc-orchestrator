@@ -914,6 +914,20 @@ KV_COMPACT_PARAMS = {
     "n_future": "n_future",
 }
 
+# 2026-07-16 resume-precondition (epyc-root handoffs/active/
+# autopilot-continuous-optimization.md): kv_compaction trials 1422/1427
+# hard-failed on HTTP 500 {"message": "Expected Attention compression failed"}
+# from ingest_long_context. On the frozen v8 server the ONLY source of that
+# message is tools/server/server-context.cpp SERVER_TASK_TYPE_SLOT_COMPACT when
+# llama_kv_compress_evict() returns -1, and evict returns -1 ONLY when
+# llama_kv_compress_score() returns empty — i.e. a scoring PRECONDITION failed
+# (empty slot: seq pos_max < 0; no attention KV cache resolvable for the model;
+# or no attention layers), never a mid-compaction fault. That is "nothing to
+# compact on this slot" — a capability/state condition of the target role, not
+# a failure of the trial's kv.* params — so it must be classified per-role as a
+# skip, not a hard apply error that fails the trial and feeds the thrash loop.
+KV_COMPACT_UNCOMPACTABLE_MARKER = "Expected Attention compression failed"
+
 
 @dataclass
 class ApplyResult:
@@ -1151,6 +1165,21 @@ class KvCompactionApplicator:
                 payload["per_role"][role] = {"status": "skipped", "reason": "no port mapping"}
                 continue
             res = compress_slot(port=port, slot_id=0, **kwargs)
+            if not res.success and KV_COMPACT_UNCOMPACTABLE_MARKER in (res.error or ""):
+                # Slot not compactable (empty KV cache / unsupported memory
+                # layout) — see KV_COMPACT_UNCOMPACTABLE_MARKER. Skip the role
+                # instead of hard-failing the whole trial apply.
+                log.warning(
+                    "KV compaction skipped for role %s (port %d): slot not "
+                    "compactable (empty KV cache or unsupported memory layout): %s",
+                    role, port, res.error,
+                )
+                payload["per_role"][role] = {
+                    "status": "skipped",
+                    "reason": "slot not compactable (empty or unsupported)",
+                    "detail": res.error,
+                }
+                continue
             role_result = {
                 "success": res.success,
                 "n_evicted": res.n_evicted,
@@ -1160,7 +1189,21 @@ class KvCompactionApplicator:
             payload["per_role"][role] = role_result
             if role_result.get("error") or role_result.get("success") is False:
                 errors.append(f"{role}: {role_result.get('error') or 'not applied'}")
-        return ApplyResult(status="error" if errors else "ok", payload=payload, errors=errors)
+        applied_any = any(
+            isinstance(role_result, dict) and role_result.get("success")
+            for role_result in payload["per_role"].values()
+        )
+        if errors:
+            status = "error"
+        elif not applied_any:
+            # Every target role was skipped (uncompactable slot / no port
+            # mapping): no live config changed, so the trial must journal as a
+            # benign no-change skip — NOT evaluate a baseline masquerading as
+            # the trial params (actions._numeric_apply_no_changes handles this).
+            status = "no_changes"
+        else:
+            status = "ok"
+        return ApplyResult(status=status, payload=payload, errors=errors)
 
 
 def classify_params(params: dict[str, Any]) -> dict[str, dict[str, Any]]:
