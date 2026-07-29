@@ -31,6 +31,12 @@ FINAL_C1_RETRY_PATH = PROJECT_ROOT / "scripts/benchmark/final_c1_retry.py"
 FINAL_C1_VALIDATOR_PATH = PROJECT_ROOT / "scripts/benchmark/final_c1_validator.py"
 MIXED_REPAIR_PATH = PROJECT_ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
 TERMINALIZER_PATH = PROJECT_ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
+COMPOSITE_SOURCE_TERMINALIZER_PATH = (
+    PROJECT_ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_v5_composite_source.py"
+)
+COMPOSITE_SOURCE_TERMINALIZER_SHA256 = (
+    "6a39c7c4bdf9a208aaca3ca8da1102109dc445355f73d39e791f6206a2aebd3d"
+)
 CONTEXT_SCHEMA = "epyc.e8_quality_v5_recovery_r2_finalizer.v1"
 COMPOSITE_SOURCE_DIR = Path(
     "/mnt/raid0/llm/epyc-root/artifacts/operator/"
@@ -189,6 +195,58 @@ def _expected_scorer_attempt_inputs(
     return expected
 
 
+def _validate_standard_complete_seal(
+    root: Path,
+    *,
+    expected_writer: str | None = None,
+    expected_manifest_name: str | None = None,
+    expected_manifest_schema: str | None = None,
+) -> dict[str, Any]:
+    """Validate the sole authoritative root seal for a published namespace."""
+    if root.name.startswith(".") and ".staging-" in root.name:
+        raise ValueError("complete E8 input must be a published non-staging namespace")
+    seal_path = root / "run_seal.json"
+    if seal_path.is_symlink() or not seal_path.is_file():
+        raise ValueError("complete E8 input lacks a safe authoritative root run seal")
+    seal = V4.load_json(seal_path)
+    manifest_name = seal.get("completion_manifest_path")
+    if (
+        seal.get("schema") != V4.TERMINAL_SEAL.RUN_SEAL_SCHEMA
+        or seal.get("status") != V4.TERMINAL_SEAL.COMPLETE_STATUS
+        or not isinstance(seal.get("writer"), str)
+        or not seal["writer"]
+        or not isinstance(manifest_name, str)
+        or Path(manifest_name).name != manifest_name
+        or manifest_name == "run_seal.json"
+    ):
+        raise ValueError("complete E8 input root run seal contract differs")
+    if expected_writer is not None and seal["writer"] != expected_writer:
+        raise ValueError("complete E8 input root run seal writer differs")
+    if expected_manifest_name is not None and manifest_name != expected_manifest_name:
+        raise ValueError("complete E8 input completion manifest path differs")
+    manifest_path = root / manifest_name
+    if (
+        manifest_path.is_symlink()
+        or not manifest_path.is_file()
+        or seal.get("completion_manifest_sha256") != sha256_path(manifest_path)
+    ):
+        raise ValueError("complete E8 input completion manifest binding differs")
+    manifest = V4.load_json(manifest_path)
+    if (
+        expected_manifest_schema is not None
+        and manifest.get("schema") != expected_manifest_schema
+    ):
+        raise ValueError("complete E8 input completion manifest schema differs")
+    expected_bundle = {
+        item.relative_to(root).as_posix(): sha256_path(item)
+        for item in sorted(root.rglob("*"))
+        if item.is_file() and item != seal_path
+    }
+    if seal.get("bundle_sha256") != expected_bundle:
+        raise ValueError("complete E8 input root run seal bundle differs")
+    return {"seal": seal, "manifest": manifest}
+
+
 def validate_intermediate(path: Path) -> dict[str, Any]:
     """Return immutable r2 inputs, failing before the resume finalizer runs."""
     if path.is_symlink():
@@ -221,6 +279,24 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
         raise ValueError("recovery intermediate lacks a required sealed artifact")
     plan = V4.load_json(plan_path)
     if plan.get("schema") == FINAL_C1_RETRY.PLAN_SCHEMA:
+        sealed = _validate_standard_complete_seal(
+            intermediate,
+            expected_writer="final_c1_deterministic_completion",
+            expected_manifest_name="deterministic_completion_manifest.json",
+            expected_manifest_schema=(
+                "epyc.e8_quality_v5_final_c1_deterministic_completion.v1"
+            ),
+        )
+        complete = V4.load_json(complete_path)
+        if complete.get("deterministic_completion") != {
+            "path": "deterministic_completion_manifest.json",
+            "sha256": sha256_path(
+                intermediate / "deterministic_completion_manifest.json"
+            ),
+        }:
+            raise ValueError("final-c1 deterministic completion reference differs")
+        if sealed["manifest"].get("status") not in {"complete", "validated_complete"}:
+            raise ValueError("final-c1 deterministic completion manifest is not complete")
         return _validate_final_c1_intermediate(intermediate, plan)
     if plan.get("schema") == RACE_RETRY.LEGACY_PLAN_SCHEMA:
         raise ValueError("legacy V1 race evidence is audit-only")
@@ -741,16 +817,9 @@ def _validate_final_c1_intermediate(root: Path, plan: dict[str, Any]) -> dict[st
     }
 
 
-def build_plan(source_dir: Path) -> dict[str, Any]:
-    """Bind the already-complete banked source; never re-open T2/r1."""
-    if source_dir.is_symlink():
-        raise ValueError("recovery finalizer source must not be a symlink")
-    source = source_dir.resolve(strict=True)
+def _validate_composite_payload(source: Path) -> tuple[dict[str, str], dict[str, Any]]:
     hashes = RESUME._safe_source_files(source)
-    if (
-        source != COMPOSITE_SOURCE_DIR.resolve(strict=True)
-        or RECOVERY.canonical_hash(hashes) != COMPOSITE_SOURCE_TREE_SHA256
-    ):
+    if RECOVERY.canonical_hash(hashes) != COMPOSITE_SOURCE_TREE_SHA256:
         raise ValueError("recovery finalizer only accepts the reviewed composite source")
     for tier, repetitions in ((1, (1, 2, 3)), (2, (1,))):
         for repetition in repetitions:
@@ -775,10 +844,64 @@ def build_plan(source_dir: Path) -> dict[str, Any]:
         (99, "aime_2024-I-12"),
     ]:
         raise ValueError("completed T2/r1 source has a broadened generation tail")
+    return hashes, history
+
+
+def validate_legacy_composite_source(source_dir: Path) -> dict[str, Any]:
+    """Validate the historical staging source without making it admissible."""
+    if source_dir.is_symlink():
+        raise ValueError("recovery finalizer source must not be a symlink")
+    source = source_dir.resolve(strict=True)
+    if source != COMPOSITE_SOURCE_DIR.resolve(strict=True):
+        raise ValueError("legacy composite source path differs from its reviewed pin")
+    hashes, history = _validate_composite_payload(source)
     return {
         "schema": "epyc.e8_quality_v5_recovery_finalizer_source.v1",
         "protocol_id": RECOVERY.PROTOCOL_ID,
         "source": str(source),
+        "source_sha256": hashes,
+        "source_tree_sha256": RECOVERY.canonical_hash(hashes),
+        "banked": {"tiers": [1], "t2_r1": True},
+        "fresh_collection": [{"tier": 2, "repetition": 3}],
+        "t2_r1_repair_history": history,
+        "legacy_staging_audit_only": True,
+    }
+
+
+def build_plan(source_dir: Path) -> dict[str, Any]:
+    """Bind one terminalized non-staging copy of the completed T2/r1 source."""
+    if source_dir.is_symlink():
+        raise ValueError("recovery finalizer source must not be a symlink")
+    root = source_dir.resolve(strict=True)
+    sealed = _validate_standard_complete_seal(
+        root,
+        expected_writer="terminalize_e8_quality_baseline_v5_composite_source",
+        expected_manifest_name="composite_source_manifest.json",
+        expected_manifest_schema="epyc.e8_quality_v5_composite_source_terminal.v1",
+    )
+    if sealed["seal"].get("runner_sha256") != COMPOSITE_SOURCE_TERMINALIZER_SHA256:
+        raise ValueError("composite source terminalizer runner differs")
+    manifest = sealed["manifest"]
+    source = root / "source_snapshot"
+    if (
+        manifest.get("status") != "complete"
+        or manifest.get("historical_source") != str(
+            COMPOSITE_SOURCE_DIR.resolve(strict=True)
+        )
+        or manifest.get("source_snapshot") != "source_snapshot"
+        or manifest.get("source_tree_sha256") != COMPOSITE_SOURCE_TREE_SHA256
+    ):
+        raise ValueError("composite source terminal manifest differs")
+    hashes, history = _validate_composite_payload(source)
+    return {
+        "schema": "epyc.e8_quality_v5_recovery_finalizer_source.v1",
+        "protocol_id": RECOVERY.PROTOCOL_ID,
+        "source": str(source),
+        "source_terminal_root": str(root),
+        "source_terminal_seal_sha256": sha256_path(root / "run_seal.json"),
+        "source_terminal_manifest_sha256": sha256_path(
+            root / "composite_source_manifest.json"
+        ),
         "source_sha256": hashes,
         "source_tree_sha256": RECOVERY.canonical_hash(hashes),
         "banked": {"tiers": [1], "t2_r1": True},
@@ -1271,11 +1394,11 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
 def execute(args: argparse.Namespace) -> Path:
     """Finalize completed banked ledgers plus one ordinary V5 T2/r3 collection."""
     finalizer_contract, recovery_dir = _execution_contract(args)
-    source = args.source_dir.resolve(strict=True)
     plan = {
-        **build_plan(source),
+        **build_plan(args.source_dir),
         "finalizer_contract": finalizer_contract,
     }
+    source = Path(plan["source"]).resolve(strict=True)
     intermediate = validate_intermediate(recovery_dir)
     if intermediate.get("plan", {}).get("schema") != EXPECTED_INTERMEDIATE_SCHEMA:
         raise ValueError("recovery finalizer intermediate dispatch changed after binding")
@@ -1517,7 +1640,7 @@ def execute(args: argparse.Namespace) -> Path:
             staging / "run_seal.json",
             {
                 "schema": "epyc.e8_quality_baseline_run_seal.v1",
-                "status": "staged_complete_pending_publish",
+                "status": V4.TERMINAL_SEAL.STAGED_COMPLETE_STATUS,
                 "manifest_sha256": sha256_path(evidence_path),
                 "runner_report_sha256": sha256_path(report_path),
                 "protocol_receipt_sha256": None,
@@ -1550,13 +1673,7 @@ def execute(args: argparse.Namespace) -> Path:
         V4.fsync_dir(staging)
         V4.atomic_publish_noreplace(staging, destination)
         V4.fsync_dir(destination.parent)
-        published_seal_path = destination / "run_seal.json"
-        published_seal = V4.load_json(published_seal_path)
-        if published_seal.get("status") != "staged_complete_pending_publish":
-            raise ValueError("recovery finalizer pre-publish seal status differs")
-        published_seal["status"] = "complete"
-        published_seal["published_at"] = V4.utc_now()
-        RECOVERY._write_json(published_seal_path, published_seal)
+        V4.TERMINAL_SEAL.promote_staged_complete(destination)
         return destination
     except BaseException as exc:
         aborted = (

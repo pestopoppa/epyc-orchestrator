@@ -3858,7 +3858,11 @@ def execute(
     bundle = {str(published_path(path, staging_dir=staging_dir, output_dir=output_dir)): sha256_path(path) for path in dict.fromkeys(bundle_paths)}
     seal = {
         "schema": "epyc.e8_quality_baseline_run_seal.v1",
-        "status": "complete" if report["decision_grade"] else "failed",
+        "status": (
+            TERMINAL_SEAL.STAGED_COMPLETE_STATUS
+            if report["decision_grade"]
+            else "failed"
+        ),
         "manifest_sha256": sha256_path(evidence_path),
         "runner_report_sha256": sha256_path(report_path),
         "protocol_receipt_sha256": (
@@ -3876,6 +3880,7 @@ def execute(
     if report["decision_grade"]:
         atomic_publish_noreplace(staging_dir, output_dir)
         fsync_dir(output_dir.parent)
+        TERMINAL_SEAL.promote_staged_complete(output_dir)
         return report, 0
     return report, 2
 
