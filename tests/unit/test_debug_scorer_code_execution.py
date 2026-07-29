@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import sys
 from pathlib import Path
 
@@ -11,6 +12,39 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "benchmark"))
 import pytest
 
 from debug_scorer import ScoringUnavailableError, score_answer  # noqa: E402
+
+
+_BCB190_ANSWER = """```python
+import sqlite3
+import pandas as pd
+import csv
+from io import StringIO
+
+DATABASE_NAME = 'test.db'
+TABLE_NAME = 'test_table'
+
+def task_func(csv_input):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    if isinstance(csv_input, str):
+        with open(csv_input, 'r') as file:
+            csv_data = file.read()
+    else:
+        csv_data = csv_input.getvalue()
+    reader = csv.reader(StringIO(csv_data))
+    headers = next(reader)
+    cursor.execute(f\"DROP TABLE IF EXISTS {TABLE_NAME}\")
+    cursor.execute(
+        f\"CREATE TABLE {TABLE_NAME} ({', '.join([f'{header} TEXT' for header in headers])})\"
+    )
+    placeholders = ', '.join(['?' for _ in headers])
+    for row in reader:
+        cursor.execute(f\"INSERT INTO {TABLE_NAME} VALUES ({placeholders})\", row)
+    conn.commit()
+    result = pd.read_sql_query(f\"SELECT * FROM {TABLE_NAME}\", conn)
+    conn.close()
+    return result
+```"""
 
 
 def test_code_execution_without_oracle_does_not_pass_on_importable_code() -> None:
@@ -134,3 +168,62 @@ class TestCases(unittest.TestCase):
         scoring_method="code_execution",
         scoring_config={"language": "python", "timeout": 5, "test_code": test_code},
     )
+
+
+def test_bcb190_sqlite_answer_still_scores_true() -> None:
+    """BCB190 writes ``test.db`` relative to the scorer CWD."""
+    assert score_answer(
+        answer=_BCB190_ANSWER,
+        expected="task_func",
+        scoring_method="code_execution",
+        scoring_config={
+            "language": "python",
+            "timeout": 10,
+            "test_code": """
+from io import StringIO
+
+result = task_func(StringIO('Name,Age\\nAlice,25\\nBob,30\\n'))
+assert result.to_dict(orient='list') == {'Name': ['Alice', 'Bob'], 'Age': ['25', '30']}
+""",
+        },
+    )
+
+
+def test_code_execution_concurrent_relative_files_are_isolated(tmp_path: Path) -> None:
+    """Concurrent scorers cannot cross-contaminate a BCB190-style ``test.db``."""
+    barrier_dir = tmp_path / "barrier"
+    barrier_dir.mkdir()
+
+    def score_with_token(token: str) -> bool:
+        test_code = f"""
+from pathlib import Path
+import time
+
+barrier_dir = Path({str(barrier_dir)!r})
+(barrier_dir / {token!r}).write_text('ready', encoding='utf-8')
+deadline = time.monotonic() + 5
+while len(list(barrier_dir.glob('*'))) < 2:
+    assert time.monotonic() < deadline
+    time.sleep(0.01)
+
+Path('test.db').write_text({token!r}, encoding='utf-8')
+time.sleep(0.25)
+(barrier_dir / {token + ".cwd"!r}).write_text(str(Path.cwd()), encoding='utf-8')
+assert Path('test.db').read_text(encoding='utf-8') == {token!r}
+"""
+        return score_answer(
+            answer="```python\ndef task_func():\n    return None\n```",
+            expected="",
+            scoring_method="code_execution",
+            scoring_config={"language": "python", "timeout": 10, "test_code": test_code},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(score_with_token, ("left", "right")))
+
+    assert results == [True, True]
+    left_cwd = Path((barrier_dir / "left.cwd").read_text(encoding="utf-8"))
+    right_cwd = Path((barrier_dir / "right.cwd").read_text(encoding="utf-8"))
+    assert left_cwd != right_cwd
+    assert not left_cwd.exists()
+    assert not right_cwd.exists()
