@@ -1160,8 +1160,9 @@ class QScorer:
                 action = ",".join(routing) if isinstance(routing, list) else str(routing)
 
                 if Q_TD_WRITE:
-                    existing_id = self._find_existing_routing_memory(
+                    existing_id = self._find_existing_memory(
                         embedding, action, task_context.get("objective"),
+                        action_type="routing",
                     )
                     if existing_id is not None:
                         memory = self.store.get_by_id(existing_id)
@@ -1212,13 +1213,14 @@ class QScorer:
 
         return result
 
-    def _find_existing_routing_memory(
+    def _find_existing_memory(
         self,
         embedding: np.ndarray,
         action: str,
         objective: Optional[str],
+        action_type: str = "routing",
     ) -> Optional[str]:
-        """Return the id of an existing routing memory for this exact
+        """Return the id of an existing memory of `action_type` for this exact
         (objective, action), or None.
 
         The find half of the ORCHESTRATOR_Q_TD_WRITE find-or-update write path.
@@ -1227,12 +1229,18 @@ class QScorer:
         distinct objectives are never merged. This converges with the offline
         consolidation migration, which groups by the same (objective, action)
         key — so live TD writes and the migrated store agree on row identity.
+
+        Shared by the routing and escalation paths. Both store their identity
+        key the same way (`context.objective` + `action`) via
+        build_memory_record, so one exact-match rule is correct for both; only
+        the `action_type` partition differs, and it is never crossed because it
+        is pushed down into the similarity query.
         """
         if objective is None:
             return None
         try:
             candidates = self.store.retrieve_by_similarity(
-                embedding, k=Q_TD_MATCH_K, action_type="routing",
+                embedding, k=Q_TD_MATCH_K, action_type=action_type,
             )
         except Exception:
             return None
@@ -1274,6 +1282,34 @@ class QScorer:
             embedding = self.embedder.embed_failure_context(failure_context)
             action = f"escalate:{escalation.data.get('from_tier')}->{escalation.data.get('to_tier')}"
 
+            # Same append-only defect the routing path had: the sole production
+            # emitter never populates memory_id, so this branch blind-appended a
+            # fresh row per escalation (4,382 such rows at the 2026-07-22 audit).
+            # Under ORCHESTRATOR_Q_TD_WRITE, find-or-update in place first.
+            # The identity key is (reason, escalate:from->to) — `reason` is what
+            # build_memory_record stores as `objective` below, so the finder's
+            # exact-match rule keys on the same field it will later be stored under.
+            if Q_TD_WRITE:
+                existing_id = self._find_existing_memory(
+                    embedding, action, escalation.data.get("reason"),
+                    action_type="escalation",
+                )
+                if existing_id is not None:
+                    memory = self.store.get_by_id(existing_id)
+                    if memory is not None:
+                        old_q = memory.q_value
+                        new_q = self.store.update_q_value(
+                            existing_id, reward, self.config.learning_rate,
+                            temporal_decay_rate=self.config.temporal_decay_rate,
+                        )
+                        self.logger.log_memory_update(
+                            existing_id, old_q, new_q, reward, task_id,
+                        )
+                        result["memories_updated"] = 1
+                        return result
+
+            # First observation of this (reason, action) — or flag off: append a
+            # new row exactly as the legacy path always did.
             initial_q = 0.5 + (reward * 0.5)
 
             # Escalation memories: the "objective" is the failure reason, and the
