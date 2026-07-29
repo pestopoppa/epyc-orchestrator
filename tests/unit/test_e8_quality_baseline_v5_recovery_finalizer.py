@@ -1369,6 +1369,24 @@ def test_validate_intermediate_rejects_lexical_symlink(tmp_path: Path) -> None:
         finalizer.validate_intermediate(link)
 
 
+def test_race_retry_validation_delegates_to_producer_publication_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "race-retry"
+    root.mkdir()
+    plan = {"schema": finalizer.RACE_RETRY.PLAN_SCHEMA}
+    seen: list[tuple[Path, dict]] = []
+
+    def stop_after_shared_gate(path: Path, received_plan: dict) -> None:
+        seen.append((path, received_plan))
+        raise RuntimeError("producer publication gate")
+
+    monkeypatch.setattr(finalizer.RACE_RETRY, "validate_staged_tree", stop_after_shared_gate)
+    with pytest.raises(RuntimeError, match="producer publication gate"):
+        finalizer._validate_race_retry_intermediate(root, plan)
+    assert seen == [(root, plan)]
+
+
 def test_final_c1_intermediate_requires_complete_and_preserves_mixed_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -21,6 +21,7 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Any
+import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 RECOVERY_PATH = ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
@@ -844,90 +845,267 @@ def _harvest_retry(
     )
 
 
-@RECOVERY.durable_output_writer(
-    "prepare_e8_quality_baseline_v5_partial_r2_race_retry"
-)
+def _fsync_tree(root: Path) -> None:
+    """Durably flush a private tree before atomically publishing it."""
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise ValueError(f"race-retry staged tree contains a symlink: {path}")
+        if path.is_file():
+            descriptor = os.open(path, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+    for path in sorted((item for item in root.rglob("*") if item.is_dir()), reverse=True):
+        V4.fsync_dir(path)
+    V4.fsync_dir(root)
+
+
+def _bound_snapshot_hashes(root: Path, name: str) -> dict[str, str]:
+    binding = root / name / "source_binding.json"
+    if not binding.is_file() or binding.is_symlink():
+        raise ValueError("race-retry staged tree lacks a bound snapshot")
+    snapshot = binding.parent
+    binding_value = V4.load_json(binding)
+    expected = binding_value.get("source_sha256")
+    actual = {
+        path.relative_to(snapshot).as_posix(): sha256_path(path)
+        for path in sorted(snapshot.rglob("*"))
+        if path.is_file() and path != binding and not path.is_symlink()
+    }
+    if (
+        not isinstance(expected, dict)
+        or expected != actual
+        or binding_value.get("source_tree_sha256") != canonical_hash(expected)
+    ):
+        raise ValueError("race-retry staged snapshot binding differs")
+    return expected
+
+
+def validate_staged_tree(
+    root: Path,
+    plan: dict[str, Any],
+    *,
+    destination: Path | None = None,
+    require_complete: bool = False,
+) -> None:
+    """Validate the producer-owned race-retry publication contract.
+
+    This deliberately checks the artifacts which make an intermediate safe to
+    expose as a namespace.  The recovery finalizer calls this same gate before
+    its deeper eligibility validation, so producer and consumer cannot drift
+    on publication semantics.
+    """
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("race-retry staged output must be a real directory")
+    if any(path.is_symlink() for path in root.rglob("*")):
+        raise ValueError("race-retry staged output contains a symlink")
+    if (root / RECOVERY.ABORT_MARKER_NAME).exists():
+        raise ValueError("race-retry staged output is durably aborted")
+    required = {
+        "partial_r2_plan.json",
+        "recovery_proposal.json",
+        "r2_complete.json",
+        "responses.T2.r2.jsonl",
+        "eval_sidecars/question_results.e8-t2-r2.jsonl",
+        "judge_traces.T2.r2.jsonl",
+        "raw.T2.r2.json",
+        "recovery_rows.T2.r2.jsonl",
+        "scorer_attempts.T2.r2.jsonl",
+        "runtime_watch.r2.race_retry.jsonl",
+    }
+    missing = [relative for relative in sorted(required) if not (root / relative).is_file()]
+    if missing and require_complete:
+        raise ValueError("race-retry staged output lacks sealed artifacts: " + ", ".join(missing))
+    persisted = V4.load_json(root / "partial_r2_plan.json")
+    expected_plan = {key: value for key, value in plan.items() if key != "_journal"}
+    if persisted != expected_plan:
+        raise ValueError("race-retry staged plan differs from its producer plan")
+    if (
+        _bound_snapshot_hashes(root, "source_snapshot") != plan.get("source_sha256")
+        or _bound_snapshot_hashes(root, "predecessor_snapshot") != plan.get("predecessor_sha256")
+    ):
+        raise ValueError("race-retry staged snapshot differs from producer binding")
+    if missing:
+        return
+    proposal = V4.load_json(root / "recovery_proposal.json")
+    complete = V4.load_json(root / "r2_complete.json")
+    artifact_hashes = {
+        "plan_sha256": root / "partial_r2_plan.json",
+        "responses_sha256": root / "responses.T2.r2.jsonl",
+        "sidecar_sha256": root / "eval_sidecars/question_results.e8-t2-r2.jsonl",
+        "trace_sha256": root / "judge_traces.T2.r2.jsonl",
+        "raw_sha256": root / "raw.T2.r2.json",
+        "journal_sha256": root / "recovery_rows.T2.r2.jsonl",
+    }
+    published_destination = destination or root
+    if (
+        proposal.get("schema") != PROPOSAL_SCHEMA
+        or proposal.get("output_namespace") != str(published_destination)
+        or complete.get("status") != COMPLETE_STATUS
+        or any(complete.get(key) != sha256_path(path) for key, path in artifact_hashes.items())
+    ):
+        raise ValueError("race-retry staged output completion binding differs")
+
+
 def execute(args: argparse.Namespace) -> Path:
-    output = args.output_dir.absolute()
-    if output.exists() or output.is_symlink():
-        raise FileExistsError(f"race-retry output namespace already exists: {output}")
+    destination = args.output_dir.absolute()
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"race-retry output namespace already exists: {destination}")
     plan = build_plan(args.source_dir, args.expected_source_tree_sha256)
     if os.environ.get("AUTOPILOT_EVAL_CONCURRENCY") != str(V4.CONCURRENCY):
         raise RuntimeError("AUTOPILOT_EVAL_CONCURRENCY must equal ratified c3 before race-retry inference")
     source = args.source_dir.resolve(strict=True)
-    runner_args = V5.parse_args(["--collect-candidate", "--output-dir", str(output), "--api-url", args.api_url])
-    claim = RECOVERY._capture_recovery_claim(args)
-    binding = V4.runtime_binding(runner_args)
-    capacity = RECOVERY.preflight_frontdoor_capacity(binding, required=V4.CONCURRENCY, claim=claim)
-    base = source / "source_snapshot"
-    public, scoring = RECOVERY._load_vector(base, "question_vector.T2.json"), RECOVERY._load_vector(base, "scoring_vector.T2.json")
-    questions = RECOVERY._reconstruct_questions(runner_args, public, scoring, t1_core_id=str(plan["t1_core_id"]))
-    if canonical_hash(source_hashes(source)) != plan["predecessor_tree_sha256"]:
-        raise ValueError("race-retry predecessor changed during pre-write validation")
-    output.mkdir(parents=True, exist_ok=True)
-    persisted_plan = {key: value for key, value in plan.items() if key != "_journal"}
-    RECOVERY._write_json(output / "partial_r2_plan.json", persisted_plan)
-    proposal = RECOVERY._recovery_proposal(persisted_plan, output, claim=claim, frontdoor_capacity=capacity, instrument=RECOVERY._instrument_identity(runner_args))
-    if proposal["generation_ordinals_sha256"] != canonical_hash(persisted_plan["race_retry_ordinals"]):
-        raise ValueError("race-retry proposal generation target binding differs")
-    proposal.update({"schema": PROPOSAL_SCHEMA, "retry_runner_sha256": persisted_plan["retry_runner_sha256"], "predecessor_tree_sha256": persisted_plan["predecessor_tree_sha256"], "predecessor_watcher": persisted_plan["predecessor_watcher"], "predecessor_failed_attempts": persisted_plan["predecessor_failed_attempts"], "race_retry_ordinals_sha256": canonical_hash(persisted_plan["race_retry_ordinals"])})
-    if "mixed_tail_repair" in persisted_plan:
-        proposal["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
-    RECOVERY._bind_recovery_proposal(output, proposal)
-    _copy_tree(base, output / "source_snapshot", persisted_plan["source_sha256"])
-    _copy_tree(source, output / "predecessor_snapshot", persisted_plan["predecessor_sha256"])
-    RECOVERY._SAVED_ROWS = _saved_rows(source, base)
-    journal_path, rows = output / "recovery_rows.T2.r2.jsonl", {}
-    for ordinal, source_name in (
-        *((ordinal, "reuse") for ordinal in plan["reuse_ordinals"]),
-        *((ordinal, "scorer_replay") for ordinal in plan["inherited_scorer_replay_ordinals"]),
-        *((ordinal, "imported_generation") for ordinal in plan["imported_generation_ordinals"]),
-        *((ordinal, "scorer_replay") for ordinal in plan["scorer_replay_ordinals"]),
-        *((ordinal, "predecessor_generation") for ordinal in plan["predecessor_generation_import_ordinals"]),
-    ):
-        RECOVERY._record(journal_path, rows, ordinal, plan["_journal"][ordinal]["response"], source_name)
-    shutil.copyfile(source / "generation_judge_traces.T2.r2.jsonl", output / "generation_judge_traces.T2.r2.jsonl")
-    shutil.copyfile(source / "scorer_replay_traces.T2.r2.jsonl", output / "scorer_replay_traces.T2.r2.jsonl")
-    shutil.copyfile(source / "scorer_attempts.T2.r2.jsonl", output / "scorer_attempts.T2.r2.jsonl")
-    health = V4.api_health(runner_args.api_url, runner_args.http_timeout_s)
-    watcher_path = output / persisted_plan["retry_watcher_path"]
-    watcher = V4.RuntimeWatcher(runner_args, binding, watcher_path, expected_probe_urls=V4.probe_url_mapping(health), include_receipt=False)
-    watcher.start()
+    staging = destination.with_name(f".{destination.name}.staging-{uuid.uuid4().hex}")
+    staging.mkdir(mode=0o700)
+    V4.fsync_dir(staging.parent)
+    output = staging
     try:
-        V4.require_clean_watcher(watcher)
-        results, execution, replayed = RECOVERY._generate_with_watcher(watcher, output, args, questions, persisted_plan["race_retry_ordinals"])
-    finally:
-        watcher.stop()
-    claim_after = RECOVERY._capture_recovery_claim(args)
-    if claim_after != claim:
-        raise ValueError("race-retry held recovery claim changed during collection")
-    evidence = RECOVERY._watcher_evidence(watcher_path, proposal, claim_before=claim, claim_after=claim_after)
-    fresh = V4.response_rows(results, execution)
-    RECOVERY._reconcile_generation_scorer_sidecar(output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl", fresh, execution, replayed)
-    failures = _harvest_retry(
-        output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl",
-        watcher_path,
-        rows,
-        journal_path,
-        questions,
-        set(persisted_plan["race_retry_ordinals"]),
-    )
-    if failures or set(persisted_plan["race_retry_ordinals"]) - set(rows):
-        if failures:
-            RECOVERY._record_failed_generation_attempts(output, failures)
-        raise RuntimeError("race-retry did not produce every permitted clean ordinal")
-    RECOVERY._complete_r2(output, output / "source_snapshot", persisted_plan, rows, questions, args.api_url)
-    marker = V4.load_json(output / "r2_complete.json")
-    marker.update({"status": COMPLETE_STATUS, "watcher": evidence, "claim": claim, "predecessor_watcher": persisted_plan["predecessor_watcher"], "predecessor_failed_attempts": persisted_plan["predecessor_failed_attempts"]})
-    if "mixed_tail_repair" in persisted_plan:
-        marker["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
-    RECOVERY._write_json(output / "r2_complete.json", marker)
-    if (
-        source_hashes(base) != persisted_plan["source_sha256"]
-        or source_hashes(source) != persisted_plan["predecessor_sha256"]
-    ):
-        raise ValueError("race-retry immutable source changed during collection")
-    return output
+        runner_args = V5.parse_args(
+            ["--collect-candidate", "--output-dir", str(output), "--api-url", args.api_url]
+        )
+        claim = RECOVERY._capture_recovery_claim(args)
+        binding = V4.runtime_binding(runner_args)
+        capacity = RECOVERY.preflight_frontdoor_capacity(
+            binding, required=V4.CONCURRENCY, claim=claim
+        )
+        base = source / "source_snapshot"
+        public, scoring = (
+            RECOVERY._load_vector(base, "question_vector.T2.json"),
+            RECOVERY._load_vector(base, "scoring_vector.T2.json"),
+        )
+        questions = RECOVERY._reconstruct_questions(
+            runner_args, public, scoring, t1_core_id=str(plan["t1_core_id"])
+        )
+        if canonical_hash(source_hashes(source)) != plan["predecessor_tree_sha256"]:
+            raise ValueError("race-retry predecessor changed during pre-write validation")
+        persisted_plan = {key: value for key, value in plan.items() if key != "_journal"}
+        RECOVERY._write_json(output / "partial_r2_plan.json", persisted_plan)
+        proposal = RECOVERY._recovery_proposal(
+            persisted_plan,
+            destination,
+            claim=claim,
+            frontdoor_capacity=capacity,
+            instrument=RECOVERY._instrument_identity(runner_args),
+        )
+        if proposal["generation_ordinals_sha256"] != canonical_hash(
+            persisted_plan["race_retry_ordinals"]
+        ):
+            raise ValueError("race-retry proposal generation target binding differs")
+        proposal.update(
+            {
+                "schema": PROPOSAL_SCHEMA,
+                "retry_runner_sha256": persisted_plan["retry_runner_sha256"],
+                "predecessor_tree_sha256": persisted_plan["predecessor_tree_sha256"],
+                "predecessor_watcher": persisted_plan["predecessor_watcher"],
+                "predecessor_failed_attempts": persisted_plan["predecessor_failed_attempts"],
+                "race_retry_ordinals_sha256": canonical_hash(
+                    persisted_plan["race_retry_ordinals"]
+                ),
+            }
+        )
+        if "mixed_tail_repair" in persisted_plan:
+            proposal["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
+        RECOVERY._bind_recovery_proposal(output, proposal)
+        _copy_tree(base, output / "source_snapshot", persisted_plan["source_sha256"])
+        _copy_tree(source, output / "predecessor_snapshot", persisted_plan["predecessor_sha256"])
+        RECOVERY._SAVED_ROWS = _saved_rows(source, base)
+        journal_path, rows = output / "recovery_rows.T2.r2.jsonl", {}
+        for ordinal, source_name in (
+            *((ordinal, "reuse") for ordinal in plan["reuse_ordinals"]),
+            *((ordinal, "scorer_replay") for ordinal in plan["inherited_scorer_replay_ordinals"]),
+            *((ordinal, "imported_generation") for ordinal in plan["imported_generation_ordinals"]),
+            *((ordinal, "scorer_replay") for ordinal in plan["scorer_replay_ordinals"]),
+            *((ordinal, "predecessor_generation") for ordinal in plan["predecessor_generation_import_ordinals"]),
+        ):
+            RECOVERY._record(journal_path, rows, ordinal, plan["_journal"][ordinal]["response"], source_name)
+        shutil.copyfile(source / "generation_judge_traces.T2.r2.jsonl", output / "generation_judge_traces.T2.r2.jsonl")
+        shutil.copyfile(source / "scorer_replay_traces.T2.r2.jsonl", output / "scorer_replay_traces.T2.r2.jsonl")
+        shutil.copyfile(source / "scorer_attempts.T2.r2.jsonl", output / "scorer_attempts.T2.r2.jsonl")
+        health = V4.api_health(runner_args.api_url, runner_args.http_timeout_s)
+        watcher_path = output / persisted_plan["retry_watcher_path"]
+        watcher = V4.RuntimeWatcher(
+            runner_args,
+            binding,
+            watcher_path,
+            expected_probe_urls=V4.probe_url_mapping(health),
+            include_receipt=False,
+        )
+        watcher.start()
+        try:
+            V4.require_clean_watcher(watcher)
+            results, execution, replayed = RECOVERY._generate_with_watcher(
+                watcher, output, args, questions, persisted_plan["race_retry_ordinals"]
+            )
+        finally:
+            watcher.stop()
+        claim_after = RECOVERY._capture_recovery_claim(args)
+        if claim_after != claim:
+            raise ValueError("race-retry held recovery claim changed during collection")
+        evidence = RECOVERY._watcher_evidence(
+            watcher_path, proposal, claim_before=claim, claim_after=claim_after
+        )
+        fresh = V4.response_rows(results, execution)
+        RECOVERY._reconcile_generation_scorer_sidecar(
+            output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl",
+            fresh,
+            execution,
+            replayed,
+        )
+        failures = _harvest_retry(
+            output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl",
+            watcher_path,
+            rows,
+            journal_path,
+            questions,
+            set(persisted_plan["race_retry_ordinals"]),
+        )
+        if failures or set(persisted_plan["race_retry_ordinals"]) - set(rows):
+            if failures:
+                RECOVERY._record_failed_generation_attempts(output, failures)
+            raise RuntimeError("race-retry did not produce every permitted clean ordinal")
+        RECOVERY._complete_r2(
+            output, output / "source_snapshot", persisted_plan, rows, questions, args.api_url
+        )
+        marker = V4.load_json(output / "r2_complete.json")
+        marker.update(
+            {
+                "status": COMPLETE_STATUS,
+                "watcher": evidence,
+                "claim": claim,
+                "predecessor_watcher": persisted_plan["predecessor_watcher"],
+                "predecessor_failed_attempts": persisted_plan["predecessor_failed_attempts"],
+            }
+        )
+        if "mixed_tail_repair" in persisted_plan:
+            marker["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
+        RECOVERY._write_json(output / "r2_complete.json", marker)
+        if (
+            source_hashes(base) != persisted_plan["source_sha256"]
+            or source_hashes(source) != persisted_plan["predecessor_sha256"]
+        ):
+            raise ValueError("race-retry immutable source changed during collection")
+        validate_staged_tree(output, plan, destination=destination, require_complete=True)
+        _fsync_tree(output)
+        if (
+            source_hashes(base) != persisted_plan["source_sha256"]
+            or source_hashes(source) != persisted_plan["predecessor_sha256"]
+        ):
+            raise ValueError("race-retry immutable source changed before publication")
+        V4.atomic_publish_noreplace(output, destination)
+        V4.fsync_dir(destination.parent)
+        return destination
+    except BaseException as exc:
+        if output.is_dir() and not output.is_symlink():
+            RECOVERY.record_durable_abort(
+                output,
+                writer="prepare_e8_quality_baseline_v5_partial_r2_race_retry",
+                error=exc,
+            )
+            quarantine = destination.with_name(f".{destination.name}.aborted-{uuid.uuid4().hex}")
+            output.rename(quarantine)
+            V4.fsync_dir(quarantine.parent)
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:

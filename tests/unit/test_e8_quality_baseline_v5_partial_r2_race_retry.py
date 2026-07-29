@@ -317,8 +317,14 @@ def test_execute_binds_race_generation_targets_before_inference(
     with pytest.raises(ProposalBound):
         RETRY.execute(args)
 
-    plan = RETRY.V4.load_json(args.output_dir / "partial_r2_plan.json")
+    assert not args.output_dir.exists()
+    quarantines = list(tmp_path.glob(".race-retry.aborted-*"))
+    assert len(quarantines) == 1
+    plan = RETRY.V4.load_json(quarantines[0] / "partial_r2_plan.json")
     assert plan["generation_ordinals"] == [97, 203, 279]
+    abort = RETRY.V4.load_json(quarantines[0] / RETRY.RECOVERY.ABORT_MARKER_NAME)
+    assert abort["status"] == "terminal_aborted_no_admission"
+    assert captured["output_namespace"] == str(args.output_dir)
     assert captured["generation_ordinals_sha256"] == RETRY.canonical_hash([97, 203, 279])
     assert captured["race_retry_ordinals_sha256"] == captured["generation_ordinals_sha256"]
 

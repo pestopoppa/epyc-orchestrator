@@ -509,6 +509,9 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
     zero-token frontdoor placement races may be represented by the fresh
     retry watcher; no scorer or general generation retry is admitted here.
     """
+    # The producer owns the sealed-publication contract.  Keep this explicit
+    # delegation ahead of the finalizer's deeper eligibility checks.
+    RACE_RETRY.validate_staged_tree(root, plan)
     required = {
         "proposal": root / "recovery_proposal.json",
         "complete": root / "r2_complete.json",
