@@ -22,6 +22,10 @@ _TOOL_CALL_RE = re.compile(
     r'"id"\s*:\s*"call_[^"]+"\s*,\s*"function"\s*:',
 )
 
+_TAGGED_JSON_TOOL_CALL_RE = re.compile(
+    r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL
+)
+
 
 def _extract_json_arrays(text: str) -> list[list[dict]]:
     """Extract JSON arrays from text by scanning for balanced brackets."""
@@ -64,8 +68,60 @@ def _extract_json_arrays(text: str) -> list[list[dict]]:
     return arrays
 
 
+def _render_call_code(calls: list[tuple[str, dict]]) -> str:
+    """Render parsed tool calls as executable REPL ``CALL()`` statements."""
+    lines: list[str] = []
+    for i, (name, kwargs) in enumerate(calls):
+        kw_parts = ", ".join(f'{k}={json.dumps(v)}' for k, v in kwargs.items())
+        var = f"result_{i}" if len(calls) > 1 else "result"
+        lines.append(f'{var} = CALL("{name}", {kw_parts})')
+
+    # Print results so the REPL captures output for the next turn.
+    if len(calls) == 1:
+        lines.append("print(result)")
+    else:
+        for i in range(len(calls)):
+            lines.append(f"print(result_{i})")
+    return "\n".join(lines)
+
+
+def _deduplicate_tool_calls(items: list[dict]) -> list[tuple[str, dict]]:
+    """Normalize direct and OpenAI-style JSON tool-call objects."""
+    calls_seen: list[tuple[str, dict]] = []
+    seen_keys: set[tuple[str, str]] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        # Jackrong v2/Coder templates use the direct {name, arguments} object;
+        # OpenAI completions wrap the same fields under ``function``.
+        func = item.get("function") or item
+        if not isinstance(func, dict):
+            continue
+        name = func.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        raw_args = func.get("arguments", {})
+        if isinstance(raw_args, str):
+            try:
+                args = json.loads(raw_args)
+            except (json.JSONDecodeError, ValueError):
+                args = {}
+        else:
+            args = raw_args
+        if not isinstance(args, dict):
+            args = {}
+        # JSON serialization gives a stable, hashable key even when an
+        # argument value is itself a list or object.
+        dedup_key = (name, json.dumps(args, sort_keys=True, separators=(",", ":")))
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
+        calls_seen.append((name, args))
+    return calls_seen
+
+
 def translate_openai_tool_calls(text: str) -> str | None:
-    """Detect OpenAI-format tool_call JSON in raw LLM output and translate to CALL() code.
+    """Translate recognized JSON tool-call wire formats to REPL ``CALL()`` code.
 
     When a model emits ``[{"id":"call_...","function":{"name":"web_search",
     "arguments":"{\"query\":\"...\"}"},"type":"function"}]`` instead of
@@ -75,12 +131,34 @@ def translate_openai_tool_calls(text: str) -> str | None:
     returns equivalent Python code using ``CALL()`` syntax.  Returns ``None``
     if no tool_call JSON is detected.
     """
+    # Jackrong v2 and Coder place a direct JSON object inside a tool_call tag:
+    # <tool_call>{"name":"web_search","arguments":{"query":"..."}}</tool_call>.
+    # Parse each tag independently: templates differ per model, but the wire
+    # contract is pinned by these fixtures rather than inferred from Qwen XML.
+    tagged_items: list[dict] = []
+    for match in _TAGGED_JSON_TOOL_CALL_RE.finditer(text):
+        try:
+            payload = json.loads(match.group(1))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            tagged_items.append(payload)
+        elif isinstance(payload, list):
+            tagged_items.extend(item for item in payload if isinstance(item, dict))
+    tagged_calls = _deduplicate_tool_calls(tagged_items)
+    if tagged_calls:
+        _log.info(
+            "Translated %d tagged JSON tool_call(s) to CALL() syntax: %s",
+            len(tagged_calls),
+            [call[0] for call in tagged_calls],
+        )
+        return _render_call_code(tagged_calls)
+
     if not _TOOL_CALL_RE.search(text):
         return None
 
     # Extract all JSON arrays that look like tool_call lists.
-    calls_seen: list[tuple[str, dict]] = []  # (name, kwargs) deduped
-    seen_keys: set[str] = set()
+    items: list[dict] = []
 
     # Find JSON array boundaries robustly.  The model emits space-separated
     # ``[{...}] [{...}]`` blocks; simple regex can't handle nested braces
@@ -88,22 +166,10 @@ def translate_openai_tool_calls(text: str) -> str | None:
     # ``]`` by tracking brace/bracket depth.
     for arr in _extract_json_arrays(text):
         for item in arr:
-            if not isinstance(item, dict):
-                continue
-            func = item.get("function") or {}
-            name = func.get("name")
-            if not name:
-                continue
-            try:
-                args = json.loads(func.get("arguments", "{}"))
-            except (json.JSONDecodeError, ValueError):
-                args = {}
-            # Dedup key: (name, sorted args)
-            dedup_key = (name, tuple(sorted(args.items())))
-            if dedup_key in seen_keys:
-                continue
-            seen_keys.add(dedup_key)
-            calls_seen.append((name, args))
+            if isinstance(item, dict):
+                items.append(item)
+
+    calls_seen = _deduplicate_tool_calls(items)
 
     if not calls_seen:
         return None
@@ -114,22 +180,9 @@ def translate_openai_tool_calls(text: str) -> str | None:
         [c[0] for c in calls_seen],
     )
 
-    # Build CALL() code lines.  Do NOT auto-wrap with FINAL() — the model
-    # wants to inspect tool results and continue reasoning in the next turn.
-    lines: list[str] = []
-    for i, (name, kwargs) in enumerate(calls_seen):
-        kw_parts = ", ".join(f'{k}={json.dumps(v)}' for k, v in kwargs.items())
-        var = f"result_{i}" if len(calls_seen) > 1 else "result"
-        lines.append(f'{var} = CALL("{name}", {kw_parts})')
-
-    # Print results so the REPL captures output for the next turn
-    if len(calls_seen) == 1:
-        lines.append("print(result)")
-    else:
-        for i in range(len(calls_seen)):
-            lines.append(f"print(result_{i})")
-
-    return "\n".join(lines)
+    # Do NOT auto-wrap with FINAL(): the model inspects the tool result on the
+    # following turn.
+    return _render_call_code(calls_seen)
 
 
 def _strip_import_lines(code: str) -> str:

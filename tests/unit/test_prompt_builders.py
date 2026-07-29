@@ -144,6 +144,24 @@ class TestExtractCodeFromResponse:
         assert 'FINAL(result)' in result
         assert '<|tool_call>' not in result
 
+    def test_translates_jackrong_v2_tagged_json_tool_call(self):
+        """Jackrong v2's 6,994-byte template uses tagged direct JSON, not Qwen XML."""
+        response = (
+            '<tool_call>{"name":"web_search",'
+            '"arguments":{"query":"EPYC parser"}}</tool_call>'
+        )
+        result = extract_code_from_response(response)
+        assert result == 'result = CALL("web_search", query="EPYC parser")\nprint(result)'
+
+    def test_translates_jackrong_coder_tagged_json_tool_call(self):
+        """Coder's distinct 4,718-byte template preserves the tagged JSON wire contract."""
+        response = (
+            '<tool_call>{"name":"grep",'
+            '"arguments":{"pattern":"TODO","path":"src"}}</tool_call>'
+        )
+        result = extract_code_from_response(response)
+        assert result == 'result = CALL("grep", pattern="TODO", path="src")\nprint(result)'
+
 
 # ── auto_wrap_final ───────────────────────────────────────────────────────
 
