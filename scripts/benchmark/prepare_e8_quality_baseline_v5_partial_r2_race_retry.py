@@ -41,6 +41,7 @@ TERMINALIZATION_NAME = "terminalization_transition.json"
 TERMINALIZATION_COMPLETE_NAME = "terminalization_complete.json"
 TERMINALIZATION_INCOMPLETE_NAME = "terminalization_incomplete.json"
 TERMINALIZATION_SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v1"
+TERMINALIZATION_SCHEMA_V2 = "epyc.e8_quality_v5_partial_r2_terminalization.v2"
 TERMINALIZER_PATH = ROOT / "scripts/benchmark/terminalize_e8_quality_baseline_v5_partial_r2_successor.py"
 COMPLETE_STATUS = "intermediate_r2_race_retry_complete"
 N = 500
@@ -55,6 +56,9 @@ HISTORICAL_MIXED_PREDECESSOR_TREE_SHA256 = (
 )
 HISTORICAL_MIXED_REPAIR_RUNNER_SHA256 = (
     "a09a169d6991a514581f1209cae5b8d6553102741b3d2c2215b48031589b1d76"
+)
+HISTORICAL_TERMINALIZER_RUNNER_SHA256 = (
+    "5ee7ccad87982b68cbdf7713d639cf71106daf819cc7b7b14a159847c6a70326"
 )
 
 
@@ -578,12 +582,16 @@ def _validate_mixed_predecessor(
             or terminalization.get("path") != TERMINALIZATION_NAME
             or terminalization.get("sha256") != sha256_path(original_transition_path)
             or terminalization.get("terminalizer_runner")
-            != {"path": TERMINALIZER_PATH.name, "sha256": sha256_path(TERMINALIZER_PATH)}
+            != {
+                "path": TERMINALIZER_PATH.name,
+                "sha256": HISTORICAL_TERMINALIZER_RUNNER_SHA256,
+            }
         ):
             raise ValueError("mixed-tail predecessor terminalization provenance differs")
         transition = V4.load_json(original_transition_path)
         if (
-            transition.get("schema") != TERMINALIZATION_SCHEMA
+            transition.get("schema")
+            not in {TERMINALIZATION_SCHEMA, TERMINALIZATION_SCHEMA_V2}
             or transition.get("status") != "terminal_failed"
             or transition.get("source_tree_sha256") != terminalization.get("source_tree_sha256")
             or transition.get("terminalizer_runner") != terminalization.get("terminalizer_runner")

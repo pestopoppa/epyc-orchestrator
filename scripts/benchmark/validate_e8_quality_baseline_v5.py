@@ -933,6 +933,7 @@ def validate_mixed_tail_repair_context(
         "terminalization_transition_sha256",
         "terminalizer_runner",
         "terminalization_source_tree_sha256",
+        "terminalization_restart_surface_eligibility",
     )
     if mixed is None:
         if any(context.get(key) is not None for key in mixed_context_keys):
@@ -983,6 +984,7 @@ def validate_mixed_tail_repair_context(
         "terminalization_transition_sha256",
         "terminalizer_runner",
         "terminalization_source_tree_sha256",
+        "terminalization_restart_surface_eligibility",
     )
     if terminalization is None:
         if any(context.get(key) is not None for key in terminalization_keys):
@@ -1003,6 +1005,8 @@ def validate_mixed_tail_repair_context(
         }
         or context.get("terminalization_source_tree_sha256")
         != terminalization.get("source_tree_sha256")
+        or context.get("terminalization_restart_surface_eligibility")
+        != terminalization.get("restart_surface_eligibility")
     ):
         raise ValueError("terminalization transition differs from the externally reviewed hash")
 

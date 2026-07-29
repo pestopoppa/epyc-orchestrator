@@ -1334,6 +1334,10 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
                 },
                 "terminalization_source_tree_sha256": terminalization["source_tree_sha256"],
             })
+            if "restart_surface_eligibility" in terminalization:
+                mixed_tail_context["terminalization_restart_surface_eligibility"] = (
+                    terminalization["restart_surface_eligibility"]
+                )
     report["recovery_r2"] = {
         "schema": CONTEXT_SCHEMA,
         "recovery_runner": {"path": str(RECOVERY_PATH), "sha256": sha256_path(RECOVERY_PATH)},

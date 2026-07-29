@@ -31,7 +31,8 @@ EVIDENCE_NAME = "mixed_tail_repair.json"
 TERMINALIZATION_NAME = "terminalization_transition.json"
 TERMINALIZATION_COMPLETE_NAME = "terminalization_complete.json"
 TERMINALIZATION_INCOMPLETE_NAME = "terminalization_incomplete.json"
-TERMINALIZATION_SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v1"
+TERMINALIZATION_SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v2"
+HISTORICAL_TERMINALIZATION_SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v1"
 N = 500
 TIMEOUT_ERROR = "[ERROR: Inference failed: chat_completions failed: timed out]"
 ALLOWED_CLASSES = ("clean", "race_lost", "timeout", "outer_timeout", "scorer_replay")
@@ -89,6 +90,33 @@ def _identity(row: dict[str, Any], question: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(result, dict) or result.get("qid") != qid or result.get("question_id") != qid:
         raise ValueError("mixed-tail sidecar identity differs from sealed vector")
     return result
+
+
+def _restart_surface_eligibility(
+    sidecars: dict[int, tuple[int, dict[str, Any]]], generation: list[int]
+) -> dict[str, Any]:
+    """Fail closed unless every terminalized generation proves a warm host.
+
+    The saved per-question sidecar is the authoritative capture surface.  A
+    summary, a watcher sample, or a missing covariate cannot substitute for an
+    affirmative per-row ``cache_warm_state == 'warm'`` predicate.
+    """
+    if any(type(ordinal) is not int for ordinal in generation):
+        raise ValueError("restart-surface generation ordinals are invalid")
+    states: dict[str, int] = {}
+    for ordinal in sorted(generation):
+        row = sidecars.get(ordinal)
+        result = row[1].get("result") if row is not None else None
+        covariates = result.get("host_covariates") if isinstance(result, dict) else None
+        state = covariates.get("cache_warm_state") if isinstance(covariates, dict) else None
+        label = state if isinstance(state, str) and state else "missing"
+        states[label] = states.get(label, 0) + 1
+    return {
+        "predicate": "all_result_host_covariates_cache_warm_state_eq_warm.v1",
+        "covered_generation_ordinals": sorted(generation),
+        "cache_warm_state_counts": dict(sorted(states.items())),
+        "eligible": bool(generation) and set(states) == {"warm"},
+    }
 
 
 def _timeout(row: dict[str, Any], question: dict[str, Any]) -> bool:
@@ -335,11 +363,20 @@ def _terminalization_transition(
             or record.get("after_sha256") != payload.get(relative)
         ):
             raise ValueError("mixed-tail terminalization rewritten artifact differs")
+    schema = value.get("schema")
+    expected_runner = {
+        "path": TERMINALIZER_PATH.name,
+        "sha256": (
+            sha256_path(TERMINALIZER_PATH)
+            if schema == TERMINALIZATION_SCHEMA
+            else RACE.HISTORICAL_TERMINALIZER_RUNNER_SHA256
+        ),
+    }
     if (
-        value.get("schema") != TERMINALIZATION_SCHEMA
+        schema not in {TERMINALIZATION_SCHEMA, HISTORICAL_TERMINALIZATION_SCHEMA}
         or value.get("status") != "terminal_failed"
         or not isinstance(runner, dict)
-        or runner != {"path": TERMINALIZER_PATH.name, "sha256": sha256_path(TERMINALIZER_PATH)}
+        or runner != expected_runner
         or not isinstance(sidecar, dict)
         or sidecar.get("path") != "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
         or sidecar.get("source_sha256") != source.get(sidecar["path"])
@@ -397,6 +434,19 @@ def _terminalization_transition(
     generation = plan.get("generation_ordinals")
     if not isinstance(generation, list) or set(sidecars) != set(generation):
         raise ValueError("mixed-tail terminalization sidecar coverage differs")
+    restart_surface_eligibility = value.get("restart_surface_eligibility")
+    if schema == TERMINALIZATION_SCHEMA:
+        expected_eligibility = _restart_surface_eligibility(sidecars, generation)
+        expected_eligibility["sidecar"] = {
+            "path": sidecar["path"],
+            "sha256": sha256_path(root / sidecar["path"]),
+        }
+        if restart_surface_eligibility != expected_eligibility:
+            raise ValueError("mixed-tail terminalization restart-surface predicate differs")
+        if restart_surface_eligibility.get("eligible") is not True:
+            raise ValueError("mixed-tail terminalization quarantines non-warm restart evidence")
+    elif restart_surface_eligibility is not None:
+        raise ValueError("historical terminalization carries an unreviewed restart predicate")
     kinds = {ordinal: _classify(sidecars[ordinal][1], questions[ordinal]) for ordinal in generation}
     classified = {
         kind: sorted(ordinal for ordinal in generation if kinds[ordinal] == kind)
@@ -417,12 +467,16 @@ def _terminalization_transition(
     if require_completion:
         completion = V4.load_json(completion_path)
         if (
-            completion.get("schema") != TERMINALIZATION_SCHEMA
+            completion.get("schema") != schema
             or completion.get("status") != "published_complete"
             or completion.get("transition") != {"path": TERMINALIZATION_NAME, "sha256": sha256_path(path)}
             or completion.get("terminalizer_runner") != runner
             or completion.get("source_tree_sha256") != source_tree
             or completion.get("output_payload_tree_sha256") != value.get("output_payload_tree_sha256")
+            or (
+                schema == TERMINALIZATION_SCHEMA
+                and completion.get("restart_surface_eligibility") != restart_surface_eligibility
+            )
         ):
             raise ValueError("mixed-tail terminalization completion seal differs")
     return {
@@ -430,6 +484,11 @@ def _terminalization_transition(
         "sha256": sha256_path(path),
         "source_tree_sha256": source_tree,
         "terminalizer_runner": runner,
+        **(
+            {"restart_surface_eligibility": restart_surface_eligibility}
+            if schema == TERMINALIZATION_SCHEMA
+            else {}
+        ),
     }
 
 

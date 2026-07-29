@@ -42,6 +42,21 @@ def test_publish_never_replaces_a_concurrent_destination(tmp_path: Path) -> None
         TERMINALIZER._rename_noreplace(source, destination)
 
 
+def test_restart_surface_predicate_requires_an_affirmative_warm_state() -> None:
+    sidecars = {
+        0: (0, {"result": {"host_covariates": {"cache_warm_state": "warm"}}}),
+        1: (1, {"result": {"host_covariates": {"cache_warm_state": "cold"}}}),
+        2: (2, {"result": {}}),
+    }
+    predicate = TERMINALIZER.MIXED._restart_surface_eligibility(sidecars, [0, 1, 2])
+    assert predicate == {
+        "predicate": "all_result_host_covariates_cache_warm_state_eq_warm.v1",
+        "covered_generation_ordinals": [0, 1, 2],
+        "cache_warm_state_counts": {"cold": 1, "missing": 1, "warm": 1},
+        "eligible": False,
+    }
+
+
 @pytest.mark.skipif(not FAILED_SOURCE.is_dir(), reason="sealed E8 failed source is host evidence")
 def test_original_failed_artifact_is_rejected_and_terminalized_output_is_accepted(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
@@ -51,6 +66,15 @@ def test_original_failed_artifact_is_rejected_and_terminalized_output_is_accepte
         )
     output = tmp_path / "terminalized"
     TERMINALIZER.terminalize(FAILED_SOURCE, output, SOURCE_HASH)
+    transition = TERMINALIZER.V4.load_json(output / TERMINALIZER.TRANSITION_NAME)
+    completion = TERMINALIZER.V4.load_json(output / TERMINALIZER.COMPLETION_NAME)
+    eligibility = transition["restart_surface_eligibility"]
+    assert transition["schema"] == TERMINALIZER.SCHEMA
+    assert eligibility["eligible"] is True
+    assert eligibility["cache_warm_state_counts"] == {
+        "warm": len(eligibility["covered_generation_ordinals"])
+    }
+    assert completion["restart_surface_eligibility"] == eligibility
     terminal_hash = TERMINALIZER.canonical_hash(TERMINALIZER.RACE.source_hashes(output))
     plan = TERMINALIZER.MIXED.build_plan(output, terminal_hash)
     assert 296 in plan["mixed_tail_repair"]["generation_retry_ordinals"]

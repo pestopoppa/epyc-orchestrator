@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RACE_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
 MIXED_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
 RECOVERY_PATH = ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
-SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v1"
+SCHEMA = "epyc.e8_quality_v5_partial_r2_terminalization.v2"
 TRANSITION_NAME = "terminalization_transition.json"
 COMPLETION_NAME = "terminalization_complete.json"
 INCOMPLETE_NAME = "terminalization_incomplete.json"
@@ -159,6 +159,7 @@ def _write_completion_seal(output: Path, transition: dict[str, Any]) -> None:
         "terminalizer_runner": transition["terminalizer_runner"],
         "source_tree_sha256": transition["source_tree_sha256"],
         "output_payload_tree_sha256": transition["output_payload_tree_sha256"],
+        "restart_surface_eligibility": transition["restart_surface_eligibility"],
     }
     temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
     data = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
@@ -373,6 +374,13 @@ def terminalize(source_dir: Path, output_dir: Path, expected_source_tree_sha256:
             raise ValueError("terminal bridge changed an unlisted copied source artifact")
         if set(output_before_transition) != set(source_sha256) | {ledger["path"]}:
             raise ValueError("terminal bridge output has an unlisted source artifact before transition")
+        restart_surface_eligibility = MIXED._restart_surface_eligibility(
+            validated["sidecars"], plan["generation_ordinals"]
+        )
+        restart_surface_eligibility["sidecar"] = {
+            "path": SIDECARE_RELATIVE,
+            "sha256": sha256_path(staging / SIDECARE_RELATIVE),
+        }
         transition = {
             "schema": SCHEMA,
             "status": "terminal_failed",
@@ -401,6 +409,7 @@ def terminalize(source_dir: Path, output_dir: Path, expected_source_tree_sha256:
                 "source_sha256": source_sha256[SIDECARE_RELATIVE],
                 "output_sha256": sha256_path(staging / SIDECARE_RELATIVE),
             },
+            "restart_surface_eligibility": restart_surface_eligibility,
             "journal": {
                 "path": "recovery_rows.T2.r2.jsonl",
                 "clean_generation_ordinals": appended,
