@@ -5,12 +5,14 @@ from __future__ import annotations
 import concurrent.futures
 import importlib.util
 import os
+import socket
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 import httpx
+import pytest
 
 
 _ROOT = Path(__file__).resolve().parents[2] / "scripts" / "benchmark"
@@ -455,6 +457,8 @@ def test_eval_reconnect_does_not_retry_timeouts():
         "class": "client_transport_timeout",
         "code": "read_timeout",
         "phase": "client_transport",
+        "exception_class": "httpx.ReadTimeout",
+        "exception_reason": "read_timeout",
         "role": "worker_math",
         "workload_class": "eval_batch",
         "max_queue_wait_ms": 90_000,
@@ -503,6 +507,31 @@ def test_non_eval_timeout_adds_only_typed_transport_provenance():
     assert set(data["failure_provenance"]).isdisjoint(
         {"generation_started", "tokens_generated", "partial", "degraded"}
     )
+
+
+@pytest.mark.parametrize(
+    ("exc", "reason", "exception_class"),
+    [
+        (httpx.ConnectTimeout("connect"), "connect_timeout", "httpx.ConnectTimeout"),
+        (httpx.ReadTimeout("read"), "read_timeout", "httpx.ReadTimeout"),
+        (httpx.WriteTimeout("write"), "write_timeout", "httpx.WriteTimeout"),
+        (httpx.PoolTimeout("pool"), "pool_timeout", "httpx.PoolTimeout"),
+        (socket.timeout("socket"), "socket_timeout", "builtins.TimeoutError"),
+    ],
+)
+def test_transport_timeout_preserves_typed_exception_class_and_reason(
+    exc, reason, exception_class
+):
+    client = Mock()
+    client.post.side_effect = exc
+    data = _MOD.call_orchestrator_forced(
+        prompt="q", force_role="worker", client=client, workload_class="eval_batch"
+    )
+    provenance = data["failure_provenance"]
+    assert provenance["class"] == "client_transport_timeout"
+    assert provenance["code"] == reason
+    assert provenance["exception_reason"] == reason
+    assert provenance["exception_class"] == exception_class
 
 
 def _reconnect_meta(**overrides):
@@ -698,6 +727,9 @@ def test_call_orchestrator_with_slot_poll_timeout_erase_branch():
             poll_port=8080,
         )
     assert "timeout after slot erase" in resp["error"]
+    assert resp["failure_provenance"]["class"] == "slot_erase_timeout"
+    assert resp["failure_provenance"]["code"] == "timeout_after_slot_erase"
+    assert resp["failure_provenance"]["elapsed_ms"] == 2000
     assert elapsed >= 0.0
     assert progress["max_decoded"] == 0
 

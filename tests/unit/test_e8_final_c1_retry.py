@@ -594,6 +594,33 @@ def test_structured_admission_timeout_is_wording_stable_and_other_classes_fail_c
     sidecar["result"]["error_detail"] = "timed out"
     assert not RUNNER._terminal_timeout(sidecar, 97, question)
 
+    sidecar["result"]["failure_provenance"] = {
+        "class": "slot_erase_timeout",
+        "code": "timeout_after_slot_erase",
+        "exception_class": "httpx.PoolTimeout",
+        "exception_reason": "pool_timeout",
+    }
+    assert not RUNNER._terminal_timeout(sidecar, 97, question)
+
+
+def test_historical_timeout_requires_hash_and_bound_latency_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _response, sidecar = _timeout(97)
+    question = {"qid": RUNNER.RETRY_QIDS[0]}
+    sidecar["result"].pop("failure_provenance")
+    sidecar["elapsed_s"] = 300.0
+    sidecar["result"]["error_detail"] = (
+        "[ERROR: Inference failed: chat_completions failed: timed out]"
+    )
+    sidecar["result"]["latency_ms"] = 299000
+    monkeypatch.setattr(RUNNER, "HISTORICAL_TIMEOUT_SIDECAR_SHA256", {RUNNER.canonical_hash(sidecar)})
+    assert not RUNNER._terminal_timeout(sidecar, 97, question, allow_historical=True)
+
+    sidecar["result"]["latency_ms"] = 300000
+    monkeypatch.setattr(RUNNER, "HISTORICAL_TIMEOUT_SIDECAR_SHA256", {RUNNER.canonical_hash(sidecar)})
+    assert RUNNER._terminal_timeout(sidecar, 97, question, allow_historical=True)
+
 
 def test_cli_exposes_no_timeout_or_concurrency_override() -> None:
     with pytest.raises(SystemExit):
