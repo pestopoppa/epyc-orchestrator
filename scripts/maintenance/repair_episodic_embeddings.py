@@ -12,7 +12,7 @@ Runs in two modes:
 Health definition:
 
     n_db_routing       = COUNT(*) FROM memories WHERE action_type='routing'
-    n_db_indexed       = COUNT(*) FROM memories WHERE action_type IN indexed types
+    n_db_indexed       = COUNT(*) FROM memories with a nonempty action_type
     n_faiss_vectors    = embeddings.faiss IndexFlatIP ntotal (read-only check)
     n_id_map           = number of IDs in id_map.npy
     n_reembedded_npz   = number of IDs in reembedded.npz (if present)
@@ -36,7 +36,7 @@ Usage:
 
 The repair step:
     1. Calls reembed_episodic_store.py to produce a fresh reembedded.npz
-       for routing/escalation rows (uses existing parallel-BGE primitive —
+       for every live indexed row (uses existing parallel-BGE primitive —
        same configured-server pattern).
     2. Builds a new IndexFlatIP from the fresh embeddings.
     3. Atomically swaps embeddings.faiss + id_map.npy into place (writes to .new,
@@ -66,6 +66,8 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from orchestration.repl_memory.indexed_memory_policy import indexed_memory_predicate
+
 try:
     from scripts.server.stack_manifest import EMBEDDER_PORTS
 except Exception:  # pragma: no cover - maintenance fallback for partial checkouts
@@ -81,11 +83,9 @@ DEFAULT_ID_MAP_PATH = DEFAULT_SESSIONS_DIR / "id_map.npy"
 DEFAULT_REEMBEDDED_PATH = DEFAULT_SESSIONS_DIR / "reembedded.npz"
 DEFAULT_FAISS_LOCK_PATH = DEFAULT_SESSIONS_DIR / ".episodic_faiss.lock"
 REEMBED_SCRIPT = PROJECT_ROOT / "scripts/graph_router/reembed_episodic_store.py"
-INDEXED_ACTION_TYPES = ("routing", "escalation")
-
 # Retrieval is materially degraded well before catastrophic 50% coverage loss.
 # Keep a small append-lag allowance for live writers, but require the live
-# FAISS/id_map mirror to cover nearly all live routing rows before health passes.
+# FAISS/id_map mirror must cover nearly all live indexed rows before health passes.
 HEALTH_THRESHOLD = 0.99
 MIN_ORPHANS_TO_REPAIR = 1000  # don't repair if delta is small (< this many orphans)
 DEFAULT_EMBEDDER_SERVERS = len(EMBEDDER_PORTS)
@@ -135,7 +135,7 @@ def _assert_db_growth_within_bound(
     if max_db_growth < 0:
         return
     del faiss_path, reembedded_path
-    current_indexed_count = _live_memory_count(db_path, INDEXED_ACTION_TYPES)
+    current_indexed_count = _live_memory_count(db_path)
     db_growth = current_indexed_count - start_indexed_count
     if db_growth > max_db_growth:
         raise SystemExit(
@@ -173,18 +173,15 @@ def diagnose(
     n_db_routing = conn.execute(
         "SELECT COUNT(*) FROM memories WHERE action_type='routing'"
     ).fetchone()[0]
-    indexed_placeholders = ",".join("?" for _ in INDEXED_ACTION_TYPES)
     n_db_indexed = conn.execute(
-        f"SELECT COUNT(*) FROM memories WHERE action_type IN ({indexed_placeholders})",
-        tuple(INDEXED_ACTION_TYPES),
+        f"SELECT COUNT(*) FROM memories WHERE {indexed_memory_predicate()}",
     ).fetchone()[0]
     live_indexed_ids: set[str] = set()
     if n_db_indexed > 0:
         live_indexed_ids = {
             str(r[0])
             for r in conn.execute(
-                f"SELECT id FROM memories WHERE action_type IN ({indexed_placeholders})",
-                tuple(INDEXED_ACTION_TYPES),
+                f"SELECT id FROM memories WHERE {indexed_memory_predicate()}",
             ).fetchall()
         }
     conn.close()
@@ -338,29 +335,25 @@ def _load_reembedded_ids(path: Path) -> list[str]:
     return [str(item) for item in data["ids"].tolist()]
 
 
-def _live_memory_ids(db_path: Path, action_types: Sequence[str]) -> set[str]:
+def _live_memory_ids(db_path: Path) -> set[str]:
     if not db_path.exists():
         return set()
-    placeholders = ",".join("?" for _ in action_types)
     with sqlite3.connect(str(db_path)) as conn:
         return {
             str(row[0])
             for row in conn.execute(
-                f"SELECT id FROM memories WHERE action_type IN ({placeholders})",
-                tuple(action_types),
+                f"SELECT id FROM memories WHERE {indexed_memory_predicate()}",
             ).fetchall()
         }
 
 
-def _live_memory_count(db_path: Path, action_types: Sequence[str]) -> int:
+def _live_memory_count(db_path: Path) -> int:
     if not db_path.exists():
         return 0
-    placeholders = ",".join("?" for _ in action_types)
     with sqlite3.connect(str(db_path)) as conn:
         return int(
             conn.execute(
-                f"SELECT COUNT(*) FROM memories WHERE action_type IN ({placeholders})",
-                tuple(action_types),
+                f"SELECT COUNT(*) FROM memories WHERE {indexed_memory_predicate()}",
             ).fetchone()[0]
         )
 
@@ -669,7 +662,7 @@ def run_repair(
     start_indexed_count = start_report.n_db_indexed or start_report.n_db_routing
     if incremental and not skip_reembed and faiss_path.exists() and id_map_path.exists():
         if start_report.id_map_matches_faiss:
-            live_indexed_ids = _live_memory_ids(db_path, INDEXED_ACTION_TYPES)
+            live_indexed_ids = _live_memory_ids(db_path)
             id_map_ids = set(_load_npy_ids(id_map_path))
             reembedded_ids = set(_load_reembedded_ids(reembedded_path))
             ids_missing_faiss = live_indexed_ids - id_map_ids

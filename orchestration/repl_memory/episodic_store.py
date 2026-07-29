@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import numpy as np
 
+from .indexed_memory_policy import indexed_memory_predicate, is_indexed_action_type
+
 if TYPE_CHECKING:
     from .faiss_store import FAISSEmbeddingStore, NumpyEmbeddingStore
     from .failure_graph import FailureGraph
@@ -398,6 +400,9 @@ class EpisodicStore:
         Returns:
             Memory ID
         """
+        if not is_indexed_action_type(action_type):
+            raise ValueError("action_type must be a nonempty string for indexed episodic memory")
+
         memory_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
 
@@ -699,7 +704,7 @@ class EpisodicStore:
             SELECT id, embedding_idx, action, action_type, context, outcome, q_value,
                    created_at, updated_at, update_count, model_id, assigned_role, sub_decision
             FROM memories
-            WHERE id IN ({placeholders})
+            WHERE id IN ({placeholders}) AND {indexed_memory_predicate()}
         """
         params: list = list(memory_ids)
 

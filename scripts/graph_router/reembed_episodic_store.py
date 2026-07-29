@@ -2,7 +2,7 @@
 """Re-embed episodic memories that lack FAISS embeddings.
 
 Launches multiple temporary llama-server instances with BGE-large in parallel,
-embeds all routing/escalation memories using concurrent requests,
+embeds all live indexed memories using concurrent requests,
 and saves the result as a numpy array keyed by memory ID.
 
 One-time operation to recover embeddings lost when the FAISS index was rebuilt.
@@ -46,6 +46,7 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "orchestration/repl_memory/sessions/reembedded.n
 LLAMA_SERVER = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-server")
 
 from scripts.graph_router.extract_training_data import normalize_action
+from orchestration.repl_memory.indexed_memory_policy import indexed_memory_predicate
 
 TEXT_FIELDS = (
     "objective",
@@ -278,10 +279,10 @@ def main():
     # ── Extract memories from SQLite ──
     logger.info("Reading memories from %s", db_path)
     conn = sqlite3.connect(db_path)
-    rows = conn.execute("""
+    rows = conn.execute(f"""
         SELECT id, action, action_type, context, outcome, q_value
         FROM memories
-        WHERE (action_type = 'routing' OR action_type = 'escalation')
+        WHERE {indexed_memory_predicate()}
         ORDER BY created_at
     """).fetchall()
     conn.close()

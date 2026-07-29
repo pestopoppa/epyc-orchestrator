@@ -114,6 +114,98 @@ def test_diagnose_counts_all_indexed_action_types(monkeypatch, tmp_path: Path) -
     assert not report.healthy
 
 
+def test_diagnose_accepts_every_live_indexed_action_type(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "episodic.db"
+    faiss_path = tmp_path / "embeddings.faiss"
+    id_map_path = tmp_path / "id_map.npy"
+    reembedded_path = tmp_path / "reembedded.npz"
+    live_ids = ["routing-1", "exploration-1", "persona-1"]
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, action_type TEXT)")
+        conn.executemany(
+            "INSERT INTO memories (id, action_type) VALUES (?, ?)",
+            [("routing-1", "routing"), ("exploration-1", "exploration"), ("persona-1", "persona")],
+        )
+
+    faiss_path.touch()
+    monkeypatch.setitem(
+        sys.modules,
+        "faiss",
+        types.SimpleNamespace(read_index=lambda _path: types.SimpleNamespace(ntotal=3)),
+    )
+    np.save(id_map_path, np.array(live_ids, dtype=object))
+    np.savez(reembedded_path, ids=np.array(live_ids, dtype=object))
+
+    report = repair.diagnose(db_path, faiss_path, reembedded_path, id_map_path)
+
+    assert report.n_db_indexed == 3
+    assert report.missing_id_count == 0
+    assert report.stale_id_count == 0
+    assert report.healthy
+
+
+def test_diagnose_flags_missing_routing_id_among_other_valid_types(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db_path = tmp_path / "episodic.db"
+    faiss_path = tmp_path / "embeddings.faiss"
+    id_map_path = tmp_path / "id_map.npy"
+    reembedded_path = tmp_path / "reembedded.npz"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, action_type TEXT)")
+        conn.executemany(
+            "INSERT INTO memories (id, action_type) VALUES (?, ?)",
+            [("routing-1", "routing"), ("exploration-1", "exploration"), ("persona-1", "persona")],
+        )
+
+    faiss_path.touch()
+    monkeypatch.setitem(
+        sys.modules,
+        "faiss",
+        types.SimpleNamespace(read_index=lambda _path: types.SimpleNamespace(ntotal=2)),
+    )
+    np.save(id_map_path, np.array(["exploration-1", "persona-1"], dtype=object))
+
+    report = repair.diagnose(db_path, faiss_path, reembedded_path, id_map_path)
+
+    assert report.missing_id_count == 1
+    assert report.orphan_count == 1
+    assert not report.healthy
+
+
+def test_diagnose_flags_genuinely_deleted_id_with_other_valid_types(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db_path = tmp_path / "episodic.db"
+    faiss_path = tmp_path / "embeddings.faiss"
+    id_map_path = tmp_path / "id_map.npy"
+    reembedded_path = tmp_path / "reembedded.npz"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, action_type TEXT)")
+        conn.executemany(
+            "INSERT INTO memories (id, action_type) VALUES (?, ?)",
+            [("routing-1", "routing"), ("persona-1", "persona")],
+        )
+
+    faiss_path.touch()
+    monkeypatch.setitem(
+        sys.modules,
+        "faiss",
+        types.SimpleNamespace(read_index=lambda _path: types.SimpleNamespace(ntotal=3)),
+    )
+    np.save(id_map_path, np.array(["routing-1", "persona-1", "deleted-1"], dtype=object))
+
+    report = repair.diagnose(db_path, faiss_path, reembedded_path, id_map_path)
+
+    assert report.missing_id_count == 0
+    assert report.stale_id_count == 1
+    assert report.orphan_count == 1
+    assert not report.healthy
+
+
 def test_diagnose_flags_stale_extra_id_when_live_coverage_complete(
     monkeypatch, tmp_path: Path
 ) -> None:
