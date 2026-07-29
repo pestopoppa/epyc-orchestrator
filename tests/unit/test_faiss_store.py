@@ -726,3 +726,97 @@ class TestCorruptLoadDoesNotDestroyTheStore:
         store = FAISSEmbeddingStore(path=tmp_path / "brand-new", dim=8)
         assert store.index.ntotal == 0
         assert store.id_map == []
+
+
+class TestOrphanTmpSweep:
+    """Startup janitor for tmp files stranded by SIGKILLed saves.
+
+    orchestration-robustness-audit-2026-07-11.md: 37 GB across 67 files had to
+    be reclaimed by hand on 2026-07-21. `_save` cleans up in a `finally`, which
+    does NOT run on SIGKILL, and this host runs earlyoom by design — so the
+    orphans are structural and re-accumulate.
+    """
+
+    @pytest.fixture
+    def temp_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield Path(tmpdir)
+
+    @pytest.fixture
+    def store(self, temp_dir):
+        from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
+
+        return FAISSEmbeddingStore(path=temp_dir, dim=8)
+
+    def _tmp(self, store, name, age_s):
+        import os
+        import time
+
+        p = store.path / name
+        p.write_bytes(b"x" * 16)
+        old = time.time() - age_s
+        os.utime(p, (old, old))
+        return p
+
+    def test_removes_old_unopened_orphans(self, store):
+        a = self._tmp(store, ".embeddings.faiss.abc123.tmp", 48 * 3600)
+        b = self._tmp(store, ".id_map.npy.def456.tmp", 48 * 3600)
+        removed = store.sweep_orphan_tmp_files()
+        assert set(removed) == {a, b}
+        assert not a.exists() and not b.exists()
+
+    def test_keeps_recent_orphans(self, store):
+        """A fresh tmp may belong to a save that is still running."""
+        p = self._tmp(store, ".embeddings.faiss.fresh.tmp", 60)
+        assert store.sweep_orphan_tmp_files() == []
+        assert p.exists()
+
+    def test_never_deletes_a_file_held_open(self, store):
+        """The property that matters: a tmp observed live mid-save on
+        2026-07-21 completed normally. Age alone would have corrupted it."""
+        p = self._tmp(store, ".embeddings.faiss.inflight.tmp", 48 * 3600)
+        with p.open("rb"):  # held open for the duration of the sweep
+            removed = store.sweep_orphan_tmp_files()
+            assert removed == []
+            assert p.exists()
+        # once closed, the same file is reclaimable
+        assert store.sweep_orphan_tmp_files() == [p]
+        assert not p.exists()
+
+    def test_leaves_real_store_files_alone(self, store):
+        # A clean store's save() is a no-op, so add a vector first — otherwise
+        # there would be no real files to protect and this would pass vacuously.
+        store.add("m1", np.ones(8, dtype=np.float32))
+        store.save()
+        assert store.index_path.exists() and store.id_map_path.exists()
+
+        stale = self._tmp(store, ".embeddings.faiss.stale.tmp", 48 * 3600)
+        removed = store.sweep_orphan_tmp_files()
+
+        assert removed == [stale]
+        assert store.index_path.exists() and store.id_map_path.exists()
+
+    def test_runs_on_init_and_never_blocks_open(self, temp_dir):
+        from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
+        import os
+        import time
+
+        stale = temp_dir / ".embeddings.faiss.onboot.tmp"
+        stale.write_bytes(b"y" * 16)
+        old = time.time() - 48 * 3600
+        os.utime(stale, (old, old))
+
+        s = FAISSEmbeddingStore(path=temp_dir, dim=8)
+        assert not stale.exists()
+        assert s.count == 0  # store still opened normally
+
+    def test_sweep_failure_does_not_break_construction(self, temp_dir, monkeypatch):
+        """A janitor must never stop the store from opening."""
+        from orchestration.repl_memory import faiss_store as fs
+
+        def boom(self, *a, **k):
+            raise OSError("proc walk exploded")
+
+        monkeypatch.setattr(fs.FAISSEmbeddingStore, "sweep_orphan_tmp_files", boom)
+        s = fs.FAISSEmbeddingStore(path=temp_dir, dim=8)
+        assert s.count == 0

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Protocol
@@ -130,11 +131,96 @@ class FAISSEmbeddingStore:
         # Ensure directory exists
         self.path.mkdir(parents=True, exist_ok=True)
 
+        # Reclaim tmp files stranded by SIGKILLed saves before doing anything
+        # else. Never fatal: a janitor must not stop the store from opening.
+        try:
+            self.sweep_orphan_tmp_files()
+        except Exception:  # noqa: BLE001 — best-effort housekeeping
+            pass
+
         # Load existing or create new
         if self.index_path.exists() and self.id_map_path.exists():
             self._load()
         else:
             self._create_new()
+
+    def _open_file_inodes(self) -> set[tuple[int, int]]:
+        """(st_dev, st_ino) of every file currently held open on this host.
+
+        Walks /proc/*/fd because `fuser` is not installed in the devcontainer.
+        Identity is by INODE, not path: a tmp being written right now may
+        already have been renamed, and a stale path could be reused.
+        Processes we cannot read (foreign uid, or exited mid-walk) are skipped
+        — they simply do not contribute to the exclusion set.
+        """
+        open_inodes: set[tuple[int, int]] = set()
+        proc = Path("/proc")
+        for pid_dir in proc.glob("[0-9]*"):
+            fd_dir = pid_dir / "fd"
+            try:
+                fds = list(fd_dir.iterdir())
+            except OSError:
+                continue
+            for fd in fds:
+                try:
+                    st = fd.stat()  # follows the symlink to the target
+                except OSError:
+                    continue
+                open_inodes.add((st.st_dev, st.st_ino))
+        return open_inodes
+
+    def sweep_orphan_tmp_files(self, max_age_s: float = 24 * 3600) -> list[Path]:
+        """Unlink atomic-save tmp files stranded by a killed process.
+
+        `_save` writes tmp -> verify -> replace with cleanup in a `finally`,
+        but **`finally` does not run on SIGKILL** — and this host runs earlyoom
+        (which SIGKILLs by design) plus hard session terminations. Each
+        interrupted save strands a ~2 GB tmp; 37 GB across 67 files had to be
+        reclaimed by hand on 2026-07-21, and the cause is structural so they
+        re-accumulate.
+
+        Two conditions, both required, and the second is the important one:
+          (a) older than `max_age_s`;
+          (b) not currently held open by ANY process.
+        During the 2026-07-21 cleanup a tmp was observed live mid-save and its
+        save completed normally — deleting on age alone would have corrupted
+        an in-flight save of a store that can take minutes to write.
+
+        Returns the paths actually unlinked.
+        """
+        now = time.time()
+        candidates = [
+            p
+            for stem in (self.index_path.name, self.id_map_path.name)
+            for p in self.path.glob(f".{stem}.*.tmp*")
+            if p.is_file()
+        ]
+        if not candidates:
+            return []
+
+        open_inodes = self._open_file_inodes()
+        removed: list[Path] = []
+        for tmp in candidates:
+            try:
+                st = tmp.stat()
+            except OSError:
+                continue
+            if now - st.st_mtime < max_age_s:
+                continue
+            if (st.st_dev, st.st_ino) in open_inodes:
+                continue  # in-flight save — leave it alone
+            try:
+                tmp.unlink()
+            except OSError:
+                continue
+            removed.append(tmp)
+        if removed:
+            logger.info(
+                "faiss_store: reclaimed %d orphaned tmp file(s) from killed saves: %s",
+                len(removed),
+                ", ".join(p.name for p in removed),
+            )
+        return removed
 
     def _current_disk_signature(self) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
         def signature(path: Path) -> tuple[int, int] | None:
