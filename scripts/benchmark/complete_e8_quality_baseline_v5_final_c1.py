@@ -32,6 +32,8 @@ SCHEMA = "epyc.e8_quality_v5_final_c1_deterministic_completion.v1"
 MANIFEST_NAME = "deterministic_completion_manifest.json"
 RUN_SEAL_NAME = "run_seal.json"
 SOURCE_ABORT_COPY_NAME = "deterministic_completion_source_abort.json"
+TYPED_TRACE_INPUT_NAME = "typed_judge_trace_inputs.T2.r2.jsonl"
+TYPED_TRACE_SELECTION_NAME = "typed_judge_trace_selection.json"
 WRITER = "final_c1_deterministic_completion"
 AT_FDCWD = -100
 RENAME_NOREPLACE = 1
@@ -520,6 +522,100 @@ def _scorer_replay_evidence(
     }
 
 
+def _typed_trace_rows(
+    source: Path, state: dict[str, Any], manifest: dict[str, Any]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Select only the score-attempt history bound to each typed lineage row."""
+    entries = {entry["ordinal"]: entry for entry in manifest["entries"]}
+    selected: list[dict[str, Any]] = []
+    selection: list[dict[str, Any]] = []
+
+    def rows(path: Path, qid: str) -> list[dict[str, Any]]:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("typed trace selection ledger is missing or unsafe")
+        return [row for row in V4.load_jsonl(path) if row.get("fixed_vector_qid") == qid]
+
+    for ordinal, question in enumerate(state["questions"]):
+        if question.get("scoring_method") != "llm_judge":
+            continue
+        entry = entries.get(ordinal)
+        journal = state["journal"].get(ordinal)
+        if not isinstance(entry, dict) or not isinstance(journal, dict):
+            raise ValueError("typed trace selection has no provenance entry")
+        response = journal.get("response")
+        if not isinstance(response, dict):
+            raise ValueError("typed trace selection has no response")
+        qid = str(response.get("qid") or "")
+        if not qid or qid != entry.get("qid"):
+            raise ValueError("typed trace selection qid differs from provenance")
+        source_kind = entry.get("journal_source")
+        surface = entry.get("surface")
+        if source_kind == "generation" and surface == "current_generation":
+            initial_path = source / "generation_judge_traces.T2.r2.jsonl"
+            attempts = rows(initial_path, qid)
+            paths = [initial_path] * len(attempts)
+        elif source_kind == "predecessor_generation" and surface == "successor_generation":
+            initial_path = source / "predecessor_snapshot/predecessor_snapshot/generation_judge_traces.T2.r2.jsonl"
+            attempts = rows(initial_path, qid)
+            paths = [initial_path] * len(attempts)
+        elif source_kind == "reuse" and surface == "saved_r2":
+            initial_path = source / "predecessor_snapshot/predecessor_snapshot/source_snapshot/judge_traces.T2.r2.jsonl"
+            attempts = rows(initial_path, qid)
+            paths = [initial_path] * len(attempts)
+        elif source_kind == "scorer_replay":
+            replay = entry.get("scorer_replay")
+            if not isinstance(replay, dict):
+                raise ValueError("typed scorer replay has no bound evidence")
+            if replay.get("class") == "inherited_scorer_replay" and surface == "saved_r2":
+                initial_path = source / "predecessor_snapshot/predecessor_snapshot/source_snapshot/judge_traces.T2.r2.jsonl"
+            elif replay.get("class") == "successor_scorer_replay" and surface == "imported_generation":
+                initial_path = source / "predecessor_snapshot/predecessor_snapshot/failed_source_snapshot/generation_judge_traces.T2.r2.jsonl"
+            else:
+                raise ValueError("typed scorer replay source/surface differs")
+            initial = rows(initial_path, qid)
+            replay_path = source / str(replay.get("trace_path") or "")
+            replay_rows = rows(replay_path, qid)
+            if (
+                len(initial) != 1
+                or len(replay_rows) != 1
+                or sha256_path(replay_path) != replay.get("trace_file_sha256")
+                or canonical_hash(replay_rows[0]) != replay.get("trace_row_sha256")
+            ):
+                raise ValueError("typed scorer replay trace differs from provenance")
+            attempts = [initial[0], replay_rows[0]]
+            paths = [initial_path, replay_path]
+        else:
+            raise ValueError("typed trace selection has an unsupported source/surface")
+        if len(attempts) not in (1, 2):
+            raise ValueError("typed trace selection is not a bounded attempt history")
+        verdict = V4._validate_llm_judge_trace_history(
+            str(response.get("answer") or ""),
+            str(question.get("expected") or ""),
+            question.get("scoring_config") or {},
+            {"schema": "epyc.e8_quality_llm_judge_trace.v2", "attempts": attempts},
+            default_api_url="http://127.0.0.1:8000",
+        )
+        if verdict is not response.get("correct"):
+            raise ValueError("typed trace selection verdict differs from response")
+        selected.extend(attempts)
+        selection.append(
+            {
+                "ordinal": ordinal,
+                "qid": qid,
+                "journal_source": source_kind,
+                "trace_paths": [str(path.relative_to(source)) for path in paths],
+                "trace_file_sha256": [sha256_path(path) for path in paths],
+                "attempt_row_sha256": [canonical_hash(row) for row in attempts],
+            }
+        )
+    result = {
+        "schema": "epyc.e8_quality_v5_typed_judge_trace_selection.v1",
+        "rows": selection,
+        "rows_sha256": canonical_hash(selection),
+    }
+    return selected, result
+
+
 def build_provenance_manifest(
     source: Path, state: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
@@ -648,6 +744,8 @@ def build_provenance_manifest(
         "entries": entries,
         "entries_sha256": canonical_hash(entries),
     }
+    _rows, trace_selection = _typed_trace_rows(source, state, manifest)
+    manifest["typed_judge_trace_selection"] = trace_selection
     return manifest, selected
 
 
@@ -801,6 +899,8 @@ def _validate_completed_staging(
         "raw": staging / "raw.T2.r2.json",
         "journal": staging / "recovery_rows.T2.r2.jsonl",
         "attempts": staging / FINAL_C1.ATTEMPTS_NAME,
+        "typed_trace_input": staging / TYPED_TRACE_INPUT_NAME,
+        "typed_trace_selection": staging / TYPED_TRACE_SELECTION_NAME,
     }
     expected_files = (
         set(state["hashes"])
@@ -817,6 +917,7 @@ def _validate_completed_staging(
     )
     if require_run_seal:
         expected_files.add(RUN_SEAL_NAME)
+    expected_files.update({TYPED_TRACE_INPUT_NAME, TYPED_TRACE_SELECTION_NAME})
     actual_files = {
         str(path.relative_to(staging))
         for path in staging.rglob("*")
@@ -842,6 +943,9 @@ def _validate_completed_staging(
         required["sidecar"], expected_n=RECOVERY.N
     )
     questions = state["questions"]
+    typed_trace_rows, typed_trace_selection = _typed_trace_rows(
+        staging, state, manifest
+    )
     if (
         len(responses) != RECOVERY.N
         or responses
@@ -869,6 +973,10 @@ def _validate_completed_staging(
             "sha256": sha256_path(required["manifest"]),
         }
         or V4.load_json(required["manifest"]) != manifest
+        or manifest.get("typed_judge_trace_selection") != typed_trace_selection
+        or V4.load_json(required["typed_trace_selection"])
+        != typed_trace_selection
+        or V4.load_jsonl(required["typed_trace_input"]) != typed_trace_rows
         or [row.get("qid") for row in responses]
         != [V4._question_qid(question) for question in questions]
     ):
@@ -888,6 +996,14 @@ def _complete(
     selected: dict[int, dict[str, Any]],
 ) -> None:
     _copy_source(source, staging, state["hashes"])
+    trace_rows, trace_selection = _typed_trace_rows(source, state, manifest)
+    if manifest.get("typed_judge_trace_selection") != trace_selection:
+        raise ValueError("typed judge trace selection differs from manifest")
+    V4.write_text(
+        staging / TYPED_TRACE_INPUT_NAME,
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in trace_rows),
+    )
+    _write_json(staging / TYPED_TRACE_SELECTION_NAME, trace_selection)
     RECOVERY._SAVED_ROWS = selected
     RECOVERY._complete_r2(
         staging,
@@ -896,6 +1012,7 @@ def _complete(
         state["journal"],
         state["questions"],
         "http://127.0.0.1:8000",
+        trace_fragments=[staging / TYPED_TRACE_INPUT_NAME],
     )
     raw_path = staging / "raw.T2.r2.json"
     raw = V4.load_json(raw_path)

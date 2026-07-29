@@ -1194,6 +1194,7 @@ def _complete_r2(
     api_url: str,
     *,
     completion_context: dict[str, Any] | None = None,
+    trace_fragments: list[Path] | None = None,
 ) -> None:
     if len(rows) != N:
         raise ValueError("partial-r2 cannot seal an incomplete response ledger")
@@ -1241,11 +1242,15 @@ def _complete_r2(
     ):
         raise ValueError("partial-r2 rebuilt sidecar is not coherent")
     trace_path = output / "judge_traces.T2.r2.jsonl"
-    fragments = [
+    fragments = trace_fragments if trace_fragments is not None else [
         snapshot / "judge_traces.T2.r2.jsonl",
         output / "scorer_replay_traces.T2.r2.jsonl",
         output / "generation_judge_traces.T2.r2.jsonl",
     ]
+    if trace_fragments is not None and any(
+        path.is_symlink() or not path.is_file() for path in fragments
+    ):
+        raise ValueError("partial-r2 typed trace fragment is missing or unsafe")
     V4.write_text(trace_path, "".join(path.read_text() for path in fragments if path.exists()))
     V4.seal_judge_trace_outcomes(
         trace_path, responses, questions, tier=TIER, repetition=REPETITION, default_api_url=api_url
