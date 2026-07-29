@@ -88,12 +88,6 @@ APPLIER_ADAPTER_SHA256 = (
 CANONICAL_APPLIER_SHA256 = (
     "f1e0c0a88edaea5a66dda34ec9a938f8a20daa17491263a44ffff179623d3d61"
 )
-FAILURE_SCHEMA = "epyc.e8_quality_generation_failure.v1"
-TIMEOUT_FAILURE = {
-    "schema": FAILURE_SCHEMA,
-    "version": 1,
-    "code": "request_timeout",
-}
 HISTORICAL_TIMEOUT_SIDECAR_SHA256 = {
     "a550c07752f8dedc0fdf5c4582b587c90f3b624405ed1454f628e523c100cae9",
     "a41be1b012bb33475a5d8c9fd2e810c5b6dab651d123e3006f07cfc3f7fc835e",
@@ -424,7 +418,19 @@ def validate_receipt(
     return receipt
 
 
-def _terminal_timeout(row: dict[str, Any], ordinal: int, question: dict[str, Any]) -> bool:
+def _terminal_timeout(
+    row: dict[str, Any],
+    ordinal: int,
+    question: dict[str, Any],
+    *,
+    allow_historical: bool = False,
+) -> bool:
+    """Recognize typed admission races, plus the sealed V1 source on import.
+
+    Fresh final-C1 output must carry the producer's failure provenance.
+    Client transport timeouts are intentionally not terminal dispositions:
+    they cannot prove whether server-side generation started.
+    """
     result = row.get("result")
     if (
         not isinstance(result, dict)
@@ -436,6 +442,10 @@ def _terminal_timeout(row: dict[str, Any], ordinal: int, question: dict[str, Any
         or result.get("correct") is not False
         or V4._question_qid(question) != result.get("qid")
     ):
+        return False
+    if RACE._race_lost(row, question):
+        return True
+    if not allow_historical:
         return False
     elapsed = row.get("elapsed_s")
     latency_ms = result.get("latency_ms")
@@ -453,47 +463,12 @@ def _terminal_timeout(row: dict[str, Any], ordinal: int, question: dict[str, Any
         and isinstance(latency_ms, int)
         and 300000 <= latency_ms <= 300500
     )
-    if not (inner or outer):
-        return False
-    if result.get("failure") == TIMEOUT_FAILURE:
-        return True
     detail = str(result.get("error_detail") or "")
     exact_historical_text = (
         inner
         and detail == "[ERROR: Inference failed: chat_completions failed: timed out]"
     ) or (outer and detail == "timed out")
-    return (
-        exact_historical_text
-        and canonical_hash(row) in HISTORICAL_TIMEOUT_SIDECAR_SHA256
-    )
-
-
-def _normalize_timeout_failure(row: dict[str, Any]) -> None:
-    """Add the current structured code at the producer boundary."""
-    result = row.get("result")
-    if not isinstance(result, dict) or result.get("error") is not True:
-        return
-    detail = str(result.get("error_detail") or "")
-    elapsed = row.get("elapsed_s")
-    latency_ms = result.get("latency_ms")
-    inner = (
-        detail == "[ERROR: Inference failed: chat_completions failed: timed out]"
-        and result.get("route") == "frontdoor"
-        and isinstance(elapsed, (int, float))
-        and 299.0 <= float(elapsed) <= 300.5
-        and isinstance(latency_ms, int)
-        and 299000 <= latency_ms <= 300500
-    )
-    outer = (
-        detail == "timed out"
-        and result.get("route") in (None, "")
-        and isinstance(elapsed, (int, float))
-        and 300.0 <= float(elapsed) <= 300.5
-        and isinstance(latency_ms, int)
-        and 300000 <= latency_ms <= 300500
-    )
-    if inner or outer:
-        result["failure"] = dict(TIMEOUT_FAILURE)
+    return exact_historical_text and canonical_hash(row) in HISTORICAL_TIMEOUT_SIDECAR_SHA256
 
 
 def validate_failed_source(source: Path = SOURCE) -> dict[str, Any]:
@@ -521,11 +496,11 @@ def validate_failed_source(source: Path = SOURCE) -> dict[str, Any]:
     plan = V4.load_json(source / "partial_r2_plan.json")
     proposal = V4.load_json(source / "recovery_proposal.json")
     if (
-        plan.get("schema") != RACE.PLAN_SCHEMA
+        plan.get("schema") != RACE.LEGACY_PLAN_SCHEMA
         or plan.get("generation_ordinals") != list(RACE_RETRY_ORDINALS)
         or plan.get("race_retry_ordinals") != list(RACE_RETRY_ORDINALS)
         or plan.get("generation_concurrency") != V4.CONCURRENCY
-        or proposal.get("schema") != RACE.PROPOSAL_SCHEMA
+        or proposal.get("schema") != RACE.LEGACY_PROPOSAL_SCHEMA
         or proposal.get("generation_ordinals_sha256")
         != canonical_hash(list(RACE_RETRY_ORDINALS))
         or proposal.get("race_retry_ordinals_sha256")
@@ -547,9 +522,11 @@ def validate_failed_source(source: Path = SOURCE) -> dict[str, Any]:
     if set(sidecars) != {97, 203, 279}:
         raise ValueError("final-c1 source sidecar does not contain the exact race batch")
     if (
-        not _terminal_timeout(sidecars[97], 97, questions[97])
+        not _terminal_timeout(sidecars[97], 97, questions[97], allow_historical=True)
         or not RACE._clean(sidecars[203], questions[203])
-        or not _terminal_timeout(sidecars[279], 279, questions[279])
+        or not _terminal_timeout(
+            sidecars[279], 279, questions[279], allow_historical=True
+        )
     ):
         raise ValueError("final-c1 source outcomes differ from the reviewed timeout pair")
     failures = V4.load_jsonl(source / "generation_failed_attempts.T2.r2.jsonl")
@@ -773,7 +750,6 @@ def _generate_one(
         results[0],
         qid=V4._question_qid(question),
     )
-    _normalize_timeout_failure(merged)
     if replayed and not all(row.get("outcome") == "recovered" for row in replayed):
         raise ValueError("final-c1 scorer replay did not recover")
     if (

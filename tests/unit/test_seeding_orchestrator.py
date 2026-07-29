@@ -284,6 +284,48 @@ def test_call_orchestrator_forced_preserves_structured_http_error_body():
     assert data["tools_called"] == ["web_search"]
 
 
+def test_call_orchestrator_forced_preserves_server_failure_provenance():
+    provenance = {
+        "schema": "epyc.failure_provenance.v1",
+        "class": "admission_timeout",
+        "code": "race_lost",
+        "phase": "admission",
+        "generation_started": False,
+        "tokens_generated": 0,
+        "partial": False,
+        "degraded": False,
+        "role": "frontdoor",
+        "workload_class": "eval_batch",
+        "max_queue_wait_ms": 90_000,
+    }
+    client = Mock()
+    client.post.return_value = _Resp(
+        503,
+        {
+            "error": "contention_denied",
+            "detail": "placement timeout",
+            "retry_after_s": 5,
+            "error_code": 503,
+            "error_detail": "placement timeout",
+            "failure_provenance": provenance,
+        },
+    )
+
+    data = _MOD.call_orchestrator_forced(
+        prompt="q",
+        force_role="frontdoor",
+        client=client,
+        workload_class="eval_batch",
+    )
+
+    assert data["error"] == "contention_denied"
+    assert data["detail"] == "placement timeout"
+    assert data["retry_after_s"] == 5
+    assert data["error_code"] == 503
+    assert data["error_detail"] == "placement timeout"
+    assert data["failure_provenance"] == provenance
+
+
 def test_call_orchestrator_forced_includes_optional_payload_fields():
     client = Mock()
     client.post.return_value = _Resp(200, {"answer": "ok"})
@@ -408,6 +450,19 @@ def test_eval_reconnect_does_not_retry_timeouts():
     assert data["answer"] == ""
     assert data.get("failure_reason") != "api_unreachable_after_backoff"
     assert "api_unreachable_after_backoff" not in str(data.get("error"))
+    assert data["failure_provenance"] == {
+        "schema": "epyc.failure_provenance.v1",
+        "class": "client_transport_timeout",
+        "code": "read_timeout",
+        "phase": "client_transport",
+        "role": "worker_math",
+        "workload_class": "eval_batch",
+        "max_queue_wait_ms": 90_000,
+    }
+    assert "generation_started" not in data["failure_provenance"]
+    assert "tokens_generated" not in data["failure_provenance"]
+    assert "partial" not in data["failure_provenance"]
+    assert "degraded" not in data["failure_provenance"]
     sleep_mock.assert_not_called()
     assert client.post.call_count == 1
 
@@ -428,6 +483,26 @@ def test_non_eval_connection_error_preserves_legacy_terminal_semantics():
     assert "failure_reason" not in data
     sleep_mock.assert_not_called()
     assert client.post.call_count == 1
+
+
+def test_non_eval_timeout_adds_only_typed_transport_provenance():
+    client = Mock()
+    client.post.side_effect = httpx.ReadTimeout("read timed out")
+
+    data = _MOD.call_orchestrator_forced(
+        prompt="q",
+        force_role="worker",
+        client=client,
+    )
+
+    assert data["answer"] == ""
+    assert data["error"] == "read timed out"
+    assert data["failure_provenance"]["class"] == "client_transport_timeout"
+    assert data["failure_provenance"]["code"] == "read_timeout"
+    assert data["failure_provenance"]["workload_class"] == ""
+    assert set(data["failure_provenance"]).isdisjoint(
+        {"generation_started", "tokens_generated", "partial", "degraded"}
+    )
 
 
 def _reconnect_meta(**overrides):
@@ -473,6 +548,74 @@ def test_eval_reconnect_watcher_path_backs_off_and_recovers():
     assert data["answer"] == "recovered"
     assert rp_mock.call_count == 2
     assert sleep_mock.call_args_list == [call(1.0)]
+
+
+def test_watcher_path_preserves_server_failure_provenance_unchanged():
+    import resilient_http
+
+    provenance = {
+        "schema": "epyc.failure_provenance.v1",
+        "class": "admission_timeout",
+        "code": "race_lost",
+        "phase": "admission",
+        "generation_started": False,
+        "tokens_generated": 0,
+        "partial": False,
+        "degraded": False,
+        "role": "frontdoor",
+        "workload_class": "eval_batch",
+        "max_queue_wait_ms": 90_000,
+    }
+    response = {
+        "error": "contention_denied",
+        "error_code": 503,
+        "error_detail": "placement timeout",
+        "failure_provenance": provenance,
+    }
+    with patch.object(
+        resilient_http,
+        "resilient_post",
+        return_value=(response, _reconnect_meta(clean=True)),
+    ):
+        data = _MOD.call_orchestrator_forced(
+            prompt="q",
+            force_role="frontdoor",
+            workload_class="eval_batch",
+            watcher=object(),
+        )
+
+    assert data["failure_provenance"] == provenance
+    assert data["error"] == "contention_denied"
+
+
+def test_watcher_client_timeout_omits_unobserved_server_state():
+    import resilient_http
+
+    with patch.object(
+        resilient_http,
+        "resilient_post",
+        return_value=(
+            {"answer": "", "error": "ReadTimeout: timed out"},
+            _reconnect_meta(
+                real_failure=True,
+                reason="read_timeout",
+                detail="ReadTimeout: timed out",
+            ),
+        ),
+    ):
+        data = _MOD.call_orchestrator_forced(
+            prompt="q",
+            force_role="frontdoor",
+            workload_class="eval_batch",
+            watcher=object(),
+        )
+
+    provenance = data["failure_provenance"]
+    assert provenance["class"] == "client_transport_timeout"
+    assert provenance["code"] == "read_timeout"
+    assert set(provenance).isdisjoint(
+        {"generation_started", "tokens_generated", "partial", "degraded"}
+    )
 
 
 class _Future:

@@ -162,7 +162,12 @@ RECOVERY_R2_SUCCESSOR_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_successor_pla
 RECOVERY_R2_SUCCESSOR_PROPOSAL_SCHEMA = (
     "epyc.e8_quality_v5_partial_r2_successor_proposal.v1"
 )
-RECOVERY_R2_RACE_RETRY_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_race_retry_plan.v1"
+RECOVERY_R2_RACE_RETRY_LEGACY_PLAN_SCHEMA = (
+    "epyc.e8_quality_v5_partial_r2_race_retry_plan.v1"
+)
+RECOVERY_R2_RACE_RETRY_PLAN_SCHEMA = (
+    "epyc.e8_quality_v5_partial_r2_race_retry_plan.v2"
+)
 RECOVERY_R2_FINAL_C1_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_final_c1_retry_plan.v1"
 RECOVERY_R2_SUCCESSOR_EXPECTED_COUNTS = {
     "reuse_ordinals": 59,
@@ -1239,6 +1244,8 @@ def validate_recovery_r2_context(
         raise ValueError("recovery-r2 artifact hash binding differs")
     _validate_banked_t2_r1_repair_history(context, evidence_root=evidence_root)
     plan = load_json(plan_path, "recovery-r2 plan")
+    if plan.get("schema") == RECOVERY_R2_RACE_RETRY_LEGACY_PLAN_SCHEMA:
+        raise ValueError("legacy V1 race evidence is audit-only")
     if plan.get("schema") == RECOVERY_R2_RACE_RETRY_PLAN_SCHEMA:
         return validate_race_retry_recovery_r2_context(
             context,

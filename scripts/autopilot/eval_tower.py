@@ -805,6 +805,14 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
     if r.error:
         item["error"] = True
         item["error_detail"] = str(r.error).replace("\n", " ")[:200]
+        if isinstance(r.failure_provenance, dict):
+            item["failure_provenance"] = dict(r.failure_provenance)
+            if r.failure_provenance.get("class") == "admission_timeout":
+                # Retry eligibility needs explicit negative facts. Preserve
+                # both booleans even though the general compact format omits
+                # false values.
+                item["partial"] = bool(r.partial)
+                item["degraded"] = bool(r.degraded)
     if r.partial:
         item["partial"] = True
     if r.degraded:
@@ -1504,6 +1512,7 @@ class QuestionResult:
     answer: str = ""
     correct: bool = False
     error: str | None = None
+    failure_provenance: dict[str, Any] | None = None
     tokens_generated: int = 0
     elapsed_s: float = 0.0
     route_used: str = ""
@@ -2860,6 +2869,16 @@ class EvalTower:
         # bits onto QuestionResult so _aggregate can roll them up into
         # the trial-level EvalResult.
         meta = resp.get("_meta") or {}
+        failure_provenance = (
+            dict(resp["failure_provenance"])
+            if error and isinstance(resp.get("failure_provenance"), dict)
+            else None
+        )
+        provenance_role = (
+            str(failure_provenance.get("role") or "")
+            if failure_provenance is not None
+            else ""
+        )
         return QuestionResult(
             question_id=outcome.question_id,
             suite=outcome.suite,
@@ -2869,9 +2888,12 @@ class EvalTower:
             answer=answer,
             correct=correct,
             error=error,
+            failure_provenance=failure_provenance,
             tokens_generated=outcome.tokens,
             elapsed_s=outcome.elapsed,
-            route_used=str(resp.get("routed_to") or resp.get("model") or ""),
+            route_used=str(
+                resp.get("routed_to") or resp.get("model") or provenance_role
+            ),
             cost_tier=resp.get("cost_tier", 0),
             scoring_method=scoring_method,
             partial=bool(resp.get("partial", False)),

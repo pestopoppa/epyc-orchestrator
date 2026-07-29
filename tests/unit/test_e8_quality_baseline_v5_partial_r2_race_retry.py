@@ -27,13 +27,33 @@ FAILED_C1_SOURCE = Path(
 FAILED_C1_TREE_SHA256 = "4b7e66bec01c4eb2f65e10b75b9b1219ff74afda79f02873972194eefca2e286"
 
 
-def _row(*, error: str = RACE, tokens: int = 0, answer: str | None = None) -> dict:
+def _provenance(**overrides: object) -> dict:
+    value = {
+        "schema": RETRY.FAILURE_PROVENANCE_SCHEMA,
+        "class": "admission_timeout",
+        "code": "race_lost",
+        "phase": "admission",
+        "generation_started": False,
+        "tokens_generated": 0,
+        "partial": False,
+        "degraded": False,
+        "role": "frontdoor",
+        "workload_class": "eval_batch",
+        "max_queue_wait_ms": 90_000,
+    }
+    value.update(overrides)
+    return value
+
+
+def _row(*, error: str = RACE, tokens: int = 0, answer: str = "") -> dict:
     return {
         "row_type": "question_result", "ordinal": 0,
-        "answer": error if answer is None else answer,
+        "answer": answer,
         "result": {
-            "qid": "q0", "question_id": "q0", "error": True,
-            "error_detail": error, "tokens_generated": tokens, "route": "frontdoor",
+            "qid": "q0", "question_id": "q0", "correct": False,
+            "error": True, "error_detail": error, "tokens_generated": tokens,
+            "route": "frontdoor", "partial": False, "degraded": False,
+            "failure_provenance": _provenance(),
         },
     }
 
@@ -153,14 +173,73 @@ def test_parent_fsync_fault_after_publish_quarantines_public_destination(
     assert abort["status"] == "terminal_aborted_no_admission"
 
 
-def test_exact_race_lost_requires_zero_tokens_and_error_sentinel() -> None:
+def test_exact_race_lost_requires_typed_pre_generation_contract() -> None:
     assert RETRY._race_lost(_row(), QUESTION)
     assert not RETRY._race_lost(_row(tokens=1), QUESTION)
     assert not RETRY._race_lost(_row(answer="model output"), QUESTION)
 
 
-def test_non_race_error_is_not_retry_eligible() -> None:
-    assert not RETRY._race_lost(_row(error="timed out", answer=""), QUESTION)
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("schema", "epyc.failure_provenance.v0"),
+        ("class", "client_transport_timeout"),
+        ("code", "contention_timeout"),
+        ("phase", "client_transport"),
+        ("generation_started", True),
+        ("generation_started", "false"),
+        ("tokens_generated", 1),
+        ("tokens_generated", "0"),
+        ("partial", True),
+        ("partial", "false"),
+        ("degraded", True),
+        ("degraded", "false"),
+        ("role", "worker"),
+        ("workload_class", "campaign"),
+        ("max_queue_wait_ms", 89_999),
+        ("max_queue_wait_ms", "90000"),
+    ],
+)
+def test_v2_rejects_each_mutated_provenance_field(key: str, value: object) -> None:
+    row = _row(error="arbitrary wording ignored")
+    row["result"]["failure_provenance"] = _provenance(**{key: value})
+    assert not RETRY._race_lost(row, QUESTION)
+
+
+@pytest.mark.parametrize("key", sorted(_provenance()))
+def test_v2_rejects_each_missing_provenance_field(key: str) -> None:
+    row = _row()
+    del row["result"]["failure_provenance"][key]
+    assert not RETRY._race_lost(row, QUESTION)
+
+
+def test_v2_rejects_legacy_string_lookalike_and_client_timeout() -> None:
+    legacy = _row()
+    legacy["result"].pop("failure_provenance")
+    assert not RETRY._race_lost(legacy, QUESTION)
+
+    transport = _row()
+    transport["result"]["failure_provenance"] = {
+        "schema": RETRY.FAILURE_PROVENANCE_SCHEMA,
+        "class": "client_transport_timeout",
+        "code": "read_timeout",
+        "phase": "client_transport",
+        "role": "frontdoor",
+        "workload_class": "eval_batch",
+        "max_queue_wait_ms": 90_000,
+    }
+    assert not RETRY._race_lost(transport, QUESTION)
+
+
+def test_v2_rejects_missing_explicit_result_negatives_and_copied_identity() -> None:
+    for key in ("partial", "degraded"):
+        row = _row()
+        del row["result"][key]
+        assert not RETRY._race_lost(row, QUESTION)
+    copied = _row()
+    copied["result"]["qid"] = copied["result"]["question_id"] = "other"
+    with pytest.raises(ValueError, match="identity"):
+        RETRY._race_lost(copied, QUESTION)
 
 
 def test_duplicate_sidecar_ordinal_fails_closed(tmp_path: Path) -> None:
@@ -168,6 +247,16 @@ def test_duplicate_sidecar_ordinal_fails_closed(tmp_path: Path) -> None:
     _write_jsonl(path, [_row(), _row()])
     with pytest.raises(ValueError, match="duplicate"):
         RETRY._rows(path)
+
+
+def test_unknown_plan_schema_cannot_enter_v2_publication(tmp_path: Path) -> None:
+    root = tmp_path / "candidate"
+    root.mkdir()
+    with pytest.raises(ValueError, match="schema is unsupported"):
+        RETRY.validate_staged_tree(
+            root,
+            {"schema": "epyc.e8_quality_v5_partial_r2_race_retry_plan.v999"},
+        )
 
 
 def test_terminal_failure_ledger_validates_sidecar_completion_order(tmp_path: Path) -> None:
@@ -321,7 +410,13 @@ def test_nested_terminalization_accepts_only_the_exact_enclosing_binding(tmp_pat
         "mixed_tail_repair"
     ]["terminalization_transition"]
 
-    assert RETRY._validate_terminalization_transition_semantically(snapshot) == descriptor
+    assert (
+        RETRY._validate_terminalization_transition_semantically(
+            snapshot,
+            allow_historical=True,
+        )
+        == descriptor
+    )
 
 
 @pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
@@ -331,6 +426,7 @@ def test_frozen_c1_source_is_directly_admitted_without_a_root_transition() -> No
     plan = RETRY.build_plan(FAILED_C1_SOURCE, FAILED_C1_TREE_SHA256)
 
     assert plan["predecessor_tree_sha256"] == FAILED_C1_TREE_SHA256
+    assert plan["schema"] == RETRY.LEGACY_PLAN_SCHEMA
     assert plan["generation_ordinals"] == plan["race_retry_ordinals"]
     assert plan["race_retry_ordinals"] == [97, 203, 279]
     assert (
@@ -348,44 +444,7 @@ def test_copied_mixed_predecessor_cannot_enter_future_execution(tmp_path: Path) 
 
 
 @pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
-def test_execute_binds_race_generation_targets_before_inference(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class ProposalBound(Exception):
-        pass
-
-    captured: dict = {}
-    claim = {
-        "claims": [
-            {
-                "payload": {
-                    "request_tag": "test-race-proposal",
-                    "region": "q3",
-                }
-            }
-        ]
-    }
-    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", str(RETRY.V4.CONCURRENCY))
-    monkeypatch.setattr(RETRY.RECOVERY, "_capture_recovery_claim", lambda _args: claim)
-    monkeypatch.setattr(RETRY.V4, "runtime_binding", lambda _args: {})
-    monkeypatch.setattr(
-        RETRY.RECOVERY,
-        "preflight_frontdoor_capacity",
-        lambda *_args, **_kwargs: {"capacity": RETRY.V4.CONCURRENCY},
-    )
-    monkeypatch.setattr(RETRY.RECOVERY, "_load_vector", lambda *_args: {})
-    monkeypatch.setattr(
-        RETRY.RECOVERY,
-        "_reconstruct_questions",
-        lambda *_args, **_kwargs: [{"qid": f"q{ordinal}"} for ordinal in range(RETRY.N)],
-    )
-    monkeypatch.setattr(RETRY.RECOVERY, "_instrument_identity", lambda _args: {"test": True})
-
-    def bind_proposal(_output: Path, proposal: dict) -> None:
-        captured.update(proposal)
-        raise ProposalBound
-
-    monkeypatch.setattr(RETRY.RECOVERY, "_bind_recovery_proposal", bind_proposal)
+def test_exact_historical_v1_cannot_execute(tmp_path: Path) -> None:
     args = SimpleNamespace(
         source_dir=FAILED_C1_SOURCE,
         expected_source_tree_sha256=FAILED_C1_TREE_SHA256,
@@ -396,19 +455,11 @@ def test_execute_binds_race_generation_targets_before_inference(
         region_claim_dir=tmp_path,
     )
 
-    with pytest.raises(ProposalBound):
+    with pytest.raises(RuntimeError, match="audit-only"):
         RETRY.execute(args)
 
     assert not args.output_dir.exists()
-    quarantines = list(tmp_path.glob(".race-retry.aborted-*"))
-    assert len(quarantines) == 1
-    plan = RETRY.V4.load_json(quarantines[0] / "partial_r2_plan.json")
-    assert plan["generation_ordinals"] == [97, 203, 279]
-    abort = RETRY.V4.load_json(quarantines[0] / RETRY.RECOVERY.ABORT_MARKER_NAME)
-    assert abort["status"] == "terminal_aborted_no_admission"
-    assert captured["output_namespace"] == str(args.output_dir)
-    assert captured["generation_ordinals_sha256"] == RETRY.canonical_hash([97, 203, 279])
-    assert captured["race_retry_ordinals_sha256"] == captured["generation_ordinals_sha256"]
+    assert not list(tmp_path.glob(".race-retry.aborted-*"))
 
 
 @pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
@@ -535,7 +586,7 @@ def _mixed_chain_fixture(tmp_path: Path) -> tuple[Path, dict, list[dict], dict[i
     }
     descriptor = {
         "schema": RETRY.MIXED_REPAIR_SCHEMA,
-        "repair_runner_sha256": RETRY.sha256_path(RETRY.MIXED_REPAIR_PATH),
+        "repair_runner_sha256": RETRY.HISTORICAL_MIXED_REPAIR_RUNNER_SHA256,
         "predecessor": "/immutable/original",
         "predecessor_sha256": original_hashes,
         "predecessor_tree_sha256": RETRY.canonical_hash(original_hashes),
@@ -622,6 +673,12 @@ def test_mixed_predecessor_chain_recomputes_nested_evidence(
         "_clean",
         lambda row, _question: row.get("result", {}).get("error") is not True,
     )
+    monkeypatch.setattr(RETRY, "HISTORICAL_MIXED_PREDECESSOR", root)
+    monkeypatch.setattr(
+        RETRY,
+        "HISTORICAL_MIXED_PREDECESSOR_TREE_SHA256",
+        RETRY.canonical_hash(RETRY.source_hashes(root)),
+    )
 
     chain = RETRY.validate_mixed_predecessor(root, plan, questions, current_rows)
 
@@ -638,6 +695,12 @@ def test_mixed_predecessor_chain_rejects_runner_or_evidence_drift(
         RETRY,
         "_clean",
         lambda row, _question: row.get("result", {}).get("error") is not True,
+    )
+    monkeypatch.setattr(RETRY, "HISTORICAL_MIXED_PREDECESSOR", root)
+    monkeypatch.setattr(
+        RETRY,
+        "HISTORICAL_MIXED_PREDECESSOR_TREE_SHA256",
+        RETRY.canonical_hash(RETRY.source_hashes(root)),
     )
     plan["mixed_tail_repair"]["repair_runner_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="runner"):

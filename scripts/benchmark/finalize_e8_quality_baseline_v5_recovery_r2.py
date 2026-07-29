@@ -216,6 +216,8 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
     plan = V4.load_json(plan_path)
     if plan.get("schema") == FINAL_C1_RETRY.PLAN_SCHEMA:
         return _validate_final_c1_intermediate(intermediate, plan)
+    if plan.get("schema") == RACE_RETRY.LEGACY_PLAN_SCHEMA:
+        raise ValueError("legacy V1 race evidence is audit-only")
     if plan.get("schema") == RACE_RETRY.PLAN_SCHEMA:
         return _validate_race_retry_intermediate(intermediate, plan)
     if plan.get("schema") == SUCCESSOR.PLAN_SCHEMA:
@@ -509,6 +511,8 @@ def _validate_race_retry_intermediate(root: Path, plan: dict[str, Any]) -> dict[
     zero-token frontdoor placement races may be represented by the fresh
     retry watcher; no scorer or general generation retry is admitted here.
     """
+    if plan.get("schema") != RACE_RETRY.PLAN_SCHEMA:
+        raise ValueError("only typed V2 race-retry intermediates are admissible")
     # The producer owns the sealed-publication contract.  Keep this explicit
     # delegation ahead of the finalizer's deeper eligibility checks.
     RACE_RETRY.validate_staged_tree(root, plan)
