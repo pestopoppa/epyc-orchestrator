@@ -369,6 +369,9 @@ def create_app() -> FastAPI:
                 "error": "contention_denied",
                 "detail": str(exc),
                 "retry_after_s": 5,
+                "error_code": 503,
+                "error_detail": str(exc),
+                "failure_provenance": exc.provenance(),
             },
             headers={"Retry-After": "5"},
         )

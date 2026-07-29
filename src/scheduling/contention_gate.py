@@ -480,4 +480,87 @@ class ContentionDenied(RuntimeError):
 
     Callers (chat route) should surface this as a 503 with `Retry-After`
     rather than propagating to the user as an unhandled 500.
+
+    ``failure_provenance`` is intentionally a closed, JSON-primitive record.
+    Consumers must use it instead of classifying the human-readable exception
+    message.  A request never reaches generation when this exception is raised.
     """
+
+    FAILURE_PROVENANCE_SCHEMA = "epyc.failure_provenance.v1"
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        role: str = "unknown",
+        workload_class: str = "interactive",
+        wait_budget_ms: int = 0,
+        failure_class: str = "admission_denied",
+        code: str = "contention_denied",
+    ) -> None:
+        super().__init__(detail)
+        self.failure_provenance = self._build_failure_provenance(
+            role=role,
+            workload_class=workload_class,
+            wait_budget_ms=wait_budget_ms,
+            failure_class=failure_class,
+            code=code,
+        )
+
+    @classmethod
+    def _build_failure_provenance(
+        cls,
+        *,
+        role: str,
+        workload_class: str,
+        wait_budget_ms: int,
+        failure_class: str,
+        code: str,
+    ) -> dict[str, str | int | bool]:
+        """Build the closed v1 admission-denial contract.
+
+        Keep the type checks here rather than relying on downstream schema
+        validation: producer bugs must fail locally, before an ambiguous row
+        can become durable evidence.
+        """
+        string_fields = {
+            "role": role,
+            "workload_class": workload_class,
+            "class": failure_class,
+            "code": code,
+        }
+        for field_name, value in string_fields.items():
+            if not isinstance(value, str) or not value.strip():
+                raise TypeError(f"failure provenance {field_name} must be a non-empty string")
+        if failure_class not in {"admission_denied", "admission_timeout"}:
+            raise ValueError("failure provenance class is not a supported admission outcome")
+        # ``race_lost`` is a narrow physical fact, not a generic timeout label.
+        # Keeping this pair closed prevents another producer from accidentally
+        # minting E8-eligible recovery evidence for an ordinary gate timeout.
+        if (failure_class, code) == ("admission_timeout", "race_lost"):
+            pass
+        elif failure_class == "admission_timeout" or code == "race_lost":
+            raise ValueError(
+                "failure provenance admission_timeout is reserved for code=race_lost"
+            )
+        if isinstance(wait_budget_ms, bool) or not isinstance(wait_budget_ms, int):
+            raise TypeError("failure provenance wait_budget_ms must be an integer")
+        if wait_budget_ms < 0:
+            raise ValueError("failure provenance wait_budget_ms must be non-negative")
+        return {
+            "schema": cls.FAILURE_PROVENANCE_SCHEMA,
+            "class": failure_class,
+            "code": code,
+            "phase": "admission",
+            "role": role,
+            "workload_class": workload_class,
+            "wait_budget_ms": wait_budget_ms,
+            "generation_started": False,
+            "tokens_generated": 0,
+            "partial": False,
+            "degraded": False,
+        }
+
+    def provenance(self) -> dict[str, str | int | bool]:
+        """Return a copy so callers cannot mutate the exception contract."""
+        return dict(self.failure_provenance)

@@ -296,7 +296,12 @@ class InferenceMixin:
         # MUST run BEFORE _acquire_role — the per-role semaphore would hide
         # an admitted request from the active-decode snapshot during its wait.
         # ContentionDenied surfaces as 503 + Retry-After at the chat route.
-        from src.scheduling.contention_gate import get_gate, ContentionDenied
+        from src.scheduling.contention_gate import (
+            _DEFAULT_BACKGROUND_WAIT_MS,
+            _DEFAULT_FOREGROUND_WAIT_MS,
+            ContentionDenied,
+            get_gate,
+        )
         from src.scheduling.contention import TrafficClass, shape_aware_contention_enabled
 
         priority = self.get_request_priority() if hasattr(self, "get_request_priority") else "interactive"
@@ -307,6 +312,18 @@ class InferenceMixin:
         max_wait_ms = (
             self.get_max_queue_wait_ms() if hasattr(self, "get_max_queue_wait_ms") else None
         )
+        workload_class = (
+            self.get_request_workload_class()
+            if hasattr(self, "get_request_workload_class")
+            else "interactive"
+        )
+        wait_budget_ms = max_wait_ms
+        if wait_budget_ms is None:
+            wait_budget_ms = (
+                _DEFAULT_BACKGROUND_WAIT_MS
+                if traffic_class == TrafficClass.BACKGROUND
+                else _DEFAULT_FOREGROUND_WAIT_MS
+            )
 
         backend = self._backends.get(role) if hasattr(self, "_backends") else None
         defer_to_dispatch = (
@@ -319,7 +336,12 @@ class InferenceMixin:
             decision = gate.admit(role, traffic_class, max_wait_ms)
             if not decision.admitted:
                 raise ContentionDenied(
-                    f"contention gate denied role={role} class={traffic_class.value}: {decision.reason}"
+                    f"contention gate denied role={role} class={traffic_class.value}: {decision.reason}",
+                    role=role,
+                    workload_class=str(workload_class or "interactive"),
+                    wait_budget_ms=wait_budget_ms,
+                    failure_class="admission_denied",
+                    code="contention_gate_timeout",
                 )
 
         acquire = getattr(self, "_acquire_role", None)

@@ -22,6 +22,54 @@ def test_contention_denied_class_is_runtime_error() -> None:
     assert "test reason" in str(exc_info.value)
 
 
+def test_contention_denied_provenance_is_closed_json_primitive_contract() -> None:
+    """Admission denials carry typed state, never text-derived evidence."""
+    from src.scheduling.contention_gate import ContentionDenied
+
+    exc = ContentionDenied(
+        "placement lost its lock race",
+        role="frontdoor",
+        workload_class="quality_baseline",
+        wait_budget_ms=300_000,
+        failure_class="admission_timeout",
+        code="race_lost",
+    )
+
+    provenance = exc.provenance()
+    assert provenance == {
+        "schema": "epyc.failure_provenance.v1",
+        "class": "admission_timeout",
+        "code": "race_lost",
+        "phase": "admission",
+        "role": "frontdoor",
+        "workload_class": "quality_baseline",
+        "wait_budget_ms": 300_000,
+        "generation_started": False,
+        "tokens_generated": 0,
+        "partial": False,
+        "degraded": False,
+    }
+    assert all(type(value) in {str, int, bool} for value in provenance.values())
+    provenance["code"] = "mutated"
+    assert exc.provenance()["code"] == "race_lost"
+
+
+def test_contention_denied_rejects_non_primitive_budget() -> None:
+    from src.scheduling.contention_gate import ContentionDenied
+
+    with pytest.raises(TypeError, match="wait_budget_ms"):
+        ContentionDenied("bad", wait_budget_ms=True)
+
+
+def test_contention_denied_reserves_race_lost_for_admission_timeout() -> None:
+    from src.scheduling.contention_gate import ContentionDenied
+
+    with pytest.raises(ValueError, match="reserved"):
+        ContentionDenied("bad", code="race_lost")
+    with pytest.raises(ValueError, match="reserved"):
+        ContentionDenied("bad", failure_class="admission_timeout", code="gate_timeout")
+
+
 def test_app_registers_503_handler_for_contention_denied() -> None:
     """The FastAPI app must have an exception handler mapping ContentionDenied → 503."""
     import os
@@ -57,6 +105,38 @@ def test_503_response_carries_retry_after() -> None:
     assert body["error"] == "contention_denied"
     assert "frontdoor" in body["detail"]
     assert body["retry_after_s"] == 5
+    # The original three body fields remain intact; typed provenance is
+    # additive and only emitted by this explicit exception handler.
+    assert body["error_code"] == 503
+    assert body["error_detail"] == body["detail"]
+    provenance = body["failure_provenance"]
+    assert provenance["schema"] == "epyc.failure_provenance.v1"
+    assert provenance["phase"] == "admission"
+    assert provenance["generation_started"] is False
+    assert provenance["tokens_generated"] == 0
+    assert provenance["partial"] is False
+    assert provenance["degraded"] is False
+    assert all(type(value) in {str, int, bool} for value in provenance.values())
+
+
+def test_generic_exception_does_not_receive_admission_provenance() -> None:
+    """Structured denial state is never guessed for unrelated failures."""
+    import os
+
+    os.environ["PYTEST_CURRENT_TEST"] = "1"
+    from fastapi.testclient import TestClient
+    from src.api import app
+
+    @app.get("/__test_generic_error_without_provenance")
+    def _raise_generic():
+        raise RuntimeError("unrelated backend bug")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/__test_generic_error_without_provenance")
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body == {"error": "internal_server_error", "detail": "Internal server error"}
 
 
 def test_503_response_logs_progress_counter() -> None:

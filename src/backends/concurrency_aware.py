@@ -1238,6 +1238,10 @@ class ConcurrencyAwareBackend:
             instance_regions = get_instance_regions()
             queue_wait_ms = self._max_queue_wait_ms_for_request(request)
             poll_budget_s = 60.0 if queue_wait_ms is None else max(0.0, queue_wait_ms / 1000.0)
+            wait_budget_ms = int(poll_budget_s * 1000)
+            workload_class = str(
+                getattr(request, "workload_class", None) or "interactive"
+            )
             poll_deadline = time.perf_counter() + poll_budget_s
             poll_interval_s = 0.150  # matches contention_gate._GATE_POLL_S
             queue_log_emitted = False
@@ -1245,6 +1249,8 @@ class ConcurrencyAwareBackend:
             shape_gate_enabled = self._shape_aware_contention_enabled()
             gate = get_gate() if shape_gate_enabled else None
             traffic_class = self._traffic_class_for_request(request)
+            timeout_class = "admission_denied"
+            timeout_code = "placement_unavailable"
             while True:
                 all_holders = active_region_holders()
                 holders_for_role = all_holders.get(self._topology_role, [])
@@ -1318,6 +1324,8 @@ class ConcurrencyAwareBackend:
                 )
                 if not placement.is_queue:
                     # At least one safe candidate — try them in priority order.
+                    gate_rejected = False
+                    lock_race_lost = False
                     for place in placement.places:
                         if gate is not None:
                             decision = gate.evaluate(
@@ -1336,18 +1344,31 @@ class ConcurrencyAwareBackend:
                                         decision.reason,
                                     )
                                     queue_log_emitted = True
+                                gate_rejected = True
                                 continue
                         attempt = _try_instance(self._topology_role, place.topology_idx)
                         if attempt is not None:
                             chosen_ctx, _paths = attempt
                             chosen_idx = place.internal_idx
                             break
+                        lock_race_lost = True
                     if chosen_ctx is not None:
                         break  # acquired; exit poll loop
                     # Either every physically safe candidate was rejected by
                     # the placement-aware seam, or every safe candidate's lock
                     # was stolen between the holder snapshot and try-acquire.
                     # Re-poll until holders change or the budget expires.
+                    if gate_rejected:
+                        timeout_class = "admission_denied"
+                        timeout_code = "placement_gate_timeout"
+                    elif lock_race_lost:
+                        # A safe candidate existed, but another request acquired
+                        # it between the holder snapshot and our try-acquire.
+                        timeout_class = "admission_timeout"
+                        timeout_code = "race_lost"
+                    else:
+                        timeout_class = "admission_denied"
+                        timeout_code = "placement_unavailable"
                 else:
                     if not queue_log_emitted:
                         logger.info(
@@ -1355,11 +1376,17 @@ class ConcurrencyAwareBackend:
                             self._role, placement.queue.reason.value, placement.queue.detail,
                         )
                         queue_log_emitted = True
+                    timeout_class = "admission_denied"
+                    timeout_code = f"placement_{placement.queue.reason.value}_timeout"
                 if time.perf_counter() >= poll_deadline:
                     raise ContentionDenied(
                         f"placement timeout role={self._role} "
-                        f"reason={placement.queue.reason.value if placement.queue else 'race_lost'} "
-                        f"holders={holders_for_role} after {poll_budget_s:.1f}s"
+                        f"reason={timeout_code} holders={holders_for_role} after {poll_budget_s:.1f}s",
+                        role=self._topology_role,
+                        workload_class=workload_class,
+                        wait_budget_ms=wait_budget_ms,
+                        failure_class=timeout_class,
+                        code=timeout_code,
                     )
                 time.sleep(poll_interval_s)
         else:

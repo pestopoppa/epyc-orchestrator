@@ -199,6 +199,54 @@ def test_dispatcher_raises_contention_denied_on_poll_timeout(
             pass
     assert "placement timeout" in str(exc_info.value)
     assert "frontdoor" in str(exc_info.value)
+    assert exc_info.value.provenance()["class"] == "admission_denied"
+    assert exc_info.value.provenance()["code"] == "placement_topology_overlap_timeout"
+
+
+def test_dispatcher_marks_only_lock_snapshot_races_as_race_lost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed non-blocking acquire after a safe placement is a real race.
+
+    This is deliberately distinct from a topology queue timeout: only this
+    situation carries the E8-eligible ``admission_timeout/race_lost`` pair.
+    """
+    backend = _make_backend(monkeypatch)
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.active_region_holders", lambda: {}
+    )
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.held_regions_by_role", lambda *a, **k: {}
+    )
+    monkeypatch.setattr(
+        "src.runtime.instance_topology.get_instance_regions",
+        lambda: _FRONTDOOR_REGIONS,
+    )
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.cpu_region_lock_for_instance",
+        lambda role, idx, **kwargs: _FakeLockCtx(role, idx, succeed=False),
+    )
+    times = iter([0.0, 100.0])
+    monkeypatch.setattr(
+        "src.backends.concurrency_aware.time.perf_counter", lambda: next(times)
+    )
+    monkeypatch.setattr("src.backends.concurrency_aware.time.sleep", lambda _x: None)
+
+    request = type(
+        "Request", (), {"workload_class": "quality_baseline", "max_queue_wait_ms": 250}
+    )()
+    from src.scheduling.contention_gate import ContentionDenied
+
+    with pytest.raises(ContentionDenied) as exc_info:
+        with backend._dispatch(session_id="race", request=request):
+            pass
+
+    provenance = exc_info.value.provenance()
+    assert provenance["class"] == "admission_timeout"
+    assert provenance["code"] == "race_lost"
+    assert provenance["role"] == "frontdoor"
+    assert provenance["workload_class"] == "quality_baseline"
+    assert provenance["wait_budget_ms"] == 250
 
 
 def test_dispatcher_legacy_path_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:

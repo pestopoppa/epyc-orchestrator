@@ -99,6 +99,35 @@ class TestInferenceMixinRealCall:
         assert prims.total_generation_ms == 300.0
         assert prims.total_http_overhead_ms == 10.0
 
+    def test_gate_denial_has_typed_non_race_provenance(self, monkeypatch):
+        """The direct gate path records the effective request contract."""
+        from types import SimpleNamespace
+
+        prims = LLMPrimitives(mock_mode=False)
+        gate = SimpleNamespace(
+            admit=lambda *_args, **_kwargs: SimpleNamespace(
+                admitted=False, reason="matrix queue timeout"
+            )
+        )
+        monkeypatch.setattr("src.scheduling.contention_gate.get_gate", lambda: gate)
+
+        from src.scheduling.contention_gate import ContentionDenied
+
+        with prims.request_context(
+            priority="background",
+            workload_class="eval_batch",
+            max_queue_wait_ms=321,
+        ):
+            with pytest.raises(ContentionDenied) as exc_info:
+                prims._real_call("Test prompt", "frontdoor")
+
+        provenance = exc_info.value.provenance()
+        assert provenance["class"] == "admission_denied"
+        assert provenance["code"] == "contention_gate_timeout"
+        assert provenance["role"] == "frontdoor"
+        assert provenance["workload_class"] == "eval_batch"
+        assert provenance["wait_budget_ms"] == 321
+
     def test_real_call_fallback_to_model_server(self, mock_model_server):
         """Test _real_call falls back to ModelServer when no backend."""
         prims = LLMPrimitives(
