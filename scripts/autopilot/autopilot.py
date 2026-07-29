@@ -111,7 +111,7 @@ from state_store import (
 from blacklist_purge_plan import purge_scoped_target, retryable_reexploration_target
 from state_lock import state_write_lock
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
-from paired_stats import QuestionOutcome, mcnemar_from_vectors
+from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_result
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
     action_signature,
@@ -1447,6 +1447,7 @@ def _seq_paired_baseline_diagnostics(
         label_b=f"candidate:{candidate_trial_id}",
     )
     payload = asdict(result)
+    payload["mcnemar_verdict"] = verdict_from_result(result)
     payload.update(
         {
             "status": "ok" if result.shared_qids > 0 else "no_shared_qids",

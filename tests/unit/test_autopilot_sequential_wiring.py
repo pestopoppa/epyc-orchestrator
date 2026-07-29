@@ -430,6 +430,16 @@ def test_seq_paired_baseline_diagnostics_compares_latest_reference(
     assert diag["same_correct"] == 1
     assert diag["a_wrong_b_correct"] == 1
     assert diag["delta_b_minus_a"] == pytest.approx(0.5)
+    assert diag["mcnemar_verdict"] == {
+        "verdict": "indistinguishable",
+        "method": "mcnemar",
+        "approximation": "exact_binomial",
+        "n_discordant": 1,
+        "p_value": pytest.approx(1.0),
+        "z": None,
+        "alpha": 0.05,
+        "exact_max_discordant": 25,
+    }
 
 
 def test_seq_paired_baseline_diagnostics_reports_missing_reference(
