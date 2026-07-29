@@ -355,7 +355,8 @@ def _timeout(ordinal: int) -> tuple[dict, dict]:
     sidecar = {
         "row_type": "question_result",
         "ordinal": ordinal,
-        "elapsed_s": 300.1,
+        "answer": "",
+        "elapsed_s": 90.0,
         "result": {
             "qid": qid,
             "question_id": qid,
@@ -363,8 +364,23 @@ def _timeout(ordinal: int) -> tuple[dict, dict]:
             "error": True,
             "error_detail": "timed out",
             "tokens_generated": 0,
-            "latency_ms": 300100,
-            "failure": dict(RUNNER.TIMEOUT_FAILURE),
+            "latency_ms": 90000,
+            "route": "frontdoor",
+            "partial": False,
+            "degraded": False,
+            "failure_provenance": {
+                "schema": RUNNER.RACE.FAILURE_PROVENANCE_SCHEMA,
+                "class": "admission_timeout",
+                "code": "race_lost",
+                "phase": "admission",
+                "generation_started": False,
+                "tokens_generated": 0,
+                "partial": False,
+                "degraded": False,
+                "role": "frontdoor",
+                "workload_class": "eval_batch",
+                "max_queue_wait_ms": 90_000,
+            },
         },
     }
     return response, sidecar
@@ -437,7 +453,7 @@ def test_non_timeout_failure_is_instrument_error_not_terminal_disposition(
 ) -> None:
     response, sidecar = _timeout(97)
     sidecar["result"]["error_detail"] = "connection reset"
-    sidecar["result"].pop("failure")
+    sidecar["result"]["failure_provenance"]["class"] = "backend_failure"
     with pytest.raises(RuntimeError, match="outside the ratified timeout"):
         _run_schedule(
             tmp_path,
@@ -447,16 +463,24 @@ def test_non_timeout_failure_is_instrument_error_not_terminal_disposition(
     assert not (tmp_path / RUNNER.TERMINAL_NAME).exists()
 
 
-def test_structured_timeout_is_wording_stable_and_unknown_code_fails_closed() -> None:
+def test_structured_admission_timeout_is_wording_stable_and_other_classes_fail_closed() -> None:
     _response, sidecar = _timeout(97)
     sidecar["result"]["error_detail"] = "request deadline exceeded"
     question = {"qid": RUNNER.RETRY_QIDS[0]}
     assert RUNNER._terminal_timeout(sidecar, 97, question)
 
-    sidecar["result"]["failure"]["code"] = "transport_failure"
+    sidecar["result"]["failure_provenance"]["code"] = "contention_timeout"
     assert not RUNNER._terminal_timeout(sidecar, 97, question)
 
-    sidecar["result"].pop("failure")
+    sidecar["result"]["failure_provenance"] = {
+        "schema": RUNNER.RACE.FAILURE_PROVENANCE_SCHEMA,
+        "class": "client_transport_timeout",
+        "code": "read_timeout",
+        "phase": "client_transport",
+        "role": "frontdoor",
+        "workload_class": "eval_batch",
+        "max_queue_wait_ms": 90_000,
+    }
     sidecar["result"]["error_detail"] = "timed out"
     assert not RUNNER._terminal_timeout(sidecar, 97, question)
 

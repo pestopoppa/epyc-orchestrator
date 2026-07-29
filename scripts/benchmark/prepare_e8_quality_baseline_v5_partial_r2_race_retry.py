@@ -28,8 +28,11 @@ RECOVERY_PATH = ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial
 SUCCESSOR_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_successor.py"
 RESUME_PATH = ROOT / "scripts/benchmark/resume_e8_quality_baseline_v5.py"
 MIXED_REPAIR_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair.py"
-PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_race_retry_plan.v1"
-PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_race_retry_proposal.v1"
+LEGACY_PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_race_retry_plan.v1"
+PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_race_retry_plan.v2"
+LEGACY_PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_race_retry_proposal.v1"
+PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_race_retry_proposal.v2"
+FAILURE_PROVENANCE_SCHEMA = "epyc.failure_provenance.v1"
 MIXED_REPAIR_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_repair.v1"
 MIXED_PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_repair_proposal.v1"
 MIXED_CHAIN_SCHEMA = "epyc.e8_quality_v5_partial_r2_mixed_tail_chain.v1"
@@ -49,6 +52,9 @@ HISTORICAL_MIXED_PREDECESSOR = Path(
 )
 HISTORICAL_MIXED_PREDECESSOR_TREE_SHA256 = (
     "4b7e66bec01c4eb2f65e10b75b9b1219ff74afda79f02873972194eefca2e286"
+)
+HISTORICAL_MIXED_REPAIR_RUNNER_SHA256 = (
+    "a09a169d6991a514581f1209cae5b8d6553102741b3d2c2215b48031589b1d76"
 )
 
 
@@ -101,8 +107,77 @@ def _rows(path: Path) -> dict[int, dict[str, Any]]:
 
 
 def _race_lost(row: dict[str, Any], question: dict[str, Any]) -> bool:
+    """Admit only a typed, pre-generation E8 placement race.
+
+    Text in ``error_detail`` is deliberately irrelevant. A server or client
+    timeout, generic 504, backend failure, missing provenance, or legacy
+    lookalike cannot satisfy this V2 predicate.
+    """
     result = row.get("result")
-    if not isinstance(result, dict) or result.get("qid") != V4._question_qid(question) or result.get("question_id") != result.get("qid"):
+    if (
+        not isinstance(result, dict)
+        or result.get("qid") != V4._question_qid(question)
+        or result.get("question_id") != result.get("qid")
+    ):
+        raise ValueError("race-retry sidecar identity differs from sealed vector")
+    expected = {
+        "schema": FAILURE_PROVENANCE_SCHEMA,
+        "class": "admission_timeout",
+        "code": "race_lost",
+        "phase": "admission",
+        "generation_started": False,
+        "tokens_generated": 0,
+        "partial": False,
+        "degraded": False,
+        "role": "frontdoor",
+        "workload_class": "eval_batch",
+        "max_queue_wait_ms": 90_000,
+    }
+    provenance = result.get("failure_provenance")
+    return (
+        isinstance(provenance, dict)
+        and set(provenance) == set(expected)
+        and all(
+            type(provenance[key]) is type(value) and provenance[key] == value
+            for key, value in expected.items()
+        )
+        and result.get("error") is True
+        and result.get("correct") is False
+        and type(result.get("tokens_generated")) is int
+        and result["tokens_generated"] == 0
+        and result.get("route") == "frontdoor"
+        and "answer_hash" not in result
+        and "partial" in result
+        and result["partial"] is False
+        and "degraded" in result
+        and result["degraded"] is False
+        and row.get("answer") == ""
+    )
+
+
+def _legacy_compatibility(source_dir: Path, source_tree_sha256: str) -> bool:
+    return (
+        source_dir == HISTORICAL_MIXED_PREDECESSOR
+        and source_tree_sha256 == HISTORICAL_MIXED_PREDECESSOR_TREE_SHA256
+    )
+
+
+def _legacy_race_lost(
+    row: dict[str, Any],
+    question: dict[str, Any],
+    *,
+    source_dir: Path,
+    source_tree_sha256: str,
+) -> bool:
+    """Exact V1 compatibility predicate for the one hash-pinned predecessor."""
+    if not _legacy_compatibility(source_dir, source_tree_sha256):
+        raise ValueError("legacy race predicate is restricted to the exact historical artifact")
+    result = row.get("result")
+    if (
+        not isinstance(result, dict)
+        or result.get("qid") != V4._question_qid(question)
+        or result.get("question_id") != result.get("qid")
+    ):
         raise ValueError("race-retry sidecar identity differs from sealed vector")
     error = str(result.get("error_detail") or "")
     tokens = result.get("tokens_generated")
@@ -311,11 +386,23 @@ def _outer_timeout(row: dict[str, Any], question: dict[str, Any]) -> bool:
     )
 
 
-def _mixed_class(row: dict[str, Any], question: dict[str, Any]) -> str:
+def _mixed_class(
+    row: dict[str, Any],
+    question: dict[str, Any],
+    *,
+    source_dir: Path,
+    source_tree_sha256: str,
+) -> str:
+    """Classify the exact hash-pinned V1 compatibility artifact only."""
     result = row.get("result")
     if not isinstance(result, dict):
         raise ValueError("mixed-tail original sidecar result is invalid")
-    if _race_lost(row, question):
+    if _legacy_race_lost(
+        row,
+        question,
+        source_dir=source_dir,
+        source_tree_sha256=source_tree_sha256,
+    ):
         return "race_lost"
     error = str(result.get("error_detail") or "")
     answer = str(row.get("answer") or "")
@@ -356,7 +443,11 @@ def _mixed_ordinals(value: Any, label: str) -> list[int]:
     return value
 
 
-def _validate_terminalization_transition_semantically(root: Path) -> dict[str, Any]:
+def _validate_terminalization_transition_semantically(
+    root: Path,
+    *,
+    allow_historical: bool = False,
+) -> dict[str, Any]:
     """Reuse the bridge verifier through one exact nested-snapshot wrapper.
 
     ``RACE._copy_tree`` adds ``source_binding.json`` when it nests a terminal
@@ -387,6 +478,7 @@ def _validate_terminalization_transition_semantically(root: Path) -> dict[str, A
         return payload_hashes
 
     original_journal_verifier = module.RACE._validate_predecessor_journal
+    original_race_lost = module.RACE._race_lost
 
     def journal_verifier_with_validated_transition(
         candidate_root: Path,
@@ -404,11 +496,19 @@ def _validate_terminalization_transition_semantically(root: Path) -> dict[str, A
 
     module.source_hashes = source_hashes_without_exact_wrapper
     module.RACE._validate_predecessor_journal = journal_verifier_with_validated_transition
+    if allow_historical:
+        module.RACE._race_lost = lambda row, question: _legacy_race_lost(
+            row,
+            question,
+            source_dir=HISTORICAL_MIXED_PREDECESSOR,
+            source_tree_sha256=HISTORICAL_MIXED_PREDECESSOR_TREE_SHA256,
+        )
     try:
         transition = module._terminalization_transition(root)
     finally:
         module.source_hashes = original_source_hashes
         module.RACE._validate_predecessor_journal = original_journal_verifier
+        module.RACE._race_lost = original_race_lost
     if not isinstance(transition, dict):
         raise ValueError("mixed-tail predecessor terminalization verification is absent")
     return transition
@@ -419,11 +519,17 @@ def _validate_mixed_predecessor(
     predecessor_plan: dict[str, Any],
     questions: list[dict[str, Any]],
     current_sidecars: dict[int, dict[str, Any]],
+    *,
+    source_tree_sha256: str,
 ) -> tuple[dict[str, Any] | None, Path | None]:
     """Recompute an optional mixed-tail chain from its nested original snapshot."""
     descriptor = predecessor_plan.get("mixed_tail_repair")
     if descriptor is None:
         return None, None
+    if not _legacy_compatibility(root, source_tree_sha256):
+        raise ValueError(
+            "mixed-tail V1 compatibility is restricted to the exact historical artifact"
+        )
     evidence_path = root / MIXED_EVIDENCE_NAME
     original_binding_path = root / "predecessor_snapshot/source_binding.json"
     original_plan_path = root / "predecessor_snapshot/partial_r2_plan.json"
@@ -450,7 +556,7 @@ def _validate_mixed_predecessor(
     if not isinstance(descriptor, dict) or descriptor.get("schema") != MIXED_REPAIR_SCHEMA:
         raise ValueError("mixed-tail predecessor descriptor schema differs")
     if (
-        descriptor.get("repair_runner_sha256") != sha256_path(MIXED_REPAIR_PATH)
+        descriptor.get("repair_runner_sha256") != HISTORICAL_MIXED_REPAIR_RUNNER_SHA256
         or descriptor.get("predecessor_watcher") is None
         or descriptor.get("predecessor_provenance")
         != {"path": original_proposal_path.name, "sha256": sha256_path(original_proposal_path)}
@@ -483,7 +589,13 @@ def _validate_mixed_predecessor(
             or transition.get("terminalizer_runner") != terminalization.get("terminalizer_runner")
         ):
             raise ValueError("mixed-tail predecessor terminalization evidence differs")
-        if _validate_terminalization_transition_semantically(original_binding_path.parent) != terminalization:
+        if (
+            _validate_terminalization_transition_semantically(
+                original_binding_path.parent,
+                allow_historical=True,
+            )
+            != terminalization
+        ):
             raise ValueError("mixed-tail predecessor terminalization semantics differ")
     original_hashes, original_root = _load_bound_snapshot(root, "predecessor_snapshot")
     if (
@@ -507,7 +619,13 @@ def _validate_mixed_predecessor(
         kind: sorted(
             ordinal
             for ordinal in generation
-            if _mixed_class(original_sidecars[ordinal], questions[ordinal]) == kind
+            if _mixed_class(
+                original_sidecars[ordinal],
+                questions[ordinal],
+                source_dir=root,
+                source_tree_sha256=source_tree_sha256,
+            )
+            == kind
         )
         for kind in ("clean", "race_lost", "timeout", "outer_timeout", "scorer_replay")
     }
@@ -611,8 +729,13 @@ def validate_mixed_predecessor(
     current_sidecars: dict[int, dict[str, Any]],
 ) -> dict[str, Any] | None:
     """Public compatibility wrapper returning only durable mixed-chain evidence."""
+    source_tree_sha256 = canonical_hash(source_hashes(root))
     result, _transition_path = _validate_mixed_predecessor(
-        root, predecessor_plan, questions, current_sidecars
+        root,
+        predecessor_plan,
+        questions,
+        current_sidecars,
+        source_tree_sha256=source_tree_sha256,
     )
     return result
 
@@ -699,16 +822,14 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
     hashes = source_hashes(root)
     if canonical_hash(hashes) != expected_source_tree_sha256:
         raise ValueError("race-retry predecessor differs from the explicit terminal tree hash")
+    legacy_compatibility = _legacy_compatibility(root, expected_source_tree_sha256)
     if (root / "r2_complete.json").exists():
         raise ValueError("race-retry accepts only a failed, not complete, successor")
     required = ("partial_r2_plan.json", "recovery_proposal.json", "recovery_rows.T2.r2.jsonl", "runtime_watch.r2.successor.jsonl", "scorer_attempts.T2.r2.jsonl", "generation_judge_traces.T2.r2.jsonl", "scorer_replay_traces.T2.r2.jsonl", "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl", "source_snapshot/source_binding.json", "failed_source_snapshot/source_binding.json")
     if any(not (root / item).is_file() for item in required):
         raise ValueError("race-retry predecessor lacks required terminal evidence")
     predecessor = V4.load_json(root / "partial_r2_plan.json")
-    if predecessor.get("mixed_tail_repair") is not None and (
-        root != HISTORICAL_MIXED_PREDECESSOR
-        or expected_source_tree_sha256 != HISTORICAL_MIXED_PREDECESSOR_TREE_SHA256
-    ):
+    if predecessor.get("mixed_tail_repair") is not None and not legacy_compatibility:
         raise ValueError(
             "race-retry mixed-tail compatibility is restricted to the exact historical artifact"
         )
@@ -739,7 +860,16 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
         row = sidecars[ordinal]
         if _clean(row, questions[ordinal]):
             clean_generation.append(ordinal)
-        elif _race_lost(row, questions[ordinal]):
+        elif (
+            _legacy_race_lost(
+                row,
+                questions[ordinal],
+                source_dir=root,
+                source_tree_sha256=expected_source_tree_sha256,
+            )
+            if legacy_compatibility
+            else _race_lost(row, questions[ordinal])
+        ):
             retry.append(ordinal)
         else:
             raise ValueError("race-retry predecessor has a non-race, non-clean generation outcome")
@@ -747,7 +877,11 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
         raise ValueError("race-retry predecessor has no exact zero-token race-lost failures")
     failure_path, failure_sha = _terminal_failure_ledger(root, sidecars, retry)
     mixed_tail_repair, transition_path = _validate_mixed_predecessor(
-        root, predecessor, questions, sidecars
+        root,
+        predecessor,
+        questions,
+        sidecars,
+        source_tree_sha256=expected_source_tree_sha256,
     )
     journal = _validate_predecessor_journal(
         root,
@@ -758,7 +892,8 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
     )
     _require_clean_predecessor_watcher(root / "runtime_watch.r2.successor.jsonl")
     plan = {
-        "schema": PLAN_SCHEMA, "protocol_id": RECOVERY.PROTOCOL_ID, "source": str(root),
+        "schema": LEGACY_PLAN_SCHEMA if legacy_compatibility else PLAN_SCHEMA,
+        "protocol_id": RECOVERY.PROTOCOL_ID, "source": str(root),
         "predecessor_sha256": hashes, "predecessor_tree_sha256": canonical_hash(hashes),
         "retry_runner_sha256": sha256_path(Path(__file__)), "source_sha256": base_hashes,
         "source_tree_sha256": canonical_hash(base_hashes), "failed_source_sha256": failed_hashes,
@@ -771,7 +906,27 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
         "predecessor_generation_import_ordinals": clean_generation,
         "generation_ordinals": retry,
         "race_retry_ordinals": retry,
-        "race_retry_evidence": [{"ordinal": ordinal, "qid": V4._question_qid(questions[ordinal]), "sidecar_sha256": canonical_hash(sidecars[ordinal]), "error_detail": str(sidecars[ordinal]["result"]["error_detail"])} for ordinal in retry],
+        "race_retry_evidence": [
+            {
+                "ordinal": ordinal,
+                "qid": V4._question_qid(questions[ordinal]),
+                "sidecar_sha256": canonical_hash(sidecars[ordinal]),
+                **(
+                    {
+                        "error_detail": str(
+                            sidecars[ordinal]["result"]["error_detail"]
+                        )
+                    }
+                    if legacy_compatibility
+                    else {
+                        "failure_provenance": sidecars[ordinal]["result"][
+                            "failure_provenance"
+                        ]
+                    }
+                ),
+            }
+            for ordinal in retry
+        ],
         "predecessor_watcher": {"path": "runtime_watch.r2.successor.jsonl", "sha256": sha256_path(root / "runtime_watch.r2.successor.jsonl"), "eligibility": "excluded_audit_evidence"},
         "predecessor_failed_attempts": {"path": failure_path.name, "sha256": failure_sha, "eligibility": "exact_race_retry_authorization"},
         "retry_watcher_path": "runtime_watch.r2.race_retry.jsonl", "_journal": journal,
@@ -898,6 +1053,8 @@ def validate_staged_tree(
     """
     if root.is_symlink() or not root.is_dir():
         raise ValueError("race-retry staged output must be a real directory")
+    if plan.get("schema") not in {LEGACY_PLAN_SCHEMA, PLAN_SCHEMA}:
+        raise ValueError("race-retry staged plan schema is unsupported")
     if any(path.is_symlink() for path in root.rglob("*")):
         raise ValueError("race-retry staged output contains a symlink")
     if (root / RECOVERY.ABORT_MARKER_NAME).exists():
@@ -939,8 +1096,13 @@ def validate_staged_tree(
         "journal_sha256": root / "recovery_rows.T2.r2.jsonl",
     }
     published_destination = destination or root
+    expected_proposal_schema = (
+        LEGACY_PROPOSAL_SCHEMA
+        if plan.get("schema") == LEGACY_PLAN_SCHEMA
+        else PROPOSAL_SCHEMA
+    )
     if (
-        proposal.get("schema") != PROPOSAL_SCHEMA
+        proposal.get("schema") != expected_proposal_schema
         or proposal.get("output_namespace") != str(published_destination)
         or complete.get("status") != COMPLETE_STATUS
         or any(complete.get(key) != sha256_path(path) for key, path in artifact_hashes.items())
@@ -1008,6 +1170,10 @@ def execute(args: argparse.Namespace) -> Path:
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"race-retry output namespace already exists: {destination}")
     plan = build_plan(args.source_dir, args.expected_source_tree_sha256)
+    if plan.get("schema") != PLAN_SCHEMA:
+        raise RuntimeError(
+            "legacy V1 race evidence is audit-only; only a typed V2 plan may execute"
+        )
     if os.environ.get("AUTOPILOT_EVAL_CONCURRENCY") != str(V4.CONCURRENCY):
         raise RuntimeError("AUTOPILOT_EVAL_CONCURRENCY must equal ratified c3 before race-retry inference")
     source = args.source_dir.resolve(strict=True)

@@ -20,8 +20,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 for _p in (
     REPO_ROOT / "scripts" / "autopilot",
@@ -306,6 +304,57 @@ def test_guards_dormant_on_normal_answer(monkeypatch) -> None:
     assert result.error is None
     assert result.correct is True
     assert result.route_used == "worker_math"
+
+
+def test_typed_failure_provenance_persists_only_on_error_rows(monkeypatch) -> None:
+    provenance = {
+        "schema": "epyc.failure_provenance.v1",
+        "class": "admission_timeout",
+        "code": "race_lost",
+        "phase": "admission",
+        "generation_started": False,
+        "tokens_generated": 0,
+        "partial": False,
+        "degraded": False,
+        "role": "frontdoor",
+        "workload_class": "eval_batch",
+        "max_queue_wait_ms": 90_000,
+    }
+    tower = EvalTower()
+
+    def _failed_call(**_kwargs):  # noqa: ANN001
+        return {
+            "answer": "",
+            "error": "contention denied",
+            "tokens_generated": 0,
+            "failure_provenance": provenance,
+        }
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _failed_call)
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "typed-failure",
+                "suite": "test",
+                "prompt": "q",
+                "expected": "a",
+            },
+            client,
+        )
+
+    assert result.failure_provenance == provenance
+    assert result.route_used == "frontdoor"
+    compact = eval_tower._compact_question_result(result)
+    assert compact["failure_provenance"] == provenance
+    assert compact["partial"] is False
+    assert compact["degraded"] is False
+    assert compact["route"] == "frontdoor"
+    assert compact["correct"] is False
+    assert "answer_hash" not in compact
+
+    result.error = None
+    compact_success = eval_tower._compact_question_result(result)
+    assert "failure_provenance" not in compact_success
 
 
 # ── Guard 3 env override: raise the per-question eval budget ──────────────────

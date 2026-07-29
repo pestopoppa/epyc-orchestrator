@@ -75,6 +75,10 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
 # a peer reset or "server disconnected" mid-reload — which are exactly the
 # connection-reset flavors we want to survive.
 _RECONNECT_REASONS = frozenset({"connect_error", "request_error"})
+_TRANSPORT_TIMEOUT_REASONS = frozenset(
+    {"connect_timeout", "read_timeout", "timeout"}
+)
+_FAILURE_PROVENANCE_SCHEMA = "epyc.failure_provenance.v1"
 
 
 def _classify_exc(exc: BaseException) -> tuple[str, str]:
@@ -93,6 +97,32 @@ def _classify_exc(exc: BaseException) -> tuple[str, str]:
         return classify_exception(exc)
     except Exception:
         return ("unexpected_error", f"{type(exc).__name__}: {exc}")
+
+
+def _client_transport_timeout_provenance(
+    *,
+    reason: str,
+    role: str,
+    workload_class: str | None,
+    max_queue_wait_ms: int,
+) -> dict[str, Any]:
+    """Describe an observed client timeout without asserting server state.
+
+    A client-side timeout cannot prove whether the server began generation or
+    how much work it completed. Those server-side fields are omitted entirely,
+    which makes this class structurally ineligible for admission-time retries.
+    """
+    if reason not in _TRANSPORT_TIMEOUT_REASONS:
+        raise ValueError(f"not a transport-timeout reason: {reason!r}")
+    return {
+        "schema": _FAILURE_PROVENANCE_SCHEMA,
+        "class": "client_transport_timeout",
+        "code": reason,
+        "phase": "client_transport",
+        "role": str(role or ""),
+        "workload_class": str(workload_class or ""),
+        "max_queue_wait_ms": int(max_queue_wait_ms),
+    }
 
 
 # ── Slot management ──────────────────────────────────────────────────
@@ -834,6 +864,18 @@ def call_orchestrator_forced(
     if prompt_root:
         payload["x_orchestrator_prompt_root"] = str(prompt_root)
 
+    def _timeout_result(exc: BaseException, reason: str) -> dict[str, Any]:
+        return {
+            "answer": "",
+            "error": str(exc),
+            "failure_provenance": _client_transport_timeout_provenance(
+                reason=reason,
+                role=force_role,
+                workload_class=workload_class,
+                max_queue_wait_ms=int(payload["max_queue_wait_ms"]),
+            ),
+        }
+
     def _execute_direct() -> dict[str, Any]:
         """One direct POST + response parse. RAISES on transport/connection
         exceptions; returns the parsed response dict (including structured HTTP
@@ -902,20 +944,34 @@ def call_orchestrator_forced(
             # Attach meta as _meta so downstream consumers can inspect without
             # disturbing existing data keys.
             data["_meta"] = meta
+            reason = str(meta.get("reason") or "")
+            if (
+                data.get("error")
+                and "failure_provenance" not in data
+                and reason in _TRANSPORT_TIMEOUT_REASONS
+            ):
+                data["failure_provenance"] = _client_transport_timeout_provenance(
+                    reason=reason,
+                    role=force_role,
+                    workload_class=workload_class,
+                    max_queue_wait_ms=int(payload["max_queue_wait_ms"]),
+                )
         return data
 
-    # ── Non-eval traffic: preserve the EXACT legacy code path. Critical for
-    # the non-autopilot callers of this function (14 impacted symbols per
-    # GitNexus blast-radius audit). Any change here that newly escapes an
-    # exception or alters the response dict shape would break them. The
-    # reconnect-backoff below is scoped to eval traffic only (mirrors the
-    # deadline-starvation guard above), so these callers are untouched.
+    # ── Non-eval traffic: preserve legacy terminal behavior. Critical for the
+    # non-autopilot callers of this function (14 impacted symbols per GitNexus
+    # blast-radius audit). Exceptions remain swallowed. The only additive
+    # shape is typed provenance for an observed transport timeout; connection
+    # failures and all successful responses remain unchanged.
     if str(workload_class or "") != "eval_batch":
         if watcher is None:
             try:
                 return _execute_direct()
-            except Exception as e:
-                return {"answer": "", "error": str(e)}
+            except Exception as exc:
+                reason, _detail = _classify_exc(exc)
+                if reason in _TRANSPORT_TIMEOUT_REASONS:
+                    return _timeout_result(exc, reason)
+                return {"answer": "", "error": str(exc)}
         return _execute_watcher()
 
     # ── Eval traffic: reconnect backoff on CONNECTION-level failures ─────
@@ -939,7 +995,10 @@ def call_orchestrator_forced(
                 reason, _detail = _classify_exc(exc)
                 if reason not in _RECONNECT_REASONS:
                     # Not connection-level (timeout / http status / other):
-                    # preserve the legacy terminal error dict byte-for-byte.
+                    # Client timeouts carry typed provenance but never claim
+                    # that server-side generation did not start.
+                    if reason in _TRANSPORT_TIMEOUT_REASONS:
+                        return _timeout_result(exc, reason)
                     return {"answer": "", "error": str(exc)}
                 last_detail = str(exc)
         else:

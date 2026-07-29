@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Repair a terminal, evidence-derived mixed tail before E8 race retry.
+"""Audit the terminal, evidence-derived V1 mixed-tail repair bridge.
 
-This is a deliberately one-use, fail-closed bridge.  It accepts only a
-terminal v1 successor with only approved tail classes, deterministically replays
-preserved scorer answers, and regenerates only exact timeout/reload-overlap rows.
-The resulting terminal namespace retains only exact race-lost rows and is
-therefore accepted by ``prepare_e8_quality_baseline_v5_partial_r2_race_retry``.
+The one-use bridge has completed. Its validators remain available to verify the
+sealed historical chain, but new execution is forbidden now that retries require
+typed failure provenance.
 """
 from __future__ import annotations
 
@@ -13,7 +11,6 @@ import argparse
 import hashlib
 import importlib.util
 import json
-import os
 import re
 import shutil
 import sys
@@ -127,9 +124,25 @@ def _scorer_only(row: dict[str, Any], question: dict[str, Any]) -> bool:
     )
 
 
+def _legacy_race_lost(row: dict[str, Any], question: dict[str, Any]) -> bool:
+    """Classify the hash-pinned V1 predecessor without creating V2 provenance."""
+    result = _identity(row, question)
+    error = str(result.get("error_detail") or "")
+    tokens = result.get("tokens_generated")
+    return (
+        result.get("error") is True
+        and type(tokens) is int
+        and tokens == 0
+        and result.get("route") == "frontdoor"
+        and error.startswith(RECOVERY.RACE_LOST_PREFIX)
+        and error.endswith("after 90.0s]")
+        and str(row.get("answer") or "") in ("", error)
+    )
+
+
 def _classify(row: dict[str, Any], question: dict[str, Any]) -> str:
     _identity(row, question)
-    if RACE._race_lost(row, question):
+    if _legacy_race_lost(row, question):
         return "race_lost"
     if _timeout(row, question):
         return "timeout"
@@ -658,103 +671,9 @@ def execute(args: argparse.Namespace) -> Path:
     output = args.output_dir.absolute()
     if output.exists() or output.is_symlink():
         raise FileExistsError(f"mixed-tail repair output namespace already exists: {output}")
-    plan = build_plan(args.source_dir, args.expected_source_tree_sha256)
-    repair = plan["mixed_tail_repair"]
-    if os.environ.get("AUTOPILOT_EVAL_CONCURRENCY") != str(V4.CONCURRENCY):
-        raise RuntimeError("AUTOPILOT_EVAL_CONCURRENCY must equal ratified c3 before mixed-tail inference")
-    source = args.source_dir.resolve(strict=True)
-    base = source / "source_snapshot"
-    runner_args = V5.parse_args(["--collect-candidate", "--output-dir", str(output), "--api-url", args.api_url])
-    public = RECOVERY._load_vector(base, "question_vector.T2.json")
-    scoring = RECOVERY._load_vector(base, "scoring_vector.T2.json")
-    questions = RECOVERY._reconstruct_questions(runner_args, public, scoring, t1_core_id=str(plan["t1_core_id"]))
-    if canonical_hash(source_hashes(source)) != repair["predecessor_tree_sha256"]:
-        raise ValueError("mixed-tail predecessor changed during pre-write validation")
-    output.mkdir(parents=True, exist_ok=False)
-    RECOVERY._write_json(output / "partial_r2_plan.json", plan)
-    _copy_tree(base, output / "source_snapshot", plan["source_sha256"])
-    _copy_tree(source / "failed_source_snapshot", output / "failed_source_snapshot", plan["failed_source_sha256"])
-    _copy_tree(source, output / "predecessor_snapshot", repair["predecessor_sha256"])
-    for name in ("generation_judge_traces.T2.r2.jsonl", "scorer_replay_traces.T2.r2.jsonl", "scorer_attempts.T2.r2.jsonl"):
-        _copy_then_append(source / name, output / name)
-    _copy_journal_without_targets(
-        source / "recovery_rows.T2.r2.jsonl", output / "recovery_rows.T2.r2.jsonl",
-        set(repair["generation_retry_ordinals"]) | set(repair["scorer_replay_ordinals"]),
+    raise RuntimeError(
+        "mixed-tail V1 bridge is audit-only; fresh retries require typed failure provenance"
     )
-    source_lines, source_rows = _rows_with_bytes(source / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl")
-    journal = output / "recovery_rows.T2.r2.jsonl"
-    rows = RECOVERY._load_journal(journal)
-    RECOVERY._SAVED_ROWS = RACE._saved_rows(source, base)
-    # Deterministic scorer replay is complete before any generation call or watcher starts.
-    scorer_plan = {"scorer_replay_ordinals": repair["scorer_replay_ordinals"]}
-    scorer_journal = output / ".scorer_replay_journal"
-    replay_rows = dict(rows)
-    RECOVERY._recover_saved_scorers(
-        replay_rows, scorer_journal, scorer_plan, questions, scoring["questions"],
-        output / "scorer_replay_traces.T2.r2.jsonl", output / "scorer_attempts.T2.r2.jsonl", args.api_url,
-    )
-    scorer_replacements: dict[int, dict[str, Any]] = {}
-    for ordinal in repair["scorer_replay_ordinals"]:
-        response = replay_rows[ordinal]["response"]
-        source_row = source_rows[ordinal][1]
-        replacement = V5._coherent_sidecar_row(source_row, response, qid=response["qid"])
-        if not V5.validate_clean_sidecar_result(response, replacement, qid=response["qid"]):
-            raise ValueError("mixed-tail scorer replay did not produce a coherent sidecar")
-        scorer_replacements[ordinal] = replacement
-        # Race retry's established terminal contract represents all clean generation rows alike.
-        RECOVERY._record(journal, rows, ordinal, response, "generation")
-    scorer_journal.unlink(missing_ok=True)
-    claim = RECOVERY._capture_recovery_claim(args)
-    binding = V4.runtime_binding(runner_args)
-    capacity = RECOVERY.preflight_frontdoor_capacity(binding, required=V4.CONCURRENCY, claim=claim)
-    proposal = RECOVERY._recovery_proposal(plan, output, claim=claim, frontdoor_capacity=capacity, instrument=RECOVERY._instrument_identity(runner_args))
-    proposal.update({"schema": PROPOSAL_SCHEMA, "mixed_tail_repair": repair})
-    RECOVERY._bind_recovery_proposal(output, proposal)
-    watcher_path = output / "runtime_watch.r2.successor.jsonl"
-    health = V4.api_health(runner_args.api_url, runner_args.http_timeout_s)
-    watcher = V4.RuntimeWatcher(runner_args, binding, watcher_path, expected_probe_urls=V4.probe_url_mapping(health), include_receipt=False)
-    workspace = output / ".generation_workspace"
-    # RECOVERY owns files below the artifact root but expects its caller to
-    # create that root.  The mixed bridge passes a nested workspace instead.
-    workspace.mkdir(mode=0o700)
-    watcher.start()
-    try:
-        V4.require_clean_watcher(watcher)
-        results, execution, replayed = RECOVERY._generate_with_watcher(watcher, workspace, args, questions, repair["generation_retry_ordinals"])
-    finally:
-        watcher.stop()
-    claim_after = RECOVERY._capture_recovery_claim(args)
-    if claim_after != claim:
-        raise ValueError("mixed-tail held recovery claim changed during generation")
-    RECOVERY._watcher_evidence(watcher_path, proposal, claim_before=claim, claim_after=claim_after)
-    fresh = V4.response_rows(results, execution)
-    temp_sidecar = workspace / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
-    RECOVERY._reconcile_generation_scorer_sidecar(temp_sidecar, fresh, execution, replayed)
-    _, generated_rows = _rows_with_bytes(temp_sidecar)
-    if set(generated_rows) != set(repair["generation_retry_ordinals"]):
-        raise ValueError("mixed-tail generation sidecar contains an unexpected ordinal")
-    generation_replacements: dict[int, dict[str, Any]] = {}
-    for ordinal in repair["generation_retry_ordinals"]:
-        if ordinal not in generated_rows:
-            raise ValueError("mixed-tail generation sidecar lacks a requested repair ordinal")
-        response = RECOVERY._response_from_sidecar(generated_rows[ordinal][1], questions[ordinal])
-        if not V5.validate_clean_sidecar_result(response, generated_rows[ordinal][1], qid=response["qid"]):
-            raise RuntimeError("mixed-tail generation retry did not produce a clean ordinal")
-        RECOVERY._record(journal, rows, ordinal, response, "generation")
-        generation_replacements[ordinal] = generated_rows[ordinal][1]
-    trace = workspace / "generation_judge_traces.T2.r2.jsonl"
-    if trace.exists():
-        with (output / "generation_judge_traces.T2.r2.jsonl").open("ab") as destination:
-            destination.write(trace.read_bytes())
-    shutil.rmtree(workspace)
-    replacements = {**scorer_replacements, **generation_replacements}
-    sidecar_path = output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
-    _rewrite_target_rows(sidecar_path, source_lines, source_rows, replacements)
-    _terminal_race_ledger(output / "generation_failed_attempts.T2.r2.jsonl", source_rows, repair["race_retry_ordinals"])
-    RECOVERY._write_json(output / EVIDENCE_NAME, _repair_evidence(plan, replacements, source_rows))
-    # The existing race-only runner is the final structural gate for this bridge.
-    RACE.build_plan(output, canonical_hash(source_hashes(output)))
-    return output
 
 
 def main(argv: list[str] | None = None) -> int:

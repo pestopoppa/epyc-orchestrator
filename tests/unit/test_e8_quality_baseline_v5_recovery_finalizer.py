@@ -1387,6 +1387,14 @@ def test_race_retry_validation_delegates_to_producer_publication_gate(
     assert seen == [(root, plan)]
 
 
+def test_legacy_race_retry_is_audit_only(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="typed V2"):
+        finalizer._validate_race_retry_intermediate(
+            tmp_path,
+            {"schema": finalizer.RACE_RETRY.LEGACY_PLAN_SCHEMA},
+        )
+
+
 def test_final_c1_intermediate_requires_complete_and_preserves_mixed_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

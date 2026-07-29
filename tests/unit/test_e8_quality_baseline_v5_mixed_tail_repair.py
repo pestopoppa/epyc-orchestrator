@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 from pathlib import Path
 
@@ -180,12 +181,11 @@ def test_sidecar_rewrite_preserves_every_unrelated_byte(tmp_path: Path) -> None:
     assert json.loads(output[1])["answer"] == "new"
 
 
-def test_generation_workspace_is_created_before_recovery_helper_runs() -> None:
-    source = PATH.read_text(encoding="utf-8")
-    workspace_creation = source.index("workspace.mkdir(mode=0o700)")
-    helper_call = source.index("RECOVERY._generate_with_watcher(")
+def test_audit_only_execute_has_no_generation_path() -> None:
+    source = inspect.getsource(REPAIR.execute)
 
-    assert workspace_creation < helper_call
+    assert "_generate_with_watcher" not in source
+    assert "audit-only" in source
 
 
 def test_journal_copy_removes_only_replaced_ordinals(tmp_path: Path) -> None:
@@ -391,4 +391,15 @@ def test_output_collision_stops_before_predecessor_validation(tmp_path: Path) ->
     })()
 
     with pytest.raises(FileExistsError, match="output namespace already exists"):
+        REPAIR.execute(args)
+
+
+def test_historical_mixed_tail_bridge_cannot_execute(tmp_path: Path) -> None:
+    args = type("Args", (), {
+        "output_dir": tmp_path / "new-output",
+        "source_dir": tmp_path / "source",
+        "expected_source_tree_sha256": "0" * 64,
+    })()
+
+    with pytest.raises(RuntimeError, match="audit-only"):
         REPAIR.execute(args)
