@@ -24,6 +24,7 @@ from pathlib import Path
 import subprocess
 import sys
 from typing import Any
+import uuid
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -101,7 +102,14 @@ def _source_hashes(source: Path) -> dict[str, str]:
         if path.is_symlink():
             raise ValueError(f"partial-r2 source contains a symlink: {path}")
         if path.is_file():
-            hashes[str(path.relative_to(source))] = sha256_path(path)
+            relative = path.relative_to(source).as_posix()
+            if relative == "source_binding.json":
+                relative = "upstream_source_binding.json"
+                if (source / relative).exists():
+                    raise ValueError(
+                        "partial-r2 source has ambiguous current/upstream bindings"
+                    )
+            hashes[relative] = sha256_path(path)
     return hashes
 
 
@@ -459,21 +467,36 @@ def _append_jsonl(path: Path, value: dict[str, Any]) -> None:
 
 def _write_json(path: Path, value: Any) -> None:
     data = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
-    fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
+    fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
         V4._write_full_record(fd, data)
         os.fsync(fd)
     finally:
         os.close(fd)
-    V4.fsync_dir(path.parent)
+    try:
+        os.replace(temporary, path)
+        V4.fsync_dir(path.parent)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
-def record_durable_abort(output: Path, *, writer: str, error: BaseException) -> Path:
+def record_durable_abort(
+    output: Path,
+    *,
+    writer: str,
+    error: BaseException,
+    runner_path: Path | None = None,
+) -> Path:
     error_text = f"{type(error).__module__}.{type(error).__qualname__}:{error}"
     marker = output / ABORT_MARKER_NAME
-    _write_json(
-        marker,
-        {
+    V4.TERMINAL_SEAL.record_terminal_abort(
+        output,
+        writer=writer,
+        error=error,
+        marker_name=ABORT_MARKER_NAME,
+        marker_payload={
             "schema": ABORT_SCHEMA,
             "status": "terminal_aborted_no_admission",
             "writer": writer,
@@ -483,6 +506,7 @@ def record_durable_abort(output: Path, *, writer: str, error: BaseException) -> 
             "no_auto_retry": True,
             "no_admission": True,
         },
+        runner_path=runner_path or Path(__file__).resolve(),
     )
     return marker
 
@@ -503,7 +527,12 @@ def durable_output_writer(writer: str) -> Any:
                     and output.is_dir()
                     and not output.is_symlink()
                 ):
-                    record_durable_abort(output, writer=writer, error=exc)
+                    record_durable_abort(
+                        output,
+                        writer=writer,
+                        error=exc,
+                        runner_path=Path(function.__code__.co_filename).resolve(),
+                    )
                 raise
 
         return wrapped
@@ -523,7 +552,11 @@ def _snapshot_source(source: Path, output: Path, plan: dict[str, Any]) -> Path:
                 raise ValueError("partial-r2 output snapshot was modified")
         return snapshot
     for relative, digest in plan["source_sha256"].items():
-        origin = source / relative
+        origin = (
+            source / "source_binding.json"
+            if relative == "upstream_source_binding.json"
+            else source / relative
+        )
         data = origin.read_bytes()
         if hashlib.sha256(data).hexdigest() != digest:
             raise ValueError("partial-r2 source changed before snapshot")
@@ -1159,6 +1192,8 @@ def _complete_r2(
     rows: dict[int, dict[str, Any]],
     questions: list[dict[str, Any]],
     api_url: str,
+    *,
+    completion_context: dict[str, Any] | None = None,
 ) -> None:
     if len(rows) != N:
         raise ValueError("partial-r2 cannot seal an incomplete response ledger")
@@ -1255,9 +1290,7 @@ def _complete_r2(
             "per_suite_counts": dict(aggregate.per_suite_counts),
         },
     )
-    _write_json(
-        output / "r2_complete.json",
-        {
+    marker = {
             "schema": "epyc.e8_quality_partial_r2_complete.v1",
             "status": "complete",
             "responses_sha256": sha256_path(output / "responses.T2.r2.jsonl"),
@@ -1267,8 +1300,10 @@ def _complete_r2(
             "journal_sha256": sha256_path(output / "recovery_rows.T2.r2.jsonl"),
             "scoring_audit": audit,
             "plan_sha256": sha256_path(output / "partial_r2_plan.json"),
-        },
-    )
+        }
+    if completion_context is not None:
+        marker.update(completion_context)
+    _write_json(output / "r2_complete.json", marker)
 
 
 @durable_output_writer("recover_e8_quality_baseline_v5_partial_r2")
@@ -1277,6 +1312,17 @@ def execute(args: argparse.Namespace) -> Path:
     plan = build_plan(source)
     claim = _capture_recovery_claim(args)
     output = args.output_dir.absolute()
+    abort_marker = output / ABORT_MARKER_NAME
+    run_seal = output / "run_seal.json"
+    if abort_marker.exists() or (
+        run_seal.is_file()
+        and not run_seal.is_symlink()
+        and V4.load_json(run_seal).get("status") == "terminal_aborted_no_admission"
+    ):
+        raise ValueError(
+            "partial-r2 output is terminally aborted; only an explicit validated "
+            "successor may consume it"
+        )
     if output.is_symlink() or (output.exists() and not output.is_dir()):
         raise ValueError("partial-r2 output namespace is not a directory")
     runner_args = V5.parse_args(
@@ -1447,21 +1493,24 @@ def execute(args: argparse.Namespace) -> Path:
             "required": False,
             "reason": "no_pending_scorer_or_generation_request",
         }
-    _complete_r2(output, snapshot, plan, rows, questions, args.api_url)
     if _source_hashes(source.resolve(strict=True)) != plan["source_sha256"]:
         raise ValueError("partial-r2 source changed during collection")
     scorer_attempts = _scorer_attempts_evidence(output, rows, plan, questions, scoring_questions)
-    marker = V4.load_json(output / "r2_complete.json")
-    marker.update(
-        {
+    _complete_r2(
+        output,
+        snapshot,
+        plan,
+        rows,
+        questions,
+        args.api_url,
+        completion_context={
             "status": "intermediate_r2_complete",
             "watcher": r2_watch_evidence,
             "claim": claim,
             "scorer_attempts": scorer_attempts,
             "scorer_attempts_sha256": scorer_attempts.get("sha256"),
-        }
+        },
     )
-    _write_json(output / "r2_complete.json", marker)
     return output
 
 

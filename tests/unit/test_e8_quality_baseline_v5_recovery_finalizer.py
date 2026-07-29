@@ -173,7 +173,70 @@ def test_finalizer_fault_after_staging_creation_is_quarantined(
     )
     assert abort["status"] == "terminal_aborted_no_admission"
     assert abort["no_admission"] is True
+    seal = json.loads((quarantines[0] / "run_seal.json").read_text())
+    assert seal["status"] == "terminal_aborted_no_admission"
+    assert seal["writer"] == "finalize_e8_quality_baseline_v5_recovery_r2"
     assert captured["plan"]["finalizer_contract"] == contract
+
+
+def test_validate_intermediate_rejects_terminal_root_seal_without_marker(
+    tmp_path: Path,
+) -> None:
+    intermediate = tmp_path / "intermediate"
+    intermediate.mkdir()
+    _write_json(
+        intermediate / "run_seal.json",
+        {
+            "schema": finalizer.V4.TERMINAL_SEAL.RUN_SEAL_SCHEMA,
+            "status": finalizer.V4.TERMINAL_SEAL.TERMINAL_STATUS,
+        },
+    )
+
+    with pytest.raises(ValueError, match="terminally sealed"):
+        finalizer.validate_intermediate(intermediate)
+
+
+def test_copy_bound_race_intermediate_preserves_raw_and_named_watcher(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "race"
+    destination = tmp_path / "copied"
+    _write_json(
+        source / "source_snapshot/source_binding.json",
+        {"source_sha256": {}, "source_tree_sha256": finalizer.RECOVERY.canonical_hash({})},
+    )
+    _write_json(
+        source / "predecessor_snapshot/source_binding.json",
+        {"source_sha256": {}, "source_tree_sha256": finalizer.RECOVERY.canonical_hash({})},
+    )
+    _write_json(
+        source / "partial_r2_plan.json",
+        {"schema": finalizer.RACE_RETRY.PLAN_SCHEMA},
+    )
+    for relative in (
+        "recovery_proposal.json",
+        "r2_complete.json",
+        "raw.T2.r2.json",
+    ):
+        _write_json(source / relative, {"artifact": relative})
+    for relative in (
+        "responses.T2.r2.jsonl",
+        "eval_sidecars/question_results.e8-t2-r2.jsonl",
+        "judge_traces.T2.r2.jsonl",
+        "recovery_rows.T2.r2.jsonl",
+        "scorer_attempts.T2.r2.jsonl",
+        "runtime_watch.r2.race_retry.jsonl",
+    ):
+        _write_jsonl(source / relative, [{"artifact": relative}])
+
+    finalizer._copy_bound_intermediate(source, destination)
+
+    assert (destination / "raw.T2.r2.json").read_bytes() == (
+        source / "raw.T2.r2.json"
+    ).read_bytes()
+    named = destination / "runtime_watch.r2.race_retry.jsonl"
+    canonical = destination / "runtime_watch.r2.jsonl"
+    assert named.read_bytes() == canonical.read_bytes()
 
 
 def _context(tmp_path: Path) -> tuple[dict, dict]:

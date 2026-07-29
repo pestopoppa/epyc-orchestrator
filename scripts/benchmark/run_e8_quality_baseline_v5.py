@@ -61,9 +61,12 @@ def record_durable_abort(path: Path, *, writer: str, error: BaseException) -> No
     """Persist a fail-closed marker in a candidate namespace before re-raising."""
     if not path.is_dir() or path.is_symlink():
         raise ValueError(f"cannot mark unsafe candidate namespace aborted: {path}")
-    V4.write_json(
-        path / ABORT_MARKER_NAME,
-        {
+    V4.TERMINAL_SEAL.record_terminal_abort(
+        path,
+        writer=writer,
+        error=error,
+        marker_name=ABORT_MARKER_NAME,
+        marker_payload={
             "schema": ABORT_SCHEMA,
             "status": "aborted",
             "writer": writer,
@@ -71,8 +74,8 @@ def record_durable_abort(path: Path, *, writer: str, error: BaseException) -> No
             "error": str(error),
             "recorded_at": V4.utc_now(),
         },
+        runner_path=RUNNER_PATH,
     )
-    V4.fsync_dir(path)
 
 
 def durable_candidate_writer(writer: str) -> Any:

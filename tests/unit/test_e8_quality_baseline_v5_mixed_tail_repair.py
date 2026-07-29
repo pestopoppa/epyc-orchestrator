@@ -403,3 +403,4 @@ def test_historical_mixed_tail_bridge_cannot_execute(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="audit-only"):
         REPAIR.execute(args)
+    assert not args.output_dir.exists()

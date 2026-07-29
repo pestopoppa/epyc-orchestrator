@@ -197,6 +197,12 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
     _no_symlinks(intermediate)
     if (intermediate / RECOVERY.ABORT_MARKER_NAME).exists():
         raise ValueError("recovery intermediate is durably aborted and non-admissible")
+    root_seal = intermediate / "run_seal.json"
+    if root_seal.exists():
+        if root_seal.is_symlink() or not root_seal.is_file():
+            raise ValueError("recovery intermediate root run seal is unsafe")
+        if V4.load_json(root_seal).get("status") == V4.TERMINAL_SEAL.TERMINAL_STATUS:
+            raise ValueError("recovery intermediate is terminally sealed and non-admissible")
     plan_path = intermediate / "partial_r2_plan.json"
     complete_path = intermediate / "r2_complete.json"
     source_binding = intermediate / "source_snapshot/source_binding.json"
@@ -933,6 +939,7 @@ def _copy_bound_intermediate(root: Path, destination: Path) -> None:
         "responses.T2.r2.jsonl",
         "eval_sidecars/question_results.e8-t2-r2.jsonl",
         "judge_traces.T2.r2.jsonl",
+        "raw.T2.r2.json",
         "recovery_rows.T2.r2.jsonl",
         "scorer_attempts.T2.r2.jsonl",
     ):
@@ -944,8 +951,8 @@ def _copy_bound_intermediate(root: Path, destination: Path) -> None:
         else "runtime_watch.r2.jsonl"
     )
     _copy_file(root / watcher, destination / "runtime_watch.r2.jsonl")
-    if final_c1_retry:
-        _copy_file(root / watcher, destination / FINAL_C1_RETRY.WATCHER_NAME)
+    if race_retry or final_c1_retry:
+        _copy_file(root / watcher, destination / watcher)
     if successor:
         binding = V4.load_json(root / "failed_source_snapshot/source_binding.json")
         hashes = binding.get("source_sha256")
@@ -982,6 +989,10 @@ def _copy_bound_intermediate(root: Path, destination: Path) -> None:
 
 def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[str, Any]) -> None:
     """Layer the sealed r2 context onto the preserved partial-resume context."""
+    original_partial_binding = staging / "source_snapshot/source_binding.json"
+    if original_partial_binding.is_symlink() or not original_partial_binding.is_file():
+        raise ValueError("composite partial-resume source binding is missing or unsafe")
+    partial_binding_sha256_before = sha256_path(original_partial_binding)
     copied = staging / "recovery_r2_intermediate"
     _copy_bound_intermediate(intermediate["root"], copied)
     report_path = staging / "runner_report.json"
@@ -1074,7 +1085,7 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
         "t2_r1_generation_tail_ordinals": [98, 99],
         "t2_r1_scorer_recovery_ordinals": [row["ordinal"] for row in scorer_rows],
     }
-    if sha256_path(partial_binding) != sha256_path(staging / "source_snapshot/source_binding.json"):
+    if sha256_path(partial_binding) != partial_binding_sha256_before:
         raise ValueError("composite partial-resume source binding changed during finalization")
     repair_names = ("partial_resume_plan.json", "generation_tail_attempts.T2.r1.jsonl")
     if any(
@@ -1506,7 +1517,7 @@ def execute(args: argparse.Namespace) -> Path:
             staging / "run_seal.json",
             {
                 "schema": "epyc.e8_quality_baseline_run_seal.v1",
-                "status": "complete",
+                "status": "staged_complete_pending_publish",
                 "manifest_sha256": sha256_path(evidence_path),
                 "runner_report_sha256": sha256_path(report_path),
                 "protocol_receipt_sha256": None,
@@ -1539,6 +1550,13 @@ def execute(args: argparse.Namespace) -> Path:
         V4.fsync_dir(staging)
         V4.atomic_publish_noreplace(staging, destination)
         V4.fsync_dir(destination.parent)
+        published_seal_path = destination / "run_seal.json"
+        published_seal = V4.load_json(published_seal_path)
+        if published_seal.get("status") != "staged_complete_pending_publish":
+            raise ValueError("recovery finalizer pre-publish seal status differs")
+        published_seal["status"] = "complete"
+        published_seal["published_at"] = V4.utc_now()
+        RECOVERY._write_json(published_seal_path, published_seal)
         return destination
     except BaseException as exc:
         aborted = (
@@ -1553,6 +1571,7 @@ def execute(args: argparse.Namespace) -> Path:
                 aborted,
                 writer="finalize_e8_quality_baseline_v5_recovery_r2",
                 error=exc,
+                runner_path=Path(__file__).resolve(),
             )
             quarantine = destination.with_name(
                 f".{destination.name}.aborted-{uuid.uuid4().hex}"

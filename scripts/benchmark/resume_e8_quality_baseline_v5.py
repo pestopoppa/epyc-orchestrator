@@ -678,7 +678,6 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     V4.write_text(path, "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
 
 
-@V5.durable_candidate_writer("resume_e8_quality_baseline_v5")
 def execute(args: argparse.Namespace) -> Path:
     """Publish a canonical six-observation v5 bundle from the interrupted run.
 
@@ -1008,7 +1007,24 @@ def execute(args: argparse.Namespace) -> Path:
         V4.atomic_publish_noreplace(staging, destination)
         V4.fsync_dir(destination.parent)
         return destination
-    except Exception:
+    except BaseException as exc:
+        aborted = (
+            staging
+            if staging.is_dir() and not staging.is_symlink()
+            else destination
+            if destination.is_dir() and not destination.is_symlink()
+            else None
+        )
+        if aborted is not None:
+            try:
+                V4.TERMINAL_SEAL.record_terminal_abort(
+                    aborted,
+                    writer="resume_e8_quality_baseline_v5",
+                    error=exc,
+                    runner_path=RUNNER_PATH,
+                )
+            except BaseException as seal_error:
+                exc.add_note(f"failed to terminally seal {aborted}: {seal_error}")
         raise
 
 

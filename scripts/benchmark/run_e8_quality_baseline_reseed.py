@@ -17,6 +17,7 @@ import ctypes
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,7 @@ import httpx
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+TERMINAL_SEAL_PATH = PROJECT_ROOT / "scripts/benchmark/e8_terminal_seal.py"
 ROOT = Path("/mnt/raid0/llm/epyc-root")
 RESEARCH_ROOT = Path("/mnt/raid0/llm/epyc-inference-research")
 AUTOPILOT_DIR = PROJECT_ROOT / "scripts" / "autopilot"
@@ -54,6 +56,19 @@ from seeding_scoring import (  # noqa: E402
     score_answer_or_error,
     score_answer_deterministic,
 )
+
+
+def _load_terminal_seal() -> Any:
+    spec = importlib.util.spec_from_file_location("e8_terminal_seal_reseed", TERMINAL_SEAL_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot import E8 terminal-seal helper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+TERMINAL_SEAL = _load_terminal_seal()
 
 
 E8_BOUNDARY = 1785004723.0
@@ -3562,6 +3577,13 @@ def prepare_report(
     }
 
 
+@TERMINAL_SEAL.durable_candidate_writer(
+    "run_e8_quality_baseline_reseed",
+    marker_name="durable_abort.json",
+    marker_schema="epyc.e8_quality_candidate_abort.v1",
+    marker_status="aborted",
+    runner_path=Path(__file__).resolve(),
+)
 def execute(
     args: argparse.Namespace,
     *,

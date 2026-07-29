@@ -1120,6 +1120,7 @@ def _quarantine_output(output: Path, destination: Path, error: BaseException) ->
             output,
             writer="prepare_e8_quality_baseline_v5_partial_r2_race_retry",
             error=error,
+            runner_path=Path(__file__).resolve(),
         )
     finally:
         # Never replace a pre-existing quarantine: a collision is evidence, not
@@ -1285,22 +1286,24 @@ def execute(args: argparse.Namespace) -> Path:
             if failures:
                 RECOVERY._record_failed_generation_attempts(output, failures)
             raise RuntimeError("race-retry did not produce every permitted clean ordinal")
-        RECOVERY._complete_r2(
-            output, output / "source_snapshot", persisted_plan, rows, questions, args.api_url
-        )
-        marker = V4.load_json(output / "r2_complete.json")
-        marker.update(
-            {
+        completion_context = {
                 "status": COMPLETE_STATUS,
                 "watcher": evidence,
                 "claim": claim,
                 "predecessor_watcher": persisted_plan["predecessor_watcher"],
                 "predecessor_failed_attempts": persisted_plan["predecessor_failed_attempts"],
             }
-        )
         if "mixed_tail_repair" in persisted_plan:
-            marker["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
-        RECOVERY._write_json(output / "r2_complete.json", marker)
+            completion_context["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
+        RECOVERY._complete_r2(
+            output,
+            output / "source_snapshot",
+            persisted_plan,
+            rows,
+            questions,
+            args.api_url,
+            completion_context=completion_context,
+        )
         if (
             source_hashes(base) != persisted_plan["source_sha256"]
             or source_hashes(source) != persisted_plan["predecessor_sha256"]
