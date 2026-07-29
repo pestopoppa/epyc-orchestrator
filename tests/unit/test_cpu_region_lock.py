@@ -51,7 +51,9 @@ from src.runtime.cpu_region_lock import (  # noqa: E402
     cpu_region_lock_for_instance,
     read_region_lock_payload,
     region_lock_path,
+    sweep_stale_region_lock_payloads,
 )
+import src.runtime.cpu_region_lock as cpu_region_lock_module  # noqa: E402
 
 
 # ───────────────────────────── topology tests ─────────────────────────────
@@ -203,6 +205,25 @@ class TestCpuRegionLockBasic:
             assert isinstance(payload["started_at"], float)
 
         assert read_region_lock_payload(paths["q0"]) is None
+
+    def test_startup_sweep_clears_unlocked_stale_payload(self):
+        path = region_lock_path("worker_general", "q2")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"pid": 839651, "region": "q2"}\n', encoding="utf-8")
+
+        assert sweep_stale_region_lock_payloads() == 1
+        assert path.exists()
+        assert path.read_text(encoding="utf-8") == ""
+
+    def test_startup_sweep_never_clears_payload_when_flock_is_held(self, monkeypatch):
+        path = region_lock_path("worker_general", "q3")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = '{"pid": 839651, "region": "q3"}\n'
+        path.write_text(payload, encoding="utf-8")
+        monkeypatch.setattr(cpu_region_lock_module, "_try_flock", lambda *_args: False)
+
+        assert sweep_stale_region_lock_payloads() == 0
+        assert path.read_text(encoding="utf-8") == payload
 
     def test_empty_region_set_is_noop(self):
         with cpu_region_lock("frontdoor", set()) as paths:

@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI):
     # though the lock-acquisition code path is fully in place.
     try:
         from src.backends.concurrency_aware import ConcurrencyAwareBackend
-        from src.runtime.cpu_region_lock import region_lock_path
+        from src.runtime.cpu_region_lock import region_lock_path, sweep_stale_region_lock_payloads
         from src.runtime.instance_topology import get_instance_regions, ATOMIC_REGIONS
 
         _topology = get_instance_regions()
@@ -105,6 +105,7 @@ async def lifespan(app: FastAPI):
             _role_regions.setdefault(_role, set()).update(_regs)
 
         _warmed = 0
+        _stale_payloads_cleared = sweep_stale_region_lock_payloads()
         for _role, _backend in (state.llm_primitives._backends or {}).items():
             if not isinstance(_backend, ConcurrencyAwareBackend):
                 continue
@@ -115,6 +116,11 @@ async def lifespan(app: FastAPI):
                 _warmed += 1
         if _warmed:
             logger.info("cpu_region_lock warm-up: pre-created %d lock files", _warmed)
+        if _stale_payloads_cleared:
+            logger.info(
+                "cpu_region_lock startup sweep: cleared %d stale diagnostic payload(s)",
+                _stale_payloads_cleared,
+            )
     except Exception as _exc:
         logger.debug("cpu_region_lock warm-up skipped: %s", _exc)
 

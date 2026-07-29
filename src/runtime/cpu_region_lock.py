@@ -287,6 +287,55 @@ def _clear_lock_payload(fh: IO[bytes]) -> None:
         pass
 
 
+def sweep_stale_region_lock_payloads() -> int:
+    """Clear diagnostic payloads whose lock file is currently unlocked.
+
+    The flock is the sole liveness and occupancy fact.  A process terminated
+    without running the context manager's ``finally`` block releases that
+    flock but leaves its JSON attribution bytes behind.  Probe and hold an
+    exclusive flock before clearing so an active dispatcher's payload is never
+    changed; PID values are deliberately not consulted because they can be
+    reused.
+
+    Returns the number of non-empty, unlocked role lock files cleared.  This
+    is best-effort diagnostic hygiene and must never affect dispatch safety.
+    """
+    cleared = 0
+    lock_dir = _tmp_dir()
+    try:
+        lock_paths = tuple(lock_dir.glob("cpu_region.*.*.lock"))
+    except OSError:
+        return cleared
+
+    for lock_path in lock_paths:
+        # GLOBAL locks are exclusion-only and have no attribution payload.
+        if lock_path.name.startswith(f"cpu_region.{_GLOBAL_MUTEX_ROLE}."):
+            continue
+        try:
+            with open(lock_path, "r+b") as fh:
+                try:
+                    acquired = _try_flock(fh.fileno(), fcntl.LOCK_EX)
+                except OSError:
+                    continue
+                if not acquired:
+                    continue
+                try:
+                    fh.seek(0)
+                    if not fh.read().strip():
+                        continue
+                    _clear_lock_payload(fh)
+                    cleared += 1
+                finally:
+                    try:
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+        except OSError:
+            # A concurrent filesystem cleanup must not affect dispatch.
+            continue
+    return cleared
+
+
 def read_region_lock_payload(lock_file: Path) -> dict[str, object] | None:
     """Read the JSON payload from a region lock file, if present and valid."""
     try:
