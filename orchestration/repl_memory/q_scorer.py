@@ -1335,6 +1335,7 @@ class QScorer:
         """
         result = {"memories_updated": 0, "memories_created": 0}
         context = context or {}
+        task_type = context.get("task_type") or "chat"
 
         # Clamp reward to valid range
         reward = max(-1.0, min(1.0, reward))
@@ -1344,12 +1345,27 @@ class QScorer:
             emb_array = np.array(embedding, dtype=np.float32)
         else:
             task_ir = {
-                "task_type": context.get("task_type", "chat"),
+                "task_type": task_type,
                 # Untruncated: the 200-char cap destroyed text at write time.
                 # memory_record.embedding_text() bounds the EMBEDDER input only.
                 "objective": task_description,
             }
             emb_array = self.embedder.embed_task_ir(task_ir)
+
+        # A hash pseudo-vector can only establish text identity, never semantic
+        # similarity. It must not update an existing memory selected by FAISS.
+        from .embedder import is_degenerate_embedding, is_hash_fallback_embedding
+
+        embedding_text = build_memory_record(
+            objective=task_description,
+            task_type=task_type,
+        ).embedding_text()
+        if (
+            is_degenerate_embedding(emb_array) is not None
+            or is_hash_fallback_embedding(embedding_text, emb_array)
+        ):
+            logger.warning("Refusing external Q-score with a fallback or degenerate embedding")
+            return result
 
         # Search for existing similar memory with same action
         # Note: retrieve_by_similarity returns memories sorted by similarity
@@ -1361,12 +1377,25 @@ class QScorer:
         # Filter to high-similarity matches (similarity_score >= 0.85)
         similar = [m for m in similar if m.similarity_score >= 0.85]
 
-        # Update existing memory if action matches closely
+        # A high cosine score is only a candidate lookup. Updating requires the
+        # same normalized identity so unrelated memories cannot absorb a reward.
+        def normalized(value: Any) -> str:
+            return " ".join(str(value or "").split())
+
+        expected_identity = (
+            normalized(task_description),
+            normalized(task_type),
+            normalized(action),
+        )
         updated = False
         for mem in similar:
-            if mem.action == action or (
-                hasattr(mem, "action") and mem.action.startswith(action.split(":")[0])
-            ):
+            memory_context = mem.context if isinstance(mem.context, dict) else {}
+            memory_identity = (
+                normalized(memory_context.get("objective")),
+                normalized(memory_context.get("task_type")),
+                normalized(mem.action),
+            )
+            if memory_identity == expected_identity:
                 old_q = mem.q_value
                 new_q = self.store.update_q_value(
                     mem.id, reward, self.config.learning_rate,

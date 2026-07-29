@@ -11,6 +11,8 @@ import json
 import sqlite3
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import faiss
@@ -166,6 +168,51 @@ class TestSemanticSkipIsLoudNotSilent:
         assert c["pass"] is None
         assert "unreachable" in c["detail"]
         # a skip must not fail the gate — BGE may still be booting — but it is visible
+        assert rc == 0
+
+    def test_required_semantic_fails_when_embedder_is_unavailable(self, tmp_path):
+        rc, report = run_checker(
+            build_store(tmp_path / "required-noembed"), "--semantic", "--require-semantic",
+            "--embedder-url", "http://127.0.0.1:9/embedding",
+        )
+        c = by_name(report)["semantic_self_match"]
+        assert c["pass"] is False
+        assert "unreachable" in c["detail"]
+        assert rc == 1
+
+    def test_required_semantic_passes_with_a_healthy_cosine(self, tmp_path):
+        store = build_store(tmp_path / "semantic-clean", n=1)
+        vector = faiss.read_index(str(store / "embeddings.faiss")).reconstruct(0).tolist()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - required stdlib handler name
+                body = json.dumps({"embedding": vector}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            rc, report = run_checker(
+                store,
+                "--semantic",
+                "--require-semantic",
+                "--embedder-url",
+                f"http://127.0.0.1:{server.server_port}/embedding",
+            )
+        finally:
+            server.shutdown()
+            thread.join()
+        c = by_name(report)["semantic_self_match"]
+        assert c["pass"] is True
+        assert c["mean_cosine"] == pytest.approx(1.0)
         assert rc == 0
 
 

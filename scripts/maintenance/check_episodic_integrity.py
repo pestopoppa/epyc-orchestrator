@@ -69,9 +69,16 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sessions-dir", default=str(SESSIONS))
     ap.add_argument("--semantic", action="store_true", help="also run the BGE self-match check")
+    ap.add_argument(
+        "--require-semantic",
+        action="store_true",
+        help="fail when the requested semantic self-match check cannot complete",
+    )
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--embedder-url", default="http://127.0.0.1:8090/embedding")
     args = ap.parse_args()
+    if args.require_semantic and not args.semantic:
+        ap.error("--require-semantic requires --semantic")
 
     import faiss
     import numpy as np
@@ -207,8 +214,14 @@ def main() -> int:
                             break
         except Exception as exc:  # BGE unreachable / still booting
             sims = []
-            skip("semantic_self_match", f"BGE embedder unreachable ({type(exc).__name__}: {exc}) "
-                 "— the DECISIVE check did not run; re-run once the embedders are up")
+            detail = (
+                f"BGE embedder unreachable ({type(exc).__name__}: {exc}) "
+                "— the DECISIVE check did not run; re-run once the embedders are up"
+            )
+            if args.require_semantic:
+                record("semantic_self_match", False, detail)
+            else:
+                skip("semantic_self_match", detail)
         if sims:
             mean = float(np.mean(sims))
             record(
@@ -217,6 +230,14 @@ def main() -> int:
                 f"mean cosine {mean:.4f} over {len(sims)} rows (floor {MIN_SELF_MATCH}; "
                 f"0.55 = vectors belong to other rows)",
                 mean_cosine=round(mean, 4),
+            )
+        elif args.require_semantic and not any(
+            check["check"] == "semantic_self_match" for check in checks
+        ):
+            record(
+                "semantic_self_match",
+                False,
+                "semantic self-match produced no usable objective samples",
             )
     con.close()
 

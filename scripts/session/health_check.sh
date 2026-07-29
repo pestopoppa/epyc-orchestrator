@@ -49,6 +49,13 @@ check_python scripts/server/stack_health.py
 check_python scripts/autopilot/phase_health_report.py
 check_python scripts/security/audit_repository.py
 
+if timeout 90s python3 scripts/maintenance/check_episodic_integrity.py --semantic --require-semantic; then
+  printf 'ok: episodic semantic integrity\n'
+else
+  printf 'failed: episodic semantic integrity\n' >&2
+  status=1
+fi
+
 if [[ -x scripts/security/audit_repository.py ]]; then
   scripts/security/audit_repository.py >/dev/null
 else

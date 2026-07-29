@@ -731,6 +731,7 @@ class TestMultiDimensionalCost:
 
 import numpy as np
 from orchestration.repl_memory.episodic_store import MemoryEntry
+from orchestration.repl_memory.embedder import hash_fallback_embedding
 
 
 def _make_memory(action: str, q_value: float = 0.5, memory_id: str = "m1") -> MemoryEntry:
@@ -1038,3 +1039,76 @@ class TestComputeSpoPlusAdjustment:
 
         adj = s._compute_spo_plus_adjustment(task, routing, reward=0.5, margin=1.0)
         assert adj == 0.0
+
+
+class TestExternalScoreIdentity:
+    def _candidate(self, *, objective: str, task_type: str = "chat") -> MemoryEntry:
+        return MemoryEntry(
+            id="candidate",
+            embedding=None,
+            action="frontdoor:direct",
+            action_type="routing",
+            context={"objective": objective, "task_type": task_type},
+            q_value=0.7,
+            similarity_score=0.99,
+        )
+
+    def test_high_similarity_different_identity_is_not_updated(self):
+        scorer = _scorer()
+        scorer.store.retrieve_by_similarity.return_value = [
+            self._candidate(objective="another task"),
+        ]
+        scorer.score_external_result(
+            "target task",
+            "frontdoor:direct",
+            1.0,
+            context={"task_type": "chat"},
+            embedding=np.ones(1024, dtype=np.float32),
+        )
+        scorer.store.update_q_value.assert_not_called()
+        scorer.store.store.assert_called_once()
+
+    def test_exact_normalized_identity_is_updated(self):
+        scorer = _scorer()
+        scorer.store.retrieve_by_similarity.return_value = [
+            self._candidate(objective="target   task", task_type=" chat "),
+        ]
+        scorer.score_external_result(
+            " target task ",
+            " frontdoor:direct ",
+            1.0,
+            context={"task_type": "chat"},
+            embedding=np.ones(1024, dtype=np.float32),
+        )
+        scorer.store.update_q_value.assert_called_once()
+        scorer.store.store.assert_not_called()
+
+    def test_fallback_embedding_cannot_update_or_create(self):
+        scorer = _scorer()
+        scorer.store.retrieve_by_similarity.return_value = [
+            self._candidate(objective="target task"),
+        ]
+        fallback = hash_fallback_embedding("type:chat | objective:target task")
+        result = scorer.score_external_result(
+            "target task",
+            "frontdoor:direct",
+            1.0,
+            context={"task_type": "chat"},
+            embedding=fallback,
+        )
+        assert result == {"memories_updated": 0, "memories_created": 0}
+        scorer.store.update_q_value.assert_not_called()
+        scorer.store.store.assert_not_called()
+
+    def test_fallback_with_null_task_type_cannot_update_or_create(self):
+        scorer = _scorer()
+        fallback = hash_fallback_embedding("type:chat | objective:target task")
+        result = scorer.score_external_result(
+            "target task",
+            "frontdoor:direct",
+            1.0,
+            context={"task_type": None},
+            embedding=fallback,
+        )
+        assert result == {"memories_updated": 0, "memories_created": 0}
+        scorer.store.retrieve_by_similarity.assert_not_called()
