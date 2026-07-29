@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 status=0
+REPO_PYTHON="$ROOT/.venv/bin/python"
 
 check_file() {
   local path="$1"
@@ -49,7 +50,10 @@ check_python scripts/server/stack_health.py
 check_python scripts/autopilot/phase_health_report.py
 check_python scripts/security/audit_repository.py
 
-if timeout 90s python3 scripts/maintenance/check_episodic_integrity.py --semantic --require-semantic; then
+if [[ ! -x "$REPO_PYTHON" ]]; then
+  printf 'missing: repository Python %s for episodic semantic integrity\n' "$REPO_PYTHON" >&2
+  status=1
+elif timeout 90s "$REPO_PYTHON" scripts/maintenance/check_episodic_integrity.py --semantic --require-semantic; then
   printf 'ok: episodic semantic integrity\n'
 else
   printf 'failed: episodic semantic integrity\n' >&2
