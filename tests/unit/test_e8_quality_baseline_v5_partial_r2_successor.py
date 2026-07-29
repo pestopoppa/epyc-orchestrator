@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from contextlib import nullcontext
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -94,3 +95,183 @@ def test_successor_admission_uses_frontdoor_capacity_not_observer_regions(
     )
     assert proof["capacity"] == 3
     assert proof["held_global_regions"] == ["q3"]
+
+
+def _patch_successor_prewrite(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    plan: dict[str, object],
+) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", str(SUCCESSOR.V4.CONCURRENCY))
+    monkeypatch.setattr(SUCCESSOR, "build_plan", lambda _source: plan)
+    monkeypatch.setattr(
+        SUCCESSOR.V5,
+        "parse_args",
+        lambda _argv: SimpleNamespace(api_url="http://test", http_timeout_s=1),
+    )
+    monkeypatch.setattr(SUCCESSOR.RECOVERY, "_capture_recovery_claim", lambda _args: {})
+    monkeypatch.setattr(SUCCESSOR.V4, "runtime_binding", lambda _args: {})
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY,
+        "preflight_frontdoor_capacity",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY, "_instrument_identity", lambda _args: {}
+    )
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY,
+        "_load_vector",
+        lambda _root, name: (
+            {"questions": [{"qid": "q0"}]}
+            if name == "question_vector.T2.json"
+            else {"questions": [{"qid": "q0"}]}
+        ),
+    )
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY,
+        "_reconstruct_questions",
+        lambda *_args, **_kwargs: [{"qid": "q0"}],
+    )
+    monkeypatch.setattr(SUCCESSOR, "source_hashes", lambda _source: {})
+
+
+def test_successor_failure_after_output_creation_is_durably_aborted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+    plan = {
+        "failed_source_sha256": {},
+        "t1_core_id": "t1",
+    }
+    _patch_successor_prewrite(monkeypatch, plan=plan)
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY,
+        "_recovery_proposal",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("proposal fault")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="proposal fault"):
+        SUCCESSOR.execute(
+            SimpleNamespace(source_dir=source, output_dir=output, api_url="http://test")
+        )
+
+    abort = SUCCESSOR.V4.load_json(
+        output / SUCCESSOR.RECOVERY.ABORT_MARKER_NAME
+    )
+    assert abort["status"] == "terminal_aborted_no_admission"
+    assert abort["no_admission"] is True
+
+
+def test_successor_reaches_post_generation_shared_harvest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    (source / "source_snapshot").mkdir(parents=True)
+    (source / "generation_judge_traces.T2.r2.jsonl").write_text(
+        "", encoding="utf-8"
+    )
+    output = tmp_path / "output"
+    plan = {
+        "failed_source_sha256": {},
+        "failed_source_tree_sha256": "f" * 64,
+        "failed_watcher": {"eligibility": "excluded_audit_evidence"},
+        "successor_runner_sha256": "a" * 64,
+        "successor_watcher_path": "runtime_watch.r2.successor.jsonl",
+        "t1_core_id": "t1",
+        "generation_ordinals": [0],
+        "imported_generation_ordinals": [],
+    }
+    _patch_successor_prewrite(monkeypatch, plan=plan)
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY, "_recovery_proposal", lambda *_args, **_kwargs: {}
+    )
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY, "_bind_recovery_proposal", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY,
+        "_snapshot_source",
+        lambda *_args: source / "source_snapshot",
+    )
+    monkeypatch.setattr(SUCCESSOR, "_copy_failed_audit", lambda *_args: None)
+    monkeypatch.setattr(SUCCESSOR.V4, "load_jsonl", lambda _path: [])
+    monkeypatch.setattr(SUCCESSOR, "_rows", lambda _path: {})
+    monkeypatch.setattr(SUCCESSOR.RECOVERY, "_record", lambda *_args: None)
+    monkeypatch.setattr(SUCCESSOR.V4, "api_health", lambda *_args: {})
+    monkeypatch.setattr(SUCCESSOR.V4, "probe_url_mapping", lambda _health: {})
+
+    class Watcher:
+        fatal_error = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def sample(self) -> None:
+            pass
+
+        def active_load(self, **_kwargs):
+            return nullcontext()
+
+    monkeypatch.setattr(SUCCESSOR.V4, "RuntimeWatcher", Watcher)
+    monkeypatch.setattr(SUCCESSOR.V4, "require_clean_watcher", lambda _watcher: None)
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY, "_recover_saved_scorers", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY,
+        "_generate_with_watcher",
+        lambda *_args: ([], [], []),
+    )
+    monkeypatch.setattr(SUCCESSOR.V4, "response_rows", lambda *_args: [])
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY,
+        "_reconcile_generation_scorer_sidecar",
+        lambda *_args: None,
+    )
+    captured: dict[str, object] = {}
+
+    def harvest(path, watcher_path, rows, _journal, _questions, permitted):
+        captured.update(
+            {
+                "path": path,
+                "watcher_path": watcher_path,
+                "permitted": permitted,
+            }
+        )
+        rows[0] = {"response": {"qid": "q0"}}
+        return []
+
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY, "_harvest_generation_sidecar", harvest
+    )
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY, "_generation_targets", lambda *_args: []
+    )
+
+    def complete(root, *_args):
+        SUCCESSOR.RECOVERY._write_json(root / "r2_complete.json", {})
+
+    monkeypatch.setattr(SUCCESSOR.RECOVERY, "_complete_r2", complete)
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY, "_scorer_attempts_evidence", lambda *_args: {}
+    )
+    monkeypatch.setattr(
+        SUCCESSOR.RECOVERY, "_watcher_evidence", lambda *_args, **_kwargs: {}
+    )
+
+    assert SUCCESSOR.execute(
+        SimpleNamespace(source_dir=source, output_dir=output, api_url="http://test")
+    ) == output
+    assert captured["watcher_path"] == output / plan["successor_watcher_path"]
+    assert captured["permitted"] == {0}

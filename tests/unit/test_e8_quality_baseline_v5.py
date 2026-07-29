@@ -30,6 +30,200 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_durable_candidate_writer_marks_new_staging_and_published_namespaces(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "candidate"
+    staging = tmp_path / ".candidate.staging-fault"
+
+    @runner.durable_candidate_writer("fault_injection")
+    def fail(args: SimpleNamespace) -> None:
+        staging.mkdir()
+        output.mkdir()
+        raise RuntimeError("injected failure")
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        fail(SimpleNamespace(output_dir=output))
+    for namespace in (staging, output):
+        marker = json.loads((namespace / runner.ABORT_MARKER_NAME).read_text())
+        assert marker["schema"] == runner.ABORT_SCHEMA
+        assert marker["status"] == "aborted"
+        assert marker["writer"] == "fault_injection"
+        assert marker["error_class"] == "RuntimeError"
+
+
+def test_durable_candidate_writer_marks_false_terminal_result(tmp_path: Path) -> None:
+    output = tmp_path / "candidate"
+    staging = tmp_path / ".candidate.staging-false"
+
+    @runner.durable_candidate_writer("false_injection")
+    def fail(_args: SimpleNamespace) -> bool:
+        staging.mkdir()
+        return False
+
+    assert fail(SimpleNamespace(output_dir=output)) is False
+    marker = json.loads((staging / runner.ABORT_MARKER_NAME).read_text())
+    assert marker["status"] == "aborted"
+    assert marker["error"] == "false_injection returned non-success status False"
+
+
+def test_execute_marks_real_ineligible_staging_return(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "candidate"
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}\n")
+    watcher_rows = [
+        {
+            "started_at": "2026-07-28T00:00:00Z",
+            "finished_at": "2026-07-28T00:00:00Z",
+            "ok": True,
+        },
+        {
+            "started_at": "2026-07-28T00:00:05Z",
+            "finished_at": "2026-07-28T00:00:05Z",
+            "ok": True,
+        },
+    ]
+
+    class FakeThread:
+        alive = True
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+    class FakeWatcher:
+        def __init__(self, _args, _binding, path: Path, **_kwargs) -> None:
+            self.path = path
+            self._thread = FakeThread()
+            self.samples: list[dict] = []
+            self.fatal_error = None
+
+        def start(self) -> None:
+            return None
+
+        def active_load(self, **_kwargs):
+            return nullcontext()
+
+        def stop(self) -> list[dict]:
+            _jsonl(self.path, watcher_rows)
+            self.samples = watcher_rows
+            self._thread.alive = False
+            return self.samples
+
+    class FakeTower:
+        def __init__(self, **_kwargs) -> None:
+            self._question_artifact_dir = None
+
+    report = {
+        "blockers": [],
+        "preconditions": {
+            "file_sha256": {},
+            "health": {"ok": True, "payload_sha256": "health"},
+            "numeric_rerun": {},
+        },
+    }
+    monkeypatch.setattr(runner, "protocol_proposal", lambda _args: {})
+    monkeypatch.setattr(runner.V4, "prepare_report", lambda *_args, **_kwargs: report)
+    monkeypatch.setattr(runner.V4, "runtime_binding", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(runner.V4, "EvalTower", FakeTower)
+    monkeypatch.setattr(runner.V4, "probe_url_mapping", lambda _health: {})
+    monkeypatch.setattr(runner.V4, "RuntimeWatcher", FakeWatcher)
+    monkeypatch.setattr(runner.V4, "require_clean_watcher", lambda _watcher: None)
+    monkeypatch.setattr(
+        runner.V4,
+        "question_vector",
+        lambda _tower, *, tier, **_kwargs: (
+            [{"qid": f"q{tier}", "suite": "suite"}],
+            f"core-{tier}",
+        ),
+    )
+    monkeypatch.setattr(
+        runner.V4, "validate_source_vector_scorer_config", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        runner.V4, "apply_context_replacement_map", lambda _args, questions, **_kwargs: questions
+    )
+    monkeypatch.setattr(
+        runner.V4,
+        "public_vector",
+        lambda questions, *, tier, core_id, seed: {
+            "n": len(questions),
+            "tier": tier,
+            "core_id": core_id,
+            "seed": seed,
+        },
+    )
+    monkeypatch.setattr(
+        runner.V4,
+        "scoring_vector",
+        lambda questions, *, tier, core_id, seed: {
+            "questions": questions,
+            "tier": tier,
+            "core_id": core_id,
+            "seed": seed,
+        },
+    )
+    monkeypatch.setattr(runner.V4, "frontdoor_context_coverage", lambda *_args: {})
+    monkeypatch.setattr(runner.V4, "candidate_contract_from_proposal", lambda *_args: {})
+    monkeypatch.setattr(runner, "protocol_contract", lambda *_args: None)
+    monkeypatch.setattr(
+        runner,
+        "run_repetition_v5",
+        lambda *_args, tier, **_kwargs: (
+            {
+                "ts": "2026-07-28T00:00:00Z",
+                "q": 0.0,
+                "core_id": f"core-{tier}",
+            },
+            {
+                "error_classification": {"infrastructure": 1},
+                "n_results": 1,
+                "actual_eval_concurrency": [runner.V4.CONCURRENCY],
+                "response_vector_matches_input": True,
+                "per_suite_counts_match_input": True,
+                "runtime_binding_matches_pre": True,
+                "all_routes_frontdoor": True,
+                "sidecar_sha256": "0" * 64,
+                "judge_trace_sha256": "0" * 64,
+                "scoring_audit": {"matches": True},
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        runner.V4, "api_health", lambda *_args: {"ok": True, "payload_sha256": "health"}
+    )
+    monkeypatch.setattr(runner.V4, "file_fingerprints", lambda *_args: {})
+    monkeypatch.setattr(runner.V4, "immutable_paths", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(runner.V4, "numeric_rerun_status", lambda *_args: {})
+    monkeypatch.setattr(runner.V4, "load_json", lambda _path: {})
+    monkeypatch.setattr(runner, "validate_repetition_artifacts", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runner.V4, "build_evidence", lambda **_kwargs: ({}, {}))
+
+    result, status = runner.execute(
+        SimpleNamespace(
+            output_dir=output,
+            api_url="http://test",
+            http_timeout_s=1,
+            t1_n=1,
+            t2_n=1,
+            t1_core_id="core-1",
+            seed=42,
+            state_path=state_path,
+        )
+    )
+
+    assert status == 2
+    assert result["decision_grade"] is False
+    assert not output.exists()
+    staging = next(tmp_path.glob(".candidate.staging-*"))
+    marker = json.loads((staging / runner.ABORT_MARKER_NAME).read_text())
+    assert marker["status"] == "aborted"
+    assert marker["writer"] == "run_e8_quality_baseline_v5"
+    assert marker["error"] == "run_e8_quality_baseline_v5 returned non-success status 2"
+    assert json.loads((staging / "run_seal.json").read_text())["status"] == "failed"
+
+
 def _integrated_e8_pins(*, wrapper: Path | None = None, validator_wrapper: Path | None = None) -> dict[str, str]:
     """Pins used by the final wrapper's exact integration-source contract."""
     benchmark = INTEGRATED_E8_ROOT / "scripts/benchmark"
@@ -1344,6 +1538,101 @@ def test_validator_recomputes_raw_aggregates_from_response_ledgers(
     evidence.write_text(json.dumps(manifest) + "\n")
     _reseal_candidate(evidence, validator)
     with pytest.raises(ValueError, match="raw observation differs"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_response_suite_not_bound_to_fixed_vector(
+    tmp_path: Path,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_fixed_suite_test")
+    root = evidence.parent
+    response_path = root / "responses.T1.r1.jsonl"
+    pristine_path = root / "pristine_full_run.T1.r1" / response_path.name
+    responses = runner.V4.load_jsonl(response_path)
+    responses[0]["suite"] = ""
+    _jsonl(response_path, responses)
+    pristine_path.write_bytes(response_path.read_bytes())
+    report_path = root / "runner_report.json"
+    report = json.loads(report_path.read_text())
+    detail = report["observations"]["1"][0]
+    detail["response_sha256"] = validator.sha256_path(response_path)
+    detail["pristine_full_run"]["artifacts"][response_path.name]["sha256"] = (
+        validator.sha256_path(pristine_path)
+    )
+    report_path.write_text(json.dumps(report) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="fixed scoring vector"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+@pytest.mark.parametrize("timestamp", ["not-a-timestamp", "2026-07-01T00:00:00Z"])
+def test_validator_rejects_malformed_or_pre_e8_raw_timestamp(
+    tmp_path: Path,
+    timestamp: str,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator(
+        f"e8_v5_validator_raw_timestamp_{timestamp[:3]}_test"
+    )
+    root = evidence.parent
+    raw_path = root / "raw.T1.r1.json"
+    raw = json.loads(raw_path.read_text())
+    raw["ts"] = timestamp
+    raw_path.write_text(json.dumps(raw) + "\n")
+    summary_path = root / "summary.T1.json"
+    summary = json.loads(summary_path.read_text())
+    summary["observations"][0]["ts"] = timestamp
+    summary["observations"][0]["sha256"] = validator.sha256_path(raw_path)
+    summary_path.write_text(json.dumps(summary) + "\n")
+    manifest = json.loads(evidence.read_text())
+    manifest["source_records"][0]["sha256"] = validator.sha256_path(summary_path)
+    evidence.write_text(json.dumps(manifest) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="timestamp"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_external_symlink_in_sealed_tree(tmp_path: Path) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_external_symlink_test")
+    external = tmp_path / "external.json"
+    external.write_text("{}\n")
+    (evidence.parent / "external-alias.json").symlink_to(external)
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="symlink"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_durable_abort_marker(tmp_path: Path) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_abort_marker_test")
+    runner.V4.write_json(
+        evidence.parent / runner.ABORT_MARKER_NAME,
+        {
+            "schema": runner.ABORT_SCHEMA,
+            "status": "aborted",
+            "writer": "fault_injection",
+        },
+    )
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="abort marker"):
         validator.validate(
             evidence,
             expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),

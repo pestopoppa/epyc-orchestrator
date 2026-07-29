@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -12,6 +13,17 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 PATH = ROOT / "scripts/benchmark/final_c1_retry.py"
+REAL_ORIGINAL_RECEIPT = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+    "ratify_e8_final_c1_retry_amendment_20260728.json"
+)
+REAL_ORIGINAL_RATIFIER = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+    "ratify_e8_final_c1_retry_amendment_20260728.sh"
+)
+REAL_ORIGINAL_RECEIPT_SHA256 = (
+    "51aef2bd0431c8df5050f7985422d9712fc2d1494cfed1d7a3b1a54e5cab121e"
+)
 SPEC = importlib.util.spec_from_file_location("e8_final_c1_retry_test", PATH)
 assert SPEC is not None and SPEC.loader is not None
 RUNNER = importlib.util.module_from_spec(SPEC)
@@ -23,9 +35,12 @@ SPEC.loader.exec_module(RUNNER)
 def _clean_pinned_runtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    ratifier = tmp_path / "ratifier.sh"
-    ratifier.write_text("#!/bin/bash\n", encoding="utf-8")
-    monkeypatch.setattr(RUNNER, "CANONICAL_RATIFIER", ratifier)
+    original_ratifier = tmp_path / "original-ratifier.sh"
+    canonical_ratifier = tmp_path / "superseding-ratifier.sh"
+    original_ratifier.write_text("#!/bin/bash\n", encoding="utf-8")
+    canonical_ratifier.write_text("#!/bin/bash\n", encoding="utf-8")
+    monkeypatch.setattr(RUNNER, "ORIGINAL_RATIFIER", original_ratifier)
+    monkeypatch.setattr(RUNNER, "CANONICAL_RATIFIER", canonical_ratifier)
     monkeypatch.setattr(
         RUNNER,
         "_runtime_git_identity",
@@ -38,18 +53,26 @@ def _clean_pinned_runtime(
             "clean": True,
         },
     )
+    original_path = tmp_path / "original-receipt.json"
+    original_path.write_text(
+        json.dumps(_original_receipt(), sort_keys=True) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(RUNNER, "ORIGINAL_RECEIPT", original_path)
+    monkeypatch.setattr(
+        RUNNER, "ORIGINAL_RECEIPT_SHA256", RUNNER.sha256_path(original_path)
+    )
 
 
-def _receipt() -> dict:
+def _common_receipt(*, schema: str, attestation: str, ratifier: Path) -> dict:
     return {
-        "schema": RUNNER.RECEIPT_SCHEMA,
+        "schema": schema,
         "status": "ratified",
         "protocol_id": RUNNER.PROTOCOL_ID,
         "ratified_at": "2026-07-28T20:00:00Z",
-        "human_attestation": RUNNER.ATTESTATION,
+        "human_attestation": attestation,
         "amendment_script": {
-            "path": str(RUNNER.CANONICAL_RATIFIER),
-            "sha256": RUNNER.sha256_path(RUNNER.CANONICAL_RATIFIER),
+            "path": str(ratifier),
+            "sha256": RUNNER.sha256_path(ratifier),
         },
         "failed_race_evidence": {
             "namespace": str(RUNNER.SOURCE),
@@ -68,20 +91,6 @@ def _receipt() -> dict:
             "path": str(RUNNER.SOURCE),
             "tree_sha256": RUNNER.SOURCE_TREE_SHA256,
         },
-        "instrument": {
-            "repository": str(RUNNER.CANONICAL_REPOSITORY),
-            "commit": "a" * 40,
-            "tree": "b" * 40,
-            "ratifier_interpreter": "/usr/bin/python3",
-            "runner": {
-                "path": "scripts/benchmark/final_c1_retry.py",
-                "sha256": RUNNER.sha256_path(PATH),
-            },
-            "validator": {
-                "path": "scripts/benchmark/final_c1_validator.py",
-                "sha256": RUNNER.sha256_path(RUNNER.VALIDATOR_PATH),
-            },
-        },
         "authorization": RUNNER._receipt_contract(),
         "non_authorizations": {
             "no_inference_by_ratifier": True,
@@ -89,6 +98,46 @@ def _receipt() -> dict:
             "no_state_write": True,
         },
     }
+
+
+def _original_receipt() -> dict:
+    receipt = _common_receipt(
+        schema=RUNNER.ORIGINAL_RECEIPT_SCHEMA,
+        attestation=RUNNER.ORIGINAL_ATTESTATION,
+        ratifier=RUNNER.ORIGINAL_RATIFIER,
+    )
+    receipt["instrument"] = RUNNER._provenance_instrument(
+        commit=RUNNER.ORIGINAL_ORCH_COMMIT,
+        tree=RUNNER.ORIGINAL_ORCH_TREE,
+        runner_sha256=RUNNER.ORIGINAL_RUNNER_SHA256,
+    )
+    return receipt
+
+
+def _receipt() -> dict:
+    receipt = _common_receipt(
+        schema=RUNNER.RECEIPT_SCHEMA,
+        attestation=RUNNER.ATTESTATION,
+        ratifier=RUNNER.CANONICAL_RATIFIER,
+    )
+    receipt["supersedes"] = {
+        "path": str(RUNNER.ORIGINAL_RECEIPT),
+        "sha256": RUNNER.ORIGINAL_RECEIPT_SHA256,
+        "schema": RUNNER.ORIGINAL_RECEIPT_SCHEMA,
+        "human_attestation": RUNNER.ORIGINAL_ATTESTATION,
+    }
+    receipt["instrument"] = {
+        **RUNNER._provenance_instrument(
+            commit="a" * 40,
+            tree="b" * 40,
+            runner_sha256=RUNNER.sha256_path(PATH),
+        ),
+        "validator": {
+            "path": "scripts/benchmark/final_c1_validator.py",
+            "sha256": RUNNER.sha256_path(RUNNER.VALIDATOR_PATH),
+        },
+    }
+    return receipt
 
 
 def _write_receipt(path: Path, receipt: dict | None = None) -> Path:
@@ -103,6 +152,49 @@ def test_exact_failed_race_source_is_the_only_admitted_source() -> None:
     assert len(validated["hashes"]) == 806
     assert RUNNER.canonical_hash(validated["hashes"]) == RUNNER.SOURCE_TREE_SHA256
     assert sorted(set(range(500)) - set(validated["journal"])) == [97, 279]
+
+
+@pytest.mark.skipif(
+    not REAL_ORIGINAL_RECEIPT.is_file() or not RUNNER.SOURCE.is_dir(),
+    reason="real durable receipt or sealed failed-race evidence unavailable",
+)
+def test_real_durable_receipt_builds_read_only_plan_and_cli_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(RUNNER, "ORIGINAL_RECEIPT", REAL_ORIGINAL_RECEIPT)
+    monkeypatch.setattr(RUNNER, "ORIGINAL_RATIFIER", REAL_ORIGINAL_RATIFIER)
+    monkeypatch.setattr(
+        RUNNER, "ORIGINAL_RECEIPT_SHA256", REAL_ORIGINAL_RECEIPT_SHA256
+    )
+
+    plan = RUNNER.build_plan(RUNNER.SOURCE, REAL_ORIGINAL_RECEIPT)
+    assert plan["execution_authorized"] is False
+    assert plan["amendment_receipt"]["schema"] == RUNNER.ORIGINAL_RECEIPT_SCHEMA
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(PATH),
+            "--plan",
+            "--amendment-receipt",
+            str(REAL_ORIGINAL_RECEIPT),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    cli_plan = json.loads(result.stdout)
+    assert cli_plan["execution_authorized"] is False
+    assert cli_plan["amendment_receipt"]["sha256"] == REAL_ORIGINAL_RECEIPT_SHA256
+
+
+def test_original_receipt_cannot_authorize_execution() -> None:
+    with pytest.raises(ValueError, match="superseding receipt is required"):
+        RUNNER.validate_receipt(
+            RUNNER.ORIGINAL_RECEIPT, require_execution=True
+        )
 
 
 def test_source_alias_and_unreviewed_namespace_are_rejected(tmp_path: Path) -> None:
@@ -272,6 +364,7 @@ def _timeout(ordinal: int) -> tuple[dict, dict]:
             "error_detail": "timed out",
             "tokens_generated": 0,
             "latency_ms": 300100,
+            "failure": dict(RUNNER.TIMEOUT_FAILURE),
         },
     }
     return response, sidecar
@@ -301,6 +394,7 @@ def _run_schedule(
     attempts, sidecars, failure = RUNNER._collect_schedule(
         output=tmp_path,
         watcher=object(),
+        watcher_path=tmp_path / "runtime_watch.jsonl",
         runner_args=SimpleNamespace(),
         questions=questions,
         original_sidecars={97: {}, 279: {}},
@@ -343,6 +437,7 @@ def test_non_timeout_failure_is_instrument_error_not_terminal_disposition(
 ) -> None:
     response, sidecar = _timeout(97)
     sidecar["result"]["error_detail"] = "connection reset"
+    sidecar["result"].pop("failure")
     with pytest.raises(RuntimeError, match="outside the ratified timeout"):
         _run_schedule(
             tmp_path,
@@ -350,6 +445,20 @@ def test_non_timeout_failure_is_instrument_error_not_terminal_disposition(
             {97: (response, sidecar), 279: _clean(279)},
         )
     assert not (tmp_path / RUNNER.TERMINAL_NAME).exists()
+
+
+def test_structured_timeout_is_wording_stable_and_unknown_code_fails_closed() -> None:
+    _response, sidecar = _timeout(97)
+    sidecar["result"]["error_detail"] = "request deadline exceeded"
+    question = {"qid": RUNNER.RETRY_QIDS[0]}
+    assert RUNNER._terminal_timeout(sidecar, 97, question)
+
+    sidecar["result"]["failure"]["code"] = "transport_failure"
+    assert not RUNNER._terminal_timeout(sidecar, 97, question)
+
+    sidecar["result"].pop("failure")
+    sidecar["result"]["error_detail"] = "timed out"
+    assert not RUNNER._terminal_timeout(sidecar, 97, question)
 
 
 def test_cli_exposes_no_timeout_or_concurrency_override() -> None:
@@ -365,9 +474,11 @@ def test_cli_exposes_no_timeout_or_concurrency_override() -> None:
 
 
 def _focused_sidecar_rows(*, label: str, qid: str) -> list[dict]:
+    batch_id = "focused-batch"
     return [
         {
             "row_type": "batch_start",
+            "eval_batch_id": batch_id,
             "label": label,
             "requested_n": 1,
             "concurrency": 1,
@@ -375,19 +486,47 @@ def _focused_sidecar_rows(*, label: str, qid: str) -> list[dict]:
         },
         {
             "row_type": "question_result",
+            "eval_batch_id": batch_id,
             "label": label,
             "requested_n": 1,
             "ordinal": 0,
+            "started_at_s": 1785196801.0,
+            "ended_at_s": 1785196802.0,
             "result": {"qid": qid},
         },
         {
             "row_type": "batch_complete",
+            "eval_batch_id": batch_id,
             "label": label,
             "requested_n": 1,
             "completed_n": 1,
             "complete": True,
         },
     ]
+
+
+def _focused_watcher(path: Path) -> Path:
+    path.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in (
+                {
+                    "ok": True,
+                    "active_load": {"tier": 2, "repetition": 2},
+                    "started_at": "2026-07-28T00:00:00Z",
+                    "finished_at": "2026-07-28T00:00:00Z",
+                },
+                {
+                    "ok": True,
+                    "active_load": {"tier": 2, "repetition": 2},
+                    "started_at": "2026-07-28T00:00:05Z",
+                    "finished_at": "2026-07-28T00:00:05Z",
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 def test_focused_sidecar_is_discovered_by_validated_content(tmp_path: Path) -> None:
@@ -398,7 +537,12 @@ def test_focused_sidecar_is_discovered_by_validated_content(tmp_path: Path) -> N
         "".join(json.dumps(row) + "\n" for row in _focused_sidecar_rows(label=label, qid=qid)),
         encoding="utf-8",
     )
-    selected, row = RUNNER._discover_focused_sidecar(tmp_path, label=label, qid=qid)
+    selected, row = RUNNER._discover_focused_sidecar(
+        tmp_path,
+        watcher_path=_focused_watcher(tmp_path / "watcher.jsonl"),
+        label=label,
+        qid=qid,
+    )
     assert selected == path
     assert row["result"]["qid"] == qid
 
@@ -412,7 +556,12 @@ def test_focused_sidecar_rejects_ambiguous_or_wrong_contract(tmp_path: Path) -> 
         "".join(json.dumps(row) + "\n" for row in wrong), encoding="utf-8"
     )
     with pytest.raises(ValueError, match="exactly one"):
-        RUNNER._discover_focused_sidecar(tmp_path, label=label, qid=qid)
+        RUNNER._discover_focused_sidecar(
+            tmp_path,
+            watcher_path=_focused_watcher(tmp_path / "watcher.jsonl"),
+            label=label,
+            qid=qid,
+        )
 
     rows = _focused_sidecar_rows(label=label, qid=qid)
     for name in ("first", "second"):
@@ -420,4 +569,9 @@ def test_focused_sidecar_rejects_ambiguous_or_wrong_contract(tmp_path: Path) -> 
             "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
         )
     with pytest.raises(ValueError, match="exactly one"):
-        RUNNER._discover_focused_sidecar(tmp_path, label=label, qid=qid)
+        RUNNER._discover_focused_sidecar(
+            tmp_path,
+            watcher_path=_focused_watcher(tmp_path / "watcher.jsonl"),
+            label=label,
+            qid=qid,
+        )

@@ -678,6 +678,7 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     V4.write_text(path, "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
 
 
+@V5.durable_candidate_writer("resume_e8_quality_baseline_v5")
 def execute(args: argparse.Namespace) -> Path:
     """Publish a canonical six-observation v5 bundle from the interrupted run.
 

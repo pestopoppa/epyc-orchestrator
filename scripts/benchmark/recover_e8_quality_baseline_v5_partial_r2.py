@@ -14,6 +14,7 @@ import argparse
 from collections import Counter
 from datetime import datetime
 import fcntl
+import functools
 import hashlib
 import importlib.util
 import itertools
@@ -40,6 +41,8 @@ EXPECTED_SAVED_DISPOSITIONS = Counter({"reuse": 59, "regenerate": 17, "rescore":
 EXPECTED_GENERATION_N = 438
 RACE_LOST_PREFIX = "[ERROR: placement timeout role=frontdoor reason=race_lost holders="
 SCORER_UNAVAILABLE_PREFIX = "scoring_unavailable:"
+ABORT_MARKER_NAME = "writer_abort.json"
+ABORT_SCHEMA = "epyc.e8_quality_writer_abort.v1"
 
 
 def _load_v5() -> Any:
@@ -451,6 +454,49 @@ def _write_json(path: Path, value: Any) -> None:
     V4.fsync_dir(path.parent)
 
 
+def record_durable_abort(output: Path, *, writer: str, error: BaseException) -> Path:
+    error_text = f"{type(error).__module__}.{type(error).__qualname__}:{error}"
+    marker = output / ABORT_MARKER_NAME
+    _write_json(
+        marker,
+        {
+            "schema": ABORT_SCHEMA,
+            "status": "terminal_aborted_no_admission",
+            "writer": writer,
+            "error_type": f"{type(error).__module__}.{type(error).__qualname__}",
+            "error_sha256": hashlib.sha256(error_text.encode()).hexdigest(),
+            "recorded_at": V4.utc_now(),
+            "no_auto_retry": True,
+            "no_admission": True,
+        },
+    )
+    return marker
+
+
+def durable_output_writer(writer: str) -> Any:
+    """Durably terminalize a namespace created by a failed writer invocation."""
+
+    def decorate(function: Any) -> Any:
+        @functools.wraps(function)
+        def wrapped(args: argparse.Namespace) -> Any:
+            output = args.output_dir.absolute()
+            existed_before = output.exists() or output.is_symlink()
+            try:
+                return function(args)
+            except BaseException as exc:
+                if (
+                    not existed_before
+                    and output.is_dir()
+                    and not output.is_symlink()
+                ):
+                    record_durable_abort(output, writer=writer, error=exc)
+                raise
+
+        return wrapped
+
+    return decorate
+
+
 def _snapshot_source(source: Path, output: Path, plan: dict[str, Any]) -> Path:
     snapshot = output / "source_snapshot"
     binding = snapshot / "source_binding.json"
@@ -652,6 +698,10 @@ def _validate_generation_sidecar_envelope(
     path: Path,
     watcher_path: Path,
     permitted: set[int],
+    *,
+    expected_label: str = "e8-t2-r2-recovery",
+    expected_concurrency: int = V4.CONCURRENCY,
+    expected_load: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -664,16 +714,35 @@ def _validate_generation_sidecar_envelope(
     if not question_rows:
         return []
     starts: dict[str, dict[str, Any]] = {}
+    completes: dict[str, dict[str, Any]] = {}
     for row in parsed:
-        if not isinstance(row, dict) or row.get("row_type") != "batch_start":
+        if not isinstance(row, dict):
+            continue
+        if row.get("row_type") == "batch_complete":
+            batch_id = row.get("eval_batch_id")
+            if (
+                not isinstance(batch_id, str)
+                or not batch_id
+                or batch_id in completes
+                or row.get("label") != expected_label
+                or not isinstance(row.get("requested_n"), int)
+                or isinstance(row.get("requested_n"), bool)
+                or not isinstance(row.get("completed_n"), int)
+                or isinstance(row.get("completed_n"), bool)
+                or row.get("complete") is not True
+            ):
+                raise ValueError("partial-r2 generation batch completion is invalid")
+            completes[batch_id] = row
+            continue
+        if row.get("row_type") != "batch_start":
             continue
         batch_id = row.get("eval_batch_id")
         if (
             not isinstance(batch_id, str)
             or not batch_id
             or batch_id in starts
-            or row.get("label") != "e8-t2-r2-recovery"
-            or row.get("concurrency") != V4.CONCURRENCY
+            or row.get("label") != expected_label
+            or row.get("concurrency") != expected_concurrency
             or not isinstance(row.get("requested_n"), int)
             or isinstance(row.get("requested_n"), bool)
             or not 0 < row["requested_n"] <= len(permitted)
@@ -682,10 +751,19 @@ def _validate_generation_sidecar_envelope(
         starts[batch_id] = row
     if not starts:
         raise ValueError("partial-r2 generation sidecar has no c3 batch identity")
+    if set(completes) != set(starts):
+        raise ValueError("partial-r2 generation sidecar lacks exact batch completion")
+    for batch_id, start in starts.items():
+        complete = completes[batch_id]
+        if (
+            complete["requested_n"] != start["requested_n"]
+            or complete["completed_n"] != start["requested_n"]
+        ):
+            raise ValueError("partial-r2 generation batch did not complete its requested rows")
     if not watcher_path.is_file() or watcher_path.is_symlink():
         raise ValueError("partial-r2 generation sidecar lacks watcher evidence")
     watcher = V4.load_jsonl(watcher_path)
-    expected_load = {"tier": TIER, "repetition": REPETITION}
+    expected_load = expected_load or {"tier": TIER, "repetition": REPETITION}
     active = [
         row
         for row in watcher
@@ -703,9 +781,11 @@ def _validate_generation_sidecar_envelope(
     active_start = min(_watcher_timestamp(row.get("started_at")) for row in active)
     active_end = max(_watcher_timestamp(row.get("finished_at")) for row in active)
     seen: set[int] = set()
+    rows_per_batch: dict[str, int] = {batch_id: 0 for batch_id in starts}
     for row in question_rows:
         ordinal = row.get("ordinal")
-        batch = starts.get(row.get("eval_batch_id"))
+        batch_id = row.get("eval_batch_id")
+        batch = starts.get(batch_id)
         started = row.get("started_at_s")
         ended = row.get("ended_at_s")
         if (
@@ -724,6 +804,10 @@ def _validate_generation_sidecar_envelope(
                 "partial-r2 generation row is not bound to its c3 batch and watcher"
             )
         seen.add(ordinal)
+        assert isinstance(batch_id, str)
+        rows_per_batch[batch_id] += 1
+    if any(rows_per_batch[batch_id] != start["requested_n"] for batch_id, start in starts.items()):
+        raise ValueError("partial-r2 generation batch row count differs from requested_n")
     return question_rows
 
 
@@ -734,9 +818,18 @@ def _harvest_generation_sidecar(
     journal: Path,
     questions: list[dict[str, Any]],
     permitted: set[int],
+    *,
+    expected_label: str = "e8-t2-r2-recovery",
+    expected_concurrency: int = V4.CONCURRENCY,
 ) -> list[dict[str, Any]]:
     failures: list[dict[str, Any]] = []
-    for row in _validate_generation_sidecar_envelope(path, watcher_path, permitted):
+    for row in _validate_generation_sidecar_envelope(
+        path,
+        watcher_path,
+        permitted,
+        expected_label=expected_label,
+        expected_concurrency=expected_concurrency,
+    ):
         ordinal = row.get("ordinal")
         assert isinstance(ordinal, int)
         response = _response_from_sidecar(row, questions[ordinal])
@@ -1164,6 +1257,7 @@ def _complete_r2(
     )
 
 
+@durable_output_writer("recover_e8_quality_baseline_v5_partial_r2")
 def execute(args: argparse.Namespace) -> Path:
     source = args.source_dir
     plan = build_plan(source)

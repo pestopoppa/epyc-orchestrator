@@ -52,6 +52,25 @@ def _watcher(started_at: str, *, binding: str = "a") -> dict:
     }
 
 
+def test_copy_tree_rejects_destination_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    artifact = source / "artifact.json"
+    artifact.write_text("sealed\n")
+    expected = {"artifact.json": RETRY.sha256_path(artifact)}
+    real_copy = RETRY.shutil.copyfile
+
+    def corrupt_copy(origin: Path, destination: Path) -> None:
+        real_copy(origin, destination)
+        Path(destination).write_text("corrupt\n")
+
+    monkeypatch.setattr(RETRY.shutil, "copyfile", corrupt_copy)
+    with pytest.raises(ValueError, match="copy differs"):
+        RETRY._copy_tree(source, tmp_path / "destination", expected)
+
+
 def test_exact_race_lost_requires_zero_tokens_and_error_sentinel() -> None:
     assert RETRY._race_lost(_row(), QUESTION)
     assert not RETRY._race_lost(_row(tokens=1), QUESTION)
@@ -236,6 +255,14 @@ def test_frozen_c1_source_is_directly_admitted_without_a_root_transition() -> No
         plan["mixed_tail_repair"]["terminalization_transition"]["sha256"]
         == "227bbd841f8fc3a4a58f2ef35d6452b63f7c34e21de4e75a407f21413d4409c6"
     )
+
+
+@pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
+def test_copied_mixed_predecessor_cannot_enter_future_execution(tmp_path: Path) -> None:
+    copied = tmp_path / "copied-mixed-predecessor"
+    shutil.copytree(FAILED_C1_SOURCE, copied)
+    with pytest.raises(ValueError, match="exact historical artifact"):
+        RETRY.build_plan(copied, FAILED_C1_TREE_SHA256)
 
 
 @pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")

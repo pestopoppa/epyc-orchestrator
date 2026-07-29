@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import sys
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,6 +40,140 @@ def _write_json(path: Path, value: object) -> None:
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
+
+
+def _execution_args(
+    intermediate: Path,
+    *,
+    expected_tree: str | None = None,
+    expected_runner: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        recovery_dir=intermediate,
+        expected_intermediate_namespace=intermediate,
+        expected_intermediate_tree_sha256=(
+            expected_tree or finalizer._intermediate_tree_sha256(intermediate)
+        ),
+        expected_finalizer_sha256=expected_runner or _sha(FINALIZER_PATH),
+    )
+
+
+def test_direct_finalizer_rejects_self_hash_before_any_staging(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "candidate"
+    args = SimpleNamespace(
+        expected_finalizer_sha256="0" * 64,
+        recovery_dir=tmp_path / "missing",
+        expected_intermediate_namespace=tmp_path / "missing",
+        expected_intermediate_tree_sha256="0" * 64,
+        source_dir=tmp_path / "missing-source",
+        output_dir=output,
+    )
+    with pytest.raises(ValueError, match="self SHA-256"):
+        finalizer.execute(args)
+    assert not output.exists()
+    assert list(tmp_path.glob(".candidate.staging-*")) == []
+
+
+def test_direct_finalizer_rejects_alternate_schema_namespace_and_tree(
+    tmp_path: Path,
+) -> None:
+    intermediate = tmp_path / "intermediate"
+    intermediate.mkdir()
+    _write_json(
+        intermediate / "partial_r2_plan.json",
+        {"schema": finalizer.SUCCESSOR.PLAN_SCHEMA},
+    )
+    with pytest.raises(ValueError, match="only the expected final-c1"):
+        finalizer._execution_contract(_execution_args(intermediate))
+
+    _write_json(
+        intermediate / "partial_r2_plan.json",
+        {"schema": finalizer.EXPECTED_INTERMEDIATE_SCHEMA},
+    )
+    sealed_tree = finalizer._intermediate_tree_sha256(intermediate)
+    (intermediate / "late-sidecar.jsonl").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="namespace or tree"):
+        finalizer._execution_contract(
+            _execution_args(intermediate, expected_tree=sealed_tree)
+        )
+
+    alias = tmp_path / "intermediate-alias"
+    alias.symlink_to(intermediate, target_is_directory=True)
+    with pytest.raises(ValueError, match="namespace is not exact"):
+        finalizer._execution_contract(
+            SimpleNamespace(
+                recovery_dir=alias,
+                expected_intermediate_namespace=intermediate,
+                expected_intermediate_tree_sha256=(
+                    finalizer._intermediate_tree_sha256(intermediate)
+                ),
+                expected_finalizer_sha256=_sha(FINALIZER_PATH),
+            )
+        )
+
+
+def test_finalizer_fault_after_staging_creation_is_quarantined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    recovery = tmp_path / "recovery"
+    source.mkdir()
+    recovery.mkdir()
+    output = tmp_path / "candidate"
+    contract = {
+        "finalizer": {"path": str(FINALIZER_PATH), "sha256": _sha(FINALIZER_PATH)},
+        "intermediate": {
+            "schema": finalizer.EXPECTED_INTERMEDIATE_SCHEMA,
+            "namespace": str(recovery),
+            "tree_sha256": "a" * 64,
+        },
+    }
+    monkeypatch.setattr(
+        finalizer, "_execution_contract", lambda _args: (contract, recovery)
+    )
+    monkeypatch.setattr(finalizer, "build_plan", lambda _source: {"sealed": True})
+    monkeypatch.setattr(
+        finalizer,
+        "validate_intermediate",
+        lambda _path: {"plan": {"schema": finalizer.EXPECTED_INTERMEDIATE_SCHEMA}},
+    )
+    monkeypatch.setattr(
+        finalizer.V5,
+        "parse_args",
+        lambda _argv: SimpleNamespace(),
+    )
+    monkeypatch.setattr(finalizer.V5, "protocol_proposal", lambda _args: {})
+    monkeypatch.setattr(
+        finalizer.V4,
+        "prepare_report",
+        lambda _args, **_kwargs: {"blockers": []},
+    )
+    captured: dict[str, object] = {}
+
+    def fail_after_plan(_path: Path, value: object) -> None:
+        captured["plan"] = value
+        raise RuntimeError("fault after staging creation")
+
+    monkeypatch.setattr(finalizer.RESUME, "write_json_create", fail_after_plan)
+    args = SimpleNamespace(
+        source_dir=source,
+        recovery_dir=recovery,
+        output_dir=output,
+        api_url="http://test",
+    )
+    with pytest.raises(RuntimeError, match="fault after staging"):
+        finalizer.execute(args)
+    assert not output.exists()
+    quarantines = list(tmp_path.glob(".candidate.aborted-*"))
+    assert len(quarantines) == 1
+    abort = json.loads(
+        (quarantines[0] / finalizer.RECOVERY.ABORT_MARKER_NAME).read_text()
+    )
+    assert abort["status"] == "terminal_aborted_no_admission"
+    assert abort["no_admission"] is True
+    assert captured["plan"]["finalizer_contract"] == contract
 
 
 def _context(tmp_path: Path) -> tuple[dict, dict]:
@@ -1208,6 +1343,21 @@ def test_install_recovered_r2_rejects_mutated_partial_source_file(tmp_path: Path
         finalizer._install_recovered_r2(
             {"root": tmp_path / "recovered"}, staging, tmp_path / "published", object()
         )
+
+
+def test_copy_file_rejects_faulty_destination_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_text("sealed\n")
+
+    def corrupt_write(path: Path, _payload: bytes) -> None:
+        path.write_text("corrupt\n")
+
+    monkeypatch.setattr(finalizer.V5, "write_bytes_create", corrupt_write)
+    with pytest.raises(ValueError, match="copy differs"):
+        finalizer._copy_file(source, destination)
 
 
 def test_validate_intermediate_rejects_lexical_symlink(tmp_path: Path) -> None:

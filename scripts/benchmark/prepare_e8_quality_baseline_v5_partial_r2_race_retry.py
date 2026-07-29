@@ -42,6 +42,13 @@ COMPLETE_STATUS = "intermediate_r2_race_retry_complete"
 N = 500
 OUTER_TIMEOUT_TOLERANCE_S = 0.5
 OUTER_TIMEOUT_LATENCY_TOLERANCE_MS = 500.0
+HISTORICAL_MIXED_PREDECESSOR = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+    "e8_quality_baseline_v5_partial_r2_mixed_tail_c1_successor_20260728T194407Z"
+)
+HISTORICAL_MIXED_PREDECESSOR_TREE_SHA256 = (
+    "4b7e66bec01c4eb2f65e10b75b9b1219ff74afda79f02873972194eefca2e286"
+)
 
 
 def _load(path: Path, name: str) -> Any:
@@ -697,6 +704,13 @@ def build_plan(source_dir: Path, expected_source_tree_sha256: str) -> dict[str, 
     if any(not (root / item).is_file() for item in required):
         raise ValueError("race-retry predecessor lacks required terminal evidence")
     predecessor = V4.load_json(root / "partial_r2_plan.json")
+    if predecessor.get("mixed_tail_repair") is not None and (
+        root != HISTORICAL_MIXED_PREDECESSOR
+        or expected_source_tree_sha256 != HISTORICAL_MIXED_PREDECESSOR_TREE_SHA256
+    ):
+        raise ValueError(
+            "race-retry mixed-tail compatibility is restricted to the exact historical artifact"
+        )
     categories = ("reuse_ordinals", "inherited_scorer_replay_ordinals", "imported_generation_ordinals", "scorer_replay_ordinals", "generation_ordinals")
     values = [predecessor.get(name) for name in categories]
     if (
@@ -773,6 +787,15 @@ def _copy_tree(source: Path, destination: Path, hashes: dict[str, str]) -> None:
             raise ValueError("race-retry predecessor changed while copying audit evidence")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(origin, target)
+        if sha256_path(origin) != digest or sha256_path(target) != digest:
+            raise ValueError("race-retry audit-evidence copy differs from its sealed source")
+    copied = {
+        path.relative_to(destination).as_posix(): sha256_path(path)
+        for path in sorted(destination.rglob("*"))
+        if path.is_file() and not path.is_symlink()
+    }
+    if copied != hashes:
+        raise ValueError("race-retry audit-evidence copy has a non-exact artifact set")
     RECOVERY._write_json(destination / "source_binding.json", {"source_sha256": hashes, "source_tree_sha256": canonical_hash(hashes)})
 
 
@@ -803,19 +826,27 @@ def _authoritative_saved_responses(
     return saved
 
 
-def _harvest_retry(path: Path, rows: dict[int, dict[str, Any]], journal: Path, questions: list[dict[str, Any]], permitted: set[int]) -> list[dict[str, Any]]:
-    failures: list[dict[str, Any]] = []
-    for ordinal, row in _rows(path).items():
-        if ordinal not in permitted:
-            raise ValueError("race-retry generated an unexpected ordinal")
-        response = RECOVERY._response_from_sidecar(row, questions[ordinal])
-        if not V5.validate_clean_sidecar_result(response, row, qid=response["qid"]):
-            failures.append({"ordinal": ordinal, "sidecar_sha256": canonical_hash(row)})
-            continue
-        RECOVERY._record(journal, rows, ordinal, response, "generation")
-    return failures
+def _harvest_retry(
+    path: Path,
+    watcher_path: Path,
+    rows: dict[int, dict[str, Any]],
+    journal: Path,
+    questions: list[dict[str, Any]],
+    permitted: set[int],
+) -> list[dict[str, Any]]:
+    return RECOVERY._harvest_generation_sidecar(
+        path,
+        watcher_path,
+        rows,
+        journal,
+        questions,
+        permitted,
+    )
 
 
+@RECOVERY.durable_output_writer(
+    "prepare_e8_quality_baseline_v5_partial_r2_race_retry"
+)
 def execute(args: argparse.Namespace) -> Path:
     output = args.output_dir.absolute()
     if output.exists() or output.is_symlink():
@@ -873,7 +904,14 @@ def execute(args: argparse.Namespace) -> Path:
     evidence = RECOVERY._watcher_evidence(watcher_path, proposal, claim_before=claim, claim_after=claim_after)
     fresh = V4.response_rows(results, execution)
     RECOVERY._reconcile_generation_scorer_sidecar(output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl", fresh, execution, replayed)
-    failures = _harvest_retry(output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl", rows, journal_path, questions, set(persisted_plan["race_retry_ordinals"]))
+    failures = _harvest_retry(
+        output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl",
+        watcher_path,
+        rows,
+        journal_path,
+        questions,
+        set(persisted_plan["race_retry_ordinals"]),
+    )
     if failures or set(persisted_plan["race_retry_ordinals"]) - set(rows):
         if failures:
             RECOVERY._record_failed_generation_attempts(output, failures)
@@ -884,6 +922,11 @@ def execute(args: argparse.Namespace) -> Path:
     if "mixed_tail_repair" in persisted_plan:
         marker["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
     RECOVERY._write_json(output / "r2_complete.json", marker)
+    if (
+        source_hashes(base) != persisted_plan["source_sha256"]
+        or source_hashes(source) != persisted_plan["predecessor_sha256"]
+    ):
+        raise ValueError("race-retry immutable source changed during collection")
     return output
 
 
