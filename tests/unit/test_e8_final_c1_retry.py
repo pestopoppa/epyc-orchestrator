@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import copy
 import importlib.util
 import json
@@ -696,6 +697,34 @@ def test_cli_exposes_no_timeout_or_concurrency_override() -> None:
                 "301",
             ]
         )
+
+
+def test_completion_metadata_is_passed_to_the_single_recovery_write() -> None:
+    tree = ast.parse(PATH.read_text())
+    execute = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "execute"
+    )
+    complete = next(
+        node
+        for node in ast.walk(execute)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_complete_r2"
+    )
+    assert any(keyword.arg == "completion_context" for keyword in complete.keywords)
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_write_json"
+        and node.args
+        and isinstance(node.args[0], ast.BinOp)
+        and isinstance(node.args[0].op, ast.Div)
+        and isinstance(node.args[0].right, ast.Constant)
+        and node.args[0].right.value == "r2_complete.json"
+        for node in ast.walk(execute)
+    )
 
 
 def test_execute_passes_the_explicit_amended_c1_capacity_contract(

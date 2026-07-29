@@ -259,8 +259,16 @@ def test_successor_reaches_post_generation_shared_harvest(
         SUCCESSOR.RECOVERY, "_generation_targets", lambda *_args: []
     )
 
-    def complete(root, *_args):
-        SUCCESSOR.RECOVERY._write_json(root / "r2_complete.json", {})
+    def complete(root, *_args, completion_context=None):
+        assert completion_context == {
+            "status": "intermediate_r2_successor_complete",
+            "watcher": {},
+            "claim": {},
+            "scorer_attempts": {},
+            "scorer_attempts_sha256": None,
+            "failed_watcher": plan["failed_watcher"],
+        }
+        SUCCESSOR.RECOVERY._write_json(root / "r2_complete.json", completion_context)
 
     monkeypatch.setattr(SUCCESSOR.RECOVERY, "_complete_r2", complete)
     monkeypatch.setattr(
