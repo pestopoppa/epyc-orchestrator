@@ -595,6 +595,73 @@ def test_source_hashes_rejects_special_files(tmp_path: Path) -> None:
         COMPLETION.source_hashes(source)
 
 
+def test_historical_receipt_binds_source_producer_not_current_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipt_path = tmp_path / "receipt.json"
+    historical_runner = "1" * 64
+    historical_helper = "2" * 64
+    _write_json(
+        receipt_path,
+        {
+            "schema": COMPLETION.FINAL_C1.RECEIPT_SCHEMA,
+            "status": "ratified",
+            "human_attestation": COMPLETION.FINAL_C1.ATTESTATION,
+            "authorization": COMPLETION.FINAL_C1._receipt_contract(),
+            "non_authorizations": {
+                "no_inference_by_ratifier": True,
+                "no_lineup_mutation": True,
+                "no_state_write": True,
+            },
+            "instrument": {
+                "commit": "historical-commit",
+                "runner": {
+                    "path": "scripts/benchmark/final_c1_retry.py",
+                    "sha256": historical_runner,
+                },
+                "recovery_helper": {
+                    "path": (
+                        "scripts/benchmark/"
+                        "recover_e8_quality_baseline_v5_partial_r2.py"
+                    ),
+                    "sha256": historical_helper,
+                },
+            },
+        },
+    )
+    reference = {
+        "path": str(receipt_path),
+        "schema": COMPLETION.FINAL_C1.RECEIPT_SCHEMA,
+        "sha256": COMPLETION.sha256_path(receipt_path),
+    }
+    plan = {
+        "amendment_receipt": reference,
+        "retry_runner_sha256": historical_runner,
+    }
+    proposal = {
+        "instrument": {
+            "commit": "historical-commit",
+            "runner_sha256": historical_helper,
+            "measurement_source_sha256": {
+                (
+                    "/historical/scripts/benchmark/"
+                    "recover_e8_quality_baseline_v5_partial_r2.py"
+                ): historical_helper,
+            },
+        }
+    }
+    monkeypatch.setattr(
+        COMPLETION.FINAL_C1,
+        "CANONICAL_RECEIPT",
+        receipt_path,
+    )
+
+    assert COMPLETION._source_receipt_is_bound(plan, proposal) == reference
+    assert historical_helper != COMPLETION.sha256_path(
+        COMPLETION.FINAL_C1.RECOVERY_PATH
+    )
+
+
 def test_aborted_source_rejects_unbound_writer_abort(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
