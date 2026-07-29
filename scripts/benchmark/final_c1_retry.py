@@ -25,13 +25,21 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
 CANONICAL_REPOSITORY = Path("/mnt/raid0/llm/epyc-orchestrator")
-CANONICAL_RECEIPT = Path(
+ORIGINAL_RECEIPT = Path(
     "/mnt/raid0/llm/epyc-root/artifacts/operator/"
     "ratify_e8_final_c1_retry_amendment_20260728.json"
 )
-CANONICAL_RATIFIER = Path(
+ORIGINAL_RATIFIER = Path(
     "/mnt/raid0/llm/epyc-root/artifacts/operator/"
     "ratify_e8_final_c1_retry_amendment_20260728.sh"
+)
+CANONICAL_RECEIPT = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+    "ratify_e8_final_c1_retry_superseding_20260729.json"
+)
+CANONICAL_RATIFIER = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+    "ratify_e8_final_c1_retry_superseding_20260729.sh"
 )
 RACE_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
 RECOVERY_PATH = ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
@@ -48,8 +56,48 @@ PLAN_SCHEMA = "epyc.e8_quality_v5_partial_r2_final_c1_retry_plan.v1"
 PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_final_c1_retry_proposal.v1"
 COMPLETE_STATUS = "intermediate_r2_final_c1_retry_complete"
 TERMINAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_final_c1_terminal.v1"
-RECEIPT_SCHEMA = "epyc.operator_e8_quality_final_c1_retry_amendment.v1"
-ATTESTATION = "RATIFY-E8-FINAL-C1-RETRY-20260728"
+ORIGINAL_RECEIPT_SCHEMA = "epyc.operator_e8_quality_final_c1_retry_amendment.v1"
+RECEIPT_SCHEMA = "epyc.operator_e8_quality_final_c1_retry_superseding.v1"
+ORIGINAL_ATTESTATION = "RATIFY-E8-FINAL-C1-RETRY-20260728"
+ATTESTATION = "RATIFY-E8-FINAL-C1-RETRY-SUPERSEDING-20260729"
+ORIGINAL_RECEIPT_SHA256 = (
+    "51aef2bd0431c8df5050f7985422d9712fc2d1494cfed1d7a3b1a54e5cab121e"
+)
+ORIGINAL_ORCH_COMMIT = "a37385074ffcf795b8bac668a3b630ea5bebace2"
+ORIGINAL_ORCH_TREE = "dad67e0ac036d8a582234044db3424a1aa3f0a36"
+ORIGINAL_RUNNER_SHA256 = (
+    "0bc35b84399df7d7434de6b356f58545f28cea89bf164aaa85977d7954ce6295"
+)
+ORIGINAL_VALIDATOR_SHA256 = (
+    "b82c49cfa362d75496d5e925d58ae5b11d1d33c3d9d14a6f7f796a6c6bf4e977"
+)
+WRAPPER_PATH = ROOT / (
+    "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+)
+APPLIER_ADAPTER_PATH = ROOT / (
+    "scripts/benchmark/operator_candidates/"
+    "apply_e8_quality_baseline_state_v5_candidate.py"
+)
+CANONICAL_APPLIER_PATH = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
+)
+WRAPPER_SHA256 = "fca5b8b0e663205e3525098e3997fec76b22533ef8dd7175745acc3e4fc1753c"
+APPLIER_ADAPTER_SHA256 = (
+    "ab8ed499c98eedfb961f790ede2596649d8f6080317145f3b8203ab871080309"
+)
+CANONICAL_APPLIER_SHA256 = (
+    "f1e0c0a88edaea5a66dda34ec9a938f8a20daa17491263a44ffff179623d3d61"
+)
+FAILURE_SCHEMA = "epyc.e8_quality_generation_failure.v1"
+TIMEOUT_FAILURE = {
+    "schema": FAILURE_SCHEMA,
+    "version": 1,
+    "code": "request_timeout",
+}
+HISTORICAL_TIMEOUT_SIDECAR_SHA256 = {
+    "a550c07752f8dedc0fdf5c4582b587c90f3b624405ed1454f628e523c100cae9",
+    "a41be1b012bb33475a5d8c9fd2e810c5b6dab651d123e3006f07cfc3f7fc835e",
+}
 RETRY_ORDINALS = (97, 279)
 RACE_RETRY_ORDINALS = (97, 203, 279)
 RETRY_QIDS = ("leval_codeU_269", "leval_review_summ_382")
@@ -155,26 +203,47 @@ def _runtime_git_identity(repository: Path) -> dict[str, Any]:
     }
 
 
-def validate_receipt(path: Path) -> dict[str, Any]:
-    if (
-        path.is_symlink()
-        or not path.is_file()
-        or path.resolve(strict=True) != CANONICAL_RECEIPT
-    ):
-        raise ValueError("final-c1 amendment receipt is missing or unsafe")
-    receipt = V4.load_json(path)
+def _provenance_instrument(
+    *, commit: str, tree: str, runner_sha256: str
+) -> dict[str, Any]:
+    return {
+        "repository": str(CANONICAL_REPOSITORY),
+        "commit": commit,
+        "tree": tree,
+        "ratifier_interpreter": "/usr/bin/python3",
+        "runner": {
+            "path": "scripts/benchmark/final_c1_retry.py",
+            "sha256": runner_sha256,
+        },
+        "validator": {
+            "path": "scripts/benchmark/final_c1_validator.py",
+            "sha256": ORIGINAL_VALIDATOR_SHA256,
+        },
+        "wrapper": {
+            "path": str(WRAPPER_PATH.relative_to(ROOT)),
+            "sha256": WRAPPER_SHA256,
+        },
+        "applier_adapter": {
+            "path": str(APPLIER_ADAPTER_PATH.relative_to(ROOT)),
+            "sha256": APPLIER_ADAPTER_SHA256,
+        },
+        "canonical_applier": {
+            "path": "artifacts/operator/apply_e8_quality_baseline_state.py",
+            "sha256": CANONICAL_APPLIER_SHA256,
+        },
+    }
+
+
+def _receipt_common_is_exact(
+    receipt: dict[str, Any],
+    *,
+    expected_keys: set[str],
+    schema: str,
+    attestation: str,
+    ratifier: Path,
+) -> bool:
     source = receipt.get("source")
-    instrument = receipt.get("instrument")
-    runner = instrument.get("runner") if isinstance(instrument, dict) else None
-    validator = instrument.get("validator") if isinstance(instrument, dict) else None
     non_authorizations = receipt.get("non_authorizations")
-    repository = Path(str(instrument.get("repository") or "")) if isinstance(
-        instrument, dict
-    ) else Path()
-    try:
-        git_identity = _runtime_git_identity(repository)
-    except (OSError, subprocess.SubprocessError):
-        git_identity = {}
     amendment_script = receipt.get("amendment_script")
     failed_race = receipt.get("failed_race_evidence")
     ratified_at = receipt.get("ratified_at")
@@ -184,34 +253,22 @@ def validate_receipt(path: Path) -> dict[str, Any]:
         )
     except ValueError:
         parsed_ratified_at = None
-    if (
-        set(receipt)
-        != {
-            "schema",
-            "status",
-            "protocol_id",
-            "ratified_at",
-            "human_attestation",
-            "amendment_script",
-            "failed_race_evidence",
-            "source",
-            "instrument",
-            "authorization",
-            "non_authorizations",
-        }
-        or receipt.get("schema") != RECEIPT_SCHEMA
+    return not (
+        set(receipt) != expected_keys
+        or receipt.get("schema") != schema
         or receipt.get("status") != "ratified"
         or receipt.get("protocol_id") != PROTOCOL_ID
-        or receipt.get("human_attestation") != ATTESTATION
+        or receipt.get("human_attestation") != attestation
         or not isinstance(ratified_at, str)
         or not ratified_at.endswith("Z")
         or parsed_ratified_at is None
         or parsed_ratified_at.utcoffset() is None
         or not isinstance(amendment_script, dict)
         or set(amendment_script) != {"path", "sha256"}
-        or amendment_script.get("path") != str(CANONICAL_RATIFIER)
-        or not CANONICAL_RATIFIER.is_file()
-        or amendment_script.get("sha256") != sha256_path(CANONICAL_RATIFIER)
+        or amendment_script.get("path") != str(ratifier)
+        or ratifier.is_symlink()
+        or not ratifier.is_file()
+        or amendment_script.get("sha256") != sha256_path(ratifier)
         or not isinstance(failed_race, dict)
         or set(failed_race)
         != {
@@ -242,34 +299,128 @@ def validate_receipt(path: Path) -> dict[str, Any]:
             "no_lineup_mutation": True,
             "no_state_write": True,
         }
-        or not isinstance(instrument, dict)
-        or set(instrument)
+    )
+
+
+def _load_original_receipt() -> dict[str, Any]:
+    if (
+        ORIGINAL_RECEIPT.is_symlink()
+        or not ORIGINAL_RECEIPT.is_file()
+        or ORIGINAL_RECEIPT.resolve(strict=True) != ORIGINAL_RECEIPT
+        or sha256_path(ORIGINAL_RECEIPT) != ORIGINAL_RECEIPT_SHA256
+    ):
+        raise ValueError("original final-c1 receipt is missing, unsafe, or differs")
+    receipt = V4.load_json(ORIGINAL_RECEIPT)
+    expected_keys = {
+        "schema",
+        "status",
+        "protocol_id",
+        "ratified_at",
+        "human_attestation",
+        "amendment_script",
+        "failed_race_evidence",
+        "source",
+        "instrument",
+        "authorization",
+        "non_authorizations",
+    }
+    if (
+        not isinstance(receipt, dict)
+        or not _receipt_common_is_exact(
+            receipt,
+            expected_keys=expected_keys,
+            schema=ORIGINAL_RECEIPT_SCHEMA,
+            attestation=ORIGINAL_ATTESTATION,
+            ratifier=ORIGINAL_RATIFIER,
+        )
+        or receipt.get("instrument")
+        != _provenance_instrument(
+            commit=ORIGINAL_ORCH_COMMIT,
+            tree=ORIGINAL_ORCH_TREE,
+            runner_sha256=ORIGINAL_RUNNER_SHA256,
+        )
+    ):
+        raise ValueError("original final-c1 receipt differs from the exact authorization")
+    return receipt
+
+
+def validate_receipt(
+    path: Path, *, require_execution: bool = False
+) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("final-c1 amendment receipt is missing or unsafe")
+    resolved = path.resolve(strict=True)
+    if resolved == ORIGINAL_RECEIPT:
+        receipt = _load_original_receipt()
+        if require_execution:
+            raise ValueError(
+                "original final-c1 receipt is planning-only; "
+                "the canonical superseding receipt is required for execution"
+            )
+        return receipt
+    if resolved != CANONICAL_RECEIPT:
+        raise ValueError("final-c1 amendment receipt is missing or unsafe")
+
+    original = _load_original_receipt()
+    receipt = V4.load_json(path)
+    expected_keys = {
+        "schema",
+        "status",
+        "protocol_id",
+        "ratified_at",
+        "human_attestation",
+        "amendment_script",
+        "supersedes",
+        "failed_race_evidence",
+        "source",
+        "instrument",
+        "authorization",
+        "non_authorizations",
+    }
+    instrument = receipt.get("instrument") if isinstance(receipt, dict) else None
+    repository = Path(str(instrument.get("repository") or "")) if isinstance(
+        instrument, dict
+    ) else Path()
+    try:
+        git_identity = _runtime_git_identity(repository)
+    except (OSError, subprocess.SubprocessError):
+        git_identity = {}
+    expected_instrument = _provenance_instrument(
+        commit=str(git_identity.get("commit") or ""),
+        tree=str(git_identity.get("tree") or ""),
+        runner_sha256=sha256_path(Path(__file__)),
+    )
+    expected_instrument["validator"]["sha256"] = sha256_path(VALIDATOR_PATH)
+    if (
+        not isinstance(receipt, dict)
+        or not _receipt_common_is_exact(
+            receipt,
+            expected_keys=expected_keys,
+            schema=RECEIPT_SCHEMA,
+            attestation=ATTESTATION,
+            ratifier=CANONICAL_RATIFIER,
+        )
+        or receipt.get("supersedes")
         != {
-            "repository",
-            "commit",
-            "tree",
-            "ratifier_interpreter",
-            "runner",
-            "validator",
+            "path": str(ORIGINAL_RECEIPT),
+            "sha256": ORIGINAL_RECEIPT_SHA256,
+            "schema": ORIGINAL_RECEIPT_SCHEMA,
+            "human_attestation": ORIGINAL_ATTESTATION,
         }
-        or instrument.get("ratifier_interpreter") != "/usr/bin/python3"
-        or instrument.get("repository") != str(CANONICAL_REPOSITORY)
+        or receipt.get("authorization") != original.get("authorization")
+        or receipt.get("non_authorizations") != original.get("non_authorizations")
+        or instrument != expected_instrument
         or repository.resolve() != CANONICAL_REPOSITORY.resolve()
         or git_identity.get("canonical_top") != str(CANONICAL_REPOSITORY.resolve())
         or git_identity.get("same_repository") is not True
-        or git_identity.get("commit") != instrument.get("commit")
-        or git_identity.get("tree") != instrument.get("tree")
         or git_identity.get("clean") is not True
-        or not isinstance(runner, dict)
-        or set(runner) != {"path", "sha256"}
-        or runner.get("path") != "scripts/benchmark/final_c1_retry.py"
-        or runner.get("sha256") != sha256_path(Path(__file__))
-        or not isinstance(validator, dict)
-        or set(validator) != {"path", "sha256"}
-        or validator.get("path") != "scripts/benchmark/final_c1_validator.py"
-        or validator.get("sha256") != sha256_path(VALIDATOR_PATH)
+        or sha256_path(WRAPPER_PATH) != WRAPPER_SHA256
+        or sha256_path(APPLIER_ADAPTER_PATH) != APPLIER_ADAPTER_SHA256
+        or sha256_path(CANONICAL_APPLIER_PATH) != CANONICAL_APPLIER_SHA256
     ):
-        raise ValueError("final-c1 amendment receipt differs from the exact authorization")
+        raise ValueError(
+            "superseding final-c1 receipt differs from the exact authorization"
+        )
     return receipt
 
 
@@ -286,6 +437,42 @@ def _terminal_timeout(row: dict[str, Any], ordinal: int, question: dict[str, Any
         or V4._question_qid(question) != result.get("qid")
     ):
         return False
+    elapsed = row.get("elapsed_s")
+    latency_ms = result.get("latency_ms")
+    inner = (
+        result.get("route") == "frontdoor"
+        and isinstance(elapsed, (int, float))
+        and 299.0 <= float(elapsed) <= 300.5
+        and isinstance(latency_ms, int)
+        and 299000 <= latency_ms <= 300500
+    )
+    outer = (
+        result.get("route") in (None, "")
+        and isinstance(elapsed, (int, float))
+        and 300.0 <= float(elapsed) <= 300.5
+        and isinstance(latency_ms, int)
+        and 300000 <= latency_ms <= 300500
+    )
+    if not (inner or outer):
+        return False
+    if result.get("failure") == TIMEOUT_FAILURE:
+        return True
+    detail = str(result.get("error_detail") or "")
+    exact_historical_text = (
+        inner
+        and detail == "[ERROR: Inference failed: chat_completions failed: timed out]"
+    ) or (outer and detail == "timed out")
+    return (
+        exact_historical_text
+        and canonical_hash(row) in HISTORICAL_TIMEOUT_SIDECAR_SHA256
+    )
+
+
+def _normalize_timeout_failure(row: dict[str, Any]) -> None:
+    """Add the current structured code at the producer boundary."""
+    result = row.get("result")
+    if not isinstance(result, dict) or result.get("error") is not True:
+        return
     detail = str(result.get("error_detail") or "")
     elapsed = row.get("elapsed_s")
     latency_ms = result.get("latency_ms")
@@ -305,7 +492,8 @@ def _terminal_timeout(row: dict[str, Any], ordinal: int, question: dict[str, Any
         and isinstance(latency_ms, int)
         and 300000 <= latency_ms <= 300500
     )
-    return inner or outer
+    if inner or outer:
+        result["failure"] = dict(TIMEOUT_FAILURE)
 
 
 def validate_failed_source(source: Path = SOURCE) -> dict[str, Any]:
@@ -400,9 +588,16 @@ def validate_failed_source(source: Path = SOURCE) -> dict[str, Any]:
     }
 
 
-def build_plan(source: Path, receipt_path: Path) -> dict[str, Any]:
+def build_plan(
+    source: Path,
+    receipt_path: Path,
+    *,
+    require_execution_receipt: bool = False,
+) -> dict[str, Any]:
     validated = validate_failed_source(source)
-    receipt = validate_receipt(receipt_path)
+    receipt = validate_receipt(
+        receipt_path, require_execution=require_execution_receipt
+    )
     source_plan = validated["plan"]
     plan = {
         "schema": PLAN_SCHEMA,
@@ -443,6 +638,7 @@ def build_plan(source: Path, receipt_path: Path) -> dict[str, Any]:
         "success_disposition": "clean_rows_continue_existing_clean_500_finalizer",
         "repeated_failure_disposition": "terminal_failed_no_admission",
         "no_auto_retry": True,
+        "execution_authorized": receipt["schema"] == RECEIPT_SCHEMA,
     }
     if "mixed_tail_repair" in source_plan:
         plan["mixed_tail_repair"] = source_plan["mixed_tail_repair"]
@@ -464,7 +660,11 @@ def _claim_is_exact_q3(claim: dict[str, Any]) -> bool:
 
 
 def _discover_focused_sidecar(
-    focused_dir: Path, *, label: str, qid: str
+    focused_dir: Path,
+    *,
+    watcher_path: Path,
+    label: str,
+    qid: str,
 ) -> tuple[Path, dict[str, Any]]:
     """Select the one focused sidecar by its batch contract, not its filename."""
     matches: list[tuple[Path, dict[str, Any]]] = []
@@ -473,15 +673,28 @@ def _discover_focused_sidecar(
             continue
         try:
             parsed, indexed = V5.sidecar_question_rows(candidate, expected_n=1)
+            envelope = RECOVERY._validate_generation_sidecar_envelope(
+                candidate,
+                watcher_path,
+                {0},
+                expected_label=label,
+                expected_concurrency=CONCURRENCY,
+            )
         except (OSError, ValueError, json.JSONDecodeError):
             continue
         starts = [row for row in parsed if row.get("row_type") == "batch_start"]
         completes = [row for row in parsed if row.get("row_type") == "batch_complete"]
         result = indexed[0][1]
+        batch_id = starts[0].get("eval_batch_id") if starts else None
         if (
             len(parsed) == 3
+            and envelope == [result]
             and len(starts) == 1
             and len(completes) == 1
+            and isinstance(batch_id, str)
+            and batch_id
+            and result.get("eval_batch_id") == batch_id
+            and completes[0].get("eval_batch_id") == batch_id
             and starts[0].get("label") == label
             and starts[0].get("requested_n") == 1
             and starts[0].get("concurrency") == CONCURRENCY
@@ -509,6 +722,7 @@ def _generate_one(
     *,
     output: Path,
     watcher: Any,
+    watcher_path: Path,
     runner_args: argparse.Namespace,
     question: dict[str, Any],
     original_sidecar: dict[str, Any],
@@ -548,7 +762,10 @@ def _generate_one(
         raise ValueError("final-c1 generated an unexpected result count")
     fresh = V4.response_rows(results, [execution])
     _focused_sidecar, focused_row = _discover_focused_sidecar(
-        focused_dir, label=label, qid=V4._question_qid(question)
+        focused_dir,
+        watcher_path=watcher_path,
+        label=label,
+        qid=V4._question_qid(question),
     )
     merged = V5._merged_retry_sidecar(
         original_sidecar,
@@ -556,6 +773,7 @@ def _generate_one(
         results[0],
         qid=V4._question_qid(question),
     )
+    _normalize_timeout_failure(merged)
     if replayed and not all(row.get("outcome") == "recovered" for row in replayed):
         raise ValueError("final-c1 scorer replay did not recover")
     if (
@@ -610,6 +828,7 @@ def _collect_schedule(
     *,
     output: Path,
     watcher: Any,
+    watcher_path: Path,
     runner_args: argparse.Namespace,
     questions: list[dict[str, Any]],
     original_sidecars: dict[int, dict[str, Any]],
@@ -624,6 +843,7 @@ def _collect_schedule(
         response, sidecar = _generate_one(
             output=output,
             watcher=watcher,
+            watcher_path=watcher_path,
             runner_args=runner_args,
             question=questions[ordinal],
             original_sidecar=original_sidecars[ordinal],
@@ -658,11 +878,16 @@ def _collect_schedule(
     return attempts, fresh_sidecars, failure
 
 
+@RECOVERY.durable_output_writer("final_c1_retry")
 def execute(args: argparse.Namespace) -> Path:
     output = args.output_dir.absolute()
     if output.exists() or output.is_symlink():
         raise FileExistsError(f"final-c1 output namespace already exists: {output}")
-    plan = build_plan(args.source_dir, args.amendment_receipt)
+    plan = build_plan(
+        args.source_dir,
+        args.amendment_receipt,
+        require_execution_receipt=True,
+    )
     if os.environ.get("AUTOPILOT_EVAL_CONCURRENCY") != str(CONCURRENCY):
         raise RuntimeError("AUTOPILOT_EVAL_CONCURRENCY must equal amended c1")
     source = args.source_dir.resolve(strict=True)
@@ -740,6 +965,7 @@ def execute(args: argparse.Namespace) -> Path:
         attempts, fresh_sidecars, failure = _collect_schedule(
             output=output,
             watcher=watcher,
+            watcher_path=watcher_path,
             runner_args=runner_args,
             questions=questions,
             original_sidecars=validated["sidecars"],
@@ -837,6 +1063,8 @@ def validate_output(root: Path, *, require_complete: bool = False) -> dict[str, 
     """Validate a completed or terminal final-c1 namespace without inference."""
     if root.is_symlink() or not root.is_dir():
         raise ValueError("final-c1 output must be a real directory")
+    if (root / RECOVERY.ABORT_MARKER_NAME).exists():
+        raise ValueError("final-c1 output is durably aborted and non-admissible")
     plan_path = root / "partial_r2_plan.json"
     proposal_path = root / "recovery_proposal.json"
     if any(path.is_symlink() or not path.is_file() for path in (plan_path, proposal_path)):
@@ -853,6 +1081,7 @@ def validate_output(root: Path, *, require_complete: bool = False) -> dict[str, 
         or plan.get("final_c1_retry_qids") != list(RETRY_QIDS)
         or plan.get("predecessor_import_ordinals")
         != sorted(set(range(500)) - set(RETRY_ORDINALS))
+        or plan.get("execution_authorized") is not True
         or plan.get("retry_runner_sha256") != sha256_path(Path(__file__))
         or plan.get("race_retry_runner_sha256") != sha256_path(RACE_PATH)
         or not isinstance(receipt_ref, dict)
@@ -864,7 +1093,7 @@ def validate_output(root: Path, *, require_complete: bool = False) -> dict[str, 
         or receipt_ref.get("schema") != RECEIPT_SCHEMA
     ):
         raise ValueError("final-c1 amendment receipt binding differs")
-    validate_receipt(receipt_path)
+    validate_receipt(receipt_path, require_execution=True)
     _validate_predecessor_snapshot(root, plan)
     source_binding = V4.load_json(root / "source_snapshot/source_binding.json")
     if (
@@ -1010,7 +1239,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-dir", type=Path, default=SOURCE)
     parser.add_argument("--amendment-receipt", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--collect", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--plan", action="store_true")
+    mode.add_argument("--collect", action="store_true")
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--region-claim-tag", default="")
     parser.add_argument("--region-claim-regions", default="")

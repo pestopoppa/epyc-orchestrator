@@ -158,6 +158,7 @@ def _copy_failed_audit(source: Path, output: Path, hashes: dict[str, str]) -> No
     RECOVERY._write_json(audit / "source_binding.json", {"source_sha256": hashes, "source_tree_sha256": canonical_hash(hashes)})
 
 
+@RECOVERY.durable_output_writer("prepare_e8_quality_baseline_v5_partial_r2_successor")
 def execute(args: argparse.Namespace) -> Path:
     """Collect only the successor tail; never reuse the failed watcher segment."""
     source = args.source_dir.resolve(strict=True)
@@ -219,7 +220,14 @@ def execute(args: argparse.Namespace) -> Path:
     evidence = RECOVERY._watcher_evidence(watcher_path, proposal, claim_before=claim, claim_after=claim_after)
     fresh = V4.response_rows(results, execution)
     RECOVERY._reconcile_generation_scorer_sidecar(output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl", fresh, execution, replayed)
-    failures = RECOVERY._harvest_generation_sidecar(output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl", rows, journal, questions, set(plan["generation_ordinals"]))
+    failures = RECOVERY._harvest_generation_sidecar(
+        output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl",
+        watcher_path,
+        rows,
+        journal,
+        questions,
+        set(plan["generation_ordinals"]),
+    )
     if failures or RECOVERY._generation_targets(plan, rows):
         if failures:
             RECOVERY._record_failed_generation_attempts(output, failures)

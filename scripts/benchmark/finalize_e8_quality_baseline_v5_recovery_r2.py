@@ -61,6 +61,7 @@ SUCCESSOR = _load(SUCCESSOR_PATH, "e8_v5_recovery_finalizer_successor")
 RACE_RETRY = _load(RACE_RETRY_PATH, "e8_v5_recovery_finalizer_race_retry")
 FINAL_C1_RETRY = _load(FINAL_C1_RETRY_PATH, "e8_v5_recovery_finalizer_final_c1")
 V4 = V5.V4
+EXPECTED_INTERMEDIATE_SCHEMA = FINAL_C1_RETRY.PLAN_SCHEMA
 
 
 def sha256_path(path: Path) -> str:
@@ -75,6 +76,62 @@ def _copy_file(source: Path, destination: Path) -> None:
 def _no_symlinks(root: Path) -> None:
     if root.is_symlink() or not root.is_dir() or any(path.is_symlink() for path in root.rglob("*")):
         raise ValueError("recovery intermediate must be a real symlink-free directory")
+
+
+def _intermediate_tree_sha256(root: Path) -> str:
+    _no_symlinks(root)
+    hashes = {
+        path.relative_to(root).as_posix(): sha256_path(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+    return RECOVERY.canonical_hash(hashes)
+
+
+def _execution_contract(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
+    expected_runner = str(args.expected_finalizer_sha256)
+    actual_runner = sha256_path(Path(__file__))
+    if (
+        len(expected_runner) != 64
+        or any(character not in "0123456789abcdef" for character in expected_runner)
+        or expected_runner != actual_runner
+    ):
+        raise ValueError("recovery finalizer self SHA-256 differs from the expected pin")
+    recovery_arg = args.recovery_dir
+    expected_namespace = args.expected_intermediate_namespace
+    if (
+        not recovery_arg.is_absolute()
+        or not expected_namespace.is_absolute()
+        or recovery_arg.is_symlink()
+        or expected_namespace.is_symlink()
+    ):
+        raise ValueError("recovery finalizer intermediate namespace is not exact")
+    recovery = recovery_arg.resolve(strict=True)
+    if (
+        recovery_arg != recovery
+        or expected_namespace != recovery
+        or str(args.expected_intermediate_tree_sha256)
+        != _intermediate_tree_sha256(recovery)
+    ):
+        raise ValueError(
+            "recovery finalizer intermediate namespace or tree differs from the expected pin"
+        )
+    intermediate_plan = V4.load_json(recovery / "partial_r2_plan.json")
+    if intermediate_plan.get("schema") != EXPECTED_INTERMEDIATE_SCHEMA:
+        raise ValueError(
+            "recovery finalizer accepts only the expected final-c1 intermediate schema"
+        )
+    return {
+        "finalizer": {
+            "path": str(Path(__file__).resolve()),
+            "sha256": actual_runner,
+        },
+        "intermediate": {
+            "schema": EXPECTED_INTERMEDIATE_SCHEMA,
+            "namespace": str(recovery),
+            "tree_sha256": str(args.expected_intermediate_tree_sha256),
+        },
+    }, recovery
 
 
 def _expected_scorer_attempt_inputs(
@@ -133,6 +190,8 @@ def validate_intermediate(path: Path) -> dict[str, Any]:
         raise ValueError("recovery intermediate must not be a symlink")
     intermediate = path.resolve(strict=True)
     _no_symlinks(intermediate)
+    if (intermediate / RECOVERY.ABORT_MARKER_NAME).exists():
+        raise ValueError("recovery intermediate is durably aborted and non-admissible")
     plan_path = intermediate / "partial_r2_plan.json"
     complete_path = intermediate / "r2_complete.json"
     source_binding = intermediate / "source_snapshot/source_binding.json"
@@ -1183,9 +1242,15 @@ def _rewrite_for_recovery(staging: Path, destination: Path, intermediate: dict[s
 
 def execute(args: argparse.Namespace) -> Path:
     """Finalize completed banked ledgers plus one ordinary V5 T2/r3 collection."""
+    finalizer_contract, recovery_dir = _execution_contract(args)
     source = args.source_dir.resolve(strict=True)
-    plan = build_plan(source)
-    intermediate = validate_intermediate(args.recovery_dir)
+    plan = {
+        **build_plan(source),
+        "finalizer_contract": finalizer_contract,
+    }
+    intermediate = validate_intermediate(recovery_dir)
+    if intermediate.get("plan", {}).get("schema") != EXPECTED_INTERMEDIATE_SCHEMA:
+        raise ValueError("recovery finalizer intermediate dispatch changed after binding")
     destination = args.output_dir.absolute()
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"recovery finalizer output already exists: {destination}")
@@ -1441,7 +1506,25 @@ def execute(args: argparse.Namespace) -> Path:
         V4.atomic_publish_noreplace(staging, destination)
         V4.fsync_dir(destination.parent)
         return destination
-    except Exception:
+    except BaseException as exc:
+        aborted = (
+            staging
+            if staging.is_dir() and not staging.is_symlink()
+            else destination
+            if destination.is_dir() and not destination.is_symlink()
+            else None
+        )
+        if aborted is not None:
+            RECOVERY.record_durable_abort(
+                aborted,
+                writer="finalize_e8_quality_baseline_v5_recovery_r2",
+                error=exc,
+            )
+            quarantine = destination.with_name(
+                f".{destination.name}.aborted-{uuid.uuid4().hex}"
+            )
+            aborted.rename(quarantine)
+            V4.fsync_dir(quarantine.parent)
         raise
 
 
@@ -1452,6 +1535,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     mode.add_argument("--collect", action="store_true")
     parser.add_argument("--source-dir", type=Path, required=True)
     parser.add_argument("--recovery-dir", type=Path, required=True)
+    parser.add_argument("--expected-intermediate-namespace", type=Path, required=True)
+    parser.add_argument("--expected-intermediate-tree-sha256", required=True)
+    parser.add_argument("--expected-finalizer-sha256", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--region-claim-tag", default="")
@@ -1463,7 +1549,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.plan:
-        print(json.dumps({"source": build_plan(args.source_dir)}, indent=2, sort_keys=True))
+        finalizer_contract, _recovery_dir = _execution_contract(args)
+        print(
+            json.dumps(
+                {
+                    "source": build_plan(args.source_dir),
+                    "finalizer_contract": finalizer_contract,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     print(execute(args))
     return 0

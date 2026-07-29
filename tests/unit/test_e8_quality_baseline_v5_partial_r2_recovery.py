@@ -683,7 +683,16 @@ def _args(source: Path, output: Path) -> SimpleNamespace:
     return SimpleNamespace(source_dir=source, output_dir=output, api_url="http://test")
 
 
-@pytest.mark.parametrize("defect", ["concurrency", "batch_id", "watcher_bracket"])
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "concurrency",
+        "batch_id",
+        "watcher_bracket",
+        "stale_sidecar",
+        "cadence_gap",
+    ],
+)
 def test_generation_harvest_requires_c3_batch_and_clean_watcher_bracket(
     tmp_path: Path,
     defect: str,
@@ -705,7 +714,9 @@ def test_generation_harvest_requires_c3_batch_and_clean_watcher_bracket(
             "label": "e8-t2-r2-recovery",
             "requested_n": 1,
             "ordinal": 7,
-            "started_at_s": 1785196801.0,
+            "started_at_s": (
+                1785196799.0 if defect == "stale_sidecar" else 1785196801.0
+            ),
             "ended_at_s": 1785196806.0 if defect == "watcher_bracket" else 1785196804.0,
             "answer": "answer",
             "result": {"qid": "q7", "question_id": "q7"},
@@ -722,8 +733,16 @@ def test_generation_harvest_requires_c3_batch_and_clean_watcher_bracket(
         {
             "ok": True,
             "active_load": {"tier": 2, "repetition": 2},
-            "started_at": "2026-07-28T00:00:05Z",
-            "finished_at": "2026-07-28T00:00:05Z",
+            "started_at": (
+                "2026-07-28T00:00:08Z"
+                if defect == "cadence_gap"
+                else "2026-07-28T00:00:05Z"
+            ),
+            "finished_at": (
+                "2026-07-28T00:00:08Z"
+                if defect == "cadence_gap"
+                else "2026-07-28T00:00:05Z"
+            ),
         },
     ]
     _write(watcher, watcher_rows)

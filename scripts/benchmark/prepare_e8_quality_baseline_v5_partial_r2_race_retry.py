@@ -803,19 +803,27 @@ def _authoritative_saved_responses(
     return saved
 
 
-def _harvest_retry(path: Path, rows: dict[int, dict[str, Any]], journal: Path, questions: list[dict[str, Any]], permitted: set[int]) -> list[dict[str, Any]]:
-    failures: list[dict[str, Any]] = []
-    for ordinal, row in _rows(path).items():
-        if ordinal not in permitted:
-            raise ValueError("race-retry generated an unexpected ordinal")
-        response = RECOVERY._response_from_sidecar(row, questions[ordinal])
-        if not V5.validate_clean_sidecar_result(response, row, qid=response["qid"]):
-            failures.append({"ordinal": ordinal, "sidecar_sha256": canonical_hash(row)})
-            continue
-        RECOVERY._record(journal, rows, ordinal, response, "generation")
-    return failures
+def _harvest_retry(
+    path: Path,
+    watcher_path: Path,
+    rows: dict[int, dict[str, Any]],
+    journal: Path,
+    questions: list[dict[str, Any]],
+    permitted: set[int],
+) -> list[dict[str, Any]]:
+    return RECOVERY._harvest_generation_sidecar(
+        path,
+        watcher_path,
+        rows,
+        journal,
+        questions,
+        permitted,
+    )
 
 
+@RECOVERY.durable_output_writer(
+    "prepare_e8_quality_baseline_v5_partial_r2_race_retry"
+)
 def execute(args: argparse.Namespace) -> Path:
     output = args.output_dir.absolute()
     if output.exists() or output.is_symlink():
@@ -873,7 +881,14 @@ def execute(args: argparse.Namespace) -> Path:
     evidence = RECOVERY._watcher_evidence(watcher_path, proposal, claim_before=claim, claim_after=claim_after)
     fresh = V4.response_rows(results, execution)
     RECOVERY._reconcile_generation_scorer_sidecar(output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl", fresh, execution, replayed)
-    failures = _harvest_retry(output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl", rows, journal_path, questions, set(persisted_plan["race_retry_ordinals"]))
+    failures = _harvest_retry(
+        output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl",
+        watcher_path,
+        rows,
+        journal_path,
+        questions,
+        set(persisted_plan["race_retry_ordinals"]),
+    )
     if failures or set(persisted_plan["race_retry_ordinals"]) - set(rows):
         if failures:
             RECOVERY._record_failed_generation_attempts(output, failures)
