@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -187,6 +188,29 @@ assert result.to_dict(orient='list') == {'Name': ['Alice', 'Bob'], 'Age': ['25',
 """,
         },
     )
+
+
+def test_code_execution_timeout_kills_descendant_processes() -> None:
+    """A timed-out harness must not wait for a child holding its output pipes."""
+    child = "import time; time.sleep(5)"
+    test_code = f"""
+import subprocess
+import sys
+import time
+
+subprocess.Popen([sys.executable, '-c', {child!r}])
+time.sleep(5)
+assert time.monotonic() >= 0
+"""
+    started = time.monotonic()
+    with pytest.raises(ScoringUnavailableError, match="configured timeout"):
+        score_answer(
+            answer="```python\ndef task_func():\n    return None\n```",
+            expected="",
+            scoring_method="code_execution",
+            scoring_config={"language": "python", "timeout": 0.2, "test_code": test_code},
+        )
+    assert time.monotonic() - started < 2
 
 
 def test_code_execution_concurrent_relative_files_are_isolated(tmp_path: Path) -> None:

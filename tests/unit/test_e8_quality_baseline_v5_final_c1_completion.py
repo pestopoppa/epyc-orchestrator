@@ -813,6 +813,30 @@ def test_aborted_source_rejects_unbound_writer_abort(tmp_path: Path) -> None:
         )
 
 
+def test_historical_scorer_sources_requires_exact_sealed_pair() -> None:
+    state = {
+        "proposal": {
+            "instrument": {
+                "measurement_source_sha256": {
+                    "/historical/scripts/benchmark/debug_scorer.py": "a" * 64,
+                    "/historical/scripts/benchmark/seeding_scoring.py": "b" * 64,
+                }
+            }
+        }
+    }
+
+    assert COMPLETION._historical_scorer_sources(state) == {
+        "debug_scorer": "a" * 64,
+        "seeding_scoring": "b" * 64,
+    }
+
+    state["proposal"]["instrument"]["measurement_source_sha256"].pop(
+        "/historical/scripts/benchmark/seeding_scoring.py"
+    )
+    with pytest.raises(ValueError, match="ambiguous scorer source binding"):
+        COMPLETION._historical_scorer_sources(state)
+
+
 def test_audit_never_accepts_an_output_namespace(
     tmp_path: Path,
 ) -> None:

@@ -73,6 +73,10 @@ TERMINAL_SEAL = _load_terminal_seal()
 
 E8_BOUNDARY = 1785004723.0
 E8_ERA = "E8"
+HISTORICAL_E8_SCORER_SOURCES = {
+    "debug_scorer": "90b2fe1f9d756ae584f2c4e9bffc0be3f244712828706e154e8ad41c047d475a",
+    "seeding_scoring": "fe59c4f97bcd8d977b73a11b4a014c97314d43fb4070121e77fd7cf1a48dcf3b",
+}
 FROZEN_V8_LLAMA_VERSION = "10107"
 FROZEN_V8_LLAMA_TREE = Path("/mnt/raid0/llm/llama.cpp")
 FROZEN_V8_LLAMA_BRANCH = "production-consolidated-v8"
@@ -715,6 +719,7 @@ def validate_llm_judge_trace(
     *,
     default_api_url: str,
     default_role: str = JUDGE_DEFAULT_ROLE,
+    historical_source_sha256: dict[str, str] | None = None,
 ) -> bool:
     """Re-derive one judge result solely from sealed request/response evidence."""
     scorer = _load_orchestrator_debug_scorer()
@@ -724,7 +729,8 @@ def validate_llm_judge_trace(
         "debug_scorer": sha256_path(DEBUG_SCORER_SOURCE),
         "seeding_scoring": sha256_path(SCORING_SOURCE),
     }
-    if trace.get("source_sha256") != expected_sources:
+    trace_sources = trace.get("source_sha256")
+    if trace_sources != expected_sources and trace_sources != historical_source_sha256:
         raise ValueError("judge trace scorer source hashes do not match")
     if trace.get("correlation_sha256") != judge_correlation_sha256(answer, expected, config):
         raise ValueError("judge trace correlation hash does not match")
@@ -796,6 +802,7 @@ def _validate_failed_llm_judge_trace(
     *,
     default_api_url: str,
     default_role: str = JUDGE_DEFAULT_ROLE,
+    historical_source_sha256: dict[str, str] | None = None,
 ) -> None:
     """Validate a sealed unavailable-judge attempt without treating it as a verdict."""
     expected_sources = {
@@ -812,7 +819,10 @@ def _validate_failed_llm_judge_trace(
     error = trace.get("error")
     if (
         trace.get("schema") != "epyc.e8_quality_llm_judge_trace.v1"
-        or trace.get("source_sha256") != expected_sources
+        or (
+            trace.get("source_sha256") != expected_sources
+            and trace.get("source_sha256") != historical_source_sha256
+        )
         or trace.get("correlation_sha256") != judge_correlation_sha256(answer, expected, config)
         or trace.get("scorer_answer") != normalized_answer
         or trace.get("expected") != str(expected)
@@ -849,6 +859,7 @@ def _validate_llm_judge_trace_history(
     *,
     default_api_url: str,
     default_role: str = JUDGE_DEFAULT_ROLE,
+    historical_source_sha256: dict[str, str] | None = None,
 ) -> bool | None:
     """Validate one sealed trace or the bounded scorer-tail attempt history."""
     if trace.get("schema") == "epyc.e8_quality_llm_judge_trace.v1":
@@ -856,11 +867,13 @@ def _validate_llm_judge_trace_history(
             _validate_failed_llm_judge_trace(
                 answer, expected, config, trace,
                 default_api_url=_judge_trace_api_url(trace, default_api_url), default_role=default_role,
+                historical_source_sha256=historical_source_sha256,
             )
             return None
         return validate_llm_judge_trace(
             answer, expected, config, trace,
             default_api_url=_judge_trace_api_url(trace, default_api_url), default_role=default_role,
+            historical_source_sha256=historical_source_sha256,
         )
     if trace.get("schema") != "epyc.e8_quality_llm_judge_trace.v2":
         raise ValueError("judge trace schema is invalid")
@@ -873,6 +886,7 @@ def _validate_llm_judge_trace_history(
         _validate_failed_llm_judge_trace(
             answer, expected, config, prior,
             default_api_url=_judge_trace_api_url(prior, default_api_url), default_role=default_role,
+            historical_source_sha256=historical_source_sha256,
         )
     final = attempts[-1]
     if not isinstance(final, dict):
@@ -881,11 +895,13 @@ def _validate_llm_judge_trace_history(
         _validate_failed_llm_judge_trace(
             answer, expected, config, final,
             default_api_url=_judge_trace_api_url(final, default_api_url), default_role=default_role,
+            historical_source_sha256=historical_source_sha256,
         )
         return None
     return validate_llm_judge_trace(
         answer, expected, config, final,
         default_api_url=_judge_trace_api_url(final, default_api_url), default_role=default_role,
+        historical_source_sha256=historical_source_sha256,
     )
 
 
@@ -937,6 +953,7 @@ def validate_response_scoring(
     default_api_url: str,
     tier: int,
     repetition: int,
+    historical_source_sha256: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Independently replay every score using one sealed trace per judge vector row."""
     if len(responses) != len(questions):
@@ -984,6 +1001,7 @@ def validate_response_scoring(
             replayed = _validate_llm_judge_trace_history(
                 answer, expected, config, trace,
                 default_api_url=default_api_url,
+                historical_source_sha256=historical_source_sha256,
             )
             if response.get("error") is not None:
                 if response.get("correct") is not False or replayed is not None:
@@ -2648,11 +2666,13 @@ def prepare_legacy_t1_r1_migration(
             validate_llm_judge_trace(
                 str(response.get("answer") or ""), expected, config, trace,
                 default_api_url=_judge_trace_api_url(trace, default_api_url),
+                historical_source_sha256=HISTORICAL_E8_SCORER_SOURCES,
             )
         else:
             _validate_failed_llm_judge_trace(
                 str(trace.get("scorer_answer") or ""), expected, config, trace,
                 default_api_url=_judge_trace_api_url(trace, default_api_url),
+                historical_source_sha256=HISTORICAL_E8_SCORER_SOURCES,
             )
         traces_by_ordinal[ordinal] = trace
     if unassigned:
@@ -2963,6 +2983,7 @@ def finalize_legacy_t1_r1_migration(
     audit = validate_response_scoring(
         merged, migration.questions, trace_path,
         default_api_url=default_api_url, tier=1, repetition=1,
+        historical_source_sha256=HISTORICAL_E8_SCORER_SOURCES,
     )
     return merged, {
         "scoring_audit": audit,

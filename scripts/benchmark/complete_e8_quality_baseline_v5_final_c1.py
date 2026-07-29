@@ -257,6 +257,33 @@ def _source_receipt_is_bound(
     return reference
 
 
+def _historical_scorer_sources(state: dict[str, Any]) -> dict[str, str] | None:
+    """Read the historical scorer pair from the sealed producer proposal."""
+    proposal = state.get("proposal")
+    instrument = proposal.get("instrument") if isinstance(proposal, dict) else None
+    sources = (
+        instrument.get("measurement_source_sha256")
+        if isinstance(instrument, dict)
+        else None
+    )
+    if not isinstance(sources, dict):
+        return None
+    result: dict[str, str] = {}
+    for name in ("debug_scorer", "seeding_scoring"):
+        matches = [
+            digest
+            for path, digest in sources.items()
+            if isinstance(path, str)
+            and path.endswith(f"/scripts/benchmark/{name}.py")
+            and isinstance(digest, str)
+            and len(digest) == 64
+        ]
+        if len(matches) != 1:
+            raise ValueError("aborted final-C1 proposal has ambiguous scorer source binding")
+        result[name] = matches[0]
+    return result
+
+
 def _validate_aborted_source(
     source: Path, expected_source_tree_sha256: str
 ) -> dict[str, Any]:
@@ -559,6 +586,7 @@ def _scorer_replay_evidence(
         config,
         trace,
         default_api_url=api_url,
+        historical_source_sha256=_historical_scorer_sources(state),
     )
     if (
         trace.get("fixed_vector_qid") != qid
@@ -657,6 +685,7 @@ def _typed_trace_rows(
             question.get("scoring_config") or {},
             {"schema": "epyc.e8_quality_llm_judge_trace.v2", "attempts": attempts},
             default_api_url="http://127.0.0.1:8000",
+            historical_source_sha256=_historical_scorer_sources(state),
         )
         if verdict is not response.get("correct"):
             raise ValueError("typed trace selection verdict differs from response")

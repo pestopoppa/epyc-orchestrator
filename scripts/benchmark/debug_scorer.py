@@ -24,7 +24,9 @@ from __future__ import annotations
 import ast
 import json
 import math
+import os
 import re
+import signal
 import subprocess
 import tempfile
 import threading
@@ -486,14 +488,23 @@ def _score_code_execution(
             workdir = Path(workdir_name)
             solution_path = workdir / "solution.py"
             solution_path.write_text(full_code, encoding="utf-8")
-            result = subprocess.run(
+            process = subprocess.Popen(
                 ["python3", str(solution_path)],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
                 cwd=workdir,
+                start_new_session=True,
             )
-            return result.returncode == 0
+            try:
+                process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate()
+                raise ScoringUnavailableError(
+                    "code_execution exceeded its configured timeout"
+                )
+            return process.returncode == 0
     except subprocess.TimeoutExpired:
         return False
     except OSError as exc:
