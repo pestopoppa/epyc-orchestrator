@@ -72,18 +72,21 @@ def _tmp_dir() -> Path:
 
     Resolution order (env override wins so tests can redirect):
       1. ORCHESTRATOR_TMP_DIR env var (explicit override)
-      2. src.config.get_config().paths.tmp_dir
+      2. ORCHESTRATOR_PATHS_TMP_DIR (the configured PathsConfig override)
       3. /mnt/raid0/llm/tmp hard-coded fallback
-    """
-    env_override = os.environ.get("ORCHESTRATOR_TMP_DIR")
-    if env_override:
-        return Path(env_override)
-    try:
-        from src.config import get_config  # type: ignore[import-not-found]
 
-        return Path(get_config().paths.tmp_dir)
-    except Exception:
-        return Path("/mnt/raid0/llm/tmp")
+    This module is imported by the standalone ``region-lock`` CLI.  It must
+    not import ``src.config`` here: configuration startup reads runtime facts,
+    which imports the stack path helpers and can re-enter configuration while
+    the runtime-facts module is still initializing.  The paths configuration
+    is environment-backed, so the documented override preserves configurable
+    lock placement without that import cycle.
+    """
+    for name in ("ORCHESTRATOR_TMP_DIR", "ORCHESTRATOR_PATHS_TMP_DIR"):
+        env_override = os.environ.get(name)
+        if env_override:
+            return Path(env_override)
+    return Path("/mnt/raid0/llm/tmp")
 
 
 def _lock_poll_s() -> float:
