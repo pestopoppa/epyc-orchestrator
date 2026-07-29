@@ -1100,12 +1100,10 @@ def execute(args: argparse.Namespace) -> Path:
             },
         ],
     )
+    # TIER-C BRICK FIX (10d-1): one write, evidence included.
     RECOVERY._complete_r2(
-        output, output / "source_snapshot", plan, rows, questions, args.api_url
-    )
-    marker = V4.load_json(output / "r2_complete.json")
-    marker.update(
-        {
+        output, output / "source_snapshot", plan, rows, questions, args.api_url,
+        marker_extra={
             "status": COMPLETE_STATUS,
             "watcher": watcher_evidence,
             "claim": claim,
@@ -1115,9 +1113,8 @@ def execute(args: argparse.Namespace) -> Path:
             "amendment_receipt": plan["amendment_receipt"],
             "attempts_path": ATTEMPTS_NAME,
             "attempts_sha256": sha256_path(output / ATTEMPTS_NAME),
-        }
+        },
     )
-    _write_json(output / "r2_complete.json", marker)
     return output
 
 

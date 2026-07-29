@@ -458,14 +458,23 @@ def _append_jsonl(path: Path, value: dict[str, Any]) -> None:
 
 
 def _write_json(path: Path, value: Any) -> None:
-    data = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
-    fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-    try:
-        V4._write_full_record(fd, data)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    V4.fsync_dir(path.parent)
+    """Atomically replace a JSON artifact.
+
+    TIER-C BRICK FIX (10d-2). This used to open the destination with
+    ``O_CREAT | O_TRUNC`` and write in place, so a crash between the truncate and
+    the final fsync left a zero-length or half-written JSON file AT THE REAL PATH.
+    Every reader of that namespace then fails on a decode error, and the guards
+    that refuse to overwrite an existing artifact (``_bind_recovery_proposal``,
+    the r2_complete pre-checks) make the namespace permanently unusable: it can be
+    neither read nor rewritten. That is the crash-window brick class.
+
+    ``V4.write_json`` already does the correct thing — temp file in the same
+    directory, fsync, ``os.replace``, fsync of the parent — so this delegates
+    rather than keeping a second, weaker implementation of the same operation.
+    A partial write now lands on a temp name that no reader consults, and the
+    destination either has its old contents or its new ones, never neither.
+    """
+    V4.write_json(path, value)
 
 
 def record_durable_abort(output: Path, *, writer: str, error: BaseException) -> Path:
@@ -1159,7 +1168,8 @@ def _complete_r2(
     rows: dict[int, dict[str, Any]],
     questions: list[dict[str, Any]],
     api_url: str,
-) -> None:
+    marker_extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if len(rows) != N:
         raise ValueError("partial-r2 cannot seal an incomplete response ledger")
     responses = [rows[ordinal]["response"] for ordinal in range(N)]
@@ -1255,20 +1265,28 @@ def _complete_r2(
             "per_suite_counts": dict(aggregate.per_suite_counts),
         },
     )
-    _write_json(
-        output / "r2_complete.json",
-        {
-            "schema": "epyc.e8_quality_partial_r2_complete.v1",
-            "status": "complete",
-            "responses_sha256": sha256_path(output / "responses.T2.r2.jsonl"),
-            "sidecar_sha256": sha256_path(sidecar_path),
-            "trace_sha256": sha256_path(trace_path),
-            "raw_sha256": sha256_path(output / "raw.T2.r2.json"),
-            "journal_sha256": sha256_path(output / "recovery_rows.T2.r2.jsonl"),
-            "scoring_audit": audit,
-            "plan_sha256": sha256_path(output / "partial_r2_plan.json"),
-        },
-    )
+    # TIER-C BRICK FIX (10d-1): ONE write of r2_complete.json, carrying its terminal
+    # status and every field the caller needs recorded with it. This used to write
+    # `status: complete` here and leave each caller to load-update-rewrite the same
+    # path a second time; a crash between the two writes left a marker that claimed
+    # completion while missing the watcher/claim/scorer evidence every reader
+    # requires — and because the marker already existed, the namespace could not be
+    # rewritten either. Callers now pass their fields in via `marker_extra`.
+    marker = {
+        "schema": "epyc.e8_quality_partial_r2_complete.v1",
+        "status": "complete",
+        "responses_sha256": sha256_path(output / "responses.T2.r2.jsonl"),
+        "sidecar_sha256": sha256_path(sidecar_path),
+        "trace_sha256": sha256_path(trace_path),
+        "raw_sha256": sha256_path(output / "raw.T2.r2.json"),
+        "journal_sha256": sha256_path(output / "recovery_rows.T2.r2.jsonl"),
+        "scoring_audit": audit,
+        "plan_sha256": sha256_path(output / "partial_r2_plan.json"),
+    }
+    if marker_extra:
+        marker.update(marker_extra)
+    _write_json(output / "r2_complete.json", marker)
+    return marker
 
 
 @durable_output_writer("recover_e8_quality_baseline_v5_partial_r2")
@@ -1447,21 +1465,22 @@ def execute(args: argparse.Namespace) -> Path:
             "required": False,
             "reason": "no_pending_scorer_or_generation_request",
         }
-    _complete_r2(output, snapshot, plan, rows, questions, args.api_url)
     if _source_hashes(source.resolve(strict=True)) != plan["source_sha256"]:
         raise ValueError("partial-r2 source changed during collection")
+    # TIER-C BRICK FIX (10d-1): scorer evidence is computed BEFORE the marker is
+    # written, and `_complete_r2` performs the single write that includes it. There
+    # is now no window in which r2_complete.json exists but is incomplete.
     scorer_attempts = _scorer_attempts_evidence(output, rows, plan, questions, scoring_questions)
-    marker = V4.load_json(output / "r2_complete.json")
-    marker.update(
-        {
+    _complete_r2(
+        output, snapshot, plan, rows, questions, args.api_url,
+        marker_extra={
             "status": "intermediate_r2_complete",
             "watcher": r2_watch_evidence,
             "claim": claim,
             "scorer_attempts": scorer_attempts,
             "scorer_attempts_sha256": scorer_attempts.get("sha256"),
-        }
+        },
     )
-    _write_json(output / "r2_complete.json", marker)
     return output
 
 

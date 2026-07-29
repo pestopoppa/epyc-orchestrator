@@ -1285,22 +1285,22 @@ def execute(args: argparse.Namespace) -> Path:
             if failures:
                 RECOVERY._record_failed_generation_attempts(output, failures)
             raise RuntimeError("race-retry did not produce every permitted clean ordinal")
-        RECOVERY._complete_r2(
-            output, output / "source_snapshot", persisted_plan, rows, questions, args.api_url
-        )
-        marker = V4.load_json(output / "r2_complete.json")
-        marker.update(
-            {
-                "status": COMPLETE_STATUS,
-                "watcher": evidence,
-                "claim": claim,
-                "predecessor_watcher": persisted_plan["predecessor_watcher"],
-                "predecessor_failed_attempts": persisted_plan["predecessor_failed_attempts"],
-            }
-        )
+        # TIER-C BRICK FIX (10d-1): single write via `marker_extra` — the previous
+        # load-update-rewrite of r2_complete.json left a crash window in which the
+        # marker claimed completion without its evidence, bricking the namespace.
+        marker_extra = {
+            "status": COMPLETE_STATUS,
+            "watcher": evidence,
+            "claim": claim,
+            "predecessor_watcher": persisted_plan["predecessor_watcher"],
+            "predecessor_failed_attempts": persisted_plan["predecessor_failed_attempts"],
+        }
         if "mixed_tail_repair" in persisted_plan:
-            marker["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
-        RECOVERY._write_json(output / "r2_complete.json", marker)
+            marker_extra["mixed_tail_repair"] = persisted_plan["mixed_tail_repair"]
+        RECOVERY._complete_r2(
+            output, output / "source_snapshot", persisted_plan, rows, questions, args.api_url,
+            marker_extra=marker_extra,
+        )
         if (
             source_hashes(base) != persisted_plan["source_sha256"]
             or source_hashes(source) != persisted_plan["predecessor_sha256"]

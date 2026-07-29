@@ -726,7 +726,10 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
     monkeypatch.setattr(recovery.V4, "EvalTower", FakeTower)
     monkeypatch.setattr(recovery.V4, "replay_llm_judge_scorer_tail_once", replay)
 
-    def complete(output, _snapshot, _plan, rows, _questions, _api_url):
+    def complete(output, _snapshot, _plan, rows, _questions, _api_url, *, marker_extra=None):
+        # TIER-C 10d-1: the real _complete_r2 performs the SINGLE marker write and
+        # folds `marker_extra` into it. The double replicates that contract, so a
+        # regression that reintroduces a caller-side second write shows up here.
         recovery.V4.write_text(
             output / "responses.T2.r2.jsonl",
             "".join(
@@ -735,14 +738,15 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
             ),
         )
         recovery._write_json(output / "raw.T2.r2.json", {"q": 1.0, "n": len(rows)})
-        recovery._write_json(
-            output / "r2_complete.json",
-            {
-                "status": "complete",
-                "raw_sha256": recovery.sha256_path(output / "raw.T2.r2.json"),
-                "journal_sha256": recovery.sha256_path(output / "recovery_rows.T2.r2.jsonl"),
-            },
-        )
+        marker = {
+            "status": "complete",
+            "raw_sha256": recovery.sha256_path(output / "raw.T2.r2.json"),
+            "journal_sha256": recovery.sha256_path(output / "recovery_rows.T2.r2.jsonl"),
+        }
+        if marker_extra:
+            marker.update(marker_extra)
+        recovery._write_json(output / "r2_complete.json", marker)
+        return marker
 
     monkeypatch.setattr(recovery, "_complete_r2", complete)
 
@@ -987,7 +991,9 @@ def test_resume_after_durable_generation_reuses_complete_watcher_evidence(
     monkeypatch.setattr(
         recovery,
         "_complete_r2",
-        lambda *_args: (_ for _ in ()).throw(RuntimeError("crash before r2 complete")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("crash before r2 complete")
+        ),
     )
     with pytest.raises(RuntimeError, match="crash before r2 complete"):
         recovery.execute(_args(source, output))

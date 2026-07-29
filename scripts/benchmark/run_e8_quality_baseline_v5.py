@@ -1189,13 +1189,32 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "bundle_sha256": bundle,
         "completed_at": V4.utc_now(),
     }
-    V4.write_json(staging_dir / "run_seal.json", seal)
-    V4.fsync_dir(staging_dir)
-    if eligible:
-        V4.atomic_publish_noreplace(staging_dir, output_dir)
-        V4.fsync_dir(output_dir.parent)
-        return report, 0
-    return report, 2
+    # TIER-C BRICK FIX (10d-3): SEAL AFTER PUBLISH.
+    #
+    # The seal used to be written into STAGING and only then published. A crash in
+    # that window left a staging directory carrying `status: complete` for a bundle
+    # that was never published — and because the publish is `noreplace`, a rerun
+    # could neither publish over it nor trust it, so the namespace was bricked.
+    # The seal is the LAST thing that becomes true, so it must be the last thing
+    # written, and it must be written where the bundle actually lives.
+    #
+    # The residual window is deliberately the recoverable one: a crash between the
+    # publish and the seal leaves a PUBLISHED-BUT-UNSEALED bundle. That state is
+    # detectable (bundle present, `run_seal.json` absent) and completable by
+    # re-sealing, because every input the seal hashes is already durable. The state
+    # it replaces — sealed-but-unpublished — was neither detectable nor completable.
+    #
+    # A failed run still seals in staging: nothing is published, so staging IS where
+    # that bundle lives, and the seal records why it failed.
+    if not eligible:
+        V4.write_json(staging_dir / "run_seal.json", seal)
+        V4.fsync_dir(staging_dir)
+        return report, 2
+    V4.atomic_publish_noreplace(staging_dir, output_dir)
+    V4.fsync_dir(output_dir.parent)
+    V4.write_json(output_dir / "run_seal.json", seal)
+    V4.fsync_dir(output_dir)
+    return report, 0
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

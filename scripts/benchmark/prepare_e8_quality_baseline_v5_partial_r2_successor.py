@@ -232,11 +232,19 @@ def execute(args: argparse.Namespace) -> Path:
         if failures:
             RECOVERY._record_failed_generation_attempts(output, failures)
         raise RuntimeError("successor generation did not produce every permitted clean ordinal")
-    RECOVERY._complete_r2(output, snapshot, plan, rows, questions, args.api_url)
+    # TIER-C BRICK FIX (10d-1): scorer evidence first, then ONE marker write.
     attempts = RECOVERY._scorer_attempts_evidence(output, rows, plan, questions, scoring["questions"])
-    marker = V4.load_json(output / "r2_complete.json")
-    marker.update({"status": "intermediate_r2_successor_complete", "watcher": evidence, "claim": claim, "scorer_attempts": attempts, "scorer_attempts_sha256": attempts.get("sha256"), "failed_watcher": plan["failed_watcher"]})
-    RECOVERY._write_json(output / "r2_complete.json", marker)
+    RECOVERY._complete_r2(
+        output, snapshot, plan, rows, questions, args.api_url,
+        marker_extra={
+            "status": "intermediate_r2_successor_complete",
+            "watcher": evidence,
+            "claim": claim,
+            "scorer_attempts": attempts,
+            "scorer_attempts_sha256": attempts.get("sha256"),
+            "failed_watcher": plan["failed_watcher"],
+        },
+    )
     return output
 
 

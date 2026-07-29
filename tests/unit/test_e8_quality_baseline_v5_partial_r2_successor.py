@@ -259,8 +259,13 @@ def test_successor_reaches_post_generation_shared_harvest(
         SUCCESSOR.RECOVERY, "_generation_targets", lambda *_args: []
     )
 
-    def complete(root, *_args):
-        SUCCESSOR.RECOVERY._write_json(root / "r2_complete.json", {})
+    def complete(root, *_args, marker_extra=None):
+        # TIER-C 10d-1: the single marker write now lives in _complete_r2 and folds
+        # in marker_extra, so the double must too — otherwise a caller-side second
+        # write could be reintroduced without this test noticing.
+        marker = dict(marker_extra or {})
+        SUCCESSOR.RECOVERY._write_json(root / "r2_complete.json", marker)
+        return marker
 
     monkeypatch.setattr(SUCCESSOR.RECOVERY, "_complete_r2", complete)
     monkeypatch.setattr(
