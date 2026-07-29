@@ -32,6 +32,9 @@ from pathlib import Path
 from typing import Any
 
 
+_SCORER_TMP_ROOT = Path("/mnt/raid0/llm/tmp")
+
+
 class ScoringUnavailableError(RuntimeError):
     """Raised when a requested scorer cannot run.
 
@@ -324,40 +327,38 @@ def _score_stdin_program(
     full_code = preamble + code
 
     try:
-        sol_file = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", delete=False,
-            dir="/mnt/raid0/llm/tmp",
-        )
-        sol_file.write(full_code)
-        sol_file.flush()
-        sol_file.close()
+        # Benchmark test code can create relative files (for example BCB190's
+        # ``test.db``). Each scorer invocation needs a private CWD so parallel
+        # rows cannot observe or delete one another's files.
+        with tempfile.TemporaryDirectory(
+            prefix="debug-scorer-", dir=_SCORER_TMP_ROOT
+        ) as workdir_name:
+            workdir = Path(workdir_name)
+            sol_file = workdir / "solution.py"
+            sol_file.write_text(full_code, encoding="utf-8")
 
-        for inp, expected_out in cases:
-            try:
-                result = subprocess.run(
-                    ["python3", sol_file.name],
-                    input=inp,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    cwd="/mnt/raid0/llm/tmp",
-                )
-            except subprocess.TimeoutExpired:
-                Path(sol_file.name).unlink(missing_ok=True)
-                return False
+            for inp, expected_out in cases:
+                try:
+                    result = subprocess.run(
+                        ["python3", str(sol_file)],
+                        input=inp,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        cwd=workdir,
+                    )
+                except subprocess.TimeoutExpired:
+                    return False
 
-            if result.returncode != 0:
-                Path(sol_file.name).unlink(missing_ok=True)
-                return False
+                if result.returncode != 0:
+                    return False
 
-            got = result.stdout.strip()
-            want = expected_out.strip()
-            if got != want:
-                Path(sol_file.name).unlink(missing_ok=True)
-                return False
+                got = result.stdout.strip()
+                want = expected_out.strip()
+                if got != want:
+                    return False
 
-        Path(sol_file.name).unlink(missing_ok=True)
-        return True
+            return True
     except OSError as exc:
         raise ScoringUnavailableError(
             "code_execution could not create or execute its temporary stdin harness"
@@ -476,22 +477,22 @@ def _score_code_execution(
             f"    assert {entry_point}(*_args, **_kwargs) == _expected\n"
         )
 
-    # Execute in sandboxed subprocess
+    # Execute in a private sandboxed subprocess. Benchmark test code is allowed
+    # to create relative files, so a shared CWD corrupts concurrent scorers.
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", delete=False,
-            dir="/mnt/raid0/llm/tmp",
-        ) as f:
-            f.write(full_code)
-            f.flush()
+        with tempfile.TemporaryDirectory(
+            prefix="debug-scorer-", dir=_SCORER_TMP_ROOT
+        ) as workdir_name:
+            workdir = Path(workdir_name)
+            solution_path = workdir / "solution.py"
+            solution_path.write_text(full_code, encoding="utf-8")
             result = subprocess.run(
-                ["python3", f.name],
+                ["python3", str(solution_path)],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                cwd="/mnt/raid0/llm/tmp",
+                cwd=workdir,
             )
-            Path(f.name).unlink(missing_ok=True)
             return result.returncode == 0
     except subprocess.TimeoutExpired:
         return False
