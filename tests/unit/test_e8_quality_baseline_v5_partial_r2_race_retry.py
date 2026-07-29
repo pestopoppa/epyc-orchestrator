@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -70,6 +71,67 @@ def _watcher(started_at: str, *, binding: str = "a") -> dict:
         "api_probe_urls": {"frontdoor": binding},
         "runtime_artifacts": {"server": {"identity": binding}},
     }
+
+
+def test_real_admission_race_contract_reaches_v2_predicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the wire contract instead of constructing a provenance fixture."""
+    from fastapi.testclient import TestClient
+
+    from src.api import app
+    from src.scheduling.contention_gate import ContentionDenied
+
+    eval_tower = sys.modules[RETRY.V4.EvalTower.__module__]
+
+    @app.post("/__test_e8_typed_admission_race")
+    def _raise_typed_race() -> None:
+        raise ContentionDenied(
+            "placement lock race",
+            role="frontdoor",
+            workload_class="eval_batch",
+            wait_budget_ms=90_000,
+            failure_class="admission_timeout",
+            code="race_lost",
+        )
+
+    api_client = TestClient(app)
+
+    class ApiAdapter:
+        def post(self, *_args: object, **_kwargs: object):
+            return api_client.post("/__test_e8_typed_admission_race")
+
+    wire_response = eval_tower.call_orchestrator_forced(
+        prompt="q",
+        force_role="frontdoor",
+        client=ApiAdapter(),
+        workload_class="eval_batch",
+        timeout=90,
+    )
+    monkeypatch.setattr(
+        eval_tower,
+        "call_orchestrator_forced",
+        lambda **_kwargs: dict(wire_response),
+    )
+
+    tower = eval_tower.EvalTower()
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "q0",
+                "qid": "q0",
+                "suite": "test",
+                "prompt": "q",
+                "expected": "a",
+                "force_role": "frontdoor",
+            },
+            client,
+        )
+    compact = eval_tower._compact_question_result(result)
+    assert RETRY._race_lost(
+        {"answer": result.answer, "result": compact},
+        QUESTION,
+    )
 
 
 def test_copy_tree_rejects_destination_mutation(

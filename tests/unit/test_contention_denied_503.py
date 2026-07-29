@@ -43,7 +43,7 @@ def test_contention_denied_provenance_is_closed_json_primitive_contract() -> Non
         "phase": "admission",
         "role": "frontdoor",
         "workload_class": "quality_baseline",
-        "wait_budget_ms": 300_000,
+        "max_queue_wait_ms": 300_000,
         "generation_started": False,
         "tokens_generated": 0,
         "partial": False,

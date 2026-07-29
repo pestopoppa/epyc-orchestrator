@@ -290,7 +290,15 @@ def _sidecar(qids: list[str], *, failure_ordinal: int = 0) -> list[dict]:
         answer = "a"
         if ordinal == failure_ordinal:
             answer = "timed out"
-            result.update({"tokens_generated": 0, "error": True, "error_detail": "timed out"})
+            result.update(
+                {
+                    "tokens_generated": 0,
+                    "error": True,
+                    "error_detail": "timed out",
+                    "partial": False,
+                    "degraded": False,
+                }
+            )
         rows.append(
             {
                 "row_type": "question_result",
@@ -321,23 +329,30 @@ def test_generation_classifier_accepts_only_evidence_bound_reviewed_errors(error
             "tokens_generated": 0,
             "error": True,
             "error_detail": error,
+            "partial": False,
+            "degraded": False,
         }
     }
     assert runner.classify_generation_failure(response, sidecar) == error
 
 
-def test_generation_classifier_preserves_distinct_eval_tower_question_id() -> None:
+@pytest.mark.parametrize("question_id", ["unknown", "other"])
+def test_generation_classifier_rejects_unbound_eval_tower_question_id(
+    question_id: str,
+) -> None:
     response = _response("stable-qid", "timed out", error="timed out")
     sidecar = {
         "result": {
             "qid": "stable-qid",
-            "question_id": "unknown",
+            "question_id": question_id,
             "tokens_generated": 0,
             "error": True,
             "error_detail": "timed out",
+            "partial": False,
+            "degraded": False,
         }
     }
-    assert runner.classify_generation_failure(response, sidecar) == "timed out"
+    assert runner.classify_generation_failure(response, sidecar) is None
 
 
 def test_generation_classifier_rejects_missing_eval_tower_question_id() -> None:
@@ -348,9 +363,54 @@ def test_generation_classifier_rejects_missing_eval_tower_question_id() -> None:
             "tokens_generated": 0,
             "error": True,
             "error_detail": "timed out",
+            "partial": False,
+            "degraded": False,
         }
     }
     assert runner.classify_generation_failure(response, sidecar) is None
+
+
+@pytest.mark.parametrize(
+    "result_change",
+    [
+        {},
+        {"partial": True, "degraded": False},
+        {"partial": False, "degraded": True},
+        {"partial": "false", "degraded": False},
+        {"partial": False, "degraded": "false"},
+    ],
+)
+def test_generation_classifier_requires_explicit_clean_sidecar_state(
+    result_change: dict,
+) -> None:
+    response = _response("q", "timed out", error="timed out")
+    sidecar = {
+        "result": {
+            "qid": "q",
+            "question_id": "q",
+            "tokens_generated": 0,
+            "error": True,
+            "error_detail": "timed out",
+            **result_change,
+        }
+    }
+    assert runner.classify_generation_failure(response, sidecar) is None
+
+
+def test_generation_failure_targets_rejects_unbound_sidecar() -> None:
+    response = _response("q", "timed out", error="timed out")
+    sidecar = {
+        "result": {
+            "qid": "q",
+            "question_id": "unknown",
+            "tokens_generated": 0,
+            "error": True,
+            "error_detail": "timed out",
+            "partial": False,
+            "degraded": False,
+        }
+    }
+    assert runner.generation_failure_targets([response], {0: (0, sidecar)}) == []
 
 
 @pytest.mark.parametrize(
@@ -381,6 +441,8 @@ def test_generation_classifier_rejects_model_and_scorer_failures(
                     "tokens_generated": tokens,
                     "error": result_error,
                     "error_detail": detail,
+                    "partial": False,
+                    "degraded": False,
                 }
             },
         )
@@ -396,6 +458,8 @@ def test_generation_classifier_rejects_cross_ledger_mismatch() -> None:
             "tokens_generated": 0,
             "error": True,
             "error_detail": "timed out",
+            "partial": False,
+            "degraded": False,
         }
     }
     assert (
@@ -457,6 +521,8 @@ def test_generation_classifier_rejects_nonclean_response_state(
             "tokens_generated": 0,
             "error": True,
             "error_detail": "timed out",
+            "partial": False,
+            "degraded": False,
         }
     }
     assert runner.classify_generation_failure(response, sidecar) is None
@@ -493,6 +559,8 @@ class FakeTower:
             "error": bool(error),
             "error_detail": error,
         }
+        if error:
+            result_row.update({"partial": False, "degraded": False})
         sidecar_answer = answer
         if not error and self.malformed_success == "zero_tokens":
             result_row["tokens_generated"] = 0

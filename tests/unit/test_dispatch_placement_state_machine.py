@@ -246,7 +246,7 @@ def test_dispatcher_marks_only_lock_snapshot_races_as_race_lost(
     assert provenance["code"] == "race_lost"
     assert provenance["role"] == "frontdoor"
     assert provenance["workload_class"] == "quality_baseline"
-    assert provenance["wait_budget_ms"] == 250
+    assert provenance["max_queue_wait_ms"] == 250
 
 
 def test_dispatcher_legacy_path_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:

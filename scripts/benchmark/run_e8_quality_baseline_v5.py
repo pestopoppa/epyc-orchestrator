@@ -218,12 +218,14 @@ def classify_generation_failure(
         and response_error == error
         and qid
         and str(result.get("qid") or "") == qid
-        and isinstance(question_id, str)
-        and bool(question_id.strip())
+        and question_id == qid
+        and question_id != "unknown"
         and blank_or_sentinel
         and error in ACCEPTED_INFRA_ERRORS
         and response.get("partial") is False
         and response.get("degraded") is False
+        and result.get("partial") is False
+        and result.get("degraded") is False
         and response.get("route_used") == "frontdoor"
     ):
         return error

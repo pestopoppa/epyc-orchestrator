@@ -554,7 +554,7 @@ class ContentionDenied(RuntimeError):
             "phase": "admission",
             "role": role,
             "workload_class": workload_class,
-            "wait_budget_ms": wait_budget_ms,
+            "max_queue_wait_ms": wait_budget_ms,
             "generation_started": False,
             "tokens_generated": 0,
             "partial": False,

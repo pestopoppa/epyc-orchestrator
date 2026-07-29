@@ -126,7 +126,7 @@ class TestInferenceMixinRealCall:
         assert provenance["code"] == "contention_gate_timeout"
         assert provenance["role"] == "frontdoor"
         assert provenance["workload_class"] == "eval_batch"
-        assert provenance["wait_budget_ms"] == 321
+        assert provenance["max_queue_wait_ms"] == 321
 
     def test_real_call_fallback_to_model_server(self, mock_model_server):
         """Test _real_call falls back to ModelServer when no backend."""

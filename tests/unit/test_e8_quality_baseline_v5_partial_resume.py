@@ -106,6 +106,11 @@ def _source(tmp_path: Path) -> Path:
                             "error_detail": error,
                             "route": "frontdoor",
                             "correct": not bool(error),
+                            **(
+                                {"partial": False, "degraded": False}
+                                if error
+                                else {}
+                            ),
                         },
                     }
                 )
@@ -150,9 +155,25 @@ def test_plan_rejects_any_extra_or_missing_target(tmp_path: Path) -> None:
     sidecars = [json.loads(line) for line in sidecar.read_text().splitlines()]
     sidecars[100]["answer"] = rows[100]["answer"]
     sidecars[100]["result"].update(
-        {"tokens_generated": 0, "error": True, "error_detail": rows[100]["error"]}
+        {
+            "tokens_generated": 0,
+            "error": True,
+            "error_detail": rows[100]["error"],
+            "partial": False,
+            "degraded": False,
+        }
     )
     sidecar.write_text("".join(json.dumps(row) + "\n" for row in sidecars))
+    with pytest.raises(ValueError, match="target set differs"):
+        resume.build_plan(root)
+
+
+def test_plan_rejects_unbound_generation_target(tmp_path: Path) -> None:
+    root = _source(tmp_path)
+    sidecar = root / "eval_sidecars/question_results.e8-t2-r1.jsonl"
+    rows = [json.loads(line) for line in sidecar.read_text().splitlines()]
+    rows[98]["result"]["question_id"] = "unknown"
+    sidecar.write_text("".join(json.dumps(row) + "\n" for row in rows))
     with pytest.raises(ValueError, match="target set differs"):
         resume.build_plan(root)
 
