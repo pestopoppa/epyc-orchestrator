@@ -324,6 +324,52 @@ def test_manifest_rejects_scorer_trace_verdict_tamper(
         COMPLETION.build_provenance_manifest(source, state)
 
 
+def test_typed_trace_selection_rejects_stale_scorer_replay_from_generation_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    generation = (
+        source
+        / "predecessor_snapshot/predecessor_snapshot/"
+        "generation_judge_traces.T2.r2.jsonl"
+    )
+    _write_jsonl(
+        generation,
+        [
+            {"fixed_vector_qid": "q0", "trace": "initial"},
+            {"fixed_vector_qid": "q0", "trace": "retry"},
+        ],
+    )
+    _write_jsonl(
+        source / "scorer_replay_traces.T2.r2.jsonl",
+        [{"fixed_vector_qid": "q0", "trace": "stale-third-replay"}],
+    )
+    question = {
+        "qid": "q0", "scoring_method": "llm_judge",
+        "scoring_config": {}, "expected": "expected",
+    }
+    state = {"questions": [question], "journal": {0: {"response": {
+        "qid": "q0", "answer": "answer", "correct": False,
+    }}}}
+    manifest = {"entries": [{
+        "ordinal": 0, "qid": "q0", "journal_source": "predecessor_generation",
+        "surface": "successor_generation",
+    }]}
+    monkeypatch.setattr(
+        COMPLETION.V4, "_validate_llm_judge_trace_history",
+        lambda *_args, **_kwargs: False,
+    )
+
+    rows, selection = COMPLETION._typed_trace_rows(source, state, manifest)
+
+    assert [row["trace"] for row in rows] == ["initial", "retry"]
+    assert all(row["trace"] != "stale-third-replay" for row in rows)
+    assert selection["rows"][0]["trace_paths"] == [
+        "predecessor_snapshot/predecessor_snapshot/generation_judge_traces.T2.r2.jsonl",
+        "predecessor_snapshot/predecessor_snapshot/generation_judge_traces.T2.r2.jsonl",
+    ]
+
+
 def test_caught_failure_publishes_abort_and_terminal_run_seal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
