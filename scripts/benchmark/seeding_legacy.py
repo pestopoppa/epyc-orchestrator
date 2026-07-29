@@ -28,7 +28,11 @@ from seeding_types import (
     VISION_ROLES,
     state,
 )
-from seeding_scoring import score_answer_deterministic
+from seeding_scoring import (
+    _classify_error,
+    _inband_error_text,
+    score_answer_or_error,
+)
 from seeding_orchestrator import _erase_slots, call_orchestrator_forced
 from seeding_checkpoint import (
     _prompt_hash,
@@ -323,12 +327,40 @@ def evaluate_question(
         prompt_eval_ms = response.get("prompt_eval_ms", 0.0)
         http_overhead_ms = response.get("http_overhead_ms", 0.0)
 
-        if error:
+        # An in-band error can arrive as a normal-looking answer with no
+        # structured error.  Surface it before scoring so it cannot become a
+        # false task failure and poison comparative reward injection.
+        if not error:
+            inband = _inband_error_text(answer)
+            if inband is not None:
+                error = inband
+                logger.error(
+                    "REL-1 in-band error surfaced as answer (role=%s): %s",
+                    role,
+                    inband[:200],
+                )
+
+        error_type = _classify_error(error)
+        if error and target_port in HEAVY_PORTS and tokens_generated == 0:
+            _erase_slots(target_port)
+        if error_type == "infrastructure":
             passed = False
-            if target_port in HEAVY_PORTS and tokens_generated == 0:
-                _erase_slots(target_port)
+        elif error:
+            passed = False
         else:
-            passed = score_answer_deterministic(answer, expected, scoring_method, scoring_config)
+            passed, score_error = score_answer_or_error(
+                answer, expected, scoring_method, scoring_config
+            )
+            if passed is None:
+                error = score_error
+                error_type = "infrastructure"
+                passed = False
+                logger.warning(
+                    "REL-1 scorer unavailable (role=%s method=%s): %s — excluding question",
+                    role,
+                    scoring_method,
+                    score_error,
+                )
 
         role_results[key] = RoleResult(
             role=role,
@@ -337,6 +369,7 @@ def evaluate_question(
             passed=passed,
             elapsed_seconds=q_elapsed,
             error=error,
+            error_type=error_type,
             tokens_generated=tokens_generated,
             tools_used=tools_used,
             tools_called=tools_called,
@@ -388,8 +421,17 @@ def evaluate_question(
         if timing_parts:
             logger.info(f"{indent}{', '.join(timing_parts)}")
 
-    # Compute comparative rewards (baseline is frontdoor:direct)
-    rewards = compute_comparative_rewards(role_results, baseline_key="frontdoor:direct")
+    # A comparative question with any infrastructure failure has no trustworthy
+    # baseline.  Persist the diagnostic rows, but emit no rewards: treating an
+    # infrastructure failure as a task failure would teach the router a false
+    # 0.0 (or falsely reward another role against a broken baseline).
+    has_infrastructure_error = any(
+        rr.error_type == "infrastructure" for rr in role_results.values()
+    )
+    rewards = (
+        {} if has_infrastructure_error
+        else compute_comparative_rewards(role_results, baseline_key="frontdoor:direct")
+    )
 
     # Clone rewards and results to aliased (deduplicated) roles
     for alias, canonical in alias_map.items():
@@ -403,13 +445,19 @@ def evaluate_question(
 
     # Inject rewards immediately (per-question, not batched)
     rewards_injected = 0
-    if not dry_run:
+    if not dry_run and rewards:
         comp_for_inject = ComparativeResult(
             suite=suite, question_id=qid, prompt=prompt[:200],
             expected=expected[:200], reference=prompt_info.get("reference", ""),
             rewards=rewards,
         )
         rewards_injected = _inject_rewards_http(comp_for_inject, url, client)
+    elif has_infrastructure_error:
+        logger.warning(
+            "REL-1 infrastructure error in %s/%s — skipping comparative reward injection",
+            suite,
+            qid,
+        )
 
     # Escalation chains: detect cheap-fail -> expensive-pass patterns
     escalation_data: list[dict[str, Any]] = []

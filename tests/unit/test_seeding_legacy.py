@@ -154,7 +154,7 @@ def test_evaluate_question_text_path_alias_clone_and_escalation_injection():
                 {"answer": "3", "error": None, "tokens_generated": 4, "tools_used": 1, "tools_called": ["calc"]},
             ],
         ) as call_mock,
-        patch.object(_MOD, "score_answer_deterministic", side_effect=[True, False]),
+        patch.object(_MOD, "score_answer_or_error", side_effect=[(True, None), (False, None)]),
         patch.object(_MOD, "compute_comparative_rewards", return_value={"frontdoor:direct": 1.0, "worker_math:direct": 0.2}),
         patch.object(_MOD, "_inject_rewards_http", return_value=2),
         patch.object(
@@ -210,7 +210,7 @@ def test_evaluate_question_vl_filters_combos_and_erases_heavy_on_zero_token_erro
                 {"answer": "cat", "error": None, "tokens_generated": 3},
             ],
         ),
-        patch.object(_MOD, "score_answer_deterministic", return_value=True),
+        patch.object(_MOD, "score_answer_or_error", return_value=(True, None)),
         patch.object(_MOD, "compute_comparative_rewards", return_value={}),
         patch.object(_MOD.logger, "info"),
     ):
@@ -228,6 +228,74 @@ def test_evaluate_question_vl_filters_combos_and_erases_heavy_on_zero_token_erro
     assert comp is not None
     assert set(comp.role_results.keys()) == {"frontdoor:direct", "worker_vision:repl"}
     erase.assert_called_once_with(8080)
+
+
+def test_evaluate_question_inband_error_is_infrastructure_and_skips_rewards():
+    prompt_info = {"suite": "math", "id": "inband", "prompt": "p", "expected": "e"}
+    with (
+        patch.object(_MOD, "ROLE_PORT", {"frontdoor": 8080}),
+        patch.object(_MOD, "HEAVY_PORTS", set()),
+        patch.object(
+            _MOD,
+            "call_orchestrator_forced",
+            return_value={"answer": "[ERROR: circuit open]", "error": None},
+        ),
+        patch.object(_MOD, "compute_comparative_rewards") as compute_rewards,
+        patch.object(_MOD, "_inject_rewards_http") as inject_rewards,
+    ):
+        result = _MOD.evaluate_question(
+            prompt_info=prompt_info,
+            combos=[("frontdoor", "direct")],
+            alias_map={},
+            modes=["direct"],
+            url="http://localhost:8000",
+            timeout=30,
+            client=object(),
+        )
+
+    assert result is not None
+    rr = result.role_results["frontdoor:direct"]
+    assert rr.error_type == "infrastructure"
+    assert result.rewards == {}
+    compute_rewards.assert_not_called()
+    inject_rewards.assert_not_called()
+
+
+def test_evaluate_question_unavailable_scorer_is_infrastructure_and_skips_rewards():
+    prompt_info = {"suite": "math", "id": "scorer", "prompt": "p", "expected": "e"}
+    with (
+        patch.object(_MOD, "ROLE_PORT", {"frontdoor": 8080}),
+        patch.object(_MOD, "HEAVY_PORTS", set()),
+        patch.object(
+            _MOD,
+            "call_orchestrator_forced",
+            return_value={"answer": "answer", "error": None},
+        ),
+        patch.object(
+            _MOD,
+            "score_answer_or_error",
+            return_value=(None, "scoring_unavailable: oracle unavailable"),
+        ),
+        patch.object(_MOD, "compute_comparative_rewards") as compute_rewards,
+        patch.object(_MOD, "_inject_rewards_http") as inject_rewards,
+    ):
+        result = _MOD.evaluate_question(
+            prompt_info=prompt_info,
+            combos=[("frontdoor", "direct")],
+            alias_map={},
+            modes=["direct"],
+            url="http://localhost:8000",
+            timeout=30,
+            client=object(),
+        )
+
+    assert result is not None
+    rr = result.role_results["frontdoor:direct"]
+    assert rr.error_type == "infrastructure"
+    assert rr.error == "scoring_unavailable: oracle unavailable"
+    assert result.rewards == {}
+    compute_rewards.assert_not_called()
+    inject_rewards.assert_not_called()
 
 
 def test_evaluate_question_returns_none_when_shutdown_requested():
@@ -269,7 +337,7 @@ def test_evaluate_question_logging_and_cooldown_paths():
             },
             {"answer": "e", "error": None, "tokens_generated": 2},
         ]),
-        patch.object(_MOD, "score_answer_deterministic", return_value=True),
+        patch.object(_MOD, "score_answer_or_error", return_value=(True, None)),
         patch.object(_MOD, "compute_comparative_rewards", return_value={}),
         patch.object(_MOD.time, "sleep") as sleep_mock,
         patch.object(_MOD.logger, "info", side_effect=lambda line, *a, **k: log_lines.append(str(line))),
