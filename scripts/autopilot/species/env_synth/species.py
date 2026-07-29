@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +50,83 @@ DEFAULT_JOURNAL_PATH = ORCH_ROOT / "orchestration" / "autopilot_env_synth_journa
 # float, reason: str)`` tuple. In production this is wired to the
 # architect_general worker; tests inject a mock.
 ReferenceSolver = Callable[[str, list[str]], Awaitable[tuple[bool, float, str]]]
+
+
+@dataclass(frozen=True)
+class PlanStep:
+    """One simulated non-terminal action and its expected world state."""
+
+    action: str
+    predicted_state: Any
+
+
+PlanSimulator = Callable[[SynthesizedTask], Awaitable[list[PlanStep]]]
+StepExecutor = Callable[[SynthesizedTask, PlanStep], Awaitable[Any]]
+
+
+@dataclass
+class PlanExecutionGuard:
+    """Fail closed when an induced-world plan diverges from execution.
+
+    This is deliberately opt-in: the current Phase-1 task synthesizer has no
+    environment model or action executor. A future adapter supplies both
+    callbacks and an artifact directory; the guard then compares each
+    predicted state to the observed state and stops at the first mismatch.
+    """
+
+    plan_simulator: PlanSimulator
+    step_executor: StepExecutor
+    artifact_dir: Path
+
+    async def evaluate(self, task: SynthesizedTask) -> tuple[bool, str]:
+        try:
+            plan = await self.plan_simulator(task)
+        except Exception as exc:  # noqa: BLE001 -- external adapter boundary
+            log.warning("plan simulation raised: %s", exc)
+            return False, f"plan_simulator_error: {exc}"
+
+        for step_index, step in enumerate(plan):
+            try:
+                observed_state = await self.step_executor(task, step)
+            except Exception as exc:  # noqa: BLE001 -- external adapter boundary
+                log.warning("plan step %d execution raised: %s", step_index, exc)
+                return False, f"plan_executor_error_at_step_{step_index}: {exc}"
+            if observed_state != step.predicted_state:
+                artifact_path = self._write_divergence_artifact(
+                    task=task,
+                    step_index=step_index,
+                    step=step,
+                    observed_state=observed_state,
+                )
+                return False, f"plan_executor_divergence_at_step_{step_index}: {artifact_path}"
+        return True, "plan_executor_aligned"
+
+    def _write_divergence_artifact(
+        self,
+        *,
+        task: SynthesizedTask,
+        step_index: int,
+        step: PlanStep,
+        observed_state: Any,
+    ) -> Path:
+        """Persist the first divergence for replay; never continue execution."""
+        task_digest = hashlib.sha256(task.prompt.encode("utf-8")).hexdigest()[:12]
+        path = self.artifact_dir / f"plan_executor_divergence_{task_digest}_step{step_index}.json"
+        payload = {
+            "environment_id": task.environment_id,
+            "prompt": task.prompt,
+            "step_index": step_index,
+            "action": step.action,
+            "predicted_state": step.predicted_state,
+            "observed_state": observed_state,
+            "reason": "plan_executor_state_mismatch",
+        }
+        self.artifact_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, sort_keys=True, indent=2, default=str) + "\n",
+            encoding="utf-8",
+        )
+        return path
 
 
 @dataclass
@@ -88,6 +166,7 @@ class SolvabilityGate:
     weak_reference_solver: Optional[ReferenceSolver] = None
     require_weak_failure: bool = False
     weak_pass_confidence: float = 0.6
+    plan_execution_guard: Optional[PlanExecutionGuard] = None
 
     async def evaluate(
         self,
@@ -119,6 +198,10 @@ class SolvabilityGate:
                 if self.require_weak_failure:
                     return False, confidence, f"weak_reference_solved: {weak_reason}"
                 return True, confidence, f"ok_weak_reference_solved_nonbinding: {weak_reason}"
+        if self.plan_execution_guard is not None:
+            aligned, guard_reason = await self.plan_execution_guard.evaluate(task)
+            if not aligned:
+                return False, confidence, guard_reason
         return True, confidence, "ok"
 
 

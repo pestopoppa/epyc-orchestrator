@@ -17,6 +17,8 @@ from scripts.autopilot.species.env_synth import (
     ETDAgent,
     MCPToolEntry,
     MCPToolRegistry,
+    PlanExecutionGuard,
+    PlanStep,
     SolvabilityGate,
     SuiteStagnation,
     SynthesizedTask,
@@ -373,6 +375,73 @@ def test_solvability_gate_fails_closed_on_required_weak_solver_error():
     assert ok is False
     assert confidence == 0.9
     assert reason == "weak_solver_error: weak unavailable"
+
+
+def test_solvability_gate_halts_on_first_plan_executor_divergence(tmp_path):
+    async def strong_solver(prompt, tool_set):
+        return True, 0.9, "strong_ok"
+
+    async def simulate_plan(task):
+        return [
+            PlanStep(action="set x", predicted_state={"x": 1}),
+            PlanStep(action="set y", predicted_state={"x": 1, "y": 2}),
+            PlanStep(action="must not run", predicted_state={"x": 1, "y": 3}),
+        ]
+
+    executed_actions: list[str] = []
+
+    async def execute_step(task, step):
+        executed_actions.append(step.action)
+        return {"x": 1} if step.action == "set x" else {"x": 1, "y": 99}
+
+    gate = SolvabilityGate(
+        reference_solver=strong_solver,
+        plan_execution_guard=PlanExecutionGuard(
+            plan_simulator=simulate_plan,
+            step_executor=execute_step,
+            artifact_dir=tmp_path / "divergences",
+        ),
+    )
+
+    ok, confidence, reason = asyncio.run(gate.evaluate(_task_for_gate()))
+
+    assert ok is False
+    assert confidence == 0.9
+    assert reason.startswith("plan_executor_divergence_at_step_1:")
+    assert executed_actions == ["set x", "set y"]
+    artifacts = list((tmp_path / "divergences").glob("*.json"))
+    assert len(artifacts) == 1
+    artifact = json.loads(artifacts[0].read_text())
+    assert artifact["step_index"] == 1
+    assert artifact["predicted_state"] == {"x": 1, "y": 2}
+    assert artifact["observed_state"] == {"x": 1, "y": 99}
+
+
+def test_solvability_gate_accepts_an_aligned_plan_executor(tmp_path):
+    async def strong_solver(prompt, tool_set):
+        return True, 0.9, "strong_ok"
+
+    async def simulate_plan(task):
+        return [PlanStep(action="set x", predicted_state={"x": 1})]
+
+    async def execute_step(task, step):
+        return {"x": 1}
+
+    gate = SolvabilityGate(
+        reference_solver=strong_solver,
+        plan_execution_guard=PlanExecutionGuard(
+            plan_simulator=simulate_plan,
+            step_executor=execute_step,
+            artifact_dir=tmp_path / "divergences",
+        ),
+    )
+
+    ok, confidence, reason = asyncio.run(gate.evaluate(_task_for_gate()))
+
+    assert ok is True
+    assert confidence == 0.9
+    assert reason == "ok"
+    assert not (tmp_path / "divergences").exists()
 
 
 def test_env_synth_propose_actions_shape():

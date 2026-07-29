@@ -34,6 +34,8 @@ from scripts.autopilot.species.env_synth.mcp_tool_registry import (
 from scripts.autopilot.species.env_synth.species import (
     EnvSynth,
     EnvSynthAction,
+    PlanExecutionGuard,
+    PlanStep,
     SolvabilityGate,
 )
 from scripts.autopilot.species.env_synth.gap_diagnosis import (
@@ -48,7 +50,7 @@ from scripts.autopilot.species.env_synth.eval_integration import (
 )
 
 __all__ = [
-    "EnvSynth", "EnvSynthAction", "SolvabilityGate",
+    "EnvSynth", "EnvSynthAction", "PlanExecutionGuard", "PlanStep", "SolvabilityGate",
     "ETDAgent",
     "TaskSynthesizer", "SynthesizedTask", "DifficultyBand",
     "VerifierBuilder", "VerifierSpec", "VerifierType",
