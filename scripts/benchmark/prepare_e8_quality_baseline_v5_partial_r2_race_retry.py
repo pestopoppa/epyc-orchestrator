@@ -948,6 +948,61 @@ def validate_staged_tree(
         raise ValueError("race-retry staged output completion binding differs")
 
 
+def _quarantine_output(output: Path, destination: Path, error: BaseException) -> None:
+    """Terminalize a failed private or already-published namespace off-path."""
+    if not output.is_dir() or output.is_symlink():
+        return
+    quarantine = destination.with_name(f".{destination.name}.aborted-{uuid.uuid4().hex}")
+    try:
+        RECOVERY.record_durable_abort(
+            output,
+            writer="prepare_e8_quality_baseline_v5_partial_r2_race_retry",
+            error=error,
+        )
+    finally:
+        # Never replace a pre-existing quarantine: a collision is evidence, not
+        # permission to overwrite another failed invocation.
+        V4.atomic_publish_noreplace(output, quarantine)
+        V4.fsync_dir(quarantine.parent)
+
+
+def _validate_and_publish(
+    staging: Path,
+    destination: Path,
+    plan: dict[str, Any],
+    *,
+    source: Path,
+    base: Path,
+    persisted_plan: dict[str, Any],
+) -> None:
+    """Seal then publish a complete staged tree with no validation gap."""
+    validate_staged_tree(staging, plan, destination=destination, require_complete=True)
+    _fsync_tree(staging)
+    if (
+        source_hashes(base) != persisted_plan["source_sha256"]
+        or source_hashes(source) != persisted_plan["predecessor_sha256"]
+    ):
+        raise ValueError("race-retry immutable source changed before publication")
+    # Fsync can take long enough for an external writer to mutate the private
+    # directory.  Re-run the exact producer gate immediately before rename.
+    validate_staged_tree(staging, plan, destination=destination, require_complete=True)
+    published = False
+    try:
+        V4.atomic_publish_noreplace(staging, destination)
+        published = True
+        V4.fsync_dir(destination.parent)
+    except BaseException as exc:
+        if published:
+            try:
+                _quarantine_output(destination, destination, exc)
+            except BaseException:
+                # Preserve the original publication failure.  The quarantine
+                # transition is no-replace, so a cleanup failure cannot
+                # silently overwrite competing evidence.
+                pass
+        raise
+
+
 def execute(args: argparse.Namespace) -> Path:
     destination = args.output_dir.absolute()
     if destination.exists() or destination.is_symlink():
@@ -1085,26 +1140,23 @@ def execute(args: argparse.Namespace) -> Path:
             or source_hashes(source) != persisted_plan["predecessor_sha256"]
         ):
             raise ValueError("race-retry immutable source changed during collection")
-        validate_staged_tree(output, plan, destination=destination, require_complete=True)
-        _fsync_tree(output)
-        if (
-            source_hashes(base) != persisted_plan["source_sha256"]
-            or source_hashes(source) != persisted_plan["predecessor_sha256"]
-        ):
-            raise ValueError("race-retry immutable source changed before publication")
-        V4.atomic_publish_noreplace(output, destination)
-        V4.fsync_dir(destination.parent)
+        _validate_and_publish(
+            output,
+            destination,
+            plan,
+            source=source,
+            base=base,
+            persisted_plan=persisted_plan,
+        )
         return destination
     except BaseException as exc:
         if output.is_dir() and not output.is_symlink():
-            RECOVERY.record_durable_abort(
-                output,
-                writer="prepare_e8_quality_baseline_v5_partial_r2_race_retry",
-                error=exc,
-            )
-            quarantine = destination.with_name(f".{destination.name}.aborted-{uuid.uuid4().hex}")
-            output.rename(quarantine)
-            V4.fsync_dir(quarantine.parent)
+            try:
+                _quarantine_output(output, destination, exc)
+            except BaseException:
+                # The original collection/publication error remains the
+                # caller-visible failure when cleanup itself also faults.
+                pass
         raise
 
 

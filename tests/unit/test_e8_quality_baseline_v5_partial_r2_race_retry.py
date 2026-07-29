@@ -71,6 +71,88 @@ def test_copy_tree_rejects_destination_mutation(
         RETRY._copy_tree(source, tmp_path / "destination", expected)
 
 
+def test_publish_revalidates_after_fsync_before_atomic_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staging = tmp_path / ".candidate.staging-test"
+    destination = tmp_path / "candidate"
+    source = tmp_path / "source"
+    base = source / "source_snapshot"
+    staging.mkdir()
+    base.mkdir(parents=True)
+    marker = staging / "mutation-marker"
+    marker.write_text("before", encoding="utf-8")
+    seen: list[str] = []
+
+    def validate(path: Path, _plan: dict, **_kwargs: object) -> None:
+        seen.append((path / "mutation-marker").read_text(encoding="utf-8"))
+        if len(seen) == 2:
+            raise ValueError("staged tree changed during fsync")
+
+    def mutate_after_first_validation(_path: Path) -> None:
+        marker.write_text("after", encoding="utf-8")
+
+    monkeypatch.setattr(RETRY, "validate_staged_tree", validate)
+    monkeypatch.setattr(RETRY, "_fsync_tree", mutate_after_first_validation)
+    monkeypatch.setattr(RETRY, "source_hashes", lambda _path: {})
+    monkeypatch.setattr(
+        RETRY.V4,
+        "atomic_publish_noreplace",
+        lambda *_args: pytest.fail("must not publish a post-fsync mutation"),
+    )
+
+    with pytest.raises(ValueError, match="changed during fsync"):
+        RETRY._validate_and_publish(
+            staging,
+            destination,
+            {"source_sha256": {}, "predecessor_sha256": {}},
+            source=source,
+            base=base,
+            persisted_plan={"source_sha256": {}, "predecessor_sha256": {}},
+        )
+    assert seen == ["before", "after"]
+    assert staging.is_dir()
+    assert not destination.exists()
+
+
+def test_parent_fsync_fault_after_publish_quarantines_public_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staging = tmp_path / ".candidate.staging-test"
+    destination = tmp_path / "candidate"
+    source = tmp_path / "source"
+    base = source / "source_snapshot"
+    staging.mkdir()
+    base.mkdir(parents=True)
+    (staging / "sealed.txt").write_text("sealed\n", encoding="utf-8")
+    monkeypatch.setattr(RETRY, "validate_staged_tree", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(RETRY, "_fsync_tree", lambda _path: None)
+    monkeypatch.setattr(RETRY, "source_hashes", lambda _path: {})
+    real_fsync_dir = RETRY.V4.fsync_dir
+
+    def fail_only_post_publish(path: Path) -> None:
+        if path == destination.parent and destination.is_dir():
+            raise OSError("injected parent fsync failure")
+        real_fsync_dir(path)
+
+    monkeypatch.setattr(RETRY.V4, "fsync_dir", fail_only_post_publish)
+    with pytest.raises(OSError, match="injected parent fsync failure"):
+        RETRY._validate_and_publish(
+            staging,
+            destination,
+            {"source_sha256": {}, "predecessor_sha256": {}},
+            source=source,
+            base=base,
+            persisted_plan={"source_sha256": {}, "predecessor_sha256": {}},
+        )
+
+    assert not destination.exists()
+    quarantines = list(tmp_path.glob(".candidate.aborted-*"))
+    assert len(quarantines) == 1
+    abort = RETRY.V4.load_json(quarantines[0] / RETRY.RECOVERY.ABORT_MARKER_NAME)
+    assert abort["status"] == "terminal_aborted_no_admission"
+
+
 def test_exact_race_lost_requires_zero_tokens_and_error_sentinel() -> None:
     assert RETRY._race_lost(_row(), QUESTION)
     assert not RETRY._race_lost(_row(tokens=1), QUESTION)
