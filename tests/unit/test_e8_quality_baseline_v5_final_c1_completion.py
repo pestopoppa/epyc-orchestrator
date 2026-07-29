@@ -515,7 +515,13 @@ def test_execute_and_validate_complete_reduced_typed_lineage(
             "proposal": {
                 "frontdoor_capacity": {
                     "held_recovery_claim": {"claim_id": "unit-q2"}
-                }
+                },
+                "instrument": {
+                    "measurement_source_sha256": {
+                        "/sealed/scripts/benchmark/debug_scorer.py": "c" * 64,
+                        "/sealed/scripts/benchmark/seeding_scoring.py": "d" * 64,
+                    }
+                },
             },
             "source_abort": source_abort,
         }
@@ -535,11 +541,14 @@ def test_execute_and_validate_complete_reduced_typed_lineage(
     )
     monkeypatch.setattr(COMPLETION.V4, "fsync_dir", lambda _path: None)
 
+    complete_r2_kwargs: dict[str, object] = {}
+
     def complete_r2(
         destination: Path,
         *_args: object,
         **_kwargs: object,
     ) -> None:
+        complete_r2_kwargs.update(_kwargs)
         responses = [
             state["journal"][ordinal]["response"]
             for ordinal in range(COMPLETION.RECOVERY.N)
@@ -587,6 +596,10 @@ def test_execute_and_validate_complete_reduced_typed_lineage(
     )
 
     assert COMPLETION.execute(args) == output
+    assert complete_r2_kwargs["historical_source_sha256"] == {
+        "debug_scorer": "c" * 64,
+        "seeding_scoring": "d" * 64,
+    }
     validation = COMPLETION.validate_published(args)
 
     assert validation["status"] == "published_complete_valid"

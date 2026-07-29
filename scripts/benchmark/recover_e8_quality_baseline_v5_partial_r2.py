@@ -1195,6 +1195,7 @@ def _complete_r2(
     *,
     completion_context: dict[str, Any] | None = None,
     trace_fragments: list[Path] | None = None,
+    historical_source_sha256: dict[str, str] | None = None,
 ) -> None:
     if len(rows) != N:
         raise ValueError("partial-r2 cannot seal an incomplete response ledger")
@@ -1256,7 +1257,13 @@ def _complete_r2(
         trace_path, responses, questions, tier=TIER, repetition=REPETITION, default_api_url=api_url
     )
     audit = V4.validate_response_scoring(
-        responses, questions, trace_path, default_api_url=api_url, tier=TIER, repetition=REPETITION
+        responses,
+        questions,
+        trace_path,
+        default_api_url=api_url,
+        tier=TIER,
+        repetition=REPETITION,
+        historical_source_sha256=historical_source_sha256,
     )
     V4.write_text(
         output / "responses.T2.r2.jsonl",

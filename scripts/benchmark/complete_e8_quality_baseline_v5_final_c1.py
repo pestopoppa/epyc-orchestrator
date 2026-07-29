@@ -1343,6 +1343,7 @@ def _complete(
         state["questions"],
         "http://127.0.0.1:8000",
         trace_fragments=[staging / TYPED_TRACE_INPUT_NAME],
+        historical_source_sha256=_historical_scorer_sources(state),
     )
     raw_path = staging / "raw.T2.r2.json"
     raw = V4.load_json(raw_path)
