@@ -12,6 +12,7 @@ import datetime as dt
 import hashlib
 import json
 import re
+import sqlite3
 from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
@@ -165,6 +166,16 @@ def parse_ts(value: Any) -> dt.datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=dt.timezone.utc)
     return parsed.astimezone(dt.timezone.utc)
+
+
+def parse_epoch_ts(value: Any) -> dt.datetime | None:
+    """Parse Hermes' Unix-second timestamps without guessing other formats."""
+    if not isinstance(value, int | float):
+        return None
+    try:
+        return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _date_from_path(path: Path) -> str | None:
@@ -591,6 +602,157 @@ def harvest_historical_conversations(
     return records, meta
 
 
+def harvest_hermes_state(
+    *,
+    state_db_paths: list[Path],
+    valid_classes: set[str],
+    start_date: str | None,
+    end_date: str | None,
+    omit_prompt_text: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Read Hermes state.db as an opt-in, read-only historical task source.
+
+    Hermes stores one SQLite row per message.  This reader deliberately imports
+    only user text followed by an assistant response, preserves prompt hashes by
+    default, and treats absent per-turn outcome/route data as absent rather than
+    inventing it.  It supports the current schema and excludes soft-deleted rows
+    when an ``active`` column is present in a newer compatible schema.
+    """
+    records: list[dict[str, Any]] = []
+    skipped = Counter()
+    opened: list[str] = []
+    for db_path in state_db_paths:
+        path = db_path.expanduser()
+        if not path.is_file():
+            skipped["missing_db"] += 1
+            continue
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            message_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(messages)")}
+            session_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(sessions)")}
+            required = {"id", "session_id", "role", "content", "timestamp"}
+            if not required <= message_columns:
+                skipped["incompatible_schema"] += 1
+                conn.close()
+                continue
+            message_active = " AND COALESCE(m.active, 1) != 0" if "active" in message_columns else ""
+            session_active = " AND COALESCE(s.active, 1) != 0" if "active" in session_columns else ""
+            model_expr = "s.model" if "model" in session_columns else "NULL"
+            rows = list(
+                conn.execute(
+                    "SELECT m.id, m.session_id, m.role, m.content, m.timestamp, m.token_count, "
+                    f"{model_expr} AS model FROM messages m JOIN sessions s ON s.id = m.session_id "
+                    f"WHERE 1=1{message_active}{session_active} ORDER BY m.session_id, m.timestamp, m.id"
+                )
+            )
+            conn.close()
+        except sqlite3.Error:
+            skipped["sqlite_error"] += 1
+            continue
+        opened.append(str(path))
+        by_session: dict[str, list[sqlite3.Row]] = {}
+        for row in rows:
+            by_session.setdefault(str(row["session_id"]), []).append(row)
+        for session_id, messages in by_session.items():
+            for index, user_row in enumerate(messages):
+                if user_row["role"] != "user" or not isinstance(user_row["content"], str):
+                    continue
+                text = user_row["content"].strip()
+                if not text or text.startswith("<command-name>") or text.startswith("<local-command-"):
+                    skipped["not_user_task"] += 1
+                    continue
+                start_ts = parse_epoch_ts(user_row["timestamp"])
+                date_str = start_ts.date().isoformat() if start_ts else None
+                if not _date_in_range(date_str, start_date, end_date):
+                    skipped["outside_date_range"] += 1
+                    continue
+                assistant_row = None
+                for candidate in messages[index + 1 :]:
+                    if candidate["role"] == "user":
+                        break
+                    if candidate["role"] == "assistant" and isinstance(candidate["content"], str):
+                        assistant_row = candidate
+                        break
+                end_ts = parse_epoch_ts(assistant_row["timestamp"]) if assistant_row else None
+                class_info = classify_task(text, valid_classes)
+                synthetic = synthetic_like(text)
+                eligibility_reasons = []
+                if not class_info["class_is_taxonomy"]:
+                    eligibility_reasons.append("not_taxonomy_class")
+                if assistant_row is None:
+                    eligibility_reasons.append("missing_outcome")
+                if synthetic:
+                    eligibility_reasons.append("synthetic_like_prompt")
+                source_ref = {"path": str(path), "message_id": user_row["id"]}
+                terminal_ref = (
+                    {"path": str(path), "message_id": assistant_row["id"]}
+                    if assistant_row is not None
+                    else None
+                )
+                completion_tokens = assistant_row["token_count"] if assistant_row is not None else None
+                message_id = user_row["id"]
+                tokens = (
+                    {"completion_tokens": completion_tokens, "total": completion_tokens}
+                    if isinstance(completion_tokens, int | float)
+                    else None
+                )
+                records.append(
+                    {
+                        "schema_version": "real_task_record.v1",
+                        "record_type": "task_record",
+                        "task_id": f"hermes-{sha256_text(f'{path}:{message_id}', n=16)}",
+                        "source": "hermes_state_sqlite",
+                        "source_family": "historical_operator_conversation",
+                        "source_refs": [source_ref],
+                        "started_ref": source_ref,
+                        "terminal_ref": terminal_ref,
+                        "task_type": "chat",
+                        "priority": "historical",
+                        "class": class_info["class"],
+                        "class_source": class_info["class_source"],
+                        "class_confidence": class_info["class_confidence"],
+                        "class_matches": class_info["class_matches"],
+                        "class_is_taxonomy": class_info["class_is_taxonomy"],
+                        "prompt_ref": {
+                            "kind": "hermes_state_prompt_sha256",
+                            "sha256": sha256_text(text),
+                            "source_ref": source_ref,
+                        },
+                        "prompt": "" if omit_prompt_text else text,
+                        "route_taken": [],
+                        "route_strategy": "hermes_state",
+                        "final_answer_role": assistant_row["model"] if assistant_row is not None else None,
+                        "producer_role": "historical_assistant" if assistant_row is not None else None,
+                        "wall_s": _wall_seconds(start_ts, end_ts, None),
+                        "tokens": tokens,
+                        "outcome": "success" if assistant_row is not None else "unknown",
+                        "outcome_source": "assistant_response_observed" if assistant_row is not None else "missing_assistant",
+                        "task_record_ref": None,
+                        "task_record_schema_version": None,
+                        "operator_verdict": None,
+                        "operator_verdict_details_ref": None,
+                        "timestamps": {
+                            "started_at": start_ts.isoformat() if start_ts else None,
+                            "ended_at": end_ts.isoformat() if end_ts else None,
+                        },
+                        "privacy_class": "local_private",
+                        "synthetic_like": synthetic,
+                        "training_eligible": not eligibility_reasons,
+                        "eligibility_reasons": eligibility_reasons,
+                        "historical": {
+                            "session_id": session_id,
+                            "uuid": f"message-{user_row['id']}",
+                            "cwd": None,
+                            "git_branch": None,
+                            "entrypoint": "hermes_state",
+                            "version": None,
+                        },
+                    }
+                )
+    return records, {"source": "hermes_state_sqlite", "source_paths": opened, "records": len(records), "skipped": dict(skipped)}
+
+
 def harvest_progress_records(
     *,
     progress_log_dir: Path,
@@ -955,6 +1117,7 @@ def write_manifest(
     progress_meta: dict[str, Any],
     lab_meta: dict[str, Any],
     historical_meta: dict[str, Any],
+    hermes_meta: dict[str, Any],
     rows: list[dict[str, Any]],
     options: dict[str, Any],
 ) -> None:
@@ -975,7 +1138,12 @@ def write_manifest(
             "taxonomy_class": sum(1 for row in rows if row.get("class_is_taxonomy")),
             "duplicates_collapsed": sum(int(row.get("duplicate_count") or 1) - 1 for row in rows),
         },
-        "sources": {"progress": progress_meta, "lab": lab_meta, "historical": historical_meta},
+        "sources": {
+            "progress": progress_meta,
+            "lab": lab_meta,
+            "historical": historical_meta,
+            "hermes": hermes_meta,
+        },
         "options": options,
         "privacy_note": "Records are local-private; do not publish prompt text under F6.",
     }
@@ -1011,7 +1179,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         omit_prompt_text=args.omit_prompt_text,
         include_sidechains=args.include_historical_sidechains,
     )
-    rows = progress_records + lab_records + historical_records
+    hermes_records, hermes_meta = harvest_hermes_state(
+        state_db_paths=[Path(p).expanduser() for p in args.hermes_state_dbs],
+        valid_classes=valid_classes,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        omit_prompt_text=args.omit_prompt_text,
+    )
+    rows = progress_records + lab_records + historical_records + hermes_records
     rows.sort(key=lambda row: ((row.get("timestamps") or {}).get("started_at") or "", row.get("task_id") or ""))
     if args.exclude_synthetic_like:
         rows = [row for row in rows if not row.get("synthetic_like")]
@@ -1034,6 +1209,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "lab_task_records": args.lab_task_records,
         "historical_conversation_paths": args.historical_conversation_paths,
         "include_historical_sidechains": args.include_historical_sidechains,
+        "hermes_state_dbs": args.hermes_state_dbs,
         "compact_evidence": args.compact_evidence,
         "training_eligible_only": args.training_eligible_only,
     }
@@ -1047,6 +1223,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         progress_meta=progress_meta,
         lab_meta=lab_meta,
         historical_meta=historical_meta,
+        hermes_meta=hermes_meta,
         rows=rows,
         options=options,
     )
@@ -1067,6 +1244,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Claude/Codex session JSONL file or directory to harvest as historical operator workflow.",
+    )
+    parser.add_argument(
+        "--hermes-state-db",
+        dest="hermes_state_dbs",
+        action="append",
+        default=[],
+        help="Hermes state.db to harvest read-only as local-private historical workflow.",
     )
     parser.add_argument(
         "--include-historical-sidechains",

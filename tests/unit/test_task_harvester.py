@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import sqlite3
 from argparse import Namespace
 from pathlib import Path
 
@@ -58,6 +59,7 @@ def _args(tmp_path: Path, **overrides) -> Namespace:
         "lab_task_records": [],
         "historical_conversation_paths": [],
         "include_historical_sidechains": False,
+        "hermes_state_dbs": [],
         "limit": 0,
         "include_open": False,
         "exclude_synthetic_like": False,
@@ -72,6 +74,73 @@ def _args(tmp_path: Path, **overrides) -> Namespace:
 
 def _read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def _hermes_state_db(path: Path) -> None:
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, model TEXT, active INTEGER DEFAULT 1);
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT,
+            timestamp REAL NOT NULL,
+            token_count INTEGER,
+            active INTEGER DEFAULT 1
+        );
+        """
+    )
+    conn.executemany("INSERT INTO sessions (id, model, active) VALUES (?, ?, ?)", [
+        ("s-live", "hermes-model", 1),
+        ("s-dead", "deleted-model", 0),
+    ])
+    conn.executemany(
+        "INSERT INTO messages (id, session_id, role, content, timestamp, token_count, active) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (1, "s-live", "user", "Implement a code patch and update tests", 1781222400.0, None, 1),
+            (2, "s-live", "assistant", "Done.", 1781222404.5, 11, 1),
+            (3, "s-live", "user", "hidden deleted request", 1781222410.0, None, 0),
+            (4, "s-live", "assistant", "ignored", 1781222412.0, 2, 1),
+            (5, "s-dead", "user", "Implement hidden task", 1781222420.0, None, 1),
+            (6, "s-dead", "assistant", "ignored", 1781222422.0, 2, 1),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_harvest_hermes_state_is_read_only_hashes_prompts_and_excludes_soft_deleted(tmp_path: Path) -> None:
+    _workload_model(tmp_path / "workload_model.yaml")
+    db_path = tmp_path / "state.db"
+    _hermes_state_db(db_path)
+
+    result = harvest_tasks.run(
+        _args(
+            tmp_path,
+            progress_log_dir=str(tmp_path / "missing-progress"),
+            hermes_state_dbs=[str(db_path)],
+            omit_prompt_text=True,
+            training_eligible_only=True,
+        )
+    )
+
+    rows = _read_jsonl(Path(result["output"]))
+    manifest = json.loads(Path(result["manifest"]).read_text())
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["source"] == "hermes_state_sqlite"
+    assert row["source_family"] == "historical_operator_conversation"
+    assert row["prompt"] == ""
+    assert row["prompt_ref"]["kind"] == "hermes_state_prompt_sha256"
+    assert row["route_strategy"] == "hermes_state"
+    assert row["final_answer_role"] == "hermes-model"
+    assert row["wall_s"] == 4.5
+    assert row["tokens"] == {"completion_tokens": 11, "total": 11}
+    assert row["training_eligible"] is True
+    assert manifest["sources"]["hermes"]["records"] == 1
+    assert manifest["counts"]["by_source"] == {"hermes_state_sqlite": 1}
 
 
 def test_harvest_progress_records_with_class_outcome_route_and_wall_time(tmp_path: Path) -> None:
