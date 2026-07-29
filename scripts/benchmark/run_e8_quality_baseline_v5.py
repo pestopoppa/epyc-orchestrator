@@ -88,9 +88,8 @@ def durable_candidate_writer(writer: str) -> Any:
             staging_pattern = f".{output.name}.staging-*"
             existing_staging = set(output.parent.glob(staging_pattern))
             output_existed = output.exists() or output.is_symlink()
-            try:
-                return function(args, *call_args, **call_kwargs)
-            except BaseException as exc:
+
+            def mark_created(error: BaseException) -> None:
                 candidates = sorted(
                     set(output.parent.glob(staging_pattern)) - existing_staging,
                     key=str,
@@ -99,12 +98,33 @@ def durable_candidate_writer(writer: str) -> Any:
                     candidates.append(output)
                 for candidate in candidates:
                     try:
-                        record_durable_abort(candidate, writer=writer, error=exc)
+                        record_durable_abort(candidate, writer=writer, error=error)
                     except BaseException as marker_error:
-                        exc.add_note(
+                        error.add_note(
                             f"failed to persist abort marker in {candidate}: {marker_error}"
                         )
+
+            try:
+                result = function(args, *call_args, **call_kwargs)
+            except BaseException as exc:
+                mark_created(exc)
                 raise
+            status = (
+                result[-1]
+                if isinstance(result, tuple)
+                and result
+                and isinstance(result[-1], int)
+                and not isinstance(result[-1], bool)
+                else None
+            )
+            if result is False or (status is not None and status != 0):
+                mark_created(
+                    RuntimeError(
+                        f"{writer} returned non-success status "
+                        f"{status if status is not None else result!r}"
+                    )
+                )
+            return result
 
         return wrapped
 

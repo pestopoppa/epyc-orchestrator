@@ -52,6 +52,178 @@ def test_durable_candidate_writer_marks_new_staging_and_published_namespaces(
         assert marker["error_class"] == "RuntimeError"
 
 
+def test_durable_candidate_writer_marks_false_terminal_result(tmp_path: Path) -> None:
+    output = tmp_path / "candidate"
+    staging = tmp_path / ".candidate.staging-false"
+
+    @runner.durable_candidate_writer("false_injection")
+    def fail(_args: SimpleNamespace) -> bool:
+        staging.mkdir()
+        return False
+
+    assert fail(SimpleNamespace(output_dir=output)) is False
+    marker = json.loads((staging / runner.ABORT_MARKER_NAME).read_text())
+    assert marker["status"] == "aborted"
+    assert marker["error"] == "false_injection returned non-success status False"
+
+
+def test_execute_marks_real_ineligible_staging_return(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "candidate"
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}\n")
+    watcher_rows = [
+        {
+            "started_at": "2026-07-28T00:00:00Z",
+            "finished_at": "2026-07-28T00:00:00Z",
+            "ok": True,
+        },
+        {
+            "started_at": "2026-07-28T00:00:05Z",
+            "finished_at": "2026-07-28T00:00:05Z",
+            "ok": True,
+        },
+    ]
+
+    class FakeThread:
+        alive = True
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+    class FakeWatcher:
+        def __init__(self, _args, _binding, path: Path, **_kwargs) -> None:
+            self.path = path
+            self._thread = FakeThread()
+            self.samples: list[dict] = []
+            self.fatal_error = None
+
+        def start(self) -> None:
+            return None
+
+        def active_load(self, **_kwargs):
+            return nullcontext()
+
+        def stop(self) -> list[dict]:
+            _jsonl(self.path, watcher_rows)
+            self.samples = watcher_rows
+            self._thread.alive = False
+            return self.samples
+
+    class FakeTower:
+        def __init__(self, **_kwargs) -> None:
+            self._question_artifact_dir = None
+
+    report = {
+        "blockers": [],
+        "preconditions": {
+            "file_sha256": {},
+            "health": {"ok": True, "payload_sha256": "health"},
+            "numeric_rerun": {},
+        },
+    }
+    monkeypatch.setattr(runner, "protocol_proposal", lambda _args: {})
+    monkeypatch.setattr(runner.V4, "prepare_report", lambda *_args, **_kwargs: report)
+    monkeypatch.setattr(runner.V4, "runtime_binding", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(runner.V4, "EvalTower", FakeTower)
+    monkeypatch.setattr(runner.V4, "probe_url_mapping", lambda _health: {})
+    monkeypatch.setattr(runner.V4, "RuntimeWatcher", FakeWatcher)
+    monkeypatch.setattr(runner.V4, "require_clean_watcher", lambda _watcher: None)
+    monkeypatch.setattr(
+        runner.V4,
+        "question_vector",
+        lambda _tower, *, tier, **_kwargs: (
+            [{"qid": f"q{tier}", "suite": "suite"}],
+            f"core-{tier}",
+        ),
+    )
+    monkeypatch.setattr(
+        runner.V4, "validate_source_vector_scorer_config", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        runner.V4, "apply_context_replacement_map", lambda _args, questions, **_kwargs: questions
+    )
+    monkeypatch.setattr(
+        runner.V4,
+        "public_vector",
+        lambda questions, *, tier, core_id, seed: {
+            "n": len(questions),
+            "tier": tier,
+            "core_id": core_id,
+            "seed": seed,
+        },
+    )
+    monkeypatch.setattr(
+        runner.V4,
+        "scoring_vector",
+        lambda questions, *, tier, core_id, seed: {
+            "questions": questions,
+            "tier": tier,
+            "core_id": core_id,
+            "seed": seed,
+        },
+    )
+    monkeypatch.setattr(runner.V4, "frontdoor_context_coverage", lambda *_args: {})
+    monkeypatch.setattr(runner.V4, "candidate_contract_from_proposal", lambda *_args: {})
+    monkeypatch.setattr(runner, "protocol_contract", lambda *_args: None)
+    monkeypatch.setattr(
+        runner,
+        "run_repetition_v5",
+        lambda *_args, tier, **_kwargs: (
+            {
+                "ts": "2026-07-28T00:00:00Z",
+                "q": 0.0,
+                "core_id": f"core-{tier}",
+            },
+            {
+                "error_classification": {"infrastructure": 1},
+                "n_results": 1,
+                "actual_eval_concurrency": [runner.V4.CONCURRENCY],
+                "response_vector_matches_input": True,
+                "per_suite_counts_match_input": True,
+                "runtime_binding_matches_pre": True,
+                "all_routes_frontdoor": True,
+                "sidecar_sha256": "0" * 64,
+                "judge_trace_sha256": "0" * 64,
+                "scoring_audit": {"matches": True},
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        runner.V4, "api_health", lambda *_args: {"ok": True, "payload_sha256": "health"}
+    )
+    monkeypatch.setattr(runner.V4, "file_fingerprints", lambda *_args: {})
+    monkeypatch.setattr(runner.V4, "immutable_paths", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(runner.V4, "numeric_rerun_status", lambda *_args: {})
+    monkeypatch.setattr(runner.V4, "load_json", lambda _path: {})
+    monkeypatch.setattr(runner, "validate_repetition_artifacts", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runner.V4, "build_evidence", lambda **_kwargs: ({}, {}))
+
+    result, status = runner.execute(
+        SimpleNamespace(
+            output_dir=output,
+            api_url="http://test",
+            http_timeout_s=1,
+            t1_n=1,
+            t2_n=1,
+            t1_core_id="core-1",
+            seed=42,
+            state_path=state_path,
+        )
+    )
+
+    assert status == 2
+    assert result["decision_grade"] is False
+    assert not output.exists()
+    staging = next(tmp_path.glob(".candidate.staging-*"))
+    marker = json.loads((staging / runner.ABORT_MARKER_NAME).read_text())
+    assert marker["status"] == "aborted"
+    assert marker["writer"] == "run_e8_quality_baseline_v5"
+    assert marker["error"] == "run_e8_quality_baseline_v5 returned non-success status 2"
+    assert json.loads((staging / "run_seal.json").read_text())["status"] == "failed"
+
+
 def _integrated_e8_pins(*, wrapper: Path | None = None, validator_wrapper: Path | None = None) -> dict[str, str]:
     """Pins used by the final wrapper's exact integration-source contract."""
     benchmark = INTEGRATED_E8_ROOT / "scripts/benchmark"
