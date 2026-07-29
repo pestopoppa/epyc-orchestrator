@@ -874,7 +874,12 @@ def execute(args: argparse.Namespace) -> Path:
     if not _claim_is_exact_q3(claim):
         raise ValueError("final-c1 requires the exact held q3 claim")
     binding = V4.runtime_binding(runner_args)
-    capacity = RECOVERY.preflight_frontdoor_capacity(binding, required=1, claim=claim)
+    capacity = RECOVERY.preflight_frontdoor_capacity(
+        binding,
+        required=CONCURRENCY,
+        claim=claim,
+        expected_concurrency=CONCURRENCY,
+    )
     validated = validate_failed_source(source)
     questions = RECOVERY._reconstruct_questions(
         runner_args,
