@@ -72,6 +72,30 @@ version: 1
 lane: gpu_shadow_lane
 device: ROCm0
 vram_total_gib: 64
+
+# ══════════════════════════════════════════════════════════════════════════
+# WHISPER'S ~1.6 GB IN EVERY `phase2_resident_set` ROW IS A RESERVATION FOR A
+# TENANT THAT MAY NEVER ARRIVE — AND THE ERROR IS FAIL-SAFE. Measured
+# 2026-07-29 (claude-gpu-lane, P2-2d): the deployed whisper is faster-whisper
+# large-v3-turbo on **CTranslate2 4.7.2, which has no ROCm/HIP backend** — it
+# exposes only `Device` + `get_cuda_device_count`, reports `cuda_devices 0`,
+# and `whisper_server.py:61-62` is hard-coded `device="cpu"`. whisper.cpp (the
+# ggml sibling that DOES build against HIP) is not on this host. D2's
+# "~1.6 GB" is the CTranslate2 DIRECTORY's disk footprint — the size of a
+# model that cannot execute on the device — never a measured MI210 VRAM
+# figure.
+#
+# DO NOT "correct" these budgets upward on the strength of that. If whisper
+# never lands, every `phase2_resident_set` row is CONSERVATIVE by ~1.6 GiB:
+# it UNDER-states available dynamic VRAM, so no ceiling over-authorises and
+# no (np, ctx) cell needs withdrawing. Reclaiming the 1.6 GiB is a ceiling
+# amendment that is downstream of the P2-5j placement sweep by the same gate
+# as every carve variant — and it is gated on the operator's still-open W1
+# (whisper stays CPU, amend D2) vs W2 (port to whisper.cpp on HIP) choice.
+# Operator chose W3 on 2026-07-29 — DEFER: land the two verified tenants, file
+# whisper downstream of the bake-off. W3 decides nothing about these numbers.
+# Record: epyc-root docs/reference/p2-2-tenant-landing-readiness-20260729.md §3.
+# ══════════════════════════════════════════════════════════════════════════
 policy_source:
   instrument: np_context_study_v8_20260727
   aggregator: driver/aggregate_np_context_v8.py (read-only; surfaces terminal)
