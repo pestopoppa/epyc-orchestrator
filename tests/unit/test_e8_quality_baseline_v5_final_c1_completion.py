@@ -599,6 +599,90 @@ def test_execute_and_validate_complete_reduced_typed_lineage(
         output / COMPLETION.RUN_SEAL_NAME
     )["status"] == COMPLETION.TERMINAL_SEAL.COMPLETE_STATUS
 
+    replay = COMPLETION.V4.load_jsonl(output / COMPLETION.SCORE_REPLAY_NAME)
+    replay[0]["after_correct"] = not replay[0]["after_correct"]
+    _write_jsonl(output / COMPLETION.SCORE_REPLAY_NAME, replay)
+    with pytest.raises(ValueError, match="deterministic completion output differs"):
+        COMPLETION.validate_published(args)
+
+
+def test_deterministic_score_replay_corrects_live_bcb190_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A historical false cannot survive a pinned code-execution replay."""
+    monkeypatch.setattr(COMPLETION.RECOVERY, "N", 419)
+    questions = [_question(ordinal) for ordinal in range(419)]
+    questions[418] = {
+        "qid": "bcb_BigCodeBench/190",
+        "suite": "bigcodebench",
+        "scoring_method": "code_execution",
+        "scoring_config": {"language": "python"},
+        "expected": "assert True",
+    }
+    journal = {
+        ordinal: {
+            "ordinal": ordinal,
+            "source": "reuse",
+            "response": _response(ordinal),
+        }
+        for ordinal in range(419)
+    }
+    response = journal[418]["response"]
+    response.update(
+        {
+            "qid": "bcb_BigCodeBench/190",
+            "suite": "bigcodebench",
+            "scoring_method": "code_execution",
+            "answer": "assert True",
+            "correct": False,
+            "scoring_config_sha256": COMPLETION.canonical_hash(
+                {"language": "python"}
+            ),
+        }
+    )
+    selected = {ordinal: _sidecar(ordinal) for ordinal in range(419)}
+    selected[418] = {
+        "row_type": "question_result",
+        "ordinal": 418,
+        "answer": "assert True",
+        "result": {
+            "qid": "bcb_BigCodeBench/190",
+            "question_id": "bcb_BigCodeBench/190",
+            "tokens_generated": 1,
+            "correct": False,
+            "route": "frontdoor",
+            "answer_hash": COMPLETION.V5._normalized_answer_hash("assert True"),
+        },
+    }
+    monkeypatch.setattr(
+        COMPLETION.V4,
+        "independently_score_response",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        COMPLETION,
+        "_scorer_runtime_witness",
+        lambda: {"test_runtime": "pinned"},
+    )
+
+    working, records, corrections = COMPLETION._replay_deterministic_scores(
+        {"journal": journal, "questions": questions}, selected
+    )
+
+    record = next(row for row in records if row["ordinal"] == 418)
+    assert record["qid"] == "bcb_BigCodeBench/190"
+    assert record["changed"] is True
+    assert record["before_correct"] is False
+    assert record["after_correct"] is True
+    assert record["scorer_sources_sha256"] == COMPLETION.canonical_hash(
+        record["scorer_sources"]
+    )
+    assert record["scorer_runtime_witness_sha256"] == COMPLETION.canonical_hash(
+        record["scorer_runtime_witness"]
+    )
+    assert working[418]["response"]["correct"] is True
+    assert corrections[418]["result"]["correct"] is True
+
 
 def test_parent_fsync_failure_terminalizes_published_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
