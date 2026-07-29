@@ -530,7 +530,12 @@ def load_runner() -> Any:
 
 
 def resolve_artifact(root: Path, value: Any, label: str) -> Path:
-    path = Path(str(value or "")).resolve(strict=True)
+    referenced = Path(str(value or ""))
+    if not referenced.is_absolute():
+        raise ValueError(f"{label} is not an absolute canonical path")
+    path = referenced.resolve(strict=True)
+    if referenced != path:
+        raise ValueError(f"{label} uses a symlink or non-canonical path")
     if not path.is_relative_to(root):
         raise ValueError(f"{label} escapes the sealed evidence directory")
     return path
@@ -1951,6 +1956,11 @@ def validate(
         raise ValueError("v4 base runner differs from the externally reviewed hash")
     evidence_path = evidence_path.resolve(strict=True)
     evidence_root = evidence_path.parent
+    if any(
+        path.name == getattr(runner, "ABORT_MARKER_NAME", "durable_abort.json")
+        for path in evidence_root.rglob("*")
+    ):
+        raise ValueError("evidence namespace has a durable abort marker")
     evidence = load_json(evidence_path, "evidence")
     if (
         set(evidence) != EXPECTED_EVIDENCE_KEYS
@@ -2311,9 +2321,17 @@ def validate(
                 ):
                     raise ValueError("partial-resume pristine artifacts are not source-linked")
             expected_qids = [row["qid"] for row in vectors[tier]["questions"]]
+            expected_suites = [row.get("suite") for row in scoring[tier]["questions"]]
+            if any(not isinstance(suite, str) or not suite for suite in expected_suites):
+                raise ValueError("fixed scoring vector has an invalid suite identity")
             responses = runner.V4.load_jsonl(response_path)
             if any(set(row) != RESPONSE_KEYS for row in responses):
                 raise ValueError("final response ledger has unexpected fields")
+            if len(responses) != len(expected_suites) or any(
+                response.get("suite") != expected_suites[ordinal]
+                for ordinal, response in enumerate(responses)
+            ):
+                raise ValueError("final response suite differs from the fixed scoring vector")
             pristine_trace_lines = (
                 pristine_paths[trace_path.name].read_bytes().splitlines(keepends=True)
             )
@@ -2525,8 +2543,8 @@ def validate(
                 repetition=repetition,
             )
             suites: dict[str, list[bool]] = {}
-            for response in responses:
-                suites.setdefault(str(response["suite"]), []).append(
+            for ordinal, response in enumerate(responses):
+                suites.setdefault(expected_suites[ordinal], []).append(
                     bool(response["correct"])
                 )
             derived_raw[(tier, repetition)] = {
@@ -2805,6 +2823,18 @@ def validate(
             )
             raw = load_json(raw_path, "raw observation")
             recomputed = derived_raw[(tier, repetition)]
+            raw_timestamp = raw.get("ts")
+            try:
+                parsed_timestamp = datetime.fromisoformat(
+                    raw_timestamp.replace("Z", "+00:00")
+                )
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError("raw observation timestamp is invalid") from exc
+            if (
+                parsed_timestamp.tzinfo is None
+                or parsed_timestamp.timestamp() < runner.V4.E8_BOUNDARY
+            ):
+                raise ValueError("raw observation timestamp is outside E8")
             if (
                 raw_path
                 != evidence_path.parent / f"raw.T{tier}.r{repetition}.json"
@@ -2888,16 +2918,25 @@ def validate(
     bundle = seal.get("bundle_sha256")
     if not isinstance(bundle, dict) or not bundle:
         raise ValueError("v5 bundle seal is missing")
-    actual_paths = {
-        str(path.resolve())
-        for path in evidence_path.parent.rglob("*")
-        if path.is_file() and path.name != "run_seal.json"
-    }
+    tree_entries = list(evidence_root.rglob("*"))
+    if any(path.is_symlink() for path in tree_entries):
+        raise ValueError("v5 evidence tree contains a symlink")
+    actual_paths: set[str] = set()
+    for path in tree_entries:
+        if not path.is_file() or path.name == "run_seal.json":
+            continue
+        resolved = path.resolve(strict=True)
+        if not resolved.is_relative_to(evidence_root):
+            raise ValueError("v5 evidence tree member escapes the evidence root")
+        actual_paths.add(str(resolved))
     if set(bundle) != actual_paths:
         raise ValueError("v5 bundle seal does not have the exact artifact set")
     for path_text, expected in bundle.items():
-        path = Path(path_text)
-        if not path.is_absolute() or not path.is_file() or sha256_path(path) != expected:
+        try:
+            path = resolve_artifact(evidence_root, path_text, "sealed bundle member")
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"sealed bundle member differs: {path_text}") from exc
+        if path.name == "run_seal.json" or not path.is_file() or sha256_path(path) != expected:
             raise ValueError(f"sealed bundle member differs: {path_text}")
     return {
         "valid": True,

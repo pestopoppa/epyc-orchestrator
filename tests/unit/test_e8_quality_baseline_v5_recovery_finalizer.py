@@ -1345,6 +1345,21 @@ def test_install_recovered_r2_rejects_mutated_partial_source_file(tmp_path: Path
         )
 
 
+def test_copy_file_rejects_faulty_destination_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_text("sealed\n")
+
+    def corrupt_write(path: Path, _payload: bytes) -> None:
+        path.write_text("corrupt\n")
+
+    monkeypatch.setattr(finalizer.V5, "write_bytes_create", corrupt_write)
+    with pytest.raises(ValueError, match="copy differs"):
+        finalizer._copy_file(source, destination)
+
+
 def test_validate_intermediate_rejects_lexical_symlink(tmp_path: Path) -> None:
     real = tmp_path / "real"
     real.mkdir()

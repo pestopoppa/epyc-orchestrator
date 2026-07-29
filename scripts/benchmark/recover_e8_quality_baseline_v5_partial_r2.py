@@ -714,8 +714,27 @@ def _validate_generation_sidecar_envelope(
     if not question_rows:
         return []
     starts: dict[str, dict[str, Any]] = {}
+    completes: dict[str, dict[str, Any]] = {}
     for row in parsed:
-        if not isinstance(row, dict) or row.get("row_type") != "batch_start":
+        if not isinstance(row, dict):
+            continue
+        if row.get("row_type") == "batch_complete":
+            batch_id = row.get("eval_batch_id")
+            if (
+                not isinstance(batch_id, str)
+                or not batch_id
+                or batch_id in completes
+                or row.get("label") != expected_label
+                or not isinstance(row.get("requested_n"), int)
+                or isinstance(row.get("requested_n"), bool)
+                or not isinstance(row.get("completed_n"), int)
+                or isinstance(row.get("completed_n"), bool)
+                or row.get("complete") is not True
+            ):
+                raise ValueError("partial-r2 generation batch completion is invalid")
+            completes[batch_id] = row
+            continue
+        if row.get("row_type") != "batch_start":
             continue
         batch_id = row.get("eval_batch_id")
         if (
@@ -732,6 +751,15 @@ def _validate_generation_sidecar_envelope(
         starts[batch_id] = row
     if not starts:
         raise ValueError("partial-r2 generation sidecar has no c3 batch identity")
+    if set(completes) != set(starts):
+        raise ValueError("partial-r2 generation sidecar lacks exact batch completion")
+    for batch_id, start in starts.items():
+        complete = completes[batch_id]
+        if (
+            complete["requested_n"] != start["requested_n"]
+            or complete["completed_n"] != start["requested_n"]
+        ):
+            raise ValueError("partial-r2 generation batch did not complete its requested rows")
     if not watcher_path.is_file() or watcher_path.is_symlink():
         raise ValueError("partial-r2 generation sidecar lacks watcher evidence")
     watcher = V4.load_jsonl(watcher_path)
@@ -753,9 +781,11 @@ def _validate_generation_sidecar_envelope(
     active_start = min(_watcher_timestamp(row.get("started_at")) for row in active)
     active_end = max(_watcher_timestamp(row.get("finished_at")) for row in active)
     seen: set[int] = set()
+    rows_per_batch: dict[str, int] = {batch_id: 0 for batch_id in starts}
     for row in question_rows:
         ordinal = row.get("ordinal")
-        batch = starts.get(row.get("eval_batch_id"))
+        batch_id = row.get("eval_batch_id")
+        batch = starts.get(batch_id)
         started = row.get("started_at_s")
         ended = row.get("ended_at_s")
         if (
@@ -774,6 +804,10 @@ def _validate_generation_sidecar_envelope(
                 "partial-r2 generation row is not bound to its c3 batch and watcher"
             )
         seen.add(ordinal)
+        assert isinstance(batch_id, str)
+        rows_per_batch[batch_id] += 1
+    if any(rows_per_batch[batch_id] != start["requested_n"] for batch_id, start in starts.items()):
+        raise ValueError("partial-r2 generation batch row count differs from requested_n")
     return question_rows
 
 

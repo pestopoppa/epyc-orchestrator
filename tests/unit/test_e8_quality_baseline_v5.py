@@ -30,6 +30,28 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_durable_candidate_writer_marks_new_staging_and_published_namespaces(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "candidate"
+    staging = tmp_path / ".candidate.staging-fault"
+
+    @runner.durable_candidate_writer("fault_injection")
+    def fail(args: SimpleNamespace) -> None:
+        staging.mkdir()
+        output.mkdir()
+        raise RuntimeError("injected failure")
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        fail(SimpleNamespace(output_dir=output))
+    for namespace in (staging, output):
+        marker = json.loads((namespace / runner.ABORT_MARKER_NAME).read_text())
+        assert marker["schema"] == runner.ABORT_SCHEMA
+        assert marker["status"] == "aborted"
+        assert marker["writer"] == "fault_injection"
+        assert marker["error_class"] == "RuntimeError"
+
+
 def _integrated_e8_pins(*, wrapper: Path | None = None, validator_wrapper: Path | None = None) -> dict[str, str]:
     """Pins used by the final wrapper's exact integration-source contract."""
     benchmark = INTEGRATED_E8_ROOT / "scripts/benchmark"
@@ -1344,6 +1366,101 @@ def test_validator_recomputes_raw_aggregates_from_response_ledgers(
     evidence.write_text(json.dumps(manifest) + "\n")
     _reseal_candidate(evidence, validator)
     with pytest.raises(ValueError, match="raw observation differs"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_response_suite_not_bound_to_fixed_vector(
+    tmp_path: Path,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_fixed_suite_test")
+    root = evidence.parent
+    response_path = root / "responses.T1.r1.jsonl"
+    pristine_path = root / "pristine_full_run.T1.r1" / response_path.name
+    responses = runner.V4.load_jsonl(response_path)
+    responses[0]["suite"] = ""
+    _jsonl(response_path, responses)
+    pristine_path.write_bytes(response_path.read_bytes())
+    report_path = root / "runner_report.json"
+    report = json.loads(report_path.read_text())
+    detail = report["observations"]["1"][0]
+    detail["response_sha256"] = validator.sha256_path(response_path)
+    detail["pristine_full_run"]["artifacts"][response_path.name]["sha256"] = (
+        validator.sha256_path(pristine_path)
+    )
+    report_path.write_text(json.dumps(report) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="fixed scoring vector"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+@pytest.mark.parametrize("timestamp", ["not-a-timestamp", "2026-07-01T00:00:00Z"])
+def test_validator_rejects_malformed_or_pre_e8_raw_timestamp(
+    tmp_path: Path,
+    timestamp: str,
+) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator(
+        f"e8_v5_validator_raw_timestamp_{timestamp[:3]}_test"
+    )
+    root = evidence.parent
+    raw_path = root / "raw.T1.r1.json"
+    raw = json.loads(raw_path.read_text())
+    raw["ts"] = timestamp
+    raw_path.write_text(json.dumps(raw) + "\n")
+    summary_path = root / "summary.T1.json"
+    summary = json.loads(summary_path.read_text())
+    summary["observations"][0]["ts"] = timestamp
+    summary["observations"][0]["sha256"] = validator.sha256_path(raw_path)
+    summary_path.write_text(json.dumps(summary) + "\n")
+    manifest = json.loads(evidence.read_text())
+    manifest["source_records"][0]["sha256"] = validator.sha256_path(summary_path)
+    evidence.write_text(json.dumps(manifest) + "\n")
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="timestamp"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_external_symlink_in_sealed_tree(tmp_path: Path) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_external_symlink_test")
+    external = tmp_path / "external.json"
+    external.write_text("{}\n")
+    (evidence.parent / "external-alias.json").symlink_to(external)
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="symlink"):
+        validator.validate(
+            evidence,
+            expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),
+            expected_base_runner_sha256=validator.sha256_path(runner.V4_PATH),
+        )
+
+
+def test_validator_rejects_durable_abort_marker(tmp_path: Path) -> None:
+    evidence = _synthetic_candidate(tmp_path)
+    validator = _load_validator("e8_v5_validator_abort_marker_test")
+    runner.V4.write_json(
+        evidence.parent / runner.ABORT_MARKER_NAME,
+        {
+            "schema": runner.ABORT_SCHEMA,
+            "status": "aborted",
+            "writer": "fault_injection",
+        },
+    )
+    _reseal_candidate(evidence, validator)
+    with pytest.raises(ValueError, match="abort marker"):
         validator.validate(
             evidence,
             expected_runner_sha256=validator.sha256_path(runner.RUNNER_PATH),

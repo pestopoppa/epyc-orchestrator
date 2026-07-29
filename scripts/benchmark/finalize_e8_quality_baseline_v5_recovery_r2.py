@@ -69,8 +69,13 @@ def sha256_path(path: Path) -> str:
 
 
 def _copy_file(source: Path, destination: Path) -> None:
+    if not source.is_file() or source.is_symlink():
+        raise ValueError(f"recovery finalizer copy source is unsafe: {source}")
+    source_digest = sha256_path(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     V5.write_bytes_create(destination, source.read_bytes())
+    if sha256_path(source) != source_digest or sha256_path(destination) != source_digest:
+        raise ValueError("recovery finalizer copy differs from its immutable source")
 
 
 def _no_symlinks(root: Path) -> None:
@@ -776,6 +781,11 @@ def _copy_composite_source(source: Path, staging: Path, plan: dict[str, Any]) ->
         if sha256_path(origin) != expected:
             raise ValueError(f"composite source changed before copy: {relative}")
         _copy_file(origin, staging / relative)
+    if RESUME._safe_source_files(source) != plan["source_sha256"] or any(
+        sha256_path(staging / relative) != expected
+        for relative, expected in plan["source_sha256"].items()
+    ):
+        raise ValueError("composite source or destination changed during copy")
 
 
 def _canonical_t2r1_tail(staging: Path, destination: Path) -> dict[str, Any]:
@@ -1500,8 +1510,25 @@ def execute(args: argparse.Namespace) -> Path:
             },
         )
         _rewrite_for_recovery(staging, destination, intermediate)
-        if RESUME._safe_source_files(source) != plan["source_sha256"]:
-            raise ValueError("banked source changed during recovery finalization")
+        if (
+            RESUME._safe_source_files(source) != plan["source_sha256"]
+            or _intermediate_tree_sha256(intermediate["root"])
+            != finalizer_contract["intermediate"]["tree_sha256"]
+        ):
+            raise ValueError("bound source changed during recovery finalization")
+        final_seal = V4.load_json(staging / "run_seal.json")
+        final_bundle = {
+            RESUME._published(path, staging=staging, destination=destination): sha256_path(path)
+            for path in sorted(staging.rglob("*"))
+            if path.is_file() and path.name != "run_seal.json"
+        }
+        if (
+            final_seal.get("bundle_sha256") != final_bundle
+            or final_seal.get("manifest_sha256") != sha256_path(evidence_path)
+            or final_seal.get("runner_report_sha256") != sha256_path(report_path)
+            or final_seal.get("protocol_candidate_sha256") != sha256_path(candidate_path)
+        ):
+            raise ValueError("recovery finalizer seal differs from the final staged tree")
         V4.fsync_dir(staging)
         V4.atomic_publish_noreplace(staging, destination)
         V4.fsync_dir(destination.parent)

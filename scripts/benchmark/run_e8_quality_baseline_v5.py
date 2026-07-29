@@ -13,6 +13,7 @@ import argparse
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime
+import functools
 import hashlib
 import importlib.util
 import json
@@ -32,6 +33,8 @@ PROPOSAL_SCHEMA = "epyc.e8_quality_baseline_protocol_proposal.v4"
 TAIL_SCHEMA = "epyc.e8_quality_generation_tail.v1"
 REQUEST_TIMEOUT_S = 300
 TAIL_CONCURRENCY = 1
+ABORT_MARKER_NAME = "durable_abort.json"
+ABORT_SCHEMA = "epyc.e8_quality_candidate_abort.v1"
 ACCEPTED_INFRA_ERRORS = frozenset(
     {
         "timed out",
@@ -52,6 +55,60 @@ GENERATION_TAIL_CONTRACT = {
     "pristine_full_run_snapshot": "before_any_v5_line_replacement",
     "sidecar_replacement_allowlists": "recovered_scorer_tail_union_generation_tail",
 }
+
+
+def record_durable_abort(path: Path, *, writer: str, error: BaseException) -> None:
+    """Persist a fail-closed marker in a candidate namespace before re-raising."""
+    if not path.is_dir() or path.is_symlink():
+        raise ValueError(f"cannot mark unsafe candidate namespace aborted: {path}")
+    V4.write_json(
+        path / ABORT_MARKER_NAME,
+        {
+            "schema": ABORT_SCHEMA,
+            "status": "aborted",
+            "writer": writer,
+            "error_class": type(error).__name__,
+            "error": str(error),
+            "recorded_at": V4.utc_now(),
+        },
+    )
+    V4.fsync_dir(path)
+
+
+def durable_candidate_writer(writer: str) -> Any:
+    """Mark every namespace created by a failed base/resume invocation."""
+
+    def decorate(function: Any) -> Any:
+        @functools.wraps(function)
+        def wrapped(args: argparse.Namespace, *call_args: Any, **call_kwargs: Any) -> Any:
+            output_value = getattr(args, "output_dir", None)
+            if output_value is None:
+                return function(args, *call_args, **call_kwargs)
+            output = Path(output_value).absolute()
+            staging_pattern = f".{output.name}.staging-*"
+            existing_staging = set(output.parent.glob(staging_pattern))
+            output_existed = output.exists() or output.is_symlink()
+            try:
+                return function(args, *call_args, **call_kwargs)
+            except BaseException as exc:
+                candidates = sorted(
+                    set(output.parent.glob(staging_pattern)) - existing_staging,
+                    key=str,
+                )
+                if not output_existed and (output.exists() or output.is_symlink()):
+                    candidates.append(output)
+                for candidate in candidates:
+                    try:
+                        record_durable_abort(candidate, writer=writer, error=exc)
+                    except BaseException as marker_error:
+                        exc.add_note(
+                            f"failed to persist abort marker in {candidate}: {marker_error}"
+                        )
+                raise
+
+        return wrapped
+
+    return decorate
 
 
 def _load_v4() -> Any:
@@ -887,6 +944,7 @@ def validate_repetition_artifacts(
                 raise ValueError("v5 generation-tail attempts are duplicated")
 
 
+@durable_candidate_writer("run_e8_quality_baseline_v5")
 def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     proposal = protocol_proposal(args)
     report = V4.prepare_report(args, candidate_proposal=proposal)

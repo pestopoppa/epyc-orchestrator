@@ -632,6 +632,7 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
                     "eval_batch_id": batch_id,
                     "label": "e8-t2-r2-recovery",
                     "requested_n": len(execution),
+                    "completed_n": len(execution),
                     "complete": True,
                 }
             )
@@ -691,6 +692,9 @@ def _args(source: Path, output: Path) -> SimpleNamespace:
         "watcher_bracket",
         "stale_sidecar",
         "cadence_gap",
+        "missing_complete",
+        "partial_complete",
+        "complete_requested_n",
     ],
 )
 def test_generation_harvest_requires_c3_batch_and_clean_watcher_bracket(
@@ -722,6 +726,17 @@ def test_generation_harvest_requires_c3_batch_and_clean_watcher_bracket(
             "result": {"qid": "q7", "question_id": "q7"},
         },
     ]
+    if defect != "missing_complete":
+        rows.append(
+            {
+                "row_type": "batch_complete",
+                "eval_batch_id": batch_id,
+                "label": "e8-t2-r2-recovery",
+                "requested_n": 2 if defect == "complete_requested_n" else 1,
+                "completed_n": 0 if defect == "partial_complete" else 1,
+                "complete": True,
+            }
+        )
     _write(sidecar, rows)
     watcher_rows = [
         {
