@@ -1758,13 +1758,53 @@ def cmd_reload(args: argparse.Namespace) -> int:
     return 0
 
 
+def _declared_non_optional_services() -> list[tuple[str, int, str]]:
+    """Return active manifest services that must be visible even without state.
+
+    Stack priors define the active serving topology.  Docker services are also
+    manifest-declared, and unlike the explicit optional auxiliary set they must
+    be surfaced when absent.  Group aliases by port so shared servers produce
+    one status row.
+    """
+    names_by_port: dict[int, set[str]] = {}
+    health_paths: dict[int, str] = {}
+
+    for role, record in live_stack_role_records().items():
+        for port in stack_prior_serving_ports(stack_prior_serving(record)):
+            names_by_port.setdefault(port, set()).add(role)
+            health_paths.setdefault(port, "/health")
+
+    for service in DOCKER_SERVICES:
+        name = service.get("name")
+        port = service.get("port")
+        if (
+            not isinstance(name, str)
+            or not isinstance(port, int)
+            or name in OPTIONAL_AUXILIARY_ROLES
+        ):
+            continue
+        names_by_port.setdefault(port, set()).add(name)
+        health_path = service.get("health_path", "/health")
+        health_paths[port] = health_path if isinstance(health_path, str) else "/health"
+
+    return [
+        ("/".join(sorted(names)), port, health_paths[port])
+        for port, names in sorted(names_by_port.items())
+    ]
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """Show status of all components."""
     state = load_state()
     state_roles = {info.role for info in state.values()}
     unavailable_optional_roles = sorted(OPTIONAL_AUXILIARY_ROLES - state_roles)
+    declared_services = _declared_non_optional_services()
+    state_ports = {info.port for info in state.values()}
+    missing_declared_services = [
+        service for service in declared_services if service[1] not in state_ports
+    ]
 
-    if not state and not unavailable_optional_roles:
+    if not state and not unavailable_optional_roles and not missing_declared_services:
         print("No components running")
         return 0
 
@@ -1836,6 +1876,20 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(
             f"{role:<25} {PORT_MAP[role]:<8} {'-':<10} "
             f"{'unavailable_optional':<10} {'n/a':<12} configured optional"
+        )
+
+    # The state file is an observation of a launch, not the launch contract.
+    # A crash between process launch and state persistence previously made an
+    # active-priors service disappear from `status` entirely. Reconcile only
+    # the currently declared live roles (plus non-optional Docker services):
+    # inactive warm roles deliberately do not appear here.
+    for name, port, health_path in missing_declared_services:
+        listening = is_port_in_use(port)
+        healthy = wait_for_health(port, timeout=3, path=health_path) if listening else False
+        status = "healthy" if healthy else "unavailable"
+        print(
+            f"{name:<25} {port:<8} {'-':<10} {status:<10} "
+            f"{'state-missing':<12} manifest-declared; no state row"
         )
 
     print()

@@ -1127,6 +1127,77 @@ def test_cmd_status_renders_absent_optional_auxiliary_once(monkeypatch, capsys) 
     assert "No components running" not in out
 
 
+def test_cmd_status_surfaces_declared_service_missing_state_row(monkeypatch, capsys) -> None:
+    """Active stack-prior services stay visible when state persistence misses them."""
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {})
+    monkeypatch.setattr(
+        stack_commands,
+        "live_stack_role_records",
+        lambda *_args, **_kwargs: {"frontdoor": {"serving": {"ports": [8070]}}},
+    )
+    monkeypatch.setattr(stack_commands, "DOCKER_SERVICES", [])
+    monkeypatch.setattr(stack_commands, "OPTIONAL_AUXILIARY_ROLES", frozenset())
+    monkeypatch.setattr(stack_commands, "is_port_in_use", lambda port: port == 8070)
+    monkeypatch.setattr(
+        stack_commands,
+        "wait_for_health",
+        lambda port, **_kwargs: port == 8070,
+    )
+    monkeypatch.setattr(stack_commands, "_episodic_embedding_status_line", lambda: "memory ok")
+
+    assert stack_commands.cmd_status(Namespace()) == 0
+
+    out = capsys.readouterr().out
+    assert "frontdoor" in out
+    assert "healthy" in out
+    assert "state-missing" in out
+    assert "manifest-declared; no state row" in out
+
+
+def test_cmd_status_marks_declared_down_but_omits_inactive_manifest_roles(monkeypatch, capsys) -> None:
+    """A declared-but-down service differs from a warm role absent from active priors."""
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {})
+    monkeypatch.setattr(
+        stack_commands,
+        "live_stack_role_records",
+        lambda *_args, **_kwargs: {"frontdoor": {"serving": {"ports": [8070]}}},
+    )
+    monkeypatch.setattr(stack_commands, "DOCKER_SERVICES", [])
+    monkeypatch.setattr(stack_commands, "OPTIONAL_AUXILIARY_ROLES", frozenset())
+    monkeypatch.setattr(stack_commands, "is_port_in_use", lambda _port: False)
+    monkeypatch.setattr(stack_commands, "_episodic_embedding_status_line", lambda: "memory ok")
+
+    assert stack_commands.cmd_status(Namespace()) == 0
+
+    out = capsys.readouterr().out
+    assert "frontdoor" in out
+    assert "unavailable" in out
+    assert "state-missing" in out
+    assert "worker_fast" not in out
+    assert "8102" not in out
+
+
+def test_cmd_status_surfaces_manifest_declared_docker_service_without_state(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {})
+    monkeypatch.setattr(stack_commands, "live_stack_role_records", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        stack_commands,
+        "DOCKER_SERVICES",
+        [{"name": "nextplaid-code", "port": 8088, "health_path": "/health"}],
+    )
+    monkeypatch.setattr(stack_commands, "OPTIONAL_AUXILIARY_ROLES", frozenset())
+    monkeypatch.setattr(stack_commands, "is_port_in_use", lambda _port: False)
+    monkeypatch.setattr(stack_commands, "_episodic_embedding_status_line", lambda: "memory ok")
+
+    assert stack_commands.cmd_status(Namespace()) == 0
+
+    out = capsys.readouterr().out
+    assert "nextplaid-code" in out
+    assert "8088" in out
+    assert "unavailable" in out
+    assert "state-missing" in out
+
+
 def test_cmd_status_does_not_duplicate_present_optional_auxiliary(monkeypatch, capsys) -> None:
     info = stack_commands.ProcessInfo(
         role="whisper",
