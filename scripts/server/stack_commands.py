@@ -38,6 +38,7 @@ from scripts.server.stack_manifest import (
     EMBEDDER_PORTS,
     HOT_SERVERS,
     NUMA_REPLICA_PORTS,
+    OPTIONAL_AUXILIARY_ROLES,
     PORT_MAP,
     ROLE_LAUNCH_META,
     WARM_SERVERS,
@@ -1760,8 +1761,10 @@ def cmd_reload(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     """Show status of all components."""
     state = load_state()
+    state_roles = {info.role for info in state.values()}
+    unavailable_optional_roles = sorted(OPTIONAL_AUXILIARY_ROLES - state_roles)
 
-    if not state:
+    if not state and not unavailable_optional_roles:
         print("No components running")
         return 0
 
@@ -1827,6 +1830,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(
             f"{name:<25} {info.port:<8} {pid_str:<10} {status:<10} "
             f"{attestation:<12} {model[:30]}"
+        )
+
+    for role in unavailable_optional_roles:
+        print(
+            f"{role:<25} {PORT_MAP[role]:<8} {'-':<10} "
+            f"{'unavailable_optional':<10} {'n/a':<12} configured optional"
         )
 
     print()

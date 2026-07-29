@@ -57,6 +57,10 @@ PORT_MAP = {
     "whisper": 9000,  # faster-whisper STT (transcription service, not llama-server)
 }
 
+# Stack-managed auxiliaries whose startup failure is non-fatal but must remain
+# visible in the read-only status surface even when no state row was created.
+OPTIONAL_AUXILIARY_ROLES = frozenset({"whisper"})
+
 # HOT roles (always started) - NUMA-optimized
 # 2026-05-06: architect_coding removed, ingest_long_context promoted (see registry).
 HOT_ROLES = {

@@ -1114,6 +1114,41 @@ def test_cmd_status_prints_model_attestation_warning(monkeypatch, capsys) -> Non
     assert saved == []
 
 
+def test_cmd_status_renders_absent_optional_auxiliary_once(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {})
+    monkeypatch.setattr(stack_commands, "_episodic_embedding_status_line", lambda: "memory ok")
+
+    assert stack_commands.cmd_status(Namespace()) == 0
+
+    out = capsys.readouterr().out
+    assert sum(line.startswith("whisper") for line in out.splitlines()) == 1
+    assert "9000" in out
+    assert "unavailable_optional" in out
+    assert "No components running" not in out
+
+
+def test_cmd_status_does_not_duplicate_present_optional_auxiliary(monkeypatch, capsys) -> None:
+    info = stack_commands.ProcessInfo(
+        role="whisper",
+        pid=123,
+        port=9000,
+        started_at="now",
+        model_path="faster-whisper-large-v3-turbo-int8",
+        log_file="whisper.log",
+    )
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {"whisper": info})
+    monkeypatch.setattr(stack_commands.os, "kill", lambda _pid, _signal: None)
+    monkeypatch.setattr(stack_commands, "wait_for_health", lambda *a, **kw: True)
+    monkeypatch.setattr(stack_commands, "_episodic_embedding_status_line", lambda: "memory ok")
+    monkeypatch.setattr(stack_commands._stack_processes, "process_cmdline", lambda _pid: [])
+
+    assert stack_commands.cmd_status(Namespace()) == 0
+
+    out = capsys.readouterr().out
+    assert sum(line.startswith("whisper") for line in out.splitlines()) == 1
+    assert "unavailable_optional" not in out
+
+
 def test_cmd_status_prints_episodic_embedding_health(monkeypatch, capsys) -> None:
     from scripts.maintenance import repair_episodic_embeddings as repair
 
