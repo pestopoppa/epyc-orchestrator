@@ -552,21 +552,28 @@ def _terminal_timeout(
         return True
     if not allow_historical:
         return False
+    # Typed provenance wins over error text. Client-pool/socket timeouts and
+    # watchdog slot-erase timeouts are never reviewed server-budget evidence.
+    provenance = result.get("failure_provenance")
+    if isinstance(provenance, dict):
+        return False
     elapsed = row.get("elapsed_s")
     latency_ms = result.get("latency_ms")
+    def _latency_bound(lower_ms: int, upper_ms: int) -> bool:
+        return (
+            isinstance(elapsed, (int, float))
+            and not isinstance(elapsed, bool)
+            and isinstance(latency_ms, int)
+            and lower_ms <= latency_ms <= upper_ms
+            and abs((float(elapsed) * 1000) - latency_ms) <= 500
+        )
     inner = (
         result.get("route") == "frontdoor"
-        and isinstance(elapsed, (int, float))
-        and 299.0 <= float(elapsed) <= 300.5
-        and isinstance(latency_ms, int)
-        and 299000 <= latency_ms <= 300500
+        and _latency_bound(299000, 300500)
     )
     outer = (
         result.get("route") in (None, "")
-        and isinstance(elapsed, (int, float))
-        and 300.0 <= float(elapsed) <= 300.5
-        and isinstance(latency_ms, int)
-        and 300000 <= latency_ms <= 300500
+        and _latency_bound(300000, 300500)
     )
     detail = str(result.get("error_detail") or "")
     exact_historical_text = (

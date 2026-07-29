@@ -9,6 +9,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -76,7 +77,7 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
 # connection-reset flavors we want to survive.
 _RECONNECT_REASONS = frozenset({"connect_error", "request_error"})
 _TRANSPORT_TIMEOUT_REASONS = frozenset(
-    {"connect_timeout", "read_timeout", "timeout"}
+    {"connect_timeout", "read_timeout", "write_timeout", "pool_timeout", "socket_timeout", "timeout"}
 )
 _FAILURE_PROVENANCE_SCHEMA = "epyc.failure_provenance.v1"
 
@@ -86,6 +87,24 @@ def _classify_exc(exc: BaseException) -> tuple[str, str]:
     classifier, with a self-contained fallback so this module never hard-depends
     on ``src`` being importable. Mirrors the reason strings resilient_post stamps
     into its meta dict so both request paths agree on what is reconnectable."""
+    # E8 retains the timeout subclass: a PoolTimeout is client contention, not
+    # proof that the server exhausted its generation budget.
+    try:
+        import httpx
+        if isinstance(exc, httpx.PoolTimeout):
+            return ("pool_timeout", f"{type(exc).__name__}: {exc}")
+        if isinstance(exc, httpx.ConnectTimeout):
+            return ("connect_timeout", f"{type(exc).__name__}: {exc}")
+        if isinstance(exc, httpx.ReadTimeout):
+            return ("read_timeout", f"{type(exc).__name__}: {exc}")
+        if isinstance(exc, httpx.WriteTimeout):
+            return ("write_timeout", f"{type(exc).__name__}: {exc}")
+        if isinstance(exc, httpx.TimeoutException):
+            return ("timeout", f"{type(exc).__name__}: {exc}")
+    except Exception:
+        pass
+    if isinstance(exc, socket.timeout):
+        return ("socket_timeout", f"{type(exc).__name__}: {exc}")
     try:
         from pathlib import Path
 
@@ -102,6 +121,7 @@ def _classify_exc(exc: BaseException) -> tuple[str, str]:
 def _client_transport_timeout_provenance(
     *,
     reason: str,
+    exc: BaseException,
     role: str,
     workload_class: str | None,
     max_queue_wait_ms: int,
@@ -119,6 +139,29 @@ def _client_transport_timeout_provenance(
         "class": "client_transport_timeout",
         "code": reason,
         "phase": "client_transport",
+        "exception_class": f"{type(exc).__module__}.{type(exc).__qualname__}",
+        "exception_reason": reason,
+        "role": str(role or ""),
+        "workload_class": str(workload_class or ""),
+        "max_queue_wait_ms": int(max_queue_wait_ms),
+    }
+
+
+def _slot_erase_timeout_provenance(*, elapsed_s: float, server_generation_observed: bool, exc: BaseException | None, role: str, workload_class: str | None, max_queue_wait_ms: int) -> dict[str, Any]:
+    """Record a watchdog timeout without claiming a reviewed server timeout."""
+    exception_class = (
+        f"{type(exc).__module__}.{type(exc).__qualname__}"
+        if exc is not None else "concurrent.futures.TimeoutError"
+    )
+    return {
+        "schema": _FAILURE_PROVENANCE_SCHEMA,
+        "class": "slot_erase_timeout",
+        "code": "timeout_after_slot_erase",
+        "phase": "execution_watchdog",
+        "exception_class": exception_class,
+        "exception_reason": "future_timeout" if exc is None else _classify_exc(exc)[0],
+        "elapsed_ms": int(round(max(0.0, elapsed_s) * 1000)),
+        "server_generation_observed": bool(server_generation_observed),
         "role": str(role or ""),
         "workload_class": str(workload_class or ""),
         "max_queue_wait_ms": int(max_queue_wait_ms),
@@ -439,11 +482,27 @@ def _call_orchestrator_with_slot_poll(
                     try:
                         resp = fut.result(timeout=12.0)
                         elapsed = time.perf_counter() - t0
-                    except (concurrent.futures.TimeoutError, Exception):
+                    except concurrent.futures.TimeoutError:
                         elapsed = time.perf_counter() - t0
                         resp = {
                             "answer": "",
                             "error": f"timeout after slot erase ({elapsed:.0f}s)",
+                            "failure_provenance": _slot_erase_timeout_provenance(
+                                elapsed_s=elapsed, server_generation_observed=seen_processing_slot,
+                                exc=None, role=force_role, workload_class=workload_class,
+                                max_queue_wait_ms=min(int(timeout * 1000), 90_000),
+                            ),
+                        }
+                    except Exception as exc:
+                        elapsed = time.perf_counter() - t0
+                        resp = {
+                            "answer": "",
+                            "error": f"timeout after slot erase ({elapsed:.0f}s)",
+                            "failure_provenance": _slot_erase_timeout_provenance(
+                                elapsed_s=elapsed, server_generation_observed=seen_processing_slot,
+                                exc=exc, role=force_role, workload_class=workload_class,
+                                max_queue_wait_ms=min(int(timeout * 1000), 90_000),
+                            ),
                         }
                     break
 
@@ -870,6 +929,7 @@ def call_orchestrator_forced(
             "error": str(exc),
             "failure_provenance": _client_transport_timeout_provenance(
                 reason=reason,
+                exc=exc,
                 role=force_role,
                 workload_class=workload_class,
                 max_queue_wait_ms=int(payload["max_queue_wait_ms"]),
@@ -952,6 +1012,7 @@ def call_orchestrator_forced(
             ):
                 data["failure_provenance"] = _client_transport_timeout_provenance(
                     reason=reason,
+                    exc=RuntimeError(str(meta.get("detail") or data.get("error") or reason)),
                     role=force_role,
                     workload_class=workload_class,
                     max_queue_wait_ms=int(payload["max_queue_wait_ms"]),
