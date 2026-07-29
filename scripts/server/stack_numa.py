@@ -22,9 +22,20 @@ from __future__ import annotations
 # =============================================================================
 # NUMA CPU Pinning — validated via benchmarks (2026-03-18)
 # =============================================================================
-# EPYC 9655: 192 cores, 2 NUMA nodes (~566 GB each).
-# Node 0: cores 0-47, HT 96-143
-# Node 1: cores 48-95, HT 144-191
+# EPYC 9655: 192 logical cores (96 physical + SMT), 4 NUMA nodes (NPS4), ~290 GB each.
+# Node 0: cores  0-23, HT  96-119      Node 2: cores 48-71, HT 144-167
+# Node 1: cores 24-47, HT 120-143      Node 3: cores 72-95, HT 168-191
+#
+# CORRECTED 2026-07-29 (`auditor`, P2-5l). This block previously read "2 NUMA nodes
+# (~566 GB each) / Node 0: cores 0-47, HT 96-143 / Node 1: cores 48-95, HT 144-191",
+# which was wrong on node count, per-node memory AND cpu ranges — and it contradicted
+# the NUMA_Q* quarter definitions immediately below it, which were and are correct
+# (NUMA_Q0A "0-23,96-119" is exactly node 0). Re-derived from `numactl -H` on this
+# host: "available: 4 nodes (0-3)", node 0 cpus 0-23 + 96-119, node size 289860 MB.
+# Nothing behavioural changed; the code was already right and only its own header
+# misdescribed the machine. A misdocumented topology invariant is how the next
+# placement defect gets built, which is why this was worth correcting rather than
+# leaving as harmless prose.
 
 # NUMA quarter definitions: (cpu_list, thread_count)
 NUMA_Q0A = ("0-23,96-119", 48)
