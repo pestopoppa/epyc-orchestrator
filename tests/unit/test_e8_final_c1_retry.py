@@ -37,10 +37,13 @@ def _clean_pinned_runtime(
 ) -> None:
     original_ratifier = tmp_path / "original-ratifier.sh"
     canonical_ratifier = tmp_path / "superseding-ratifier.sh"
+    capacityfix_ratifier = tmp_path / "capacityfix-ratifier.sh"
     original_ratifier.write_text("#!/bin/bash\n", encoding="utf-8")
     canonical_ratifier.write_text("#!/bin/bash\n", encoding="utf-8")
+    capacityfix_ratifier.write_text("#!/bin/bash\n", encoding="utf-8")
     monkeypatch.setattr(RUNNER, "ORIGINAL_RATIFIER", original_ratifier)
-    monkeypatch.setattr(RUNNER, "CANONICAL_RATIFIER", canonical_ratifier)
+    monkeypatch.setattr(RUNNER, "SUPERSEDING_RATIFIER", canonical_ratifier)
+    monkeypatch.setattr(RUNNER, "CANONICAL_RATIFIER", capacityfix_ratifier)
     monkeypatch.setattr(
         RUNNER,
         "_runtime_git_identity",
@@ -60,6 +63,14 @@ def _clean_pinned_runtime(
     monkeypatch.setattr(RUNNER, "ORIGINAL_RECEIPT", original_path)
     monkeypatch.setattr(
         RUNNER, "ORIGINAL_RECEIPT_SHA256", RUNNER.sha256_path(original_path)
+    )
+    superseding_path = tmp_path / "superseding-receipt.json"
+    superseding_path.write_text(
+        json.dumps(_superseding_receipt(), sort_keys=True) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(RUNNER, "SUPERSEDING_RECEIPT", superseding_path)
+    monkeypatch.setattr(
+        RUNNER, "SUPERSEDING_RECEIPT_SHA256", RUNNER.sha256_path(superseding_path)
     )
 
 
@@ -114,11 +125,11 @@ def _original_receipt() -> dict:
     return receipt
 
 
-def _receipt() -> dict:
+def _superseding_receipt() -> dict:
     receipt = _common_receipt(
-        schema=RUNNER.RECEIPT_SCHEMA,
-        attestation=RUNNER.ATTESTATION,
-        ratifier=RUNNER.CANONICAL_RATIFIER,
+        schema=RUNNER.SUPERSEDING_RECEIPT_SCHEMA,
+        attestation=RUNNER.SUPERSEDING_ATTESTATION,
+        ratifier=RUNNER.SUPERSEDING_RATIFIER,
     )
     receipt["supersedes"] = {
         "path": str(RUNNER.ORIGINAL_RECEIPT),
@@ -128,15 +139,39 @@ def _receipt() -> dict:
     }
     receipt["instrument"] = {
         **RUNNER._provenance_instrument(
+            commit=RUNNER.SUPERSEDING_ORCH_COMMIT,
+            tree=RUNNER.SUPERSEDING_ORCH_TREE,
+            runner_sha256=RUNNER.SUPERSEDING_RUNNER_SHA256,
+        ),
+    }
+    return receipt
+
+
+def _receipt() -> dict:
+    receipt = _common_receipt(
+        schema=RUNNER.RECEIPT_SCHEMA,
+        attestation=RUNNER.ATTESTATION,
+        ratifier=RUNNER.CANONICAL_RATIFIER,
+    )
+    receipt["supersedes"] = {
+        "path": str(RUNNER.SUPERSEDING_RECEIPT),
+        "sha256": RUNNER.SUPERSEDING_RECEIPT_SHA256,
+        "schema": RUNNER.SUPERSEDING_RECEIPT_SCHEMA,
+        "human_attestation": RUNNER.SUPERSEDING_ATTESTATION,
+    }
+    receipt["instrument"] = {
+        **RUNNER._provenance_instrument(
             commit="a" * 40,
             tree="b" * 40,
             runner_sha256=RUNNER.sha256_path(PATH),
+            recovery_helper_sha256=RUNNER.sha256_path(RUNNER.RECOVERY_PATH),
         ),
         "validator": {
             "path": "scripts/benchmark/final_c1_validator.py",
             "sha256": RUNNER.sha256_path(RUNNER.VALIDATOR_PATH),
         },
     }
+    receipt["capacity_fix"] = RUNNER._capacity_fix_contract()
     return receipt
 
 
@@ -190,11 +225,86 @@ def test_real_durable_receipt_builds_read_only_plan_and_cli_plan(
     assert cli_plan["amendment_receipt"]["sha256"] == REAL_ORIGINAL_RECEIPT_SHA256
 
 
-def test_original_receipt_cannot_authorize_execution() -> None:
-    with pytest.raises(ValueError, match="superseding receipt is required"):
+@pytest.mark.parametrize("receipt_name", ["ORIGINAL_RECEIPT", "SUPERSEDING_RECEIPT"])
+def test_historical_receipts_cannot_authorize_execution(receipt_name: str) -> None:
+    with pytest.raises(ValueError, match="capacity-fix receipt is required"):
         RUNNER.validate_receipt(
-            RUNNER.ORIGINAL_RECEIPT, require_execution=True
+            getattr(RUNNER, receipt_name), require_execution=True
         )
+
+
+@pytest.mark.parametrize("receipt_name", ["ORIGINAL_RECEIPT", "SUPERSEDING_RECEIPT"])
+def test_historical_receipts_build_planning_only_plans(
+    receipt_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        RUNNER,
+        "validate_failed_source",
+        lambda _source: {
+            "plan": {"core_id": "core", "t1_core_id": "t1"},
+            "hashes": {},
+            "base_hashes": {},
+            "journal": {},
+        },
+    )
+    plan = RUNNER.build_plan(Path("/unused"), getattr(RUNNER, receipt_name))
+    assert plan["execution_authorized"] is False
+
+
+def test_capacityfix_receipt_accepts_exact_clean_linked_worktree(tmp_path: Path) -> None:
+    receipt = RUNNER.validate_receipt(
+        _write_receipt(tmp_path / "capacityfix.json"), require_execution=True
+    )
+    assert receipt["schema"] == RUNNER.RECEIPT_SCHEMA
+    assert receipt["capacity_fix"] == RUNNER._capacity_fix_contract()
+
+
+def test_capacityfix_receipt_rejects_bad_superseding_ancestry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    superseding = _superseding_receipt()
+    superseding["supersedes"]["sha256"] = "0" * 64
+    bad_path = tmp_path / "bad-superseding.json"
+    bad_path.write_text(json.dumps(superseding) + "\n", encoding="utf-8")
+    monkeypatch.setattr(RUNNER, "SUPERSEDING_RECEIPT", bad_path)
+    monkeypatch.setattr(
+        RUNNER, "SUPERSEDING_RECEIPT_SHA256", RUNNER.sha256_path(bad_path)
+    )
+    with pytest.raises(ValueError, match="superseding final-c1 receipt differs"):
+        RUNNER.validate_receipt(_write_receipt(tmp_path / "capacityfix.json"))
+
+
+def test_capacityfix_receipt_rejects_altered_capacity_fix_contract(tmp_path: Path) -> None:
+    receipt = _receipt()
+    receipt["capacity_fix"]["helper"]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="exact authorization"):
+        RUNNER.validate_receipt(_write_receipt(tmp_path / "receipt.json", receipt))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("legacy_default_expected_concurrency", 1),
+        ("final_c1_expected_concurrency", 3),
+        ("helper", {"path": "scripts/benchmark/wrong.py", "sha256": "0" * 64}),
+    ],
+)
+def test_capacityfix_receipt_rejects_capacity_contract_mutation(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    receipt = _receipt()
+    receipt["capacity_fix"][field] = value
+    with pytest.raises(ValueError, match="exact authorization"):
+        RUNNER.validate_receipt(_write_receipt(tmp_path / "receipt.json", receipt))
+
+
+def test_capacityfix_receipt_rejects_recovery_helper_instrument_drift(
+    tmp_path: Path,
+) -> None:
+    receipt = _receipt()
+    receipt["instrument"]["recovery_helper"]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="exact authorization"):
+        RUNNER.validate_receipt(_write_receipt(tmp_path / "receipt.json", receipt))
 
 
 def test_source_alias_and_unreviewed_namespace_are_rejected(tmp_path: Path) -> None:

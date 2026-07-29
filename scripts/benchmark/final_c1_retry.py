@@ -33,13 +33,21 @@ ORIGINAL_RATIFIER = Path(
     "/mnt/raid0/llm/epyc-root/artifacts/operator/"
     "ratify_e8_final_c1_retry_amendment_20260728.sh"
 )
-CANONICAL_RECEIPT = Path(
+SUPERSEDING_RECEIPT = Path(
     "/mnt/raid0/llm/epyc-root/artifacts/operator/"
     "ratify_e8_final_c1_retry_superseding_20260729.json"
 )
-CANONICAL_RATIFIER = Path(
+SUPERSEDING_RATIFIER = Path(
     "/mnt/raid0/llm/epyc-root/artifacts/operator/"
     "ratify_e8_final_c1_retry_superseding_20260729.sh"
+)
+CANONICAL_RECEIPT = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+    "ratify_e8_final_c1_retry_capacityfix_20260729.json"
+)
+CANONICAL_RATIFIER = Path(
+    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
+    "ratify_e8_final_c1_retry_capacityfix_20260729.sh"
 )
 RACE_PATH = ROOT / "scripts/benchmark/prepare_e8_quality_baseline_v5_partial_r2_race_retry.py"
 RECOVERY_PATH = ROOT / "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
@@ -57,16 +65,26 @@ PROPOSAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_final_c1_retry_proposal.v1"
 COMPLETE_STATUS = "intermediate_r2_final_c1_retry_complete"
 TERMINAL_SCHEMA = "epyc.e8_quality_v5_partial_r2_final_c1_terminal.v1"
 ORIGINAL_RECEIPT_SCHEMA = "epyc.operator_e8_quality_final_c1_retry_amendment.v1"
-RECEIPT_SCHEMA = "epyc.operator_e8_quality_final_c1_retry_superseding.v1"
+SUPERSEDING_RECEIPT_SCHEMA = "epyc.operator_e8_quality_final_c1_retry_superseding.v1"
+RECEIPT_SCHEMA = "epyc.operator_e8_quality_final_c1_retry_capacityfix.v1"
 ORIGINAL_ATTESTATION = "RATIFY-E8-FINAL-C1-RETRY-20260728"
-ATTESTATION = "RATIFY-E8-FINAL-C1-RETRY-SUPERSEDING-20260729"
+SUPERSEDING_ATTESTATION = "RATIFY-E8-FINAL-C1-RETRY-SUPERSEDING-20260729"
+ATTESTATION = "RATIFY-E8-FINAL-C1-RETRY-CAPACITYFIX-20260729"
 ORIGINAL_RECEIPT_SHA256 = (
     "51aef2bd0431c8df5050f7985422d9712fc2d1494cfed1d7a3b1a54e5cab121e"
+)
+SUPERSEDING_RECEIPT_SHA256 = (
+    "ec2db70c6aa27e1cd3f47930514820a2fc88b75e3704c11c48647c6adbaaeeb6"
 )
 ORIGINAL_ORCH_COMMIT = "a37385074ffcf795b8bac668a3b630ea5bebace2"
 ORIGINAL_ORCH_TREE = "dad67e0ac036d8a582234044db3424a1aa3f0a36"
 ORIGINAL_RUNNER_SHA256 = (
     "0bc35b84399df7d7434de6b356f58545f28cea89bf164aaa85977d7954ce6295"
+)
+SUPERSEDING_ORCH_COMMIT = "243b56e9fa0f0f652d400c2716470b21158c7ae7"
+SUPERSEDING_ORCH_TREE = "95c5396e68eff5fb1624b9a0103131b3474d582a"
+SUPERSEDING_RUNNER_SHA256 = (
+    "b215e0aa34357224302543c2b49a5cf8e07a25d2d4dd28df5121131c63cef62b"
 )
 ORIGINAL_VALIDATOR_SHA256 = (
     "b82c49cfa362d75496d5e925d58ae5b11d1d33c3d9d14a6f7f796a6c6bf4e977"
@@ -198,9 +216,13 @@ def _runtime_git_identity(repository: Path) -> dict[str, Any]:
 
 
 def _provenance_instrument(
-    *, commit: str, tree: str, runner_sha256: str
+    *,
+    commit: str,
+    tree: str,
+    runner_sha256: str,
+    recovery_helper_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    instrument = {
         "repository": str(CANONICAL_REPOSITORY),
         "commit": commit,
         "tree": tree,
@@ -225,6 +247,24 @@ def _provenance_instrument(
             "path": "artifacts/operator/apply_e8_quality_baseline_state.py",
             "sha256": CANONICAL_APPLIER_SHA256,
         },
+    }
+    if recovery_helper_sha256 is not None:
+        instrument["recovery_helper"] = {
+            "path": "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py",
+            "sha256": recovery_helper_sha256,
+        }
+    return instrument
+
+
+def _capacity_fix_contract() -> dict[str, Any]:
+    """Bind the explicit c1 preflight that supersedes the legacy c3 default."""
+    return {
+        "helper": {
+            "path": "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py",
+            "sha256": sha256_path(RECOVERY_PATH),
+        },
+        "legacy_default_expected_concurrency": 3,
+        "final_c1_expected_concurrency": CONCURRENCY,
     }
 
 
@@ -338,25 +378,17 @@ def _load_original_receipt() -> dict[str, Any]:
     return receipt
 
 
-def validate_receipt(
-    path: Path, *, require_execution: bool = False
-) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("final-c1 amendment receipt is missing or unsafe")
-    resolved = path.resolve(strict=True)
-    if resolved == ORIGINAL_RECEIPT:
-        receipt = _load_original_receipt()
-        if require_execution:
-            raise ValueError(
-                "original final-c1 receipt is planning-only; "
-                "the canonical superseding receipt is required for execution"
-            )
-        return receipt
-    if resolved != CANONICAL_RECEIPT:
-        raise ValueError("final-c1 amendment receipt is missing or unsafe")
-
+def _load_superseding_receipt() -> dict[str, Any]:
+    """Validate the ratified typed-provenance receipt as immutable ancestry."""
+    if (
+        SUPERSEDING_RECEIPT.is_symlink()
+        or not SUPERSEDING_RECEIPT.is_file()
+        or SUPERSEDING_RECEIPT.resolve(strict=True) != SUPERSEDING_RECEIPT
+        or sha256_path(SUPERSEDING_RECEIPT) != SUPERSEDING_RECEIPT_SHA256
+    ):
+        raise ValueError("superseding final-c1 receipt is missing, unsafe, or differs")
     original = _load_original_receipt()
-    receipt = V4.load_json(path)
+    receipt = V4.load_json(SUPERSEDING_RECEIPT)
     expected_keys = {
         "schema",
         "status",
@@ -371,6 +403,77 @@ def validate_receipt(
         "authorization",
         "non_authorizations",
     }
+    if (
+        not isinstance(receipt, dict)
+        or not _receipt_common_is_exact(
+            receipt,
+            expected_keys=expected_keys,
+            schema=SUPERSEDING_RECEIPT_SCHEMA,
+            attestation=SUPERSEDING_ATTESTATION,
+            ratifier=SUPERSEDING_RATIFIER,
+        )
+        or receipt.get("supersedes")
+        != {
+            "path": str(ORIGINAL_RECEIPT),
+            "sha256": ORIGINAL_RECEIPT_SHA256,
+            "schema": ORIGINAL_RECEIPT_SCHEMA,
+            "human_attestation": ORIGINAL_ATTESTATION,
+        }
+        or receipt.get("authorization") != original.get("authorization")
+        or receipt.get("non_authorizations") != original.get("non_authorizations")
+        or receipt.get("instrument")
+        != _provenance_instrument(
+            commit=SUPERSEDING_ORCH_COMMIT,
+            tree=SUPERSEDING_ORCH_TREE,
+            runner_sha256=SUPERSEDING_RUNNER_SHA256,
+        )
+    ):
+        raise ValueError("superseding final-c1 receipt differs from the exact authorization")
+    return receipt
+
+
+def validate_receipt(
+    path: Path, *, require_execution: bool = False
+) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("final-c1 amendment receipt is missing or unsafe")
+    resolved = path.resolve(strict=True)
+    if resolved == ORIGINAL_RECEIPT:
+        receipt = _load_original_receipt()
+        if require_execution:
+            raise ValueError(
+                "original final-c1 receipt is planning-only; "
+                "the capacity-fix receipt is required for execution"
+            )
+        return receipt
+    if resolved == SUPERSEDING_RECEIPT:
+        receipt = _load_superseding_receipt()
+        if require_execution:
+            raise ValueError(
+                "superseding final-c1 receipt is planning-only; "
+                "the capacity-fix receipt is required for execution"
+            )
+        return receipt
+    if resolved != CANONICAL_RECEIPT:
+        raise ValueError("final-c1 amendment receipt is missing or unsafe")
+
+    superseding = _load_superseding_receipt()
+    receipt = V4.load_json(path)
+    expected_keys = {
+        "schema",
+        "status",
+        "protocol_id",
+        "ratified_at",
+        "human_attestation",
+        "amendment_script",
+        "supersedes",
+        "failed_race_evidence",
+        "source",
+        "instrument",
+        "authorization",
+        "non_authorizations",
+        "capacity_fix",
+    }
     instrument = receipt.get("instrument") if isinstance(receipt, dict) else None
     repository = Path(str(instrument.get("repository") or "")) if isinstance(
         instrument, dict
@@ -383,6 +486,7 @@ def validate_receipt(
         commit=str(git_identity.get("commit") or ""),
         tree=str(git_identity.get("tree") or ""),
         runner_sha256=sha256_path(Path(__file__)),
+        recovery_helper_sha256=sha256_path(RECOVERY_PATH),
     )
     expected_instrument["validator"]["sha256"] = sha256_path(VALIDATOR_PATH)
     if (
@@ -396,13 +500,14 @@ def validate_receipt(
         )
         or receipt.get("supersedes")
         != {
-            "path": str(ORIGINAL_RECEIPT),
-            "sha256": ORIGINAL_RECEIPT_SHA256,
-            "schema": ORIGINAL_RECEIPT_SCHEMA,
-            "human_attestation": ORIGINAL_ATTESTATION,
+            "path": str(SUPERSEDING_RECEIPT),
+            "sha256": SUPERSEDING_RECEIPT_SHA256,
+            "schema": SUPERSEDING_RECEIPT_SCHEMA,
+            "human_attestation": SUPERSEDING_ATTESTATION,
         }
-        or receipt.get("authorization") != original.get("authorization")
-        or receipt.get("non_authorizations") != original.get("non_authorizations")
+        or receipt.get("authorization") != superseding.get("authorization")
+        or receipt.get("non_authorizations") != superseding.get("non_authorizations")
+        or receipt.get("capacity_fix") != _capacity_fix_contract()
         or instrument != expected_instrument
         or repository.resolve() != CANONICAL_REPOSITORY.resolve()
         or git_identity.get("canonical_top") != str(CANONICAL_REPOSITORY.resolve())
@@ -413,7 +518,7 @@ def validate_receipt(
         or sha256_path(CANONICAL_APPLIER_PATH) != CANONICAL_APPLIER_SHA256
     ):
         raise ValueError(
-            "superseding final-c1 receipt differs from the exact authorization"
+            "capacity-fix final-c1 receipt differs from the exact authorization"
         )
     return receipt
 
