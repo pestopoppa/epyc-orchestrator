@@ -233,6 +233,9 @@ def test_parent_fsync_fault_after_publish_quarantines_public_destination(
     assert len(quarantines) == 1
     abort = RETRY.V4.load_json(quarantines[0] / RETRY.RECOVERY.ABORT_MARKER_NAME)
     assert abort["status"] == "terminal_aborted_no_admission"
+    seal = RETRY.V4.load_json(quarantines[0] / "run_seal.json")
+    assert seal["status"] == "terminal_aborted_no_admission"
+    assert seal["writer"] == "prepare_e8_quality_baseline_v5_partial_r2_race_retry"
 
 
 def test_exact_race_lost_requires_typed_pre_generation_contract() -> None:

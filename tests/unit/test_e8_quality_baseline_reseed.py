@@ -1202,6 +1202,10 @@ def test_watcher_failure_aborts_before_next_repetition(tmp_path: Path, monkeypat
 
     assert FakeTower.calls == 1
     assert not args.output_dir.exists()
+    staging = next(tmp_path.glob(f".{args.output_dir.name}.staging-*"))
+    seal = json.loads((staging / "run_seal.json").read_text())
+    assert seal["status"] == "terminal_aborted_no_admission"
+    assert seal["writer"] == "run_e8_quality_baseline_reseed"
 
 
 def test_receipt_requires_canonical_path_and_current_runner_hash(

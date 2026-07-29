@@ -50,6 +50,11 @@ def test_durable_candidate_writer_marks_new_staging_and_published_namespaces(
         assert marker["status"] == "aborted"
         assert marker["writer"] == "fault_injection"
         assert marker["error_class"] == "RuntimeError"
+        seal = json.loads((namespace / "run_seal.json").read_text())
+        assert seal["status"] == "terminal_aborted_no_admission"
+        assert seal["abort_marker_sha256"] == _sha(
+            namespace / runner.ABORT_MARKER_NAME
+        )
 
 
 def test_durable_candidate_writer_marks_false_terminal_result(tmp_path: Path) -> None:
@@ -65,6 +70,9 @@ def test_durable_candidate_writer_marks_false_terminal_result(tmp_path: Path) ->
     marker = json.loads((staging / runner.ABORT_MARKER_NAME).read_text())
     assert marker["status"] == "aborted"
     assert marker["error"] == "false_injection returned non-success status False"
+    assert json.loads((staging / "run_seal.json").read_text())["status"] == (
+        "terminal_aborted_no_admission"
+    )
 
 
 def test_execute_marks_real_ineligible_staging_return(
@@ -221,7 +229,9 @@ def test_execute_marks_real_ineligible_staging_return(
     assert marker["status"] == "aborted"
     assert marker["writer"] == "run_e8_quality_baseline_v5"
     assert marker["error"] == "run_e8_quality_baseline_v5 returned non-success status 2"
-    assert json.loads((staging / "run_seal.json").read_text())["status"] == "failed"
+    seal = json.loads((staging / "run_seal.json").read_text())
+    assert seal["status"] == "terminal_aborted_no_admission"
+    assert seal["superseded_run_seal_status"] == "failed"
 
 
 def _integrated_e8_pins(*, wrapper: Path | None = None, validator_wrapper: Path | None = None) -> dict[str, str]:

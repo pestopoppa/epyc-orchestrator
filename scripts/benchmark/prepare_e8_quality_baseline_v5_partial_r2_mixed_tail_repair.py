@@ -667,6 +667,9 @@ def _repair_evidence(plan: dict[str, Any], replacements: dict[int, dict[str, Any
     }
 
 
+@RECOVERY.durable_output_writer(
+    "prepare_e8_quality_baseline_v5_partial_r2_mixed_tail_repair"
+)
 def execute(args: argparse.Namespace) -> Path:
     output = args.output_dir.absolute()
     if output.exists() or output.is_symlink():

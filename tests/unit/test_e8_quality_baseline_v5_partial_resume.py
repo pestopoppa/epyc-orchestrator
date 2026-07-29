@@ -573,6 +573,42 @@ def test_atomic_publication_never_replaces_existing_destination(tmp_path: Path) 
     assert (destination / "existing").read_text() == "immutable\n"
 
 
+def test_resume_fault_after_staging_creation_is_terminally_sealed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "candidate"
+    monkeypatch.setattr(resume, "build_plan", lambda _source: {"sealed": True})
+    monkeypatch.setattr(resume.V5, "parse_args", lambda _argv: SimpleNamespace())
+    monkeypatch.setattr(resume.V5, "protocol_proposal", lambda _args: {})
+    monkeypatch.setattr(
+        resume.V4,
+        "prepare_report",
+        lambda _args, **_kwargs: {"blockers": []},
+    )
+    monkeypatch.setattr(
+        resume,
+        "write_json_create",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("injected staging fault")),
+    )
+
+    with pytest.raises(RuntimeError, match="injected staging fault"):
+        resume.execute(
+            SimpleNamespace(
+                source_dir=source,
+                output_dir=output,
+                api_url="http://test",
+            )
+        )
+
+    staging = next(tmp_path.glob(".candidate.staging-*"))
+    assert resume.V4.load_json(staging / "run_seal.json")["status"] == (
+        "terminal_aborted_no_admission"
+    )
+    assert resume.V4.load_json(staging / "writer_abort.json")["no_admission"] is True
+
+
 def test_segmented_monitor_requires_gap_free_clean_claimed_segments() -> None:
     validator_path = PROJECT_ROOT / "scripts/benchmark/validate_e8_quality_baseline_v5.py"
     spec = importlib.util.spec_from_file_location("e8_v5_segmented_validator", validator_path)

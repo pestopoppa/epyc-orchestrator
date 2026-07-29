@@ -147,6 +147,70 @@ def _superseding_receipt() -> dict:
     return receipt
 
 
+def test_execute_fault_after_output_creation_is_terminally_sealed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    base = source / "source_snapshot"
+    base.mkdir(parents=True)
+    output = tmp_path / "candidate"
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", str(RUNNER.CONCURRENCY))
+    monkeypatch.setattr(
+        RUNNER,
+        "build_plan",
+        lambda *_args, **_kwargs: {"t1_core_id": "core"},
+    )
+    monkeypatch.setattr(
+        RUNNER.V5,
+        "parse_args",
+        lambda _argv: SimpleNamespace(api_url="http://test", http_timeout_s=1),
+    )
+    monkeypatch.setattr(RUNNER.RECOVERY, "_capture_recovery_claim", lambda _args: {})
+    monkeypatch.setattr(RUNNER, "_claim_is_exact_q3", lambda _claim: True)
+    monkeypatch.setattr(RUNNER.V4, "runtime_binding", lambda _args: {})
+    monkeypatch.setattr(
+        RUNNER.RECOVERY,
+        "preflight_frontdoor_capacity",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        RUNNER,
+        "validate_failed_source",
+        lambda _source: {
+            "base": base,
+            "base_hashes": {},
+            "hashes": {},
+            "journal": {},
+        },
+    )
+    monkeypatch.setattr(RUNNER.RECOVERY, "_load_vector", lambda *_args: {})
+    monkeypatch.setattr(RUNNER.RECOVERY, "_reconstruct_questions", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(RUNNER, "source_hashes", lambda _source: {})
+    monkeypatch.setattr(RUNNER, "SOURCE_TREE_SHA256", RUNNER.canonical_hash({}))
+    monkeypatch.setattr(
+        RUNNER,
+        "_write_json",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("injected output fault")),
+    )
+
+    with pytest.raises(RuntimeError, match="injected output fault"):
+        RUNNER.execute(
+            SimpleNamespace(
+                source_dir=source,
+                output_dir=output,
+                api_url="http://test",
+                amendment_receipt=tmp_path / "unused.json",
+            )
+        )
+
+    assert RUNNER.V4.load_json(output / "run_seal.json")["status"] == (
+        "terminal_aborted_no_admission"
+    )
+    assert RUNNER.V4.load_json(output / "writer_abort.json")["writer"] == (
+        "final_c1_retry"
+    )
+
+
 def _receipt() -> dict:
     receipt = _common_receipt(
         schema=RUNNER.RECEIPT_SCHEMA,

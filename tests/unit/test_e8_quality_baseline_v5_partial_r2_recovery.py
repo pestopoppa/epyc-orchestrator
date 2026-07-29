@@ -726,7 +726,16 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
     monkeypatch.setattr(recovery.V4, "EvalTower", FakeTower)
     monkeypatch.setattr(recovery.V4, "replay_llm_judge_scorer_tail_once", replay)
 
-    def complete(output, _snapshot, _plan, rows, _questions, _api_url):
+    def complete(
+        output,
+        _snapshot,
+        _plan,
+        rows,
+        _questions,
+        _api_url,
+        *,
+        completion_context=None,
+    ):
         recovery.V4.write_text(
             output / "responses.T2.r2.jsonl",
             "".join(
@@ -735,14 +744,14 @@ def _patch_execute_environment(monkeypatch: pytest.MonkeyPatch, requests: list[l
             ),
         )
         recovery._write_json(output / "raw.T2.r2.json", {"q": 1.0, "n": len(rows)})
-        recovery._write_json(
-            output / "r2_complete.json",
-            {
+        marker = {
                 "status": "complete",
                 "raw_sha256": recovery.sha256_path(output / "raw.T2.r2.json"),
                 "journal_sha256": recovery.sha256_path(output / "recovery_rows.T2.r2.jsonl"),
-            },
-        )
+            }
+        if completion_context is not None:
+            marker.update(completion_context)
+        recovery._write_json(output / "r2_complete.json", marker)
 
     monkeypatch.setattr(recovery, "_complete_r2", complete)
 
@@ -935,7 +944,7 @@ def test_failed_scorer_attempt_is_durable_and_cannot_be_replayed(
     watcher = recovery.V4.load_jsonl(output / "runtime_watch.r2.jsonl")
     assert any(row["active_load"] == {"tier": 2, "repetition": 2} for row in watcher)
 
-    with pytest.raises(RuntimeError, match="failed scorer-replay history"):
+    with pytest.raises(ValueError, match="terminally aborted"):
         recovery.execute(_args(source, output))
     assert calls == 1
     assert requests == []
@@ -975,7 +984,7 @@ def test_watcher_evidence_rejects_inconsistent_binding_or_cadence(
         )
 
 
-def test_resume_after_durable_generation_reuses_complete_watcher_evidence(
+def test_failed_namespace_is_terminal_and_requires_an_explicit_successor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _small_contract(monkeypatch)
@@ -987,27 +996,27 @@ def test_resume_after_durable_generation_reuses_complete_watcher_evidence(
     monkeypatch.setattr(
         recovery,
         "_complete_r2",
-        lambda *_args: (_ for _ in ()).throw(RuntimeError("crash before r2 complete")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("crash before r2 complete")
+        ),
     )
     with pytest.raises(RuntimeError, match="crash before r2 complete"):
         recovery.execute(_args(source, output))
     watcher_rows = recovery.V4.load_jsonl(output / "runtime_watch.r2.jsonl")
     assert watcher_rows and all(row["ok"] is True for row in watcher_rows)
     assert any(row["active_load"] == {"tier": 2, "repetition": 2} for row in watcher_rows)
-
-    monkeypatch.setattr(recovery, "_complete_r2", complete)
-    recovery.execute(_args(source, output))
-
-    marker = recovery.V4.load_json(output / "r2_complete.json")
-    assert requests == [[1, 3, 4]]
-    assert marker["watcher"]["samples"] == len(watcher_rows)
-    assert marker["watcher"]["sha256"] == recovery.sha256_path(output / "runtime_watch.r2.jsonl")
-    assert marker["watcher"]["proposal_sha256"] == recovery.sha256_path(
-        output / "recovery_proposal.json"
+    assert recovery.V4.load_json(output / "writer_abort.json")["no_admission"] is True
+    assert recovery.V4.load_json(output / "run_seal.json")["status"] == (
+        "terminal_aborted_no_admission"
     )
 
+    monkeypatch.setattr(recovery, "_complete_r2", complete)
+    with pytest.raises(ValueError, match="terminally aborted"):
+        recovery.execute(_args(source, output))
+    assert requests == [[1, 3, 4]]
 
-def test_interrupted_generation_harvests_clean_rows_and_requests_only_remaining(
+
+def test_interrupted_generation_terminalizes_without_automatic_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _small_contract(monkeypatch)
@@ -1033,24 +1042,62 @@ def test_interrupted_generation_harvests_clean_rows_and_requests_only_remaining(
         recovery.execute(_args(source, output))
     monkeypatch.setattr(recovery.V4, "EvalTower", original_tower)
 
-    recovery.execute(_args(source, output))
-    assert requests == [[1], [3, 4]]
+    with pytest.raises(ValueError, match="terminally aborted"):
+        recovery.execute(_args(source, output))
+    assert requests == [[1]]
+    assert recovery.V4.load_json(output / "run_seal.json")["status"] == (
+        "terminal_aborted_no_admission"
+    )
     journal = recovery.V4.load_jsonl(output / "recovery_rows.T2.r2.jsonl")
-    assert {row["ordinal"] for row in journal} == set(range(5))
+    assert set(range(5)) - {1, 3, 4} <= {row["ordinal"] for row in journal}
     sidecar = recovery.V4.load_jsonl(
         output / "eval_sidecars/question_results.e8-t2-r2-recovery.jsonl"
     )
     assert {row["ordinal"] for row in sidecar if row.get("row_type") == "question_result"} == {
-        1,
-        3,
-        4,
+        1
     }
-    scorer_row = next(row for row in sidecar if row.get("ordinal") == 4)
-    assert scorer_row["result"].get("error") is None
     watcher = recovery.V4.load_jsonl(output / "runtime_watch.r2.jsonl")
     assert all(row["ok"] is True for row in watcher)
     assert all(row["active_load"] in (None, {"tier": 2, "repetition": 2}) for row in watcher)
     assert any(row["active_load"] == {"tier": 2, "repetition": 2} for row in watcher)
+
+
+def test_atomic_json_replacement_preserves_prior_bytes_on_publish_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "state.json"
+    path.write_text('{"state":"old"}\n')
+    monkeypatch.setattr(
+        recovery.os,
+        "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("injected replace failure")),
+    )
+
+    with pytest.raises(OSError, match="injected replace failure"):
+        recovery._write_json(path, {"state": "new"})
+
+    assert path.read_text() == '{"state":"old"}\n'
+    assert list(tmp_path.glob(".state.json.tmp-*")) == []
+
+
+def test_snapshot_relocates_upstream_binding_without_self_overwrite(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    upstream = source / "source_binding.json"
+    upstream.write_text('{"source_sha256":{"old":"binding"}}\n')
+    plan = recovery.build_plan(source)
+    output = tmp_path / "output"
+    output.mkdir()
+
+    snapshot = recovery._snapshot_source(source, output, plan)
+
+    assert (snapshot / "upstream_source_binding.json").read_bytes() == upstream.read_bytes()
+    wrapper = recovery.V4.load_json(snapshot / "source_binding.json")
+    assert wrapper["source_sha256"] == plan["source_sha256"]
+    assert wrapper["source_sha256"]["upstream_source_binding.json"] == (
+        recovery.sha256_path(upstream)
+    )
 
 
 def test_failed_attempt_history_fails_closed_before_any_request(
