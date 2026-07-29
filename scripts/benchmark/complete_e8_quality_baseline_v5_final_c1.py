@@ -21,6 +21,7 @@ import os
 import shutil
 import sys
 import uuid
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,11 @@ RUN_SEAL_NAME = "run_seal.json"
 SOURCE_ABORT_COPY_NAME = "deterministic_completion_source_abort.json"
 TYPED_TRACE_INPUT_NAME = "typed_judge_trace_inputs.T2.r2.jsonl"
 TYPED_TRACE_SELECTION_NAME = "typed_judge_trace_selection.json"
+SCORE_REPLAY_NAME = "deterministic_score_replay.jsonl"
+SOURCE_JOURNAL_COPY_NAME = (
+    "deterministic_score_replay_source/recovery_rows.T2.r2.jsonl"
+)
+CORRECTED_SIDECARS_NAME = "deterministic_score_replay_sidecars.jsonl"
 WRITER = "final_c1_deterministic_completion"
 AT_FDCWD = -100
 RENAME_NOREPLACE = 1
@@ -110,6 +116,63 @@ def _question_rows(path: Path) -> dict[int, dict[str, Any]]:
             raise ValueError("provenance sidecar contains an invalid ordinal")
         rows[ordinal] = row
     return rows
+
+
+def _jsonl_bytes(rows: list[dict[str, Any]]) -> bytes:
+    return "".join(
+        json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
+        for row in rows
+    ).encode()
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    V4.write_text(path, _jsonl_bytes(rows).decode())
+
+
+def _scorer_source_hashes() -> dict[str, str]:
+    """Bind the deterministic scorer and its concrete implementation files."""
+    paths = (
+        ROOT / "scripts/benchmark/run_e8_quality_baseline_reseed.py",
+        ROOT / "scripts/benchmark/seeding_scoring.py",
+        ROOT / "scripts/benchmark/debug_scorer.py",
+    )
+    hashes: dict[str, str] = {}
+    for path in paths:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("deterministic scorer source is missing or unsafe")
+        hashes[str(path.relative_to(ROOT))] = sha256_path(path)
+    return hashes
+
+
+def _scorer_runtime_witness() -> dict[str, str]:
+    """Identify the scorer implementation actually imported for this replay."""
+    scoring_module = sys.modules.get(V4.score_answer_deterministic.__module__)
+    debug_module = sys.modules.get("epyc_orch_debug_scorer")
+    if scoring_module is None or debug_module is None:
+        raise ValueError("deterministic scorer runtime module was not loaded")
+    scoring_path = Path(str(getattr(scoring_module, "__file__", "")))
+    debug_path = Path(str(getattr(debug_module, "__file__", "")))
+    if any(
+        path.is_symlink() or not path.is_file()
+        for path in (scoring_path, debug_path)
+    ):
+        raise ValueError("deterministic scorer runtime witness is unsafe")
+    return {
+        "python_executable": sys.executable,
+        "python_implementation": sys.implementation.name,
+        "python_version": ".".join(map(str, sys.version_info[:3])),
+        "seeding_scoring_path": str(scoring_path.resolve(strict=True)),
+        "seeding_scoring_sha256": sha256_path(scoring_path),
+        "debug_scorer_path": str(debug_path.resolve(strict=True)),
+        "debug_scorer_sha256": sha256_path(debug_path),
+    }
+
+
+def _active_journal(state: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    journal = state.get("working_journal", state["journal"])
+    if not isinstance(journal, dict):
+        raise ValueError("deterministic score replay has no complete working journal")
+    return journal
 
 
 def _require_exact_set(name: str, value: Any) -> set[int]:
@@ -420,7 +483,7 @@ def _provenance_surfaces(
             for ordinal in race_retry - set(FINAL_C1.RETRY_ORDINALS)
         },
     }
-    journal = state["journal"]
+    journal = _active_journal(state)
     if (
         set(expected_sources) != set(range(RECOVERY.N))
         or any(
@@ -539,7 +602,7 @@ def _typed_trace_rows(
         if question.get("scoring_method") != "llm_judge":
             continue
         entry = entries.get(ordinal)
-        journal = state["journal"].get(ordinal)
+        journal = _active_journal(state).get(ordinal)
         if not isinstance(entry, dict) or not isinstance(journal, dict):
             raise ValueError("typed trace selection has no provenance entry")
         response = journal.get("response")
@@ -616,12 +679,15 @@ def _typed_trace_rows(
     return selected, result
 
 
-def build_provenance_manifest(
-    source: Path, state: dict[str, Any]
+def _build_provenance_manifest(
+    source: Path,
+    state: dict[str, Any],
+    *,
+    score_replay_by_ordinal: dict[int, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
     surfaces, paths, categories = _provenance_surfaces(source, state)
     inherited_scorer = categories["inherited_scorer_replay_ordinals"]
-    journal = state["journal"]
+    journal = _active_journal(state)
     questions = state["questions"]
     selected: dict[int, dict[str, Any]] = {}
     entries: list[dict[str, Any]] = []
@@ -655,6 +721,25 @@ def build_provenance_manifest(
         source_response = RECOVERY._response_from_sidecar(
             sidecar, questions[ordinal]
         )
+        replay = (score_replay_by_ordinal or {}).get(ordinal)
+        response_matches_source = source_response == response
+        if replay is not None:
+            if (
+                replay.get("ordinal") != ordinal
+                or replay.get("qid") != qid
+                or replay.get("changed") is not True
+                or replay.get("source_response_sha256")
+                != canonical_hash(source_response)
+                or replay.get("derived_response_sha256")
+                != canonical_hash(response)
+                or any(
+                    source_response.get(key) != response.get(key)
+                    for key in source_response.keys() | response.keys()
+                    if key != "correct"
+                )
+            ):
+                raise ValueError("deterministic scorer replay differs from response")
+            response_matches_source = False
         if (
             response.get("qid") != qid
             or not V5.validate_clean_sidecar_result(
@@ -662,7 +747,8 @@ def build_provenance_manifest(
             )
             or (
                 source_kind != "scorer_replay"
-                and source_response != response
+                and not response_matches_source
+                and replay is None
             )
             or (
                 source_kind == "scorer_replay"
@@ -684,7 +770,7 @@ def build_provenance_manifest(
             raise ValueError(
                 f"typed sidecar provenance differs at ordinal {ordinal}"
             )
-        selected[ordinal] = sidecar
+        selected[ordinal] = coherent if replay is not None else sidecar
         path = paths[surface]
         entry = {
             "ordinal": ordinal,
@@ -699,6 +785,8 @@ def build_provenance_manifest(
             "coherent_row_sha256": canonical_hash(coherent),
             "response_sha256": canonical_hash(response),
         }
+        if replay is not None:
+            entry["deterministic_score_replay"] = replay
         if source_kind == "scorer_replay":
             entry["scorer_replay"] = _scorer_replay_evidence(
                 source,
@@ -749,6 +837,139 @@ def build_provenance_manifest(
     return manifest, selected
 
 
+def _replay_deterministic_scores(
+    state: dict[str, Any],
+    selected: dict[int, dict[str, Any]],
+) -> tuple[dict[int, dict[str, Any]], list[dict[str, Any]], dict[int, dict[str, Any]]]:
+    """Replay every non-judge score into a separately derived journal.
+
+    The source journal and selected source sidecars are never altered.  A
+    correction must be backed by the exact source response, question, sidecar,
+    and scorer implementation hashes before it can reach `_complete_r2`.
+    """
+    original = state["journal"]
+    working = deepcopy(original)
+    scorer_sources = _scorer_source_hashes()
+    scorer_sources_sha256 = canonical_hash(scorer_sources)
+    records: list[dict[str, Any]] = []
+    corrections: dict[int, dict[str, Any]] = {}
+    for ordinal, question in enumerate(state["questions"]):
+        method = str(question.get("scoring_method") or "")
+        if method == "llm_judge":
+            continue
+        source_row = original.get(ordinal)
+        sidecar = selected.get(ordinal)
+        if not isinstance(source_row, dict) or not isinstance(sidecar, dict):
+            raise ValueError("deterministic scorer replay lacks source provenance")
+        source_response = source_row.get("response")
+        if not isinstance(source_response, dict):
+            raise ValueError("deterministic scorer replay lacks a source response")
+        qid = V4._question_qid(question)
+        if (
+            source_response.get("qid") != qid
+            or source_response.get("scoring_method") != method
+            or source_response.get("error") is not None
+            or source_response.get("partial") is not False
+            or source_response.get("degraded") is not False
+        ):
+            raise ValueError("deterministic scorer replay source response is not clean")
+        replayed = V4.independently_score_response(
+            str(source_response.get("answer") or ""),
+            str(question.get("expected") or ""),
+            method,
+            question.get("scoring_config") or {},
+            default_api_url="http://127.0.0.1:8000",
+        )
+        if type(replayed) is not bool:
+            raise ValueError("deterministic scorer replay has no boolean verdict")
+        runtime_witness = _scorer_runtime_witness()
+        derived_response = deepcopy(source_response)
+        derived_response["correct"] = replayed
+        changed = replayed is not source_response.get("correct")
+        record = {
+            "schema": "epyc.e8_quality_v5_deterministic_score_replay.v1",
+            "ordinal": ordinal,
+            "qid": qid,
+            "scoring_method": method,
+            "changed": changed,
+            "before_correct": source_response.get("correct"),
+            "after_correct": replayed,
+            "source_response_sha256": canonical_hash(source_response),
+            "derived_response_sha256": canonical_hash(derived_response),
+            "question_sha256": canonical_hash(question),
+            "source_sidecar_sha256": canonical_hash(sidecar),
+            "scorer_sources": scorer_sources,
+            "scorer_sources_sha256": scorer_sources_sha256,
+            "scorer_runtime_witness": runtime_witness,
+            "scorer_runtime_witness_sha256": canonical_hash(runtime_witness),
+        }
+        if changed:
+            working[ordinal] = {**source_row, "response": derived_response}
+            corrected = V5._coherent_sidecar_row(sidecar, derived_response, qid=qid)
+            record["derived_sidecar_sha256"] = canonical_hash(corrected)
+            corrections[ordinal] = corrected
+        records.append(record)
+    if not records:
+        raise ValueError("deterministic scorer replay found no non-judge rows")
+    if any(record["ordinal"] == 418 for record in records) and not any(
+        record["ordinal"] == 418 and record["changed"] is True for record in records
+    ):
+        raise ValueError("ordinal 418 did not retain its deterministic scorer correction")
+    return working, records, corrections
+
+
+def build_provenance_manifest(
+    source: Path, state: dict[str, Any]
+) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
+    """Build typed lineage, then derive and bind current deterministic scores."""
+    # Establish the immutable source-sidecar selection before scoring it.
+    _base_manifest, selected = _build_provenance_manifest(source, state)
+    working, records, corrections = _replay_deterministic_scores(state, selected)
+    state["working_journal"] = working
+    state["score_replay_records"] = records
+    state["score_replay_corrections"] = corrections
+    by_ordinal = {record["ordinal"]: record for record in records if record["changed"]}
+    manifest, selected = _build_provenance_manifest(
+        source,
+        state,
+        score_replay_by_ordinal=by_ordinal,
+    )
+    manifest["deterministic_score_replay"] = {
+        "path": SCORE_REPLAY_NAME,
+        "schema": "epyc.e8_quality_v5_deterministic_score_replay.v1",
+        "records": len(records),
+        "records_sha256": canonical_hash(records),
+        "ledger_sha256": hashlib.sha256(_jsonl_bytes(records)).hexdigest(),
+        "correction_ordinals": sorted(corrections),
+        "correction_count": len(corrections),
+        "source_journal": {
+            "path": SOURCE_JOURNAL_COPY_NAME,
+            "sha256": state["hashes"]["recovery_rows.T2.r2.jsonl"],
+        },
+        "derived_journal": {
+            "path": "recovery_rows.T2.r2.jsonl",
+            "sha256": hashlib.sha256(
+                _jsonl_bytes([
+                    working[ordinal] for ordinal in range(RECOVERY.N)
+                ])
+            ).hexdigest(),
+        },
+        "corrected_sidecars": {
+            "path": CORRECTED_SIDECARS_NAME,
+            "records": len(corrections),
+            "records_sha256": canonical_hash([
+                {"ordinal": ordinal, "sidecar": corrections[ordinal]}
+                for ordinal in sorted(corrections)
+            ]),
+            "sha256": hashlib.sha256(_jsonl_bytes([
+                {"ordinal": ordinal, "sidecar": corrections[ordinal]}
+                for ordinal in sorted(corrections)
+            ])).hexdigest(),
+        },
+    }
+    return manifest, selected
+
+
 def _copy_source(source: Path, staging: Path, hashes: dict[str, str]) -> None:
     for relative, digest in hashes.items():
         if relative == RECOVERY.ABORT_MARKER_NAME:
@@ -765,6 +986,44 @@ def _copy_source(source: Path, staging: Path, hashes: dict[str, str]) -> None:
     )
     if source_hashes(source) != hashes:
         raise ValueError("deterministic completion source changed while copying")
+
+
+def _materialize_score_replay(
+    staging: Path, state: dict[str, Any], manifest: dict[str, Any]
+) -> None:
+    """Keep the copied source journal immutable and write its derived successor."""
+    original_journal = staging / "recovery_rows.T2.r2.jsonl"
+    source_copy = staging / SOURCE_JOURNAL_COPY_NAME
+    source_copy.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(original_journal, source_copy)
+    if (
+        sha256_path(source_copy) != state["hashes"]["recovery_rows.T2.r2.jsonl"]
+        or sha256_path(original_journal) != state["hashes"]["recovery_rows.T2.r2.jsonl"]
+    ):
+        raise ValueError("deterministic score replay source journal differs")
+    working_journal = _active_journal(state)
+    _write_jsonl(
+        original_journal,
+        [working_journal[ordinal] for ordinal in range(RECOVERY.N)],
+    )
+    records = state.get("score_replay_records")
+    corrections = state.get("score_replay_corrections")
+    if not isinstance(records, list) or not isinstance(corrections, dict):
+        raise ValueError("deterministic score replay was not prepared")
+    _write_jsonl(staging / SCORE_REPLAY_NAME, records)
+    correction_rows = [
+        {"ordinal": ordinal, "sidecar": corrections[ordinal]}
+        for ordinal in sorted(corrections)
+    ]
+    _write_jsonl(staging / CORRECTED_SIDECARS_NAME, correction_rows)
+    replay = manifest.get("deterministic_score_replay")
+    if not isinstance(replay, dict):
+        raise ValueError("completion manifest has no deterministic score replay")
+    replay["ledger_sha256"] = sha256_path(staging / SCORE_REPLAY_NAME)
+    replay["derived_journal"]["sha256"] = sha256_path(original_journal)
+    replay["corrected_sidecars"]["sha256"] = sha256_path(
+        staging / CORRECTED_SIDECARS_NAME
+    )
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -907,6 +1166,9 @@ def _validate_completed_staging(
         - {RECOVERY.ABORT_MARKER_NAME}
         | {
             SOURCE_ABORT_COPY_NAME,
+            SOURCE_JOURNAL_COPY_NAME,
+            SCORE_REPLAY_NAME,
+            CORRECTED_SIDECARS_NAME,
             MANIFEST_NAME,
             "r2_complete.json",
             "responses.T2.r2.jsonl",
@@ -930,13 +1192,22 @@ def _validate_completed_staging(
         or any(
             sha256_path(staging / relative) != digest
             for relative, digest in state["hashes"].items()
-            if relative != RECOVERY.ABORT_MARKER_NAME
+            if relative not in {
+                RECOVERY.ABORT_MARKER_NAME,
+                "recovery_rows.T2.r2.jsonl",
+            }
         )
         or sha256_path(staging / SOURCE_ABORT_COPY_NAME)
         != state["hashes"][RECOVERY.ABORT_MARKER_NAME]
         or (staging / RECOVERY.ABORT_MARKER_NAME).exists()
     ):
         raise ValueError("deterministic completion artifact set differs")
+    source_journal_copy = staging / SOURCE_JOURNAL_COPY_NAME
+    replay_path = staging / SCORE_REPLAY_NAME
+    corrected_path = staging / CORRECTED_SIDECARS_NAME
+    replay = manifest.get("deterministic_score_replay")
+    if not isinstance(replay, dict):
+        raise ValueError("deterministic completion manifest lacks score replay")
     responses = V4.load_jsonl(required["responses"])
     journal = V4.load_jsonl(required["journal"])
     _parsed, sidecars = V5.sidecar_question_rows(
@@ -949,9 +1220,12 @@ def _validate_completed_staging(
     if (
         len(responses) != RECOVERY.N
         or responses
-        != [state["journal"][ordinal]["response"] for ordinal in range(RECOVERY.N)]
+        != [
+            _active_journal(state)[ordinal]["response"]
+            for ordinal in range(RECOVERY.N)
+        ]
         or journal
-        != [state["journal"][ordinal] for ordinal in range(RECOVERY.N)]
+        != [_active_journal(state)[ordinal] for ordinal in range(RECOVERY.N)]
         or any(
             not V5.validate_clean_sidecar_result(
                 response, sidecars[ordinal][1], qid=response["qid"]
@@ -979,8 +1253,34 @@ def _validate_completed_staging(
         or V4.load_jsonl(required["typed_trace_input"]) != typed_trace_rows
         or [row.get("qid") for row in responses]
         != [V4._question_qid(question) for question in questions]
+        or sha256_path(source_journal_copy)
+        != state["hashes"]["recovery_rows.T2.r2.jsonl"]
+        or sha256_path(replay_path) != replay.get("ledger_sha256")
+        or canonical_hash(V4.load_jsonl(replay_path))
+        != replay.get("records_sha256")
+        or sha256_path(required["journal"])
+        != replay.get("derived_journal", {}).get("sha256")
+        or sha256_path(corrected_path)
+        != replay.get("corrected_sidecars", {}).get("sha256")
     ):
         raise ValueError("deterministic completion output differs")
+    records = V4.load_jsonl(replay_path)
+    corrections = V4.load_jsonl(corrected_path)
+    expected_corrections = state.get("score_replay_corrections")
+    if (
+        not isinstance(expected_corrections, dict)
+        or len(records) != replay.get("records")
+        or len(corrections) != replay.get("corrected_sidecars", {}).get("records")
+        or sorted(row.get("ordinal") for row in corrections)
+        != sorted(expected_corrections)
+        or [record.get("ordinal") for record in records]
+        != sorted(record.get("ordinal") for record in records)
+        or any(
+            record.get("changed") is not (record.get("ordinal") in expected_corrections)
+            for record in records
+        )
+    ):
+        raise ValueError("deterministic score replay evidence differs")
     RACE._require_clean_predecessor_watcher(
         staging / FINAL_C1.WATCHER_NAME
     )
@@ -996,6 +1296,7 @@ def _complete(
     selected: dict[int, dict[str, Any]],
 ) -> None:
     _copy_source(source, staging, state["hashes"])
+    _materialize_score_replay(staging, state, manifest)
     trace_rows, trace_selection = _typed_trace_rows(source, state, manifest)
     if manifest.get("typed_judge_trace_selection") != trace_selection:
         raise ValueError("typed judge trace selection differs from manifest")
@@ -1009,7 +1310,7 @@ def _complete(
         staging,
         staging / "source_snapshot",
         state["plan"],
-        state["journal"],
+        _active_journal(state),
         state["questions"],
         "http://127.0.0.1:8000",
         trace_fragments=[staging / TYPED_TRACE_INPUT_NAME],
@@ -1075,6 +1376,8 @@ def execute(args: argparse.Namespace) -> Path:
         )
         manifest, selected = build_provenance_manifest(source, state)
         _complete(source, staging, state, manifest, selected)
+        if "hashes" in state and source_hashes(source) != state["hashes"]:
+            raise ValueError("deterministic completion source changed during completion")
         _fsync_tree(staging)
         _rename_noreplace(staging, output)
         published = True
@@ -1131,6 +1434,19 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
         "journal_rows": len(state["journal"]),
         "provenance_rows": len(selected),
         "provenance_entries_sha256": manifest["entries_sha256"],
+        "deterministic_score_replay": {
+            "records": manifest["deterministic_score_replay"]["records"],
+            "correction_count": manifest["deterministic_score_replay"]["correction_count"],
+            "correction_ordinals": manifest["deterministic_score_replay"]["correction_ordinals"],
+            "ordinal_418": next(
+                (
+                    record
+                    for record in state["score_replay_records"]
+                    if record["ordinal"] == 418
+                ),
+                None,
+            ),
+        },
         "source_counts": {
             name: sum(
                 row["journal_source"] == name
