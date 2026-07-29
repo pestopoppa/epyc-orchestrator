@@ -133,7 +133,11 @@ def test_finalizer_fault_after_staging_creation_is_quarantined(
     monkeypatch.setattr(
         finalizer, "_execution_contract", lambda _args: (contract, recovery)
     )
-    monkeypatch.setattr(finalizer, "build_plan", lambda _source: {"sealed": True})
+    monkeypatch.setattr(
+        finalizer,
+        "build_plan",
+        lambda _source: {"sealed": True, "source": str(source)},
+    )
     monkeypatch.setattr(
         finalizer,
         "validate_intermediate",
@@ -194,6 +198,120 @@ def test_validate_intermediate_rejects_terminal_root_seal_without_marker(
 
     with pytest.raises(ValueError, match="terminally sealed"):
         finalizer.validate_intermediate(intermediate)
+
+
+def _sealed_final_c1_stub(tmp_path: Path) -> Path:
+    root = tmp_path / "final-c1-complete"
+    for relative in (
+        "recovery_proposal.json",
+        "responses.T2.r2.jsonl",
+        "eval_sidecars/question_results.e8-t2-r2.jsonl",
+        "judge_traces.T2.r2.jsonl",
+        "recovery_rows.T2.r2.jsonl",
+        "scorer_attempts.T2.r2.jsonl",
+        "source_snapshot/source_binding.json",
+    ):
+        _write_json(root / relative, {})
+    _write_json(
+        root / "partial_r2_plan.json",
+        {"schema": finalizer.FINAL_C1_RETRY.PLAN_SCHEMA},
+    )
+    manifest = root / "deterministic_completion_manifest.json"
+    _write_json(
+        manifest,
+        {
+            "schema": "epyc.e8_quality_v5_final_c1_deterministic_completion.v1",
+            "status": "complete",
+        },
+    )
+    _write_json(
+        root / "r2_complete.json",
+        {
+            "deterministic_completion": {
+                "path": manifest.name,
+                "sha256": _sha(manifest),
+            }
+        },
+    )
+    finalizer.V4.TERMINAL_SEAL.record_complete(
+        root,
+        writer="final_c1_deterministic_completion",
+        manifest_name=manifest.name,
+    )
+    return root
+
+
+def test_final_c1_dispatch_requires_exact_published_complete_seal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _sealed_final_c1_stub(tmp_path)
+    monkeypatch.setattr(
+        finalizer,
+        "_validate_final_c1_intermediate",
+        lambda _root, plan: {"plan": plan, "sealed": True},
+    )
+
+    assert finalizer.validate_intermediate(root)["sealed"] is True
+
+    seal_path = root / "run_seal.json"
+    seal = json.loads(seal_path.read_text())
+    seal["status"] = finalizer.V4.TERMINAL_SEAL.STAGED_COMPLETE_STATUS
+    _write_json(seal_path, seal)
+    with pytest.raises(ValueError, match="root run seal contract"):
+        finalizer.validate_intermediate(root)
+
+    staged = tmp_path / ".final-c1.staging-deadbeef"
+    root.rename(staged)
+    with pytest.raises(ValueError, match="published non-staging"):
+        finalizer.validate_intermediate(staged)
+
+
+def test_composite_terminalizer_pin_is_historical_not_live_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    historical = tmp_path / "historical"
+    historical.mkdir()
+    root = tmp_path / "published-source"
+    (root / "source_snapshot").mkdir(parents=True)
+    manifest = root / "composite_source_manifest.json"
+    _write_json(
+        manifest,
+        {
+            "schema": "epyc.e8_quality_v5_composite_source_terminal.v1",
+            "status": "complete",
+            "historical_source": str(historical),
+            "source_snapshot": "source_snapshot",
+            "source_tree_sha256": finalizer.COMPOSITE_SOURCE_TREE_SHA256,
+        },
+    )
+    finalizer.V4.TERMINAL_SEAL.record_complete(
+        root,
+        writer="terminalize_e8_quality_baseline_v5_composite_source",
+        manifest_name=manifest.name,
+        runner_path=finalizer.COMPOSITE_SOURCE_TERMINALIZER_PATH,
+    )
+    monkeypatch.setattr(finalizer, "COMPOSITE_SOURCE_DIR", historical)
+    monkeypatch.setattr(
+        finalizer,
+        "_validate_composite_payload",
+        lambda _source: ({"payload": "a" * 64}, {}),
+    )
+    drifted = tmp_path / "drifted-terminalizer.py"
+    drifted.write_text("# drift\n")
+    monkeypatch.setattr(
+        finalizer,
+        "COMPOSITE_SOURCE_TERMINALIZER_PATH",
+        drifted,
+    )
+
+    assert finalizer.build_plan(root)["source_terminal_root"] == str(root)
+
+    seal_path = root / "run_seal.json"
+    seal = json.loads(seal_path.read_text())
+    seal["runner_sha256"] = _sha(drifted)
+    _write_json(seal_path, seal)
+    with pytest.raises(ValueError, match="terminalizer runner differs"):
+        finalizer.build_plan(root)
 
 
 def test_copy_bound_race_intermediate_preserves_raw_and_named_watcher(
@@ -1112,12 +1230,14 @@ def test_recovery_r2_context_rejects_source_watcher_and_claim_drift(tmp_path: Pa
         _validate(root, context)
 
 
-def test_finalizer_plan_accepts_the_preserved_completed_r1_source() -> None:
+def test_finalizer_plan_rejects_the_unsealed_preserved_staging_source() -> None:
     source = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/"
         ".e8_quality_baseline_v5_partial_resume_promptfix_20260728.staging-b0d7ce62d6e04509a1cec7849aa68832"
     )
-    plan = finalizer.build_plan(source)
+    with pytest.raises(ValueError, match="published non-staging"):
+        finalizer.build_plan(source)
+    plan = finalizer.validate_legacy_composite_source(source)
     assert plan["banked"] == {"tiers": [1], "t2_r1": True}
     assert plan["fresh_collection"] == [{"tier": 2, "repetition": 3}]
 
@@ -1128,7 +1248,7 @@ def test_real_source_tail_is_rebound_to_the_new_bundle_without_regeneration(tmp_
         ".e8_quality_baseline_v5_partial_resume_promptfix_20260728.staging-"
         "b0d7ce62d6e04509a1cec7849aa68832"
     )
-    plan = finalizer.build_plan(source)
+    plan = finalizer.validate_legacy_composite_source(source)
     staging = tmp_path / "staging"
     destination = tmp_path / "published"
     finalizer._copy_composite_source(source, staging, plan)
@@ -1163,7 +1283,11 @@ def test_real_source_tail_rejects_broadened_ordinals(tmp_path: Path) -> None:
         "b0d7ce62d6e04509a1cec7849aa68832"
     )
     staging = tmp_path / "staging"
-    finalizer._copy_composite_source(source, staging, finalizer.build_plan(source))
+    finalizer._copy_composite_source(
+        source,
+        staging,
+        finalizer.validate_legacy_composite_source(source),
+    )
     plan_path = staging / "partial_resume_plan.json"
     plan = json.loads(plan_path.read_text())
     plan["generation_tail"]["targets"][1]["ordinal"] = 100
@@ -1176,7 +1300,9 @@ def test_real_source_tail_rejects_broadened_ordinals(tmp_path: Path) -> None:
 def test_layered_context_is_limited_to_the_exact_composite_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source_plan = finalizer.build_plan(validator.COMPOSITE_SOURCE_DIR)
+    source_plan = finalizer.validate_legacy_composite_source(
+        validator.COMPOSITE_SOURCE_DIR
+    )
     assert validator.canonical_hash(source_plan["source_sha256"]) == (
         validator.COMPOSITE_SOURCE_TREE_SHA256
     )
@@ -1188,7 +1314,8 @@ def test_layered_context_is_limited_to_the_exact_composite_source(
             "composite_source_plan_sha256": _sha(source_plan_path),
         }
     }
-    validator.validate_composite_context(context, evidence_root=tmp_path)
+    with pytest.raises(ValueError, match="published terminal copy"):
+        validator.validate_composite_context(context, evidence_root=tmp_path)
     recycled_source = tmp_path / "recycled-source"
     monkeypatch.setattr(validator, "COMPOSITE_SOURCE_DIR", recycled_source)
     source_plan["source"] = str(recycled_source)
@@ -1196,11 +1323,12 @@ def test_layered_context_is_limited_to_the_exact_composite_source(
         entry["path"] = str(recycled_source / name)
     _write_json(source_plan_path, source_plan)
     context["context"]["composite_source_plan_sha256"] = _sha(source_plan_path)
-    validator.validate_composite_context(context, evidence_root=tmp_path)
+    with pytest.raises(ValueError, match="published terminal copy"):
+        validator.validate_composite_context(context, evidence_root=tmp_path)
     source_plan["source_sha256"] = {}
     _write_json(source_plan_path, source_plan)
     context["context"]["composite_source_plan_sha256"] = _sha(source_plan_path)
-    with pytest.raises(ValueError, match="exact reviewed composite"):
+    with pytest.raises(ValueError, match="published terminal copy"):
         validator.validate_composite_context(context, evidence_root=tmp_path)
 
 

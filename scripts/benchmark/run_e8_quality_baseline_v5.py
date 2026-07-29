@@ -1183,7 +1183,9 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     }
     seal = {
         "schema": "epyc.e8_quality_baseline_run_seal.v1",
-        "status": "complete" if eligible else "failed",
+        "status": (
+            V4.TERMINAL_SEAL.STAGED_COMPLETE_STATUS if eligible else "failed"
+        ),
         "manifest_sha256": V4.sha256_path(evidence_path),
         "runner_report_sha256": V4.sha256_path(report_path),
         "protocol_receipt_sha256": None,
@@ -1197,6 +1199,7 @@ def execute(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     if eligible:
         V4.atomic_publish_noreplace(staging_dir, output_dir)
         V4.fsync_dir(output_dir.parent)
+        V4.TERMINAL_SEAL.promote_staged_complete(output_dir)
         return report, 0
     return report, 2
 

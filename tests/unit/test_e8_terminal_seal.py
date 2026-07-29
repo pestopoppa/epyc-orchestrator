@@ -122,6 +122,41 @@ def test_complete_seal_binds_manifest_and_nested_run_seal(
     assert value["bundle_sha256"]["nested/run_seal.json"] == _sha(nested_seal)
 
 
+def test_complete_seal_rejects_staging_namespace(tmp_path: Path) -> None:
+    namespace = tmp_path / ".candidate.staging-deadbeef"
+    namespace.mkdir()
+    (namespace / "manifest.json").write_text("{}\n")
+    with pytest.raises(ValueError, match="staging namespace"):
+        seal.record_complete(
+            namespace,
+            writer="test",
+            manifest_name="manifest.json",
+        )
+
+
+def test_promote_staged_complete_is_atomic_and_exact(tmp_path: Path) -> None:
+    namespace = tmp_path / "published"
+    namespace.mkdir()
+    root = namespace / "run_seal.json"
+    root.write_text(
+        json.dumps(
+            {
+                "schema": seal.RUN_SEAL_SCHEMA,
+                "status": seal.STAGED_COMPLETE_STATUS,
+            }
+        )
+        + "\n"
+    )
+
+    seal.promote_staged_complete(namespace)
+
+    promoted = json.loads(root.read_text())
+    assert promoted["status"] == seal.COMPLETE_STATUS
+    assert isinstance(promoted["published_at"], str)
+    with pytest.raises(ValueError, match="staged-complete"):
+        seal.promote_staged_complete(namespace)
+
+
 def test_writer_preserves_original_failure_and_success_path(tmp_path: Path) -> None:
     failed_output = tmp_path / "failed"
 
