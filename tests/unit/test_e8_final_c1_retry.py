@@ -497,6 +497,46 @@ def test_cli_exposes_no_timeout_or_concurrency_override() -> None:
         )
 
 
+def test_execute_passes_the_explicit_amended_c1_capacity_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+    seen: dict[str, object] = {}
+
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", str(RUNNER.CONCURRENCY))
+    monkeypatch.setattr(RUNNER, "build_plan", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        RUNNER.V5,
+        "parse_args",
+        lambda _argv: SimpleNamespace(api_url="http://test", http_timeout_s=1),
+    )
+    monkeypatch.setattr(RUNNER.RECOVERY, "_capture_recovery_claim", lambda _args: {})
+    monkeypatch.setattr(RUNNER, "_claim_is_exact_q3", lambda _claim: True)
+    monkeypatch.setattr(RUNNER.V4, "runtime_binding", lambda _args: {})
+
+    def stop_after_capacity(_binding: dict, **kwargs: object) -> dict:
+        seen.update(kwargs)
+        raise ValueError("capacity sentinel")
+
+    monkeypatch.setattr(RUNNER.RECOVERY, "preflight_frontdoor_capacity", stop_after_capacity)
+    with pytest.raises(ValueError, match="capacity sentinel"):
+        RUNNER.execute(
+            SimpleNamespace(
+                output_dir=output,
+                source_dir=source,
+                amendment_receipt=tmp_path / "receipt.json",
+                api_url="http://test",
+            )
+        )
+    assert seen == {
+        "required": RUNNER.CONCURRENCY,
+        "claim": {},
+        "expected_concurrency": RUNNER.CONCURRENCY,
+    }
+
+
 def _focused_sidecar_rows(*, label: str, qid: str) -> list[dict]:
     batch_id = "focused-batch"
     return [

@@ -336,10 +336,24 @@ def _capture_recovery_claim(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def preflight_frontdoor_capacity(
-    binding: dict[str, Any], *, required: int, claim: dict[str, Any]
+    binding: dict[str, Any],
+    *,
+    required: int,
+    claim: dict[str, Any],
+    expected_concurrency: int = V4.CONCURRENCY,
 ) -> dict[str, Any]:
-    if required != V4.CONCURRENCY:
-        raise ValueError("partial-r2 recovery concurrency differs from the ratified E8 concurrency")
+    if (
+        isinstance(expected_concurrency, bool)
+        or not isinstance(expected_concurrency, int)
+        or expected_concurrency not in {1, V4.CONCURRENCY}
+    ):
+        raise ValueError("frontdoor preflight accepts only the ratified c3 or amended c1 concurrency")
+    if (
+        isinstance(required, bool)
+        or not isinstance(required, int)
+        or required != expected_concurrency
+    ):
+        raise ValueError("frontdoor capacity requirement differs from the explicit concurrency contract")
     from src.runtime.instance_topology import get_instance_regions, topology_idx_for_port
 
     instance_regions = get_instance_regions()

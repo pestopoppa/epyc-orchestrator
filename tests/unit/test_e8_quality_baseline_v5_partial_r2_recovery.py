@@ -365,6 +365,73 @@ def test_capacity_selects_only_mutually_disjoint_free_instances() -> None:
     assert [row["topology_idx"] for row in selected] == [1, 2, 3]
 
 
+def test_frontdoor_capacity_requires_an_explicit_c1_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1 is an amended exception; legacy callers remain bound to C3."""
+    from src.runtime import instance_topology
+
+    monkeypatch.setattr(
+        instance_topology,
+        "get_instance_regions",
+        lambda: {
+            ("frontdoor", 1): frozenset({"q0"}),
+            ("frontdoor", 2): frozenset({"q1"}),
+            ("frontdoor", 3): frozenset({"q2"}),
+        },
+    )
+    monkeypatch.setattr(
+        instance_topology,
+        "topology_idx_for_port",
+        lambda role, port: {
+            ("frontdoor", 8070): 1,
+            ("frontdoor", 8080): 2,
+            ("frontdoor", 8180): 3,
+        }.get((role, port)),
+    )
+    monkeypatch.setattr(recovery, "_locked_global_regions", lambda _regions: set())
+    binding = {
+        "runtime_topology": [
+            {"port": port, "roles": ["frontdoor"]} for port in (8070, 8080, 8180)
+        ]
+    }
+    claim = {"claims": [{"payload": {"region": "q3"}}]}
+
+    with pytest.raises(ValueError, match="explicit concurrency contract"):
+        recovery.preflight_frontdoor_capacity(binding, required=1, claim=claim)
+
+    proof = recovery.preflight_frontdoor_capacity(
+        binding,
+        required=1,
+        claim=claim,
+        expected_concurrency=1,
+    )
+    assert proof["required_concurrency"] == 1
+    assert proof["capacity"] == recovery.V4.CONCURRENCY
+
+    with pytest.raises(ValueError, match="only the ratified c3 or amended c1"):
+        recovery.preflight_frontdoor_capacity(
+            binding,
+            required=2,
+            claim=claim,
+            expected_concurrency=2,
+        )
+    with pytest.raises(ValueError, match="only the ratified c3 or amended c1"):
+        recovery.preflight_frontdoor_capacity(
+            binding,
+            required=1,
+            claim=claim,
+            expected_concurrency=True,
+        )
+
+    proof = recovery.preflight_frontdoor_capacity(
+        binding,
+        required=recovery.V4.CONCURRENCY,
+        claim=claim,
+    )
+    assert proof["required_concurrency"] == recovery.V4.CONCURRENCY
+
+
 def _small_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     """Shrink only this module's frozen contract for execute-path tests."""
     monkeypatch.setattr(recovery, "N", 5)
