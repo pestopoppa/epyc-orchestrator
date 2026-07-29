@@ -665,6 +665,8 @@ def _copy_source(source: Path, staging: Path, hashes: dict[str, str]) -> None:
         source / RECOVERY.ABORT_MARKER_NAME,
         staging / SOURCE_ABORT_COPY_NAME,
     )
+    if source_hashes(source) != hashes:
+        raise ValueError("deterministic completion source changed while copying")
 
 
 def _write_json(path: Path, value: Any) -> None:
