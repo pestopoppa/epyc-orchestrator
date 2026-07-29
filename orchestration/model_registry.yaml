@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-07-19T22:19:58+00:00
-# Cache key:   863b1e482a81c743...
+# Compiled at: 2026-07-29T06:11:46+00:00
+# Cache key:   1d1da9de23aef6a1...
 # Active roles: architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -495,24 +495,6 @@ dflash_drafters:
     format: safetensors
     status: downloaded
 deprecated_models:
-- model: Qwable-v1-GGUF (IQ4_XS)
-  path_was: /mnt/raid0/llm/models/Qwable-v1-GGUF/
-  size_gb: 53
-  reason: Failed all reviewer slates (RM-2.fast); never an active orchestrator role;
-    operator-approved disk cleanup for 27B Q8 bench downloads
-  deleted: 2026-07-26
-- model: longcat-flash-lite-q4km
-  path_was: /mnt/raid0/llm/models/longcat-flash-lite-q4km/
-  size_gb: 38
-  reason: Research probe only (llama.cpp-longcat-probe worktree); never registered as a role;
-    operator-approved disk cleanup
-  deleted: 2026-07-26
-- model: Qwen3.6-27B-MTP-f16-upcast
-  path_was: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-f16-upcast.gguf
-  size_gb: 51
-  reason: Conversion intermediate, zero consumers; regenerable from MTP source;
-    operator-approved disk cleanup
-  deleted: 2026-07-26
 - model: Meta-Llama-3-70B-Instruct-Q4_K_M
   path_was: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Meta-Llama-3-70B-Instruct-GGUF/
   size_gb: 40
@@ -1167,9 +1149,7 @@ server_mode:
     chat_template_kwargs:
       enable_thinking: false
     model_role: qwen36_q8_0
-    shared_with:
-    - coder_escalation
-    - worker_summarize
+    shared_with: []
     description: Root LM — Qwen3.6-35B-A3B MTP Q8 (quality 93%, May-4 Claude-as-Judge 170/183; v6 NEXTN self-draft)
     benchmark_date: 2026-05-04
     benchmark_score: 170/183 (92.9%)
@@ -1195,6 +1175,29 @@ server_mode:
       corpus_retrieval: true
     throughput: 24.3
     previous_model: Qwen3.5-35B-A3B-UD-Q4_K_M.gguf
+  coder_escalation:
+    url: http://localhost:8070
+    port: 8070
+    slots: 1
+    chat_template_kwargs:
+      enable_thinking: false
+    model_role: qwen36_q8_0
+    description: Coding escalation — Qwen3.6-35B-A3B Q8 (shares frontdoor GGUF; 97% coder vs 77% Qwen3-Coder-30B; absorbs eliminated architect_coding). Former Qwen2.5-Coder-32B-Q4 preserved as qwen25_coder_32b_q4km.
+    benchmark_date: 2026-05-04
+    benchmark_score: 170/183 (93%)
+    model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+    model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+    kv_quant:
+      k: q8_0
+      v: q8_0
+    memory_gb: 37
+    tier: hot
+    acceleration:
+      type: none
+      lookup: false
+      corpus_retrieval: true
+    throughput: 24.3
+    previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
   worker:
     url: http://localhost:8072
     port: 8072
