@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import os
+import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -211,6 +214,47 @@ assert time.monotonic() >= 0
             scoring_config={"language": "python", "timeout": 0.2, "test_code": test_code},
         )
     assert time.monotonic() - started < 2
+
+
+def test_code_execution_child_dies_when_its_scorer_parent_is_killed(tmp_path: Path) -> None:
+    """An externally killed scorer must not strand its isolated child on CPU."""
+    pid_file = tmp_path / "solution.pid"
+    wrapper = f"""
+import sys
+sys.path.insert(0, {str(REPO_ROOT / 'scripts' / 'benchmark')!r})
+from debug_scorer import score_answer
+answer = '''```python
+from pathlib import Path
+import os
+import time
+def task_func():
+    Path({str(pid_file)!r}).write_text(str(os.getpid()))
+    while True:
+        pass
+```'''
+score_answer(answer, '', 'code_execution', {{'language': 'python', 'timeout': 30, 'test_code': 'assert task_func() is None'}})
+"""
+    parent = subprocess.Popen([sys.executable, "-c", wrapper])
+    try:
+        deadline = time.monotonic() + 5
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert pid_file.is_file(), "scorer child did not start"
+        child_pid = int(pid_file.read_text())
+        os.kill(parent.pid, signal.SIGKILL)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("scorer child survived its killed parent")
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait()
 
 
 def test_code_execution_concurrent_relative_files_are_isolated(tmp_path: Path) -> None:

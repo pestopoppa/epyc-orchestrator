@@ -36,6 +36,24 @@ from typing import Any
 
 _SCORER_TMP_ROOT = Path("/mnt/raid0/llm/tmp")
 
+# ``start_new_session`` keeps an untrusted scorer's descendants out of the
+# caller's process group, but it also means an externally interrupted caller
+# can leave the direct scorer child alive.  Set PR_SET_PDEATHSIG *inside* that
+# child rather than via ``preexec_fn``: this scorer is used from threaded
+# callers, where preexec_fn can deadlock before exec.
+_PARENT_DEATH_GUARD = """\
+import ctypes as _epyc_ctypes
+import os as _epyc_os
+import signal as _epyc_signal
+
+_epyc_libc = _epyc_ctypes.CDLL(None, use_errno=True)
+if _epyc_libc.prctl(1, _epyc_signal.SIGKILL, 0, 0, 0) != 0:
+    raise RuntimeError("unable to install scorer parent-death guard")
+if _epyc_os.getppid() == 1:
+    raise SystemExit("scorer parent exited before parent-death guard installed")
+del _epyc_ctypes, _epyc_libc, _epyc_os, _epyc_signal
+"""
+
 
 class ScoringUnavailableError(RuntimeError):
     """Raised when a requested scorer cannot run.
@@ -453,7 +471,7 @@ def _score_code_execution(
         return False
 
     # Build full test script
-    full_code = _TYPING_PREAMBLE + code
+    full_code = _PARENT_DEATH_GUARD + "\n" + _TYPING_PREAMBLE + code
     if test_code:
         full_code += "\n\n" + test_code
         if _has_unittest_case(test_code) and "unittest.main" not in test_code:
