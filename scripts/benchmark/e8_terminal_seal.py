@@ -15,6 +15,7 @@ import uuid
 
 RUN_SEAL_SCHEMA = "epyc.e8_quality_baseline_run_seal.v1"
 COMPLETE_STATUS = "complete"
+STAGED_COMPLETE_STATUS = "staged_complete_pending_publish"
 TERMINAL_STATUS = "terminal_aborted_no_admission"
 
 
@@ -87,6 +88,8 @@ def record_complete(
     namespace = namespace.absolute()
     if namespace.is_symlink() or not namespace.is_dir():
         raise ValueError(f"cannot seal unsafe E8 namespace: {namespace}")
+    if namespace.name.startswith(".") and ".staging-" in namespace.name:
+        raise ValueError("cannot seal an E8 staging namespace complete")
     if Path(manifest_name).name != manifest_name or manifest_name == "run_seal.json":
         raise ValueError("E8 completion manifest must be one safe basename")
 
@@ -112,6 +115,26 @@ def record_complete(
         "bundle_sha256": _bundle_hashes(namespace),
         "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
+    _write_json_atomic(seal_path, seal)
+    return seal_path
+
+
+def promote_staged_complete(namespace: Path) -> Path:
+    """Atomically make a just-published staged seal admissible."""
+    namespace = namespace.absolute()
+    if namespace.is_symlink() or not namespace.is_dir():
+        raise ValueError(f"cannot promote unsafe E8 namespace: {namespace}")
+    seal_path = namespace / "run_seal.json"
+    if seal_path.is_symlink() or not seal_path.is_file():
+        raise ValueError("published E8 namespace lacks a safe root run seal")
+    seal = _load_object(seal_path, label="staged E8 run seal")
+    if (
+        seal.get("schema") != RUN_SEAL_SCHEMA
+        or seal.get("status") != STAGED_COMPLETE_STATUS
+    ):
+        raise ValueError("published E8 namespace does not have a staged-complete seal")
+    seal["status"] = COMPLETE_STATUS
+    seal["published_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     _write_json_atomic(seal_path, seal)
     return seal_path
 

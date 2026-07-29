@@ -33,6 +33,12 @@ TERMINALIZER_RUNNER_PATH = Path(__file__).with_name(
 FINAL_C1_RETRY_RUNNER_PATH = Path(__file__).with_name("final_c1_retry.py")
 FINAL_C1_VALIDATOR_PATH = Path(__file__).with_name("final_c1_validator.py")
 FINALIZER_PATH = Path(__file__).with_name("finalize_e8_quality_baseline_v5_recovery_r2.py")
+COMPOSITE_SOURCE_TERMINALIZER_PATH = Path(__file__).with_name(
+    "terminalize_e8_quality_baseline_v5_composite_source.py"
+)
+COMPOSITE_SOURCE_TERMINALIZER_SHA256 = (
+    "6a39c7c4bdf9a208aaca3ca8da1102109dc445355f73d39e791f6206a2aebd3d"
+)
 EXPECTED_EVIDENCE_KEYS = {
     "schema",
     "eval_quality_era",
@@ -1526,20 +1532,71 @@ def validate_composite_context(recovery_context: dict[str, Any], *, evidence_roo
         else None
     )
     source_hashes = source_plan.get("source_sha256")
+    terminal_root_value = source_plan.get("source_terminal_root")
+    terminal_root = (
+        Path(posixpath.normpath(terminal_root_value))
+        if isinstance(terminal_root_value, str)
+        and Path(terminal_root_value).is_absolute()
+        else None
+    )
+    if (
+        terminal_root is None
+        or terminal_root.name.startswith(".")
+        or ".staging-" in terminal_root.name
+        or normalized_source != terminal_root / "source_snapshot"
+    ):
+        raise ValueError("layered recovery source is not a published terminal copy")
+    seal_path = terminal_root / "run_seal.json"
+    manifest_path = terminal_root / "composite_source_manifest.json"
+    if (
+        seal_path.is_symlink()
+        or manifest_path.is_symlink()
+        or not seal_path.is_file()
+        or not manifest_path.is_file()
+        or source_plan.get("source_terminal_seal_sha256") != sha256_path(seal_path)
+        or source_plan.get("source_terminal_manifest_sha256")
+        != sha256_path(manifest_path)
+    ):
+        raise ValueError("layered recovery terminal source binding differs")
+    terminal_seal = load_json(seal_path, "composite source root seal")
+    terminal_manifest = load_json(manifest_path, "composite source manifest")
+    terminal_bundle = {
+        item.relative_to(terminal_root).as_posix(): sha256_path(item)
+        for item in sorted(terminal_root.rglob("*"))
+        if item.is_file() and item != seal_path
+    }
+    if (
+        terminal_seal.get("schema") != "epyc.e8_quality_baseline_run_seal.v1"
+        or terminal_seal.get("status") != "complete"
+        or terminal_seal.get("writer")
+        != "terminalize_e8_quality_baseline_v5_composite_source"
+        or terminal_seal.get("runner_sha256")
+        != COMPOSITE_SOURCE_TERMINALIZER_SHA256
+        or terminal_seal.get("completion_manifest_path")
+        != "composite_source_manifest.json"
+        or terminal_seal.get("completion_manifest_sha256") != sha256_path(manifest_path)
+        or terminal_seal.get("bundle_sha256") != terminal_bundle
+        or terminal_manifest.get("schema")
+        != "epyc.e8_quality_v5_composite_source_terminal.v1"
+        or terminal_manifest.get("status") != "complete"
+        or terminal_manifest.get("historical_source") != str(COMPOSITE_SOURCE_DIR)
+        or terminal_manifest.get("source_snapshot") != "source_snapshot"
+        or terminal_manifest.get("source_tree_sha256") != COMPOSITE_SOURCE_TREE_SHA256
+    ):
+        raise ValueError("layered recovery terminal source seal differs")
     expected_history = {
         "partial_resume_plan.json": {
-            "path": str(COMPOSITE_SOURCE_DIR / "partial_resume_plan.json"),
+            "path": str(normalized_source / "partial_resume_plan.json"),
             "sha256": COMPOSITE_PARTIAL_RESUME_PLAN_SHA256,
         },
         "generation_tail_attempts.T2.r1.jsonl": {
-            "path": str(COMPOSITE_SOURCE_DIR / "generation_tail_attempts.T2.r1.jsonl"),
+            "path": str(normalized_source / "generation_tail_attempts.T2.r1.jsonl"),
             "sha256": COMPOSITE_GENERATION_ATTEMPTS_SHA256,
         },
     }
     if (
         source_plan.get("schema") != "epyc.e8_quality_v5_recovery_finalizer_source.v1"
         or source_plan.get("protocol_id") != "e8_quality_full_pool_tier_baseline.v5"
-        or normalized_source != COMPOSITE_SOURCE_DIR
         or source_plan.get("source_tree_sha256") != COMPOSITE_SOURCE_TREE_SHA256
         or not isinstance(source_hashes, dict)
         or canonical_hash(source_hashes) != COMPOSITE_SOURCE_TREE_SHA256
@@ -1963,6 +2020,8 @@ def validate(
         raise ValueError("v4 base runner differs from the externally reviewed hash")
     evidence_path = evidence_path.resolve(strict=True)
     evidence_root = evidence_path.parent
+    if evidence_root.name.startswith(".") and ".staging-" in evidence_root.name:
+        raise ValueError("v5 evidence must be a published non-staging namespace")
     if any(
         path.name == getattr(runner, "ABORT_MARKER_NAME", "durable_abort.json")
         for path in evidence_root.rglob("*")

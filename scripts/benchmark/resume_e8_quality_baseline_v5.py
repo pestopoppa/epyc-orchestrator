@@ -991,7 +991,7 @@ def execute(args: argparse.Namespace) -> Path:
             staging / "run_seal.json",
             {
                 "schema": "epyc.e8_quality_baseline_run_seal.v1",
-                "status": "complete",
+                "status": V4.TERMINAL_SEAL.STAGED_COMPLETE_STATUS,
                 "manifest_sha256": sha256_path(evidence_path),
                 "runner_report_sha256": sha256_path(report_path),
                 "protocol_receipt_sha256": None,
@@ -1006,6 +1006,7 @@ def execute(args: argparse.Namespace) -> Path:
         V4.fsync_dir(staging)
         V4.atomic_publish_noreplace(staging, destination)
         V4.fsync_dir(destination.parent)
+        V4.TERMINAL_SEAL.promote_staged_complete(destination)
         return destination
     except BaseException as exc:
         aborted = (
