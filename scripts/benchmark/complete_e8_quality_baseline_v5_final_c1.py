@@ -125,7 +125,9 @@ def _require_exact_set(name: str, value: Any) -> set[int]:
     return set(value)
 
 
-def _source_receipt_is_bound(plan: dict[str, Any]) -> dict[str, Any]:
+def _source_receipt_is_bound(
+    plan: dict[str, Any], proposal: dict[str, Any]
+) -> dict[str, Any]:
     reference = plan.get("amendment_receipt")
     if not isinstance(reference, dict):
         raise ValueError("aborted final-C1 plan has no typed amendment receipt")
@@ -146,6 +148,24 @@ def _source_receipt_is_bound(plan: dict[str, Any]) -> dict[str, Any]:
         if isinstance(instrument, dict)
         else None
     )
+    proposal_instrument = proposal.get("instrument")
+    measurement_sources = (
+        proposal_instrument.get("measurement_source_sha256")
+        if isinstance(proposal_instrument, dict)
+        else None
+    )
+    historical_helper_sources = (
+        [
+            digest
+            for path, digest in measurement_sources.items()
+            if path.endswith(
+                "/scripts/benchmark/"
+                "recover_e8_quality_baseline_v5_partial_r2.py"
+            )
+        ]
+        if isinstance(measurement_sources, dict)
+        else []
+    )
     if (
         receipt.get("schema") != FINAL_C1.RECEIPT_SCHEMA
         or receipt.get("status") != "ratified"
@@ -158,10 +178,15 @@ def _source_receipt_is_bound(plan: dict[str, Any]) -> dict[str, Any]:
             "no_state_write": True,
         }
         or not isinstance(runner, dict)
+        or runner.get("path") != "scripts/benchmark/final_c1_retry.py"
         or runner.get("sha256") != plan.get("retry_runner_sha256")
-        or runner.get("sha256") != sha256_path(FINAL_C1_PATH)
         or not isinstance(helper, dict)
-        or helper.get("sha256") != sha256_path(FINAL_C1.RECOVERY_PATH)
+        or helper.get("path")
+        != "scripts/benchmark/recover_e8_quality_baseline_v5_partial_r2.py"
+        or not isinstance(proposal_instrument, dict)
+        or proposal_instrument.get("commit") != instrument.get("commit")
+        or proposal_instrument.get("runner_sha256") != helper.get("sha256")
+        or historical_helper_sources != [helper.get("sha256")]
     ):
         raise ValueError("aborted final-C1 receipt does not bind the pinned producer")
     return reference
@@ -210,7 +235,7 @@ def _validate_aborted_source(
         raise ValueError("aborted final-C1 source lacks its plan or proposal")
     plan = V4.load_json(plan_path)
     proposal = V4.load_json(proposal_path)
-    receipt = _source_receipt_is_bound(plan)
+    receipt = _source_receipt_is_bound(plan, proposal)
     if (
         plan.get("schema") != FINAL_C1.PLAN_SCHEMA
         or plan.get("protocol_id") != RECOVERY.PROTOCOL_ID
@@ -222,9 +247,6 @@ def _validate_aborted_source(
         or plan.get("predecessor_import_ordinals")
         != sorted(set(range(RECOVERY.N)) - set(FINAL_C1.RETRY_ORDINALS))
         or plan.get("execution_authorized") is not True
-        or plan.get("retry_runner_sha256") != sha256_path(FINAL_C1_PATH)
-        or plan.get("race_retry_runner_sha256")
-        != sha256_path(FINAL_C1.RACE_PATH)
     ):
         raise ValueError("aborted final-C1 plan differs from the ratified contract")
     FINAL_C1._validate_predecessor_snapshot(source, plan)
@@ -601,6 +623,28 @@ def build_provenance_manifest(
             "typed-plan-lineage-v1:"
             "current/race/successor/imported/saved-r2"
         ),
+        "completion_instrument": {
+            "runner": {
+                "path": str(Path(__file__).relative_to(ROOT)),
+                "sha256": sha256_path(Path(__file__)),
+            },
+            "final_c1_contract_source": {
+                "path": str(FINAL_C1_PATH.relative_to(ROOT)),
+                "sha256": sha256_path(FINAL_C1_PATH),
+            },
+            "recovery_helper": {
+                "path": str(FINAL_C1.RECOVERY_PATH.relative_to(ROOT)),
+                "sha256": sha256_path(FINAL_C1.RECOVERY_PATH),
+            },
+            "race_contract_source": {
+                "path": str(FINAL_C1.RACE_PATH.relative_to(ROOT)),
+                "sha256": sha256_path(FINAL_C1.RACE_PATH),
+            },
+            "terminal_seal_helper": {
+                "path": str(TERMINAL_SEAL_PATH.relative_to(ROOT)),
+                "sha256": sha256_path(TERMINAL_SEAL_PATH),
+            },
+        },
         "entries": entries,
         "entries_sha256": canonical_hash(entries),
     }
@@ -985,6 +1029,7 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
             }
             for row in state["attempts"]
         ],
+        "completion_instrument": manifest["completion_instrument"],
         "runner_sha256": sha256_path(Path(__file__)),
     }
 
