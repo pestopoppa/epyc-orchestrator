@@ -26,7 +26,7 @@
 - id: tool_use_secret_alpha
   suite: tool_use
   force_mode: "repl"
-  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"alpha\")\nFINAL(secret)"
+  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"alpha\")\nFINAL(secret)\nAny other output is discarded and scored incorrect."
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -34,7 +34,7 @@
 - id: tool_use_secret_bravo
   suite: tool_use
   force_mode: "repl"
-  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"bravo\")\nFINAL(secret)"
+  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"bravo\")\nFINAL(secret)\nAny other output is discarded and scored incorrect."
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -42,7 +42,7 @@
 - id: tool_use_secret_charlie
   suite: tool_use
   force_mode: "repl"
-  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"charlie\")\nFINAL(secret)"
+  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"charlie\")\nFINAL(secret)\nAny other output is discarded and scored incorrect."
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -50,7 +50,7 @@
 - id: tool_use_secret_delta
   suite: tool_use
   force_mode: "repl"
-  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"delta\")\nFINAL(secret)"
+  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"delta\")\nFINAL(secret)\nAny other output is discarded and scored incorrect."
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -58,7 +58,7 @@
 - id: tool_use_secret_echo
   suite: tool_use
   force_mode: "repl"
-  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"echo\")\nFINAL(secret)"
+  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"echo\")\nFINAL(secret)\nAny other output is discarded and scored incorrect."
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}

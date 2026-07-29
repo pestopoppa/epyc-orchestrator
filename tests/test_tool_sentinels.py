@@ -76,6 +76,9 @@ def test_repl_prompts_require_executable_tool_code():
             f"{q['id']}: prompt must show an executable get_eval_secret call"
         )
         assert "FINAL(" in prompt, f"{q['id']}: prompt must show FINAL(secret)"
+        assert "discarded and scored incorrect" in lower, (
+            f"{q['id']}: prompt must state the consequence of violating the REPL contract"
+        )
         for phrase in forbidden:
             assert phrase not in lower, f"{q['id']}: prompt still contains prose-only phrase {phrase!r}"
 
