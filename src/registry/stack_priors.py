@@ -37,7 +37,7 @@ DEFAULT_STACK_PATHS = REPO_ROOT / "scripts" / "server" / "stack_paths.py"
 DEFAULT_STACK_RUNTIME = REPO_ROOT / "scripts" / "server" / "stack_runtime.py"
 PRECEDENCE_SPEC = REPO_ROOT / "docs" / "reference" / "stack-truth-precedence.md"
 DEFAULT_MODELS_DIR = Path("/mnt/raid0/llm/models")
-DEFAULT_MODEL_BASE_DIR = Path("/mnt/raid0/llm/lmstudio/models")
+DEFAULT_MODEL_BASE_DIR = Path("/mnt/raid0/llm/models")
 
 STACK_PRIORS_VERSION = 4
 REQUIRED_TOP_LEVEL_FIELDS = (
@@ -655,8 +655,24 @@ def _server_for_role(
     stack_aliases: dict[str, str],
     stack_roles: dict[str, dict[str, Any]],
 ) -> tuple[str | None, dict[str, Any] | None, str]:
+    primary = stack_aliases.get(role)
     direct = server_mode.get(role)
     if isinstance(direct, dict):
+        # A logical alias can retain its own registry row for routing metadata.
+        # When that row omits a launch-affecting host field, however, project
+        # the manifest primary's process contract rather than publishing a
+        # partial runtime record for the same llama-server.
+        if primary:
+            server_role, host_cfg, binding = _server_for_role(
+                primary, server_mode, {}, stack_roles
+            )
+            if (
+                host_cfg is not None
+                and direct.get("model_role") == host_cfg.get("model_role")
+                and not direct.get("draft_model")
+                and host_cfg.get("draft_model")
+            ):
+                return server_role, host_cfg, f"stack_manifest.alias->{binding}"
         return role, direct, "server_mode.direct"
 
     for server_role, cfg in server_mode.items():
@@ -668,7 +684,6 @@ def _server_for_role(
         if isinstance(shared_with, list) and role in shared_with:
             return str(server_role), cfg, "server_mode.shared_with"
 
-    primary = stack_aliases.get(role)
     if primary:
         server_role, cfg, binding = _server_for_role(primary, server_mode, {}, stack_roles)
         if cfg is not None:

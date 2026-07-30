@@ -51,7 +51,7 @@ def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
 
 
 # Default paths
-DEFAULT_MODEL_BASE = "/mnt/raid0/llm/lmstudio/models"
+DEFAULT_MODEL_BASE = "/mnt/raid0/llm/models"
 HEALTH_CHECK_TIMEOUT = _read_registry_timeout("scripts", "onboard_health", 60)
 HEALTH_CHECK_PROMPT = "What is 2+2? Answer with just the number."
 

@@ -238,7 +238,7 @@ class RegistryLoader:
             self._model_base_path: Path = get_config().paths.model_base
         except Exception as e:
             logger.debug("Config unavailable, using default model base path: %s", e)
-            self._model_base_path: Path = Path("/mnt/raid0/llm/lmstudio/models")
+            self._model_base_path: Path = Path("/mnt/raid0/llm/models")
         self._runtime_defaults: dict[str, Any] = {}
         self._missing_models: list[str] = []
 

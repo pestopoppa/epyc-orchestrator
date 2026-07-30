@@ -23,7 +23,7 @@ import yaml
 
 # Default paths
 DEFAULT_REGISTRY_PATH = "/mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml"
-DEFAULT_MODEL_BASE_PATH = "/mnt/raid0/llm/lmstudio/models"
+DEFAULT_MODEL_BASE_PATH = "/mnt/raid0/llm/models"
 
 
 class ModelRegistry:
