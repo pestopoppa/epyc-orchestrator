@@ -12,6 +12,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVER_DIR = ROOT / "scripts" / "server"
@@ -65,20 +67,45 @@ def test_single_instance_roles_use_first_entry() -> None:
 
 
 def test_quartered_roles_per_instance_thread_count() -> None:
-    """Phase 1b: vision_escalation + ingest_long_context were upgraded to
-    full + 4 quarters (worker_vision reverted to single — too small). Per-
-    instance thread count must resolve correctly for the quartered roles."""
-    for role in ("vision_escalation", "ingest_long_context"):
+    """Per-instance thread count must resolve correctly for the quartered roles.
+
+    Scope corrected 2026-07-30: this previously asserted `vision_escalation`
+    had "full + at least 1 quarter post-Phase-1b" and had been failing against
+    the live config, which gives it a SINGLE instance on `72-95,168-191` @24t
+    (NUMA_Q1B, = NPS4 node3). The Phase-1b claim in the old docstring does not
+    match `stack_numa.NUMA_CONFIG`; the config is the source of truth, so the
+    role moved to its own shape assertion below.
+    """
+    for role in ("ingest_long_context",):
         instances = _instances(role)
         assert len(instances) >= 2, (
-            f"{role} should have full + at least 1 quarter post-Phase-1b "
-            f"(got {len(instances)} instances)"
+            f"{role} should have full + at least 1 quarter (got {len(instances)})"
         )
         for idx, (_cpus, _port, expected_threads) in enumerate(instances):
             resolved = orchestrator_stack._resolve_thread_count(role, idx)
             assert int(resolved) == expected_threads, (
                 f"{role} instance[{idx}] expected -t {expected_threads}, got {resolved}"
             )
+
+
+def test_vision_escalation_stays_single_instance() -> None:
+    """`vision_escalation` is single-instance on NUMA_Q1B (NPS4 node3).
+
+    Added 2026-07-30 to pin the actual shape, replacing the stale expectation in
+    `test_quartered_roles_per_instance_thread_count`. Node-aligned, so it is not
+    exposed to the straddling-cpuset defect — but it does share one VL GGUF with
+    `worker_vision` on a different node, so under shared mmap only one of the two
+    can hold node-local weights. See handoffs/active/numa-placement-defect-20260730.md.
+    """
+    instances = _instances("vision_escalation")
+    assert len(instances) == 1, (
+        f"vision_escalation should be single-instance (got {len(instances)})"
+    )
+    cpus, port, threads = instances[0]
+    assert port == 8087
+    assert threads == 24
+    assert cpus == "72-95,168-191"  # NUMA_Q1B == NPS4 node3
+    assert _nodes_spanned(cpus) == {3}, "should be node-aligned, not straddling"
 
 
 def test_worker_vision_stays_single_instance() -> None:
@@ -92,22 +119,75 @@ def test_worker_vision_stays_single_instance() -> None:
     assert cpus == "24-47,120-143"  # NUMA_Q0B
 
 
-def test_frontdoor_full_uses_numa_node0_not_full() -> None:
-    """April 2026-04-17 head-to-head: NUMA_NODE0 beats NUMA_FULL+interleave=all
-    by 1.7% on Qwen3.6-35B-A3B Q8 (cache locality wins for A3B MoE).
-    Recorded in progress/2026-05/2026-05-20.md:671-680."""
-    instances = _instances("frontdoor")
-    full = instances[0]
-    assert full[0] == "0-47,96-143", (
-        f"frontdoor full should be NUMA_NODE0 (0-47,96-143), got {full[0]!r} — "
-        "if this is NUMA_FULL ('0-95'), it's the 2026-05-24 mistaken migration; "
-        "April head-to-head data says NUMA_NODE0 wins"
-    )
-    # And: no numactl_policy (config B in April test was plain taskset, no numactl)
-    import stack_numa
-    assert "numactl_policy" not in stack_numa.NUMA_CONFIG["frontdoor"], (
-        "frontdoor should NOT have numactl_policy set — April config B "
-        "(plain taskset, no numactl) beat config A (numactl interleave=all)"
+# Live NPS4 topology, verified 2026-07-30 via `numactl --hardware`.
+NPS4_NODES = {
+    0: "0-23,96-119",
+    1: "24-47,120-143",
+    2: "48-71,144-167",
+    3: "72-95,168-191",
+}
+
+
+def _parse_cpuset(cpuset: str) -> set[int]:
+    cpus: set[int] = set()
+    for part in cpuset.split(","):
+        if "-" in part:
+            lo, hi = part.split("-")
+            cpus.update(range(int(lo), int(hi) + 1))
+        else:
+            cpus.add(int(part))
+    return cpus
+
+
+def _nodes_spanned(cpuset: str) -> set[int]:
+    cpus = _parse_cpuset(cpuset)
+    return {n for n, cs in NPS4_NODES.items() if cpus & _parse_cpuset(cs)}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "KNOWN DEFECT, fix not yet authorised — see "
+        "handoffs/active/numa-placement-defect-20260730.md. `frontdoor` (8070) and "
+        "`ingest_long_context` (8085) sit on NUMA_NODE0 '0-47,96-143', which spans "
+        "NPS4 nodes 0+1, with no numactl policy. Measured cost 2.16x and 1.85x. "
+        "strict=True on purpose: when the wiring is corrected this test starts "
+        "passing and the strict xfail FAILS the suite, forcing this marker to be "
+        "removed rather than silently outliving the defect."
+    ),
+)
+def test_straddling_cpusets_declare_a_numa_policy() -> None:
+    """Any instance whose cpuset spans more than one NPS4 node must declare a
+    memory policy.
+
+    Replaces `test_frontdoor_full_uses_numa_node0_not_full`, removed 2026-07-30.
+    That test asserted `full[0] == "0-47,96-143"` AND that frontdoor carries no
+    `numactl_policy` — so it did not merely document the defect, it *forbade the
+    fix*: adding `interleave=all` to frontdoor would have failed it. Its stated
+    authority was an April 2026-04-17 head-to-head that is invalid twice over —
+    it predates the 2026-04-24 NPS4 reboot (when `0-47,96-143` genuinely was one
+    node), and its source CSV records `spec == "baseline"`.
+
+    Without a policy, every weight page lands on whichever node faults it first
+    and the rest of the thread team reads cross-node for the model's lifetime.
+    `numactl --interleave` binds at FIRST TOUCH only, so a warm-cache A/B cannot
+    detect this — which is exactly how the 1.7% result that justified the old
+    test was produced.
+    """
+    offenders: list[str] = []
+    for role, cfg in stack_numa.NUMA_CONFIG.items():
+        policy = cfg.get("numactl_policy") or cfg.get("numactl_policy_instances")
+        if policy:
+            continue
+        for cpuset, port, _threads in cfg.get("instances", []):
+            spanned = _nodes_spanned(cpuset)
+            if len(spanned) > 1:
+                offenders.append(
+                    f"{role}:{port} cpuset={cpuset!r} spans NPS4 nodes "
+                    f"{sorted(spanned)} with no numactl policy"
+                )
+    assert not offenders, "straddling cpuset without a memory policy:\n  " + "\n  ".join(
+        offenders
     )
 
 

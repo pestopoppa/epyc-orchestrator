@@ -7,13 +7,45 @@ re-imports the constants and `_numa_prefix()` so the launcher and server-build
 code keeps working unchanged.
 
 Key findings (2026-03-18 benchmarks, refined through 2026-05-08):
-- Models ≤65 GB: 4×48t NUMA-quarter instances give 6-7× aggregate throughput
-- Models 130-250 GB: 1×96t NUMA-node pinning gives 1.2-1.5×
-- Using all 192t is ANTI-OPTIMAL (46-60% cross-NUMA penalty)
-- taskset alone is sufficient for the S4 no-mmap/single-owner regime; shared
-  mmap multi-instance roles need explicit evidence before changing memory policy
+- ⚠ SUPERSEDED 2026-07-30 — "Models ≤65 GB: 4×48t NUMA-quarter instances give
+  6-7× aggregate throughput". That 6-7× was measured against a 1×192t
+  all-SMT-threads baseline, NOT against a correctly-placed full-machine
+  instance, and it was never matched on total concurrency. Directly measured
+  at matched total concurrency T (llama-bench tg128, spec-dec off, drop_caches
+  before every arm, kernel production-consolidated-v8 / binary 10107), one
+  full-machine instance (taskset -c 0-95 + numactl --interleave=all) beats four
+  quarters at EVERY rung: T=4 79.7 vs 52.9, T=8 105.1 vs 81.0, T=16 131.0 vs
+  108.4, T=32 145.9 vs 143.8 aggregate tok/s.
+- Models 130-250 GB: 1×96t pinning gives 1.2-1.5×. NB the historical
+  "NUMA-node" wording here is a misnomer — see the NUMA_NODE0/NUMA_NODE1 note
+  below; a node on this NPS4 host is 24 physical cores, i.e. one quarter.
+- Using all 192t is ANTI-OPTIMAL (46-60% penalty vs 96 physical cores)
+- ⚠ CORRECTED 2026-07-30 — "taskset alone is sufficient for the S4
+  no-mmap/single-owner regime; shared mmap multi-instance roles need explicit
+  evidence before changing memory policy". The first clause stands. The second
+  understated the problem: shared-mmap fleets do not merely lack evidence for a
+  memory policy, they have NO usable memory policy at all. GGUF pages are
+  placed ONCE, by whichever instance faults them in first; every later instance
+  inherits that placement regardless of its own --membind/--interleave.
+  Measured on a quad-quarter fleet via live numa_maps: 25.6 / 25.6 / 24.2 /
+  26.9 % node-local under shared mmap vs 100 % each under --no-mmap, with fleet
+  decode 40.91 -> 52.13 tok/s. Consequence: fleet placement — and therefore
+  fleet throughput — depends on instance START ORDER and is nondeterministic
+  across reboots.
 - mlock gives 30× latency improvement under memory pressure (S2)
 - Total mlock budget: ~701 GB of 1.13 TB (62%), leaving ~429 GB for KV + OS
+
+⚠ NO WIRING CHANGE IS AUTHORISED BY THE 2026-07-30 NOTES IN THIS FILE.
+Every 2026-07-30 annotation here is COMMENT-ONLY; this module is deliberately
+behaviourally unchanged. The numbers above are OBSERVATION-GRADE: the protocol
+P-BENCH-PLACEMENT-1 (epyc-inference-research/docs/protocols/
+numa-placement-measurement-protocol.md) has a MEASUREMENT.md registry entry
+that is STAGED, not applied, so none of this may gate a keep / revert / deploy
+/ promote decision. Changing the cpusets is a production serving-path change:
+operator-gated, owned by the session that owns the inference, and it would also
+break comparability with the AutoPilot operating point currently being
+re-anchored against. Analysis: epyc-root handoffs/active/
+numa-placement-defect-20260730.md.
 """
 
 from __future__ import annotations
@@ -42,6 +74,27 @@ NUMA_Q0A = ("0-23,96-119", 48)
 NUMA_Q0B = ("24-47,120-143", 48)
 NUMA_Q1A = ("48-71,144-167", 48)
 NUMA_Q1B = ("72-95,168-191", 48)
+# ⚠ NAME IS AN NPS2-ERA ARTEFACT — THESE ARE NOT SINGLE NUMA NODES.
+# Verified against live topology 2026-07-30 (`numactl --hardware`, NPS4):
+#     node0 = 0-23,96-119   node1 = 24-47,120-143
+#     node2 = 48-71,144-167 node3 = 72-95,168-191   (distances: local 10, remote 12)
+# So NUMA_NODE0 spans node0+node1 and NUMA_NODE1 spans node2+node3. The names were
+# correct under NPS2, before the 2026-04-24 NPS4 reboot; they have been misleading since.
+# The quarter constants above ARE exactly the four NPS4 nodes and are correctly named.
+#
+# CONSEQUENCE, measured: with no numactl policy, weights first-touch onto whichever node
+# loads them, so ~half a 96-thread team reads every weight cross-node. The E5 affinity
+# artifact for this shape recorded pages_by_node {N0: 9226101} / total 9226101 — i.e. all
+# 35.2 GiB on node0 while the threads spanned node0+node1.
+#
+# ⚠ The 2026-04-17 head-to-head quoted below to justify this wiring is NOT valid evidence
+# for it: that run predates the NPS4 reboot (so the cpuset genuinely WAS one node then),
+# and its source CSV records spec == "baseline", i.e. SPECULATIVE DECODING OFF.
+# Do not cite 26.60/27.06 t/s as a current figure for this shape.
+#
+# The correct cpuset is under measurement (E5 re-run, 2026-07-30). Wiring intentionally
+# left UNCHANGED until that reports — changing it now would break comparability with the
+# recorded AutoPilot operating point we are re-anchoring against.
 NUMA_NODE0 = ("0-47,96-143", 96)
 NUMA_NODE1 = ("48-95,144-191", 96)
 # Full-machine physical-cores-only (no SMT) — for canonical-recipe wiring
@@ -236,8 +289,31 @@ def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
     Default: taskset -c <cpu_list>. The S4 benchmark found no benefit from
     adding numactl --membind for no-mmap/single-owner runs where first-touch owns
     the private copy. That finding does not generalize to shared-mmap quarter
-    fleets: those roles rely on interleaved shared pages unless a role-specific
-    A/B plus live numa_maps proof justifies changing memory policy.
+    fleets.
+
+    ⚠ CORRECTED 2026-07-30 (comment only — no behaviour change here). This
+    docstring used to continue: "those roles rely on interleaved shared pages
+    unless a role-specific A/B plus live numa_maps proof justifies changing
+    memory policy". That premise is DISPROVED. Shared-mmap quarter fleets do
+    NOT reliably get interleaved pages — they get whatever the FIRST instance
+    to fault a page in chose. The GGUF is placed once; later instances inherit
+    that placement regardless of their own --membind/--interleave, so at most
+    one instance can be node-local and fleet placement depends on instance
+    START ORDER.
+
+    The evidence this docstring demanded now exists, and it is exactly a
+    role-specific A/B plus live numa_maps: a quad-quarter fleet measured
+    25.6 / 25.6 / 24.2 / 26.9 % node-local pages under shared mmap versus
+    100 % each under --no-mmap, with fleet decode 40.91 -> 52.13 tok/s (at a
+    cost of ~+141 GB RAM, since --no-mmap gives each instance a private copy).
+    Instrument: llama-bench tg128, spec-dec off, drop_caches before every arm,
+    kernel production-consolidated-v8 / binary 10107.
+
+    NOT AUTHORISED AS A CHANGE. This is OBSERVATION-GRADE — P-BENCH-PLACEMENT-1
+    has a MEASUREMENT.md registry entry that is STAGED, not applied, so it may
+    not gate a keep / revert / deploy / promote decision. Any memory-policy or
+    mmap change to a serving role is operator-gated and must be executed by the
+    session that owns the inference. See the module docstring.
 
     If the role's NUMA_CONFIG entry has a "numactl_policy" key (e.g. "interleave=all"),
     wraps the launch with `numactl --<policy> --` ahead of taskset. Roles can

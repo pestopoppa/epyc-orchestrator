@@ -17,15 +17,45 @@ The current role/port/model summary is generated from `orchestration/derived/sta
 
 ### HOT Tier (Always Resident) — NUMA-Optimized (2026-05-09 consolidation)
 
-| Port(s) | Roles | Model | NUMA | Acceleration | Speed | RAM |
+> **NUMA-label correction — 2026-07-30.** The `NUMA` column below previously used "Node 0" /
+> "Node 1" for the `stack_numa.py` constants `NUMA_NODE0 = "0-47,96-143"` and
+> `NUMA_NODE1 = "48-95,144-191"`. **Those are not NUMA nodes on this host.** Since the
+> 2026-04-24 NPS4 reboot the machine has four nodes — `node0 = 0-23,96-119`,
+> `node1 = 24-47,120-143`, `node2 = 48-71,144-167`, `node3 = 72-95,168-191` — so each of those
+> constants straddles a *pair* of nodes. The names are NPS2-era artefacts; only the `NUMA_Q*`
+> quarter constants are node-aligned. The column now names cpusets and memory policy directly.
+> `architect_general` was additionally mislabelled: it runs `taskset -c 0-95` +
+> `numactl --interleave=all` (the whole machine), never "Node 0".
+
+| Port(s) | Roles | Model | NUMA (cpuset + memory policy) | Acceleration | Speed | RAM |
 |---------|-------|-------|------|--------------|-------|-----|
-| 8070 (full-mode) or 8080,8180,8280,8380 (quarter-mode) | frontdoor + coder_escalation (shared GGUF, separate slots) | Qwen3.6-35B-A3B Q8 (swapped 2026-05-04 from Qwen3.5-35B Q4_K_M) | 1×96t full or 4×48t quarters | None (Q8 MoE baseline); `enable_thinking=false` | ~12.7 t/s per instance (full); ~24.3 t/s aggregate (quarter) | 37GB shared mmap |
-| 8072 (full-mode) or 8082,8182,8282,8382 (quarter-mode) | worker_general (explore, math, summarize aliases) | gemma-4-26B-A4B-it Q4_K_M + MTP drafter (swapped 2026-05-08 from Qwen2.5-7B / Qwen3-Coder-30B) | 1×96t full or 4×48t quarters | MTP spec decode (ik_llama.cpp PR #1744); `KMP_BLOCKTIME=10` | 60.7 t/s per instance | ~16GB |
-| 8083 | architect_general | Qwen3.5-122B-A10B Q4_K_M (swapped 2026-03-19 from Qwen3-235B-A22B) | Node 0, 96t | MoE reduction; `enable_thinking=false` | 12.19 t/s (Probe B canonical, 2026-05-04) | ~69GB |
-| 8085 | ingest_long_context | Qwen3-Next-80B-A3B Q4_K_M | Node 0, 96t | None (SSM-hybrid), mlock | 14.4–20.8 t/s @ ~12K context | ~46GB |
-| 8086 | worker_vision | Qwen2.5-VL-7B Q4_K_M + mmproj | Q0B pinned | None (VL) | ~15 t/s | ~8GB |
-| 8087 | vision_escalation | Qwen3-VL-30B-A3B Q4_K_M + mmproj | Node 1, 96t | MoE4 | ~10 t/s | ~20GB |
+| 8070 (full-mode) or 8080,8180,8280,8380 (quarter-mode) | frontdoor + coder_escalation (shared GGUF, separate slots) | Qwen3.6-35B-A3B Q8 (swapped 2026-05-04 from Qwen3.5-35B Q4_K_M) | full: `0-47,96-143` @96t, **no `numactl` policy** (straddles node0+node1 — see MIS-WIRED note) · quarters: 4×48t, one per node | None (Q8 MoE baseline); `enable_thinking=false` | **10.83 ± 0.04 t/s as-wired** (full); 23.36 ± 0.11 at canonical `0-95` + `interleave=all` — see note | 37GB shared mmap |
+| 8072 (full-mode) or 8082,8182,8282,8382 (quarter-mode) | worker_general (explore, math, summarize aliases) | gemma-4-26B-A4B-it Q4_K_M + MTP drafter (swapped 2026-05-08 from Qwen2.5-7B / Qwen3-Coder-30B) | full: `0-95` @96t + `interleave=all` (whole machine — **correct**) · quarters: 4×48t, one per node | MTP spec decode (ik_llama.cpp PR #1744); `KMP_BLOCKTIME=10` | 60.7 t/s per instance | ~16GB |
+| 8083 | architect_general | Qwen3.5-122B-A10B Q4_K_M (swapped 2026-03-19 from Qwen3-235B-A22B) | `0-95` @96t + `interleave=all` (whole machine — **correct**) | MoE reduction; `enable_thinking=false` | 12.19 t/s (Probe B canonical, 2026-05-04) | ~69GB |
+| 8085 | ingest_long_context | Qwen3-Next-80B-A3B Q4_K_M | full: `0-47,96-143` @96t, **no `numactl` policy** (straddles node0+node1 — see MIS-WIRED note) · quarters: 4×48t | None (SSM-hybrid), mlock | **12.42 t/s as-wired**; 22.92 at canonical `0-95` + `interleave=all`. Legacy row read "14.4–20.8 t/s @ ~12K context" | ~46GB |
+| 8086 | worker_vision | Qwen2.5-VL-7B Q4_K_M + mmproj | `Q0B` = `24-47,120-143` (= NPS4 node1) | None (VL) | ~15 t/s | ~8GB |
+| 8087 | vision_escalation | Qwen3-VL-30B-A3B Q4_K_M + mmproj | `Q1B` = `72-95,168-191` @24t (= NPS4 node3). Legacy row read "Node 1, 96t" — wrong on both counts | MoE4 | ~10 t/s | ~20GB |
 | 8090-8095 | embedder (6x) | BGE-large-en-v1.5 F16 | unpinned | probe-first | — | ~4GB |
+
+> **⚠ MIS-WIRED (2026-07-30, observation-grade) — `frontdoor` (8070) and `ingest_long_context`
+> (8085) only.** Both launch on the straddling `0-47,96-143` cpuset with no `numactl` policy, so
+> weights first-touch onto one node while half the 96-thread team reads them cross-node.
+> Measured with `llama-bench` tg128, spec-dec off, `drop_caches` before every arm, kernel
+> `production-consolidated-v8` (binary `10107`): frontdoor `10.83 ± 0.04 → 23.36 ± 0.11` tok/s
+> (**2.16×**, r=10, Qwen3.6-35B-A3B-Q8_0) and ingest `12.42 → 22.92` (**1.85×**) when moved to
+> canonical full machine `taskset -c 0-95` + `numactl --interleave=all`. **`worker_general` and
+> `architect_general` are already canonical and are unaffected — this is a two-role defect, not
+> a fleet-wide one.**
+>
+> Note also that `--interleave` binds at **first touch only**, so re-testing against a warm page
+> cache silently "confirms" the bad number.
+>
+> **Nothing here is authorised as a change.** `scripts/server/stack_numa.py` carries corrected
+> comments and is deliberately behaviourally unchanged. The protocol that would make these
+> numbers decision-grade — `P-BENCH-PLACEMENT-1`
+> (`epyc-inference-research/docs/protocols/numa-placement-measurement-protocol.md`) — has a
+> `MEASUREMENT.md` registry entry that is **STAGED, not applied**, so they may not gate a
+> keep / revert / deploy / promote decision.
 
 **Notes**:
 - The former port 8084 (architect_coding, Qwen3-Coder-480B-A35B) was **removed on 2026-05-06**. REAP-246B scored 70% on the coder suite — worse than worker_general (77%) and far worse than the frontdoor model (97%); the role was eliminated and its 139 GB warm-tier footprint reclaimed. Hard coding escalations now terminate at coder_escalation. <!-- stack-change-guard: allow historical retired-role note -->
