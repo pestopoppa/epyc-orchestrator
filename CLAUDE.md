@@ -5,7 +5,7 @@
 This repo is part of a multi-repo project:
 - **epyc-root** — governance, hooks, agents, handoffs ([pestopoppa/epyc-root](https://github.com/pestopoppa/epyc-root))
 - **epyc-inference-research** — benchmarks, research, full model registry ([pestopoppa/epyc-inference-research](https://github.com/pestopoppa/epyc-inference-research))
-- **epyc-llama** — custom llama.cpp fork ([pestopoppa/llama.cpp](https://github.com/pestopoppa/llama.cpp))
+- **epyc-llama** — custom llama.cpp fork ([pestopoppa/llama.cpp](https://github.com/pestopoppa/llama.cpp)). Its working tree (`/mnt/raid0/llm/llama.cpp`) is the **FROZEN production kernel** (`production-consolidated-v8`) and carries only upstream agent files — never build, edit, or commit there; all kernel work happens in `llama.cpp-experimental` (epyc-root CLAUDE.md § Experimental Kernel Workflow)
 
 Benchmarks, research docs, agent files, and handoffs live in their respective repos — not here.
 
@@ -16,11 +16,11 @@ Benchmarks, research docs, agent files, and handoffs live in their respective re
 ## Architecture
 
 ```
-Request:  FastAPI(:8000) → AppState → ChatPipeline → REPLExecutor → run_task() → [graph nodes]
-Graph:    orchestration_graph (pydantic-graph) → 7 node classes → LLMPrimitives → [model servers]
-Memory:   EpisodicStore(SQLite) → FAISSStore → ParallelEmbedder → BGE pool
-Skills:   SkillBank(skills.db+FAISS) → SkillRetriever → prompt injection | OutcomeTracker
-Tools:    REPLExecutor → ToolRegistry(allowed_callers, chain telemetry) → PluginLoader
+Request:  FastAPI(:8000) → AppState → ChatPipeline → REPL executor (src/repl_environment/: Executor/RestrictedExecutor/StepExecutor) → run_task() → [graph nodes]
+Graph:    src/graph/ (pydantic-graph) → 9 node classes (6 main + 3 MindDR) → LLMPrimitives → [model servers]
+Memory:   episodic store (SQLite; EpisodicStoreProtocol) → FAISS index → embedder pool (BGE)
+Skills:   SkillBank(skills.db+FAISS) → SkillRetriever → prompt injection
+Tools:    REPL executor → tool registry (allowed_callers, chain telemetry) → plugin loader
 Prompts:  resolve_prompt(name) → orchestration/prompts/{name}.md (hot-swap) → fallback constant
 Sessions: /chat(session_id) → latest Checkpoint restore → cross-request variable continuity
 ```
@@ -31,7 +31,7 @@ Sessions: /chat(session_id) → latest Checkpoint restore → cross-request vari
 - All filesystem paths via `get_config()` from `src/config/` — never hardcode paths
 - Lazy imports for heavy dependencies (faiss, sklearn, etc.)
 - Configuration hierarchy: env vars → .env → pydantic-settings defaults
-- Registry access via `src/registry_loader.py` — typed helpers for roles, timeouts, escalation
+- Registry access via `src/registry/registry_loader.py` (back-compat shim at `src/registry_loader.py`) — typed helpers for roles, timeouts, escalation
 
 ## Key Patterns
 
@@ -57,10 +57,11 @@ Run `make gates` after any changes. This runs:
 2. Shell lint (`shellcheck`)
 3. Format check (`ruff format --check`)
 4. Lint (`ruff check`)
+5. NextPlaid reindex (`nextplaid-reindex`; plus conditional `integration-sanity`)
 
 ## Operator Decision Requests
 
-Never ask the operator an open-ended question when escalating a decision. Present a decision package: 2–4 concrete options with tradeoffs and supporting data, a recommendation with reasoning, and the default outcome if no choice is made. Claude Code sessions deliver this via the AskUserQuestion tool (recommended option first). Full contract: `/mnt/raid0/llm/epyc-root/agents/shared/OPERATING_CONSTRAINTS.md` → *Operator Decision Requests*.
+Escalations are decision packages (options + tradeoffs + recommendation + default), never open-ended questions. Canonical contract: `/mnt/raid0/llm/epyc-root/agents/shared/OPERATING_CONSTRAINTS.md` → *Operator Decision Requests*.
 
 ## Directory Layout
 
@@ -69,7 +70,7 @@ Never ask the operator an open-ended question when escalating a decision. Presen
 | `src/` | Core application code |
 | `src/api/` | FastAPI routes, pipeline stages |
 | `src/config/` | pydantic-settings configuration |
-| `src/orchestration_graph/` | pydantic-graph node definitions |
+| `src/graph/` | pydantic-graph node definitions |
 | `src/repl_environment/` | REPL executor, tool plugins |
 | `src/vision/` | Vision pipeline |
 | `orchestration/` | Runtime config (registry, prompts, tools, schemas) |
