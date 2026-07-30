@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-07-25T20:21:35Z'
+compiled_at: '2026-07-30T12:54:13Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: bf300a26
-    sha256: 4ccb929a70c7a175c79c5962e21b49cc45e909e958188f0a5b0814ce2a10ae41
+    repo_commit: 97d7fc40
+    sha256: 54fda88218a0555d4561d5ad97574254b5a3698a99fd49f2d50aad1d93414a7d
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: '99194233'
-    sha256: f09dc2605ed233517a639fc474a45d26ed83ee59f9a02caf5349fd2fde0a1d70
+    repo_commit: 4de958fc
+    sha256: 5074154811f5adcaf3580262503d86428c05b6e9f04e053d14da02a8b78325c6
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -417,9 +417,9 @@ models:
     - frontdoor
     - worker_summarize
     server_roles:
+    - coder_escalation
     - frontdoor
-    runtime_aliases:
-    - frontdoor
+    runtime_aliases: []
     shared_mmap: true
   quality:
     suite_vector:
@@ -435,16 +435,24 @@ models:
     measured:
     - date: '2026-05-04'
       protocol: registry benchmark_score
-      value: 170/183 (92.9%)
+      value: 170/183 (93%)
     - date: '2026-05-04'
       protocol: registry benchmark_score
       value: 170/183 (92.9%)
     - date: '2026-05-04'
-      protocol: registry benchmark_score
-      value: 170/183 (92.9%)
+      protocol: registry performance block
+      value:
+        baseline_tps: 24.3
+        optimized_tps: 24.3
+        quality_pct: 93
+        general_suite: 30/30 (100%)
+        coder_suite: 29/30 (97%)
+        thinking_suite: 28/30 (93%)
+        long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
+        speedup: shares_frontdoor_gguf
   speed:
     solo_96t_tps: 24.3
-    quarter_48t_tps: 24.3
+    quarter_48t_tps: null
     prefill_tps: null
     optimized_tps: 24.3
     source: orchestration/model_registry.yaml
@@ -453,22 +461,21 @@ models:
       protocol: server_mode throughput
       value_tps: 24.3
   acceleration:
-    spec_type: draft-mtp
+    spec_type: none
     draft_compat: []
     enable_thinking: false
     thinking_control:
       mode: toggle_off
       source: model.disable_thinking
-    kv: &id001
+    kv:
       k: q8_0
       v: q8_0
-    draft_max: 4
     lookup: false
     corpus_retrieval: true
   serving:
     binary: llama.cpp
     binary_dir: null
-    numa_policy: 4x48t_quarter_instances
+    numa_policy: server_default
     mlock: true
     ports:
     - 8070
@@ -476,7 +483,7 @@ models:
     - 8180
     - 8280
     - 8380
-    server_role: frontdoor
+    server_role: coder_escalation
     requirements: {}
   known_gaps: []
   architecture:
@@ -527,7 +534,9 @@ models:
     thinking_control:
       mode: toggle_off
       source: model.disable_thinking
-    kv: *id001
+    kv:
+      k: q8_0
+      v: q8_0
     draft_max: 4
     lookup: false
     corpus_retrieval: true

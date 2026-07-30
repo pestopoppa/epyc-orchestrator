@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-25T20:21:35Z'
+compiled_at: '2026-07-30T12:54:13Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 4ccb929a70c7a175c79c5962e21b49cc45e909e958188f0a5b0814ce2a10ae41
-    repo_commit: bf300a26
+    sha256: 54fda88218a0555d4561d5ad97574254b5a3698a99fd49f2d50aad1d93414a7d
+    repo_commit: 97d7fc40
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 282e41096aad6cee2808591b7f289ae8db2ac8db8d3a2a481504c3471d8b37c7
-    repo_commit: bf300a26
+    sha256: 8f77ff0459a9758e9b10dd26b38347d3396e5aaa7eaa9a05e242a80f81b0811b
+    repo_commit: 97d7fc40
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
-    sha256: 29fde0c2b3161d5b56fe8cb6fd2fe4ebd0bfbdd609fe239b6e0045f6c70b744b
-    repo_commit: bf300a26
+    sha256: c0927095a97028adca2744a90bf2fb8f0555df52eacf6abb4f8dbcb6bef80281
+    repo_commit: 97d7fc40
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
-    sha256: 8d314cf9ccb5224baa6b40bca4a4881db2914f163e6dd21a4abf51e9e62fcf02
-    repo_commit: bf300a26
+    sha256: 09e730c5976b11981d10cd11737de83583bd76377ef4a7d4ad164dc1445be8aa
+    repo_commit: 97d7fc40
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 6505d7d42656a28166df398388f2088a28822221f9c58e8ac69b0d8697106af9
-    repo_commit: bf300a26
+    sha256: 3c0cb1adaa9adb2912363d24471d2d98757c50f706f76d38cc6b5a220c981e8a
+    repo_commit: 97d7fc40
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: bf300a26
+    repo_commit: 97d7fc40
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: bf300a26
+    repo_commit: 97d7fc40
 roles:
   architect_general:
     role: architect_general
@@ -254,11 +254,10 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8070
+      endpoint: http://localhost:8080
       server_role: frontdoor
-      binding: server_mode.shared_with
+      binding: stack_manifest.alias->server_mode.direct
       ports:
-      - 8070
       - 8080
       - 8180
       - 8280
@@ -268,15 +267,15 @@ roles:
       effective_context_tokens: 32768
       binary: llama.cpp
       binary_dir: null
-      numa_policy: 4x48t_quarter_instances
+      numa_policy: server_default
       shared_mmap: true
       launch:
         entries:
-        - port: 8070
+        - port: 8080
           primary_role: frontdoor
           mode: default
           alias: true
-          numa_instance: 0
+          numa_instance: 1
         primary_roles:
         - frontdoor
         modes:
@@ -335,7 +334,7 @@ roles:
       quality_overall: 0.93
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: none
       draft_compat: []
       enable_thinking: false
       thinking_control:
@@ -344,7 +343,6 @@ roles:
       kv:
         k: q8_0
         v: q8_0
-      draft_max: 4
       lookup: false
       corpus_retrieval: true
     model:
@@ -365,18 +363,27 @@ roles:
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
+      - coder_escalation
       - frontdoor
       alias_overrides: []
       quality:
       - date: '2026-05-04'
         protocol: registry benchmark_score
-        value: 170/183 (92.9%)
+        value: 170/183 (93%)
       - date: '2026-05-04'
         protocol: registry benchmark_score
         value: 170/183 (92.9%)
       - date: '2026-05-04'
-        protocol: registry benchmark_score
-        value: 170/183 (92.9%)
+        protocol: registry performance block
+        value:
+          baseline_tps: 24.3
+          optimized_tps: 24.3
+          quality_pct: 93
+          general_suite: 30/30 (100%)
+          coder_suite: 29/30 (97%)
+          thinking_suite: 28/30 (93%)
+          long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
+          speedup: shares_frontdoor_gguf
       speed:
       - date: '2026-05-04'
         protocol: server_mode throughput
@@ -389,11 +396,10 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8070
+      endpoint: http://localhost:8080
       server_role: frontdoor
       binding: server_mode.direct
       ports:
-      - 8070
       - 8080
       - 8180
       - 8280
@@ -403,15 +409,10 @@ roles:
       effective_context_tokens: 32768
       binary: llama.cpp
       binary_dir: null
-      numa_policy: 4x48t_quarter_instances
+      numa_policy: server_default
       shared_mmap: true
       launch:
         entries:
-        - port: 8070
-          primary_role: frontdoor
-          mode: default
-          alias: false
-          numa_instance: 0
         - port: 8080
           primary_role: frontdoor
           mode: default
@@ -490,7 +491,7 @@ roles:
       quality_overall: 0.93
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: none
       draft_compat: []
       enable_thinking: false
       thinking_control:
@@ -499,7 +500,6 @@ roles:
       kv:
         k: q8_0
         v: q8_0
-      draft_max: 4
       lookup: false
       corpus_retrieval: true
     model:
@@ -520,18 +520,27 @@ roles:
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
+      - coder_escalation
       - frontdoor
       alias_overrides: []
       quality:
       - date: '2026-05-04'
         protocol: registry benchmark_score
-        value: 170/183 (92.9%)
+        value: 170/183 (93%)
       - date: '2026-05-04'
         protocol: registry benchmark_score
         value: 170/183 (92.9%)
       - date: '2026-05-04'
-        protocol: registry benchmark_score
-        value: 170/183 (92.9%)
+        protocol: registry performance block
+        value:
+          baseline_tps: 24.3
+          optimized_tps: 24.3
+          quality_pct: 93
+          general_suite: 30/30 (100%)
+          coder_suite: 29/30 (97%)
+          thinking_suite: 28/30 (93%)
+          long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
+          speedup: shares_frontdoor_gguf
       speed:
       - date: '2026-05-04'
         protocol: server_mode throughput
@@ -544,11 +553,10 @@ roles:
     model_id: qwen3-next-80b-a3b-q4_k_m
     display_name: Qwen3-Next-80B-A3B-Instruct
     serving:
-      endpoint: http://localhost:8085
+      endpoint: http://localhost:8185
       server_role: ingest_long_context
       binding: server_mode.direct
       ports:
-      - 8085
       - 8185
       - 8285
       - 8385
@@ -562,11 +570,6 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8085
-          primary_role: ingest_long_context
-          mode: default
-          alias: false
-          numa_instance: 0
         - port: 8185
           primary_role: ingest_long_context
           mode: default
@@ -898,11 +901,10 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8072
+      endpoint: http://localhost:8082
       server_role: worker
       binding: server_mode.shared_with
       ports:
-      - 8072
       - 8082
       - 8182
       - 8282
@@ -916,12 +918,6 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8072
-          primary_role: worker_general
-          mode: worker_pool
-          alias: true
-          numa_instance: 0
-          worker_type: explore
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -1232,11 +1228,10 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8072
+      endpoint: http://localhost:8082
       server_role: worker
       binding: server_mode.model_role
       ports:
-      - 8072
       - 8082
       - 8182
       - 8282
@@ -1250,12 +1245,6 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8072
-          primary_role: worker_general
-          mode: worker_pool
-          alias: false
-          numa_instance: 0
-          worker_type: explore
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -1434,11 +1423,10 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8072
+      endpoint: http://localhost:8082
       server_role: worker
       binding: server_mode.shared_with
       ports:
-      - 8072
       - 8082
       - 8182
       - 8282
@@ -1452,12 +1440,6 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8072
-          primary_role: worker_general
-          mode: worker_pool
-          alias: true
-          numa_instance: 0
-          worker_type: explore
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -1618,11 +1600,10 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8070
+      endpoint: http://localhost:8080
       server_role: frontdoor
-      binding: server_mode.shared_with
+      binding: stack_manifest.alias->server_mode.direct
       ports:
-      - 8070
       - 8080
       - 8180
       - 8280
@@ -1632,15 +1613,15 @@ roles:
       effective_context_tokens: 32768
       binary: llama.cpp
       binary_dir: null
-      numa_policy: 4x48t_quarter_instances
+      numa_policy: server_default
       shared_mmap: true
       launch:
         entries:
-        - port: 8070
+        - port: 8080
           primary_role: frontdoor
           mode: default
           alias: true
-          numa_instance: 0
+          numa_instance: 1
         primary_roles:
         - frontdoor
         modes:
@@ -1699,7 +1680,7 @@ roles:
       quality_overall: 0.93
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: none
       draft_compat: []
       enable_thinking: false
       thinking_control:
@@ -1708,7 +1689,6 @@ roles:
       kv:
         k: q8_0
         v: q8_0
-      draft_max: 4
       lookup: false
       corpus_retrieval: true
     model:
@@ -1729,18 +1709,27 @@ roles:
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
+      - coder_escalation
       - frontdoor
       alias_overrides: []
       quality:
       - date: '2026-05-04'
         protocol: registry benchmark_score
-        value: 170/183 (92.9%)
+        value: 170/183 (93%)
       - date: '2026-05-04'
         protocol: registry benchmark_score
         value: 170/183 (92.9%)
       - date: '2026-05-04'
-        protocol: registry benchmark_score
-        value: 170/183 (92.9%)
+        protocol: registry performance block
+        value:
+          baseline_tps: 24.3
+          optimized_tps: 24.3
+          quality_pct: 93
+          general_suite: 30/30 (100%)
+          coder_suite: 29/30 (97%)
+          thinking_suite: 28/30 (93%)
+          long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
+          speedup: shares_frontdoor_gguf
       speed:
       - date: '2026-05-04'
         protocol: server_mode throughput
