@@ -858,11 +858,12 @@ class PathsConfig:
     model_base: Path = field(
         default_factory=lambda: Path(
             os.environ.get(
-                "ORCHESTRATOR_PATHS_MODEL_BASE", f"{_get_default_llm_root()}/lmstudio/models"
+                "ORCHESTRATOR_PATHS_MODEL_BASE", f"{_get_default_llm_root()}/models"
             )
         )
     )
-    """Base directory for LM Studio models."""
+    """Base directory for models (consolidated root 2026-07-30; the old
+    lmstudio/models root remains a symlink farm)."""
 
     log_dir: Path = field(
         default_factory=lambda: Path(
@@ -1094,7 +1095,7 @@ class VisionConfig:
         default_factory=lambda: Path(
             os.environ.get(
                 "ORCHESTRATOR_PATHS_VL_MODEL",
-                f"{_get_default_llm_root()}/lmstudio/models/lmstudio-community/"
+                f"{_get_default_llm_root()}/models/lmstudio-community/"
                 "Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
             )
         )
@@ -1103,7 +1104,7 @@ class VisionConfig:
         default_factory=lambda: Path(
             os.environ.get(
                 "ORCHESTRATOR_PATHS_VL_MMPROJ",
-                f"{_get_default_llm_root()}/lmstudio/models/lmstudio-community/"
+                f"{_get_default_llm_root()}/models/lmstudio-community/"
                 "Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf",
             )
         )
@@ -1522,7 +1523,7 @@ class WorkerPoolPathsConfig:
     model_base: Path = field(
         default_factory=lambda: Path(
             os.environ.get(
-                "ORCHESTRATOR_PATHS_MODEL_BASE", f"{_get_default_llm_root()}/lmstudio/models"
+                "ORCHESTRATOR_PATHS_MODEL_BASE", f"{_get_default_llm_root()}/models"
             )
         )
     )

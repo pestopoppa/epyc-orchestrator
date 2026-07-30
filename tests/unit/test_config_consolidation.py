@@ -828,7 +828,7 @@ class TestWiringRegistryLoader:
         expected_model_base = Path(
             os.environ.get(
                 "ORCHESTRATOR_PATHS_MODEL_BASE",
-                str(expected_llm_root / "lmstudio" / "models"),
+                str(expected_llm_root / "models"),
             )
         )
         assert cfg.paths.model_base == expected_model_base
