@@ -1135,6 +1135,24 @@ def _role_no_mmap_prior(
     return default
 
 
+def _spec_type_has_mtp(spec_type: str | None) -> bool:
+    """True when a registry ``spec_type`` engages the MTP/NEXTN self-draft path.
+
+    ``spec_type`` may be a single token (``draft-mtp``) or a COMPOSED,
+    comma-separated chain (``ngram-mod,draft-mtp`` — the production recipe; see
+    the canonical ``speculative_decoding_policy`` block in the master registry).
+    A composed chain still needs the NEXTN draft path resolved and ``-md``
+    suppression applied, so it must take the same branch as the bare token.
+
+    Testing ``== "draft-mtp"`` here (the pre-2026-07-31 behaviour) made a
+    composed value fall through to the DISABLED spec, launching the role with no
+    speculation at all.
+    """
+    if not isinstance(spec_type, str) or not spec_type:
+        return False
+    return "draft-mtp" in {token.strip() for token in spec_type.split(",")}
+
+
 def _positive_int_prior(
     *containers: dict[str, Any] | None,
     key: str,
@@ -1430,6 +1448,14 @@ def _launch_runtime_record(
     # 2026-06-26 v6 cutover: spec_type carries the v6 MTP token 'draft-mtp' (bare
     # 'mtp' is invalid in v6). It is preserved verbatim from the registry
     # acceleration block — no normalization/allow-list rejects it here.
+    #
+    # 2026-07-31: spec_type may now be a COMPOSED, comma-separated chain such as
+    # `ngram-mod,draft-mtp` (the production recipe — see the canonical
+    # `speculative_decoding_policy` block in the master registry). The branch
+    # below previously tested `== "draft-mtp"` exactly, so a composed value fell
+    # through to the DISABLED spec and silently launched the role with NO
+    # speculation at all — strictly worse than draft-mtp alone. Match on
+    # membership of the chain instead of string equality.
     spec_type_prior = (
         str(acceleration.get("spec_type"))
         if isinstance(acceleration.get("spec_type"), str) and acceleration.get("spec_type")
@@ -1491,7 +1517,7 @@ def _launch_runtime_record(
                 else None,
             }
         )
-    elif spec_type_prior == "draft-mtp" and role == primary_role:
+    elif _spec_type_has_mtp(spec_type_prior) and role == primary_role:
         # 2026-06-26 v6 cutover: emit a NON-NULL draft-mtp spec ONLY for the PRIMARY
         # role that launches the server (role == primary_role). ALIAS roles
         # (shared_with_first_n, e.g. coder_escalation / worker_summarize sharing
