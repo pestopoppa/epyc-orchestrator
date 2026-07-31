@@ -23,9 +23,8 @@ interaction_skills:
   # architect_general's performance block since before the 2026-03-19 model swap
   # (quarantined under superseded_model_history in the master registry on 2026-07-31).
   #
-  # NOTE ON max_queue_wait_ms / max_output_tokens: the 122B decodes at roughly
-  # 8 t/s on CPU, so a 600-token critique is ~75 s of decode. The long queue
-  # wait is deliberate — this is a considered consult, not an inline check like
+  # NOTE ON max_queue_wait_ms / max_output_tokens: the long queue wait is
+  # deliberate — this is a considered consult, not an inline check like
   # architect_general.review_before_commit (400 tokens, 2 s wait).
   architect_critic:
     critique_plan:
