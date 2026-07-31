@@ -509,7 +509,13 @@ def _serving(
     if not server_cfg:
         numa_policy = "role_endpoint_binding" if ports else "unresolved_no_server_binding"
     elif numa_instances == 4:
+        # Retired 2026-07-30. Retained so historical descriptors stay readable.
         numa_policy = "4x48t_quarter_instances"
+    elif numa_instances == 2:
+        # 2026-07-30 HALF FLEET. Without this branch every half role fell through
+        # to "server_default" — the topology label the whole derived layer
+        # carries — so retiring quarters silently unlabelled the entire fleet.
+        numa_policy = "2x48t_half_instances"
     elif numa_instances == 1:
         numa_policy = "single_96t"
     else:

@@ -3,18 +3,55 @@
 from __future__ import annotations
 
 
+from unittest.mock import patch
+
 from scripts.server.stack_numa import (
     MLOCK_ROLES,
     NUMA_CONFIG,
-    NUMA_NODE0,
-    NUMA_Q0A,
+    NUMA_FULL,
     _numa_prefix,
 )
 
 
 def test_numa_prefix_taskset_only_when_no_policy() -> None:
-    # frontdoor instance 1 is NUMA_Q0A with no numactl_policy
-    assert _numa_prefix("frontdoor", instance_idx=1) == ["taskset", "-c", NUMA_Q0A[0]]
+    """`_numa_prefix` emits a bare taskset when the entry declares no policy.
+
+    Rewritten 2026-07-30 against a SYNTHETIC entry. It previously asserted this
+    using `frontdoor` instance 1, on the premise "frontdoor instance 1 is NUMA_Q0A
+    with no numactl_policy". That premise is gone: after the topology correction
+    every live role declares a memory policy, because an instance whose cpuset
+    spans more than one NPS4 node and does not declare one gets its pages placed
+    by whichever thread faults first (measured cost: up to 2.9x).
+
+    So there is deliberately no policy-less role left to point at. Testing the
+    helper against a fixture keeps the branch covered without requiring the live
+    config to keep a defective entry alive purely so a unit test has something to
+    assert — which is how the previous version of this file came to pin the
+    defect in place.
+    """
+    synthetic = dict(NUMA_CONFIG)
+    synthetic["_fixture_no_policy"] = {"instances": [("0-23,96-119", 9999, 24)]}
+    with patch.dict("scripts.server.stack_numa.NUMA_CONFIG", synthetic, clear=True):
+        assert _numa_prefix("_fixture_no_policy", instance_idx=0) == [
+            "taskset",
+            "-c",
+            "0-23,96-119",
+        ]
+
+
+def test_every_live_role_declares_a_memory_policy() -> None:
+    """The counterpart to the fixture above: no LIVE entry may omit a policy.
+
+    This is the assertion the old test displaced. Node-aligned entries use
+    `membind`; multi-node entries use `interleave`. Either satisfies it.
+    """
+    missing = [
+        f"{role}:{port}"
+        for role, cfg in NUMA_CONFIG.items()
+        if not (cfg.get("numactl_policy") or cfg.get("numactl_policy_instances"))
+        for _cpus, port, _t in cfg.get("instances", [])
+    ]
+    assert not missing, "instances with no memory policy: " + ", ".join(missing)
 
 
 def test_numa_prefix_wraps_with_numactl_when_policy_present() -> None:
@@ -64,7 +101,24 @@ def test_numa_config_ports_are_unique_within_role() -> None:
         assert len(ports) == len(set(ports)), f"{role}: duplicate ports {ports}"
 
 
-def test_numa_node0_constant_matches_first_frontdoor_instance() -> None:
-    """Regression guard: frontdoor[0] depends on NUMA_NODE0; if NUMA_NODE0 moves, frontdoor[0] must too."""
+def test_frontdoor_first_instance_is_the_full_machine() -> None:
+    """frontdoor[0] is the FULL instance: all 96 physical cores, interleaved.
+
+    Replaces `test_numa_node0_constant_matches_first_frontdoor_instance`, which
+    asserted `frontdoor[0] == NUMA_NODE0`. `NUMA_NODE0` is an NPS2-era name: it is
+    `("0-47,96-143", 96)`, which on the live NPS4 topology spans TWO nodes and
+    asks for 96 threads on 48 physical cores. Binding frontdoor's primary
+    instance to it was the placement defect, measured at 10.83 vs 23.36 tok/s
+    (tg128, n=10) against the canonical full-machine recipe.
+
+    The old test did not merely describe that wiring, it REQUIRED it — correcting
+    frontdoor[0] necessarily failed it. A guard whose passing condition is the
+    defect cannot survive the fix, so it is replaced rather than adjusted.
+
+    `NUMA_NODE0`/`NUMA_Q0A` still exist in stack_numa but are now referenced only
+    by tests and comments; no production path reads them. They are deletion
+    candidates once the remaining test fixtures stop naming them.
+    """
     cpu_list, _, threads = NUMA_CONFIG["frontdoor"]["instances"][0]
-    assert (cpu_list, threads) == NUMA_NODE0
+    assert (cpu_list, threads) == NUMA_FULL
+    assert NUMA_CONFIG["frontdoor"]["numactl_policy_instances"][0] == "interleave=all"

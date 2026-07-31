@@ -60,10 +60,45 @@ def test_enum_value_passes_through() -> None:
     assert get_placement_policy("r", cfg) is RolePlacementPolicy.QUEUE_ONLY
 
 
-@pytest.mark.parametrize("bad", ["garbage", "", "solo-prefer-full", 42, None, {}])
-def test_malformed_value_falls_back_to_default(bad: object) -> None:
-    cfg = {"r": {"placement_policy": bad}}
+@pytest.mark.parametrize("absent", ["", None])
+def test_absent_value_falls_back_to_default(absent: object) -> None:
+    """An ABSENT policy resolves to the conservative default. Only absent."""
+    cfg = {"r": {"placement_policy": absent}}
     assert get_placement_policy("r", cfg) is DEFAULT_PLACEMENT_POLICY
+
+
+@pytest.mark.parametrize(
+    "bad, exc",
+    [
+        ("garbage", ValueError),
+        ("solo-prefer-full", ValueError),  # hyphens, not underscores — the near-miss
+        (42, TypeError),
+        ({}, TypeError),
+    ],
+)
+def test_unrecognised_value_raises_rather_than_silently_degrading(
+    bad: object, exc: type[Exception]
+) -> None:
+    """A value that WAS configured but cannot be mapped must raise.
+
+    Behaviour change 2026-07-30, replacing `test_malformed_value_falls_back_to_default`.
+    That test asserted every malformed value resolved to DEFAULT_PLACEMENT_POLICY —
+    which is NOT "no policy", it is a DIFFERENT policy (SOLO_PREFER_FULL), and it is
+    the one that lets a solo request acquire a full instance's every region lock and
+    serialize the machine (the DISPATCH-A shape, 2026-07-21). So the old behaviour
+    silently substituted the most dangerous policy for the one the author asked for,
+    with no log line, and the test froze that in place.
+
+    `"solo-prefer-full"` is the case that matters: hyphens where the enum uses
+    underscores. It is one keystroke from valid and it degraded silently. This is
+    imminent, not hypothetical — the enum vocabulary is still quarter-shaped
+    (BURST_PREFER_QUARTERS) while the deployed topology is 1 full + 2 halves, so a
+    rename is queued, and a half-finished alias map would have degraded live roles
+    without a trace.
+    """
+    cfg = {"r": {"placement_policy": bad}}
+    with pytest.raises(exc):
+        get_placement_policy("r", cfg)
 
 
 def test_live_call_with_no_arg_does_not_crash() -> None:

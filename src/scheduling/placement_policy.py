@@ -66,16 +66,44 @@ DEFAULT_PLACEMENT_POLICY = RolePlacementPolicy.SOLO_PREFER_FULL
 
 
 def _coerce(raw: object) -> Optional[RolePlacementPolicy]:
-    """Best-effort coercion of a NUMA_CONFIG-supplied value to the enum.
-    Returns None if the value can't be mapped (caller substitutes default)."""
+    """Coerce a NUMA_CONFIG-supplied value to the enum.
+
+    Returns None ONLY when nothing was configured. A value that WAS configured
+    but cannot be mapped now raises, because the previous behaviour was a silent
+    downgrade with real consequences: an unrecognised string returned None and
+    the caller substituted DEFAULT_PLACEMENT_POLICY (= SOLO_PREFER_FULL), which
+    is not "no policy" — it is a DIFFERENT policy, and the one that lets a solo
+    request acquire a full instance's every region lock and serialize the
+    machine (the DISPATCH-A shape, 2026-07-21).
+
+    This matters imminently: the enum's vocabulary is quarter-shaped
+    (BURST_PREFER_QUARTERS, and SOLO_PREFER_FULL's own docstring says "spill to
+    NUMA-disjoint quarters") while the deployed topology is now 1 full + 2
+    halves. Renaming toward shape-agnostic values is queued work, and under the
+    old behaviour a typo or a half-finished alias map would have degraded roles
+    to SOLO_PREFER_FULL without a single log line. A rename that looks safe and
+    is not.
+    """
     if isinstance(raw, RolePlacementPolicy):
         return raw
+    if raw is None:
+        return None
     if isinstance(raw, str):
-        try:
-            return RolePlacementPolicy(raw.strip().lower())
-        except ValueError:
+        text = raw.strip().lower()
+        if not text:
             return None
-    return None
+        try:
+            return RolePlacementPolicy(text)
+        except ValueError as exc:
+            raise ValueError(
+                f"placement_policy {raw!r} is not a RolePlacementPolicy. "
+                f"Valid: {sorted(p.value for p in RolePlacementPolicy)}. "
+                "Refusing to fall back to the default — that would silently "
+                "substitute a DIFFERENT policy, not an absent one."
+            ) from exc
+    raise TypeError(
+        f"placement_policy must be a str or RolePlacementPolicy, got {type(raw).__name__}: {raw!r}"
+    )
 
 
 def get_placement_policy(role: str, numa_config: Optional[dict] = None) -> RolePlacementPolicy:
