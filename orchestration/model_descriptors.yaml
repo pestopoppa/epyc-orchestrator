@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-07-31T12:48:45Z'
+compiled_at: '2026-07-31T20:12:19Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 270cf9ea
-    sha256: cf07e29ca87e7fb495e37f9ba606644b873dd5a1d7f54ad29c9c2160175022e5
+    repo_commit: a3cfe65e
+    sha256: 0b918c85f46726e380527b8f86058c38c0cb36305bed262ea94d6eccf7ef9984
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: 5dfc339e
-    sha256: 411f5b617e464e6d408a3baa39f4b0fb68fd4d15aad9566e7fe0386bb6051f62
+    repo_commit: 596a1e24
+    sha256: ee172b18a76d14d4a12bbd1899686fba93f0d21af87d8459177926abdfd0f283
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -59,8 +59,9 @@ models:
     - date: null
       protocol: registry performance block
       value:
-        baseline_tps: 38.46
-        optimized_tps: 38.46
+        baseline_tps: 37.63
+        optimized_tps: 56.86
+        optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
         quality_pct: 90
         tool_compliance_pct: 96
         draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
@@ -73,8 +74,9 @@ models:
     - date: null
       protocol: registry performance block
       value:
-        baseline_tps: 38.46
-        optimized_tps: 38.46
+        baseline_tps: 37.63
+        optimized_tps: 56.86
+        optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
         quality_pct: 90
         tool_compliance_pct: 96
         draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
@@ -87,8 +89,9 @@ models:
     - date: null
       protocol: registry performance block
       value:
-        baseline_tps: 38.46
-        optimized_tps: 38.46
+        baseline_tps: 37.63
+        optimized_tps: 56.86
+        optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
         quality_pct: 90
         tool_compliance_pct: 96
         draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
@@ -99,17 +102,17 @@ models:
           85.77) but did not improve non-repetitive coding explanation speed and failed the required-heading contract under the 640-token cap; short edit was only marginally faster than draft-mtp and all
           modes failed the exact patch contract. Treat ngram-mod,draft-mtp as a task-specific token-reuse lane, not the broad worker default. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_prompt_diverse_20260719T004626Z/compact_summary.json.'
   speed:
-    solo_96t_tps: 38.46
-    quarter_48t_tps: 38.46
+    solo_96t_tps: 37.63
+    quarter_48t_tps: null
     prefill_tps: null
-    optimized_tps: 38.46
+    optimized_tps: 56.86
     source: orchestration/model_registry.yaml
     measured:
     - date: null
       protocol: server_mode throughput
-      value_tps: 38.46
+      value_tps: 56.86
   acceleration:
-    spec_type: ngram-mod,draft-mtp
+    spec_type: draft-mtp
     draft_compat:
     - draft_gemma4_26b_a4b_assistant_q8
     enable_thinking: false
@@ -126,14 +129,12 @@ models:
   serving:
     binary: llama.cpp
     binary_dir: null
-    numa_policy: 4x48t_quarter_instances
+    numa_policy: 2x48t_half_instances
     mlock: true
     ports:
     - 8072
     - 8082
     - 8182
-    - 8282
-    - 8382
     server_role: worker
     requirements: {}
   known_gaps: []
@@ -178,7 +179,9 @@ models:
         k35_longdecode_observation: '2026-07-19 current experimental-v7 `ed4091266` comparison against the MiniCPM-o candidate found the temporary Qwen2.5-VL alias still faster on MI210 (`4/4`, quality
           decode mean `133.29 t/s`, long decode `118.50 t/s`). MiniCPM-o also passed the same four fixtures but decoded the long sample at `109.18 t/s`. The controlled MiniCPM-o live launch/smoke and Qwen2.5-VL
           rollback check were executed after the candidate gate, but persistent API/AutoPilot traffic was not restarted or observed; keep this Qwen2.5-VL alias as the safety lane until that persistent-live
-          cutover is explicitly performed.
+          cutover is explicitly performed. SUPERSEDED 2026-07-31: the MiniCPM-o cutover is CANCELLED and MiniCPM-o is deprecated with its weights deleted. Qwen2.5-VL is no longer a "temporary alias" or
+          a "safety lane" pending a flip — on 42q OCRBench+ChartQA it scored 35/42 against MiniCPM-o''s 31/42, so it is the better model on quality as well as speed and it stands as the incumbent on its
+          own merits. Any future vision_escalation change should be evaluated against Qwen3-VL-30B-A3B Q4_K_M (36/42), the only arm measured above the incumbent.
 
           '
     - date: '2026-03-04'
@@ -259,7 +262,7 @@ models:
       protocol: registry benchmark_score
       value: 25/27 (93%) on canonical long_context suite, May-4
   speed:
-    solo_96t_tps: 14.4
+    solo_96t_tps: 10.12
     quarter_48t_tps: null
     prefill_tps: null
     optimized_tps: 10.12
@@ -283,10 +286,12 @@ models:
   serving:
     binary: llama.cpp
     binary_dir: null
-    numa_policy: server_default
+    numa_policy: 2x48t_half_instances
     mlock: true
     ports:
     - 8085
+    - 8185
+    - 8285
     server_role: ingest_long_context
     requirements: {}
   known_gaps: []
@@ -322,14 +327,18 @@ models:
     - date: null
       protocol: registry performance block
       value:
-        baseline_tps: 5.3
-        moe4_baseline_tps: 3.87
-        moe4_spec_tps: 8.21
-        full_spec_tps: 6.08
+        superseded_model_history:
+          model: Qwen3-235B-A22B-Q4_K_M
+          note: category=BASELINE / historical. Never a headline, never a decision input.
+          baseline_tps: 5.3
+          moe4_baseline_tps: 3.87
+          moe4_spec_tps: 8.21
+          full_spec_tps: 6.08
         qwen35_122b_probe_b_tps: 12.19
-        optimized_tps: 12.19
+        optimized_tps: 24.0
+        optimized_tps_long_context: 15.76
+        optimized_tps_attest: '[published stack measurement artifact, production-optimal rows, 2026-07-31]'
         quality_score: 2.57/3
-        speedup: 2.30x
         spec_acceptance_moe4: 54.8%
         spec_acceptance_full: 52.7%
     - date: null
@@ -362,17 +371,17 @@ models:
           verdict: status_quo_self_review_failed_patch_reviewer
           evidence: /mnt/raid0/llm/epyc-inference-research/data/reviewer_model_ablations/rm2-next-a1-architect-statusquo-ccrab-p-rev1-20260719T210513Z
   speed:
-    solo_96t_tps: 12.19
+    solo_96t_tps: 24.0
     quarter_48t_tps: null
     prefill_tps: null
-    optimized_tps: 12.19
+    optimized_tps: 24.0
     source: orchestration/model_registry.yaml
     measured:
     - date: null
       protocol: server_mode throughput
-      value_tps: 12.19
+      value_tps: 24.0
   acceleration:
-    spec_type: ngram-mod,draft-mtp
+    spec_type: draft-mtp
     draft_compat:
     - qwen3.5-122b-a10b-ud-q4_k_m
     enable_thinking: false
@@ -419,7 +428,8 @@ models:
     server_roles:
     - coder_escalation
     - frontdoor
-    runtime_aliases: []
+    runtime_aliases:
+    - frontdoor
     shared_mmap: true
   quality:
     suite_vector:
@@ -440,26 +450,18 @@ models:
       protocol: registry benchmark_score
       value: 170/183 (92.9%)
     - date: '2026-05-04'
-      protocol: registry performance block
-      value:
-        baseline_tps: 24.3
-        optimized_tps: 24.3
-        quality_pct: 93
-        general_suite: 30/30 (100%)
-        coder_suite: 29/30 (97%)
-        thinking_suite: 28/30 (93%)
-        long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
-        speedup: shares_frontdoor_gguf
+      protocol: registry benchmark_score
+      value: 170/183 (92.9%)
   speed:
-    solo_96t_tps: 24.3
+    solo_96t_tps: 40.22
     quarter_48t_tps: null
     prefill_tps: null
-    optimized_tps: 24.3
+    optimized_tps: 40.22
     source: orchestration/model_registry.yaml
     measured:
     - date: '2026-05-04'
       protocol: server_mode throughput
-      value_tps: 24.3
+      value_tps: 40.22
   acceleration:
     spec_type: none
     draft_compat: []
@@ -481,8 +483,6 @@ models:
     - 8070
     - 8080
     - 8180
-    - 8280
-    - 8380
     server_role: coder_escalation
     requirements: {}
   known_gaps: []
@@ -519,16 +519,16 @@ models:
       value: 170/183 (92.9%)
   speed:
     solo_96t_tps: 25.6
-    quarter_48t_tps: 24.3
+    quarter_48t_tps: null
     prefill_tps: null
     optimized_tps: 27.4
     source: orchestration/model_registry.yaml
     measured:
     - date: '2026-05-04'
       protocol: server_mode throughput
-      value_tps: 24.3
+      value_tps: 40.22
   acceleration:
-    spec_type: ngram-mod,draft-mtp
+    spec_type: draft-mtp
     draft_compat: []
     enable_thinking: false
     thinking_control:
@@ -543,14 +543,12 @@ models:
   serving:
     binary: llama.cpp
     binary_dir: null
-    numa_policy: 4x48t_quarter_instances
+    numa_policy: 2x48t_half_instances
     mlock: false
     ports:
     - 8070
     - 8080
     - 8180
-    - 8280
-    - 8380
     server_role: frontdoor
     requirements: {}
   known_gaps: []

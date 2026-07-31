@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-07-30T19:44:20+00:00
-# Cache key:   0e441d3d29ffdd05...
+# Compiled at: 2026-07-31T20:12:01+00:00
+# Cache key:   cf6dbafab3315990...
 # Active roles: architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1150,7 +1150,9 @@ server_mode:
     chat_template_kwargs:
       enable_thinking: false
     model_role: qwen36_q8_0
-    shared_with: []
+    shared_with:
+    - coder_escalation
+    - worker_summarize
     description: Root LM — Qwen3.6-35B-A3B MTP Q8 (quality 93%, May-4 Claude-as-Judge 170/183; v6 NEXTN self-draft)
     benchmark_date: 2026-05-04
     benchmark_score: 170/183 (92.9%)
@@ -1162,19 +1164,17 @@ server_mode:
       v: q8_0
     memory_gb: 37
     tier: hot
-    numa_instances: 4
+    numa_instances: 2
     numa_ports:
     - 8080
     - 8180
-    - 8280
-    - 8380
     acceleration:
       type: speculative_decoding
-      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
+      spec_type: draft-mtp
       draft_max: 4
       lookup: false
       corpus_retrieval: true
-    throughput: 24.3
+    throughput: 40.22
     previous_model: Qwen3.5-35B-A3B-UD-Q4_K_M.gguf
   coder_escalation:
     no_mmap: true
@@ -1196,9 +1196,10 @@ server_mode:
     tier: hot
     acceleration:
       type: none
+      inherits_spec_from: frontdoor
       lookup: false
       corpus_retrieval: true
-    throughput: 24.3
+    throughput: 40.22
     previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
   worker:
     url: http://localhost:8072
@@ -1216,21 +1217,18 @@ server_mode:
     previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
     acceleration:
       type: speculative_decoding
-      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
-      # ngram_candidate_spec_type RETIRED 2026-07-31 -- its value is now committed in spec_type above.
+      spec_type: draft-mtp
       draft_max: 2
       draft_p_min: 0.0
       threads_draft: 16
       ubatch: 512
       lookup: false
       corpus_retrieval: false
-    numa_instances: 4
+    numa_instances: 2
     numa_ports:
     - 8082
     - 8182
-    - 8282
-    - 8382
-    throughput: 38.46
+    throughput: 56.86
   architect_general:
     no_mmap: true
     url: http://localhost:8083
@@ -1248,19 +1246,23 @@ server_mode:
     tier: hot
     acceleration:
       type: speculative_decoding
-      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
+      spec_type: draft-mtp
       draft_max: 4
       draft_model: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
       lookup: false
     numa_instances: 1
     numa_ports:
     - 8083
-    throughput: 12.19
+    throughput: 24.0
     previous_model: Qwen3-235B-A22B-Q4_K_M.gguf
   ingest_long_context:
     no_mmap: true
     url: http://localhost:8085
     port: 8085
+    numa_instances: 2
+    numa_ports:
+    - 8185
+    - 8285
     slots: 1
     model_role: ingest_long_context
     thinking_control:
@@ -1275,6 +1277,8 @@ server_mode:
     tier: hot
     acceleration:
       type: none
+      spec_type: none
+      spec_category: OPTIMUM
     throughput: 14.4-20.8
     benchmark_score: 25/27 (93%) on canonical long_context suite, May-4
     notes: SSM-hybrid linear attention scales O(n) per token — at extreme contexts (50K+) outperforms pure-attention models. Best Stage-1 candidate for three_stage_summarization (full-context fast draft).
@@ -1306,14 +1310,15 @@ roles:
     - ingest
     acceleration:
       type: speculative_decoding
-      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
+      spec_type: draft-mtp
       draft_max: 4
       draft_model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
       lookup: false
       corpus_retrieval: true
     performance:
-      baseline_tps: 24.3
-      optimized_tps: 24.3
+      baseline_tps: null
+      optimized_tps: 40.22
+      optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
       quality_pct: 93
       benchmark_date: 2026-05-04
     memory:
@@ -1359,8 +1364,9 @@ roles:
       lookup: false
       corpus_retrieval: true
     performance:
-      baseline_tps: 24.3
-      optimized_tps: 24.3
+      baseline_tps: null
+      optimized_tps: 40.22
+      optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
       quality_pct: 93
       coder_suite: 29/30 (97%)
       agentic_suite: 26/30 (87%)
@@ -1405,6 +1411,8 @@ roles:
     - architect
     acceleration:
       type: none
+      spec_type: none
+      spec_category: OPTIMUM
     constraints:
       forbid:
       - speculative_decoding
@@ -1452,7 +1460,7 @@ roles:
     - general
     acceleration:
       type: speculative_decoding
-      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
+      spec_type: draft-mtp
       draft_model: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
       draft_max: 4
       k: 4
@@ -1465,14 +1473,18 @@ roles:
         '
       benchmarked: 2026-05-04
     performance:
-      baseline_tps: 5.3
-      moe4_baseline_tps: 3.87
-      moe4_spec_tps: 8.21
-      full_spec_tps: 6.08
+      superseded_model_history:
+        model: Qwen3-235B-A22B-Q4_K_M
+        note: category=BASELINE / historical. Never a headline, never a decision input.
+        baseline_tps: 5.3
+        moe4_baseline_tps: 3.87
+        moe4_spec_tps: 8.21
+        full_spec_tps: 6.08
       qwen35_122b_probe_b_tps: 12.19
-      optimized_tps: 12.19
+      optimized_tps: 24.0
+      optimized_tps_long_context: 15.76
+      optimized_tps_attest: '[published stack measurement artifact, production-optimal rows, 2026-07-31]'
       quality_score: 2.57/3
-      speedup: 2.30x
       spec_acceptance_moe4: 54.8%
       spec_acceptance_full: 52.7%
     memory:
@@ -1605,9 +1617,17 @@ roles:
     - coder
     - general
     acceleration:
-      type: ngram_lookup
-      spec_type: ngram-mod,draft-mtp   # was ngram-simple (2026-07-31): a fourth undiscussed variant on the model backing frontdoor AND coder_escalation
-      draft_max: 64
+      type: speculative_decoding
+      spec_type: draft-mtp
+      draft_max: 4
+      historical_candidate:
+        category: CANDIDATE
+        spec_type: ngram-simple
+        draft_max: 64
+        result: +10.1% sweep-verified, pre-MTP era (interleave + ngram dm=64 -> 27.4 t/s)
+        note: 'Superseded by the composed ngram-mod,draft-mtp recipe. Retained as a research record only. Do NOT launch this.
+
+          '
     performance:
       baseline_tps: 25.6
       optimized_tps: 27.4
@@ -1683,8 +1703,7 @@ roles:
     - coder
     acceleration:
       type: speculative_decoding
-      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
-      # ngram_candidate_spec_type RETIRED 2026-07-31 -- its value is now committed in spec_type above.
+      spec_type: draft-mtp
       draft_role: draft_gemma4_26b_a4b_assistant_q8
       draft_max: 2
       draft_p_min: 0.0
@@ -1695,8 +1714,9 @@ roles:
       - prompt_lookup
       reason: legacy prompt_lookup remains disabled; v7 common_speculative composes ngram-mod with draft-mtp as one launch-time stack.
     performance:
-      baseline_tps: 38.46
-      optimized_tps: 38.46
+      baseline_tps: 37.63
+      optimized_tps: 56.86
+      optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
       quality_pct: 90
       tool_compliance_pct: 96
       draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
@@ -1841,7 +1861,9 @@ roles:
       k35_longdecode_observation: '2026-07-19 current experimental-v7 `ed4091266` comparison against the MiniCPM-o candidate found the temporary Qwen2.5-VL alias still faster on MI210 (`4/4`, quality decode
         mean `133.29 t/s`, long decode `118.50 t/s`). MiniCPM-o also passed the same four fixtures but decoded the long sample at `109.18 t/s`. The controlled MiniCPM-o live launch/smoke and Qwen2.5-VL
         rollback check were executed after the candidate gate, but persistent API/AutoPilot traffic was not restarted or observed; keep this Qwen2.5-VL alias as the safety lane until that persistent-live
-        cutover is explicitly performed.
+        cutover is explicitly performed. SUPERSEDED 2026-07-31: the MiniCPM-o cutover is CANCELLED and MiniCPM-o is deprecated with its weights deleted. Qwen2.5-VL is no longer a "temporary alias" or a
+        "safety lane" pending a flip — on 42q OCRBench+ChartQA it scored 35/42 against MiniCPM-o''s 31/42, so it is the better model on quality as well as speed and it stands as the incumbent on its own
+        merits. Any future vision_escalation change should be evaluated against Qwen3-VL-30B-A3B Q4_K_M (36/42), the only arm measured above the incumbent.
 
         '
     memory:
@@ -1900,8 +1922,9 @@ roles:
       type: none
       lookup: false
     performance:
-      baseline_tps: 24.3
-      optimized_tps: 24.3
+      baseline_tps: null
+      optimized_tps: 40.22
+      optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
       quality_pct: 93
       general_suite: 30/30 (100%)
       coder_suite: 29/30 (97%)
