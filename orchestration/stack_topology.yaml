@@ -1,0 +1,49 @@
+# =============================================================================
+# STACK TOPOLOGY — the input of record
+# =============================================================================
+#
+# Compilation of the stack is a PURE FUNCTION of three declared inputs:
+#
+#     compile( master registry , role assignments , THIS FILE )
+#         -> lean registry -> model_descriptors.yaml -> derived/stack_priors.yaml
+#
+# The live fleet is NEVER consulted to decide what to compile. It is consulted
+# only AFTERWARDS, to assert that what is running matches what was declared.
+# Before 2026-07-31 the compiler probed the running fleet to choose the lineup,
+# which made its output a function of machine state rather than of its inputs —
+# a clean-shell compile and a fleet-up compile produced different artifacts from
+# identical sources. That is the defect this file closes.
+#
+# Precedence when resolving the mode (the resolver reports which one it used, so
+# a wrong answer is attributable rather than silent):
+#
+#     1. ORCHESTRATOR_STACK_NUMA_MODE   — deliberate override, experiments only
+#     2. THIS FILE                      — the declared lineup, normal operation
+#     3. realized-fleet probe           — backstop only, if this file is missing
+#
+# Changing the lineup is a data edit here plus a recompile. It does not require
+# touching the master registry (which owns models and their launch profiles) or
+# any launcher code.
+#
+# -----------------------------------------------------------------------------
+schema_version: stack_topology.v1
+
+# full    — one 96-core instance per quarterable role, numactl --interleave=all
+# quarter — the sub-full shape only. NOTE: since the 2026-07-31 half-fleet
+#           cutover this token means HALVES (2x48t), not quarters (4x24t). The
+#           token was retained rather than renamed because the mode enum is read
+#           by the launcher, the manifest filter and the guard; renaming it is a
+#           separate, wider change. See scripts/server/stack_numa.py.
+# both    — the full instance AND the sub-full instances (current production).
+numa_mode: both
+
+# Human-readable statement of what `both` currently means, so a reader does not
+# have to reconstruct it from NUMA_CONFIG. Not consumed by the compiler.
+realized_shape:
+  quarterable_roles: full (0-95, interleave=all, -t 96) + half A (0-47,96-143,
+    interleave=0,1, -t 48) + half B (48-95,144-191, interleave=2,3, -t 48)
+  note: >
+    Each half spans exactly the two NPS4 nodes its cpuset covers and interleaves
+    over only those nodes. A half must never use interleave=all — that places
+    weights on nodes its threads cannot reach locally, which is the defect that
+    cost frontdoor and ingest_long_context roughly 2x for months.

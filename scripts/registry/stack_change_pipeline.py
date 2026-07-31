@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import os
 import subprocess
 import sys
 from collections import Counter
@@ -32,6 +33,10 @@ from scripts.validate.stack_change_guard import (  # noqa: E402
     DEFAULT_SURFACE_EXCEPTIONS,
     DEFAULT_SURFACE_MANIFEST,
     validate_stack_priors,
+)
+from scripts.validate.reasoning_effort_certifications import (  # noqa: E402
+    DEFAULT_CERTIFICATIONS as DEFAULT_EFFORT_CERTIFICATIONS,
+    validate_reasoning_effort_certifications,
 )
 from orchestration.repl_memory.q_scorer import (  # noqa: E402
     validate_live_q_scorer_prior_sources,
@@ -76,11 +81,73 @@ SURFACE_WARNING_ORDER = (
 )
 
 
+DEFAULT_STACK_TOPOLOGY = REPO_ROOT / "orchestration" / "stack_topology.yaml"
+# Mirrors scripts/server/stack_numa_mode.VALID_STACK_NUMA_MODES. Duplicated as a
+# literal rather than imported because that module sits behind the stack_paths /
+# stack_manifest circular-import chain that already fails at runtime here.
+VALID_NUMA_MODES = frozenset({"full", "quarter", "both"})
+
+
+def resolve_declared_numa_mode(
+    topology_path: Path = DEFAULT_STACK_TOPOLOGY,
+) -> tuple[str | None, str]:
+    """Resolve the compile-time NUMA mode and REPORT WHERE IT CAME FROM.
+
+    Compilation must be a pure function of its declared inputs. Probing the live
+    fleet to decide the lineup made the output depend on machine state, so a
+    clean-shell compile and a fleet-up compile produced different artifacts from
+    identical sources.
+
+    Precedence: explicit env override > declared topology file > (caller falls
+    back to the realized-fleet probe only when neither is present).
+
+    Returns ``(mode, source)``. ``mode`` is None when nothing is declared, which
+    tells the caller to use its realized-mode backstop. ``source`` is always a
+    human-readable label — a value without a provenance label is how a wrong
+    lineup goes unattributed.
+    """
+    env_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
+    if env_mode in VALID_NUMA_MODES:
+        return env_mode, "env:ORCHESTRATOR_STACK_NUMA_MODE"
+    try:
+        declared = yaml.safe_load(topology_path.read_text()) or {}
+        mode = declared.get("numa_mode")
+        if isinstance(mode, str) and mode.strip() in VALID_NUMA_MODES:
+            return mode.strip(), f"declared:{topology_path.name}"
+        if mode is not None:
+            return None, f"declared:{topology_path.name} INVALID value {mode!r}"
+    except FileNotFoundError:
+        return None, "no declared topology file"
+    except Exception as exc:  # noqa: BLE001
+        return None, f"declared topology unreadable: {exc}"
+    return None, "no numa_mode declared"
+
+
+def _topology_path(config: "StackChangePipelineConfig") -> Path:
+    """Topology declaration belonging to THIS config's repo_root."""
+    if config.stack_topology is not None:
+        return config.stack_topology
+    return config.repo_root / "orchestration" / "stack_topology.yaml"
+
+
+def _numa_mode_kwargs(topology_path: Path = DEFAULT_STACK_TOPOLOGY) -> tuple[dict, str]:
+    """Build the compile kwargs for the NUMA mode, plus the provenance label."""
+    mode, source = resolve_declared_numa_mode(topology_path)
+    if mode is None:
+        # Backstop only. Refusing beats defaulting to "full": ESC-8 kill chain A4
+        # rewrote stack_priors.yaml to the dead full lineup that way.
+        return {"require_realized_mode": True}, f"{source} -> realized-fleet probe"
+    return {"numa_mode": mode}, source
+
+
 @dataclass(frozen=True)
 class StackChangePipelineConfig:
     mode: Mode
     repo_root: Path = REPO_ROOT
     lean_registry: Path = DEFAULT_LEAN_REGISTRY
+    # None => resolve under this config's repo_root, so a tmp_path fixture does not
+    # silently inherit the production topology declaration.
+    stack_topology: Path | None = None
     research_registry: Path | None = DEFAULT_RESEARCH_REGISTRY
     descriptors: Path = DEFAULT_DESCRIPTOR_OUTPUT
     stack_priors: Path = DEFAULT_STACK_PRIORS
@@ -89,6 +156,7 @@ class StackChangePipelineConfig:
     schema: Path = DEFAULT_SCHEMA
     surface_exceptions: Path = DEFAULT_SURFACE_EXCEPTIONS
     surface_manifest: Path = DEFAULT_SURFACE_MANIFEST
+    effort_certifications: Path = DEFAULT_EFFORT_CERTIFICATIONS
     roles: set[str] | None = None
     allow_known_gaps: bool = False
     allow_production_blocker_waivers: bool = False
@@ -410,6 +478,102 @@ def _stack_prior_roles(config: StackChangePipelineConfig) -> set[str] | None:
     return set(config.roles) if config.roles is not None else None
 
 
+def _lean_registry_step(
+    config: StackChangePipelineConfig, *, check: bool
+) -> PipelineStep:
+    """Recompile the LEAN registry from the master registry.
+
+    THE MISSING HOP. Until 2026-07-31 nothing in this pipeline recompiled lean;
+    it imported only ``launcher_tenant_roles`` and treated the lean registry as a
+    read-only input. So `update` regenerated descriptors and stack priors FROM A
+    STALE LEAN REGISTRY and reported `descriptors: updated / stack_priors:
+    updated / guard: ok` while faithfully re-emitting values master had already
+    corrected. A green result computed over the wrong input.
+
+    Concretely: master reversed the composed speculative recipe at 17:38 and
+    corrected four throughput priors, and production kept launching the reversed
+    recipe because every layer below lean was regenerated from lean.
+
+    The chain is master -> lean -> descriptors -> stack_priors -> argv. This step
+    makes the pipeline own the whole chain instead of its last three links.
+    """
+    if config.research_registry is None:
+        return PipelineStep(
+            name="lean_registry",
+            status="ok",
+            details=["skipped: no research (master) registry configured"],
+        )
+    try:
+        from scripts.server.stack_manifest import ROLE_LAUNCH_META
+        from src.registry.registry_compiler import (
+            active_roles_from_launch_meta,
+            compile_lean,
+            cache_key,
+            load_or_compile,
+        )
+
+        # Use the COMPILER's own notion of the active set, not the pipeline's.
+        # _active_roles() additionally carries launcher tenants (eval_batch_frontdoor),
+        # which descriptors and priors legitimately need but which the lean registry
+        # does not project. Mixing the two makes the cache key never match, so the
+        # step would report "stale" on every run — a guard that always fires is as
+        # useless as one that never does.
+        active = (
+            set(config.roles)
+            if config.roles is not None
+            else active_roles_from_launch_meta(ROLE_LAUNCH_META)
+        )
+        cache_path = config.lean_registry.parent / ".lean_cache_key"
+        expected_key = cache_key(config.research_registry, active)
+        current_key = cache_path.read_text().strip() if cache_path.exists() else ""
+
+        if check:
+            # Compare without writing. A key mismatch means the committed lean
+            # registry no longer corresponds to master + the active role set.
+            if current_key == expected_key:
+                return PipelineStep(
+                    name="lean_registry",
+                    status="ok",
+                    details=[f"fresh vs master: {config.research_registry}"],
+                )
+            compile_lean(config.research_registry, active)  # parse-check master
+            return PipelineStep(
+                name="lean_registry",
+                status="stale",
+                errors=[
+                    "lean registry is stale against the master registry "
+                    f"(key {current_key[:12] or '<none>'} != {expected_key[:12]})",
+                    "everything below is compiled FROM lean, so a stale lean makes "
+                    "descriptors/stack_priors green over the wrong input",
+                    "run: uv run python scripts/registry/stack_change_pipeline.py update",
+                ],
+            )
+
+        if cache_path.exists():
+            cache_path.unlink()  # force, as the CLI's --force does
+        out = load_or_compile(
+            config.research_registry, active, config.lean_registry, cache_path
+        )
+    except Exception as exc:  # noqa: BLE001
+        return PipelineStep(
+            name="lean_registry",
+            status="failed",
+            errors=[
+                f"lean registry compile from master failed: {exc}",
+                f"master: {config.research_registry}",
+            ],
+        )
+    return PipelineStep(
+        name="lean_registry",
+        status="ok",
+        details=[
+            f"recompiled from master: {config.research_registry}"
+            f" -> {config.lean_registry}",
+            f"{len(out.get('roles', {}))} roles projected through the active manifest",
+        ],
+    )
+
+
 def _check_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
     try:
         expected = compile_model_descriptors(
@@ -508,15 +672,17 @@ def _update_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
 
 def _check_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
     try:
-        # ESC-8 Fix 6: resolve the NUMA mode from the realized fleet (or refuse)
-        # so a clean-shell check computes the SAME lineup the update writes and
-        # cannot report the quarters-only priors as "stale" against a full expected.
+        # The mode comes from the DECLARED topology so that check and update
+        # compute the same lineup from the same inputs, whatever the fleet is
+        # doing. The realized-fleet probe remains only as a backstop when nothing
+        # is declared (ESC-8 Fix 6: refuse rather than default to "full").
+        mode_kwargs, _mode_source = _numa_mode_kwargs(_topology_path(config))
         expected = compile_stack_priors(
             registry_path=config.lean_registry,
             descriptor_path=config.descriptors,
             active_roles=_stack_prior_roles(config),
             allow_incomplete=config.compile_incomplete,
-            require_realized_mode=True,
+            **mode_kwargs,
         )
     except Exception as exc:  # noqa: BLE001
         return PipelineStep(
@@ -543,16 +709,18 @@ def _check_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
 
 def _update_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
     try:
-        # ESC-8 Fix 6: a clean-shell `pipeline update` must not read the ambient
-        # default-full env and rewrite stack_priors.yaml to the dead full lineup
-        # (kill chain A4). Derive the mode from the realized fleet, or refuse.
+        # Same declared-topology resolution as _check_stack_priors, so an update
+        # can never write a lineup a check would call stale. ESC-8 Fix 6 survives
+        # as the backstop: with nothing declared this still refuses rather than
+        # defaulting to "full" and rewriting priors to the dead full lineup.
+        mode_kwargs, mode_source = _numa_mode_kwargs(_topology_path(config))
         priors = write_stack_priors(
             config.stack_priors,
             registry_path=config.lean_registry,
             descriptor_path=config.descriptors,
             active_roles=_stack_prior_roles(config),
             allow_incomplete=config.compile_incomplete,
-            require_realized_mode=True,
+            **mode_kwargs,
         )
     except Exception as exc:  # noqa: BLE001
         return PipelineStep(
@@ -563,7 +731,12 @@ def _update_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
     return PipelineStep(
         name="stack_priors",
         status="updated",
-        details=[f"wrote {len(priors.get('roles', {}))} role prior(s): {config.stack_priors}"],
+        details=[
+            f"wrote {len(priors.get('roles', {}))} role prior(s): {config.stack_priors}",
+            # Provenance, not decoration: a lineup written from the wrong source is
+            # otherwise indistinguishable from one written from the right source.
+            f"numa mode source: {mode_source}",
+        ],
     )
 
 
@@ -678,6 +851,24 @@ def _guard_step(
     elif warnings:
         status = "warnings"
     return PipelineStep(name=name, status=status, errors=errors, warnings=warnings)
+
+
+def _reasoning_effort_certifications_step(config: StackChangePipelineConfig) -> PipelineStep:
+    result = validate_reasoning_effort_certifications(
+        registry_path=config.lean_registry,
+        certifications_path=config.effort_certifications,
+    )
+    if result.errors:
+        return PipelineStep(
+            name="reasoning_effort_certifications",
+            status="failed",
+            errors=result.errors,
+        )
+    return PipelineStep(
+        name="reasoning_effort_certifications",
+        status="ok",
+        details=["declared prompt-effort levels match their certified model/quant/kernel era"],
+    )
 
 
 def _promotion_gate_command() -> list[str]:
@@ -831,11 +1022,25 @@ def _promotion_gate_step(config: StackChangePipelineConfig, *, prior_ok: bool) -
 def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineReport:
     report = PipelineReport()
     if config.mode == "check":
+        report.steps.append(_lean_registry_step(config, check=True))
         report.steps.append(_check_descriptors(config))
         report.steps.append(_check_stack_priors(config))
         report.steps.append(_procedure_enums(config, check=True))
         report.steps.append(_check_operator_summary(config))
     else:
+        # master -> lean FIRST. Everything below compiles from lean, so this must
+        # lead or the rest is regenerated over a stale input and reports green.
+        lean_step = _lean_registry_step(config, check=False)
+        report.steps.append(lean_step)
+        if not lean_step.ok:
+            report.steps.append(
+                PipelineStep(
+                    name="descriptors",
+                    status="failed",
+                    errors=["skipped: lean registry did not compile from master"],
+                )
+            )
+            return report
         descriptor_step = _update_descriptors(config)
         report.steps.append(descriptor_step)
         if descriptor_step.ok:
@@ -880,6 +1085,7 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
             allow_known_gaps=config.allow_known_gaps,
         )
     )
+    report.steps.append(_reasoning_effort_certifications_step(config))
     report.steps.append(_stack_manifest_registry_step(config, prior_ok=report.ok))
     report.steps.append(_q_scorer_prior_sources_step(config, prior_ok=report.ok))
     report.steps.append(_runtime_attestation_step(prior_ok=report.ok))
@@ -926,6 +1132,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--schema", type=Path, default=DEFAULT_SCHEMA)
     parser.add_argument("--surface-exceptions", type=Path, default=DEFAULT_SURFACE_EXCEPTIONS)
     parser.add_argument("--surface-manifest", type=Path, default=DEFAULT_SURFACE_MANIFEST)
+    parser.add_argument(
+        "--effort-certifications", type=Path, default=DEFAULT_EFFORT_CERTIFICATIONS
+    )
     parser.add_argument("--roles", nargs="+", help="Explicit active roles")
     parser.add_argument(
         "--strict-descriptor-compile",
@@ -969,6 +1178,7 @@ def main(argv: list[str] | None = None) -> int:
         schema=args.schema,
         surface_exceptions=args.surface_exceptions,
         surface_manifest=args.surface_manifest,
+        effort_certifications=args.effort_certifications,
         roles=set(args.roles) if args.roles else None,
         allow_known_gaps=args.allow_known_gaps,
         allow_production_blocker_waivers=args.allow_production_blocker_waivers,

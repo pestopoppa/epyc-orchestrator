@@ -374,6 +374,12 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
     assert update_report.ok
     assert check_report.ok
     assert {step.name for step in check_report.steps} == {
+        # 2026-07-31: master -> lean is now the pipeline's FIRST step. Before this
+        # it was absent entirely and the pipeline regenerated descriptors and
+        # priors from a lean registry nothing kept fresh, reporting green over a
+        # stale input. This set is the step inventory of record — an addition here
+        # must be deliberate.
+        "lean_registry",
         "descriptors",
         "stack_priors",
         "procedure_enums",
@@ -381,6 +387,7 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         "guard",
         "guard_all_surfaces",
         "guard_strict",
+        "reasoning_effort_certifications",
         "stack_manifest_registry",
         "q_scorer_priors",
         "runtime_attestation",
