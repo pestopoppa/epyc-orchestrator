@@ -1,8 +1,19 @@
 interaction_skills:
-  # architect_critic — Qwen3.5-122B-A10B UD-Q4_K_M, CPU. Deliberately NOT a
-  # routed role: it receives no traffic of its own. architect_general (or the
-  # autopilot planner) requests its opinion on specific deep-reasoning tasks via
-  # consult(); it never sits in the normal escalation path.
+  # architect_critic — Qwen3.5-122B-A10B UD-Q4_K_M, CPU, port 8074, tier hot.
+  #
+  # CORRECTED 2026-07-31: an earlier version of this comment said architect_critic
+  # was "deliberately NOT a routed role". That was wrong. It is BOTH consultable
+  # and ROUTABLE:
+  #   - consultable via this skill, requested by architect_general or the autopilot
+  #     planner cycle for specific deep-reasoning tasks;
+  #   - routable as a normal escalation target in specific circumstances (operator's
+  #     example: "boosted reasoning");
+  #   - and it MUST be a selectable arm in autopilot's search space. An arm autopilot
+  #     cannot see is an arm it can never learn the value of.
+  #
+  # tier hot is deliberate: the 122B holds 69 GB standing, and the operator accepted
+  # that cost explicitly ("it costs us very little"), with the worst case being that
+  # it is rarely selected.
   #
   # NOTE ON max_queue_wait_ms / max_output_tokens: the 122B decodes at roughly
   # 8 t/s on CPU, so a 600-token critique is ~75 s of decode. The long queue
