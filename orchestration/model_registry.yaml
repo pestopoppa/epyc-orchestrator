@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-07-29T06:11:46+00:00
-# Cache key:   1d1da9de23aef6a1...
+# Compiled at: 2026-07-30T19:44:20+00:00
+# Cache key:   0e441d3d29ffdd05...
 # Active roles: architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1143,6 +1143,7 @@ kernel_audits:
       pass: true (no crash, no recurrence drift through 32K)
 server_mode:
   frontdoor:
+    no_mmap: true
     url: http://localhost:8070
     port: 8070
     slots: 2
@@ -1169,13 +1170,14 @@ server_mode:
     - 8380
     acceleration:
       type: speculative_decoding
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
       draft_max: 4
       lookup: false
       corpus_retrieval: true
     throughput: 24.3
     previous_model: Qwen3.5-35B-A3B-UD-Q4_K_M.gguf
   coder_escalation:
+    no_mmap: true
     url: http://localhost:8070
     port: 8070
     slots: 1
@@ -1214,8 +1216,8 @@ server_mode:
     previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
     acceleration:
       type: speculative_decoding
-      spec_type: draft-mtp
-      ngram_candidate_spec_type: ngram-mod,draft-mtp
+      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
+      # ngram_candidate_spec_type RETIRED 2026-07-31 -- its value is now committed in spec_type above.
       draft_max: 2
       draft_p_min: 0.0
       threads_draft: 16
@@ -1230,6 +1232,7 @@ server_mode:
     - 8382
     throughput: 38.46
   architect_general:
+    no_mmap: true
     url: http://localhost:8083
     port: 8083
     slots: 2
@@ -1245,7 +1248,7 @@ server_mode:
     tier: hot
     acceleration:
       type: speculative_decoding
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
       draft_max: 4
       draft_model: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
       lookup: false
@@ -1255,6 +1258,7 @@ server_mode:
     throughput: 12.19
     previous_model: Qwen3-235B-A22B-Q4_K_M.gguf
   ingest_long_context:
+    no_mmap: true
     url: http://localhost:8085
     port: 8085
     slots: 1
@@ -1302,7 +1306,7 @@ roles:
     - ingest
     acceleration:
       type: speculative_decoding
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
       draft_max: 4
       draft_model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
       lookup: false
@@ -1448,7 +1452,7 @@ roles:
     - general
     acceleration:
       type: speculative_decoding
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
       draft_model: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
       draft_max: 4
       k: 4
@@ -1602,7 +1606,7 @@ roles:
     - general
     acceleration:
       type: ngram_lookup
-      spec_type: ngram-simple
+      spec_type: ngram-mod,draft-mtp   # was ngram-simple (2026-07-31): a fourth undiscussed variant on the model backing frontdoor AND coder_escalation
       draft_max: 64
     performance:
       baseline_tps: 25.6
@@ -1679,8 +1683,8 @@ roles:
     - coder
     acceleration:
       type: speculative_decoding
-      spec_type: draft-mtp
-      ngram_candidate_spec_type: ngram-mod,draft-mtp
+      spec_type: ngram-mod,draft-mtp   # composed: operator decision 2026-07-31, see speculative_decoding_policy
+      # ngram_candidate_spec_type RETIRED 2026-07-31 -- its value is now committed in spec_type above.
       draft_role: draft_gemma4_26b_a4b_assistant_q8
       draft_max: 2
       draft_p_min: 0.0
@@ -1747,6 +1751,7 @@ roles:
 
       '
   worker_vision:
+    no_mmap: true
     tier: C
     port: 8086
     description: Agentic vision tasks - dedicated VL server with mmproj
@@ -1799,6 +1804,7 @@ roles:
 
       '
   vision_escalation:
+    no_mmap: true
     tier: C
     port: 8087
     description: Temporary safe vision escalation alias - Qwen2.5-VL server with mmproj

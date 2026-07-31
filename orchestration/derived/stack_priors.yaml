@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-30T18:29:09Z'
+compiled_at: '2026-07-31T12:48:46Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: e55852340f094563c884c5255eb4b3835255c81f3a6523bc5af8e9c27d0494b9
-    repo_commit: a1318585
+    sha256: cf07e29ca87e7fb495e37f9ba606644b873dd5a1d7f54ad29c9c2160175022e5
+    repo_commit: 270cf9ea
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 811a8dd3677a6323de88c4adef77ad752885cab0dc047e467db3c63c6c397237
-    repo_commit: a1318585
+    sha256: c041d114fd2e9f720afbdbcfe539314d52d152ba128e90ccbf5698afddab9aae
+    repo_commit: 270cf9ea
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: c0927095a97028adca2744a90bf2fb8f0555df52eacf6abb4f8dbcb6bef80281
-    repo_commit: a1318585
+    repo_commit: 270cf9ea
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
-    sha256: 09e730c5976b11981d10cd11737de83583bd76377ef4a7d4ad164dc1445be8aa
-    repo_commit: a1318585
+    sha256: c70b4ac6b9fe2562f7876c8da677ced2570e59146c3dea772d08347c8eb4d78a
+    repo_commit: 270cf9ea
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 3c0cb1adaa9adb2912363d24471d2d98757c50f706f76d38cc6b5a220c981e8a
-    repo_commit: a1318585
+    repo_commit: 270cf9ea
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: a1318585
+    repo_commit: 270cf9ea
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: a1318585
+    repo_commit: 270cf9ea
 roles:
   architect_general:
     role: architect_general
@@ -128,7 +128,7 @@ roles:
             kv_type_k: q4_0
             kv_type_v: f16
             kv_hadamard: false
-            no_mmap: false
+            no_mmap: true
             mlock: true
             slot_save_path: /mnt/raid0/llm/cache/kv_slots/architect_general
           flags:
@@ -139,7 +139,7 @@ roles:
             override_kv: []
             spec:
               enabled: true
-              type: draft-mtp
+              type: ngram-mod,draft-mtp
               disabled_by: null
               draft_model_path: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
               draft_max: 4
@@ -165,7 +165,7 @@ roles:
       quality_overall: 0.8567
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp
       draft_compat:
       - qwen3.5-122b-a10b-ud-q4_k_m
       enable_thinking: false
@@ -254,14 +254,13 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8080
+      endpoint: http://localhost:8070
       server_role: frontdoor
       binding: stack_manifest.alias->server_mode.direct
       ports:
+      - 8070
       - 8080
       - 8180
-      - 8280
-      - 8380
       slots: 2
       tier: hot
       effective_context_tokens: 32768
@@ -271,11 +270,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8080
+        - port: 8070
           primary_role: frontdoor
           mode: default
           alias: true
-          numa_instance: 1
+          numa_instance: 0
         primary_roles:
         - frontdoor
         modes:
@@ -297,7 +296,7 @@ roles:
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
-            no_mmap: false
+            no_mmap: true
             mlock: true
             slot_save_path: /mnt/raid0/llm/cache/kv_slots/frontdoor
           flags:
@@ -396,14 +395,13 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8080
+      endpoint: http://localhost:8070
       server_role: frontdoor
       binding: server_mode.direct
       ports:
+      - 8070
       - 8080
       - 8180
-      - 8280
-      - 8380
       slots: 2
       tier: hot
       effective_context_tokens: 32768
@@ -413,6 +411,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8070
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 0
         - port: 8080
           primary_role: frontdoor
           mode: default
@@ -423,16 +426,6 @@ roles:
           mode: default
           alias: false
           numa_instance: 2
-        - port: 8280
-          primary_role: frontdoor
-          mode: default
-          alias: false
-          numa_instance: 3
-        - port: 8380
-          primary_role: frontdoor
-          mode: default
-          alias: false
-          numa_instance: 4
         primary_roles:
         - frontdoor
         modes:
@@ -454,7 +447,7 @@ roles:
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
-            no_mmap: false
+            no_mmap: true
             mlock: true
             slot_save_path: /mnt/raid0/llm/cache/kv_slots/frontdoor
           flags:
@@ -465,7 +458,7 @@ roles:
             override_kv: []
             spec:
               enabled: true
-              type: draft-mtp
+              type: ngram-mod,draft-mtp
               disabled_by: null
               draft_model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
               draft_max: 4
@@ -553,14 +546,13 @@ roles:
     model_id: qwen3-next-80b-a3b-q4_k_m
     display_name: Qwen3-Next-80B-A3B-Instruct
     serving:
-      endpoint: http://localhost:8185
+      endpoint: http://localhost:8085
       server_role: ingest_long_context
       binding: server_mode.direct
       ports:
+      - 8085
       - 8185
       - 8285
-      - 8385
-      - 8485
       slots: 1
       tier: hot
       effective_context_tokens: 32768
@@ -570,6 +562,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8085
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 0
         - port: 8185
           primary_role: ingest_long_context
           mode: default
@@ -580,16 +577,6 @@ roles:
           mode: default
           alias: false
           numa_instance: 2
-        - port: 8385
-          primary_role: ingest_long_context
-          mode: default
-          alias: false
-          numa_instance: 3
-        - port: 8485
-          primary_role: ingest_long_context
-          mode: default
-          alias: false
-          numa_instance: 4
         primary_roles:
         - ingest_long_context
         modes:
@@ -610,7 +597,7 @@ roles:
             kv_type_k: q4_0
             kv_type_v: q4_0
             kv_hadamard: false
-            no_mmap: false
+            no_mmap: true
             mlock: true
             slot_save_path: /mnt/raid0/llm/cache/kv_slots/ingest_long_context
           flags:
@@ -728,7 +715,7 @@ roles:
       quality_overall: 0.8567
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp
       draft_compat:
       - qwen3.5-122b-a10b-ud-q4_k_m
       enable_thinking: false
@@ -854,7 +841,7 @@ roles:
       quality_overall: 0.738
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp
       draft_compat: []
       enable_thinking: false
       thinking_control:
@@ -901,14 +888,13 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.shared_with
       ports:
+      - 8072
       - 8082
       - 8182
-      - 8282
-      - 8382
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -918,6 +904,12 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 0
+          worker_type: explore
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -956,7 +948,7 @@ roles:
             override_kv: []
             spec:
               enabled: true
-              type: draft-mtp
+              type: ngram-mod,draft-mtp
               disabled_by: null
               draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
               draft_max: 2
@@ -982,7 +974,7 @@ roles:
       quality_overall: 0.9
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
@@ -1118,7 +1110,7 @@ roles:
             kv_type_k: null
             kv_type_v: null
             kv_hadamard: false
-            no_mmap: false
+            no_mmap: true
             mlock: false
             slot_save_path: null
           flags:
@@ -1228,14 +1220,13 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.model_role
       ports:
+      - 8072
       - 8082
       - 8182
-      - 8282
-      - 8382
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -1245,6 +1236,12 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 0
+          worker_type: explore
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -1256,18 +1253,6 @@ roles:
           mode: worker_pool
           alias: false
           numa_instance: 2
-          worker_type: explore
-        - port: 8282
-          primary_role: worker_general
-          mode: worker_pool
-          alias: false
-          numa_instance: 3
-          worker_type: explore
-        - port: 8382
-          primary_role: worker_general
-          mode: worker_pool
-          alias: false
-          numa_instance: 4
           worker_type: explore
         primary_roles:
         - worker_general
@@ -1301,7 +1286,7 @@ roles:
             override_kv: []
             spec:
               enabled: true
-              type: draft-mtp
+              type: ngram-mod,draft-mtp
               disabled_by: null
               draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
               draft_max: 2
@@ -1327,7 +1312,7 @@ roles:
       quality_overall: 0.9
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
@@ -1423,14 +1408,13 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.shared_with
       ports:
+      - 8072
       - 8082
       - 8182
-      - 8282
-      - 8382
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -1440,6 +1424,12 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 0
+          worker_type: explore
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -1478,7 +1468,7 @@ roles:
             override_kv: []
             spec:
               enabled: true
-              type: draft-mtp
+              type: ngram-mod,draft-mtp
               disabled_by: null
               draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
               draft_max: 2
@@ -1504,7 +1494,7 @@ roles:
       quality_overall: 0.9
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
@@ -1600,14 +1590,13 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8080
+      endpoint: http://localhost:8070
       server_role: frontdoor
       binding: stack_manifest.alias->server_mode.direct
       ports:
+      - 8070
       - 8080
       - 8180
-      - 8280
-      - 8380
       slots: 2
       tier: hot
       effective_context_tokens: 32768
@@ -1617,11 +1606,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8080
+        - port: 8070
           primary_role: frontdoor
           mode: default
           alias: true
-          numa_instance: 1
+          numa_instance: 0
         primary_roles:
         - frontdoor
         modes:
@@ -1643,7 +1632,7 @@ roles:
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
-            no_mmap: false
+            no_mmap: true
             mlock: true
             slot_save_path: /mnt/raid0/llm/cache/kv_slots/frontdoor
           flags:
@@ -1782,7 +1771,7 @@ roles:
             kv_type_k: null
             kv_type_v: null
             kv_hadamard: false
-            no_mmap: false
+            no_mmap: true
             mlock: false
             slot_save_path: null
           flags:

@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-07-30T19:44:21Z'
+compiled_at: '2026-07-31T12:48:45Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 002079d7
-    sha256: 7656b1a9a6894e281fd6ce706a37b12380af990ebbccf31029127d415daabb78
+    repo_commit: 270cf9ea
+    sha256: cf07e29ca87e7fb495e37f9ba606644b873dd5a1d7f54ad29c9c2160175022e5
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: bd1f086e
-    sha256: ba18a3ccae9beeddcbae102ed852195b7023d5c70c22887d34a1c816183396ff
+    repo_commit: 5dfc339e
+    sha256: 411f5b617e464e6d408a3baa39f4b0fb68fd4d15aad9566e7fe0386bb6051f62
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -109,7 +109,7 @@ models:
       protocol: server_mode throughput
       value_tps: 38.46
   acceleration:
-    spec_type: draft-mtp
+    spec_type: ngram-mod,draft-mtp
     draft_compat:
     - draft_gemma4_26b_a4b_assistant_q8
     enable_thinking: false
@@ -372,7 +372,7 @@ models:
       protocol: server_mode throughput
       value_tps: 12.19
   acceleration:
-    spec_type: draft-mtp
+    spec_type: ngram-mod,draft-mtp
     draft_compat:
     - qwen3.5-122b-a10b-ud-q4_k_m
     enable_thinking: false
@@ -528,7 +528,7 @@ models:
       protocol: server_mode throughput
       value_tps: 24.3
   acceleration:
-    spec_type: draft-mtp
+    spec_type: ngram-mod,draft-mtp
     draft_compat: []
     enable_thinking: false
     thinking_control:
