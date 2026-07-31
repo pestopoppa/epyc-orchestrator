@@ -1089,6 +1089,31 @@ def _runtime_requirements(
     return binary_dir, ld_paths
 
 
+def _declared_device(server_cfg: Any, role_cfg: Any) -> str | None:
+    """Return the role's declared serving device, if any (e.g. 'ROCm0', 'none')."""
+    for cfg in (server_cfg, role_cfg):
+        if isinstance(cfg, dict):
+            device = cfg.get("device")
+            if isinstance(device, str) and device.strip():
+                return device.strip()
+    return None
+
+
+def _backend_for_role(server_cfg: Any, role_cfg: Any) -> str:
+    """Map a role's declared device to a production kernel BACKEND.
+
+    A backend is a capability, not a location. `llama.cpp/build/bin` is a CPU-ONLY
+    build with no `libggml-hip.so`, so a role moved to the GPU by a registry edit
+    alone would previously have launched on it and run on CPU SILENTLY — a missing
+    ggml backend does not raise, it simply is not used. Deriving the backend from
+    the declared device is what makes `device: ROCm0` mean something at launch.
+    """
+    device = (_declared_device(server_cfg, role_cfg) or "").lower()
+    if device.startswith("rocm") or device.startswith("cuda") or device.startswith("gpu"):
+        return "gpu"
+    return "cpu"
+
+
 def _effective_acceleration(
     role_cfg: dict[str, Any] | None,
     server_cfg: dict[str, Any] | None,
@@ -1393,6 +1418,25 @@ def _launch_runtime_record(
     acceleration = _effective_acceleration(role_cfg, server_cfg)
     binary_dir, ld_paths = _runtime_requirements(server_cfg, role_cfg)
 
+    # No explicit binary_dir? Derive one from the role's declared DEVICE via the
+    # stable kernel layer, instead of falling through to a CPU-only literal. This
+    # is what makes `device: ROCm0` reach the launcher: without it a GPU role
+    # silently ran on llama.cpp/build/bin, which has no libggml-hip.so.
+    backend = _backend_for_role(server_cfg, role_cfg)
+    # An EXPLICIT registry binary_dir is an override and carries env consequences
+    # (strip-ggml policy, KMP_BLOCKTIME). A backend-derived default must not, or
+    # every role silently changes env policy. Keep the two distinguishable.
+    explicit_binary_override = bool(binary_dir)
+    if not binary_dir:
+        try:
+            from src.registry.kernel_paths import backend_dir as _kernel_backend_dir
+
+            binary_dir = str(_kernel_backend_dir(backend))
+        except Exception:
+            # Layer unavailable (fresh checkout / test fixture): keep the previous
+            # behaviour rather than failing the whole compile.
+            binary_dir = None
+
     binary_path = str(Path(binary_dir) / "llama-server") if binary_dir else str(LLAMA_SERVER)
     binary_family = (
         str(descriptor_serving.get("binary"))
@@ -1607,8 +1651,10 @@ def _launch_runtime_record(
         "binary_path": binary_path,
         "binary_dir": binary_dir,
         "ld_library_path": ld_paths,
-        "env_policy": "binary_override_strip_ggml" if binary_dir else "canonical",
-        "kmp_blocktime": 10 if binary_dir else None,
+        "env_policy": (
+            "binary_override_strip_ggml" if explicit_binary_override else "canonical"
+        ),
+        "kmp_blocktime": 10 if explicit_binary_override else None,
         "cache": {
             "context_tokens": context_tokens,
             "slots": slots,

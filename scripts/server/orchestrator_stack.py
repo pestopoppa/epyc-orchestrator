@@ -137,6 +137,21 @@ _WORKER_GENERAL_DEGRADED_FALLBACK = {
     "context_tokens": 16384,
 }
 
+def _kernel_server_binary(backend: str) -> Path:
+    """Resolve a production server binary by BACKEND, with a safe last resort.
+
+    Prefers the stable kernel layer so a build-path literal never decides what a
+    GPU lane actually launches. Falls back to the previously-hardcoded path only
+    if the layer is unavailable, so this cannot make a working host worse.
+    """
+    try:
+        from src.registry.kernel_paths import server_binary
+
+        return server_binary(backend)
+    except Exception:
+        return Path(f"/mnt/raid0/llm/llama.cpp/build{'-hip' if backend == 'gpu' else ''}/bin/llama-server")
+
+
 _CPU_ONLY_DEVICE_FLAGS = ("--device", "-dev")
 _CPU_ONLY_DRAFT_DEVICE_FLAGS = ("--device-draft", "-devd")
 
@@ -938,7 +953,9 @@ def _build_gpu_shadow_lane_command(port: int, numa_instance: int = 0) -> list[st
         _runtime_string(
             runtime,
             "binary_path",
-            "/mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server",
+            # Backend, not a build path. A literal here is how a GPU lane silently
+            # acquires whatever that directory happens to contain.
+            str(_kernel_server_binary("gpu")),
         ),
         "-m",
         _runtime_string(requirements, "model_path", ""),

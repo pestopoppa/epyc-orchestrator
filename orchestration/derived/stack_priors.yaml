@@ -48,7 +48,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-31T20:12:19Z'
+compiled_at: '2026-07-31T21:35:49Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -56,31 +56,31 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: 0b918c85f46726e380527b8f86058c38c0cb36305bed262ea94d6eccf7ef9984
-    repo_commit: a3cfe65e
+    repo_commit: c1a004bf
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 17ad2c7c822b0bfdee0b08e808a3df4918771448a2956d29d9134d1a67f457da
-    repo_commit: a3cfe65e
+    sha256: e73f303d49ce4d0ceb0199c8541cae14f2a6ca28f2c51e803f471e1ed19fad25
+    repo_commit: c1a004bf
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: c0927095a97028adca2744a90bf2fb8f0555df52eacf6abb4f8dbcb6bef80281
-    repo_commit: a3cfe65e
+    repo_commit: c1a004bf
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: c70b4ac6b9fe2562f7876c8da677ced2570e59146c3dea772d08347c8eb4d78a
-    repo_commit: a3cfe65e
+    repo_commit: c1a004bf
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 3c0cb1adaa9adb2912363d24471d2d98757c50f706f76d38cc6b5a220c981e8a
-    repo_commit: a3cfe65e
+    repo_commit: c1a004bf
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: a3cfe65e
+    repo_commit: c1a004bf
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: a3cfe65e
+    repo_commit: c1a004bf
 roles:
   architect_general:
     role: architect_general
@@ -117,7 +117,7 @@ roles:
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
+          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -289,7 +289,7 @@ roles:
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
+          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -432,7 +432,7 @@ roles:
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
+          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -574,7 +574,7 @@ roles:
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
+          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -916,7 +916,7 @@ roles:
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
+          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -1092,7 +1092,7 @@ roles:
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
+          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -1259,7 +1259,7 @@ roles:
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
+          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -1444,7 +1444,7 @@ roles:
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
+          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -1622,7 +1622,7 @@ roles:
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
+          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -1753,7 +1753,7 @@ roles:
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
+          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
