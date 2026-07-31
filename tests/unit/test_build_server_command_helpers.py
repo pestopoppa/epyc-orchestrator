@@ -836,10 +836,15 @@ def test_eval_batch_frontdoor_command_uses_pbench3_serving_shape() -> None:
     assert _flag_value(cmd, "--port") == "18070"
     assert _flag_value(cmd, "-np") == "8"
     assert _flag_value(cmd, "-c") == "32768"
-    assert _flag_value(cmd, "-t") == "96"
+    # 2026-07-31 HALF FLEET: 18070 sits on NUMA_HALF_A, which is 48 physical cores.
+    # The prior value 96 pinned the 2x SMT oversubscription that 982adb0c removed.
+    assert _flag_value(cmd, "-t") == "48"
     assert _flag_value(cmd, "-ub") == "8192"
     assert _flag_value(cmd, "-ctk") == "q8_0"
     assert _flag_value(cmd, "-ctv") == "q8_0"
+    # CORRECT AS WRITTEN — do not "fix" this to ngram-mod,draft-mtp. Master reversed
+    # the composed recipe at a126e43d; derived/stack_priors.yaml has not been
+    # regenerated, so this assertion fails against stale data, not a stale expectation.
     assert _flag_value(cmd, "--spec-type") == "draft-mtp"
     assert _flag_value(cmd, "--spec-draft-n-max") == "4"
     assert "--jinja" in cmd
@@ -1028,14 +1033,25 @@ def test_start_server_worker_pool_forwards_numa_instance_to_prefix(tmp_path, mon
     _assert_detached_popen(popen)
 
 
-def test_worker_general_numa_policy_is_full_instance_only() -> None:
+def test_every_instance_interleaves_over_only_the_nodes_it_spans() -> None:
+    """REPLACES test_worker_general_numa_policy_is_full_instance_only (2026-07-31).
+
+    That test asserted the sub-full instances carry NO numactl policy. Post-982adb0c
+    that is the defect, not the contract: a cpuset spanning two NPS4 nodes with no
+    policy places weights on nodes its threads cannot reach locally, which is what
+    cost frontdoor and ingest_long_context ~2x. It would have failed the fix rather
+    than the bug, so it is replaced rather than adjusted.
+    """
     full_prefix = oss._numa_prefix("worker_general", 0)
-    quarter_prefix = oss._numa_prefix("worker_general", 1)
+    half_a_prefix = oss._numa_prefix("worker_general", 1)
+    half_b_prefix = oss._numa_prefix("worker_general", 2)
 
     assert full_prefix[:3] == ["numactl", "--interleave=all", "--"]
-    assert quarter_prefix[:2] == ["taskset", "-c"]
-    assert "numactl" not in quarter_prefix
-    assert "--interleave=all" not in quarter_prefix
+    assert half_a_prefix[:3] == ["numactl", "--interleave=0,1", "--"]
+    assert half_b_prefix[:3] == ["numactl", "--interleave=2,3", "--"]
+    # A half must never interleave over all four nodes — that is the original defect.
+    assert "--interleave=all" not in half_a_prefix
+    assert "--interleave=all" not in half_b_prefix
 
 
 def test_role_level_numa_policy_still_applies_to_all_instances() -> None:
