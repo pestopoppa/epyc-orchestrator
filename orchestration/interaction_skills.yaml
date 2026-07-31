@@ -1,4 +1,65 @@
 interaction_skills:
+  # architect_critic — Qwen3.5-122B-A10B UD-Q4_K_M, CPU. Deliberately NOT a
+  # routed role: it receives no traffic of its own. architect_general (or the
+  # autopilot planner) requests its opinion on specific deep-reasoning tasks via
+  # consult(); it never sits in the normal escalation path.
+  #
+  # NOTE ON max_queue_wait_ms / max_output_tokens: the 122B decodes at roughly
+  # 8 t/s on CPU, so a 600-token critique is ~75 s of decode. The long queue
+  # wait is deliberate — this is a considered consult, not an inline check like
+  # architect_general.review_before_commit (400 tokens, 2 s wait).
+  architect_critic:
+    critique_plan:
+      kind: consult
+      description: >
+        Adversarial review of a proposed plan before execution. Primary consumer
+        is the autopilot planner cycle; architect_general may also request it for
+        deep-reasoning tasks where a second opinion is worth the latency.
+      output_schema:
+        type: object
+        required: [fatal_flaws, unstated_assumptions, should_not_build, verdict, confidence]
+        properties:
+          fatal_flaws:
+            type: array
+            description: Reasons this plan fails outright, not stylistic objections.
+            items:
+              type: string
+          unstated_assumptions:
+            type: array
+            description: Things the plan takes for granted that have not been established.
+            items:
+              type: string
+          should_not_build:
+            type: array
+            description: >
+              THE DELETE LENS. Parts of the plan to cut, not fix. Required because
+              an adversarial reviewer that can only ADD mechanism reliably makes
+              plans bigger — every critique becomes another component. A critic
+              with no authority to subtract is a complexity pump.
+            items:
+              type: string
+          simpler_alternative:
+            type:
+              - string
+              - "null"
+            description: A materially smaller approach that achieves the same goal, or null.
+          verdict:
+            type: string
+            enum: [proceed, proceed_with_changes, reconsider]
+          confidence:
+            type: number
+            minimum: 0
+            maximum: 1
+        additionalProperties: false
+      max_output_tokens: 600
+      scheduler_defaults:
+        priority: background
+        workload_class: consult
+        max_queue_wait_ms: 15000
+        cancellable: true
+      tools_budget: 0
+      cache_ttl_seconds: 3600
+
   architect_general:
     review_before_commit:
       kind: consult
