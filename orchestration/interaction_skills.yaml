@@ -15,6 +15,14 @@ interaction_skills:
   # that cost explicitly ("it costs us very little"), with the worst case being that
   # it is rarely selected.
   #
+  # THROUGHPUT (category=OPTIMUM, full instance, canonical placement, draft-mtp):
+  #   24.00 tok/s short context, 15.76 tok/s long context.
+  # So a 600-token critique is ~25 s short-context, ~38 s long-context.
+  # An earlier version of this comment said "roughly 8 t/s ... ~75 s". That was wrong:
+  # 8.21 is a Qwen3-235B-A22B figure that had been left unlabelled in
+  # architect_general's performance block since before the 2026-03-19 model swap
+  # (quarantined under superseded_model_history in the master registry on 2026-07-31).
+  #
   # NOTE ON max_queue_wait_ms / max_output_tokens: the 122B decodes at roughly
   # 8 t/s on CPU, so a 600-token critique is ~75 s of decode. The long queue
   # wait is deliberate — this is a considered consult, not an inline check like
