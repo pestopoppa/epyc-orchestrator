@@ -35,17 +35,28 @@ Key findings (2026-03-18 benchmarks, refined through 2026-05-08):
 - mlock gives 30× latency improvement under memory pressure (S2)
 - Total mlock budget: ~701 GB of 1.13 TB (62%), leaving ~429 GB for KV + OS
 
-⚠ NO WIRING CHANGE IS AUTHORISED BY THE 2026-07-30 NOTES IN THIS FILE.
-Every 2026-07-30 annotation here is COMMENT-ONLY; this module is deliberately
-behaviourally unchanged. The numbers above are OBSERVATION-GRADE: the protocol
-P-BENCH-PLACEMENT-1 (epyc-inference-research/docs/protocols/
-numa-placement-measurement-protocol.md) has a MEASUREMENT.md registry entry
-that is STAGED, not applied, so none of this may gate a keep / revert / deploy
-/ promote decision. Changing the cpusets is a production serving-path change:
-operator-gated, owned by the session that owns the inference, and it would also
-break comparability with the AutoPilot operating point currently being
-re-anchored against. Analysis: epyc-root handoffs/active/
-numa-placement-defect-20260730.md.
+WIRING CHANGE APPLIED 2026-07-30 (operator-ratified). This block previously read
+"NO WIRING CHANGE IS AUTHORISED … this module is deliberately behaviourally
+unchanged … P-BENCH-PLACEMENT-1 … is STAGED, not applied". Both clauses are now
+false and are corrected rather than deleted, so the transition stays auditable:
+
+  * P-BENCH-PLACEMENT-1 was RATIFIED 2026-07-30 (epyc-root commit 07b7dcab) into
+    MEASUREMENT.md §2 and the CPU annex measurement/protocols/bench-cpu.md.
+    Figures taken under it are decision-grade within its scope — subject to its
+    own gates, which ratification does not waive.
+  * The topology was changed: quarters retired, every quarterable role now runs
+    1 full + 2 halves. See the HALF FLEET block below and the per-role entries.
+
+Two invariants are now ASSERTED AT IMPORT (see _assert_instance_invariants at
+the end of this file), because both were derivable from the cpuset all along and
+a mismatch is therefore always a bug: -t must equal the cpuset's PHYSICAL core
+count, and any cpuset spanning more than one NPS4 node must declare a numactl
+policy. Before today 15/19 instances violated the first and 17/19 the second,
+including exactly the two later measured at 2.16x and 1.85x below canonical.
+
+Analysis: epyc-root handoffs/active/numa-placement-defect-20260730.md.
+Registration gate for any new model: epyc-inference-research
+docs/protocols/model-registration-runbook.md (MRG-1).
 """
 
 from __future__ import annotations
@@ -103,6 +114,81 @@ NUMA_NODE1 = ("48-95,144-191", 96)
 # (matches the canonical bench recipe used by Probe B 2026-05-04).
 NUMA_FULL = ("0-95", 96)
 
+# ── 2026-07-30 HALF FLEET (operator-ratified) ────────────────────────────────
+# Same cpusets as NUMA_NODE0/NUMA_NODE1 but with the CORRECT thread count. Each
+# half holds 48 PHYSICAL cores (0-47 or 48-95) plus their 48 SMT siblings, so -t
+# is 48, not 96. NUMA_NODE0[1] / NUMA_NODE1[1] are both 96 and reusing them for a
+# half instance silently re-introduces 2x SMT oversubscription — measured cost
+# -13% per-stream and -8.5% aggregate at np=4. Do not reuse them here.
+#
+#   HALF_A = NPS4 nodes 0+1. GPU-DISJOINT. The GPU shadow lane pins host threads
+#            to logical 184-191, which fold to physical 88-95 = region q3;
+#            fold_smt_to_physical overlap with "0-47,96-143" is EMPTY. Measured
+#            under a bandwidth-generating lane proxy, a 0-95 full instance lost
+#            34% while this half lost nothing.
+#   HALF_B = NPS4 nodes 2+3. NOT GPU-disjoint — it literally contains 72-95 and
+#            168-191, so it IS a physical co-tenant of the lane.
+#
+# Pair each with its matching interleave list (interleave=0,1 / interleave=2,3).
+# --interleave=all on a half would place weights on nodes its threads cannot
+# reach locally, which is the same defect class this fleet exists to fix.
+NUMA_HALF_A = ("0-47,96-143", 48)
+NUMA_HALF_B = ("48-95,144-191", 48)
+
+# ── Import-time invariants (2026-07-30) ──────────────────────────────────────
+# Two of the three per-instance fields are DERIVABLE from the cpuset, so a
+# mismatch is always a bug rather than a choice. Asserting here — a leaf module,
+# so no import cycle — makes the 2026-07-30 defect class structurally
+# unreachable rather than merely fixed.
+#
+# Before today 15/19 instances violated the thread rule and 17/19 the policy
+# rule, including exactly the two measured at 2.16x and 1.85x below canonical.
+# All 13 current instances satisfy both.
+_NPS4_NODES = {0: "0-23,96-119", 1: "24-47,120-143",
+               2: "48-71,144-167", 3: "72-95,168-191"}
+
+
+def _parse_cpus(spec: str) -> set[int]:
+    out: set[int] = set()
+    for part in spec.split(","):
+        if "-" in part:
+            lo, hi = part.split("-")
+            out.update(range(int(lo), int(hi) + 1))
+        else:
+            out.add(int(part))
+    return out
+
+
+def _nodes_touched(spec: str) -> list[int]:
+    cpus = _parse_cpus(spec)
+    return sorted(n for n, s in _NPS4_NODES.items() if cpus & _parse_cpus(s))
+
+
+def _assert_instance_invariants() -> None:
+    """Fail loudly at import if any instance contradicts its own cpuset."""
+    problems: list[str] = []
+    for role, cfg in NUMA_CONFIG.items():
+        per = cfg.get("numactl_policy_instances") or {}
+        one = cfg.get("numactl_policy")
+        for idx, (cpus, port, threads) in enumerate(cfg.get("instances", [])):
+            phys = len([c for c in _parse_cpus(cpus) if c < 96])
+            if threads != phys:
+                problems.append(
+                    f"{role}[{idx}] :{port} -t {threads} but cpuset {cpus!r} holds "
+                    f"{phys} PHYSICAL cores — SMT oversubscription"
+                )
+            nodes = _nodes_touched(cpus)
+            if len(nodes) > 1 and not (per.get(idx) or one):
+                problems.append(
+                    f"{role}[{idx}] :{port} cpuset {cpus!r} spans NPS4 nodes {nodes} "
+                    f"with NO numactl policy — weights land wherever they first touch"
+                )
+    if problems:
+        raise AssertionError(
+            "stack_numa NUMA_CONFIG invariant violation:\n  " + "\n  ".join(problems)
+        )
+
+
 # Per-role NUMA configurations.
 # "instances" is a list of (cpu_list, port, threads) tuples.
 # Roles with multiple instances get round-robin routing (requires orchestrator support).
@@ -112,36 +198,36 @@ NUMA_CONFIG: dict[str, dict] = {
     # Pre-warm strategy (2026-03-29): 5 instances total, +19 GB (95 GB total for frontdoor).
     # Concurrency router: single session → full (96t), concurrent → quarter (48t) instances.
     "frontdoor": {
+        # 2026-07-30 HALF FLEET. Quarters retired; 1 full + 2 halves.
+        # Superseded the 2026-05-24 revert, whose justification (an April
+        # 2026-04-17 head-to-head reading 27.06 vs 26.60 t/s) is RETRACTED: it
+        # predates the 2026-04-24 NPS4 reboot, when "0-47,96-143" genuinely was
+        # one NUMA node, and its source CSV records spec == "baseline".
+        # Re-measured 2026-07-30 under P-BENCH-PLACEMENT-1, llama-bench tg128
+        # r=10: as-wired 10.83 +/- 0.04 vs canonical 23.36 +/- 0.11 — a 2.16x
+        # loss, not a 1.7% win.
+        # Quarters retired because they lose at every matched concurrency, and
+        # the margin WIDENS with load (aggregate tok/s at T=8: full 124.56,
+        # 2xhalf 104.53, 4xquarter 89.25).
         "instances": [
-            # 2026-05-24 REVERT: full instance returned to NUMA_NODE0 (cores
-            # 0-47, SMT siblings 96-143) WITHOUT numactl_policy. April 2026-04-17
-            # 3-rep head-to-head bench on Qwen3.6-35B-A3B Q8 (recorded in
-            # progress/2026-05/2026-05-20.md lines 671-680):
-            #   Config A: numactl --interleave=all + 96t  → 26.60 t/s
-            #   Config B: NUMA_NODE0 (taskset 0-47,96-143) + 96t  → 27.06 t/s
-            # B beats A by 1.7% — A3B MoE activates only ~3B/35B params per
-            # token, so memory traffic is low and cache locality dominates over
-            # channel parallelism. NUMA_NODE0 is correct.
-            # An earlier 2026-05-24 commit (6657bbd) migrated this to
-            # NUMA_FULL+interleave=all citing "consistency with worker_general /
-            # architect_general"; that ignored the April head-to-head. Reverted.
-            (NUMA_NODE0[0], 8070, NUMA_NODE0[1]),  # full: 1×96t on cores 0-47+SMT
-            (NUMA_Q0A[0], 8080, NUMA_Q0A[1]),      # quarter 0
-            (NUMA_Q0B[0], 8180, NUMA_Q0B[1]),      # quarter 1
-            (NUMA_Q1A[0], 8280, NUMA_Q1A[1]),      # quarter 2
-            (NUMA_Q1B[0], 8380, NUMA_Q1B[1]),      # quarter 3
+            (NUMA_FULL[0], 8070, NUMA_FULL[1]),      # full   0-95, interleave=all
+            (NUMA_HALF_A[0], 8080, NUMA_HALF_A[1]),  # half A nodes 0,1 — GPU-disjoint
+            (NUMA_HALF_B[0], 8180, NUMA_HALF_B[1]),  # half B nodes 2,3 — GPU co-tenant
         ],
-        "full_instance_idx": 0,  # index of 1×96t instance in list above
-        # WP-7/J6 (2026-05-26): J5 ratified frontdoor quarters scale 1.37-1.67x
-        # (all 8 disjoint pairs allow, incl. full+quarter); placement SM places
-        # 3 disjoint live. Prefer quarters under burst, full for solo.
+        "full_instance_idx": 0,
+        # Prefer the split shape under burst, full for solo. See the enum note in
+        # src/scheduling/placement_policy.py — "split" resolves to whatever
+        # sub-full shape the role declares, which is now halves, not quarters.
         "placement_policy": "burst_prefer_quarters",
-        "mlock": True,   # 19 GB per instance — latency-critical (S2: 30x improvement)
-        # NOTE: NPS4 single-quarter at -t 48 gives ~8.90 t/s on this model per
-        # Phase 0.5 (Qwen3-Coder-30B Q4's 46.6 t/s NPS4 sweep does NOT transfer
-        # to 35B Q8 — Q8 needs more BW than one quarter provides). The 4
-        # quarter instances above will run noticeably slower than the full;
-        # ConcurrencyAwareBackend prefers the full for solo requests anyway.
+        "numactl_policy_instances": {
+            0: "interleave=all",
+            1: "interleave=0,1",
+            2: "interleave=2,3",
+        },
+        "mlock": True,
+        # TUNING SURFACE: the speculation recipe is NOT here. It lives in the
+        # master registry's `acceleration` block for this role, and that single
+        # field is the only thing an ngram change needs to touch.
     },
     # P-BENCH-3/A7 eval-batch serving lane. Warm/explicit-only; normal stack start
     # does not launch it. Uses the frontdoor model on a dedicated high port with
@@ -150,11 +236,20 @@ NUMA_CONFIG: dict[str, dict] = {
     # so existing frontdoor region locks remain conservative when traffic is
     # routed to this endpoint.
     "eval_batch_frontdoor": {
+        # 2026-07-30: two corrections, both the same defect class as the fleet fix.
+        # (1) -t was NUMA_NODE0[1] = 96 on a cpuset holding 48 PHYSICAL cores, i.e.
+        #     2x SMT oversubscription. Measured cost elsewhere: -13% per-stream.
+        # (2) numactl_policy was "interleave=all" on a cpuset spanning only NPS4
+        #     nodes 0+1 — that places a quarter of the weights on nodes 2 and 3,
+        #     which this instance's threads cannot reach locally. interleave=0,1
+        #     matches the cpuset.
+        # Not in the contention matrix's measured role set, so the -t change does
+        # not move the matrix fingerprint.
         "instances": [
-            (NUMA_NODE0[0], 18070, NUMA_NODE0[1]),
+            (NUMA_HALF_A[0], 18070, NUMA_HALF_A[1]),
         ],
         "mlock": True,
-        "numactl_policy": "interleave=all",
+        "numactl_policy": "interleave=0,1",
     },
     # coder_escalation NUMA_CONFIG entry REMOVED 2026-05-09 — consolidated onto
     # frontdoor's server (same Qwen3.6-35B-A3B Q8 GGUF since 2026-05-06 swap).
@@ -170,6 +265,29 @@ NUMA_CONFIG: dict[str, dict] = {
     # epyc-inference-research/data/cpu_optimization/2026-05-04-qwen35-122b-arch-probe/
     # Reopen 4× per-NUMA-node wiring (16.86 t/s aggregate) ONLY if architect_general workload
     # shifts to 4+ concurrent batch eval — see findings_phase2.md.
+    # ROLE DEFINITION (operator, 2026-07-30) — read this before "fixing" the
+    # all-region hold below. This role is a **reasoning boost / critic**, invoked
+    # only in select circumstances: autopilot planning when running fully local,
+    # and dedicated high-value focused reasoning sessions. It is NOT a general
+    # serving role and is not expected to carry routine traffic.
+    #
+    # Its single full instance on 0-95 holds ALL FOUR region locks, so while it
+    # runs it serializes the entire CPU NUMA topology. That is INHERENT AND
+    # ACCEPTED for this role, not a defect: there is no sub-full shape to demote
+    # to, and a 122B at Q4_K_M has nothing smaller to be. Do not "fix" it by
+    # adding a placement_policy — the other roles' burst_prefer_* exists because
+    # they HAVE splits; this one does not.
+    #
+    # The expectation is that autopilot learns to mostly disregard it, because
+    # the whole-machine lock is expensive relative to the reasoning gain on most
+    # requests. For that to be learnable the cost must be ATTRIBUTABLE — a
+    # whole-machine slowdown with no holder attribution is exactly the shape that
+    # produced the mislearned `dual-half-negative` prior. See the autopilot
+    # hygiene audit: `cpu_region_lock._acquire_one_with_timeout` already computes
+    # wait seconds and resolves holders, so aggregating
+    # `region_lock_wait_s_by_holder: {(role, shape_id): sec}` into the journal
+    # turns this from an unattributable slowdown into a regressable per-role
+    # scalar. Land that telemetry BEFORE exposing any routing knob for this role.
     "architect_general": {
         "instances": [
             (NUMA_FULL[0], 8083, NUMA_FULL[1]),  # 1×96t physical cores, all 4 NUMA nodes
@@ -196,14 +314,32 @@ NUMA_CONFIG: dict[str, dict] = {
     # head-to-head data exists for Qwen3-Next-80B Q4, but it's an A3B MoE
     # like Qwen3.6 so cache-locality argument applies — keep parity).
     "ingest_long_context": {
+        # 2026-07-30 HALF FLEET. The full previously sat on NUMA_NODE0
+        # ("0-47,96-143") with NO memory policy at all, straddling NPS4 nodes 0+1
+        # so every weight page landed wherever it was first touched. Measured
+        # cost under P-BENCH-PLACEMENT-1: 12.42 -> 22.92 tok/s, a 1.85x loss.
+        # This is also the ONE role where the split shape beats the full under
+        # load rather than merely trailing it — aggregate tok/s: T=4 half 60.88
+        # vs full 58.04; T=8 half 86.17 vs full 72.53. The SSM/MoE hybrid
+        # behaves differently from the dense-attention MoEs.
         "instances": [
-            (NUMA_NODE0[0], 8085, NUMA_NODE0[1]),    # full: 1×96t on cores 0-47+SMT
-            (NUMA_Q0A[0], 8185, NUMA_Q0A[1]),        # quarter 0
-            (NUMA_Q0B[0], 8285, NUMA_Q0B[1]),        # quarter 1
-            (NUMA_Q1A[0], 8385, NUMA_Q1A[1]),        # quarter 2
-            (NUMA_Q1B[0], 8485, NUMA_Q1B[1]),        # quarter 3
+            (NUMA_FULL[0], 8085, NUMA_FULL[1]),      # full   0-95, interleave=all
+            (NUMA_HALF_A[0], 8185, NUMA_HALF_A[1]),  # half A nodes 0,1 — GPU-disjoint
+            (NUMA_HALF_B[0], 8285, NUMA_HALF_B[1]),  # half B nodes 2,3 — GPU co-tenant
         ],
         "full_instance_idx": 0,
+        # Was ABSENT, so this role fell through to SOLO_PREFER_FULL and its full
+        # instance — which holds all four region locks — could be acquired by a
+        # single solo request and serialize the machine. That is the DISPATCH-A
+        # shape (2026-07-21). frontdoor and worker_general were protected; this
+        # role was not. Parity, not a preference: autopilot can tune it via the
+        # AXA3 placement_policy knob surface once the enum is shape-agnostic.
+        "placement_policy": "burst_prefer_quarters",
+        "numactl_policy_instances": {
+            0: "interleave=all",
+            1: "interleave=0,1",
+            2: "interleave=2,3",
+        },
         "mlock": True,    # ~46 GB per instance — latency-critical for ingest pipeline (Stage 1 of three_stage_summarization since 2026-05-06)
     },
     # Worker: gemma4-26B-A4B Q4_K_M MTP (16 GB) — pre-warm: 1×96t + 4×48t.
@@ -223,11 +359,15 @@ NUMA_CONFIG: dict[str, dict] = {
             # their per-quarter pinning since the full canonical recipe is incompatible
             # with the 4×concurrent design. Keep interleave scoped to idx0 so
             # --no-mmap quarters can first-touch local private pages.
-            ("0-95", 8072, 96),                    # full canonical (replaces NUMA_NODE0)
-            (NUMA_Q0A[0], 8082, NUMA_Q0A[1]),      # quarter 0
-            (NUMA_Q0B[0], 8182, NUMA_Q0B[1]),      # quarter 1
-            (NUMA_Q1A[0], 8282, NUMA_Q1A[1]),      # quarter 2
-            (NUMA_Q1B[0], 8382, NUMA_Q1B[1]),      # quarter 3
+            # 2026-07-30 HALF FLEET. Quarters retired — they lose at every
+            # matched concurrency (gemma aggregate tok/s at T=8: full 256.77,
+            # 2xhalf 200.12, 4xquarter 150.57) and the margin widens with load.
+            # The full keeps "0-95" + interleave=all: gemma4 MTP asserts
+            # "tensor buffer not set" on a one-socket cpuset, per the 2026-05-08
+            # note this replaces.
+            (NUMA_FULL[0], 8072, NUMA_FULL[1]),      # full   0-95, interleave=all
+            (NUMA_HALF_A[0], 8082, NUMA_HALF_A[1]),  # half A nodes 0,1 — GPU-disjoint
+            (NUMA_HALF_B[0], 8182, NUMA_HALF_B[1]),  # half B nodes 2,3 — GPU co-tenant
         ],
         "full_instance_idx": 0,
         # WP-7/J6 (2026-05-26): J5 -t48 re-bench → same_role borderline (mean
@@ -257,7 +397,14 @@ NUMA_CONFIG: dict[str, dict] = {
         "placement_policy": "burst_prefer_quarters",
         "mlock": True,
         "spec_overrides": {"draft_max": 2, "p_split": 0},  # gemma4 MTP recipe (was dm=8 for Qwen3-Coder)
-        "numactl_policy_instances": {0: "interleave=all"},  # required for gemma4 MTP idx0
+        # Every instance now declares a policy. Previously only idx0 did, which
+        # left the sub-full instances on default first-touch — the defect class
+        # that cost frontdoor and ingest_long_context ~2x for months.
+        "numactl_policy_instances": {
+            0: "interleave=all",   # required for gemma4 MTP idx0
+            1: "interleave=0,1",
+            2: "interleave=2,3",
+        },
     },
     # Qwen2.5-VL-7B Q4_K_M (~4 GB) — single instance on Q0B at 24t.
     # Phase 0.5 bench (2026-05-24) showed 24t = 11.39 t/s, 48t = 11.30 t/s
@@ -266,16 +413,36 @@ NUMA_CONFIG: dict[str, dict] = {
     # quarters, all using 24t each = 16 GB unnecessary mlock budget. Reverted
     # to the original single-quarter shape: this role just doesn't have
     # enough request volume to justify concurrent-serving topology.
+    # NOTE — CROSS-ROLE mmap sharing. worker_vision and vision_escalation are two
+    # SEPARATE roles pinned to two DIFFERENT NPS4 nodes that point at ONE shared
+    # VL GGUF. Under shared mmap its pages are placed once, by whichever loads
+    # first, so at most one of them can ever be node-local: both measured 0.25
+    # local. This refutes the intuition that a single-instance role is immune to
+    # the shared-mmap defect — here the sharing is across roles. Each needs an
+    # explicit membind AND no_mmap in the registry, or the membind is accepted
+    # and silently does nothing.
     "worker_vision": {
         "instances": [(NUMA_Q0B[0], 8086, 24)],
         "mlock": True,    # ~4 GB — minimal footprint
+        "numactl_policy": "membind=1",   # NUMA_Q0B == NPS4 node1
     },
-    # MiniCPM-o vision escalation runs on MI210 with a small 24t host quarter
-    # for request/image preprocessing. Keep it distinct from worker_vision so
-    # ports 8086 and 8087 can coexist without overlapping CPU masks.
+    # The vision escalation lane runs on MI210 with a small 24t host quarter for
+    # request/image preprocessing. Keep it distinct from worker_vision so ports
+    # 8086 and 8087 can coexist without overlapping CPU masks.
+    #
+    # 2026-07-31: this comment previously named MiniCPM-o as the tenant. MiniCPM-o
+    # is DEPRECATED and its weights are deleted — the 2026-07-18 activation policy
+    # that would have flipped this lane to it is REVOKED. On a 42-question
+    # OCRBench+ChartQA set MiniCPM-o scored 31/42 against the Qwen2.5-VL-7B
+    # incumbent's 35/42, i.e. promotion would have been a quality regression.
+    # The lane itself is tenant-agnostic and still valid; which model serves on it
+    # is registry data. The forward candidate, if this is ever revisited, is
+    # Qwen3-VL-30B-A3B Q4_K_M (36/42). The 24t/membind=3 sizing below was chosen
+    # for a ~6 GB host-visible VL tenant and should be re-derived for any new one.
     "vision_escalation": {
         "instances": [(NUMA_Q1B[0], 8087, 24)],
         "mlock": True,    # ~6 GB host-visible + MI210 resident VL lane
+        "numactl_policy": "membind=3",   # NUMA_Q1B == NPS4 node3
     },
 }
 
@@ -342,3 +509,6 @@ def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
         return prefix
     # Fallback: no pinning (embedders, fast workers, dev mode)
     return []
+
+
+_assert_instance_invariants()

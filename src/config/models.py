@@ -268,33 +268,36 @@ def _get_default_stack_priors_path() -> str:
     )
 
 
+# 2026-07-30 HALF FLEET. Quarters retired; these last-resort literals dropped
+# the freed ports 8280/8380/8282/8382/8385/8485 (and vision_escalation's
+# 8187/8287/8387/8487, which were never launched at all — that role is and
+# was single-instance). A stale port here is not cosmetic: dispatch fails
+# OPEN on a port it cannot resolve to a topology index, so an unknown
+# endpoint yields NO region lock rather than an error.
 _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
     "frontdoor": (
         "full:http://localhost:8070,http://localhost:8080,"
-        "http://localhost:8180,http://localhost:8280,http://localhost:8380"
+        "http://localhost:8180"
     ),
     # Frontdoor-fleet alias (registry shared_with, 2026-07-22 reconciliation):
     # last-resort literal mirrors the host fleet (drift guard enforces parity).
-    "coder_escalation": "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380",
+    "coder_escalation": "full:http://localhost:8070,http://localhost:8080,http://localhost:8180",
     "worker_general": (
         "full:http://localhost:8072,http://localhost:8082,"
-        "http://localhost:8182,http://localhost:8282,http://localhost:8382"
+        "http://localhost:8182"
     ),
     "worker_math": (
         "full:http://localhost:8072,http://localhost:8082,"
-        "http://localhost:8182,http://localhost:8282,http://localhost:8382"
+        "http://localhost:8182"
     ),
     "worker_vision": "http://localhost:8086",
-    "vision_escalation": (
-        "full:http://localhost:8087,http://localhost:8187,"
-        "http://localhost:8287,http://localhost:8387,http://localhost:8487"
-    ),
+    "vision_escalation": "http://localhost:8087",
     "worker_fast": "http://localhost:8102",
-    "worker_summarize": "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380",  # frontdoor-fleet alias, parity-guarded
+    "worker_summarize": "full:http://localhost:8070,http://localhost:8080,http://localhost:8180",  # frontdoor-fleet alias, parity-guarded
     "architect_general": "http://localhost:8083",
     "ingest_long_context": (
         "full:http://localhost:8085,http://localhost:8185,"
-        "http://localhost:8285,http://localhost:8385,http://localhost:8485"
+        "http://localhost:8285"
     ),
     "api_url": "http://localhost:8000",
     "ocr_server": "http://localhost:9001",

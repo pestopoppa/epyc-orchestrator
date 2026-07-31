@@ -65,12 +65,58 @@ class FleetParityError(FleetBuildError):
 # fallback per FLEET — never per role — so the degraded path still resolves
 # without re-introducing per-role copies. Ports are resolved against
 # NUMA_CONFIG like any other endpoint set (full/quarter alignment included).
-_FLEET_DEGRADED_FALLBACK_PORTS: dict[str, tuple[int, ...]] = {
-    "frontdoor": (8070, 8080, 8180, 8280, 8380),
-    "worker_general": (8072, 8082, 8182, 8282, 8382),
-    "architect_general": (8083,),
-    "ingest_long_context": (8085, 8185, 8285, 8385, 8485),
-}
+def _derive_degraded_fallback_ports() -> dict[str, tuple[int, ...]]:
+    """Degraded-mode ports, DERIVED from NUMA_CONFIG rather than restated.
+
+    2026-07-30. These were literal 5-port tuples per fleet, and they went stale
+    the moment the topology changed from 1 full + 4 quarters to 1 full + 2
+    halves — advertising 8280/8380/8282/8382/8385/8485, which no longer exist.
+    That is not a cosmetic staleness: several dispatch paths fail OPEN on a port
+    they cannot resolve to a topology index. ``backend.py`` falls back to a
+    positional index, ``placement.py`` treats an empty region set as
+    overlap-free, and ``cpu_region_lock`` yields NO LOCK AT ALL for an unknown
+    ``(role, idx)``. A stale literal here is therefore a route to unlocked
+    dispatch, not merely a wrong number.
+
+    Deriving keeps the module's stated contract — the docstring already claimed
+    ports "are resolved against NUMA_CONFIG like any other endpoint set" — and
+    removes the second source of truth. If NUMA_CONFIG is unavailable (fresh
+    clone, no scripts/ on the path) this yields an empty mapping, and the caller
+    already handles that by skipping the fleet and leaving roles on the legacy
+    per-role build.
+    """
+    cfg = _default_numa_config()
+    out: dict[str, tuple[int, ...]] = {}
+    for role in ("frontdoor", "worker_general", "architect_general", "ingest_long_context"):
+        entry = cfg.get(role) if isinstance(cfg, Mapping) else None
+        instances = (entry or {}).get("instances") if isinstance(entry, Mapping) else None
+        if not instances:
+            continue
+        ports: list[int] = []
+        for inst in instances:
+            try:
+                ports.append(int(inst[1]))
+            except (TypeError, ValueError, IndexError):
+                continue
+        if ports:
+            out[role] = tuple(ports)
+    return out
+
+
+_FLEET_DEGRADED_FALLBACK_PORTS_CACHE: dict[str, tuple[int, ...]] | None = None
+
+
+def _fleet_degraded_fallback_ports() -> dict[str, tuple[int, ...]]:
+    """Lazily derive and cache. Deliberately NOT a module-level constant.
+
+    ``_default_numa_config`` is defined later in this module, so evaluating at
+    import time raises NameError. Deferring also means a caller that never hits
+    the degraded path never imports ``stack_numa`` at all.
+    """
+    global _FLEET_DEGRADED_FALLBACK_PORTS_CACHE
+    if _FLEET_DEGRADED_FALLBACK_PORTS_CACHE is None:
+        _FLEET_DEGRADED_FALLBACK_PORTS_CACHE = _derive_degraded_fallback_ports()
+    return _FLEET_DEGRADED_FALLBACK_PORTS_CACHE
 
 
 @dataclass(frozen=True)
@@ -351,7 +397,7 @@ def build_fleets_and_bindings(
         degraded = False
         ports: list[int] | tuple[int, ...] = priors.get(fleet_id, [])
         if not ports:
-            ports = _FLEET_DEGRADED_FALLBACK_PORTS.get(fleet_id, ())
+            ports = _fleet_degraded_fallback_ports().get(fleet_id, ())
             degraded = bool(ports)
             if not ports:
                 _log.info(
