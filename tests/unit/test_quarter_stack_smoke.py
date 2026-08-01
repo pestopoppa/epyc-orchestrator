@@ -6,7 +6,16 @@ import json
 
 import httpx
 
+from scripts.server.stack_manifest import HOT_SERVERS, PORT_MAP
+from scripts.server.stack_numa import NUMA_CONFIG
 from scripts.smoke import quarter_stack_smoke as smoke
+
+# Ports the stack used to expose and no longer does. 8280/8380 and 8282/8382 were
+# frontdoor and worker_general quarters 4-5; 8385/8485 were ingest_long_context
+# quarters 4-5; 8087 was the standalone vision_escalation 7B, now an alias on
+# worker_vision's :8086 process. The hand-maintained EXPECTED_CHAT_PORTS literal
+# still probed all seven until 2026-08-01.
+RETIRED_CHAT_PORTS = frozenset({8280, 8380, 8282, 8382, 8385, 8485, 8087})
 
 
 class FakeResponse:
@@ -22,17 +31,46 @@ class FakeResponse:
         return self.body
 
 
-def test_topology_matches_closed_world_contract() -> None:
+def test_topology_sources_are_coherent() -> None:
     assert smoke.topology_errors() == []
-    assert smoke.EXPECTED_CHAT_PORTS == (
-        8070, 8080, 8180, 8280, 8380,
-        8072, 8082, 8182, 8282, 8382,
-        8085, 8185, 8285, 8385, 8485,
-        8083, 8086, 8087,
+
+
+def test_chat_ports_are_derived_from_the_launcher_hot_tier() -> None:
+    """The chat surface IS the manifest's computed HOT tier minus the embedders."""
+    assert smoke.EXPECTED_CHAT_PORTS == tuple(
+        server["port"] for server in HOT_SERVERS if not server.get("embedding")
     )
+    assert smoke.EXPECTED_CHAT_PORTS == smoke.expected_chat_ports()
+    assert smoke.EXPECTED_CHAT_PORTS  # non-empty
+    assert len(set(smoke.EXPECTED_CHAT_PORTS)) == len(smoke.EXPECTED_CHAT_PORTS)
 
 
-def test_run_smoke_is_sequential_and_writes_twenty_four_rows(tmp_path, monkeypatch) -> None:
+def test_derived_chat_ports_drop_retired_ports_and_pick_up_live_ones() -> None:
+    """Regression pin for the drift the hand-maintained literal had accumulated."""
+    derived = set(smoke.EXPECTED_CHAT_PORTS)
+
+    assert derived & RETIRED_CHAT_PORTS == set()
+    # Every NUMA-pinned chat instance the stack actually declares is probed.
+    for role in ("frontdoor", "worker_general", "ingest_long_context"):
+        for _cpus, port, _threads in NUMA_CONFIG[role]["instances"]:
+            assert port in derived, f"{role} instance on {port} is not probed"
+    # architect_critic (:8074) went HOT on 2026-08-01; the literal never listed it.
+    assert PORT_MAP["architect_critic"] in derived
+    # Aliases share their host process's port rather than adding one.
+    assert PORT_MAP["vision_escalation"] == PORT_MAP["worker_vision"]
+    assert PORT_MAP["coder_escalation"] == PORT_MAP["architect_general"]
+
+
+def test_topology_errors_flags_a_role_that_port_map_disagrees_about(monkeypatch) -> None:
+    """The coherence check has teeth: PORT_MAP drift must be reported."""
+    monkeypatch.setitem(smoke.PORT_MAP, "frontdoor", 9999)
+
+    errors = smoke.topology_errors()
+
+    assert any("frontdoor" in error and "9999" in error for error in errors)
+
+
+def test_run_smoke_is_sequential_and_writes_one_row_per_endpoint(tmp_path, monkeypatch) -> None:
     seen: list[str] = []
 
     def post(url: str, **_kwargs: object) -> FakeResponse:
@@ -48,8 +86,9 @@ def test_run_smoke_is_sequential_and_writes_twenty_four_rows(tmp_path, monkeypat
 
     assert smoke.run_smoke(output) == 0
     rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
-    assert len(rows) == 24
-    assert [row["port"] for row in rows] == list(smoke.EXPECTED_CHAT_PORTS + smoke.EXPECTED_EMBEDDER_PORTS)
+    expected_ports = list(smoke.EXPECTED_CHAT_PORTS + smoke.EXPECTED_EMBEDDER_PORTS)
+    assert len(rows) == len(expected_ports)
+    assert [row["port"] for row in rows] == expected_ports
     assert all(row["ok"] for row in rows)
     assert seen == [row["url"] for row in rows]
 
@@ -85,7 +124,7 @@ def test_endpoint_failure_is_recorded_without_fail_fast(tmp_path, monkeypatch) -
 
     assert smoke.run_smoke(output) == 1
     rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
-    assert len(calls) == 24
+    assert len(calls) == len(smoke.EXPECTED_CHAT_PORTS) + len(smoke.EXPECTED_EMBEDDER_PORTS)
     assert rows[0]["port"] == 8070 and rows[0]["ok"] is True
     assert rows[1]["port"] == 8080 and rows[1]["ok"] is False
     assert rows[-1]["port"] == 8095 and rows[-1]["ok"] is True

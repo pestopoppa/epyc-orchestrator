@@ -160,20 +160,52 @@ def _has_any_flag(cmd: list[str], flags: tuple[str, ...]) -> bool:
     return any(flag in cmd for flag in flags)
 
 
-def _append_cpu_only_device_args(cmd: list[str]) -> None:
-    """Pin stack-launched llama-server roles to CPU devices.
+def _append_device_args(cmd: list[str], flags: dict[str, Any] | None = None) -> None:
+    """Pin a role to its DECLARED device, defaulting to CPU when nothing is declared.
 
-    The production stack's text roles are CPU roles. A HIP-capable v7 binary will
-    otherwise auto-select ROCm0 for host op offload / draft sampling and regress
-    worker_general ngram+MTP throughput on CPU-only launches.
+    Was ``_append_cpu_only_device_args``, whose premise — "the production stack's
+    text roles are CPU roles" — was true when it landed and stopped being true at
+    the 2026-07-31 W1 cutover. It ASSUMED CPU rather than reading the declaration,
+    and because it runs last and unconditionally over every builder's argv, it
+    overwrote the answer for any builder that had not emitted a device itself.
+    ``_build_role_command`` was such a builder, so architect_general — declared
+    ``device: ROCm0``, ``ngl: all``, 36.7 GiB VRAM, and correctly resolved to the
+    HIP binary — launched as `build-hip/bin/llama-server ... --device none`: the
+    right binary with every device switched off, serving a 27B on 24 CPU threads
+    while reporting healthy (PID 1935263, rocm-smi VRAM 0.02%, observed
+    2026-08-01).
+
+    The CPU default is KEPT, not deleted: a role that declares no device is a CPU
+    role and pinning it to ``none`` is deliberate — a HIP-capable binary otherwise
+    auto-selects ROCm0 for host op offload / draft sampling and regresses
+    worker_general's ngram+MTP throughput. What changes is that "no device" now
+    means "none was declared" instead of "none was emitted".
+
+    The draft device follows the target's device unless separately declared.
+    Forcing ``--device-draft none`` under a GPU-resident target would strand a
+    NEXTN self-draft (whose draft head lives in the target's own GGUF) on the CPU.
     """
+    declared = flags.get("device") if isinstance(flags, dict) else None
+    declared = declared.strip() if isinstance(declared, str) and declared.strip() else None
+    declared_draft = flags.get("device_draft") if isinstance(flags, dict) else None
+    declared_draft = (
+        declared_draft.strip()
+        if isinstance(declared_draft, str) and declared_draft.strip()
+        else None
+    )
+
     if not _has_any_flag(cmd, _CPU_ONLY_DEVICE_FLAGS):
-        cmd.extend(["--device", "none"])
+        cmd.extend(["--device", declared or "none"])
     if (
         ("--spec-type" in cmd or "-md" in cmd)
         and not _has_any_flag(cmd, _CPU_ONLY_DRAFT_DEVICE_FLAGS)
     ):
-        cmd.extend(["--device-draft", "none"])
+        cmd.extend(["--device-draft", declared_draft or declared or "none"])
+
+
+# Pre-2026-08-01 name. Kept as an alias because the old name asserts a CPU-only
+# premise that is no longer true; new call sites should use _append_device_args.
+_append_cpu_only_device_args = _append_device_args
 
 
 def _repo_short_sha(path: Path | None = None) -> str | None:
@@ -325,6 +357,42 @@ def _append_spec_decode_args(
         cmd.extend(["--spec-ngram-mod-n-max", ngram_mod_n_max])
     if ngram_mod_n_match:
         cmd.extend(["--spec-ngram-mod-n-match", ngram_mod_n_match])
+
+
+# Compiled flag name -> (llama-server argument, allow a non-numeric token).
+# Declared in the registry's serving block, compiled into runtime.flags by
+# src/registry/stack_priors.py, emitted here. Kept as DATA so adding a declared
+# serving knob is a registry + compiler change, not a new branch in every builder.
+#
+# n_gpu_layers allows a string because the registry declares it both ways:
+# worker_vision as `n_gpu_layers: 999`, architect_general as `ngl: all`. Both are
+# valid llama-server values on this kernel.
+_RUNTIME_SERVING_FLAG_ARGS: tuple[tuple[str, str, bool], ...] = (
+    ("n_gpu_layers", "-ngl", True),
+    ("image_min_tokens", "--image-min-tokens", False),
+    ("cache_ram", "--cache-ram", False),
+)
+
+
+def _append_runtime_serving_flags(cmd: list[str], flags: dict[str, Any]) -> None:
+    """Emit the declared serving flags that the compiled priors carry.
+
+    Emitted ONLY when the compiled record declares them. Nothing here has a
+    fallback: these came from ``roles.<role>.serving`` / ``server_mode.<role>``, and
+    a launcher-side default would put a GPU-shaped flag on every CPU role — which is
+    precisely how a "sensible default" becomes an undeclared production setting.
+
+    ``0`` is a DECLARED value (``cache_ram: 0`` disables the prompt cache), so the
+    guard is ``is not None`` / ``>= 0``, never truthiness.
+    """
+    for key, arg, allow_str in _RUNTIME_SERVING_FLAG_ARGS:
+        value = flags.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) and value >= 0:
+            cmd.extend([arg, str(value)])
+        elif allow_str and isinstance(value, str) and value.strip():
+            cmd.extend([arg, value.strip()])
 
 
 def _append_runtime_kv_args(cmd: list[str], cache: dict[str, Any]) -> None:
@@ -620,10 +688,11 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
         device = flags.get("device") or VISION_ESCALATION_DEVICE
         if isinstance(device, str) and device:
             cmd.extend(["--device", device])
+        _append_runtime_serving_flags(cmd, flags)
         if cache.get("no_mmap", False) is True:
             cmd.append("--no-mmap")
         return cmd
-    # Qwen2.5-VL-7B - smaller worker model
+    # Qwen3-VL-30B-A3B-Instruct Q4_K_M on MI210 (2026-07-31 cutover from Qwen2.5-VL-7B).
     role_name = "worker_vision"
     requirements, runtime = _stack_prior_launch(role_name)
     cache = _runtime_cache(runtime)
@@ -654,6 +723,10 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
     device = flags.get("device")
     if isinstance(device, str) and device:
         cmd.extend(["--device", device])
+    # -ngl / --image-min-tokens / --cache-ram: declared in the registry's serving
+    # block, compiled into runtime.flags, emitted here. Without -ngl the server takes
+    # `--device ROCm0` and then offloads nothing, which is a GPU launch in name only.
+    _append_runtime_serving_flags(cmd, flags)
     if cache.get("no_mmap", False) is True:
         cmd.append("--no-mmap")
     return cmd
@@ -1231,10 +1304,26 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
         for override in flags.get("override_kv") or []:
             if isinstance(override, str) and override:
                 cmd.extend(["--override-kv", override])
+        # Declared serving flags (-ngl / --image-min-tokens / --cache-ram). Inert for
+        # every role that does not declare them, which today is every role on this
+        # branch — but the vision defect existed precisely because the declaration
+        # had nowhere to land, so the general builder gets the same door.
+        _append_runtime_serving_flags(cmd, flags)
         _append_runtime_spec_args(cmd, runtime, model_path)
         reasoning = flags.get("reasoning")
         if isinstance(reasoning, str) and reasoning:
             cmd.extend(["--reasoning", reasoning])
+        # `device`, emitted exactly as _build_vision_command emits it. This builder
+        # read flash_attn, jinja, reasoning, override_kv and the whole spec block
+        # but never `device`, so a role's declared processor was the one compiled
+        # field with nowhere to land on the default path — and _append_device_args
+        # then filled the silence with "none".
+        device = flags.get("device")
+        if isinstance(device, str) and device:
+            cmd.extend(["--device", device])
+        device_draft = flags.get("device_draft")
+        if isinstance(device_draft, str) and device_draft:
+            cmd.extend(["--device-draft", device_draft])
     else:
         _append_acceleration_args(cmd, role_name, accel, model_path)
     _apply_numa_spec_overrides(cmd, NUMA_CONFIG.get(role_name))
@@ -1250,6 +1339,44 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
     cmd.extend(["--slot-save-path", str(slot_dir)])
 
     return cmd
+
+
+def _dispatch_prior_role(
+    role_config: Any,
+    *,
+    dev_mode: bool,
+    embedding_mode: bool,
+    worker_pool_mode: bool,
+    worker_type: str | None,
+    vision_mode: bool,
+    vision_type: str | None,
+    eval_batch_frontdoor_mode: bool,
+    gpu_shadow_lane_mode: bool,
+) -> str | None:
+    """Which role's compiled priors describe the command build_server_command emits.
+
+    Mirrors the dispatcher's own branch order, and returns the SAME role name each
+    builder already looks its priors up under — so `--device` is resolved from the
+    identical record that supplied the binary, context and slots. Returns None for
+    the shapes that have no registry role at all (dev, embedders, worker_fast);
+    those get the CPU default, which is what they had before.
+    """
+    if vision_mode:
+        return "vision_escalation" if vision_type == "escalation" else "worker_vision"
+    if embedding_mode:
+        return None
+    if eval_batch_frontdoor_mode:
+        return "frontdoor"
+    if gpu_shadow_lane_mode:
+        return GPU_SHADOW_LANE_TENANT_ROLE
+    if worker_pool_mode and worker_type:
+        # _build_worker_general_command reads worker_general's priors for BOTH the
+        # general and explore worker types; worker_fast reads none.
+        return None if worker_type == "fast" else "worker_general"
+    if dev_mode:
+        return None
+    name = getattr(role_config, "name", None)
+    return str(name) if isinstance(name, str) and name else None
 
 
 def build_server_command(
@@ -1277,6 +1404,17 @@ def build_server_command(
     to pick per-instance thread count. Defaults to 0 so callers that don't
     care about quarters (vision, embedding, dev, worker_pool) are unaffected.
     """
+    prior_role = _dispatch_prior_role(
+        role_config,
+        dev_mode=dev_mode,
+        embedding_mode=embedding_mode,
+        worker_pool_mode=worker_pool_mode,
+        worker_type=worker_type,
+        vision_mode=vision_mode,
+        vision_type=vision_type,
+        eval_batch_frontdoor_mode=eval_batch_frontdoor_mode,
+        gpu_shadow_lane_mode=gpu_shadow_lane_mode,
+    )
     if vision_mode:
         cmd = _build_vision_command(port, vision_type, numa_instance)
     elif embedding_mode:
@@ -1300,7 +1438,11 @@ def build_server_command(
         cmd = _build_dev_command(port)
     else:
         cmd = _build_role_command(role_config, port, numa_instance)
-    _append_cpu_only_device_args(cmd)
+    # Pass the role's DECLARED device down. Every builder above is covered, not just
+    # the two that emit `--device` themselves — a declaration must not depend on
+    # which launch shape a role happens to use.
+    prior_flags = _runtime_flags(_stack_prior_launch(prior_role)[1]) if prior_role else None
+    _append_device_args(cmd, prior_flags)
     return cmd
 
 

@@ -54,6 +54,18 @@ REPO_ROOT = _THIS.parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "server"))
 
+# Device axis for the feasibility model (rider §2). Imported after the sys.path
+# setup above, which is what makes `src.` resolvable when this file is run as a
+# standalone script. `device_model` is pure and import-safe: it reads declared
+# artifacts only and touches no process.
+from src.scheduling.device_model import (  # noqa: E402
+    DEFAULT_VRAM_HEADROOM_GIB,
+    DeviceClass,
+    resolve_device_classes,
+    vram_capacity_gib as _declared_vram_capacity_gib,
+    vram_fit,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [matrix] %(levelname)s %(message)s")
 log = logging.getLogger("contention_matrix")
 
@@ -575,12 +587,19 @@ def enumerate_n_way(
 # Each NON_QUARTERABLE role co-runs (if at all) only via its instance-0 footprint:
 #   - ingest_long_context: instance-0 is a HALF (0-47), so it co-runs as a half
 #     against the other half (e.g. ingest 0-47 + vision 48-95 = disjoint, fine).
-#   - architect_general: instance-0 is the WHOLE machine (0-95) and it has NO
-#     half/quarter instance (confirmed: it cannot be made to run on a half, only
-#     full), so it can NEVER co-run — it is strictly solo.
+#   - architect_general: HISTORICAL. Instance-0 used to be the WHOLE machine
+#     (0-95) with no half/quarter alternative, which made the role strictly
+#     solo. That stopped being true in the 2026-08-01 W1 cutover: the role is
+#     now Qwen3.6-27B on MI210 with a GPU HOST LANE, so its instance-0 is 8
+#     host threads, its device is ROCm0, and it is one of the most
+#     co-residency-friendly roles on the box. Membership here is now inert for
+#     it (it has exactly one instance either way) and is kept only so the set
+#     keeps meaning "never gets quartered", which is still accurate.
+#     The whole-machine solo blocker did not disappear, it was RENAMED:
+#     `architect_critic` now holds the 0-95 interleave=all instance on :8074.
 # This is the per-role "quarterable" property the WP-5 placement policy needs:
 # small MoE-light models (gemma4-26B, frontdoor-35B-A3B, vision-30B-A3B) quarter
-# well; large models stay full/half; architect is full-only/solo.
+# well; large models stay full/half; the GPU lanes do not quarter at all.
 NON_QUARTERABLE: set[str] = {"ingest_long_context", "architect_general"}
 
 
@@ -610,27 +629,42 @@ def _role_footprints(
     return out
 
 
-def feasible_assignment(roleset, numa_config) -> dict | None:
-    """Find a mutually-disjoint cpuset assignment (one instance per role).
+@dataclass(frozen=True)
+class FeasibilityVerdict:
+    """Why a role-set can or cannot coexist, with the resource named.
 
-    Models the corrected concurrency rule (2026-05-26 audit): roles can co-run
-    only on non-overlapping cpusets. A full-machine instance (all 4 regions,
-    e.g. worker_general-full or architect-full) occupies everything, so it can
-    only be selected when it is the sole role; otherwise the role must fall back
-    to a quarter instance. Roles with no disjoint option (e.g. architect, which
-    has ONLY a full instance) cannot co-run and make the set infeasible.
-
-    Returns {role: {instance_idx, port, regions}} (prefers quarters / smaller
-    footprints first to leave room for others), or None if infeasible.
+    `reason` is deliberately SPECIFIC. The predecessor emitted a single bare
+    `topology_infeasible` for every failure, which conflated "these two want
+    the same physical cores" with "these two do not fit on the card" — two
+    different resources with two different remedies.
     """
-    foot = {r: _role_footprints(numa_config, r) for r in roleset}
-    if any(not foot[r] for r in roleset):
-        return None
+
+    feasible: bool
+    reason: str  # "" when feasible
+    evidence: str
+    assignment: dict | None
+    device_classes: dict[str, str]
+    vram: dict | None = None
+    reasons: tuple[str, ...] = ()
+
+
+def _cpu_packing(cpu_roles, numa_config) -> tuple[dict | None, str]:
+    """Mutually-disjoint cpuset packing over CPU-device roles only.
+
+    Unchanged physics for CPU decode (2026-05-26 audit): they can co-run only
+    on non-overlapping cpusets, so a whole-machine instance can be selected
+    only when it is the sole CPU role; otherwise the role falls back to a
+    smaller footprint. Returns (assignment, failure_reason).
+    """
+    foot = {r: _role_footprints(numa_config, r) for r in cpu_roles}
+    missing = [r for r in cpu_roles if not foot[r]]
+    if missing:
+        return (None, "no_placeable_instance")
     # Try smaller footprints first (quarters before full) so the packing leaves
     # room; order roles by fewest options first to prune the search.
     for r in foot:
         foot[r] = sorted(foot[r], key=lambda t: (len(t[2]), t[0]))
-    order = sorted(roleset, key=lambda r: len(foot[r]))
+    order = sorted(cpu_roles, key=lambda r: len(foot[r]))
     chosen: dict = {}
     used: set = set()
 
@@ -650,40 +684,260 @@ def feasible_assignment(roleset, numa_config) -> dict | None:
         return False
 
     if rec(0):
-        return {r: {"instance_idx": chosen[r][0], "port": chosen[r][1], "regions": chosen[r][2]} for r in roleset}
-    return None
+        return (
+            {
+                r: {"instance_idx": chosen[r][0], "port": chosen[r][1], "regions": chosen[r][2]}
+                for r in cpu_roles
+            },
+            "",
+        )
+    return (None, "cpu_region_conflict")
 
 
-def enumerate_feasible(numa_config: dict, *, max_size: int | None = None) -> dict[str, Any]:
-    """Quarter-level placement-feasibility enumeration (corrected cross-role model).
+def _gpu_placements(gpu_roles, numa_config) -> tuple[dict | None, str]:
+    """Placements for GPU roles. A GPU role's host lane is SHAREABLE, so it
+    reserves nothing — it is recorded for provenance, not for exclusion."""
+    out: dict = {}
+    for r in gpu_roles:
+        foot = _role_footprints(numa_config, r)
+        if not foot:
+            return (None, "no_placeable_instance")
+        idx, port, regs = sorted(foot, key=lambda t: (len(t[2]), t[0]))[0]
+        out[r] = {
+            "instance_idx": idx,
+            "port": port,
+            "regions": sorted(regs),
+            "host_lane_shared": True,
+        }
+    return (out, "")
 
-    A role-set is a candidate iff its roles admit a mutually-disjoint cpuset
-    assignment; otherwise it is excluded `topology_infeasible`. Throughput is
-    NOT judged here — the assignment is the realizable placement to measure.
+
+def assess_feasibility(
+    roleset,
+    numa_config,
+    *,
+    priors: dict | None = None,
+    server_mode: dict | None = None,
+    device_map: dict | None = None,
+    vram_capacity_gib: float | None = None,
+    vram_headroom_gib: float | None = None,
+    allow_host_query: bool = False,
+) -> FeasibilityVerdict:
+    """Can these roles coexist? Answered per RESOURCE, not per cpuset.
+
+    Artifact 1 + 2 of the device/load-axes rider. The set is partitioned by
+    DEVICE and each partition is judged against the resource it actually
+    consumes:
+
+      * CPU-device instances claim their CPU regions EXCLUSIVELY. Two of them
+        overlapping a region are infeasible together — unchanged behaviour.
+      * GPU-device instances do NOT claim CPU regions exclusively. Their host
+        lane is shareable light work (tokenise, sample, marshal) while the
+        weights are VRAM-resident under `-ngl`. Instead they claim VRAM, and
+        the GPU subset must FIT the device with headroom reserved.
+      * GPU-vs-CPU region overlap is NOT a conflict. That false exclusion is
+        the defect this function exists to remove.
+
+    Device resolution RAISES (`DeviceResolutionError`) on an undeclared role or
+    on a disagreement between the compiled priors and `gpu_host_lane`. That is
+    intentional: a feasibility answer computed over a corrupted device map is
+    worse than no answer.
+    """
+    roleset = tuple(roleset)
+    devices = device_map or resolve_device_classes(roleset, numa_config=numa_config, priors=priors)
+    device_classes = {r: devices[r].device_class.value for r in roleset}
+
+    cpu_roles = [r for r in roleset if devices[r].device_class is DeviceClass.CPU]
+    gpu_roles = [r for r in roleset if devices[r].device_class is DeviceClass.GPU]
+
+    reasons: list[str] = []
+    evidence: list[str] = []
+
+    cpu_assign, cpu_reason = _cpu_packing(cpu_roles, numa_config)
+    if cpu_reason:
+        reasons.append(cpu_reason)
+        if cpu_reason == "cpu_region_conflict":
+            evidence.append(
+                "no mutually-disjoint cpuset assignment exists over the CPU-device "
+                f"subset {sorted(cpu_roles)} (over-subscribed or solo-only full instance)"
+            )
+        else:
+            evidence.append(f"a CPU-device role in {sorted(cpu_roles)} declares no instance")
+
+    gpu_assign, gpu_place_reason = _gpu_placements(gpu_roles, numa_config)
+    if gpu_place_reason:
+        reasons.append(gpu_place_reason)
+        evidence.append(f"a GPU-device role in {sorted(gpu_roles)} declares no instance")
+
+    vram_report: dict | None = None
+    if gpu_roles:
+        fit = vram_fit(
+            gpu_roles,
+            priors=priors,
+            server_mode=server_mode,
+            headroom_gib=vram_headroom_gib,
+            capacity_gib=vram_capacity_gib,
+            allow_host_query=allow_host_query,
+        )
+        vram_report = {
+            "required_gib": fit.required_gib,
+            "budget_gib": fit.budget_gib,
+            "capacity_gib": fit.capacity_gib,
+            "headroom_gib": fit.headroom_gib,
+            "capacity_source": fit.capacity_source,
+            "per_role_gib": fit.per_role,
+            "slack_gib": fit.slack_gib,
+            "gpu_roles": sorted(gpu_roles),
+        }
+        if fit.undeclared_roles:
+            vram_report["undeclared_roles"] = list(fit.undeclared_roles)
+        if not fit.ok:
+            reasons.append(fit.reason)
+            if fit.reason == "vram_capacity_exceeded":
+                evidence.append(
+                    f"GPU subset {sorted(gpu_roles)} needs {fit.required_gib} GiB VRAM "
+                    f"but the budget is {fit.budget_gib} GiB "
+                    f"({fit.capacity_gib} GiB capacity - {fit.headroom_gib} GiB reserved, "
+                    f"source {fit.capacity_source})"
+                )
+            else:
+                evidence.append(
+                    "VRAM footprint is undeclared for "
+                    f"{list(fit.undeclared_roles)} — cannot show the set fits, failing closed"
+                )
+
+    if reasons:
+        return FeasibilityVerdict(
+            feasible=False,
+            reason=reasons[0],
+            evidence="; ".join(evidence),
+            assignment=None,
+            device_classes=device_classes,
+            vram=vram_report,
+            reasons=tuple(reasons),
+        )
+
+    assignment = {**(cpu_assign or {}), **(gpu_assign or {})}
+    return FeasibilityVerdict(
+        feasible=True,
+        reason="",
+        evidence="",
+        assignment=assignment,
+        device_classes=device_classes,
+        vram=vram_report,
+        reasons=(),
+    )
+
+
+def feasible_assignment(roleset, numa_config, **kwargs) -> dict | None:
+    """Device-aware placement for a role-set, or None if infeasible.
+
+    Thin wrapper over `assess_feasibility` kept for callers that only need the
+    placement. Prefer `assess_feasibility` when you need to know WHICH resource
+    excluded the set — `None` here cannot distinguish a CPU region conflict
+    from a VRAM shortfall.
+    """
+    return assess_feasibility(roleset, numa_config, **kwargs).assignment
+
+
+def enumerate_feasible(
+    numa_config: dict,
+    *,
+    max_size: int | None = None,
+    priors: dict | None = None,
+    server_mode: dict | None = None,
+    vram_capacity_gib: float | None = None,
+    vram_headroom_gib: float | None = None,
+    allow_host_query: bool = False,
+) -> dict[str, Any]:
+    """Device-aware placement-feasibility enumeration.
+
+    A role-set is a candidate iff (a) its CPU-device subset admits a mutually
+    disjoint cpuset assignment and (b) its GPU-device subset fits VRAM with
+    headroom reserved. Exclusions name the resource — `cpu_region_conflict`,
+    `vram_capacity_exceeded`, `vram_declaration_missing`,
+    `no_placeable_instance` — never a bare `topology_infeasible`. Throughput is
+    NOT judged here; the assignment is the realizable placement to measure.
+
+    The device map and the VRAM capacity are resolved ONCE, up front, so an
+    undeclared role or a disagreeing declaration raises before any verdict is
+    produced rather than silently colouring one combination.
     """
     roles = sorted(r for r in numa_config if numa_config[r].get("instances"))
+    devices = resolve_device_classes(roles, numa_config=numa_config, priors=priors)
+
+    capacity_source = "n/a (no GPU-device role in topology)"
+    if any(d.device_class is DeviceClass.GPU for d in devices.values()):
+        if vram_capacity_gib is None:
+            vram_capacity_gib, capacity_source = _declared_vram_capacity_gib(
+                allow_host_query=allow_host_query
+            )
+        else:
+            capacity_source = "explicit"
+
     hi = max_size or len(roles)
     candidates: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     for size in range(2, hi + 1):
         for combo in itertools.combinations(roles, size):
-            assign = feasible_assignment(combo, numa_config)
-            if assign:
-                candidates.append({
-                    "roles": list(combo), "size": size,
-                    "assignment": {r: {"port": assign[r]["port"], "regions": assign[r]["regions"]} for r in combo},
-                })
+            verdict = assess_feasibility(
+                combo,
+                numa_config,
+                priors=priors,
+                server_mode=server_mode,
+                device_map=devices,
+                vram_capacity_gib=vram_capacity_gib,
+                vram_headroom_gib=vram_headroom_gib,
+            )
+            entry: dict[str, Any] = {
+                "roles": list(combo),
+                "size": size,
+                "device_classes": verdict.device_classes,
+            }
+            if verdict.vram is not None:
+                entry["vram"] = verdict.vram
+            if verdict.feasible:
+                entry["assignment"] = {
+                    r: {
+                        "port": verdict.assignment[r]["port"],
+                        "regions": verdict.assignment[r]["regions"],
+                        **(
+                            {"host_lane_shared": True}
+                            if verdict.assignment[r].get("host_lane_shared")
+                            else {}
+                        ),
+                    }
+                    for r in combo
+                }
+                candidates.append(entry)
             else:
-                excluded.append({
-                    "roles": list(combo), "size": size,
-                    "reason": "topology_infeasible",
-                    "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)",
-                })
+                entry["reason"] = verdict.reason
+                entry["reasons"] = list(verdict.reasons)
+                entry["evidence"] = verdict.evidence
+                excluded.append(entry)
+
+    gpu_roles = sorted(r for r, d in devices.items() if d.device_class is DeviceClass.GPU)
     return {
         "roles": roles,
+        "device_model": {
+            "gpu_roles": gpu_roles,
+            "cpu_roles": sorted(set(roles) - set(gpu_roles)),
+            "device_classes": {r: d.device_class.value for r, d in devices.items()},
+            "device_sources": {r: d.source for r, d in devices.items()},
+            "vram_capacity_gib": vram_capacity_gib,
+            "vram_capacity_source": capacity_source,
+        },
         "candidate_sets": sorted(candidates, key=lambda x: (x["size"], x["roles"])),
         "excluded_sets": sorted(excluded, key=lambda x: (x["size"], x["roles"])),
-        "summary": {"n_candidates": len(candidates), "n_excluded": len(excluded), "max_size": hi},
+        "summary": {
+            "n_candidates": len(candidates),
+            "n_excluded": len(excluded),
+            "max_size": hi,
+            "n_excluded_by_reason": {
+                reason: sum(1 for e in excluded if e["reason"] == reason)
+                for reason in sorted({e["reason"] for e in excluded})
+            },
+        },
     }
 
 
@@ -696,20 +950,49 @@ def cmd_enumerate(args: argparse.Namespace) -> int:
         MatrixStatus,
     )
 
+    _feasibility = getattr(args, "feasibility", False)
+
     matrix_path = Path(args.matrix) if args.matrix else DEFAULT_OUTPUT
-    matrix = load_contention_matrix(matrix_path)
+    matrix = None
+    try:
+        matrix = load_contention_matrix(matrix_path)
+    except FileNotFoundError:
+        if not _feasibility:
+            raise
     live_hash = topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
     status = matrix_status(matrix_path, current_topology_hash=live_hash)
     if status != MatrixStatus.OK:
-        log.error(
-            "matrix status %s (live hash %s) — enumeration requires a fresh, "
-            "topology-matching matrix; refusing to emit a manifest against stale evidence.",
-            status.value, live_hash,
-        )
-        return 2
+        # The N-way enumeration CONSUMES measured pair ratios, so a stale matrix
+        # would silently prune real candidates — that path still refuses.
+        #
+        # The feasibility enumeration reads NO measurement at all: it is derived
+        # entirely from NUMA_CONFIG plus the declared device (rider §4, artifact
+        # 1 — "needs measurement? No"). Refusing it on the freshness of evidence
+        # it never opens is a category error, and it is the reason this command
+        # could not be run at all through three topology generations of matrix
+        # drift. Warn loudly, stamp the status into the manifest, proceed.
+        if _feasibility:
+            log.warning(
+                "matrix status %s (live hash %s) — proceeding anyway: the feasibility "
+                "model is derived from topology + declared device and reads no "
+                "measured cell. The stale matrix is recorded in the manifest.",
+                status.value, live_hash,
+            )
+        else:
+            log.error(
+                "matrix status %s (live hash %s) — enumeration requires a fresh, "
+                "topology-matching matrix; refusing to emit a manifest against stale evidence.",
+                status.value, live_hash,
+            )
+            return 2
 
-    if getattr(args, "feasibility", False):
-        body = enumerate_feasible(NUMA_CONFIG, max_size=args.max_size)
+    if _feasibility:
+        body = enumerate_feasible(
+            NUMA_CONFIG,
+            max_size=args.max_size,
+            vram_headroom_gib=args.vram_headroom,
+            allow_host_query=args.allow_host_query,
+        )
     else:
         floor = args.floor if args.floor is not None else matrix.default_floor
         body = enumerate_n_way(
@@ -725,7 +1008,10 @@ def cmd_enumerate(args: argparse.Namespace) -> int:
     content = json.dumps(body, sort_keys=True, separators=(",", ":"))
     content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
 
-    src_bytes = matrix_path.read_bytes()
+    try:
+        src_bytes = matrix_path.read_bytes()
+    except OSError:
+        src_bytes = b""
     git_sha = ""
     try:
         git_sha = subprocess.run(
@@ -735,10 +1021,10 @@ def cmd_enumerate(args: argparse.Namespace) -> int:
     except Exception:
         pass
 
-    _feas = getattr(args, "feasibility", False)
+    _feas = _feasibility
     manifest = {
         "task_id": "J4a-feasible" if _feas else "J4a",
-        "model": "quarter_level_disjoint_cpuset" if _feas else "full_instance_pairwise",
+        "model": "device_aware_disjoint_cpuset_plus_vram" if _feas else "full_instance_pairwise",
         "run_id": args.run_id or f"j4a-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "topology_hash": live_hash,
@@ -747,8 +1033,13 @@ def cmd_enumerate(args: argparse.Namespace) -> int:
             "path": str(matrix_path),
             "sha256": hashlib.sha256(src_bytes).hexdigest(),
             "git_sha": git_sha,
-            "topology_hash": matrix.topology_hash,
-            "measured_at": matrix.measured_at,
+            "topology_hash": matrix.topology_hash if matrix else "",
+            "measured_at": matrix.measured_at if matrix else "",
+            # Stamped for BOTH models. The feasibility model consumes nothing
+            # from the matrix, but a reader must still be able to see what the
+            # measured evidence looked like when the manifest was cut.
+            "status": status.value,
+            "consumed_by_this_model": not _feas,
         },
         **body,
     }
@@ -770,9 +1061,24 @@ def cmd_enumerate(args: argparse.Namespace) -> int:
         len(manifest.get("flags", [])),
         content_hash,
     )
+    if _feas:
+        dm = manifest.get("device_model", {})
+        log.info(
+            "  device model: GPU %s | CPU %s | VRAM capacity %s GiB (%s)",
+            dm.get("gpu_roles"), dm.get("cpu_roles"),
+            dm.get("vram_capacity_gib"), dm.get("vram_capacity_source"),
+        )
+        log.info("  exclusions by reason: %s", manifest["summary"].get("n_excluded_by_reason"))
     for c in manifest["candidate_sets"]:
         if "assignment" in c:
-            log.info("  CANDIDATE %s ports=%s", c["roles"], {r: c["assignment"][r]["port"] for r in c["roles"]})
+            devs = c.get("device_classes", {})
+            tag = "".join(sorted({d[0].upper() for d in devs.values()})) if devs else "?"
+            log.info(
+                "  CANDIDATE [%s] %s ports=%s%s",
+                tag, c["roles"],
+                {r: c["assignment"][r]["port"] for r in c["roles"]},
+                f" vram={c['vram']['required_gib']}/{c['vram']['budget_gib']}GiB" if c.get("vram") else "",
+            )
         else:
             log.info("  CANDIDATE %s (min_pair_ratio=%s)", c["roles"], c.get("min_pair_ratio"))
     for f in manifest.get("flags", []):
@@ -1229,8 +1535,16 @@ def main() -> int:
     p_enum.add_argument("--max-size", type=int, default=None, dest="max_size", help="max active-set size to enumerate (default: #roles)")
     p_enum.add_argument("--run-id", default=None, dest="run_id", help="stable run id for the manifest")
     p_enum.add_argument("--feasibility", action="store_true",
-                        help="quarter-level disjoint-cpuset model: candidates = role-sets with a "
-                             "mutually-disjoint placement (full-machine/solo-only instances pruned)")
+                        help="device-aware feasibility model: CPU-device roles must be pairwise "
+                             "region-disjoint, GPU-device roles must fit VRAM, GPU-vs-CPU cpuset "
+                             "overlap is not a conflict. Derived only — reads no measured cell, "
+                             "so it does not require a fresh matrix")
+    p_enum.add_argument("--vram-headroom", type=float, default=None, dest="vram_headroom",
+                        help="GiB of VRAM to reserve in the capacity check "
+                             f"(default {DEFAULT_VRAM_HEADROOM_GIB}, or $ORCHESTRATOR_VRAM_HEADROOM_GIB)")
+    p_enum.add_argument("--allow-host-query", action="store_true", dest="allow_host_query",
+                        help="permit a READ-ONLY `rocm-smi --showmeminfo vram` query when the "
+                             "declared VRAM capacity artifact is unavailable")
     p_enum.set_defaults(func=cmd_enumerate)
 
     p_nway = sub.add_parser(

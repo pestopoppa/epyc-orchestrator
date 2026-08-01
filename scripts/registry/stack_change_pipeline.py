@@ -30,6 +30,7 @@ from scripts.registry.render_stack_summary import (  # noqa: E402
     write_current_stack_summary,
 )
 from scripts.validate.stack_change_guard import (  # noqa: E402
+    DEFAULT_ACCEPTED_GAPS,
     DEFAULT_SURFACE_EXCEPTIONS,
     DEFAULT_SURFACE_MANIFEST,
     validate_stack_priors,
@@ -79,6 +80,7 @@ SURFACE_WARNING_ORDER = (
     "legacy_test",
     "historical_doc",
 )
+ACCEPTED_GAP_WARNING_PREFIX = "accepted_gap."
 
 
 DEFAULT_STACK_TOPOLOGY = REPO_ROOT / "orchestration" / "stack_topology.yaml"
@@ -156,6 +158,7 @@ class StackChangePipelineConfig:
     schema: Path = DEFAULT_SCHEMA
     surface_exceptions: Path = DEFAULT_SURFACE_EXCEPTIONS
     surface_manifest: Path = DEFAULT_SURFACE_MANIFEST
+    accepted_gaps: Path = DEFAULT_ACCEPTED_GAPS
     effort_certifications: Path = DEFAULT_EFFORT_CERTIFICATIONS
     roles: set[str] | None = None
     allow_known_gaps: bool = False
@@ -206,6 +209,33 @@ class PipelineReport:
                 counts[bucket] += 1
         return dict(counts)
 
+    def accepted_gap_lines(self) -> list[str]:
+        """Report every tolerated gap WITH its expiry.
+
+        An acceptance nobody reads is a silenced check. These lines print on both
+        the pass and the blocked path so an operator always sees what the gate is
+        tolerating and until when.
+        """
+        declarations: dict[tuple[str, str], str] = {}
+        for warning in self.unique_warnings:
+            if not warning.startswith(ACCEPTED_GAP_WARNING_PREFIX):
+                continue
+            head, _, detail = warning.partition(": ")
+            role = head.rsplit(".", 1)[-1]
+            gap, _, suffix = detail.partition(" [declaration: ")
+            expires = "unknown"
+            for part in suffix.rstrip("]").split("; "):
+                if part.startswith("expires="):
+                    expires = part[len("expires="):]
+                    break
+            declarations[(role, gap.strip())] = expires
+        if not declarations:
+            return []
+        lines = [f"accepted_gaps: {len(declarations)} declared and unexpired"]
+        for (role, gap), expires in sorted(declarations.items()):
+            lines.append(f"  accepted_gap: {role}: {gap} (expires {expires})")
+        return lines
+
     def acceptance_lines(self) -> list[str]:
         if self.ok:
             lines = ["acceptance: no-inference checks passed"]
@@ -230,6 +260,7 @@ class PipelineReport:
                             f"{key}={surface_counts[key]}" for key in ordered_keys
                         )
                     )
+            lines.extend(self.accepted_gap_lines())
             lines.append(
                 "promotion_gate: run uv run pytest -q "
                 + " ".join(PROMOTION_GATE_TARGETS)
@@ -238,6 +269,7 @@ class PipelineReport:
             return lines
         return [
             "acceptance: blocked",
+            *self.accepted_gap_lines(),
             f"promotion_gate: fix {len(self.errors)} error(s) before promotion",
         ]
 
@@ -838,6 +870,7 @@ def _guard_step(
         registry_path=config.lean_registry,
         descriptor_path=config.descriptors,
         allow_production_blocker_waivers=config.allow_production_blocker_waivers,
+        accepted_gaps_path=config.accepted_gaps,
     )
     errors = list(result.errors)
     warnings = list(result.warnings)
@@ -1133,6 +1166,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--surface-exceptions", type=Path, default=DEFAULT_SURFACE_EXCEPTIONS)
     parser.add_argument("--surface-manifest", type=Path, default=DEFAULT_SURFACE_MANIFEST)
     parser.add_argument(
+        "--accepted-gaps",
+        type=Path,
+        default=DEFAULT_ACCEPTED_GAPS,
+        help=(
+            "YAML file declaring owned, expiring acceptances of known stack-prior "
+            "gaps; declared gaps are reported with their expiry instead of blocking"
+        ),
+    )
+    parser.add_argument(
         "--effort-certifications", type=Path, default=DEFAULT_EFFORT_CERTIFICATIONS
     )
     parser.add_argument("--roles", nargs="+", help="Explicit active roles")
@@ -1178,6 +1220,7 @@ def main(argv: list[str] | None = None) -> int:
         schema=args.schema,
         surface_exceptions=args.surface_exceptions,
         surface_manifest=args.surface_manifest,
+        accepted_gaps=args.accepted_gaps,
         effort_certifications=args.effort_certifications,
         roles=set(args.roles) if args.roles else None,
         allow_known_gaps=args.allow_known_gaps,

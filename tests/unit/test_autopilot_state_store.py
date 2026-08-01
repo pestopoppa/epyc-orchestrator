@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -391,18 +392,48 @@ def test_append_blacklist_skips_unpatternable_actions(tmp_path) -> None:
 # ----- model signatures -----
 
 
-def test_load_model_signatures_returns_empty_when_missing(tmp_path) -> None:
-    assert state_store.load_model_signatures(tmp_path / "no.yaml") == {}
+def test_load_model_signatures_raises_when_no_descriptor_path_given(tmp_path) -> None:
+    """No descriptor path is an honest refusal, not an empty dict (2026-08-01)."""
+    with pytest.raises(state_store.ModelSignaturesUnavailableError) as excinfo:
+        state_store.load_model_signatures(tmp_path / "legacy.yaml")
+    assert "orchestration/model_descriptors.yaml" in str(excinfo.value)
 
 
-def test_load_model_signatures_parses_yaml(tmp_path) -> None:
-    f = tmp_path / "sigs.yaml"
-    f.write_text(yaml.dump({"models": {
-        "gemma-4-26B": {"role": "worker", "max_throughput_tps": 76.5},
+def test_load_model_signatures_raises_when_descriptors_missing_on_disk(tmp_path) -> None:
+    with pytest.raises(state_store.ModelSignaturesUnavailableError) as excinfo:
+        state_store.load_model_signatures(
+            tmp_path / "legacy.yaml", descriptors_path=tmp_path / "no-descriptors.yaml"
+        )
+    assert "orchestration/model_descriptors.yaml" in str(excinfo.value)
+    assert "no-descriptors.yaml" in str(excinfo.value)
+
+
+def test_load_model_signatures_raises_when_descriptors_unparseable(tmp_path) -> None:
+    descriptors = tmp_path / "model_descriptors.yaml"
+    descriptors.write_text("models: [\n  - unterminated\n")
+    with pytest.raises(state_store.ModelSignaturesUnavailableError) as excinfo:
+        state_store.load_model_signatures(None, descriptors_path=descriptors)
+    assert "orchestration/model_descriptors.yaml" in str(excinfo.value)
+
+
+def test_load_model_signatures_raises_when_descriptors_empty(tmp_path) -> None:
+    descriptors = tmp_path / "model_descriptors.yaml"
+    descriptors.write_text(yaml.dump({"descriptor_version": 3, "models": []}))
+    with pytest.raises(state_store.ModelSignaturesUnavailableError) as excinfo:
+        state_store.load_model_signatures(None, descriptors_path=descriptors)
+    assert "carries no model descriptors" in str(excinfo.value)
+
+
+def test_load_model_signatures_never_falls_back_to_a_legacy_signature_file(tmp_path) -> None:
+    """A readable legacy YAML must NOT rescue an unreadable descriptor artifact."""
+    legacy = tmp_path / "model_quality_signatures.yaml"
+    legacy.write_text(yaml.dump({"models": {
+        "retired-fleet-model": {"role": "frontdoor", "max_throughput_tps": 12.7},
     }}))
-    out = state_store.load_model_signatures(f)
-    assert "gemma-4-26B" in out
-    assert out["gemma-4-26B"]["max_throughput_tps"] == 76.5
+    with pytest.raises(state_store.ModelSignaturesUnavailableError):
+        state_store.load_model_signatures(
+            legacy, descriptors_path=tmp_path / "no-descriptors.yaml"
+        )
 
 
 def test_load_model_signatures_prefers_model_descriptors(tmp_path) -> None:

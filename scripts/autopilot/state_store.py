@@ -262,29 +262,76 @@ def _descriptor_signatures(data: dict[str, Any]) -> dict[str, Any]:
     return signatures if len(signatures) > 1 else {}
 
 
+_DESCRIPTORS_ARTIFACT = "orchestration/model_descriptors.yaml"
+_DESCRIPTORS_REMEDIATION = (
+    "recompile it with: uv run python scripts/registry/stack_change_pipeline.py update"
+)
+
+
+class ModelSignaturesUnavailableError(RuntimeError):
+    """Raised when the compiled model descriptors cannot supply model signatures.
+
+    2026-08-01: the legacy fallback ``orchestration/model_quality_signatures.yaml``
+    was DELETED. It was a hand-maintained restatement of the fleet retired on
+    2026-05-08 (it still named Qwen3.5-35B-A3B at 12.7 t/s as frontdoor and
+    Qwen3-Coder-32B as coder_escalation, against 40.2 t/s and a shared Qwen3.6-27B
+    in ``orchestration/derived/stack_priors.yaml``). Silently substituting it fed
+    the autopilot controller confident wrong throughput/quality priors; an honest
+    refusal is strictly better.
+    """
+
+
 def load_model_signatures(
-    signatures_path: Path,
+    signatures_path: Path | None = None,
     descriptors_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Load descriptor-backed model signatures, falling back to legacy YAML."""
-    if descriptors_path is not None and descriptors_path.exists():
-        try:
-            descriptor_data = yaml.safe_load(descriptors_path.read_text()) or {}
-            if isinstance(descriptor_data, dict):
-                descriptor_signatures = _descriptor_signatures(descriptor_data)
-                if descriptor_signatures:
-                    return descriptor_signatures
-        except (yaml.YAMLError, OSError, ValueError) as e:
-            log.warning("Could not load model descriptors: %s", e)
+    """Load descriptor-backed model signatures. No fallback — raise if unavailable.
 
-    if not signatures_path.exists():
-        return {}
+    Args:
+        signatures_path: RETIRED. Was the legacy
+            ``orchestration/model_quality_signatures.yaml`` fallback, deleted
+            2026-08-01. Still accepted positionally so existing call sites keep
+            working; the value is ignored.
+        descriptors_path: Path to ``orchestration/model_descriptors.yaml``, the
+            compiled descriptor artifact that is now the ONLY source.
+
+    Raises:
+        ModelSignaturesUnavailableError: the descriptor path is absent, missing on
+            disk, unreadable, or carries no usable model descriptors.
+    """
+    del signatures_path  # retired legacy fallback — deliberately unused
+
+    if descriptors_path is None:
+        raise ModelSignaturesUnavailableError(
+            f"model signatures require {_DESCRIPTORS_ARTIFACT}, but no descriptor "
+            f"path was supplied; {_DESCRIPTORS_REMEDIATION}"
+        )
+    if not descriptors_path.exists():
+        raise ModelSignaturesUnavailableError(
+            f"model signatures require {_DESCRIPTORS_ARTIFACT}, but "
+            f"{descriptors_path} does not exist; {_DESCRIPTORS_REMEDIATION}"
+        )
     try:
-        data = yaml.safe_load(signatures_path.read_text()) or {}
-        return data.get("models", {})
-    except (yaml.YAMLError, OSError) as e:
-        log.warning("Could not load model signatures: %s", e)
-        return {}
+        descriptor_data = yaml.safe_load(descriptors_path.read_text()) or {}
+    except (yaml.YAMLError, OSError, ValueError) as exc:
+        raise ModelSignaturesUnavailableError(
+            f"model signatures require {_DESCRIPTORS_ARTIFACT}, but "
+            f"{descriptors_path} is unreadable ({exc}); {_DESCRIPTORS_REMEDIATION}"
+        ) from exc
+    if not isinstance(descriptor_data, dict):
+        raise ModelSignaturesUnavailableError(
+            f"model signatures require {_DESCRIPTORS_ARTIFACT}, but "
+            f"{descriptors_path} is not a YAML mapping; {_DESCRIPTORS_REMEDIATION}"
+        )
+
+    descriptor_signatures = _descriptor_signatures(descriptor_data)
+    if not descriptor_signatures:
+        raise ModelSignaturesUnavailableError(
+            f"model signatures require {_DESCRIPTORS_ARTIFACT}, but "
+            f"{descriptors_path} carries no model descriptors; "
+            f"{_DESCRIPTORS_REMEDIATION}"
+        )
+    return descriptor_signatures
 
 
 def format_model_signatures(signatures: dict[str, Any]) -> str:

@@ -797,8 +797,19 @@ def _descriptor_for_role(
         mem_gb = server_cfg.get("memory_gb")
 
     server_model_name = _first_model_name(server_cfg) if server_cfg else None
+    # 2026-08-01: pass the server's OWN model dict, not `{}`.
+    #
+    # `_quant_from` prefers an explicit `quant:` field and only falls back to
+    # parsing the name. The role side above is resolved as
+    # `_quant_from(model_name, model)` — name PLUS declared field — while this
+    # side was resolved from the name alone. For any model whose name does not
+    # embed its quant (Qwen3-VL-30B-A3B-Instruct, declared `quant: Q4_K_M`) the
+    # two ids could never agree, and the Role-server conflict below fired on a
+    # mismatch the comparison had manufactured by discarding information it held.
+    # Symmetric inputs; a genuine quant disagreement still raises.
+    server_model_dict = _first_model_dict(server_cfg) if server_cfg else {}
     server_model_id = (
-        _canonical_model_id(server_model_name, _quant_from(server_model_name, {}))
+        _canonical_model_id(server_model_name, _quant_from(server_model_name, server_model_dict))
         if server_model_name
         else None
     )

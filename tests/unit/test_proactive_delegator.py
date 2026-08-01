@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from src.proactive_delegation.delegator import ProactiveDelegator
+from src.roles import Role
 from src.proactive_delegation.review_service import (
     AggregationService,
     ArchitectReviewService,
@@ -391,34 +392,59 @@ class TestSpecialistPromptBuilding:
 
 
 class TestRoleEscalation:
-    """Test role escalation logic."""
+    """Test role escalation logic.
+
+    2026-08-01: the delegator's private escalation map was deleted; `_escalate_role`
+    now delegates to the canonical `Role.escalates_to()` in src/roles.py. These tests
+    assert AGREEMENT with the canonical ladder rather than restating a fifth copy of
+    it, plus the two edge behaviours the private map used to own.
+    """
+
+    @staticmethod
+    def _delegator() -> ProactiveDelegator:
+        return ProactiveDelegator(Mock(), Mock())
 
     def test_escalate_role_worker_to_coder(self):
         """Test worker escalation."""
-        registry = Mock()
-        primitives = Mock()
-        delegator = ProactiveDelegator(registry, primitives)
+        assert self._delegator()._escalate_role("worker_general") == "coder_escalation"
 
-        escalated = delegator._escalate_role("worker_general")
-        assert escalated == "coder_escalation"
+    def test_escalate_role_agrees_with_canonical_ladder(self):
+        """Every role in the canonical ladder escalates exactly as src/roles.py says."""
+        delegator = self._delegator()
+        for role in Role:
+            target = role.escalates_to()
+            if target is None:
+                continue
+            assert delegator._escalate_role(role.value) == target.value
 
-    def test_escalate_role_coder_to_architect(self):
-        """Test coder escalation."""
-        registry = Mock()
-        primitives = Mock()
-        delegator = ProactiveDelegator(registry, primitives)
+    def test_escalate_role_coder_no_longer_null_hops_to_architect_general(self):
+        """coder_escalation is an ALIAS on architect_general's :8083 process.
 
-        escalated = delegator._escalate_role("coder_escalation")
-        assert escalated == "architect_general"
+        The deleted private map sent it to architect_general — the same GGUF in the
+        same process, so the "escalation" could only reroll the sampling seed.
+        """
+        escalated = self._delegator()._escalate_role("coder_escalation")
 
-    def test_escalate_role_architect_terminal(self):
-        """Test architect escalation stays on live architect role."""
-        registry = Mock()
-        primitives = Mock()
-        delegator = ProactiveDelegator(registry, primitives)
+        assert escalated == Role.CODER_ESCALATION.escalates_to().value
+        assert escalated != "architect_general"
 
-        escalated = delegator._escalate_role("architect_general")
-        assert escalated == "architect_general"
+    def test_escalate_role_architect_general_is_not_a_self_loop(self):
+        """The deleted private map had architect_general -> architect_general."""
+        escalated = self._delegator()._escalate_role("architect_general")
+
+        assert escalated != "architect_general"
+        assert escalated == Role.ARCHITECT_GENERAL.escalates_to().value
+
+    def test_escalate_role_terminal_rung_returns_itself(self):
+        """A role with no escalation target stays put — never a downgrade."""
+        terminal = [role for role in Role if role.escalates_to() is None]
+        assert Role.ARCHITECT_CRITIC in terminal
+        delegator = self._delegator()
+        assert delegator._escalate_role(Role.ARCHITECT_CRITIC.value) == "architect_critic"
+
+    def test_escalate_role_unknown_string_keeps_historical_fallback(self):
+        """Behaviour preserved for anything outside the ladder."""
+        assert self._delegator()._escalate_role("not_a_role") == "architect_general"
 
 
 class TestAggregationService:

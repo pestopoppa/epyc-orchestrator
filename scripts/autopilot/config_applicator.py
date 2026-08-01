@@ -558,8 +558,18 @@ AP3_ROLE_RESTART_KNOB_SPECS: dict[str, RoleRestartKnob] = {
             "architect_spec_type", "enum", "draft-mtp",
             role="architect_general",
             registry_path="server_mode.architect_general.acceleration.spec_type",
-            allowed_values=("draft-mtp", "ngram-mod,draft-mtp"),
-            doc="Architect composed-spec launch type, quality-gated before live use.",
+            allowed_values=("draft-mtp",),
+            doc=(
+                "Architect spec launch type. 2026-08-01: 'ngram-mod,draft-mtp' REMOVED from "
+                "the allowed set. The composed recipe was falsified on 2026-07-31 — 35B "
+                "long-context coding 0/12, gemma produced ZERO drafts on 9/12 (byte-identical "
+                "arms), 80B ngram-alone acceptance 1.6-4.7% because SSM state cannot fork. "
+                "Leaving it here let autopilot write the falsified recipe straight back into "
+                "the registry block the cutover had just corrected, so 'do not reintroduce "
+                "ngram-mod' was not enforceable by registry edits alone. A single-value enum "
+                "is retained rather than deleting the knob so existing strategy rows that "
+                "reference it still resolve."
+            ),
         ),
         RoleRestartKnob(
             "architect_draft_max", "int", 4,

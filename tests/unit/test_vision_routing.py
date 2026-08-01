@@ -281,7 +281,13 @@ roles:
         )
 
         assert _fallback_vl_port_for_role("worker_vision") == 8086
-        assert _vl_port_for_role("vision_escalation", tmp_path / "missing.yaml") == 8087
+        # 2026-08-01 W1 cutover: was 8087. vision_escalation stopped being its own
+        # server and became an alias on worker_vision's :8086 MI210 process, so the
+        # degraded-mode default follows PORT_MAP onto the same port. Port 8087 is
+        # retired; a fallback still pointing there would route vision escalations
+        # at a dead socket.
+        assert _fallback_vl_port_for_role("vision_escalation") == 8086
+        assert _vl_port_for_role("vision_escalation", tmp_path / "missing.yaml") == 8086
 
     def test_vl_port_for_role_rejects_stale_degraded_fallback_when_priors_exist(
         self, tmp_path: Path

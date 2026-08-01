@@ -53,16 +53,32 @@ def test_stack_status_targets_fallback_excludes_retired_ports(tmp_path: Path) ->
     targets = _stack_status_targets(tmp_path / "missing.yaml")
 
     assert (_RETIRED_ARCHITECT_ROLE, 8084) not in targets
-    assert ("coder_escalation/frontdoor/worker_summarize", 8070) in targets
+    # 2026-08-01 W1 cutover: was ("coder_escalation/frontdoor/worker_summarize",
+    # 8070). coder_escalation left frontdoor's :8070 process for
+    # architect_general's :8083, leaving worker_summarize as frontdoor's only alias.
+    assert ("frontdoor/worker_summarize", 8070) in targets
+    assert ("architect_general/coder_escalation", 8083) in targets
+    # architect_critic is the NEW 122B role on the full CPU instance, port 8074.
+    assert ("architect_critic", 8074) in targets
+    # Port 8087 retired: vision_escalation is an alias on worker_vision's :8086.
+    assert ("vision_escalation/worker_vision", 8086) in targets
+    assert all(port != 8087 for _, port in targets)
     assert all(port != 8090 for _, port in targets)
 
 
 def test_fallback_status_targets_derive_alias_groups_from_manifest() -> None:
     targets = _fallback_status_targets()
 
-    assert ("coder_escalation/frontdoor/worker_summarize", 8070) in targets
+    # 2026-08-01 W1 cutover: same alias-group reshaping as the test above —
+    # coder_escalation moved 8070 -> 8083, vision_escalation 8087 -> 8086,
+    # architect_critic added on 8074.
+    assert ("frontdoor/worker_summarize", 8070) in targets
     assert ("toolrunner/worker_general/worker_math", 8072) in targets
+    assert ("architect_general/coder_escalation", 8083) in targets
+    assert ("architect_critic", 8074) in targets
+    assert ("vision_escalation/worker_vision", 8086) in targets
     assert all("worker_explore" not in name for name, _ in targets)
+    assert all(port != 8087 for _, port in targets)
     assert all(port != 8090 for _, port in targets)
 
 

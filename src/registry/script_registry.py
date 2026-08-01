@@ -432,7 +432,13 @@ class ScriptRegistry:
                 config_path = get_config().paths.project_root / "orchestration" / "mcp_servers.yaml"
             except Exception as e:
                 logger.debug("Could not load config for MCP path: %s", e)
-                config_path = Path(__file__).parent.parent / "orchestration" / "mcp_servers.yaml"
+                # 2026-08-01: was `Path(__file__).parent.parent`, which from
+                # src/registry/ resolves to `src/` — i.e. `src/orchestration/
+                # mcp_servers.yaml`, a path that has never existed. The fallback
+                # could therefore never work; it only converted a config failure
+                # into a confusing "file not found" for a file nobody wrote.
+                # `parents[2]` is the repo root, where orchestration/ actually is.
+                config_path = Path(__file__).resolve().parents[2] / "orchestration" / "mcp_servers.yaml"
             self._mcp_configs = load_server_configs(config_path)
 
         server_id = script.mcp_server

@@ -24,12 +24,24 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# Default registry location (static fallback; config preferred in __init__)
-DEFAULT_REGISTRY_PATH = (
-    Path(__file__).resolve().parent.parent / "orchestration" / "model_registry.yaml"
-)
-DEFAULT_LEAN_REGISTRY_PATH = (
-    Path(__file__).resolve().parent.parent / "orchestration" / "model_registry_lean.yaml"
+# Default registry locations (static fallback; config preferred in __init__).
+#
+# 2026-08-01: both constants used to resolve to `src/orchestration/model_registry*.yaml`
+# — `parent.parent` from `src/registry/` is `src/`, which is a Python package with no
+# `orchestration/` directory. Neither file has ever existed, so
+# `ORCHESTRATOR_REGISTRY_MODE=lean` raised RegistryError on every start.
+#
+# The real artifacts, and the single source of truth for their locations, live in
+# `src/registry/model_descriptors.py` (also imported by
+# `scripts/registry/stack_change_pipeline.py`):
+#   * DEFAULT_RESEARCH_REGISTRY — the MASTER registry in epyc-inference-research.
+#   * DEFAULT_LEAN_REGISTRY     — `<repo>/orchestration/model_registry.yaml`, the
+#     lean runtime view that `src/registry/registry_compiler.py` compiles from the
+#     master at every stack start.
+# Re-exported here rather than restated so there is no fourth copy to drift.
+from src.registry.model_descriptors import (  # noqa: E402
+    DEFAULT_LEAN_REGISTRY as DEFAULT_LEAN_REGISTRY_PATH,
+    DEFAULT_RESEARCH_REGISTRY as DEFAULT_REGISTRY_PATH,
 )
 
 

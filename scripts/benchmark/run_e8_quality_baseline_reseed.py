@@ -3921,7 +3921,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--state-path", type=Path, default=PROJECT_ROOT / "orchestration/autopilot_state.json")
     parser.add_argument("--registry-path", type=Path, default=PROJECT_ROOT / "orchestration/model_registry.yaml")
-    parser.add_argument("--lean-registry-path", type=Path, default=PROJECT_ROOT / "orchestration/model_registry_lean.yaml")
+    # 2026-08-01: was orchestration/model_registry_lean.yaml (DELETED — a stale
+    # hand-maintained second role table). The lean registry is the compiled
+    # orchestration/model_registry.yaml, which registry_compiler.py regenerates from
+    # the master at every stack start.
+    parser.add_argument("--lean-registry-path", type=Path, default=PROJECT_ROOT / "orchestration/model_registry.yaml")
     parser.add_argument("--runtime-facts-path", type=Path, default=Path("/mnt/raid0/llm/tmp/orchestrator_runtime_facts.json"))
     parser.add_argument("--stack-priors-path", type=Path, default=PROJECT_ROOT / "orchestration/derived/stack_priors.yaml")
     parser.add_argument("--orchestrator-state-path", type=Path, default=PROJECT_ROOT / "logs/orchestrator_state.json")

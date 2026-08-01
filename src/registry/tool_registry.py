@@ -593,7 +593,12 @@ class ToolRegistry:
         from src.mcp_client import call_mcp_tool, load_server_configs
 
         if self._mcp_configs is None:
-            config_path = Path(__file__).parent.parent / "orchestration" / "mcp_servers.yaml"
+            # 2026-08-01: was `Path(__file__).parent.parent`, which from
+            # src/registry/ resolves to `src/` — `src/orchestration/mcp_servers.yaml`
+            # has never existed, so every MCP tool call through this path failed on
+            # a missing file rather than on anything real. Same defect as
+            # script_registry.py:435 and the registry_loader defaults.
+            config_path = Path(__file__).resolve().parents[2] / "orchestration" / "mcp_servers.yaml"
             self._mcp_configs = load_server_configs(config_path)
 
         if server not in self._mcp_configs:

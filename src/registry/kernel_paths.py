@@ -17,6 +17,7 @@ tree's ggml runs silently wrong rather than failing.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 KERNEL_ROOT = Path("/mnt/raid0/llm/kernels")
@@ -31,6 +32,12 @@ BACKEND_BINARIES: dict[str, str] = {
 }
 
 VALID_BACKENDS = frozenset(BACKEND_BINARIES)
+
+# Backends whose binaries need a vendor runtime on LD_LIBRARY_PATH in addition to
+# their own ggml. Data, not a branch: a future cuda/vulkan backend joins the map.
+BACKEND_VENDOR_LIB_DIRS: dict[str, tuple[Path, ...]] = {
+    "gpu": (Path(os.environ.get("ROCM_PATH", "/opt/rocm")) / "lib",),
+}
 
 
 class KernelPathError(RuntimeError):
@@ -58,6 +65,33 @@ def backend_dir(backend: str) -> Path:
             f"Repoint it with: ln -sfn <build dir> {path}"
         )
     return path.resolve()
+
+
+def backend_ld_library_path(backend: str) -> list[str]:
+    """Return the ``LD_LIBRARY_PATH`` entries a launcher must PREPEND for ``backend``.
+
+    Setting this is not optional for an accelerated backend, and the failure mode is
+    silent. ``build-hip/bin/llama-server`` has ``RUNPATH=$ORIGIN:/opt/rocm/lib``, but
+    ``LD_LIBRARY_PATH`` outranks ``RUNPATH`` in the loader's search order — so an
+    ambient ``LD_LIBRARY_PATH`` containing the CPU tree (which this host's shell
+    profile sets) makes the HIP binary load the CPU-only ``libggml.so`` from
+    ``build/bin``. No ROCm device is then registered and ``--device ROCm0`` is
+    rejected outright with ``invalid device: ROCm0`` (observed 2026-08-01 on
+    worker_vision:8086). A role that does NOT name a device fails quieter still: it
+    launches, serves, and runs entirely on the CPU.
+
+    Returns ``[]`` for backends that need no prepend (``cpu``): the CPU tree is what
+    the ambient environment already resolves to, and adding a path there would change
+    every CPU role's environment for no benefit.
+    """
+    if backend not in VALID_BACKENDS:
+        raise KernelPathError(
+            f"unknown kernel backend {backend!r}; valid: {sorted(VALID_BACKENDS)}"
+        )
+    vendor_dirs = BACKEND_VENDOR_LIB_DIRS.get(backend)
+    if not vendor_dirs:
+        return []
+    return [str(backend_dir(backend)), *(str(path) for path in vendor_dirs)]
 
 
 def server_binary(backend: str) -> Path:

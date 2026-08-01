@@ -623,12 +623,16 @@ class ProactiveDelegator:
                 feedback=review.feedback,
             )
 
-            # Log escalation if needed
+            # Log escalation if needed. 2026-08-01: to_tier was hardcoded to
+            # "architect_general" — a fifth restatement of the ladder, 25 lines above
+            # the escalation it describes, that logged the wrong destination for every
+            # role whose target is not architect_general. Ask the canonical ladder
+            # (_escalate_role is pure, so calling it twice is free).
             if review.decision == ReviewDecision.ESCALATE and self.progress_logger:
                 self.progress_logger.log_escalation(
                     task_id=task_ir.get("task_id", ""),
                     from_tier=role,
-                    to_tier="architect_general",
+                    to_tier=self._escalate_role(role),
                     reason=f"Review escalation: {review.feedback}",
                 )
 
@@ -715,16 +719,31 @@ class ProactiveDelegator:
         return "\n".join(prompt_parts)
 
     def _escalate_role(self, current_role: str) -> str:
-        """Get escalated role for current role."""
-        escalation_map = {
-            "worker_general": "coder_escalation",
-            "worker_math": "coder_escalation",
-            "worker_vision": "coder_escalation",
-            "coder_escalation": "architect_general",
-            "frontdoor": "coder_escalation",
-            "architect_general": "architect_general",
-        }
-        return escalation_map.get(current_role, "architect_general")
+        """Get escalated role for current role, via the canonical ladder.
+
+        2026-08-01: this held a private FOURTH copy of the escalation ladder. It had
+        drifted into two dead hops — ``architect_general -> architect_general`` (a
+        self-loop) and, after the W1 cutover, ``coder_escalation -> architect_general``
+        (the same model in the same process on :8083, so escalating could only change
+        the sampling seed). ``src.roles._ESCALATION_MAP``, reached through
+        ``Role.escalates_to()``, is the single source of truth.
+
+        Behaviour preserved from the private map:
+          * returns a role-name ``str`` (the caller reassigns ``role`` and keeps
+            dispatching, so ``None`` is not a legal return);
+          * a string that is not a known role still falls back to
+            ``architect_general``.
+        Terminal rungs (``architect_critic``, which has no escalation target) return
+        the input unchanged — the old map expressed exactly that for the then-terminal
+        ``architect_general``.
+        """
+        role = Role.from_string(current_role)
+        if role is None:
+            return Role.ARCHITECT_GENERAL.value
+        target = role.escalates_to()
+        if target is None:
+            return role.value
+        return target.value
 
     def _should_review_subtask(self, step: dict[str, Any]) -> bool:
         """Complexity-gated per-subtask review placement (RD-10b).

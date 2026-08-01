@@ -181,27 +181,51 @@ def test_descriptor_active_roles_are_canonical_launch_roles() -> None:
 # -----------------------------------------------------------------------------
 
 
-def test_build_vision_command_escalation_uses_worker_vision_safety_alias() -> None:
+def test_build_vision_command_escalation_uses_worker_vision_model() -> None:
+    """2026-08-01 W1 cutover — renamed from
+    ``test_build_vision_command_escalation_uses_worker_vision_safety_alias``.
+
+    vision_escalation is no longer a "temporary safety alias" pending a
+    higher-quality replacement: it is a routing label on worker_vision's ONE
+    :8086 MI210 process (Qwen3-VL-30B-A3B-Instruct Q4_K_M). Nothing launches this
+    branch any more (ROLE_LAUNCH_META has no vision_escalation entry), but the
+    branch is still live code, so its shape stays pinned here.
+    """
     cmd = oss._build_vision_command(port=8087, vision_type="escalation")
     assert oss.VISION_ESCALATION_MODEL == oss.VISION_WORKER_MODEL
     assert oss.VISION_ESCALATION_MMPROJ == oss.VISION_WORKER_MMPROJ
-    assert "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf" in oss.VISION_ESCALATION_MODEL
-    assert "mmproj-model-f16.gguf" in oss.VISION_ESCALATION_MMPROJ
+    # Was Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf / mmproj-model-f16.gguf.
+    assert "Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf" in oss.VISION_ESCALATION_MODEL
+    assert "mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf" in oss.VISION_ESCALATION_MMPROJ
     assert oss.VISION_ESCALATION_MODEL in cmd
     assert oss.VISION_ESCALATION_MMPROJ in cmd
     assert "--mmproj" in cmd
-    assert _flag_value(cmd, "--device") == "none"
+    # Was "none" (CPU-only 7B lane); the unified VL process is MI210-resident.
+    assert _flag_value(cmd, "--device") == "ROCm0"
     assert _flag_value(cmd, "--reasoning") == "off"
+    # Still no expert-count override: the registry corrected int:4 to "use the
+    # GGUF default of 8" on 2026-07-31.
     assert "--override-kv" not in cmd
-    assert cmd[cmd.index("-c") + 1] == "8192"
-    assert cmd[cmd.index("-t") + 1] == "24"
+    # Was "8192"; LAUNCH_CONTEXT_TOKENS moved both VL roles to the measured 16384.
+    assert cmd[cmd.index("-c") + 1] == "16384"
+    # Was "24", from NUMA_CONFIG["vision_escalation"]. That entry was DELETED by
+    # the cutover (the role launches nothing), so _resolve_thread_count now falls
+    # through to its unknown-role default of 96. Pinned deliberately: if anyone
+    # re-rosters vision_escalation as a process, this flips and demands a review.
+    assert cmd[cmd.index("-t") + 1] == "96"
+    assert "vision_escalation" not in oss.NUMA_CONFIG
 
 
-def test_build_vision_command_worker_uses_small_model() -> None:
+def test_build_vision_command_worker_uses_stack_prior_shape() -> None:
+    """2026-08-01 W1 cutover — renamed from
+    ``test_build_vision_command_worker_uses_small_model``: the VL worker is no
+    longer the small model (Qwen2.5-VL-7B, 4.4 GB CPU) but Qwen3-VL-30B-A3B
+    Q4_K_M on MI210."""
     cmd = oss._build_vision_command(port=8086, vision_type="worker")
     assert oss.VISION_WORKER_MODEL in cmd
     assert oss.VISION_WORKER_MMPROJ in cmd
-    assert cmd[cmd.index("-c") + 1] == "8192"
+    # Was "8192"; now the 16384 the model was actually measured at.
+    assert cmd[cmd.index("-c") + 1] == "16384"
     assert cmd[cmd.index("-t") + 1] == "24"
 
 
@@ -209,7 +233,12 @@ def test_build_vision_command_worker_uses_small_model() -> None:
     ("role", "port", "vision_type"),
     [
         ("worker_vision", 8086, "worker"),
-        ("vision_escalation", 8087, "escalation"),
+        # 2026-08-01 W1 cutover: the ("vision_escalation", 8087, "escalation")
+        # case is VOID, not skipped. vision_escalation has no ROLE_LAUNCH_META
+        # entry and no NUMA_CONFIG entry any more, so no launch witness exists for
+        # it to be compared against — its stack-prior record is worker_vision's
+        # entry with alias=True and vision_type="worker", already covered by the
+        # row above. Port 8087 is retired.
     ],
 )
 def test_build_vision_command_matches_stack_prior_launch_witness(
@@ -270,11 +299,29 @@ def test_build_vision_command_prefers_stack_prior_requirements(
     assert "--flash-attn" not in cmd
 
 
-def test_dispatcher_uses_cpu_device_for_temporary_vision_escalation_alias() -> None:
-    cmd = oss.build_server_command(None, 8087, vision_mode=True, vision_type="escalation")
+def test_dispatcher_resolves_vision_escalation_to_worker_vision_gpu_process() -> None:
+    """2026-08-01 W1 cutover — REPLACES
+    ``test_dispatcher_uses_cpu_device_for_temporary_vision_escalation_alias``.
 
-    assert _flag_value(cmd, "--device") == "none"
-    assert "ROCm0" not in _all_flag_values(cmd, "--device")
+    That test asserted ``--device none`` on a dedicated :8087 CPU escalation
+    server. The concept is void: the cutover deleted that server, so there is no
+    CPU device left to assert. The surviving invariant — where does
+    vision_escalation actually resolve to — is asserted instead, with the device
+    check kept at identical strength and its polarity flipped (ROCm0 in, "none"
+    out).
+    """
+    # vision_escalation resolves onto worker_vision's process, not one of its own.
+    assert oss.PORT_MAP["vision_escalation"] == oss.PORT_MAP["worker_vision"] == 8086
+    assert "vision_escalation" not in oss.ROLE_LAUNCH_META  # launches nothing
+    assert "vision_escalation" not in oss.NUMA_CONFIG  # no CPU wiring of its own
+    assert oss.ROLE_LAUNCH_META["worker_vision"]["shared_with_first_n"] == [
+        "vision_escalation"
+    ]
+
+    cmd = oss.build_server_command(None, 8086, vision_mode=True, vision_type="worker")
+
+    assert _flag_value(cmd, "--device") == "ROCm0"
+    assert "none" not in _all_flag_values(cmd, "--device")
 
 
 def test_build_embedding_command_enables_embeddings_and_cls_pool() -> None:
@@ -620,10 +667,26 @@ def test_append_kv_quant_args_emits_q8_for_frontdoor() -> None:
     assert cmd == ["-ctk", "q8_0", "-ctv", "q8_0"]
 
 
-def test_append_kv_quant_args_emits_q4_f16_for_architect_general() -> None:
+def test_append_kv_quant_args_emits_q4_f16_for_architect_critic() -> None:
+    """2026-08-01 W1 cutover — retargeted from architect_general.
+
+    The (q4_0, f16) KV pair belongs to the Qwen3.5-122B UD-Q4_K_M, and it moved
+    WITH the model when the 122B vacated architect_general for the new
+    architect_critic role on :8074. Same expectation, new owner.
+    """
+    cmd: list[str] = []
+    oss._append_kv_quant_args(cmd, "architect_critic")
+    assert cmd == ["-ctk", "q4_0", "-ctv", "f16"]
+
+
+def test_append_kv_quant_args_emits_q8_for_architect_general() -> None:
+    """2026-08-01 W1 cutover: architect_general is now Qwen3.6-27B dense Q8 on
+    MI210 and takes q8_0/q8_0 (was q4_0/f16 under the 122B). It MUST match
+    coder_escalation, which is an alias on the very same :8083 process — two
+    aliases declaring different KV shapes for one server is incoherent."""
     cmd: list[str] = []
     oss._append_kv_quant_args(cmd, "architect_general")
-    assert cmd == ["-ctk", "q4_0", "-ctv", "f16"]
+    assert cmd == ["-ctk", "q8_0", "-ctv", "q8_0"]
 
 
 def test_append_kv_quant_args_noop_for_role_without_config() -> None:
@@ -861,7 +924,12 @@ def test_eval_batch_frontdoor_command_uses_pbench3_serving_shape() -> None:
 def test_dispatcher_routes_vision_mode() -> None:
     with patch.object(oss, "_build_vision_command", return_value=["VISION"]) as m:
         out = oss.build_server_command(None, 8087, vision_mode=True, vision_type="escalation")
-    assert out == ["VISION", "--device", "none"]
+    # 2026-08-01: was ["VISION", "--device", "none"]. The tail is the dispatcher's
+    # device-pinning step, which used to ASSUME CPU regardless of the role; it now
+    # reads the role's compiled declaration, and vision_escalation declares ROCm0.
+    # Asserting "none" here was pinning the defect that launched GPU-declared roles
+    # with every device disabled. Polarity flipped, strength unchanged.
+    assert out == ["VISION", "--device", "ROCm0"]
     # numa_instance defaults to 0 (full) and is forwarded post-da1aed6 so quarters
     # get NUMA_CONFIG -t (was always -t 96).
     m.assert_called_once_with(8087, "escalation", 0)
@@ -1055,9 +1123,22 @@ def test_every_instance_interleaves_over_only_the_nodes_it_spans() -> None:
 
 
 def test_role_level_numa_policy_still_applies_to_all_instances() -> None:
-    prefix = oss._numa_prefix("architect_general", 0)
-
-    assert prefix[:3] == ["numactl", "--interleave=all", "--"]
+    # 2026-08-01 W1 cutover: the full-machine `interleave=all` instance under test
+    # here used to be architect_general's; it moved WITH the 122B to
+    # architect_critic (:8074, cpus 0-95). Same policy, same shape, new role name.
+    assert oss._numa_prefix("architect_critic", 0)[:3] == [
+        "numactl",
+        "--interleave=all",
+        "--",
+    ]
+    # architect_general kept a role-level (not per-instance) policy across the
+    # cutover — it is now the GPU host quarter on NPS4 node 3. Asserted so the
+    # "role-level policy applies" contract still has a witness on this role.
+    assert oss._numa_prefix("architect_general", 0)[:3] == [
+        "numactl",
+        "--membind=3",
+        "--",
+    ]
 
 
 def test_start_server_embedding_candidate_reports_recipe_model_path(

@@ -22,7 +22,10 @@ from src.registry.stack_priors import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 _RUNTIME_SELECTED_ROLE_ALIASES = {
-    "coder_escalation": "frontdoor",
+    # 2026-08-01 W1 CUTOVER — see src/config/models.py for the rationale. A stale
+    # entry here reports the role permanently unrealized in /health.
+    "coder_escalation": "architect_general",
+    "vision_escalation": "worker_vision",
     "worker_summarize": "frontdoor",
     "worker_explore": "worker_general",
     "worker_math": "worker_general",

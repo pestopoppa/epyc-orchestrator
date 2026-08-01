@@ -182,6 +182,9 @@ class TestScoringConfigDefaults:
             "frontdoor",
             "coder_escalation",
             "architect_general",
+            # 2026-08-01 W1 cutover: NEW production role — the Qwen3.5-122B
+            # UD-Q4_K_M that architect_general vacated, on CPU :8074.
+            "architect_critic",
             "ingest_long_context",
             "worker_explore",
             "worker_general",
@@ -196,17 +199,30 @@ class TestScoringConfigDefaults:
     def test_baseline_tps_loads_current_registry_values(self):
         cfg = ScoringConfig()
 
-        assert cfg.baseline_tps_by_role["frontdoor"] == pytest.approx(24.3)
-        assert cfg.baseline_tps_by_role["coder_escalation"] == pytest.approx(24.3)
-        assert cfg.baseline_tps_by_role["architect_general"] == pytest.approx(12.19)
+        # Every literal below is read off the regenerated
+        # orchestration/derived/stack_priors.yaml (roles.<role>.priors.throughput_tps)
+        # as of the 2026-08-01 W1 cutover. Old values are recorded inline so a
+        # future drift is diffable rather than mysterious.
+        assert cfg.baseline_tps_by_role["frontdoor"] == pytest.approx(40.22)  # was 24.3
+        # coder_escalation now rides architect_general's :8083 GPU 27B (was 24.3,
+        # frontdoor's 35B); the two MUST agree — same model, same process.
+        assert cfg.baseline_tps_by_role["coder_escalation"] == pytest.approx(47.79)
+        # architect_general: Qwen3.6-27B on MI210 (was 12.19, the CPU 122B).
+        assert cfg.baseline_tps_by_role["architect_general"] == pytest.approx(47.79)
+        # architect_critic: the CPU 122B's own measured throughput, moved with it.
+        assert cfg.baseline_tps_by_role["architect_critic"] == pytest.approx(24.0)
         assert cfg.baseline_tps_by_role["ingest_long_context"] == pytest.approx(20.8)
-        assert cfg.baseline_tps_by_role["worker_explore"] == pytest.approx(38.46)
-        assert cfg.baseline_tps_by_role["worker_general"] == pytest.approx(38.46)
-        assert cfg.baseline_tps_by_role["worker_math"] == pytest.approx(38.46)
-        assert cfg.baseline_tps_by_role["worker_summarize"] == pytest.approx(24.3)
-        assert cfg.baseline_tps_by_role["toolrunner"] == pytest.approx(38.46)
-        assert cfg.baseline_tps_by_role["worker_vision"] == pytest.approx(21.32)
-        assert cfg.baseline_tps_by_role["vision_escalation"] == pytest.approx(21.32)
+        # worker_* fleet: 38.46 -> 56.86 (registry re-baseline, not W1).
+        assert cfg.baseline_tps_by_role["worker_explore"] == pytest.approx(56.86)
+        assert cfg.baseline_tps_by_role["worker_general"] == pytest.approx(56.86)
+        assert cfg.baseline_tps_by_role["worker_math"] == pytest.approx(56.86)
+        # worker_summarize is frontdoor's ONLY alias now, so it tracks frontdoor.
+        assert cfg.baseline_tps_by_role["worker_summarize"] == pytest.approx(40.22)
+        assert cfg.baseline_tps_by_role["toolrunner"] == pytest.approx(56.86)
+        # Both VL roles are one MI210 process (Qwen3-VL-30B-A3B); was 21.32 on the
+        # CPU Qwen2.5-VL-7B.
+        assert cfg.baseline_tps_by_role["worker_vision"] == pytest.approx(112.2)
+        assert cfg.baseline_tps_by_role["vision_escalation"] == pytest.approx(112.2)
         assert _RETIRED_ARCHITECT_ROLE not in cfg.baseline_tps_by_role
 
     def test_default_config_exposes_stack_prior_sources(self):

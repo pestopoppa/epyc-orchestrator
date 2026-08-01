@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-07-31T21:53:28Z'
+compiled_at: '2026-08-01T09:49:50Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 4e8bf1f0
-    sha256: 0b918c85f46726e380527b8f86058c38c0cb36305bed262ea94d6eccf7ef9984
+    repo_commit: ca5f3e81
+    sha256: efa951a383c5190eaad510af292b89aa7e8957ae72911dbf9af86984f5510a81
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: 596a1e24
-    sha256: ee172b18a76d14d4a12bbd1899686fba93f0d21af87d8459177926abdfd0f283
+    repo_commit: fd7a2cdb
+    sha256: fad010833712d17567db62d1d021b921cb4167478654c8c1676a88e4e2b78e32
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -138,99 +138,6 @@ models:
     server_role: worker
     requirements: {}
   known_gaps: []
-- model_id: qwen2.5-vl-7b-q4_k_m
-  display_name: Qwen2.5-VL-7B-Instruct
-  family: qwen2.5-vl
-  arch: dense
-  params_b: 7.0
-  active_b: 7.0
-  quant: Q4_K_M
-  mem_gb: 4.4
-  ctx_max: 128000
-  ctx_model_max: null
-  modalities:
-  - text
-  - vision
-  role_bindings:
-    roles:
-    - vision_escalation
-    - worker_vision
-    server_roles: []
-    runtime_aliases: []
-    shared_mmap: false
-  quality:
-    suite_vector:
-      vision_language: 0.9167
-      overall: 0.9167
-    source: orchestration/model_registry.yaml
-    eval_protocol: MEASUREMENT.md#canonical-quality
-    measured:
-    - date: '2026-07-17'
-      protocol: registry performance block
-      value:
-        baseline_tps: 16.91
-        optimized_tps: 21.32
-        speedup: 1.0x
-        vl_score:
-          pct: 100.0
-          raw: 4/4 K35 fixed fixtures
-        benchmark_date: '2026-07-17'
-        evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json
-        k35_longdecode_observation: '2026-07-19 current experimental-v7 `ed4091266` comparison against the MiniCPM-o candidate found the temporary Qwen2.5-VL alias still faster on MI210 (`4/4`, quality
-          decode mean `133.29 t/s`, long decode `118.50 t/s`). MiniCPM-o also passed the same four fixtures but decoded the long sample at `109.18 t/s`. The controlled MiniCPM-o live launch/smoke and Qwen2.5-VL
-          rollback check were executed after the candidate gate, but persistent API/AutoPilot traffic was not restarted or observed; keep this Qwen2.5-VL alias as the safety lane until that persistent-live
-          cutover is explicitly performed. SUPERSEDED 2026-07-31: the MiniCPM-o cutover is CANCELLED and MiniCPM-o is deprecated with its weights deleted. Qwen2.5-VL is no longer a "temporary alias" or
-          a "safety lane" pending a flip — on 42q OCRBench+ChartQA it scored 35/42 against MiniCPM-o''s 31/42, so it is the better model on quality as well as speed and it stands as the incumbent on its
-          own merits. Any future vision_escalation change should be evaluated against Qwen3-VL-30B-A3B Q4_K_M (36/42), the only arm measured above the incumbent.
-
-          '
-    - date: '2026-03-04'
-      protocol: registry performance block
-      value:
-        baseline_tps: 15.28
-        optimized_tps: 20.0
-        speedup: 1.3x
-        vl_score: 11/12 (92%)
-        benchmark_date: '2026-03-04'
-        k35_longdecode_observation: '2026-07-19 current experimental-v7 `ed4091266` MI210 worker-vs-escalation comparison kept Qwen2.5-VL as the faster safe lane: fixed fixtures passed `4/4`, quality decode
-          averaged `133.29 t/s`, and the chart long-decode sample generated `437` completion tokens at `118.50 t/s` with max `11%` VRAM. Artifact: `/mnt/raid0/llm/epyc-inference-research/data/k35_vision_matrix/k35_worker_vs_escalation_mi210_longdecode_20260719T004016Z/summary.json`.
-
-          '
-  speed:
-    solo_96t_tps: null
-    quarter_48t_tps: null
-    prefill_tps: null
-    optimized_tps: 21.32
-    source: orchestration/model_registry.yaml
-    measured:
-    - date: '2026-07-17'
-      protocol: registry performance block
-      baseline_tps: 16.91
-      optimized_tps: 21.32
-  acceleration:
-    spec_type: baseline
-    draft_compat: []
-    enable_thinking: null
-    thinking_control:
-      mode: native_no_thinking_toggle
-      effective_mode: native_no_think_tags
-      evidence_strength: model_family_inferred
-      evidence: Qwen2.5-VL Instruct predates Qwen3 thinking controls; multimodal role has no chat-template thinking toggle.
-    kv:
-      k: null
-      v: null
-  serving:
-    binary: llama.cpp
-    binary_dir: null
-    numa_policy: role_endpoint_binding
-    mlock: false
-    ports:
-    - 8086
-    - 8087
-    server_role: null
-    requirements:
-      mmproj_path: lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf
-  known_gaps: []
 - model_id: qwen3-next-80b-a3b-q4_k_m
   display_name: Qwen3-Next-80B-A3B-Instruct
   family: qwen3-next
@@ -298,6 +205,107 @@ models:
   architecture:
     attention_layers: 32
     source: registry.model
+- model_id: qwen3-vl-30b-a3b-q4_k_m
+  display_name: Qwen3-VL-30B-A3B-Instruct
+  family: qwen3-vl
+  arch: qwen3vlmoe
+  params_b: 30.0
+  active_b: 3.0
+  quant: Q4_K_M
+  mem_gb: 17.3
+  ctx_max: 262144
+  ctx_model_max: null
+  modalities:
+  - text
+  - vision
+  role_bindings:
+    roles:
+    - vision_escalation
+    - worker_vision
+    server_roles:
+    - worker_vision
+    runtime_aliases:
+    - worker_vision
+    shared_mmap: true
+  quality:
+    suite_vector:
+      vision_language: 0.636
+      overall: 0.636
+    source: orchestration/model_registry.yaml
+    eval_protocol: MEASUREMENT.md#canonical-quality
+    measured:
+    - date: '2026-07-31'
+      protocol: registry performance block
+      value:
+        inherits_from: worker_vision
+        baseline_tps: 112.2
+        optimized_tps: 112.2
+        vl_score:
+          pct: 63.6
+          raw: 159/250
+        vl_score_protocol: 'MMMU-val, 250 multiple-choice single-image questions, MI210 (ROCm0), 2026-07-31. Paired exact McNemar vs Qwen2.5-VL-7B (131/250): +11.2 pp, p=0.0011.'
+        benchmark_date: '2026-07-31'
+        evidence: /mnt/raid0/llm/tmp/vision_final_results.json
+    - date: '2026-07-31'
+      protocol: registry performance block
+      value:
+        baseline_tps: 112.2
+        optimized_tps: 112.2
+        decode_tps_range: 102.84 - 178.46
+        prefill_tps: 1356.95
+        cold_load_s: 4.0
+        vram_mb: 21049
+        vram_caveat: VRAM grows on first EXECUTION, not at load — the four-model steady state measured 62.59 of 63.98 GiB (1.40 GiB headroom) after each model ran once, vs 61.66 at load. Any budget built
+          from load-time figures runs ~1 GiB optimistic.
+        speedup: 1.0x
+        vl_score:
+          pct: 63.6
+          raw: 159/250
+        vl_score_protocol: 'MMMU-val, 250 multiple-choice single-image questions, MI210 (ROCm0), 2026-07-31. Paired exact McNemar vs Qwen2.5-VL-7B (131/250): +11.2 pp, p=0.0011.'
+        benchmark_date: '2026-07-31'
+        evidence: /mnt/raid0/llm/tmp/vision_final_results.json
+        evidence_harness: /mnt/raid0/llm/tmp/vision_final.py
+        cutover_observation: '2026-07-31 MMMU validation, 250 multiple-choice single-image questions, MI210 (ROCm0), llama.cpp-experimental build-v8-hip, one arm at a time, `--image-min-tokens 1024` on
+          EVERY arm, prompt cache disabled (`--cache-ram 0`). Qwen3-VL-30B-A3B Q4_K_M `159/250` (63.6%); Qwen2.5-VL-7B Q4_K_M incumbent `131/250` (52.4%); Qwen3-VL-8B Q8_0 `143/250` (57.2%); Qwen3-VL-4B
+          Q8_0 `135/250` (54.0%). Paired exact McNemar over the 250 aligned items: 49 candidate-only-correct vs 21 incumbent-only-correct, two-sided p=0.0011. COSTS, recorded because this swap is not free:
+          decode is ~1.9x SLOWER (112.20 vs 214.54 t/s median, same host, same harness) and VRAM is 2.7x larger (21049 vs 7685 MB). Quality was the binding constraint; speed was not. PARSE-FAIL ASYMMETRY:
+          the candidate produced 17 unparseable answers, the incumbent 0. That asymmetry counts AGAINST the candidate in the score above, so +11.2 pp is a FLOOR. A further 23 candidate answers were truncated
+          at the 2048-token rescue cap and scored wrong.
+
+          '
+  speed:
+    solo_96t_tps: 112.2
+    quarter_48t_tps: null
+    prefill_tps: null
+    optimized_tps: 112.2
+    source: orchestration/model_registry.yaml
+    measured:
+    - date: '2026-07-31'
+      protocol: server_mode throughput
+      value_tps: 112.2
+  acceleration:
+    spec_type: baseline
+    draft_compat: []
+    enable_thinking: null
+    thinking_control:
+      mode: native_no_thinking_toggle
+      effective_mode: native_no_think_tags
+      evidence_strength: measured
+      evidence: 'Inherited from worker_vision — same process, same weights. 2026-07-31 MMMU-250: 250/250 turns returned message.content, 0 empty, nothink fallback never fired.'
+    kv:
+      k: null
+      v: null
+  serving:
+    binary: llama.cpp
+    binary_dir: null
+    numa_policy: server_default
+    mlock: false
+    ports:
+    - 8086
+    server_role: worker_vision
+    requirements:
+      mmproj_path: /mnt/raid0/llm/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf
+  known_gaps: []
 - model_id: qwen3.5-122b-a10b-q4_k_m
   display_name: Qwen3.5-122B-A10B
   family: qwen3.5
@@ -312,10 +320,10 @@ models:
   - text
   role_bindings:
     roles:
-    - architect_general
+    - architect_critic
     - qwen35_122b_q4km
     server_roles:
-    - architect_general
+    - architect_critic
     runtime_aliases: []
     shared_mmap: true
   quality:
@@ -327,20 +335,15 @@ models:
     - date: null
       protocol: registry performance block
       value:
-        superseded_model_history:
-          model: Qwen3-235B-A22B-Q4_K_M
-          note: category=BASELINE / historical. Never a headline, never a decision input.
-          baseline_tps: 5.3
-          moe4_baseline_tps: 3.87
-          moe4_spec_tps: 8.21
-          full_spec_tps: 6.08
-        qwen35_122b_probe_b_tps: 12.19
+        baseline_tps: 11.3
         optimized_tps: 24.0
         optimized_tps_long_context: 15.76
-        optimized_tps_attest: '[published stack measurement artifact, production-optimal rows, 2026-07-31]'
+        speedup: 2.12x
         quality_score: 2.57/3
-        spec_acceptance_moe4: 54.8%
-        spec_acceptance_full: 52.7%
+        measurement_category: OPTIMUM
+        measurement_date: '2026-07-31'
+        contention_note: This role's single full instance on 0-95 holds ALL FOUR CPU region locks; while it runs it serializes the entire CPU NUMA topology (stack_numa.py:274-276). That is inherent and
+          accepted for this role, but it is the real cost of tier:hot — not the 69 GB.
     - date: null
       protocol: registry performance block
       value:
@@ -377,7 +380,7 @@ models:
     optimized_tps: 24.0
     source: orchestration/model_registry.yaml
     measured:
-    - date: null
+    - date: '2026-07-31'
       protocol: server_mode throughput
       value_tps: 24.0
   acceleration:
@@ -388,6 +391,143 @@ models:
     thinking_control:
       mode: toggle_off
       source: chat_template_kwargs.enable_thinking
+    kv:
+      k: null
+      v: null
+    draft_max: 4
+    k: 4
+    p_split: 0
+    lookup: false
+  serving:
+    binary: llama.cpp
+    binary_dir: null
+    numa_policy: single_96t
+    mlock: true
+    ports:
+    - 8074
+    server_role: architect_critic
+    requirements: {}
+  known_gaps: []
+  architecture:
+    attention_layers: 64
+    source: registry.model
+- model_id: qwen3.6-27b-mtp-q8_0
+  display_name: Qwen3.6-27B-MTP-Q8_0
+  family: qwen3.6
+  arch: qwen35
+  params_b: 27.0
+  active_b: null
+  quant: Q8_0
+  mem_gb: 27.05
+  ctx_max: 262144
+  ctx_model_max: null
+  modalities:
+  - text
+  role_bindings:
+    roles:
+    - architect_general
+    - coder_escalation
+    - qwen36_27b_mtp_q8_local
+    server_roles:
+    - architect_general
+    - coder_escalation
+    runtime_aliases: []
+    shared_mmap: true
+  quality:
+    suite_vector:
+      swe_verified: 0.575
+    source: orchestration/model_registry.yaml
+    eval_protocol: MEASUREMENT.md#canonical-quality
+    measured:
+    - date: '2026-07-31'
+      protocol: registry performance block
+      value:
+        superseded_model_history:
+          model: Qwen3-235B-A22B-Q4_K_M
+          note: category=BASELINE / historical. Never a headline, never a decision input.
+          baseline_tps: 5.3
+          moe4_baseline_tps: 3.87
+          moe4_spec_tps: 8.21
+          full_spec_tps: 6.08
+        superseded_model_history_122b:
+          model: Qwen3.5-122B-A10B UD-Q4_K_M
+          note: Relocated to roles.architect_critic. Retained here only as the swap breadcrumb.
+          qwen35_122b_probe_b_tps: 12.19
+          optimized_tps: 24.0
+          optimized_tps_long_context: 15.76
+          quality_score: 2.57/3
+          spec_acceptance_moe4: 54.8%
+          spec_acceptance_full: 52.7%
+        baseline_tps: 30.87
+        optimized_tps: 47.79
+        optimized_tps_long_context: 36.71
+        optimized_tps_attest: '[published stack measurement record §01, 2026-07-31, production-optimal rows]'
+        contended_tps: 19.81
+        speedup: 1.55x
+        vram_gib: 36.7
+        swe_verified_pct: 57.5
+        swe_verified_raw: 23/40
+        swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
+        swe_verified_comparators: A1 Qwen3.5-122B-A10B IQ2 37.5% (15/40) · A4 Qwen3.6-35B-A3B 32.5% (13/40). NOTE A1 is the IQ2 quant, NOT the UD-Q4_K_M that architect_critic serves — this is not a head-to-head
+          against the deployed 122B.
+        swe_verified_shape_caveat: Measured at -c 49152 / f16 KV / -np 1; production launches -c 16384 / q8_0 KV / slots 2. Quality transfer across context depth is assumed here, not measured.
+        swe_verified_transfer_basis: operator-certified v7-to-v8 kernel delta 0.0pp exact quality parity; quality_transfer_to_v8_eligible=true
+        quality_score: null
+        benchmark_date: '2026-07-31'
+    - date: null
+      protocol: registry performance block
+      value:
+        inherits_from: architect_general
+        baseline_tps: 30.87
+        optimized_tps: 47.79
+        optimized_tps_long_context: 36.71
+        optimized_tps_attest: '[published stack measurement record §01, 2026-07-31]'
+        contended_tps: 19.81
+        swe_verified_pct: 57.5
+        swe_verified_raw: 23/40
+        swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
+        quality_pct: null
+        coder_suite: null
+        agentic_suite: null
+        math_suite: null
+        speedup: 1.55x
+    - date: null
+      protocol: registry performance block
+      value:
+        benchmark_status: current_v7_mi210_context_and_ngram_observation_quality_gate_open
+        current_v7_mi210_context_observation: '2026-07-18 current experimental-v7 `cf051d3e1` MI210 llama-bench run on the exact MTP Q8 artifact with `-dev ROCm0 -ngl 99 -fa on` measured base benchmark
+          throughput: prompt-only `pp512 839.72 t/s`, decode-only `tg128 30.85 t/s`, and paired context rows `pp2048+tg512 134.70 t/s`, `pp8192+tg512 311.90 t/s`, `pp32768+tg512 477.89 t/s`. `llama-bench`
+          exposed no MTP/ngram selector, so this is not native-MTP acceptance evidence or a default acceleration claim.
+
+          '
+        ngram_gpu_smoke_observation: '2026-07-18 bounded MI210 server/chat smoke on experimental-v7 `cf051d3e18c7` used the exact MTP Q8 artifact after DR-0 scheduling found no aggressive same-model IQ
+          drafter available. Four prompts per arm, 256-token cap, seed 42, temperature 0: no-spec baseline mean `31.37 t/s`; `ngram-simple` mean `33.40 t/s`, median `31.29 t/s`, `34/58` accepted drafts
+          (`58.6%`), output matched baseline on `4/4`; `ngram-cache` mean `29.11 t/s`, `8/17` accepted (`47.1%`), output matched baseline on `3/4`. Observation-only; not a role or default acceleration claim.
+
+          '
+        evidence:
+        - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/metrics_summary.json
+        - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/summary.md
+        - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/summary.json
+        - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/dr0_blocker.txt
+  speed:
+    solo_96t_tps: 47.79
+    quarter_48t_tps: null
+    prefill_tps: null
+    optimized_tps: 47.79
+    source: orchestration/model_registry.yaml
+    measured:
+    - date: '2026-07-31'
+      protocol: server_mode throughput
+      value_tps: 47.79
+  acceleration:
+    spec_type: draft-mtp
+    draft_compat:
+    - qwen3.6-27b-mtp-q8_0
+    enable_thinking: false
+    thinking_control:
+      mode: toggle_off
+      source: model.disable_thinking
     kv:
       k: null
       v: null
@@ -422,11 +562,9 @@ models:
   - text
   role_bindings:
     roles:
-    - coder_escalation
     - frontdoor
     - worker_summarize
     server_roles:
-    - coder_escalation
     - frontdoor
     runtime_aliases:
     - frontdoor
@@ -434,10 +572,8 @@ models:
   quality:
     suite_vector:
       overall: 0.93
-      coder: 0.9667
-      agentic: 0.8667
-      math: 0.9667
       general: 1.0
+      coder: 0.9667
       thinking: 0.9333
       long_context: 1.0
     source: orchestration/model_registry.yaml
@@ -445,15 +581,12 @@ models:
     measured:
     - date: '2026-05-04'
       protocol: registry benchmark_score
-      value: 170/183 (93%)
-    - date: '2026-05-04'
-      protocol: registry benchmark_score
       value: 170/183 (92.9%)
     - date: '2026-05-04'
       protocol: registry benchmark_score
       value: 170/183 (92.9%)
   speed:
-    solo_96t_tps: 40.22
+    solo_96t_tps: null
     quarter_48t_tps: null
     prefill_tps: null
     optimized_tps: 40.22
@@ -463,27 +596,29 @@ models:
       protocol: server_mode throughput
       value_tps: 40.22
   acceleration:
-    spec_type: none
-    draft_compat: []
+    spec_type: draft-mtp
+    draft_compat:
+    - qwen3.6-35b-a3b-mtp-q8_0
     enable_thinking: false
     thinking_control:
       mode: toggle_off
       source: model.disable_thinking
-    kv:
+    kv: &id001
       k: q8_0
       v: q8_0
+    draft_max: 4
     lookup: false
     corpus_retrieval: true
   serving:
     binary: llama.cpp
     binary_dir: null
-    numa_policy: server_default
+    numa_policy: 2x48t_half_instances
     mlock: true
     ports:
     - 8070
     - 8080
     - 8180
-    server_role: coder_escalation
+    server_role: frontdoor
     requirements: {}
   known_gaps: []
   architecture:
@@ -534,9 +669,7 @@ models:
     thinking_control:
       mode: toggle_off
       source: model.disable_thinking
-    kv:
-      k: q8_0
-      v: q8_0
+    kv: *id001
     draft_max: 4
     lookup: false
     corpus_retrieval: true

@@ -56,17 +56,25 @@ def test_stack_manifest_info_defaults_to_launcher_full_mode(monkeypatch: pytest.
 
     assert roles["frontdoor"]["url"] == "http://localhost:8070"
     assert roles["frontdoor"]["ports"] == [8070]
-    assert roles["coder_escalation"]["url"] == "http://localhost:8070"
+    # 2026-08-01 W1 cutover: coder_escalation was http://localhost:8070 (alias on
+    # frontdoor's 35B CPU process); it is now an alias on architect_general's
+    # :8083 MI210 Qwen3.6-27B process.
+    assert roles["coder_escalation"]["url"] == "http://localhost:8083"
     assert roles["worker_summarize"]["url"] == "http://localhost:8070"
     assert roles["worker_general"]["url"] == "http://localhost:8072"
     assert roles["worker_general"]["ports"] == [8072]
     assert roles["ingest_long_context"]["url"] == "http://localhost:8085"
-    assert roles["vision_escalation"]["url"] == "http://localhost:8087"
+    # 2026-08-01 W1 cutover: vision_escalation was its own server on
+    # http://localhost:8087; it is now an alias on worker_vision's :8086 process
+    # (port 8087 retired). The requirements-equality assertion below is what makes
+    # it an alias rather than a second VL model, so it is kept verbatim.
+    assert roles["vision_escalation"]["url"] == "http://localhost:8086"
     assert (
         roles["vision_escalation"]["launch"]["requirements"]
         == roles["worker_vision"]["launch"]["requirements"]
     )
-    assert "Qwen2.5-VL-7B-Instruct" in roles["vision_escalation"]["launch"][
+    # 2026-08-01 W1 cutover: was "Qwen2.5-VL-7B-Instruct".
+    assert "Qwen3-VL-30B-A3B-Instruct" in roles["vision_escalation"]["launch"][
         "requirements"
     ]["model_path"]
 
@@ -79,9 +87,13 @@ def test_stack_manifest_info_can_compile_explicit_both_mode(
     _aliases, roles = _stack_manifest_info()
 
     assert roles["frontdoor"]["url"] == "http://localhost:8070"
-    assert roles["frontdoor"]["ports"] == [8070, 8080, 8180, 8280, 8380]
+    # Half fleet: full + 2 halves. Was [8070, 8080, 8180, 8280, 8380] (full + 4
+    # quarters) before the 2026-07-30 quarter retirement in stack_numa.py; asserted
+    # against the current lineup as of the 2026-08-01 W1 cutover sweep.
+    assert roles["frontdoor"]["ports"] == [8070, 8080, 8180]
     assert roles["worker_general"]["url"] == "http://localhost:8072"
-    assert roles["worker_general"]["ports"] == [8072, 8082, 8182, 8282, 8382]
+    # Was [8072, 8082, 8182, 8282, 8382] (full + 4 quarters); now full + 2 halves.
+    assert roles["worker_general"]["ports"] == [8072, 8082, 8182]
 
 
 def test_alias_roles_inherit_host_full_fleet_ports(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,25 +105,29 @@ def test_alias_roles_inherit_host_full_fleet_ports(monkeypatch: pytest.MonkeyPat
     _aliases, roles = _stack_manifest_info()
 
     # Host roles keep their own fleet + primary port/url (unchanged by the fix).
-    assert roles["worker_general"]["ports"] == [8072, 8082, 8182, 8282, 8382]
+    # Fleets were full + 4 quarters ([...8282, 8382] / [...8280, 8380]) until the
+    # 2026-07-30 quarter retirement; they are now full + 2 halves.
+    assert roles["worker_general"]["ports"] == [8072, 8082, 8182]
     assert roles["worker_general"]["port"] == 8072
     assert roles["worker_general"]["url"] == "http://localhost:8072"
-    assert roles["frontdoor"]["ports"] == [8070, 8080, 8180, 8280, 8380]
+    assert roles["frontdoor"]["ports"] == [8070, 8080, 8180]
     assert roles["frontdoor"]["port"] == 8070
 
     # Aliases now inherit the FULL host fleet (previously a single quarter).
     assert roles["worker_math"]["ports"] == roles["worker_general"]["ports"]
     assert roles["toolrunner"]["ports"] == roles["worker_general"]["ports"]
     assert roles["worker_explore"]["ports"] == roles["worker_general"]["ports"]
-    assert roles["coder_escalation"]["ports"] == roles["frontdoor"]["ports"]
+    # 2026-08-01 W1 cutover: coder_escalation's host changed frontdoor -> architect_general.
+    assert roles["coder_escalation"]["ports"] == roles["architect_general"]["ports"]
     assert roles["worker_summarize"]["ports"] == roles["frontdoor"]["ports"]
 
     # Alias primary port/url still resolves to the host's primary (first) port.
     assert roles["worker_math"]["port"] == 8072
     assert roles["worker_math"]["url"] == "http://localhost:8072"
-    assert roles["coder_escalation"]["url"] == "http://localhost:8070"
+    # 2026-08-01 W1 cutover: was http://localhost:8070 / host "frontdoor".
+    assert roles["coder_escalation"]["url"] == "http://localhost:8083"
     assert _aliases["worker_math"] == "worker_general"
-    assert _aliases["coder_escalation"] == "frontdoor"
+    assert _aliases["coder_escalation"] == "architect_general"
 
 
 def test_serving_record_projects_alias_host_fleet_full_url() -> None:
@@ -176,9 +192,11 @@ def test_regenerated_worker_math_url_byte_equals_fix_a_delegated_value(
     # legacy literals are byte-identical (commit 89748805), so the generated
     # serving URL matches whichever the operative layer resolves.
     assert fix_a_worker_math == _LEGACY_SERVER_URL_FALLBACKS["worker_general"]
+    # Fleet literal tracks the live lineup: was
+    # "...8182,http://localhost:8282,http://localhost:8382" (full + 4 quarters)
+    # before the 2026-07-30 quarter retirement; now full + 2 halves.
     assert regenerated == (
-        "full:http://localhost:8072,http://localhost:8082,"
-        "http://localhost:8182,http://localhost:8282,http://localhost:8382"
+        "full:http://localhost:8072,http://localhost:8082,http://localhost:8182"
     )
 
 
@@ -519,7 +537,11 @@ def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path
     assert frontdoor_runtime["cache"]["slot_save_path"].endswith("/kv_slots/frontdoor")
     assert frontdoor_runtime["flags"]["jinja"] is True
     assert frontdoor_runtime["flags"]["spec"]["enabled"] is False
-    assert coder["serving"]["endpoint"] == "http://localhost:8070"
+    # 2026-08-01 W1 cutover: was http://localhost:8070. The endpoint is resolved
+    # from the REAL launcher manifest (stack_manifest.PORT_MAP), not from this
+    # synthetic registry — which is exactly the drift this assertion detects.
+    # coder_escalation is now an alias on architect_general's :8083 process.
+    assert coder["serving"]["endpoint"] == "http://localhost:8083"
     assert coder["serving"]["shared_mmap"] is True
 
 
@@ -1057,7 +1079,9 @@ def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) 
     assert role["serving"]["binding"] == "stack_manifest.role"
     assert role["serving"]["endpoint"] == "http://localhost:8086"
     assert role["serving"]["slots"] == 2
-    assert role["serving"]["effective_context_tokens"] == 8192
+    # 2026-08-01 W1 cutover: was 8192. LAUNCH_CONTEXT_TOKENS["worker_vision"]
+    # moved 8192 -> 16384, the shape the Qwen3-VL-30B was actually measured at.
+    assert role["serving"]["effective_context_tokens"] == 16384
     assert role["serving"]["launch"]["entries"] == [
         {
             "port": 8086,
@@ -1067,19 +1091,28 @@ def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) 
             "vision_type": "worker",
         }
     ]
+    # 2026-08-01 W1 cutover: was Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf +
+    # mmproj-model-f16.gguf; the VL lane moved to Qwen3-VL-30B-A3B on MI210.
     assert role["serving"]["launch"]["requirements"]["model_path"].endswith(
-        "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
+        "Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf"
     )
     assert role["serving"]["launch"]["requirements"]["mmproj_path"].endswith(
-        "mmproj-model-f16.gguf"
+        "mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf"
     )
     runtime = role["serving"]["launch"]["runtime"]
     assert runtime["binary_family"] == "llama.cpp"
     assert runtime["cache"]["slots"] == 2
     assert runtime["cache"]["ubatch"] is None
     assert runtime["cache"]["mlock"] is False
-    assert runtime["flags"]["flash_attn"] is True
+    # Still None, and deliberately so: `device` is a server_mode field and this
+    # test's registry has an EMPTY server_mode. The live compile does emit ROCm0
+    # for worker_vision after the 2026-08-01 W1 cutover (from
+    # server_mode.worker_vision.device); that path is witnessed by
+    # tests/unit/test_build_server_command_helpers.py, not here. Asserting ROCm0
+    # here would assert the launcher can invent a device the registry never
+    # declared, which is the opposite of the contract.
     assert runtime["flags"]["device"] is None
+    assert runtime["flags"]["flash_attn"] is True
     assert runtime["flags"]["jinja"] is False
     assert runtime["flags"]["spec"]["enabled"] is False
     assert role["priors"]["memory_cost"] == 1.0
@@ -1184,8 +1217,13 @@ def _worker_math_conflict_paths(tmp_path: Path) -> tuple[Path, Path]:
 def test_compile_require_realized_mode_derives_quarter_lineup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """V4: a clean-shell compile with a quarters-live probe derives the quarter
-    lineup (alias inherits the host's quarter fleet), never the dead full port."""
+    """V4: a clean-shell compile with a sub-full-live probe derives the sub-full
+    lineup (alias inherits the host's sub-full fleet), never the dead full port.
+
+    The sub-full shape is whatever the role declares in NUMA_CONFIG: quarters when
+    this test was written, halves since the 2026-07-30 quarter retirement. The
+    invariant under test — the dead full host port must never appear — is
+    shape-independent."""
     monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
     registry_path, descriptor_path = _worker_math_conflict_paths(tmp_path)
 
@@ -1200,7 +1238,9 @@ def test_compile_require_realized_mode_derives_quarter_lineup(
 
     ports = priors["roles"]["worker_math"]["serving"]["ports"]
     assert 8072 not in ports  # the dead full host port must not appear
-    assert ports == [8082, 8182, 8282, 8382]
+    # Was [8082, 8182, 8282, 8382] (4 quarters) before the 2026-07-30 quarter
+    # retirement; worker_general's sub-full lineup is now 2 halves.
+    assert ports == [8082, 8182]
 
 
 def test_compile_require_realized_mode_refuses_without_signal(tmp_path: Path) -> None:

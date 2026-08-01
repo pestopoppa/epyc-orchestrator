@@ -1,8 +1,23 @@
 """Deterministic post-promotion smoke for the both-mode production stack.
 
-The probe targets the three full chat instances, their twelve quarter
-instances, the architect and vision chat lanes, and the six production BGE
-endpoints.
+The probe targets every chat endpoint the stack manifest says it launches in the
+HOT tier, plus the six production BGE embedding endpoints.
+
+2026-08-01: the chat port list used to be a hand-maintained literal. It had gone
+closed-world-stale — it still named 8280/8380 and 8282/8382 (frontdoor and
+worker_general quarters 4-5, retired when both roles dropped to three instances),
+8385/8485 (ingest_long_context quarters 4-5), and 8087 (the retired standalone
+vision_escalation 7B, now an alias on worker_vision's :8086 process) — while
+MISSING 8074, the architect_critic lane promoted to HOT on 2026-08-01. It also
+looked up `vision_escalation` in NUMA_CONFIG, where it has no entry precisely
+because it is an alias rather than its own server. The result was a smoke that
+probed seven dead ports, skipped a live one, and refused to run at all.
+
+The ports are now DERIVED from `stack_manifest.HOT_SERVERS`, the launcher's own
+computed server list (built from ROLE_LAUNCH_META + NUMA_CONFIG) — the same
+structure `orchestrator_stack.py` starts from. `topology_errors()` no longer
+compares a literal against a derivation; it checks that the derived surface is
+internally coherent and agrees with PORT_MAP and NUMA_CONFIG.
 """
 
 from __future__ import annotations
@@ -23,72 +38,82 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.server.stack_manifest import EMBEDDER_PORTS, PORT_MAP  # noqa: E402
+from scripts.server.stack_manifest import (  # noqa: E402
+    EMBEDDER_PORTS,
+    HOT_SERVERS,
+    PORT_MAP,
+    WARM_SERVERS,
+)
 from scripts.server.stack_numa import NUMA_CONFIG  # noqa: E402
 
 
-EXPECTED_CHAT_PORTS = (
-    8070, 8080, 8180, 8280, 8380,
-    8072, 8082, 8182, 8282, 8382,
-    8085, 8185, 8285, 8385, 8485,
-    8083, 8086, 8087,
-)
+def _chat_servers() -> list[dict[str, Any]]:
+    """HOT-tier servers that expose /v1/chat/completions.
+
+    Everything the launcher classifies HOT except the embedding servers, which
+    speak /embedding instead and are probed separately.
+    """
+    return [
+        server
+        for server in HOT_SERVERS
+        if not server.get("embedding") and isinstance(server.get("port"), int)
+    ]
+
+
+def expected_chat_ports() -> tuple[int, ...]:
+    """Chat ports this stack declares, in launch order. Derived, never hand-listed."""
+    return tuple(server["port"] for server in _chat_servers())
+
+
+EXPECTED_CHAT_PORTS = expected_chat_ports()
 EXPECTED_EMBEDDER_PORTS = (8090, 8091, 8092, 8093, 8094, 8095)
 EMBEDDING_DIMENSION = 1024
 TIMEOUT_SECONDS = 30.0
 
-_BOTH_MODE_ROLES = ("frontdoor", "worker_general", "ingest_long_context")
-_SINGLE_CHAT_ROLES = ("worker_vision", "vision_escalation")
-
-
-def _ports_for_role(role: str) -> list[int]:
-    try:
-        return [int(instance[1]) for instance in NUMA_CONFIG[role]["instances"]]
-    except (KeyError, TypeError, ValueError, IndexError) as exc:
-        raise ValueError(f"invalid NUMA_CONFIG entry for {role!r}: {exc}") from exc
-
 
 def topology_errors() -> list[str]:
-    """Return closed-world manifest/NUMA drift errors for this fixed smoke."""
+    """Return manifest/NUMA incoherence that would make the probe meaningless.
+
+    The chat surface is DERIVED, so there is nothing left to compare it against;
+    what IS checkable is whether the sources it is derived from agree with each
+    other. PORT_MAP must name the same port the launcher computes for every role
+    served by a chat server, every NUMA_CONFIG role must actually be launched, and
+    the derived surface must be non-empty and duplicate-free.
+    """
     errors: list[str] = []
-    derived_chat: list[int] = []
 
-    for role in _BOTH_MODE_ROLES:
-        try:
-            ports = _ports_for_role(role)
-        except ValueError as exc:
-            errors.append(str(exc))
-            continue
-        if not ports or PORT_MAP.get(role) != ports[0]:
-            errors.append(f"{role}: PORT_MAP primary does not match NUMA_CONFIG")
-            continue
-        derived_chat.extend(ports)
+    servers = _chat_servers()
+    ports = [server["port"] for server in servers]
+    if not ports:
+        errors.append("no chat servers in the manifest HOT tier")
+    duplicates = sorted({port for port in ports if ports.count(port) > 1})
+    if duplicates:
+        errors.append(f"duplicate chat ports in the manifest HOT tier: {duplicates}")
 
-    try:
-        architect_ports = _ports_for_role("architect_general")
-    except ValueError as exc:
-        errors.append(str(exc))
-    else:
-        if architect_ports != [8083] or PORT_MAP.get("architect_general") != 8083:
-            errors.append("architect_general must be a single PORT_MAP-aligned NUMA instance on 8083")
-        else:
-            derived_chat.append(8083)
+    # Every role served by a chat process — including aliases like coder_escalation
+    # and vision_escalation, which ride another role's server and therefore have no
+    # NUMA_CONFIG entry of their own — must resolve to the port PORT_MAP advertises.
+    computed_role_ports: dict[str, int] = {}
+    for server in servers:
+        for role in server.get("roles", []):
+            computed_role_ports.setdefault(str(role), server["port"])
+    for role, port in sorted(computed_role_ports.items()):
+        declared = PORT_MAP.get(role)
+        if declared is None:
+            errors.append(f"{role}: served on {port} but absent from PORT_MAP")
+        elif declared != port:
+            errors.append(f"{role}: PORT_MAP says {declared}, launcher computes {port}")
 
-    for role in _SINGLE_CHAT_ROLES:
-        try:
-            ports = _ports_for_role(role)
-        except ValueError as exc:
-            errors.append(str(exc))
-            continue
-        if len(ports) != 1 or PORT_MAP.get(role) != ports[0]:
-            errors.append(f"{role}: expected one PORT_MAP-aligned NUMA instance")
-            continue
-        derived_chat.extend(ports)
+    # A NUMA_CONFIG entry for a role nobody launches is dead pinning config.
+    launched_roles = {
+        str(role)
+        for server in HOT_SERVERS + WARM_SERVERS
+        for role in server.get("roles", [])
+    }
+    for role in sorted(NUMA_CONFIG):
+        if role not in launched_roles:
+            errors.append(f"{role}: has NUMA_CONFIG instances but is never launched")
 
-    if tuple(derived_chat) != EXPECTED_CHAT_PORTS:
-        errors.append(
-            f"chat topology mismatch: expected {list(EXPECTED_CHAT_PORTS)}, got {derived_chat}"
-        )
     if tuple(EMBEDDER_PORTS) != EXPECTED_EMBEDDER_PORTS:
         errors.append(
             f"embedder topology mismatch: expected {list(EXPECTED_EMBEDDER_PORTS)}, got {EMBEDDER_PORTS}"

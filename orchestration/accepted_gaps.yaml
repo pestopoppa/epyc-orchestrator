@@ -1,0 +1,72 @@
+# Operator-declared acceptances of known stack-prior gaps.
+#
+# WHY THIS FILE EXISTS
+# The stack-change gate had exactly one severity. A gap the operator had
+# consciously accepted looked identical to an unsafe launch, so the only way to
+# start the stack was ORCHESTRATOR_SKIP_STACK_CHANGE_GATE=1 — which disables the
+# WHOLE gate, including the source-hash, launch-parity and retired-role checks
+# that are genuinely load-bearing. Between 2026-07-31 and 2026-08-01 the stack
+# was started that way four times in a row. A bypass used four times running is
+# not an escape hatch, it is the new default.
+#
+# A declaration here downgrades ONE named gap on ONE named role to a VISIBLE
+# warning that survives strict mode. It does not silence anything: the gap is
+# printed on every gate run with its owner and expiry.
+#
+# RULES
+# - Match is EXACT on (role, gap). No wildcards, no "all gaps for this role",
+#   no "all gaps of this type" — a declaration filed for a missing quality prior
+#   must never also swallow a missing live server binding.
+# - `expires` is REQUIRED. An accepted gap that never expires is a deleted check.
+# - An EXPIRED declaration is an ERROR, and the gap it covered goes back to
+#   blocking. Renew with fresh evidence or close the gap; do not extend by habit.
+# - A declaration that matches no current gap is an ERROR (stale waiver = drift).
+#
+# Required fields per entry:
+# - role:     stack-prior role key, exactly as it appears in
+#             orchestration/derived/stack_priors.yaml
+# - gap:      the gap string, exactly as compiled (see known_gaps /
+#             known_global_gaps in that artifact)
+# - reason:   what is known, what instrument produced it, and what is missing
+# - owner:    accountable person/team
+# - declared: ISO date the acceptance was made
+# - expires:  ISO date it stops being accepted
+#
+# Verify with:
+#   uv run python scripts/validate/stack_change_guard.py --strict
+#   uv run python scripts/registry/stack_change_pipeline.py check
+accepted_gaps:
+  - role: architect_general
+    gap: Missing overall quality prior
+    reason: >-
+      architect_general was repointed to Qwen3.6-27B-MTP-Q8_0 on 2026-08-01. The
+      27B carries RATIFIED SWE-bench Verified evidence (23/40, 57.5%, recorded in
+      the registry) but has NOT been run on the canonical 79-question judge
+      suite, which is the only instrument `quality_score` is defined against.
+      The prior is therefore deliberately null rather than laundered from a
+      different instrument onto a scale it was not measured on. Closing action:
+      run the canonical judge suite on the 27B and compile a real quality prior.
+    owner: operator
+    declared: "2026-08-01"
+    expires: "2026-09-01"
+  - role: coder_escalation
+    gap: Missing overall quality prior
+    reason: >-
+      coder_escalation aliases architect_general's Qwen3.6-27B-MTP-Q8_0 process
+      (:8083) as of 2026-08-01 and inherits the same gap: ratified SWE-bench
+      Verified evidence (23/40, 57.5%), no canonical 79-question judge-suite run,
+      so quality_score stays null instead of being borrowed from another
+      instrument. Closes together with architect_general.
+    owner: operator
+    declared: "2026-08-01"
+    expires: "2026-09-01"
+  - role: qwen36_27b_mtp_q8_local
+    gap: Missing overall quality prior
+    reason: >-
+      The registry row for the Qwen3.6-27B-MTP-Q8_0 artifact itself, backing both
+      roles above. Ratified SWE-bench Verified evidence (23/40, 57.5%) exists;
+      the canonical 79-question judge suite has not been run, so no overall
+      quality prior is compiled for it. Closes with the judge-suite run.
+    owner: operator
+    declared: "2026-08-01"
+    expires: "2026-09-01"

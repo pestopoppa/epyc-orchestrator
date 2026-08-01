@@ -39,8 +39,12 @@ resource_budget:
   reserve_kv_gb: 100   # minimum headroom for KV caches + OS
 
 roles:
+  # Per-role model/quant/ram_gb rows below are compared against
+  # orchestration/derived/stack_priors.yaml by the stack-change guard rule
+  # `stale_role_fact_table`. Restate them from the compiled artifact; do not
+  # hand-maintain them.
   frontdoor:
-    model: Qwen3.6-35B-A3B-Q8_0
+    model: Qwen3.6-35B-A3B-MTP-Q8_0   # 2026-08-01: was Qwen3.6-35B-A3B-Q8_0 (the NON-MTP GGUF, a different file)
     quant: Q8_0
     tier: HOT
     ram_gb: 37
@@ -95,10 +99,12 @@ roles:
     alias_to: worker_general
 
   architect_general:
-    model: Qwen3.5-122B-A10B
-    quant: Q4_K_M
+    # 2026-07-31/08-01: repointed to the 27B on MI210; the 122B vacated to the
+    # new architect_critic role (:8074). Was Qwen3.5-122B-A10B / Q4_K_M / 69 GB.
+    model: Qwen3.6-27B-MTP-Q8_0
+    quant: Q8_0
     tier: HOT
-    ram_gb: 69
+    ram_gb: 27.05
     full:
       port: 8083
       numa: FULL
@@ -123,10 +129,12 @@ roles:
       - { port: 8485, numa: Q1B, threads: 48 }
 
   worker_vision:
-    model: Qwen2.5-VL-7B
+    # 2026-07-31: Qwen2.5-VL-7B retired on both vision roles (MMMU-250 52.4% ->
+    # 63.6%). Was Qwen2.5-VL-7B / 4.4 GB.
+    model: Qwen3-VL-30B-A3B-Instruct
     quant: Q4_K_M
     tier: HOT
-    ram_gb: 4.4
+    ram_gb: 17.3
     full:
       port: 8086
       numa: Q0B

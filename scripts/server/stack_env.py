@@ -94,7 +94,11 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
     # Arch class: moe_q4_bw_bound_mbind_sensitive. c2 wins at +1.28% (σ ~0.4%, z ~3)
     # vs default v5 at 96t canonical. CPU1 stack net-neutral, c3 (combined) regresses to
     # noise. Source bundle: data/cpu_optimization/2026-05-04-qwen35-122b-arch-probe/
-    "architect_general": {
+    # 2026-08-01 W1 CUTOVER: this block is the 122B's Probe-B tuning and it MOVED
+    # WITH THE MODEL to architect_critic. architect_general is now Qwen3.6-27B dense
+    # Q8 on MI210 (ROCm0) — a CPU NUMA repack setting applied to a ROCm process is
+    # at best inert and at worst misleading provenance.
+    "architect_critic": {
         "GGML_NUMA_REPACK_INTERLEAVE": "0",
     },
     # Hybrid SSM dense (Nemotron-9B-v2-class) — c3 = CPU1 stack + mbind off.
@@ -134,7 +138,12 @@ def _role_env_overrides(role: str) -> dict[str, str]:
     # (default v5 — MoE-Spec budget=40 was REAP-246B-specific, NOT validated on hybrid SSM).
     # formalizer (MathSmith-Qwen3-8B Q8 dense) routes to dense_q8 — it's not MoE at all.
     arch_aliases = {
-        "coder_escalation": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
+        # 2026-08-01 W1 CUTOVER: coder_escalation no longer shares frontdoor's GGUF.
+        # It is an alias on architect_general's MI210 27B, so it must inherit THAT
+        # role's env block — inheriting frontdoor's CPU EP-stack env on a ROCm
+        # process was the concrete risk flagged in the cutover audit.
+        "coder_escalation": "architect_general",
+        "vision_escalation": "worker_vision",  # one MI210 :8086 process serves both
         "worker_summarize": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
         "general_gemma_3_27b_it_qat": "dense_q4",
         "ingest_long_context": "hybrid_ssm_moe",  # Qwen3-Next-80B-A3B

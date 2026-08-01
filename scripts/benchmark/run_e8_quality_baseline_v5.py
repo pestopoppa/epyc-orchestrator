@@ -1219,9 +1219,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--registry-path", type=Path, default=RUNTIME_ROOT / "orchestration/model_registry.yaml"
     )
     parser.add_argument(
+        # 2026-08-01: was orchestration/model_registry_lean.yaml, a hand-maintained
+        # second role table (dated 2026-06-13) that has been DELETED. The lean
+        # registry is orchestration/model_registry.yaml — src/registry/registry_compiler.py
+        # compiles that lean runtime view from the master at every stack start, so it
+        # is the same artifact --registry-path binds. Kept as a separate flag so the
+        # evidence receipt's lean_registry_sha256 field is unchanged.
         "--lean-registry-path",
         type=Path,
-        default=RUNTIME_ROOT / "orchestration/model_registry_lean.yaml",
+        default=RUNTIME_ROOT / "orchestration/model_registry.yaml",
     )
     parser.add_argument(
         "--runtime-facts-path",

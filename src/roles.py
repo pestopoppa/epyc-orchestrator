@@ -123,6 +123,22 @@ class Role(str, Enum):
     serialized role strings are normalized by ``Role._missing_``.
     """
 
+    ARCHITECT_CRITIC = "architect_critic"
+    """Adversarial plan critic — the terminal rung of the escalation ladder.
+
+    Added 2026-08-01 (W1 cutover). Serves the Qwen3.5-122B-A10B UD-Q4_K_M that
+    ``architect_general`` vacated when it moved to the MI210 27B, on the same full
+    CPU instance, port 8074.
+
+    THIS MEMBER IS LOAD-BEARING, not documentation. ``stack_priors.py:325`` emits
+    the arm into the live action space via
+    ``canonical_stack_role_id(role_name) or str(role_name)``, but
+    ``action_space.py:125 normalize_action`` returns ``None`` for anything that is
+    not a ``Role``, silently dropping every replayed episode. Without this member
+    the critic would be an arm with a label slot and permanently zero training
+    rows — unlearnable, which the operator ruled must not happen.
+    """
+
     THINKING_REASONING = "thinking_reasoning"
     """Chain-of-thought reasoning specialist.
 
@@ -158,7 +174,22 @@ class Role(str, Enum):
     """Vision-language worker.
 
     Handles tasks involving images: OCR, image understanding, UI analysis.
-    Uses multimodal model (Qwen2.5-VL).
+    Qwen3-VL-30B-A3B-Instruct Q4_K_M on MI210 since the 2026-08-01 W1 cutover
+    (was Qwen2.5-VL-7B on CPU).
+    """
+
+    VISION_ESCALATION = "vision_escalation"
+    """Vision escalation — an ALIAS on the worker_vision process, not a second server.
+
+    Added to the enum 2026-08-01. It is a live, registry-declared, routable role
+    (tier C) and `Role("vision_escalation")` raised ValueError before this, which is
+    the same unlearnable-arm defect ARCHITECT_CRITIC was added to avoid: the arm
+    reaches the action space via stack_priors while `action_space.normalize_action`
+    returns None for a non-Role and silently drops every replayed episode.
+
+    Since the W1 cutover this resolves to the SAME :8086 MI210 process as
+    worker_vision (server_mode.worker_vision.shared_with), so it is a routing label
+    over a shared server rather than a distinct model.
     """
 
     TOOLRUNNER = "toolrunner"
@@ -350,18 +381,32 @@ def resolve_reviewer_role(
 
 
 _TIER_MAP: dict[Role, Tier] = {
+    # 2026-08-01: corrected against the registry's declared `roles.<role>.tier`.
+    # This table is a hand restatement of registry data and had drifted. Two bugs:
+    #   * ARCHITECT_CRITIC was ABSENT, so `get_tier()` returned its Tier.C default.
+    #     Consequences were all silent: approval_gate.py:159-163 only gates a
+    #     transition when tiers DIFFER, so worker -> architect_critic read C -> C and
+    #     the approval gate for the whole-machine-locking 122B never fired; the
+    #     prompt builder told it "You are a c-tier architect_critic assistant"; and
+    #     repl_environment/routing.py advertised worker capabilities for it.
+    #   * ARCHITECT_GENERAL was Tier.B where the registry declares A.
+    # NOTE the name collision that helped this drift: `Tier` here is A/B/C/D
+    # (capability class), which is NOT the residency tier hot/warm used by
+    # ROLE_LAUNCH_META. Same word, different domain.
     # Tier A
     Role.FRONTDOOR: Tier.A,
+    Role.ARCHITECT_GENERAL: Tier.A,
     # Tier B
     Role.CODER_ESCALATION: Tier.B,
     Role.INGEST_LONG_CONTEXT: Tier.B,
-    Role.ARCHITECT_GENERAL: Tier.B,
+    Role.ARCHITECT_CRITIC: Tier.B,
     Role.THINKING_REASONING: Tier.B,
     # Tier C
     Role.WORKER_GENERAL: Tier.C,
     Role.WORKER_MATH: Tier.C,
     Role.WORKER_SUMMARIZE: Tier.C,
     Role.WORKER_VISION: Tier.C,
+    Role.VISION_ESCALATION: Tier.C,
     Role.TOOLRUNNER: Tier.C,
     # Tier D
     Role.DRAFT_CODER: Tier.D,
@@ -379,13 +424,18 @@ _ESCALATION_MAP: dict[Role, Role] = {
     Role.TOOLRUNNER: Role.CODER_ESCALATION,
     # Frontdoor escalates to coder
     Role.FRONTDOOR: Role.CODER_ESCALATION,
-    # Coder escalates to live architect role. architect_coding is retained as a
-    # compatibility role only; its historical server ports are intentionally dead.
-    Role.CODER_ESCALATION: Role.ARCHITECT_GENERAL,
-    Role.THINKING_REASONING: Role.ARCHITECT_GENERAL,
+    # 2026-08-01 W1 CUTOVER: coder_escalation is now an ALIAS on architect_general's
+    # :8083 process — same model, same server. Escalating one to the other was a
+    # null hop that burned a rung of the ladder without changing anything. Both now
+    # escalate to architect_critic (122B, :8074), which is a genuinely different
+    # model on genuinely different hardware.
+    Role.CODER_ESCALATION: Role.ARCHITECT_CRITIC,
+    Role.THINKING_REASONING: Role.ARCHITECT_CRITIC,
     # Ingest escalates to architect
     Role.INGEST_LONG_CONTEXT: Role.ARCHITECT_GENERAL,
-    # Architects have no escalation (top of chain)
+    # architect_general now HAS an escalation: the critic is the terminal rung.
+    Role.ARCHITECT_GENERAL: Role.ARCHITECT_CRITIC,
+    # architect_critic is the top of the chain and does not escalate.
     # Draft models don't escalate (they support other models)
 }
 
@@ -393,7 +443,13 @@ _ESCALATION_MAP: dict[Role, Role] = {
 # Role -> Fallback alternatives (infrastructure failure, NOT task escalation)
 # Used when model_fallback feature is enabled and primary backend is circuit-open.
 _FALLBACK_MAP: dict[Role, list[Role]] = {
-    Role.ARCHITECT_GENERAL: [Role.CODER_ESCALATION],
+    # 2026-08-01 W1 CUTOVER: was [CODER_ESCALATION], which after the cutover is the
+    # SAME PROCESS ON THE SAME PORT — an infrastructure fallback that retries the
+    # exact backend whose circuit just opened. architect_critic is a different
+    # model on a different device, so it is a real fallback.
+    Role.ARCHITECT_GENERAL: [Role.ARCHITECT_CRITIC],
+    Role.ARCHITECT_CRITIC: [Role.ARCHITECT_GENERAL],
+    # Still valid: frontdoor is a separate CPU process with a separate GGUF.
     Role.CODER_ESCALATION: [Role.FRONTDOOR],
     Role.WORKER_MATH: [Role.WORKER_GENERAL],
     Role.INGEST_LONG_CONTEXT: [Role.ARCHITECT_GENERAL],

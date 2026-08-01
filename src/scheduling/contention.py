@@ -30,6 +30,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.scheduling.device_model import (
+    DeviceClass,
+    DeviceResolutionError,
+    resolve_role_device,
+)
+
 log = logging.getLogger("scheduling.contention")
 
 # Default contention floor — pair ratios at or above this are "allow", below
@@ -516,31 +522,83 @@ class Placement:
 
     `regions` is a frozenset of atomic-region ids (e.g. {"q0","q1"} for a
     node0-half, {"q0","q1","q2","q3"} for a whole-machine full). Source of
-    truth is `src.runtime.instance_topology.get_instance_regions()`. An EMPTY
-    region set means "placement unknown" — admit_set fails closed for background
-    and falls back to the legacy role-keyed `pair_policy` for foreground.
+    truth is `src.runtime.instance_topology.get_instance_regions()`.
+
+    `device_class` is the DEVICE axis (rider §2). It decides WHICH resource the
+    placement claims exclusively:
+
+      * `DeviceClass.CPU` — claims its regions exclusively (today's rule).
+      * `DeviceClass.GPU` — claims NO CPU regions. Its host lane is shareable
+        light work (tokenise, sample, marshal) while the weights sit in VRAM
+        under `-ngl`, so overlapping a CPU decode's cpuset is not a conflict.
+      * `None` — UNRESOLVED. Treated conservatively as CPU-exclusive, which is
+        exactly today's behaviour, so every existing caller is unchanged. This
+        is not a "default to CPU": the RESOLVER (`device_model.resolve_role_device`)
+        never guesses — it raises. `None` here means the caller did not ask.
+
+    An empty region set means "placement unknown" for a CPU placement —
+    admit_set fails closed for background and falls back to the legacy
+    role-keyed `pair_policy` for foreground. For a RESOLVED GPU placement an
+    empty region set is not unknown at all, it is the correct answer: the
+    canonical GPU host lane `184-191` is SMT-siblings-only, so it maps to zero
+    atomic regions. Conflating those two was the live-path half of the defect.
     """
 
     role: str
     regions: frozenset[str] = frozenset()
+    device_class: DeviceClass | None = None
+
+
+def claims_cpu_regions(p: Placement) -> bool:
+    """Does this placement hold its CPU regions EXCLUSIVELY?
+
+    True for CPU-device placements and for unresolved ones (conservative).
+    False only for a placement positively resolved as GPU.
+    """
+    return p.device_class is not DeviceClass.GPU
 
 
 def placements_overlap(a: Placement, b: Placement) -> bool:
     """True iff two placements share any physical region. Overlap is a set
     intersection over canonical regions — the shape's NAME is irrelevant
-    (frontdoor "full" = {q0,q1} is disjoint from vision "full" = {q2,q3})."""
+    (frontdoor "full" = {q0,q1} is disjoint from vision "full" = {q2,q3}).
+
+    Physical overlap ONLY. Whether an overlap is a *conflict* is a device
+    question — see `placements_conflict`."""
     return bool(a.regions & b.regions)
+
+
+def placements_conflict(a: Placement, b: Placement) -> bool:
+    """True iff the two placements cannot co-run on the same cores.
+
+    Region overlap is necessary but not sufficient: if EITHER side is a
+    resolved GPU placement, the overlap is a shared host lane rather than
+    contended DRAM bandwidth, and the pair does not conflict. Two GPU roles
+    sharing one host lane — which `architect_general` and `worker_vision` do
+    right now on `184-191` — are likewise not in conflict here; what they
+    actually contend for is VRAM, a capacity constraint that belongs to the
+    feasibility/capacity artifact, not to this region-overlap predicate.
+    """
+    if not claims_cpu_regions(a) or not claims_cpu_regions(b):
+        return False
+    return placements_overlap(a, b)
 
 
 def placement_for_instance(
     role: str,
     topology_idx: int,
     instance_regions: dict[tuple[str, int], frozenset[str]] | None = None,
+    *,
+    device_class: DeviceClass | None = None,
 ) -> Placement:
     """Build a `Placement` for (role, topology_idx) from the canonical
     instance→regions map. If `instance_regions` is None it is loaded live
     from `instance_topology.get_instance_regions()`. Unknown (role, idx)
-    yields an empty-region Placement (→ admit_set treats it as unknown)."""
+    yields an empty-region Placement (→ admit_set treats it as unknown).
+
+    `device_class` is passed through unresolved by default; callers that want
+    the device axis resolve it themselves (see `seam_admit`) so this helper
+    stays pure and cannot raise."""
     if instance_regions is None:
         try:
             from src.runtime.instance_topology import get_instance_regions
@@ -551,6 +609,7 @@ def placement_for_instance(
     return Placement(
         role=role,
         regions=instance_regions.get((role, topology_idx), frozenset()),
+        device_class=device_class,
     )
 
 
@@ -566,20 +625,26 @@ def admit_set(
 
     SCAFFOLDING — not yet called by the gate or seeder.
 
-    Decision (shape-keyed):
-      1. **Physical overlap** — if the candidate's regions intersect ANY active
-         placement's regions, the two cannot co-run on the same cores. Return
-         QUEUE (serialize; the holder must release first). This is the case a
-         role-keyed gate gets wrong by reading a stale primary-overlap ratio.
+    Decision (shape-keyed AND device-keyed):
+      1. **CPU-region conflict** — if the candidate's regions intersect ANY
+         active placement's regions AND both sides claim their regions
+         exclusively (i.e. neither is a resolved GPU placement), the two cannot
+         co-run on the same cores. Return QUEUE (serialize; the holder must
+         release first). This is the case a role-keyed gate gets wrong by
+         reading a stale primary-overlap ratio. A GPU candidate is NOT queued
+         behind a CPU holder on cpuset overlap alone — its host lane is
+         shareable light work, not contended DRAM bandwidth.
       2. **Disjoint** — delegate the role-set verdict to the authoritative
          `nway_policy` over the union of roles. This path assumes the caller has
          supplied A's certified smallest-disjoint placements (quarters where
          supported, otherwise the smallest disjoint shape); `nway_policy` is
          called UNCHANGED.
-      3. **Unknown placement** — if the candidate (or any active placement) has
-         no region info, overlap is undecidable; background fails closed
-         immediately, while foreground uses the legacy role-keyed `pair_policy`
-         fallback against each active role.
+      3. **Unknown placement** — if the candidate (or any active placement)
+         claims CPU regions but has no region info, overlap is undecidable;
+         background fails closed immediately, while foreground uses the legacy
+         role-keyed `pair_policy` fallback against each active role. A RESOLVED
+         GPU placement with no regions is not undecidable — it is a correct
+         "claims no CPU region" — so it does not trigger this branch.
 
     Returns a `PairDecision`; callers map QUEUE→wait/serialize as today.
     """
@@ -596,8 +661,12 @@ def admit_set(
 
     # (3) Unknown placement → fail closed for background. Undecidable overlap
     # means we cannot trust the shape-keyed path; foreground keeps the legacy
-    # role-keyed fallback for compatibility.
-    if not candidate_placement.regions or any(not p.regions for p in active):
+    # role-keyed fallback for compatibility. A resolved GPU placement is exempt:
+    # it legitimately holds no CPU region, which is an ANSWER, not an absence.
+    if any(
+        claims_cpu_regions(p) and not p.regions
+        for p in (candidate_placement, *active)
+    ):
         if is_background:
             return PairDecision.QUEUE
         if matrix is None:
@@ -614,11 +683,11 @@ def admit_set(
                 worst = d
         return worst
 
-    # (1) Physical overlap on canonical regions → serialize. A shape's label is
-    # never consulted; only the region sets. This is the disambiguation the
-    # role-keyed gate cannot make.
+    # (1) CPU-region conflict → serialize. A shape's label is never consulted;
+    # only the region sets AND the device each side actually draws on. This is
+    # the disambiguation the role-keyed gate cannot make.
     for ap in active:
-        if placements_overlap(ap, candidate_placement):
+        if placements_conflict(ap, candidate_placement):
             return PairDecision.QUEUE
 
     # (2) Disjoint → role-set N-way verdict over the role union. This branch is
@@ -674,9 +743,42 @@ def seam_admit(
 ) -> PairDecision | None:
     """B WIRING SEAM — placement-aware admission with same-role preservation.
 
-    SCAFFOLDING: not yet called by the gate/seeder. Returns None when
-    shape-aware contention is disabled (the default) so callers keep the legacy
-    path unchanged — no live behavior change, no J6 taint.
+    WIRED AND LIVE-REACHABLE (corrected 2026-08-01). This docstring previously
+    said "SCAFFOLDING: not yet called by the gate/seeder". That stopped being
+    true on 2026-05-31 when the dispatch-side caller landed, and a stale
+    "dead code" comment on a live path is worse than no comment: it tells the
+    next reader — and the next auditor — to skip the thing that actually runs.
+    The real call chain today is
+        src/backends/concurrency_aware.py:1334  (passes place.topology_idx)
+          -> ContentionGate.admit(candidate_topology_idx=...)
+          -> ContentionGate.evaluate()          (contention_gate.py:312)
+          -> seam_admit()                       (here)
+
+    What IS still true: this returns None when shape-aware contention is
+    disabled, which is the default, so callers keep the legacy
+    pair_policy/nway_policy verdict and production behaviour is unchanged until
+    an operator arms BOTH flags. Inert-by-flag, not unreachable-by-wiring.
+
+    DEVICE AXIS (2026-08-01, artifact 1 of the device/load-axes rider): this
+    module previously had NO concept of `device`, so a role whose weights are
+    VRAM-resident under `-ngl` and whose cpuset only supplies host threads for
+    tokenising/sampling was accounted identically to a CPU decode holding the
+    same cpuset — GPU-lane co-residency with a half/full CPU instance read as
+    contention on cpuset overlap alone, when in physics it largely is not. It
+    now resolves each placement's device from the compiled
+    `orchestration/derived/stack_priors.yaml`
+    (`roles.<r>.serving.launch.runtime.flags.device`), corroborated by
+    `NUMA_CONFIG[<r>]["gpu_host_lane"]`, and a GPU placement no longer claims
+    CPU regions exclusively.
+
+    Resolution FAILS CLOSED, never silently: an undeclared role, or a
+    disagreement between the two declarations, is treated like the unknown
+    occupancy case below (background QUEUE, foreground legacy path) and logged —
+    it is never resolved by picking one declaration. VRAM capacity is NOT gated
+    here; it is a set-wide capacity constraint owned by the feasibility model
+    (`scripts/server/contention_matrix.assess_feasibility`), because it cannot
+    be decided per-pair. See
+    handoffs/active/contention-model-device-and-load-axes-rider.md §2/§4.
 
     The on/off decision is made ONLY by `shape_aware_contention_enabled()` (the
     dual-flag gate). There is deliberately NO `enabled` override parameter
@@ -730,14 +832,35 @@ def seam_admit(
         except FileNotFoundError:
             return PairDecision.QUEUE if is_background else PairDecision.ALLOW
 
+    # Device axis. Resolved for the candidate AND every holder, up front, so a
+    # bad declaration cannot colour just one comparison. `resolve_role_device`
+    # raises rather than guessing; here that is downgraded to the same
+    # fail-closed treatment as an unknown occupancy snapshot — never to a
+    # silent CPU default, which is what produced the false-exclusion bug.
+    try:
+        devices = {
+            role: resolve_role_device(role).device_class
+            for role in {candidate_role, *active_holders}
+        }
+    except DeviceResolutionError as exc:
+        log.warning("seam_admit: device resolution failed (%s) — failing closed", exc)
+        return PairDecision.QUEUE if is_background else None
+
     candidate = placement_for_instance(
-        candidate_role, candidate_topology_idx, instance_regions
+        candidate_role,
+        candidate_topology_idx,
+        instance_regions,
+        device_class=devices[candidate_role],
     )
-    all_active = [Placement(role, regions) for role, regions in active_holders.items()]
+    all_active = [
+        Placement(role, regions, devices[role]) for role, regions in active_holders.items()
+    ]
 
     # Unknown candidate placement -> defer to admit_set's unknown handling (bg
     # fail-closed; fg per-pair, which already routes same-role via pair_policy).
-    if not candidate.regions:
+    # A resolved GPU candidate holds no CPU region BY CONSTRUCTION, so it is not
+    # "unknown" and must not be routed down the fail-closed path.
+    if claims_cpu_regions(candidate) and not candidate.regions:
         return admit_set(all_active, candidate, traffic_class, matrix=matrix, floor=floor)
 
     same_role_active = [p for p in all_active if p.role == candidate_role]
@@ -747,7 +870,7 @@ def seam_admit(
 
     if same_role_active:
         for p in same_role_active:
-            if placements_overlap(p, candidate):
+            if placements_conflict(p, candidate):
                 return PairDecision.QUEUE
         worst = _worse_decision(
             worst,
@@ -789,6 +912,13 @@ def select_backfill_candidate(
     `admit_set` enforces: overlap → QUEUE (skip), disjoint → nway verdict,
     unknown placement → bg fail-closed (skip). So a candidate is selected only
     when admit_set returns ALLOW for it against the active set.
+
+    DEVICE-UNAWARE, deliberately: placements are built without a resolved
+    `device_class`, so every candidate is treated as CPU-exclusive — identical
+    to this function's behaviour before the device axis landed. Resolving the
+    device here would let a GPU candidate backfill beside a whole-machine CPU
+    holder, which is the RIGHT answer physically but a live-behaviour change in
+    a path C has not authorized yet. Resolve devices here when C is wired.
     """
     active_placements = [
         Placement(role, regions) for role, regions in active_holders.items()

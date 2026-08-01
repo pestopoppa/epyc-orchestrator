@@ -33,7 +33,31 @@ DEFAULT_SURFACE_EXCEPTIONS = REPO_ROOT / "orchestration" / "stack_change_guard_e
 DEFAULT_SURFACE_MANIFEST = REPO_ROOT / "orchestration" / "stack_change_surface_manifest.yaml"
 DEFAULT_ADD_MODEL_PROCEDURE = REPO_ROOT / "orchestration" / "procedures" / "add_model_to_registry.yaml"
 DEFAULT_PROCEDURE_SCHEMA = REPO_ROOT / "orchestration" / "procedure.schema.json"
-RETIRED_LIVE_ROLES = {"architect_coding"}
+DEFAULT_ACCEPTED_GAPS = REPO_ROOT / "orchestration" / "accepted_gaps.yaml"
+DEFAULT_MASTER_REGISTRY = Path(
+    "/mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml"
+)
+
+# Documented FLOOR, not the answer. `RETIRED_LIVE_ROLES` used to BE this literal:
+# a hand-written restatement of "historic roles minus live roles" that could only
+# ever catch staleness somebody remembered to type in. It is now derived (see
+# `derive_retired_live_roles`), and the literal survives only so that a role the
+# guard already catches can never be lost to a derivation change. Derivation
+# failure RAISES; it never degrades silently to this floor alone.
+RETIRED_LIVE_ROLE_FLOOR = frozenset({"architect_coding"})
+# Master-registry keys that mark an entry as no longer deployable. `deprecated`
+# and `retired` are the two vocabularies actually in use; the *_reason/*_date
+# companions are accepted so an entry that carries only the prose marker is not
+# read as live.
+RETIRED_ROLE_MARKER_FIELDS = (
+    "deprecated",
+    "deprecated_reason",
+    "deprecated_date",
+    "deprecation_reason",
+    "retired",
+    "retired_reason",
+    "retired_date",
+)
 MANIFEST_OWNED_AUXILIARY_LAUNCH_ROLES = frozenset({"worker_fast"})
 MANIFEST_OWNED_DEFAULT_AUXILIARY_LAUNCH_ROLES = frozenset({"eval_batch_frontdoor"})
 MANIFEST_OWNED_AUXILIARY_LAUNCH_MODES = frozenset({"embedding"})
@@ -127,6 +151,143 @@ class SurfaceException:
         )
 
 
+@dataclass(frozen=True)
+class AcceptedGapDeclaration:
+    """An operator-declared, owned, EXPIRING acceptance of one stack-prior gap.
+
+    The gate used to have exactly one severity: a known gap the operator had
+    consciously accepted was indistinguishable from an unsafe launch, so the only
+    available answer was ORCHESTRATOR_SKIP_STACK_CHANGE_GATE=1 — which disables
+    every check, including the load-bearing ones. A declaration downgrades ONE
+    named gap on ONE named role to a visible warning. It never matches by
+    wildcard: role and gap string must both be exact, or a declaration filed for
+    a missing quality prior would also swallow a missing live server binding.
+    """
+
+    role: str
+    gap: str
+    reason: str
+    owner: str
+    declared: str
+    expires: str
+
+    def matches(self, role: str, gap: str) -> bool:
+        return self.role == role and self.gap == gap
+
+    def warning_suffix(self) -> str:
+        return (
+            f"owner={self.owner}; declared={self.declared}; "
+            f"expires={self.expires}; reason={self.reason}"
+        )
+
+
+class RetiredRoleDerivationError(RuntimeError):
+    """Raised when the retired-role set cannot be derived from its sources."""
+
+
+def _has_retired_marker(record: Any) -> bool:
+    if not isinstance(record, dict):
+        return False
+    for field in RETIRED_ROLE_MARKER_FIELDS:
+        value = record.get(field)
+        if value is None or value is False:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return True
+    return False
+
+
+def _registry_role_names(path: Path, label: str) -> set[str]:
+    try:
+        loaded = _load_yaml(path)
+    except FileNotFoundError as exc:
+        raise RetiredRoleDerivationError(f"{label} registry is missing: {path}") from exc
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise RetiredRoleDerivationError(f"{label} registry is unreadable ({path}): {exc}") from exc
+    roles = loaded.get("roles")
+    if not isinstance(roles, dict) or not roles:
+        raise RetiredRoleDerivationError(
+            f"{label} registry has no mapping-valued 'roles' section: {path}"
+        )
+    return {name for name in roles if isinstance(name, str)}
+
+
+def derive_retired_live_roles(
+    *,
+    master_registry_path: Path = DEFAULT_MASTER_REGISTRY,
+    lean_registry_path: Path = DEFAULT_REGISTRY,
+    floor: frozenset[str] = RETIRED_LIVE_ROLE_FLOOR,
+) -> frozenset[str]:
+    """Derive "historic roles minus live roles" instead of restating it by hand.
+
+    Historic names come from the MASTER registry, where a decommissioned entry
+    keeps its row and gains a retirement marker. Live names come from the
+    COMPILED lean registry — deliberately not from the stack priors under
+    validation, because the priors are the artifact being checked: sourcing
+    "live" from them would make "a retired role reappeared in the priors"
+    unprovable by construction.
+
+    Raises RetiredRoleDerivationError when either source is missing or shaped
+    wrong. Falling back to the floor would hand back a guard that looks like it
+    is checking 40+ names while actually checking one.
+    """
+    try:
+        master = _load_yaml(master_registry_path)
+    except FileNotFoundError as exc:
+        raise RetiredRoleDerivationError(
+            f"master registry is missing: {master_registry_path}"
+        ) from exc
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise RetiredRoleDerivationError(
+            f"master registry is unreadable ({master_registry_path}): {exc}"
+        ) from exc
+    master_roles = master.get("roles")
+    if not isinstance(master_roles, dict) or not master_roles:
+        raise RetiredRoleDerivationError(
+            f"master registry has no mapping-valued 'roles' section: {master_registry_path}"
+        )
+
+    live_roles = _registry_role_names(lean_registry_path, "compiled lean")
+    retired = {
+        name
+        for name, record in master_roles.items()
+        if isinstance(name, str) and _has_retired_marker(record)
+    }
+    # A name that is retired upstream AND live downstream is a registry
+    # contradiction, not a retired role. Subtract it: mis-flagging a live role
+    # would make every stack change fail on a name the fleet is actually serving.
+    return frozenset((retired - live_roles) | floor)
+
+
+_RETIRED_LIVE_ROLES_CACHE: frozenset[str] | None = None
+
+
+def retired_live_roles(*, refresh: bool = False) -> frozenset[str]:
+    """Cached accessor for the derived retired-role set."""
+    global _RETIRED_LIVE_ROLES_CACHE
+    if refresh or _RETIRED_LIVE_ROLES_CACHE is None:
+        _RETIRED_LIVE_ROLES_CACHE = derive_retired_live_roles()
+    return _RETIRED_LIVE_ROLES_CACHE
+
+
+def _retired_live_roles_or_error() -> tuple[frozenset[str], list[str]]:
+    """Resolve the retired-role set, reporting derivation failure as an ERROR.
+
+    The degraded floor is still used for the remaining checks so one broken
+    source does not blind every other invariant — but the failure is recorded,
+    never swallowed.
+    """
+    try:
+        return retired_live_roles(), []
+    except RetiredRoleDerivationError as exc:
+        return RETIRED_LIVE_ROLE_FLOOR, [
+            f"retired-role derivation failed: {exc}; "
+            f"falling back to the documented floor {sorted(RETIRED_LIVE_ROLE_FLOOR)} "
+            "for this run only"
+        ]
+
+
 HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
     HardcodedSurfaceRule(
         rule_id="retired_role_in_active_code",
@@ -159,13 +320,14 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         path_globs=("orchestration/procedures/*.yaml",),
         remediation="compile procedure role choices from stack priors",
     ),
-    HardcodedSurfaceRule(
-        rule_id="retired_role_in_lean_registry",
-        category="production_blocker",
-        pattern=r"\barchitect_coding\b",
-        path_globs=("orchestration/model_registry_lean.yaml",),
-        remediation="route lean code escalation through coder_escalation",
-    ),
+    # 2026-08-01: `retired_role_in_lean_registry` REMOVED. Its only target,
+    # orchestration/model_registry_lean.yaml, was deleted — it was a stale second
+    # role table from 2026-06-13 still selectable via ORCHESTRATOR_REGISTRY_MODE=lean,
+    # disagreeing with the compiled registry on tier, acceleration recipe, timeouts
+    # and escalation chains. The real lean artifact is orchestration/model_registry.yaml,
+    # COMPILED from master, so a retired role cannot persist in it: it is regenerated,
+    # not maintained. A rule matching no file is not a safety net, it is a green light
+    # that means nothing. Removed with its manifest entry (the bijection is enforced).
     HardcodedSurfaceRule(
         rule_id="retired_role_in_source_access",
         category="production_blocker",
@@ -173,13 +335,25 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         path_globs=("orchestration/source_registry.yaml",),
         remediation="remove retired roles from web-source role_access metadata",
     ),
-    HardcodedSurfaceRule(
-        rule_id="retired_role_in_quality_signature",
-        category="production_blocker",
-        pattern=r"\barchitect_coding\b",
-        path_globs=("orchestration/model_quality_signatures.yaml",),
-        remediation="remove retired model signatures or bind them to current live roles only with fresh evidence",
-    ),
+    # 2026-08-01: `retired_role_in_quality_signature` REMOVED with its target file.
+    #
+    # Worth recording WHY that file was deleted rather than fixed, because this rule
+    # is the cautionary tale: it scanned model_quality_signatures.yaml for the string
+    # `architect_coding` and passed clean, while all FOUR rows of that file described
+    # the fleet retired 2026-05-08 at throughputs 1.4x-11x too low. None of them
+    # happened to contain the one retired name the rule knew about.
+    #
+    # The lesson generalises to the rules that remain: the retired-role set used to be
+    # a hand-written restatement of "historic roles minus live roles". A name-matching
+    # guard can only catch staleness it was told to look for, so it cannot detect a
+    # table that is stale in every VALUE while naming only current roles. The durable
+    # form is a comparison against the compiled artifact, not a grep for known-bad
+    # strings.
+    #
+    # 2026-08-01: both halves now fixed. The retired set is DERIVED
+    # (`derive_retired_live_roles`), and value staleness is caught by
+    # ROLE_FACT_SURFACE_RULES, which compares a config surface's per-role facts
+    # against the compiled stack priors instead of grepping for known-bad names.
     HardcodedSurfaceRule(
         rule_id="retired_role_in_tests",
         category="legacy_test",
@@ -354,6 +528,60 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class RoleFactSurfaceRule:
+    """A config surface that RESTATES per-role facts the compiled artifact owns.
+
+    Deliberately not a `HardcodedSurfaceRule`: there is no known-bad string to
+    grep for. The rule names a role-keyed table and the fields it duplicates,
+    and the check compares those values against
+    ``orchestration/derived/stack_priors.yaml``. That is the only shape that
+    catches drift nobody enumerated in advance — the failure that let
+    model_quality_signatures.yaml describe a fleet retired 2026-05-08, at
+    throughputs 1.4x-11x too low, while passing a name-matching rule clean
+    because every row named a role that was still current.
+
+    Scope is intentionally narrow: only surfaces where "the compiled artifact
+    declares the same fact" is unambiguous. Roles absent from the compiled
+    artifact are skipped, not flagged — absence is a different check.
+    """
+
+    rule_id: str
+    category: str
+    path_globs: tuple[str, ...]
+    roles_key: str
+    fields: tuple[str, ...]
+    remediation: str
+    exclude_globs: tuple[str, ...] = ()
+    # Rows the surface marks as pure aliases restate NOTHING about their own
+    # serving: `tier: ALIAS` is a structural marker meaning "launches no server",
+    # not a serving tier, and comparing it against the compiled `hot` would be a
+    # category error that buries the real mismatches under noise. Alias TARGETS
+    # are already checked by src/config/stack_templates._validate_stack_prior_parity.
+    alias_field: str = "alias_to"
+    alias_tier_values: frozenset[str] = frozenset({"alias"})
+
+
+ROLE_FACT_SURFACE_RULES: tuple[RoleFactSurfaceRule, ...] = (
+    RoleFactSurfaceRule(
+        rule_id="stale_role_fact_table",
+        category="production_blocker",
+        path_globs=("stack_templates/*.yaml",),
+        exclude_globs=(),
+        roles_key="roles",
+        # Ports and alias targets are deliberately NOT compared here:
+        # src/config/stack_templates._validate_stack_prior_parity already compares
+        # them against the same generated priors. A second implementation of the
+        # same comparison is a second thing to drift.
+        fields=("model", "quant", "tier"),
+        remediation=(
+            "restate the role's model/quant/tier from the compiled stack priors "
+            "(orchestration/derived/stack_priors.yaml) or delete the stale row"
+        ),
+    ),
+)
+
+
 CONSUMER_SURFACE_CLASSIFICATIONS = frozenset(
     {
         "generated",
@@ -398,6 +626,7 @@ CONSUMER_SURFACE_TEXT_FIELDS = (
 def hardcoded_surface_rule_inventory(
     rules: tuple[HardcodedSurfaceRule, ...] = HARDCODED_SURFACE_RULES,
     ownership_manifest: dict[str, Any] | None = None,
+    role_fact_rules: tuple[RoleFactSurfaceRule, ...] = ROLE_FACT_SURFACE_RULES,
 ) -> dict[str, Any]:
     """Return the curated model-specific surface rules as machine-readable data."""
     ownership_by_rule = _surface_manifest_by_rule(ownership_manifest)
@@ -405,8 +634,23 @@ def hardcoded_surface_rule_inventory(
     return {
         "version": 1,
         "rule_count": len(rules),
+        "role_fact_rule_count": len(role_fact_rules),
         "consumer_surface_count": len(consumer_surfaces),
         "categories": sorted({rule.category for rule in rules}),
+        "role_fact_rules": [
+            {
+                "rule_id": rule.rule_id,
+                "category": rule.category,
+                "path_globs": list(rule.path_globs),
+                "exclude_globs": list(rule.exclude_globs),
+                "roles_key": rule.roles_key,
+                "fields": list(rule.fields),
+                "compared_against": "orchestration/derived/stack_priors.yaml",
+                "remediation": rule.remediation,
+                "ownership": ownership_by_rule.get(rule.rule_id, {}),
+            }
+            for rule in role_fact_rules
+        ],
         "rules": [
             {
                 "rule_id": rule.rule_id,
@@ -503,8 +747,17 @@ def validate_surface_manifest(
     *,
     rules: tuple[HardcodedSurfaceRule, ...] = HARDCODED_SURFACE_RULES,
     required_consumer_surface_ids: frozenset[str] | None = None,
+    role_fact_rules: tuple[RoleFactSurfaceRule, ...] | None = None,
 ) -> list[str]:
-    """Validate scanner-rule ownership metadata for stack-change reviews."""
+    """Validate scanner-rule ownership metadata for stack-change reviews.
+
+    The bijection covers BOTH rule families: a value-staleness rule without an
+    owner is as unaccountable as a name-matching one.
+    """
+    if role_fact_rules is None:
+        role_fact_rules = (
+            ROLE_FACT_SURFACE_RULES if rules == HARDCODED_SURFACE_RULES else ()
+        )
     manifest, errors = load_surface_manifest(path)
     if errors:
         return errors
@@ -516,7 +769,11 @@ def validate_surface_manifest(
     if not isinstance(surfaces, list):
         return errors + ["hardcoded-surface ownership manifest has no list-valued 'surfaces'"]
 
-    rules_by_id = {rule.rule_id: rule for rule in rules}
+    rules_by_id: dict[str, HardcodedSurfaceRule | RoleFactSurfaceRule] = {
+        rule.rule_id: rule for rule in rules
+    }
+    for role_fact_rule in role_fact_rules:
+        rules_by_id[role_fact_rule.rule_id] = role_fact_rule
     seen: dict[str, int] = {}
     required_text_fields = (
         "rule_id",
@@ -1145,6 +1402,29 @@ def _alias_host_role(record: dict[str, Any]) -> str | None:
     return host
 
 
+def _manifest_alias_host(target: dict[str, Any]) -> str | None:
+    """Return the manifest primary for a pure alias launch target.
+
+    Registry ``server_mode.shared_with`` is useful corroboration but is not the
+    source of the launch relationship.  The computed manifest's alias entries
+    remain sufficient to align an alias serving fleet with its primary when a
+    registry compilation has omitted that convenience metadata.
+    """
+    entries = target.get("launch_entries")
+    if not isinstance(entries, list) or not entries:
+        return None
+    hosts = {
+        entry.get("primary_role")
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("alias") is True
+    }
+    if len(hosts) != 1 or not all(isinstance(host, str) and host for host in hosts):
+        return None
+    if not all(isinstance(entry, dict) and entry.get("alias") is True for entry in entries):
+        return None
+    return next(iter(hosts))
+
+
 def validate_launch_manifest_serving_alignment(
     priors: dict[str, Any],
     *,
@@ -1207,7 +1487,11 @@ def validate_launch_manifest_serving_alignment(
         # launch row (superset of the alias's tagged subset), not its own.
         # Host resolution: model-conflict evidence first (alias_overrides),
         # else the declarative server_mode shared_with relation.
-        host_role = _alias_host_role(record) or target.get("alias_host")
+        host_role = (
+            _alias_host_role(record)
+            or target.get("alias_host")
+            or _manifest_alias_host(target)
+        )
         if host_role and isinstance(targets.get(host_role), dict):
             target = targets[host_role]
         serving = record.get("serving")
@@ -1415,6 +1699,175 @@ def scan_hardcoded_surfaces(
     return findings
 
 
+def _normalized_identity(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+def _role_key_line(lines: list[str], role: str) -> int:
+    pattern = re.compile(rf"^\s*{re.escape(role)}\s*:")
+    for line_no, line in enumerate(lines, start=1):
+        if pattern.match(line):
+            return line_no
+    return 0
+
+
+def _compiled_model_identities(record: dict[str, Any]) -> list[str]:
+    """Every name the compiled artifact uses for this role's model."""
+    identities: list[str] = []
+    for key in ("display_name", "model_id"):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            identities.append(value.strip())
+    serving = record.get("serving")
+    serving = serving if isinstance(serving, dict) else {}
+    launch = serving.get("launch")
+    launch = launch if isinstance(launch, dict) else {}
+    requirements = launch.get("requirements")
+    requirements = requirements if isinstance(requirements, dict) else {}
+    model_path = requirements.get("model_path")
+    if isinstance(model_path, str) and model_path.strip():
+        identities.append(Path(model_path.strip()).stem)
+    return identities
+
+
+def _identity_agrees(declared: Any, identities: list[str]) -> bool:
+    """Substring-tolerant model-identity comparison.
+
+    Config surfaces routinely write an informal name ("Qwen3-Next-80B-A3B") for a
+    model the compiled artifact spells out ("Qwen3-Next-80B-A3B-Instruct"), and
+    treating that as drift would bury the real signal. Containment either way is
+    accepted; a distinguishing token the other side does not carry at all — an
+    "-MTP" build, a different parameter count, a different family — is not.
+    """
+    normalized = _normalized_identity(declared)
+    if not normalized:
+        return True
+    for identity in identities:
+        candidate = _normalized_identity(identity)
+        if not candidate:
+            continue
+        if normalized in candidate or candidate in normalized:
+            return True
+    return False
+
+
+def _compiled_role_fact(record: dict[str, Any], field: str) -> Any:
+    if field == "model":
+        return _compiled_model_identities(record)
+    if field == "quant":
+        model = record.get("model")
+        model = model if isinstance(model, dict) else {}
+        return model.get("quant")
+    if field == "tier":
+        serving = record.get("serving")
+        serving = serving if isinstance(serving, dict) else {}
+        return serving.get("tier")
+    return None
+
+
+def _role_fact_mismatch(field: str, declared: Any, compiled: Any) -> str | None:
+    if declared is None or (isinstance(declared, str) and not declared.strip()):
+        return None
+    if field == "model":
+        identities = compiled if isinstance(compiled, list) else []
+        if not identities:
+            return None
+        if _identity_agrees(declared, identities):
+            return None
+        return f"model {declared!r} != compiled {identities[0]!r}"
+    if compiled is None or (isinstance(compiled, str) and not compiled.strip()):
+        return None
+    if _normalized_identity(declared) == _normalized_identity(compiled):
+        return None
+    return f"{field} {declared!r} != compiled {compiled!r}"
+
+
+def _declared_row_is_alias(record: dict[str, Any], rule: RoleFactSurfaceRule) -> bool:
+    alias_to = record.get(rule.alias_field)
+    if isinstance(alias_to, str) and alias_to.strip():
+        return True
+    tier = record.get("tier")
+    return isinstance(tier, str) and tier.strip().lower() in rule.alias_tier_values
+
+
+def scan_role_fact_surfaces(
+    priors: dict[str, Any],
+    repo_root: Path = REPO_ROOT,
+    *,
+    rules: tuple[RoleFactSurfaceRule, ...] = ROLE_FACT_SURFACE_RULES,
+    categories: frozenset[str] | None = None,
+) -> list[SurfaceFinding]:
+    """Compare role-keyed config tables against the compiled stack priors.
+
+    Emits ordinary ``SurfaceFinding``s so declared exceptions, waiver-staleness
+    checks and the warning-bucket accounting apply unchanged.
+    """
+    compiled_roles = priors.get("roles")
+    if not isinstance(compiled_roles, dict):
+        return []
+    findings: list[SurfaceFinding] = []
+    for rule in rules:
+        if categories is not None and rule.category not in categories:
+            continue
+        for path in _candidate_paths(
+            repo_root,
+            HardcodedSurfaceRule(
+                rule_id=rule.rule_id,
+                category=rule.category,
+                pattern="",
+                path_globs=rule.path_globs,
+                exclude_globs=rule.exclude_globs,
+                remediation=rule.remediation,
+            ),
+        ):
+            try:
+                if path.stat().st_size > SURFACE_SCAN_MAX_FILE_BYTES:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                declared_doc = yaml.safe_load(text)
+            except (OSError, UnicodeDecodeError, yaml.YAMLError):
+                continue
+            if not isinstance(declared_doc, dict):
+                continue
+            declared_roles = declared_doc.get(rule.roles_key)
+            if not isinstance(declared_roles, dict):
+                continue
+            lines = text.splitlines()
+            rel_path = path.relative_to(repo_root)
+            for role in sorted(declared_roles):
+                declared_record = declared_roles.get(role)
+                compiled_record = compiled_roles.get(role)
+                if not isinstance(declared_record, dict) or not isinstance(compiled_record, dict):
+                    continue
+                if _declared_row_is_alias(declared_record, rule):
+                    continue
+                line_no = _role_key_line(lines, role)
+                if line_no and SURFACE_SCAN_ALLOW_MARKER in lines[line_no - 1]:
+                    continue
+                mismatches = []
+                for field in rule.fields:
+                    mismatch = _role_fact_mismatch(
+                        field,
+                        declared_record.get(field),
+                        _compiled_role_fact(compiled_record, field),
+                    )
+                    if mismatch is not None:
+                        mismatches.append(mismatch)
+                if not mismatches:
+                    continue
+                findings.append(
+                    SurfaceFinding(
+                        rule_id=rule.rule_id,
+                        category=rule.category,
+                        path=rel_path,
+                        line=line_no,
+                        snippet=f"role {role!r}: " + "; ".join(mismatches),
+                        remediation=rule.remediation,
+                    )
+                )
+    return findings
+
+
 def _surface_exception_from_raw(index: int, raw: Any) -> tuple[SurfaceException | None, list[str]]:
     errors: list[str] = []
     prefix = f"surface exception #{index}"
@@ -1513,6 +1966,134 @@ def _production_blocker_waiver_errors(exceptions: list[SurfaceException]) -> lis
     return errors
 
 
+def _accepted_gap_from_raw(
+    index: int, raw: Any
+) -> tuple[AcceptedGapDeclaration | None, list[str]]:
+    errors: list[str] = []
+    prefix = f"accepted gap #{index}"
+    if not isinstance(raw, dict):
+        return None, [f"{prefix} is not a mapping"]
+
+    def required_str(field: str) -> str:
+        value = raw.get(field)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{prefix} missing non-empty {field!r}")
+            return ""
+        return value.strip()
+
+    role = required_str("role")
+    gap = required_str("gap")
+    reason = required_str("reason")
+    owner = required_str("owner")
+
+    declared = required_str("declared")
+    if declared:
+        try:
+            date.fromisoformat(declared)
+        except ValueError:
+            errors.append(f"{prefix} declared must be an ISO date YYYY-MM-DD")
+
+    # Expiry is REQUIRED and enforced. An accepted gap that never expires is a
+    # silenced check with extra paperwork.
+    expires = required_str("expires")
+    if expires:
+        try:
+            expires_date = date.fromisoformat(expires)
+        except ValueError:
+            errors.append(f"{prefix} expires must be an ISO date YYYY-MM-DD")
+        else:
+            if expires_date < date.today():
+                errors.append(
+                    f"{prefix} for role {role or '?'} gap {gap or '?'!r} "
+                    f"expired on {expires}; renew it with fresh evidence or close the gap"
+                )
+
+    declaration = AcceptedGapDeclaration(
+        role=role,
+        gap=gap,
+        reason=reason,
+        owner=owner,
+        declared=declared,
+        expires=expires,
+    )
+    return (None, errors) if errors else (declaration, [])
+
+
+def load_accepted_gaps(
+    path: Path = DEFAULT_ACCEPTED_GAPS,
+) -> tuple[list[AcceptedGapDeclaration], list[str]]:
+    """Load operator-declared, expiring acceptances of known stack-prior gaps.
+
+    An expired or malformed declaration is dropped AND reported: the gap it
+    covered goes back to being an error, and the stale declaration is an error
+    of its own. Silently honouring an expired waiver is how a temporary
+    acceptance becomes permanent.
+    """
+    if not path.exists():
+        return [], []
+    try:
+        loaded = _load_yaml(path)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        return [], [f"failed to load accepted-gap file {path}: {exc}"]
+    raw_gaps = loaded.get("accepted_gaps", [])
+    if raw_gaps is None:
+        return [], []
+    if not isinstance(raw_gaps, list):
+        return [], [f"accepted-gap file {path} has non-list 'accepted_gaps'"]
+
+    declarations: list[AcceptedGapDeclaration] = []
+    errors: list[str] = []
+    for index, raw in enumerate(raw_gaps, start=1):
+        declaration, entry_errors = _accepted_gap_from_raw(index, raw)
+        errors.extend(entry_errors)
+        if declaration is not None:
+            declarations.append(declaration)
+    return declarations, errors
+
+
+def _matching_accepted_gap(
+    role: str,
+    gap: str,
+    declarations: list[AcceptedGapDeclaration],
+) -> AcceptedGapDeclaration | None:
+    for declaration in declarations:
+        if declaration.matches(role, gap):
+            return declaration
+    return None
+
+
+def _unmatched_accepted_gap_errors(
+    present_gaps: set[tuple[str, str]],
+    declarations: list[AcceptedGapDeclaration],
+) -> list[str]:
+    """Return errors for declarations whose gap is no longer present.
+
+    Same shape as `_unmatched_surface_exception_errors`: a waiver that no longer
+    corresponds to anything is drift, and drift that reports nothing is how a
+    declaration file turns into a list of things nobody remembers deciding.
+    """
+    errors: list[str] = []
+    for index, declaration in enumerate(declarations, start=1):
+        if (declaration.role, declaration.gap) in present_gaps:
+            continue
+        errors.append(
+            f"accepted gap #{index} no longer matches a stack-prior gap: "
+            f"role {declaration.role!r} gap {declaration.gap!r}; remove the stale declaration"
+        )
+    return errors
+
+
+def _accepted_gap_warning(
+    scope: str,
+    role: str,
+    gap: str,
+    declaration: AcceptedGapDeclaration,
+) -> str:
+    return (
+        f"accepted_gap.{scope}.{role}: {gap} [declaration: {declaration.warning_suffix()}]"
+    )
+
+
 def _matching_surface_exception(
     finding: SurfaceFinding,
     exceptions: list[SurfaceException],
@@ -1556,17 +2137,23 @@ def _unmatched_surface_exception_errors(
     return errors
 
 
-def stack_prior_role_choices(priors: dict[str, Any]) -> list[str]:
+def stack_prior_role_choices(
+    priors: dict[str, Any],
+    *,
+    retired_roles: frozenset[str] | None = None,
+) -> list[str]:
     """Return model role choices that procedure inputs should accept."""
     roles = priors.get("roles")
     if not isinstance(roles, dict):
         return []
+    if retired_roles is None:
+        retired_roles = retired_live_roles()
 
     choices: list[str] = []
     for role, record in roles.items():
         if not isinstance(role, str) or not isinstance(record, dict):
             continue
-        if role in RETIRED_LIVE_ROLES:
+        if role in retired_roles:
             continue
         if record.get("deployment_status") == "retired":
             continue
@@ -1574,17 +2161,23 @@ def stack_prior_role_choices(priors: dict[str, Any]) -> list[str]:
     return sorted(choices)
 
 
-def stack_prior_permission_role_choices(priors: dict[str, Any]) -> list[str]:
+def stack_prior_permission_role_choices(
+    priors: dict[str, Any],
+    *,
+    retired_roles: frozenset[str] | None = None,
+) -> list[str]:
     """Return live executor roles accepted by the procedure schema."""
     roles = priors.get("roles")
     if not isinstance(roles, dict):
         return []
+    if retired_roles is None:
+        retired_roles = retired_live_roles()
 
     choices: list[str] = []
     for role, record in roles.items():
         if not isinstance(role, str) or not isinstance(record, dict):
             continue
-        if role in RETIRED_LIVE_ROLES:
+        if role in retired_roles:
             continue
         if record.get("deployment_status") == "live_stack":
             choices.append(role)
@@ -1627,9 +2220,13 @@ def validate_procedure_role_enums(
     repo_root: Path = REPO_ROOT,
     procedure_path: Path | None = None,
     schema_path: Path | None = None,
+    retired_roles: frozenset[str] | None = None,
 ) -> list[str]:
     """Validate generated procedure role enums against stack priors."""
     errors: list[str] = []
+    if retired_roles is None:
+        retired_roles, retired_errors = _retired_live_roles_or_error()
+        errors.extend(retired_errors)
     raw_procedure_path = procedure_path
     if raw_procedure_path is None:
         resolved_procedure_path = repo_root / DEFAULT_ADD_MODEL_PROCEDURE.relative_to(REPO_ROOT)
@@ -1640,7 +2237,7 @@ def validate_procedure_role_enums(
             else repo_root / raw_procedure_path
         )
     if resolved_procedure_path.exists():
-        expected = stack_prior_role_choices(priors)
+        expected = stack_prior_role_choices(priors, retired_roles=retired_roles)
         actual = _procedure_input_enum(resolved_procedure_path, "role")
         if actual is None:
             rel_path = _display_path(resolved_procedure_path, repo_root)
@@ -1661,7 +2258,9 @@ def validate_procedure_role_enums(
             raw_schema_path if raw_schema_path.is_absolute() else repo_root / raw_schema_path
         )
     if resolved_schema_path.exists():
-        expected_permissions = stack_prior_permission_role_choices(priors)
+        expected_permissions = stack_prior_permission_role_choices(
+            priors, retired_roles=retired_roles
+        )
         actual_permissions = _procedure_schema_permission_enum(resolved_schema_path)
         if actual_permissions is None:
             rel_path = _display_path(resolved_schema_path, repo_root)
@@ -1692,6 +2291,7 @@ def validate_stack_priors(
     registry_path: Path = DEFAULT_REGISTRY,
     descriptor_path: Path = DEFAULT_DESCRIPTORS,
     allow_production_blocker_waivers: bool = False,
+    accepted_gaps_path: Path | None = DEFAULT_ACCEPTED_GAPS,
 ) -> GuardResult:
     errors: list[str] = []
     warnings: list[str] = []
@@ -1699,6 +2299,21 @@ def validate_stack_priors(
         return GuardResult(errors=[f"missing stack priors artifact: {priors_path}"], warnings=[])
 
     priors = _load_yaml(priors_path)
+    retired_roles, retired_errors = _retired_live_roles_or_error()
+    errors.extend(retired_errors)
+
+    # Declared gaps are scoped to the artifact they were declared against. A
+    # tmp_path fixture must not inherit production declarations, or every
+    # fixture would trip the stale-declaration check.
+    accepted_gaps: list[AcceptedGapDeclaration] = []
+    if accepted_gaps_path is not None:
+        default_gaps_for_other_priors = (
+            accepted_gaps_path == DEFAULT_ACCEPTED_GAPS
+            and priors_path.resolve() != DEFAULT_PRIORS.resolve()
+        )
+        if not default_gaps_for_other_priors:
+            accepted_gaps, accepted_gap_errors = load_accepted_gaps(accepted_gaps_path)
+            errors.extend(accepted_gap_errors)
     errors.extend(validate_stack_priors_contract(priors))
     errors.extend(
         validate_launch_manifest_serving_alignment(
@@ -1718,7 +2333,24 @@ def validate_stack_priors(
         errors.append("stack priors artifact has no source_artifacts section")
         sources = {}
 
-    for label in REQUIRED_SOURCE_ARTIFACTS:
+    # 2026-08-01: verify EVERY pin the compiler emitted, not a hand-listed subset.
+    #
+    # REQUIRED_SOURCE_ARTIFACTS is a second restatement of the producer's pin set
+    # (src/registry/stack_priors.py `source_artifacts`), and the two had already
+    # diverged: the compiler emitted 9 pins and this loop checked 7, so
+    # `launch_manifest.yaml` and `stack_topology.yaml` — which now hold the
+    # launcher configuration that used to live in the .py files — were pinned and
+    # never verified. Mutating them changed no verdict.
+    #
+    # This is the same shape as the `device` field being absent from runtime
+    # attestation: nothing was duplicated, something was simply MISSING from a
+    # hand-maintained checklist, so no amount of reviewing what WAS checked would
+    # have found it. Iterating the producer's own keys means a pin added upstream
+    # is verified automatically, with no one needing to remember.
+    #
+    # REQUIRED_SOURCE_ARTIFACTS survives as a FLOOR: these must be present, so a
+    # compiler that silently stopped emitting one is still caught.
+    for label in sorted(set(REQUIRED_SOURCE_ARTIFACTS) | set(sources)):
         source = sources.get(label)
         if not isinstance(source, dict):
             errors.append(f"missing source_artifacts.{label}")
@@ -1733,13 +2365,14 @@ def validate_stack_priors(
                 f"source_artifacts.{label} hash mismatch: {path} expected {expected}, got {actual}"
             )
 
-    for role in sorted(RETIRED_LIVE_ROLES & set(roles)):
+    for role in sorted(retired_roles & set(roles)):
         record = roles.get(role) or {}
         if record.get("deployment_status") == "live_stack":
             errors.append(f"retired role {role!r} appears as live_stack")
         else:
             warnings.append(f"retired role {role!r} appears in non-live priors")
 
+    present_gaps: set[tuple[str, str]] = set()
     for role, record in sorted(roles.items()):
         if not isinstance(record, dict):
             errors.append(f"role {role!r} record is not a mapping")
@@ -1758,15 +2391,42 @@ def validate_stack_priors(
                     f"live HOT role {role!r} has memory_cost={priors_block.get('memory_cost')!r}"
                 )
         if known_gaps:
-            warnings.append(f"role {role!r} has {len(known_gaps)} known gap(s)")
+            undeclared = 0
+            for gap in known_gaps:
+                gap_text = str(gap)
+                present_gaps.add((role, gap_text))
+                declaration = _matching_accepted_gap(role, gap_text, accepted_gaps)
+                if declaration is None:
+                    undeclared += 1
+                else:
+                    warnings.append(
+                        _accepted_gap_warning("role", role, gap_text, declaration)
+                    )
+            if undeclared:
+                warnings.append(f"role {role!r} has {undeclared} known gap(s)")
 
     global_gaps = priors.get("known_global_gaps")
     if isinstance(global_gaps, dict):
         for role, gaps in sorted(global_gaps.items()):
-            if gaps:
-                warnings.append(f"known_global_gaps.{role}: {len(gaps)} gap(s)")
+            if not gaps:
+                continue
+            undeclared = 0
+            for gap in gaps:
+                gap_text = str(gap)
+                present_gaps.add((role, gap_text))
+                declaration = _matching_accepted_gap(role, gap_text, accepted_gaps)
+                if declaration is None:
+                    undeclared += 1
+                else:
+                    warnings.append(
+                        _accepted_gap_warning("known_global_gaps", role, gap_text, declaration)
+                    )
+            if undeclared:
+                warnings.append(f"known_global_gaps.{role}: {undeclared} gap(s)")
     elif global_gaps:
         errors.append("known_global_gaps must be a mapping when present")
+
+    errors.extend(_unmatched_accepted_gap_errors(present_gaps, accepted_gaps))
 
     if scan_surfaces:
         if surface_manifest_path is not None:
@@ -1777,6 +2437,7 @@ def validate_stack_priors(
                 repo_root=repo_root,
                 procedure_path=procedure_path,
                 schema_path=procedure_schema_path,
+                retired_roles=retired_roles,
             )
         )
         surface_exceptions: list[SurfaceException] = []
@@ -1793,6 +2454,9 @@ def validate_stack_priors(
                 if not allow_production_blocker_waivers:
                     errors.extend(_production_blocker_waiver_errors(surface_exceptions))
         surface_findings = scan_hardcoded_surfaces(repo_root, categories=surface_categories)
+        surface_findings.extend(
+            scan_role_fact_surfaces(priors, repo_root, categories=surface_categories)
+        )
         # Validate waiver staleness against a full-category scan. Otherwise a
         # documented legacy_test / historical_doc exception would be reported as
         # a stale waiver whenever the surface report is scoped to
@@ -1802,6 +2466,9 @@ def validate_stack_priors(
             staleness_findings = surface_findings
         else:
             staleness_findings = scan_hardcoded_surfaces(repo_root, categories=None)
+            staleness_findings.extend(
+                scan_role_fact_surfaces(priors, repo_root, categories=None)
+            )
         errors.extend(_unmatched_surface_exception_errors(staleness_findings, surface_exceptions))
         for finding in surface_findings:
             warnings.append(_surface_warning_for_finding(finding, surface_exceptions))
@@ -1809,7 +2476,11 @@ def validate_stack_priors(
     if strict and warnings:
         retained_warnings: list[str] = []
         for warning in warnings:
-            if warning.startswith("hardcoded_surface.waived."):
+            # Two prefixes survive strict mode, and both mean the same thing: a
+            # human with a name and a deadline has looked at this and accepted
+            # it. Everything else is an error, because the gate cannot tell the
+            # difference between "unmeasured" and "unsafe" on its own.
+            if warning.startswith(("hardcoded_surface.waived.", "accepted_gap.")):
                 retained_warnings.append(warning)
             else:
                 errors.append(f"strict: {warning}")
@@ -1869,6 +2540,15 @@ def main(argv: list[str] | None = None) -> int:
         help="YAML file documenting hardcoded-surface ownership",
     )
     parser.add_argument(
+        "--accepted-gaps",
+        type=Path,
+        default=DEFAULT_ACCEPTED_GAPS,
+        help=(
+            "YAML file declaring owned, expiring acceptances of known stack-prior "
+            "gaps; declared gaps stay visible warnings in strict mode"
+        ),
+    )
+    parser.add_argument(
         "--list-hardcoded-surface-rules",
         action="store_true",
         help="Print the curated hardcoded-surface rule inventory and exit",
@@ -1921,6 +2601,7 @@ def main(argv: list[str] | None = None) -> int:
         surface_exceptions_path=args.surface_exceptions,
         surface_manifest_path=args.surface_manifest,
         allow_production_blocker_waivers=args.allow_production_blocker_waivers,
+        accepted_gaps_path=args.accepted_gaps,
     )
     if result.errors:
         print(f"FAIL: {len(result.errors)} stack-prior error(s)")

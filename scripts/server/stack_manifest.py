@@ -8,71 +8,121 @@ HOT_SERVERS / WARM_SERVERS from ROLE_LAUNCH_META + NUMA_CONFIG.
 
 orchestrator_stack.py re-imports every name here, and the registry compiler's
 `from orchestrator_stack import ROLE_LAUNCH_META` fallback path keeps working.
+
+2026-08-01 — THIS MODULE IS NOW A THIN LOADER. Every table below used to be a
+Python literal; they now live in `orchestration/launch_manifest.yaml` (launch
+data) and `orchestration/stack_topology.yaml` (per-role NUMA wiring, via
+stack_numa). The names, types and values are unchanged — `frozenset` is still
+`frozenset`, tuples are still tuples — so no consumer changed.
+
+The reason is not tidiness. The duplication this module accumulated (and the
+ring of local fallback tables around it) existed BECAUSE it was code: a Python
+table invites a second Python table beside it, and every severe launcher defect
+found in the 2026-07 audit had the same shape — the compiled artifact was
+correct and a local literal won anyway. Data does not invite that.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from scripts.server.stack_numa import NUMA_CONFIG
 from scripts.server.stack_paths import LLAMA_MATH_TOOLS, _V2_ROLES, _PATHS
+
+
+# =============================================================================
+# Declared-data loader
+# =============================================================================
+
+_LAUNCH_MANIFEST_PATH = Path(__file__).resolve().parents[2] / "orchestration" / "launch_manifest.yaml"
+
+# Path placeholders the manifest may use. Substitution is literal, not
+# str.format, so a value containing braces for some other reason is left alone
+# instead of raising a KeyError at import.
+_PATH_TOKENS: dict[str, str] = {
+    "{models_dir}": str(_PATHS["models_dir"]),
+    "{model_base}": str(_PATHS["model_base"]),
+    "{project_root}": str(_PATHS["project_root"]),
+    "{cache_dir}": str(_PATHS["cache_dir"]),
+    "{llm_root}": str(_PATHS["llm_root"]),
+    "{tmp_dir}": str(_PATHS["tmp_dir"]),
+}
+
+_REQUIRED_MANIFEST_SECTIONS = (
+    "port_map",
+    "optional_auxiliary_roles",
+    "hot_roles",
+    "serial_roles",
+    "role_launch_meta",
+    "models",
+    "embedding",
+    "vision",
+    "launch_shape",
+    "gpu_shadow_lane",
+    "orchestrator_profiles",
+    "docker_services",
+)
+
+
+def _expand_paths(value):
+    """Recursively expand {models_dir}-style placeholders in loaded strings."""
+    if isinstance(value, str):
+        for token, replacement in _PATH_TOKENS.items():
+            if token in value:
+                value = value.replace(token, replacement)
+        return value
+    if isinstance(value, list):
+        return [_expand_paths(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _expand_paths(item) for key, item in value.items()}
+    return value
+
+
+def _load_launch_manifest(path: Path | None = None) -> dict:
+    """Load orchestration/launch_manifest.yaml.
+
+    No fallback table and no partial load. A launcher that cannot read its own
+    manifest must fail at IMPORT rather than start something plausible — the
+    failure mode this refactor exists to remove is precisely "a local default
+    won over the declared value and the run looked fine".
+    """
+    manifest_path = _LAUNCH_MANIFEST_PATH if path is None else path
+    try:
+        document = yaml.safe_load(manifest_path.read_text())
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"stack_manifest: declared launch manifest missing at {manifest_path}. "
+            f"The launcher has no fallback manifest by design."
+        ) from exc
+    if not isinstance(document, dict):
+        raise ValueError(f"stack_manifest: {manifest_path} did not parse to a mapping")
+    missing = [key for key in _REQUIRED_MANIFEST_SECTIONS if key not in document]
+    if missing:
+        raise ValueError(f"stack_manifest: {manifest_path} is missing section(s) {missing}")
+    return _expand_paths(document)
+
+
+_MANIFEST = _load_launch_manifest()
 
 
 # =============================================================================
 # Port assignments by role (primary ports — full-speed 1×96t instances)
 # Pre-warm (2026-03-29): primary port is the full-speed instance.
 # Quarter instances on offset ports (808x, 818x, 828x, 838x).
+# Declared in launch_manifest.yaml `port_map:` — including the per-role comments
+# that record WHY each port is what it is.
 # =============================================================================
 
-PORT_MAP = {
-    "frontdoor": 8070,  # Full-speed 1×96t (quarters: 8080, 8180, 8280, 8380)
-    "coder_escalation": 8070,  # Alias -> frontdoor shared Qwen3.6 server
-    "worker_summarize": 8070,  # Alias -> frontdoor shared Qwen3.6 server
-    "worker_general": 8072,  # Full-speed 1×96t (quarters: 8082, 8182, 8282, 8382)
-    "worker_explore": 8072,  # Alias -> worker_general (legacy name; pre-2026-03-19)
-    "worker_math": 8072,  # Shares with worker_general
-    "toolrunner": 8072,  # Shares with worker_general
-    "worker_vision": 8086,  # Dedicated VL server
-    "vision_escalation": 8087,  # Temporary VL escalation alias -> Qwen2.5-VL
-    "eval_batch_frontdoor": 18070,  # Warm eval-batch Qwen3.6 frontdoor lane (-np 8)
-    "worker_coder": 8102,  # Fast coding worker semantic role (1.5B backend) — DEPRECATED (worker_pool)
-    "worker_fast": 8102,  # Fast worker (1.5B, WARM, 4 slots) — DEPRECATED (worker_pool)
-    # Specialists (no pre-warm — already multi-instance or too large for quarters)
-    "architect_general": 8083,
-    # architect_coding REMOVED 2026-05-06 — REAP-246B 70% coder < frontdoor 97%; role eliminated. 139 GB freed.
-    "ingest_long_context": 8085,
-    # Embedding servers (6 parallel instances for redundancy)
-    "embedder": 8090,  # Primary embedding server
-    "embedder_1": 8091,
-    "embedder_2": 8092,
-    "embedder_3": 8093,
-    "embedder_4": 8094,
-    "embedder_5": 8095,
-    "embedder_granite_97m_r2": 8096,
-    "embedder_multilingual_e5_base": 8097,
-    "embedder_bge_m3": 8098,
-    "orchestrator": 8000,
-    "document_formalizer": 9001,
-    "sd_server": 8190,  # ERNIE-Image-Turbo via stable-diffusion.cpp native (replaced ComfyUI 2026-05-07; ~1.7-3.4× CPU speedup)
-    "whisper": 9000,  # faster-whisper STT (transcription service, not llama-server)
-}
+PORT_MAP = dict(_MANIFEST["port_map"])
 
 # Stack-managed auxiliaries whose startup failure is non-fatal but must remain
 # visible in the read-only status surface even when no state row was created.
-OPTIONAL_AUXILIARY_ROLES = frozenset({"whisper"})
+OPTIONAL_AUXILIARY_ROLES = frozenset(_MANIFEST["optional_auxiliary_roles"])
 
 # HOT roles (always started) - NUMA-optimized
-# 2026-05-06: architect_coding removed, ingest_long_context promoted (see registry).
-HOT_ROLES = {
-    "frontdoor",
-    "coder_escalation",
-    "worker_general",
-    "embedder",
-    "architect_general",
-    "ingest_long_context",
-    "worker_vision",
-    "vision_escalation",
-}
+HOT_ROLES = set(_MANIFEST["hot_roles"])
 
 # All NUMA replica ports (for port scanning and cleanup) — derived from
 # NUMA_CONFIG + PORT_MAP. Stays here because it depends on both the manifest's
@@ -88,31 +138,7 @@ NUMA_REPLICA_PORTS = {
 # Roles that must never run concurrently (large/latency-sensitive paths).
 # Note: frontdoor intentionally runs with 2 slots by default for better
 # interactive responsiveness under concurrent traffic.
-# 2026-05-06: removed architect_coding (role eliminated) + thinking_reasoning (role eliminated, no GGUF).
-SERIAL_ROLES = {
-    "coder_escalation",
-    "worker_summarize",
-    # 2026-05-11: frontdoor added to test -np 1 vs -np 2 single-instance throughput.
-    # -np 2 was inherited from quarter-mode (4×48t) where two slots gave round-robin
-    # admission. In full-mode 1×96t single-user serving, slot 2 is just preallocated
-    # KV that we never use — wastes L3. If -np 1 measurably improves throughput,
-    # keep frontdoor in SERIAL_ROLES; otherwise revert.
-    "frontdoor",
-    # architect_general REMOVED 2026-05-09: -np 1 + speculative tree decode
-    # (draft_max=24, p_split=0) trips a llama.cpp assertion in
-    # common_speculative_state_tree::draft — `init: ... starting position of Y < cache position X`
-    # → `decode: failed to initialize batch` →
-    # `init: invalid seq_id[1][0] = 1 >= 1` →
-    # `GGML_ASSERT(logits != nullptr)` in common/sampling.cpp:152.
-    # Build b8957-2ffbdbbba (production llama.cpp). Re-enable when upstream patches
-    # M-RoPE rollback or we move to a binary that supports it. Throughput cost: spec
-    # decode previously +25% (4.3→12.6 t/s with moe8+spec_q8); MoE-expert-reduction
-    # path stays active so we keep the moe-budget gain (12.19 t/s probe-B canonical).
-    "ingest_long_context",
-    "vision_escalation",
-    "formalizer",
-    "toolrunner",
-}
+SERIAL_ROLES = set(_MANIFEST["serial_roles"])
 
 
 # =============================================================================
@@ -123,338 +149,124 @@ SERIAL_ROLES = {
 # to forget one when adding/removing/renaming a role and ship a broken config.
 #
 # Post-2026-05-06: HOT_SERVERS / WARM_SERVERS are COMPUTED from:
-#   1. ROLE_LAUNCH_META (below) — small classification dict: per-role tier +
-#      launch mode + aliases + mode-specific kwargs.
+#   1. ROLE_LAUNCH_META — small classification dict: per-role tier + launch mode
+#      + aliases + mode-specific kwargs. Declared in launch_manifest.yaml.
 #   2. NUMA_CONFIG (stack_numa) — wiring spec: per-role NUMA instances list.
+#      Declared in stack_topology.yaml.
 #
-# Adding a new role now requires editing TWO places consistently:
-#   a) Add the role's NUMA wiring in NUMA_CONFIG (or set "no_numa": True in
-#      ROLE_LAUNCH_META if the role doesn't need NUMA pinning, e.g. embedders).
-#   b) Add a ROLE_LAUNCH_META entry with tier/mode/aliases.
+# Adding a new role now requires editing TWO declared places consistently:
+#   a) Add the role's NUMA wiring in stack_topology.yaml `numa_config:` (or set
+#      `no_numa: true` in role_launch_meta if the role doesn't need NUMA pinning,
+#      e.g. embedders).
+#   b) Add a role_launch_meta entry with tier/mode/aliases.
 # A consistency check (`_validate_role_classification()` below) catches
 # common mismatches at module load time.
 
-# Per-role launch metadata. Source of truth for tier classification + launch mode.
+# Per-role launch metadata. Source of truth for tier classification + launch
+# mode. Insertion order is load-bearing — HOT_SERVERS/WARM_SERVERS are emitted
+# in it — and YAML mapping order is preserved on load.
 ROLE_LAUNCH_META: dict[str, dict] = {
-    # ---- HOT tier (always started) ----
-    # 2026-05-09: coder_escalation + worker_summarize CONSOLIDATED onto frontdoor's
-    # llama-server. All three share the same Qwen3.6-35B-A3B Q8 GGUF since the
-    # 2026-05-06 model swap; running them as separate processes wasted 36 GB of
-    # mlocked RAM and ran two competing 96-thread OMP teams (-40% to -69%
-    # throughput on the cohabiting roles per 2026-05-09 measurements). The
-    # orchestrator API routes by role name → registry's url field (all three
-    # roles point at port 8070 in the registry).
-    "frontdoor": {
-        "tier": "hot",
-        "mode": "default",
-        "shared_with_first_n": ["coder_escalation", "worker_summarize"],
-    },
-    # coder_escalation entry REMOVED 2026-05-09 — consolidated into frontdoor above.
-    # NUMA_CONFIG['coder_escalation'] left in place as dead key for git-history
-    # blame purposes; not referenced by build_servers_from_classification anymore.
-    "worker_general": {
-        "tier": "hot",
-        "mode": "worker_pool",
-        "worker_type": "explore",
-        # Aliases that share the worker_general process: worker_explore is the
-        # legacy name (pre-2026-03-19 worker pool design); worker_math + toolrunner
-        # share the GGUF mmap and process for routing fan-out.
-        "shared_with_first_n": ["worker_explore", "worker_math", "toolrunner"],
-        "shared_with_first_n_count": 2,
-    },  # aliases on full + first quarter
-    "architect_general": {"tier": "hot", "mode": "default"},
-    "ingest_long_context": {"tier": "hot", "mode": "default"},
-    "worker_vision": {"tier": "hot", "mode": "vision", "vision_type": "worker"},
-    "vision_escalation": {"tier": "hot", "mode": "vision", "vision_type": "escalation"},
-    # Embedders — no NUMA pinning, fixed single port each
-    "embedder": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8090},
-    "embedder_1": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8091},
-    "embedder_2": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8092},
-    "embedder_3": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8093},
-    "embedder_4": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8094},
-    "embedder_5": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8095},
-    # Dense-retriever Phase B candidates. Warm/default-off so production
-    # BGE-large episodic memory behavior stays unchanged until explicitly launched.
-    "embedder_granite_97m_r2": {
-        "tier": "warm",
-        "mode": "embedding",
-        "no_numa": True,
-        "port": 8096,
-    },
-    "embedder_multilingual_e5_base": {
-        "tier": "warm",
-        "mode": "embedding",
-        "no_numa": True,
-        "port": 8097,
-    },
-    "embedder_bge_m3": {
-        "tier": "warm",
-        "mode": "embedding",
-        "no_numa": True,
-        "port": 8098,
-    },
-    # ---- WARM tier (optional, --include-warm) ----
-    # 2026-05-06: worker_pool deprecated in registry; warm 1.5B worker retained as inert.
-    "worker_fast": {
-        "tier": "warm",
-        "mode": "worker_pool",
-        "worker_type": "fast",
-        "no_numa": True,
-        "port": 8102,
-    },
-    # P-BENCH-3/A7: explicit-only batch-serving lane for EvalTower traffic.
-    # launcher_only keeps this warm process out of lean-registry and descriptor
-    # compile inputs; it is not a distinct model-routing role.
-    "eval_batch_frontdoor": {
-        "tier": "warm",
-        "mode": "eval_batch_frontdoor",
-        "launcher_only": True,
-    },
-    # architect_coding REMOVED 2026-05-06 (REAP-246B role eliminated; 139 GB freed)
-    # ingest_long_context PROMOTED to HOT 2026-05-06 (Stage 1 of three_stage_summarization)
-    # thinking_reasoning REMOVED 2026-05-06 (GGUF deleted from disk 2026-03-06)
+    role: dict(meta) for role, meta in _MANIFEST["role_launch_meta"].items()
 }
 
 
+
 # =============================================================================
-# Model paths
+# Model paths — declared in launch_manifest.yaml `models:` / `embedding:` /
+# `vision:`. The measured provenance for each choice moved with the data.
 # =============================================================================
+
+_MODELS = _MANIFEST["models"]
+_EMBEDDING = _MANIFEST["embedding"]
 
 # Embedding model: BGE-large-en-v1.5 (purpose-built for embeddings, 1024 dims)
 # 6 parallel instances provide redundancy and reduce latency via fan-out
-EMBEDDING_MODEL_PATH = str(_PATHS["models_dir"] / "bge-large-en-v1.5-f16.gguf")
-EMBEDDER_PORTS = [8090, 8091, 8092, 8093, 8094, 8095]
+EMBEDDING_MODEL_PATH = _MODELS["embedding_model_path"]
+EMBEDDER_PORTS = list(_EMBEDDING["pool_ports"])
+# Each pool port gets its OWN recipe dict (never a shared one — a caller that
+# mutated a shared dict would silently retune the whole pool).
 EMBEDDING_SERVER_RECIPES: dict[int, dict[str, str | int | bool]] = {
-    port: {
-        "model_path": EMBEDDING_MODEL_PATH,
-        "model_name": "BGE-large-en-v1.5 (embeddings)",
-        "context_tokens": 512,
-        "threads": 4,
-        "slots": 4,
-        "pooling": "cls",
-        "flash_attn": True,
-    }
+    port: {"model_path": EMBEDDING_MODEL_PATH, **_EMBEDDING["pool_recipe"]}
     for port in EMBEDDER_PORTS
 }
 EMBEDDING_SERVER_RECIPES.update(
-    {
-        8096: {
-            "model_path": "/mnt/raid0/llm/models/granite-embedding-97m-multilingual-r2-Q8_0.gguf",
-            "model_name": "granite-embedding-97m-multilingual-r2 Q8_0",
-            "context_tokens": 32768,
-            "threads": 16,
-            "slots": 4,
-            "pooling": "cls",
-            "flash_attn": True,
-        },
-        8097: {
-            "model_path": "/mnt/raid0/llm/models/multilingual-e5-base-Q8_0.gguf",
-            "model_name": "multilingual-e5-base Q8_0",
-            "context_tokens": 512,
-            "threads": 16,
-            "slots": 4,
-            "pooling": "mean",
-            "flash_attn": True,
-        },
-        8098: {
-            "model_path": "/mnt/raid0/llm/models/bge-m3-Q8_0.gguf",
-            "model_name": "BGE-M3 Q8_0 dense-only",
-            "context_tokens": 8192,
-            "threads": 16,
-            "slots": 4,
-            "pooling": "cls",
-            "flash_attn": True,
-        },
-    }
+    {int(port): dict(recipe) for port, recipe in _EMBEDDING["extra_recipes"].items()}
 )
 
 # Worker pool models (FIXED paths to existing files)
 # NOTE: worker_coder uses the fast 1.5B worker backend on port 8102.
-WORKER_POOL_MODELS = {
-    # gemma4-26B-A4B Q4_K_M MTP — swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4_K_M.
-    # +18pp on tool_compliance (96% vs 78%), +6pp on full suite (90% vs 84%),
-    # +36% tps on tool_compliance (60.7 vs 44.7), 3× more concise output.
-    # NB: requires ik_llama.cpp PR #1744 binary (Phase 2 wires runtime_requirements
-    # through the launcher; until then this path is informational only — production
-    # launcher still uses default LLAMA_SERVER and will fail on gemma4 arch).
-    # 2026-06-26 v6 cutover: ORIG base GGUF — old gemma-4-26B-A4B-it-Q4_K_M.gguf garbles on v6.
-    "explore": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf",
-    "fast": str(
-        _PATHS["model_base"] / "QuantFactory/Qwen2.5-Coder-1.5B-GGUF/Qwen2.5-Coder-1.5B.Q4_K_M.gguf"
-    ),
-}
+WORKER_POOL_MODELS = dict(_MODELS["worker_pool"])
 
 # Draft model for MTP speculative decoding on explore worker.
-# gemma4 assistant Q8 — in-house GGUF converted from google/gemma-4-26B-A4B-it-assistant
-# safetensors (no community GGUF existed). 4-layer drafter, 58% acceptance at draft_max=2.
-# 2026-06-26 v6 cutover: v6 MTP head — old -assistant-Q8_0.gguf is the ik gemma4_mtp format, incompatible with v6.
-EXPLORE_DRAFT_MODEL = "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf"
+EXPLORE_DRAFT_MODEL = _MODELS["explore_draft_model"]
 
-# Vision models (VL) with multimodal projector
-VISION_WORKER_MODEL = str(
-    _PATHS["model_base"]
-    / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
-)
-VISION_WORKER_MMPROJ = str(
-    _PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf"
-)
-# Temporary 2026-07-19 safety alias: use the same validated Qwen2.5-VL lane
-# for escalation until a higher-quality replacement wins the vision gate.
+# Vision models (VL) with multimodal projector.
+_VISION_WORKER = _MANIFEST["vision"]["worker"]
+_VISION_ESCALATION = _MANIFEST["vision"]["escalation"]
+VISION_WORKER_MODEL = _VISION_WORKER["model"]
+VISION_WORKER_MMPROJ = _VISION_WORKER["mmproj"]
+VISION_WORKER_DEVICE = _VISION_WORKER["device"]
+VISION_WORKER_IMAGE_MIN_TOKENS = _VISION_WORKER["image_min_tokens"]
+VISION_WORKER_CACHE_RAM = _VISION_WORKER["cache_ram"]
+# vision_escalation is an ALIAS on the worker's process, not a second server, so
+# its model/mmproj/device are BOUND rather than declared twice. Declaring them
+# separately is exactly how the retired :8087 lane drifted to a different model.
+if not _VISION_ESCALATION.get("same_as_worker"):
+    raise ValueError(
+        "stack_manifest: vision.escalation must declare same_as_worker: true — "
+        "vision_escalation is an alias on the worker_vision process, and a second "
+        "independent model declaration is the drift this binding exists to prevent"
+    )
 VISION_ESCALATION_MODEL = VISION_WORKER_MODEL
 VISION_ESCALATION_MMPROJ = VISION_WORKER_MMPROJ
-VISION_ESCALATION_DEVICE = "none"
-VISION_ESCALATION_REASONING = "off"
+VISION_ESCALATION_DEVICE = VISION_WORKER_DEVICE
+VISION_ESCALATION_REASONING = _VISION_ESCALATION["reasoning"]
 
-DEFAULT_EFFECTIVE_CONTEXT_TOKENS = 32768
-LAUNCH_CONTEXT_TOKENS = {
-    "worker_general": 16384,
-    "worker_fast": 16384,
-    "worker_vision": 8192,
-    "vision_escalation": 8192,
-    "architect_general": 16384,
-    "ingest_long_context": 32768,
-}
+_LAUNCH_SHAPE = _MANIFEST["launch_shape"]
+DEFAULT_EFFECTIVE_CONTEXT_TOKENS = _LAUNCH_SHAPE["default_effective_context_tokens"]
+LAUNCH_CONTEXT_TOKENS = dict(_LAUNCH_SHAPE["context_tokens"])
 
-DEFAULT_UBATCH_TOKENS = 8192
+DEFAULT_UBATCH_TOKENS = _LAUNCH_SHAPE["default_ubatch_tokens"]
 
 # Effective launcher KV settings. Descriptors may preserve broader model
 # capability metadata; this table witnesses the actual llama-server CLI path.
 LAUNCH_KV_QUANT_CONFIGS = {
-    "frontdoor": ("q8_0", "q8_0"),
-    "coder_escalation": ("q8_0", "q8_0"),
-    "worker_summarize": ("q8_0", "q8_0"),
-    "worker_general": ("q8_0", "q8_0"),
-    "worker_math": ("q8_0", "q8_0"),
-    "toolrunner": ("q8_0", "q8_0"),
-    "architect_general": ("q4_0", "f16"),
-    "ingest_long_context": ("q4_0", "q4_0"),
+    role: tuple(pair) for role, pair in _LAUNCH_SHAPE["kv_quant_configs"].items()
 }
-# 2026-06-26 v6 cutover: architect_general MTP enabled (NEXTN draft-mtp); M-RoPE assertion resolved in v6, smoke-gated at cutover
-NO_SPEC_DECODE_ROLES: set[str] = set()
+NO_SPEC_DECODE_ROLES: set[str] = set(_LAUNCH_SHAPE["no_spec_decode_roles"])
 KV_HADAMARD_ROLES = set(_V2_ROLES)
 
 # =============================================================================
 # GPU shadow lane launch constants (docs/gpu-shadow-lane.md; gpu-serving-tie-in
-# P2-6/P0-2). Tenancy is registry data: the launcher borrows priors from the
-# registry role below (eval_batch_frontdoor source_role pattern). Duty swap =
-# repoint the ONE tenant-role constant. These constants are INERT until the
-# registry proposal adds the `gpu_shadow_lane` ROLE_LAUNCH_META + NUMA_CONFIG +
-# PORT_MAP entries — no code path reaches them before then (the mode branch in
-# _build_servers_from_classification only fires for an entry with mode
-# "gpu_shadow_lane", and none exists).
+# P2-6/P0-2). Declared in launch_manifest.yaml `gpu_shadow_lane:`; INERT until a
+# registry proposal adds the matching role_launch_meta + numa_config + port_map
+# entries.
 # =============================================================================
 
-GPU_SHADOW_LANE_TENANT_ROLE = "coder_escalation_shadow"
-GPU_SHADOW_LANE_DEVICE = "ROCm0"
-GPU_SHADOW_LANE_REASONING = "off"
-# Fallback serving shape ONLY (priors override at launch; the authoritative
-# source is the serving_shape block of orchestration/gpu_shadow_lane_np_ceiling.yaml,
-# compiled into the tenant's stack-prior cache by src/registry/stack_priors.py).
-# These mirror the phase2_resident_set default: -np 8 x 8192-token slots.
-GPU_SHADOW_LANE_FALLBACK_SLOTS = 8
-GPU_SHADOW_LANE_FALLBACK_CONTEXT_TOKENS = 65536
+_GPU_SHADOW_LANE = _MANIFEST["gpu_shadow_lane"]
+GPU_SHADOW_LANE_TENANT_ROLE = _GPU_SHADOW_LANE["tenant_role"]
+GPU_SHADOW_LANE_DEVICE = _GPU_SHADOW_LANE["device"]
+GPU_SHADOW_LANE_REASONING = _GPU_SHADOW_LANE["reasoning"]
+GPU_SHADOW_LANE_FALLBACK_SLOTS = _GPU_SHADOW_LANE["fallback_slots"]
+GPU_SHADOW_LANE_FALLBACK_CONTEXT_TOKENS = _GPU_SHADOW_LANE["fallback_context_tokens"]
 
-DEV_MODEL = "Qwen2.5-Coder-0.5B-Instruct-Q8_0.gguf"
+DEV_MODEL = _MODELS["dev_model"]
 DEV_MODEL_PATH = str(_PATHS["models_dir"] / DEV_MODEL)
 
 # Optional orchestrator API launch profiles for repeatable debugging runs.
 ORCHESTRATOR_PROFILES: dict[str, dict[str, str]] = {
-    "contention-debug": {
-        "ORCHESTRATOR_UVICORN_WORKERS": "6",
-        "ORCHESTRATOR_FRONTDOOR_TRACE": "1",
-        "ORCHESTRATOR_DELEGATION_TRACE": "1",
-        "ORCHESTRATOR_DELEGATION_TOTAL_MAX_SECONDS": "55",
-        "ORCHESTRATOR_DELEGATION_SPECIALIST_MAX_SECONDS": "25",
-        "ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_EXCLUSIVE_S": "45",
-        "ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_SHARED_S": "45",
-    },
-    "gate3-tool-telemetry": {
-        "AUTOPILOT_TOOL_SENTINELS": "1",
-        "ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT": "1",
-    },
+    name: dict(env) for name, env in _MANIFEST["orchestrator_profiles"].items()
 }
 
 
 # =============================================================================
 # Docker Services (NextPLAID retrieval + SearXNG metasearch + Crawl4AI extraction)
+# Declared in launch_manifest.yaml `docker_services:`, including the port-choice
+# rationale (searxng 8888 not 8090; crawl4ai 11235 not 8086).
 # =============================================================================
 
-DOCKER_SERVICES = [
-    {
-        "name": "nextplaid-code",
-        "port": 8088,
-        "image": "ghcr.io/lightonai/next-plaid:cpu-1.0.4",
-        "model": "lightonai/LateOn-Code",
-        "description": "Multi-vector code retrieval (ColBERT)",
-        # Separate index subdir to avoid cross-contamination (different models = incompatible embeddings)
-        "volumes": [
-            f"{_PATHS['project_root']}/cache/next-plaid/code-indices:/data/indices",
-            f"{_PATHS['cache_dir']}/huggingface:/root/.cache/huggingface",
-        ],
-        "args": [
-            "--host",
-            "0.0.0.0",
-            "--port",
-            "8080",
-            "--index-dir",
-            "/data/indices",
-            "--model",
-            "lightonai/LateOn-Code",
-            "--int8",
-        ],
-    },
-    {
-        "name": "nextplaid-docs",
-        "port": 8089,
-        "image": "ghcr.io/lightonai/next-plaid:cpu-1.0.4",
-        "model": "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx",
-        "description": "Multi-vector doc retrieval (ColBERT)",
-        "volumes": [
-            f"{_PATHS['project_root']}/cache/next-plaid/docs-indices:/data/indices",
-            f"{_PATHS['cache_dir']}/huggingface:/root/.cache/huggingface",
-            "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx:/models/gte-moderncolbert-v1-onnx:ro",
-        ],
-        "args": [
-            "--host",
-            "0.0.0.0",
-            "--port",
-            "8080",
-            "--index-dir",
-            "/data/indices",
-            "--model",
-            "/models/gte-moderncolbert-v1-onnx",
-            "--int8",
-        ],
-    },
-    {
-        "name": "searxng",
-        # 8888 (not 8090): the embedder pool occupies 8090-8095, so leaving
-        # searxng on 8090 collides with embedder_0 and the container fails
-        # docker-run networking. 8888 sits outside both the llama-server
-        # 80xx range and the reembed_episodic_store.py probe range.
-        "port": 8888,
-        "image": "docker.io/searxng/searxng:latest",
-        "description": "Metasearch aggregator (JSON API for web_search)",
-        "volumes": [
-            f"{_PATHS['project_root']}/config/searxng:/etc/searxng:Z",
-        ],
-        "args": [],  # Config via mounted settings.yml, not CLI args
-        "health_path": "/",  # SearXNG serves HTML on /, not /health
-    },
-    {
-        "name": "crawl4ai",
-        # Crawl4AI's maintained Docker deployment serves on 11235. Do not use
-        # the old handoff hint of 8086; that is the worker_vision port.
-        "port": 11235,
-        "container_port": 11235,
-        "image": "unclecode/crawl4ai:latest",
-        "description": "Browser-backed page extraction for web_research",
-        "shm_size": "1g",
-        "run_timeout": 180,
-        "args": [],
-        "health_path": "/health",
-    },
-]
+DOCKER_SERVICES = [dict(service) for service in _MANIFEST["docker_services"]]
+
 
 
 # =============================================================================

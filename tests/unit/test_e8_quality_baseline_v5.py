@@ -1026,7 +1026,10 @@ def test_v5_cli_separates_reviewed_source_from_live_runtime_paths() -> None:
     runtime_root = Path("/mnt/raid0/llm/epyc-orchestrator")
     assert args.state_path == runtime_root / "orchestration/autopilot_state.json"
     assert args.registry_path == runtime_root / "orchestration/model_registry.yaml"
-    assert args.lean_registry_path == runtime_root / "orchestration/model_registry_lean.yaml"
+    # 2026-08-01: model_registry_lean.yaml deleted; the lean registry IS the
+    # compiled orchestration/model_registry.yaml.
+    assert args.lean_registry_path == runtime_root / "orchestration/model_registry.yaml"
+    assert args.lean_registry_path.exists()
     assert args.stack_priors_path == runtime_root / "orchestration/derived/stack_priors.yaml"
     assert args.orchestrator_state_path == runtime_root / "logs/orchestrator_state.json"
     assert args.journal_path == runtime_root / "orchestration/autopilot_journal.jsonl"

@@ -564,6 +564,57 @@ def _runtime_attestation_warnings(
                 Path(actual).name if actual else "no --slot-save-path",
             ))
 
+    # 2026-08-01: `device` was the ONE declared field this table never checked. That
+    # omission is why a role could run on the wrong processor while attesting clean:
+    # architect_general was verified against binary_path, model, context, slots,
+    # ubatch, kv types, mmap, mlock, slot-save-path, flash_attn, jinja, reasoning,
+    # override_kv and the entire spec block — and passed all of them — while serving
+    # a GPU-declared 27B on 24 CPU threads under `--device none`. Attestation that
+    # covers every field except which processor is executing is not attestation.
+    #
+    # BOTH directions are covered. A declared device must appear verbatim. An
+    # UNDECLARED device means "CPU role", so a live device that is anything other
+    # than `none` is drift too — that is the check that would catch the mirror-image
+    # accident of a CPU role landing on the GPU. A cmdline carrying no device flag at
+    # all is not asserted against: that is the shape of a contract fixture, not of a
+    # stack-launched process (the launcher always emits one).
+    declared_device = flags.get("device")
+    declared_device = (
+        declared_device.strip()
+        if isinstance(declared_device, str) and declared_device.strip()
+        else None
+    )
+    actual_device = _last_cmdline_flag_value(cmdline, "--device", "-dev")
+    if declared_device is not None:
+        if actual_device != declared_device:
+            warnings.append(_runtime_value_warning(
+                name, info, "device", declared_device, actual_device or "no --device"
+            ))
+    elif actual_device is not None and actual_device != "none":
+        warnings.append(_runtime_value_warning(
+            name, info, "device", "none", actual_device
+        ))
+
+    # The draft device follows the target's device unless a role declares its own.
+    declared_draft_device = flags.get("device_draft")
+    declared_draft_device = (
+        declared_draft_device.strip()
+        if isinstance(declared_draft_device, str) and declared_draft_device.strip()
+        else declared_device
+    )
+    if _cmdline_flag_values(cmdline, "--spec-type") or _cmdline_flag_values(cmdline, "-md"):
+        actual_draft_device = _last_cmdline_flag_value(cmdline, "--device-draft", "-devd")
+        if declared_draft_device is not None:
+            if actual_draft_device != declared_draft_device:
+                warnings.append(_runtime_value_warning(
+                    name, info, "device_draft", declared_draft_device,
+                    actual_draft_device or "no --device-draft",
+                ))
+        elif actual_draft_device is not None and actual_draft_device != "none":
+            warnings.append(_runtime_value_warning(
+                name, info, "device_draft", "none", actual_draft_device
+            ))
+
     flash_attn = flags.get("flash_attn")
     if isinstance(flash_attn, bool):
         actual = _last_cmdline_flag_value(cmdline, "--flash-attn") == "on"

@@ -57,7 +57,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["architect_general", "coder_escalation", "frontdoor", "ingest_long_context", "toolrunner", "vision_escalation", "worker_general", "worker_math", "worker_summarize", "worker_vision", "admin"]
+            "enum": ["architect_critic", "architect_general", "coder_escalation", "frontdoor", "ingest_long_context", "toolrunner", "vision_escalation", "worker_general", "worker_math", "worker_summarize", "worker_vision", "admin"]
           },
           "description": "Roles allowed to execute this procedure"
         },

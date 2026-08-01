@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from src.registry_loader import (
+    DEFAULT_LEAN_REGISTRY_PATH,
     RegistryError,
     RegistryLoader,
 )
@@ -160,9 +161,14 @@ class TestRegistryLoaderBasic:
             RegistryLoader(registry_path)
 
     def test_committed_lean_registry_excludes_retired_architect_role(self):
-        """Lean registry routes code escalation to the live coder role."""
-        repo_root = Path(__file__).resolve().parents[2]
-        registry_path = repo_root / "orchestration" / "model_registry_lean.yaml"
+        """Lean registry routes code escalation to the live coder role.
+
+        2026-08-01: repointed from the hand-maintained
+        `orchestration/model_registry_lean.yaml` (deleted — a second, drifted role
+        table dated 2026-06-13) to the compiled lean artifact that
+        `src/registry/registry_compiler.py` regenerates from the master registry.
+        """
+        registry_path = DEFAULT_LEAN_REGISTRY_PATH
 
         loader = RegistryLoader(registry_path, validate_paths=False)
 

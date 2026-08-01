@@ -911,6 +911,174 @@ def test_generic_spec_launch_pins_target_and_draft_devices_to_cpu(monkeypatch, t
     assert cmd[cmd.index("--device-draft") + 1] == "none"
 
 
+def test_generic_gpu_role_emits_its_declared_device_instead_of_none(
+    monkeypatch, tmp_path
+) -> None:
+    """The default builder must EMIT a declared device, not be overwritten to CPU.
+
+    Regression for the 2026-08-01 finding: architect_general declares
+    `device: ROCm0` + `ngl: all`, resolved correctly to the HIP binary, and then
+    launched as `--device none --device-draft none` because `_build_role_command`
+    never read `flags["device"]` and `_append_device_args` assumed CPU. It served a
+    GPU-declared 27B on 24 CPU threads while attesting healthy.
+    """
+    monkeypatch.setattr(stack, "SLOT_SAVE_DIR", tmp_path)
+    monkeypatch.setattr(stack, "_resolve_thread_count", lambda _role, _idx: "24")
+    monkeypatch.setattr(
+        stack,
+        "_stack_prior_launch",
+        lambda _role: (
+            {"model_path": "/models/architect.gguf"},
+            {
+                "binary_path": "/opt/llama/build-hip/bin/llama-server",
+                "cache": {
+                    "context_tokens": 16384,
+                    "slots": 2,
+                    "ubatch": 8192,
+                    "slot_save_path": str(tmp_path / "architect_general"),
+                },
+                "flags": {
+                    "flash_attn": True,
+                    "jinja": True,
+                    "device": "ROCm0",
+                    "n_gpu_layers": "all",
+                    "spec": {
+                        "enabled": True,
+                        "type": "draft-mtp",
+                        "draft_model_path": "/models/architect.gguf",
+                        "draft_max": 4,
+                    },
+                },
+            },
+        ),
+    )
+    role_config = Namespace(
+        name="architect_general",
+        model=Namespace(full_path="/models/architect.gguf"),
+        acceleration=Namespace(type="none"),
+    )
+
+    cmd = stack.build_server_command(role_config, 8083)
+
+    assert cmd[cmd.index("--device") + 1] == "ROCm0"
+    assert "none" not in _all_values(cmd, "--device")
+    # -ngl must ride along: selecting a device while offloading nothing to it is a
+    # GPU launch in name only.
+    assert cmd[cmd.index("-ngl") + 1] == "all"
+    # The NEXTN self-draft lives in the target's own GGUF, so it must not be
+    # stranded on the CPU under a GPU-resident target.
+    assert cmd[cmd.index("--device-draft") + 1] == "ROCm0"
+
+
+def _all_values(cmd: list[str], flag: str) -> list[str]:
+    return [cmd[i + 1] for i, tok in enumerate(cmd) if tok == flag and i + 1 < len(cmd)]
+
+
+def test_runtime_attestation_warns_when_live_device_contradicts_declaration() -> None:
+    """The attestation gap that made the architect_general defect invisible.
+
+    Every other declared field was checked; `device` was not. A process could run on
+    the wrong processor and still pass.
+    """
+    info = stack_commands.ProcessInfo(
+        role="architect_general",
+        pid=1935263,
+        port=8083,
+        started_at="now",
+        model_path="/models/architect.gguf",
+        log_file="architect.log",
+    )
+
+    warnings = stack_commands._runtime_attestation_warnings(
+        "architect_general",
+        info,
+        [
+            "/opt/llama/build-hip/bin/llama-server",
+            "-m",
+            "/models/architect.gguf",
+            "--device",
+            "none",
+            "--device-draft",
+            "none",
+            "--spec-type",
+            "draft-mtp",
+        ],
+        {
+            "requirements": {"model_path": "/models/architect.gguf"},
+            "runtime": {
+                "binary_path": "/opt/llama/build-hip/bin/llama-server",
+                "flags": {
+                    "device": "ROCm0",
+                    "spec": {"enabled": True, "type": "draft-mtp"},
+                },
+            },
+        },
+    )
+
+    assert any("device expected ROCm0" in warning for warning in warnings)
+    assert any("live cmdline has none" in warning for warning in warnings)
+    assert any("device_draft expected ROCm0" in warning for warning in warnings)
+
+
+def test_runtime_attestation_warns_when_cpu_role_lands_on_a_gpu() -> None:
+    """Mirror image: an UNDECLARED device means CPU, so a live ROCm0 is drift too."""
+    info = stack_commands.ProcessInfo(
+        role="frontdoor",
+        pid=123,
+        port=8070,
+        started_at="now",
+        model_path="/models/frontdoor.gguf",
+        log_file="frontdoor.log",
+    )
+
+    warnings = stack_commands._runtime_attestation_warnings(
+        "frontdoor",
+        info,
+        [
+            "llama-server",
+            "-m",
+            "/models/frontdoor.gguf",
+            "--device",
+            "ROCm0",
+        ],
+        {
+            "requirements": {"model_path": "/models/frontdoor.gguf"},
+            "runtime": {"flags": {"spec": {"enabled": False}}},
+        },
+    )
+
+    assert any("device expected none" in warning for warning in warnings)
+
+
+def test_runtime_attestation_passes_when_device_matches_declaration() -> None:
+    info = stack_commands.ProcessInfo(
+        role="worker_vision",
+        pid=123,
+        port=8086,
+        started_at="now",
+        model_path="/models/vl.gguf",
+        log_file="vision.log",
+    )
+
+    warnings = stack_commands._runtime_attestation_warnings(
+        "worker_vision",
+        info,
+        [
+            "llama-server",
+            "-m",
+            "/models/vl.gguf",
+            "--device",
+            "ROCm0",
+        ],
+        {
+            "requirements": {"model_path": "/models/vl.gguf"},
+            "runtime": {"flags": {"device": "ROCm0", "spec": {"enabled": False}}},
+        },
+    )
+
+    assert warnings == []
+
+
 def test_runtime_attestation_accepts_embedded_nextn_without_md() -> None:
     info = stack_commands.ProcessInfo(
         role="frontdoor",

@@ -28,14 +28,6 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/registry/sync_procedure_role_enums.py --check
     drift_response: regenerate procedure enums from stack priors
-  - rule_id: retired_role_in_lean_registry
-    category: production_blocker
-    owner: stack-change-governance
-    consumer_scope: lean production model registry
-    promotion_blocker: true
-    review_cadence: every stack change
-    evidence_command: uv run python scripts/validate/stack_change_guard.py
-    drift_response: remove retired roles from production registry truth
   - rule_id: retired_role_in_source_access
     category: production_blocker
     owner: stack-change-governance
@@ -44,14 +36,6 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/validate/stack_change_guard.py
     drift_response: bind source access to current live roles only
-  - rule_id: retired_role_in_quality_signature
-    category: production_blocker
-    owner: stack-change-governance
-    consumer_scope: model quality signature metadata
-    promotion_blocker: true
-    review_cadence: every stack change
-    evidence_command: uv run python scripts/validate/stack_change_guard.py
-    drift_response: remove retired signatures or bind fresh evidence to live roles
   - rule_id: retired_role_in_tests
     category: legacy_test
     owner: test-infrastructure
@@ -220,6 +204,18 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/validate/stack_change_guard.py
     drift_response: derive summaries from stack_manifest or stack priors
+  # Value-staleness rule (RoleFactSurfaceRule), not a name-matching one: it
+  # compares a role-keyed config table against the compiled stack priors instead
+  # of grepping for known-bad role names. The bijection covers it too — an
+  # unowned comparison rule is as unaccountable as an unowned grep.
+  - rule_id: stale_role_fact_table
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: role-keyed config tables that restate compiled per-role model/quant/tier facts (stack_templates/*.yaml)
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: restate the role's facts from orchestration/derived/stack_priors.yaml or delete the stale row
 
 consumer_surfaces:
   - surface_id: q_scorer_priors

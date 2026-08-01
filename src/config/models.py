@@ -279,9 +279,11 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
         "full:http://localhost:8070,http://localhost:8080,"
         "http://localhost:8180"
     ),
-    # Frontdoor-fleet alias (registry shared_with, 2026-07-22 reconciliation):
-    # last-resort literal mirrors the host fleet (drift guard enforces parity).
-    "coder_escalation": "full:http://localhost:8070,http://localhost:8080,http://localhost:8180",
+    # 2026-08-01 W1 CUTOVER: coder_escalation left the frontdoor fleet for
+    # architect_general's single GPU process. It has no half-fleet siblings — the
+    # 27B is one MI210 server, not a 1-full-plus-2-halves CPU lineup, so the
+    # "full:" multi-URL form would advertise ports that do not exist.
+    "coder_escalation": "http://localhost:8083",
     "worker_general": (
         "full:http://localhost:8072,http://localhost:8082,"
         "http://localhost:8182"
@@ -291,10 +293,11 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
         "http://localhost:8182"
     ),
     "worker_vision": "http://localhost:8086",
-    "vision_escalation": "http://localhost:8087",
+    "vision_escalation": "http://localhost:8086",  # 2026-08-01 W1: alias, same process (was :8087)
     "worker_fast": "http://localhost:8102",
     "worker_summarize": "full:http://localhost:8070,http://localhost:8080,http://localhost:8180",  # frontdoor-fleet alias, parity-guarded
     "architect_general": "http://localhost:8083",
+    "architect_critic": "http://localhost:8074",  # NEW 2026-08-01 (W1): the 122B on CPU
     "ingest_long_context": (
         "full:http://localhost:8085,http://localhost:8185,"
         "http://localhost:8285"
@@ -322,7 +325,13 @@ _CANONICAL_SERVER_URL_ALIASES: dict[str, str] = {
 # stale PID after an API-only restart, so complete these stable same-process
 # aliases before static priors get a chance to reintroduce dead full ports.
 _RUNTIME_SELECTED_ROLE_ALIASES: dict[str, str] = {
-    "coder_escalation": "frontdoor",
+    # 2026-08-01 W1 CUTOVER: coder_escalation's host moved frontdoor -> architect_general.
+    # This table OVERRIDES the registry at runtime, so leaving it stale would land
+    # coder_escalation requests back on :8070 no matter what the registry declares.
+    # Kept in lockstep with the identical tables in src/api/routes/health.py and
+    # scripts/server/stack_env.py.
+    "coder_escalation": "architect_general",
+    "vision_escalation": "worker_vision",
     "worker_summarize": "frontdoor",
     "worker_explore": "worker_general",
     "worker_math": "worker_general",
@@ -893,41 +902,65 @@ class ServerURLsConfig:
     # Tier A - Front Door. "full:" prefix triggers ConcurrencyAwareBackend.
     frontdoor: str = field(default_factory=lambda: _server_url_default("frontdoor"))
 
-    # Tier B - Specialists. `coder`/`coder_escalation` are served by the frontdoor
-    # GGUF (Qwen3.6-35B-A3B Q8; server_mode.coder_escalation is pinned to frontdoor
-    # port 8070, shared mmap). Delegate the URL DEFAULT to frontdoor so they inherit
-    # its `full:` quarter fleet → ConcurrencyAwareBackend, and _infer_topology_role_for_urls
-    # resolves the identical URL tuple to topology_role=frontdoor (region locks +
-    # FULL_DISABLED/demotion apply). Role name is preserved for everything else
-    # (timeouts, role prompts, /v1 path) — only the URL default changes.
+    # Tier B - Specialists.
+    #
+    # 2026-08-01 W1 CUTOVER — `coder_escalation` NO LONGER DELEGATES TO FRONTDOOR.
+    # The comment that stood here said "server_mode.coder_escalation is pinned to
+    # frontdoor port 8070, shared mmap". That ceased to be true at the cutover: the
+    # role moved to architect_general's MI210 :8083 process and is a different model
+    # on a different device.
+    # This was the LAST copy still pointing at the old host. `PORT_MAP`,
+    # `_LEGACY_SERVER_URL_FALLBACKS` and `_RUNTIME_SELECTED_ROLE_ALIASES` were all
+    # updated in the cutover commit; this field default was missed, and because it
+    # asks for the literal string "frontdoor" it BYPASSED the correct resolution —
+    # `_stack_prior_server_urls()["coder_escalation"]` already returned :8083 while
+    # `ServerURLsConfig().coder_escalation` still returned frontdoor's `full:` fleet.
+    # Since `as_dict()` here is the backend map for chat, routing, openai-compat and
+    # health, every coder_escalation request was still landing on frontdoor's CPU
+    # 35B — i.e. the null hop the whole cutover existed to remove.
+    coder_escalation: str = field(default_factory=lambda: _server_url_default("coder_escalation"))
+    # `coder` is a CANDIDATE-ROLE label, not a serving role — it has no server_mode
+    # row and no port of its own, so delegating its URL default is correct. It stays
+    # on frontdoor: D3 removed `coder` from frontdoor's candidate_roles for AUTOPILOT
+    # ARM PURPOSES, but frontdoor is still hop 1 of escalation_chains.coder and is
+    # still the cheap CPU lane a bare `coder` label should resolve to.
     coder: str = field(default_factory=lambda: _server_url_default("frontdoor"))
-    coder_escalation: str = field(default_factory=lambda: _server_url_default("frontdoor"))
 
     # Tier C - Workers. `worker` and deprecated worker_* roles stay as
     # compatibility aliases where stack priors do not expose that exact label.
     worker: str = field(default_factory=lambda: _server_url_default("worker"))
     worker_general: str = field(default_factory=lambda: _server_url_default("worker_general"))
-    # toolrunner is a logical alias over worker_general (shared Gemma-4 backend)
-    toolrunner: str = field(default_factory=lambda: _server_url_default("worker_general"))
+    # 2026-08-01: these ask for their OWN role name, not their alias host's.
+    # `_server_url_default` already resolves an alias to its serving process via
+    # `_STACK_PRIOR_SERVER_URL_ALIASES` / `_STACK_MANIFEST_SERVER_URL_ALIASES`, both
+    # of which are derived from the registry's `shared_with` relation — so naming the
+    # host here added nothing and broke the moment a role was repointed. That is
+    # exactly how `coder_escalation` kept resolving to frontdoor's :8070 through the
+    # W1 cutover: the VALUE was derived, but the LOOKUP KEY was hardcoded, so the
+    # resolver faithfully returned the right answer to the wrong question.
+    # Verified byte-identical to the previous hardcoded delegation before changing.
+    toolrunner: str = field(default_factory=lambda: _server_url_default("toolrunner"))
     worker_explore: str = field(default_factory=lambda: _server_url_default("worker_explore"))
-    # worker_math shares worker_general's physical gemma fleet
-    # (server_mode.worker.shared_with) — delegate the URL default to worker_general
-    # so it inherits the `full:` quarter fleet (topology_role=worker_general), same
-    # pattern as toolrunner above. Role name preserved for timeouts/prompts/path.
-    worker_math: str = field(default_factory=lambda: _server_url_default("worker_general"))
+    worker_math: str = field(default_factory=lambda: _server_url_default("worker_math"))
     worker_vision: str = field(default_factory=lambda: _server_url_default("worker_vision"))
     vision_escalation: str = field(
         default_factory=lambda: _server_url_default("vision_escalation")
     )
     worker_coder: str = field(default_factory=lambda: _server_url_default("worker_coder"))
     worker_fast: str = field(default_factory=lambda: _server_url_default("worker_fast"))
-    # worker_summarize is served by the frontdoor GGUF (Qwen3.6-35B-A3B Q8, shared
-    # mmap) — delegate the URL default to frontdoor for its `full:` quarter fleet
-    # (topology_role=frontdoor). Role name preserved for timeouts/prompts/path.
-    worker_summarize: str = field(default_factory=lambda: _server_url_default("frontdoor"))
+    # 2026-08-01: asks for its own name; the resolver derives the frontdoor host from
+    # `server_mode.frontdoor.shared_with`. Verified byte-identical to the previous
+    # hardcoded `_server_url_default("frontdoor")` before changing.
+    worker_summarize: str = field(default_factory=lambda: _server_url_default("worker_summarize"))
 
     # Tier B - Architect / long-context.
     architect_general: str = field(default_factory=lambda: _server_url_default("architect_general"))
+    # NEW 2026-08-01 (W1). _server_url_default() ends in a bare subscript of
+    # _LEGACY_SERVER_URL_FALLBACKS (models.py:754, no .get/default), so adding a
+    # field here WITHOUT the matching fallback entry raises KeyError at config
+    # CONSTRUCTION — fresh checkout, degraded mode, and every test that builds a
+    # config. The entry was added above in the same commit.
+    architect_critic: str = field(default_factory=lambda: _server_url_default("architect_critic"))
     ingest_long_context: str = field(
         default_factory=lambda: _server_url_default("ingest_long_context")
     )
@@ -997,6 +1030,9 @@ class TimeoutsConfig:
     architect_general: int = field(
         default_factory=lambda: int(_registry_timeout("roles", "architect_general", 600))
     )
+    architect_critic: int = field(
+        default_factory=lambda: int(_registry_timeout("roles", "architect_critic", 600))
+    )
     default_request: int = field(
         default_factory=lambda: int(_registry_timeout("", "default", 600))
     )
@@ -1058,6 +1094,7 @@ class TimeoutsConfig:
             "vision_escalation": self.vision_escalation,
             "ingest_long_context": self.ingest_long_context,
             "architect_general": self.architect_general,
+            "architect_critic": self.architect_critic,
         }
 
     def _normalize_timeout_role(self, role: str) -> str:
@@ -1094,12 +1131,18 @@ class VisionConfig:
             )
         )
     )
+    # 2026-08-01 W1 CUTOVER. This is a SECOND, OFFLINE vision pipeline
+    # (llama-mtmd-cli batch analyzer) with its own model paths and its own port
+    # pair, independent of stack priors. It was still pinned to the retired
+    # Qwen2.5-VL-7B and to :8087, a port that no longer exists after the vision
+    # unification — so the batch analyzer would have kept running the retired
+    # model against a dead port while the served stack was correct.
     vl_model_path: Path = field(
         default_factory=lambda: Path(
             os.environ.get(
                 "ORCHESTRATOR_PATHS_VL_MODEL",
                 f"{_get_default_llm_root()}/models/lmstudio-community/"
-                "Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+                "Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
             )
         )
     )
@@ -1108,12 +1151,13 @@ class VisionConfig:
             os.environ.get(
                 "ORCHESTRATOR_PATHS_VL_MMPROJ",
                 f"{_get_default_llm_root()}/models/lmstudio-community/"
-                "Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf",
+                "Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf",
             )
         )
     )
     vl_server_port: int = 8086
-    vl_escalation_server_port: int = 8087
+    # Both roles now resolve to the same :8086 process.
+    vl_escalation_server_port: int = 8086
 
     # Processing limits
     max_image_size_mb: int = 20

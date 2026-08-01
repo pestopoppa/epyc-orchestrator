@@ -26,6 +26,7 @@ Environment flags:
 from __future__ import annotations
 
 import argparse
+import atexit
 from collections import deque
 from dataclasses import asdict
 import fcntl
@@ -94,6 +95,7 @@ from phase_status import (
 # 2026-05-22 Tranche-5 refactor — extracted modules. Public names re-imported below.
 import controller_io
 from controller_io import PLANNER_ARCHIVE_PATH, invoke_controller as _invoke_controller_impl
+from run_manifest import build_run_manifest, manifest_drift_reasons
 from planner_coordinator import plan_with_providers, uncritiqued_dispatch_block_reason
 from state_store import (
     OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST,
@@ -104,6 +106,7 @@ from state_store import (
     check_blacklist,
     format_model_signatures,
     load_blacklist as _load_blacklist_impl,
+    ModelSignaturesUnavailableError,
     load_model_signatures as _load_model_signatures_impl,
     load_state as _load_state_impl,
     save_state as _save_state_impl,
@@ -203,11 +206,66 @@ STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 LOCK_PATH = ORCH_ROOT / "orchestration" / ".autopilot.lock"
 BLACKLIST_PATH = SCRIPT_DIR / "failure_blacklist.yaml"
 OPERATOR_OUTBOX_PATH = ORCH_ROOT / "orchestration" / "autopilot_operator_outbox.jsonl"
+EXIT_BREADCRUMB_PATH = ORCH_ROOT / "logs" / "autopilot_exit_breadcrumb.jsonl"
 # Prompt-budget cap (2026-06-10): only the most-recent N blacklist entries are
 # RENDERED into the planner prompt (the full list is always enforced at dispatch
 # by check_blacklist()). Keeps the unbounded-growth blacklist from dominating the
 # ~80KB prompt. Operator-tunable.
 BLACKLIST_RENDER_CAP = int(os.environ.get("AUTOPILOT_BLACKLIST_RENDER_CAP", "18"))
+
+
+class ExitBreadcrumb:
+    """Append durable process-lifecycle facts for post-mortem recovery.
+
+    The regular AutoPilot log can be lost when a process is killed abruptly.
+    This compact JSONL trail uses a single append+fsync write, so a received
+    SIGINT/SIGTERM and all cooperative exits survive independently of the
+    logging pipeline.  SIGKILL and OOM still cannot run Python cleanup; their
+    diagnostic signal is the absence of a terminal breadcrumb.
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = path or EXIT_BREADCRUMB_PATH
+        self._context: dict[str, Any] = {}
+        self._terminal_written = False
+
+    def set_context(self, **context: Any) -> None:
+        self._context.update({key: value for key, value in context.items() if value is not None})
+
+    def write(self, reason: str, **details: Any) -> bool:
+        """Best-effort append with fsync; never disrupt the optimizer itself."""
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "pid": os.getpid(),
+            "reason": reason,
+            **self._context,
+            **details,
+        }
+        encoded = (json.dumps(payload, sort_keys=True, default=str) + "\n").encode("utf-8")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, encoded)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except OSError:
+            return False
+        return True
+
+    def mark_terminal(self, reason: str, **details: Any) -> bool:
+        """Write at most one cooperative terminal record per process."""
+        if self._terminal_written:
+            return True
+        written = self.write(reason, terminal=True, **details)
+        if written:
+            self._terminal_written = True
+        return written
+
+    def register_atexit(self) -> None:
+        """Classify any otherwise-unclassified interpreter teardown."""
+        atexit.register(self.mark_terminal, "interpreter_exit")
 OPERATOR_OUTBOX_RENDER_CAP = int(os.environ.get("AUTOPILOT_OPERATOR_OUTBOX_RENDER_CAP", "5"))
 PRIOR_DECISION_DIGEST_CAP = int(os.environ.get("AUTOPILOT_PRIOR_DECISION_DIGEST_CAP", "4"))
 PLANNER_JOURNAL_SUMMARY_LIMIT = int(os.environ.get("AUTOPILOT_PLANNER_JOURNAL_SUMMARY_LIMIT", "12"))
@@ -5716,6 +5774,46 @@ def _recover_from_in_flight_trial(
     return trial_counter
 
 
+def _run_manifest_source_paths() -> dict[str, Path]:
+    """Return the source set that defines an AutoPilot trial's control path."""
+    return {
+        "autopilot": Path(__file__),
+        "controller_io": Path(controller_io.__file__),
+        "eval_tower": SCRIPT_DIR / "eval_tower.py",
+    }
+
+
+def _run_manifest_evaluator() -> dict[str, str]:
+    return {"class": "EvalTower", "url": ORCHESTRATOR_URL}
+
+
+def _reject_in_flight_manifest_drift(state: dict[str, Any]) -> None:
+    """Fail closed before recovering a trial from a changed run environment."""
+    in_flight = state.get("in_flight_trial")
+    if not isinstance(in_flight, dict):
+        return
+    manifest = in_flight.get("run_manifest")
+    if manifest is None:  # Legacy marker: preserve the existing recovery path.
+        return
+    if not isinstance(manifest, dict):
+        reasons = ["malformed-manifest"]
+    else:
+        reasons = manifest_drift_reasons(
+            manifest,
+            source_paths=_run_manifest_source_paths(),
+            evaluator=_run_manifest_evaluator(),
+        )
+    if not reasons:
+        return
+    detail = ",".join(reasons)
+    state["paused"] = True
+    state["_dispatch_deficiency"] = f"run_manifest_drift:{detail}"
+    save_state(state)
+    raise RuntimeError(
+        "Refusing in-flight trial recovery after run-manifest drift: " + detail
+    )
+
+
 def _ap37_finite_float(value: Any) -> float | None:
     try:
         number = float(value)
@@ -6529,6 +6627,14 @@ def run_loop(
     use_tui: bool = False,
 ) -> None:
     """Main optimization loop."""
+    breadcrumb = ExitBreadcrumb()
+    breadcrumb.write(
+        "run_loop_started",
+        max_trials=max_trials,
+        dry_run=dry_run,
+        use_controller=use_controller,
+    )
+    breadcrumb.register_atexit()
     # Optional TUI for live inference monitoring
     tui = None
     if use_tui:
@@ -6542,7 +6648,16 @@ def run_loop(
             tui = None
 
     try:
-        _run_loop_inner(max_trials, dry_run, use_controller, tui)
+        _run_loop_inner(max_trials, dry_run, use_controller, tui, breadcrumb)
+    except BaseException as exc:
+        breadcrumb.mark_terminal(
+            "unhandled_exception",
+            exception_type=type(exc).__name__,
+            exception_message=str(exc)[:512],
+        )
+        raise
+    else:
+        breadcrumb.mark_terminal("run_loop_return")
     finally:
         if tui is not None:
             tui.__exit__(None, None, None)
@@ -6635,6 +6750,7 @@ def _run_loop_inner(
     dry_run: bool,
     use_controller: bool,
     tui: "AutoPilotTUI | None" = None,
+    breadcrumb: ExitBreadcrumb | None = None,
 ) -> None:
     """Inner loop (separated to ensure TUI cleanup via run_loop's finally)."""
     state = load_state()
@@ -6780,12 +6896,15 @@ def _run_loop_inner(
     #       journal.record. Write a placeholder JournalEntry tagged
     #       bug_corrupted_by=autopilot_killed_mid_trial so the planner sees
     #       the gap and excludes it from hypothesis chains. Skip gate + archive.
+    _reject_in_flight_manifest_drift(state)
     trial_counter = _recover_from_in_flight_trial(
         state,
         journal,
         archive,
         trial_counter,
     )
+    if breadcrumb is not None:
+        breadcrumb.set_context(trial_id=trial_counter)
     _sync_startup_archive_from_journal_authority(state, journal, archive)
     # Bump the fleet-startup timestamp on every start (recovery path or
     # normal startup) so downstream watchers can detect autopilot
@@ -6798,6 +6917,12 @@ def _run_loop_inner(
 
     def signal_handler(signum, frame):
         nonlocal shutdown_requested
+        if breadcrumb is not None:
+            breadcrumb.write(
+                "signal_received",
+                signal_number=signum,
+                signal_name=signal.Signals(signum).name,
+            )
         log.info("Shutdown requested (signal %d)", signum)
         shutdown_requested = True
 
@@ -7053,8 +7178,29 @@ def _run_loop_inner(
             except Exception:
                 slot_memory_text = "  (query failed)"
 
-            # Load model signatures for hypothesis assessment
-            model_sigs = load_model_signatures()
+            # Load model signatures for hypothesis assessment.
+            #
+            # 2026-08-01: `load_model_signatures` now RAISES when the descriptor
+            # artifact is unavailable, instead of silently falling back to
+            # `model_quality_signatures.yaml` — a hand-maintained table that had
+            # drifted three model generations (it described the fleet retired
+            # 2026-05-08, at throughputs 1.4x-11x too low). Planning confidently
+            # against a dead fleet is worse than not planning.
+            #
+            # But a REFUSAL and a CRASH are not the same thing. Unhandled, that
+            # raise would tear down the controller loop mid-trial. Catch it here
+            # and halt deliberately: the operator gets a named artifact and a
+            # recompile command, and the trial ends cleanly rather than as a
+            # traceback with whatever partial state was in flight.
+            try:
+                model_sigs = load_model_signatures()
+            except ModelSignaturesUnavailableError as exc:
+                log.critical(
+                    "model signatures unavailable — halting the controller rather "
+                    "than planning against unknown models: %s",
+                    exc,
+                )
+                break
             model_signatures_text = format_model_signatures(model_sigs)
 
             # Adaptive-batch telemetry hint for the controller. Surfaces
@@ -7858,6 +8004,11 @@ def _run_loop_inner(
             state["in_flight_trial"] = {
                 "trial_id": trial_counter,
                 "action": action,
+                "run_manifest": build_run_manifest(
+                    source_paths=_run_manifest_source_paths(),
+                    task=action,
+                    evaluator=_run_manifest_evaluator(),
+                ),
                 "started_at": time.time(),
                 "host_pid": os.getpid(),
                 "host_started_at": state.get("autopilot_fleet_started_at"),
@@ -8939,6 +9090,12 @@ def _run_loop_inner(
     if not dry_run:
         lab.checkpoint_state(trial_id=trial_counter, notes="Shutdown checkpoint")
     phase.clear("autopilot process exiting")
+    if breadcrumb is not None:
+        breadcrumb.mark_terminal(
+            "loop_exit",
+            exit_trigger="signal" if shutdown_requested else "loop_completed",
+            trial_id=trial_counter,
+        )
 
 
 def _format_suite_trends(

@@ -2,22 +2,31 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from pathlib import Path
 
 import yaml
 
+import pytest
+
 import scripts.validate.stack_change_guard as stack_change_guard
 from scripts.validate.stack_change_guard import (
     HARDCODED_SURFACE_RULES,
     REQUIRED_CONSUMER_SURFACE_IDS,
+    RETIRED_LIVE_ROLE_FLOOR,
+    ROLE_FACT_SURFACE_RULES,
     GuardResult,
     HardcodedSurfaceRule,
+    RetiredRoleDerivationError,
+    RoleFactSurfaceRule,
+    derive_retired_live_roles,
     hardcoded_surface_rule_inventory,
     hardcoded_surface_warning_counts,
     main as stack_change_guard_main,
     scan_hardcoded_surfaces,
+    scan_role_fact_surfaces,
     validate_surface_manifest,
     validate_stack_priors,
 )
@@ -316,6 +325,57 @@ def test_validate_stack_priors_rejects_launch_manifest_port_set_drift(
     assert not result.ok
     assert any("missing launch manifest port(s) [8080]" in error for error in result.errors)
     assert any("include non-launch port(s) [9999]" in error for error in result.errors)
+
+
+def test_validate_stack_priors_alias_uses_manifest_primary_without_registry_hint(
+    tmp_path: Path,
+) -> None:
+    """A pure manifest alias inherits its primary's full serving fleet."""
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    payload = _priors(registry, descriptors)
+    alias = copy.deepcopy(payload["roles"]["frontdoor"])
+    alias["role"] = "coder_escalation"
+    alias["serving"]["server_role"] = "coder_escalation"
+    alias["serving"]["launch"]["entries"] = [
+        {
+            "port": 8080,
+            "primary_role": "frontdoor",
+            "mode": "default",
+            "alias": True,
+            "numa_instance": 1,
+        }
+    ]
+    payload["roles"]["coder_escalation"] = alias
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", payload)
+
+    host_target = {
+        "port": 8070,
+        "ports": [8070, 8080, 8180, 8280, 8380],
+        "tier": "hot",
+    }
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": host_target,
+            "coder_escalation": {
+                "port": 8080,
+                "ports": [8080],
+                "tier": "hot",
+                "launch_entries": [
+                    {
+                        "port": 8080,
+                        "primary_role": "frontdoor",
+                        "mode": "default",
+                        "alias": True,
+                        "numa_instance": 1,
+                    }
+                ],
+            },
+        },
+    )
+
+    assert result.ok, result.errors
 
 
 def test_validate_stack_priors_rejects_launch_manifest_entry_drift(
@@ -1057,25 +1117,6 @@ def test_scan_hardcoded_surfaces_flags_retired_launch_env_var(tmp_path: Path) ->
         for finding in findings
     )
 
-
-def test_scan_hardcoded_surfaces_flags_retired_lean_registry_role(tmp_path: Path) -> None:
-    orchestration = tmp_path / "orchestration"
-    orchestration.mkdir()
-    (orchestration / "model_registry_lean.yaml").write_text(
-        "roles:\n  architect_coding:\n    tier: B\n",
-        encoding="utf-8",
-    )
-
-    findings = scan_hardcoded_surfaces(tmp_path)
-
-    assert any(
-        finding.rule_id == "retired_role_in_lean_registry"
-        and finding.category == "production_blocker"
-        and finding.path.as_posix() == "orchestration/model_registry_lean.yaml"
-        for finding in findings
-    )
-
-
 def test_scan_hardcoded_surfaces_flags_retired_source_access_role(tmp_path: Path) -> None:
     orchestration = tmp_path / "orchestration"
     orchestration.mkdir()
@@ -1092,25 +1133,6 @@ def test_scan_hardcoded_surfaces_flags_retired_source_access_role(tmp_path: Path
         and finding.path.as_posix() == "orchestration/source_registry.yaml"
         for finding in findings
     )
-
-
-def test_scan_hardcoded_surfaces_flags_retired_quality_signature_role(tmp_path: Path) -> None:
-    orchestration = tmp_path / "orchestration"
-    orchestration.mkdir()
-    (orchestration / "model_quality_signatures.yaml").write_text(
-        "models:\n  retired:\n    role: architect_coding\n",
-        encoding="utf-8",
-    )
-
-    findings = scan_hardcoded_surfaces(tmp_path)
-
-    assert any(
-        finding.rule_id == "retired_role_in_quality_signature"
-        and finding.category == "production_blocker"
-        and finding.path.as_posix() == "orchestration/model_quality_signatures.yaml"
-        for finding in findings
-    )
-
 
 def test_scan_hardcoded_surfaces_flags_stale_autopilot_program_guidance(tmp_path: Path) -> None:
     autopilot = tmp_path / "scripts" / "autopilot"
@@ -1959,4 +1981,513 @@ def test_genuinely_stale_legacy_exception_is_still_reported(tmp_path: Path) -> N
     assert any(
         "no longer matches a hardcoded-surface finding" in error
         for error in result.errors
+    )
+
+
+# ---------------------------------------------------------------------------
+# Declared, expiring acceptance of known stack-prior gaps.
+#
+# The gate had exactly one severity, so "the operator knows about this and has
+# accepted it" and "this is unsafe to launch" produced the same answer, and the
+# only response was the total-bypass env flag. These tests pin the three states
+# apart: declared+live -> visible warning, undeclared -> error, declared+expired
+# -> error that names the expiry.
+# ---------------------------------------------------------------------------
+
+
+def _gap_priors(tmp_path: Path, gaps: dict[str, list[str]]) -> Path:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    payload = _priors(registry, descriptors)
+    payload["roles"]["frontdoor"]["known_gaps"] = list(gaps.get("frontdoor", []))
+    payload["known_global_gaps"] = {
+        role: list(role_gaps) for role, role_gaps in gaps.items() if role_gaps
+    }
+    return _write_yaml(tmp_path / "stack_priors.yaml", payload)
+
+
+def _gap_declaration(**overrides) -> dict:
+    declaration = {
+        "role": "frontdoor",
+        "gap": "Missing overall quality prior",
+        "reason": "ratified SWE-bench evidence exists; canonical judge suite not run",
+        "owner": "operator",
+        "declared": "2026-08-01",
+        "expires": "2099-01-01",
+    }
+    declaration.update(overrides)
+    return declaration
+
+
+def _gap_file(tmp_path: Path, *declarations: dict) -> Path:
+    return _write_yaml(
+        tmp_path / "accepted_gaps.yaml", {"accepted_gaps": list(declarations)}
+    )
+
+
+_GATE_TARGETS = {"frontdoor": {"port": 8070, "tier": "hot"}}
+
+
+def test_declared_gap_stays_a_visible_warning_in_strict_mode(tmp_path: Path) -> None:
+    priors = _gap_priors(tmp_path, {"frontdoor": ["Missing overall quality prior"]})
+    gaps = _gap_file(tmp_path, _gap_declaration())
+
+    result = validate_stack_priors(
+        priors,
+        strict=True,
+        launch_manifest_targets=_GATE_TARGETS,
+        accepted_gaps_path=gaps,
+    )
+
+    assert result.ok, result.errors
+    # Visible, not silent: the operator must be able to read what is tolerated
+    # and until when straight off the gate output.
+    accepted = [w for w in result.warnings if w.startswith("accepted_gap.")]
+    assert accepted
+    assert all("expires=2099-01-01" in warning for warning in accepted)
+    assert all("owner=operator" in warning for warning in accepted)
+
+
+def test_undeclared_gap_still_blocks_strict_mode(tmp_path: Path) -> None:
+    priors = _gap_priors(tmp_path, {"frontdoor": ["Missing overall quality prior"]})
+    gaps = _gap_file(tmp_path)
+
+    result = validate_stack_priors(
+        priors,
+        strict=True,
+        launch_manifest_targets=_GATE_TARGETS,
+        accepted_gaps_path=gaps,
+    )
+
+    assert not result.ok
+    assert any(error.startswith("strict:") for error in result.errors)
+
+
+def test_expired_declaration_blocks_and_reports_its_expiry(tmp_path: Path) -> None:
+    priors = _gap_priors(tmp_path, {"frontdoor": ["Missing overall quality prior"]})
+    gaps = _gap_file(tmp_path, _gap_declaration(expires="2020-01-01"))
+
+    result = validate_stack_priors(
+        priors,
+        strict=True,
+        launch_manifest_targets=_GATE_TARGETS,
+        accepted_gaps_path=gaps,
+    )
+
+    assert not result.ok
+    assert any("expired on 2020-01-01" in error for error in result.errors)
+    # The declaration is dropped, so the gap it covered goes back to blocking —
+    # an expired waiver must not keep working.
+    assert any(error.startswith("strict:") for error in result.errors)
+
+
+def test_declaration_requires_an_expiry(tmp_path: Path) -> None:
+    priors = _gap_priors(tmp_path, {"frontdoor": ["Missing overall quality prior"]})
+    declaration = _gap_declaration()
+    del declaration["expires"]
+    gaps = _gap_file(tmp_path, declaration)
+
+    result = validate_stack_priors(
+        priors, launch_manifest_targets=_GATE_TARGETS, accepted_gaps_path=gaps
+    )
+
+    assert not result.ok
+    assert any("missing non-empty 'expires'" in error for error in result.errors)
+
+
+def test_stale_declaration_for_an_absent_gap_is_reported(tmp_path: Path) -> None:
+    priors = _gap_priors(tmp_path, {})
+    gaps = _gap_file(tmp_path, _gap_declaration())
+
+    result = validate_stack_priors(
+        priors, launch_manifest_targets=_GATE_TARGETS, accepted_gaps_path=gaps
+    )
+
+    assert not result.ok
+    assert any(
+        "no longer matches a stack-prior gap" in error for error in result.errors
+    )
+
+
+def test_declaration_matches_role_and_gap_exactly_never_by_wildcard(
+    tmp_path: Path,
+) -> None:
+    # A declaration filed for a missing quality prior must not also swallow a
+    # missing live server binding on the same role, nor the same gap on a
+    # different role. Both are the failure the declaration file exists to avoid.
+    priors = _gap_priors(
+        tmp_path,
+        {
+            "frontdoor": [
+                "Missing overall quality prior",
+                "Missing live server binding",
+            ]
+        },
+    )
+    same_role_other_gap = _gap_file(tmp_path, _gap_declaration())
+
+    result = validate_stack_priors(
+        priors,
+        strict=True,
+        launch_manifest_targets=_GATE_TARGETS,
+        accepted_gaps_path=same_role_other_gap,
+    )
+
+    assert not result.ok
+    assert any(error.startswith("strict:") for error in result.errors)
+
+    other_role = _write_yaml(
+        tmp_path / "other_role_gaps.yaml",
+        {
+            "accepted_gaps": [
+                _gap_declaration(role="architect_general"),
+                _gap_declaration(gap="Missing live server binding"),
+            ]
+        },
+    )
+    result = validate_stack_priors(
+        priors,
+        strict=True,
+        launch_manifest_targets=_GATE_TARGETS,
+        accepted_gaps_path=other_role,
+    )
+
+    assert not result.ok
+    # The architect_general declaration matches nothing here.
+    assert any(
+        "no longer matches a stack-prior gap" in error and "architect_general" in error
+        for error in result.errors
+    )
+
+
+def test_production_accepted_gaps_file_declares_the_27b_quality_priors() -> None:
+    declarations, errors = stack_change_guard.load_accepted_gaps()
+
+    assert not errors, errors
+    assert {(d.role, d.gap) for d in declarations} == {
+        ("architect_general", "Missing overall quality prior"),
+        ("coder_escalation", "Missing overall quality prior"),
+        ("qwen36_27b_mtp_q8_local", "Missing overall quality prior"),
+    }
+    assert all(d.owner == "operator" and d.expires == "2026-09-01" for d in declarations)
+
+
+# ---------------------------------------------------------------------------
+# Retired-role set: derived, not restated by hand.
+# ---------------------------------------------------------------------------
+
+
+def _retired_role_sources(tmp_path: Path, master_roles: dict, lean_roles: dict):
+    master = _write_yaml(tmp_path / "master.yaml", {"roles": master_roles})
+    lean = _write_yaml(tmp_path / "lean.yaml", {"roles": lean_roles})
+    return master, lean
+
+
+def test_derive_retired_live_roles_reads_master_retirement_markers(
+    tmp_path: Path,
+) -> None:
+    master, lean = _retired_role_sources(
+        tmp_path,
+        {
+            "frontdoor": {"tier": "A"},
+            "old_by_deprecated": {"deprecated": True},
+            "old_by_retired_date": {"retired": "2026-07-31"},
+            "old_by_reason_only": {"deprecated_reason": "GGUF deleted"},
+        },
+        {"frontdoor": {}},
+    )
+
+    derived = derive_retired_live_roles(
+        master_registry_path=master, lean_registry_path=lean, floor=frozenset()
+    )
+
+    # Nobody had to enumerate these three names anywhere in the guard.
+    assert derived == {
+        "old_by_deprecated",
+        "old_by_retired_date",
+        "old_by_reason_only",
+    }
+
+
+def test_derive_retired_live_roles_never_flags_a_live_role(tmp_path: Path) -> None:
+    # Master says deprecated, the compiled lean registry still serves it: that is
+    # a registry contradiction, not a retired role. Flagging it would fail every
+    # stack change on a name the fleet is actually running.
+    master, lean = _retired_role_sources(
+        tmp_path,
+        {"frontdoor": {"deprecated": True}, "gone": {"deprecated": True}},
+        {"frontdoor": {}},
+    )
+
+    derived = derive_retired_live_roles(
+        master_registry_path=master, lean_registry_path=lean, floor=frozenset()
+    )
+
+    assert derived == {"gone"}
+
+
+def test_derive_retired_live_roles_keeps_the_documented_floor(tmp_path: Path) -> None:
+    master, lean = _retired_role_sources(tmp_path, {"frontdoor": {}}, {"frontdoor": {}})
+
+    derived = derive_retired_live_roles(
+        master_registry_path=master, lean_registry_path=lean
+    )
+
+    assert RETIRED_LIVE_ROLE_FLOOR <= derived
+
+
+def test_derive_retired_live_roles_raises_instead_of_degrading_to_the_floor(
+    tmp_path: Path,
+) -> None:
+    _, lean = _retired_role_sources(tmp_path, {"frontdoor": {}}, {"frontdoor": {}})
+
+    with pytest.raises(RetiredRoleDerivationError):
+        derive_retired_live_roles(
+            master_registry_path=tmp_path / "absent.yaml", lean_registry_path=lean
+        )
+
+    shapeless = _write_yaml(tmp_path / "shapeless.yaml", {"roles": []})
+    with pytest.raises(RetiredRoleDerivationError):
+        derive_retired_live_roles(
+            master_registry_path=shapeless, lean_registry_path=lean
+        )
+
+
+def test_retired_role_derivation_failure_is_reported_not_swallowed(monkeypatch) -> None:
+    def _boom(**_kwargs):
+        raise RetiredRoleDerivationError("master registry is missing: /nope.yaml")
+
+    monkeypatch.setattr(stack_change_guard, "_RETIRED_LIVE_ROLES_CACHE", None)
+    monkeypatch.setattr(stack_change_guard, "derive_retired_live_roles", _boom)
+
+    roles, errors = stack_change_guard._retired_live_roles_or_error()
+
+    assert roles == RETIRED_LIVE_ROLE_FLOOR
+    assert any("retired-role derivation failed" in error for error in errors)
+
+
+def test_production_retired_role_set_is_derived_and_supersets_the_floor() -> None:
+    derived = stack_change_guard.retired_live_roles(refresh=True)
+
+    assert RETIRED_LIVE_ROLE_FLOOR <= derived
+    # A derived set that is only the floor means derivation silently did nothing.
+    assert len(derived) > len(RETIRED_LIVE_ROLE_FLOOR)
+
+
+# ---------------------------------------------------------------------------
+# Value staleness: compare against the compiled artifact, do not grep for names.
+#
+# This is the model_quality_signatures.yaml failure: every row named a CURRENT
+# role, so the name-matching rule passed clean while every VALUE described the
+# fleet retired 2026-05-08.
+# ---------------------------------------------------------------------------
+
+
+_ROLE_FACT_RULE = RoleFactSurfaceRule(
+    rule_id="unit_role_fact_rule",
+    category="production_blocker",
+    path_globs=("stack_templates/*.yaml",),
+    roles_key="roles",
+    fields=("model", "quant", "tier"),
+    remediation="restate from the compiled stack priors",
+)
+
+
+def _compiled_priors_doc() -> dict:
+    return {
+        "roles": {
+            "frontdoor": {
+                "display_name": "Qwen3.6-35B-A3B-MTP-Q8_0",
+                "model_id": "qwen3.6-35b-a3b-mtp-q8_0",
+                "model": {"quant": "Q8_0"},
+                "serving": {
+                    "tier": "hot",
+                    "launch": {
+                        "requirements": {
+                            "model_path": "/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf"
+                        }
+                    },
+                },
+            }
+        }
+    }
+
+
+def _template(tmp_path: Path, roles: dict) -> Path:
+    templates = tmp_path / "stack_templates"
+    templates.mkdir(parents=True, exist_ok=True)
+    return _write_yaml(templates / "default.yaml", {"name": "default", "roles": roles})
+
+
+def test_role_fact_scan_reports_value_drift_on_a_current_role_name(
+    tmp_path: Path,
+) -> None:
+    # TEETH: the surface names only a live role, so every name-matching rule in
+    # the guard passes it clean. Its VALUES describe a different model.
+    _template(
+        tmp_path,
+        {"frontdoor": {"model": "Qwen3.5-122B-A10B", "quant": "Q4_K_M", "tier": "HOT"}},
+    )
+
+    findings = scan_role_fact_surfaces(
+        _compiled_priors_doc(), tmp_path, rules=(_ROLE_FACT_RULE,)
+    )
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "unit_role_fact_rule"
+    assert findings[0].category == "production_blocker"
+    assert findings[0].path.as_posix() == "stack_templates/default.yaml"
+    assert "Qwen3.5-122B-A10B" in findings[0].snippet
+    assert "Qwen3.6-35B-A3B-MTP-Q8_0" in findings[0].snippet
+    assert "quant 'Q4_K_M' != compiled 'Q8_0'" in findings[0].snippet
+    # A drifted row must point at itself, not at line 1 of the file.
+    assert findings[0].line > 0
+
+
+def test_role_fact_scan_catches_a_distinguishing_build_token(tmp_path: Path) -> None:
+    # The non-MTP GGUF is a DIFFERENT FILE with the same family name; launching it
+    # silently disables draft-mtp speculative decoding.
+    _template(
+        tmp_path,
+        {"frontdoor": {"model": "Qwen3.6-35B-A3B-Q8_0", "quant": "Q8_0", "tier": "HOT"}},
+    )
+
+    findings = scan_role_fact_surfaces(
+        _compiled_priors_doc(), tmp_path, rules=(_ROLE_FACT_RULE,)
+    )
+
+    assert len(findings) == 1
+    assert "Qwen3.6-35B-A3B-Q8_0" in findings[0].snippet
+
+
+def test_role_fact_scan_tolerates_an_informal_but_agreeing_name(tmp_path: Path) -> None:
+    # Config surfaces write short names for the model the compiled artifact spells
+    # out. Treating that as drift would bury the real signal.
+    _template(
+        tmp_path,
+        {"frontdoor": {"model": "Qwen3.6-35B-A3B-MTP", "quant": "Q8_0", "tier": "hot"}},
+    )
+
+    assert not scan_role_fact_surfaces(
+        _compiled_priors_doc(), tmp_path, rules=(_ROLE_FACT_RULE,)
+    )
+
+
+def test_role_fact_scan_skips_alias_rows_and_unknown_roles(tmp_path: Path) -> None:
+    # `tier: ALIAS` is a structural marker meaning "launches no server", not a
+    # serving tier; comparing it against the compiled `hot` is a category error.
+    # A role the compiled artifact does not declare has nothing to compare to.
+    _template(
+        tmp_path,
+        {
+            "frontdoor": {"model": "Qwen3.6-35B-A3B-MTP-Q8_0", "quant": "Q8_0", "tier": "HOT"},
+            "worker_summarize": {"tier": "ALIAS", "alias_to": "frontdoor"},
+            "embedder": {"model": "bge-large-en-v1.5-f16", "quant": "f16", "tier": "HOT"},
+        },
+    )
+
+    assert not scan_role_fact_surfaces(
+        _compiled_priors_doc(), tmp_path, rules=(_ROLE_FACT_RULE,)
+    )
+
+
+def test_role_fact_scan_honours_the_inline_allow_marker(tmp_path: Path) -> None:
+    templates = tmp_path / "stack_templates"
+    templates.mkdir(parents=True)
+    (templates / "default.yaml").write_text(
+        "name: default\n"
+        "roles:\n"
+        f"  frontdoor:  # {stack_change_guard.SURFACE_SCAN_ALLOW_MARKER}\n"
+        "    model: Qwen3.5-122B-A10B\n"
+        "    quant: Q4_K_M\n"
+        "    tier: HOT\n",
+        encoding="utf-8",
+    )
+
+    assert not scan_role_fact_surfaces(
+        _compiled_priors_doc(), tmp_path, rules=(_ROLE_FACT_RULE,)
+    )
+
+
+def test_validate_stack_priors_blocks_strict_mode_on_role_fact_drift(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    payload = _priors(registry, descriptors)
+    payload["roles"]["frontdoor"]["display_name"] = "Qwen3.6-35B-A3B-MTP-Q8_0"
+    payload["roles"]["frontdoor"]["model"] = {"quant": "Q8_0"}
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", payload)
+    _template(
+        tmp_path,
+        {"frontdoor": {"model": "Qwen2.5-VL-7B", "quant": "Q4_K_M", "tier": "HOT"}},
+    )
+
+    loose = validate_stack_priors(
+        priors,
+        scan_surfaces=True,
+        repo_root=tmp_path,
+        launch_manifest_targets=_GATE_TARGETS,
+    )
+    strict = validate_stack_priors(
+        priors,
+        strict=True,
+        scan_surfaces=True,
+        repo_root=tmp_path,
+        launch_manifest_targets=_GATE_TARGETS,
+    )
+
+    assert loose.ok
+    assert any("stale_role_fact_table" in warning for warning in loose.warnings)
+    assert not strict.ok
+    assert any("stale_role_fact_table" in error for error in strict.errors)
+
+
+def test_surface_manifest_bijection_covers_role_fact_rules(tmp_path: Path) -> None:
+    manifest = _write_yaml(
+        tmp_path / "manifest.yaml",
+        {
+            "version": 1,
+            "surfaces": [
+                {
+                    "rule_id": "unit_rule",
+                    "category": "production_blocker",
+                    "owner": "stack-change-governance",
+                    "consumer_scope": "unit",
+                    "promotion_blocker": True,
+                    "review_cadence": "every stack change",
+                    "evidence_command": "uv run python scripts/validate/stack_change_guard.py",
+                    "drift_response": "derive from generated truth",
+                }
+            ],
+        },
+    )
+    rule = HardcodedSurfaceRule(
+        rule_id="unit_rule",
+        category="production_blocker",
+        pattern=r"\bunit\b",
+        path_globs=("src/**/*.py",),
+        remediation="derive from generated truth",
+    )
+
+    errors = validate_surface_manifest(
+        manifest, rules=(rule,), role_fact_rules=(_ROLE_FACT_RULE,)
+    )
+
+    assert any("unit_role_fact_rule" in error for error in errors)
+
+
+def test_production_surface_manifest_owns_every_role_fact_rule() -> None:
+    assert ROLE_FACT_SURFACE_RULES
+    assert not validate_surface_manifest()
+    manifest, manifest_errors = stack_change_guard.load_surface_manifest()
+    assert not manifest_errors, manifest_errors
+    inventory = hardcoded_surface_rule_inventory(ownership_manifest=manifest)
+    assert inventory["role_fact_rule_count"] == len(ROLE_FACT_SURFACE_RULES)
+    assert all(
+        rule["ownership"].get("owner") for rule in inventory["role_fact_rules"]
+    )
+    assert all(
+        rule["compared_against"] == "orchestration/derived/stack_priors.yaml"
+        for rule in inventory["role_fact_rules"]
     )

@@ -32,6 +32,16 @@ DEFAULT_DESCRIPTORS = REPO_ROOT / "orchestration" / "model_descriptors.yaml"
 DEFAULT_OUTPUT = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 DEFAULT_STACK_MANIFEST = REPO_ROOT / "scripts" / "server" / "stack_manifest.py"
 DEFAULT_STACK_NUMA = REPO_ROOT / "scripts" / "server" / "stack_numa.py"
+# 2026-08-01: the launcher's configuration moved OUT of the two .py files above
+# and into these declared artifacts; those modules are now thin loaders. Pinning
+# only the loaders would leave the provenance chain pointing at files that no
+# longer contain the facts — edit launch_manifest.yaml and every pinned hash
+# would still match, so a stale derived layer would look fresh.
+# The byte-hash pin caught exactly that failure earlier today when
+# orchestrator_stack.py changed; it must keep covering the data now that the data
+# has moved.
+DEFAULT_LAUNCH_MANIFEST = REPO_ROOT / "orchestration" / "launch_manifest.yaml"
+DEFAULT_STACK_TOPOLOGY = REPO_ROOT / "orchestration" / "stack_topology.yaml"
 DEFAULT_ORCHESTRATOR_STACK = REPO_ROOT / "scripts" / "server" / "orchestrator_stack.py"
 DEFAULT_STACK_PATHS = REPO_ROOT / "scripts" / "server" / "stack_paths.py"
 DEFAULT_STACK_RUNTIME = REPO_ROOT / "scripts" / "server" / "stack_runtime.py"
@@ -1229,6 +1239,78 @@ def _runtime_flag_string_prior(
     return fallback
 
 
+def _runtime_flag_int_prior(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+    *,
+    key: str,
+    minimum: int = 0,
+) -> int | None:
+    """Resolve an optional INTEGER launcher flag from registry serving metadata.
+
+    The integer twin of ``_runtime_flag_string_prior``, with the same search order
+    (``server_mode`` row first, then role-local ``server`` / ``serving`` / ``launch``
+    sub-mappings) so a role whose declaration lives only under ``roles.<role>.serving``
+    — which is where ``worker_vision`` declares ``n_gpu_layers``, ``image_min_tokens``
+    and ``cache_ram`` — can still carry it into the compiled priors.
+
+    ``minimum=0`` is deliberate and load-bearing: ``cache_ram: 0`` ("prompt cache
+    disabled") is a DECLARED value, not an absent one, and a ``> 0`` test would drop
+    it. Returns ``None`` when undeclared. Never substitute a default here — these are
+    GPU-shaped flags, and a default would put ``-ngl`` on every CPU role.
+    """
+    for cfg in (server_cfg, role_cfg):
+        if not isinstance(cfg, dict):
+            continue
+        for source in (cfg, cfg.get("server"), cfg.get("serving"), cfg.get("launch")):
+            if not isinstance(source, dict):
+                continue
+            value = source.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= minimum:
+                return value
+    return None
+
+
+# Registry spellings for GPU offload depth, in precedence order. Two are in live
+# use with different value types; see _n_gpu_layers_prior.
+_N_GPU_LAYERS_KEYS: tuple[str, ...] = ("n_gpu_layers", "ngl", "gpu_layers")
+
+
+def _n_gpu_layers_prior(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+) -> int | str | None:
+    """Resolve the declared GPU offload depth, whatever the registry chose to call it.
+
+    The master registry declares this TWICE, under two spellings and two types:
+    ``roles.worker_vision.serving.n_gpu_layers: 999`` (int) and
+    ``server_mode.architect_general.ngl: "all"`` (str). Reading only the first
+    spelling is how architect_general would end up emitting ``--device ROCm0`` with
+    no ``-ngl`` at all — a GPU launch in name only, since the device is then selected
+    and nothing is offloaded to it. ``-ngl all`` is a valid llama-server value on
+    this kernel (the GPU shadow-lane builder already emits it), so the string form is
+    carried through verbatim rather than being translated to a number here.
+
+    Returns None when undeclared. No default: a role that does not ask for offload
+    must not receive it.
+    """
+    for key in _N_GPU_LAYERS_KEYS:
+        for cfg in (server_cfg, role_cfg):
+            if not isinstance(cfg, dict):
+                continue
+            for source in (cfg, cfg.get("server"), cfg.get("serving"), cfg.get("launch")):
+                if not isinstance(source, dict):
+                    continue
+                value = source.get(key)
+                if isinstance(value, bool):
+                    continue
+                if isinstance(value, int) and value >= 0:
+                    return value
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return None
+
+
 def _descriptor_reasoning_flag_prior(descriptor: dict[str, Any]) -> str | None:
     acceleration = descriptor.get("acceleration")
     if not isinstance(acceleration, dict):
@@ -1437,6 +1519,25 @@ def _launch_runtime_record(
             # behaviour rather than failing the whole compile.
             binary_dir = None
 
+    # 2026-08-01 (INC vision `invalid device: ROCm0`): resolving binary_dir from the
+    # backend was only HALF the derivation. The binary is chosen by backend but its
+    # ggml was still chosen by whatever LD_LIBRARY_PATH the launching shell happened
+    # to export — on this host that is the CPU tree, which outranks the binary's own
+    # RUNPATH. The HIP binary therefore loaded CPU-only ggml, registered no ROCm
+    # device, and rejected its own declared `--device ROCm0`. Derive the library path
+    # from the SAME backend that chose the binary, so the two can never disagree.
+    # An EXPLICIT registry ld_library_path stays authoritative (it is an override,
+    # and the only reason to write one is to name something non-derivable).
+    if not ld_paths:
+        try:
+            from src.registry.kernel_paths import (
+                backend_ld_library_path as _kernel_backend_ld,
+            )
+
+            ld_paths = _kernel_backend_ld(backend)
+        except Exception:
+            ld_paths = []
+
     binary_path = str(Path(binary_dir) / "llama-server") if binary_dir else str(LLAMA_SERVER)
     binary_family = (
         str(descriptor_serving.get("binary"))
@@ -1465,6 +1566,25 @@ def _launch_runtime_record(
         slots = lane_shape.get("np_slots") if isinstance(lane_shape, dict) else None
     else:
         slots = 1 if primary_role in SERIAL_ROLES else 2
+
+    # 2026-08-01: `slots` is DECLARED DATA, and the mode literals above were
+    # shadowing it. `server_mode.worker_vision.slots: 1` never reached the compiled
+    # record because the `mode == "vision"` branch hardcoded 2 for any non-escalation
+    # VL server, so the launcher emitted `-np 2` for a role that declares 1.
+    #
+    # A declaration outranks a mode LITERAL but NOT the serial invariant: SERIAL_ROLES
+    # deliberately overrides the registry today — frontdoor and architect_critic each
+    # declare `slots: 2` and each run `-np 1` in production — so it stays a ceiling of
+    # 1 rather than becoming another value to be overwritten. Roles that declare
+    # nothing are left entirely alone: the fix is "stop ignoring what was written",
+    # not "re-derive everyone".
+    #
+    # gpu_shadow_lane is exempt: its shape is policy data from
+    # gpu_shadow_lane_np_ceiling.yaml and a None there means "refuse", not "guess".
+    if mode != "gpu_shadow_lane":
+        declared_slots = _runtime_flag_int_prior(server_cfg, role_cfg, key="slots", minimum=1)
+        if declared_slots is not None:
+            slots = 1 if primary_role in SERIAL_ROLES else declared_slots
 
     canonical_primary_role = str(Role.from_string(primary_role, default=None) or primary_role)
     canonical_role = str(Role.from_string(role, default=None) or role)
@@ -1701,6 +1821,25 @@ def _launch_runtime_record(
                 if mode == "vision" and vision_type == "escalation"
                 else None,
             ),
+            # Separate draft device, when a role declares one. None everywhere today;
+            # the launcher then lets the draft follow the target's device rather than
+            # stranding a NEXTN self-draft on the CPU under a GPU-resident target.
+            "device_draft": _runtime_flag_string_prior(
+                server_cfg, role_cfg, key="device_draft"
+            ),
+            # 2026-08-01: `device` alone does not put a model on the GPU. The three
+            # flags below were declared in the registry's serving block and stopped
+            # here — never compiled, never emitted — so the VL server was asked to
+            # use ROCm0 with zero offloaded layers, full-resolution image tokens and
+            # the prompt cache on. All three are None when undeclared: they are
+            # GPU-shaped, and a launcher default would apply them to CPU roles too.
+            # `cache_ram` in particular is meaningfully 0 ("disable the prompt
+            # cache"), so absence must be None and not 0.
+            "n_gpu_layers": _n_gpu_layers_prior(server_cfg, role_cfg),
+            "image_min_tokens": _runtime_flag_int_prior(
+                server_cfg, role_cfg, key="image_min_tokens"
+            ),
+            "cache_ram": _runtime_flag_int_prior(server_cfg, role_cfg, key="cache_ram"),
             "reasoning": _runtime_reasoning_prior(
                 server_cfg,
                 role_cfg,
@@ -2131,6 +2270,8 @@ def compile_stack_priors(
             "descriptors": _source_metadata(descriptor_path),
             "stack_manifest": _source_metadata(DEFAULT_STACK_MANIFEST),
             "stack_numa": _source_metadata(DEFAULT_STACK_NUMA),
+            "launch_manifest": _source_metadata(DEFAULT_LAUNCH_MANIFEST),
+            "stack_topology": _source_metadata(DEFAULT_STACK_TOPOLOGY),
             "orchestrator_stack": _source_metadata(DEFAULT_ORCHESTRATOR_STACK),
             "stack_paths": _source_metadata(DEFAULT_STACK_PATHS),
             "stack_runtime": _source_metadata(DEFAULT_STACK_RUNTIME),
