@@ -59,6 +59,8 @@ if (
 from scripts.server import stack_processes as _stack_processes
 from scripts.server.stack_env import (
     build_launch_env,
+    build_service_env,
+    compose_ld_library_path,
 )
 from scripts.server.stack_health import wait_for_health as _wait_for_health
 from scripts.server.fleet_markers import (
@@ -70,6 +72,7 @@ from scripts.server.stack_runtime import (
     runtime_requirements_for_role as _runtime_requirements_for_role_impl,
 )
 from scripts.server.stack_manifest import (
+    AUX_SERVICES,
     DEV_MODEL,
     DEV_MODEL_PATH,
     DEFAULT_EFFECTIVE_CONTEXT_TOKENS,
@@ -588,8 +591,18 @@ def _apply_runtime_requirements_env(
     *,
     binary_override: str | None,
     ld_paths: list[str] | None,
+    ld_path_mode: str = "prepend",
 ) -> None:
-    """Apply role runtime overrides to a llama-server launch environment."""
+    """Apply role runtime overrides to a llama-server launch environment.
+
+    `ld_path_mode` defaults to "prepend", which routes through
+    `compose_ld_library_path`'s pure-concatenation branch and is therefore
+    byte-identical to the pre-2026-08-02 inline expression for every role. A role
+    whose runtime requirements declare `ld_library_path_mode: replace` gets the
+    ambient path dropped — available to llama-server roles for the same reason aux
+    services need it (an experimental tree with its own ggml generation), but no
+    role declares it today, so no live role's env changes.
+    """
     if binary_override:
         stripped = [
             key for key in list(env.keys()) if key.startswith("GGML_") and key != "GGML_IQK"
@@ -601,9 +614,11 @@ def _apply_runtime_requirements_env(
         env["KMP_BLOCKTIME"] = "10"
     if ld_paths:
         existing = env.get("LD_LIBRARY_PATH", "")
-        merged = ":".join(ld_paths) + (f":{existing}" if existing else "")
-        env["LD_LIBRARY_PATH"] = merged
-        print(f"    LD_LIBRARY_PATH += {ld_paths}")
+        env["LD_LIBRARY_PATH"] = compose_ld_library_path(ld_paths, existing, ld_path_mode)
+        if ld_path_mode == "replace":
+            print(f"    LD_LIBRARY_PATH := {ld_paths}  (ambient dropped)")
+        else:
+            print(f"    LD_LIBRARY_PATH += {ld_paths}")
 
 
 def is_port_in_use(port: int) -> bool:
@@ -2270,30 +2285,140 @@ def start_orchestrator(
     return None
 
 
-def start_document_formalizer() -> ProcessInfo | None:
-    """Start the document formalizer (LightOnOCR-2) server."""
-    log_file = LOG_DIR / "document_formalizer.log"
-    port = 9001
+# =============================================================================
+# Aux services — ONE launcher, driven by the declared AUX_SERVICES registry
+# =============================================================================
+#
+# Replaces four near-identical `start_<name>()` functions (2026-08-02, W5/W4).
+# They differed only in argv, cwd, env, health path and labels — all data — yet
+# each one restated the Popen boilerplate, and `cmd_reload`'s dispatch chain had
+# to be edited separately to know a service existed. Two of the four never were,
+# which is exactly how `reload whisper` and `reload sd_server` came to kill a
+# service without restarting it. The registry now feeds start, reload and status
+# from one place, so a service cannot be startable-but-not-reloadable again.
 
-    print(f"  Starting document_formalizer (LightOnOCR-2) on port {port}")
+_VERIFY_GGML_LINKAGE_SCRIPT = Path(
+    "/mnt/raid0/llm/epyc-inference-research/scripts/utils/verify_ggml_linkage.sh"
+)
 
-    # Set environment
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(_PATHS["project_root"]) + os.pathsep + env.get("PYTHONPATH", "")
-    env["LIGHTONOCR_WORKERS"] = "8"
-    env["LIGHTONOCR_THREADS"] = "12"
-    env["LIGHTONOCR_MAX_TOKENS"] = "2048"
-    env["LIGHTONOCR_TIMEOUT"] = "120"
+
+def _resolve_aux_launch(service) -> tuple[list[str], list[str], Path | None]:
+    """Resolve a service's argv, LD_LIBRARY_PATH entries and expected ggml tree.
+
+    Backend resolution happens HERE — at launch — deliberately. Resolving it at
+    import would make a single dangling kernel symlink fail the orchestrator's
+    import rather than the one service that depends on it, and `kernel_paths`
+    raises rather than falling back precisely so the failure is not silent.
+    """
+    argv = [token.replace("{python}", sys.executable) for token in service.argv]
+    ld_paths = list(service.ld_library_path)
+    tree: Path | None = None
+    if service.backend:
+        from src.registry.kernel_paths import (
+            backend_dir,
+            backend_ld_library_path,
+            server_binary,
+        )
+
+        argv[0] = str(server_binary(service.backend))
+        ld_paths = backend_ld_library_path(service.backend)
+        tree = backend_dir(service.backend)
+    return argv, ld_paths, tree
+
+
+def _build_aux_env(service, ld_paths: list[str]) -> dict[str, str]:
+    """Compose the launch environment for one aux service."""
+    spec = service._replace(ld_library_path=tuple(ld_paths))
+    env = build_service_env(spec, os.environ.copy())
+    if service.pythonpath:
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = os.pathsep.join(service.pythonpath) + (
+            f"{os.pathsep}{existing}" if existing else ""
+        )
+    return env
+
+
+def _verify_aux_ggml_linkage(binary: str, tree: Path, env: dict[str, str]) -> bool:
+    """Prove the binary resolves its ggml inside `tree` under the LAUNCH env.
+
+    The check is run with `env` — the environment the service is about to be
+    launched with — not the caller's. Verifying under any other environment
+    proves nothing: LD_LIBRARY_PATH is the variable under test, so a check that
+    does not carry it is a check of a different process.
+
+    Failure is fatal to the launch, not a warning. A wrong-tree resolution does
+    not crash and does not degrade visibly — on 2026-07-31 a HIP whisper-cli
+    loaded the production CPU-only ggml, printed `use gpu = 1`, and produced
+    well-formed transcripts at CPU speed. Serving those answers is worse than
+    not serving.
+    """
+    if not _VERIFY_GGML_LINKAGE_SCRIPT.exists():
+        print(f"    [FAIL] linkage verifier missing: {_VERIFY_GGML_LINKAGE_SCRIPT}")
+        return False
+    try:
+        result = subprocess.run(
+            ["bash", str(_VERIFY_GGML_LINKAGE_SCRIPT), binary, str(tree)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"    [FAIL] linkage verifier did not run: {exc}")
+        return False
+    for line in result.stdout.splitlines():
+        if line.strip().startswith(("OK ", "BAD ", "FAIL", "PASS")):
+            print(f"      {line.strip()}")
+    if result.returncode != 0:
+        print(f"    [FAIL] ggml linkage check failed for {binary}")
+        print(f"           expected every ggml lib under {tree}")
+        return False
+    return True
+
+
+def start_aux_service(name: str) -> ProcessInfo | None:
+    """Start one declared auxiliary service. Returns None on any failure."""
+    service = AUX_SERVICES.get(name)
+    if service is None:
+        print(f"    [FAIL] unknown aux service {name!r}")
+        return None
+
+    log_file = LOG_DIR / service.log
+    label = service.description or service.name
+    print(f"  Starting {service.name} ({label}) on port {service.port}")
+
+    try:
+        argv, ld_paths, tree = _resolve_aux_launch(service)
+    except Exception as exc:  # KernelPathError and anything else path-shaped
+        print(f"    [FAIL] {service.name}: {exc}")
+        return None
+
+    executable = Path(argv[0])
+    if executable.is_absolute() and not executable.exists():
+        print(f"    [FAIL] launcher not found: {executable}")
+        return None
+    if not Path(service.cwd).is_dir():
+        print(f"    [FAIL] working directory not found: {service.cwd}")
+        return None
+
+    env = _build_aux_env(service, ld_paths)
+    if ld_paths:
+        verb = ":=" if service.ld_library_path_mode == "replace" else "+="
+        print(f"    LD_LIBRARY_PATH {verb} {ld_paths}")
+        if service.ld_library_path_mode == "replace":
+            print("      (ambient LD_LIBRARY_PATH dropped — foreign ggml trees unreachable)")
+
+    if service.verify_ggml_linkage:
+        if tree is None:
+            print(f"    [FAIL] {service.name} requests a linkage check but declares no backend")
+            return None
+        if not _verify_aux_ggml_linkage(argv[0], tree, env):
+            return None
 
     with open(log_file, "w") as log:
         proc = subprocess.Popen(
-            [
-                sys.executable,
-                str(_PATHS["project_root"] / "src/services/lightonocr_llama_server.py"),
-                "--port",
-                str(port),
-            ],
-            cwd=str(_PATHS["project_root"]),
+            argv,
+            cwd=service.cwd,
             stdout=log,
             stderr=subprocess.STDOUT,
             env=env,
@@ -2303,188 +2428,72 @@ def start_document_formalizer() -> ProcessInfo | None:
         )
 
     print(f"    PID: {proc.pid}")
-    print("    Waiting for health...")
+    print(
+        f"    Waiting for health (path={service.health_path}, "
+        f"timeout={service.health_timeout}s)..."
+    )
 
-    if wait_for_health(port, timeout=60):
-        print("    [OK] Document formalizer ready")
+    if wait_for_health(service.port, timeout=service.health_timeout, path=service.health_path):
+        print(f"    [OK] {service.name} ready")
         return ProcessInfo(
-            role="document_formalizer",
+            role=service.name,
             pid=proc.pid,
-            port=port,
+            port=service.port,
             started_at=datetime.now().isoformat(),
-            model_path="LightOnOCR-2-1B-bbox",
+            model_path=service.model_label,
             log_file=str(log_file),
         )
-    else:
-        print("    [FAIL] Document formalizer did not start")
-        print(f"    Check log: {log_file}")
-        kill_process(proc.pid)
-        return None
+
+    print(f"    [FAIL] {service.name} did not start")
+    print(f"    Check log: {log_file}")
+    kill_process(proc.pid)
+    return None
+
+
+# Named wrappers kept so existing call sites and their tests keep working
+# unchanged. They carry no logic — the declaration in launch_manifest.yaml is
+# the whole definition of each service.
+def start_document_formalizer() -> ProcessInfo | None:
+    """Start the document formalizer (LightOnOCR-2) server."""
+    return start_aux_service("document_formalizer")
 
 
 def start_sd_server() -> ProcessInfo | None:
     """Start the sd-server diffusion inference service (stable-diffusion.cpp native).
 
-    Replaces the ComfyUI-GGUF + PyTorch path 2026-05-07 — sd.cpp's native
-    ggml backend keeps Q8_0 weights packed and uses native quantized GEMM
-    kernels, skipping ComfyUI-GGUF's per-layer dequant-to-BF16 step.
-    Measured ~1.74× wall-clock and ~3.43× sampler s/iter speedup at 512² /
-    4 steps; expected ~2× wall-clock at production 1024² / 8 steps.
-    Stack-managed per feedback_stack_managed_services. Health probe uses
-    /sdapi/v1/samplers (sd-server has no dedicated /health endpoint).
+    Replaced the ComfyUI-GGUF + PyTorch path 2026-05-07 — sd.cpp's native ggml
+    backend keeps Q8_0 weights packed and uses native quantized GEMM kernels,
+    skipping ComfyUI-GGUF's per-layer dequant-to-BF16 step. Measured ~1.74x
+    wall-clock and ~3.43x sampler s/iter speedup at 512 sq / 4 steps.
     """
-    log_file = LOG_DIR / "sd_server.log"
-    port = 8190
-    launcher = _PATHS["project_root"] / "scripts/diffusion/start_sd_server.sh"
-
-    print(f"  Starting sd_server (ERNIE-Image-Turbo, ggml native) on port {port}")
-
-    if not launcher.exists():
-        print(f"    [FAIL] Launcher not found: {launcher}")
-        return None
-
-    env = os.environ.copy()
-    env["SD_SERVER_PORT"] = str(port)
-
-    with open(log_file, "w") as log:
-        proc = subprocess.Popen(
-            ["bash", str(launcher)],
-            cwd=str(_PATHS["project_root"]),
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-        )
-
-    print(f"    PID: {proc.pid}")
-    print("    Waiting for health (path=/sdapi/v1/samplers, timeout=120s)...")
-
-    if wait_for_health(port, timeout=120, path="/sdapi/v1/samplers"):
-        print("    [OK] sd-server ready")
-        return ProcessInfo(
-            role="sd_server",
-            pid=proc.pid,
-            port=port,
-            started_at=datetime.now().isoformat(),
-            model_path="ernie-image-turbo-Q8_0.gguf + ministral-3-3b + flux2-vae (sd.cpp ggml native)",
-            log_file=str(log_file),
-        )
-    else:
-        print("    [FAIL] sd-server did not start")
-        print(f"    Check log: {log_file}")
-        kill_process(proc.pid)
-        return None
+    return start_aux_service("sd_server")
 
 
 def start_whisper() -> ProcessInfo | None:
-    """Start the faster-whisper STT server (large-v3-turbo, int8).
+    """Start the STT server on :9000.
 
-    Promoted from sidecar to stack-managed 2026-05-06 per
-    feedback_stack_managed_services. Reuses the existing launch script in
-    epyc-inference-research; no rewrite needed.
+    2026-08-02 (W4): this is whisper.cpp @ production-speech-v1 on the MI210, NOT
+    the faster-whisper CTranslate2 service it replaced. That service hardcoded
+    device="cpu" and could not have been otherwise — CTranslate2 4.7.2 ships no
+    ROCm backend. See the `whisper` entry in launch_manifest.yaml for the API
+    delta this swap carries.
     """
-    log_file = LOG_DIR / "whisper.log"
-    port = 9000
-    # Whisper launcher lives in the inference-research repo (was a sidecar)
-    launcher = Path("/mnt/raid0/llm/epyc-inference-research/scripts/voice/start_whisper_server.sh")
+    return start_aux_service("whisper")
 
-    print(f"  Starting whisper (faster-whisper large-v3-turbo) on port {port}")
 
-    if not launcher.exists():
-        print(f"    [FAIL] Launcher not found: {launcher}")
-        return None
-
-    env = os.environ.copy()
-    env["WHISPER_PORT"] = str(port)
-
-    with open(log_file, "w") as log:
-        proc = subprocess.Popen(
-            ["bash", str(launcher)],
-            cwd=str(launcher.parent),
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-        )
-
-    print(f"    PID: {proc.pid}")
-    print("    Waiting for health (path=/health, timeout=60s)...")
-
-    if wait_for_health(port, timeout=60, path="/health"):
-        print("    [OK] Whisper ready")
-        return ProcessInfo(
-            role="whisper",
-            pid=proc.pid,
-            port=port,
-            started_at=datetime.now().isoformat(),
-            model_path="faster-whisper-large-v3-turbo (int8)",
-            log_file=str(log_file),
-        )
-    else:
-        print("    [FAIL] Whisper did not start")
-        print(f"    Check log: {log_file}")
-        kill_process(proc.pid)
-        return None
+def start_tts() -> ProcessInfo | None:
+    """Start the qwentts.cpp TTS server on :9002 (first registered 2026-08-02)."""
+    return start_aux_service("tts")
 
 
 def start_handoff_dashboard() -> ProcessInfo | None:
     """Start the epyc-root handoff progress dashboard hub (port 8100).
 
     Project-wide, file/artifact-backed progress board owned by the governance
-    repo (epyc-root). It is deliberately dependency-free (Python stdlib only),
-    so it runs under any interpreter — the orchestrator venv is not required.
-    The autopilot dashboard stays on the orchestrator (:8000/dashboard) because
-    it needs live in-process state; this hub links to it and vice-versa.
-    Stack-managed per feedback_stack_managed_services.
+    repo. Deliberately dependency-free (stdlib only), so it runs under any
+    interpreter — the orchestrator venv is not required.
     """
-    log_file = LOG_DIR / "handoff_dashboard.log"
-    port = 8100
-    repo = Path("/mnt/raid0/llm/epyc-root")
-    server = repo / "dashboard" / "server.py"
-
-    print(f"  Starting handoff_dashboard (epyc-root hub) on port {port}")
-
-    if not server.exists():
-        print(f"    [FAIL] hub server not found: {server}")
-        return None
-
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(repo) + os.pathsep + env.get("PYTHONPATH", "")
-
-    with open(log_file, "w") as log:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "dashboard.server", "--host", "0.0.0.0", "--port", str(port)],
-            cwd=str(repo),
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-        )
-
-    print(f"    PID: {proc.pid}")
-    print("    Waiting for health (path=/health, timeout=30s)...")
-
-    if wait_for_health(port, timeout=30, path="/health"):
-        print("    [OK] handoff dashboard ready")
-        return ProcessInfo(
-            role="handoff_dashboard",
-            pid=proc.pid,
-            port=port,
-            started_at=datetime.now().isoformat(),
-            model_path="epyc-root handoff progress hub (stdlib)",
-            log_file=str(log_file),
-        )
-    else:
-        print("    [FAIL] handoff dashboard did not start")
-        print(f"    Check log: {log_file}")
-        kill_process(proc.pid)
-        return None
+    return start_aux_service("handoff_dashboard")
 
 
 # =============================================================================

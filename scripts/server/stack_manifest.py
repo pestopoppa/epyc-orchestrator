@@ -87,6 +87,7 @@ _REQUIRED_MANIFEST_SECTIONS = (
     "orchestrator_profiles",
     "parity",
     "docker_services",
+    "aux_services",
 )
 
 
@@ -253,6 +254,122 @@ PORT_MAP = dict(_MANIFEST["port_map"])
 # Stack-managed auxiliaries whose startup failure is non-fatal but must remain
 # visible in the read-only status surface even when no state row was created.
 OPTIONAL_AUXILIARY_ROLES = frozenset(_MANIFEST["optional_auxiliary_roles"])
+
+
+# =============================================================================
+# Aux services — stack-managed processes that are NOT llama-server roles
+# Declared in launch_manifest.yaml `aux_services:`.
+# =============================================================================
+
+
+class AuxService(NamedTuple):
+    """One declared auxiliary service.
+
+    The registry this type populates is what makes `start` and `reload` agree.
+    Before it existed, "things that can be started" was a set of bespoke
+    `start_<name>()` functions and "things that can be reloaded" was an
+    independent `elif` chain; whisper and sd_server were in the first and not the
+    second, so reloading them killed the listener and then failed to bring it
+    back. One table now feeds both.
+    """
+
+    name: str
+    port: int
+    argv: tuple[str, ...]
+    cwd: str
+    log: str
+    model_label: str
+    description: str = ""
+    optional: bool = False
+    backend: str | None = None
+    env: dict[str, str] = {}  # noqa: RUF012 — replaced per-instance by _aux_service()
+    pythonpath: tuple[str, ...] = ()
+    ld_library_path: tuple[str, ...] = ()
+    ld_library_path_mode: str = "prepend"
+    verify_ggml_linkage: bool = False
+    health_path: str = "/health"
+    health_timeout: int = 60
+
+
+_AUX_LD_MODES = ("prepend", "replace")
+
+
+def _aux_service(entry: dict[str, Any]) -> AuxService:
+    """Build one AuxService, failing loudly on a malformed declaration.
+
+    No defaulting of required fields. A service whose declaration is incomplete
+    must fail at import, not launch something plausible on the wrong port — the
+    same contract `_load_launch_manifest` holds for the rest of this file.
+    """
+    for required in ("name", "port", "argv", "cwd", "log", "model_label"):
+        if required not in entry:
+            raise ValueError(f"aux_services: entry {entry.get('name', entry)!r} lacks {required!r}")
+    backend = entry.get("backend")
+    # A backend-resolved service is by definition running a foreign ggml
+    # generation, so `replace` is its default: `prepend` would leave the ambient
+    # llama.cpp tree reachable behind it, and a mixed-generation resolution does
+    # not fail — it serves wrong answers.
+    mode = entry.get("ld_library_path_mode", "replace" if backend else "prepend")
+    if mode not in _AUX_LD_MODES:
+        raise ValueError(
+            f"aux_services: {entry['name']!r} declares ld_library_path_mode={mode!r}; "
+            f"valid: {list(_AUX_LD_MODES)}"
+        )
+    return AuxService(
+        name=str(entry["name"]),
+        port=int(entry["port"]),
+        argv=tuple(str(token) for token in entry["argv"]),
+        cwd=str(entry["cwd"]),
+        log=str(entry["log"]),
+        model_label=str(entry["model_label"]),
+        description=str(entry.get("description", "")),
+        optional=bool(entry.get("optional", False)),
+        backend=str(backend) if backend else None,
+        env={str(key): str(value) for key, value in (entry.get("env") or {}).items()},
+        pythonpath=tuple(str(path) for path in (entry.get("pythonpath") or ())),
+        ld_library_path=tuple(str(path) for path in (entry.get("ld_library_path") or ())),
+        ld_library_path_mode=mode,
+        verify_ggml_linkage=bool(entry.get("verify_ggml_linkage", False)),
+        health_path=str(entry.get("health_path", "/health")),
+        health_timeout=int(entry.get("health_timeout", 60)),
+    )
+
+
+AUX_SERVICES: dict[str, AuxService] = {
+    str(entry["name"]): _aux_service(entry) for entry in _MANIFEST["aux_services"]
+}
+
+
+def _validate_aux_services() -> None:
+    """Import-time coherence checks for the aux-service registry.
+
+    Both checks encode a defect that actually shipped:
+      * a declared port that disagrees with PORT_MAP is how `reload <name>` and
+        `status <name>` end up pointed at different listeners;
+      * an optional auxiliary missing from PORT_MAP raises KeyError inside
+        `cmd_status`'s unavailable-optional loop, i.e. the status surface dies
+        precisely when a service is down and the operator needs to see it.
+    """
+    problems: list[str] = []
+    for name, service in AUX_SERVICES.items():
+        declared = PORT_MAP.get(name)
+        if declared is not None and declared != service.port:
+            problems.append(
+                f"aux service {name!r}: PORT_MAP says {declared}, aux_services says {service.port}"
+            )
+        if service.optional and name not in PORT_MAP:
+            problems.append(
+                f"aux service {name!r} is optional but absent from PORT_MAP "
+                f"(cmd_status indexes PORT_MAP for every optional auxiliary)"
+            )
+    for role in OPTIONAL_AUXILIARY_ROLES:
+        if role not in PORT_MAP:
+            problems.append(f"optional auxiliary role {role!r} is absent from PORT_MAP")
+    if problems:
+        raise ValueError("stack_manifest: aux service declaration is incoherent: " + "; ".join(problems))
+
+
+_validate_aux_services()
 
 # HOT roles (always started) - NUMA-optimized
 HOT_ROLES = set(_MANIFEST["hot_roles"])

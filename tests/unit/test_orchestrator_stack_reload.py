@@ -424,6 +424,168 @@ def test_reload_document_formalizer_uses_auxiliary_starter(monkeypatch) -> None:
     assert refreshed == [("stack_reload", {"document_formalizer": new_info})]
 
 
+# =============================================================================
+# W5 — reload must RESTART an aux service, not merely kill it
+# =============================================================================
+#
+# THE DEFECT THESE TESTS PIN (fixed 2026-08-02):
+#
+# `whisper` (9000) and `sd_server` (8190) are in PORT_MAP but in neither
+# HOT_SERVERS nor WARM_SERVERS. `cmd_reload` dispatched auxiliaries through a
+# hand-written `elif` chain that named only document_formalizer and
+# handoff_dashboard, so these two fell through to `elif component in PORT_MAP:`.
+# That branch killed every listener on the port and then called `start_server()`
+# — the llama-server path — with `roles=["whisper"]`, a role no registry
+# declares. The start could only fail, so the command killed the service, never
+# restarted it, and returned 1.
+#
+# WHY THESE FAIL ON THE PRE-FIX CODE: each asserts rc == 0, that the service's
+# own starter ran, and that a live state row was written. Against the old
+# dispatch the run reaches `start_server()` instead — which these tests make
+# raise — so it errors out before any of that. The `RegistryLoader` and
+# `start_server` traps below are the load-bearing part: without them the old
+# code would merely return 1 and the tests would still fail, but for a reason
+# that does not distinguish "took the llama-server path" from "starter said no".
+@pytest.mark.parametrize(
+    ("component", "port", "starter", "model_label"),
+    [
+        ("whisper", 9000, "start_whisper", "whisper.cpp large-v3-turbo"),
+        ("sd_server", 8190, "start_sd_server", "ernie-image-turbo-Q8_0.gguf"),
+        ("tts", 9002, "start_tts", "Qwen3-TTS-12Hz-0.6B"),
+    ],
+)
+def test_reload_aux_service_restarts_it(
+    monkeypatch, component: str, port: int, starter: str, model_label: str
+) -> None:
+    old_info = stack.ProcessInfo(
+        role=component, pid=111, port=port, started_at="before",
+        model_path="old", log_file="old.log",
+    )
+    new_info = stack.ProcessInfo(
+        role=component, pid=222, port=port, started_at="after",
+        model_path=model_label, log_file=f"{component}.log",
+    )
+    state = {component: old_info}
+    killed: list[int] = []
+    pid_helper_calls: list[int] = []
+    saved: list[dict[str, stack.ProcessInfo]] = []
+    started: list[str] = []
+
+    monkeypatch.setattr(stack, "load_state", lambda: state)
+    monkeypatch.setattr(stack, "save_state", lambda value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        stack_commands, "_refresh_runtime_facts_manifest", lambda *a, **kw: None
+    )
+    # An aux service is not a registry role. Touching either of these means the
+    # llama-server path was taken — the exact pre-fix behaviour.
+    monkeypatch.setattr(
+        stack, "RegistryLoader",
+        lambda: (_ for _ in ()).throw(AssertionError("registry must not load for an aux service")),
+    )
+    monkeypatch.setattr(
+        stack, "start_server",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError(f"{component} must not route through start_server()")
+        ),
+    )
+    monkeypatch.setattr(stack, "kill_process", lambda pid: killed.append(pid))
+    monkeypatch.setattr(stack.time, "sleep", lambda _seconds: None)
+
+    def fake_pids_on_port(p: int) -> list[int]:
+        pid_helper_calls.append(p)
+        return [333]
+
+    monkeypatch.setattr(stack, "_pids_on_port", fake_pids_on_port)
+
+    def fake_start():
+        started.append(component)
+        return new_info
+
+    monkeypatch.setattr(stack, starter, fake_start)
+
+    rc = stack.cmd_reload(Namespace(components=[component]))
+
+    assert rc == 0, f"reload {component} must succeed"
+    assert killed == [333], "the old listener must be stopped"
+    assert pid_helper_calls == [port], "must act on the declared port"
+    # The restart half — this is what was missing.
+    assert started == [component], f"reload {component} must call its own starter"
+    assert saved[-1] == {component: new_info}, "state must record the RESTARTED process"
+
+
+def test_reload_aux_service_reports_failure_without_leaving_a_stale_state_row(
+    monkeypatch,
+) -> None:
+    """A starter that fails must return 1 AND drop the dead row from state.
+
+    Leaving the pre-kill ProcessInfo behind would make `status` report a PID that
+    was killed seconds earlier — the state file is an observation of a launch, so
+    a failed relaunch must not leave the previous observation standing.
+    """
+    old_info = stack.ProcessInfo(
+        role="whisper", pid=111, port=9000, started_at="before",
+        model_path="old", log_file="old.log",
+    )
+    state = {"whisper": old_info}
+    saved: list[dict[str, stack.ProcessInfo]] = []
+
+    monkeypatch.setattr(stack, "load_state", lambda: state)
+    monkeypatch.setattr(stack, "save_state", lambda value: saved.append(dict(value)))
+    monkeypatch.setattr(stack_commands, "_refresh_runtime_facts_manifest", lambda *a, **kw: None)
+    monkeypatch.setattr(stack, "kill_process", lambda _pid: None)
+    monkeypatch.setattr(stack.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(stack, "_pids_on_port", lambda _port: [333])
+    monkeypatch.setattr(stack, "start_whisper", lambda: None)
+
+    assert stack.cmd_reload(Namespace(components=["whisper"])) == 1
+    assert "whisper" not in state
+
+
+def test_every_declared_aux_service_is_reloadable(monkeypatch) -> None:
+    """No declared service may be startable-but-not-reloadable.
+
+    This is the structural guard, and it is the one that would have caught the
+    original defect without anyone thinking to test whisper specifically: it
+    derives its cases from the registry, so a service added to
+    launch_manifest.yaml is covered the moment it is declared. A test that named
+    the services explicitly would have been written against the same incomplete
+    list that caused the bug.
+    """
+    from scripts.server.stack_manifest import AUX_SERVICES
+
+    monkeypatch.setattr(stack, "save_state", lambda _value: None)
+    monkeypatch.setattr(stack_commands, "_refresh_runtime_facts_manifest", lambda *a, **kw: None)
+    monkeypatch.setattr(stack, "kill_process", lambda _pid: None)
+    monkeypatch.setattr(stack.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(stack, "_pids_on_port", lambda _port: [])
+    monkeypatch.setattr(
+        stack, "RegistryLoader",
+        lambda: (_ for _ in ()).throw(AssertionError("registry must not load for an aux service")),
+    )
+    monkeypatch.setattr(
+        stack, "start_server",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("aux service hit start_server()")),
+    )
+
+    for name, service in AUX_SERVICES.items():
+        info = stack.ProcessInfo(
+            role=name, pid=222, port=service.port, started_at="after",
+            model_path=service.model_label, log_file=service.log,
+        )
+        calls: list[str] = []
+
+        def fake_start(_name: str = name, _info=info) -> stack.ProcessInfo:
+            calls.append(_name)
+            return _info
+
+        monkeypatch.setattr(stack, "load_state", lambda: {})
+        monkeypatch.setattr(stack, f"start_{name}", fake_start, raising=False)
+        monkeypatch.setattr(stack, "start_aux_service", lambda n: fake_start(n))
+
+        assert stack.cmd_reload(Namespace(components=[name])) == 0, f"reload {name} failed"
+        assert calls == [name], f"reload {name} did not start {name}"
+
+
 def test_reload_refreshes_runtime_facts_manifest_after_successful_state_save(
     monkeypatch,
     tmp_path: Path,
@@ -1636,8 +1798,17 @@ def test_cmd_status_does_not_duplicate_present_optional_auxiliary(monkeypatch, c
     assert stack_commands.cmd_status(Namespace()) == 0
 
     out = capsys.readouterr().out
-    assert sum(line.startswith("whisper") for line in out.splitlines()) == 1
-    assert "unavailable_optional" not in out
+    whisper_lines = [line for line in out.splitlines() if line.startswith("whisper")]
+    assert len(whisper_lines) == 1
+    # A PRESENT optional auxiliary must not ALSO be listed as unavailable.
+    #
+    # This used to assert `"unavailable_optional" not in out`, which tested the
+    # right thing only by accident: whisper was the sole optional auxiliary, so
+    # the string could not appear for any other reason. Registering `tts` as a
+    # second optional auxiliary (2026-08-02, W4) made that proxy false — tts is
+    # legitimately unavailable in this fixture and SHOULD be reported. Scope the
+    # assertion to the service under test instead of the whole status surface.
+    assert "unavailable_optional" not in whisper_lines[0]
 
 
 def test_cmd_status_prints_episodic_embedding_health(monkeypatch, capsys) -> None:

@@ -35,9 +35,25 @@ VALID_BACKENDS = frozenset(BACKEND_BINARIES)
 
 # Backends whose binaries need a vendor runtime on LD_LIBRARY_PATH in addition to
 # their own ggml. Data, not a branch: a future cuda/vulkan backend joins the map.
+# stt and tts are HIP builds too (both trees ship libggml-hip.so), so both need
+# the ROCm runtime alongside their own ggml.
 BACKEND_VENDOR_LIB_DIRS: dict[str, tuple[Path, ...]] = {
     "gpu": (Path(os.environ.get("ROCM_PATH", "/opt/rocm")) / "lib",),
+    "stt": (Path(os.environ.get("ROCM_PATH", "/opt/rocm")) / "lib",),
+    "tts": (Path(os.environ.get("ROCM_PATH", "/opt/rocm")) / "lib",),
 }
+
+# The ONE backend that needs no prepend, and the reason why: the ambient
+# environment already resolves to the CPU tree, so adding a path there would
+# change every CPU role's environment for no benefit.
+#
+# Everything else must lead with its OWN directory. This used to be derived from
+# "has vendor dirs?", which silently returned [] for stt and tts — the two
+# backends whose ggml generation differs MOST from the ambient one (0.18.0 and
+# 0.17.0 vs the CPU tree's 0.16.0). Deriving "needs no prepend" from "needs no
+# vendor runtime" conflated two unrelated properties and produced exactly the
+# silent-wrong-ggml launch this module exists to prevent.
+_BACKENDS_NEEDING_NO_PREPEND = frozenset({"cpu"})
 
 
 class KernelPathError(RuntimeError):
@@ -83,14 +99,19 @@ def backend_ld_library_path(backend: str) -> list[str]:
     Returns ``[]`` for backends that need no prepend (``cpu``): the CPU tree is what
     the ambient environment already resolves to, and adding a path there would change
     every CPU role's environment for no benefit.
+
+    Every OTHER backend leads with its own directory, whether or not it also needs a
+    vendor runtime. ``stt`` and ``tts`` returned ``[]`` until 2026-08-02 because the
+    emptiness test was "no vendor dirs" rather than "is the ambient tree" — see
+    ``_BACKENDS_NEEDING_NO_PREPEND``.
     """
     if backend not in VALID_BACKENDS:
         raise KernelPathError(
             f"unknown kernel backend {backend!r}; valid: {sorted(VALID_BACKENDS)}"
         )
-    vendor_dirs = BACKEND_VENDOR_LIB_DIRS.get(backend)
-    if not vendor_dirs:
+    if backend in _BACKENDS_NEEDING_NO_PREPEND:
         return []
+    vendor_dirs = BACKEND_VENDOR_LIB_DIRS.get(backend, ())
     return [str(backend_dir(backend)), *(str(path) for path in vendor_dirs)]
 
 

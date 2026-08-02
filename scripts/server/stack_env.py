@@ -124,6 +124,105 @@ _STACK_ENV_CANONICAL_ALIASES = {
 }
 
 
+# =============================================================================
+# LD_LIBRARY_PATH composition — the ONE place either composer builds that value.
+# =============================================================================
+#
+# Two modes, and the second one is the point.
+#
+#   prepend  — declared paths lead, the ambient value is kept behind them.
+#              Correct when the ambient value is the tree you want as a fallback
+#              (every llama-server role: the ambient path IS the CPU tree).
+#
+#   replace  — declared paths are the WHOLE value. The ambient path is dropped.
+#              Required for any binary from a tree with its own ggml generation.
+#
+# Why `replace` had to exist (INC-20260731-ggml-linkage-silent-cpu-fallback):
+# LD_LIBRARY_PATH outranks DT_RUNPATH in the loader's search order. whisper.cpp's
+# whisper-server carries RUNPATH=/mnt/raid0/llm/whisper.cpp/build/bin and STILL
+# loaded libggml-base/libggml/libggml-cpu from /mnt/raid0/llm/llama.cpp/build/bin
+# whenever that directory appeared anywhere on the ambient LD_LIBRARY_PATH — as it
+# does in every process descended from a pre-2026-07-31 shell, including the
+# orchestrator API running right now.
+#
+# Prepending the correct tree does NOT fix this. The loader takes the FIRST
+# directory containing a matching soname, so prepending wins for libraries the
+# tree actually ships — but the mixed outcome is worse than the clean failure:
+# whisper's ggml-0.18.0 libggml-hip loaded against llama.cpp's ggml-0.16.0
+# libggml-base is an ABI mismatch that does not raise. It runs, it answers, and
+# the answers are wrong. Only dropping the foreign tree from the search path
+# removes the failure mode rather than reordering it.
+_LD_PATH_MODES = ("prepend", "replace")
+
+
+def compose_ld_library_path(
+    declared: list[str] | tuple[str, ...] | None,
+    ambient: str,
+    mode: str = "prepend",
+) -> str:
+    """Compose an LD_LIBRARY_PATH from declared paths and the ambient value.
+
+    `mode="prepend"` (default) is PURE CONCATENATION, byte-for-byte what
+    `_apply_runtime_requirements_env` did before this helper existed. It deliberately
+    does not de-duplicate: `/opt/rocm/lib` legitimately appears both in a GPU role's
+    declared paths and in the ambient value, and collapsing it would silently change
+    the composed env of every live GPU role. This function was introduced to give aux
+    services a `replace` mode, not to retune roles that are serving right now, so the
+    prepend branch is held byte-identical on purpose.
+
+    `mode="replace"` drops `ambient` entirely — the only way to stop a foreign ggml
+    tree on the inherited path from outranking a binary's own RUNPATH. Here
+    de-duplication IS applied: the declared list is author-controlled, short, and a
+    repeated entry in it can only mislead a reader about precedence.
+    """
+    if mode not in _LD_PATH_MODES:
+        raise ValueError(
+            f"unknown LD_LIBRARY_PATH mode {mode!r}; valid: {list(_LD_PATH_MODES)}"
+        )
+    declared_paths = [str(path) for path in (declared or []) if str(path)]
+    if mode == "prepend":
+        return ":".join(declared_paths) + (f":{ambient}" if ambient else "")
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for entry in declared_paths:
+        if entry not in seen:
+            seen.add(entry)
+            ordered.append(entry)
+    return ":".join(ordered)
+
+
+def build_service_env(
+    spec: "object", base_env: dict[str, str] | None = None
+) -> dict[str, str]:
+    """Compose the launch env for an AUX SERVICE (not a llama-server role).
+
+    Deliberately does NOT apply `_CANONICAL_OMP_ENV` or any per-role GGML_* block.
+    Those are llama-server tuning; applying them to whisper.cpp or tts-server would
+    attribute a llama.cpp recipe to a different kernel with a different ggml, which
+    is misleading provenance at best. Aux services declare their own env, in full,
+    in `orchestration/launch_manifest.yaml`.
+
+    Order (later overrides earlier):
+        1. base_env (parent process env, typically os.environ.copy())
+        2. the service's declared plain env vars
+        3. LD_LIBRARY_PATH, composed per the service's declared mode
+
+    LD_LIBRARY_PATH is composed LAST and unconditionally when the service declares
+    paths, so a declared plain env var cannot accidentally reintroduce the ambient
+    value it was meant to drop.
+    """
+    env: dict[str, str] = dict(base_env) if base_env else {}
+    env.update({key: str(value) for key, value in (getattr(spec, "env", None) or {}).items()})
+    declared = getattr(spec, "ld_library_path", None)
+    if declared:
+        env["LD_LIBRARY_PATH"] = compose_ld_library_path(
+            declared,
+            env.get("LD_LIBRARY_PATH", ""),
+            getattr(spec, "ld_library_path_mode", "prepend"),
+        )
+    return env
+
+
 def _role_env_overrides(role: str) -> dict[str, str]:
     """Return per-role env block for a given role. Empty dict if role not registered.
     Falls back through arch-class aliases (e.g. coder_escalation → worker)."""

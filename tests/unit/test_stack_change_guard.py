@@ -2580,3 +2580,158 @@ def test_derived_retired_role_scan_gains_coverage_and_loses_none(tmp_path: Path)
     assert probe in derived_findings[0].snippet
     # coverage gained, none lost
     assert hand_snippets <= {f.snippet for f in derived_findings}
+
+
+# ---------------------------------------------------------------------------
+# Fail-open regression suite (W6, 2026-08-02)
+#
+# Each of these constructs the condition the guard exists to detect and asserts
+# it now reports COULD-NOT-CHECK. Before the repair every one of them returned a
+# clean result: the guard reported success on exactly the condition it detects.
+# The screen each test encodes: "can I make this check pass by DELETING the
+# thing it inspects?"
+# ---------------------------------------------------------------------------
+
+
+def _real_priors() -> dict:
+    return yaml.safe_load(
+        stack_change_guard.DEFAULT_PRIORS.read_text(encoding="utf-8")
+    )
+
+
+def _could_not_check(errors: list[str]) -> list[str]:
+    return [e for e in errors if stack_change_guard.COULD_NOT_CHECK in e]
+
+
+def _block_import(monkeypatch: pytest.MonkeyPatch, module_name: str) -> None:
+    import builtins
+
+    real_import = builtins.__import__
+
+    def blocked(name, *args, **kwargs):
+        if name == module_name:
+            raise ImportError(f"simulated: {module_name} unimportable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked)
+
+
+def test_launch_view_import_failure_is_could_not_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blocking the launch-manifest import must not take the gate clean."""
+    priors = _real_priors()
+    _block_import(monkeypatch, "scripts.server.stack_manifest")
+
+    targets, view_errors = stack_change_guard._launch_manifest_targets_or_error()
+    errors = stack_change_guard.validate_launch_manifest_serving_alignment(priors)
+
+    assert targets == {}
+    assert _could_not_check(view_errors)
+    assert _could_not_check(errors)
+    assert any("did not import" in e for e in errors)
+
+
+def test_launch_requirements_unavailable_is_could_not_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Losing the launch-path constants must be reported, not absorbed."""
+
+    def _raise(_server: dict) -> dict:
+        raise stack_change_guard.LaunchViewUnavailableError("simulated")
+
+    monkeypatch.setattr(stack_change_guard, "_launch_requirements_for_server", _raise)
+    errors = stack_change_guard.validate_launch_manifest_serving_alignment(_real_priors())
+
+    assert any("launch requirements unavailable" in e for e in _could_not_check(errors))
+
+
+def test_launch_context_unavailable_is_could_not_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0-of-N context assertions skipped, with the target count unchanged."""
+
+    def _raise(_server: dict) -> int:
+        raise stack_change_guard.LaunchViewUnavailableError("simulated")
+
+    monkeypatch.setattr(stack_change_guard, "_effective_context_for_server", _raise)
+    errors = stack_change_guard.validate_launch_manifest_serving_alignment(_real_priors())
+
+    assert any("launch context unavailable" in e for e in _could_not_check(errors))
+
+
+def test_declared_fact_without_launch_counterpart_is_could_not_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The checklist is derived from the producer, so ANY cause of a dropped
+    launch-view value is caught — not only an import error."""
+    monkeypatch.setattr(
+        stack_change_guard, "_effective_context_for_server", lambda _server: None
+    )
+    errors = stack_change_guard.validate_launch_manifest_serving_alignment(_real_priors())
+
+    skipped = [
+        e
+        for e in _could_not_check(errors)
+        if "declares serving.effective_context_tokens" in e
+    ]
+    assert skipped, "a declared context with no launch counterpart must be reported"
+
+
+def test_empty_launch_view_is_could_not_check() -> None:
+    """0 launch targets is an instrument failure, not 'no alignment errors'."""
+    errors = stack_change_guard.validate_launch_manifest_serving_alignment(
+        _real_priors(), launch_manifest_targets={}
+    )
+
+    assert any("0 launch targets" in e for e in _could_not_check(errors))
+
+
+def test_unreadable_registry_is_could_not_check(tmp_path: Path) -> None:
+    """A registry that will not parse silently halved the launch view."""
+    bad = tmp_path / "registry.yaml"
+    bad.write_text("this: is: not: valid: yaml: [\n", encoding="utf-8")
+
+    errors = stack_change_guard.validate_launch_manifest_serving_alignment(
+        _real_priors(), registry_path=bad
+    )
+
+    assert any("launch-view registry is unreadable" in e for e in _could_not_check(errors))
+
+
+def test_deleted_registry_is_could_not_check(tmp_path: Path) -> None:
+    """The delete screen, applied directly."""
+    errors = stack_change_guard.validate_launch_manifest_serving_alignment(
+        _real_priors(), registry_path=tmp_path / "not-here.yaml"
+    )
+
+    assert any("launch-view registry is missing" in e for e in _could_not_check(errors))
+
+
+def test_missing_procedure_artifact_is_could_not_check(tmp_path: Path) -> None:
+    """Deleting the procedure used to make its enum check pass."""
+    errors = stack_change_guard.validate_procedure_role_enums(
+        _real_priors(), procedure_path=tmp_path / "not-here.yaml"
+    )
+
+    assert any("procedure artifact is missing" in e for e in _could_not_check(errors))
+
+
+def test_missing_procedure_schema_is_could_not_check(tmp_path: Path) -> None:
+    errors = stack_change_guard.validate_procedure_role_enums(
+        _real_priors(), schema_path=tmp_path / "not-here.json"
+    )
+
+    assert any(
+        "procedure schema artifact is missing" in e for e in _could_not_check(errors)
+    )
+
+
+def test_healthy_artifacts_emit_no_could_not_check() -> None:
+    """The other half of a guard with teeth: it must stay quiet when it CAN check."""
+    priors = _real_priors()
+
+    assert _could_not_check(
+        stack_change_guard.validate_launch_manifest_serving_alignment(priors)
+    ) == []
+    assert _could_not_check(stack_change_guard.validate_procedure_role_enums(priors)) == []

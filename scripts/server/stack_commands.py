@@ -34,6 +34,7 @@ from scripts.server.stack_docker import (
 from scripts.server.stack_health import wait_for_health as _wait_for_health
 from scripts.server.stack_host import apply_host_prerequisites
 from scripts.server.stack_manifest import (
+    AUX_SERVICES,
     DOCKER_SERVICES,
     EMBEDDER_PORTS,
     HOT_SERVERS,
@@ -141,6 +142,14 @@ def start_whisper(*a, **kw):
 
 def start_handoff_dashboard(*a, **kw):
     return _orchestrator_stack().start_handoff_dashboard(*a, **kw)
+
+
+def start_tts(*a, **kw):
+    return _orchestrator_stack().start_tts(*a, **kw)
+
+
+def start_aux_service(*a, **kw):
+    return _orchestrator_stack().start_aux_service(*a, **kw)
 
 
 def load_state(*a, **kw):
@@ -1760,96 +1769,39 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     print()
 
-    # Start document formalizer (optional, non-fatal)
+    # Start every declared auxiliary service (optional, non-fatal).
+    #
+    # 2026-08-02 (W5/W4): was four hand-written blocks, one per service, each
+    # restating the same already-healthy-skip / start / record shape with its own
+    # literal port, health path and label. That duplication is why registering a
+    # service meant editing several places and why two of them were missed in the
+    # reload path. The loop below iterates AUX_SERVICES, so declaring a service in
+    # launch_manifest.yaml is now the ONLY step required to have it started,
+    # reloaded and reported.
     if not args.dev and not args.only:
-        print("[5] Starting document formalizer (LightOnOCR-2)...")
-        info = None
-        if is_port_in_use(9001) and wait_for_health(9001, timeout=3):
-            print("  Already healthy, skipping")
-            info = _preserved_process_info(
-                "document_formalizer",
-                9001,
-                "LightOnOCR-2",
-                str(LOG_DIR / "document_formalizer.log"),
-            )
-        else:
-            info = start_document_formalizer()
-        if info:
-            state["document_formalizer"] = info
-        else:
-            print("  [!] Document formalizer failed (non-fatal, continuing)")
-
-        print()
-
-        # Start sd-server diffusion service (optional, non-fatal)
-        # ERNIE-Image-Turbo Q8 GGUF + Mistral3 + flux2 VAE via stable-diffusion.cpp.
-        # Replaced ComfyUI 2026-05-07 — see start_sd_server() for context.
-        if is_port_in_use(8190) and wait_for_health(8190, timeout=3, path="/sdapi/v1/samplers"):
-            print("[5a] Starting sd-server (ggml native diffusion)...")
-            print("  Already healthy, skipping")
-            preserved = _preserved_process_info(
-                "sd_server",
-                8190,
-                "ernie-image-turbo-Q8_0.gguf + ministral-3-3b + flux2-vae",
-                str(LOG_DIR / "sd_server.log"),
-            )
-            if preserved:
-                state["sd_server"] = preserved
-        else:
-            print("[5a] Starting sd-server (ggml native diffusion)...")
-            info = start_sd_server()
-            if info:
-                state["sd_server"] = info
+        for index, service in enumerate(AUX_SERVICES.values()):
+            step = f"[5{'' if index == 0 else chr(ord('a') + index - 1)}]"
+            print(f"{step} Starting {service.name} ({service.description or service.name})...")
+            if is_port_in_use(service.port) and wait_for_health(
+                service.port, timeout=3, path=service.health_path
+            ):
+                print("  Already healthy, skipping")
+                preserved = _preserved_process_info(
+                    service.name,
+                    service.port,
+                    service.model_label,
+                    str(LOG_DIR / service.log),
+                )
+                if preserved:
+                    state[service.name] = preserved
             else:
-                print("  [!] sd-server failed (non-fatal, image generation unavailable)")
-
-        print()
-
-        # Start Whisper STT service (optional, non-fatal)
-        # Promoted from sidecar 2026-05-06.
-        if is_port_in_use(9000) and wait_for_health(9000, timeout=3, path="/health"):
-            print("[5b] Starting Whisper STT server...")
-            print("  Already healthy, skipping")
-            preserved = _preserved_process_info(
-                "whisper",
-                9000,
-                "faster-whisper-large-v3-turbo-int8",
-                str(LOG_DIR / "whisper.log"),
-            )
-            if preserved:
-                state["whisper"] = preserved
-        else:
-            print("[5b] Starting Whisper STT server...")
-            info = start_whisper()
-            if info:
-                state["whisper"] = info
-            else:
-                print("  [!] Whisper failed (non-fatal, STT unavailable)")
-
-        print()
-
-        # Start handoff dashboard hub (epyc-root, optional, non-fatal).
-        # Project-wide progress board; stdlib-only, owned by the governance repo.
-        if is_port_in_use(8100) and wait_for_health(8100, timeout=3, path="/health"):
-            print("[5c] Starting handoff dashboard (epyc-root hub)...")
-            print("  Already healthy, skipping")
-            preserved = _preserved_process_info(
-                "handoff_dashboard",
-                8100,
-                "epyc-root handoff progress hub",
-                str(LOG_DIR / "handoff_dashboard.log"),
-            )
-            if preserved:
-                state["handoff_dashboard"] = preserved
-        else:
-            print("[5c] Starting handoff dashboard (epyc-root hub)...")
-            info = start_handoff_dashboard()
-            if info:
-                state["handoff_dashboard"] = info
-            else:
-                print("  [!] handoff dashboard failed (non-fatal, continuing)")
-
-        print()
+                starter = globals().get(f"start_{service.name}")
+                info = starter() if callable(starter) else start_aux_service(service.name)
+                if info:
+                    state[service.name] = info
+                else:
+                    print(f"  [!] {service.name} failed (non-fatal, continuing)")
+            print()
 
         # Start Docker services (NextPLAID retrieval + SearXNG metasearch)
         if _docker_available():
@@ -2072,38 +2024,43 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 print("  [!] Failed to restart orchestrator")
                 return 1
 
-        elif component == "document_formalizer":
-            port = 9001
-
-            # Auxiliary service: do not route through start_server()/RegistryLoader.
-            # It is a Python OCR service, not a llama-server registry role.
-            for pid in _pids_on_port(port):
+        elif component in AUX_SERVICES:
+            # Auxiliary services: do NOT route through start_server()/RegistryLoader.
+            # None of them is a llama-server registry role.
+            #
+            # 2026-08-02 (W5) — THIS BRANCH MUST PRECEDE THE `component in PORT_MAP`
+            # BRANCH BELOW, and that ordering is the whole fix.
+            #
+            # Before today this was a hand-written chain that named only
+            # document_formalizer and handoff_dashboard. whisper (9000) and
+            # sd_server (8190) are in PORT_MAP but in neither HOT_SERVERS nor
+            # WARM_SERVERS, so `reload whisper` fell through to the PORT_MAP branch,
+            # which killed every listener on the port and then called start_server()
+            # — the llama-server path — with roles=["whisper"]. There is no such
+            # registry role, so the start could only fail. Net effect: the service
+            # was killed, never restarted, and the command returned 1 having left
+            # STT down. Same for sd_server.
+            #
+            # Dispatching off the declared registry (rather than a chain a human
+            # must remember to extend) is what stops the next registered service
+            # from inheriting the defect.
+            service = AUX_SERVICES[component]
+            for pid in _pids_on_port(service.port):
                 kill_process(pid)
-            state.pop("document_formalizer", None)
+            state.pop(component, None)
             time.sleep(1)
 
-            info = start_document_formalizer()
+            # Prefer the service's named wrapper when one exists, else the generic
+            # launcher. Derived from the name, not a second hand-kept table — a
+            # newly declared service works with no wrapper at all, while the
+            # existing public `start_<name>()` entry points (and every caller and
+            # test bound to them) keep their exact meaning.
+            starter = globals().get(f"start_{component}")
+            info = starter() if callable(starter) else start_aux_service(component)
             if info:
-                state["document_formalizer"] = info
+                state[component] = info
             else:
-                print("  [!] Failed to restart document_formalizer")
-                return 1
-
-        elif component == "handoff_dashboard":
-            port = 8100
-
-            # Auxiliary service: a stdlib web server owned by epyc-root, not a
-            # llama-server registry role — do not route through start_server().
-            for pid in _pids_on_port(port):
-                kill_process(pid)
-            state.pop("handoff_dashboard", None)
-            time.sleep(1)
-
-            info = start_handoff_dashboard()
-            if info:
-                state["handoff_dashboard"] = info
-            else:
-                print("  [!] Failed to restart handoff_dashboard")
+                print(f"  [!] Failed to restart {component}")
                 return 1
 
         elif component in PORT_MAP:

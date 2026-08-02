@@ -97,13 +97,15 @@ port_map:
   orchestrator: 8000
   document_formalizer: 9001
   sd_server: 8190          # ERNIE-Image-Turbo via stable-diffusion.cpp native (replaced ComfyUI 2026-05-07; ~1.7-3.4× CPU speedup)
-  whisper: 9000            # faster-whisper STT (transcription service, not llama-server)
+  whisper: 9000            # whisper.cpp STT (transcription service, not llama-server)
+  tts: 9002                # qwentts.cpp TTS (registered 2026-08-02, W4)
 
 # Stack-managed auxiliaries whose startup failure is non-fatal but must remain
 # visible in the read-only status surface even when no state row was created.
 # Loaded as a frozenset.
 optional_auxiliary_roles:
   - whisper
+  - tts
 
 # HOT roles (always started) - NUMA-optimized
 # 2026-05-06: architect_coding removed, ingest_long_context promoted (see registry).
@@ -656,3 +658,139 @@ docker_services:
     run_timeout: 180
     args: []
     health_path: /health
+
+# =============================================================================
+# Aux services — stack-managed processes that are NOT llama-server roles
+# =============================================================================
+#
+# Added 2026-08-02 (W5/W4). Before this section existed, every auxiliary had a
+# bespoke `start_<name>()` in orchestrator_stack.py and `cmd_reload` dispatched to
+# it through a hand-written `elif` chain. Two of the four auxiliaries were never
+# added to that chain, so `reload whisper` and `reload sd_server` fell through to
+# the generic `elif component in PORT_MAP:` branch — which killed the listener and
+# then called `start_server()`, the llama-server path, which cannot start a service
+# that has no registry role. The service was killed and never restarted.
+#
+# That defect was structural, not clerical: the dispatch chain had no relationship
+# to the set of things that can be started, so nothing forced the two to agree.
+# Declaring services as DATA makes the registry the single source of both, which is
+# why this had to land before registering any further service.
+#
+# Schema per entry:
+#   name            state key + status label + `reload <name>` component
+#   port            listener port
+#   optional        startup failure is non-fatal (mirrors optional_auxiliary_roles)
+#   argv            launch argv; tokens {python} {project_root} {llm_root} are expanded
+#   backend         OPTIONAL kernel backend (cpu|gpu|stt|tts). When set, argv[0] is
+#                   replaced by the backend's server binary and LD_LIBRARY_PATH is
+#                   derived from src/registry/kernel_paths.py and RESOLVED AT LAUNCH,
+#                   never at import — a dangling kernel symlink must fail that one
+#                   service, not the orchestrator's import.
+#   cwd             working directory
+#   env             plain env vars, applied verbatim
+#   pythonpath      entries PREPENDED to PYTHONPATH
+#   ld_library_path explicit LD_LIBRARY_PATH entries (ignored when `backend` is set)
+#   ld_library_path_mode  prepend | replace. Defaults to `replace` when `backend` is
+#                   set, `prepend` otherwise. See stack_env.compose_ld_library_path.
+#   verify_ggml_linkage  fail the launch unless every linked ggml/whisper/llama lib
+#                   resolves inside the backend tree
+#   health_path / health_timeout   readiness probe
+#   model_label     what `status` reports in the MODEL column
+#   log             log file name under LOG_DIR
+aux_services:
+  - name: document_formalizer
+    port: 9001
+    optional: false
+    description: LightOnOCR-2 document formalizer (OCR sidecar, Python)
+    argv: ["{python}", "{project_root}/src/services/lightonocr_llama_server.py", "--port", "9001"]
+    cwd: "{project_root}"
+    pythonpath: ["{project_root}"]
+    env:
+      LIGHTONOCR_WORKERS: "8"
+      LIGHTONOCR_THREADS: "12"
+      LIGHTONOCR_MAX_TOKENS: "2048"
+      LIGHTONOCR_TIMEOUT: "120"
+    health_path: /health
+    health_timeout: 60
+    model_label: LightOnOCR-2-1B-bbox
+    log: document_formalizer.log
+
+  - name: sd_server
+    port: 8190
+    optional: false
+    description: ERNIE-Image-Turbo diffusion via stable-diffusion.cpp native ggml
+    argv: ["bash", "{project_root}/scripts/diffusion/start_sd_server.sh"]
+    cwd: "{project_root}"
+    env:
+      SD_SERVER_PORT: "8190"
+    # sd-server has no /health endpoint; /sdapi/v1/samplers is the readiness proxy.
+    health_path: /sdapi/v1/samplers
+    health_timeout: 120
+    model_label: ernie-image-turbo-Q8_0.gguf + ministral-3-3b + flux2-vae (sd.cpp ggml native)
+    log: sd_server.log
+
+  - name: whisper
+    port: 9000
+    optional: true
+    # 2026-08-02 W4 IMPLEMENTATION SWAP, NOT A NEW PORT. :9000 previously ran
+    # faster-whisper (CTranslate2 int8) via
+    # epyc-inference-research/scripts/voice/whisper_server.py, which hardcodes
+    # device="cpu" — CTranslate2 4.7.2 has no ROCm backend at all, so that service
+    # was CPU-only regardless of configuration. This entry moves :9000 onto
+    # whisper.cpp @ production-speech-v1, which is a HIP build and uses the MI210.
+    #
+    # API DELTA the operator must know about:
+    #   kept    POST /v1/audio/transcriptions  (via --inference-path)
+    #   kept    GET  /health
+    #   LOST    POST /v1/audio/translations    (whisper.cpp exposes translation as a
+    #           `translate` form field on the inference path, not a separate route)
+    #   LOST    GET  /v1/models
+    #   WAV ONLY — whisper.cpp's --convert needs ffmpeg, which is NOT installed on
+    #           this host. faster-whisper accepted arbitrary containers. Do not set
+    #           --convert until ffmpeg exists.
+    description: whisper.cpp STT (large-v3-turbo, HIP/gfx90a)
+    backend: stt
+    argv: ["whisper-server",
+           "-m", "{llm_root}/models/whisper-ggml/ggml-large-v3-turbo.bin",
+           "--host", "127.0.0.1",
+           "--port", "9000",
+           "--inference-path", "/v1/audio/transcriptions",
+           "-t", "8"]
+    cwd: "{llm_root}/whisper.cpp"
+    verify_ggml_linkage: true
+    health_path: /health
+    health_timeout: 90
+    model_label: whisper.cpp large-v3-turbo (HIP gfx90a, ggml 0.18.0)
+    log: whisper.log
+
+  - name: tts
+    port: 9002
+    optional: true
+    # 2026-08-02 W4: first registration. No TTS process has ever run under stack
+    # management; 9002 was verified free before being claimed.
+    description: qwentts.cpp TTS server (Qwen3-TTS 12Hz 0.6B, HIP/gfx90a)
+    backend: tts
+    argv: ["tts-server",
+           "--model", "{llm_root}/models/Qwen3-TTS-qwentts/qwen-talker-0.6b-base-Q8_0.gguf",
+           "--codec", "{llm_root}/models/Qwen3-TTS-qwentts/qwen-tokenizer-12hz-Q8_0.gguf",
+           "--alias", "qwen3-tts-12hz-0.6b",
+           "--host", "127.0.0.1",
+           "--port", "9002"]
+    cwd: "{llm_root}/qwentts.cpp"
+    verify_ggml_linkage: true
+    health_path: /health
+    health_timeout: 90
+    model_label: Qwen3-TTS-12Hz-0.6B Talker Q8_0 + 12hz codec (HIP gfx90a, ggml 0.17.0)
+    log: tts.log
+
+  - name: handoff_dashboard
+    port: 8100
+    optional: false
+    description: epyc-root handoff progress hub (stdlib only, runs under any interpreter)
+    argv: ["{python}", "-m", "dashboard.server", "--host", "0.0.0.0", "--port", "8100"]
+    cwd: "{llm_root}/epyc-root"
+    pythonpath: ["{llm_root}/epyc-root"]
+    health_path: /health
+    health_timeout: 30
+    model_label: epyc-root handoff progress hub (stdlib)
+    log: handoff_dashboard.log

@@ -189,6 +189,26 @@ class RetiredRoleDerivationError(RuntimeError):
     """Raised when the retired-role set cannot be derived from its sources."""
 
 
+# Prefix for the THIRD outcome. PASS and FAIL are not the whole vocabulary: a
+# guard that cannot evaluate its condition must say so, loudly and non-zero,
+# because "I found no violations" and "I could not look" are different facts and
+# only one of them is an assurance. Emitted as an ERROR (never a warning), so the
+# gate goes red on the instrument failing exactly as it does on the invariant
+# failing.
+COULD_NOT_CHECK = "COULD-NOT-CHECK"
+
+
+class LaunchViewUnavailableError(RuntimeError):
+    """Raised when a launch-view input cannot be evaluated at all.
+
+    Deliberately an exception rather than a neutral return. ``{}`` / ``None`` /
+    ``[]`` are indistinguishable from "nothing to report", and every caller in
+    this file reads them as "no violations" — so a helper that returns one on an
+    import or parse failure converts an unknown into a false assurance. Raising
+    forces the caller to decide, and the caller records COULD-NOT-CHECK.
+    """
+
+
 def _has_retired_marker(record: Any) -> bool:
     if not isinstance(record, dict):
         return False
@@ -1004,11 +1024,26 @@ def _port_from_endpoint(endpoint: Any) -> int | None:
     return int(match.group(1))
 
 
-def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+def _load_yaml_mapping_or_error(path: Path, label: str) -> tuple[dict[str, Any], list[str]]:
+    """Load a launch-view input, reporting unreadability as an ERROR.
+
+    Replaces a ``try: ... except Exception: return {}`` helper. That version
+    handed the launch view an empty mapping whenever the registry or descriptor
+    file was missing or malformed, and the view built from it looked ordinary:
+    measured 2026-07-31 on a deliberately corrupted registry, alias_host
+    coverage went 6 -> 0 and launch_requirements 13 -> 7, while not one error
+    named the file that had failed to parse.
+
+    The degraded mapping is still returned so the remaining invariants keep
+    running — one broken input must not blind every other check — but the
+    failure is recorded, the same contract as ``_retired_live_roles_or_error``.
+    """
     try:
-        return _load_yaml(path)
-    except Exception:
-        return {}
+        return _load_yaml(path), []
+    except FileNotFoundError:
+        return {}, [f"{COULD_NOT_CHECK}: launch-view {label} is missing: {path}"]
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        return {}, [f"{COULD_NOT_CHECK}: launch-view {label} is unreadable ({path}): {exc}"]
 
 
 def _descriptor_by_role(descriptors: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1094,11 +1129,44 @@ def _launch_manifest_targets(
     registry_path: Path = DEFAULT_REGISTRY,
     descriptor_path: Path = DEFAULT_DESCRIPTORS,
 ) -> dict[str, dict[str, Any]]:
-    """Return live launch ports/tier per role from the computed manifest."""
+    """Return live launch ports/tier per role from the computed manifest.
+
+    Convenience wrapper for readers that only want the view. Anything that
+    GATES on the view must call `_launch_manifest_targets_or_error`: an empty
+    return here means "could not evaluate" exactly as often as it means
+    "nothing to report", and the two must not be collapsed at a gate.
+    """
+    targets, _errors = _launch_manifest_targets_or_error(
+        registry_path=registry_path,
+        descriptor_path=descriptor_path,
+    )
+    return targets
+
+
+def _launch_manifest_targets_or_error(
+    *,
+    registry_path: Path = DEFAULT_REGISTRY,
+    descriptor_path: Path = DEFAULT_DESCRIPTORS,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Build the launch view, reporting every input it could not evaluate.
+
+    The predecessor returned a bare `{}` when `scripts.server.stack_manifest`
+    failed to import, which is the whole launch view. Measured 2026-07-31 with
+    the import blocked: launch targets 22 -> 0 and launch-alignment errors
+    12 -> 0, i.e. the promotion gate went CLEAN because its instrument had
+    broken. A byte-hash check over the sources does not cover this — during an
+    import failure the file is byte-identical and unimportable at the same time.
+    """
+    errors: list[str] = []
     try:
         from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS, _filter_by_numa_mode
-    except Exception:
-        return {}
+    except Exception as exc:  # noqa: BLE001 — report the failure, never degrade to "clean"
+        return {}, [
+            f"{COULD_NOT_CHECK}: launch manifest view unavailable — "
+            f"scripts.server.stack_manifest did not import "
+            f"({type(exc).__name__}: {exc}); EVERY launch/serving alignment "
+            "assertion was skipped"
+        ]
 
     from scripts.server.stack_numa_mode import env_stack_numa_mode
 
@@ -1110,12 +1178,20 @@ def _launch_manifest_targets(
     numa_mode = _realized_launch_numa_mode()
     if numa_mode is None:
         numa_mode = env_stack_numa_mode()
-    registry = _load_yaml_mapping(registry_path)
+    registry, registry_errors = _load_yaml_mapping_or_error(registry_path, "registry")
+    errors.extend(registry_errors)
     registry_roles = registry.get("roles") if isinstance(registry.get("roles"), dict) else {}
     server_mode = (
         registry.get("server_mode") if isinstance(registry.get("server_mode"), dict) else {}
     )
-    descriptor_roles = _descriptor_by_role(_load_yaml_mapping(descriptor_path))
+    descriptors, descriptor_errors = _load_yaml_mapping_or_error(descriptor_path, "descriptors")
+    errors.extend(descriptor_errors)
+    descriptor_roles = _descriptor_by_role(descriptors)
+
+    # One report per cause, not one per server: the failure is an instrument
+    # fact, and 23 copies of it would bury the invariant errors underneath.
+    requirements_unavailable: str | None = None
+    context_unavailable: str | None = None
 
     targets: dict[str, dict[str, Any]] = {}
     for tier, servers in (
@@ -1128,6 +1204,16 @@ def _launch_manifest_targets(
             port = server.get("port")
             if not isinstance(port, int):
                 continue
+            try:
+                server_context = _effective_context_for_server(server)
+            except LaunchViewUnavailableError as exc:
+                server_context = None
+                context_unavailable = context_unavailable or str(exc)
+            try:
+                server_requirements = _launch_requirements_for_server(server)
+            except LaunchViewUnavailableError as exc:
+                server_requirements = {}
+                requirements_unavailable = requirements_unavailable or str(exc)
             for role in server.get("roles") or []:
                 if isinstance(role, str):
                     target = targets.setdefault(
@@ -1136,7 +1222,7 @@ def _launch_manifest_targets(
                             "port": port,
                             "ports": [],
                             "tier": tier,
-                            "effective_context_tokens": _effective_context_for_server(server),
+                            "effective_context_tokens": server_context,
                             "launch_entries": [],
                             "launch_requirements": {},
                             "port_shape_classes": {},
@@ -1148,9 +1234,7 @@ def _launch_manifest_targets(
                     entry_shape_class = entry.get("cpu_shape_class")
                     if isinstance(entry_shape_class, str) and entry_shape_class:
                         target["port_shape_classes"][port] = entry_shape_class
-                    target["launch_requirements"].update(
-                        _launch_requirements_for_server(server)
-                    )
+                    target["launch_requirements"].update(server_requirements)
     # WP-13: attach the declarative alias→host relation from server_mode
     # shared_with. evidence.alias_overrides only exists for MODEL-conflicted
     # aliases (worker_math's ghost binding); same-model aliases
@@ -1201,7 +1285,23 @@ def _launch_manifest_targets(
             role_cfg,
             _launch_cfg_from_target(target),
         )
-    return targets
+
+    # The target COUNT is unchanged when these fail, which is what made the
+    # 2026-07-31 reproduction invisible: 22 targets reported, 0 of 22 context
+    # assertions actually evaluated. Report the skip explicitly.
+    if context_unavailable:
+        errors.append(
+            f"{COULD_NOT_CHECK}: launch context unavailable for all {len(targets)} "
+            f"launch target(s) — {context_unavailable}; every "
+            "serving.effective_context_tokens assertion was skipped"
+        )
+    if requirements_unavailable:
+        errors.append(
+            f"{COULD_NOT_CHECK}: launch requirements unavailable for all {len(targets)} "
+            f"launch target(s) — {requirements_unavailable}; every "
+            "serving.launch.requirements assertion was skipped"
+        )
+    return targets, errors
 
 
 def _launch_mode_for_server(server: dict[str, Any]) -> str:
@@ -1260,8 +1360,15 @@ def _launch_requirements_for_server(server: dict[str, Any]) -> dict[str, str]:
             VISION_WORKER_MODEL,
             WORKER_POOL_MODELS,
         )
-    except Exception:
-        return {}
+    except Exception as exc:  # noqa: BLE001 — raise, never return "no requirements"
+        # Returning `{}` here made every model-path comparison vanish while the
+        # guard still reported the same number of launch targets: measured
+        # 2026-07-31, poisoned model paths detected 10/10 -> 8/10 with no
+        # indication that two roles had stopped being checked.
+        raise LaunchViewUnavailableError(
+            f"scripts.server.stack_manifest launch-path constants did not import "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
 
     requirements: dict[str, str] = {}
     mode = _launch_mode_for_server(server)
@@ -1298,8 +1405,15 @@ def _effective_context_for_server(server: dict[str, Any]) -> int | None:
             DEFAULT_EFFECTIVE_CONTEXT_TOKENS,
             LAUNCH_CONTEXT_TOKENS,
         )
-    except Exception:
-        return None
+    except Exception as exc:  # noqa: BLE001 — raise, never return "no context"
+        # `None` is also the legitimate "this server declares no primary role"
+        # answer, so returning it on an import failure hid the failure inside a
+        # normal-looking result: 0 of 22 roles context-checked, target count
+        # unchanged, guard green (measured 2026-07-31).
+        raise LaunchViewUnavailableError(
+            f"scripts.server.stack_manifest context constants did not import "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
 
     roles = server.get("roles")
     role = roles[0] if isinstance(roles, list) and roles and isinstance(roles[0], str) else None
@@ -1477,19 +1591,42 @@ def validate_launch_manifest_serving_alignment(
     descriptor_path: Path = DEFAULT_DESCRIPTORS,
 ) -> list[str]:
     """Validate generated live serving records against current launch roles."""
-    targets = (
-        _launch_manifest_targets(registry_path=registry_path, descriptor_path=descriptor_path)
-        if launch_manifest_targets is None
-        else launch_manifest_targets
-    )
+    errors: list[str] = []
+    if launch_manifest_targets is None:
+        targets, view_errors = _launch_manifest_targets_or_error(
+            registry_path=registry_path, descriptor_path=descriptor_path
+        )
+        errors.extend(view_errors)
+        derived_view = True
+    else:
+        targets = launch_manifest_targets
+        # An injected view is a caller-authored stub, not the producer's own
+        # launch view, so it cannot be held to the producer's checklist below —
+        # a fixture that omits a field omitted it on purpose. Production never
+        # injects: `main()` and `stack_change_pipeline` both leave this None, so
+        # the derived path is THE consumer and keeps the full checklist.
+        derived_view = False
+
     if not targets:
-        return []
+        # NOT `return []`. An empty launch view is this guard's own instrument
+        # failing, and reporting "no alignment errors" on it takes the promotion
+        # gate clean on precisely the condition the gate exists to catch
+        # (measured 2026-07-31: targets 22 -> 0 took alignment errors 12 -> 0).
+        errors.append(
+            f"{COULD_NOT_CHECK}: launch manifest produced 0 launch targets, so no "
+            "launch/serving alignment could be evaluated at all"
+        )
+        return errors
 
     roles = priors.get("roles")
     if not isinstance(roles, dict):
-        return []
+        # This early return LOOKS like the one above and is not fail-open: a
+        # second reader, `validate_stack_priors`, independently re-reads
+        # `priors['roles']` and appends "stack priors artifact has no
+        # mapping-valued roles section". Returning here is only safe because
+        # that reader exists — do not delete it, and do not duplicate it here.
+        return errors
 
-    errors: list[str] = []
     live_roles = _live_prior_roles(roles)
     full_launch_coverage_required = priors.get("coverage_scope") != "explicit_active_roles"
     for role, target in sorted(targets.items()):
@@ -1555,6 +1692,33 @@ def validate_launch_manifest_serving_alignment(
             target.get("launch_requirements")
         )
         target_launch_runtime = _normalized_launch_runtime(target.get("launch_runtime"))
+
+        # Derive the checklist from the PRODUCER, not from whatever the launch
+        # view managed to compute. Every comparison below is guarded by "did the
+        # launch view produce a value?", so any cause of that value going
+        # missing — a failed import, a refactor that stops populating the field,
+        # a test seam left in place — silently deletes the assertion instead of
+        # failing it. The compiled priors are the producer here: if a role
+        # DECLARES the fact, the fact is checkable, and a launch view that
+        # cannot supply the counterpart is a COULD-NOT-CHECK, not a pass.
+        declared_launch = serving.get("launch") if isinstance(serving.get("launch"), dict) else {}
+        declared_requirements = _normalized_launch_requirements(
+            declared_launch.get("requirements")
+        )
+        if derived_view and declared_requirements and not target_launch_requirements:
+            errors.append(
+                f"{COULD_NOT_CHECK}: role {role!r} declares serving.launch.requirements "
+                f"{sorted(declared_requirements)} but the launch view produced none; "
+                "the requirement comparison was skipped, not passed"
+            )
+        declared_context = serving.get("effective_context_tokens")
+        if derived_view and isinstance(declared_context, int) and not isinstance(target_context, int):
+            errors.append(
+                f"{COULD_NOT_CHECK}: role {role!r} declares serving.effective_context_tokens "
+                f"{declared_context} but the launch view produced none; the context "
+                "comparison was skipped, not passed"
+            )
+
         endpoint_port = _port_from_endpoint(serving.get("endpoint"))
         ports = serving.get("ports")
         port_set = {port for port in ports if isinstance(port, int)} if isinstance(ports, list) else set()
@@ -2334,6 +2498,13 @@ def validate_procedure_role_enums(
             if raw_procedure_path.is_absolute()
             else repo_root / raw_procedure_path
         )
+    # A default artifact path resolved against a FOREIGN repo root is genuinely
+    # absent-by-construction (fixtures, sibling checkouts) — same carve-out the
+    # surface-exception loader already applies. Everywhere else, "the artifact I
+    # exist to check is not there" is an error, exactly as a missing
+    # `source_artifacts.<label>` is an error in `validate_stack_priors`: a check
+    # you can pass by DELETING the thing it inspects is not a check.
+    default_paths_for_other_repo = repo_root.resolve() != REPO_ROOT.resolve()
     if resolved_procedure_path.exists():
         expected = stack_prior_role_choices(priors, retired_roles=retired_roles)
         actual = _procedure_input_enum(resolved_procedure_path, "role")
@@ -2347,6 +2518,12 @@ def validate_procedure_role_enums(
                 f"from stack priors, got {actual} "
                 "[run: scripts/registry/sync_procedure_role_enums.py]"
             )
+    elif raw_procedure_path is not None or not default_paths_for_other_repo:
+        errors.append(
+            f"{COULD_NOT_CHECK}: procedure artifact is missing: "
+            f"{_display_path(resolved_procedure_path, repo_root)}; the role-enum "
+            "comparison was skipped, not passed"
+        )
 
     raw_schema_path = schema_path
     if raw_schema_path is None:
@@ -2371,6 +2548,12 @@ def validate_procedure_role_enums(
                 f"got {actual_permissions} "
                 "[run: scripts/registry/sync_procedure_role_enums.py]"
             )
+    elif raw_schema_path is not None or not default_paths_for_other_repo:
+        errors.append(
+            f"{COULD_NOT_CHECK}: procedure schema artifact is missing: "
+            f"{_display_path(resolved_schema_path, repo_root)}; the permission-enum "
+            "comparison was skipped, not passed"
+        )
     return errors
 
 
