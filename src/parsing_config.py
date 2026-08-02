@@ -37,7 +37,6 @@ PARSING_CONFIG: dict[str, ParsingMode] = {
     "coder_escalation": ParsingMode.INSTRUCTOR,
     "architect_general": ParsingMode.INSTRUCTOR,
     "ingest_long_context": ParsingMode.NONE,  # Returns summaries
-    "thinking_reasoning": ParsingMode.NONE,  # Returns reasoning chains
     # Tier C - Workers, mostly plain text
     "worker_general": ParsingMode.NONE,
     "worker_math": ParsingMode.NONE,

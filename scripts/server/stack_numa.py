@@ -288,6 +288,40 @@ _CPU_SHAPES: dict[str, tuple[str, int]] = {
     "GPU_HOST_LANE": GPU_HOST_LANE,
 }
 
+# ── SHAPE CLASSES (2026-08-02) ───────────────────────────────────────────────
+# The equivalence classes over the host shapes above. A CLASS is what a MODEL
+# can meaningfully have an opinion about ("how many concurrent slots do I want
+# on a half-size instance"); a SHAPE is the machine fact underneath it ("which
+# 48 physical cores, which two NPS4 nodes").
+#
+# This table is the whole reason the master registry can declare
+# `slots_by_shape: {full: 16, half: 4}` without learning anything about cpusets.
+# It lives HERE, with the shapes, because it is derived from them and from
+# nothing else — mapping NUMA_HALF_B to "half" is not a decision anyone may
+# make differently, it is a restatement of the shape's size. There is
+# deliberately NO role -> class table anywhere: the class of an instance is
+# looked up from the `cpu_shape` its stack_topology.yaml entry already declares.
+#
+# NUMA_NODE0/NUMA_NODE1 are classed "half" because their CPUSETS are exactly
+# the halves' (see the NPS2-era naming warning above); only their thread counts
+# differ, and no current instance names them.
+_SHAPE_CLASSES: dict[str, str] = {
+    "NUMA_Q0A": "quarter",
+    "NUMA_Q0B": "quarter",
+    "NUMA_Q1A": "quarter",
+    "NUMA_Q1B": "quarter",
+    "NUMA_NODE0": "half",
+    "NUMA_NODE1": "half",
+    "NUMA_FULL": "full",
+    "NUMA_HALF_A": "half",
+    "NUMA_HALF_B": "half",
+    "GPU_HOST_LANE": "gpu_host_lane",
+}
+
+# The classes a declaration may name. Exported so the registry-side guard can
+# reject a typo (`halve: 4`) instead of silently falling back to the flat value.
+CPU_SHAPE_CLASSES: frozenset[str] = frozenset(_SHAPE_CLASSES.values())
+
 _INSTANCE_FIELDS = frozenset({"cpu_shape", "port"})
 _ROLE_FIELDS = frozenset(
     {
@@ -303,8 +337,15 @@ _ROLE_FIELDS = frozenset(
 )
 
 
-def _load_numa_config(path: Path | None = None) -> dict[str, dict]:
+def _load_numa_config(path: Path | None = None) -> tuple[dict[str, dict], dict[str, tuple[str, ...]]]:
     """Load the declared per-role NUMA wiring from stack_topology.yaml.
+
+    Returns ``(NUMA_CONFIG, shape_names_by_role)``. The second element preserves
+    the per-instance ``cpu_shape`` NAME, which the tuple form of ``instances``
+    throws away — ``(cpu_list, port, threads)`` is unpacked positionally by the
+    launcher, the placement state machine, the contention model and
+    instance_topology, so it must stay exactly three wide. The shape name is
+    carried alongside instead of being wedged into the tuple.
 
     No fallback table, no defaults, no `except: return {}`. A launcher that
     cannot read its own wiring must fail at IMPORT — a fail-open default here is
@@ -330,6 +371,7 @@ def _load_numa_config(path: Path | None = None) -> dict[str, dict]:
         raise ValueError(f"stack_numa: {topology_path} declares no non-empty 'numa_config'")
 
     config: dict[str, dict] = {}
+    shape_names: dict[str, tuple[str, ...]] = {}
     for role, raw in declared.items():
         if not isinstance(raw, dict):
             raise ValueError(f"stack_numa: numa_config['{role}'] must be a mapping")
@@ -344,6 +386,7 @@ def _load_numa_config(path: Path | None = None) -> dict[str, dict]:
             raise ValueError(f"stack_numa: numa_config['{role}'] declares no instances")
 
         instances: list[tuple[str, int, int]] = []
+        role_shapes: list[str] = []
         for idx, entry in enumerate(raw_instances):
             if not isinstance(entry, dict):
                 raise ValueError(f"stack_numa: numa_config['{role}'].instances[{idx}] must be a mapping")
@@ -366,16 +409,39 @@ def _load_numa_config(path: Path | None = None) -> dict[str, dict]:
                 )
             cpu_list, threads = _CPU_SHAPES[shape_name]
             instances.append((cpu_list, port, threads))
+            role_shapes.append(str(shape_name))
 
         cfg: dict = {"instances": instances}
         for field in raw:
             if field != "instances":
                 cfg[field] = raw[field]
         config[role] = cfg
-    return config
+        shape_names[role] = tuple(role_shapes)
+    return config, shape_names
 
 
-NUMA_CONFIG: dict[str, dict] = _load_numa_config()
+NUMA_CONFIG, NUMA_INSTANCE_SHAPES = _load_numa_config()
+
+# role -> per-instance SHAPE CLASS, index-aligned with NUMA_CONFIG[role]["instances"].
+# This is the launcher-side half of the per-instance `-np` join: the master
+# registry declares slots per CLASS, this says which class each instance is, and
+# src/registry/stack_priors.py multiplies the two together.
+NUMA_INSTANCE_SHAPE_CLASSES: dict[str, tuple[str, ...]] = {
+    role: tuple(_SHAPE_CLASSES[name] for name in names)
+    for role, names in NUMA_INSTANCE_SHAPES.items()
+}
+
+
+def instance_shape_class(role: str, instance_idx: int = 0) -> str | None:
+    """Shape class of one declared instance, or None when the role/index is unknown.
+
+    None is NOT a default — callers must treat it as "no per-shape declaration
+    applies" and fall back to the role's flat slot count, never to a guess.
+    """
+    classes = NUMA_INSTANCE_SHAPE_CLASSES.get(role)
+    if not classes or not (0 <= instance_idx < len(classes)):
+        return None
+    return classes[instance_idx]
 
 # Roles that should use --mlock (requires ulimit -l unlimited in launch env)
 MLOCK_ROLES = {role for role, cfg in NUMA_CONFIG.items() if cfg.get("mlock")}

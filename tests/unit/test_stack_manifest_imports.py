@@ -216,10 +216,26 @@ def test_eval_batch_frontdoor_is_warm_launcher_only() -> None:
 
 
 def test_launch_kv_quant_configs_keep_canonical_worker_roles_only() -> None:
+    """2026-08-02: the table is DERIVED from master, so its keys follow master.
+
+    `worker_explore` used to be absent because the hand-written
+    `launch_shape.kv_quant_configs` simply did not list it. That table is deleted;
+    the entries now come from `server_mode.<role>.serving_shape.kv_quant` resolved
+    over every role name the launcher can be asked about, and worker_explore is a
+    declared `shared_with` alias of `worker` — it rides that process and therefore
+    genuinely has that process's KV types. Its presence is the derivation working,
+    not drift. What the test still pins is that no alias contradicts its host.
+    """
     from scripts.server.stack_manifest import LAUNCH_KV_QUANT_CONFIGS
 
-    assert "worker_explore" not in LAUNCH_KV_QUANT_CONFIGS
     assert LAUNCH_KV_QUANT_CONFIGS["worker_general"] == ("q8_0", "q8_0")
+    for alias in ("worker_explore", "worker_math", "toolrunner"):
+        assert LAUNCH_KV_QUANT_CONFIGS[alias] == LAUNCH_KV_QUANT_CONFIGS["worker_general"]
+    assert LAUNCH_KV_QUANT_CONFIGS["worker_summarize"] == LAUNCH_KV_QUANT_CONFIGS["frontdoor"]
+    # worker_vision stays ABSENT: it declares no kv_quant, so no -ctk/-ctv is
+    # emitted and llama-server's f16 default stands. A q8_0 VL quality check is
+    # running separately; do not pre-empt it by adding a row.
+    assert "worker_vision" not in LAUNCH_KV_QUANT_CONFIGS
 
 
 def test_validate_against_registry_checks_port_map_alias_drift(
@@ -366,3 +382,220 @@ def test_math_tools_path_supports_subproject_build() -> None:
     assert "build/bin/llama-math-tools" in str(
         LLAMA_MATH_TOOLS
     ) or "tools/math-tools/build/llama-math-tools" in str(LLAMA_MATH_TOOLS)
+
+
+# =============================================================================
+# Phase 2 — declaration derivation + parity guard
+# =============================================================================
+# `slots`, `device` and the role alias lists are DERIVED from the master
+# registry instead of restated in launch_manifest.yaml. These tests pin both
+# halves of that: the derivation produces the declared value, and the guard
+# that keeps a second copy from reappearing actually raises.
+
+
+def test_resolve_slots_returns_the_master_declaration_not_the_serial_policy() -> None:
+    """`-np` must come from server_mode.<role>.slots, never from SERIAL_ROLES.
+
+    frontdoor and architect_critic are IN SERIAL_ROLES and DECLARE their slots;
+    the old launcher formula (`1 if role in SERIAL_ROLES else 2`) answered the
+    admission question with a serving number and returned 1 for both.
+
+    The declared values moved on 2026-08-02 (frontdoor 2 -> 16, architect_critic
+    2 -> 4, operator-ratified), so this compares against the DECLARATION rather
+    than a literal — the property under test is "resolve_slots returns what master
+    says", which must survive master saying something different.
+    """
+    from scripts.server.stack_manifest import DECLARED_SLOTS, SERIAL_ROLES, resolve_slots
+
+    for role in ("frontdoor", "architect_critic"):
+        assert role in SERIAL_ROLES
+        decision = resolve_slots(role, "default")
+        assert decision.slots == DECLARED_SLOTS[role]
+        assert decision.slots > 1, "a serial role must still not be clamped to 1 slot"
+        assert decision.declared
+        assert decision.source.startswith("master:")
+
+
+def test_resolve_slots_is_per_instance_for_a_split_role() -> None:
+    """One role, two shapes, two answers — what a per-role `slots` cannot express."""
+    from scripts.server.stack_manifest import declared_slots_by_port, resolve_slots
+
+    for role, full_port, half_ports in (
+        ("frontdoor", 8070, (8080, 8180)),
+        ("worker_general", 8072, (8082, 8182)),
+    ):
+        full = resolve_slots(role, numa_instance=0)
+        assert full.slots == 16
+        assert full.source.endswith(".full")
+        for idx in (1, 2):
+            half = resolve_slots(role, numa_instance=idx)
+            assert half.slots == 4
+            assert half.source.endswith(".half")
+        assert declared_slots_by_port(role) == {full_port: 16, half_ports[0]: 4, half_ports[1]: 4}
+
+    # A single-shape role has no split and resolves through the flat compat scalar.
+    gpu = resolve_slots("architect_general", numa_instance=0)
+    assert (gpu.slots, gpu.source) == (8, "master:architect_general/direct")
+
+
+def test_resolve_slots_matches_master_for_every_declared_role() -> None:
+    from scripts.server.stack_manifest import DECLARED_SLOTS, resolve_slots
+
+    registry = yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text()
+    )["server_mode"]
+
+    assert DECLARED_SLOTS, "master declares slots for at least the serving roles"
+    for role, slots in DECLARED_SLOTS.items():
+        decision = resolve_slots(role)
+        assert decision.slots == slots
+        master_role = decision.source.split(":", 1)[1].split("/", 1)[0]
+        assert registry[master_role]["slots"] == slots
+
+
+def test_resolve_slots_labels_its_fallback_source() -> None:
+    """An undeclared role gets the manifest fallback AND says so.
+
+    A fallback that is indistinguishable from a declaration is how "master says
+    1 and we launched 2" stayed invisible.
+    """
+    from scripts.server.stack_manifest import FALLBACK_SLOTS, resolve_slots
+
+    decision = resolve_slots("embedder", "embedding")
+    assert not decision.declared
+    assert decision.source == "manifest:fallback_slots.embedding"
+    assert decision.slots == FALLBACK_SLOTS["embedding"]
+
+    fast = resolve_slots("worker_fast", "worker_pool", worker_type="fast")
+    assert fast.source == "manifest:fallback_slots.worker_pool_fast"
+    assert fast.slots == 4
+
+
+def test_vision_device_is_derived_from_master() -> None:
+    from scripts.server.stack_manifest import VISION_WORKER_DEVICE
+
+    registry = yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text()
+    )["server_mode"]
+    assert VISION_WORKER_DEVICE == registry["worker_vision"]["device"]
+
+    manifest = yaml.safe_load(
+        (ROOT / "orchestration" / "launch_manifest.yaml").read_text()
+    )
+    assert "device" not in manifest["vision"]["worker"], (
+        "vision.worker must not re-declare a device — it is derived from master"
+    )
+
+
+def test_role_aliases_are_derived_from_master_plus_declared_extras() -> None:
+    from scripts.server.stack_manifest import ROLE_LAUNCH_META
+
+    registry = yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text()
+    )["server_mode"]
+    manifest = yaml.safe_load(
+        (ROOT / "orchestration" / "launch_manifest.yaml").read_text()
+    )["role_launch_meta"]
+
+    def master_shared(launcher_role: str) -> list[str]:
+        row = registry.get(launcher_role)
+        if not isinstance(row, dict):
+            row = next(
+                (cfg for cfg in registry.values() if cfg.get("model_role") == launcher_role),
+                None,
+            )
+        return list((row or {}).get("shared_with") or [])
+
+    for role, meta in ROLE_LAUNCH_META.items():
+        extras = list(manifest[role].get("launcher_only_aliases") or [])
+        expected = extras + [a for a in master_shared(role) if a not in extras]
+        assert meta.get("shared_with_first_n", []) == expected, role
+        assert "shared_with_first_n" not in manifest[role], (
+            f"{role} re-declares shared_with_first_n; it is derived from master"
+        )
+
+
+def test_parity_guard_passes_on_the_shipped_configuration() -> None:
+    from scripts.server.stack_manifest import validate_declaration_parity
+
+    validate_declaration_parity()
+
+
+@pytest.mark.parametrize(
+    "label,target,key,value",
+    [
+        ("launcher port drifts", "PORT_MAP", "frontdoor", 8071),
+        ("launcher tier drifts", "ROLE_LAUNCH_META.frontdoor", "tier", "warm"),
+    ],
+)
+def test_parity_guard_fails_when_a_launcher_row_drifts(
+    label: str, target: str, key: str, value: object, monkeypatch
+) -> None:
+    from scripts.server import stack_manifest as sm
+
+    if "." in target:
+        attr, sub = target.split(".", 1)
+        container = dict(getattr(sm, attr))
+        container[sub] = {**container[sub], key: value}
+        monkeypatch.setattr(sm, attr, container)
+    else:
+        container = dict(getattr(sm, target))
+        container[key] = value
+        monkeypatch.setattr(sm, target, container)
+
+    with pytest.raises(ValueError, match="parity violated"):
+        sm.validate_declaration_parity()
+
+
+def test_parity_guard_fails_when_master_drifts(monkeypatch) -> None:
+    from scripts.server import stack_manifest as sm
+
+    mutated = {
+        name: ({**cfg, "port": 9999} if name == "frontdoor" else cfg)
+        for name, cfg in sm.MASTER_SERVER_MODE.items()
+    }
+    monkeypatch.setattr(sm, "MASTER_SERVER_MODE", mutated)
+
+    with pytest.raises(ValueError, match="parity violated"):
+        sm.validate_declaration_parity()
+
+
+def test_parity_guard_fails_when_a_derived_field_is_redeclared(monkeypatch) -> None:
+    from scripts.server import stack_manifest as sm
+
+    manifest = {**sm._MANIFEST}
+    manifest["vision"] = {
+        **manifest["vision"],
+        "worker": {**manifest["vision"]["worker"], "device": "ROCm0"},
+    }
+    monkeypatch.setattr(sm, "_MANIFEST", manifest)
+
+    with pytest.raises(ValueError, match="DERIVED from master"):
+        sm.validate_declaration_parity()
+
+
+def test_parity_guard_fails_on_an_unargued_launcher_only_alias(monkeypatch) -> None:
+    from scripts.server import stack_manifest as sm
+
+    monkeypatch.setattr(sm, "_PARITY", {**sm._PARITY, "exceptions": []})
+
+    with pytest.raises(ValueError, match="written reason"):
+        sm.validate_declaration_parity()
+
+
+def test_parity_guard_fails_on_a_stale_exception(monkeypatch) -> None:
+    """When master starts declaring the alias, the exception must be deleted."""
+    from scripts.server import stack_manifest as sm
+
+    mutated = {
+        name: (
+            {**cfg, "shared_with": ["worker_explore", *cfg.get("shared_with", [])]}
+            if name == "worker"
+            else cfg
+        )
+        for name, cfg in sm.MASTER_SERVER_MODE.items()
+    }
+    monkeypatch.setattr(sm, "MASTER_SERVER_MODE", mutated)
+
+    with pytest.raises(ValueError, match="no longer launcher-only"):
+        sm.validate_declaration_parity()

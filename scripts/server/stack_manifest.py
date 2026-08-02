@@ -25,10 +25,16 @@ correct and a local literal won anyway. Data does not invite that.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import yaml
 
-from scripts.server.stack_numa import NUMA_CONFIG
+from scripts.server.stack_numa import (
+    CPU_SHAPE_CLASSES,
+    NUMA_CONFIG,
+    NUMA_INSTANCE_SHAPE_CLASSES,
+    instance_shape_class,
+)
 from scripts.server.stack_paths import LLAMA_MATH_TOOLS, _V2_ROLES, _PATHS
 
 
@@ -36,7 +42,23 @@ from scripts.server.stack_paths import LLAMA_MATH_TOOLS, _V2_ROLES, _PATHS
 # Declared-data loader
 # =============================================================================
 
-_LAUNCH_MANIFEST_PATH = Path(__file__).resolve().parents[2] / "orchestration" / "launch_manifest.yaml"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_LAUNCH_MANIFEST_PATH = _REPO_ROOT / "orchestration" / "launch_manifest.yaml"
+# ⚠ NAME IS A TRAP, KEPT ONLY FOR CALLER COMPATIBILITY. This is the orchestrator's
+# COMPILED LEAN registry, NOT the research master at
+# /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml.
+# The two have the same basename and the lean one is a projection of the other.
+#
+# Reading the compiled artifact is the CORRECT choice — it is what the orchestrator
+# actually consumes, and master->lean is guarded separately by the compile chain.
+# But the name and the docstring below both say "MASTER", and that cost a debugging
+# cycle on 2026-08-02: an edit to the real master appeared to be ignored by the
+# parity guard until `registry_compiler --force` had run. That is expected behaviour,
+# not a bug — the guard simply could not see a change that had not been compiled yet.
+#
+# If you edit the research master, RECOMPILE before expecting this guard to react.
+_LEAN_REGISTRY_PATH = _REPO_ROOT / "orchestration" / "model_registry.yaml"
+_MASTER_REGISTRY_PATH = _LEAN_REGISTRY_PATH  # legacy alias; prefer _LEAN_REGISTRY_PATH
 
 # Path placeholders the manifest may use. Substitution is literal, not
 # str.format, so a value containing braces for some other reason is left alone
@@ -60,8 +82,10 @@ _REQUIRED_MANIFEST_SECTIONS = (
     "embedding",
     "vision",
     "launch_shape",
+    "capacity",
     "gpu_shadow_lane",
     "orchestrator_profiles",
+    "parity",
     "docker_services",
 )
 
@@ -104,7 +128,116 @@ def _load_launch_manifest(path: Path | None = None) -> dict:
     return _expand_paths(document)
 
 
+def _load_master_registry(path: Path | None = None) -> dict:
+    """Load the COMPILED LEAN registry — master's projection, not master itself.
+
+    See the note on ``_LEAN_REGISTRY_PATH``: same basename as the research master,
+    different file. Edits to the research master are invisible here until
+    ``registry_compiler --force`` has run.
+
+    Same contract as ``_load_launch_manifest``: no fallback, no partial load.
+    Phase 2 made the launcher READ master for `slots`, `device` and the role
+    aliases instead of restating them, so master is now a hard input to the
+    launcher's configuration rather than something it is merely cross-checked
+    against. A launcher that cannot read it must fail at import; guessing is
+    the failure mode the whole refactor exists to remove.
+    """
+    registry_path = _MASTER_REGISTRY_PATH if path is None else path
+    try:
+        document = yaml.safe_load(registry_path.read_text())
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"stack_manifest: master registry missing at {registry_path}. The launcher "
+            f"derives slots/device/aliases from it and has no fallback copy by design."
+        ) from exc
+    if not isinstance(document, dict):
+        raise ValueError(f"stack_manifest: {registry_path} did not parse to a mapping")
+    server_mode = document.get("server_mode")
+    if not isinstance(server_mode, dict) or not server_mode:
+        raise ValueError(
+            f"stack_manifest: {registry_path} has no usable `server_mode:` section"
+        )
+    return document
+
+
 _MANIFEST = _load_launch_manifest()
+_MASTER = _load_master_registry()
+
+# The master registry's per-server declarations, keyed by MASTER role name. Note
+# that master and the launcher do not always use the same name for the same
+# process (master says `worker`, the launcher says `worker_general`), which is
+# what `master_server_row()` below exists to bridge.
+MASTER_SERVER_MODE: dict[str, dict] = {
+    name: cfg for name, cfg in _MASTER["server_mode"].items() if isinstance(cfg, dict)
+}
+
+
+def master_server_row(role: str) -> tuple[str | None, dict | None, str]:
+    """Resolve a LAUNCHER role name to the master `server_mode` row that governs it.
+
+    Returns ``(master_role_name, row, binding)``. The search order mirrors
+    ``src/registry/stack_priors._server_for_role`` exactly — a divergence in the
+    binding rules would mean the compiled priors and the launcher fallback
+    disagreed about which declaration applies, which is the same bug one level up:
+      1. a row named for the role itself,
+      2. a row whose ``model_role`` is the role (master `worker` -> `worker_general`),
+      3. a row whose ``shared_with`` contains the role (aliases).
+    ``binding`` is "unresolved" when master says nothing about the role.
+    """
+    direct = MASTER_SERVER_MODE.get(role)
+    if isinstance(direct, dict):
+        return role, direct, "direct"
+    for name, cfg in MASTER_SERVER_MODE.items():
+        if cfg.get("model_role") == role:
+            return name, cfg, "model_role"
+        shared_with = cfg.get("shared_with")
+        if isinstance(shared_with, list) and role in shared_with:
+            return name, cfg, "shared_with"
+    return None, None, "unresolved"
+
+
+# The master registry's KV-FEASIBILITY GROUP. `n_ctx`, `slots_by_shape` and
+# `kv_quant` are declared together under `server_mode.<role>.serving_shape`
+# because they are not independent: KV bytes are
+# `KiB_per_token(model, kv_quant) * n_ctx`, and per-slot context is
+# `n_ctx / slots`. See the long comment above `frontdoor:` in the master
+# registry for the full argument.
+SERVING_SHAPE_KEY = "serving_shape"
+
+
+def master_serving_shape(role: str) -> tuple[dict, str | None]:
+    """Master's ``serving_shape`` block for a LAUNCHER role name, if it has one."""
+    name, row, binding = master_server_row(role)
+    if row is None:
+        return {}, None
+    shape = row.get(SERVING_SHAPE_KEY)
+    if not isinstance(shape, dict) or not shape:
+        return {}, None
+    return shape, f"{name}/{binding}.{SERVING_SHAPE_KEY}"
+
+
+def master_declared(role: str, key: str) -> tuple[Any, str | None]:
+    """Return ``(value, "<master_role>/<binding>")`` for a master-declared field.
+
+    ``(None, None)`` when master declares nothing for that role/field.
+
+    The grouped ``serving_shape`` block is consulted FIRST, then the flat key.
+    Back-compat is a READ path, not a write path: a row that has not migrated
+    (today only ``coder_escalation``, an alias with no serving shape of its own)
+    still resolves through the flat key, but a row that HAS migrated must not
+    keep a flat copy — ``validate_declaration_parity`` rejects that, because two
+    live copies of one number is exactly what the grouping removes.
+    """
+    name, row, binding = master_server_row(role)
+    if row is None:
+        return None, None
+    shape = row.get(SERVING_SHAPE_KEY)
+    if isinstance(shape, dict) and shape.get(key) is not None:
+        return shape[key], f"{name}/{binding}.{SERVING_SHAPE_KEY}"
+    value = row.get(key)
+    if value is None:
+        return None, None
+    return value, f"{name}/{binding}"
 
 
 # =============================================================================
@@ -162,12 +295,53 @@ SERIAL_ROLES = set(_MANIFEST["serial_roles"])
 # A consistency check (`_validate_role_classification()` below) catches
 # common mismatches at module load time.
 
-# Per-role launch metadata. Source of truth for tier classification + launch
-# mode. Insertion order is load-bearing — HOT_SERVERS/WARM_SERVERS are emitted
-# in it — and YAML mapping order is preserved on load.
-ROLE_LAUNCH_META: dict[str, dict] = {
-    role: dict(meta) for role, meta in _MANIFEST["role_launch_meta"].items()
-}
+def _derived_aliases(role: str, meta: dict) -> list[str]:
+    """Aliases that ride this role's process: launcher-only extras, then master's.
+
+    Master's ``server_mode.<role>.shared_with`` is the declaration; the launcher
+    used to keep a parallel ``shared_with_first_n`` list beside it, and the two
+    drifted (master narrowed frontdoor's list at the W1 cutover while the
+    launcher copy had to be edited separately in the same commit to keep up).
+
+    ``launcher_only_aliases`` carries names master does not list — today only
+    worker_explore, whose case is argued in launch_manifest.yaml. Extras LEAD so
+    the emitted roles list keeps its historical order; the order is not
+    functionally load-bearing (every alias resolves to the same port) but it
+    surfaces in fleet markers and state keys, so it is worth not churning.
+    """
+    extras = [str(alias) for alias in meta.get("launcher_only_aliases") or []]
+    shared_with, _source = master_declared(role, "shared_with")
+    declared = [str(alias) for alias in shared_with or [] if isinstance(alias, str)]
+    return extras + [alias for alias in declared if alias not in extras]
+
+
+def _build_role_launch_meta() -> dict[str, dict]:
+    """Per-role launch metadata, with the alias list DERIVED from master.
+
+    Insertion order is load-bearing — HOT_SERVERS/WARM_SERVERS are emitted in it
+    — and YAML mapping order is preserved on load.
+    """
+    out: dict[str, dict] = {}
+    for role, declared_meta in _MANIFEST["role_launch_meta"].items():
+        meta = dict(declared_meta)
+        if "shared_with_first_n" in meta:
+            raise ValueError(
+                f"stack_manifest: role_launch_meta['{role}'] declares "
+                f"shared_with_first_n, which phase 2 DERIVES from "
+                f"server_mode.{role}.shared_with. Add the alias to the master "
+                f"registry, or to launcher_only_aliases with a parity exception."
+            )
+        aliases = _derived_aliases(role, meta)
+        meta.pop("launcher_only_aliases", None)
+        if aliases:
+            # Only set the key when non-empty: an empty list is a different dict
+            # shape from an absent key, and consumers iterate this dict.
+            meta["shared_with_first_n"] = aliases
+        out[role] = meta
+    return out
+
+
+ROLE_LAUNCH_META: dict[str, dict] = _build_role_launch_meta()
 
 
 
@@ -205,7 +379,24 @@ _VISION_WORKER = _MANIFEST["vision"]["worker"]
 _VISION_ESCALATION = _MANIFEST["vision"]["escalation"]
 VISION_WORKER_MODEL = _VISION_WORKER["model"]
 VISION_WORKER_MMPROJ = _VISION_WORKER["mmproj"]
-VISION_WORKER_DEVICE = _VISION_WORKER["device"]
+# DERIVED (phase 2) from server_mode.worker_vision.device. The launcher used to
+# declare `device: ROCm0` in vision.worker; that second copy is exactly the
+# surface the `--device none` incident ran through, and master also declares
+# architect_general's device — a role this block could not name at all.
+_VISION_WORKER_DEVICE, _VISION_WORKER_DEVICE_SOURCE = master_declared("worker_vision", "device")
+if not isinstance(_VISION_WORKER_DEVICE, str) or not _VISION_WORKER_DEVICE:
+    raise ValueError(
+        "stack_manifest: server_mode.worker_vision.device is not declared in the master "
+        "registry. The launcher derives the VL processor from it and keeps no local copy; "
+        "declare it in orchestration/model_registry.yaml rather than re-adding one here."
+    )
+if "device" in _VISION_WORKER:
+    raise ValueError(
+        "stack_manifest: launch_manifest.yaml vision.worker re-declares `device`, which "
+        "phase 2 derives from server_mode.worker_vision.device. Two declarations is how "
+        "the GPU role ended up on CPU; remove it and change the master registry instead."
+    )
+VISION_WORKER_DEVICE = _VISION_WORKER_DEVICE
 VISION_WORKER_IMAGE_MIN_TOKENS = _VISION_WORKER["image_min_tokens"]
 VISION_WORKER_CACHE_RAM = _VISION_WORKER["cache_ram"]
 # vision_escalation is an ALIAS on the worker's process, not a second server, so
@@ -223,18 +414,259 @@ VISION_ESCALATION_DEVICE = VISION_WORKER_DEVICE
 VISION_ESCALATION_REASONING = _VISION_ESCALATION["reasoning"]
 
 _LAUNCH_SHAPE = _MANIFEST["launch_shape"]
+# Host-side capacity policy for the serving_shape capacity guard. The GPU side
+# needs nothing here — device_model owns the declared VRAM total and headroom.
+_CAPACITY = _MANIFEST["capacity"]
 DEFAULT_EFFECTIVE_CONTEXT_TOKENS = _LAUNCH_SHAPE["default_effective_context_tokens"]
-LAUNCH_CONTEXT_TOKENS = dict(_LAUNCH_SHAPE["context_tokens"])
 
 DEFAULT_UBATCH_TOKENS = _LAUNCH_SHAPE["default_ubatch_tokens"]
 
+
+def _launcher_role_universe() -> list[str]:
+    """Every role name the launcher can be asked about — primaries and aliases.
+
+    Aliases are included because an alias rides its host's process and must
+    resolve to the SAME serving shape; a table that covered only primaries would
+    make `LAUNCH_CONTEXT_TOKENS["vision_escalation"]` a KeyError in the escalation
+    branch of the VL builder.
+    """
+    roles: set[str] = set(_MANIFEST["port_map"]) | set(_MANIFEST["role_launch_meta"])
+    roles.update(NUMA_CONFIG)
+    for meta in ROLE_LAUNCH_META.values():
+        roles.update(str(alias) for alias in meta.get("shared_with_first_n") or [])
+    return sorted(roles)
+
+
+def _derived_context_tokens() -> dict[str, int]:
+    """`-c` per role: master's `serving_shape.n_ctx` first, manifest rows second.
+
+    2026-08-02: `n_ctx` used to be declared on BOTH sides and merely cross-checked
+    (`parity.checked`). It is now DERIVED, like `slots` and `shared_with` before
+    it, because it is one third of the KV-feasibility group and a launcher-side
+    copy could be edited without master's capacity check ever seeing it. The
+    manifest keeps only rows master has no row for — today just `worker_fast`.
+    """
+    out: dict[str, int] = {
+        str(role): int(value)
+        for role, value in (_LAUNCH_SHAPE.get("context_tokens") or {}).items()
+    }
+    for role in _launcher_role_universe():
+        declared, _source = master_declared(role, "n_ctx")
+        if isinstance(declared, int) and not isinstance(declared, bool) and declared > 0:
+            out[role] = declared
+    return out
+
+
+def _derived_kv_quant_configs() -> dict[str, tuple[str, str]]:
+    """`-ctk`/`-ctv` per role, DERIVED from master's `serving_shape.kv_quant`.
+
+    2026-08-02: `launch_shape.kv_quant_configs` is DELETED. It held 9 rows while
+    master held 2, so the launcher looked authoritative and master looked
+    incomplete — but master is where the KV type belongs, since the KV footprint
+    it implies is only meaningful next to the `n_ctx` it multiplies. All 7 rows
+    master was missing were verified against the LIVE `/proc/<pid>/cmdline`
+    `-ctk`/`-ctv` before being written there, so this move recorded reality
+    rather than changing it.
+
+    A role with no declaration gets no entry and therefore no `-ctk`/`-ctv` at
+    all — today that is the embedders and `worker_fast`, which declare no
+    `serving_shape`.
+
+    `worker_vision` USED to be the example here, on the grounds that it "keeps
+    llama-server's f16 default while a q8_0 VL quality check runs separately".
+    That check has since run and landed: the MMMU-250 paired A/B (f16 153/250 vs
+    q8_0 155/250, +0.80 pp, CI [-1.90,+3.03], non-inferior at a pre-registered
+    3 pp margin) moved `server_mode.worker_vision.serving_shape.kv_quant` to
+    q8_0/q8_0, so the VL roles are now covered like any other. Do not read this
+    resolver as a vision exemption — `_build_vision_command` emits whatever
+    master declares, same as every other builder.
+
+    The resolver is per-ROLE today. It reads through `master_declared`, which
+    already consults `serving_shape` first, so a future `kv_quant_by_shape` is a
+    schema addition here and in `resolve_slots` — not a migration.
+    """
+    out: dict[str, tuple[str, str]] = {}
+    for role in _launcher_role_universe():
+        raw, _source = master_declared(role, "kv_quant")
+        if isinstance(raw, dict) and raw.get("k") and raw.get("v"):
+            out[role] = (str(raw["k"]), str(raw["v"]))
+    return out
+
+
+LAUNCH_CONTEXT_TOKENS = _derived_context_tokens()
+
 # Effective launcher KV settings. Descriptors may preserve broader model
 # capability metadata; this table witnesses the actual llama-server CLI path.
-LAUNCH_KV_QUANT_CONFIGS = {
-    role: tuple(pair) for role, pair in _LAUNCH_SHAPE["kv_quant_configs"].items()
-}
+LAUNCH_KV_QUANT_CONFIGS = _derived_kv_quant_configs()
 NO_SPEC_DECODE_ROLES: set[str] = set(_LAUNCH_SHAPE["no_spec_decode_roles"])
 KV_HADAMARD_ROLES = set(_V2_ROLES)
+
+
+# =============================================================================
+# Slots (-np) — DERIVED from the master registry
+# =============================================================================
+# `slots` is how many concurrent slots the SERVER is launched with. It is NOT
+# SERIAL_ROLES, which is an admission policy (how many requests the orchestrator
+# will have in flight for a role). The launcher computed `-np` as
+# `1 if role in SERIAL_ROLES else 2`, which conflated the two and disagreed with
+# the declared `server_mode.<role>.slots` for 6 of the 11 role names master
+# declares it for. A role may legitimately run a 2-slot server while admission
+# serialises it; the two must be derived from two different declarations.
+
+FALLBACK_SLOTS: dict[str, int] = {
+    key: int(value) for key, value in _LAUNCH_SHAPE["fallback_slots"].items()
+}
+
+
+class SlotsDecision(NamedTuple):
+    """A resolved slot count and WHERE it came from.
+
+    The source string is not decoration. A config surface that hands back
+    fallbacks without saying they are fallbacks makes "master declares 1 and we
+    launched 2" indistinguishable from "nobody declared anything" — which is how
+    the vision defect stayed invisible while the compiled artifact was correct.
+    """
+
+    slots: int
+    source: str
+
+    @property
+    def declared(self) -> bool:
+        return self.source.startswith("master:")
+
+
+def _fallback_slots_key(mode: str, worker_type: str | None, vision_type: str | None) -> str:
+    """Manifest key for a launch mode's fallback, most specific first."""
+    if mode == "worker_pool" and worker_type:
+        specific = f"worker_pool_{worker_type}"
+        if specific in FALLBACK_SLOTS:
+            return specific
+    if mode == "vision" and vision_type:
+        specific = f"vision_{vision_type}"
+        if specific in FALLBACK_SLOTS:
+            return specific
+    return mode if mode in FALLBACK_SLOTS else "default"
+
+
+def fallback_slots_for_mode(
+    mode: str = "default",
+    *,
+    worker_type: str | None = None,
+    vision_type: str | None = None,
+) -> SlotsDecision:
+    """The launcher's declared per-mode slot default. Consults NO registry.
+
+    For callers that already resolve the declaration themselves against a
+    registry they were HANDED — the stack-prior compiler takes a
+    ``registry_path`` and must honour that one, not whatever registry this
+    module happened to load. Reading master here as well would give the compiler
+    two sources for one field, which is the bug one level up.
+    """
+    key = _fallback_slots_key(mode, worker_type, vision_type)
+    return SlotsDecision(FALLBACK_SLOTS[key], f"manifest:fallback_slots.{key}")
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
+def slots_by_shape_for(role: str) -> tuple[dict[str, int], str | None]:
+    """Master's per-shape-class slot map for a role, if it declares one.
+
+    Keys are SHAPE CLASSES (`full` / `half` / `quarter` / `gpu_host_lane`), never
+    cpusets — see `stack_numa._SHAPE_CLASSES`.
+    """
+    raw, source = master_declared(role, "slots_by_shape")
+    if not isinstance(raw, dict):
+        return {}, None
+    table = {
+        str(cls): parsed
+        for cls, value in raw.items()
+        if (parsed := _positive_int(value)) is not None
+    }
+    return table, source
+
+
+def resolve_slots(
+    role: str,
+    mode: str = "default",
+    *,
+    worker_type: str | None = None,
+    vision_type: str | None = None,
+    numa_instance: int | None = None,
+) -> SlotsDecision:
+    """Resolve `-np` for one INSTANCE of a role.
+
+    Precedence, most specific first:
+      1. ``serving_shape.slots_by_shape[<class of this instance>]`` — the
+         per-instance answer. Requires ``numa_instance``; the instance's shape
+         CLASS comes from ``stack_topology.yaml``'s declared ``cpu_shape``, so no
+         role -> shape table exists anywhere.
+      2. the role's flat ``slots`` — the compat scalar, and the whole answer for
+         a role with one instance class (both GPU roles).
+      3. the manifest's per-mode fallback, for a role master says nothing about.
+
+    2026-08-02: (1) is new. `slots` is per-ROLE, but the operator's spec is per
+    INSTANCE SHAPE — frontdoor's 96-core full wants 16 slots while each 48-core
+    half wants 4, and one number cannot say that. A class the role does not
+    declare falls through to (2) rather than erroring, which is what makes
+    ``slots_by_shape`` optional and keeps the GPU roles on a single scalar.
+
+    SERIAL_ROLES deliberately does NOT appear here. Serialising a role is an
+    admission decision and it is made in src/api/admission.py; expressing it by
+    shrinking the server's slot count instead both loses the distinction and
+    silently overrides a declaration.
+    """
+    if numa_instance is not None:
+        shape_class = instance_shape_class(role, numa_instance)
+        if shape_class is not None:
+            table, source = slots_by_shape_for(role)
+            if shape_class in table:
+                return SlotsDecision(
+                    table[shape_class], f"master:{source}.{shape_class}"
+                )
+
+    declared, source = master_declared(role, "slots")
+    parsed = _positive_int(declared)
+    if parsed is not None:
+        return SlotsDecision(parsed, f"master:{source}")
+    return fallback_slots_for_mode(mode, worker_type=worker_type, vision_type=vision_type)
+
+
+def _declared_slots_table() -> dict[str, int]:
+    """Every launcher role name master declares a slot count for."""
+    table: dict[str, int] = {}
+    for role in sorted(set(_MANIFEST["port_map"]) | set(_MANIFEST["role_launch_meta"])):
+        declared, _source = master_declared(role, "slots")
+        parsed = _positive_int(declared)
+        if parsed is not None:
+            table[role] = parsed
+    return table
+
+
+def declared_slots_by_port(role: str) -> dict[int, int]:
+    """Port -> resolved `-np`, for every declared instance of a role.
+
+    The JOIN, at its smallest: `stack_topology.yaml` supplies the ports and the
+    shape classes, the master registry supplies the slots per class. Used by the
+    parity guard and the capacity check; the compiled priors carry the same map
+    for the launcher and for admission, resolved against the registry the
+    COMPILER was handed rather than the ambient one.
+    """
+    cfg = NUMA_CONFIG.get(role)
+    if not cfg:
+        return {}
+    out: dict[int, int] = {}
+    for idx, instance in enumerate(cfg["instances"]):
+        out[int(instance[1])] = resolve_slots(role, numa_instance=idx).slots
+    return out
+
+
+# Role name -> declared slot count, for inspection/reporting and the parity
+# guard. Absent keys are roles master says nothing about.
+DECLARED_SLOTS: dict[str, int] = _declared_slots_table()
 
 # =============================================================================
 # GPU shadow lane launch constants (docs/gpu-shadow-lane.md; gpu-serving-tie-in
@@ -450,8 +882,528 @@ def _validate_role_classification() -> None:
         raise ValueError(msg)
 
 
+# =============================================================================
+# Parity guard — no field may be declared twice and disagree
+# =============================================================================
+# `_validate_role_classification()` above checks the launcher against ITSELF
+# (manifest vs topology). This one checks the launcher against the MASTER
+# registry, which is the direction every severe launcher finding came from: the
+# compiled artifact was right and a local copy won anyway.
+#
+# It is not a warning list. `validate_against_registry()` already returns
+# warnings and is called non-fatally from `start`; warnings are how a
+# divergence survives for three months. This raises, at import, before anything
+# is launched.
+
+_PARITY = _MANIFEST["parity"]
+
+
+def _parity_exception_keys() -> set[tuple[str, str]]:
+    """(field, launcher_role) pairs the manifest argues for keeping divergent."""
+    keys: set[tuple[str, str]] = set()
+    for entry in _PARITY.get("exceptions") or []:
+        if not isinstance(entry, dict):
+            continue
+        field = entry.get("field")
+        role = entry.get("launcher_role")
+        if isinstance(field, str) and isinstance(role, str):
+            if not str(entry.get("reason") or "").strip():
+                raise ValueError(
+                    f"stack_manifest: parity exception {field}/{role} has no reason. "
+                    f"An exception without an argument is just a silence with extra steps."
+                )
+            keys.add((field, role))
+    return keys
+
+
+def _launcher_declarations(field: str) -> dict[str, object]:
+    """The launcher's rows for a doubly-declared field, keyed by ROLE name."""
+    if field == "port":
+        return dict(PORT_MAP)
+    if field == "tier":
+        return {role: meta.get("tier") for role, meta in ROLE_LAUNCH_META.items()}
+    if field == "kv_quant":
+        return {role: tuple(pair) for role, pair in LAUNCH_KV_QUANT_CONFIGS.items()}
+    if field == "n_ctx":
+        return dict(LAUNCH_CONTEXT_TOKENS)
+    if field in ("numa_ports", "numa_instances"):
+        # master's `numa_ports` is the launcher's instance list MINUS the full
+        # instance (a role with no `full_instance_idx` has no full instance to
+        # remove), and `numa_instances` is its length. stack_topology declares
+        # (cpus, port, threads) per instance, which master cannot express, so the
+        # launcher holds the richer declaration and master holds a projection of
+        # it — this reconstructs the projection and compares that.
+        rows: dict[str, object] = {}
+        for role, cfg in NUMA_CONFIG.items():
+            instances = cfg.get("instances") or []
+            full_idx = cfg.get("full_instance_idx")
+            ports = [
+                instance[1]
+                for idx, instance in enumerate(instances)
+                if idx != full_idx or full_idx is None
+            ]
+            rows[role] = ports if field == "numa_ports" else len(ports)
+        return rows
+    raise ValueError(f"stack_manifest: parity guard has no launcher accessor for {field!r}")
+
+
+def _master_declaration(role: str, field: str) -> tuple[object, str | None]:
+    """Master's value for a doubly-declared field, in the launcher's units."""
+    if field == "kv_quant":
+        raw, source = master_declared(role, "kv_quant")
+        if isinstance(raw, dict) and raw.get("k") and raw.get("v"):
+            return (str(raw["k"]), str(raw["v"])), source
+        return None, None
+    return master_declared(role, field)
+
+
+def validate_declaration_parity() -> None:
+    """Fail if any field declared in BOTH this launcher and master disagrees.
+
+    Two checks:
+      1. DERIVED fields must not be re-declared launcher-side. A derivation dies
+         when somebody adds the value back "for clarity"; the guard is the thing
+         that notices.
+      2. Every field in `parity.checked` is intersected on role name and
+         compared. Rows only one side declares are fine — they are why the field
+         is still declared here at all. Rows both declare and disagree are not.
+    """
+    errors: list[str] = []
+    exceptions = _parity_exception_keys()
+    used_exceptions: set[tuple[str, str]] = set()
+
+    # --- 1. derived fields must have no launcher-side declaration -------------
+    derived = set(_PARITY.get("derived_from_master") or [])
+    if "slots" in derived:
+        for role, meta in _MANIFEST["role_launch_meta"].items():
+            if "slots" in meta:
+                errors.append(
+                    f"role_launch_meta['{role}'] declares `slots`, which is DERIVED "
+                    f"from server_mode.{role}.slots"
+                )
+        if "slots" in _LAUNCH_SHAPE:
+            errors.append("launch_shape declares a `slots` table, which is DERIVED from master")
+    if "kv_quant" in derived and "kv_quant_configs" in _LAUNCH_SHAPE:
+        errors.append(
+            "launch_shape declares `kv_quant_configs`, which is DERIVED from "
+            "server_mode.<role>.serving_shape.kv_quant. It was DELETED on 2026-08-02 "
+            "after all 9 of its rows were verified against the live -ctk/-ctv and "
+            "written to master; re-adding it recreates the 9-vs-2 split where the "
+            "launcher outranked the registry on a model fact."
+        )
+    if "n_ctx" in derived:
+        for role in sorted(_LAUNCH_SHAPE.get("context_tokens") or {}):
+            declared, source = master_declared(str(role), "n_ctx")
+            if declared is not None:
+                errors.append(
+                    f"launch_shape.context_tokens['{role}'] re-declares `n_ctx`, which is "
+                    f"DERIVED from master ({source}, {declared!r}). n_ctx is one third of "
+                    f"the KV-feasibility group; a launcher-side copy can be edited without "
+                    f"the capacity check ever seeing it."
+                )
+    if "device" in derived and "device" in _MANIFEST["vision"]["worker"]:
+        errors.append("vision.worker declares `device`, which is DERIVED from master")
+    if "shared_with" in derived:
+        for role, meta in _MANIFEST["role_launch_meta"].items():
+            if "shared_with_first_n" in meta:
+                errors.append(
+                    f"role_launch_meta['{role}'] declares `shared_with_first_n`, which is "
+                    f"DERIVED from server_mode.{role}.shared_with"
+                )
+
+    # --- 2. doubly-declared fields must agree row by row ----------------------
+    for field in _PARITY.get("checked") or []:
+        launcher_rows = _launcher_declarations(str(field))
+        for role, launcher_value in sorted(launcher_rows.items()):
+            if launcher_value is None:
+                continue
+            master_value, source = _master_declaration(role, str(field))
+            if master_value is None:
+                continue
+            if isinstance(master_value, list):
+                master_value = list(master_value)
+            if isinstance(launcher_value, list):
+                launcher_value = list(launcher_value)
+            if launcher_value == master_value:
+                continue
+            key = (str(field), role)
+            if key in exceptions:
+                used_exceptions.add(key)
+                continue
+            errors.append(
+                f"{field} for role '{role}': launcher declares {launcher_value!r}, "
+                f"master ({source}) declares {master_value!r}"
+            )
+
+    # --- 3. the derived alias lists must still match master ------------------
+    # `shared_with` is derived, so it cannot disagree by construction — but the
+    # launcher-only extras CAN turn into permanent shadow declarations. Assert
+    # each extra is covered by an argued exception, and drop the exception the
+    # moment master starts declaring it.
+    for role, meta in _MANIFEST["role_launch_meta"].items():
+        extras = meta.get("launcher_only_aliases") or []
+        if not extras:
+            continue
+        key = ("shared_with", role)
+        declared, source = master_declared(role, "shared_with")
+        already = [alias for alias in extras if alias in (declared or [])]
+        if already:
+            errors.append(
+                f"role_launch_meta['{role}'].launcher_only_aliases lists {already!r}, "
+                f"which master ({source}) now declares too — delete the extra and the "
+                f"parity exception; it is no longer launcher-only"
+            )
+            continue
+        if key not in exceptions:
+            errors.append(
+                f"role_launch_meta['{role}'].launcher_only_aliases={list(extras)!r} has no "
+                f"`parity.exceptions` entry. A launcher-only alias needs a written reason."
+            )
+        else:
+            used_exceptions.add(key)
+
+    # --- 4. the KV-feasibility group must be internally coherent -------------
+    # `slots_by_shape` is the one declaration in master that is only meaningful
+    # against the topology, so it is the one that can go stale silently: rename a
+    # shape class, retire a role's halves, or mistype a key, and a role quietly
+    # falls back to the flat scalar with no error anywhere. Four teeth:
+    #   (a) every key is a real shape class,
+    #   (b) every key matches at least one instance the role actually has,
+    #   (c) every instance of the role resolves to a positive slot count,
+    #   (d) the flat compat scalar equals the primary instance's resolved value.
+    # (d) is the one that matters most in practice: `slots` is read directly by
+    # consumers that know nothing about shapes, so a group that disagrees with it
+    # ships two different answers to the same question.
+    for role in sorted(set(_MANIFEST["role_launch_meta"]) | set(NUMA_CONFIG)):
+        table, source = slots_by_shape_for(role)
+        instance_classes = NUMA_INSTANCE_SHAPE_CLASSES.get(role, ())
+        if table:
+            unknown = sorted(set(table) - set(CPU_SHAPE_CLASSES))
+            if unknown:
+                errors.append(
+                    f"slots_by_shape for role '{role}' ({source}) names unknown shape "
+                    f"class(es) {unknown}; known classes are {sorted(CPU_SHAPE_CLASSES)}"
+                )
+            unused = sorted(set(table) - set(instance_classes) - set(unknown))
+            if unused:
+                errors.append(
+                    f"slots_by_shape for role '{role}' ({source}) declares {unused} but the "
+                    f"role has no instance of that class in stack_topology.yaml "
+                    f"(its instances are {list(instance_classes)}). A slot count nothing "
+                    f"can consume is a declaration that will never be noticed as wrong."
+                )
+        if not instance_classes:
+            continue
+        for idx, shape_class in enumerate(instance_classes):
+            decision = resolve_slots(role, numa_instance=idx)
+            if decision.slots <= 0:
+                errors.append(
+                    f"role '{role}' instance {idx} ({shape_class}) resolves to "
+                    f"{decision.slots} slots via {decision.source}"
+                )
+        flat, flat_source = master_declared(role, "slots")
+        primary_idx = NUMA_CONFIG.get(role, {}).get("full_instance_idx", 0) or 0
+        primary = resolve_slots(role, numa_instance=primary_idx)
+        if table and _positive_int(flat) is not None and flat != primary.slots:
+            errors.append(
+                f"role '{role}': flat `slots` ({flat_source}) is {flat!r} but the primary "
+                f"instance (index {primary_idx}, class "
+                f"{instance_classes[primary_idx] if primary_idx < len(instance_classes) else '?'}) "
+                f"resolves to {primary.slots} via {primary.source}. The flat key is the COMPAT "
+                f"SCALAR for consumers that do not know about shapes; it must agree with the "
+                f"shape the endpoint actually serves."
+            )
+
+    stale = sorted(exceptions - used_exceptions)
+    for field, role in stale:
+        errors.append(
+            f"parity exception {field}/{role} no longer applies — the two sides agree. "
+            f"Delete it so the next real divergence is not pre-excused."
+        )
+
+    if errors:
+        raise ValueError(
+            "Launcher/master declaration parity violated (launch_manifest.yaml vs "
+            "model_registry.yaml):\n  " + "\n  ".join(errors)
+        )
+
+
+# =============================================================================
+# Capacity guard — the KV-feasibility group, validated TOGETHER
+# =============================================================================
+# `validate_declaration_parity()` checks that nobody declared the same thing
+# twice. This checks something no parity rule can: that the numbers, each
+# individually plausible, ADD UP on the hardware.
+#
+# The failure it exists to prevent has no single wrong line. Raise n_ctx here,
+# add an instance there, switch a KV type back to f16 somewhere else — three
+# defensible commits, and the fourth one OOMs a card at model-load time with a
+# HIP allocation failure that names none of them. Grouping the three fields into
+# `serving_shape` is what makes the sum computable from ONE declaration; this
+# function is why the grouping was worth doing.
+#
+# ── THE ARITHMETIC ───────────────────────────────────────────────────────────
+#     KV KiB/token @f16 = block_count * head_count_kv * (key_length + value_length) * 2 / 1024
+# read straight out of the GGUF header, and declared per role as
+# `serving_shape.kv_kib_per_token_f16`. K and V are quantised INDEPENDENTLY, so
+# each side is scaled separately: f16 = 1.0, q8_0 = 0.5, q4_0 = 0.25 of that
+# side's half. Total KV bytes for an instance = KiB/token * n_ctx; `-np` does
+# NOT multiply it (llama-server partitions one -c-sized cache across slots).
+
+# Byte-width of one KV element RELATIVE TO f16, per llama.cpp cache type. Only
+# the types this fleet actually uses are listed: an unrecognised type RAISES
+# rather than being assumed f16, because assuming the LARGEST type would silently
+# pass an infeasible lineup and assuming the smallest would silently fail a
+# feasible one. Neither is a safe default, so there is none.
+_KV_TYPE_F16_RATIO: dict[str, float] = {
+    "f32": 2.0,
+    "f16": 1.0,
+    "bf16": 1.0,
+    "q8_0": 0.5,
+    "q5_1": 0.375,
+    "q5_0": 0.34375,
+    "q4_1": 0.28125,
+    "q4_0": 0.25,
+}
+
+_GIB_PER_KIB_TOKEN = 1.0 / (1024.0 * 1024.0)
+
+
+def kv_gib_for(role: str, n_ctx: int, kv_quant: tuple[str, str] | None) -> float:
+    """KV cache size in GiB for one instance of `role` at `n_ctx`."""
+    shape, source = master_serving_shape(role)
+    per_token_f16 = shape.get("kv_kib_per_token_f16")
+    if not isinstance(per_token_f16, (int, float)) or per_token_f16 <= 0:
+        raise ValueError(
+            f"stack_manifest: role '{role}' has a serving_shape ({source}) with no usable "
+            f"`kv_kib_per_token_f16`. It is a MEASURED GGUF fact "
+            f"(block_count * head_count_kv * (key_length + value_length) * 2 / 1024) and the "
+            f"capacity check cannot be run without it. Read it from the GGUF header rather "
+            f"than estimating."
+        )
+    half = float(per_token_f16) / 2.0  # the K side and the V side, each
+    k_type, v_type = (kv_quant or ("f16", "f16"))
+    ratios = []
+    for side, kv_type in (("k", k_type), ("v", v_type)):
+        ratio = _KV_TYPE_F16_RATIO.get(str(kv_type).lower())
+        if ratio is None:
+            raise ValueError(
+                f"stack_manifest: role '{role}' declares KV type {kv_type!r} for the {side} "
+                f"side, which the capacity check has no width for. Add it to "
+                f"_KV_TYPE_F16_RATIO with its true element width — do NOT let it default."
+            )
+        ratios.append(ratio)
+    return half * (ratios[0] + ratios[1]) * float(n_ctx) * _GIB_PER_KIB_TOKEN
+
+
+def serving_shape_instances() -> list[dict]:
+    """One record per declared instance, with its resolved shape and footprint.
+
+    The JOIN made explicit: model facts from the master registry, placement from
+    stack_topology.yaml, one row each. Roles with no `serving_shape` block are
+    skipped — that is every launcher-only lane (`eval_batch_frontdoor`), the
+    embedder pool and `worker_fast`, none of which master describes.
+    """
+    rows: list[dict] = []
+    for role in sorted(set(_MANIFEST["role_launch_meta"]) & set(NUMA_CONFIG)):
+        shape, shape_source = master_serving_shape(role)
+        if not shape:
+            continue
+        n_ctx = shape.get("n_ctx")
+        if not isinstance(n_ctx, int) or isinstance(n_ctx, bool) or n_ctx <= 0:
+            raise ValueError(
+                f"stack_manifest: role '{role}' has a serving_shape ({shape_source}) with no "
+                f"usable `n_ctx`. The group is validated as a whole; a partial group cannot be."
+            )
+        kv_quant = LAUNCH_KV_QUANT_CONFIGS.get(role)
+        device, _device_source = master_declared(role, "device")
+        classes = NUMA_INSTANCE_SHAPE_CLASSES.get(role, ())
+        for idx, instance in enumerate(NUMA_CONFIG[role]["instances"]):
+            shape_class = classes[idx] if idx < len(classes) else None
+            rows.append(
+                {
+                    "role": role,
+                    "numa_instance": idx,
+                    "port": int(instance[1]),
+                    "shape_class": shape_class,
+                    "device": str(device) if isinstance(device, str) else None,
+                    "on_gpu": shape_class == "gpu_host_lane",
+                    "n_ctx": n_ctx,
+                    "slots": resolve_slots(role, numa_instance=idx).slots,
+                    "kv_quant": kv_quant,
+                    "kv_gib": round(kv_gib_for(role, n_ctx, kv_quant), 4),
+                    "vram_non_kv_gib": shape.get("vram_non_kv_gib"),
+                    "host_weights_gib": master_declared(role, "memory_gb")[0],
+                    "no_mmap": bool(master_declared(role, "no_mmap")[0]),
+                }
+            )
+    return rows
+
+
+def _host_memtotal_gib() -> float | None:
+    """Host RAM from /proc/meminfo. A HOST FACT, read-only, never a knob.
+
+    Returns None when unreadable (a container without /proc, a non-Linux test
+    box). The host gate is then reported as UNGATED rather than passing quietly —
+    "capacity unknown" and "capacity fine" must not look the same.
+    """
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                return float(line.split()[1]) / (1024.0 * 1024.0)
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def serving_shape_capacity_report() -> dict:
+    """Per-device footprint of the declared lineup. Pure arithmetic, no processes.
+
+    GPU is gated through `src.scheduling.device_model.vram_fit` rather than a
+    second capacity model: that module already owns "does the resident set fit",
+    including the declared 63.98 GiB total, the 2.0 GiB first-execution headroom
+    and the alias-collapse rule. It is handed a SYNTHETIC `server_mode` in which
+    each GPU role's VRAM is `vram_non_kv_gib + kv_gib` for its declared shape,
+    with `priors={}` so it cannot reach past the closed world it was given.
+
+    Host has no such helper — device_model is VRAM-only — so the host sum lives
+    here, sharing the same per-instance KV numbers so the two can never disagree
+    about what a KV cache costs.
+    """
+    from src.scheduling.device_model import vram_fit
+
+    rows = serving_shape_instances()
+
+    gpu_rows = [row for row in rows if row["on_gpu"]]
+    synthetic_server_mode: dict[str, dict] = {}
+    missing_vram: list[str] = []
+    for row in gpu_rows:
+        non_kv = row["vram_non_kv_gib"]
+        if not isinstance(non_kv, (int, float)) or non_kv <= 0:
+            missing_vram.append(row["role"])
+            continue
+        # One entry per SERVER (primary role only — aliases are never in
+        # role_launch_meta), so vram_fit's alias collapse has nothing to collapse
+        # and cannot double-count a shared process.
+        synthetic_server_mode[row["role"]] = {
+            "vram_gib": round(float(non_kv) + row["kv_gib"], 4)
+        }
+    if missing_vram:
+        raise ValueError(
+            "stack_manifest: GPU role(s) "
+            f"{sorted(set(missing_vram))} declare no `serving_shape.vram_non_kv_gib`. "
+            "The capacity check needs the KV-FREE resident figure; `vram_gib` is a "
+            "KV-inclusive total at some past context and using it would double-count."
+        )
+    fit = vram_fit(
+        [row["role"] for row in gpu_rows],
+        priors={},
+        server_mode=synthetic_server_mode,
+    )
+
+    host_rows = [row for row in rows if not row["on_gpu"]]
+    host_kv_gib = round(sum(row["kv_gib"] for row in host_rows), 4)
+    # Weights: a `no_mmap` role gets a PRIVATE copy per instance (that is the
+    # point of the 2026-07-30 change — shared mmap placed every page once, on
+    # whichever node faulted first). A shared-mmap role's GGUF is resident once.
+    host_weights_gib = 0.0
+    counted_shared: set[str] = set()
+    for row in host_rows:
+        weights = row["host_weights_gib"]
+        if not isinstance(weights, (int, float)) or weights <= 0:
+            continue
+        if row["no_mmap"]:
+            host_weights_gib += float(weights)
+        elif row["role"] not in counted_shared:
+            host_weights_gib += float(weights)
+            counted_shared.add(row["role"])
+    host_weights_gib = round(host_weights_gib, 4)
+
+    host_total = _host_memtotal_gib()
+    reserve = float(_CAPACITY["host_os_reserve_gib"])
+    host_required = round(host_kv_gib + host_weights_gib, 4)
+    host_budget = round(host_total - reserve, 4) if host_total is not None else None
+    return {
+        "instances": rows,
+        "gpu": {
+            "fit": fit,
+            "required_gib": fit.required_gib,
+            "budget_gib": fit.budget_gib,
+            "capacity_gib": fit.capacity_gib,
+            "per_role": dict(fit.per_role),
+            "kv_gib": round(sum(row["kv_gib"] for row in gpu_rows), 4),
+        },
+        "host": {
+            "gated": host_budget is not None,
+            "kv_gib": host_kv_gib,
+            "weights_gib": host_weights_gib,
+            "required_gib": host_required,
+            "budget_gib": host_budget,
+            "capacity_gib": round(host_total, 4) if host_total is not None else None,
+            "reserve_gib": reserve,
+            "ok": True if host_budget is None else host_required <= host_budget,
+        },
+    }
+
+
+def validate_serving_shape_capacity() -> None:
+    """Refuse a lineup whose declared KV does not fit the hardware it runs on.
+
+    Fails CLOSED on the GPU, where the margin is 3 GiB and the failure mode is a
+    load-time HIP allocation error. Fails closed on the host too when
+    /proc/meminfo is readable; when it is not, the host leg is reported UNGATED
+    and only the GPU leg binds — a container that cannot see host RAM must not
+    be able to pass a check it never ran.
+
+    KNOWN UNDERCOUNT, recorded rather than papered over: whisper.cpp (STT) and
+    Qwen3-TTS also tenant this MI210 when active. Neither has a `server_mode` row
+    — voice_server still describes a CPU faster-whisper service and TTS has no
+    entry at all — so the GPU sum is ~2.5 GiB optimistic whenever they are up.
+    Both were ABSENT from the card at the 2026-08-02 measurement (rocm-smi
+    --showpids showed only the two llama-servers). The 2.0 GiB `vram_fit`
+    headroom does not cover them; giving them registry rows is the real fix.
+    """
+    report = serving_shape_capacity_report()
+    problems: list[str] = []
+
+    fit = report["gpu"]["fit"]
+    if not fit.ok:
+        overage = round(fit.required_gib - fit.budget_gib, 4)
+        detail = ", ".join(
+            f"{role} {gib:.2f}" for role, gib in sorted(fit.per_role.items())
+        )
+        problems.append(
+            f"device ROCm0 (GPU) OVERSUBSCRIBED by {overage:.2f} GiB: declared lineup needs "
+            f"{fit.required_gib:.2f} GiB but the budget is {fit.budget_gib:.2f} GiB "
+            f"({fit.capacity_gib:.2f} GiB capacity from {fit.capacity_source} minus "
+            f"{fit.headroom_gib:.2f} GiB headroom). Per role (weights+KV): {detail}. "
+            f"Reason: {fit.reason or 'n/a'}. Lower `serving_shape.n_ctx`, or quantise "
+            f"`serving_shape.kv_quant` further, for a role on this device."
+        )
+
+    host = report["host"]
+    if host["gated"] and not host["ok"]:
+        overage = round(host["required_gib"] - host["budget_gib"], 4)
+        problems.append(
+            f"device host (CPU RAM) OVERSUBSCRIBED by {overage:.2f} GiB: declared lineup needs "
+            f"{host['required_gib']:.2f} GiB ({host['weights_gib']:.2f} weights + "
+            f"{host['kv_gib']:.2f} KV) but the budget is {host['budget_gib']:.2f} GiB "
+            f"({host['capacity_gib']:.2f} GiB MemTotal minus {host['reserve_gib']:.2f} GiB "
+            f"OS reserve)."
+        )
+
+    if problems:
+        raise ValueError(
+            "Declared serving_shape lineup does not fit the hardware "
+            "(model_registry.yaml server_mode.<role>.serving_shape x "
+            "stack_topology.yaml placement):\n  " + "\n  ".join(problems)
+        )
+
+
 # Validate at module load (fails fast on misconfiguration)
 _validate_role_classification()
+validate_declaration_parity()
+validate_serving_shape_capacity()
 
 # Computed server lists. Single source of truth: ROLE_LAUNCH_META + NUMA_CONFIG.
 HOT_SERVERS, WARM_SERVERS = _build_servers_from_classification()

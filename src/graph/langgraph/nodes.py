@@ -692,7 +692,6 @@ ROLE_TO_LG_NODE: dict[str, str] = {
     "worker_summarize": "worker",
     "worker_vision": "worker",
     "toolrunner": "worker",
-    "thinking_reasoning": "coder",
     "coder_escalation": "coder_escalation",
     "ingest_long_context": "ingest",
     "architect_general": "architect",

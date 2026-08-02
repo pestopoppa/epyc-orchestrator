@@ -82,14 +82,75 @@ FALLBACK_BASELINE_TPS_BY_ROLE: Dict[str, float] = {
     "vision_escalation": 27.6,
 }
 
-BASELINE_QUALITY_BY_ROLE: Dict[str, float] = {
-    "frontdoor": 0.895,
-    "coder_escalation": 0.915,
-    "architect_general": 0.94,
-    "worker_general": 0.745,
-    "worker_math": 0.85,
-    "worker_vision": 0.81,
+# 2026-08-02: KEYED BY MODEL ARTIFACT, NOT BY ROLE.
+#
+# This was `BASELINE_QUALITY_BY_ROLE`, and role-keying made it INTERNALLY
+# CONTRADICTORY BY CONSTRUCTION — roles share models, so the same GGUF carried two
+# different quality numbers:
+#
+#   architect_general 0.94  and coder_escalation 0.915  -> both Qwen3.6-27B-MTP-Q8_0
+#   worker_general    0.745 and worker_math       0.85   -> both gemma-4-26B-A4B
+#
+# Each stale value is the quality of the model that role USED to serve: 0.94 is the
+# Qwen3.5-122B's (which moved to architect_critic in the 2026-08-01 W1 cutover) and
+# 0.915 is frontdoor's 35B's. So a role repoint silently transferred another model's
+# quality onto the new one, and the router scored a 27B with a 122B's number.
+#
+# Quality is a property of a MODEL under an instrument, never of a role name. Keying
+# by role means every future repoint re-introduces this defect. Keying by artifact
+# means a repointed role either resolves to its own model's measured quality or gets
+# NO entry — and `q_reward.py:147` already guards with `if role in ...`, so a missing
+# entry cleanly SKIPS the quality-gap penalty instead of fabricating one.
+#
+# Values below are retained only for artifacts whose figure was actually measured on
+# THAT artifact. Qwen3.6-27B-MTP-Q8_0 is deliberately ABSENT: it has ratified
+# SWE-bench Verified evidence (23/40, 57.5%) but no canonical 79-question judge-suite
+# run, and SWE-bench is a different instrument on a different scale. An absent entry
+# is the honest representation of that.
+BASELINE_QUALITY_BY_MODEL: Dict[str, float] = {
+    "Qwen3.6-35B-A3B-MTP-Q8_0.gguf": 0.895,
+    "gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf": 0.745,
 }
+
+
+def _baseline_quality_by_role(priors: dict | None = None) -> Dict[str, float]:
+    """Project the model-keyed table onto live roles via the compiled priors.
+
+    A role whose model has no measured entry is OMITTED rather than defaulted.
+    Falling back to a number would reinstate exactly the defect this replaced.
+    """
+    if priors is None:
+        try:
+            import yaml
+
+            from pathlib import Path
+
+            path = (
+                Path(__file__).resolve().parents[2]
+                / "orchestration"
+                / "derived"
+                / "stack_priors.yaml"
+            )
+            priors = yaml.safe_load(path.read_text()) or {}
+        except Exception:
+            # No compiled priors -> no role projection is possible. Return empty
+            # rather than guessing; the consumer skips the penalty.
+            return {}
+    out: Dict[str, float] = {}
+    for role, record in (priors.get("roles") or {}).items():
+        if not isinstance(record, dict):
+            continue
+        req = (
+            ((record.get("serving") or {}).get("launch") or {}).get("requirements")
+            or {}
+        )
+        model_path = req.get("model_path")
+        if not isinstance(model_path, str) or not model_path:
+            continue
+        quality = BASELINE_QUALITY_BY_MODEL.get(model_path.rsplit("/", 1)[-1])
+        if quality is not None:
+            out[role] = quality
+    return out
 
 FALLBACK_MEMORY_COST_BY_ROLE: Dict[str, float] = {
     "frontdoor": 1.0,
@@ -200,14 +261,15 @@ def _fallback_q_scorer_priors(*, degraded_reason: str | None = None) -> QScorerP
     return _materialize_q_scorer_priors(
         QScorerPriors(
             baseline_tps_by_role=dict(FALLBACK_BASELINE_TPS_BY_ROLE),
-            baseline_quality_by_role=dict(BASELINE_QUALITY_BY_ROLE),
+            baseline_quality_by_role=_baseline_quality_by_role(),
             memory_cost_by_role=dict(FALLBACK_MEMORY_COST_BY_ROLE),
             baseline_tps_source_by_role={
                 role: PRIOR_SOURCE_DEGRADED_FALLBACK
                 for role in FALLBACK_BASELINE_TPS_BY_ROLE
             },
             baseline_quality_source_by_role={
-                role: PRIOR_SOURCE_DEGRADED_FALLBACK for role in BASELINE_QUALITY_BY_ROLE
+                role: PRIOR_SOURCE_DEGRADED_FALLBACK
+                for role in _baseline_quality_by_role()
             },
             memory_cost_source_by_role={
                 role: PRIOR_SOURCE_DEGRADED_FALLBACK
@@ -415,14 +477,49 @@ def validate_live_q_scorer_prior_sources(
         ("quality", priors.baseline_quality_source_by_role),
         ("memory_cost", priors.memory_cost_source_by_role),
     )
+    # 2026-08-02: an ABSENT prior and a FABRICATED one are not the same failure.
+    #
+    # This loop treated both as "not stack_priors" and blocked identically, which
+    # made the honest state unreachable: a role whose model has no measured quality
+    # CANNOT draw one from stack_priors, so demanding it is demanding the impossible
+    # — and the only way to satisfy the gate was to let a degraded table supply a
+    # number, i.e. to prefer a fabricated value over an admitted unknown.
+    #
+    #   degraded_fallback -> a NUMBER FROM SOMEWHERE ELSE is being scored as if it
+    #                        described this model. Always an error. This is how the
+    #                        router came to score a Qwen3.6-27B with the 122B's 0.94.
+    #   <missing>         -> the model genuinely has no measured value on this
+    #                        instrument, and the consumer SKIPS the term rather than
+    #                        inventing one (q_reward.py guards with `if role in ...`).
+    #                        Permitted only when the compiled prior agrees it is null,
+    #                        so "missing" can never mask a compile that dropped a
+    #                        value it should have carried.
+    priors_doc = _load_valid_stack_priors(stack_priors_path)
+    role_records = (priors_doc.get("roles") or {}) if isinstance(priors_doc, dict) else {}
+
+    def _declared_null(role: str, prior_name: str) -> bool:
+        if prior_name != "quality":
+            return False
+        record = role_records.get(role)
+        if not isinstance(record, dict):
+            return False
+        block = record.get("priors")
+        if not isinstance(block, dict):
+            return False
+        return "quality_overall" in block and block.get("quality_overall") is None
+
     for role in sorted(_live_stack_q_scorer_roles(stack_priors_path)):
         for prior_name, source_by_role in source_maps:
             source = source_by_role.get(role, "<missing>")
-            if source != PRIOR_SOURCE_STACK_PRIORS:
-                errors.append(
-                    f"live q_scorer role {role!r} uses {prior_name} source "
-                    f"{source}; expected {PRIOR_SOURCE_STACK_PRIORS}"
-                )
+            if source == PRIOR_SOURCE_STACK_PRIORS:
+                continue
+            if source == "<missing>" and _declared_null(role, prior_name):
+                # Honest absence, corroborated by the compiled artifact.
+                continue
+            errors.append(
+                f"live q_scorer role {role!r} uses {prior_name} source "
+                f"{source}; expected {PRIOR_SOURCE_STACK_PRIORS}"
+            )
     return errors
 
 
@@ -457,7 +554,7 @@ def descriptor_q_scorer_priors_by_role(
         return stack_prior_q_scorer_priors_by_role(stack_priors_path)
 
     tps_by_role = registry_baseline_tps_by_role(registry_path)
-    quality_by_role = dict(BASELINE_QUALITY_BY_ROLE)
+    quality_by_role = _baseline_quality_by_role()
     memory_by_role = registry_memory_cost_by_role(registry_path)
     tps_sources = {role: PRIOR_SOURCE_REGISTRY for role in tps_by_role}
     quality_sources = {

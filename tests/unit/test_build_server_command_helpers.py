@@ -206,8 +206,12 @@ def test_build_vision_command_escalation_uses_worker_vision_model() -> None:
     # Still no expert-count override: the registry corrected int:4 to "use the
     # GGUF default of 8" on 2026-07-31.
     assert "--override-kv" not in cmd
-    # Was "8192"; LAUNCH_CONTEXT_TOKENS moved both VL roles to the measured 16384.
-    assert cmd[cmd.index("-c") + 1] == "16384"
+    # 8192 -> 16384 (2026-08-01 W1) -> 65536 (2026-08-02, operator-ratified).
+    # DERIVED now, not declared launcher-side: server_mode.worker_vision
+    # .serving_shape.n_ctx, which vision_escalation inherits through shared_with.
+    # 65536 / -np 4 = 16384 per slot, i.e. the same per-slot depth the MMMU-250
+    # cutover measured — the total grew, the per-request context did not.
+    assert cmd[cmd.index("-c") + 1] == "65536"
     # Was "24", from NUMA_CONFIG["vision_escalation"]. That entry was DELETED by
     # the cutover (the role launches nothing), so _resolve_thread_count now falls
     # through to its unknown-role default of 96. Pinned deliberately: if anyone
@@ -224,9 +228,33 @@ def test_build_vision_command_worker_uses_stack_prior_shape() -> None:
     cmd = oss._build_vision_command(port=8086, vision_type="worker")
     assert oss.VISION_WORKER_MODEL in cmd
     assert oss.VISION_WORKER_MMPROJ in cmd
-    # Was "8192"; now the 16384 the model was actually measured at.
-    assert cmd[cmd.index("-c") + 1] == "16384"
-    assert cmd[cmd.index("-t") + 1] == "24"
+    # 8192 -> 16384 (measured shape) -> 65536 (2026-08-02, operator-ratified,
+    # DERIVED from server_mode.worker_vision.serving_shape.n_ctx). Per-slot depth
+    # is unchanged at 65536/-np 4 = 16384.
+    assert cmd[cmd.index("-c") + 1] == "65536"
+    # -t was "24", the NPS4 node-1 CPU quarter this role held while it was the
+    # 4.4 GB Qwen2.5-VL-7B. The 2026-08-01 W1 cutover moved worker_vision onto
+    # the MI210, and a GPU-resident role takes the SHARED GPU host lane, not a
+    # CPU quarter — its host threads only tokenise, sample and marshal.
+    #
+    # There is no longer a disagreement about which host shape the VL role owns;
+    # all four declarations agree, so assert against them rather than a literal:
+    #   * stack_numa.GPU_HOST_LANE — canonical BECAUSE MEASURED: the MMMU-250
+    #     cutover that chose this model ran `taskset -c 184-191 ... -t 8`.
+    #   * NUMA_CONFIG["worker_vision"] — gpu_host_lane, cpuset 184-191.
+    #   * the compiled stack prior — launch entry cpu_shape_class gpu_host_lane.
+    # If anyone re-rosters the VL role onto a CPU quarter, all three must move
+    # together or this fails.
+    from scripts.server.stack_numa import GPU_HOST_LANE
+
+    lane_cpus, lane_threads = GPU_HOST_LANE
+    assert oss.NUMA_CONFIG["worker_vision"]["gpu_host_lane"] is True
+    assert oss.NUMA_CONFIG["worker_vision"]["instances"][0][0] == lane_cpus
+    assert {
+        entry["cpu_shape_class"]
+        for entry in _stack_prior_role("worker_vision")["serving"]["launch"]["entries"]
+    } == {"gpu_host_lane"}
+    assert cmd[cmd.index("-t") + 1] == str(lane_threads)
 
 
 @pytest.mark.parametrize(
@@ -520,7 +548,12 @@ def test_build_worker_general_command_rejects_boolean_runtime_numbers(
         binary_override=None,
     )
 
-    assert _flag_value(cmd, "-np") == "1"
+    # The prior fixture above declares no slots, so `-np` falls through to the
+    # ambient declaration for :8072 — worker's FULL instance, 16 as of the
+    # 2026-08-02 per-shape ratification (was 1). What this test is actually
+    # about is unchanged: a boolean in a numeric runtime field must be rejected
+    # rather than coerced, which the spec assertions below still pin.
+    assert _flag_value(cmd, "-np") == "16"
     fallback = oss._WORKER_GENERAL_DEGRADED_FALLBACK
     assert _flag_value(cmd, "-c") == str(fallback["context_tokens"])
     assert _flag_value(cmd, "-ub") == str(fallback["ubatch"])
@@ -690,9 +723,25 @@ def test_append_kv_quant_args_emits_q8_for_architect_general() -> None:
 
 
 def test_append_kv_quant_args_noop_for_role_without_config() -> None:
-    cmd = ["pre-existing"]
-    oss._append_kv_quant_args(cmd, "worker_vision")  # not in _KV_QUANT_CONFIGS
-    assert cmd == ["pre-existing"]
+    """A launch role with no derived KV-quant entry must get NO -ctk/-ctv.
+
+    2026-08-02: `worker_vision` was this test's example of a KV-config-free role.
+    It is not one any more — the MMMU-250 paired A/B (f16 153/250 vs q8_0
+    155/250, +0.80 pp, CI [-1.90,+3.03], non-inferior at a pre-registered 3 pp
+    margin) moved it to q8_0/q8_0. `_KV_QUANT_CONFIGS` is also no longer
+    hand-listed: it is DERIVED from `server_mode.<role>.serving_shape.kv_quant`.
+    So take the examples FROM the derived table instead of naming a role, and
+    this cannot go stale the same way again.
+    """
+    uncovered = sorted(set(oss.ROLE_LAUNCH_META) - set(oss._KV_QUANT_CONFIGS))
+    # The role that made this test stale is now covered — that is the point.
+    assert "worker_vision" not in uncovered
+    # Guard against the loop below going vacuous if every role gains a config.
+    assert uncovered, "expected at least one launch role without a derived KV-quant config"
+    for role_name in uncovered:
+        cmd = ["pre-existing"]
+        oss._append_kv_quant_args(cmd, role_name)
+        assert cmd == ["pre-existing"], role_name
 
 
 def test_apply_numa_spec_overrides_rewrites_draft_max() -> None:
@@ -1202,3 +1251,106 @@ def test_start_document_formalizer_detaches_child_stdio(tmp_path, monkeypatch) -
 
     assert info is not None
     _assert_detached_popen(popen)
+
+
+# =============================================================================
+# Phase 2 — `-np` on the FALLBACK path comes from the declaration
+# =============================================================================
+# Compiled priors normally supply `slots`, so the launcher's own fallback is
+# only reached when a role has no usable prior record. That is exactly why the
+# divergence survived: the fallback was `1 if role in SERIAL_ROLES else 2`,
+# which disagreed with `server_mode.<role>.slots` for 6 of the 11 roles master
+# declares it for, and nothing exercised it. These tests exercise it.
+
+
+def _np_without_priors(build, *args, **kwargs) -> str:
+    """Build a command with the compiled priors suppressed."""
+    with patch.object(oss, "_stack_prior_launch", lambda role: ({}, {})):
+        cmd = build(*args, **kwargs)
+    return cmd[cmd.index("-np") + 1]
+
+
+@pytest.mark.parametrize(
+    ("role", "port"),
+    [
+        ("frontdoor", 8070),
+        ("architect_general", 8083),
+        ("architect_critic", 8074),
+        ("ingest_long_context", 8085),
+    ],
+)
+def test_role_command_np_fallback_equals_the_declared_slots(role: str, port: int) -> None:
+    from scripts.server.stack_manifest import DECLARED_SLOTS
+
+    role_config = SimpleNamespace(
+        name=role,
+        model=SimpleNamespace(full_path=f"/models/{role}.gguf", name=role),
+        acceleration=SimpleNamespace(type="none", draft_role=None, experts=None, k=None),
+    )
+    assert _np_without_priors(oss._build_role_command, role_config, port) == str(
+        DECLARED_SLOTS[role]
+    )
+
+
+def test_vision_worker_np_fallback_is_the_declared_one_not_the_old_literal() -> None:
+    """The exhibit: this branch hardcoded 2 while worker_vision declared 1.
+
+    The declared value has since moved 1 -> 4 (2026-08-02, operator-ratified),
+    which is exactly the point — the assertion tracks the DECLARATION rather than
+    restating a number, so a ratified change lands here without an edit to the
+    launcher. Only the constant below had to move.
+    """
+    from scripts.server.stack_manifest import DECLARED_SLOTS
+
+    assert DECLARED_SLOTS["worker_vision"] == 4
+    assert _np_without_priors(oss._build_vision_command, 8086, "worker") == "4"
+
+
+def test_worker_general_np_fallback_is_the_declared_one() -> None:
+    from scripts.server.stack_manifest import DECLARED_SLOTS
+
+    # 1 -> 16: :8072 is worker's FULL instance and `slots_by_shape.full` is 16.
+    # DECLARED_SLOTS is the per-ROLE compat scalar, which the parity guard pins to
+    # the primary instance's value, so the two agree by construction.
+    assert DECLARED_SLOTS["worker_general"] == 16
+    assert (
+        _np_without_priors(oss._build_worker_general_command, 8072, "/models/w.gguf", None)
+        == "16"
+    )
+
+
+def test_worker_general_np_differs_between_the_full_and_a_half() -> None:
+    """The per-INSTANCE claim: one role, one record, two different `-np`.
+
+    This is what a per-role slot count could not express. :8072 is the 96-core
+    full (16 slots, 16384 tokens each); :8082 is a 48-core half (4 slots, 65536
+    each). Both resolve from the same `serving_shape.slots_by_shape` joined
+    against the `cpu_shape` stack_topology.yaml declares for each instance.
+    """
+    full = _np_without_priors(
+        oss._build_worker_general_command, 8072, "/models/w.gguf", None, 0
+    )
+    half = _np_without_priors(
+        oss._build_worker_general_command, 8082, "/models/w.gguf", None, 1
+    )
+    assert (full, half) == ("16", "4")
+
+
+def test_serial_roles_no_longer_shrinks_the_launched_slot_count() -> None:
+    """SERIAL_ROLES is an admission policy; adding a role to it must not move -np."""
+    from scripts.server import stack_manifest
+
+    role_config = SimpleNamespace(
+        name="architect_general",
+        model=SimpleNamespace(full_path="/models/a.gguf", name="architect_general"),
+        acceleration=SimpleNamespace(type="none", draft_role=None, experts=None, k=None),
+    )
+    before = _np_without_priors(oss._build_role_command, role_config, 8083)
+    with patch.object(
+        stack_manifest, "SERIAL_ROLES", stack_manifest.SERIAL_ROLES | {"architect_general"}
+    ):
+        after = _np_without_priors(oss._build_role_command, role_config, 8083)
+    # 2 -> 8 (operator-ratified 2026-08-02). The invariant under test is the
+    # EQUALITY, not the number: adding a role to SERIAL_ROLES must leave `-np`
+    # exactly where it was.
+    assert before == after == "8"

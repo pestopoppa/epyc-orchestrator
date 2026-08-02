@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -2491,3 +2493,90 @@ def test_production_surface_manifest_owns_every_role_fact_rule() -> None:
         rule["compared_against"] == "orchestration/derived/stack_priors.yaml"
         for rule in inventory["role_fact_rules"]
     )
+
+
+# ---------------------------------------------------------------------------
+# Derived retired-role surface patterns (2026-08-02)
+#
+# These rules each carried the literal `\barchitect_coding\b` while this module
+# already derived the authoritative retired-role set a few hundred lines above.
+# The two had diverged: the derivation returns dozens of names, the scanner looked
+# for one. Nothing was duplicated, a name was simply MISSING from a hand-written
+# pattern — so no review of what the rule DID match could reveal what it did not.
+# ---------------------------------------------------------------------------
+
+
+def test_retired_role_rules_derive_their_pattern_from_the_producer() -> None:
+    derived_rules, errors = stack_change_guard._derive_retired_role_patterns(
+        HARDCODED_SURFACE_RULES
+    )
+    assert not errors, errors
+
+    marked = [rule for rule in HARDCODED_SURFACE_RULES if rule.derive_retired_roles]
+    assert marked, "no rule is marked derive_retired_roles"
+
+    retired = stack_change_guard.retired_live_roles()
+    by_id = {rule.rule_id: rule for rule in derived_rules}
+    for rule in marked:
+        pattern = re.compile(by_id[rule.rule_id].pattern)
+        # every DERIVED retired role is now scanned for...
+        for role in retired:
+            assert pattern.search(role), f"{rule.rule_id} does not match {role}"
+        # ...and the FLOOR is still covered even if the derivation shrinks.
+        for role in RETIRED_LIVE_ROLE_FLOOR:
+            assert pattern.search(role), f"{rule.rule_id} lost floor role {role}"
+        # a live role must NOT match, or every stack change fails on a name the
+        # fleet is actually serving.
+        assert not pattern.search("architect_general")
+
+
+def test_retired_role_derivation_keeps_the_floor_when_derivation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken source degrades to the floor and REPORTS, never silently passes."""
+
+    def _boom() -> frozenset[str]:
+        raise RetiredRoleDerivationError("master registry unreadable")
+
+    monkeypatch.setattr(stack_change_guard, "retired_live_roles", _boom)
+    derived_rules, errors = stack_change_guard._derive_retired_role_patterns(
+        HARDCODED_SURFACE_RULES
+    )
+    assert errors and "retired-role derivation failed" in errors[0]
+    marked = next(r for r in derived_rules if r.derive_retired_roles)
+    pattern = re.compile(marked.pattern)
+    for role in RETIRED_LIVE_ROLE_FLOOR:
+        assert pattern.search(role)
+
+
+def test_derived_retired_role_scan_gains_coverage_and_loses_none(tmp_path: Path) -> None:
+    """Teeth: a retired role the hand-written pattern never named is now found."""
+    (tmp_path / "src").mkdir()
+    retired = sorted(stack_change_guard.retired_live_roles() - RETIRED_LIVE_ROLE_FLOOR)
+    if not retired:
+        pytest.skip("no retired role beyond the floor to demonstrate with")
+    probe = retired[0]
+    (tmp_path / "src" / "live_module.py").write_text(
+        f'ROLE_MAP = {{"{probe}": "x", "{sorted(RETIRED_LIVE_ROLE_FLOOR)[0]}": "y"}}\n',
+        encoding="utf-8",
+    )
+
+    rule = next(
+        r for r in HARDCODED_SURFACE_RULES if r.rule_id == "retired_role_in_active_code"
+    )
+    hand_written = dataclasses.replace(rule, derive_retired_roles=False, exclude_globs=())
+    derived = dataclasses.replace(rule, exclude_globs=())
+
+    hand_findings = stack_change_guard.scan_hardcoded_surfaces(
+        tmp_path, rules=(hand_written,), categories=None
+    )
+    derived_findings = stack_change_guard.scan_hardcoded_surfaces(
+        tmp_path, rules=(derived,), categories=None
+    )
+
+    assert len(hand_findings) == 1  # only the floor role is named by hand
+    assert len(derived_findings) == 1
+    hand_snippets = {f.snippet for f in hand_findings}
+    assert probe in derived_findings[0].snippet
+    # coverage gained, none lost
+    assert hand_snippets <= {f.snippet for f in derived_findings}

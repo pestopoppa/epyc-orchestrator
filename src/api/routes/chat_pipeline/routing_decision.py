@@ -527,7 +527,6 @@ def derive_task_type_from_route(task_ir: dict, routing_decision: list) -> None:
         "worker_math": "math",
         "coder_escalation": "coder",
         "coder_primary": "coder",
-        "thinking_reasoning": "thinking",
     }
     routed_role = str(routing_decision[0]) if routing_decision else ""
     derived_task_type = role_to_task_type.get(routed_role)

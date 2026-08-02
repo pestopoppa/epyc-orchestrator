@@ -139,11 +139,26 @@ class Role(str, Enum):
     rows — unlearnable, which the operator ruled must not happen.
     """
 
-    THINKING_REASONING = "thinking_reasoning"
-    """Chain-of-thought reasoning specialist.
+    THINKING_REASONING = "thinking_reasoning"  # stack-change-guard: allow
+    """RETIRED 2026-03-06 — retained ONLY so old serialized rows still deserialize.
 
-    Used for tasks requiring explicit reasoning chains.
-    May output <think> tags before final answer.
+    The registry marks it `deprecated: true`, `deprecated_reason: "GGUF deleted from
+    disk — model weights no longer available"`. It has no `PORT_MAP` entry, no
+    `ROLE_LAUNCH_META` entry and no server: nothing can route to it.
+
+    The member stays because episodic-memory and routing rows written before
+    2026-03-06 carry the literal string, and constructing a Role from it must keep
+    resolving for those to replay. Deleting it would turn historical rows into
+    `normalize_action -> None` drops, which is the same unlearnable-arm defect that
+    ARCHITECT_CRITIC was added to avoid, only pointing backwards.
+
+    The `stack-change-guard: allow` marker above is deliberate and is the ONLY
+    permitted live reference. On 2026-08-02 the guard's retired-role set became
+    derived (1 hand-written name -> 42 from registry markers) and correctly flagged
+    five live references to this role; the other four were dead code in
+    `parsing_config`, a langgraph node map, `factual_risk` and a routing task-type
+    map, and were removed. If a reference to this role appears anywhere else, it is
+    a bug — the model does not exist on disk.
     """
 
     # =========================================================================

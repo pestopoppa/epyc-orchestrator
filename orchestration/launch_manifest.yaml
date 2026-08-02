@@ -16,17 +16,27 @@
 # code: a Python table invites a second Python table beside it, and a fallback
 # dict is one `try/except ImportError` away. Data does not invite that.
 #
-# PHASE STATUS. This is phase 1: EXTRACTION ONLY. Every value here is the value
-# that was in Python, byte-for-byte identical after load. Phase 2 re-derives the
-# fields the master registry already declares (port, tier, device, slots, n_ctx,
-# kv_quant, shared_with) instead of declaring them twice — see the phase-2 notes
-# marked `DERIVABLE:` below.
+# PHASE STATUS. Phase 1 was EXTRACTION ONLY (Python literals -> this file).
+# Phase 2 (2026-08-02) stops RESTATING what the master registry already declares:
+#
+#   DERIVED from orchestration/model_registry.yaml `server_mode` (no longer
+#   declared here at all — stack_manifest.py reads master):
+#     * slots        -> server_mode.<role>.slots      (drives -np)
+#     * device       -> server_mode.<role>.device     (vision worker)
+#     * shared_with  -> server_mode.<role>.shared_with (role aliases)
+#
+#   STILL DECLARED HERE, because master has no counterpart for most rows, but
+#   now covered by the import-time parity guard `validate_declaration_parity()`
+#   so the rows that DO exist in both can never drift:
+#     * port, tier, kv_quant, n_ctx, and the numa_ports/numa_instances
+#       projection of stack_topology.yaml
 #
 # HOW TO CHANGE IT. Edit the data. Do not add a fallback table in a consumer;
-# a consumer that cannot load this file must fail, not guess. The import-time
-# validator `_validate_role_classification()` in stack_manifest.py checks this
-# file against orchestration/stack_topology.yaml's numa_config on every import,
-# so a half-edit fails loudly at process start rather than at launch time.
+# a consumer that cannot load this file must fail, not guess. Two import-time
+# validators in stack_manifest.py fail loudly at process start rather than at
+# launch time:
+#   `_validate_role_classification()`  — this file vs stack_topology.yaml
+#   `validate_declaration_parity()`    — this file vs the MASTER registry
 # -----------------------------------------------------------------------------
 schema_version: launch_manifest.v1
 
@@ -41,9 +51,13 @@ schema_version: launch_manifest.v1
 # Pre-warm (2026-03-29): primary port is the full-speed instance.
 # Quarter instances on offset ports (808x, 818x, 828x, 838x).
 # =============================================================================
-# DERIVABLE (phase 2): the master registry declares `server_mode.<role>.port`
-# for every serving role. This table is a second copy of it plus the non-serving
-# entries (orchestrator, document_formalizer, sd_server, whisper).
+# KEPT (phase 2, option b): master declares `server_mode.<role>.port` for 11 of
+# the 28 rows below — every serving role and alias, but none of the embedder
+# pool, worker_fast/worker_coder, eval_batch_frontdoor, orchestrator,
+# document_formalizer, sd_server or whisper. Deriving 11 rows and declaring 17
+# would split one table across two files, which is worse than one table plus a
+# guard. `validate_declaration_parity()` asserts the 11 matched rows agree, so
+# the half that IS doubly declared cannot drift.
 port_map:
   frontdoor: 8070          # Full-speed 1×96t (quarters: 8080, 8180, 8280, 8380)
   # 2026-08-01 W1 CUTOVER: coder_escalation LEFT frontdoor's :8070 35B process.
@@ -107,14 +121,22 @@ hot_roles:
   - vision_escalation
 
 # Roles that must never run concurrently (large/latency-sensitive paths).
-# Note: frontdoor intentionally runs with 2 slots by default for better
-# interactive responsiveness under concurrent traffic.
+#
+# 2026-08-02 PHASE 2 — THIS IS AN ADMISSION POLICY, NOT A SERVER SHAPE.
+# It answers "how many requests will the orchestrator have in flight for this
+# role" (src/api/admission.py), NOT "how many slots is the server launched
+# with". Those are different questions and a role may legitimately run a 2-slot
+# server while admission serialises it. The launcher no longer derives `-np`
+# from this set: `-np` comes from the DECLARED `server_mode.<role>.slots` in the
+# master registry (see `launch_shape.fallback_slots` below for what happens when
+# master declares nothing). Do not re-couple them — the coupling is how a
+# `slots: 1` declaration ended up launching `-np 2`.
+#
 # 2026-05-06: removed architect_coding (role eliminated) + thinking_reasoning (role eliminated, no GGUF).
 #
-# 2026-08-01 W1 CUTOVER — this set is now aligned to the PROCESS, not the role
-# name. It drives admission concurrency (src/api/admission.py:79-85) and the
-# 1-vs-2 fallback slot count (orchestrator_stack.py:1173), so two aliases on one
-# server disagreeing about serialization is incoherent by construction.
+# 2026-08-01 W1 CUTOVER — this set is aligned to the PROCESS, not the role
+# name, so two aliases on one server disagreeing about serialization is
+# incoherent by construction.
 #   - coder_escalation REMOVED: it is now an alias on architect_general's :8083
 #     GPU process, which declares slots: 2 and is NOT serial. It was serial only
 #     because it used to share frontdoor's single-slot CPU 35B.
@@ -170,8 +192,20 @@ serial_roles:
 #
 # ORDER IS LOAD-BEARING. HOT_SERVERS / WARM_SERVERS are emitted in this order.
 #
-# DERIVABLE (phase 2): `tier` duplicates the master registry's process_layout
-# membership; `shared_with_first_n` duplicates server_mode.<role>.shared_with.
+# PHASE 2 — `shared_with_first_n` IS NO LONGER DECLARED HERE. It is DERIVED, per
+# role, from `server_mode.<role>.shared_with` in the master registry:
+#
+#     shared_with_first_n = launcher_only_aliases + master shared_with
+#
+# `launcher_only_aliases` (below, on worker_general only) carries alias names the
+# launcher must attach that master does not list. Extras lead so the historical
+# roles-list order is preserved byte-for-byte. `shared_with_first_n_count` stays
+# declared here: it says which INSTANCES get the aliases, which is a launcher
+# concept master has no way to express.
+#
+# `tier` stays declared here (option b): master covers 6 of these 17 rows —
+# the embedder pool, worker_fast and eval_batch_frontdoor have no server_mode
+# row at all. The parity guard asserts the 6 matched rows agree.
 role_launch_meta:
   # ---- HOT tier (always started) ----
   # 2026-05-09: coder_escalation + worker_summarize CONSOLIDATED onto frontdoor's
@@ -184,10 +218,9 @@ role_launch_meta:
   frontdoor:
     tier: hot
     mode: default
-    # 2026-08-01 W1: coder_escalation removed — it moved to :8083. This must
-    # stay in lockstep with server_mode.frontdoor.shared_with in the registry,
-    # which the same commit narrowed to [worker_summarize].
-    shared_with_first_n: [worker_summarize]
+    # aliases DERIVED: server_mode.frontdoor.shared_with -> [worker_summarize].
+    # 2026-08-01 W1 removed coder_escalation from that list when it moved to
+    # :8083; there is no longer a launcher-side copy that could miss the memo.
   # coder_escalation entry REMOVED 2026-05-09 — consolidated into frontdoor above.
   # 2026-08-01: it is still not its own launch entry, but its host changed from
   # frontdoor to architect_general (see that role's shared_with_first_n below).
@@ -195,17 +228,27 @@ role_launch_meta:
     tier: hot
     mode: worker_pool
     worker_type: explore
-    # Aliases that share the worker_general process: worker_explore is the
-    # legacy name (pre-2026-03-19 worker pool design); worker_math + toolrunner
-    # share the GGUF mmap and process for routing fan-out.
-    shared_with_first_n: [worker_explore, worker_math, toolrunner]
+    # aliases DERIVED: server_mode.worker.shared_with -> [worker_math, toolrunner].
+    #
+    # worker_explore is the ONE alias master does not list, and it is NOT dead:
+    # src/roles.py:332 + src/api/routes/health.py:30 canonicalise it to
+    # worker_general, src/config/models.py:943 gives it its own server_url,
+    # model_registry.yaml:76 gives it a 60s timeout row and lists it under
+    # "Active roles", three orchestration/lab_jobs.yaml jobs run with
+    # `model_role: worker_explore`, and the compiled stack priors carry a
+    # worker_explore record (tests/unit/test_stack_priors_compiler.py:119
+    # asserts its ports equal worker_general's) that exists ONLY because the
+    # launcher attaches the alias here. Dropping it to match master would delete
+    # a live role record, so master's list is the INCOMPLETE side. Declared as a
+    # launcher-only extra until master adds it — see `parity:` at the end of
+    # this file, which is where the guard reads the exception from.
     shared_with_first_n_count: 2   # aliases on full + first quarter
   # 2026-08-01 W1 CUTOVER: architect_general is Qwen3.6-27B dense Q8 on MI210
   # (ROCm0) and now HOSTS coder_escalation as an alias on its :8083 process.
   architect_general:
     tier: hot
     mode: default
-    shared_with_first_n: [coder_escalation]
+    # aliases DERIVED: server_mode.architect_general.shared_with -> [coder_escalation]
   # architect_critic — NEW 2026-08-01. The 122B UD-Q4_K_M on the full CPU
   # instance architect_general vacated, port 8074, tier hot per OPERATOR D1.
   architect_critic:
@@ -220,7 +263,7 @@ role_launch_meta:
     tier: hot
     mode: vision
     vision_type: worker
-    shared_with_first_n: [vision_escalation]
+    # aliases DERIVED: server_mode.worker_vision.shared_with -> [vision_escalation]
   # Embedders — no NUMA pinning, fixed single port each
   embedder:   {tier: hot, mode: embedding, no_numa: true, port: 8090}
   embedder_1: {tier: hot, mode: embedding, no_numa: true, port: 8091}
@@ -347,7 +390,13 @@ vision:
   worker:
     model: "{model_base}/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf"
     mmproj: "{model_base}/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf"
-    device: ROCm0
+    # device DERIVED (phase 2) from server_mode.worker_vision.device. It used to
+    # read `device: ROCm0` right here, a second copy of the declaration whose
+    # whole failure history is being shadowed: `--device none` beat a declared
+    # `device: ROCm0` and a 27B ran on CPU with the GPU idle. Master also
+    # declares architect_general's device, which this block had no way to
+    # express — so master's coverage strictly contains the launcher's and the
+    # launcher-side copy bought nothing but a second thing to forget.
     # Two launch flags this model DEPENDS ON, both discovered 2026-07-31:
     #   --image-min-tokens 1024  upstream warns Qwen-VL misbehaves below this
     #   --cache-ram 0            prompt cache is pure churn on vision traffic; every
@@ -366,45 +415,108 @@ vision:
 
 # Effective launch shape. These witness the actual llama-server CLI path;
 # descriptors may preserve broader model capability metadata.
-# DERIVABLE (phase 2): server_mode.<role>.n_ctx and .kv_quant in the master
-# registry declare the same two tables.
+#
+# PHASE 2 status of the two tables below (option b, both):
+#   kv_quant — 9 launcher rows, 3 have a master counterpart, all 3 agree.
+#   n_ctx    — 7 launcher rows, 1 has a master counterpart (worker_vision), agrees.
+# Master's coverage is a small minority in both cases, so deleting the launcher
+# tables would leave most roles undeclared. Both are in the parity guard, so the
+# matched rows cannot drift; when master grows counterparts for the rest, flip
+# them to DERIVED the way `slots` / `device` / `shared_with` already are.
 launch_shape:
   default_effective_context_tokens: 32768
   default_ubatch_tokens: 8192
 
-  context_tokens:
-    worker_general: 16384
-    worker_fast: 16384
-    # 2026-08-01 W1: 8192 -> 16384. This is the shape the Qwen3-VL-30B was actually
-    # measured at — both the MMMU cutover (vision_final.py) and the 2026-07-31 GPU
-    # co-residency run used -c 16384, and the 21049 MB VRAM figure is a 16384/np=1
-    # figure. It matches server_mode.worker_vision.n_ctx. Do NOT raise toward
-    # ctx_max 262144: the four-model GPU steady state sits at 62.59 of 63.98 GiB.
-    worker_vision: 16384
-    vision_escalation: 16384   # alias; same process, same context
-    architect_general: 16384
-    architect_critic: 16384    # inherited from the 122B's launch shape
-    ingest_long_context: 32768
+  # ---------------------------------------------------------------------------
+  # SLOT FALLBACKS — the ONLY slot numbers the launcher still owns.
+  # ---------------------------------------------------------------------------
+  # `-np` is DERIVED from `server_mode.<role>.slots` in the master registry.
+  # This table is consulted ONLY for a role master says nothing about, and every
+  # value carries the launch mode it belongs to so its source is nameable: a
+  # config surface with fallbacks and no source label has that absence as its
+  # first bug. `stack_manifest.resolve_slots()` returns the value AND where it
+  # came from ("master:<row>" or "manifest:fallback_slots.<key>"), so no caller
+  # has to guess which of the two it got.
+  #
+  # These are NOT admission limits. See the note on `serial_roles:` above.
+  #
+  # Reachability today (2026-08-02): every SERVING role has a master
+  # declaration, so only the embedder pool, worker_fast and the eval-batch lane
+  # actually land here.
+  fallback_slots:
+    default: 2                 # generic llama-server role, no master row
+    worker_pool: 1             # MTP fuses draft+target; -np 2 asserts on ik PR #1744
+    worker_pool_fast: 4        # 1.5B burst worker — 4 parallel slots
+    vision: 1                  # was 2, and that literal is the phase-2 exhibit:
+                               # it shadowed `server_mode.worker_vision.slots: 1`
+                               # and launched a serial-admitted role with -np 2
+    embedding: 4               # matches embedding.pool_recipe.slots
+    eval_batch_frontdoor: 8    # P-BENCH-3/E2 measured lane shape, not a guess
 
-  # (k_quant, v_quant) pairs.
-  kv_quant_configs:
-    frontdoor: [q8_0, q8_0]
-    coder_escalation: [q8_0, q8_0]
-    worker_summarize: [q8_0, q8_0]
-    worker_general: [q8_0, q8_0]
-    worker_math: [q8_0, q8_0]
-    toolrunner: [q8_0, q8_0]
-    # 2026-08-01 W1: the (q4_0, f16) pair belonged to the 122B and MOVED WITH IT to
-    # architect_critic. architect_general on the 27B takes q8_0/q8_0, matching
-    # server_mode.architect_general.kv_quant and coder_escalation, which is an alias
-    # on the same process and must not declare a different KV shape.
-    architect_general: [q8_0, q8_0]
-    architect_critic: [q4_0, f16]
-    ingest_long_context: [q4_0, q4_0]
+  # ---------------------------------------------------------------------------
+  # CONTEXT FALLBACKS — the ONLY -c values the launcher still owns.
+  # ---------------------------------------------------------------------------
+  # 2026-08-02: `n_ctx` is now DERIVED from
+  # `server_mode.<role>.serving_shape.n_ctx`, exactly as `slots` already was.
+  # Seven rows were deleted from here (worker_general, worker_vision,
+  # vision_escalation, architect_general, architect_critic, ingest_long_context,
+  # and the implicit frontdoor default): every one of them now lives in master,
+  # grouped with the `slots_by_shape` and `kv_quant` it is arithmetically tied
+  # to. A launcher-side copy of n_ctx could be edited without master's capacity
+  # check ever seeing it, which is precisely the class of change the group
+  # exists to make impossible.
+  #
+  # What remains is what master has no row for. `worker_fast` is a launcher-only
+  # 1.5B burst pool with no server_mode entry; if it ever gets one, delete the
+  # row here rather than reconciling the two.
+  context_tokens:
+    worker_fast: 16384
+    # The P-BENCH-3/E2 eval-batch lane's OWN context, declared for the same
+    # reason its `-np 8` is declared in fallback_slots rather than inherited:
+    # the lane borrows frontdoor's MODEL and runtime priors but not its serving
+    # shape. It had no row here and read frontdoor's compiled context instead,
+    # so when frontdoor moved 32768 -> 262144 on 2026-08-02 this lane silently
+    # followed it to a shape nothing has measured. A borrowed number that tracks
+    # its lender is not a declaration.
+    eval_batch_frontdoor: 32768
+
+  # kv_quant_configs: DELETED 2026-08-02 — DERIVED from
+  # `server_mode.<role>.serving_shape.kv_quant`. It held 9 rows while master held
+  # 2, so on this field the launcher was the authority and the registry was the
+  # incomplete copy — backwards, since the KV element type only means anything
+  # next to the `n_ctx` it multiplies. All 9 rows were verified against the LIVE
+  # `-ctk`/`-ctv` in `/proc/<pid>/cmdline` before being written to master, so the
+  # move recorded reality rather than changing it. `parity.derived_from_master`
+  # now fails the import if the key comes back.
 
   # 2026-06-26 v6 cutover: architect_general MTP enabled (NEXTN draft-mtp);
   # M-RoPE assertion resolved in v6, smoke-gated at cutover.
   no_spec_decode_roles: []
+
+
+# =============================================================================
+# CAPACITY — host-side policy for the serving_shape capacity guard
+# =============================================================================
+# `stack_manifest.validate_serving_shape_capacity()` sums the declared lineup's
+# weights + KV per DEVICE and refuses an oversubscribed one at import.
+#
+# The GPU leg needs nothing here: src/scheduling/device_model.py already owns the
+# declared VRAM total (orchestration/gpu_shadow_lane_np_ceiling.yaml,
+# vram_total_gib) and the 2.0 GiB first-execution headroom, and the check calls
+# its `vram_fit` rather than re-deriving them. The HOST leg has no such owner —
+# device_model is VRAM-only — so its one policy number lives here as data.
+capacity:
+  # Reserved out of MemTotal for the OS, page cache, the orchestrator API, the
+  # embedder pool, docker services and every non-llama-server tenant. MemTotal
+  # itself is read from /proc/meminfo (a host fact, not a knob); this is the
+  # share of it the model fleet may not claim.
+  #
+  # 64 GiB on a 1133 GiB host (5.6%). Sized against the measured steady state
+  # rather than guessed: the declared CPU lineup at n_ctx 262144 needs ~334 GiB
+  # of weights + ~244 GiB of KV = ~578 GiB, so this reserve is not the binding
+  # constraint today and is not tuned to make anything fit. It exists so the
+  # gate fails BEFORE the machine starts swapping, not at the moment it does.
+  host_os_reserve_gib: 64
 
 
 # =============================================================================
@@ -443,6 +555,57 @@ orchestrator_profiles:
     AUTOPILOT_TOOL_SENTINELS: "1"
     ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT: "1"
 
+
+# =============================================================================
+# PARITY GUARD — every field declared in BOTH this file and the master registry
+# =============================================================================
+# `stack_manifest.validate_declaration_parity()` runs at module import and
+# RAISES on any disagreement. Scope is computed, not listed: for each field
+# below it takes the launcher rows and the master rows, intersects them on role
+# name (through the same binding master uses — direct row, then `model_role`,
+# then `shared_with`), and compares. A field that is DERIVED is checked the
+# other way round: the guard asserts this file does NOT re-declare it, because
+# the way a derivation dies is someone helpfully adding the value back.
+#
+# Adding a field to `checked:` is how you extend the guard. Adding a row to
+# `exceptions:` is how you record a disagreement you have decided not to fix
+# yet — it needs a reason and it shows up in the guard's failure text, so it is
+# an argument, not a silence.
+parity:
+  # Fields this file no longer declares at all. The guard fails if they come back.
+  derived_from_master:
+    - slots          # -> server_mode.<role>.slots  +  serving_shape.slots_by_shape
+    - device         # -> server_mode.<role>.device (vision worker)
+    - shared_with    # -> server_mode.<role>.shared_with (+ launcher_only_aliases)
+    # 2026-08-02 — the KV-FEASIBILITY GROUP moved to master and became derived:
+    - n_ctx          # -> server_mode.<role>.serving_shape.n_ctx
+    - kv_quant       # -> server_mode.<role>.serving_shape.kv_quant
+    # These two joined `slots` because the three are ONE decision, not three:
+    # KV bytes = KiB_per_token(model, kv_quant) * n_ctx, and per-slot context is
+    # n_ctx / slots. Declared apart they can be walked into an infeasible
+    # combination one plausible commit at a time; declared together
+    # `validate_serving_shape_capacity()` can refuse the combination at import.
+    # Note the guard shapes differ: `n_ctx` still has a launcher fallback table
+    # for roles master does not cover (worker_fast), so the check is "no row for
+    # a role master DOES declare"; `kv_quant_configs` is gone entirely, so the
+    # check is "the key must not exist".
+
+  # Fields declared in both. The guard fails if any matched row disagrees.
+  checked:
+    - port
+    - tier
+    - numa_ports
+    - numa_instances
+
+  # Known, argued-for disagreements. Anything NOT listed here fails the guard.
+  # Known, argued-for disagreements. Anything NOT listed here fails the guard.
+  exceptions: []
+  # 2026-08-02: the sole exception (shared_with / worker_general / worker_explore) was
+  # RESOLVED at its own `resolves_when` — the research master now declares
+  # server_mode.worker.shared_with: [worker_explore, worker_math, toolrunner].
+  # The guard caught the exception the moment it went stale and refused to import until
+  # it was deleted, which is the point: a waiver that outlives its cause silently
+  # pre-excuses the next real divergence.
 
 # =============================================================================
 # Docker Services (NextPLAID retrieval + SearXNG metasearch + Crawl4AI extraction)

@@ -588,7 +588,12 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     assert worker["serving"]["server_role"] == "worker"
     assert worker["serving"]["binding"] == "server_mode.model_role"
     assert worker["serving"]["ports"] == [8072]
-    assert worker["serving"]["effective_context_tokens"] == 16384
+    # 16384 -> 262144 (2026-08-02, operator-ratified). DERIVED from
+    # server_mode.worker.serving_shape.n_ctx, which reaches worker_general through
+    # the model_role binding this test is about. The 16384 it used to read was the
+    # stale `roles.worker_general.model.max_context`; the gemma4 GGUF's own
+    # context_length is 262144.
+    assert worker["serving"]["effective_context_tokens"] == 262144
     assert worker["serving"]["launch"]["primary_roles"] == ["worker_general"]
     assert worker["serving"]["launch"]["modes"] == ["worker_pool"]
     assert worker["serving"]["launch"]["requirements"]["model_path"].endswith(
@@ -612,7 +617,9 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     # registry binary_dir override — otherwise every role silently changes policy.
     assert runtime["env_policy"] == "canonical"
     assert runtime["kmp_blocktime"] is None
-    assert runtime["cache"]["context_tokens"] == 16384
+    # Same 16384 -> 262144 move as serving.effective_context_tokens above; this is
+    # the runtime half of the same number, and the two must not diverge.
+    assert runtime["cache"]["context_tokens"] == 262144
     assert runtime["cache"]["slots"] == 1
     assert runtime["cache"]["ubatch"] == 512
     assert runtime["cache"]["kv_type_k"] == "q8_0"
@@ -763,8 +770,10 @@ def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
     assert priors["roles"]["worker_general"]["serving"]["ports"] == [8072]
     assert priors["roles"]["worker_math"]["serving"]["ports"] == [8072]
     assert priors["roles"]["toolrunner"]["serving"]["ports"] == [8072]
-    assert priors["roles"]["worker_math"]["serving"]["effective_context_tokens"] == 16384
-    assert priors["roles"]["toolrunner"]["serving"]["effective_context_tokens"] == 16384
+    # 16384 -> 262144 (2026-08-02): both aliases ride worker's process and inherit
+    # its serving_shape.n_ctx, which is the property this test asserts.
+    assert priors["roles"]["worker_math"]["serving"]["effective_context_tokens"] == 262144
+    assert priors["roles"]["toolrunner"]["serving"]["effective_context_tokens"] == 262144
     assert priors["roles"]["worker_math"]["serving"]["binding"] == "server_mode.shared_with"
     assert priors["roles"]["toolrunner"]["serving"]["binding"] == "server_mode.shared_with"
     assert priors["roles"]["worker_math"]["serving"]["launch"]["requirements"] == (
@@ -849,7 +858,12 @@ def test_launch_runtime_record_does_not_force_reasoning_when_template_ignores_to
     )
 
     assert runtime["flags"]["reasoning"] is None
-    assert runtime["cache"]["slots"] == 1
+    # 1 -> 2. This fixture passes an empty server_cfg, so `slots` comes from the
+    # manifest's declared `launch_shape.fallback_slots.default` (2). It read 1
+    # only because the SERIAL_ROLES clamp — an ADMISSION policy applied to a
+    # SERVING number — used to rewrite it here; that clamp was removed on
+    # 2026-08-02 when the operator ratified explicit per-instance slot counts.
+    assert runtime["cache"]["slots"] == 2
 
 
 def test_launch_runtime_record_projects_ap3b_spec_numeric_controls() -> None:
@@ -1078,17 +1092,35 @@ def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) 
     assert role["deployment_status"] == "live_stack"
     assert role["serving"]["binding"] == "stack_manifest.role"
     assert role["serving"]["endpoint"] == "http://localhost:8086"
-    assert role["serving"]["slots"] == 2
-    # 2026-08-01 W1 cutover: was 8192. LAUNCH_CONTEXT_TOKENS["worker_vision"]
-    # moved 8192 -> 16384, the shape the Qwen3-VL-30B was actually measured at.
-    assert role["serving"]["effective_context_tokens"] == 16384
+    # 2026-08-02 phase 2: was 2, from the `mode == "vision"` literal
+    # `1 if vision_type == "escalation" else 2`. That literal is the exhibit for
+    # this refactor — it shadowed `server_mode.worker_vision.slots: 1` and made
+    # the launcher emit `-np 2` for a role declaring 1. With `server_mode` empty,
+    # as here, the value now comes from the DECLARED
+    # `launch_shape.fallback_slots.vision` (1) instead of a literal in the
+    # compiler. A registry that declares slots still wins over it — that is the
+    # `_runtime_flag_int_prior` path, covered by the server_mode tests above.
+    assert role["serving"]["slots"] == 1
+    # 8192 -> 16384 (2026-08-01 W1) -> 65536 (2026-08-02). LAUNCH_CONTEXT_TOKENS is
+    # now DERIVED from server_mode.worker_vision.serving_shape.n_ctx rather than
+    # declared launcher-side, so this reads the ratified value even though this
+    # fixture's own `server_mode` is empty.
+    assert role["serving"]["effective_context_tokens"] == 65536
+    # `cpu_shape_class` and per-entry `slots` are new (2026-08-02): the entry is
+    # now self-describing — where it runs, on what shape, with how many slots —
+    # which is what lets one role's full and halves carry different `-np`.
+    # worker_vision has a single GPU_HOST_LANE instance, so its class is that.
+    # `slots` is 1 here because this fixture declares no registry slots at all and
+    # falls through to launch_shape.fallback_slots.vision, as asserted above.
     assert role["serving"]["launch"]["entries"] == [
         {
             "port": 8086,
             "primary_role": "worker_vision",
             "mode": "vision",
             "alias": False,
+            "cpu_shape_class": "gpu_host_lane",
             "vision_type": "worker",
+            "slots": 1,
         }
     ]
     # 2026-08-01 W1 cutover: was Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf +
@@ -1101,7 +1133,9 @@ def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) 
     )
     runtime = role["serving"]["launch"]["runtime"]
     assert runtime["binary_family"] == "llama.cpp"
-    assert runtime["cache"]["slots"] == 2
+    # Same phase-2 move as serving.slots above: 2 was the `mode == "vision"`
+    # literal, 1 is launch_shape.fallback_slots.vision.
+    assert runtime["cache"]["slots"] == 1
     assert runtime["cache"]["ubatch"] is None
     assert runtime["cache"]["mlock"] is False
     # Still None, and deliberately so: `device` is a server_mode field and this

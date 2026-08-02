@@ -224,7 +224,7 @@ def _stack_prior_role_tiers(
 
 def _degraded_role_tier(role_name: str) -> str | None:
     """Return the explicit degraded role tier for a canonical role name."""
-    if role_name in {"architect_general", "thinking_reasoning", "thinking_exploration"}:
+    if role_name in {"architect_general", "thinking_exploration"}:
         return "tier_1"
     if role_name in {
         "coder_escalation",

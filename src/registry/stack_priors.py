@@ -497,19 +497,96 @@ def live_stack_serving_url_values(path: Path = DEFAULT_OUTPUT) -> dict[str, str]
 
 
 def live_stack_serving_slot_limits(path: Path = DEFAULT_OUTPUT) -> dict[str, int]:
-    """Return per-serving-URL admission slot limits from live stack priors."""
+    """Return per-serving-URL admission slot limits from live stack priors.
+
+    2026-08-02 — PER PORT, NOT PER ROLE. This used to read the role-level
+    `serving.slots` and fold it over every one of the role's ports with `max()`.
+    Two consequences, both wrong once instances stopped being identical:
+
+      * all three frontdoor endpoints got ONE limit, so a per-instance admission
+        limit was not expressible at all — the 96-core full and the two 48-core
+        halves were told to admit the same number of requests;
+      * the number it folded was `serving.slots`, while the launcher emitted
+        `runtime.cache.slots` for `-np`. Those two disagreed (2 vs 1 for
+        frontdoor and architect_critic), so this module's stated purpose —
+        "Aligned admission limits with llama-server slot counts (no idle slots)",
+        src/api/admission.py — was false on the roles it mattered most for.
+
+    Both are fixed by reading the per-instance `slots` now stamped on each launch
+    ENTRY: it is the exact number the launcher passes to `-np` for that port, so
+    `admission_limit == -np` holds instance by instance. The `max()` fold is kept
+    ONLY for genuine collisions — two roles resolving to the same URL, e.g. an
+    alias and its host — where the larger of two equal numbers is still that
+    number, and a real disagreement should not silently under-admit the process.
+
+    `serving.slots` remains the fallback for a record with no per-entry value
+    (launcher-only tenants, or a role compiled before this field existed).
+    """
     limits: dict[str, int] = {}
+
+    def _bump(url: str, value: int) -> None:
+        limits[url] = max(value, limits.get(url, 0))
+
     for record in live_stack_role_records(path).values():
         serving = stack_prior_serving(record)
-        slots = serving.get("slots")
-        if not isinstance(slots, int) or slots <= 0:
+        role_slots = serving.get("slots")
+        role_slots = role_slots if isinstance(role_slots, int) and role_slots > 0 else None
+
+        # `runtime.cache.slots_by_port` is the AUTHORITY, not the launch entries.
+        # An alias is tagged onto only the first N of its host's instances but
+        # serves the whole fleet (WP-13), so its entries do not cover every port
+        # in `serving.ports` — reading entries alone left the untagged ports on
+        # the role-level count and put `-np 4` halves behind a limit of 16, which
+        # is the same per-role-fold defect in a new place. `slots_by_port` is
+        # built over the inherited fleet and does cover them.
+        runtime_cache = stack_prior_launch(record).get("runtime")
+        runtime_cache = runtime_cache.get("cache") if isinstance(runtime_cache, dict) else None
+        by_port = runtime_cache.get("slots_by_port") if isinstance(runtime_cache, dict) else None
+
+        entry_ports: set[int] = set()
+        if isinstance(by_port, dict):
+            for raw_port, value in by_port.items():
+                try:
+                    port = int(raw_port)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                    continue
+                entry_ports.add(port)
+                _bump(f"http://localhost:{port}", value)
+
+        for entry in stack_prior_launch_entries(record):
+            port = entry.get("port")
+            if not isinstance(port, int) or port in entry_ports:
+                continue
+            entry_slots = entry.get("slots")
+            if not isinstance(entry_slots, int) or entry_slots <= 0:
+                entry_slots = role_slots
+            if entry_slots is None:
+                continue
+            entry_ports.add(port)
+            _bump(f"http://localhost:{port}", entry_slots)
+
+        if role_slots is None:
             continue
+        # Ports the record declares but has no launch entry for, plus the
+        # endpoint URL itself when it is not a localhost port form. Falls back to
+        # the role-level count — this is the pre-2026-08-02 behaviour, retained
+        # for exactly the rows that have nothing better.
+        for port in stack_prior_serving_ports(serving):
+            if port not in entry_ports:
+                _bump(f"http://localhost:{port}", role_slots)
         endpoint = serving.get("endpoint")
         if isinstance(endpoint, str):
-            limits[endpoint] = max(slots, limits.get(endpoint, 0))
-        for port in stack_prior_serving_ports(serving):
-            url = f"http://localhost:{port}"
-            limits[url] = max(slots, limits.get(url, 0))
+            endpoint_port = None
+            try:
+                endpoint_port = stack_prior_endpoint_port(serving)
+            except ValueError:
+                endpoint_port = None
+            if endpoint_port is None or endpoint_port not in entry_ports:
+                _bump(endpoint, role_slots)
+            else:
+                _bump(endpoint, limits.get(f"http://localhost:{endpoint_port}", role_slots))
     return limits
 
 
@@ -716,7 +793,11 @@ def _launch_mode_for_server(server: dict[str, Any]) -> str:
     return "default"
 
 
-def _launch_entry_for_role(server: dict[str, Any], role: str) -> dict[str, Any] | None:
+def _launch_entry_for_role(
+    server: dict[str, Any],
+    role: str,
+    shape_class: str | None = None,
+) -> dict[str, Any] | None:
     port = server.get("port")
     roles = server.get("roles")
     if not isinstance(port, int) or not isinstance(roles, list) or not roles:
@@ -731,6 +812,13 @@ def _launch_entry_for_role(server: dict[str, Any], role: str) -> dict[str, Any] 
     numa_instance = server.get("numa_instance")
     if isinstance(numa_instance, int):
         entry["numa_instance"] = numa_instance
+    # 2026-08-02: the instance's SHAPE CLASS (full/half/quarter/gpu_host_lane),
+    # resolved from the `cpu_shape` its stack_topology.yaml entry declares. This
+    # is the launcher-side half of the per-instance `-np` join and is carried on
+    # the entry so `_launch_runtime_record` can multiply it against the master
+    # registry it was HANDED, rather than against the ambient one.
+    if isinstance(shape_class, str) and shape_class:
+        entry["cpu_shape_class"] = shape_class
     worker_type = server.get("worker_type")
     if isinstance(worker_type, str):
         entry["worker_type"] = worker_type
@@ -898,6 +986,7 @@ def _stack_manifest_info(
             WORKER_POOL_MODELS,
             _filter_by_numa_mode,
         )
+        from scripts.server.stack_numa import instance_shape_class
     except Exception:
         return {}, {}
 
@@ -915,16 +1004,36 @@ def _stack_manifest_info(
 
     launch_ports_by_role: dict[str, list[int]] = {}
     launch_entries_by_role: dict[str, list[dict[str, Any]]] = {}
+    # port -> shape class over the ACTIVE (numa-mode-filtered) fleet. Kept next to
+    # the entry lists rather than derived per role because an ALIAS inherits its
+    # host's whole port fleet (WP-13 fleet convergence) while being TAGGED onto
+    # only the first N instances — so its own entries cannot describe every port
+    # it serves, and resolving `-np` from entries alone left the untagged ports on
+    # the role-level fallback. That produced `toolrunner` claiming 16 slots on
+    # :8182, a half instance that runs 4.
+    shape_class_by_port: dict[int, str] = {}
     for server in active_servers:
         if not isinstance(server, dict):
             continue
         port = server.get("port")
         if not isinstance(port, int):
             continue
-        for role in server.get("roles") or []:
+        server_roles = server.get("roles") or []
+        host_role = server_roles[0] if server_roles and isinstance(server_roles[0], str) else None
+        # Shape class is a property of the INSTANCE, so it is looked up on the
+        # host role (which owns the topology entry) and inherited by every alias
+        # riding the same process — an alias has no placement of its own.
+        shape_class = (
+            instance_shape_class(host_role, server.get("numa_instance", 0) or 0)
+            if isinstance(host_role, str)
+            else None
+        )
+        if isinstance(shape_class, str) and shape_class:
+            shape_class_by_port[port] = shape_class
+        for role in server_roles:
             if isinstance(role, str):
                 launch_ports_by_role.setdefault(role, []).append(port)
-                launch_entry = _launch_entry_for_role(server, role)
+                launch_entry = _launch_entry_for_role(server, role, shape_class)
                 if launch_entry is not None:
                     launch_entries_by_role.setdefault(role, []).append(launch_entry)
 
@@ -949,10 +1058,14 @@ def _stack_manifest_info(
             port = meta.get("port")
         else:
             port = PORT_MAP.get(primary)
+        primary_ports = ports or ([port] if isinstance(port, int) else [])
         roles[str(primary)] = {
             "tier": meta.get("tier"),
             "port": port,
-            "ports": ports or ([port] if isinstance(port, int) else []),
+            "ports": primary_ports,
+            "port_shape_classes": {
+                p: shape_class_by_port[p] for p in primary_ports if p in shape_class_by_port
+            },
             "url": f"http://localhost:{port}" if isinstance(port, int) else None,
             "effective_context_tokens": _effective_context_for_meta(
                 str(primary),
@@ -1028,10 +1141,21 @@ def _stack_manifest_info(
                         alias_ports = sorted(set(launch_ports_by_role.get(alias, [])))
                     alias_port = alias_ports[0] if alias_ports else port
                     aliases[alias] = str(primary)
+                    resolved_alias_ports = alias_ports or (
+                        [alias_port] if isinstance(alias_port, int) else []
+                    )
                     roles[alias] = {
                         "tier": meta.get("tier"),
                         "port": alias_port,
-                        "ports": alias_ports or ([alias_port] if isinstance(alias_port, int) else []),
+                        "ports": resolved_alias_ports,
+                        # Inherited over the HOST'S WHOLE FLEET, matching `ports`
+                        # above — an alias rides every one of its host's
+                        # instances, not only the ones it is tagged onto.
+                        "port_shape_classes": {
+                            p: shape_class_by_port[p]
+                            for p in resolved_alias_ports
+                            if p in shape_class_by_port
+                        },
                         "url": f"http://localhost:{alias_port}" if isinstance(alias_port, int) else None,
                         "effective_context_tokens": roles[str(primary)].get(
                             "effective_context_tokens"
@@ -1231,7 +1355,16 @@ def _runtime_flag_string_prior(
     for cfg in (server_cfg, role_cfg):
         if not isinstance(cfg, dict):
             continue
-        for source in (cfg, cfg.get("server"), cfg.get("serving"), cfg.get("launch")):
+        # `serving_shape` FIRST: it is the master registry's grouped
+        # KV-feasibility declaration (n_ctx / slots_by_shape / kv_quant), and the
+        # group must outrank any surviving flat copy of one of its members.
+        for source in (
+            cfg.get("serving_shape"),
+            cfg,
+            cfg.get("server"),
+            cfg.get("serving"),
+            cfg.get("launch"),
+        ):
             if isinstance(source, dict):
                 value = source.get(key)
                 if isinstance(value, str) and value:
@@ -1262,7 +1395,16 @@ def _runtime_flag_int_prior(
     for cfg in (server_cfg, role_cfg):
         if not isinstance(cfg, dict):
             continue
-        for source in (cfg, cfg.get("server"), cfg.get("serving"), cfg.get("launch")):
+        # `serving_shape` FIRST: it is the master registry's grouped
+        # KV-feasibility declaration (n_ctx / slots_by_shape / kv_quant), and the
+        # group must outrank any surviving flat copy of one of its members.
+        for source in (
+            cfg.get("serving_shape"),
+            cfg,
+            cfg.get("server"),
+            cfg.get("serving"),
+            cfg.get("launch"),
+        ):
             if not isinstance(source, dict):
                 continue
             value = source.get(key)
@@ -1298,7 +1440,16 @@ def _n_gpu_layers_prior(
         for cfg in (server_cfg, role_cfg):
             if not isinstance(cfg, dict):
                 continue
-            for source in (cfg, cfg.get("server"), cfg.get("serving"), cfg.get("launch")):
+            # `serving_shape` FIRST: it is the master registry's grouped
+            # KV-feasibility declaration (n_ctx / slots_by_shape / kv_quant), and
+            # the group must outrank any surviving flat copy of one of its members.
+            for source in (
+                cfg.get("serving_shape"),
+                cfg,
+                cfg.get("server"),
+                cfg.get("serving"),
+                cfg.get("launch"),
+            ):
                 if not isinstance(source, dict):
                     continue
                 value = source.get(key)
@@ -1380,6 +1531,10 @@ def _kv_types_prior(
     future generated surfaces.
     """
     candidate_maps = (
+        # The grouped declaration outranks every flat copy — see the
+        # `serving_shape:` block comment in the master registry.
+        _nested_mapping(server_cfg, "serving_shape", "kv_quant"),
+        _nested_mapping(role_cfg, "serving_shape", "kv_quant"),
         _nested_mapping(server_cfg, "kv_quant"),
         _nested_mapping(server_cfg, "kv_cache"),
         _nested_mapping(role_cfg, "model", "kv_cache"),
@@ -1456,6 +1611,79 @@ def _resolve_nextn_draft_path(
     return None
 
 
+def _slots_by_shape_declaration(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+) -> dict[str, int]:
+    """`serving_shape.slots_by_shape` from the registry the COMPILER WAS HANDED.
+
+    Deliberately NOT `stack_manifest.slots_by_shape_for`, which reads the ambient
+    master. The compiler takes a `registry_path` and must honour that one; a
+    second, ambient read would give one field two sources — the bug one level up.
+    """
+    out: dict[str, int] = {}
+    for cfg in (server_cfg, role_cfg):
+        table = _nested_mapping(cfg, "serving_shape", "slots_by_shape")
+        if not isinstance(table, dict):
+            continue
+        for shape_class, value in table.items():
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                out.setdefault(str(shape_class), value)
+    return out
+
+
+def _slots_by_port(
+    launch: dict[str, Any],
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+    role_slots: int | None,
+    port_shape_classes: dict[int, str] | None = None,
+) -> dict[int, int]:
+    """Port -> `-np`, one entry per launch instance. THE JOIN.
+
+    `slots` is per-ROLE; the operator's spec is per-INSTANCE SHAPE. A role's full
+    96-core instance and its 48-core halves want different slot counts, and one
+    number cannot say that. Each launch entry already carries the SHAPE CLASS its
+    `cpu_shape` resolves to (placement, from stack_topology.yaml); this maps that
+    class through the registry's `slots_by_shape` (model, from server_mode) to a
+    per-port answer. A class the role does not declare falls back to the role's
+    single slot count, which is how the two single-instance GPU roles work.
+    """
+    by_shape = _slots_by_shape_declaration(server_cfg, role_cfg)
+    out: dict[int, int] = {}
+
+    # Port -> shape class over the role's WHOLE serving fleet. For an alias this
+    # is the host's fleet, which is wider than the alias's own tagged entries —
+    # the entries alone would leave the untagged instances on the role-level
+    # fallback and claim a full's slot count on a half. Entries are merged in
+    # afterwards so a launcher-only lane with no fleet map still resolves.
+    classes: dict[int, str] = {}
+    if isinstance(port_shape_classes, dict):
+        for port, shape_class in port_shape_classes.items():
+            if isinstance(port, int) and isinstance(shape_class, str) and shape_class:
+                classes[port] = shape_class
+    entries = launch.get("entries")
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            port = entry.get("port")
+            shape_class = entry.get("cpu_shape_class")
+            if isinstance(port, int):
+                if isinstance(shape_class, str) and shape_class:
+                    classes.setdefault(port, shape_class)
+                else:
+                    classes.setdefault(port, "")
+
+    for port, shape_class in classes.items():
+        value = by_shape.get(shape_class) if shape_class else None
+        if value is None:
+            value = role_slots
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            out[port] = value
+    return {port: out[port] for port in sorted(out)}
+
+
 def _launch_runtime_record(
     role: str,
     descriptor: dict[str, Any],
@@ -1475,9 +1703,12 @@ def _launch_runtime_record(
             DEFAULT_UBATCH_TOKENS,
             LAUNCH_KV_QUANT_CONFIGS,
             NO_SPEC_DECODE_ROLES,
-            SERIAL_ROLES,
+            # SERIAL_ROLES is deliberately NOT imported any more — see the
+            # "THE SERIAL_ROLES CLAMP IS GONE" note below. Serialisation is an
+            # admission input; this module compiles SERVING numbers.
             VISION_ESCALATION_DEVICE,
             VISION_ESCALATION_REASONING,
+            fallback_slots_for_mode,
         )
         from scripts.server.stack_numa import MLOCK_ROLES
         from scripts.server.stack_paths import (
@@ -1550,41 +1781,63 @@ def _launch_runtime_record(
         binary_path = str(LLAMA_SERVER_V2)
 
     lane_shape: dict[str, int] | None = None
-    if mode == "worker_pool":
-        slots = 4 if worker_type == "fast" else 1
-    elif mode == "vision":
-        slots = 1 if vision_type == "escalation" else 2
-    elif mode == "embedding":
-        slots = 4
-    elif mode == "gpu_shadow_lane":
+    if mode == "gpu_shadow_lane":
         # gpu-serving-tie-in P2-6 (P0-1c): lane serving shape is DATA from the
         # np_ceiling policy's serving_shape block — the CPU-mode defaults
-        # (SERIAL_ROLES -> 2 slots, 32768-token context) are wrong for the
-        # lane. Missing/invalid shape -> slots None (refused downstream via
-        # the launcher-tenant known_gap), never a guessed CPU default.
+        # (2 slots, 32768-token context) are wrong for the lane. Missing/invalid
+        # shape -> slots None (refused downstream via the launcher-tenant
+        # known_gap), never a guessed CPU default.
         lane_shape = _gpu_shadow_lane_serving_shape()
         slots = lane_shape.get("np_slots") if isinstance(lane_shape, dict) else None
     else:
-        slots = 1 if primary_role in SERIAL_ROLES else 2
+        # 2026-08-02 phase 2: the per-mode slot LITERALS that used to live here
+        # (worker_pool 4/1, vision 1/2, embedding 4, default 1-if-serial-else-2)
+        # were a second copy of the launcher's, and admission carries a third.
+        # They now come from launch_shape.fallback_slots in launch_manifest.yaml.
+        #
+        # `fallback_slots_for_mode`, NOT `resolve_slots`: this compiler is handed
+        # a `registry_path` and must resolve declarations against THAT registry,
+        # which `_runtime_flag_int_prior` below already does. A second, ambient
+        # master read here would give one field two sources.
+        slots = fallback_slots_for_mode(
+            mode, worker_type=worker_type, vision_type=vision_type
+        ).slots
 
     # 2026-08-01: `slots` is DECLARED DATA, and the mode literals above were
     # shadowing it. `server_mode.worker_vision.slots: 1` never reached the compiled
     # record because the `mode == "vision"` branch hardcoded 2 for any non-escalation
     # VL server, so the launcher emitted `-np 2` for a role that declares 1.
     #
-    # A declaration outranks a mode LITERAL but NOT the serial invariant: SERIAL_ROLES
-    # deliberately overrides the registry today — frontdoor and architect_critic each
-    # declare `slots: 2` and each run `-np 1` in production — so it stays a ceiling of
-    # 1 rather than becoming another value to be overwritten. Roles that declare
-    # nothing are left entirely alone: the fix is "stop ignoring what was written",
-    # not "re-derive everyone".
+    # `_runtime_flag_int_prior` still runs on top of the resolver because it can see
+    # declarations the resolver cannot: it reads the ALREADY-BOUND server_cfg plus
+    # the role's own `server`/`serving`/`launch` sub-mappings, which is where a role
+    # with no server_mode row of its own can still carry one.
+    #
+    # ── 2026-08-02: THE SERIAL_ROLES CLAMP IS GONE ──────────────────────────────
+    # It used to sit here and force `slots = 1` for any role in SERIAL_ROLES, so
+    # this record shipped two disagreeing slot counts: `serving.slots` (master's
+    # declaration, which admission turned into a limit) versus
+    # `runtime.cache.slots` (clamped, which the launcher turned into `-np`). That
+    # was an ADMISSION policy applied to a SERVING number, and the note here said
+    # removing it was "a measurement question, not a refactor" — correctly, at the
+    # time, because nobody had decided what the slot counts should be.
+    #
+    # They have now been decided. The operator ratified explicit per-instance slot
+    # counts (frontdoor full 16 / half 4, worker full 16 / half 4, critic 4, ingest
+    # 4, 27B 8, VL 4) with the per-slot context each implies, and a clamp to 1
+    # would silently discard every one of them. SERIAL_ROLES remains what it always
+    # should have been: an input to admission in src/api/admission.py, not to `-np`.
+    # `src/registry/stack_priors.live_stack_serving_slot_limits` now keys admission
+    # PER PORT off these same per-instance values, which is what finally makes
+    # admission.py's stated intent — "Aligned admission limits with llama-server
+    # slot counts (no idle slots)" — true per instance rather than per role.
     #
     # gpu_shadow_lane is exempt: its shape is policy data from
     # gpu_shadow_lane_np_ceiling.yaml and a None there means "refuse", not "guess".
     if mode != "gpu_shadow_lane":
         declared_slots = _runtime_flag_int_prior(server_cfg, role_cfg, key="slots", minimum=1)
         if declared_slots is not None:
-            slots = 1 if primary_role in SERIAL_ROLES else declared_slots
+            slots = declared_slots
 
     canonical_primary_role = str(Role.from_string(primary_role, default=None) or primary_role)
     canonical_role = str(Role.from_string(role, default=None) or role)
@@ -1749,10 +2002,26 @@ def _launch_runtime_record(
     ):
         spec["disabled_by"] = "no_spec_decode"
 
-    context_tokens = launch_cfg.get("effective_context_tokens")
+    # `-c`. 2026-08-02: the HANDED registry's `serving_shape.n_ctx` wins, exactly
+    # as `slots` does. `launch_cfg["effective_context_tokens"]` is the launcher's
+    # view (stack_manifest derives it from the AMBIENT registry) and stays as the
+    # fallback for roles the handed registry says nothing about — every alias, and
+    # the launcher-only lanes.
+    declared_n_ctx = _runtime_flag_int_prior(server_cfg, role_cfg, key="n_ctx", minimum=1)
+    context_tokens = declared_n_ctx
+    if not isinstance(context_tokens, int):
+        context_tokens = launch_cfg.get("effective_context_tokens")
     if not isinstance(context_tokens, int):
         context_tokens = DEFAULT_EFFECTIVE_CONTEXT_TOKENS
-    if mode == "worker_pool" and worker_type == "explore":
+    if mode == "worker_pool" and worker_type == "explore" and declared_n_ctx is None:
+        # `roles.<role>.model.max_context` is a MODEL-CAPABILITY fallback, and it
+        # OVERRIDES rather than caps — so while it was unconditional it silently
+        # beat an explicit serving declaration. worker_general is the live case:
+        # `max_context: 16384` is a stale deployment shape (the gemma4 GGUF's own
+        # `gemma4.context_length` is 262144), and it would have held -c at 16384
+        # while `serving_shape.n_ctx: 262144` was ignored, giving 1024 tokens per
+        # slot at -np 16. An explicit declaration now wins; the capability figure
+        # still applies to any worker role that has no serving_shape.
         context_tokens = _worker_context_prior(role_cfg, fallback=context_tokens)
     elif mode == "gpu_shadow_lane" and isinstance(lane_shape, dict):
         # P0-1c: total -c = np_slots * slot_context_tokens from the serving_shape
@@ -1777,7 +2046,23 @@ def _launch_runtime_record(
         "kmp_blocktime": 10 if explicit_binary_override else None,
         "cache": {
             "context_tokens": context_tokens,
+            # Role-level default. Kept because plenty of consumers only want "how
+            # many slots does this role run"; the per-instance answer is below.
             "slots": slots,
+            # Port -> `-np` for THIS role's instances. The launcher indexes it by
+            # the port it is about to bind, and admission keys its per-endpoint
+            # limits off the same map, so `admission_limit == -np` holds per
+            # instance rather than per role. Empty for a role with no launch
+            # entries (nothing to place).
+            "slots_by_port": _slots_by_port(
+                launch,
+                server_cfg,
+                role_cfg,
+                slots,
+                launch_cfg.get("port_shape_classes")
+                if isinstance(launch_cfg, dict)
+                else None,
+            ),
             "ubatch": worker_ubatch
             if mode == "worker_pool" and worker_type == "explore"
             else DEFAULT_UBATCH_TOKENS
@@ -2006,6 +2291,22 @@ def _serving_record(
         runtime_launch_cfg,
     )
     launch_record["runtime"] = runtime_record
+
+    # Per-instance `-np`, stamped onto the entries themselves so a launch entry is
+    # self-describing: port, placement (numa_instance + cpu_shape_class) and the
+    # slot count that placement resolved to, in one row. `runtime.cache.slots` is
+    # still the role-level default; these are what actually get launched.
+    runtime_cache = runtime_record.get("cache") if isinstance(runtime_record, dict) else None
+    slots_by_port = (
+        runtime_cache.get("slots_by_port") if isinstance(runtime_cache, dict) else None
+    )
+    if isinstance(slots_by_port, dict):
+        for entry in launch_record.get("entries") or []:
+            if not isinstance(entry, dict):
+                continue
+            entry_slots = slots_by_port.get(entry.get("port"))
+            if isinstance(entry_slots, int) and entry_slots > 0:
+                entry["slots"] = entry_slots
 
     if not isinstance(slots, int) or slots <= 0:
         cache = runtime_record.get("cache") if isinstance(runtime_record, dict) else {}

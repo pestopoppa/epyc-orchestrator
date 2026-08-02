@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-08-01T09:49:50Z'
+compiled_at: '2026-08-02T12:00:22Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: ca5f3e81
-    sha256: efa951a383c5190eaad510af292b89aa7e8957ae72911dbf9af86984f5510a81
+    repo_commit: a517793c
+    sha256: 52911df6cfc05bf8cc6027ff17a036029b70c62b54e4010d6be608f5a0b28d88
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
     repo_commit: fd7a2cdb
-    sha256: fad010833712d17567db62d1d021b921cb4167478654c8c1676a88e4e2b78e32
+    sha256: b622674136c168cc42b8129d309680cb119065f08e080173984db0d4767f374e
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -33,6 +33,7 @@ models:
   role_bindings:
     roles:
     - toolrunner
+    - worker_explore
     - worker_general
     - worker_math
     server_roles:
@@ -64,8 +65,8 @@ models:
         optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
         quality_pct: 90
         tool_compliance_pct: 96
-        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
-          t/s with 492/666 accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
+        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at data/t5_gemma_worker_draft_depth_20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76 t/s with 492/666
+          accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
         mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
           and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
         mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
@@ -79,8 +80,8 @@ models:
         optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
         quality_pct: 90
         tool_compliance_pct: 96
-        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
-          t/s with 492/666 accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
+        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at data/t5_gemma_worker_draft_depth_20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76 t/s with 492/666
+          accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
         mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
           and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
         mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
@@ -94,8 +95,23 @@ models:
         optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
         quality_pct: 90
         tool_compliance_pct: 96
-        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
-          t/s with 492/666 accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
+        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at data/t5_gemma_worker_draft_depth_20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76 t/s with 492/666
+          accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
+        mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
+          and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
+        mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
+          85.77) but did not improve non-repetitive coding explanation speed and failed the required-heading contract under the 640-token cap; short edit was only marginally faster than draft-mtp and all
+          modes failed the exact patch contract. Treat ngram-mod,draft-mtp as a task-specific token-reuse lane, not the broad worker default. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_prompt_diverse_20260719T004626Z/compact_summary.json.'
+    - date: null
+      protocol: registry performance block
+      value:
+        baseline_tps: 37.63
+        optimized_tps: 56.86
+        optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
+        quality_pct: 90
+        tool_compliance_pct: 96
+        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at data/t5_gemma_worker_draft_depth_20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76 t/s with 492/666
+          accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
         mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
           and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
         mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
@@ -245,7 +261,7 @@ models:
           raw: 159/250
         vl_score_protocol: 'MMMU-val, 250 multiple-choice single-image questions, MI210 (ROCm0), 2026-07-31. Paired exact McNemar vs Qwen2.5-VL-7B (131/250): +11.2 pp, p=0.0011.'
         benchmark_date: '2026-07-31'
-        evidence: /mnt/raid0/llm/tmp/vision_final_results.json
+        evidence: data/vision_mmmu_cutover_20260731/results.json
     - date: '2026-07-31'
       protocol: registry performance block
       value:
@@ -263,8 +279,8 @@ models:
           raw: 159/250
         vl_score_protocol: 'MMMU-val, 250 multiple-choice single-image questions, MI210 (ROCm0), 2026-07-31. Paired exact McNemar vs Qwen2.5-VL-7B (131/250): +11.2 pp, p=0.0011.'
         benchmark_date: '2026-07-31'
-        evidence: /mnt/raid0/llm/tmp/vision_final_results.json
-        evidence_harness: /mnt/raid0/llm/tmp/vision_final.py
+        evidence: data/vision_mmmu_cutover_20260731/results.json
+        evidence_harness: data/vision_mmmu_cutover_20260731/harness.py
         cutover_observation: '2026-07-31 MMMU validation, 250 multiple-choice single-image questions, MI210 (ROCm0), llama.cpp-experimental build-v8-hip, one arm at a time, `--image-min-tokens 1024` on
           EVERY arm, prompt cache disabled (`--cache-ram 0`). Qwen3-VL-30B-A3B Q4_K_M `159/250` (63.6%); Qwen2.5-VL-7B Q4_K_M incumbent `131/250` (52.4%); Qwen3-VL-8B Q8_0 `143/250` (57.2%); Qwen3-VL-4B
           Q8_0 `135/250` (54.0%). Paired exact McNemar over the 250 aligned items: 49 candidate-only-correct vs 21 incumbent-only-correct, two-sided p=0.0011. COSTS, recorded because this swap is not free:
@@ -603,9 +619,9 @@ models:
     thinking_control:
       mode: toggle_off
       source: model.disable_thinking
-    kv: &id001
-      k: q8_0
-      v: q8_0
+    kv:
+      k: null
+      v: null
     draft_max: 4
     lookup: false
     corpus_retrieval: true
@@ -669,7 +685,9 @@ models:
     thinking_control:
       mode: toggle_off
       source: model.disable_thinking
-    kv: *id001
+    kv:
+      k: null
+      v: null
     draft_max: 4
     lookup: false
     corpus_retrieval: true

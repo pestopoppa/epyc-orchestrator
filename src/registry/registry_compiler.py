@@ -28,6 +28,7 @@ schema change when you need to inspect or re-sync generated output).
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import sys
 from datetime import datetime, timezone
@@ -35,6 +36,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+log = logging.getLogger("registry.compiler")
 
 
 # Top-level sections in the master that the orchestrator runtime DOES need.
@@ -52,7 +55,48 @@ _KEEP_SECTIONS_FULL = (
     "optimized_params",
     "runtime_quirks",
     "kernel_audits",
+    # 2026-08-02: was ABSENT, so the master's own canonical spec-recipe block was
+    # dropped from every compiled lean registry. `stack_priors.py:1178,1634` refer
+    # to it as *"the canonical `speculative_decoding_policy` block in the master
+    # registry"* while the compiled artifact did not contain it and nothing read it
+    # — an authoritative-sounding declaration that was inert. Two sources of truth
+    # for the spec recipe, one of them decorative, is how `ngram-mod` came to sit in
+    # per-role `acceleration` blocks while the policy said otherwise.
+    "speculative_decoding_policy",
 )
+
+# Top-level master sections that are DELIBERATELY not carried into the lean output,
+# with the reason. Anything in master that is in neither this set nor
+# _KEEP_SECTIONS_FULL / _FILTER_ROLE_KEYED is reported by _warn_unlisted_sections:
+# a hand-written keep-list silently drops whatever nobody remembered to add, which
+# is exactly how the block above went missing. The drop must be a decision on the
+# record, not an omission.
+_INTENTIONALLY_DROPPED_SECTIONS: dict[str, str] = {
+    "schema_version": "metadata; the lean artifact carries its own",
+    "last_updated": "metadata",
+    "notes": "human prose, not runtime input",
+}
+
+
+def _warn_unlisted_sections(master: dict[str, Any]) -> list[str]:
+    """Return a warning per master section the compiler neither keeps nor declines.
+
+    Silence here is the defect: the compiler cannot know that a section it has
+    never heard of is unimportant, and the only evidence of a drop is its absence
+    from an artifact nobody diffs.
+    """
+    known = (
+        set(_KEEP_SECTIONS_FULL)
+        | set(_FILTER_ROLE_KEYED)
+        | set(_INTENTIONALLY_DROPPED_SECTIONS)
+    )
+    return [
+        f"master registry section {name!r} is dropped from the lean output: it is in "
+        f"neither _KEEP_SECTIONS_FULL nor _INTENTIONALLY_DROPPED_SECTIONS. Add it to "
+        f"one of them so the decision is on the record."
+        for name in sorted(master)
+        if name not in known
+    ]
 # Sections that are role-keyed dicts and need filtering.
 _FILTER_ROLE_KEYED = ("server_mode", "roles")
 _RETIRED_TIMEOUT_ROLE_ALIASES = frozenset({"worker_code"})
@@ -224,6 +268,9 @@ def compile_lean(master_path: Path, active_roles: set[str]) -> dict:
         raise ValueError(f"master registry at {master_path} did not parse to a dict")
 
     needed = _resolve_role_dependencies(master, active_roles)
+
+    for warning in _warn_unlisted_sections(master):
+        log.warning("%s", warning)
 
     out: dict[str, Any] = {}
 

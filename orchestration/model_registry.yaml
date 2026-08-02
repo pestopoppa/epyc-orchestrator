@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-08-01T07:41:22+00:00
-# Cache key:   8e877a4f65679c17...
+# Compiled at: 2026-08-02T11:06:47+00:00
+# Cache key:   eefdb8be5b138a70...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1187,12 +1187,101 @@ kernel_audits:
       test: pp32768+tg128 combined
       result_t_per_s: 560.2
       pass: true (no crash, no recurrence drift through 32K)
+speculative_decoding_policy:
+  canonical: true
+  ratified_by: operator
+  ratified_on: 2026-07-31
+  supersedes: 'All prior per-role prose describing `draft-mtp` alone as the production recipe, and the `ngram_candidate_spec_type` field (RETIRED — see below).
+
+    '
+  production_recipe: draft-mtp
+  statement: 'Production runs `--spec-type draft-mtp` — MTP self-draft ALONE. The n-gram lane is NOT composed in. This applies to every role that has a working draft path.
+
+    '
+  superseded_recipe: 'REVERSED 2026-07-31 (same day it was adopted). The composed recipe `ngram-mod,draft-mtp` was adopted on the expectation of a large upside on repetitive / token-reuse context, with
+    a measured -1.6% cost on ordinary text accepted in exchange. The long-context coding test that was supposed to demonstrate that upside instead falsified it, and the exception case was falsified independently.
+    The trade was made with eyes open and is now unmade on evidence.
+
+    '
+  evidence_for_reversal:
+    long_context_coding_35b: 'Qwen3.6-35B-A3B Q8, 12 matched prompts at 15k-28k context (extend / port / fill-in-the-middle / prose). Composed won 0 of 12. Mean -4.06% against the first draft-mtp baseline
+      and -8.24% against a second replicate of the SAME baseline config. Mechanism is in the counters: composed drafts MORE and accepts LESS (extend_3: 518 -> 708 drafts, acceptance 0.734 -> 0.540). Each
+      rejected draft costs a full verification pass.
+
+      '
+    long_context_coding_gemma: 'gemma-4-26B-A4B Q4_K_M, same 12 prompts. Mean -0.04%. The real result is structural, not numeric: n-gram produced ZERO drafts on 9 of 12 prompts — those arms are byte-identical
+      in acceptance, draft count and tok/s. Coding output does not contain n-grams repeated from its context. Where it did fire (the 3 fill-in-the-middle prompts) acceptance fell from 0.78/0.84/0.78 to
+      0.67/0.68/0.62.
+
+      '
+    ordinary_text: '-1.6% mean on non-repetitive prose/code. Independent distinct-prompt re-run (ngramfix): -4.2% to +1.3% composed vs draft-mtp; n-gram ALONE costs 23-31%.
+
+      '
+    retracted_positive: 'The 2.80x that originally motivated composed was RETRACTED — a warm-context self-copy artifact from repeating one prompt, so the model copied its own prior answer (mean accepted
+      length 3.58 -> 15.88, acceptance -> 1.000).
+
+      '
+    harness_caveat: 'The 35B coding run executed its arms sequentially and its two same-config replicates differ by +4.17% (11/11 consistent), i.e. monotonic host drift over the ~2h window. DIRECTION survives
+      — composed loses against both the early and the late baseline, 0/12 and 0/11 — but quoted MAGNITUDES are soft.
+
+      '
+  where_ngram_does_win: 'TASK-CLASS SCOPED, not a default. Composed wins only where the OUTPUT repeats itself or repeats the input verbatim, AND verification is cheap (small active parameter count). Measured
+    on fresh servers: gemma-4-26B-A4B Q4_K_M on a repetitive strict-JSON tool_call, 143.58 -> 330.57 t/s (2.30x); Qwen3.5-9B Q4_K_M generating 1024 literal repetitions of one word, 114.81 -> 466.47 t/s
+    (4.06x). The SAME gemma fixture on a non-repetitive coding explanation (harness-verified repeated_5grams = 0) gave +0.07% — a dead wash — and the n-gram arm FAILED a quality check the draft-mtp arm
+    passed. Large models lose outright: Qwen3-Coder-480B refactoring -34% at 18.4% acceptance. Re-enabling composed for a specific role requires measuring THAT role''s real traffic, not a synthetic repetitive
+    fixture.
+
+    '
+  exceptions:
+    ingest_long_context:
+      model: Qwen3-Next-80B-A3B-Instruct
+      spec_type: none
+      category: OPTIMUM
+      reason: 'Qwen3-Next-80B is an SSM/MoE hybrid. Its recurrent state cannot fork, so NO external draft-model path exists and none can be built. n-gram alone yields 1.6-4.7% acceptance, i.e. nothing.
+        `--spec-type none` is therefore the BEST AVAILABLE configuration for this model — it is this model''s OPTIMUM and BELONGS IN HEADLINE TABLES. It is emphatically NOT a baseline and must never be
+        excluded from a headline on the grounds that "speculation is off". That exact mistake was made on 2026-07-31.
+
+        '
+  measurement_categories:
+    BASELINE: 'An optimization the model HAS, deliberately switched OFF. Diagnostic only. Belongs in an addendum. NEVER a headline number. NEVER a comparison arm in a promotion decision. A BASELINE regression
+      does NOT block a promotion; a BASELINE improvement is NOT a promotion argument.
+
+      '
+    OPTIMUM: 'The best configuration AVAILABLE for that model. If a model has no draft path, running it with `--spec-type none` IS its OPTIMUM (see ingest_long_context above) — that is not a baseline and
+      it belongs in headline tables. Promotion decisions are made between OPTIMUM configs and nothing else.
+
+      '
+    CANDIDATE: 'Measured but NOT adopted. Must be labelled as such so it is never mistaken for what production runs.
+
+      '
+  promotion_rule: 'Promotion is decided on the production-OPTIMAL configuration alone. A regression in a BASELINE-category measurement is not a promotion blocker and must not be cited as one. See MEASUREMENT.md
+    / agents/shared/MEASUREMENT_POLICY.md for the ratified constitution-level wording.
+
+    '
+  effective_only_after: 'scripts/registry/stack_change_pipeline.py must regenerate orchestration/derived/stack_priors.yaml before a registry spec_type change reaches a launched server. A master-registry
+    edit alone does NOT change production behaviour.
+
+    '
+  retired_fields:
+    ngram_candidate_spec_type: 'RETIRED 2026-07-31. This field previously carried `ngram-mod,draft-mtp` while `spec_type` carried `draft-mtp`, which read as "the real one is elsewhere" and directly caused
+      mis-launched measurement runs. The composed recipe is now the value of `spec_type` itself. Any surviving occurrence of this key is stale and MUST be deleted, not consulted.
+
+      '
 server_mode:
   frontdoor:
     no_mmap: true
     url: http://localhost:8070
     port: 8070
-    slots: 2
+    slots: 16
+    serving_shape:
+      n_ctx: 262144
+      slots_by_shape:
+        full: 16
+        half: 4
+      kv_quant:
+        k: q8_0
+        v: q8_0
+      kv_kib_per_token_f16: 82.0
     chat_template_kwargs:
       enable_thinking: false
     model_role: qwen36_q8_0
@@ -1204,9 +1293,6 @@ server_mode:
     model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
     model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
     draft_model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
-    kv_quant:
-      k: q8_0
-      v: q8_0
     memory_gb: 37
     tier: hot
     numa_instances: 2
@@ -1252,9 +1338,19 @@ server_mode:
   worker:
     url: http://localhost:8072
     port: 8072
-    slots: 1
+    slots: 16
+    serving_shape:
+      n_ctx: 262144
+      slots_by_shape:
+        full: 16
+        half: 4
+      kv_quant:
+        k: q8_0
+        v: q8_0
+      kv_kib_per_token_f16: 480.0
     model_role: worker_general
     shared_with:
+    - worker_explore
     - worker_math
     - toolrunner
     description: Try-cheap-first worker — gemma4-26B-A4B Q4_K_M MTP (swapped 2026-05-08 from Qwen3-Coder-30B-A3B; tool_compliance 96% vs 78%, full suite 90% vs 84%)
@@ -1280,7 +1376,14 @@ server_mode:
   worker_vision:
     url: http://localhost:8086
     port: 8086
-    slots: 1
+    slots: 4
+    serving_shape:
+      n_ctx: 65536
+      kv_quant:
+        k: q8_0
+        v: q8_0
+      kv_kib_per_token_f16: 96.0
+      vram_non_kv_gib: 19.26
     shared_with:
     - vision_escalation
     description: Vision — Qwen3-VL-30B-A3B-Instruct Q4_K_M on MI210 (MMMU-250 63.6% vs Qwen2.5-VL-7B 52.4%, +11.2 pp, paired exact McNemar p=0.0011)
@@ -1295,7 +1398,6 @@ server_mode:
     previous_model: Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
     memory_gb: 0
     vram_mb: 21049
-    n_ctx: 16384
     tier: hot
     device: ROCm0
     acceleration:
@@ -1305,7 +1407,14 @@ server_mode:
     no_mmap: true
     url: http://localhost:8083
     port: 8083
-    slots: 2
+    slots: 8
+    serving_shape:
+      n_ctx: 65536
+      kv_quant:
+        k: q8_0
+        v: q8_0
+      kv_kib_per_token_f16: 260.0
+      vram_non_kv_gib: 27.33
     chat_template_kwargs:
       enable_thinking: false
     model_role: qwen36_27b_mtp_q8_local
@@ -1336,7 +1445,15 @@ server_mode:
     no_mmap: true
     url: http://localhost:8074
     port: 8074
-    slots: 2
+    slots: 4
+    serving_shape:
+      n_ctx: 262144
+      slots_by_shape:
+        full: 4
+      kv_quant:
+        k: q4_0
+        v: f16
+      kv_kib_per_token_f16: 98.0
     chat_template_kwargs:
       enable_thinking: false
     model_role: qwen35_122b_q4km
@@ -1369,7 +1486,16 @@ server_mode:
     numa_ports:
     - 8185
     - 8285
-    slots: 1
+    slots: 4
+    serving_shape:
+      n_ctx: 262144
+      slots_by_shape:
+        full: 4
+        half: 4
+      kv_quant:
+        k: q4_0
+        v: q4_0
+      kv_kib_per_token_f16: 96.0
     model_role: ingest_long_context
     thinking_control:
       mode: template_ignores_enable_thinking
@@ -1918,8 +2044,8 @@ roles:
       optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
       quality_pct: 90
       tool_compliance_pct: 96
-      draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
-        t/s with 492/666 accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
+      draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at data/t5_gemma_worker_draft_depth_20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76 t/s with 492/666
+        accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
       mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
         and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
       mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
@@ -2019,8 +2145,8 @@ roles:
         raw: 159/250
       vl_score_protocol: 'MMMU-val, 250 multiple-choice single-image questions, MI210 (ROCm0), 2026-07-31. Paired exact McNemar vs Qwen2.5-VL-7B (131/250): +11.2 pp, p=0.0011.'
       benchmark_date: 2026-07-31
-      evidence: /mnt/raid0/llm/tmp/vision_final_results.json
-      evidence_harness: /mnt/raid0/llm/tmp/vision_final.py
+      evidence: data/vision_mmmu_cutover_20260731/results.json
+      evidence_harness: data/vision_mmmu_cutover_20260731/harness.py
       cutover_observation: '2026-07-31 MMMU validation, 250 multiple-choice single-image questions, MI210 (ROCm0), llama.cpp-experimental build-v8-hip, one arm at a time, `--image-min-tokens 1024` on EVERY
         arm, prompt cache disabled (`--cache-ram 0`). Qwen3-VL-30B-A3B Q4_K_M `159/250` (63.6%); Qwen2.5-VL-7B Q4_K_M incumbent `131/250` (52.4%); Qwen3-VL-8B Q8_0 `143/250` (57.2%); Qwen3-VL-4B Q8_0 `135/250`
         (54.0%). Paired exact McNemar over the 250 aligned items: 49 candidate-only-correct vs 21 incumbent-only-correct, two-sided p=0.0011. COSTS, recorded because this swap is not free: decode is ~1.9x
@@ -2092,7 +2218,7 @@ roles:
         raw: 159/250
       vl_score_protocol: 'MMMU-val, 250 multiple-choice single-image questions, MI210 (ROCm0), 2026-07-31. Paired exact McNemar vs Qwen2.5-VL-7B (131/250): +11.2 pp, p=0.0011.'
       benchmark_date: 2026-07-31
-      evidence: /mnt/raid0/llm/tmp/vision_final_results.json
+      evidence: data/vision_mmmu_cutover_20260731/results.json
     memory:
       residency: hot
       pinned: false
@@ -2119,11 +2245,11 @@ roles:
       \ REPRODUCED across three 2026-07-17 CPU\nconfigs (MoE4 -> \"Moldova\"; MoE4+image1024 -> \"Suriname\"; default experts -> \"Suriname\";\nexpected \"Tanzania\"), so the expert override alone does\
       \ not explain it. What changed is the\nsurrounding evidence: same model is best arm on 42q OCRBench+ChartQA (36/42) and wins\nMMMU-250 by 28 questions. chart_tanzania appears in NEITHER 2026-07-31\
       \ set, so it has never\nbeen retested under the deployed recipe.\n\nPOST-CUTOVER CHECK (owner: the session performing the live flip; cutover is not closed\nuntil recorded): re-run the four K35 fixtures\
-      \ against the LIVE :8086 process — GPU, default\nexperts, --image-min-tokens 1024 — and record chart_tanzania explicitly.\n  Fixtures: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/ (commands.sh,\
-      \ plan.json)\n  Chart fixture: epyc-orchestrator/benchmarks/images/vl/ocrbench/ocr_0619.png\n    prompt \"Which country has 7 years of compulsory education in the chart? Answer with\n    the country\
-      \ name only.\" expected `Tanzania`\n  Prior CPU artifacts (all 3/4):\n    /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/runs/vision_escalation_cpu_qwen3vl30b_moe4/result.json\n    /mnt/raid0/llm/tmp/k35-vision-escalation-image1024-20260717T1518Z/\n\
-      \    /mnt/raid0/llm/tmp/k35-vision-escalation-default-experts-20260717T1520Z/\n  DECISION RULE, fixed in advance: 4/4 -> configuration-bound, close the item. 3/4 with\n  chart_tanzania still wrong\
-      \ -> record as a bounded single-fixture blind spot on a model\n  that is +11.2 pp better overall. NOT grounds to roll back; IS grounds to carry a\n  chart-reading block into the next VL eval set.\n"
+      \ against the LIVE :8086 process — GPU, default\nexperts, --image-min-tokens 1024 — and record chart_tanzania explicitly.\n  Fixtures: data/k35_vision_matrix_20260717T1500Z/ (commands.sh, plan.json)\n\
+      \  Chart fixture: epyc-orchestrator/benchmarks/images/vl/ocrbench/ocr_0619.png\n    prompt \"Which country has 7 years of compulsory education in the chart? Answer with\n    the country name only.\"\
+      \ expected `Tanzania`\n  Prior CPU artifacts (all 3/4):\n    data/k35_vision_matrix_20260717T1500Z/runs/vision_escalation_cpu_qwen3vl30b_moe4/result.json\n    data/k35_vision_escalation_image1024_20260717T1518Z/\n\
+      \    data/k35_vision_escalation_default_experts_20260717T1520Z/\n  DECISION RULE, fixed in advance: 4/4 -> configuration-bound, close the item. 3/4 with\n  chart_tanzania still wrong -> record as\
+      \ a bounded single-fixture blind spot on a model\n  that is +11.2 pp better overall. NOT grounds to roll back; IS grounds to carry a\n  chart-reading block into the next VL eval set.\n"
   worker_summarize:
     tier: C
     description: Short-context document summarization (sub-5000 tokens; longer inputs trigger three_stage_summarization). Qwen3.6-35B-A3B Q8 — same model as frontdoor, shared GGUF mmap.
@@ -2269,7 +2395,7 @@ roles:
       baseline_tps: 30.87
       contended_tps: 19.81
       vram_gib: 36.7
-      attest: published stack measurement record §01, 2026-07-31; co-residency /mnt/raid0/llm/tmp/gpu_coresidency_results.json
+      attest: published stack measurement record §01, 2026-07-31; co-residency data/gpu_coresidency_20260731/gpu_coresidency_results.json
     model:
       name: Qwen3.6-27B-MTP-Q8_0
       path: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf

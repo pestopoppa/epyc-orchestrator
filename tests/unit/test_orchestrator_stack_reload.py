@@ -1079,6 +1079,258 @@ def test_runtime_attestation_passes_when_device_matches_declaration() -> None:
     assert warnings == []
 
 
+# ---------------------------------------------------------------------------
+# Derived attestation coverage (2026-08-02)
+#
+# The attestation checklist used to be a hand-written sequence of field names, so
+# anything the compiler emitted but nobody had listed was never compared and the
+# omission was invisible. These tests pin the derived behaviour: the fields that
+# were previously declared-but-unverified now fire, and a field with no mapping is
+# itself reported instead of being silently skipped.
+# ---------------------------------------------------------------------------
+
+
+def _attestation_info(role: str = "architect_general", port: int = 8083):
+    return stack_commands.ProcessInfo(
+        role=role,
+        pid=321,
+        port=port,
+        started_at="now",
+        model_path="/models/m.gguf",
+        log_file="a.log",
+    )
+
+
+_ATTEST_BASE_CMDLINE = [
+    "/opt/llama/bin/llama-server",
+    "-m",
+    "/models/m.gguf",
+    "--device",
+    "ROCm0",
+]
+
+
+def _attest_contract(flags: dict | None = None, cache: dict | None = None) -> dict:
+    return {
+        "requirements": {"model_path": "/models/m.gguf"},
+        "runtime": {
+            "binary_path": "/opt/llama/bin/llama-server",
+            "cache": cache or {},
+            "flags": {"device": "ROCm0", **(flags or {})},
+        },
+        "ports": [8083],
+    }
+
+
+def test_runtime_attestation_warns_when_declared_ngl_is_absent_from_cmdline() -> None:
+    """A GPU role declaring -ngl but launched without it offloads NOTHING.
+
+    Same failure path as the `device` omission: `--device ROCm0` with no -ngl is a
+    GPU launch in name only, and the hand-written checklist never looked.
+    """
+    warnings = stack_commands._runtime_attestation_warnings(
+        "architect_general",
+        _attestation_info(),
+        _ATTEST_BASE_CMDLINE,
+        _attest_contract(flags={"n_gpu_layers": "all"}),
+    )
+
+    assert warnings == [
+        "architect_general pid 321 runtime n_gpu_layers expected all; "
+        "live cmdline has no -ngl"
+    ]
+
+
+def test_runtime_attestation_warns_on_declared_serving_flag_drift() -> None:
+    """-ngl / --image-min-tokens / --cache-ram are emitted from the record.
+
+    `cache_ram: 0` is a DECLARED value (it disables the prompt cache), so the
+    comparison must be against presence, never truthiness.
+    """
+    warnings = stack_commands._runtime_attestation_warnings(
+        "worker_vision",
+        _attestation_info(role="worker_vision", port=8086),
+        _ATTEST_BASE_CMDLINE
+        + ["-ngl", "0", "--image-min-tokens", "256"],
+        _attest_contract(
+            flags={"n_gpu_layers": 999, "image_min_tokens": 1024, "cache_ram": 0}
+        ),
+    )
+
+    assert warnings == [
+        "worker_vision pid 321 runtime cache_ram expected 0; "
+        "live cmdline has no --cache-ram",
+        "worker_vision pid 321 runtime image_min_tokens expected 1024; "
+        "live cmdline has 256",
+        "worker_vision pid 321 runtime n_gpu_layers expected 999; live cmdline has 0",
+    ]
+
+
+def test_runtime_attestation_passes_when_declared_serving_flags_match() -> None:
+    warnings = stack_commands._runtime_attestation_warnings(
+        "worker_vision",
+        _attestation_info(role="worker_vision", port=8086),
+        _ATTEST_BASE_CMDLINE
+        + ["-ngl", "999", "--image-min-tokens", "1024", "--cache-ram", "0"],
+        _attest_contract(
+            flags={"n_gpu_layers": 999, "image_min_tokens": 1024, "cache_ram": 0}
+        ),
+    )
+
+    assert warnings == []
+
+
+def test_runtime_attestation_warns_on_unmapped_declared_field() -> None:
+    """THE inversion: a declared field nothing verifies is a finding, not a skip."""
+    warnings = stack_commands._runtime_attestation_warnings(
+        "architect_general",
+        _attestation_info(),
+        _ATTEST_BASE_CMDLINE,
+        _attest_contract(flags={"tensor_split": "0.5,0.5"}),
+    )
+
+    assert warnings == [
+        "architect_general pid 321 declares runtime field runtime.flags.tensor_split "
+        "but nothing attests it (no entry in _RUNTIME_FIELD_CHECKS)"
+    ]
+
+
+def test_runtime_attestation_reports_lost_coverage_for_floor_field() -> None:
+    """The hand list survives as a FLOOR: deleting a mapping is caught.
+
+    Coverage is gained by deriving from the producer, and none is lost, because a
+    required field dropping out of the mapping table is itself reported.
+    """
+    # No `device` in this record: the path is required by the FLOOR alone, which is
+    # what makes a deleted mapping detectable even when the producer stops emitting.
+    contract = {
+        "requirements": {"model_path": "/models/m.gguf"},
+        "runtime": {
+            "binary_path": "/opt/llama/bin/llama-server",
+            "cache": {},
+            "flags": {},
+        },
+        "ports": [8083],
+    }
+    removed = stack_commands._RUNTIME_FIELD_CHECKS.pop("runtime.flags.device")
+    try:
+        warnings = stack_commands._runtime_attestation_warnings(
+            "architect_general",
+            _attestation_info(),
+            ["/opt/llama/bin/llama-server", "-m", "/models/m.gguf"],
+            contract,
+        )
+    finally:
+        stack_commands._RUNTIME_FIELD_CHECKS["runtime.flags.device"] = removed
+
+    assert warnings == [
+        "architect_general pid 321 attestation coverage lost: runtime.flags.device "
+        "is a required attested field with no entry in _RUNTIME_FIELD_CHECKS"
+    ]
+
+
+def test_every_floor_field_is_mapped() -> None:
+    unmapped = [
+        path
+        for path in stack_commands._ATTESTED_RUNTIME_FIELDS
+        if path not in stack_commands._RUNTIME_FIELD_CHECKS
+    ]
+    assert unmapped == []
+
+
+def test_every_compiled_runtime_field_is_mapped() -> None:
+    """The producer's own keys must all resolve, for every live role.
+
+    This is the test that would have failed on 2026-08-01, when `device` was
+    emitted by the compiler and absent from the checklist.
+    """
+    contracts = stack_commands._stack_prior_launch_contracts()
+    if not contracts:
+        pytest.skip("no compiled stack priors available")
+
+    unmapped: set[str] = set()
+    for contract in contracts.values():
+        declared = stack_commands._declared_runtime_field_paths(
+            contract.get("requirements") or {},
+            contract.get("runtime") or {},
+        )
+        unmapped |= {
+            path for path in declared if path not in stack_commands._RUNTIME_FIELD_CHECKS
+        }
+
+    assert sorted(unmapped) == []
+
+
+def test_runtime_attestation_warns_when_spec_draft_declarations_disagree() -> None:
+    """`-md` comes from spec.draft_model_path; the draft check reads requirements.
+
+    One fact declared twice: compare the two declarations so a divergence is a
+    finding rather than a check pointed at the value the launcher did not use.
+    """
+    warnings = stack_commands._runtime_attestation_warnings(
+        "frontdoor",
+        _attestation_info(role="frontdoor", port=8070),
+        [
+            "/opt/llama/bin/llama-server",
+            "-m",
+            "/models/m.gguf",
+            "-md",
+            "/models/d.gguf",
+            "--spec-type",
+            "draft-mtp",
+        ],
+        {
+            "requirements": {
+                "model_path": "/models/m.gguf",
+                "draft_model_path": "/models/d.gguf",
+            },
+            "runtime": {
+                "binary_path": "/opt/llama/bin/llama-server",
+                "cache": {},
+                "flags": {
+                    "spec": {
+                        "enabled": True,
+                        "draft_model_path": "/models/other.gguf",
+                    }
+                },
+            },
+            "ports": [8070],
+        },
+    )
+
+    assert warnings == [
+        "frontdoor pid 321 runtime spec.draft_model_path is /models/other.gguf, but "
+        "requirements.draft_model_path is /models/d.gguf; one fact is declared twice "
+        "and the two declarations disagree"
+    ]
+
+
+def test_runtime_attestation_warns_on_declaration_the_launcher_cannot_emit() -> None:
+    """--kv-hadamard was removed in v6; declaring it true is an unkept promise."""
+    warnings = stack_commands._runtime_attestation_warnings(
+        "frontdoor",
+        _attestation_info(role="frontdoor", port=8070),
+        _ATTEST_BASE_CMDLINE,
+        _attest_contract(cache={"kv_hadamard": True}),
+    )
+
+    assert len(warnings) == 1
+    assert "declares kv_hadamard=True but the launcher cannot emit it" in warnings[0]
+    assert "no runtime effect" in warnings[0]
+
+
+def test_runtime_attestation_ignores_kv_hadamard_declared_false() -> None:
+    assert (
+        stack_commands._runtime_attestation_warnings(
+            "frontdoor",
+            _attestation_info(role="frontdoor", port=8070),
+            _ATTEST_BASE_CMDLINE,
+            _attest_contract(cache={"kv_hadamard": False}),
+        )
+        == []
+    )
+
+
 def test_runtime_attestation_accepts_embedded_nextn_without_md() -> None:
     info = stack_commands.ProcessInfo(
         role="frontdoor",

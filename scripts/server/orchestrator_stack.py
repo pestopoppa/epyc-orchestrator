@@ -87,7 +87,6 @@ from scripts.server.stack_manifest import (
     LAUNCH_KV_QUANT_CONFIGS,
     NO_SPEC_DECODE_ROLES,
     ORCHESTRATOR_PROFILES,
-    SERIAL_ROLES,
     VISION_ESCALATION_MMPROJ,
     VISION_ESCALATION_MODEL,
     VISION_ESCALATION_DEVICE,
@@ -95,6 +94,7 @@ from scripts.server.stack_manifest import (
     VISION_WORKER_MMPROJ,
     VISION_WORKER_MODEL,
     WORKER_POOL_MODELS,
+    resolve_slots,
 )
 from scripts.server.stack_paths import (
     _HEALTH_SERVER_STARTUP,
@@ -268,6 +268,54 @@ def _runtime_cache(runtime: dict[str, Any]) -> dict[str, Any]:
 def _runtime_flags(runtime: dict[str, Any]) -> dict[str, Any]:
     flags = runtime.get("flags")
     return flags if isinstance(flags, dict) else {}
+
+
+def _resolve_parallel_slots(
+    cache: dict[str, Any],
+    role_name: str,
+    port: int,
+    numa_instance: int,
+    fallback_mode: str = "default",
+    *,
+    worker_type: str | None = None,
+    vision_type: str | None = None,
+) -> str:
+    """`-np` for the instance being launched, not for the role.
+
+    2026-08-02. `-np` used to be a per-ROLE number: `runtime.cache.slots`, one
+    value for every instance a role runs. That cannot express the ratified shape
+    — frontdoor's 96-core full takes 16 slots while each of its 48-core halves
+    takes 4 — so the compiled priors now carry `runtime.cache.slots_by_port`, one
+    entry per launch instance, joined by the compiler from the model's
+    `slots_by_shape` and the instance's declared `cpu_shape`.
+
+    Resolution order, most specific first:
+      1. the compiled per-PORT value (what production uses),
+      2. the compiled role-level `slots` (a record compiled before this field),
+      3. `stack_manifest.resolve_slots(role, numa_instance=...)`, which re-derives
+         the same join from the ambient registry when no prior is available.
+    Port, not numa_instance, is the key: it is the one identifier the launcher is
+    certain of at this point, and it is what admission keys on, so a mismatch
+    between `-np` and the admission limit is not expressible.
+    """
+    by_port = cache.get("slots_by_port")
+    if isinstance(by_port, dict):
+        value = by_port.get(port)
+        if value is None:
+            value = by_port.get(str(port))
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return str(value)
+    return _runtime_positive_int(
+        cache,
+        "slots",
+        resolve_slots(
+            role_name,
+            fallback_mode,
+            worker_type=worker_type,
+            vision_type=vision_type,
+            numa_instance=numa_instance,
+        ).slots,
+    )
 
 
 def _runtime_positive_int(
@@ -673,7 +721,10 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
                 "--port",
                 str(port),
                 "-np",
-                _runtime_positive_int(cache, "slots", 1),
+                _resolve_parallel_slots(
+                    cache, role_name, port, numa_instance, "vision",
+                    vision_type="escalation",
+                ),
                 "-c",
                 _runtime_positive_int(cache, "context_tokens", LAUNCH_CONTEXT_TOKENS[role_name]),
                 "-t",
@@ -682,6 +733,16 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
         )
         if flags.get("flash_attn", True) is True:
             cmd.extend(["--flash-attn", "on"])
+        # KV quant, emitted exactly as the general builder emits it (compiled
+        # runtime first, derived table as the no-prior fallback). This branch had
+        # no KV emit at all, which was inert only while the VL roles declared no
+        # kv_quant. The 2026-08-02 master change gave worker_vision (and its
+        # vision_escalation alias) q8_0/q8_0 on measured evidence, so from that
+        # point a silent f16 launch contradicted the declaration.
+        if runtime:
+            _append_runtime_kv_args(cmd, cache)
+        else:
+            _append_kv_quant_args(cmd, role_name)
         reasoning = flags.get("reasoning") or VISION_ESCALATION_REASONING
         if isinstance(reasoning, str) and reasoning:
             cmd.extend(["--reasoning", reasoning])
@@ -708,8 +769,15 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
         "127.0.0.1",
         "--port",
         str(port),
+        # This literal was `2`. `server_mode.worker_vision.slots` declares 1, and
+        # this branch fires for any non-escalation VL server — so the declaration
+        # was shadowed and the VL role launched with twice the slots it declared.
+        # The compiled-priors side of that defect was fixed 2026-08-01; this is
+        # the launcher side of the same literal.
         "-np",
-        _runtime_positive_int(cache, "slots", 2),
+        _resolve_parallel_slots(
+            cache, role_name, port, numa_instance, "vision", vision_type="worker"
+        ),
         "-c",
         _runtime_positive_int(cache, "context_tokens", LAUNCH_CONTEXT_TOKENS[role_name]),
         "-t",
@@ -717,6 +785,15 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
     ]
     if flags.get("flash_attn", True) is True:
         cmd.extend(["--flash-attn", "on"])
+    # KV quant — see the escalation branch above. `server_mode.worker_vision
+    # .serving_shape.kv_quant` became q8_0/q8_0 on 2026-08-02 (MMMU-250 paired
+    # A/B, non-inferior at a pre-registered 3 pp margin); without this the
+    # launcher started the :8086 VL process on f16 while the compiled prior,
+    # the derived KV table and the VRAM budget all said q8_0.
+    if runtime:
+        _append_runtime_kv_args(cmd, cache)
+    else:
+        _append_kv_quant_args(cmd, role_name)
     reasoning = flags.get("reasoning")
     if isinstance(reasoning, str) and reasoning:
         cmd.extend(["--reasoning", reasoning])
@@ -779,7 +856,9 @@ def _build_worker_fast_command(port: int, model_path: str) -> list[str]:
         "--port",
         str(port),
         "-np",
-        "4",  # 4 parallel slots (consolidated from 2×2)
+        # Master has no server_mode row for worker_fast, so this is the manifest's
+        # declared worker_pool_fast fallback (4) rather than a literal here.
+        str(resolve_slots("worker_fast", "worker_pool", worker_type="fast").slots),
         "-c",
         str(LAUNCH_CONTEXT_TOKENS["worker_fast"]),  # 4K per slot
         "-t",
@@ -883,14 +962,20 @@ def _build_worker_general_command(
             "127.0.0.1",
             "--port",
             str(port),
-            # -np 1 (single slot): MTP shares state with the target across slots in a
-            # way that the ik_llama.cpp PR #1744 build asserts on with -np 2 ("tensor
-            # buffer not set" at ggml-backend.cpp:236 during inference). Single slot
-            # matches the working benchmark recipe. Pre-gemma4 worker_general used
-            # -np 2 because external-draft spec decode (Qwen3-Coder + 0.75B draft)
-            # had per-slot draft state; MTP fuses draft + target, hence -np 1.
+            # ⚠ HISTORICAL -np 1 RATIONALE, SUPERSEDED 2026-08-02 BUT KEPT: MTP was
+            # reported to share state with the target across slots in a way the
+            # ik_llama.cpp PR #1744 build asserted on with -np 2 ("tensor buffer not
+            # set" at ggml-backend.cpp:236). That build is NOT what this role runs any
+            # more — the fleet is on production-consolidated-v8 with native draft-mtp
+            # — and the operator has ratified full 16 / half 4 for this role. If the
+            # assertion reappears, THIS is the note that explains it, and the fix is
+            # to lower `serving_shape.slots_by_shape` in the master registry, not to
+            # reintroduce a literal here.
             "-np",
-            _runtime_positive_int(cache, "slots", 1),
+            _resolve_parallel_slots(
+                cache, "worker_general", port, numa_instance,
+                "worker_pool", worker_type="explore",
+            ),
             "-c",
             _runtime_positive_int(
                 cache, "context_tokens", _WORKER_GENERAL_DEGRADED_FALLBACK["context_tokens"]
@@ -970,10 +1055,19 @@ def _build_eval_batch_frontdoor_command(port: int, numa_instance: int = 0) -> li
         "127.0.0.1",
         "--port",
         str(port),
+        # The lane's defining shape (P-BENCH-3/E2), declared as
+        # launch_shape.fallback_slots.eval_batch_frontdoor rather than as a
+        # literal. It deliberately does NOT read the source role's slot prior:
+        # this lane exists to serve batch traffic wider than frontdoor does.
         "-np",
-        "8",
+        str(resolve_slots("eval_batch_frontdoor", "eval_batch_frontdoor").slots),
+        # 2026-08-02: reads the LANE'S declared context, not `cache` — i.e. not
+        # frontdoor's. Same argument as the `-np` above it: this lane borrows the
+        # source role's model and runtime priors, never its serving shape. While
+        # it read `cache["context_tokens"]` it tracked frontdoor, so frontdoor's
+        # 32768 -> 262144 move would have silently taken this lane with it.
         "-c",
-        _runtime_positive_int(cache, "context_tokens", 32768),
+        str(LAUNCH_CONTEXT_TOKENS["eval_batch_frontdoor"]),
         "-t",
         _resolve_thread_count("eval_batch_frontdoor", numa_instance),
         "-ub",
@@ -1243,8 +1337,13 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
     _requirements, runtime = _stack_prior_launch(role_name)
     cache = _runtime_cache(runtime)
     flags = _runtime_flags(runtime)
-    fallback_slots = 1 if role_name in SERIAL_ROLES else 2
-    parallel_slots = _runtime_positive_int(cache, "slots", fallback_slots)
+    # `-np` comes from the DECLARED server_mode.<role>.slots, not from
+    # SERIAL_ROLES. The old formula here (`1 if role_name in SERIAL_ROLES else 2`)
+    # answered an admission question with a serving number and disagreed with the
+    # declaration for 6 of the 11 roles master declares slots for.
+    # 2026-08-02: per-INSTANCE, not per-role. frontdoor's full runs -np 16 and each
+    # of its halves -np 4 off the same compiled record.
+    parallel_slots = _resolve_parallel_slots(cache, role_name, port, numa_instance)
     thread_count = _resolve_thread_count(role_name, numa_instance)
     context_size = _runtime_positive_int(
         cache,
@@ -2407,6 +2506,13 @@ _STACK_MANIFEST_EXPORTS = {
     "PORT_MAP",
     "ROLE_LAUNCH_META",
     "HOT_ROLES",
+    # 2026-08-02: `-np` no longer derives from SERIAL_ROLES, so this module no
+    # longer imports it directly. It stays re-exported because SERIAL_ROLES is
+    # still the admission policy and callers/tests read it off this module.
+    "SERIAL_ROLES",
+    "DECLARED_SLOTS",
+    "FALLBACK_SLOTS",
+    "validate_declaration_parity",
     "NUMA_REPLICA_PORTS",
     "HOT_SERVERS",
     "WARM_SERVERS",

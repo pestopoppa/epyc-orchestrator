@@ -114,6 +114,13 @@ def _write_role_enum_files(config: StackChangePipelineConfig, roles: set[str]) -
     )
 
 
+# 2026-08-01 W1 cutover: frontdoor's :8070 alias is now `worker_summarize`, its
+# ONLY alias. `coder_escalation` — which these two builders used to name as the
+# second role on :8070 — LEFT that process and is now an alias on
+# architect_general's :8083 (registry `server_mode.architect_general.shared_with`,
+# launch manifest PORT_MAP coder_escalation -> 8083). Naming it here made the
+# pipeline's stack_manifest_registry step report real drift against the launcher.
+# The scenario is unchanged: one primary plus one role sharing its process.
 def _base_frontdoor_registry(path: Path, *, throughput: float = 24.3) -> Path:
     return _write_yaml(
         path,
@@ -136,14 +143,14 @@ def _base_frontdoor_registry(path: Path, *, throughput: float = 24.3) -> Path:
                     "numa_instances": 1,
                     "numa_ports": [8070],
                 },
-                "coder_escalation": {
+                "worker_summarize": {
                     "url": "http://localhost:8070",
                     "port": 8070,
                     "tier": "hot",
                     "slots": 2,
                     "model": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
                     "model_path": "/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
-                    "model_role": "coder_escalation",
+                    "model_role": "worker_summarize",
                     "memory_gb": 37,
                     "throughput": throughput,
                     "benchmark_score": "170/183 (92.9%)",
@@ -170,7 +177,7 @@ def _base_frontdoor_registry(path: Path, *, throughput: float = 24.3) -> Path:
                     "acceleration": {"type": "none", "lookup": False},
                     "memory": {"pinned": True, "residency": "hot"},
                 },
-                "coder_escalation": {
+                "worker_summarize": {
                     "model": {
                         "name": "Qwen3.6-35B-A3B-Q8_0",
                         "quant": "Q8_0",
@@ -213,14 +220,14 @@ def _swapped_frontdoor_registry(path: Path, *, throughput: float = 18.5) -> Path
                     "numa_instances": 1,
                     "numa_ports": [8070],
                 },
-                "coder_escalation": {
+                "worker_summarize": {
                     "url": "http://localhost:8070",
                     "port": 8070,
                     "tier": "hot",
                     "slots": 2,
                     "model": "Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf",
                     "model_path": "/models/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf",
-                    "model_role": "coder_escalation",
+                    "model_role": "worker_summarize",
                     "memory_gb": 20,
                     "throughput": throughput,
                     "benchmark_score": "160/183 (87.4%)",
@@ -247,7 +254,7 @@ def _swapped_frontdoor_registry(path: Path, *, throughput: float = 18.5) -> Path
                     "acceleration": {"type": "none", "lookup": False},
                     "memory": {"pinned": True, "residency": "hot"},
                 },
-                "coder_escalation": {
+                "worker_summarize": {
                     "model": {
                         "name": "Qwen3.6-35B-A3B-Q4_K_M",
                         "quant": "Q4_K_M",
@@ -342,23 +349,33 @@ def _swapped_worker_registry(path: Path, *, throughput: float = 66.2) -> Path:
     )
 
 
+# 2026-07-31 vision unification + 2026-08-01 W1 cutover: worker_vision and
+# vision_escalation are ONE :8086 GPU process serving ONE VL model. Port 8087 is
+# RETIRED. The registry encodes this as
+# `server_mode.worker_vision.shared_with: [vision_escalation]` with
+# `roles.vision_escalation.alias_of: worker_vision`, and the alias declares no
+# model of its own ("There is NO second VL model resident").
+#
+# This builder used to declare TWO servers (8086 + 8087) with TWO different
+# models. That shape is no longer expressible: the launch-manifest guard resolves
+# vision_escalation to its host and requires the alias's compiled
+# serving.launch.requirements to EQUAL worker_vision's, so the two-model form
+# failed with a model_path mismatch before any of the swap assertions ran.
+#
+# The swap this fixture simulates is now the real one — the 7B incumbent replaced
+# by the 30B-A3B — so both "old model name is gone" assertions still bite.
 def _vision_registry(
     path: Path,
     *,
-    worker_model: str = "Qwen2.5-VL-7B-Instruct-Q4_K_M",
-    worker_memory_gb: int = 7,
-    worker_throughput: float = 20.0,
-    worker_quality_pct: float = 81.0,
-    worker_quant: str = "Q4_K_M",
-    escalation_model: str = "Qwen3-VL-30B-A3B-Instruct-Q4_K_M",
-    escalation_memory_gb: int = 20,
-    escalation_throughput: float = 8.0,
-    escalation_quality_pct: float = 90.0,
-    escalation_quant: str = "Q4_K_M",
+    model: str = "Qwen2.5-VL-7B-Instruct-Q4_K_M",
+    memory_gb: int = 7,
+    throughput: float = 20.0,
+    quality_pct: float = 81.0,
+    quant: str = "Q4_K_M",
+    architecture: str = "qwen2vl",
     benchmark_date: str = "2026-05-04",
 ) -> Path:
-    worker_gguf = f"{worker_model}.gguf"
-    escalation_gguf = f"{escalation_model}.gguf"
+    gguf = f"{model}.gguf"
     return _write_yaml(
         path,
         {
@@ -368,63 +385,48 @@ def _vision_registry(
                     "port": 8086,
                     "tier": "hot",
                     "slots": 2,
-                    "model": worker_gguf,
-                    "model_path": f"/models/{worker_gguf}",
+                    "model": gguf,
+                    "model_path": f"/models/{gguf}",
                     "model_role": "worker_vision",
-                    "memory_gb": worker_memory_gb,
-                    "throughput": worker_throughput,
-                    "benchmark_score": f"{worker_quality_pct:g}%",
+                    "shared_with": ["vision_escalation"],
+                    "memory_gb": memory_gb,
+                    "throughput": throughput,
+                    "benchmark_score": f"{quality_pct:g}%",
                     "benchmark_date": benchmark_date,
-                    "mmproj": f"/models/{worker_model}-mmproj.gguf",
-                },
-                "vision_escalation": {
-                    "url": "http://localhost:8087",
-                    "port": 8087,
-                    "tier": "hot",
-                    "slots": 1,
-                    "model": escalation_gguf,
-                    "model_path": f"/models/{escalation_gguf}",
-                    "model_role": "vision_escalation",
-                    "memory_gb": escalation_memory_gb,
-                    "throughput": escalation_throughput,
-                    "benchmark_score": f"{escalation_quality_pct:g}%",
-                    "benchmark_date": benchmark_date,
-                    "mmproj": f"/models/{escalation_model}-mmproj.gguf",
+                    "mmproj": f"/models/{model}-mmproj.gguf",
                 },
             },
             "roles": {
                 "worker_vision": {
                     "model": {
-                        "name": worker_model,
-                        "quant": worker_quant,
-                        "architecture": "qwen2vl",
-                        "size_gb": worker_memory_gb,
+                        "name": model,
+                        "quant": quant,
+                        "architecture": architecture,
+                        "size_gb": memory_gb,
                         "ctx_max": 8192,
                     },
                     "performance": {
-                        "quality_pct": worker_quality_pct,
-                        "baseline_tps": worker_throughput,
+                        "quality_pct": quality_pct,
+                        "baseline_tps": throughput,
                         "benchmark_date": benchmark_date,
                     },
                     "memory": {"pinned": True, "residency": "hot"},
                 },
                 "vision_escalation": {
+                    "alias_of": "worker_vision",
                     "model": {
-                        "name": escalation_model,
-                        "quant": escalation_quant,
-                        "architecture": "qwen3vlmoe",
-                        "size_gb": escalation_memory_gb,
-                        "ctx_max": 16384,
+                        "name": model,
+                        "quant": quant,
+                        "architecture": architecture,
+                        "size_gb": memory_gb,
+                        "ctx_max": 8192,
+                        "shared_gguf_with": "worker_vision",
                     },
                     "performance": {
-                        "quality_pct": escalation_quality_pct,
-                        "baseline_tps": escalation_throughput,
+                        "inherits_from": "worker_vision",
+                        "quality_pct": quality_pct,
+                        "baseline_tps": throughput,
                         "benchmark_date": benchmark_date,
-                    },
-                    "acceleration": {
-                        "type": "moe_expert_reduction",
-                        "override_key": "qwen3vlmoe.expert_used_count",
-                        "experts": 4,
                     },
                     "memory": {"pinned": True, "residency": "hot"},
                 },
@@ -436,16 +438,12 @@ def _vision_registry(
 def _swapped_vision_registry(path: Path) -> Path:
     return _vision_registry(
         path,
-        worker_model="Qwen2.5-VL-7B-Instruct-Q8_0",
-        worker_memory_gb=13,
-        worker_throughput=14.5,
-        worker_quality_pct=84.0,
-        worker_quant="Q8_0",
-        escalation_model="Qwen3-VL-30B-A3B-Instruct-Q8_0",
-        escalation_memory_gb=38,
-        escalation_throughput=5.9,
-        escalation_quality_pct=92.0,
-        escalation_quant="Q8_0",
+        model="Qwen3-VL-30B-A3B-Instruct-Q8_0",
+        memory_gb=38,
+        throughput=5.9,
+        quality_pct=92.0,
+        quant="Q8_0",
+        architecture="qwen3vlmoe",
         benchmark_date="2026-06-13",
     )
 
@@ -783,7 +781,7 @@ def _assert_seeding_descriptor_fallback_consumer(
 
 
 def test_pipeline_report_names_simulated_fixture_target(tmp_path: Path) -> None:
-    config = _config(tmp_path, mode="update", roles={"frontdoor", "coder_escalation"})
+    config = _config(tmp_path, mode="update", roles={"frontdoor", "worker_summarize"})
     _base_frontdoor_registry(config.lean_registry)
 
     report = run_stack_change_pipeline(config)
@@ -798,7 +796,7 @@ def test_simulated_check_runs_promotion_gate_when_requested(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = _config(tmp_path, mode="update", roles={"frontdoor", "coder_escalation"})
+    config = _config(tmp_path, mode="update", roles={"frontdoor", "worker_summarize"})
     _base_frontdoor_registry(config.lean_registry)
     assert run_stack_change_pipeline(config).ok
     calls: list[dict[str, Any]] = []
@@ -838,7 +836,7 @@ def test_simulated_check_fails_when_promotion_gate_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = _config(tmp_path, mode="update", roles={"frontdoor", "coder_escalation"})
+    config = _config(tmp_path, mode="update", roles={"frontdoor", "worker_summarize"})
     _base_frontdoor_registry(config.lean_registry)
     assert run_stack_change_pipeline(config).ok
     original_run = pipeline.subprocess.run
@@ -869,7 +867,7 @@ def test_simulated_check_fails_when_promotion_gate_fails(
 
 
 def test_simulated_update_does_not_write_real_operator_summary(tmp_path: Path) -> None:
-    config = _config(tmp_path, mode="update", roles={"frontdoor", "coder_escalation"})
+    config = _config(tmp_path, mode="update", roles={"frontdoor", "worker_summarize"})
     _base_frontdoor_registry(config.lean_registry)
     real_summary = StackChangePipelineConfig(mode="check").operator_summary
     before = real_summary.read_text(encoding="utf-8")
@@ -885,7 +883,7 @@ def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    roles = {"frontdoor", "coder_escalation"}
+    roles = {"frontdoor", "worker_summarize"}
     config = _config(tmp_path, mode="update", roles=roles)
     _base_frontdoor_registry(config.lean_registry)
     assert run_stack_change_pipeline(config).ok
@@ -939,7 +937,9 @@ def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
 
     expected_port = _primary_port_for_roles(priors, roles)
     assert _stack_prior_backend_urls(config.stack_priors) == {
-        "coder_escalation/frontdoor": f"http://localhost:{expected_port}"
+        # Grouped name is the sorted role set on one port; W1 moved
+        # coder_escalation off :8070, so the pair is now frontdoor+worker_summarize.
+        "frontdoor/worker_summarize": f"http://localhost:{expected_port}"
     }
     port_hints = _stack_prior_port_hints(config.stack_priors)
     assert port_hints[expected_port].split(".", 1)[0] in roles
@@ -958,7 +958,7 @@ def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
 
     q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
     assert q_priors.baseline_tps_by_role["frontdoor"] == 18.5
-    assert q_priors.baseline_tps_by_role["coder_escalation"] == 18.5
+    assert q_priors.baseline_tps_by_role["worker_summarize"] == 18.5
     assert q_priors.baseline_tps_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
     assert q_priors.baseline_quality_by_role["frontdoor"] == pytest.approx(0.874)
     assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
@@ -1142,18 +1142,21 @@ def test_simulated_vision_swap_updates_generated_consumers_with_approval(
 
     assert update_report.ok
     descriptors = yaml.safe_load(config.descriptors.read_text(encoding="utf-8"))
+    # 2026-07-31 vision unification: ONE :8086 process, so ONE VL descriptor.
+    # Was {"qwen2.5-vl-7b-q8_0", "qwen3-vl-30b-a3b-q8_0"} when vision_escalation
+    # had its own :8087 server and its own model.
     assert {model["model_id"] for model in descriptors["models"]} == {
-        "qwen2.5-vl-7b-q8_0",
         "qwen3-vl-30b-a3b-q8_0",
     }
     priors = yaml.safe_load(config.stack_priors.read_text(encoding="utf-8"))
     assert set(priors["roles"]) == roles
-    assert priors["roles"]["worker_vision"]["model_id"] == "qwen2.5-vl-7b-q8_0"
-    assert priors["roles"]["worker_vision"]["priors"]["throughput_tps"] == 14.5
-    assert priors["roles"]["worker_vision"]["priors"]["quality_overall"] == pytest.approx(0.84)
-    assert priors["roles"]["vision_escalation"]["model_id"] == "qwen3-vl-30b-a3b-q8_0"
-    assert priors["roles"]["vision_escalation"]["priors"]["throughput_tps"] == 5.9
-    assert priors["roles"]["vision_escalation"]["priors"]["quality_overall"] == pytest.approx(0.92)
+    # Both roles ride one process, so the swap must land identically on both —
+    # worker_vision was 14.5 t/s @ 0.84 on its own 7B before the unification.
+    for role in ("worker_vision", "vision_escalation"):
+        assert priors["roles"][role]["model_id"] == "qwen3-vl-30b-a3b-q8_0"
+        assert priors["roles"][role]["priors"]["throughput_tps"] == 5.9
+        assert priors["roles"][role]["priors"]["quality_overall"] == pytest.approx(0.92)
+    assert priors["roles"]["vision_escalation"]["serving"]["binding"] == "server_mode.shared_with"
 
     operator_summary = config.operator_summary.read_text(encoding="utf-8")
     assert "Source: `orchestration/derived/stack_priors.yaml`" in operator_summary
@@ -1175,27 +1178,37 @@ def test_simulated_vision_swap_updates_generated_consumers_with_approval(
     from src.api.routes.chat_vision import _vl_url_for_port, _vl_url_for_role
     from src.api.routes.vision_serving import stack_prior_vl_ports
 
+    # 2026-07-31 vision unification: :8087 is RETIRED. vision_escalation is a
+    # routing label on worker_vision's :8086 process, so every VL consumer must
+    # resolve BOTH roles to 8086 (was worker_vision 8086 / vision_escalation 8087).
     assert stack_prior_vl_ports(config.stack_priors) == {
         "worker_vision": 8086,
-        "vision_escalation": 8087,
+        "vision_escalation": 8086,
     }
     assert _vl_port_for_role("worker_vision", config.stack_priors) == 8086
-    assert _vl_port_for_role("vision_escalation", config.stack_priors) == 8087
+    assert _vl_port_for_role("vision_escalation", config.stack_priors) == 8086
     assert _vl_url_for_role("worker_vision", config.stack_priors) == "http://localhost:8086"
-    assert _vl_url_for_role("vision_escalation", config.stack_priors) == "http://localhost:8087"
+    assert _vl_url_for_role("vision_escalation", config.stack_priors) == "http://localhost:8086"
     assert _vl_url_for_port(8086, config.stack_priors) == "http://localhost:8086"
-    assert _vl_url_for_port(8087, config.stack_priors) == "http://localhost:8087"
+    # The retired port must be REFUSED, not silently fallen back to localhost:8087.
+    with pytest.raises(ValueError, match="No generated VL URL for port 8087"):
+        _vl_url_for_port(8087, config.stack_priors)
 
     q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
-    assert q_priors.baseline_tps_by_role["worker_vision"] == 14.5
+    # worker_vision was 14.5 pre-unification (its own 7B); it now reads the
+    # single :8086 model's prior, same as its alias.
+    assert q_priors.baseline_tps_by_role["worker_vision"] == 5.9
     assert q_priors.baseline_tps_by_role["vision_escalation"] == 5.9
     assert q_priors.baseline_tps_source_by_role["worker_vision"] == PRIOR_SOURCE_STACK_PRIORS
     assert q_priors.baseline_quality_by_role["vision_escalation"] == pytest.approx(0.92)
     assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
+    # Tier is derived from model memory (src/classifiers/factual_risk.py), and
+    # both roles now name the same 38 GB model — worker_vision was tier_3 only
+    # while it carried its own 13 GB 7B.
     _assert_factual_risk_stack_prior_consumer(
         config.stack_priors,
         expected_tiers={
-            "worker_vision": "tier_3",
+            "worker_vision": "tier_2",
             "vision_escalation": "tier_2",
         },
     )
@@ -1274,8 +1287,14 @@ def test_simulated_ingest_swap_updates_generated_consumers_with_approval(
     assert role["priors"]["throughput_tps"] == 14.2
     assert role["priors"]["quality_overall"] == pytest.approx(0.963)
     assert role["model"]["ctx_max"] == 262144
-    assert role["serving"]["effective_context_tokens"] == 32768
-    assert role["serving"]["launch"]["runtime"]["cache"]["context_tokens"] == 32768
+    # 32768 -> 262144 (2026-08-02, operator-ratified). This simulated registry
+    # declares no `serving_shape` of its own, so the context comes from the
+    # AMBIENT launcher table — which is now DERIVED from the real master's
+    # `server_mode.ingest_long_context.serving_shape.n_ctx`. The fixture is
+    # exercising the model/descriptor swap, not the serving shape, so it tracks
+    # the ambient value rather than pinning a literal that has moved.
+    assert role["serving"]["effective_context_tokens"] == 262144
+    assert role["serving"]["launch"]["runtime"]["cache"]["context_tokens"] == 262144
 
     operator_summary = config.operator_summary.read_text(encoding="utf-8")
     assert "Source: `orchestration/derived/stack_priors.yaml`" in operator_summary
@@ -1375,7 +1394,7 @@ def test_simulated_shared_runtime_aliases_compile_as_one_runtime_descriptor(
 
 
 def test_simulated_retired_role_enum_is_removed_by_update(tmp_path: Path) -> None:
-    roles = {"frontdoor", "coder_escalation"}
+    roles = {"frontdoor", "worker_summarize"}
     config = _config(tmp_path, mode="update", roles=roles)
     _base_frontdoor_registry(config.lean_registry)
     retired_role = "architect" + "_coding"
@@ -1471,23 +1490,20 @@ def test_simulated_context_kv_and_acceleration_drift_are_rejected(
                         "ld_library_path": ["/mnt/raid0/llm/llama.cpp/build/src"],
                     },
                 },
+                # 2026-07-31 vision unification: ONE :8086 process, two role
+                # names. vision_escalation's own :8087 server_mode entry (its own
+                # 30B model) is gone — the port is RETIRED and the launch guard
+                # now requires the alias's compiled launch requirements to equal
+                # its host's.
                 "worker_vision": {
                     "url": "http://localhost:8086",
                     "port": 8086,
                     "tier": "hot",
                     "model_role": "worker_vision",
                     "model": "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+                    "shared_with": ["vision_escalation"],
                     "throughput": 20.0,
                     "memory_gb": 7,
-                },
-                "vision_escalation": {
-                    "url": "http://localhost:8087",
-                    "port": 8087,
-                    "tier": "hot",
-                    "model_role": "vision_escalation",
-                    "model": "Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
-                    "throughput": 8.0,
-                    "memory_gb": 20,
                 },
                 "architect_general": {
                     "url": "http://localhost:8083",
@@ -1515,11 +1531,27 @@ def test_simulated_context_kv_and_acceleration_drift_are_rejected(
                 "worker_vision": {
                     "model": {"name": "Qwen2.5-VL-7B-Instruct-Q4_K_M", "ctx_max": 8192},
                     "performance": {"quality_pct": 81, "baseline_tps": 20.0},
+                    # The VL model is a MoE with a forced-expert override, so the
+                    # :8086 runtime carries an override_kv the guard must police.
+                    "acceleration": {
+                        "type": "moe_expert_reduction",
+                        "override_key": "qwen3vlmoe.expert_used_count",
+                        "experts": 4,
+                    },
                     "memory": {"residency": "hot"},
                 },
                 "vision_escalation": {
-                    "model": {"name": "Qwen3-VL-30B-A3B-Instruct-Q4_K_M", "ctx_max": 16384},
-                    "performance": {"quality_pct": 90, "baseline_tps": 8.0},
+                    "alias_of": "worker_vision",
+                    "model": {
+                        "name": "Qwen2.5-VL-7B-Instruct-Q4_K_M",
+                        "ctx_max": 8192,
+                        "shared_gguf_with": "worker_vision",
+                    },
+                    "performance": {
+                        "inherits_from": "worker_vision",
+                        "quality_pct": 81,
+                        "baseline_tps": 20.0,
+                    },
                     "memory": {"residency": "hot"},
                 },
                 "architect_general": {
@@ -1549,7 +1581,14 @@ def test_simulated_context_kv_and_acceleration_drift_are_rejected(
     payload["roles"]["worker_vision"]["serving"]["launch"]["requirements"][
         "mmproj_path"
     ] = "/tmp/stale-mmproj.gguf"
-    payload["roles"]["vision_escalation"]["serving"]["launch"]["runtime"]["flags"][
+    # Spurious-override detector. This corruption used to be written onto
+    # vision_escalation, but the 2026-07-31 unification made that role an alias:
+    # WP-13 deliberately validates an alias's RUNTIME once, on its host's row
+    # (stack_change_guard.py: `if target_launch_runtime and not host_role`), so a
+    # runtime corruption written to the alias is no longer observable anywhere.
+    # The row that owns the :8086 runtime is worker_vision, so the fabricated
+    # override goes there — same detector, correct row.
+    payload["roles"]["worker_vision"]["serving"]["launch"]["runtime"]["flags"][
         "override_kv"
     ] = ["stale.vision_override=int:1"]
     _write_yaml(config.stack_priors, payload)

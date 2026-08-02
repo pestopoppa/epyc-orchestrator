@@ -10,7 +10,7 @@ import json
 import re
 import sys
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
@@ -107,6 +107,10 @@ class HardcodedSurfaceRule:
     remediation: str
     exclude_globs: tuple[str, ...] = ()
     ignore_comment_lines: bool = False
+    # 2026-08-02: when true, `pattern` is REPLACED at scan time by an alternation
+    # over `retired_live_roles()` — the derived set — instead of being a literal
+    # naming one retired role. See `_derive_retired_role_patterns`.
+    derive_retired_roles: bool = False
 
 
 @dataclass(frozen=True)
@@ -303,6 +307,7 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
             "scripts/benchmark/deprecated/**",
         ),
         remediation="remove from live behavior or mark explicit legacy/test-only",
+        derive_retired_roles=True,
         ignore_comment_lines=True,
     ),
     HardcodedSurfaceRule(
@@ -319,6 +324,7 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         pattern=r"\barchitect_coding\b",
         path_globs=("orchestration/procedures/*.yaml",),
         remediation="compile procedure role choices from stack priors",
+        derive_retired_roles=True,
     ),
     # 2026-08-01: `retired_role_in_lean_registry` REMOVED. Its only target,
     # orchestration/model_registry_lean.yaml, was deleted — it was a stale second
@@ -334,6 +340,7 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         pattern=r"\barchitect_coding\b",
         path_globs=("orchestration/source_registry.yaml",),
         remediation="remove retired roles from web-source role_access metadata",
+        derive_retired_roles=True,
     ),
     # 2026-08-01: `retired_role_in_quality_signature` REMOVED with its target file.
     #
@@ -361,6 +368,7 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         path_globs=("tests/**/*.py", "scripts/memory/**/*.py"),
         exclude_globs=("tests/unit/test_stack_change_guard.py",),
         remediation="label as retired-role coverage or migrate fixture to stack priors",
+        derive_retired_roles=True,
     ),
     HardcodedSurfaceRule(
         rule_id="retired_role_in_operator_docs",
@@ -368,6 +376,7 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         pattern=r"\barchitect_coding\b",
         path_globs=("docs/**/*.md",),
         remediation="generate current stack tables or label snapshot as historical",
+        derive_retired_roles=True,
     ),
     HardcodedSurfaceRule(
         rule_id="bilinear_model_specs_table",
@@ -1042,6 +1051,11 @@ def _launch_cfg_from_target(target: dict[str, Any]) -> dict[str, Any]:
     launch_entries = entries if isinstance(entries, list) else []
     return {
         "effective_context_tokens": target.get("effective_context_tokens"),
+        # Port -> shape class over the role's whole serving fleet, so this
+        # independent recomputation resolves per-instance `-np` the same way the
+        # compiler does. Without it an ALIAS would resolve only the instances it
+        # is tagged onto and report a false mismatch on the rest.
+        "port_shape_classes": target.get("port_shape_classes") or {},
         "launch": {
             "entries": launch_entries,
             "primary_roles": sorted(
@@ -1125,10 +1139,15 @@ def _launch_manifest_targets(
                             "effective_context_tokens": _effective_context_for_server(server),
                             "launch_entries": [],
                             "launch_requirements": {},
+                            "port_shape_classes": {},
                         },
                     )
                     target["ports"].append(port)
-                    target["launch_entries"].append(_launch_entry_for_role(server, role))
+                    entry = _launch_entry_for_role(server, role)
+                    target["launch_entries"].append(entry)
+                    entry_shape_class = entry.get("cpu_shape_class")
+                    if isinstance(entry_shape_class, str) and entry_shape_class:
+                        target["port_shape_classes"][port] = entry_shape_class
                     target["launch_requirements"].update(
                         _launch_requirements_for_server(server)
                     )
@@ -1157,6 +1176,16 @@ def _launch_manifest_targets(
         for alias in shared:
             if isinstance(alias, str) and alias in targets and alias != host_key:
                 targets[alias]["alias_host"] = host_key
+                # WP-13 fleet convergence, extended to the shape map: an alias
+                # rides its host's WHOLE fleet even though it is tagged onto only
+                # the first N instances. The compiled record's alias `ports` are
+                # already the host's; its `slots_by_port` must span the same set,
+                # so the alias inherits the host's port -> shape-class map here.
+                host_classes = targets[host_key].get("port_shape_classes")
+                if isinstance(host_classes, dict):
+                    alias_classes = targets[alias].setdefault("port_shape_classes", {})
+                    for alias_port, alias_shape in host_classes.items():
+                        alias_classes.setdefault(alias_port, alias_shape)
 
     for role, target in targets.items():
         descriptor = descriptor_roles.get(role) or {}
@@ -1197,6 +1226,21 @@ def _launch_entry_for_role(server: dict[str, Any], role: str) -> dict[str, Any]:
     numa_instance = server.get("numa_instance")
     if isinstance(numa_instance, int):
         entry["numa_instance"] = numa_instance
+    # 2026-08-02: the instance's SHAPE CLASS, without which the independently
+    # recomputed runtime record below cannot resolve per-instance `-np` and would
+    # fall back to the role-level count for every port — reporting a mismatch
+    # against the compiled artifact that is really a gap in this recomputation.
+    # This is the guard's own second copy of `_launch_entry_for_role` (the
+    # compiler's lives in src/registry/stack_priors.py); the duplication is
+    # pre-existing and both copies must carry the field.
+    try:
+        from scripts.server.stack_numa import instance_shape_class
+
+        shape_class = instance_shape_class(str(primary_role), numa_instance or 0)
+    except Exception:  # noqa: BLE001 — the guard must report, not abort on import
+        shape_class = None
+    if isinstance(shape_class, str) and shape_class:
+        entry["cpu_shape_class"] = shape_class
     worker_type = server.get("worker_type")
     if isinstance(worker_type, str):
         entry["worker_type"] = worker_type
@@ -1639,6 +1683,50 @@ def _display_path(path: Path, repo_root: Path) -> Path:
         return path
 
 
+def _retired_role_alternation(roles: Iterable[str]) -> str:
+    """Build a word-bounded alternation over the retired-role names."""
+    names = sorted({name for name in roles if name})
+    return r"\b(?:" + "|".join(re.escape(name) for name in names) + r")\b"
+
+
+def _derive_retired_role_patterns(
+    rules: tuple[HardcodedSurfaceRule, ...],
+) -> tuple[tuple[HardcodedSurfaceRule, ...], list[str]]:
+    """Replace hand-written retired-role patterns with the DERIVED set.
+
+    2026-08-02: these rules each carried the literal ``\\barchitect_coding\\b``
+    while this very module already derives the authoritative set in
+    `retired_live_roles()` — master-registry retirement markers minus whatever the
+    compiled lean registry still serves. The two had diverged badly: the derivation
+    returns 42 retired names and the scanner looked for exactly 1, so 41 retired
+    roles could sit in live code, procedure enums, source-access metadata, tests
+    and operator docs and every one of these rules would report green.
+
+    That is the incomplete-checklist shape, and it is worse here than elsewhere
+    because the producer is IN THE SAME FILE. Nothing was duplicated; a name was
+    simply missing from a hand-maintained pattern, and no review of what the rule
+    DID match could have surfaced what it did not.
+
+    `RETIRED_LIVE_ROLE_FLOOR` stays a FLOOR (same shape as
+    `REQUIRED_SOURCE_ARTIFACTS`): the union is scanned, so a derivation that
+    silently stops reporting a known-retired role still leaves the rule with teeth.
+    A derivation failure is reported, never swallowed — the floor pattern is used
+    for that run so one broken source does not blind the rest of the scan.
+    """
+    if not any(rule.derive_retired_roles for rule in rules):
+        return rules, []
+
+    retired, errors = _retired_live_roles_or_error()
+    pattern = _retired_role_alternation(set(retired) | set(RETIRED_LIVE_ROLE_FLOOR))
+    return (
+        tuple(
+            replace(rule, pattern=pattern) if rule.derive_retired_roles else rule
+            for rule in rules
+        ),
+        errors,
+    )
+
+
 def _candidate_paths(repo_root: Path, rule: HardcodedSurfaceRule) -> list[Path]:
     paths: dict[str, Path] = {}
     for pattern in rule.path_globs:
@@ -1665,6 +1753,16 @@ def scan_hardcoded_surfaces(
     treating historical artifacts, benchmark outputs, or generated backups as
     live stack truth.
     """
+    # Rules that name retired roles get their pattern DERIVED from
+    # `retired_live_roles()` here, so a role retired upstream is scanned for
+    # without anyone editing a regex literal.
+    #
+    # The derivation errors are dropped HERE and only here: this function returns
+    # findings, not errors, and `validate_stack_priors` already resolves the same
+    # set through `_retired_live_roles_or_error()` and records the failure as an
+    # ERROR before it ever calls us. Dropping them a second time hides nothing —
+    # if the derivation is broken, the guard says so on its own line.
+    rules, _reported_by_validate_stack_priors = _derive_retired_role_patterns(rules)
     findings: list[SurfaceFinding] = []
     for rule in rules:
         if categories is not None and rule.category not in categories:

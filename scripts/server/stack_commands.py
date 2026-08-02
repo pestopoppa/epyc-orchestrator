@@ -466,6 +466,363 @@ def _runtime_value_warning(
     )
 
 
+# ---------------------------------------------------------------------------
+# Derived attestation coverage
+# ---------------------------------------------------------------------------
+#
+# 2026-08-02: the attestation checklist below used to be HAND-WRITTEN — a fixed
+# sequence of field names read out of the declared launch record. Anything the
+# compiler emitted but nobody had listed was never compared, and the omission was
+# invisible because both halves were individually correct and the output was green.
+# `device` was the field that fell through: a 27B declared on ROCm0 ran on 24 CPU
+# threads with the GPU at 0% while reporting `healthy / attest ok`.
+#
+# Adding one more name by hand does not close that class, so the checklist is now
+# DERIVED: `_declared_runtime_field_paths` walks the keys the producer actually
+# emitted for this role, and every one of them must resolve to an entry in
+# `_RUNTIME_FIELD_CHECKS`. A declared field with no entry is itself REPORTED —
+# "this role declares X and nothing verifies it" — which inverts the failure mode.
+# Before, an unknown field was silent; now it is a finding.
+#
+# `_ATTESTED_RUNTIME_FIELDS` is the old hand list, kept as a FLOOR (same shape as
+# `REQUIRED_SOURCE_ARTIFACTS` in scripts/validate/stack_change_guard.py): iteration
+# is over `sorted(set(FLOOR) | set(declared))`, so deleting a mapping that used to
+# exist is caught even if the producer also stops emitting the field.
+#
+# Modes:
+#   dedicated   verified above by purpose-written code (path/semantics too specific
+#               for the table); listed here so the field still counts as covered.
+#   container   a nested block whose CHILDREN carry the facts (walked recursively).
+#   int_flag              `<flag> <int>`, emitted for int >= 0 (mirrors the launcher).
+#   int_or_token_flag     as int_flag, but a non-empty string token is also valid
+#                         (`-ngl all`).
+#   positive_int_flag     emitted only when > 0.
+#   float_flag            emitted as str(float(value)).
+#   not_emitted           declared, but this kernel's launcher cannot emit it —
+#                         warn if a role ever declares it truthy, because then the
+#                         declaration is a promise the launch cannot keep.
+#   implied               fully determined by another field that IS checked.
+#   env_prefix            not a CLI flag: verified against /proc/<pid>/environ.
+#   env_value             not a CLI flag: exact environment variable match.
+#   cross_check           compared against another declared field, not the cmdline.
+#   metadata              provenance only; no runtime consequence to attest.
+_RUNTIME_FIELD_CHECKS: dict[str, tuple[str, tuple[str, ...], str]] = {
+    # section: requirements
+    "requirements.model_path": ("dedicated", (), ""),
+    "requirements.draft_model_path": ("dedicated", (), ""),
+    "requirements.mmproj_path": ("dedicated", (), ""),
+    # section: runtime (top level)
+    "runtime.binary_path": ("dedicated", (), ""),
+    "runtime.binary_dir": ("implied", (), "binary_path (full path) is compared verbatim"),
+    "runtime.binary_family": ("metadata", (), "provenance label; binary_path is the fact"),
+    "runtime.env_policy": (
+        "metadata",
+        (),
+        "names the env recipe; its observable effects are ld_library_path/kmp_blocktime",
+    ),
+    "runtime.ld_library_path": ("env_prefix", ("LD_LIBRARY_PATH",), ""),
+    "runtime.kmp_blocktime": ("env_value", ("KMP_BLOCKTIME",), ""),
+    "runtime.cache": ("container", (), ""),
+    "runtime.flags": ("container", (), ""),
+    # section: runtime.cache
+    "runtime.cache.context_tokens": ("dedicated", (), ""),
+    "runtime.cache.slots": ("dedicated", (), ""),
+    # 2026-08-02 per-instance `-np`. A MAP, port -> slots, not a container of
+    # named fields: its keys are ports, so they cannot be enumerated in this
+    # table and the walker is told not to descend into it (see
+    # _RUNTIME_FIELD_WALK_LEAVES). The dedicated check picks the entry matching
+    # the live process's own --port, which is what makes attestation
+    # instance-accurate — the role-level `slots` cannot be right for all three
+    # instances of a role whose full and halves differ.
+    "runtime.cache.slots_by_port": ("dedicated", (), ""),
+    "runtime.cache.ubatch": ("dedicated", (), ""),
+    "runtime.cache.kv_type_k": ("dedicated", (), ""),
+    "runtime.cache.kv_type_v": ("dedicated", (), ""),
+    "runtime.cache.no_mmap": ("dedicated", (), ""),
+    "runtime.cache.mlock": ("dedicated", (), ""),
+    "runtime.cache.slot_save_path": ("dedicated", (), ""),
+    # --kv-hadamard was removed in the v6 binary (it would crash), so the launcher's
+    # emission site is commented out. A role declaring it true would therefore get a
+    # silent no-op, which is exactly the kind of unkept declaration worth reporting.
+    "runtime.cache.kv_hadamard": (
+        "not_emitted",
+        (),
+        "--kv-hadamard removed in the v6 binary; the launcher cannot emit it",
+    ),
+    # section: runtime.flags
+    "runtime.flags.flash_attn": ("dedicated", (), ""),
+    "runtime.flags.jinja": ("dedicated", (), ""),
+    "runtime.flags.reasoning": ("dedicated", (), ""),
+    "runtime.flags.override_kv": ("dedicated", (), ""),
+    "runtime.flags.device": ("dedicated", (), ""),
+    "runtime.flags.device_draft": ("dedicated", (), ""),
+    "runtime.flags.spec": ("container", (), ""),
+    # The three declared serving flags. orchestrator_stack.py keeps these as DATA
+    # (`_RUNTIME_SERVING_FLAG_ARGS`) and emits them; nothing verified them until now.
+    # -ngl is the sharpest of the three and sits on the same failure path as `device`:
+    # without it a server takes `--device ROCm0`, offloads nothing, and is a GPU launch
+    # in name only — indistinguishable, to the old checklist, from a healthy one.
+    "runtime.flags.n_gpu_layers": ("int_or_token_flag", ("-ngl", "--n-gpu-layers", "--gpu-layers"), ""),
+    "runtime.flags.image_min_tokens": ("int_flag", ("--image-min-tokens",), ""),
+    "runtime.flags.cache_ram": ("int_flag", ("--cache-ram",), ""),
+    # section: runtime.flags.spec
+    "runtime.flags.spec.enabled": ("dedicated", (), ""),
+    "runtime.flags.spec.type": ("dedicated", (), ""),
+    "runtime.flags.spec.draft_max": ("dedicated", (), ""),
+    "runtime.flags.spec.draft_p_min": ("dedicated", (), ""),
+    "runtime.flags.spec.threads_draft": ("dedicated", (), ""),
+    "runtime.flags.spec.draft_min": ("int_flag", ("--spec-draft-n-min",), ""),
+    "runtime.flags.spec.draft_p_split": ("float_flag", ("--draft-p-split",), ""),
+    "runtime.flags.spec.ngram_mod_n_min": ("positive_int_flag", ("--spec-ngram-mod-n-min",), ""),
+    "runtime.flags.spec.ngram_mod_n_max": ("positive_int_flag", ("--spec-ngram-mod-n-max",), ""),
+    "runtime.flags.spec.ngram_mod_n_match": ("positive_int_flag", ("--spec-ngram-mod-n-match",), ""),
+    # The launcher takes `-md` from spec.draft_model_path while the dedicated draft
+    # check above reads requirements.draft_model_path. Two declarations of one fact:
+    # compare them, so a divergence is a finding rather than a check aimed at the
+    # value the launcher did not use.
+    "runtime.flags.spec.draft_model_path": (
+        "cross_check",
+        ("requirements.draft_model_path",),
+        "",
+    ),
+    "runtime.flags.spec.disabled_by": (
+        "metadata",
+        (),
+        "records why speculation is off; spec.enabled is the attested fact",
+    ),
+}
+
+# FLOOR — the hand-written checklist as it stood before this was derived. These
+# paths MUST stay mapped; losing one is reported even when the producer no longer
+# emits the field. Do not prune this list to match the current record.
+_ATTESTED_RUNTIME_FIELDS: tuple[str, ...] = (
+    "requirements.model_path",
+    "requirements.draft_model_path",
+    "requirements.mmproj_path",
+    "runtime.binary_path",
+    "runtime.cache.context_tokens",
+    "runtime.cache.slots",
+    "runtime.cache.ubatch",
+    "runtime.cache.kv_type_k",
+    "runtime.cache.kv_type_v",
+    "runtime.cache.no_mmap",
+    "runtime.cache.mlock",
+    "runtime.cache.slot_save_path",
+    "runtime.flags.device",
+    "runtime.flags.device_draft",
+    "runtime.flags.flash_attn",
+    "runtime.flags.jinja",
+    "runtime.flags.reasoning",
+    "runtime.flags.override_kv",
+    "runtime.flags.spec.enabled",
+    "runtime.flags.spec.type",
+    "runtime.flags.spec.draft_max",
+    "runtime.flags.spec.draft_p_min",
+    "runtime.flags.spec.threads_draft",
+)
+
+_RUNTIME_FIELD_WALK_MAX_DEPTH = 4
+
+# Declared blocks that are MAPS OVER DATA, not blocks of named fields. The walker
+# stops at these: their keys are values (ports), so descending would demand a
+# `_RUNTIME_FIELD_CHECKS` entry per port and report every instance as unattested.
+# The block itself must still be mapped — it is, as `dedicated` — so adding a new
+# data-keyed map without a checker is still a finding.
+_RUNTIME_FIELD_WALK_LEAVES: frozenset[str] = frozenset({"runtime.cache.slots_by_port"})
+
+
+def _declared_runtime_field_paths(
+    requirements: dict[str, Any],
+    runtime: dict[str, Any],
+) -> set[str]:
+    """Return every field path the PRODUCER emitted for this role.
+
+    The checklist is derived from this, not from a literal, so a field added to
+    the compiled record is verified (or reported as unverifiable) without anyone
+    having to remember to extend a list here.
+    """
+
+    paths: set[str] = set()
+
+    def walk(prefix: str, node: Any, depth: int) -> None:
+        if not isinstance(node, dict) or depth > _RUNTIME_FIELD_WALK_MAX_DEPTH:
+            return
+        for key, value in node.items():
+            path = f"{prefix}.{key}"
+            paths.add(path)
+            if path in _RUNTIME_FIELD_WALK_LEAVES:
+                continue
+            walk(path, value, depth + 1)
+
+    walk("requirements", requirements, 1)
+    walk("runtime", runtime, 1)
+    return paths
+
+
+def _declared_runtime_field_value(
+    requirements: dict[str, Any],
+    runtime: dict[str, Any],
+    path: str,
+) -> Any:
+    section, _, rest = path.partition(".")
+    node: Any = requirements if section == "requirements" else runtime
+    for key in rest.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def _process_environ(pid: int) -> dict[str, str] | None:
+    """Read a live process environment, or None when it cannot be read.
+
+    Unreadable is NOT treated as a mismatch: a contract fixture or a process owned
+    by another user has no environ to compare, and inventing a warning there would
+    make the check noisy exactly where it has no evidence.
+    """
+    if pid <= 0:
+        return None
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_text(errors="replace")
+    except OSError:
+        return None
+    return dict(
+        entry.split("=", 1) for entry in raw.split("\0") if "=" in entry
+    )
+
+
+def _derived_runtime_field_warnings(
+    name: str,
+    info: ProcessInfo,
+    cmdline: list[str],
+    requirements: dict[str, Any],
+    runtime: dict[str, Any],
+) -> list[str]:
+    """Verify every DECLARED runtime field, and report the ones nothing verifies.
+
+    Iterates ``sorted(set(FLOOR) | set(declared))`` — the producer's own keys, with
+    the historical hand list as a floor. Fields handled by the dedicated checks above
+    are skipped here (their warning text is the established one); everything else is
+    compared generically, and an unmapped declared field becomes a finding.
+    """
+    warnings: list[str] = []
+    declared = _declared_runtime_field_paths(requirements, runtime)
+    environ: dict[str, str] | None | bool = False  # False = not yet read
+
+    for path in sorted(set(_ATTESTED_RUNTIME_FIELDS) | declared):
+        entry = _RUNTIME_FIELD_CHECKS.get(path)
+        if entry is None:
+            # THE inversion: a field with no mapping is REPORTED, not skipped. Either
+            # the producer emitted something new that nothing verifies, or a mapping
+            # the floor requires was deleted.
+            if path in declared:
+                warnings.append(
+                    f"{name} pid {info.pid} declares runtime field {path} but nothing "
+                    f"attests it (no entry in _RUNTIME_FIELD_CHECKS)"
+                )
+            else:
+                warnings.append(
+                    f"{name} pid {info.pid} attestation coverage lost: {path} is a "
+                    f"required attested field with no entry in _RUNTIME_FIELD_CHECKS"
+                )
+            continue
+        if path not in declared:
+            # Floor entry the producer did not emit for this role: the dedicated
+            # checks already no-op on an absent value. Nothing to compare.
+            continue
+
+        mode, flags, _note = entry
+        value = _declared_runtime_field_value(requirements, runtime, path)
+        label = path.split(".", 1)[1] if path.startswith("requirements.") else path
+        label = label.removeprefix("runtime.").removeprefix("cache.").removeprefix("flags.")
+
+        if mode in ("dedicated", "container", "metadata", "implied"):
+            continue
+
+        if mode == "not_emitted":
+            if value:
+                warnings.append(
+                    f"{name} pid {info.pid} declares {label}={value!r} but the launcher "
+                    f"cannot emit it ({_note or 'not emitted by this kernel'}); the "
+                    f"declaration has no runtime effect"
+                )
+            continue
+
+        if mode == "cross_check":
+            other_path = flags[0] if flags else ""
+            other = _declared_runtime_field_value(requirements, runtime, other_path)
+            if value is not None and other is not None and str(value) != str(other):
+                warnings.append(
+                    f"{name} pid {info.pid} runtime {label} is {value}, but "
+                    f"{other_path} is {other}; one fact is declared twice and the "
+                    f"two declarations disagree"
+                )
+            continue
+
+        if mode in ("env_prefix", "env_value"):
+            if value in (None, "", [], {}):
+                continue
+            if environ is False:
+                environ = _process_environ(info.pid)
+            if not environ:
+                continue
+            var = flags[0]
+            live = environ.get(var)
+            if mode == "env_value":
+                if live != str(value):
+                    warnings.append(
+                        f"{name} pid {info.pid} runtime {label} expected {value}; "
+                        f"live {var} is {live or 'unset'}"
+                    )
+                continue
+            expected_entries = [str(entry) for entry in value] if isinstance(value, list) else [str(value)]
+            live_entries = (live or "").split(":")
+            if live_entries[: len(expected_entries)] != expected_entries:
+                warnings.append(
+                    f"{name} pid {info.pid} runtime {label} expected leading entries "
+                    f"{':'.join(expected_entries)}; live {var} is {live or 'unset'}"
+                )
+            continue
+
+        # Remaining modes compare a value token on the live cmdline. The expected
+        # token mirrors the launcher's own formatting rule for that flag, so a
+        # declaration the launcher would silently drop is reported rather than
+        # compared against a flag that was never going to appear.
+        expected_token: str | None = None
+        if isinstance(value, bool) or value is None:
+            expected_token = None
+        elif mode == "float_flag":
+            if isinstance(value, (int, float)):
+                expected_token = str(float(value))
+        elif mode == "positive_int_flag":
+            if isinstance(value, int) and value > 0:
+                expected_token = str(value)
+            elif isinstance(value, str) and value.isdigit() and int(value) > 0:
+                expected_token = value
+        elif mode in ("int_flag", "int_or_token_flag"):
+            if isinstance(value, int) and value >= 0:
+                expected_token = str(value)
+            elif mode == "int_or_token_flag" and isinstance(value, str) and value.strip():
+                expected_token = value.strip()
+
+        if expected_token is None:
+            if value not in (None, "", [], {}) and not isinstance(value, bool):
+                warnings.append(
+                    f"{name} pid {info.pid} declares {label}={value!r}, which the "
+                    f"launcher cannot express as {flags[0]}; the declaration has no "
+                    f"runtime effect"
+                )
+            continue
+
+        actual = _last_cmdline_flag_value(cmdline, *flags)
+        if actual != expected_token:
+            warnings.append(_runtime_value_warning(
+                name, info, label, expected_token, actual or f"no {flags[0]}"
+            ))
+
+    return warnings
+
+
 def _runtime_attestation_warnings(
     name: str,
     info: ProcessInfo,
@@ -532,7 +889,6 @@ def _runtime_attestation_warnings(
     flags = flags if isinstance(flags, dict) else {}
     scalar_flags = {
         "context_tokens": ("-c", "--ctx-size"),
-        "slots": ("-np", "--parallel"),
         "ubatch": ("-ub", "--ubatch-size"),
         "kv_type_k": ("-ctk",),
         "kv_type_v": ("-ctv",),
@@ -545,6 +901,31 @@ def _runtime_attestation_warnings(
         if actual != str(expected):
             warnings.append(_runtime_value_warning(
                 name, info, key, expected, actual or f"no {flag_names[0]}"
+            ))
+
+    # `-np`, PER INSTANCE. 2026-08-02: this used to sit in `scalar_flags` above and
+    # compare the live `-np` against the ROLE-level `runtime.cache.slots`. Once a
+    # role's full and half instances legitimately run different slot counts
+    # (frontdoor 16 / 4 / 4), that comparison is wrong for two of its three
+    # processes — it would report drift on correctly-launched servers, which is the
+    # fastest way to teach a reader to ignore this output. The expectation is now
+    # selected by the live process's OWN --port, so each instance is attested
+    # against the number the compiler resolved for it. The role-level value stays
+    # as the fallback for a single-instance role or a record compiled before
+    # `slots_by_port` existed.
+    expected_slots = cache.get("slots")
+    slots_by_port = cache.get("slots_by_port")
+    live_port = _last_cmdline_flag_value(cmdline, "--port")
+    if isinstance(slots_by_port, dict) and live_port is not None:
+        for key, value in slots_by_port.items():
+            if str(key) == str(live_port):
+                expected_slots = value
+                break
+    if expected_slots is not None:
+        actual = _last_cmdline_flag_value(cmdline, "-np", "--parallel")
+        if actual != str(expected_slots):
+            warnings.append(_runtime_value_warning(
+                name, info, "slots", expected_slots, actual or "no -np"
             ))
 
     for key, flag_name in {"no_mmap": "--no-mmap", "mlock": "--mlock"}.items():
@@ -678,6 +1059,14 @@ def _runtime_attestation_warnings(
                 warnings.append(_runtime_value_warning(
                     name, info, f"spec.{key}", expected, actual or f"no {flag_names[0]}"
                 ))
+
+    # Everything above is the checks that were written by hand. This closes the loop
+    # over the fields the PRODUCER declared: it verifies the ones the table can map
+    # and REPORTS the ones nothing maps. Appended last so the established warnings
+    # keep their existing order and text.
+    warnings.extend(
+        _derived_runtime_field_warnings(name, info, cmdline, requirements, runtime)
+    )
     return warnings
 
 
