@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-08-03T16:11:52+00:00
-# Cache key:   0ebdcbb23fc8033f...
+# Compiled at: 2026-08-03T18:03:44+00:00
+# Cache key:   87987bc490878a0c...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1272,12 +1272,12 @@ server_mode:
     no_mmap: true
     url: http://localhost:8070
     port: 8070
-    slots: 16
+    slots: 4
     serving_shape:
       n_ctx: 262144
       slots_by_shape:
-        full: 16
-        half: 4
+        full: 4
+        half: 1
       kv_quant:
         k: q8_0
         v: q8_0
@@ -1338,12 +1338,12 @@ server_mode:
   worker:
     url: http://localhost:8072
     port: 8072
-    slots: 16
+    slots: 4
     serving_shape:
       n_ctx: 262144
       slots_by_shape:
-        full: 16
-        half: 4
+        full: 4
+        half: 1
       kv_quant:
         k: q8_0
         v: q8_0
@@ -1376,7 +1376,7 @@ server_mode:
   worker_vision:
     url: http://localhost:8086
     port: 8086
-    slots: 4
+    slots: 1
     serving_shape:
       n_ctx: 65536
       kv_quant:
@@ -1407,7 +1407,7 @@ server_mode:
     no_mmap: true
     url: http://localhost:8083
     port: 8083
-    slots: 8
+    slots: 2
     serving_shape:
       n_ctx: 65536
       kv_quant:
@@ -1445,11 +1445,11 @@ server_mode:
     no_mmap: true
     url: http://localhost:8074
     port: 8074
-    slots: 4
+    slots: 1
     serving_shape:
       n_ctx: 262144
       slots_by_shape:
-        full: 4
+        full: 1
       kv_quant:
         k: q4_0
         v: f16
@@ -1486,12 +1486,12 @@ server_mode:
     numa_ports:
     - 8185
     - 8285
-    slots: 4
+    slots: 1
     serving_shape:
       n_ctx: 262144
       slots_by_shape:
-        full: 4
-        half: 4
+        full: 1
+        half: 1
       kv_quant:
         k: q4_0
         v: q4_0
