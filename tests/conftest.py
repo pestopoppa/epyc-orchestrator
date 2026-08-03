@@ -25,6 +25,7 @@ See also:
     - research/ESCALATION_FLOW.md for memory pool architecture
 """
 
+import json
 import os
 import warnings
 from unittest.mock import MagicMock
@@ -110,6 +111,45 @@ def pytest_configure(config):
                 "psutil not installed - cannot check memory. Install with: pip install psutil",
                 UserWarning,
             )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pin_runtime_feature_flags(tmp_path_factory):
+    """Pin the runtime feature-flag file so the suite is REPRODUCIBLE.
+
+    `src.features.runtime_flags_path()` reads
+    `orchestration/runtime_flags.json` — a gitignored file the RUNNING API
+    rewrites at will (`set_by: api:127.0.0.1`). So unit results depended on
+    whatever the live orchestrator last toggled, and could change *mid-run*:
+    during a 2026-08-02 attribution pass the `memrl` flag flipped while the
+    suite was executing.
+
+    The cost of that was not hypothetical. Comparing a clean-worktree baseline
+    against the working tree produced 18 apparent regressions; 17 of them were
+    this file, because the worktree never had the live flags. `structured_tool_
+    output: true` alone rewrites tool returns into a `ToolOutput` wrapper and
+    fails four `test_tool_registry` cases that pass with flags neutral. Any
+    attribution done without this pin is measuring operator toggles, not code.
+
+    Pinned to an EMPTY flag set, so every test sees each feature at its declared
+    default rather than at whatever production happens to be running. A test
+    that specifically exercises flag loading should monkeypatch
+    `ORCHESTRATOR_RUNTIME_FLAGS_PATH` to its own fixture; that still works,
+    because this only sets the ambient default.
+    """
+    from src.features import RUNTIME_FLAGS_ENV
+
+    previous = os.environ.get(RUNTIME_FLAGS_ENV)
+    neutral = tmp_path_factory.mktemp("runtime_flags") / "runtime_flags.json"
+    neutral.write_text(json.dumps({"flags": {}, "version": 1}), encoding="utf-8")
+    os.environ[RUNTIME_FLAGS_ENV] = str(neutral)
+    try:
+        yield neutral
+    finally:
+        if previous is None:
+            os.environ.pop(RUNTIME_FLAGS_ENV, None)
+        else:
+            os.environ[RUNTIME_FLAGS_ENV] = previous
 
 
 @pytest.fixture(autouse=True)
