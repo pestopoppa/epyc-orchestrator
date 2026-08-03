@@ -64,6 +64,10 @@ Thumbs.db
 orchestration/last_task_ir.json
 orchestration/last_architecture_ir.json
 orchestration/gate_report_*.json
+# Live feature-flag overlay: rewritten by the API at runtime, so tracking it
+# would churn every run and conflict across sessions sharing this clone. The
+# TRACKED counterpart a clone needs is orchestration/runtime_flags.spec.yaml
+# (declared posture); diff the two with scripts/validate/runtime_flags_drift.py.
 orchestration/runtime_flags.json
 
 # Tool plugin settings (per-user configuration)

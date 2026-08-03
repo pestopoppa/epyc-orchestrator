@@ -632,6 +632,18 @@ class TestOpendataloaderRuntimeProbe:
     def test_probe_true_when_java_and_sdk_present(self):
         from src.services import pdf_router as pr
 
+        # The probe is java-on-PATH AND `import opendataloader_pdf`. Only the
+        # former is mocked here, so this test genuinely requires the SDK to be
+        # installed. `opendataloader-pdf` is an OPTIONAL extra (pdf_router degrades
+        # to pdftotext with a logged reason when it is absent, and the package is
+        # not in pyproject's dependency list), so skip rather than fail — the
+        # absent-SDK behaviour is covered by test_probe_false_when_java_missing and
+        # the extractor-resolution tests that patch this probe directly.
+        pytest.importorskip(
+            "opendataloader_pdf",
+            reason="optional extra; PDF fast path degrades to pdftotext without it",
+        )
+
         pr._opendataloader_runtime_available.cache_clear()
         try:
             with patch(

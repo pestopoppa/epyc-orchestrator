@@ -26,6 +26,7 @@ from src.api.routes.chat_utils import (
 from src.api.routes.chat_pipeline.telemetry import (
     llm_completion_meta,
     llm_completion_probabilities,
+    work_completion_meta,
 )
 from src.api.services.memrl import score_completed_task
 from src.api.structured_logging import task_extra
@@ -254,6 +255,10 @@ def _execute_direct(
                 "final_answer_role": str(initial_role),
                 "answer_chars": answer_chars,
                 **llm_completion_meta(primitives),
+                # M-11a2b: the answer itself, not just its length. `answer_chars`
+                # alone is why every episodic row could say a route succeeded but
+                # never what it produced.
+                **work_completion_meta(answer=answer),
             },
         )
         score_completed_task(

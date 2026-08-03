@@ -59,9 +59,16 @@ def test_eval_result_grep_lines_emit_core_id() -> None:
 
 
 def test_eval_result_grep_lines_emit_report_only_rlvr_reward() -> None:
-    # EV-CONF gate (audit, 2026-07-21): calibration+discrimination components
-    # require details['confidence_is_real']=True — with real provenance the
-    # full composition reproduces the original 0.8375 reward.
+    # FULL provenance is now TWO stamps, not one:
+    #   * EV-CONF (audit, 2026-07-21): calibration+discrimination require
+    #     details['confidence_is_real']=True.
+    #   * ESC-7 Option A (operator-granted 2026-07-23): they are additionally
+    #     decision-capable for the CODE domain only, read from
+    #     details['scoring_method'] — math geomean confidence measured
+    #     ANTI-discriminative (AUROC 0.401/0.411 across both E7c arms, length
+    #     confounding), so non-code rows stay observational.
+    # With both stamps the full composition reproduces the original 0.8375:
+    #   0.65*0.8(acc) + 0.20*0.9(rel) + 0.10*0.95(cal) + 0.05*0.85(disc)
     result = EvalResult(
         tier=1,
         quality=2.4,
@@ -70,7 +77,7 @@ def test_eval_result_grep_lines_emit_report_only_rlvr_reward() -> None:
         reliability=0.9,
         ece=0.05,
         auroc=0.85,
-        details={"confidence_is_real": True},
+        details={"confidence_is_real": True, "scoring_method": "code_execution"},
     )
 
     lines = result.to_grep_lines()
@@ -80,6 +87,30 @@ def test_eval_result_grep_lines_emit_report_only_rlvr_reward() -> None:
     assert "METRIC rlvr_reward: 0.837500" in lines
     assert "METRIC rlvr_ready: 1" in lines
     assert "METRIC rlvr_blockers:" not in lines
+
+
+def test_eval_result_grep_lines_rlvr_zeroes_calibration_outside_the_code_domain() -> None:
+    # ESC-7 Option A, the half nothing covered: confidence provenance is REAL
+    # but the row was scored by a non-code method, so calibration AND
+    # discrimination are zeroed and the row is observational-only. Same fixture
+    # as above minus the code-domain stamp -> the 0.095+0.0425 calibration and
+    # discrimination credit disappears and 0.8375 drops to 0.70.
+    result = EvalResult(
+        tier=1,
+        quality=2.4,
+        speed=20.0,
+        cost=0.2,
+        reliability=0.9,
+        ece=0.05,
+        auroc=0.85,
+        details={"confidence_is_real": True, "scoring_method": "llm_judge"},
+    )
+
+    lines = result.to_grep_lines()
+
+    assert "METRIC rlvr_reward: 0.700000" in lines
+    assert "METRIC rlvr_ready: 0" in lines
+    assert "METRIC rlvr_blockers: calibration_domain_observational" in lines
 
 
 def test_eval_result_grep_lines_rlvr_fails_closed_without_confidence_provenance() -> None:

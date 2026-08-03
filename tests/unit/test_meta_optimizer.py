@@ -20,7 +20,6 @@ meta_optimizer = importlib.import_module("meta_optimizer")
 ExperimentJournal = experiment_journal.ExperimentJournal
 JournalEntry = experiment_journal.JournalEntry
 MetaOptimizer = meta_optimizer.MetaOptimizer
-DIVERSITY_STALL_STREAK_MIN = meta_optimizer.DIVERSITY_STALL_STREAK_MIN
 
 
 def _entry(trial_id: int, species: str, **kw) -> JournalEntry:
@@ -138,118 +137,81 @@ def test_rebalance_uses_budget_rate_instead_of_frontier_rate() -> None:
     assert budget.numeric_swarm > budget.prompt_forge
 
 
-def test_diversity_observation_records_baseline_missing_without_rebalance() -> None:
+# ── AP-37 diversity-stall detector: DELETED 2026-08-01 ────────────────────────
+# The detector was fully built and never once invoked. Its trigger is a
+# conjunction of distinct-2 collapse AND semantic-embedding-agreement collapse
+# AND a failed Verbalized Sampling recovery probe, held 10 consecutive trials.
+# Two of the three signals and both baselines needed inference machinery that was
+# never built, so every observation it ever recorded read status="signal_missing"
+# while it persisted a growing all-null blob into autopilot_state.json. The tests
+# below are the removal regression: they assert the API and the persisted state
+# key are gone, so the dead capability cannot silently return.
+
+
+def test_diversity_stall_api_is_removed_from_meta_optimizer() -> None:
     optimizer = MetaOptimizer()
+    for attr in (
+        "observe_diversity",
+        "diversity_rebalance_due",
+        "restore_diversity_state",
+        "export_diversity_state",
+        "diversity_stall_state",
+        "_default_diversity_stall_state",
+    ):
+        assert not hasattr(optimizer, attr), f"AP-37 leftover on MetaOptimizer: {attr}"
+    for const in (
+        "DIVERSITY_STALL_STREAK_MIN",
+        "DIVERSITY_DISTINCT2_RATIO_THRESHOLD",
+        "DIVERSITY_SEMANTIC_DROP_THRESHOLD",
+        "DIVERSITY_VS_RECOVERY_THRESHOLD",
+        "DIVERSITY_HISTORY_LIMIT",
+    ):
+        assert not hasattr(meta_optimizer, const), f"AP-37 leftover constant: {const}"
+    assert "diversity_stall" not in MetaOptimizer().summary()
 
-    report = optimizer.observe_diversity(
-        trial_id=1,
-        distinct2=0.42,
-        semantic_embedding_agreement=0.63,
-        vs_recovery_ratio=0.10,
-    )
 
-    assert report["status"] == "baseline_missing"
-    assert report["rebalance_recommended"] is False
-    assert optimizer.diversity_rebalance_due() is False
-    state = optimizer.export_diversity_state()
-    assert state["distinct2_history"][-1]["trial_id"] == 1
-    assert state["consecutive_trigger_count"] == 0
-
-
-def test_diversity_stall_requires_full_multisignal_streak() -> None:
-    optimizer = MetaOptimizer()
-    report: dict[str, object] = {}
-
-    for trial_id in range(1, DIVERSITY_STALL_STREAK_MIN + 1):
-        report = optimizer.observe_diversity(
-            trial_id=trial_id,
-            distinct2=0.79,
-            semantic_embedding_agreement=0.89,
-            vs_recovery_ratio=0.49,
-            distinct2_baseline=1.0,
-            semantic_embedding_agreement_baseline=1.0,
+def test_rebalance_rejects_diversity_stall_argument() -> None:
+    with pytest.raises(TypeError):
+        MetaOptimizer().rebalance(
+            species_effectiveness={},
+            hv_slope=0.01,
+            memory_count=600,
+            is_converged=False,
+            diversity_stall={"rebalance_recommended": True},
         )
-        if trial_id < DIVERSITY_STALL_STREAK_MIN:
-            assert report["rebalance_recommended"] is False
-
-    assert report["status"] == "rebalance_recommended"
-    assert report["rebalance_recommended"] is True
-    assert report["consecutive_trigger_count"] == DIVERSITY_STALL_STREAK_MIN
-    assert optimizer.diversity_rebalance_due() is True
 
 
-def test_diversity_stall_requires_vs_recovery_failure() -> None:
-    optimizer = MetaOptimizer()
-    optimizer.observe_diversity(
-        trial_id=1,
-        distinct2=0.79,
-        semantic_embedding_agreement=0.89,
-        vs_recovery_ratio=0.49,
-        distinct2_baseline=1.0,
-        semantic_embedding_agreement_baseline=1.0,
-    )
-
-    report = optimizer.observe_diversity(
-        trial_id=2,
-        distinct2=0.79,
-        semantic_embedding_agreement=0.89,
-        vs_recovery_ratio=0.80,
-    )
-
-    assert report["status"] == "ok"
-    assert report["trigger"] is False
-    assert report["consecutive_trigger_count"] == 0
-    assert optimizer.diversity_rebalance_due() is False
+def test_autopilot_default_state_has_no_diversity_stall_key() -> None:
+    autopilot = importlib.import_module("autopilot")
+    assert "diversity_stall_state" not in autopilot._default_state()
+    assert not hasattr(autopilot, "_load_ap37_diversity_baseline")
+    assert not hasattr(autopilot, "_ap37_finite_float")
 
 
-def test_diversity_stall_records_vs_missing_without_rebalance() -> None:
-    optimizer = MetaOptimizer()
+def test_normalize_state_before_save_drops_legacy_diversity_stall_state() -> None:
+    """A pre-existing autopilot_state.json must shed the dead key, not keep it.
 
-    report = optimizer.observe_diversity(
-        trial_id=1,
-        distinct2=0.79,
-        semantic_embedding_agreement=0.89,
-        distinct2_baseline=1.0,
-        semantic_embedding_agreement_baseline=1.0,
-    )
-
-    assert report["status"] == "vs_missing"
-    assert report["low_distinct2"] is True
-    assert report["low_semantic_embedding_agreement"] is True
-    assert report["rebalance_recommended"] is False
-
-
-def test_rebalance_boosts_mutation_species_on_diversity_stall() -> None:
-    baseline = MetaOptimizer().rebalance(
-        species_effectiveness={},
-        hv_slope=0.01,
-        memory_count=600,
-        is_converged=False,
-    )
-    diversity = MetaOptimizer().rebalance(
-        species_effectiveness={},
-        hv_slope=0.01,
-        memory_count=600,
-        is_converged=False,
-        diversity_stall={"rebalance_recommended": True},
-    )
-
-    assert diversity.prompt_forge > baseline.prompt_forge
-    assert diversity.structural_lab > baseline.structural_lab
-
-
-def test_diversity_state_round_trips_export_restore() -> None:
-    optimizer = MetaOptimizer()
-    optimizer.observe_diversity(
-        trial_id=1,
-        distinct2=0.79,
-        semantic_embedding_agreement=0.89,
-        vs_recovery_ratio=0.49,
-        distinct2_baseline=1.0,
-        semantic_embedding_agreement_baseline=1.0,
-    )
-
-    restored = MetaOptimizer()
-    restored.restore_diversity_state(optimizer.export_diversity_state())
-
-    assert restored.export_diversity_state() == optimizer.export_diversity_state()
+    state_store.load_state returns the on-disk JSON verbatim (it does NOT merge
+    _default_state), so dropping the key from the default alone would leave the
+    live file reporting an all-null guardrail forever.
+    """
+    autopilot = importlib.import_module("autopilot")
+    state = {
+        "trial_counter": 1460,
+        "paused": False,
+        "diversity_stall_state": {
+            "schema_version": "ap37_diversity_stall.v1",
+            "distinct2_baseline": None,
+            "semantic_embedding_agreement_baseline": None,
+            "distinct2_history": [{"trial_id": 1460, "status": "signal_missing"}],
+            "consecutive_trigger_count": 0,
+            "rebalance_recommended": False,
+            "last_status": "signal_missing",
+        },
+    }
+    autopilot._normalize_state_before_save(state)
+    assert "diversity_stall_state" not in state
+    assert state["trial_counter"] == 1460
+    # Idempotent on already-migrated / fresh state.
+    autopilot._normalize_state_before_save(state)
+    assert "diversity_stall_state" not in state

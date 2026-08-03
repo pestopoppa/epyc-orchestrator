@@ -144,18 +144,19 @@ def _nodes_spanned(cpuset: str) -> set[int]:
     return {n for n, cs in NPS4_NODES.items() if cpus & _parse_cpuset(cs)}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN DEFECT, fix not yet authorised — see "
-        "handoffs/active/numa-placement-defect-20260730.md. `frontdoor` (8070) and "
-        "`ingest_long_context` (8085) sit on NUMA_NODE0 '0-47,96-143', which spans "
-        "NPS4 nodes 0+1, with no numactl policy. Measured cost 2.16x and 1.85x. "
-        "strict=True on purpose: when the wiring is corrected this test starts "
-        "passing and the strict xfail FAILS the suite, forcing this marker to be "
-        "removed rather than silently outliving the defect."
-    ),
-)
+# 2026-08-03: the `xfail(strict=True)` that stood here is GONE, as its own reason
+# string instructed. It documented the NUMA placement defect (frontdoor :8070 and
+# ingest_long_context :8085 straddling NPS4 nodes with no memory policy, measured
+# 2.16x / 1.85x) and was strict precisely so that the fix landing would fail the
+# suite instead of letting the marker outlive the defect. That is what happened:
+# every straddling instance in NUMA_CONFIG now carries a policy —
+#   frontdoor           :8070/:8080/:8180 -> {0: interleave=all, 1: interleave=0,1, 2: interleave=2,3}
+#   ingest_long_context :8085/:8185/:8285 -> same per-instance table
+#   worker_general      :8072/:8082/:8182 -> same per-instance table
+#   architect_critic    :8074             -> interleave=all
+#   eval_batch_frontdoor:18070            -> interleave=0,1
+# so `offenders` is empty. The assertion below is unchanged and still has teeth: a
+# new straddling instance added without a policy fails it.
 def test_straddling_cpusets_declare_a_numa_policy() -> None:
     """Any instance whose cpuset spans more than one NPS4 node must declare a
     memory policy.

@@ -5,7 +5,7 @@ Runs:
 - seed_memory_from_logs.py (up to 1000 memories)
 - Additional diverse patterns
 
-Uses 8 parallel embedding servers for speed.
+Uses the BGE-large embedder pool (:8090-:8095) in parallel for speed.
 """
 
 from __future__ import annotations
@@ -27,12 +27,22 @@ from orchestration.repl_memory.episodic_store import EpisodicStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-SERVERS = [f"http://127.0.0.1:{p}" for p in range(8090, 8098)]
+# The BGE-large-en-v1.5 pool ONLY. EpisodicStore is a 1024-dim index
+# (episodic_store.py: `embedding_dim: int = 1024  # BGE-large-en-v1.5`), and the
+# launch manifest's `embedding.extra_recipes` puts DIFFERENT models on the next
+# three ports: :8096 granite-embedding-97m-multilingual-r2, :8097
+# multilingual-e5-base, :8098 bge-m3. Those are warm/default-off bench
+# comparators, but they ARE live during a K-EMB bench window — and
+# `_check_servers()` below admits any port that answers HTTP 200, not one that
+# answers with the right model. Fanning out to 8096/8097 therefore round-robins
+# foreign-dimension vectors into a BGE index. Widen this range only together
+# with a model-identity check.
+SERVERS = [f"http://127.0.0.1:{p}" for p in range(8090, 8096)]
 PROGRESS_DIR = _REPO_ROOT / "progress"
 
 
 class ParallelEmbedder:
-    """Fast parallel embedding across 8 servers."""
+    """Fast parallel embedding across the BGE-large embedder pool."""
 
     def __init__(self, server_urls: List[str]):
         self.servers = server_urls

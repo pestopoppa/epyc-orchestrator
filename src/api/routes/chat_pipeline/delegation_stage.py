@@ -12,7 +12,10 @@ from collections import Counter
 
 from src.api.models import ChatRequest, ChatResponse
 from src.api.routes.chat_delegation import _architect_delegated_answer
-from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
+from src.api.routes.chat_pipeline.telemetry import (
+    llm_completion_meta,
+    work_completion_meta,
+)
 from src.api.routes.chat_utils import RoutingResult, _truncate_looped_answer
 from src.api.services.memrl import score_completed_task
 from src.api.structured_logging import task_extra
@@ -237,6 +240,8 @@ def _execute_delegated(
                 "final_answer_role": str(initial_role),
                 **delegation_cache_meta,
                 **llm_completion_meta(primitives),
+                # M-11a2b
+                **work_completion_meta(answer=answer),
             },
         )
         score_completed_task(

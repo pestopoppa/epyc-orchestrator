@@ -17,7 +17,10 @@ import time
 from pathlib import Path
 
 from src.api.models import ChatRequest, ChatResponse
-from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
+from src.api.routes.chat_pipeline.telemetry import (
+    llm_completion_meta,
+    work_completion_meta,
+)
 from src.api.routes.chat_utils import RoutingResult
 from src.api.services.memrl import score_completed_task
 from src.api.routes.vision_serving import (
@@ -353,6 +356,9 @@ async def _execute_vision_multimodal(
                 "delegation_lineage": [str(initial_role)],
                 "final_answer_role": str(initial_role),
                 **llm_completion_meta(primitives),
+                # M-11a2b. The answer only — image bytes are NOT work payload and
+                # must never enter the episodic store.
+                **work_completion_meta(answer=answer),
             },
         )
         score_completed_task(

@@ -3376,3 +3376,63 @@ def test_gepa_status_ships_provenance_windows(tmp_path: Path, monkeypatch) -> No
     ]
     # The in-window trial still ships (label-only honesty, no data loss).
     assert [t["trial_id"] for t in payload["recent_trials"]] == [900]
+
+
+def test_scan_orchestrator_tasks_carries_vision_image_reference(tmp_path) -> None:
+    """Vision image reference reaches BOTH in-flight and completed task cards.
+
+    End-to-end guard for the vision capture pipe: routing_meta writes
+    `image_path` into the routing_decision event, and the snapshot scan must
+    carry it onto the task payload the dashboard consumes. Before the capture
+    fix, `image_path` appeared in no progress event at all, so this panel had
+    an empty pipe rather than a rendering bug.
+    """
+    log = tmp_path / "p.jsonl"
+    now_ts = datetime.now(timezone.utc).isoformat()
+    img = "/mnt/raid0/llm/epyc-orchestrator/benchmarks/images/vl/chartqa/chart_test_0452.png"
+    routing = {
+        "chosen_action": "worker_vision",
+        "decision_source": "vision_input",
+        "image_path": img,
+        "has_image": True,
+        "image_source": "path",
+    }
+    log.write_text(
+        json.dumps({"event_type": "task_started", "timestamp": now_ts, "task_id": "chat-live",
+                    "data": {"objective": "What is the peak?"}}) + "\n"
+        + json.dumps({"event_type": "routing_decision", "timestamp": now_ts,
+                      "task_id": "chat-live", "data": routing}) + "\n"
+        + json.dumps({"event_type": "task_started", "timestamp": now_ts, "task_id": "chat-done",
+                      "data": {"objective": "Read the chart"}}) + "\n"
+        + json.dumps({"event_type": "routing_decision", "timestamp": now_ts,
+                      "task_id": "chat-done", "data": routing}) + "\n"
+        + json.dumps({"event_type": "task_completed", "timestamp": now_ts,
+                      "task_id": "chat-done",
+                      "data": {"producer_role": "worker_vision"}}) + "\n"
+    )
+
+    in_flight, completed = dashboard_snapshot.scan_orchestrator_tasks(log)
+
+    assert [t["task_id"] for t in in_flight] == ["chat-live"]
+    assert [t["task_id"] for t in completed] == ["chat-done"]
+    for task in (in_flight[0], completed[0]):
+        assert task["image_path"] == img
+        assert task["has_image"] is True
+        assert task["image_source"] == "path"
+
+
+def test_scan_orchestrator_tasks_text_task_has_no_image(tmp_path) -> None:
+    """Text traffic reports has_image False with an empty path (never None)."""
+    log = tmp_path / "p.jsonl"
+    now_ts = datetime.now(timezone.utc).isoformat()
+    log.write_text(
+        json.dumps({"event_type": "task_started", "timestamp": now_ts, "task_id": "chat-text",
+                    "data": {"objective": "2+2?"}}) + "\n"
+        + json.dumps({"event_type": "routing_decision", "timestamp": now_ts,
+                      "task_id": "chat-text", "data": {"chosen_action": "frontdoor"}}) + "\n"
+    )
+
+    in_flight, _completed = dashboard_snapshot.scan_orchestrator_tasks(log)
+
+    assert in_flight[0]["has_image"] is False
+    assert in_flight[0]["image_path"] == ""

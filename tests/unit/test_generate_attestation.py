@@ -196,15 +196,13 @@ def test_collect_feature_flags_detects_worker_drift(monkeypatch, tmp_path: Path)
     assert report["heterogeneous"] == {
         "model_fallback": {"101": True, "102": False},
     }
-    assert report["intent_diffs"] == [
-        {
-            "pid": "102",
-            "flag": "model_fallback",
-            "expected": True,
-            "actual": False,
-            "source": "ORCHESTRATOR_FEATURE_MODEL_FALLBACK",
-        }
-    ]
+    # intent_diffs compares a worker against ITS OWN launch inputs (environ +
+    # runtime flag file), not against the declared block — see
+    # `expected_by_worker` in _expected_flag_diffs and the runtime-file test
+    # below. Worker 102 reports exactly what its own environ says, so the
+    # mismatch with the declared block surfaces as env_diffs, which is the
+    # channel that actually names the offending variable.
+    assert report["intent_diffs"] == []
     assert report["env_diffs"] == [
         {
             "pid": "102",
@@ -213,6 +211,50 @@ def test_collect_feature_flags_detects_worker_drift(monkeypatch, tmp_path: Path)
             "actual": "0",
         }
     ]
+
+
+def test_collect_feature_flags_detects_worker_contradicting_its_own_env(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A worker whose reported flags disagree with its own environ is intent drift.
+
+    This is what intent_diffs is for: the process is not running what its own
+    launch inputs predict (stale code, a legacy ORCHESTRATOR_* spelling, or a
+    runtime file it never re-read). Distinct from env_diffs, which catches a
+    worker launched with the wrong env in the first place.
+    """
+    proc_root = tmp_path / "proc"
+    pid_dir = proc_root / "101"
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "environ").write_bytes(b"ORCHESTRATOR_FEATURE_MODEL_FALLBACK=0\0")
+
+    responses = [
+        {
+            "pid": 101,
+            "flags": {"model_fallback": True},
+            "sources": {"model_fallback": "runtime_file:/nowhere/runtime_flags.json"},
+        }
+    ]
+    monkeypatch.setattr(attest, "_fetch_json", lambda _url: responses.pop(0))
+    monkeypatch.setattr(
+        attest,
+        "load_declared_feature_env",
+        lambda: {
+            "status": "ok",
+            "env": {"ORCHESTRATOR_FEATURE_MODEL_FALLBACK": "0"},
+            "flag_env_names": {"model_fallback": "ORCHESTRATOR_FEATURE_MODEL_FALLBACK"},
+            "flags": {"model_fallback": False},
+        },
+    )
+
+    report = attest.collect_feature_flags(polls=1, delay_s=0, proc_root=proc_root)
+
+    assert report["env_diffs"] == []
+    assert {
+        (diff["pid"], diff["flag"], diff["expected"], diff["actual"])
+        for diff in report["intent_diffs"]
+    } >= {("101", "model_fallback", False, True)}
+    assert report["status"] == "warn"
 
 
 def test_collect_feature_flags_uses_runtime_file_for_worker_intent(

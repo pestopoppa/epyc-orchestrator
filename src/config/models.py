@@ -297,6 +297,22 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
         "full:http://localhost:8072,http://localhost:8082,"
         "http://localhost:8182"
     ),
+    # 2026-08-03: RESTORED. `ServerURLsConfig.toolrunner` used to ask for the
+    # literal "worker_general"; the 2026-08-01 W1 cutover repointed it at its OWN
+    # name so the alias resolves through the registry-derived tables — but did not
+    # add the matching last-resort literal here. `_server_url_default` ends in a
+    # bare subscript of this dict, and `toolrunner` is the one field whose
+    # canonical name is itself and has no `_STACK_PRIOR_SERVER_URL_ALIASES` entry,
+    # so `ServerURLsConfig()` raised `KeyError: 'toolrunner'` whenever the derived
+    # stack priors were missing or unreadable — i.e. exactly the degraded mode this
+    # table exists to serve (fresh checkout, bootstrap before the launcher writes
+    # runtime facts). That is the hazard the `architect_critic` comment two fields
+    # below already warns about. Value mirrors worker_general, its shared process,
+    # which is byte-identical to the pre-cutover delegation.
+    "toolrunner": (
+        "full:http://localhost:8072,http://localhost:8082,"
+        "http://localhost:8182"
+    ),
     "worker_vision": "http://localhost:8086",
     "vision_escalation": "http://localhost:8086",  # 2026-08-01 W1: alias, same process (was :8087)
     "worker_fast": "http://localhost:8102",

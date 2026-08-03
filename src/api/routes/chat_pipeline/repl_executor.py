@@ -22,7 +22,10 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from src.api.models import ChatRequest, ChatResponse
-from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
+from src.api.routes.chat_pipeline.telemetry import (
+    llm_completion_meta,
+    work_completion_meta,
+)
 from src.api.services.memrl import score_completed_task
 from src.graph import run_task, GraphConfig, TaskDeps, TaskState
 from src.llm_primitives import LLMPrimitives
@@ -52,6 +55,52 @@ log = logging.getLogger(__name__)
 
 
 # ── Stage 10: REPL orchestration mode ───────────────────────────────────
+
+
+def _repl_work_meta(repl, answer: str) -> dict:
+    """Build the M-11a2b `work` payload for a REPL-mode completion.
+
+    Reads the two request-local trajectory records the REPL already keeps:
+
+      * ``repl._invoked_tools`` — the request-local invocation records captured
+        at the ``_invoke_tool`` chokepoint. Deliberately NOT
+        ``repl.tool_registry.get_invocation_log()``, which is process-global and
+        never cleared, so a later no-tool request would report a prior request's
+        tools (see the note at the tools_called site below).
+      * ``repl.get_code_log()`` — the bounded per-step code log
+        (``REPLState.CODE_LOG_MAX_STEPS`` / ``CODE_LOG_MAX_CHARS``).
+
+    Every read is guarded: work capture is observational and must never be the
+    reason a completed request fails.
+    """
+    tool_calls: list = []
+    repl_steps: list = []
+    try:
+        for inv in list(getattr(repl, "_invoked_tools", None) or []):
+            tool_calls.append(
+                {
+                    # Same field names the tool_timings telemetry already uses,
+                    # so there is one shape for "a tool ran", not two.
+                    "tool_name": getattr(inv, "tool_name", None),
+                    "elapsed_ms": getattr(inv, "elapsed_ms", None),
+                    "success": getattr(inv, "success", None),
+                }
+            )
+    except Exception:  # pragma: no cover - defensive
+        tool_calls = []
+    try:
+        get_code_log = getattr(repl, "get_code_log", None)
+        if callable(get_code_log):
+            raw_steps = get_code_log()
+            if isinstance(raw_steps, list):
+                repl_steps = raw_steps
+    except Exception:  # pragma: no cover - defensive
+        repl_steps = []
+    return work_completion_meta(
+        answer=answer,
+        tool_calls=tool_calls,
+        repl_steps=repl_steps,
+    )
 
 
 def _tools_success(
@@ -674,6 +723,10 @@ async def _execute_repl(
                 "workspace_version": (task_state.workspace_state or {}).get("version", 0),
                 "workspace_decisions": len((task_state.workspace_state or {}).get("decisions", [])),
                 **llm_completion_meta(primitives),
+                # M-11a2b. This is the richest work the pipeline produces — the
+                # trajectory a distilled skill would have to be learned FROM —
+                # and none of it reached the episodic store before.
+                **_repl_work_meta(repl, answer),
             },
         )
         score_completed_task(

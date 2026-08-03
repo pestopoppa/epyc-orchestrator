@@ -11,6 +11,14 @@ This tests the GATE'S INTEGRATION (when/how it calls the seam + combines), not
 seam_admit's internals (covered by test_shape_aware_seam.py). seam_admit is
 monkeypatched to a known verdict so the wiring logic is isolated, plus two
 end-to-end cases use the real seam_admit with monkeypatched region helpers.
+
+HERMETICITY (2026-08-03): these tests assert against a DECLARED matrix
+(`tests/unit/contention_gate_fixture.py`), not the committed
+`orchestration/contention_matrix.yaml`. The wiring question is "does the gate
+honour the seam over the legacy verdict", which needs a KNOWN legacy verdict —
+and the committed matrix is a measurement artifact whose ratios and sections
+are rewritten by every re-bench. The 2026-08-01 re-bench erased the legacy
+ALLOW these tests were built on; see the fixture module for the full account.
 """
 
 from __future__ import annotations
@@ -27,6 +35,8 @@ sys.path.insert(0, str(ROOT))
 contention = importlib.import_module("src.scheduling.contention")
 gate_mod = importlib.import_module("src.scheduling.contention_gate")
 
+from tests.unit.contention_gate_fixture import gate_fixture_matrix, make_gate  # noqa: E402
+
 PairDecision = contention.PairDecision
 TrafficClass = contention.TrafficClass
 
@@ -39,12 +49,12 @@ def reset_singleton():
 
 
 @pytest.fixture
-def real_matrix():
-    return contention.load_contention_matrix(ROOT / "orchestration" / "contention_matrix.yaml")
+def matrix():
+    return gate_fixture_matrix()
 
 
 def _gate(matrix, holders):
-    return gate_mod.ContentionGate(matrix=matrix, active_holders_fn=lambda: dict(holders))
+    return make_gate(gate_mod, holders, matrix=matrix)
 
 
 @pytest.fixture
@@ -54,12 +64,13 @@ def dual_flags_on(monkeypatch):
 
 
 # A scenario where the LEGACY verdict is ALLOW: frontdoor + worker_general is
-# allow pairwise AND n_way in the real matrix. We then have the seam return a
-# tighter verdict and assert the gate honors it only under the right conditions.
+# allow pairwise (1.82) AND n_way in the declared matrix. We then have the seam
+# return a tighter verdict and assert the gate honors it only under the right
+# conditions.
 _LEGACY_ALLOW_HOLDERS = {"worker_general": [1]}
 
 
-def test_gate_ignores_seam_when_no_candidate_idx(real_matrix, dual_flags_on, monkeypatch) -> None:
+def test_gate_ignores_seam_when_no_candidate_idx(matrix, dual_flags_on, monkeypatch) -> None:
     """Flags ON but candidate_topology_idx=None → seam NOT consulted → legacy."""
     called = {"n": 0}
 
@@ -68,13 +79,13 @@ def test_gate_ignores_seam_when_no_candidate_idx(real_matrix, dual_flags_on, mon
         return PairDecision.QUEUE
 
     monkeypatch.setattr(gate_mod, "seam_admit", _spy)
-    gate = _gate(real_matrix, _LEGACY_ALLOW_HOLDERS)
+    gate = _gate(matrix, _LEGACY_ALLOW_HOLDERS)
     d = gate.evaluate("frontdoor", TrafficClass.BACKGROUND)  # no idx
     assert called["n"] == 0
     assert d.admitted and d.decision == PairDecision.ALLOW
 
 
-def test_gate_ignores_seam_when_flags_off(real_matrix, monkeypatch) -> None:
+def test_gate_ignores_seam_when_flags_off(matrix, monkeypatch) -> None:
     """idx supplied but flags OFF → seam returns None (disabled) → legacy.
     Also assert the gate respects shape_aware_contention_enabled()=False by
     not letting a (hypothetical) seam verdict through."""
@@ -87,20 +98,20 @@ def test_gate_ignores_seam_when_flags_off(real_matrix, monkeypatch) -> None:
         return PairDecision.QUEUE
 
     monkeypatch.setattr(gate_mod, "seam_admit", _spy)
-    gate = _gate(real_matrix, _LEGACY_ALLOW_HOLDERS)
+    gate = _gate(matrix, _LEGACY_ALLOW_HOLDERS)
     d = gate.evaluate("frontdoor", TrafficClass.BACKGROUND, candidate_topology_idx=3)
     # gate guards on shape_aware_contention_enabled() before calling seam → not called
     assert called["n"] == 0
     assert d.admitted and d.decision == PairDecision.ALLOW
 
 
-def test_gate_applies_seam_tightening(real_matrix, dual_flags_on, monkeypatch) -> None:
+def test_gate_applies_seam_tightening(matrix, dual_flags_on, monkeypatch) -> None:
     """Flags ON + idx supplied + seam returns QUEUE where legacy ALLOWs →
     gate returns the TIGHTENED verdict (QUEUE, not admitted)."""
     monkeypatch.setattr(gate_mod, "seam_admit", lambda *a, **k: PairDecision.QUEUE)
-    gate = _gate(real_matrix, _LEGACY_ALLOW_HOLDERS)
+    gate = _gate(matrix, _LEGACY_ALLOW_HOLDERS)
     # sanity: legacy alone admits this
-    legacy = _gate(real_matrix, _LEGACY_ALLOW_HOLDERS).evaluate(
+    legacy = _gate(matrix, _LEGACY_ALLOW_HOLDERS).evaluate(
         "frontdoor", TrafficClass.BACKGROUND
     )
     assert legacy.admitted
@@ -110,7 +121,7 @@ def test_gate_applies_seam_tightening(real_matrix, dual_flags_on, monkeypatch) -
     assert d.decision == PairDecision.QUEUE
 
 
-def test_gate_seam_authoritative_overrides_legacy_queue(real_matrix, dual_flags_on, monkeypatch) -> None:
+def test_gate_seam_authoritative_overrides_legacy_queue(matrix, dual_flags_on, monkeypatch) -> None:
     """THE CORE OF B (audit-corrected): legacy role-keyed pair_policy QUEUEs
     frontdoor+ingest (stale 0.37 primary), but the placement-aware seam, given
     a DISJOINT candidate, returns ALLOW. When both flags + idx are supplied the
@@ -119,9 +130,9 @@ def test_gate_seam_authoritative_overrides_legacy_queue(real_matrix, dual_flags_
     never do it.)"""
     monkeypatch.setattr(gate_mod, "seam_admit", lambda *a, **k: PairDecision.ALLOW)
     # frontdoor + ingest_long_context background = 0.37 → legacy QUEUE
-    gate = _gate(real_matrix, {"ingest_long_context": [0]})
+    gate = _gate(matrix, {"ingest_long_context": [0]})
     # sanity: legacy alone (no idx) QUEUEs this
-    legacy = _gate(real_matrix, {"ingest_long_context": [0]}).evaluate(
+    legacy = _gate(matrix, {"ingest_long_context": [0]}).evaluate(
         "frontdoor", TrafficClass.BACKGROUND
     )
     assert not legacy.admitted and legacy.decision == PairDecision.QUEUE
@@ -131,14 +142,14 @@ def test_gate_seam_authoritative_overrides_legacy_queue(real_matrix, dual_flags_
     assert d.decision == PairDecision.ALLOW
 
 
-def test_gate_seam_authoritative_can_also_tighten(real_matrix, dual_flags_on, monkeypatch) -> None:
+def test_gate_seam_authoritative_can_also_tighten(matrix, dual_flags_on, monkeypatch) -> None:
     """Authoritative both ways: where legacy ALLOWs but the seam (physical
     overlap / measured block) returns QUEUE, the gate QUEUEs. The seam replaces
     the legacy verdict in both directions — it is the trusted placement-aware
     source, fail-closed inside seam_admit."""
     monkeypatch.setattr(gate_mod, "seam_admit", lambda *a, **k: PairDecision.QUEUE)
-    gate = _gate(real_matrix, _LEGACY_ALLOW_HOLDERS)
-    legacy = _gate(real_matrix, _LEGACY_ALLOW_HOLDERS).evaluate(
+    gate = _gate(matrix, _LEGACY_ALLOW_HOLDERS)
+    legacy = _gate(matrix, _LEGACY_ALLOW_HOLDERS).evaluate(
         "frontdoor", TrafficClass.BACKGROUND
     )
     assert legacy.admitted
@@ -147,32 +158,32 @@ def test_gate_seam_authoritative_can_also_tighten(real_matrix, dual_flags_on, mo
     assert d.decision == PairDecision.QUEUE
 
 
-def test_gate_seam_none_keeps_legacy(real_matrix, dual_flags_on, monkeypatch) -> None:
+def test_gate_seam_none_keeps_legacy(matrix, dual_flags_on, monkeypatch) -> None:
     """seam_admit returning None (e.g. unknown placement foreground) → gate
     keeps the legacy verdict unchanged."""
     monkeypatch.setattr(gate_mod, "seam_admit", lambda *a, **k: None)
-    gate = _gate(real_matrix, _LEGACY_ALLOW_HOLDERS)
+    gate = _gate(matrix, _LEGACY_ALLOW_HOLDERS)
     d = gate.evaluate("frontdoor", TrafficClass.BACKGROUND, candidate_topology_idx=3)
     assert d.admitted and d.decision == PairDecision.ALLOW
 
 
-def test_gate_seam_exception_falls_back_to_legacy(real_matrix, dual_flags_on, monkeypatch) -> None:
+def test_gate_seam_exception_falls_back_to_legacy(matrix, dual_flags_on, monkeypatch) -> None:
     """If seam_admit raises, the gate must not crash — it logs and uses the
     legacy verdict."""
     def _boom(*a, **k):
         raise RuntimeError("seam blew up")
 
     monkeypatch.setattr(gate_mod, "seam_admit", _boom)
-    gate = _gate(real_matrix, _LEGACY_ALLOW_HOLDERS)
+    gate = _gate(matrix, _LEGACY_ALLOW_HOLDERS)
     d = gate.evaluate("frontdoor", TrafficClass.BACKGROUND, candidate_topology_idx=3)
     assert d.admitted and d.decision == PairDecision.ALLOW
 
 
-def test_gate_real_seam_unlocks_disjoint_placement(real_matrix, dual_flags_on, monkeypatch) -> None:
+def test_gate_real_seam_unlocks_disjoint_placement(matrix, dual_flags_on, monkeypatch) -> None:
     """END-TO-END with the REAL seam_admit (not mocked): legacy QUEUEs
     frontdoor+ingest (0.37 stale primary), but frontdoor's candidate q2 is
     physically disjoint from ingest's held node0-half {q0,q1}, and the matrix's
-    n_way frontdoor+ingest is 1.716 ALLOW. The wired gate must ADMIT.
+    n_way frontdoor+ingest allows. The wired gate must ADMIT.
 
     Hermetic: monkeypatch the runtime region helpers seam_admit consults so the
     test doesn't depend on a live NUMA_CONFIG, but the genuine seam_admit logic
@@ -190,19 +201,19 @@ def test_gate_real_seam_unlocks_disjoint_placement(real_matrix, dual_flags_on, m
                         lambda instance_regions=None: {"ingest_long_context": frozenset({"q0", "q1"})})
     monkeypatch.setattr(it, "get_instance_regions", lambda: dict(regions))
 
-    gate = _gate(real_matrix, {"ingest_long_context": [0]})
+    gate = _gate(matrix, {"ingest_long_context": [0]})
     # legacy alone → QUEUE (stale pair 0.37)
-    legacy = _gate(real_matrix, {"ingest_long_context": [0]}).evaluate(
+    legacy = _gate(matrix, {"ingest_long_context": [0]}).evaluate(
         "frontdoor", TrafficClass.BACKGROUND
     )
     assert not legacy.admitted and legacy.decision == PairDecision.QUEUE
-    # real seam, disjoint candidate q2 → nway 1.716 allow → gate ADMITS
+    # real seam, disjoint candidate q2 → nway allow → gate ADMITS
     d = gate.evaluate("frontdoor", TrafficClass.BACKGROUND, candidate_topology_idx=3)
     assert d.admitted, f"expected admit via disjoint placement, got {d.decision}"
     assert d.decision == PairDecision.ALLOW
 
 
-def test_gate_real_seam_overlap_still_queues(real_matrix, dual_flags_on, monkeypatch) -> None:
+def test_gate_real_seam_overlap_still_queues(matrix, dual_flags_on, monkeypatch) -> None:
     """Real seam, but candidate OVERLAPS the held region → seam QUEUEs (physical
     conflict, fail-closed) → gate QUEUEs. Confirms the override stays safe."""
     import src.runtime.cpu_region_lock as crl
@@ -216,13 +227,13 @@ def test_gate_real_seam_overlap_still_queues(real_matrix, dual_flags_on, monkeyp
                         lambda instance_regions=None: {"ingest_long_context": frozenset({"q0", "q1"})})
     monkeypatch.setattr(it, "get_instance_regions", lambda: dict(regions))
 
-    gate = _gate(real_matrix, {"ingest_long_context": [0]})
+    gate = _gate(matrix, {"ingest_long_context": [0]})
     d = gate.evaluate("frontdoor", TrafficClass.BACKGROUND, candidate_topology_idx=1)
     assert not d.admitted
     assert d.decision == PairDecision.QUEUE
 
 
-def test_gate_no_active_decodes_short_circuits_before_seam(real_matrix, dual_flags_on, monkeypatch) -> None:
+def test_gate_no_active_decodes_short_circuits_before_seam(matrix, dual_flags_on, monkeypatch) -> None:
     """No holders → gate returns ALLOW early (before the seam block), seam not
     consulted even with flags+idx."""
     called = {"n": 0}
@@ -232,13 +243,13 @@ def test_gate_no_active_decodes_short_circuits_before_seam(real_matrix, dual_fla
         return PairDecision.QUEUE
 
     monkeypatch.setattr(gate_mod, "seam_admit", _spy)
-    gate = _gate(real_matrix, {})  # no active decodes
+    gate = _gate(matrix, {})  # no active decodes
     d = gate.evaluate("frontdoor", TrafficClass.BACKGROUND, candidate_topology_idx=3)
     assert called["n"] == 0
     assert d.admitted and d.decision == PairDecision.ALLOW
 
 
-def test_admit_threads_candidate_topology_idx_to_evaluate(real_matrix, dual_flags_on, monkeypatch) -> None:
+def test_admit_threads_candidate_topology_idx_to_evaluate(matrix, dual_flags_on, monkeypatch) -> None:
     """`admit()` is the production wait wrapper, so it must preserve the real
     dispatch candidate index when B is armed."""
     seen: list[int | None] = []
@@ -250,7 +261,7 @@ def test_admit_threads_candidate_topology_idx_to_evaluate(real_matrix, dual_flag
 
     monkeypatch.setattr(gate_mod.ContentionGate, "evaluate", _spy)
     monkeypatch.setattr(gate_mod, "seam_admit", lambda *a, **k: PairDecision.ALLOW)
-    gate = _gate(real_matrix, {"ingest_long_context": [0]})
+    gate = _gate(matrix, {"ingest_long_context": [0]})
     d = gate.admit(
         "frontdoor",
         TrafficClass.BACKGROUND,

@@ -52,9 +52,11 @@ Q_TD_WRITE = os.environ.get("ORCHESTRATOR_Q_TD_WRITE", "0") == "1"
 # Candidate depth for the find-or-update similarity lookup on the append path.
 Q_TD_MATCH_K = int(os.environ.get("ORCHESTRATOR_Q_TD_MATCH_K", "10"))
 
+from src.classifiers.role_taxonomy import VALID_TRINITY_ROLES
+
 from .embedder import TaskEmbedder
 from .episodic_store import EpisodicStore
-from .memory_record import build_memory_record
+from .memory_record import WORK_KEYS, build_memory_record, extract_work
 from .progress_logger import EventType, ProgressEntry, ProgressLogger, ProgressReader
 from .staged_scorer import StagedQScorer
 
@@ -141,11 +143,12 @@ def _model_id_for_action(action: str | None) -> str | None:
     Returns None for an unknown action, so NULL keeps meaning "unknown" rather
     than inventing an attribution.
 
-    NOTE the two sibling columns are deliberately NOT filled: `assigned_role` is
-    the Trinity tri-role axis (thinker/worker/verifier) whose readers already
-    normalise NULL to the WORKER default and whose classifier is shadow-mode
-    and off; `sub_decision` NULL correctly means "not a sub-decision". Writing a
-    serving role into either would be a wrong value where NULL is right.
+    NOTE what this function must NOT be used for. `assigned_role` is the Trinity
+    tri-role axis (thinker/worker/verifier) and `sub_decision` is the
+    orchestration sub-decision label; a SERVING role like "frontdoor" is a wrong
+    value in either. `assigned_role` is instead read off the progress entry that
+    already carries the classifier's output — see `_assigned_role_from_entry`.
+    `sub_decision` stays NULL, which correctly means "not a sub-decision".
     """
     if not action:
         return None
@@ -163,6 +166,35 @@ def _model_id_for_action(action: str | None) -> str | None:
         return None
     model_id = record.get("model_id")
     return str(model_id) if model_id else None
+
+
+def _assigned_role_from_entry(entry: Optional[ProgressEntry]) -> Optional[str]:
+    """Read the Trinity tri-role off a progress entry, or None.
+
+    TR-3.2 classifies every request (`classify_trinity_role` in
+    `src/api/routes/chat_pipeline/routing_decision.py`), and
+    `progress_logger.log_task_started` merges that `routing_meta` into the
+    ROUTING_DECISION entry's `data` — so `data["assigned_role"]` is the
+    classifier's own output, already durable in the progress JSONL. It stopped
+    there: no episodic write site ever read it back, so `memories.assigned_role`
+    was NULL on all 59,337 rows and the TR-3.3 promotion decision had no
+    shadow telemetry in the durable corpus to decide on.
+
+    VALIDATE, DO NOT COERCE. `role_taxonomy.normalise_role` maps anything
+    unrecognised (including None) to "worker", which is the correct *read*-side
+    default per TR-1.5 but the wrong *write*-side behavior: it would stamp a
+    real "worker" onto rows where the role is genuinely unknown, and silently
+    launder a stale/foreign string into a Trinity role. Unknown must stay NULL
+    so "worker" in this column always means the classifier said worker.
+    """
+    data = getattr(entry, "data", None) if entry is not None else None
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("assigned_role")
+    if not isinstance(raw, str):
+        return None
+    candidate = raw.strip().lower()
+    return candidate if candidate in VALID_TRINITY_ROLES else None
 
 
 def _baseline_quality_by_role(priors: dict | None = None) -> Dict[str, float]:
@@ -1054,19 +1086,26 @@ class QScorer:
             "ranking_source": ranking_source,
         }
 
-        # Update or create routing memory (uses contrastive-adjusted reward)
+        # Update or create routing memory (uses contrastive-adjusted reward).
+        # `task_outcome` rides along to carry the M-11a2b `work` payload; it is
+        # already guaranteed non-None here (the early return above).
         if routing_decision:
             memory_result = self._update_routing_memory(
                 task_id,
                 task_started,
                 routing_decision,
                 reward_for_update,
+                task_outcome=task_outcome,
             )
             result.update(memory_result)
 
-        # Update escalation memories (use base reward, not contrastive-adjusted)
+        # Update escalation memories (use base reward, not contrastive-adjusted).
+        # `routing_decision` rides along solely to carry this task's TR-3.2
+        # `assigned_role` — see _update_escalation_memory.
         for escalation in escalations:
-            esc_result = self._update_escalation_memory(task_id, escalation, reward)
+            esc_result = self._update_escalation_memory(
+                task_id, escalation, reward, routing_decision=routing_decision,
+            )
             result["memories_updated"] += esc_result.get("memories_updated", 0)
             result["memories_created"] += esc_result.get("memories_created", 0)
 
@@ -1301,8 +1340,17 @@ class QScorer:
         task_started: Optional[ProgressEntry],
         routing_decision: ProgressEntry,
         reward: float,
+        task_outcome: Optional[ProgressEntry] = None,
     ) -> Dict[str, Any]:
-        """Update or create routing memory."""
+        """Update or create routing memory.
+
+        `task_outcome` is the TASK_COMPLETED/TASK_FAILED entry. It rides along
+        solely to carry this task's `work` payload (M-11a2b) — answer, tool
+        calls, REPL steps, reasoning — which the pipeline puts on that entry via
+        `chat_pipeline.telemetry.work_completion_meta`. Optional and defaulted so
+        a trajectory without it (or an older caller) writes exactly the
+        objective-and-outcome row it wrote before.
+        """
         result = {"memories_updated": 0, "memories_created": 0}
 
         # Check if memory already exists
@@ -1364,17 +1412,34 @@ class QScorer:
                 # One record contract for every write site (memory_record.py):
                 # full untruncated objective + the work, telemetry excluded from
                 # the embedding text.
+                #
+                # M-11a2b: the work fields were declared by the contract on
+                # 2026-07-27 but nothing ever passed them, so `work` was absent
+                # from all 59,337 rows and distillation could only ever learn
+                # WHICH route succeeded, never HOW the task was solved. The
+                # payload is redacted and size-bounded inside
+                # build_memory_record, so this site cannot widen the policy.
+                work = extract_work(task_outcome.data if task_outcome else None)
                 record = build_memory_record(
                     objective=task_context.get("objective"),
                     task_type=task_context.get("task_type"),
                     priority=task_context.get("priority"),
                     source="progress_log",
+                    answer=work.get("answer"),
+                    tool_calls=work.get("tool_calls"),
+                    repl_steps=work.get("repl_steps"),
+                    reasoning=work.get("reasoning"),
                 )
                 memory_id = self.store.store(
                     embedding=embedding,
                     action=action,
                     action_type="routing",
                     model_id=_model_id_for_action(action),
+                    # TR-3.2 shadow role, carried on this very entry by
+                    # log_task_started's routing_meta merge. Reading it here is
+                    # the last hop of classifier -> progress JSONL -> episodic
+                    # store; without it the column was NULL on every row.
+                    assigned_role=_assigned_role_from_entry(routing_decision),
                     context=record.to_context(),
                     outcome="success" if reward > 0 else "failure",
                     initial_q=initial_q,
@@ -1433,8 +1498,18 @@ class QScorer:
         task_id: str,
         escalation: ProgressEntry,
         reward: float,
+        routing_decision: Optional[ProgressEntry] = None,
     ) -> Dict[str, Any]:
-        """Update or create escalation memory."""
+        """Update or create escalation memory.
+
+        `routing_decision` is the SAME task's ROUTING_DECISION entry, passed in
+        only to carry its TR-3.2 `assigned_role`. `log_escalation` does not
+        record the tri-role, but the Trinity axis is a property of the REQUEST
+        (what kind of work was asked for), not of which model ended up serving
+        it — an escalation is a re-route of the same request, so the task's own
+        classified role is the correct value rather than an invented one.
+        Default None keeps the column NULL when the caller has no routing entry.
+        """
         result = {"memories_updated": 0, "memories_created": 0}
 
         memory_id = escalation.memory_id
@@ -1508,6 +1583,7 @@ class QScorer:
                 action=action,
                 action_type="escalation",
                 model_id=_model_id_for_action(action),
+                assigned_role=_assigned_role_from_entry(routing_decision),
                 context=record.to_context(),
                 outcome="success" if reward > 0 else "failure",
                 initial_q=initial_q,
@@ -1633,14 +1709,31 @@ class QScorer:
             # embedding input, which is how 27,123 of 54,960 rows came to be
             # number-blobs with no task text. build_memory_record routes those
             # keys into `metrics`, where they are stored but never embedded.
+            #
+            # M-11a2b: work fields are lifted OUT of that metrics sweep first.
+            # A caller may pass them nested (`context["work"]`) or flat
+            # (`context["answer"]`); either way they belong in the record's work
+            # slots, not in `metrics` — a work payload filed as telemetry is
+            # stored under a key no reader looks at, which is the same
+            # wrong-key-silent-miss shape as the objective/task_description
+            # split this contract exists to close.
+            work = extract_work(context)
+            metrics_excluded = (
+                "task_type", "objective", "priority", "task_description", "source",
+                "work", *WORK_KEYS,
+            )
             record = build_memory_record(
                 objective=task_description,
                 task_type=context.get("task_type", "chat"),
                 source="external",
+                answer=work.get("answer"),
+                tool_calls=work.get("tool_calls"),
+                repl_steps=work.get("repl_steps"),
+                reasoning=work.get("reasoning"),
                 metrics={
                     k: v
                     for k, v in context.items()
-                    if k not in ("task_type", "objective", "priority", "task_description", "source")
+                    if k not in metrics_excluded
                 },
             )
 

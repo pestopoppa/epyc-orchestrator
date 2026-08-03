@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -1511,3 +1512,75 @@ def test_routing_meta_embeds_xmas_when_supplied(monkeypatch):
         "cell": "code:refine",
         "applied": False,
     }
+
+
+def _vision_meta(monkeypatch, request):
+    """Build routing metadata for `request` with all shadow subsystems off."""
+    state = SimpleNamespace(
+        active_requests=0,
+        llm_primitives=None,
+        registry=None,
+        hybrid_router=None,
+    )
+    monkeypatch.setattr(
+        "src.features.features",
+        lambda: SimpleNamespace(ure_uncertainty_shadow_log=False),
+    )
+    return routing_meta(
+        request,
+        state,
+        routing_strategy="vision_input",
+        heuristic_priors={},
+        factual_risk_score=0.0,
+        factual_risk_band="",
+        factual_risk_mode="",
+        difficulty_score=0.0,
+        difficulty_band="",
+        estimated_cost=0.0,
+        assigned_role="worker",
+    )
+
+
+def test_routing_meta_captures_image_path(monkeypatch):
+    """A vision request must leave a durable image reference in the progress log.
+
+    Regression guard: before this, `image_path` was forwarded to the VL backend
+    but persisted to NO progress event, so the dashboard and every offline
+    consumer saw a vision task as an ordinary text task.
+    """
+    img = "/mnt/raid0/llm/epyc-orchestrator/benchmarks/images/vl/chartqa/chart_test_0452.png"
+    meta = _vision_meta(monkeypatch, ChatRequest(prompt="Read the chart", image_path=img))
+
+    assert meta["image_path"] == img
+    assert meta["has_image"] is True
+    assert meta["image_source"] == "path"
+
+
+def test_routing_meta_never_persists_base64_payload(monkeypatch):
+    """base64 images record a flag + source, never the (megabyte) payload."""
+    payload = "A" * 4096
+    meta = _vision_meta(monkeypatch, ChatRequest(prompt="Read it", image_base64=payload))
+
+    assert meta["has_image"] is True
+    assert meta["image_source"] == "base64"
+    assert "image_path" not in meta
+    assert payload not in json.dumps(meta)
+
+
+def test_routing_meta_omits_image_keys_for_text_requests(monkeypatch):
+    """Text traffic keeps its exact legacy payload shape — no new keys."""
+    meta = _vision_meta(monkeypatch, ChatRequest(prompt="What is 2+2?"))
+
+    assert "image_path" not in meta
+    assert "has_image" not in meta
+    assert "image_source" not in meta
+
+
+def test_routing_meta_bounds_image_path_length(monkeypatch):
+    """A pathological path is capped so it cannot balloon every log line."""
+    from src.api.routes.chat_pipeline.routing_decision import MAX_IMAGE_PATH_LEN
+
+    meta = _vision_meta(
+        monkeypatch, ChatRequest(prompt="p", image_path="/mnt/raid0/" + "x" * 4096)
+    )
+    assert len(meta["image_path"]) == MAX_IMAGE_PATH_LEN

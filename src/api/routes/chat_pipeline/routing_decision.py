@@ -23,6 +23,11 @@ _TIER_COST_WEIGHTS: dict[str, float] = {
 
 _INGRESS_ROLE_ALIASES = frozenset({"worker_coder", "worker_code"})
 
+# Upper bound on the image reference persisted into the routing-decision
+# progress event. Real image paths are ~90 chars; the cap only fences a
+# pathological caller from writing an unbounded string into every log line.
+MAX_IMAGE_PATH_LEN = 512
+
 _DEFAULT_STACK_PRIORS_PATH = (
     Path(__file__).resolve().parents[4] / "orchestration" / "derived" / "stack_priors.yaml"
 )
@@ -429,6 +434,35 @@ def routing_meta(
             meta["uncertainty_components"] = uncertainty["components"]
             meta["uncertainty_n_alternatives"] = uncertainty["n_alternatives"]
             emit_uncertainty_shadow(meta, request_id=getattr(request, "session_id", None))
+    except Exception:
+        pass
+
+    # ── Vision capture ────────────────────────────────────────────────────
+    # A request carrying image data must leave a DURABLE reference in the
+    # progress JSONL. Until this, `image_path` was forwarded to the VL backend
+    # but written to no progress event at all: every offline consumer (the
+    # dashboard completed-tasks panel, replay, vl-suite triage) saw a vision
+    # task as an ordinary text task with no way to tell which image produced
+    # the answer. Verified against stored rows — `grep -c image_path` over
+    # every logs/progress/*.jsonl returned 0, including for genuinely
+    # successful `Vision multimodal` completions (e.g. chat-94e59d8f,
+    # 2026-06-13, worker_vision).
+    #
+    # Written LAST so neither `meta.update(router_meta)` nor the uncertainty
+    # block above can clobber or be perturbed by these keys.
+    #
+    # Only the PATH is stored — NEVER `image_base64`, whose payload is
+    # megabytes per row and would balloon the progress log. A base64-only
+    # request records the flag and the source so the panel can still label it.
+    try:
+        image_path = str(getattr(request, "image_path", "") or "").strip()
+        if image_path:
+            meta["image_path"] = image_path[:MAX_IMAGE_PATH_LEN]
+            meta["has_image"] = True
+            meta["image_source"] = "path"
+        elif getattr(request, "image_base64", None):
+            meta["has_image"] = True
+            meta["image_source"] = "base64"
     except Exception:
         pass
     return meta

@@ -2144,15 +2144,6 @@ def _run_loop_inner_seq_harness(
         def rebalance(self, *args: Any, **kwargs: Any) -> None:
             return None
 
-        def restore_diversity_state(self, _raw: dict[str, Any] | None) -> None:
-            return None
-
-        def observe_diversity(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-            return {"status": "signal_missing"}
-
-        def export_diversity_state(self) -> dict[str, Any]:
-            return {"schema_version": "ap37_diversity_stall.v1"}
-
     class FakeSeeder:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass

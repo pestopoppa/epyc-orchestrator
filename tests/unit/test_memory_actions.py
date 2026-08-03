@@ -49,6 +49,10 @@ def test_upsert_is_idempotent_and_syncs_status_projection(tmp_path):
 
 
 def test_upsert_updates_when_payload_changes(tmp_path):
+    # `when_not_to_use` became REQUIRED for strategy/pattern records
+    # (memory_actions.normalized(): "strategy records require when_not_to_use").
+    # This test is about upsert-on-change, not about validation, so it supplies the
+    # field; the validation itself is covered by the rejection tests below.
     store = MemoryActionStore(tmp_path / "memory")
     first = MemoryAction(
         action="UPSERT",
@@ -57,6 +61,7 @@ def test_upsert_updates_when_payload_changes(tmp_path):
         key="schema",
         content="Use append-only ledger.",
         source="test",
+        when_not_to_use="Not for high-write-rate telemetry.",
     )
     changed = MemoryAction(
         action="UPSERT",
@@ -65,6 +70,7 @@ def test_upsert_updates_when_payload_changes(tmp_path):
         key="schema",
         content="Use append-only ledger plus generated projections.",
         source="test",
+        when_not_to_use="Not for high-write-rate telemetry.",
     )
 
     insert = store.apply(first)
@@ -145,7 +151,16 @@ def test_status_inventory_strategy_projection_files_are_always_synced(tmp_path):
         )
     )
 
-    assert set(result.projection_paths) == {"inventory", "log", "plan", "status", "strategy"}
+    # `pattern` joined PROJECTION_CHANNELS alongside the original five; every
+    # declared channel must be materialised on every apply, not just the one written.
+    assert set(result.projection_paths) == {
+        "inventory",
+        "log",
+        "pattern",
+        "plan",
+        "status",
+        "strategy",
+    }
     for path in result.projection_paths.values():
         assert path.exists()
     assert "Land schema before runtime integration." in (tmp_path / "memory" / "plan.md").read_text(
@@ -157,8 +172,12 @@ def test_status_inventory_strategy_projection_files_are_always_synced(tmp_path):
 @pytest.mark.parametrize(
     "action",
     [
+        # Was `action="DELETE"`. DELETE is now a FIRST-CLASS action (it is in
+        # VALID_ACTIONS and appends a tombstone), so it is no longer an example of
+        # an invalid action. The case is retargeted at an action outside
+        # VALID_ACTIONS so this test still proves unknown actions are rejected.
         MemoryAction(
-            action="DELETE",
+            action="PURGE",
             channel="status",
             coordinate="autopilot",
             key="bad",

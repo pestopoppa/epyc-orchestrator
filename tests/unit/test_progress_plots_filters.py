@@ -122,6 +122,11 @@ def test_generate_all_plots_filters_t0_and_bug_corrupted_points(
         lambda history, output_dir=None: captured.setdefault("hv", history) or tmp_path / "hv.png",
     )
 
+    # `excluded_by_tier` was added to plot_pareto_frontier_2d after this double was
+    # written. `generate_all_plots` catches the resulting TypeError and only logs
+    # "Error generating plots", so the stale signature turned into an empty
+    # `captured` dict rather than a visible failure — keep this stub in step with
+    # the real signature.
     def _frontier(
         frontier,
         dominated,
@@ -129,11 +134,13 @@ def test_generate_all_plots_filters_t0_and_bug_corrupted_points(
         *,
         frontiers_by_tier=None,
         dominated_by_tier=None,
+        excluded_by_tier=None,
     ):
         captured["frontier"] = frontier
         captured["dominated"] = dominated
         captured["frontiers_by_tier"] = frontiers_by_tier
         captured["dominated_by_tier"] = dominated_by_tier
+        captured["excluded_by_tier"] = excluded_by_tier
         return tmp_path / "frontier.png"
 
     monkeypatch.setattr(progress_plots, "plot_pareto_frontier_2d", _frontier)

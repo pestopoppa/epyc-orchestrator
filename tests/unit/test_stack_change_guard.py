@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import datetime
 import hashlib
 import json
 import re
@@ -2162,16 +2163,31 @@ def test_declaration_matches_role_and_gap_exactly_never_by_wildcard(
     )
 
 
-def test_production_accepted_gaps_file_declares_the_27b_quality_priors() -> None:
+def test_production_accepted_gaps_file_carries_no_malformed_or_expired_waiver() -> None:
+    """Every waiver in the production file must be well-formed and still live.
+
+    Deliberately does NOT restate the file's contents. Waivers open and close as
+    gaps do — the three 2026-08-01 "Missing overall quality prior" entries were
+    removed on 2026-08-03 once the gap stopped firing — so a hardcoded roster
+    fails on every legitimate edit instead of on a real defect. The invariants
+    that actually matter are: it parses, nothing is expired, and each entry names
+    an accountable owner and a reason. That a waiver must still match a live gap
+    is covered by the stale-waiver test above.
+    """
     declarations, errors = stack_change_guard.load_accepted_gaps()
 
     assert not errors, errors
-    assert {(d.role, d.gap) for d in declarations} == {
-        ("architect_general", "Missing overall quality prior"),
-        ("coder_escalation", "Missing overall quality prior"),
-        ("qwen36_27b_mtp_q8_local", "Missing overall quality prior"),
-    }
-    assert all(d.owner == "operator" and d.expires == "2026-09-01" for d in declarations)
+    today = datetime.date.today().isoformat()
+    for declaration in declarations:
+        label = f"{declaration.role}/{declaration.gap}"
+        assert declaration.role and declaration.gap, f"waiver missing role or gap: {declaration}"
+        assert declaration.owner, f"{label}: waiver needs an accountable owner"
+        assert declaration.reason, f"{label}: waiver needs a reason"
+        assert declaration.expires, f"{label}: a waiver without an expiry is a deleted check"
+        assert declaration.expires > today, (
+            f"{label}: waiver expired on {declaration.expires}; renew with fresh "
+            "evidence or close the gap"
+        )
 
 
 # ---------------------------------------------------------------------------

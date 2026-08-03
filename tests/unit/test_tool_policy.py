@@ -447,9 +447,15 @@ class TestNoWebTaskTypes:
         from src.tool_policy import NO_WEB_TASK_TYPES
 
         assert "math" in NO_WEB_TASK_TYPES
-        assert "coder" in NO_WEB_TASK_TYPES
         assert "thinking" in NO_WEB_TASK_TYPES
-        assert "instruction_precision" in NO_WEB_TASK_TYPES
+        # 2026-08-03: `coder` and `instruction_precision` were DELIBERATELY removed
+        # from the set (see the rationale block above the constant in
+        # src/tool_policy.py: web search helps for API/library refs under the
+        # compute-first prompt priority, and format/convention questions benefit
+        # from lookup at T1 depth). Asserted absent rather than deleted so a silent
+        # re-add still fails this test.
+        assert "coder" not in NO_WEB_TASK_TYPES
+        assert "instruction_precision" not in NO_WEB_TASK_TYPES
 
     def test_no_web_task_types_excludes_factual_domains(self):
         from src.tool_policy import NO_WEB_TASK_TYPES

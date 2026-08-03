@@ -1,4 +1,13 @@
-"""Phase B — admission gate behavior + active_region_holders helper."""
+"""Phase B — admission gate behavior + active_region_holders helper.
+
+HERMETICITY (2026-08-03): the `ContentionGate` tests below assert against a
+DECLARED matrix (`tests/unit/contention_gate_fixture.py`), not the committed
+`orchestration/contention_matrix.yaml`. That file is a measurement artifact
+that is regenerated per re-bench — see the fixture module's docstring for the
+three ways the 2026-08-01 re-bench moved it under these tests. Whether the
+shipped artifact still describes the live stack is asserted separately, by the
+`test_real_matrix_*` tests in `test_scheduling_contention.py`.
+"""
 
 from __future__ import annotations
 
@@ -18,10 +27,17 @@ contention = importlib.import_module("src.scheduling.contention")
 gate_mod = importlib.import_module("src.scheduling.contention_gate")
 cpu_region_lock = importlib.import_module("src.runtime.cpu_region_lock")
 
+from tests.unit.contention_gate_fixture import (  # noqa: E402
+    gate_fixture_matrix,
+    make_gate,
+    pin_matrix_status,
+)
+
 
 @pytest.fixture
-def real_matrix_path() -> Path:
-    return ROOT / "orchestration" / "contention_matrix.yaml"
+def matrix():
+    """The declared gate matrix (see contention_gate_fixture)."""
+    return gate_fixture_matrix()
 
 
 @pytest.fixture(autouse=True)
@@ -95,96 +111,95 @@ def test_active_region_holders_groups_multiple_instances(tmp_path, monkeypatch) 
 # ── ContentionGate.evaluate ────────────────────────────────────────────
 
 
-def _fake_active_factory(holders):
-    return lambda: dict(holders)
-
-
-def test_gate_admits_when_no_active_decodes(real_matrix_path) -> None:
-    m = contention.load_contention_matrix(real_matrix_path)
-    gate = gate_mod.ContentionGate(matrix=m, active_holders_fn=_fake_active_factory({}))
+def test_gate_admits_when_no_active_decodes(matrix) -> None:
+    gate = make_gate(gate_mod, {}, matrix=matrix)
     d = gate.evaluate("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE)
     assert d.admitted
     assert d.decision == contention.PairDecision.ALLOW
 
 
-def test_gate_blocks_background_when_pair_catastrophic(real_matrix_path) -> None:
-    m = contention.load_contention_matrix(real_matrix_path)
-    # ingest_long_context is actively decoding
-    gate = gate_mod.ContentionGate(
-        matrix=m, active_holders_fn=_fake_active_factory({"ingest_long_context": [0]})
-    )
-    # Background frontdoor request — should be QUEUE (ratio 0.37)
+def test_gate_blocks_background_when_pair_catastrophic(matrix) -> None:
+    """frontdoor+ingest = 0.37, far below the 0.85 floor → background QUEUEs.
+
+    The whole active set is declared light, so the defensive N-way layer allows
+    it: the QUEUE here can only have come from the PAIR ratio.
+    """
+    gate = make_gate(gate_mod, {"ingest_long_context": [0]}, matrix=matrix)
     d = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
     assert not d.admitted
     assert d.decision == contention.PairDecision.QUEUE
     assert "ingest_long_context" in d.blocking_roles
 
 
-def test_gate_blocks_foreground_when_pair_below_floor(real_matrix_path) -> None:
+def test_gate_blocks_foreground_when_pair_below_floor(matrix) -> None:
     """frontdoor+architect = 0.50 < 0.85 → foreground also queues (per handoff:
     'block or delay unless explicit low-latency override')."""
-    m = contention.load_contention_matrix(real_matrix_path)
-    gate = gate_mod.ContentionGate(
-        matrix=m, active_holders_fn=_fake_active_factory({"architect_general": [0]})
-    )
+    gate = make_gate(gate_mod, {"architect_general": [0]}, matrix=matrix)
     d = gate.evaluate("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE)
     assert not d.admitted
     assert d.decision == contention.PairDecision.QUEUE
 
 
-def test_gate_allows_known_good_pair(real_matrix_path) -> None:
-    """frontdoor+vision_escalation is ALLOW even for background."""
-    m = contention.load_contention_matrix(real_matrix_path)
-    gate = gate_mod.ContentionGate(
-        matrix=m, active_holders_fn=_fake_active_factory({"vision_escalation": [0]})
-    )
+def test_gate_allows_borderline_pair_for_foreground_but_queues_background(matrix) -> None:
+    """floor <= ratio < 1.0 is the third pair band: foreground ALLOW, background
+    QUEUE. Distinguishes 'below floor' from 'merely borderline'."""
+    gate = make_gate(gate_mod, {"worker_borderline": [0]}, matrix=matrix)
+    fg = gate.evaluate("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE)
+    assert fg.admitted and fg.decision == contention.PairDecision.ALLOW
+    bg = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
+    assert not bg.admitted and bg.decision == contention.PairDecision.QUEUE
+
+
+def test_gate_allows_known_good_pair(matrix) -> None:
+    """A concurrency-positive pair (>= 1.0) is ALLOW even for background."""
+    gate = make_gate(gate_mod, {"vision_escalation": [0]}, matrix=matrix)
     d = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
     assert d.admitted
     assert d.decision == contention.PairDecision.ALLOW
 
 
-def test_gate_allows_same_role_when_matrix_says_allow(real_matrix_path) -> None:
-    """frontdoor is same-role-allow (4-quarters 1.88×). A second frontdoor
-    request should be admitted even while frontdoor is decoding."""
-    m = contention.load_contention_matrix(real_matrix_path)
-    gate = gate_mod.ContentionGate(
-        matrix=m, active_holders_fn=_fake_active_factory({"frontdoor": [0]})
-    )
+def test_gate_allows_same_role_when_matrix_says_allow(matrix) -> None:
+    """frontdoor is same-role-allow. A second frontdoor request should be
+    admitted even while frontdoor is decoding."""
+    gate = make_gate(gate_mod, {"frontdoor": [0]}, matrix=matrix)
     d = gate.evaluate("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE)
     assert d.admitted
 
 
-def test_gate_allows_vision_escalation_self_pair_on_certified_matrix(real_matrix_path) -> None:
-    """vision_escalation same-role is ALLOW on the certified-affinity matrix. The earlier
-    full+quarter "block" was a BAD-AFFINITY ARTIFACT (REFUTED 2026-05-26 — quarters were pinned
-    to the wrong cores; on certified disjoint quarters the co-run allows). A second vision request
-    is admitted in both traffic classes.
-    NOTE: the block→QUEUE mechanism is no longer exercised by the real matrix (no measured block
-    remains); cover that path with a synthetic-fixture matrix if regression protection is needed."""
-    m = contention.load_contention_matrix(real_matrix_path)
-    gate = gate_mod.ContentionGate(
-        matrix=m, active_holders_fn=_fake_active_factory({"vision_escalation": [0]})
-    )
+def test_gate_same_role_allow_verdict_admits_both_traffic_classes(matrix) -> None:
+    """A same-role verdict of 'allow' admits in BOTH classes.
+
+    (History: vision_escalation same-role once read 'block'; the 2026-05-26
+    certified-affinity re-bench REFUTED that as a bad-affinity artifact — the
+    quarters had been pinned to the wrong cores. The matrix has said 'allow'
+    ever since, which is what this asserts.)
+    """
+    gate = make_gate(gate_mod, {"vision_escalation": [0]}, matrix=matrix)
     bg = gate.evaluate("vision_escalation", contention.TrafficClass.BACKGROUND)
-    # ADMITTED is the invariant (no longer blocked/queued). The decision may be degraded_allow
-    # rather than allow because the same_role entry still carries structural full+q2/full+q3
-    # cpuset-overlap markers (vision's "full" half1 contains those quarters) — that is a
-    # placement-overlap signal, not a contention block.
     assert bg.admitted
     fg = gate.evaluate("vision_escalation", contention.TrafficClass.FOREGROUND_INTERACTIVE)
     assert fg.admitted
 
 
-def test_gate_picks_worst_pair_in_multi_active(real_matrix_path) -> None:
+def test_gate_same_role_block_queues_background_degrades_foreground() -> None:
+    """The same-role BLOCK path. The real matrix carries no measured same-role
+    block any more (the note this file used to carry said to cover it with a
+    synthetic fixture if regression protection was wanted — this is that)."""
+    m = gate_fixture_matrix()
+    m.same_role["frontdoor"] = contention.SameRole(role="frontdoor", verdict="block")
+    gate = make_gate(gate_mod, {"frontdoor": [0]}, matrix=m)
+    bg = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
+    assert not bg.admitted and bg.decision == contention.PairDecision.QUEUE
+    fg = gate.evaluate("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE)
+    assert fg.admitted and fg.decision == contention.PairDecision.DEGRADED_ALLOW
+
+
+def test_gate_picks_worst_pair_in_multi_active(matrix) -> None:
     """When multiple roles are active, gate picks the most-restrictive decision."""
-    m = contention.load_contention_matrix(real_matrix_path)
-    # vision_escalation is fine; architect is catastrophic
-    gate = gate_mod.ContentionGate(
-        matrix=m,
-        active_holders_fn=_fake_active_factory({
-            "vision_escalation": [0],
-            "architect_general": [0],
-        }),
+    gate = make_gate(
+        gate_mod,
+        {"vision_escalation": [0], "architect_general": [0]},
+        matrix=matrix,
     )
     d = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
     assert not d.admitted
@@ -193,38 +208,55 @@ def test_gate_picks_worst_pair_in_multi_active(real_matrix_path) -> None:
     assert "vision_escalation" not in d.blocking_roles
 
 
-def test_gate_unknown_pair_blocks_background_allows_foreground(real_matrix_path) -> None:
-    """Per handoff: unknown pair → background QUEUE, foreground ALLOW."""
-    m = contention.load_contention_matrix(real_matrix_path)
-    # Use a deliberately unmeasured synthetic active role; the committed matrix
-    # currently has no unknown_pairs after the v6 full-primary refresh.
-    gate = gate_mod.ContentionGate(
-        matrix=m, active_holders_fn=_fake_active_factory({"synthetic_unmeasured": [0]})
-    )
+def test_gate_unknown_pair_blocks_background_allows_foreground(matrix) -> None:
+    """Per handoff: unknown pair → background QUEUE, foreground ALLOW.
+
+    `synthetic_unmeasured` has no pair row but IS declared light, so the N-way
+    layer is neutral — this isolates the unknown-PAIR policy.
+    """
+    gate = make_gate(gate_mod, {"synthetic_unmeasured": [0]}, matrix=matrix)
     bg = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
     assert not bg.admitted
     fg = gate.evaluate("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE)
     assert fg.admitted
 
 
+def test_gate_nway_block_restricts_a_pairwise_allowed_set(matrix) -> None:
+    """J4c defensive layer: pairwise-allow does NOT certify the active SET.
+
+    frontdoor+worker_summarize is a 1.30 allow PAIR, but the set is a measured
+    0.72 aggregate-negative N-way — the gate must take the N-way verdict and
+    count the restriction. Nothing else at gate level covers this path, and it
+    is exactly the layer that silently drives verdicts when a regenerated
+    matrix ships without an `n_way` section.
+    """
+    gate = make_gate(gate_mod, {"worker_summarize": [0]}, matrix=matrix)
+    assert (
+        contention.pair_policy(
+            "frontdoor", "worker_summarize", contention.TrafficClass.BACKGROUND, matrix=matrix
+        )
+        == contention.PairDecision.ALLOW
+    )
+    d = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
+    assert not d.admitted
+    assert d.decision == contention.PairDecision.QUEUE
+    assert d.blocking_roles == ["worker_summarize"]
+    assert gate.metrics_snapshot()["contention_nway_restricted_count"] == 1
+
+
 # ── ContentionGate.admit (waiting behavior) ───────────────────────────
 
 
-def test_admit_returns_immediately_when_ok(real_matrix_path) -> None:
-    m = contention.load_contention_matrix(real_matrix_path)
-    gate = gate_mod.ContentionGate(matrix=m, active_holders_fn=_fake_active_factory({}))
+def test_admit_returns_immediately_when_ok(matrix) -> None:
+    gate = make_gate(gate_mod, {}, matrix=matrix)
     t0 = time.monotonic()
     d = gate.admit("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE, max_queue_wait_ms=100)
     assert d.admitted
     assert (time.monotonic() - t0) < 0.5
 
 
-def test_admit_times_out_when_persistently_blocked(real_matrix_path) -> None:
-    m = contention.load_contention_matrix(real_matrix_path)
-    gate = gate_mod.ContentionGate(
-        matrix=m,
-        active_holders_fn=_fake_active_factory({"architect_general": [0]}),
-    )
+def test_admit_times_out_when_persistently_blocked(matrix) -> None:
+    gate = make_gate(gate_mod, {"architect_general": [0]}, matrix=matrix)
     t0 = time.monotonic()
     d = gate.admit("frontdoor", contention.TrafficClass.BACKGROUND, max_queue_wait_ms=400)
     elapsed = time.monotonic() - t0
@@ -233,12 +265,8 @@ def test_admit_times_out_when_persistently_blocked(real_matrix_path) -> None:
     assert 0.4 <= elapsed < 1.5  # respected the 400ms budget
 
 
-def test_admit_zero_wait_times_out_without_poll_sleep(real_matrix_path, monkeypatch) -> None:
-    m = contention.load_contention_matrix(real_matrix_path)
-    gate = gate_mod.ContentionGate(
-        matrix=m,
-        active_holders_fn=_fake_active_factory({"architect_general": [0]}),
-    )
+def test_admit_zero_wait_times_out_without_poll_sleep(matrix, monkeypatch) -> None:
+    gate = make_gate(gate_mod, {"architect_general": [0]}, matrix=matrix)
 
     monkeypatch.setattr(gate_mod.time, "sleep", lambda _: pytest.fail("zero-wait path slept"))
 
@@ -251,13 +279,11 @@ def test_admit_zero_wait_times_out_without_poll_sleep(real_matrix_path, monkeypa
     assert gate.metrics_snapshot()["contention_timeout_count"] == 1
 
 
-def test_admit_unblocks_when_active_clears(real_matrix_path) -> None:
-    m = contention.load_contention_matrix(real_matrix_path)
+def test_admit_unblocks_when_active_clears(matrix) -> None:
     # Mutable holders dict — flip to empty after 200 ms
     holders = {"architect_general": [0]}
-    def get_holders():
-        return dict(holders)
-    gate = gate_mod.ContentionGate(matrix=m, active_holders_fn=get_holders)
+    gate = gate_mod.ContentionGate(matrix=matrix, active_holders_fn=lambda: dict(holders))
+    pin_matrix_status(gate)
 
     def clear_later():
         time.sleep(0.20)
@@ -280,9 +306,8 @@ def test_get_gate_returns_singleton() -> None:
     assert g1 is g2
 
 
-def test_metrics_snapshot_includes_required_keys(real_matrix_path) -> None:
-    m = contention.load_contention_matrix(real_matrix_path)
-    gate = gate_mod.ContentionGate(matrix=m, active_holders_fn=_fake_active_factory({}))
+def test_metrics_snapshot_includes_required_keys(matrix) -> None:
+    gate = make_gate(gate_mod, {}, matrix=matrix)
     snap = gate.metrics_snapshot()
     # Acceptance: handoff requires these counter keys
     for key in (
@@ -290,18 +315,15 @@ def test_metrics_snapshot_includes_required_keys(real_matrix_path) -> None:
         "contention_wait_seconds",
         "contention_unknown_pair_count",
         "contention_admitted_count",
+        "contention_nway_restricted_count",
         "active_decodes_by_role",
         "matrix_status",
     ):
         assert key in snap
 
 
-def test_metrics_record_blocked_count(real_matrix_path) -> None:
-    m = contention.load_contention_matrix(real_matrix_path)
-    gate = gate_mod.ContentionGate(
-        matrix=m,
-        active_holders_fn=_fake_active_factory({"architect_general": [0]}),
-    )
+def test_metrics_record_blocked_count(matrix) -> None:
+    gate = make_gate(gate_mod, {"architect_general": [0]}, matrix=matrix)
     # Force one short-budget admit that times out → records blocked count
     gate.admit("frontdoor", contention.TrafficClass.BACKGROUND, max_queue_wait_ms=200)
     snap = gate.metrics_snapshot()
@@ -312,10 +334,9 @@ def test_metrics_record_blocked_count(real_matrix_path) -> None:
 
 
 def test_metrics_use_exact_holder_instances_not_attribution_overcount(
-    real_matrix_path,
+    matrix,
     monkeypatch,
 ) -> None:
-    m = contention.load_contention_matrix(real_matrix_path)
     monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
     monkeypatch.setattr(
         cpu_region_lock,
@@ -327,9 +348,8 @@ def test_metrics_use_exact_holder_instances_not_attribution_overcount(
         "active_region_holder_instances",
         lambda: {"worker_general": [0]},
     )
-    gate = gate_mod.ContentionGate(matrix=m)
-    gate._matrix_status_cache = contention.MatrixStatus.OK
-    gate._matrix_status_checked_at = time.time()
+    gate = gate_mod.ContentionGate(matrix=matrix)
+    pin_matrix_status(gate)
 
     gate.evaluate("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE)
     snap = gate.metrics_snapshot()
@@ -338,18 +358,14 @@ def test_metrics_use_exact_holder_instances_not_attribution_overcount(
     assert snap["active_instances_by_role"] == {"worker_general": [0]}
 
 
-def test_gate_fails_closed_on_stale_matrix(real_matrix_path) -> None:
+def test_gate_fails_closed_on_stale_matrix(matrix) -> None:
     """#2 (operator audit 2026-05-27): when matrix_health is not OK (topology changed / matrix
     stale) AND concurrency is active, evaluate() fail-closes — background SERIALIZES (QUEUE, not
     admitted), foreground degraded-admits (visible, not silently 'healthy')."""
-    import time as _t
-    m = contention.load_contention_matrix(real_matrix_path)
-    gate = gate_mod.ContentionGate(
-        matrix=m, active_holders_fn=_fake_active_factory({"frontdoor": [0]})
-    )
     # Simulate a topology change the matrix wasn't benched against (force cached STALE health).
-    gate._matrix_status_cache = contention.MatrixStatus.STALE
-    gate._matrix_status_checked_at = _t.time()
+    gate = make_gate(
+        gate_mod, {"frontdoor": [0]}, matrix=matrix, status=contention.MatrixStatus.STALE
+    )
     bg = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
     assert not bg.admitted and bg.decision == contention.PairDecision.QUEUE
     assert "fail-closed" in bg.reason

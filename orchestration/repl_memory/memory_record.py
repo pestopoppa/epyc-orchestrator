@@ -61,6 +61,161 @@ EMBED_TEXT_MAX_CHARS = 2000
 #: written under this contract from the pre-2026-07-27 free-form ones.
 RECORD_VERSION = 1
 
+# ---------------------------------------------------------------------------
+# Work-payload capture policy (M-11a2b, 2026-08-03)
+# ---------------------------------------------------------------------------
+# The work fields below existed from 2026-07-27 but nothing ever passed them, so
+# 0 of 59,337 rows carried `work`. Wiring them means episodic rows now hold model
+# OUTPUT and TOOL OUTPUT, which is the first content in this store that can carry
+# a credential or an unbounded blob. Two properties are enforced here, at the
+# single construction chokepoint (`build_memory_record`), rather than at each
+# write site — the same reasoning as the degenerate-embedding refusal in
+# EpisodicStore.store(): a guarantee placed at N call sites is lost by caller
+# N+1.
+#
+# 1. REDACTION reuses the repo's ONE credential policy,
+#    src.repl_environment.redaction.redact_if_enabled (feature-gated on
+#    credential_redaction, default True). No second pattern list is invented
+#    here. Note redact_credentials() SKIPS inputs above 1 MB, so the caps below
+#    also keep every scanned string inside the scanner's working range.
+# 2. CAPS are the repo's existing values, not new ones:
+#      WORK_TEXT_MAX_CHARS  = src/tools/file/read.py's stored-text cap (32_000)
+#      WORK_MAX_ITEMS       = REPLState.CODE_LOG_MAX_STEPS (200)
+#      WORK_ITEM_MAX_CHARS  = REPLState.CODE_LOG_MAX_CHARS (4_000)
+#    Sizing sanity: answers measure ~1.1 KB mean / 58 tokens p50, so the text cap
+#    is ~29x the mean and does not bite in normal operation — it exists to bound
+#    a looping generation or a dumped file, not to compress ordinary work.
+#
+# The objective is deliberately NOT capped: destroying it at write time was the
+# measured 2026-07-27 defect and is not reintroduced here.
+
+#: Per-field cap on stored work TEXT (answer, reasoning).
+WORK_TEXT_MAX_CHARS = 32_000
+#: Cap on retained tool_calls / repl_steps entries.
+WORK_MAX_ITEMS = 200
+#: Per-entry cap on a serialized tool_call / repl_step.
+WORK_ITEM_MAX_CHARS = 4_000
+
+
+def _redact(text: str) -> str:
+    """Apply the repo's single credential-redaction policy, failing open.
+
+    Imported lazily: memory_record is imported by offline maintenance scripts
+    that must not drag in the API feature system.
+    """
+    try:
+        from src.repl_environment.redaction import redact_if_enabled
+
+        return redact_if_enabled(text)
+    except Exception:  # pragma: no cover - redaction must never fail a write
+        return text
+
+
+def sanitize_work_text(text: Any, max_chars: int = WORK_TEXT_MAX_CHARS) -> str | None:
+    """Redact credentials from, then bound, one work text field.
+
+    Redaction runs BEFORE truncation so a secret is matched against the whole
+    string, and again AFTER when truncation actually fired — the second pass is
+    what covers inputs above redact_credentials()' 1 MB scan ceiling, where the
+    first pass is a no-op by design.
+    """
+    if text is None:
+        return None
+    value = text if isinstance(text, str) else str(text)
+    value = _redact(value)
+    if len(value) > max_chars:
+        original_len = len(value)
+        value = _redact(value[:max_chars])
+        value += f"\n\n[... truncated at {max_chars} chars, total was {original_len}]"
+    return value
+
+
+def sanitize_work_items(items: Any, max_items: int = WORK_MAX_ITEMS) -> list[Any]:
+    """Bound a tool_calls / repl_steps list and redact the text inside it.
+
+    Keeps the LAST `max_items` entries (a truncated trajectory's tail is the part
+    that produced the answer) and records the drop in a sentinel entry so a
+    reader can never mistake a bounded list for a complete one.
+    """
+    if not items:
+        return []
+    if not isinstance(items, (list, tuple)):
+        items = [items]
+    entries = list(items)
+    dropped = 0
+    if len(entries) > max_items:
+        dropped = len(entries) - max_items
+        entries = entries[-max_items:]
+
+    out: list[Any] = []
+    for entry in entries:
+        try:
+            encoded = json.dumps(entry, default=str)
+        except Exception:
+            encoded = json.dumps(str(entry))
+        cleaned = sanitize_work_text(encoded, max_chars=WORK_ITEM_MAX_CHARS)
+        if cleaned == encoded:
+            # Unchanged by redaction/truncation — keep the original structure.
+            out.append(entry)
+            continue
+        try:
+            out.append(json.loads(cleaned))
+        except Exception:
+            # Truncation broke the JSON; keep the redacted text form instead of
+            # dropping the entry, so the record still says what was tried.
+            out.append({"_truncated_entry": cleaned})
+    if dropped:
+        out.insert(0, {"_elided_entries": dropped})
+    return out
+
+
+def build_work_payload(
+    *,
+    answer: Any = None,
+    tool_calls: Any = None,
+    repl_steps: Any = None,
+    reasoning: Any = None,
+) -> dict[str, Any]:
+    """The ONE producer of a `work` dict, for both stores.
+
+    Returns {} when there is nothing to record, so a caller can splat it into a
+    telemetry dict unconditionally without inventing an empty-work convention.
+    """
+    payload: dict[str, Any] = {}
+    answer_text = sanitize_work_text(answer)
+    if answer_text:
+        payload["answer"] = answer_text
+    calls = sanitize_work_items(tool_calls)
+    if calls:
+        payload["tool_calls"] = calls
+    steps = sanitize_work_items(repl_steps)
+    if steps:
+        payload["repl_steps"] = steps
+    reasoning_text = sanitize_work_text(reasoning)
+    if reasoning_text:
+        payload["reasoning"] = reasoning_text
+    return payload
+
+
+#: Keys a caller may use to hand work in through a flat context dict. Kept in one
+#: place so `score_external_result` and the legacy adapter agree on the set.
+WORK_KEYS = ("answer", "tool_calls", "repl_steps", "reasoning")
+
+
+def extract_work(source: Any) -> dict[str, Any]:
+    """Pull a work payload out of a dict that may nest it or carry it flat.
+
+    Accepts both ``{"work": {"answer": ...}}`` (the progress-log/telemetry shape)
+    and ``{"answer": ...}`` (a caller passing work fields at the top level of a
+    context dict). Returns {} when neither is present.
+    """
+    if not isinstance(source, dict):
+        return {}
+    nested = source.get("work")
+    if isinstance(nested, dict) and nested:
+        return {k: nested.get(k) for k in WORK_KEYS if nested.get(k)}
+    return {k: source.get(k) for k in WORK_KEYS if source.get(k)}
+
 
 @dataclass
 class MemoryRecord:
@@ -99,10 +254,15 @@ class MemoryRecord:
         return text[:EMBED_TEXT_MAX_CHARS]
 
     def to_context(self) -> dict[str, Any]:
-        """The stored payload. Full fidelity — nothing here is truncated.
+        """The stored payload. This method truncates nothing.
 
         ``objective`` is the complete text: the old 200-char cap destroyed it at
         write time and is not reproduced.
+
+        The work fields arrive already redacted and already bounded — the
+        capture policy is applied once, in ``build_memory_record``, so it cannot
+        be lost by a write site that assembles a record by hand and calls this
+        directly.
         """
         ctx: dict[str, Any] = {
             "record_version": RECORD_VERSION,
@@ -153,15 +313,28 @@ def build_memory_record(
     metrics: dict[str, Any] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> MemoryRecord:
-    """Construct a MemoryRecord. The only supported way to build one."""
+    """Construct a MemoryRecord. The only supported way to build one.
+
+    The work fields are redacted and bounded HERE, so every write site inherits
+    the policy and no call site can opt out of it (see the capture-policy note at
+    the top of this module). Sanitizing is idempotent: an already-bounded,
+    already-redacted payload passes through unchanged, which keeps
+    record_from_legacy_context(rec.to_context()) a fixed point.
+    """
+    work = build_work_payload(
+        answer=answer,
+        tool_calls=tool_calls,
+        repl_steps=repl_steps,
+        reasoning=reasoning,
+    )
     return MemoryRecord(
         objective=objective or "",
         task_type=task_type,
         priority=priority,
-        answer=answer,
-        tool_calls=list(tool_calls or []),
-        repl_steps=list(repl_steps or []),
-        reasoning=reasoning,
+        answer=work.get("answer"),
+        tool_calls=list(work.get("tool_calls") or []),
+        repl_steps=list(work.get("repl_steps") or []),
+        reasoning=work.get("reasoning"),
         source=source,
         metrics=dict(metrics or {}),
         extra=dict(extra or {}),

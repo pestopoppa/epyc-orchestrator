@@ -5816,56 +5816,12 @@ def _reject_in_flight_manifest_drift(state: dict[str, Any]) -> None:
     )
 
 
-def _ap37_finite_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(number) or math.isinf(number):
-        return None
-    return number
-
-
-def _load_ap37_diversity_baseline(
-    path: Path = DEFAULT_BASELINE_PATH,
-) -> dict[str, float]:
-    """Load populated EV-8 diversity baselines for AP-37 if available."""
-    if not path.exists():
-        return {}
-    try:
-        data = yaml.safe_load(path.read_text()) or {}
-    except Exception as exc:
-        log.warning("AP-37 diversity baseline load failed from %s: %s", path, exc)
-        return {}
-    table = data.get("diversity_baseline")
-    if not isinstance(table, Mapping):
-        return {}
-    distinct2_values: list[float] = []
-    semantic_values: list[float] = []
-    for row in table.values():
-        if not isinstance(row, Mapping):
-            continue
-        distinct2 = _ap37_finite_float(row.get("diversity_distinct2"))
-        semantic = _ap37_finite_float(row.get("diversity_semantic_embedding_agreement"))
-        if distinct2 is None or semantic is None:
-            continue
-        distinct2_values.append(distinct2)
-        semantic_values.append(semantic)
-    if not distinct2_values or not semantic_values:
-        return {}
-    return {
-        "distinct2_baseline": sum(distinct2_values) / len(distinct2_values),
-        "semantic_embedding_agreement_baseline": (sum(semantic_values) / len(semantic_values)),
-    }
-
-
 def _default_state() -> dict[str, Any]:
     return {
         "trial_counter": 0,
         "session_id": None,
         "paused": False,
         "species_budget": SpeciesBudget().as_dict(),
-        "diversity_stall_state": MetaOptimizer().export_diversity_state(),
         "td_errors": [],
         "seeder_state": {},
         # 2026-05-23 Phase 6b — autopilot self-crash recovery markers.
@@ -5890,6 +5846,13 @@ def load_state() -> dict[str, Any]:
 def _normalize_state_before_save(state: dict[str, Any]) -> None:
     if not state.get("paused"):
         state.pop("pause_reason", None)
+    # 2026-08-01 AP-37 removal migration. load_state() returns the on-disk JSON
+    # verbatim (state_store.load_state does NOT merge _default_state), so a key
+    # dropped from _default_state would otherwise live forever in an existing
+    # autopilot_state.json. The detector is gone; drop its state blob at the next
+    # save so the file stops carrying an all-null "guardrail" that reads as
+    # evidence of health. Idempotent, and a no-op on fresh state.
+    state.pop("diversity_stall_state", None)
 
 
 def _contrastive_trace_outcome(
@@ -6794,6 +6757,12 @@ def _run_loop_inner(
         quality_history_provenance_by_tier=state.get("quality_history_provenance_by_tier"),
         baseline_state=_baseline_state_for_startup_gate(state, journal),
         eval_quality_era=eval_quality_era,
+        # 2026-08-03: the SPEED axis's era, from the same active_instrument_eras registry
+        # entry (autopilot_speed) already used above to fence the Pareto frontier. Without
+        # it the gate's throughput floor had NO provenance at all — a post-v8 trial could be
+        # charged against a floor derived from a pre-v8 frontdoor_speed and nothing recorded
+        # would ever reveal it.
+        autopilot_speed_era=_numeric_swarm_epoch_label_from_state(state),
         quality_exclude_before_ts=quality_exclude_before_ts,
     )
     tower = EvalTower(
@@ -6869,16 +6838,8 @@ def _run_loop_inner(
     if "species_budget" in state:
         b = state["species_budget"]
         meta.budget = SpeciesBudget(**b)
-    meta.restore_diversity_state(state.get("diversity_stall_state"))
-    ap37_diversity_baseline = _load_ap37_diversity_baseline()
-    if ap37_diversity_baseline:
-        meta.restore_diversity_state(
-            {
-                **meta.export_diversity_state(),
-                **ap37_diversity_baseline,
-            }
-        )
-    state["diversity_stall_state"] = meta.export_diversity_state()
+    # AP-37 diversity-stall state was removed 2026-08-01; _normalize_state_before_save
+    # drops any residual key from pre-existing state files.
 
     # Restore seeder convergence state. Prefer the explicit state shape; fall
     # back to legacy td_errors-only persistence so existing state files still
@@ -8766,45 +8727,12 @@ def _run_loop_inner(
         oracle_adequacy = getattr(eval_result, "oracle_adequacy", {}) or {}
         legacy_objectives = list(objectives_from(eval_result))
         task_rate_objectives = list(task_rate_objectives_from(eval_result))
-        raw_eval_details = eval_result.details if isinstance(eval_result.details, dict) else {}
-        ap37_vs_recovery_ratio = None
-        for key in (
-            "vs_recovery_ratio",
-            "diversity_vs_recovery_ratio",
-            "verbalized_sampling_recovery_ratio",
-        ):
-            if key in raw_eval_details:
-                ap37_vs_recovery_ratio = raw_eval_details[key]
-                break
-        if ap37_vs_recovery_ratio is None:
-            nested_diversity = raw_eval_details.get("diversity_metrics")
-            if isinstance(nested_diversity, dict):
-                for key in (
-                    "vs_recovery_ratio",
-                    "diversity_vs_recovery_ratio",
-                    "verbalized_sampling_recovery_ratio",
-                ):
-                    if key in nested_diversity:
-                        ap37_vs_recovery_ratio = nested_diversity[key]
-                        break
-        ap37_diversity_report = meta.observe_diversity(
-            trial_id=trial_counter,
-            distinct2=eval_result.diversity_distinct2,
-            semantic_embedding_agreement=(eval_result.diversity_semantic_embedding_agreement),
-            vs_recovery_ratio=ap37_vs_recovery_ratio,
-            distinct2_baseline=ap37_diversity_baseline.get("distinct2_baseline"),
-            semantic_embedding_agreement_baseline=ap37_diversity_baseline.get(
-                "semantic_embedding_agreement_baseline"
-            ),
-        )
-        state["diversity_stall_state"] = meta.export_diversity_state()
         eval_details_dict: dict[str, Any] = {
             "per_suite_quality": eval_result.per_suite_quality,
             "routing_distribution": eval_result.routing_distribution,
             "question_results": list(getattr(eval_result, "question_results", []) or []),
             "details": eval_result.details,
             "rlvr_reward": rlvr_reward_from_result(eval_result).as_dict(),
-            "ap37_diversity_stall": ap37_diversity_report,
             "metric_schema_version": metric_schema_version,
             "harness_metrics": harness_metrics,
             "oracle_adequacy": oracle_adequacy,
@@ -8944,17 +8872,14 @@ def _run_loop_inner(
         memory.refresh_from_journal(journal)
 
         # ── 6. Meta-learn ───────────────────────────────────────
-        ap37_diversity_rebalance_due = bool(ap37_diversity_report.get("rebalance_recommended"))
-        if meta.should_rebalance(trial_counter) or ap37_diversity_rebalance_due:
+        if meta.should_rebalance(trial_counter):
             meta.rebalance(
                 species_effectiveness=journal.species_effectiveness(window=50),
                 hv_slope=hv_slope,
                 memory_count=memory_count,
                 is_converged=converged,
-                diversity_stall=ap37_diversity_report,
             )
             state["species_budget"] = meta.budget.as_dict()
-            state["diversity_stall_state"] = meta.export_diversity_state()
 
         # Context budget management: auto-checkpoint at intervals
         if trial_counter > 0 and trial_counter % 25 == 0 and not dry_run:

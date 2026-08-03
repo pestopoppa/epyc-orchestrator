@@ -197,6 +197,15 @@ def scan_orchestrator_tasks(
                         "verifier_p_success": data.get("verifier_p_success"),
                         "verifier_verdict": data.get("verifier_verdict"),
                         "difficulty_band": data.get("difficulty_band"),
+                        # Vision reference (see routing_decision.routing_meta):
+                        # carried onto BOTH in-flight and completed cards
+                        # because routing_meta is merged into every task below
+                        # before the terminal-event branch. `image_path` is a
+                        # host path, not a URL — a renderer must resolve it
+                        # through a serving route, never emit it as an <img src>.
+                        "image_path": data.get("image_path") or "",
+                        "has_image": bool(data.get("has_image")),
+                        "image_source": data.get("image_source") or "",
                     }
                 elif ev in ("task_completed", "task_failed", "escalation_triggered"):
                     terminal_events[tid] = {

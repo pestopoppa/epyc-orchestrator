@@ -72,13 +72,29 @@ roles:
 
 
 def test_model_server_targets_fallback_is_current(tmp_path: Path) -> None:
+    """Drift canary: with no stack_priors, preflight probes the DECLARED launch
+    manifest, so this asserts the fallback still describes the current stack.
+
+    Deliberately literal (unlike the monkeypatched sibling tests below, which
+    prove the derivation logic): a test that recomputed the ports from the same
+    manifest could not detect drift at all. Update it when the lineup changes,
+    with the manifest as evidence.
+
+    2026-08-01 W1 cutover: `vision_escalation` no longer has its own :8087 7B
+    server — it is an ALIAS on `worker_vision`'s :8086 process
+    (orchestration/launch_manifest.yaml:73-74), so the two roles must collapse
+    onto ONE target and :8087 must not be probed at all.
+    """
     targets = _MOD._model_server_targets(tmp_path / "missing.yaml", "http://localhost:8002")
     health_urls = {health_url for _, health_url in targets}
 
     assert ("API", "http://localhost:8002/health") in targets
     assert "http://localhost:8071/health" not in health_urls
-    assert "http://localhost:8086/health" in health_urls
-    assert "http://localhost:8087/health" in health_urls
+    assert ("vision_escalation/worker_vision", "http://localhost:8086/health") in targets
+    assert "http://localhost:8087/health" not in health_urls
+    # architect_general moved to the MI210 :8083 and coder_escalation aliases onto it.
+    assert ("architect_general/coder_escalation", "http://localhost:8083/health") in targets
+    # embedding-mode roles are excluded from health probing.
     assert "http://localhost:8090/health" not in health_urls
 
 

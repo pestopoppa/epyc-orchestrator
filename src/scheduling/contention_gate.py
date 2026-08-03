@@ -446,6 +446,11 @@ class ContentionGate:
                 "contention_degraded_allow_count": self._metrics.contention_degraded_allow_count,
                 "contention_admitted_count": self._metrics.contention_admitted_count,
                 "contention_timeout_count": self._metrics.contention_timeout_count,
+                # J4c: incremented in evaluate() but was never surfaced here, so the
+                # only counter that reports "the N-way layer overrode pairwise" was
+                # unreadable by /dashboard and by any exporter. Write-only telemetry
+                # is the same as none.
+                "contention_nway_restricted_count": self._metrics.contention_nway_restricted_count,
                 "active_decodes_by_role": dict(self._metrics.active_decodes_by_role),
                 "active_instances_by_role": {r: list(idxs) for r, idxs in self._metrics.active_instances_by_role.items()},
                 "matrix_status": self.matrix_health().value,

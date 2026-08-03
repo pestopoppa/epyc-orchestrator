@@ -793,18 +793,31 @@ class TestWebSearchTool:
         from src.tools.web.search import web_search
         import subprocess
 
-        # Response must contain 'result__a' or 'snippet' to pass bot-challenge detection
+        # Response must contain 'result__a' or 'snippet' to pass bot-challenge
+        # detection, AND sit inside a `web-result` div — the DDG parser splits the
+        # page on that class first, so an anchor outside one is never seen and the
+        # call falls through to "no relevant results".
         html_response = (
             b'<html><body>'
+            b'<div class="result results_links web-result">'
             b'<a class="result__a" href="https://docs.python.org/3/">Python Docs</a>'
             b'<span class="result__snippet">Official Python documentation</span>'
+            b'</div>'
             b'</body></html>'
         )
         mock_proc = MagicMock(spec=subprocess.CompletedProcess)
         mock_proc.returncode = 0
         mock_proc.stdout = html_response
 
-        with patch("subprocess.run", return_value=mock_proc) as mock_run:
+        # SX-6 put a SearXNG-first branch AHEAD of the DDG curl path this test
+        # patches, and `_SEARXNG_DEFAULT` is read at import time (env-var
+        # monkeypatching is too late), so without this the call escaped every mock
+        # and hit the live SearXNG at http://localhost:8888 from the unit suite.
+        # Pin the flag off to exercise the DDG seam this test is actually about.
+        with (
+            patch("src.tools.web.search._SEARXNG_DEFAULT", False),
+            patch("subprocess.run", return_value=mock_proc) as mock_run,
+        ):
             result = web_search(
                 query="python docs",
                 domain_filter="docs.python.org",
@@ -819,7 +832,13 @@ class TestWebSearchTool:
         """Test web search with error (curl fails)."""
         from src.tools.web.search import web_search
 
-        with patch("subprocess.run", side_effect=FileNotFoundError("curl not found")):
+        # See the note in test_web_search_with_domain_filter: the SearXNG-first
+        # branch must be pinned off or this test makes a live network call instead
+        # of exercising the curl-failure path.
+        with (
+            patch("src.tools.web.search._SEARXNG_DEFAULT", False),
+            patch("subprocess.run", side_effect=FileNotFoundError("curl not found")),
+        ):
             result = web_search(query="test query")
 
         assert result["success"] is False

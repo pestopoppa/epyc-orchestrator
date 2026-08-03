@@ -1612,7 +1612,10 @@ def test_eval_question_code_execution_confidence_is_binary_not_pass_rate(monkeyp
 
     monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
     monkeypatch.setattr(eval_tower, "_is_scoreable_question", lambda _q: True)
-    monkeypatch.setattr(eval_tower, "score_answer_deterministic", lambda **_k: True)
+    # `_eval_question` scores through `score_answer_or_error` (verdict, error),
+    # NOT `score_answer_deterministic` — patching the latter stopped intercepting
+    # anything and let the real code_execution sandbox run and return False.
+    monkeypatch.setattr(eval_tower, "score_answer_or_error", lambda **_k: (True, None))
 
     with eval_tower.httpx.Client(timeout=1) as client:
         result = tower._eval_question(
@@ -1660,7 +1663,8 @@ def test_eval_question_code_execution_confidence_uses_geomean_when_probs_present
 
     monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
     monkeypatch.setattr(eval_tower, "_is_scoreable_question", lambda _q: True)
-    monkeypatch.setattr(eval_tower, "score_answer_deterministic", lambda **_k: True)
+    # See the note in the sibling test: `score_answer_or_error` is the live seam.
+    monkeypatch.setattr(eval_tower, "score_answer_or_error", lambda **_k: (True, None))
 
     with eval_tower.httpx.Client(timeout=1) as client:
         result = tower._eval_question(

@@ -780,6 +780,16 @@ class Baseline:
     # legacy baseline vs the active E7 era trips the re-baseline hold. Set whenever a
     # promotion lands under a known active era, and by an operator reseed.
     eval_quality_era: str = ""
+    # Speed-instrument era this baseline's ``frontdoor_speed`` was captured under. Exact
+    # analogue of ``eval_quality_era`` on the THROUGHPUT axis (2026-08-03). Before this
+    # existed the gate carried no speed provenance at all: the throughput floor
+    # (0.8 * frontdoor_speed) could be derived from a pre-v8 measurement and charged
+    # against a post-v8 trial with nothing recorded to detect it. Empty on a legacy
+    # baseline (pre-provenance state), which the gate treats as a pre-boundary stamp, so a
+    # legacy baseline vs an active autopilot_speed era trips the throughput re-baseline
+    # hold. Stamped by update_baseline() whenever a promotion actually refreshes
+    # frontdoor_speed, and by an operator reseed.
+    autopilot_speed_era: str = ""
     # Path this baseline was loaded from. save() writes back here by default so a
     # gate constructed with a custom baseline_path (e.g. a tmp file in tests) can
     # NEVER clobber the production orchestration/autopilot_baseline.yaml. Excluded
@@ -1020,6 +1030,9 @@ class Baseline:
         era = state.get("eval_quality_era")
         if isinstance(era, str) and era.strip():
             self.eval_quality_era = era.strip()
+        speed_era = state.get("autopilot_speed_era")
+        if isinstance(speed_era, str) and speed_era.strip():
+            self.autopilot_speed_era = speed_era.strip()
 
     def quality_for_tier(self, tier: int, *, strict: bool = False) -> float | None:
         """Return same-tier quality baseline; lenient mode falls back to legacy `quality`."""
@@ -1086,6 +1099,11 @@ class Baseline:
         # payload byte-identical, and lets a missing key decode back to the pre-E7 default.
         if self.eval_quality_era:
             payload["eval_quality_era"] = self.eval_quality_era
+        # Same contract on the speed axis: only emit when known, so a legacy (unstamped)
+        # baseline's state payload stays byte-identical and a missing key decodes back to
+        # the pre-boundary default.
+        if self.autopilot_speed_era:
+            payload["autopilot_speed_era"] = self.autopilot_speed_era
         return payload
 
 
@@ -1127,6 +1145,7 @@ class SafetyGate:
         *,
         quality_history_provenance_by_tier: dict[str | int, list[Any]] | None = None,
         eval_quality_era: str | None = None,
+        autopilot_speed_era: str | None = None,
         quality_exclude_before_ts: float | None = None,
     ):
         self.baseline = Baseline.load(baseline_path, state=baseline_state)
@@ -1145,8 +1164,16 @@ class SafetyGate:
         # active_instrument_eras.eval_quality in state), a legacy/pre-E7 baseline vs this era
         # trips the re-baseline hold, and the MAD window filters to same-era samples only.
         self._eval_quality_era = (eval_quality_era or "").strip() or None
+        # Active SPEED-instrument era fence (2026-08-03). Exact analogue of the field above
+        # on the throughput axis; sourced from active_instrument_eras.autopilot_speed — the
+        # same era id autopilot.py already uses to fence the Pareto frontier
+        # (pareto_epoch_ts / frontier_rerun_required). None => the speed axis runs unfenced
+        # (single-era world / pre-existing tests) and every new branch below is inert, so
+        # the gate is byte-identical to the pre-fence version.
+        self._autopilot_speed_era = (autopilot_speed_era or "").strip() or None
         self._quality_exclude_before_ts = quality_exclude_before_ts
         self._rebaseline_hold_logged = False
+        self._speed_rebaseline_hold_logged = False
         self._consecutive_failures = consecutive_failures
         self._quality_history_by_tier: dict[int, deque[_QualityObs]] = {}
         # Precedence: provenance (rich, authoritative) > by_tier floats > flat floats. Legacy
@@ -1211,6 +1238,45 @@ class SafetyGate:
             getattr(result, "tier", "?"),
             float(getattr(result, "quality", float("nan"))),
             self._eval_quality_era,
+        )
+
+    @property
+    def speed_rebaseline_required(self) -> bool:
+        """True when the resident baseline's frontdoor_speed predates the active speed era.
+
+        The THROUGHPUT-axis analogue of :attr:`quality_rebaseline_required` (2026-08-03).
+        With an active ``autopilot_speed`` era set, a ``frontdoor_speed`` stamped under a
+        DIFFERENT (or no) era cannot attribute a throughput drop to the config-under-test:
+        the floor (0.8 * frontdoor_speed) was measured on a different speed instrument
+        (kernel/binary/topology), so a post-boundary trial charged against it is charged
+        against a number nobody can trace. While this holds the throughput violation is
+        DEMOTED to a warning — deliberately NOT hard-failed, since charging a trial against
+        an unattributable floor is exactly the defect. Inert (always False) when no active
+        era is set.
+        """
+        if not self._autopilot_speed_era:
+            return False
+        return (self.baseline.autopilot_speed_era or "") != self._autopilot_speed_era
+
+    def _log_speed_rebaseline_hold_once(self, result: EvalResult) -> None:
+        """Emit the throughput re-baseline hold at ERROR exactly once per gate instance."""
+        if self._speed_rebaseline_hold_logged:
+            return
+        self._speed_rebaseline_hold_logged = True
+        log.error(
+            "SPEED-INSTRUMENT RE-BASELINE HOLD — resident baseline autopilot_speed era=%r != "
+            "active autopilot_speed era=%r. The throughput floor %.1f t/s (80%% of baseline "
+            "frontdoor_speed %.1f) was measured under a DIFFERENT speed instrument, so this "
+            "trial (%.1f t/s) will NOT be charged against it — the violation is DEMOTED to a "
+            "warning. REMEDIATION: reseed autopilot_state.json:baseline_state from a "
+            "post-boundary eval (its autopilot_speed_era must equal %r) so the throughput "
+            "floor binds again. Analogue of the quality axis's eval-instrument hold.",
+            self.baseline.autopilot_speed_era or "<pre-boundary>",
+            self._autopilot_speed_era,
+            self.baseline.frontdoor_speed * 0.8,
+            self.baseline.frontdoor_speed,
+            float(getattr(result, "speed", float("nan"))),
+            self._autopilot_speed_era,
         )
 
     @property
@@ -1782,6 +1848,28 @@ class SafetyGate:
                 f"{self.baseline.frontdoor_speed * 0.8:.1f} t/s "
                 f"(80% of baseline {self.baseline.frontdoor_speed:.1f})"
             )
+            # Speed-instrument re-baseline hold (2026-08-03). Recorded BEFORE the throttle
+            # branch and independently of it, so the provenance defect is always visible
+            # even when a host stall also demotes the same violation (the two carry
+            # different downstream meanings: exogenous_cache_flush excludes the trial from
+            # the planner's trust window; this one says the FLOOR itself is unattributable).
+            # Demotion, never a hard fail — charging a trial against an unattributable
+            # floor is precisely the defect being fixed.
+            speed_rebaseline_hold = self.speed_rebaseline_required
+            if speed_rebaseline_hold:
+                categories.append("throughput_rebaseline_required")
+                warnings.append(
+                    f"{base_msg}. Speed-instrument re-baseline hold: resident baseline "
+                    f"autopilot_speed era="
+                    f"{self.baseline.autopilot_speed_era or '<pre-boundary>'} != active "
+                    f"autopilot_speed era={self._autopilot_speed_era}; the floor derives "
+                    "from a frontdoor_speed measured on a DIFFERENT speed instrument, so "
+                    "this trial cannot be charged against it. Throughput violation DEMOTED "
+                    "to warning (reason=speed_rebaseline_required). Remediation: reseed "
+                    "baseline_state.frontdoor_speed from a post-boundary measurement "
+                    "(autopilot_speed_era must equal the active era) so the floor binds."
+                )
+                self._log_speed_rebaseline_hold_once(result)
             if host_throttled:
                 # SG-9 (B9): explicit violation→warning DEMOTION, recorded so the pass
                 # is auditable rather than an invisible skip. Tag exogenous_cache_flush
@@ -1796,7 +1884,7 @@ class SafetyGate:
                 )
                 categories.append("throughput_throttle_demoted")
                 categories.append("exogenous_cache_flush")
-            else:
+            elif not speed_rebaseline_hold:
                 violations.append(base_msg)
                 categories.append("throughput")
         elif result.speed < self.baseline.frontdoor_speed * 0.9:
@@ -2227,6 +2315,17 @@ class SafetyGate:
         # stamp current). Only stamps when an active era is known; never clears an existing one.
         if self._eval_quality_era:
             self.baseline.eval_quality_era = self._eval_quality_era
+        # 2026-08-03: stamp the SPEED era so a reseed closes the throughput hold naturally.
+        # Gated on exactly the condition under which update_tier() actually rewrites
+        # frontdoor_speed (frontier tier AND a positive speed sample) — stamping an era onto
+        # a frontdoor_speed that was never re-measured would itself be a provenance lie, the
+        # very failure mode this field exists to prevent.
+        if (
+            self._autopilot_speed_era
+            and int(promotion_result.tier) == DEFAULT_FRONTIER_TIER
+            and promotion_result.speed > 0
+        ):
+            self.baseline.autopilot_speed_era = self._autopilot_speed_era
         log.info(
             "Baseline state updated — baseline_eligible=true (%s) | proof=%s | T%d q=%.3f s=%.1f",
             reason,
@@ -2261,14 +2360,84 @@ class SafetyGate:
             sections.append("\n".join(lines))
 
         # DEGRADED SUITES (per-suite quality below floor)
+        #
+        # 2026-08-03 — same defect class as `throughput_unmeasured` above: ABSENT data was
+        # being rendered as a measured 0.000. Two distinct problems lived here.
+        #
+        # (a) Absence rendered as a number. A per-suite entry that is None / NaN is "not
+        #     measured", not "scored zero". `None < floor` raised TypeError (killing the
+        #     whole narrative) and `nan < floor` is False (silently dropping the suite);
+        #     neither says "absent". A suite that drew questions but had NONE of them
+        #     scored (all errored) never reaches per_suite_quality at all, so it vanished
+        #     with no trace. Both are now labelled explicitly in their own section.
+        #
+        # (b) Sample-size-blind rendering. Every rejection printed ~13 lines of
+        #     "<suite>: 0.000 (floor: 1.0)". That is not 13 regressions: on a 50-question
+        #     hybrid eval most suites draw n=1, where the 0-3 score can ONLY be 0.0 or 3.0,
+        #     so a single missed question is indistinguishable from a total collapse
+        #     (observed on trials 1456/1458 — every "degraded" suite had n_result=1). The
+        #     gating legs already reason about this (PER_SUITE_BINDING_MIN_COUNT,
+        #     PER_SUITE_BASELINE_HARD_MIN_N); this narrative did not, and it is the copy
+        #     the planner actually reads. Carry n and flag low-resolution entries so a
+        #     quantization artifact can never masquerade as a measured regression.
         quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1
-        degraded = [
-            (suite, q) for suite, q in result.per_suite_quality.items() if q < quality_floor
-        ]
+        per_suite = getattr(result, "per_suite_quality", None) or {}
+        suite_counts = getattr(result, "per_suite_counts", None) or {}
+        details = getattr(result, "details", None) or {}
+        total_counts = details.get("per_suite_total_counts")
+        if not isinstance(total_counts, dict):
+            total_counts = {}
+
+        degraded: list[tuple[str, float, int | None]] = []
+        unmeasured: list[str] = []
+        for suite, q in per_suite.items():
+            if (
+                q is None
+                or isinstance(q, bool)
+                or not isinstance(q, (int, float))
+                or not math.isfinite(float(q))
+            ):
+                unmeasured.append(f"{suite}: not measured (no per-suite score recorded)")
+                continue
+            if float(q) < quality_floor:
+                raw_n = suite_counts.get(suite)
+                n = (
+                    int(raw_n)
+                    if isinstance(raw_n, int) and not isinstance(raw_n, bool)
+                    else None
+                )
+                degraded.append((suite, float(q), n))
+        # Suites that drew questions but produced no scoreable answer at all: present in the
+        # eval's per-suite TOTALS, absent from its per-suite scores. Absent, never zero.
+        for suite, n_total in sorted(total_counts.items()):
+            if suite in per_suite:
+                continue
+            unmeasured.append(f"{suite}: not measured (0 of {n_total} questions scored)")
+
         if degraded:
             lines = ["DEGRADED SUITES:"]
-            for suite, q in sorted(degraded, key=lambda x: x[1]):
-                lines.append(f"  - {suite}: {q:.3f} (floor: {quality_floor})")
+            low_res = 0
+            for suite, q, n in sorted(degraded, key=lambda x: (x[1], x[0])):
+                n_label = "n=unknown" if n is None else f"n={n}"
+                line = f"  - {suite}: {q:.3f} (floor: {quality_floor}, {n_label})"
+                if n is None or n < PER_SUITE_BINDING_MIN_COUNT:
+                    low_res += 1
+                    line += " [low-resolution]"
+                lines.append(line)
+            if low_res:
+                lines.append(
+                    f"  NOTE: {low_res} of {len(degraded)} entries are low-resolution "
+                    f"(n < {PER_SUITE_BINDING_MIN_COUNT}, or n unknown): the 0-3 suite score "
+                    "is quantized to multiples of 3/n, so a single missed question renders "
+                    "as 0.000. Read these as sampling resolution, NOT as measured "
+                    "regressions."
+                )
+            sections.append("\n".join(lines))
+
+        if unmeasured:
+            lines = ["SUITES WITHOUT A MEASURED SCORE (absent — NOT a score of 0.000):"]
+            for entry in sorted(unmeasured):
+                lines.append(f"  - {entry}")
             sections.append("\n".join(lines))
 
         # ROUTING IMBALANCE (>60% to one tier)
