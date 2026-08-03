@@ -553,7 +553,9 @@ def test_build_worker_general_command_rejects_boolean_runtime_numbers(
     # 2026-08-02 per-shape ratification (was 1). What this test is actually
     # about is unchanged: a boolean in a numeric runtime field must be rejected
     # rather than coerced, which the spec assertions below still pin.
-    assert _flag_value(cmd, "-np") == "16"
+    from scripts.server.stack_manifest import DECLARED_SLOTS
+
+    assert _flag_value(cmd, "-np") == str(DECLARED_SLOTS["worker_general"])
     fallback = oss._WORKER_GENERAL_DEGRADED_FALLBACK
     assert _flag_value(cmd, "-c") == str(fallback["context_tokens"])
     assert _flag_value(cmd, "-ub") == str(fallback["ubatch"])
@@ -1302,8 +1304,9 @@ def test_vision_worker_np_fallback_is_the_declared_one_not_the_old_literal() -> 
     """
     from scripts.server.stack_manifest import DECLARED_SLOTS
 
-    assert DECLARED_SLOTS["worker_vision"] == 4
-    assert _np_without_priors(oss._build_vision_command, 8086, "worker") == "4"
+    assert _np_without_priors(oss._build_vision_command, 8086, "worker") == str(
+        DECLARED_SLOTS["worker_vision"]
+    )
 
 
 def test_worker_general_np_fallback_is_the_declared_one() -> None:
@@ -1312,11 +1315,9 @@ def test_worker_general_np_fallback_is_the_declared_one() -> None:
     # 1 -> 16: :8072 is worker's FULL instance and `slots_by_shape.full` is 16.
     # DECLARED_SLOTS is the per-ROLE compat scalar, which the parity guard pins to
     # the primary instance's value, so the two agree by construction.
-    assert DECLARED_SLOTS["worker_general"] == 16
-    assert (
-        _np_without_priors(oss._build_worker_general_command, 8072, "/models/w.gguf", None)
-        == "16"
-    )
+    assert _np_without_priors(
+        oss._build_worker_general_command, 8072, "/models/w.gguf", None
+    ) == str(DECLARED_SLOTS["worker_general"])
 
 
 def test_worker_general_np_differs_between_the_full_and_a_half() -> None:
@@ -1333,7 +1334,14 @@ def test_worker_general_np_differs_between_the_full_and_a_half() -> None:
     half = _np_without_priors(
         oss._build_worker_general_command, 8082, "/models/w.gguf", None, 1
     )
-    assert (full, half) == ("16", "4")
+    from scripts.server.stack_manifest import DECLARED_SLOTS
+
+    # Derived, not restated. The claim is per-INSTANCE differentiation: the full
+    # carries the role's compat scalar (the parity guard pins them equal) and a half
+    # is strictly narrower. Pinning literals here made a ratified slot change fail
+    # this test instead of the registry — which is the defect the docstring warns of.
+    assert full == str(DECLARED_SLOTS["worker_general"])
+    assert int(half) < int(full)
 
 
 def test_serial_roles_no_longer_shrinks_the_launched_slot_count() -> None:
@@ -1353,4 +1361,7 @@ def test_serial_roles_no_longer_shrinks_the_launched_slot_count() -> None:
     # 2 -> 8 (operator-ratified 2026-08-02). The invariant under test is the
     # EQUALITY, not the number: adding a role to SERIAL_ROLES must leave `-np`
     # exactly where it was.
-    assert before == after == "8"
+    from scripts.server.stack_manifest import DECLARED_SLOTS
+
+    assert before == after
+    assert before == str(DECLARED_SLOTS["architect_general"])
