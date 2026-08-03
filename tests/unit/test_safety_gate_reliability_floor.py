@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 from safety_gate import (  # type: ignore[import-not-found]
@@ -147,3 +148,70 @@ def test_malformed_env_override_falls_back_to_default(tmp_path, monkeypatch):
     assert verdict.reliability_blocked is False
     # And a truly low reliability is still blocked under the fallback floor.
     assert g.check(_crater(reliability=0.5)).reliability_blocked is True
+
+
+# ---------------------------------------------------------------------------
+# REL-1 extension: on a reliability-blocked trial a 0.0 t/s sample is ABSENT,
+# not slow.
+#
+# REL-1 deliberately exempts the throughput leg ("does not depend on
+# per-question correctness"), which is right while the eval GENERATED tokens and
+# merely scored them badly. At speed == 0 nothing was generated, so the same
+# infra failure produced both numbers — and the gate was charging one of them.
+# Trial 1459 (2026-08-03) carried a fabricated "Throughput floor: 0.0 t/s <
+# 10.2 t/s (80% of baseline 12.7)" into failure_analysis, which is
+# planner-visible evidence.
+# ---------------------------------------------------------------------------
+
+
+def _unmeasured(reliability: float) -> EvalResult:
+    """An infra-failed trial: nothing generated, so speed is absent, not low."""
+    return EvalResult(
+        tier=1,
+        quality=0.0,
+        speed=0.0,
+        cost=0.0,
+        reliability=reliability,
+        per_suite_quality={},
+        routing_distribution={"frontdoor": 1.0},
+    )
+
+
+def test_zero_speed_on_reliability_blocked_trial_is_not_a_throughput_violation(tmp_path):
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
+    g.baseline.frontdoor_speed = 12.7  # floor = 10.16 t/s, so 0.0 would trip it
+
+    verdict = g.check(_unmeasured(reliability=0.0))
+
+    assert verdict.reliability_blocked is True
+    assert "throughput_unmeasured" in verdict.categories
+    assert "throughput" not in verdict.categories
+    assert not any("Throughput floor" in v for v in verdict.violations), (
+        "an infra failure that generated no tokens must not be reported as a "
+        "throughput regression — failure_analysis is planner-visible evidence"
+    )
+    assert any("not measured" in w for w in verdict.warnings)
+
+
+def test_zero_speed_with_intact_reliability_still_violates(tmp_path, monkeypatch):
+    """Narrow scope: a genuine hang IS attributable to the config under test."""
+    import scripts.autopilot.host_health as hh  # noqa: PLC0415
+
+    class _NotThrottled:
+        @staticmethod
+        def is_throttled():
+            return False, []
+
+    # Neutralise the SG-9 throttle demotion so this asserts the throughput leg,
+    # not the host's mood.
+    monkeypatch.setattr(hh.HostHealthState, "snapshot", staticmethod(_NotThrottled))
+
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
+    g.baseline.frontdoor_speed = 12.7
+
+    verdict = g.check(_unmeasured(reliability=0.99))
+
+    assert verdict.reliability_blocked is False
+    assert "throughput" in verdict.categories
+    assert "throughput_unmeasured" not in verdict.categories
+    assert any("Throughput floor" in v for v in verdict.violations)

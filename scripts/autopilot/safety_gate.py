@@ -1725,7 +1725,29 @@ class SafetyGate:
             categories.append("routing_diversity")
 
         # 5. Throughput floor
-        if result.speed < self.baseline.frontdoor_speed * 0.8:
+        #
+        # REL-1 (above) exempts the throughput leg from reliability suppression on
+        # the grounds that it "does not depend on per-question correctness". That
+        # reasoning holds while the eval GENERATED tokens and merely scored them
+        # badly. It breaks at speed == 0: zero tokens/s is not a slow measurement,
+        # it is the ABSENCE of one, and when reliability has already declared the
+        # run's evidence untrustworthy, the same infra failure produced both
+        # numbers. Charging it writes a fabricated regression into
+        # failure_analysis, which is planner-visible evidence — trial 1459
+        # (2026-08-03) carried "Throughput floor: 0.0 t/s < 10.2 t/s (80% of
+        # baseline 12.7)" from a run that generated nothing at all.
+        #
+        # Deliberately narrow: a genuine hang with INTACT reliability still
+        # violates, because there the zero is attributable to the config.
+        speed_unmeasured = reliability_blocked and result.speed <= 0.0
+        if speed_unmeasured:
+            warnings.append(
+                "Throughput not measured (0.0 t/s) on a reliability-blocked trial: "
+                "the infra failure that voided the eval evidence also voided the "
+                "speed sample. NOT charged as a throughput violation."
+            )
+            categories.append("throughput_unmeasured")
+        elif result.speed < self.baseline.frontdoor_speed * 0.8:
             # 2026-05-09 / SG-9 (B9): before attributing a throughput regression to
             # the config-under-test, check whether the HOST is itself throttled (CPU
             # freq dip / page-cache fragmentation per feedback_host_throttle_check.md).
