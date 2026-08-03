@@ -8,7 +8,10 @@
 # 50/68 questions) and could not separate architect_general from frontdoor
 # (+0.5pp, exact sign test p=0.267). Published benchmarks separate them
 # cleanly on every axis. See artifacts under
-# epyc-inference-research/data/judge_suite_headtohead_20260802/.
+# epyc-root wiki/benchmark-methodology.md -> "A saturated suite does not merely
+# fail to separate models", whose Reference section names the local campaign.
+# The raw bundle is NOT in git by ruling: research reaches GitHub as distilled
+# knowledge and references, never as raw material.
 #
 # WHAT THESE NUMBERS ARE, AND ARE NOT
 # -----------------------------------
