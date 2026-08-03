@@ -79,11 +79,33 @@ def activate() -> str | None:
     """
     if os.environ.get("EPYC_DISABLE_WORKTREE_PATH") == "1":
         return None
+
+    # Two signals, most specific first.
+    #
+    # 1. The ENTRY SCRIPT's directory. `python /path/to/worktree/scripts/foo.py`
+    #    states which checkout you mean regardless of where you happen to be
+    #    standing, and CWD alone misses it — that invocation imported the MAIN
+    #    checkout's src/ while running the worktree's script.
+    # 2. CWD, which covers `python -m pkg` and a bare REPL, where argv[0] is
+    #    empty or an interpreter flag.
+    candidates: list[str] = []
+    script = sys.argv[0] if sys.argv else ""
+    if script and not script.startswith("-"):
+        try:
+            candidates.append(os.path.dirname(os.path.realpath(script)))
+        except OSError:
+            pass
     try:
-        checkout = _enclosing_checkout(os.getcwd())
+        candidates.append(os.getcwd())
     except OSError:
         # getcwd() raises if the directory was deleted underneath us.
-        return None
+        pass
+
+    checkout = None
+    for candidate in candidates:
+        checkout = _enclosing_checkout(candidate)
+        if checkout:
+            break
     if not checkout:
         return None
 
