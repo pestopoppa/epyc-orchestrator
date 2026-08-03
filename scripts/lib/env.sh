@@ -66,12 +66,21 @@ export ORCHESTRATOR_PATHS_LLAMA_SERVER="${ORCHESTRATOR_PATHS_LLAMA_SERVER:-${LLA
 export LLAMA_SERVER="${ORCHESTRATOR_PATHS_LLAMA_SERVER}"
 
 if [[ -z "${ORCHESTRATOR_PATHS_LLAMA_MTMD:-}" ]]; then
+  # -x IS NOT A RUNNABILITY CHECK. Build trees here carry executables that die at
+  # startup on a missing libomp.so, and each tree needs its OWN dir on
+  # LD_LIBRARY_PATH (different ggml generations). Probe --version the way the
+  # binary is actually launched. Production builds first: the old order listed
+  # only legacy trees, so a missing primary silently selected llama.cpp 8219
+  # against current models with nothing logged.
   for mtmd_candidate in \
     "${LLAMA_CPP_BIN}/llama-mtmd-cli" \
+    "${LLM_ROOT}/llama.cpp/build/bin/llama-mtmd-cli" \
+    "${LLM_ROOT}/llama.cpp/build-hip/bin/llama-mtmd-cli" \
     "${LLM_ROOT}/llama.cpp/build-v2/bin/llama-mtmd-cli" \
-    "${LLM_ROOT}/llama.cpp/build_libomp_pgo_bolt/bin/llama-mtmd-cli" \
-    "${LLM_ROOT}/llama.cpp/build-blis52/bin/llama-mtmd-cli"; do
-    if [[ -x "${mtmd_candidate}" ]]; then
+    "${LLM_ROOT}/llama.cpp/build_libomp_pgo_bolt/bin/llama-mtmd-cli"; do
+    [[ -x "${mtmd_candidate}" ]] || continue
+    if LD_LIBRARY_PATH="$(dirname "${mtmd_candidate}")${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+       timeout 20 "${mtmd_candidate}" --version 2>&1 | grep -q 'version:'; then
       export ORCHESTRATOR_PATHS_LLAMA_MTMD="${mtmd_candidate}"
       break
     fi
