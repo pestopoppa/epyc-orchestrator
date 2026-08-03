@@ -1,0 +1,56 @@
+# Operator-stated hypotheses for the AutoPilot planner.
+#
+# WHY THIS FILE EXISTS
+# AutoPilot's planner already carries hypotheses with an explicit falsifier,
+# tracks them still-open until resolved, and re-surfaces the open set each
+# planning round. The "Operator Outbox" runs autopilot -> operator. There was no
+# channel the other way, so operator steering arrived out-of-band — a prompt
+# edit, a config change, a verbal instruction — carrying no falsifier and
+# leaving no resolution record. It could never be refuted, only forgotten.
+#
+# This file is that channel. It is a PROPOSAL SOURCE, never an authority.
+#
+# WHAT IT IS NOT
+# - Not a queue jump. A hypothesis here does not schedule anything.
+# - Not evidence. It enters the planner as a prior with evidence_trial_ids=[],
+#   the same provenance shape operator StrategyStore seeds already use. It can
+#   never raise its own standing by virtue of who wrote it.
+# - Not a gate bypass. It faces the pre-dispatch critic, the failure blacklist,
+#   and every gate unchanged. If a proposed action repeats a recorded negative,
+#   the critic says so — being the operator's idea is not new evidence.
+# - Not a way to declare something settled. Resolutions are recorded in
+#   orchestration/operator_hypothesis_resolutions.jsonl with the evidence that
+#   resolved them, and confirmed/refuted require at least one evidence id.
+#
+# RULES
+# - `falsifier` is MANDATORY. A hypothesis without one is REFUSED at load, not
+#   silently accepted: the falsifier is what makes this a resolvable claim
+#   rather than a standing instruction.
+# - `evidence_trial_ids` / `evidence_event_ids` / `resolution` are REFUSED here.
+#   Evidence belongs to a resolution, which says what the loop measured.
+# - A malformed file RAISES. It never degrades to an empty list — an empty list
+#   would read as "the operator has no hypotheses", which is a lie the planner
+#   would act on.
+# - Unknown fields RAISE, so a typo'd key cannot silently drop a falsifier.
+#
+# Required fields per entry:
+# - id:           lowercase slug, unique (a-z, 0-9, '-', '_', '.')
+# - hypothesis:   the claim, stated so the loop can act on it
+# - falsifier:    one-line predicted outcome whose ABSENCE invalidates the claim
+# - stated_by:    who stated it
+# - stated:       ISO date it was stated
+# Optional:
+# - confidence:   low | medium | high (self-declared; NOT an evidence grade)
+# - proposed_action: an AutoPilot action dict, so the hypothesis can be checked
+#                 against the failure blacklist / negative history
+# - notes:        free text
+#
+# Verify with:
+#   uv run python scripts/autopilot/operator_hypotheses.py validate
+# List the open set:
+#   uv run python scripts/autopilot/operator_hypotheses.py list --open-only
+# Record an outcome (refutation is as recordable as confirmation):
+#   uv run python scripts/autopilot/operator_hypotheses.py resolve <id> \
+#       --status refuted --trial 1234 --note "what was run and what it showed"
+
+operator_hypotheses: []
