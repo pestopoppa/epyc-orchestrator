@@ -14,6 +14,7 @@ import io
 import logging
 import os
 import re
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
@@ -55,26 +56,80 @@ _CONFIGURED_CLI_PATH = os.environ.get(
 )
 
 
+def _probe_mtmd_cli(path: Path) -> str | None:
+    """Return the binary's version string if it actually RUNS, else None.
+
+    `exists() and access(X_OK)` is NOT a runnability check. Several llama.cpp build
+    trees on this host carry an executable `llama-mtmd-cli` that dies at startup on
+    a missing `libomp.so`; the old check selected them happily.
+
+    The probe MUST mirror the launch environment. `_mtmd_subprocess_env` prepends the
+    binary's own directory to LD_LIBRARY_PATH, because the trees here run different
+    ggml generations and a binary that inherits the wrong one fails. Probing without
+    that makes perfectly good builds look broken -- confirmed the hard way on
+    2026-08-03, when four working trees were misdiagnosed as dead for exactly this
+    reason.
+    """
+    if not (path.exists() and os.access(path, os.X_OK)):
+        return None
+    env = {**os.environ}
+    lib_dir = str(path.resolve().parent)
+    parts = [p for p in env.get("LD_LIBRARY_PATH", "").split(":") if p]
+    if lib_dir not in parts:
+        env["LD_LIBRARY_PATH"] = ":".join([lib_dir, *parts])
+    try:
+        proc = subprocess.run(
+            [str(path), "--version"], env=env, capture_output=True,
+            text=True, timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    blob = f"{proc.stdout}\n{proc.stderr}"
+    match = re.search(r"version: (\d+) \(([0-9a-f]+)\)", blob)
+    return match.group(0) if match else None
+
+
 def _resolve_mtmd_cli(configured: str) -> str:
-    """Return an executable llama-mtmd-cli path without overriding explicit config."""
+    """Return a RUNNABLE llama-mtmd-cli path without overriding explicit config."""
     if os.environ.get("LLAMA_MTMD_CLI") or os.environ.get("ORCHESTRATOR_PATHS_LLAMA_MTMD"):
         return configured
 
     configured_path = Path(configured)
-    if configured_path.exists():
+    configured_version = _probe_mtmd_cli(configured_path)
+    if configured_version is not None:
         return configured
 
     llama_root = configured_path.parents[2] if len(configured_path.parents) >= 3 else None
     if llama_root is None:
         return configured
 
+    # PRODUCTION BUILDS FIRST. The previous list contained only legacy trees, so a
+    # missing configured path would silently fall back to llama.cpp 8219 -- three
+    # release generations behind the frozen production build -- against current
+    # models, with nothing logged. Version skew that large is not a fallback, it is a
+    # different program.
     for candidate in (
+        llama_root / "build/bin/llama-mtmd-cli",
+        llama_root / "build-hip/bin/llama-mtmd-cli",
         llama_root / "build-v2/bin/llama-mtmd-cli",
         llama_root / "build_libomp_pgo_bolt/bin/llama-mtmd-cli",
-        llama_root / "build-blis52/bin/llama-mtmd-cli",
     ):
-        if candidate.exists() and os.access(candidate, os.X_OK):
-            return str(candidate)
+        version = _probe_mtmd_cli(candidate)
+        if version is None:
+            continue
+        # Falling back is never silent: a different binary than the one configured is
+        # a fact the operator needs at startup, not a surprise in a later diff.
+        logger.warning(
+            "configured llama-mtmd-cli %s is not runnable; falling back to %s (%s)",
+            configured, candidate, version,
+        )
+        return str(candidate)
+
+    logger.error(
+        "no runnable llama-mtmd-cli found under %s; keeping configured path %s so the "
+        "failure surfaces at launch rather than as a wrong-binary result",
+        llama_root, configured,
+    )
     return configured
 
 

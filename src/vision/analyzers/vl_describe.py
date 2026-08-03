@@ -249,18 +249,63 @@ class VLDescribeAnalyzer(Analyzer):
         except OSError:
             return False
 
+    @staticmethod
+    def _mtmd_runs(path: Path) -> str | None:
+        """Return the version string if this binary actually RUNS, else None.
+
+        `exists()` is not a runnability check -- several build trees here carry an
+        `llama-mtmd-cli` that dies at startup on a missing `libomp.so`. The probe
+        sets the binary's own directory on LD_LIBRARY_PATH because these trees run
+        different ggml generations; probing without it makes good builds look broken.
+
+        NOTE: `services/lightonocr_llama_server.py::_probe_mtmd_cli` does the same
+        thing. Duplicated deliberately rather than refactored into a shared util
+        during a live-service change; unifying them is filed as follow-up.
+        """
+        if not (path.exists() and os.access(path, os.X_OK)):
+            return None
+        env = {**os.environ}
+        lib_dir = str(path.resolve().parent)
+        parts = [p for p in env.get("LD_LIBRARY_PATH", "").split(":") if p]
+        if lib_dir not in parts:
+            env["LD_LIBRARY_PATH"] = ":".join([lib_dir, *parts])
+        try:
+            proc = subprocess.run(
+                [str(path), "--version"], env=env, capture_output=True,
+                text=True, timeout=20,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        for line in f"{proc.stdout}\n{proc.stderr}".splitlines():
+            if "version:" in line:
+                return line.strip()
+        return None
+
     def _resolve_mtmd_cli(self) -> Path | None:
-        """Resolve configured or known local llama-mtmd-cli build paths."""
+        """Resolve a RUNNABLE llama-mtmd-cli, preferring the production build."""
+        root = LLAMA_MTMD_CLI.parents[2]
         candidates = [
             LLAMA_MTMD_CLI,
-            LLAMA_MTMD_CLI.parents[2] / "build-v2" / "bin" / "llama-mtmd-cli",
-            LLAMA_MTMD_CLI.parents[2] / "build_libomp_pgo_bolt" / "bin" / "llama-mtmd-cli",
-            LLAMA_MTMD_CLI.parents[2] / "build_libomp_pgo_use" / "bin" / "llama-mtmd-cli",
-            LLAMA_MTMD_CLI.parents[2] / "build-blis52" / "bin" / "llama-mtmd-cli",
+            # Production first. The previous order listed only legacy trees, so a
+            # missing configured path silently selected llama.cpp 8219 -- three
+            # release generations behind production -- against current models.
+            root / "build" / "bin" / "llama-mtmd-cli",
+            root / "build-hip" / "bin" / "llama-mtmd-cli",
+            root / "build-v2" / "bin" / "llama-mtmd-cli",
+            root / "build_libomp_pgo_bolt" / "bin" / "llama-mtmd-cli",
+            root / "build_libomp_pgo_use" / "bin" / "llama-mtmd-cli",
         ]
         for candidate in candidates:
-            if candidate.exists():
-                return candidate
+            version = self._mtmd_runs(candidate)
+            if version is None:
+                continue
+            if candidate != LLAMA_MTMD_CLI:
+                logger.warning(
+                    "configured llama-mtmd-cli %s is not runnable; using %s (%s)",
+                    LLAMA_MTMD_CLI, candidate, version,
+                )
+            return candidate
+        logger.error("no runnable llama-mtmd-cli found under %s", root)
         return None
 
     @staticmethod
