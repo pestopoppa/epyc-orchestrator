@@ -1754,7 +1754,49 @@ def _slots_by_shape_declaration(
     return out
 
 
+def _declared_slots_floor(role: str) -> dict[int, int]:
+    """Port -> `-np` for EVERY declared instance, independent of compile mode.
+
+    `stack_manifest.declared_slots_by_port` reads NUMA_CONFIG, which lists a
+    role's instances regardless of which NUMA mode is active, so it is the one
+    source here that does not depend on how the compiler was invoked.
+
+    Lazy import, mirroring `_launch_runtime_record` below: importing
+    scripts.server.stack_manifest at module scope re-enters this module and
+    yields "partially initialized module". Failure degrades to {} — the caller
+    still produces the mode-scoped map, which is what it produced before.
+    """
+    try:
+        from scripts.server.stack_manifest import declared_slots_by_port
+
+        declared = declared_slots_by_port(role)
+        if not declared:
+            # ALIAS roles have no NUMA_CONFIG entry of their own — they ride a
+            # host's process — so their floor is empty and they keep only the
+            # single port their launch entries tagged. That left server_8082 /
+            # server_8182 still attesting against a role-level 16 after the
+            # host's own map was fixed. An alias serves its host's whole fleet,
+            # so it inherits the host's declared map.
+            aliases, _roles = _stack_manifest_info()
+            host = (aliases or {}).get(role)
+            if isinstance(host, str) and host and host != role:
+                declared = declared_slots_by_port(host)
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(declared, dict):
+        return {}
+    return {
+        int(port): int(slots)
+        for port, slots in declared.items()
+        if isinstance(port, int)
+        and isinstance(slots, int)
+        and not isinstance(slots, bool)
+        and slots > 0
+    }
+
+
 def _slots_by_port(
+    role: str,
     launch: dict[str, Any],
     server_cfg: dict[str, Any] | None,
     role_cfg: dict[str, Any] | None,
@@ -1803,6 +1845,24 @@ def _slots_by_port(
             value = role_slots
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             out[port] = value
+
+    # FLOOR: every DECLARED instance, not just those the current compile mode
+    # emitted. `classes` above comes from the launch view, which is filtered by
+    # the NUMA mode the compiler ran under — so priors compiled in `full` mode
+    # carried only {8070: 16} while the fleet ran `both` and bound 8080/8180 at
+    # -np 4. Runtime attestation looks up the LIVE `--port`, missed, fell back to
+    # the role-level `slots` of 16, and reported drift on four correctly-launched
+    # half instances. That is exactly the outcome this function's docstring says
+    # it exists to prevent, and a warning channel that cries wolf on correct
+    # servers is worse than none.
+    #
+    # A port -> slots LOOKUP is keyed, so carrying ports that this mode does not
+    # launch costs nothing and makes attestation right in every mode. Mode-scoped
+    # values WIN on conflict: they reflect what the compiler actually resolved
+    # for a port it emitted; the floor only fills ports it never considered.
+    for port, slots in _declared_slots_floor(role).items():
+        out.setdefault(port, slots)
+
     return {port: out[port] for port in sorted(out)}
 
 
@@ -2177,6 +2237,7 @@ def _launch_runtime_record(
             # instance rather than per role. Empty for a role with no launch
             # entries (nothing to place).
             "slots_by_port": _slots_by_port(
+                role,
                 launch,
                 server_cfg,
                 role_cfg,
