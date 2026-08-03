@@ -458,12 +458,17 @@ models:
         )
 
         assert priors.baseline_tps_by_role["worker_math"] == pytest.approx(60.7)
-        # 0.8067, not a generic 0.85: the conflicted descriptor's own 0.99 is
-        # correctly skipped, and the fallback now resolves via the model worker_math
-        # actually runs (gemma-4-26B-A4B) rather than a single role-agnostic
-        # constant. The value mirrors the compiled prior derived from the fixed
-        # universal benchmark set.
-        assert priors.baseline_quality_by_role["worker_math"] == pytest.approx(0.8067)
+        # The conflicted descriptor's own 0.99 must be SKIPPED — that is what this
+        # test is for. The value that replaces it is DERIVED, not asserted as a
+        # literal: worker_math resolves to its own capability axis (math/aime26),
+        # which is a different number from the fleet aggregate and from its
+        # co-hosted siblings' tool_use score. A literal here has already rotted
+        # twice in one day (0.85 -> 0.8067 -> 0.883); assert the property instead.
+        got = priors.baseline_quality_by_role["worker_math"]
+        assert got != pytest.approx(0.99), "conflicted descriptor quality leaked through"
+        assert 0.0 < got <= 1.0
+        from orchestration.repl_memory.q_scorer import _baseline_quality_by_role
+        assert got == pytest.approx(_baseline_quality_by_role()["worker_math"])
 
     def test_descriptor_priors_fall_back_when_descriptor_missing(self, tmp_path):
         registry_path = tmp_path / "model_registry.yaml"
@@ -698,9 +703,17 @@ class TestMultiDimensionalCost:
         # worker_explore at 60.7 t/s, 607 tokens in 10s -> exactly at expected speed.
         cost = {"tokens_generated": 607, "elapsed_seconds": 10.0, "role": "worker_explore"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
-        # quality_gap = 0.9 - 0.75 = 0.15, penalty = 0.10 * 0.15 = 0.015
+        # DERIVED, not hardcoded. worker quality moved 0.9 -> 0.778 on 2026-08-02
+        # when worker roles began scoring on their own capability axis
+        # (tool_use / tool_compliance_local) instead of a fleet-wide aggregate.
+        # A literal here silently re-rots on the next quality measurement, which
+        # is exactly what happened to the 0.985 this replaces.
+        quality = s.config.baseline_quality_by_role["worker_explore"]
+        expected = 1.0 - s.config.cost_lambda_quality_gap * max(0.0, quality - 0.75)
         # memory_cost = 1.0 (HOT) → no memory penalty
-        assert r == pytest.approx(0.985)
+        assert r == pytest.approx(expected)
+        # and the penalty must actually be doing something
+        assert quality > 0.75, "test is vacuous if worker quality is at the floor"
 
     def test_custom_non_hot_memory_cost_penalizes(self):
         """Non-HOT residency still gets a memory penalty when configured."""
