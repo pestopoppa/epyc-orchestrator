@@ -125,6 +125,46 @@ BASELINE_QUALITY_BY_MODEL: Dict[str, float] = {
 }
 
 
+def _model_id_for_action(action: str | None) -> str | None:
+    """Resolve a routing/escalation action to the model_id that served it.
+
+    `MemoryEntry.model_id` is documented as "model that produced this memory
+    (for warm-start)" and was NULL on all 59,337 rows: `store()` has always
+    accepted the argument and no caller ever passed it (M-11a2). Warm-start and
+    any per-model analysis over the episodic corpus were therefore impossible.
+
+    DERIVED from the compiled priors so it follows the live lineup instead of
+    restating a role->model table that would drift the next time a role changes
+    weights — which happened twice in the past week (architect_general
+    122B->27B, coder_escalation 35B->27B).
+
+    Returns None for an unknown action, so NULL keeps meaning "unknown" rather
+    than inventing an attribution.
+
+    NOTE the two sibling columns are deliberately NOT filled: `assigned_role` is
+    the Trinity tri-role axis (thinker/worker/verifier) whose readers already
+    normalise NULL to the WORKER default and whose classifier is shadow-mode
+    and off; `sub_decision` NULL correctly means "not a sub-decision". Writing a
+    serving role into either would be a wrong value where NULL is right.
+    """
+    if not action:
+        return None
+    role = str(action).strip().split(".", 1)[0]
+    if not role:
+        return None
+    try:
+        import yaml
+
+        priors = yaml.safe_load(DEFAULT_STACK_PRIORS_PATH.read_text()) or {}
+    except Exception:  # noqa: BLE001
+        return None
+    record = (priors.get("roles") or {}).get(role)
+    if not isinstance(record, dict):
+        return None
+    model_id = record.get("model_id")
+    return str(model_id) if model_id else None
+
+
 def _baseline_quality_by_role(priors: dict | None = None) -> Dict[str, float]:
     """Project the model-keyed table onto live roles via the compiled priors.
 
@@ -1334,6 +1374,7 @@ class QScorer:
                     embedding=embedding,
                     action=action,
                     action_type="routing",
+                    model_id=_model_id_for_action(action),
                     context=record.to_context(),
                     outcome="success" if reward > 0 else "failure",
                     initial_q=initial_q,
@@ -1466,6 +1507,7 @@ class QScorer:
                 embedding=embedding,
                 action=action,
                 action_type="escalation",
+                model_id=_model_id_for_action(action),
                 context=record.to_context(),
                 outcome="success" if reward > 0 else "failure",
                 initial_q=initial_q,
@@ -1606,6 +1648,7 @@ class QScorer:
                 embedding=emb_array,
                 action=action,
                 action_type="routing",
+                model_id=_model_id_for_action(action),
                 context=record.to_context(),
                 outcome="success" if reward > 0 else "failure",
                 initial_q=initial_q,
