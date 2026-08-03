@@ -48,47 +48,47 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-08-03T08:39:48Z'
+compiled_at: '2026-08-03T16:11:53Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 9277de9a0069cd3f6385489115fcea886c1e7ce21c84ba3ba106e7bb882a6d51
-    repo_commit: fb551ca5
+    sha256: bef10f09bfa6844166a7216e615b360c73328b5eff5f7b65c7636fd56344143b
+    repo_commit: 7fd2dde5
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 5816fd8dad916b7ad26f7d5f3d9c9e764db3597861c2807e694f05281715799a
-    repo_commit: fb551ca5
+    sha256: 82514ec9fc5634046e47840d6fb0ab6c12a9fc1c722f9387c17e290729d49f16
+    repo_commit: 7fd2dde5
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
-    sha256: 00c1f1906a6eb5e3e0d0cb94d228e5c947fac60b26dbcecdcb81e6f5aba2aaa0
-    repo_commit: fb551ca5
+    sha256: f2b18355829ff0ba81c1d82cc0bf28ff7b1cc3ba1de2858bea0b16cb5582fe07
+    repo_commit: 7fd2dde5
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 52e0d5a420972ad16014eb048b04fb7d6bad1c860dc9f8a6e0a926bd40ca6236
-    repo_commit: fb551ca5
+    repo_commit: 7fd2dde5
   launch_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/launch_manifest.yaml
-    sha256: 299e0b2ef3202fff99b520519f05bfe8ea9c973f42c3d92b763d204be69b8c0a
-    repo_commit: fb551ca5
+    sha256: 35a4a1050d2e402f15b299c52051046388604da391803836d26aa6fcd078bfa6
+    repo_commit: 7fd2dde5
   stack_topology:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
     sha256: 8fb9e164410c6aee270b0a71ac1c47f92089a80299f09203aa0d205338b5cd97
-    repo_commit: fb551ca5
+    repo_commit: 7fd2dde5
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 5a397ef2e7e1b8e30cc61585c3ea68b5442ea2d85b138ecef0c8bba387bbb7c2
-    repo_commit: fb551ca5
+    sha256: fb45a0f27d25790a76ec70df09253e54c3947d40274dc08b68c21deac8823250
+    repo_commit: 7fd2dde5
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: fb551ca5
+    repo_commit: 7fd2dde5
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: fb551ca5
+    repo_commit: 7fd2dde5
 roles:
   architect_critic:
     role: architect_critic
@@ -789,6 +789,8 @@ roles:
       binding: server_mode.direct
       ports:
       - 8070
+      - 8080
+      - 8180
       slots: 16
       tier: hot
       effective_context_tokens: 262144
@@ -805,6 +807,20 @@ roles:
           numa_instance: 0
           cpu_shape_class: full
           slots: 16
+        - port: 8080
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 1
+          cpu_shape_class: half
+          slots: 4
+        - port: 8180
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 2
+          cpu_shape_class: half
+          slots: 4
         primary_roles:
         - frontdoor
         modes:
@@ -964,6 +980,8 @@ roles:
       binding: server_mode.direct
       ports:
       - 8085
+      - 8185
+      - 8285
       slots: 4
       tier: hot
       effective_context_tokens: 262144
@@ -979,6 +997,20 @@ roles:
           alias: false
           numa_instance: 0
           cpu_shape_class: full
+          slots: 4
+        - port: 8185
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 1
+          cpu_shape_class: half
+          slots: 4
+        - port: 8285
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 2
+          cpu_shape_class: half
           slots: 4
         primary_roles:
         - ingest_long_context
@@ -1589,6 +1621,8 @@ roles:
       binding: server_mode.shared_with
       ports:
       - 8072
+      - 8082
+      - 8182
       slots: 16
       tier: hot
       effective_context_tokens: 262144
@@ -1606,6 +1640,14 @@ roles:
           cpu_shape_class: full
           worker_type: explore
           slots: 16
+        - port: 8082
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 1
+          cpu_shape_class: half
+          worker_type: explore
+          slots: 4
         primary_roles:
         - worker_general
         modes:
@@ -2020,6 +2062,8 @@ roles:
       binding: server_mode.shared_with
       ports:
       - 8072
+      - 8082
+      - 8182
       slots: 16
       tier: hot
       effective_context_tokens: 262144
@@ -2037,6 +2081,14 @@ roles:
           cpu_shape_class: full
           worker_type: explore
           slots: 16
+        - port: 8082
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 1
+          cpu_shape_class: half
+          worker_type: explore
+          slots: 4
         primary_roles:
         - worker_general
         modes:
@@ -2254,6 +2306,8 @@ roles:
       binding: server_mode.model_role
       ports:
       - 8072
+      - 8082
+      - 8182
       slots: 16
       tier: hot
       effective_context_tokens: 262144
@@ -2271,6 +2325,22 @@ roles:
           cpu_shape_class: full
           worker_type: explore
           slots: 16
+        - port: 8082
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 1
+          cpu_shape_class: half
+          worker_type: explore
+          slots: 4
+        - port: 8182
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 2
+          cpu_shape_class: half
+          worker_type: explore
+          slots: 4
         primary_roles:
         - worker_general
         modes:
@@ -2488,6 +2558,8 @@ roles:
       binding: server_mode.shared_with
       ports:
       - 8072
+      - 8082
+      - 8182
       slots: 16
       tier: hot
       effective_context_tokens: 262144
@@ -2505,6 +2577,14 @@ roles:
           cpu_shape_class: full
           worker_type: explore
           slots: 16
+        - port: 8082
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 1
+          cpu_shape_class: half
+          worker_type: explore
+          slots: 4
         primary_roles:
         - worker_general
         modes:
@@ -2722,6 +2802,8 @@ roles:
       binding: server_mode.shared_with
       ports:
       - 8070
+      - 8080
+      - 8180
       slots: 16
       tier: hot
       effective_context_tokens: 262144

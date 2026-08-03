@@ -35,38 +35,27 @@
 # Verify with:
 #   uv run python scripts/validate/stack_change_guard.py --strict
 #   uv run python scripts/registry/stack_change_pipeline.py check
-accepted_gaps:
-  - role: architect_general
-    gap: Missing overall quality prior
-    reason: >-
-      architect_general was repointed to Qwen3.6-27B-MTP-Q8_0 on 2026-08-01. The
-      27B carries RATIFIED SWE-bench Verified evidence (23/40, 57.5%, recorded in
-      the registry) but has NOT been run on the canonical 79-question judge
-      suite, which is the only instrument `quality_score` is defined against.
-      The prior is therefore deliberately null rather than laundered from a
-      different instrument onto a scale it was not measured on. Closing action:
-      run the canonical judge suite on the 27B and compile a real quality prior.
-    owner: operator
-    declared: "2026-08-01"
-    expires: "2026-09-01"
-  - role: coder_escalation
-    gap: Missing overall quality prior
-    reason: >-
-      coder_escalation aliases architect_general's Qwen3.6-27B-MTP-Q8_0 process
-      (:8083) as of 2026-08-01 and inherits the same gap: ratified SWE-bench
-      Verified evidence (23/40, 57.5%), no canonical 79-question judge-suite run,
-      so quality_score stays null instead of being borrowed from another
-      instrument. Closes together with architect_general.
-    owner: operator
-    declared: "2026-08-01"
-    expires: "2026-09-01"
-  - role: qwen36_27b_mtp_q8_local
-    gap: Missing overall quality prior
-    reason: >-
-      The registry row for the Qwen3.6-27B-MTP-Q8_0 artifact itself, backing both
-      roles above. Ratified SWE-bench Verified evidence (23/40, 57.5%) exists;
-      the canonical 79-question judge suite has not been run, so no overall
-      quality prior is compiled for it. Closes with the judge-suite run.
-    owner: operator
-    declared: "2026-08-01"
-    expires: "2026-09-01"
+# ---------------------------------------------------------------------------
+# 2026-08-03: the three "Missing overall quality prior" declarations
+# (architect_general, coder_escalation, qwen36_27b_mtp_q8_local) were REMOVED
+# because the gap they waived no longer exists, and this file's own rule is that
+# a declaration matching no current gap is an ERROR.
+#
+# They were filed 2026-08-01 on sound reasoning: the Qwen3.6-27B carried ratified
+# SWE-bench Verified evidence (23/40, 57.5%) but no canonical judge-suite run, so
+# quality_score was deliberately left null "rather than laundered from a different
+# instrument onto a scale it was not measured on".
+#
+# What changed is the REPRESENTATION, not the evidence. Quality is no longer a
+# single scalar that a domain score has to be promoted into; it compiles as
+# quality_by_axis + quality_for_role, each keyed BY BENCHMARK and carrying its own
+# basis and rankability. Those roles now resolve a prior of 0.8597 with basis
+# "role-relevant axis reasoning via mmlu_pro" — provenance recorded, not laundered.
+# The gap check now asks "is there evidence?" rather than "is there a scalar?",
+# which is precisely the pressure that used to manufacture fake numbers.
+#
+# The waivers' closing action — run the canonical 79-question judge suite on the
+# 27B — is NOT satisfied by this and remains open work, tracked as a task rather
+# than as a waiver for a gap that no longer fires.
+# ---------------------------------------------------------------------------
+accepted_gaps: []
