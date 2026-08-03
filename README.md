@@ -43,13 +43,12 @@ All servers run on a single AMD EPYC 9655 via the `production-consolidated-v5` l
 
 | Role | Model | Quant | Port(s) | Notes |
 |---|---|---|---|---|
-| frontdoor / coder_escalation / worker_summarize | Qwen3.6-35B-A3B | Q8_0 (37 GB) | 8070, 8080, 8180, 8280, 8380 | Shared GGUF mmap. `enable_thinking=False` mandatory. +33pp accuracy + 80% t/s vs prior Qwen3.5-35B Q4_K_M baseline. |
-| worker_general | gemma-4-26B-A4B | Q4_K_M (16 GB) | 8082, 8182, 8282, 8382 | ik_llama.cpp PR #1744 MTP. +18pp tool_compliance, 76.5 t/s solo. Needs `KMP_BLOCKTIME=10` (OMP idle-spin fix). |
-| worker_general / worker_math / toolrunner | Qwen3-Coder-30B-A3B-Instruct | Q4_K_M (17 GB) | 8072 | Secondary worker pool. |
-| architect_general | Qwen3.5-122B-A10B | Q4_K_M (69 GB) | 8083 | Hybrid MoE. `enable_thinking=False`. |
-| ingest_long_context | Qwen3-Next-80B-A3B-Instruct | Q4_K_M (45 GB) | 8085 | SSM+MoE hybrid. Thinking ON (exception to the Qwen3.x default). |
-| worker_vision | Qwen2.5-VL-7B-Instruct | Q4_K_M (4 GB) | 8086 | |
-| vision_escalation | Qwen3-VL-30B-A3B-Instruct | Q4_K_M (18 GB) | 8087 | |
+| frontdoor / worker_summarize | Qwen3.6-35B-A3B-MTP | Q8_0 (37 GB) | 8070, 8080, 8180 | Shared GGUF mmap. `enable_thinking=False` mandatory. 1 full (`-np 16`) + 2 halves (`-np 4`). |
+| worker_general / worker_explore / worker_math / toolrunner | gemma-4-26B-A4B-it | Q4_K_M (16 GB) | 8072, 8082, 8182 | Try-cheap-first worker. MTP. Needs `KMP_BLOCKTIME=10` (OMP idle-spin fix). |
+| architect_general / coder_escalation | Qwen3.6-27B-MTP | Q8_0 (27 GB) | 8083 | **GPU (MI210)**. Dense, hybrid SSM/attention. `coder_escalation` moved here off the 35B on 2026-08-01. |
+| architect_critic | Qwen3.5-122B-A10B-UD | Q4_K_M (69 GB) | 8074 | Consult-only; no routed traffic. Took the 122B when it vacated `architect_general` on 2026-07-31. |
+| ingest_long_context | Qwen3-Next-80B-A3B-Instruct | Q4_K_M (45 GB) | 8085, 8185, 8285 | SSM+MoE hybrid. The one role where the halves beat the full under load. |
+| worker_vision / vision_escalation | Qwen3-VL-30B-A3B-Instruct | Q4_K_M (17 GB) | 8086 | **GPU (MI210)**. One process, both names; `:8087` retired. Needs `max_tokens >= 1024`. |
 | embedder pool ×6 | BGE-large-en-v1.5 | f16 (0.6 GB) | 8090–8095 | 1024-dim embeddings. |
 
 **Note:** `architect_coding` (formerly REAP-246B) was retired 2026-05-09 — Qwen3.6-35B-Q8 on coder_escalation beats it by ≈27 pp at <1/7 the memory. See [project_stack_consolidation_2026_05](../epyc-root/wiki/inference-serving.md) for the deconsolidation rationale.
@@ -137,11 +136,12 @@ Request → FastAPI (:8000) → ChatPipeline → Mode selection
                                             ├── REPL    → Tool loop → Response
                                             └── Delegated → Architect plan → Worker execution
 
-Model stack (20 llama-server ports, NPS4 across 4 NUMA quarters):
-  Tier A: Front door (5× Qwen3.6-35B-A3B Q8 shared mmap)
-  Tier B: Architects (Qwen3.5-122B-A10B Q4 dense-MoE, Qwen3-Next-80B-A3B SSM-hybrid)
-  Tier C: Workers (4× gemma-4-26B-A4B MTP, 1× Qwen3-Coder-30B-A3B, VL 7B + 30B)
+Model stack (NPS4; 1 full + 2 half instances per CPU role — quarters retired):
+  Tier A: frontdoor + architect_general (Qwen3.6-35B-A3B Q8 CPU; Qwen3.6-27B Q8 on MI210)
+  Tier B: architect_critic (Qwen3.5-122B-A10B Q4), ingest_long_context (Qwen3-Next-80B SSM-hybrid)
+  Tier C: Workers (gemma-4-26B-A4B MTP ×3 instances), vision (Qwen3-VL-30B on MI210)
   Tier D: Embedders (6× BGE-large)
+  Speech: whisper.cpp STT :9000 + qwentts TTS :9002, both on MI210 (live 2026-08-02)
 
 Routing: LearnedRoutingClassifier (98.7%, shadow mode) → falls through to MemRL
          → falls through to rule-based difficulty heuristics
