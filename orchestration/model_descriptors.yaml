@@ -1,15 +1,15 @@
 descriptor_version: 3
-compiled_at: '2026-08-02T15:22:27Z'
+compiled_at: '2026-08-03T00:53:40Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: cba55d49
-    sha256: 52911df6cfc05bf8cc6027ff17a036029b70c62b54e4010d6be608f5a0b28d88
+    repo_commit: 98a7d87a
+    sha256: 9277de9a0069cd3f6385489115fcea886c1e7ce21c84ba3ba106e7bb882a6d51
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: 9d686fb3
+    repo_commit: 9687f7fe
     sha256: b622674136c168cc42b8129d309680cb119065f08e080173984db0d4767f374e
 model_id_policy:
   canonical_shape: family-params-active-quant
@@ -52,8 +52,9 @@ models:
       reason: server_mode.shared_with runtime takes precedence
   quality:
     suite_vector:
-      overall: 0.9
+      overall: 0.8067
       tool_compliance: 0.96
+    overall_basis: 'public benchmarks: mean(mmlu_pro, gpqa_diamond, livecodebench_v6) — vendor_reported, bf16, mode=not stated'
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
@@ -117,6 +118,71 @@ models:
         mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
           85.77) but did not improve non-repetitive coding explanation speed and failed the required-heading contract under the 640-token cap; short edit was only marginally faster than draft-mtp and all
           modes failed the exact patch contract. Treat ngram-mod,draft-mtp as a task-specific token-reuse lane, not the broad worker default. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_prompt_diverse_20260719T004626Z/compact_summary.json.'
+    public:
+      benchmarks:
+        mmlu_pro: 0.826
+        gpqa_diamond: 0.823
+        aime26: 0.883
+        livecodebench_v6: 0.771
+        codeforces_elo: 1718
+        mmmu_pro: 0.738
+        mrcr_v2_128k: 0.441
+        tool_compliance_local: 0.778
+      benchmark_provenance:
+        mmlu_pro: vendor_reported
+        gpqa_diamond: vendor_reported
+        aime26: vendor_reported
+        livecodebench_v6: vendor_reported
+        codeforces_elo: vendor_reported
+        mmmu_pro: vendor_reported
+        mrcr_v2_128k: vendor_reported
+        tool_compliance_local: measured_local
+      provenance: vendor_reported
+      reported_precision: bf16
+      served_precision: Q4_K_M
+      reported_mode: not stated
+      source_url: https://huggingface.co/google/gemma-4-26b-a4b-it
+      absent_from_card:
+      - swe_bench_verified
+      - ifeval
+      - bfcl_v3
+      - bfcl_v4
+      - terminal_bench_2
+      retrieved: &id001 2026-08-02
+      axes:
+        mmlu_pro: reasoning
+        gpqa_diamond: science
+        aime26: math
+        aime25: math
+        hmmt25: math
+        livecodebench_v6: coding
+        aider_polyglot: coding
+        codeforces_elo: coding
+        swe_bench_verified: agentic_coding
+        terminal_bench_2: agentic_terminal
+        tool_compliance_local: tool_use
+        bfcl_v3: tool_use
+        bfcl_v4: tool_use
+        ifeval: instruction_following
+        mmmu: vision_language
+        mmmu_pro: vision_language
+        mathvision: vision_language
+        ruler_1m: long_context
+        longbench_v2: long_context
+        aa_lcr: long_context
+        mrcr_v2_128k: long_context
+      universal_keys:
+      - mmlu_pro
+      - gpqa_diamond
+      - livecodebench_v6
+    for_role:
+      value: 0.778
+      axis: tool_use
+      benchmark: tool_compliance_local
+      rankable: true
+      comparable_value: 0.8067
+      skipped_axes: []
+      basis: role-relevant axis tool_use via tool_compliance_local
   speed:
     solo_96t_tps: 37.63
     quarter_48t_tps: null
@@ -177,13 +243,83 @@ models:
   quality:
     suite_vector:
       long_context: 0.9259
-      overall: 0.9259
+      overall: 0.7003
+    overall_basis: 'public benchmarks: mean(mmlu_pro, gpqa_diamond, livecodebench_v6) — vendor_reported, bf16, mode=instruct (non-thinking variant)'
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
     - date: null
       protocol: registry benchmark_score
       value: 25/27 (93%) on canonical long_context suite, May-4
+    public:
+      benchmarks:
+        mmlu_pro: 0.806
+        gpqa_diamond: 0.729
+        aime25: 0.695
+        hmmt25: 0.541
+        livecodebench_v6: 0.566
+        aider_polyglot: 0.498
+        ifeval: 0.876
+        bfcl_v3: 0.703
+        ruler_1m: 0.918
+        tool_compliance_local: 0.704
+      benchmark_provenance:
+        mmlu_pro: vendor_reported
+        gpqa_diamond: vendor_reported
+        aime25: vendor_reported
+        hmmt25: vendor_reported
+        livecodebench_v6: vendor_reported
+        aider_polyglot: vendor_reported
+        ifeval: vendor_reported
+        bfcl_v3: vendor_reported
+        ruler_1m: vendor_reported
+        tool_compliance_local: measured_local
+      provenance: vendor_reported
+      reported_precision: bf16
+      served_precision: Q4_K_M
+      reported_mode: instruct (non-thinking variant)
+      source_url: https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct
+      absent_from_card:
+      - swe_bench_verified
+      - terminal_bench_2
+      - longbench_v2
+      - mmmu
+      retrieved: *id001
+      axes:
+        mmlu_pro: reasoning
+        gpqa_diamond: science
+        aime26: math
+        aime25: math
+        hmmt25: math
+        livecodebench_v6: coding
+        aider_polyglot: coding
+        codeforces_elo: coding
+        swe_bench_verified: agentic_coding
+        terminal_bench_2: agentic_terminal
+        tool_compliance_local: tool_use
+        bfcl_v3: tool_use
+        bfcl_v4: tool_use
+        ifeval: instruction_following
+        mmmu: vision_language
+        mmmu_pro: vision_language
+        mathvision: vision_language
+        ruler_1m: long_context
+        longbench_v2: long_context
+        aa_lcr: long_context
+        mrcr_v2_128k: long_context
+      universal_keys:
+      - mmlu_pro
+      - gpqa_diamond
+      - livecodebench_v6
+    for_role:
+      value: 0.918
+      axis: long_context
+      benchmark: ruler_1m
+      rankable: false
+      comparable_value: 0.7003
+      skipped_axes:
+      - long_context(ruler_1m)
+      basis: role-relevant axis long_context via ruler_1m — NOT cross-model comparable (no two fleet models share a benchmark on this axis); use comparable_value to rank
   speed:
     solo_96t_tps: 10.12
     quarter_48t_tps: null
@@ -246,7 +382,7 @@ models:
   quality:
     suite_vector:
       vision_language: 0.636
-      overall: 0.636
+    overall_basis: null
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
@@ -289,6 +425,63 @@ models:
           at the 2048-token rescue cap and scored wrong.
 
           '
+    public:
+      benchmarks:
+        mmmu: 0.636
+        tool_compliance_local: 0.741
+      benchmark_provenance:
+        mmmu: measured_local
+        tool_compliance_local: measured_local
+      provenance: measured_local
+      reported_precision: null
+      served_precision: Q4_K_M
+      reported_mode: null
+      source_url: https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct
+      absent_from_card:
+      - mmlu_pro
+      - gpqa_diamond
+      - livecodebench_v6
+      retrieved: *id001
+      axes:
+        mmlu_pro: reasoning
+        gpqa_diamond: science
+        aime26: math
+        aime25: math
+        hmmt25: math
+        livecodebench_v6: coding
+        aider_polyglot: coding
+        codeforces_elo: coding
+        swe_bench_verified: agentic_coding
+        terminal_bench_2: agentic_terminal
+        tool_compliance_local: tool_use
+        bfcl_v3: tool_use
+        bfcl_v4: tool_use
+        ifeval: instruction_following
+        mmmu: vision_language
+        mmmu_pro: vision_language
+        mathvision: vision_language
+        ruler_1m: long_context
+        longbench_v2: long_context
+        aa_lcr: long_context
+        mrcr_v2_128k: long_context
+      universal_keys:
+      - mmlu_pro
+      - gpqa_diamond
+      - livecodebench_v6
+      local_corroboration:
+        mmmu:
+          value: 0.636
+          instrument: mmmu-val-250-local
+          note: 'Our own run, not a vendor claim: MMMU-250 63.6% vs Qwen2.5-VL-7B 52.4%, +11.2pp, paired exact McNemar p=0.0011. The vendor card''s tables are images and were NOT transcribed — absence here
+            is "not retrieved", not "not reported".'
+    for_role:
+      value: 0.636
+      axis: vision_language
+      benchmark: mmmu
+      rankable: true
+      comparable_value: null
+      skipped_axes: []
+      basis: role-relevant axis vision_language via mmmu
   speed:
     solo_96t_tps: 112.2
     quarter_48t_tps: null
@@ -344,7 +537,8 @@ models:
     shared_mmap: true
   quality:
     suite_vector:
-      overall: 0.8567
+      overall: 0.8407
+    overall_basis: 'public benchmarks: mean(mmlu_pro, gpqa_diamond, livecodebench_v6) — vendor_reported, bf16, mode=thinking'
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
@@ -389,6 +583,79 @@ models:
           role_ready: false
           verdict: status_quo_self_review_failed_patch_reviewer
           evidence: /mnt/raid0/llm/epyc-inference-research/data/reviewer_model_ablations/rm2-next-a1-architect-statusquo-ccrab-p-rev1-20260719T210513Z
+    public:
+      benchmarks:
+        mmlu_pro: 0.867
+        gpqa_diamond: 0.866
+        ifeval: 0.934
+        livecodebench_v6: 0.789
+        swe_bench_verified: 0.72
+        terminal_bench_2: 0.494
+        bfcl_v4: 0.722
+        mmmu: 0.839
+        mmmu_pro: 0.769
+        mathvision: 0.862
+        aa_lcr: 0.669
+        longbench_v2: 0.602
+        tool_compliance_local: 0.852
+      benchmark_provenance:
+        mmlu_pro: vendor_reported
+        gpqa_diamond: vendor_reported
+        ifeval: vendor_reported
+        livecodebench_v6: vendor_reported
+        swe_bench_verified: vendor_reported
+        terminal_bench_2: vendor_reported
+        bfcl_v4: vendor_reported
+        mmmu: vendor_reported
+        mmmu_pro: vendor_reported
+        mathvision: vendor_reported
+        aa_lcr: vendor_reported
+        longbench_v2: vendor_reported
+        tool_compliance_local: measured_local
+      provenance: vendor_reported
+      reported_precision: bf16
+      served_precision: Q4_K_M
+      reported_mode: thinking
+      source_url: https://huggingface.co/Qwen/Qwen3.5-122B-A10B
+      absent_from_card:
+      - aime26
+      - aime25
+      - ruler_1m
+      retrieved: *id001
+      axes:
+        mmlu_pro: reasoning
+        gpqa_diamond: science
+        aime26: math
+        aime25: math
+        hmmt25: math
+        livecodebench_v6: coding
+        aider_polyglot: coding
+        codeforces_elo: coding
+        swe_bench_verified: agentic_coding
+        terminal_bench_2: agentic_terminal
+        tool_compliance_local: tool_use
+        bfcl_v3: tool_use
+        bfcl_v4: tool_use
+        ifeval: instruction_following
+        mmmu: vision_language
+        mmmu_pro: vision_language
+        mathvision: vision_language
+        ruler_1m: long_context
+        longbench_v2: long_context
+        aa_lcr: long_context
+        mrcr_v2_128k: long_context
+      universal_keys:
+      - mmlu_pro
+      - gpqa_diamond
+      - livecodebench_v6
+    for_role:
+      value: 0.867
+      axis: reasoning
+      benchmark: mmlu_pro
+      rankable: true
+      comparable_value: 0.8407
+      skipped_axes: []
+      basis: role-relevant axis reasoning via mmlu_pro
   speed:
     solo_96t_tps: 24.0
     quarter_48t_tps: null
@@ -452,6 +719,8 @@ models:
   quality:
     suite_vector:
       swe_verified: 0.575
+      overall: 0.8597
+    overall_basis: 'public benchmarks: mean(mmlu_pro, gpqa_diamond, livecodebench_v6) — vendor_reported, bf16, mode=thinking'
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
@@ -526,6 +795,81 @@ models:
         - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/summary.md
         - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/summary.json
         - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/dr0_blocker.txt
+    public:
+      benchmarks:
+        mmlu_pro: 0.862
+        gpqa_diamond: 0.878
+        aime26: 0.941
+        hmmt25: 0.938
+        livecodebench_v6: 0.839
+        swe_bench_verified: 0.772
+        terminal_bench_2: 0.593
+        mmmu: 0.829
+        mmmu_pro: 0.758
+        tool_compliance_local: 0.741
+      benchmark_provenance:
+        mmlu_pro: vendor_reported
+        gpqa_diamond: vendor_reported
+        aime26: vendor_reported
+        hmmt25: vendor_reported
+        livecodebench_v6: vendor_reported
+        swe_bench_verified: vendor_reported
+        terminal_bench_2: vendor_reported
+        mmmu: vendor_reported
+        mmmu_pro: vendor_reported
+        tool_compliance_local: measured_local
+      provenance: vendor_reported
+      reported_precision: bf16
+      served_precision: Q8_0
+      reported_mode: thinking
+      source_url: https://huggingface.co/Qwen/Qwen3.6-27B
+      absent_from_card:
+      - ifeval
+      - bfcl_v3
+      - bfcl_v4
+      - ruler_1m
+      - longbench_v2
+      retrieved: *id001
+      axes:
+        mmlu_pro: reasoning
+        gpqa_diamond: science
+        aime26: math
+        aime25: math
+        hmmt25: math
+        livecodebench_v6: coding
+        aider_polyglot: coding
+        codeforces_elo: coding
+        swe_bench_verified: agentic_coding
+        terminal_bench_2: agentic_terminal
+        tool_compliance_local: tool_use
+        bfcl_v3: tool_use
+        bfcl_v4: tool_use
+        ifeval: instruction_following
+        mmmu: vision_language
+        mmmu_pro: vision_language
+        mathvision: vision_language
+        ruler_1m: long_context
+        longbench_v2: long_context
+        aa_lcr: long_context
+        mrcr_v2_128k: long_context
+      universal_keys:
+      - mmlu_pro
+      - gpqa_diamond
+      - livecodebench_v6
+      local_corroboration:
+        swe_bench_verified:
+          value: 0.575
+          instrument: swe-bench-verified-40q-local
+          ratio_to_reported: 0.745
+          note: ratified local run; Q8_0, enable_thinking=false, 40-question subset
+    for_role:
+      value: 0.862
+      axis: reasoning
+      benchmark: mmlu_pro
+      rankable: true
+      comparable_value: 0.8597
+      skipped_axes: []
+      basis: role-relevant axis reasoning via mmlu_pro
   speed:
     solo_96t_tps: 47.79
     quarter_48t_tps: null
@@ -587,11 +931,12 @@ models:
     shared_mmap: true
   quality:
     suite_vector:
-      overall: 0.93
+      overall: 0.8387
       general: 1.0
       coder: 0.9667
       thinking: 0.9333
       long_context: 1.0
+    overall_basis: 'public benchmarks: mean(mmlu_pro, gpqa_diamond, livecodebench_v6) — vendor_reported, bf16, mode=thinking'
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
@@ -601,6 +946,73 @@ models:
     - date: '2026-05-04'
       protocol: registry benchmark_score
       value: 170/183 (92.9%)
+    public:
+      benchmarks:
+        mmlu_pro: 0.852
+        gpqa_diamond: 0.86
+        aime26: 0.927
+        livecodebench_v6: 0.804
+        swe_bench_verified: 0.734
+        terminal_bench_2: 0.515
+        mmmu: 0.817
+        mmmu_pro: 0.753
+        tool_compliance_local: 0.778
+      benchmark_provenance:
+        mmlu_pro: vendor_reported
+        gpqa_diamond: vendor_reported
+        aime26: vendor_reported
+        livecodebench_v6: vendor_reported
+        swe_bench_verified: vendor_reported
+        terminal_bench_2: vendor_reported
+        mmmu: vendor_reported
+        mmmu_pro: vendor_reported
+        tool_compliance_local: measured_local
+      provenance: vendor_reported
+      reported_precision: bf16
+      served_precision: Q8_0
+      reported_mode: thinking
+      source_url: https://huggingface.co/Qwen/Qwen3.6-35B-A3B
+      absent_from_card:
+      - ifeval
+      - bfcl_v3
+      - bfcl_v4
+      - ruler_1m
+      - longbench_v2
+      retrieved: *id001
+      axes:
+        mmlu_pro: reasoning
+        gpqa_diamond: science
+        aime26: math
+        aime25: math
+        hmmt25: math
+        livecodebench_v6: coding
+        aider_polyglot: coding
+        codeforces_elo: coding
+        swe_bench_verified: agentic_coding
+        terminal_bench_2: agentic_terminal
+        tool_compliance_local: tool_use
+        bfcl_v3: tool_use
+        bfcl_v4: tool_use
+        ifeval: instruction_following
+        mmmu: vision_language
+        mmmu_pro: vision_language
+        mathvision: vision_language
+        ruler_1m: long_context
+        longbench_v2: long_context
+        aa_lcr: long_context
+        mrcr_v2_128k: long_context
+      universal_keys:
+      - mmlu_pro
+      - gpqa_diamond
+      - livecodebench_v6
+    for_role:
+      value: 0.852
+      axis: reasoning
+      benchmark: mmlu_pro
+      rankable: true
+      comparable_value: 0.8387
+      skipped_axes: []
+      basis: role-relevant axis reasoning via mmlu_pro
   speed:
     solo_96t_tps: null
     quarter_48t_tps: null
@@ -661,13 +1073,81 @@ models:
     shared_mmap: true
   quality:
     suite_vector:
-      overall: 0.738
+      overall: 0.8387
+    overall_basis: 'public benchmarks: mean(mmlu_pro, gpqa_diamond, livecodebench_v6) — vendor_reported, bf16, mode=thinking'
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
     - date: '2026-05-04'
       protocol: registry benchmark_score
       value: 170/183 (92.9%)
+    public:
+      benchmarks:
+        mmlu_pro: 0.852
+        gpqa_diamond: 0.86
+        aime26: 0.927
+        livecodebench_v6: 0.804
+        swe_bench_verified: 0.734
+        terminal_bench_2: 0.515
+        mmmu: 0.817
+        mmmu_pro: 0.753
+        tool_compliance_local: 0.778
+      benchmark_provenance:
+        mmlu_pro: vendor_reported
+        gpqa_diamond: vendor_reported
+        aime26: vendor_reported
+        livecodebench_v6: vendor_reported
+        swe_bench_verified: vendor_reported
+        terminal_bench_2: vendor_reported
+        mmmu: vendor_reported
+        mmmu_pro: vendor_reported
+        tool_compliance_local: measured_local
+      provenance: vendor_reported
+      reported_precision: bf16
+      served_precision: Q8_0
+      reported_mode: thinking
+      source_url: https://huggingface.co/Qwen/Qwen3.6-35B-A3B
+      absent_from_card:
+      - ifeval
+      - bfcl_v3
+      - bfcl_v4
+      - ruler_1m
+      - longbench_v2
+      retrieved: *id001
+      axes:
+        mmlu_pro: reasoning
+        gpqa_diamond: science
+        aime26: math
+        aime25: math
+        hmmt25: math
+        livecodebench_v6: coding
+        aider_polyglot: coding
+        codeforces_elo: coding
+        swe_bench_verified: agentic_coding
+        terminal_bench_2: agentic_terminal
+        tool_compliance_local: tool_use
+        bfcl_v3: tool_use
+        bfcl_v4: tool_use
+        ifeval: instruction_following
+        mmmu: vision_language
+        mmmu_pro: vision_language
+        mathvision: vision_language
+        ruler_1m: long_context
+        longbench_v2: long_context
+        aa_lcr: long_context
+        mrcr_v2_128k: long_context
+      universal_keys:
+      - mmlu_pro
+      - gpqa_diamond
+      - livecodebench_v6
+    for_role:
+      value: 0.852
+      axis: reasoning
+      benchmark: mmlu_pro
+      rankable: true
+      comparable_value: 0.8387
+      skipped_axes: []
+      basis: role-relevant axis reasoning via mmlu_pro
   speed:
     solo_96t_tps: 25.6
     quarter_48t_tps: null

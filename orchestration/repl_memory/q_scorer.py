@@ -107,9 +107,21 @@ FALLBACK_BASELINE_TPS_BY_ROLE: Dict[str, float] = {
 # SWE-bench Verified evidence (23/40, 57.5%) but no canonical 79-question judge-suite
 # run, and SWE-bench is a different instrument on a different scale. An absent entry
 # is the honest representation of that.
+# DEGRADED-PATH FALLBACK ONLY. The authoritative source is
+# `priors.quality_overall` in the compiled stack priors, which is the mean over
+# the fixed universal benchmark set in orchestration/public_benchmarks.yaml
+# (mmlu_pro, gpqa_diamond, livecodebench_v6). These entries MIRROR that
+# derivation so a priors-less run does not silently disagree with a normal one.
+#
+# 2026-08-02: they previously did disagree. Qwen3.6-35B-A3B carried 0.895 here,
+# introduced 2026-02-13 — three months BEFORE the 2026-05-04 benchmark that put
+# quality_pct: 93 in the registry — so the router's fallback quality had been
+# stale for two measurement cycles while the measured value sat unread.
+# If you change public_benchmarks.yaml, recompile and re-mirror these.
 BASELINE_QUALITY_BY_MODEL: Dict[str, float] = {
-    "Qwen3.6-35B-A3B-MTP-Q8_0.gguf": 0.895,
-    "gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf": 0.745,
+    "Qwen3.6-35B-A3B-MTP-Q8_0.gguf": 0.8387,
+    "Qwen3.6-27B-MTP-Q8_0.gguf": 0.8597,
+    "gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf": 0.8067,
 }
 
 
@@ -140,6 +152,23 @@ def _baseline_quality_by_role(priors: dict | None = None) -> Dict[str, float]:
     for role, record in (priors.get("roles") or {}).items():
         if not isinstance(record, dict):
             continue
+
+        # PREFERRED: the role-facing figure the priors compiler already chose —
+        # the role-relevant capability axis when it can rank the fleet, else the
+        # universal aggregate, with `basis` recording which. Reading this rather
+        # than a model-keyed constant is what makes quality multidimensional at
+        # the point of use: architect_general and coder_escalation run the SAME
+        # 27B weights and now score 0.862 (reasoning/mmlu_pro) and 0.839
+        # (coding/livecodebench_v6) respectively, because they do different jobs.
+        for_role = (record.get("priors") or {}).get("quality_for_role")
+        if isinstance(for_role, dict):
+            value = for_role.get("value")
+            if isinstance(value, (int, float)) and 0 <= float(value) <= 1:
+                out[role] = float(value)
+                continue
+
+        # FALLBACK: model-keyed table, for a priors file predating the axis
+        # fields. Still model-keyed, never role-keyed.
         req = (
             ((record.get("serving") or {}).get("launch") or {}).get("requirements")
             or {}
@@ -395,7 +424,19 @@ def stack_prior_q_scorer_priors_by_role(
             for target_role in target_roles:
                 tps_by_role[target_role] = tps
                 tps_sources[target_role] = PRIOR_SOURCE_STACK_PRIORS
-        quality = _valid_quality(priors.get("quality_overall"))
+        # quality_for_role FIRST: the role-relevant axis, which is the whole
+        # point of the per-axis work. quality_overall is the fleet-wide
+        # aggregate and is the right answer only when no rankable role axis
+        # exists — which quality_for_role already decides, recording its
+        # reasoning in `basis`. Reading quality_overall here as well would give
+        # two different quality numbers for one role depending on which loader
+        # ran, which is the two-sources-of-truth defect in miniature.
+        for_role = priors.get("quality_for_role")
+        quality = None
+        if isinstance(for_role, dict):
+            quality = _valid_quality(for_role.get("value"))
+        if quality is None:
+            quality = _valid_quality(priors.get("quality_overall"))
         if quality is not None:
             for target_role in target_roles:
                 quality_by_role[target_role] = quality

@@ -128,7 +128,14 @@ def test_compile_merges_same_model_roles(tmp_path: Path) -> None:
         "worker_summarize",
     ]
     assert model["role_bindings"]["server_roles"] == ["coder_escalation", "frontdoor"]
-    assert model["quality"]["suite_vector"]["overall"] == 0.93
+    # 0.8387, not the registry's 0.93: `overall` is now the mean over the
+    # fixed universal benchmark set (mmlu_pro, gpqa_diamond,
+    # livecodebench_v6) from orchestration/public_benchmarks.yaml, which
+    # every fleet model reports. The registry figure came from our canonical
+    # judge suite, which only ever ran on two of six models and is 74%
+    # ceiling-saturated, so it cannot rank the fleet. Nothing is lost: the
+    # local measurement is preserved verbatim under quality_by_axis.local.
+    assert model["quality"]["suite_vector"]["overall"] == 0.8387
     assert model["quality"]["suite_vector"]["coder"] == 0.9667
     assert model["quality"]["suite_vector"]["long_context"] == 1.0
     assert model["architecture"] == {
@@ -180,7 +187,9 @@ def test_compile_projects_quality_score_as_overall_quality(tmp_path: Path) -> No
     )
 
     model = compiled["models"][0]
-    assert model["quality"]["suite_vector"]["overall"] == 0.8567
+    # 0.8407 from the universal benchmark mean; see the note above on why
+    # public benchmarks outrank a registry scalar for the RANKING figure.
+    assert model["quality"]["suite_vector"]["overall"] == 0.8407
     assert model["quality"]["measured"][0]["value"]["quality_score"] == "2.57/3"
     assert compiled["status"] == "compiled"
 
@@ -498,7 +507,9 @@ def test_compile_uses_role_endpoint_for_dedicated_vision_role(tmp_path: Path) ->
     assert model["serving"]["numa_policy"] == "role_endpoint_binding"
     assert model["serving"]["requirements"] == {"mmproj_path": "/models/mmproj.gguf"}
     assert model["modalities"] == ["text", "vision"]
-    assert model["quality"]["suite_vector"]["overall"] == 0.9167
+    # vision_language, not overall: a vl_score is domain evidence and is no
+    # longer promoted to the whole-model scalar.
+    assert model["quality"]["suite_vector"]["vision_language"] == 0.9167
     assert model["quality"]["suite_vector"]["vision_language"] == 0.9167
     assert "Missing serving port binding" not in model["known_gaps"]
     assert "Missing server_mode binding" not in model["known_gaps"]
@@ -537,9 +548,24 @@ def test_compile_uses_structured_vl_score_as_quality_prior(tmp_path: Path) -> No
     )
 
     model = compiled["models"][0]
-    assert model["quality"]["suite_vector"]["overall"] == 0.92
-    assert model["quality"]["suite_vector"]["vision_language"] == 0.92
+    suite_vector = model["quality"]["suite_vector"]
+
+    # The vl_score lands on its OWN axis...
+    assert suite_vector["vision_language"] == 0.92
     assert "Missing quality suite_vector evidence" not in model["known_gaps"]
+
+    # ...and must NOT also become `overall`. This assertion is inverted from
+    # what it was: the test previously required overall == 0.92, codifying the
+    # defect. A vision benchmark measures vision, and `priors.quality_overall`
+    # is the scalar the router reads as whole-model quality — so promoting it
+    # told every consumer that an MMMU score described the model's general
+    # capability. Qwen3-VL carried 0.636 that way, and Qwen3-Next-80B carried a
+    # 27-question long-context score as 0.9259.
+    assert "overall" not in suite_vector, (
+        "a single-domain score must never be promoted to `overall`; "
+        f"got {suite_vector}"
+    )
+    assert model["quality"]["overall_basis"] is None
 
 
 def test_compile_marks_qwen_next_as_long_context_modality(tmp_path: Path) -> None:

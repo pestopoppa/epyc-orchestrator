@@ -1,0 +1,360 @@
+# Public (vendor-reported / leaderboard) benchmark results, keyed by model.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The stack needs to RANK models against each other so routing can prefer the
+# right model per axis. Running our own suite for that failed: the canonical
+# 79-question judge suite is 74% saturated (both arms scored a perfect 3 on
+# 50/68 questions) and could not separate architect_general from frontdoor
+# (+0.5pp, exact sign test p=0.267). Published benchmarks separate them
+# cleanly on every axis. See artifacts under
+# epyc-inference-research/data/judge-suite-headtohead-20260802/.
+#
+# WHAT THESE NUMBERS ARE, AND ARE NOT
+# -----------------------------------
+# They are THIRD-PARTY CLAIMS, not our measurements. Per MEASUREMENT.md claim
+# grammar they may never be stated as measurements of THIS deployment. Two
+# systematic gaps, both recorded per-entry:
+#
+#   precision : vendors report bf16; we serve Q8_0 or Q4_K_M.
+#   mode      : Qwen3.6 cards state thinking mode by default; we serve
+#               enable_thinking=false.
+#
+# Both biases apply to every model alike, so the RANKING is usable and the
+# LEVELS are not. That is the only claim this file supports.
+#
+# CALIBRATION AGAINST OUR OWN STACK
+# ---------------------------------
+# SWE-bench Verified is the one axis where a vendor number and a locally
+# ratified number exist for the same model:
+#   Qwen3.6-27B  vendor 0.772   local 0.575 (23/40)   ratio 0.745
+# So this deployment realises ~75% of a published figure. That ratio is
+# evidence from ONE axis on ONE model — it is not a licence to scale every
+# number by 0.745.
+#
+# WHAT 0.745 IS NOT: a quantization penalty. It CONFOUNDS four differences at
+# once and cannot be attributed to any one of them:
+#   1. Q8_0            vs bf16
+#   2. thinking=false  vs thinking-on
+#   3. our 40-question subset vs the full 500-instance SWE-bench Verified
+#   4. our scaffold    vs the vendor's harness
+# Reading it as "Q8_0 costs 25%" would be wrong; (2) and (3) are individually
+# capable of moving SWE-bench by more than the whole gap.
+#
+# FUTURE IDEA — NOT SCHEDULED, NOT COSTED (2026-08-02, operator)
+# --------------------------------------------------------------
+# If the gap ever proves to be substantially (1), serving Qwen3.6-27B at bf16
+# instead of Q8_0 becomes interesting: it is the smallest model on the GPU and
+# the only one where full precision could plausibly fit. Isolating (1) needs a
+# controlled A/B — same 40 questions, same scaffold, thinking held constant,
+# only precision varied — which nobody has run. VRAM makes this non-trivial:
+# 27B at bf16 is ~54 GB of weights against a 64 GB MI210 that is presently at
+# 99.6% with four resident processes. Recorded so the ratio is not silently
+# re-derived later as if it were a clean quantization measurement.
+#
+# COMPARABILITY RULE — THE POINT OF THE WHOLE FILE
+# ------------------------------------------------
+# Entries are keyed by BENCHMARK, never by an abstract axis, because two
+# benchmarks under one axis name are not rival estimates of one quantity:
+#   * aime26 != aime25             (different test sets; Next-80B reports 25)
+#   * ruler_1m != longbench_v2 != mrcr_v2_128k   (three long-context
+#     instruments; comparing them is exactly the mixed-scale defect that put a
+#     27-question long-context score into `quality_overall` as if it described
+#     the whole model)
+# Two values are comparable IFF they share a benchmark key. `axes:` below is a
+# VIEW for role relevance and must never be used as a comparison unit.
+
+schema_version: 1
+retrieved: 2026-08-02
+retrieved_by: session 26b5f442 (operator-directed)
+
+# benchmark key -> which capability axis it is evidence about. A view only.
+axes:
+  mmlu_pro: reasoning
+  gpqa_diamond: science
+  aime26: math
+  aime25: math
+  hmmt25: math
+  livecodebench_v6: coding
+  aider_polyglot: coding
+  codeforces_elo: coding
+  swe_bench_verified: agentic_coding
+  terminal_bench_2: agentic_terminal
+  tool_compliance_local: tool_use
+  bfcl_v3: tool_use
+  bfcl_v4: tool_use
+  ifeval: instruction_following
+  mmmu: vision_language
+  mmmu_pro: vision_language
+  mathvision: vision_language
+  ruler_1m: long_context
+  longbench_v2: long_context
+  aa_lcr: long_context
+  mrcr_v2_128k: long_context
+
+# Benchmarks reported by EVERY text model below — the comparable core. A
+# ranking that uses only these keys has no coverage holes.
+universal_keys:
+  - mmlu_pro
+  - gpqa_diamond
+  - livecodebench_v6
+
+# capability tag (registry roles.<role>.candidate_roles) -> axes that matter for
+# it, most specific first. Roles are NOT listed here: a role's capabilities are
+# already declared in the registry, and restating them would be one more table
+# to drift.
+#
+# A preferred axis is only USED when it can actually rank — i.e. at least two
+# fleet models report the same benchmark on it. Otherwise the resolver falls
+# back to the universal aggregate and records that it did.
+capability_axes:
+  ingest: [long_context, reasoning]
+  summarization: [long_context, reasoning]
+  architect: [reasoning, science, agentic_coding]
+  architect_critic: [reasoning, science]
+  architect_general: [reasoning, science, agentic_coding]
+  critic: [reasoning, science]
+  reasoning: [reasoning, science]
+  thinking: [reasoning, science]
+  coder: [coding, agentic_coding]
+  coder_escalation: [agentic_coding, coding]
+  math: [math, reasoning]
+  worker: [tool_use, instruction_following, reasoning]
+  draft: [reasoning]
+  frontdoor: [reasoning, instruction_following]
+  general: [reasoning]
+  vision: [vision_language]
+  agentic_vision: [vision_language]
+
+# CROSS-MODEL RANKABILITY, measured from the data below rather than asserted.
+#
+# tool_use: FIXED 2026-08-02. It was unrankable (bfcl_v3 on one model, bfcl_v4
+# on another) until `tool_compliance_local` was measured across all six models
+# under one judge. That axis now ranks, and it discriminates far better than
+# any suite we own: 70.4-85.2%, versus 74% of judge-suite questions sitting at
+# a perfect ceiling.
+#
+# long_context: STILL unrankable. Each vendor publishes a different suite
+# (ruler_1m / longbench_v2 / aa_lcr / mrcr_v2_128k, one model each), so the
+# values are used for the OWNING role's fitness but carry rankable=false and
+# must never order models. Note this is not merely a missing run: a local
+# needle-retrieval attempt could not discriminate either (every arm 38/39,
+# including f16), which is why the KV study rebuilt around KL divergence.
+# Ranking this axis needs a better instrument, not just a longer slot.
+
+models:
+  qwen3.6-27b-mtp-q8_0:
+    display_name: Qwen3.6-27B
+    roles: [architect_general, coder_escalation]
+    served_precision: Q8_0
+    provenance: vendor_reported
+    reported_precision: bf16
+    reported_mode: thinking
+    source_url: https://huggingface.co/Qwen/Qwen3.6-27B
+    benchmarks:
+      mmlu_pro: 0.862
+      gpqa_diamond: 0.878
+      aime26: 0.941
+      hmmt25: 0.938
+      livecodebench_v6: 0.839
+      swe_bench_verified: 0.772
+      terminal_bench_2: 0.593
+      mmmu: 0.829
+      mmmu_pro: 0.758
+    # Measured on THIS stack 2026-08-02, not a vendor claim: the canonical
+    # tool_compliance suite (9 questions, 0-3 rubric) scored by
+    # architect_critic across all six models under one judge, one budget.
+    # Weaker instrument than an execution-verified benchmark like BFCL --
+    # it is 9 LLM-judged questions -- but it is the only tool_use evidence
+    # that covers the whole fleet, and it DISCRIMINATES: 70.4-85.2%, a
+    # 14.8pp spread, versus the 74%-ceiling saturation of the other suites.
+    local_benchmarks:
+      tool_compliance_local: 0.741
+    absent_from_card: [ifeval, bfcl_v3, bfcl_v4, ruler_1m, longbench_v2]
+    local_corroboration:
+      swe_bench_verified:
+        value: 0.575
+        instrument: swe-bench-verified-40q-local
+        ratio_to_reported: 0.745
+        note: ratified local run; Q8_0, enable_thinking=false, 40-question subset
+
+  qwen3.6-35b-a3b-mtp-q8_0:
+    display_name: Qwen3.6-35B-A3B
+    roles: [frontdoor, worker_summarize]
+    served_precision: Q8_0
+    provenance: vendor_reported
+    reported_precision: bf16
+    reported_mode: thinking
+    source_url: https://huggingface.co/Qwen/Qwen3.6-35B-A3B
+    benchmarks:
+      mmlu_pro: 0.852
+      gpqa_diamond: 0.860
+      aime26: 0.927
+      livecodebench_v6: 0.804
+      swe_bench_verified: 0.734
+      terminal_bench_2: 0.515
+      mmmu: 0.817
+      mmmu_pro: 0.753
+    # Measured on THIS stack 2026-08-02, not a vendor claim: the canonical
+    # tool_compliance suite (9 questions, 0-3 rubric) scored by
+    # architect_critic across all six models under one judge, one budget.
+    # Weaker instrument than an execution-verified benchmark like BFCL --
+    # it is 9 LLM-judged questions -- but it is the only tool_use evidence
+    # that covers the whole fleet, and it DISCRIMINATES: 70.4-85.2%, a
+    # 14.8pp spread, versus the 74%-ceiling saturation of the other suites.
+    local_benchmarks:
+      tool_compliance_local: 0.778
+    absent_from_card: [ifeval, bfcl_v3, bfcl_v4, ruler_1m, longbench_v2]
+
+  qwen3.6-35b-a3b-q8_0:
+    display_name: Qwen3.6-35B-A3B (no MTP draft head)
+    roles: [qwen36_q8_0]
+    served_precision: Q8_0
+    provenance: vendor_reported
+    reported_precision: bf16
+    reported_mode: thinking
+    source_url: https://huggingface.co/Qwen/Qwen3.6-35B-A3B
+    # Same upstream weights as qwen3.6-35b-a3b-mtp-q8_0. MTP is a serving-side
+    # speculative draft head: it changes decode throughput, not what the model
+    # knows, so the published quality figures apply to both. Listed separately
+    # because the registry carries them as distinct model ids.
+    #
+    # This entry also retires a contradiction: this model previously compiled to
+    # quality_overall=0.738 (a 2026-04-20 7-suite percentage) while its own
+    # `measured` evidence cited "170/183 (92.9%)" — the value and the evidence
+    # it pointed at disagreed by 19 points.
+    benchmarks:
+      mmlu_pro: 0.852
+      gpqa_diamond: 0.860
+      aime26: 0.927
+      livecodebench_v6: 0.804
+      swe_bench_verified: 0.734
+      terminal_bench_2: 0.515
+      mmmu: 0.817
+      mmmu_pro: 0.753
+    # Measured on THIS stack 2026-08-02, not a vendor claim: the canonical
+    # tool_compliance suite (9 questions, 0-3 rubric) scored by
+    # architect_critic across all six models under one judge, one budget.
+    # Weaker instrument than an execution-verified benchmark like BFCL --
+    # it is 9 LLM-judged questions -- but it is the only tool_use evidence
+    # that covers the whole fleet, and it DISCRIMINATES: 70.4-85.2%, a
+    # 14.8pp spread, versus the 74%-ceiling saturation of the other suites.
+    local_benchmarks:
+      tool_compliance_local: 0.778
+    absent_from_card: [ifeval, bfcl_v3, bfcl_v4, ruler_1m, longbench_v2]
+
+  qwen3.5-122b-a10b-q4_k_m:
+    display_name: Qwen3.5-122B-A10B
+    roles: [architect_critic]
+    served_precision: Q4_K_M
+    provenance: vendor_reported
+    reported_precision: bf16
+    reported_mode: thinking
+    source_url: https://huggingface.co/Qwen/Qwen3.5-122B-A10B
+    benchmarks:
+      mmlu_pro: 0.867
+      gpqa_diamond: 0.866
+      ifeval: 0.934
+      livecodebench_v6: 0.789
+      swe_bench_verified: 0.720
+      terminal_bench_2: 0.494
+      bfcl_v4: 0.722
+      mmmu: 0.839
+      mmmu_pro: 0.769
+      mathvision: 0.862
+      aa_lcr: 0.669
+      longbench_v2: 0.602
+    # Measured on THIS stack 2026-08-02, not a vendor claim: the canonical
+    # tool_compliance suite (9 questions, 0-3 rubric) scored by
+    # architect_critic across all six models under one judge, one budget.
+    # Weaker instrument than an execution-verified benchmark like BFCL --
+    # it is 9 LLM-judged questions -- but it is the only tool_use evidence
+    # that covers the whole fleet, and it DISCRIMINATES: 70.4-85.2%, a
+    # 14.8pp spread, versus the 74%-ceiling saturation of the other suites.
+    local_benchmarks:
+      tool_compliance_local: 0.852
+    absent_from_card: [aime26, aime25, ruler_1m]
+
+  qwen3-next-80b-a3b-q4_k_m:
+    display_name: Qwen3-Next-80B-A3B-Instruct
+    roles: [ingest_long_context]
+    served_precision: Q4_K_M
+    provenance: vendor_reported
+    reported_precision: bf16
+    reported_mode: instruct (non-thinking variant)
+    source_url: https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct
+    benchmarks:
+      mmlu_pro: 0.806
+      gpqa_diamond: 0.729
+      aime25: 0.695          # NOTE: AIME25, not AIME26 — not comparable to the others
+      hmmt25: 0.541
+      livecodebench_v6: 0.566
+      aider_polyglot: 0.498
+      ifeval: 0.876
+      bfcl_v3: 0.703
+      ruler_1m: 0.918        # its role-relevant axis, and it leads on it
+    # Measured on THIS stack 2026-08-02, not a vendor claim: the canonical
+    # tool_compliance suite (9 questions, 0-3 rubric) scored by
+    # architect_critic across all six models under one judge, one budget.
+    # Weaker instrument than an execution-verified benchmark like BFCL --
+    # it is 9 LLM-judged questions -- but it is the only tool_use evidence
+    # that covers the whole fleet, and it DISCRIMINATES: 70.4-85.2%, a
+    # 14.8pp spread, versus the 74%-ceiling saturation of the other suites.
+    local_benchmarks:
+      tool_compliance_local: 0.704
+    absent_from_card: [swe_bench_verified, terminal_bench_2, longbench_v2, mmmu]
+
+  gemma4-26b-a4b-it-orig-q4_k_m:
+    display_name: gemma-4-26B-A4B-it
+    roles: [worker_general, worker_explore, worker_math, toolrunner]
+    served_precision: Q4_K_M
+    provenance: vendor_reported
+    reported_precision: bf16
+    reported_mode: not stated
+    source_url: https://huggingface.co/google/gemma-4-26b-a4b-it
+    benchmarks:
+      mmlu_pro: 0.826
+      gpqa_diamond: 0.823
+      aime26: 0.883
+      livecodebench_v6: 0.771
+      codeforces_elo: 1718   # NOT a fraction — Elo. Never normalise or average this.
+      mmmu_pro: 0.738
+      mrcr_v2_128k: 0.441
+    # Measured on THIS stack 2026-08-02, not a vendor claim: the canonical
+    # tool_compliance suite (9 questions, 0-3 rubric) scored by
+    # architect_critic across all six models under one judge, one budget.
+    # Weaker instrument than an execution-verified benchmark like BFCL --
+    # it is 9 LLM-judged questions -- but it is the only tool_use evidence
+    # that covers the whole fleet, and it DISCRIMINATES: 70.4-85.2%, a
+    # 14.8pp spread, versus the 74%-ceiling saturation of the other suites.
+    local_benchmarks:
+      tool_compliance_local: 0.778
+    absent_from_card: [swe_bench_verified, ifeval, bfcl_v3, bfcl_v4, terminal_bench_2]
+
+  qwen3-vl-30b-a3b-q4_k_m:
+    display_name: Qwen3-VL-30B-A3B-Instruct
+    roles: [worker_vision, vision_escalation]
+    served_precision: Q4_K_M
+    provenance: measured_local        # vendor card publishes its tables as IMAGES
+    source_url: https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct
+    benchmarks:
+      mmmu: 0.636
+    # Measured on THIS stack 2026-08-02, not a vendor claim: the canonical
+    # tool_compliance suite (9 questions, 0-3 rubric) scored by
+    # architect_critic across all six models under one judge, one budget.
+    # Weaker instrument than an execution-verified benchmark like BFCL --
+    # it is 9 LLM-judged questions -- but it is the only tool_use evidence
+    # that covers the whole fleet, and it DISCRIMINATES: 70.4-85.2%, a
+    # 14.8pp spread, versus the 74%-ceiling saturation of the other suites.
+    local_benchmarks:
+      tool_compliance_local: 0.741
+    absent_from_card: [mmlu_pro, gpqa_diamond, livecodebench_v6]
+    local_corroboration:
+      mmmu:
+        value: 0.636
+        instrument: mmmu-val-250-local
+        note: >-
+          Our own run, not a vendor claim: MMMU-250 63.6% vs Qwen2.5-VL-7B
+          52.4%, +11.2pp, paired exact McNemar p=0.0011. The vendor card's
+          tables are images and were NOT transcribed — absence here is
+          "not retrieved", not "not reported".

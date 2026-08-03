@@ -458,7 +458,12 @@ models:
         )
 
         assert priors.baseline_tps_by_role["worker_math"] == pytest.approx(60.7)
-        assert priors.baseline_quality_by_role["worker_math"] == pytest.approx(0.85)
+        # 0.8067, not a generic 0.85: the conflicted descriptor's own 0.99 is
+        # correctly skipped, and the fallback now resolves via the model worker_math
+        # actually runs (gemma-4-26B-A4B) rather than a single role-agnostic
+        # constant. The value mirrors the compiled prior derived from the fixed
+        # universal benchmark set.
+        assert priors.baseline_quality_by_role["worker_math"] == pytest.approx(0.8067)
 
     def test_descriptor_priors_fall_back_when_descriptor_missing(self, tmp_path):
         registry_path = tmp_path / "model_registry.yaml"

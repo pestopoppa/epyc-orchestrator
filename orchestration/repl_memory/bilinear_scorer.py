@@ -5,8 +5,8 @@ Replaces per-action Q-values with a feature-conditioned scorer:
     Q(prompt, model) = sigmoid(v_model^T W v_prompt + b)
 
 where v_model is a fixed feature vector derived from model registry specs
-(baseline_tps, baseline_quality, memory_cost, param_count_log, is_moe,
-quant_bits), and v_prompt is derived from the prompt embedding or task
+(baseline_tps, baseline_quality, quality_known, memory_cost,
+param_count_log, is_moe, quant_bits), and v_prompt is derived from the prompt embedding or task
 features. W is a learned interaction matrix.
 
 Key advantage: new models score immediately from their spec features,
@@ -31,18 +31,23 @@ from src.roles import Role
 from src.registry.stack_priors import live_stack_role_records
 from src.registry.model_descriptors import compile_model_descriptors
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 logger = logging.getLogger(__name__)
 
 BILINEAR_SCORER_ENABLED = os.environ.get("BILINEAR_SCORER_ENABLED", "0") == "1"
 
-# Model feature dimension (6 features per model)
-MODEL_FEATURE_DIM = 6
+# Model feature dimension (7 features per model).
+# 7, not 6: baseline_quality gained a companion quality_known mask on
+# 2026-08-02. Any persisted W from before that is dimensionally stale and
+# must be retrained rather than loaded.
+MODEL_FEATURE_DIM = 7
 
 # Prompt feature dimension (extracted from task IR)
 PROMPT_FEATURE_DIM = 8
 
-DEFAULT_STACK_PRIORS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/derived/stack_priors.yaml")
-DEFAULT_REGISTRY_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml")
+DEFAULT_STACK_PRIORS_PATH = _REPO_ROOT / "orchestration/derived/stack_priors.yaml"
+DEFAULT_REGISTRY_PATH = _REPO_ROOT / "orchestration/model_registry.yaml"
 
 UNKNOWN_MODEL_FEATURES = {"params_b": 30.0, "is_moe": False, "quant_bits": 4.0}
 
@@ -54,6 +59,11 @@ class ModelFeatures:
     role: str
     baseline_tps: float = 0.0
     baseline_quality: float = 0.0
+    # Missing-data mask for baseline_quality. Without it, "no measurement" and
+    # "measured this value" are the same float and the model cannot tell them
+    # apart — the standard way an imputed default gets learned as if it were
+    # evidence.
+    quality_known: float = 0.0
     memory_cost: float = 0.0
     param_count_log: float = 0.0  # log2(param_count_B)
     is_moe: float = 0.0  # 1.0 for MoE, 0.0 for dense
@@ -64,6 +74,7 @@ class ModelFeatures:
         raw = np.array([
             self.baseline_tps / 40.0,  # normalize to ~[0,1]
             self.baseline_quality,
+            self.quality_known,
             self.memory_cost / 5.0,  # normalize
             self.param_count_log / 10.0,  # log2(1024B) ≈ 10
             self.is_moe,
@@ -198,7 +209,15 @@ def extract_model_features(
         features[canonical_role] = ModelFeatures(
             role=canonical_role,
             baseline_tps=tps.get(role, 10.0),
-            baseline_quality=quality.get(role, 0.75),
+            # 0.0 with an explicit known-flag, NOT a 0.75 default. 0.75 is the
+            # worker baseline the reward's quality_gap is measured against, so
+            # defaulting an UNMEASURED role to it asserted "this model is exactly
+            # worker-grade" — a specific, load-bearing claim made by omission.
+            # architect_general sat at that default while having no measured
+            # entry at all. quality_known lets a learner ignore the feature when
+            # it is absent instead of training on a fabricated value.
+            baseline_quality=float(quality.get(role, 0.0)),
+            quality_known=1.0 if role in quality else 0.0,
             memory_cost=memory.get(role, 1.0),
             param_count_log=math.log2(max(float(specs["params_b"]), 1.0)),
             is_moe=float(specs["is_moe"]),

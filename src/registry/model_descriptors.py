@@ -3,24 +3,26 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import re
 import subprocess
 import sys
 from datetime import datetime, date, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
-DEFAULT_LEAN_REGISTRY = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml")
+
+DEFAULT_LEAN_REGISTRY = _REPO_ROOT / "orchestration/model_registry.yaml"
 DEFAULT_RESEARCH_REGISTRY = Path(
     "/mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml"
 )
-DEFAULT_DESCRIPTOR_OUTPUT = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml"
-)
+DEFAULT_DESCRIPTOR_OUTPUT = _REPO_ROOT / "orchestration/model_descriptors.yaml"
 
 
 class DescriptorCompileError(ValueError):
@@ -285,7 +287,247 @@ def _registry_date(*configs: dict[str, Any] | None) -> Any:
     return None
 
 
-def _quality(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dict[str, Any]:
+# Domain words that, when they appear in a registry benchmark_score string,
+# mean the number describes ONE domain rather than the whole canonical suite.
+# Keyed by the suite_vector name the score belongs under instead of "overall".
+_BENCHMARK_DOMAIN_WORDS: tuple[tuple[str, str], ...] = (
+    ("long_context", "long_context"),
+    ("long-context", "long_context"),
+    ("vision", "vision_language"),
+    ("mmmu", "vision_language"),
+    ("swe-bench", "swe_verified"),
+    ("swe_verified", "swe_verified"),
+    ("tool_compliance", "tool_compliance"),
+)
+
+
+def _benchmark_domain_qualifier(raw: Any) -> str | None:
+    """Return the suite key a benchmark_score is scoped to, or None if whole-suite.
+
+    A benchmark_score is free text ("25/27 (93%) on canonical long_context
+    suite"). When it names its own scope, that scope — not "overall" — is where
+    the number belongs.
+    """
+    if not isinstance(raw, str):
+        return None
+    lowered = raw.lower()
+    for word, suite_key in _BENCHMARK_DOMAIN_WORDS:
+        if word in lowered:
+            return suite_key
+    return None
+
+
+_PUBLIC_BENCHMARKS_PATH = (
+    Path(__file__).resolve().parents[2] / "orchestration" / "public_benchmarks.yaml"
+)
+
+
+@lru_cache(maxsize=1)
+def _public_benchmarks() -> dict[str, Any]:
+    """Load vendor-reported / leaderboard results. Missing file is NOT fatal.
+
+    Absence yields an empty mapping so descriptors still compile, but the
+    per-model record then carries no `public` block at all rather than an
+    empty-looking one — a consumer can distinguish "no public data" from
+    "public data says zero".
+    """
+    try:
+        data = yaml.safe_load(_PUBLIC_BENCHMARKS_PATH.read_text()) or {}
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"{_PUBLIC_BENCHMARKS_PATH} exists but did not parse: {exc!r}. "
+            "Refusing to compile descriptors against a half-read benchmark file."
+        ) from exc
+    return data if isinstance(data, dict) else {}
+
+
+@lru_cache(maxsize=1)
+def _rankable_benchmarks() -> frozenset[str]:
+    """Benchmarks at least TWO fleet models report — the only ones that can rank.
+
+    MEASURED from the data, not declared. A benchmark only one model reports
+    says nothing about that model's standing: Qwen3-Next-80B's RULER-1M 0.918
+    looks like a commanding long-context number and is comparable to precisely
+    nothing, because every other model reports a different long-context suite.
+    Using it to rank would be the mixed-instrument defect wearing an axis name.
+    """
+    counts: dict[str, int] = {}
+    for record in (_public_benchmarks().get("models") or {}).values():
+        if not isinstance(record, dict):
+            continue
+        for field in ("benchmarks", "local_benchmarks"):
+            for key in record.get(field) or {}:
+                counts[key] = counts.get(key, 0) + 1
+    return frozenset(k for k, n in counts.items() if n >= 2)
+
+
+def _merged_benchmarks(record: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Pool vendor and locally-measured benchmarks, keeping provenance PER KEY.
+
+    Provenance cannot be a per-model flag once both kinds coexist: the same
+    model carries vendor-reported bf16 figures AND numbers we measured on this
+    stack at Q8_0/Q4_K_M with thinking off. Recording provenance per benchmark
+    is what lets a reader see that `mmlu_pro` is a vendor claim while
+    `tool_compliance_local` is ours, instead of one label covering both.
+
+    Local wins a key collision: a number measured on the deployed configuration
+    describes this stack better than the upstream claim about a different one.
+    """
+    merged: dict[str, Any] = {}
+    provenance: dict[str, str] = {}
+    for key, value in (record.get("benchmarks") or {}).items():
+        merged[key] = value
+        provenance[key] = str(record.get("provenance") or "vendor_reported")
+    for key, value in (record.get("local_benchmarks") or {}).items():
+        merged[key] = value
+        provenance[key] = "measured_local"
+    return merged, provenance
+
+
+def resolve_role_quality(
+    capabilities: list[str],
+    benchmarks: dict[str, Any],
+    overall: float | None,
+) -> dict[str, Any]:
+    """Pick the quality figure a ROLE should be judged on.
+
+    Walks the role's declared capabilities in order, takes the first axis that
+    is both relevant and RANKABLE, and returns the best benchmark on it. Falls
+    back to the universal aggregate — recording why — when no preferred axis
+    can rank. Returns basis text in every branch so a consumer never sees a
+    bare float whose provenance it cannot state.
+    """
+    data = _public_benchmarks()
+    axis_of = data.get("axes") or {}
+    cap_axes = data.get("capability_axes") or {}
+    rankable = _rankable_benchmarks()
+
+    preferred: list[str] = []
+    for capability in capabilities:
+        for axis in cap_axes.get(capability) or []:
+            if axis not in preferred:
+                preferred.append(axis)
+
+    unrankable_seen: list[str] = []
+    for axis in preferred:
+        on_axis = {k: v for k, v in benchmarks.items() if axis_of.get(k) == axis}
+        if not on_axis:
+            continue
+        usable = {k: v for k, v in on_axis.items() if k in rankable}
+        cross_model_rankable = bool(usable)
+        if not usable:
+            # USE the value anyway, flagged. Vendors publish different
+            # long-context suites (RULER-1M / LongBench-v2 / AA-LCR / MRCR-v2,
+            # one model each), so `long_context` can never rank the fleet — but
+            # RULER 0.918 is still the best available evidence that
+            # ingest_long_context is good at the job it exists for. Withholding
+            # it would leave the role scored on `reasoning`, which is worse
+            # evidence about its actual function.
+            #
+            # `rankable: false` is what keeps this honest: the value answers
+            # "is this role fit for its purpose", and `comparable_value` below
+            # answers "how does it rank against other models". Conflating those
+            # two questions in one float is the original defect.
+            unrankable_seen.append(f"{axis}({'/'.join(sorted(on_axis))})")
+            usable = on_axis
+        key = sorted(usable)[0]
+        value = usable[key]
+        if not isinstance(value, (int, float)):
+            continue
+        # Carry the skipped-axis note even on SUCCESS. ingest_long_context
+        # prefers `long_context` and lands on `reasoning`; without this the
+        # basis reads "role-relevant axis reasoning" and silently conceals that
+        # the axis the role actually exists for could not rank the fleet.
+        note = ""
+        if not cross_model_rankable:
+            note = (
+                " — NOT cross-model comparable (no two fleet models share a "
+                "benchmark on this axis); use comparable_value to rank"
+            )
+        elif unrankable_seen:
+            note = (
+                "; skipped higher-priority " + ", ".join(unrankable_seen)
+                + " for the same reason"
+            )
+        return {
+            "value": round(float(value), 4),
+            "axis": axis,
+            "benchmark": key,
+            # Fitness for THIS role's job.
+            "rankable": cross_model_rankable,
+            # Always cross-model comparable: the universal-benchmark aggregate.
+            # A consumer ranking models reads this; a consumer asking "is this
+            # role good at its job" reads `value`. These are different
+            # questions and a single float cannot answer both.
+            "comparable_value": overall,
+            "skipped_axes": list(unrankable_seen),
+            "basis": f"role-relevant axis {axis} via {key}{note}",
+        }
+
+    note = ""
+    if unrankable_seen:
+        note = (
+            "; preferred " + ", ".join(unrankable_seen)
+            + " present but NOT rankable (fewer than two fleet models share a "
+            "benchmark on that axis)"
+        )
+    if overall is None:
+        return {
+            "value": None,
+            "axis": None,
+            "benchmark": None,
+            "rankable": False,
+            "basis": "no rankable role axis and no universal aggregate" + note,
+        }
+    return {
+        "value": overall,
+        "axis": None,
+        "benchmark": None,
+        "rankable": True,
+        "basis": "universal aggregate (no rankable role-specific axis)" + note,
+    }
+
+
+def _public_quality(model_id: str | None) -> dict[str, Any] | None:
+    """The public-benchmark record for one model, keyed by BENCHMARK not axis.
+
+    Deliberately returns benchmark-keyed values plus the conditions they were
+    produced under. Two values are comparable iff they share a benchmark key;
+    `axes` is carried alongside purely so a role can select the benchmarks
+    relevant to it, never so that values can be pooled across an axis.
+    """
+    if not model_id:
+        return None
+    data = _public_benchmarks()
+    record = (data.get("models") or {}).get(model_id)
+    if not isinstance(record, dict):
+        return None
+    merged, per_key_provenance = _merged_benchmarks(record)
+    out = {
+        "benchmarks": merged,
+        "benchmark_provenance": per_key_provenance,
+        "provenance": record.get("provenance"),
+        "reported_precision": record.get("reported_precision"),
+        "served_precision": record.get("served_precision"),
+        "reported_mode": record.get("reported_mode"),
+        "source_url": record.get("source_url"),
+        "absent_from_card": list(record.get("absent_from_card") or []),
+        "retrieved": data.get("retrieved"),
+        "axes": dict(data.get("axes") or {}),
+        "universal_keys": list(data.get("universal_keys") or []),
+    }
+    if record.get("local_corroboration"):
+        out["local_corroboration"] = copy.deepcopy(record["local_corroboration"])
+    return out
+
+
+def _quality(
+    role_cfg: dict[str, Any],
+    server_cfg: dict[str, Any] | None,
+    model_id: str | None = None,
+) -> dict[str, Any]:
     suite_vector: dict[str, float] = {}
     performance = role_cfg.get("performance") if isinstance(role_cfg, dict) else None
     if isinstance(performance, dict):
@@ -309,13 +551,43 @@ def _quality(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dic
                     suite_key = key.removesuffix("_pct")
 
                 suite_vector[suite_key] = score
-                if key in {"long_context_quality", "vl_score"} and "overall" not in suite_vector:
-                    suite_vector["overall"] = score
+                # DELIBERATELY no promotion to "overall" here.
+                #
+                # This used to read:
+                #     if key in {"long_context_quality", "vl_score"} and ...:
+                #         suite_vector["overall"] = score
+                # which manufactured a whole-model quality figure out of a
+                # SINGLE-DOMAIN score. It is how Qwen3-Next-80B carried
+                # overall=0.9259 from a 27-question long-context suite and
+                # Qwen3-VL-30B carried overall=0.636 from MMMU — a vision
+                # benchmark — into `priors.quality_overall`, the scalar the
+                # router reads. A domain score is evidence ABOUT a domain; it
+                # is not an aggregate, and nothing downstream could tell the
+                # difference once it was named "overall".
+                #
+                # Qwen3.6-27B already demonstrated the correct behaviour by
+                # accident: it carries swe_verified with no overall, so it
+                # compiles to quality_overall=null. Null is the honest value
+                # when no whole-suite measurement exists.
+
+    overall_basis: str | None = None
+    if "overall" in suite_vector:
+        overall_basis = "registry performance quality_pct/quality_score"
 
     if isinstance(server_cfg, dict):
-        benchmark_score = _score_fraction(server_cfg.get("benchmark_score"))
+        raw_benchmark = server_cfg.get("benchmark_score")
+        benchmark_score = _score_fraction(raw_benchmark)
         if benchmark_score is not None and "overall" not in suite_vector:
-            suite_vector["overall"] = benchmark_score
+            # Only a WHOLE-SUITE benchmark may become `overall`. A registry
+            # benchmark_score that names its own narrow scope — e.g.
+            # "25/27 (93%) on canonical long_context suite" — is domain
+            # evidence wearing a general-sounding field name.
+            qualifier = _benchmark_domain_qualifier(raw_benchmark)
+            if qualifier is None:
+                suite_vector["overall"] = benchmark_score
+                overall_basis = "registry benchmark_score (whole suite)"
+            else:
+                suite_vector.setdefault(qualifier, benchmark_score)
 
     measured: list[dict[str, Any]] = []
     if isinstance(server_cfg, dict) and server_cfg.get("benchmark_score"):
@@ -335,12 +607,70 @@ def _quality(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dic
             }
         )
 
-    return {
+    record: dict[str, Any] = {
         "suite_vector": suite_vector,
+        # WHERE `overall` came from, or None when there is no overall. Without
+        # this, a consumer comparing two models' quality_overall cannot tell it
+        # is comparing a Claude-judged 79-question suite against a 7-suite
+        # percentage against a vision benchmark.
+        "overall_basis": overall_basis,
         "source": "orchestration/model_registry.yaml",
         "eval_protocol": "MEASUREMENT.md#canonical-quality",
         "measured": measured,
     }
+    # Vendor-reported / leaderboard results, benchmark-keyed. Kept in a SEPARATE
+    # block from suite_vector on purpose: suite_vector holds figures measured on
+    # this stack, `public` holds third-party claims about the bf16 upstream
+    # model. Merging them would reintroduce exactly the mixed-provenance defect
+    # the overall_basis field exists to expose.
+    public = _public_quality(model_id)
+    if public is not None:
+        record["public"] = public
+        # A LEGITIMATE `overall` — the mean over a FIXED benchmark set that
+        # every model in the fleet reports (`universal_keys`). This is the only
+        # construction that makes the scalar comparable across models: same
+        # benchmarks, same vendor conditions, no coverage holes. It is the
+        # opposite of the promotion this function used to do, where "overall"
+        # meant whichever single number happened to exist.
+        #
+        # It OUTRANKS a local whole-suite figure on purpose. Our own canonical
+        # judge suite is 74% saturated and was only ever run on two of six
+        # models, so it cannot rank the fleet; these three benchmarks can.
+        # The local numbers are preserved verbatim under suite_vector and are
+        # what a same-instrument comparison should use.
+        universal = public.get("universal_keys") or []
+        benchmarks = public.get("benchmarks") or {}
+        values = [benchmarks[k] for k in universal if isinstance(benchmarks.get(k), (int, float))]
+        if universal and len(values) == len(universal):
+            suite_vector["overall"] = round(sum(values) / len(values), 4)
+            record["overall_basis"] = (
+                "public benchmarks: mean(" + ", ".join(universal) + ") — "
+                f"{public.get('provenance')}, {public.get('reported_precision')}, "
+                f"mode={public.get('reported_mode')}"
+            )
+        elif values:
+            # Partial coverage: refuse to average a different subset than the
+            # other models use. An aggregate over a model-specific subset is
+            # not comparable to one over the full set, and silently averaging
+            # whatever exists is how incomparable scalars get built.
+            record["overall_basis"] = (
+                f"no overall: only {len(values)}/{len(universal)} universal "
+                "benchmarks reported; averaging a partial subset would not be "
+                "comparable to models with full coverage"
+            )
+
+        # THE ROLE-FACING FIGURE. Consumers that score a role (routing, reward)
+        # read this rather than picking an axis themselves, so the choice of
+        # axis — and the honesty about whether it can rank — is made once, here.
+        capabilities = []
+        if isinstance(role_cfg, dict):
+            capabilities = [
+                str(c) for c in (role_cfg.get("candidate_roles") or []) if isinstance(c, str)
+            ]
+        record["for_role"] = resolve_role_quality(
+            capabilities, benchmarks, suite_vector.get("overall")
+        )
+    return record
 
 
 def _speed(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dict[str, Any]:
@@ -844,7 +1174,7 @@ def _descriptor_for_role(
             "runtime_aliases": runtime_aliases,
             "shared_mmap": bool(server_cfg),
         },
-        "quality": _quality(role_cfg, server_cfg),
+        "quality": _quality(role_cfg, server_cfg, model_id),
         "speed": _speed(role_cfg, server_cfg),
         "acceleration": _acceleration(role_cfg, server_cfg, enrichment_records),
         "serving": _serving(role_cfg, server_role, server_cfg),
@@ -998,7 +1328,7 @@ def write_model_descriptors(
 
 
 def _roles_from_stack_manifest() -> set[str]:
-    sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator/scripts/server")
+    sys.path.insert(0, str(_REPO_ROOT / "scripts/server"))
     from stack_manifest import ROLE_LAUNCH_META  # type: ignore[import]
 
     active: set[str] = set()

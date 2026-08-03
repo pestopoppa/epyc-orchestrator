@@ -2267,9 +2267,15 @@ roles:
       disable_thinking: true
       reasoning: auto
       max_tokens_multiplier: 4
+    # 2026-08-02: reordered to lead with the role's actual job. `coder` was
+    # first, so the per-axis quality resolver scored worker_summarize on
+    # coding/livecodebench_v6 (0.804) — a coding yardstick for a summarization
+    # alias. It runs frontdoor's GGUF on frontdoor's server, so with
+    # summarization first it resolves to long_context (not rankable today, no
+    # two fleet models share a long-context benchmark) and falls back to
+    # reasoning/mmlu_pro 0.852, matching frontdoor as it should.
     candidate_roles:
-    - coder
-    - frontdoor
+    - summarization
     - ingest
     - general
     acceleration:

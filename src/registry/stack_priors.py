@@ -668,6 +668,128 @@ def _residency_cost(value: Any) -> float | None:
     return RESIDENCY_COST.get(value.strip().lower())
 
 
+def _role_capabilities(
+    role: str,
+    role_cfg: dict[str, Any] | None,
+    registry_roles: dict[str, Any] | None = None,
+    stack_aliases: dict[str, Any] | None = None,
+) -> list[str]:
+    """Capability tags for a role, INHERITED from its host when it declares none.
+
+    Five of the six alias roles carry their own `candidate_roles`; worker_explore
+    does not, because it has no `roles:` entry at all — it exists only inside
+    `server_mode.worker.shared_with`. Without inheritance it resolved to zero
+    capabilities and fell through to the fleet-wide aggregate, silently scoring
+    on a different basis from worker_general and worker_math, which run the same
+    model on the same server.
+    """
+    own = []
+    if isinstance(role_cfg, dict):
+        own = [str(c) for c in (role_cfg.get("candidate_roles") or []) if isinstance(c, str)]
+    if own:
+        return own
+
+    host = (stack_aliases or {}).get(role)
+    if not isinstance(host, str):
+        return []
+    host_cfg = (registry_roles or {}).get(host)
+    if not isinstance(host_cfg, dict):
+        return []
+    return [str(c) for c in (host_cfg.get("candidate_roles") or []) if isinstance(c, str)]
+
+
+def _quality_for_role(
+    descriptor: dict[str, Any],
+    role_cfg: dict[str, Any] | None,
+    role: str = "",
+    registry_roles: dict[str, Any] | None = None,
+    stack_aliases: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Resolve the role-facing quality figure HERE, per role — not per model.
+
+    Capabilities are a property of the ROLE (`roles.<role>.candidate_roles`),
+    while a descriptor is per MODEL and is shared by every role bound to it.
+    Resolving on the descriptor therefore gave every co-hosted role the same
+    axis: architect_general and coder_escalation both run the 27B, so
+    coder_escalation inherited `reasoning` when the axis it should be judged
+    on is `agentic_coding`. Same weights, different job, different yardstick.
+    """
+    quality = descriptor.get("quality")
+    if not isinstance(quality, dict):
+        return None
+    public = quality.get("public")
+    if not isinstance(public, dict):
+        return None
+    benchmarks = public.get("benchmarks")
+    if not isinstance(benchmarks, dict):
+        return None
+
+    capabilities = _role_capabilities(role, role_cfg, registry_roles, stack_aliases)
+
+    from src.registry.model_descriptors import resolve_role_quality
+
+    suite_vector = quality.get("suite_vector")
+    overall = suite_vector.get("overall") if isinstance(suite_vector, dict) else None
+    return resolve_role_quality(capabilities, benchmarks, overall)
+
+
+def _quality_axis_values(descriptor: dict[str, Any]) -> dict[str, Any]:
+    """Benchmark-keyed quality evidence, with provenance kept separate.
+
+    `local` holds figures measured on THIS stack; `public` holds vendor /
+    leaderboard claims about the upstream bf16 model. They are never merged:
+    a vendor number and a local number for the same benchmark can differ
+    substantially (Qwen3.6-27B SWE-bench Verified: vendor 0.772, local 0.575),
+    and collapsing them would destroy exactly the distinction a consumer needs.
+    """
+    out: dict[str, Any] = {}
+    quality = descriptor.get("quality")
+    if not isinstance(quality, dict):
+        return out
+    suite_vector = quality.get("suite_vector")
+    if isinstance(suite_vector, dict):
+        local = {str(k): v for k, v in suite_vector.items() if k != "overall"}
+        if local:
+            out["local"] = local
+    public = quality.get("public")
+    if isinstance(public, dict) and isinstance(public.get("benchmarks"), dict):
+        out["public"] = dict(public["benchmarks"])
+        out["public_conditions"] = {
+            "provenance": public.get("provenance"),
+            "reported_precision": public.get("reported_precision"),
+            "reported_mode": public.get("reported_mode"),
+            "served_precision": public.get("served_precision"),
+            "source_url": public.get("source_url"),
+            "retrieved": public.get("retrieved"),
+        }
+        if public.get("universal_keys"):
+            out["comparable_across_all_models"] = list(public["universal_keys"])
+    return out
+
+
+def _quality_evidence_axes(descriptor: dict[str, Any]) -> list[str]:
+    """Every quality axis this model has ANY evidence on, locally or published.
+
+    Used to tell "measured on domain axes but never whole-suite" (an advisory:
+    quality_overall is correctly null) apart from "no quality evidence at all"
+    (a real gap). Returns benchmark/suite keys, never an aggregate, because the
+    caller must not be tempted to average across them.
+    """
+    axes: list[str] = []
+    quality = descriptor.get("quality")
+    if not isinstance(quality, dict):
+        return axes
+    suite_vector = quality.get("suite_vector")
+    if isinstance(suite_vector, dict):
+        axes.extend(str(k) for k in suite_vector if k != "overall")
+    public = quality.get("public")
+    if isinstance(public, dict):
+        benchmarks = public.get("benchmarks")
+        if isinstance(benchmarks, dict):
+            axes.extend(str(k) for k in benchmarks)
+    return sorted(dict.fromkeys(axes))
+
+
 def _quality_prior(descriptor: dict[str, Any]) -> float | None:
     quality = descriptor.get("quality")
     if not isinstance(quality, dict):
@@ -2415,8 +2537,29 @@ def _role_record(
     quality = _quality_prior(descriptor)
     if throughput is None:
         gaps.append("Missing throughput prior")
+    quality_advisories: list[str] = []
     if quality is None:
-        gaps.append("Missing overall quality prior")
+        # A missing `overall` is only a GAP when there is no quality evidence at
+        # all. A model measured on domain axes but never on the whole canonical
+        # suite is honestly described by quality_overall=null, and demanding a
+        # scalar here is what produced the defect this replaced: to satisfy this
+        # very gap, the descriptor builder promoted single-domain scores into
+        # `overall`, so Qwen3-Next-80B carried a 27-question LONG-CONTEXT score
+        # and Qwen3-VL carried an MMMU VISION score as if each described the
+        # whole model. The rule now asks "is there evidence?", not "is there a
+        # scalar?" — and null-by-design is an ADVISORY, not a blocking gap,
+        # because blocking is the pressure that manufactures fake numbers.
+        evidence = _quality_evidence_axes(descriptor)
+        if evidence:
+            quality_advisories.append(
+                "No whole-suite quality prior; domain evidence only "
+                f"({', '.join(evidence)}). quality_overall is null BY DESIGN — "
+                "read the per-axis evidence instead of expecting a scalar."
+            )
+        else:
+            gaps.append(
+                "Missing quality evidence entirely (no suite_vector, no public benchmarks)"
+            )
     if server_cfg is None:
         gaps.append("Missing live server binding")
     architecture = descriptor.get("architecture")
@@ -2478,7 +2621,21 @@ def _role_record(
         "policy": _policy_hints(serving_record, model_record),
         "priors": {
             "throughput_tps": throughput,
+            # SCALAR, and null whenever no whole-suite measurement exists.
+            # Never synthesised from a single domain — see quality_by_axis.
             "quality_overall": quality,
+            # PER-AXIS evidence, benchmark-keyed. Two values are comparable IFF
+            # they share a key; `long_context` under RULER-1M and `long_context`
+            # under LongBench-v2 are different instruments and are kept under
+            # their own benchmark names, never pooled.
+            "quality_by_axis": _quality_axis_values(descriptor),
+            # The figure a consumer scoring THIS ROLE should use: the
+            # role-relevant axis when it can rank the fleet, otherwise the
+            # universal aggregate, with `basis` stating which and why.
+            "quality_for_role": _quality_for_role(
+                descriptor, role_cfg, role, registry_roles, stack_aliases
+            ),
+            "quality_advisories": quality_advisories,
             "memory_cost": memory_cost,
         },
         "acceleration": copy.deepcopy(descriptor.get("acceleration") or {}),

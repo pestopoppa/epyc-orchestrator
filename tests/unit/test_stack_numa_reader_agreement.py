@@ -40,6 +40,25 @@ def _stack_prior_ports(mode: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, 
     }
 
 
+def _alias_hosts(mode: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """DERIVE alias -> host from the same producer the readers use.
+
+    This was a hardcoded {"coder_escalation": "frontdoor", ...} literal. W1
+    repointed coder_escalation at architect_general, and the literal went stale
+    while still looking authoritative — the test failed asserting [8083] == [8070]
+    against a mapping the registry had already changed. `_stack_manifest_info`
+    returns this map as its first element and the test was discarding it.
+
+    Deriving it also means a NEWLY declared alias is covered automatically,
+    instead of being silently untested until someone remembers to extend a list.
+    """
+    from src.registry.stack_priors import _stack_manifest_info
+
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", mode)
+    aliases, _roles = _stack_manifest_info()
+    return {str(a): str(h) for a, h in (aliases or {}).items()}
+
+
 def _stack_change_guard_ports(
     mode: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -133,10 +152,8 @@ def test_alias_serving_fleet_converges_on_host_launch_views_diverge(
     guard_ports = _stack_change_guard_ports(mode, monkeypatch)
     manifest_ports = _manifest_ports(mode)
 
-    alias_hosts = {
-        "coder_escalation": "frontdoor",
-        "worker_summarize": "frontdoor",
-    }
+    alias_hosts = _alias_hosts(mode, monkeypatch)
+    assert alias_hosts, "no aliases derived; the mapping producer returned nothing"
     for alias, host in alias_hosts.items():
         # Launch-topology views still agree with each other on the tagged subset.
         assert manifest_ports.get(alias) == dashboard_ports.get(alias)
@@ -147,7 +164,22 @@ def test_alias_serving_fleet_converges_on_host_launch_views_diverge(
         tagged = set(manifest_ports.get(alias) or [])
         serving = set(stack_prior_ports.get(alias) or [])
         assert tagged <= serving
-        if mode == "full":
-            assert tagged == serving
+
+        # Strictness is keyed on whether the HOST fans out, not on the mode.
+        # The old form asserted `tagged < serving` for every alias in
+        # quarter/both, which was really a proxy for "hosts fan out into
+        # quarters". That proxy broke when coder_escalation moved to
+        # architect_general: GPU-hosted roles (architect_general :8083,
+        # worker_vision :8086) run ONE instance in every mode, so their aliases
+        # are tagged onto the whole fleet and the subset can never be strict.
+        if len(serving) == 1:
+            assert tagged == serving, (
+                f"{alias}: single-instance host {host} -> alias must be tagged "
+                f"onto its whole fleet"
+            )
         else:
-            assert tagged < serving
+            assert tagged < serving, (
+                f"{alias}: host {host} fans out to {sorted(serving)} but the "
+                f"launch view tags {sorted(tagged)}; WP-13 requires the serving "
+                f"view to strictly exceed the launch-tagged subset"
+            )

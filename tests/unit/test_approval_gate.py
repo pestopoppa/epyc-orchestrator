@@ -63,6 +63,25 @@ class TestAutoApproveCallback:
         assert cb.request_approval(halt) == ApprovalDecision.APPROVE
 
 
+def _assert_same_tier(from_role: str, to_role: str) -> None:
+    """Precondition for every HIGH_COST test: the pair must NOT cross a tier.
+
+    `should_halt()` returns ESCALATION for a tier crossing before it ever
+    consults the high-cost set, so a cross-tier pair makes a HIGH_COST
+    assertion untestable rather than false. Asserting the precondition
+    explicitly means a future tier reassignment fails here, naming the reason,
+    instead of the HIGH_COST tests quietly reporting on a different code path.
+    """
+    from src.roles import get_tier
+
+    assert get_tier(from_role) == get_tier(to_role), (
+        f"HIGH_COST test precondition broken: {from_role} is "
+        f"{get_tier(from_role)} but {to_role} is {get_tier(to_role)}; "
+        "should_halt() will short-circuit to ESCALATION and never reach the "
+        "high-cost check. Pick a same-tier pair."
+    )
+
+
 class TestShouldHalt:
     """Tests for should_halt() function."""
 
@@ -83,8 +102,20 @@ class TestShouldHalt:
 
     def test_architect_triggers_high_cost(self):
         set_features(Features(approval_gates=True))
-        # Coder to architect — both Tier B, so triggers HIGH_COST
-        result = should_halt("coder_escalation", "architect_general")
+        # should_halt() checks the tier boundary FIRST and returns ESCALATION,
+        # so the HIGH_COST path is only reachable for a SAME-TIER pair. This
+        # used to read coder_escalation -> architect_general and was commented
+        # "both Tier B"; on 2026-08-01 ARCHITECT_GENERAL was corrected to Tier.A
+        # against the registry's declared tier, and these tests silently started
+        # measuring ESCALATION instead of the path they name.
+        # architect_critic, not architect_general: on 2026-07-31 the 122B
+        # vacated architect_general for the new architect_critic role, leaving
+        # architect_general serving the 27B. High cost is derived from model
+        # mem_gb, so the expensive role moved with the weights — the live priors
+        # now list architect_critic alone. Asserting against architect_general
+        # would be asserting that a 27B model is expensive.
+        _assert_same_tier("coder_escalation", "architect_critic")
+        result = should_halt("coder_escalation", "architect_critic")
         assert result == HaltReason.HIGH_COST
 
     def test_generated_stack_priors_drive_high_cost_roles(self, tmp_path):
@@ -94,7 +125,7 @@ class TestShouldHalt:
             yaml.safe_dump(
                 {
                     "roles": {
-                        "architect_general": {
+                        "ingest_long_context": {
                             "deployment_status": "live_stack",
                             "model": {"mem_gb": 10.0},
                         },
@@ -108,9 +139,13 @@ class TestShouldHalt:
             encoding="utf-8",
         )
 
+        # Same-tier pair so the high-cost check is actually reached; the point
+        # of this test is that mem_gb in the GENERATED priors decides, not that
+        # a tier is crossed.
+        _assert_same_tier("ingest_long_context", "coder_escalation")
         assert (
             should_halt(
-                "architect_general",
+                "ingest_long_context",
                 "coder_escalation",
                 stack_priors_path=stack_priors,
             )
@@ -119,7 +154,7 @@ class TestShouldHalt:
         assert (
             should_halt(
                 "coder_escalation",
-                "architect_general",
+                "ingest_long_context",
                 stack_priors_path=stack_priors,
             )
             is None
@@ -129,8 +164,9 @@ class TestShouldHalt:
         set_features(Features(approval_gates=True))
         missing_stack_priors = tmp_path / "missing.yaml"
 
+        _assert_same_tier("frontdoor", "architect_general")
         result = should_halt(
-            "coder_escalation",
+            "frontdoor",
             "architect_general",
             stack_priors_path=missing_stack_priors,
         )
@@ -154,8 +190,9 @@ class TestShouldHalt:
             encoding="utf-8",
         )
 
+        _assert_same_tier("frontdoor", "architect_general")
         result = should_halt(
-            "coder_escalation",
+            "frontdoor",
             "architect_general",
             stack_priors_path=stack_priors,
         )
