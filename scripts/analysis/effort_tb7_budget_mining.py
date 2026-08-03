@@ -39,9 +39,11 @@ from typing import Dict, List
 
 import numpy as np
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 DEFAULT_SHARDS = [
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_journal_1.jsonl",
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_journal.jsonl",
+    str(_REPO_ROOT / "orchestration/autopilot_journal_1.jsonl"),
+    str(_REPO_ROOT / "orchestration/autopilot_journal.jsonl"),
 ]
 
 # Current production route -> (model, quant) binding (for labelling only; NOT inherited across

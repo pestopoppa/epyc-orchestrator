@@ -16,10 +16,12 @@ from typing import Protocol
 
 import numpy as np
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 logger = logging.getLogger(__name__)
 
 # Default paths (on RAID array per CLAUDE.md requirements)
-DEFAULT_FAISS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions")
+DEFAULT_FAISS_PATH = _REPO_ROOT / "orchestration/repl_memory/sessions"
 
 
 class FAISSDesyncError(RuntimeError):

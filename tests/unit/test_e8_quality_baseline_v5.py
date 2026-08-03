@@ -2022,7 +2022,7 @@ def test_final_wrapper_prevalidation_rejects_stale_reviewed_hashes_without_write
     canonical_applier = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
     )
-    state_path = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json")
+    state_path = PROJECT_ROOT / "orchestration/autopilot_state.json"
     state_before = state_path.read_bytes()
     completed = subprocess.run(
         [
@@ -2076,7 +2076,7 @@ def _v5_wrapper_integration_fixture(tmp_path: Path) -> tuple[Path, dict[str, str
 
     state = tmp_path / "state.json"
     state.write_bytes(
-        Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json").read_bytes()
+        (PROJECT_ROOT / "orchestration/autopilot_state.json").read_bytes()
     )
     manifest = json.loads(evidence.read_text())
     candidate = canonical.candidate_state(json.loads(state.read_text()), manifest["replacement"])
@@ -2322,7 +2322,7 @@ def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
     sys.modules[spec.name] = adapter_module
     spec.loader.exec_module(adapter_module)
     canonical = adapter_module.module
-    state_path = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json")
+    state_path = PROJECT_ROOT / "orchestration/autopilot_state.json"
     state_before = state_path.read_bytes()
     candidate = canonical.candidate_state(
         json.loads(state_before), json.loads(evidence.read_text())["replacement"]
@@ -2371,7 +2371,7 @@ def test_final_wrapper_rejects_symlinked_test_sandbox_state_escape(tmp_path: Pat
     )
     root = tmp_path / "operator-root"
     root.mkdir()
-    canonical_state = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json")
+    canonical_state = PROJECT_ROOT / "orchestration/autopilot_state.json"
     state_link = tmp_path / "state.json"
     state_link.symlink_to(canonical_state)
     lock = tmp_path / "apply.lock"

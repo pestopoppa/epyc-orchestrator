@@ -25,8 +25,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from orchestration.repl_memory.episodic_store import EpisodicStore
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 SERVERS = [f"http://127.0.0.1:{p}" for p in range(8090, 8098)]
-PROGRESS_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/progress")
+PROGRESS_DIR = _REPO_ROOT / "progress"
 
 
 class ParallelEmbedder:

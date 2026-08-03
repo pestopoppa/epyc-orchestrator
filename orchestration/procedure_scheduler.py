@@ -36,6 +36,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -112,7 +114,9 @@ class ProcedureScheduler:
             persist_state: Whether to persist state between runs.
         """
         self.registry = registry
-        self.state_path = Path(state_path or "/mnt/raid0/llm/epyc-orchestrator/orchestration/procedures/state/scheduler.json")
+        self.state_path = Path(
+            state_path or _REPO_ROOT / "orchestration/procedures/state/scheduler.json"
+        )
         self.max_concurrent = max_concurrent
         self.persist_state = persist_state
 

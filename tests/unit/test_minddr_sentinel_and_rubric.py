@@ -8,12 +8,12 @@ from pathlib import Path
 
 import yaml
 
-sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+sys.path.insert(0, str(_REPO_ROOT))
 
 
-SENTINEL_PATH = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/deep_research_sentinel.yaml"
-)
+SENTINEL_PATH = _REPO_ROOT / "orchestration/deep_research_sentinel.yaml"
 
 
 def test_deep_research_sentinel_exists_and_parses():

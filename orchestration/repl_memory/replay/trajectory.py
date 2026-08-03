@@ -20,6 +20,8 @@ import numpy as np
 
 from ..progress_logger import EventType, ProgressEntry, ProgressReader
 
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 logger = logging.getLogger(__name__)
 
 
@@ -103,7 +105,7 @@ class TrajectoryExtractor:
     ):
         self.reader = reader
         self.embedder = embedder
-        self.cache_dir = cache_dir or Path("/mnt/raid0/llm/epyc-orchestrator/cache/replay")
+        self.cache_dir = cache_dir or (_REPO_ROOT / "cache/replay")
 
     def extract_complete(
         self,

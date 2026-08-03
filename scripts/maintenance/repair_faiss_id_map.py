@@ -50,7 +50,9 @@ from pathlib import Path
 
 import numpy as np
 
-SESSIONS = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions")
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+SESSIONS = _REPO_ROOT / "orchestration/repl_memory/sessions"
 
 
 def log(msg: str) -> None:

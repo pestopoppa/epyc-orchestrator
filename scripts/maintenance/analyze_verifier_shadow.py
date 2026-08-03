@@ -40,7 +40,7 @@ from src.llm_primitives.stat_tests import (  # noqa: E402
     roc_auc as _stat_roc_auc,
 )
 
-DEFAULT_LOG_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
+DEFAULT_LOG_DIR = _PROJECT_ROOT / "logs/progress"
 
 
 def collect_log_paths(days: int, log_dir: Path) -> list[Path]:

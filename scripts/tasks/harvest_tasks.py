@@ -19,8 +19,10 @@ from typing import Any, Iterable
 
 import yaml
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
-DEFAULT_PROGRESS_LOG_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
+
+DEFAULT_PROGRESS_LOG_DIR = _REPO_ROOT / "logs/progress"
 DEFAULT_WORKLOAD_MODEL = Path("orchestration/workload_model.yaml")
 DEFAULT_OUTPUT = Path("benchmarks/prompts/real_tasks.jsonl")
 

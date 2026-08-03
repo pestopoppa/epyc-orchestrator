@@ -37,6 +37,8 @@ from typing import Any
 
 import yaml
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 log = logging.getLogger("registry.compiler")
 
 
@@ -406,16 +408,12 @@ def _main() -> int:
     p.add_argument(
         "--output",
         type=Path,
-        default=Path(
-            "/mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml"
-        ),
+        default=_REPO_ROOT / "orchestration/model_registry.yaml",
     )
     p.add_argument(
         "--cache-key",
         type=Path,
-        default=Path(
-            "/mnt/raid0/llm/epyc-orchestrator/orchestration/.lean_cache_key"
-        ),
+        default=_REPO_ROOT / "orchestration/.lean_cache_key",
     )
     p.add_argument(
         "--roles",
@@ -431,7 +429,7 @@ def _main() -> int:
     else:
         # Import the declarative manifest, not orchestrator_stack.py: the stack
         # CLI owns argparse side effects at module import time.
-        sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
+        sys.path.insert(0, str(_REPO_ROOT))
         from scripts.server.stack_manifest import ROLE_LAUNCH_META  # type: ignore[import]
         active = active_roles_from_launch_meta(ROLE_LAUNCH_META)
 

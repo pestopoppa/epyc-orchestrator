@@ -34,8 +34,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-LOG_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
-SERVER_LOG_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs")
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+LOG_DIR = _REPO_ROOT / "logs/progress"
+SERVER_LOG_DIR = _REPO_ROOT / "logs"
 
 # Configured enabled engine set (from config/searxng/settings.yml). The
 # original SX-3 target included DDG/Qwant/Startpage, but the current EPYC egress

@@ -30,7 +30,7 @@ DEFAULT_TELEMETRY_FILES = [
     Path("src/api/routes/chat_pipeline/direct_stage.py"),
     Path("orchestration/repl_memory/progress_logger.py"),
 ]
-DEFAULT_PROGRESS_LOG_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
+DEFAULT_PROGRESS_LOG_DIR = REPO_ROOT / "logs/progress"
 DEFAULT_WORKLOAD_MODEL = Path("orchestration/workload_model.yaml")
 
 

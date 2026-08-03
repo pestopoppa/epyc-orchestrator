@@ -19,6 +19,8 @@ import pytest
 
 from src.repl_environment.environment import REPLEnvironment
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch):
@@ -69,7 +71,7 @@ def test_validate_rejects_outside_paths_when_task_root_active(monkeypatch, tmp_p
     # the orchestrator tree, and a relative ../ escape — all must be rejected.
     assert env._validate_file_path(str(tmp_path.parent / "outside_abs.py"))[0] is False
     assert env._validate_file_path("/tmp/outside_abs.py")[0] is False
-    assert env._validate_file_path("/mnt/raid0/llm/epyc-orchestrator/src/x.py")[0] is False
+    assert env._validate_file_path(str(_REPO_ROOT / "src/x.py"))[0] is False
     assert env._validate_file_path("../outside.py")[0] is False  # relative escape collapses out
 
 

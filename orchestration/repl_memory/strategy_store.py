@@ -37,19 +37,19 @@ from typing import Any, Optional
 
 import numpy as np
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_STRATEGY_PATH = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/strategies"
-)
+DEFAULT_STRATEGY_PATH = _REPO_ROOT / "orchestration/repl_memory/strategies"
 
 # AP-28: files whose contents define the configuration epoch. Hash of these
 # files is recorded on every store(); entries whose stored hash differs from
 # the current hash get a validity penalty at retrieve time.
 DEFAULT_CONTEXT_FILES: tuple[Path, ...] = (
-    Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml"),
-    Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/prompts/frontdoor.md"),
-    Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/prompts/roles/worker_general.md"),
+    _REPO_ROOT / "orchestration/model_registry.yaml",
+    _REPO_ROOT / "orchestration/prompts/frontdoor.md",
+    _REPO_ROOT / "orchestration/prompts/roles/worker_general.md",
 )
 
 # Reciprocal Rank Fusion default constant (Cormack et al. 2009).
@@ -2005,7 +2005,13 @@ class StrategyStore:
         journal: Any | None = None,
         excluded_trial_ids: set[int] | None = None,
     ) -> list[dict[str, Any]]:
-        """Return stored strategies whose insight text looks task-specific."""
+        """Return audit findings without changing stored strategies or admission.
+
+        This is a diagnostic-only linter.  A caller that wants to enforce a
+        write policy must do so explicitly and retain applicability evidence;
+        findings from this method are never a reason to rewrite or reject a
+        strategy on their own.
+        """
         excluded = set(excluded_trial_ids or set())
         if journal is not None:
             excluded.update(excluded_strategy_evidence_trial_ids(journal))

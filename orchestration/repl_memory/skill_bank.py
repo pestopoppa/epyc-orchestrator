@@ -26,12 +26,12 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 logger = logging.getLogger(__name__)
 
 # Storage paths (RAID array per CLAUDE.md)
-DEFAULT_SKILLBANK_PATH = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions"
-)
+DEFAULT_SKILLBANK_PATH = _REPO_ROOT / "orchestration/repl_memory/sessions"
 
 def skill_embedding_text(
     title: str,

@@ -32,7 +32,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-LOG_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+LOG_DIR = _REPO_ROOT / "logs/progress"
 
 # Thresholds
 ESCALATION_CONCENTRATION_THRESHOLD = 0.60  # >60% of escalations on one path

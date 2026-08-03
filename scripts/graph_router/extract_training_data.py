@@ -40,9 +40,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("extract_training_data")
 
-DEFAULT_DB_PATH = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions"
-)
+DEFAULT_DB_PATH = PROJECT_ROOT / "orchestration/repl_memory/sessions"
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "orchestration/repl_memory/training_data.npz"
 
 # Known task types for one-hot encoding (order matters — must be stable)

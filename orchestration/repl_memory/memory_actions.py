@@ -18,17 +18,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
-DEFAULT_MEMORY_ACTION_PATH = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/memory_actions"
-)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
-MEMORY_ACTION_SCHEMA_VERSION = 1
-VALID_ACTIONS = frozenset({"APPEND", "CREATE", "UPSERT"})
-VALID_CHANNELS = frozenset({"log", "plan", "status", "inventory", "strategy"})
-PROJECTION_CHANNELS = ("status", "inventory", "strategy", "plan", "log")
+DEFAULT_MEMORY_ACTION_PATH = _REPO_ROOT / "orchestration/repl_memory/memory_actions"
 
-MemoryActionName = Literal["APPEND", "CREATE", "UPSERT"]
-MemoryChannel = Literal["log", "plan", "status", "inventory", "strategy"]
+MEMORY_ACTION_SCHEMA_VERSION = 2
+SUPPORTED_MEMORY_ACTION_SCHEMA_VERSIONS = frozenset({1, MEMORY_ACTION_SCHEMA_VERSION})
+VALID_ACTIONS = frozenset({"APPEND", "CREATE", "UPSERT", "DELETE"})
+VALID_CHANNELS = frozenset({"log", "plan", "status", "inventory", "strategy", "pattern"})
+PROJECTION_CHANNELS = ("status", "inventory", "strategy", "pattern", "plan", "log")
+VALID_RETENTION_STATES = frozenset({"active", "superseded", "retired"})
+MAX_PATTERN_SOURCE_EVENTS = 64
+
+MemoryActionName = Literal["APPEND", "CREATE", "UPSERT", "DELETE"]
+MemoryChannel = Literal["log", "plan", "status", "inventory", "strategy", "pattern"]
 
 
 class MemoryActionError(ValueError):
@@ -75,6 +78,22 @@ def _normalize_tags(tags: Iterable[str]) -> tuple[str, ...]:
     return tuple(clean)
 
 
+def _normalize_source_event_ids(event_ids: Iterable[str]) -> tuple[str, ...]:
+    clean: list[str] = []
+    seen: set[str] = set()
+    for event_id in event_ids:
+        normalized = _normalize_token(event_id, field_name="source_event_id", allow_slash=False)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        clean.append(normalized)
+    if len(clean) > MAX_PATTERN_SOURCE_EVENTS:
+        raise MemoryActionError(
+            f"pattern records allow at most {MAX_PATTERN_SOURCE_EVENTS} source event ids"
+        )
+    return tuple(clean)
+
+
 def _identity(channel: str, coordinate: str, key: str) -> str:
     digest = hashlib.sha256(f"{channel}\0{coordinate}\0{key}".encode("utf-8")).hexdigest()
     return digest[:24]
@@ -96,8 +115,14 @@ def _atomic_write_text(path: Path, content: str) -> None:
 class MemoryAction:
     """A first-class memory write request.
 
-    ``coordinate`` and ``key`` form the stable deduplication identity for
-    CREATE/UPSERT actions. APPEND actions always add a new ledger event.
+    ``coordinate`` and ``key`` form the stable identity for CREATE, UPSERT,
+    and DELETE actions. APPEND actions always add a new ledger event.
+
+    ``when_not_to_use`` is required for strategy and pattern records so a retrieved
+    pattern carries its own applicability boundary instead of relying on
+    implicit decay or a caller-side convention. DELETE uses ``content`` as
+    its durable deletion rationale and writes a tombstone rather than erasing
+    the prior event.
     """
 
     action: MemoryActionName
@@ -108,6 +133,12 @@ class MemoryAction:
     source: str = "autopilot"
     tags: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    when_not_to_use: str = ""
+    title: str = ""
+    description: str = ""
+    source_event_ids: tuple[str, ...] = ()
+    embedding_version: str = ""
+    retention_state: str = "active"
 
     def normalized(self) -> "MemoryAction":
         action = _normalize_token(self.action, field_name="action", allow_slash=False).upper()
@@ -121,6 +152,35 @@ class MemoryAction:
             raise MemoryActionError("content must be non-empty")
         if "\x00" in content:
             raise MemoryActionError("content must not contain NUL bytes")
+        when_not_to_use = str(self.when_not_to_use or "").strip()
+        if "\x00" in when_not_to_use:
+            raise MemoryActionError("when_not_to_use must not contain NUL bytes")
+        title = str(self.title or "").strip()
+        description = str(self.description or "").strip()
+        source_event_ids = _normalize_source_event_ids(self.source_event_ids)
+        embedding_version = str(self.embedding_version or "").strip()
+        retention_state = _normalize_token(
+            self.retention_state, field_name="retention_state", allow_slash=False
+        ).lower()
+        if retention_state not in VALID_RETENTION_STATES:
+            raise MemoryActionError(f"unknown retention_state: {self.retention_state!r}")
+        if channel in {"strategy", "pattern"} and action != "DELETE" and not when_not_to_use:
+            raise MemoryActionError(f"{channel} records require when_not_to_use")
+        if channel == "pattern" and action != "DELETE":
+            missing = [
+                field_name
+                for field_name, value in {
+                    "title": title,
+                    "description": description,
+                    "source_event_ids": source_event_ids,
+                    "embedding_version": embedding_version,
+                }.items()
+                if not value
+            ]
+            if missing:
+                raise MemoryActionError(
+                    "pattern records require " + ", ".join(missing)
+                )
         return MemoryAction(
             action=action,  # type: ignore[arg-type]
             channel=channel,  # type: ignore[arg-type]
@@ -130,6 +190,12 @@ class MemoryAction:
             source=_normalize_token(self.source, field_name="source"),
             tags=_normalize_tags(self.tags),
             metadata=dict(self.metadata or {}),
+            when_not_to_use=when_not_to_use,
+            title=title,
+            description=description,
+            source_event_ids=source_event_ids,
+            embedding_version=embedding_version,
+            retention_state=retention_state,
         )
 
 
@@ -168,7 +234,8 @@ class MemoryActionStore:
 
         The operation is serialized with a file lock. CREATE/UPSERT actions are
         deduplicated by ``channel`` + ``coordinate`` + ``key``; APPEND actions
-        always add a new event.
+        always add a new event. DELETE appends a tombstone that removes the
+        current entry from generated projections while retaining its history.
         """
 
         normalized = action.normalized()
@@ -190,6 +257,9 @@ class MemoryActionStore:
             elif normalized.action == "UPSERT" and _same_payload(existing, normalized):
                 status = "unchanged"
                 changed = False
+            elif normalized.action == "DELETE" and existing is None:
+                status = "missing"
+                changed = False
             else:
                 row = _row_from_action(
                     normalized,
@@ -203,6 +273,8 @@ class MemoryActionStore:
                     status = "created"
                 elif normalized.action == "UPSERT":
                     status = "updated" if existing else "inserted"
+                elif normalized.action == "DELETE":
+                    status = "deleted"
 
             projections = self._sync_projections(rows)
             return MemoryActionResult(
@@ -268,6 +340,12 @@ def _row_from_action(
         "source": action.source,
         "tags": list(action.tags),
         "metadata": action.metadata,
+        "when_not_to_use": action.when_not_to_use,
+        "title": action.title,
+        "description": action.description,
+        "source_event_ids": list(action.source_event_ids),
+        "embedding_version": action.embedding_version,
+        "retention_state": action.retention_state,
         "memory_id": memory_id,
         "previous_event_id": previous_event_id,
         "created_at": timestamp,
@@ -279,7 +357,8 @@ def _row_from_action(
 def _validate_row(row: Any, *, line_number: int) -> None:
     if not isinstance(row, dict):
         raise MemoryActionError(f"memory action ledger line {line_number} is not an object")
-    if row.get("schema_version") != MEMORY_ACTION_SCHEMA_VERSION:
+    schema_version = row.get("schema_version")
+    if schema_version not in SUPPORTED_MEMORY_ACTION_SCHEMA_VERSIONS:
         raise MemoryActionError(f"unsupported memory action schema at line {line_number}")
     required = {
         "action",
@@ -290,6 +369,7 @@ def _validate_row(row: Any, *, line_number: int) -> None:
         "source",
         "tags",
         "metadata",
+        "when_not_to_use",
         "memory_id",
         "event_id",
         "created_at",
@@ -308,6 +388,12 @@ def _validate_row(row: Any, *, line_number: int) -> None:
         source=row["source"],
         tags=tuple(row.get("tags") or ()),
         metadata=dict(row.get("metadata") or {}),
+        when_not_to_use=row.get("when_not_to_use", ""),
+        title=row.get("title", ""),
+        description=row.get("description", ""),
+        source_event_ids=tuple(row.get("source_event_ids") or ()),
+        embedding_version=row.get("embedding_version", ""),
+        retention_state=row.get("retention_state", "active"),
     ).normalized()
     expected_memory_id = _identity(row["channel"], row["coordinate"], row["key"])
     if row["memory_id"] != expected_memory_id:
@@ -322,6 +408,12 @@ def _same_payload(existing: dict[str, Any] | None, action: MemoryAction) -> bool
         and tuple(existing.get("tags") or ()) == action.tags
         and existing.get("source") == action.source
         and dict(existing.get("metadata") or {}) == action.metadata
+        and existing.get("when_not_to_use", "") == action.when_not_to_use
+        and existing.get("title", "") == action.title
+        and existing.get("description", "") == action.description
+        and tuple(existing.get("source_event_ids") or ()) == action.source_event_ids
+        and existing.get("embedding_version", "") == action.embedding_version
+        and existing.get("retention_state", "active") == action.retention_state
     )
 
 
@@ -329,6 +421,9 @@ def _fold_current(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     current: dict[str, dict[str, Any]] = {}
     for row in rows:
         if row.get("action") == "APPEND":
+            continue
+        if row.get("action") == "DELETE":
+            current.pop(row["memory_id"], None)
             continue
         current[row["memory_id"]] = row
     return current
@@ -362,8 +457,27 @@ def _render_projection(channel: str, entries: list[dict[str, Any]]) -> str:
         tag_suffix = f" [{tags}]" if tags else ""
         lines.append(f"## {row['coordinate']} :: {row['key']}{tag_suffix}")
         lines.append("")
+        if row.get("title"):
+            lines.append(f"### {row['title']}")
+            lines.append("")
+        if row.get("description"):
+            lines.append(row["description"])
+            lines.append("")
         lines.append(row["content"])
         lines.append("")
+        if row.get("source_event_ids"):
+            lines.append(f"- source events: {', '.join(row['source_event_ids'])}")
+        if row.get("embedding_version"):
+            lines.append(f"- embedding version: {row['embedding_version']}")
+        if row.get("retention_state"):
+            lines.append(f"- retention: {row['retention_state']}")
+        if row.get("source_event_ids") or row.get("embedding_version") or row.get("retention_state"):
+            lines.append("")
+        if row.get("when_not_to_use"):
+            lines.append("### When Not To Use")
+            lines.append("")
+            lines.append(row["when_not_to_use"])
+            lines.append("")
         lines.append(
             f"- action: {row['action']} | source: {row['source']} | event: {row['event_id']}"
         )

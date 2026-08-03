@@ -33,7 +33,10 @@ import os
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 logger = logging.getLogger(__name__)
@@ -50,7 +53,7 @@ VALID_INDICES = frozenset({"code", "docs"})
 COLGREP_VERSION = "1.2.0"
 COLGREP_EXPECTED_SHA256 = "833e52aa6c40d090142fa132e3c75d3e792a4707474682a2496e3471f646f956"
 COLGREP_BIN = f"/mnt/raid0/llm/UTILS/bin/colgrep-{COLGREP_VERSION}"
-COLGREP_DEFAULT_PATH = "/mnt/raid0/llm/epyc-orchestrator/src"
+COLGREP_DEFAULT_PATH = str(_REPO_ROOT / "src")
 COLGREP_TIMEOUT_S = 10
 
 

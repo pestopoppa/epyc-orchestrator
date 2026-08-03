@@ -173,6 +173,8 @@ except ImportError:
 # Strategy store for species memory (B1)
 from orchestration.repl_memory.strategy_store import StrategyStore
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # Durable earlyoom control-plane protection (mirrors orchestrator_stack). Guarded so a
 # resolution hiccup never blocks autopilot import/startup — it is strictly best-effort.
 try:
@@ -7213,7 +7215,7 @@ def _run_loop_inner(
 
                 _sys.path.insert(
                     0,
-                    "/mnt/raid0/llm/epyc-orchestrator/scripts/benchmark",
+                    str(_REPO_ROOT / "scripts/benchmark"),
                 )
                 from seeding_telemetry import (
                     batch_summary as _batch_summary,

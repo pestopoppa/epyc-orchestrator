@@ -20,7 +20,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_PROGRESS_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+DEFAULT_PROGRESS_DIR = _REPO_ROOT / "logs/progress"
 DEFAULT_MIN_HOURS = 48.0
 
 

@@ -18,11 +18,11 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_WEIGHTS_PATH = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/graph_router_weights.npz"
-)
+DEFAULT_WEIGHTS_PATH = _REPO_ROOT / "orchestration/repl_memory/graph_router_weights.npz"
 
 
 class GraphRouterPredictor:

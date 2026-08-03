@@ -135,10 +135,12 @@ from scripts.autopilot.autopilot_restart_advisor import (
 )
 from scripts.autopilot.state_lock import state_write_lock
 
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-ORCHESTRATOR_LOG_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs")
+ORCHESTRATOR_LOG_DIR = _REPO_ROOT / "logs"
 PROGRESS_LOG_DIR = ORCHESTRATOR_LOG_DIR / "progress"
 AUTOPILOT_LOG = ORCHESTRATOR_LOG_DIR / "autopilot.log"
 AUTOPILOT_PHASE_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.json")

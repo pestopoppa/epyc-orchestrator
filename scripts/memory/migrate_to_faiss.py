@@ -21,8 +21,10 @@ from pathlib import Path
 
 import numpy as np
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # Default path (on RAID array per CLAUDE.md requirements)
-DEFAULT_DB_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions")
+DEFAULT_DB_PATH = _REPO_ROOT / "orchestration/repl_memory/sessions"
 
 
 def migrate_to_faiss(

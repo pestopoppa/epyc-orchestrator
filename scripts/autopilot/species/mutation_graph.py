@@ -46,11 +46,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/mutation_graph.db"
-)
+DEFAULT_DB_PATH = _REPO_ROOT / "orchestration/repl_memory/mutation_graph.db"
 
 # Outcome categories — kept as plain strings rather than an Enum so the
 # autopilot main loop can record any new category without a migration.

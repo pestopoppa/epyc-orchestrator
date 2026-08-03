@@ -19,6 +19,8 @@ from src.services.pdf_router import (
     extract_pdf,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 
@@ -514,7 +516,7 @@ class TestPDFRouterIntegration:
     @pytest.mark.integration
     def test_extract_real_pdf(self):
         """Test extraction with a real PDF file (pinned to the pdftotext path)."""
-        pdf_path = Path("/mnt/raid0/llm/epyc-orchestrator/tmp/Twyne_V1_Whitepaper.pdf")
+        pdf_path = _REPO_ROOT / "tmp/Twyne_V1_Whitepaper.pdf"
         if not pdf_path.exists():
             pytest.skip("Test PDF not available")
         if not os.access(pdf_path, os.R_OK):
@@ -536,7 +538,7 @@ class TestPDFRouterIntegration:
     @pytest.mark.integration
     def test_extract_with_figures(self):
         """Test figure extraction with a real PDF."""
-        pdf_path = Path("/mnt/raid0/llm/epyc-orchestrator/tmp/Twyne_V1_Whitepaper.pdf")
+        pdf_path = _REPO_ROOT / "tmp/Twyne_V1_Whitepaper.pdf"
         if not pdf_path.exists():
             pytest.skip("Test PDF not available")
 

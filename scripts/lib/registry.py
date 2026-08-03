@@ -20,9 +20,11 @@ from typing import Any, Optional
 
 import yaml
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 # Default paths
-DEFAULT_REGISTRY_PATH = "/mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml"
+DEFAULT_REGISTRY_PATH = str(_REPO_ROOT / "orchestration/model_registry.yaml")
 DEFAULT_MODEL_BASE_PATH = "/mnt/raid0/llm/models"
 
 

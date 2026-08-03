@@ -29,6 +29,8 @@ from src.services.corpus_retrieval import (
     extract_code_query,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # Quality gate prompts (same as corpus_quality_gate.py)
 PROMPTS = [
     {
@@ -57,7 +59,7 @@ PROMPTS = [
     },
 ]
 
-OUTPUT_DIR = "/mnt/raid0/llm/epyc-orchestrator/benchmarks/results/runs/q3_requery"
+OUTPUT_DIR = str(_REPO_ROOT / "benchmarks/results/runs/q3_requery")
 QUALITY_GATE_RESULTS = "/mnt/raid0/llm/tmp/corpus_quality_gate.json"
 V3_INDEX = "/mnt/raid0/llm/cache/corpus/v3_sharded"
 

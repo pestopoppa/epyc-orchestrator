@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from orchestration.repl_memory.embedder import TaskEmbedder
 from orchestration.repl_memory.episodic_store import EpisodicStore
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def parse_logs(log_dir: Path, max_entries: int = 5000) -> list[dict]:
     """Parse progress logs and extract task pairs."""
@@ -128,7 +130,7 @@ def seed_memory(store: EpisodicStore, embedder: TaskEmbedder,
 
 
 def main():
-    log_dir = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
+    log_dir = _REPO_ROOT / "logs/progress"
     max_entries = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
 
     print("Initializing embedder...")

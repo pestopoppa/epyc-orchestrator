@@ -35,8 +35,10 @@ from pathlib import Path
 
 import httpx
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 DEFAULT_API = "http://127.0.0.1:8000"
-DEFAULT_LOG = "/mnt/raid0/llm/epyc-orchestrator/logs/orchestrator.log"
+DEFAULT_LOG = str(_REPO_ROOT / "logs/orchestrator.log")
 QUEUE_MARK = "placement queued role="
 
 

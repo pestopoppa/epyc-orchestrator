@@ -22,6 +22,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterator
 
 import httpx
@@ -29,10 +30,12 @@ import httpx
 from src.model_server import InferenceRequest, InferenceResult, ModelBackend
 from src.registry_loader import RoleConfig
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 logger = logging.getLogger(__name__)
 
 # Logit probe output file (append-only JSONL)
-_LOGIT_PROBE_PATH = "/mnt/raid0/llm/epyc-orchestrator/data/logit_probe.jsonl"
+_LOGIT_PROBE_PATH = str(_REPO_ROOT / "data/logit_probe.jsonl")
 
 # Fixed RNG seed for reproducible decode. Sampling is deterministic for a given
 # (prompt, params, seed); callers may override per-request via request.seed.

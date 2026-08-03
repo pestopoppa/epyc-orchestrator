@@ -23,10 +23,12 @@ from src.orchestration.interaction import (
     INTERACTION_POLICY_VERSION as _INTERACTION_POLICY_VERSION,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 logger = logging.getLogger(__name__)
 
 # Default log path (on RAID array, or fallback to workspace for devcontainer)
-_RAID_LOG_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
+_RAID_LOG_PATH = _REPO_ROOT / "logs/progress"
 _WORKSPACE_LOG_PATH = Path("/workspace/logs/progress")
 
 # Use RAID path if available, otherwise fallback to workspace

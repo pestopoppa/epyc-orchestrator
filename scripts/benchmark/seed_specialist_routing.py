@@ -707,6 +707,8 @@ def print_3way_summary(results: list[ThreeWayResult]) -> None:
 
 import seeding_cli_config as _seeding_cli_config
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # Re-export _PROFILE_PRESETS so tests / external code that read the name from
 # this module's namespace continue to work.
 _PROFILE_PRESETS = _seeding_cli_config._PROFILE_PRESETS
@@ -1548,7 +1550,7 @@ Examples (legacy mode - DEPRECATED):
 if __name__ == "__main__":
     import signal
 
-    _crash_log = Path("/mnt/raid0/llm/epyc-orchestrator/logs/seeding_crash.log")
+    _crash_log = _REPO_ROOT / "logs/seeding_crash.log"
     _signal_exit_code = {"value": None}
 
     def _append_crash_marker(kind: str, details: str) -> None:

@@ -33,6 +33,8 @@ import numpy as np
 
 from .indexed_memory_policy import indexed_memory_predicate, is_indexed_action_type
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 if TYPE_CHECKING:
     from .faiss_store import FAISSEmbeddingStore, NumpyEmbeddingStore
     from .failure_graph import FailureGraph
@@ -41,8 +43,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Default paths (on RAID array per CLAUDE.md requirements)
-DEFAULT_DB_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions")
-DEFAULT_EMBEDDINGS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/embeddings.npy")
+DEFAULT_DB_PATH = _REPO_ROOT / "orchestration/repl_memory/sessions"
+DEFAULT_EMBEDDINGS_PATH = _REPO_ROOT / "orchestration/repl_memory/embeddings.npy"
 
 
 def apply_td_update(

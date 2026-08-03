@@ -22,12 +22,12 @@ from ..staged_scorer import StagedConfig
 from .metrics import ReplayMetrics
 from .skill_replay import SkillBankConfig
 
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 logger = logging.getLogger(__name__)
 
 # Default archive location on RAID
-DEFAULT_ARCHIVE_PATH = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/meta_archive/archive.db"
-)
+DEFAULT_ARCHIVE_PATH = _REPO_ROOT / "orchestration/repl_memory/meta_archive/archive.db"
 
 
 @dataclass

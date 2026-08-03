@@ -6,6 +6,8 @@ from pathlib import Path
 
 from scripts.benchmark import axa2_live_cutover_bundle as bundle
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 class FakeRunner:
     def __init__(self) -> None:
@@ -213,7 +215,7 @@ def test_operator_script_defaults_to_dynamic_execution_output(tmp_path: Path, mo
 
     operator = (out / "operator_run.sh").read_text()
     assert "AXA2_RUN_ID:=axa2-live-cutover-$(date -u +%Y%m%dT%H%M%SZ)" in operator
-    assert "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/axa2_live_cutover_runs" in operator
+    assert str(_REPO_ROOT / "orchestration/reports/axa2_live_cutover_runs") in operator
     assert '--output "$AXA2_EXEC_OUTPUT"' in operator
     assert f"--output {out}" not in operator
     assert summary["operator_execution"]["mode"] == "dynamic_timestamped"

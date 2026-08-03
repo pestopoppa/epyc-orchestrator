@@ -30,6 +30,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 log = logging.getLogger("autopilot")
 
 # Tap file the planner subprocess streams into. Dashboard tails this via
@@ -41,7 +43,7 @@ PLANNER_TAP_PATH = Path("/mnt/raid0/llm/tmp/planner_tap.log")
 # is queryable for reasoning-trace research. One line per session with
 # the full event list. Lives alongside other autopilot logs so it's
 # included in the same backup/retention scheme.
-PLANNER_ARCHIVE_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/logs/planner_archive.jsonl")
+PLANNER_ARCHIVE_PATH = _REPO_ROOT / "logs/planner_archive.jsonl"
 PLANNER_SUBPROCESS_STATUS_PATH = Path("/mnt/raid0/llm/tmp/autopilot_planner_subprocess.json")
 
 # Do not inherit the operator's last interactive Claude model. Fable access is

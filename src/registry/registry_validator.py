@@ -28,6 +28,8 @@ from typing import Any
 
 import yaml
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 # Fields that, if declared in BOTH `server_mode.X` and `roles.X`,
 # must agree across both (or only be declared in one).
@@ -196,7 +198,7 @@ if __name__ == "__main__":
     import sys
 
     target = sys.argv[1] if len(sys.argv) > 1 else (
-        "/mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml"
+        str(_REPO_ROOT / "orchestration/model_registry.yaml")
     )
     try:
         errors = validate_all(target)

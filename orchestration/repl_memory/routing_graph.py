@@ -26,11 +26,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_KUZU_PATH = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/kuzu_db/routing_graph"
-)
+DEFAULT_KUZU_PATH = _REPO_ROOT / "orchestration/repl_memory/kuzu_db/routing_graph"
 
 
 class BipartiteRoutingGraph:

@@ -14,7 +14,9 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+sys.path.insert(0, str(_REPO_ROOT))
 
 
 # ── MD-1: feature flag ─────────────────────────────────────────────
@@ -87,7 +89,7 @@ def test_score_research_like_monotonic_with_signals():
 
 def test_classifier_config_has_research_like_exemplars():
     import yaml
-    cfg_path = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/classifier_config.yaml")
+    cfg_path = _REPO_ROOT / "orchestration/classifier_config.yaml"
     data = yaml.safe_load(cfg_path.read_text())
     exemplars = data.get("classification_exemplars", {})
     assert "research_like" in exemplars
@@ -103,7 +105,7 @@ def test_classifier_config_has_research_like_exemplars():
 
 @pytest.mark.parametrize("name", ["planning_agent.md", "deep_search_agent.md", "report_agent.md"])
 def test_minddr_prompt_files_exist(name):
-    path = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/prompts") / name
+    path = _REPO_ROOT / "orchestration/prompts" / name
     assert path.exists(), f"Missing MindDR prompt file: {name}"
     content = path.read_text()
     assert len(content) > 200, f"{name} looks empty / stub"

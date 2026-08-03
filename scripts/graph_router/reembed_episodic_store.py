@@ -38,9 +38,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("reembed")
 
-DEFAULT_DB = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions/episodic.db"
-)
+DEFAULT_DB = PROJECT_ROOT / "orchestration/repl_memory/sessions/episodic.db"
 DEFAULT_MODEL = Path("/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf")
 DEFAULT_OUTPUT = PROJECT_ROOT / "orchestration/repl_memory/sessions/reembedded.npz"
 LLAMA_SERVER = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-server")

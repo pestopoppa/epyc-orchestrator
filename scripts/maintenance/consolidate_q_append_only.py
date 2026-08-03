@@ -82,9 +82,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from orchestration.repl_memory.episodic_store import apply_td_update  # noqa: E402
 
-LIVE_SESSIONS_DIR = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions"
-)
+LIVE_SESSIONS_DIR = PROJECT_ROOT / "orchestration/repl_memory/sessions"
 
 CONSOLIDATED_TABLE = "memories_consolidated"
 PROVENANCE_TABLE = "_q_consolidation_provenance"

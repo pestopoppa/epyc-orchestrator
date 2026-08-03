@@ -29,12 +29,12 @@ from .engine import ReplayEngine
 from .metrics import ReplayMetrics
 from .trajectory import TrajectoryExtractor
 
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 logger = logging.getLogger(__name__)
 
 # Prompt template location
-PROMPT_TEMPLATE_PATH = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/orchestration/prompts/meta_agent_reflect.md"
-)
+PROMPT_TEMPLATE_PATH = _REPO_ROOT / "orchestration/prompts/meta_agent_reflect.md"
 
 
 class MetaAgentWorkflow:

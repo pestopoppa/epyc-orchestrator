@@ -29,10 +29,12 @@ from orchestration.repl_memory.episodic_store import EpisodicStore, extract_symp
 from orchestration.repl_memory.failure_graph import FailureGraph
 from orchestration.repl_memory.hypothesis_graph import HypothesisGraph
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # Default paths (on RAID array per CLAUDE.md)
-DEFAULT_SEEDS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/graph_seeds.yaml")
-DEFAULT_KUZU_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/kuzu_db")
-DEFAULT_EPISODIC_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions")
+DEFAULT_SEEDS_PATH = _REPO_ROOT / "orchestration/repl_memory/graph_seeds.yaml"
+DEFAULT_KUZU_PATH = _REPO_ROOT / "orchestration/repl_memory/kuzu_db"
+DEFAULT_EPISODIC_PATH = _REPO_ROOT / "orchestration/repl_memory/sessions"
 
 # Fallback for development (workspace)
 WORKSPACE_SEEDS_PATH = Path(__file__).parent.parent / "orchestration/repl_memory/graph_seeds.yaml"

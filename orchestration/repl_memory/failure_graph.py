@@ -20,11 +20,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 logger = logging.getLogger(__name__)
 
 # Default path (on RAID array per CLAUDE.md requirements)
 # Note: Each graph needs its own Kuzu database directory to avoid collisions
-DEFAULT_KUZU_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/kuzu_db/failure_graph")
+DEFAULT_KUZU_PATH = _REPO_ROOT / "orchestration/repl_memory/kuzu_db/failure_graph"
 
 
 @dataclass

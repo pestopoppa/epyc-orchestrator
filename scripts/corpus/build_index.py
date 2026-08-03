@@ -24,12 +24,14 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 # Default paths
 DEFAULT_OUTPUT = "/mnt/raid0/llm/cache/corpus/mvp_index"
-PROJECT_SRC = Path("/mnt/raid0/llm/epyc-orchestrator/src")
+PROJECT_SRC = _REPO_ROOT / "src"
 
 # Snippet extraction config
 MIN_SNIPPET_LINES = 5

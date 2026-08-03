@@ -525,7 +525,7 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
     try:
         import sys
 
-        sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator/scripts/benchmark")
+        sys.path.insert(0, str(ORCH_ROOT / "scripts/benchmark"))
         from seeding_telemetry import (
             adaptive_batch_size as _adaptive_n,
             record_batch_duration as _record_batch,

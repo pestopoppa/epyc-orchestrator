@@ -39,6 +39,8 @@ from src.config.stack_templates import (
     validate_template,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 logger = logging.getLogger(__name__)
 
 
@@ -198,7 +200,7 @@ def _discover_active_instances() -> list[dict[str, Any]]:
     On dry-run callsites where the state file is missing this returns
     an empty list — safe default.
     """
-    state_path = Path("/mnt/raid0/llm/epyc-orchestrator/orchestrator_state.json")
+    state_path = _REPO_ROOT / "orchestrator_state.json"
     if not state_path.exists():
         return []
     try:

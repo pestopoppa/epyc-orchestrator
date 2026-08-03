@@ -20,11 +20,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _find_checkpoint_dir() -> Path:
     """Find the default checkpoint directory."""
     candidates = [
-        Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/checkpoints"),
+        _REPO_ROOT / "orchestration/checkpoints",
         Path("orchestration/checkpoints"),
     ]
     for c in candidates:
@@ -208,9 +210,7 @@ def main() -> int:
     args = parser.parse_args()
 
     checkpoint_dir = args.checkpoint_dir or _find_checkpoint_dir()
-    output_path = args.output or Path(
-        "/mnt/raid0/llm/epyc-orchestrator/orchestration/eval_registry.yaml"
-    )
+    output_path = args.output or (_REPO_ROOT / "orchestration/eval_registry.yaml")
 
     registry = build_registry(checkpoint_dir, output_path)
     write_registry(registry, output_path)

@@ -9,8 +9,10 @@ from typing import Any
 
 from scripts.datasets._common import load_jsonl, stable_hash, utc_now, write_jsonl, write_manifest
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
-DEFAULT_ARCHIVE = Path("/mnt/raid0/llm/epyc-orchestrator/logs/planner_archive.jsonl")
+
+DEFAULT_ARCHIVE = _REPO_ROOT / "logs/planner_archive.jsonl"
 DEFAULT_OUTPUT = Path("orchestration/datasets/planner_sft.jsonl")
 DEFAULT_MANIFEST = Path("orchestration/datasets/planner_sft.manifest.json")
 BUILDER_VERSION = "planner_sft_builder.v1"
