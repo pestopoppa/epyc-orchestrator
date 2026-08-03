@@ -8,7 +8,7 @@
 # 50/68 questions) and could not separate architect_general from frontdoor
 # (+0.5pp, exact sign test p=0.267). Published benchmarks separate them
 # cleanly on every axis. See artifacts under
-# epyc-inference-research/data/judge-suite-headtohead-20260802/.
+# epyc-inference-research/data/judge_suite_headtohead_20260802/.
 #
 # WHAT THESE NUMBERS ARE, AND ARE NOT
 # -----------------------------------
