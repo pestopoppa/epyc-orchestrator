@@ -1,0 +1,85 @@
+{
+  "allow_autopilot_active": false,
+  "allow_serial": false,
+  "api_url": "http://localhost:8000",
+  "applied": true,
+  "blockers": [],
+  "confirm_clean_window": true,
+  "decision_grade": false,
+  "decision_grade_notes": [
+    "requires --apply --confirm-clean-window",
+    "requires AutoPilot inactive unless --allow-autopilot-active",
+    "verifier-model pass (EV-5/7/8) is MODEL-DOWNLOAD gated",
+    "requires every arm reliability >= 0.8 and real confidence provenance (see decision_grade_reasons)"
+  ],
+  "decision_grade_reasons": [
+    "arm frontdoor calibration is not decision-grade (confidence_is_real=False)"
+  ],
+  "full": true,
+  "generated_at": "2026-07-22T11:07:05+00:00",
+  "live_stack_contract": {
+    "ok": true,
+    "warnings": []
+  },
+  "min_eval_concurrency": 4,
+  "mode": "calibration",
+  "n": null,
+  "pin_command": ".venv/bin/python scripts/benchmark/eval_batch_serving_evaltower_window.py --mode calibration --suite scoring_verifiers --split HE-R+ --roles frontdoor --full --min-eval-concurrency 4 --seed 42 --api-url http://localhost:8000 --apply --confirm-clean-window",
+  "preflight": {
+    "autopilot_active": false
+  },
+  "resolved_eval_concurrency": 4,
+  "result": {
+    "dataset_sha256": "87eaabbdfd4adbbd12b1b6200d099aaa2dd4af83170b18d1f9909205d14059f0",
+    "metric_keys": [
+      "ece",
+      "auroc",
+      "top1_accuracy",
+      "bottom1_accuracy",
+      "spearman_rho",
+      "mae"
+    ],
+    "mode": "calibration",
+    "n_questions": 820,
+    "per_role": {
+      "frontdoor": {
+        "accuracy": 0.7085365853658536,
+        "auroc": null,
+        "bottom1_accuracy": null,
+        "confidence_is_real": false,
+        "confidence_source_counts": {
+          "binary_correctness_proxy": 820
+        },
+        "ece": null,
+        "mae": null,
+        "n_questions": 820,
+        "n_scored": 820,
+        "reliability": 1.0,
+        "role": "frontdoor",
+        "spearman_rho": null,
+        "top1_accuracy": null
+      }
+    },
+    "roles": [
+      "frontdoor"
+    ],
+    "seed": 42,
+    "split": "HE-R+",
+    "suite": "scoring_verifiers"
+  },
+  "roles": [
+    "frontdoor"
+  ],
+  "schema_version": "eval_batch_serving_evaltower.verifier.v1",
+  "scoring": "math_verify",
+  "seed": 42,
+  "split": "HE-R+",
+  "status": "complete",
+  "suite": "scoring_verifiers",
+  "verifier": null,
+  "verifier_counts": {
+    "n_questions": 820,
+    "n_scored": 820
+  },
+  "verifier_gate": null
+}

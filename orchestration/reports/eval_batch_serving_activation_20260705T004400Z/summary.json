@@ -1,0 +1,211 @@
+{
+  "activation_commands": [
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+    "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled --api-url http://localhost:8000 --eval-batch-url http://localhost:18070 --output-dir /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/eval_batch_serving_activation_20260705T004400Z/smoke_probe --summary-only"
+  ],
+  "applied": true,
+  "blockers": [
+    "start_eval_batch_frontdoor failed with rc=2"
+  ],
+  "decision_grade": false,
+  "eval_batch_url": "http://localhost:18070",
+  "generated_at": "2026-07-05T00:44:14+00:00",
+  "keep_enabled": false,
+  "preflight": {
+    "activation_commands": [
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+      "cd /mnt/raid0/llm/epyc-orchestrator && ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070 uv run python scripts/server/orchestrator_stack.py reload orchestrator",
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled"
+    ],
+    "api_health": {
+      "elapsed_s": 0.06021938699996099,
+      "error": null,
+      "json_body": {
+        "backend_health": {
+          "http://localhost:8070": {
+            "cooldown_s": 30.0,
+            "failure_count": 0,
+            "last_failure": 0.0,
+            "last_success": 196851.289815928,
+            "state": "closed"
+          },
+          "http://localhost:8072": {
+            "cooldown_s": 30.0,
+            "failure_count": 0,
+            "last_failure": 0.0,
+            "last_success": 196743.701275621,
+            "state": "closed"
+          },
+          "http://localhost:8083": {
+            "cooldown_s": 30.0,
+            "failure_count": 0,
+            "last_failure": 0.0,
+            "last_success": 196298.609920686,
+            "state": "closed"
+          },
+          "http://localhost:8085": {
+            "cooldown_s": 30.0,
+            "failure_count": 0,
+            "last_failure": 0.0,
+            "last_success": 196578.248775693,
+            "state": "closed"
+          },
+          "http://localhost:8086": {
+            "cooldown_s": 30.0,
+            "failure_count": 0,
+            "last_failure": 0.0,
+            "last_success": 196606.663448634,
+            "state": "closed"
+          }
+        },
+        "backend_probes": {
+          "architect_general": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 14.4,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8083"
+          },
+          "coder_escalation/frontdoor/worker_summarize": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 20.7,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8070"
+          },
+          "ingest_long_context": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 11.6,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8085"
+          },
+          "toolrunner/worker_general/worker_math": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 17.3,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8072"
+          },
+          "vision_escalation": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 5.4,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8087"
+          },
+          "worker_vision": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 8.8,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8086"
+          }
+        },
+        "knowledge_tools": {
+          "available": false,
+          "tools": {
+            "get_wikipedia_article": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            },
+            "search_arxiv": {
+              "available": false,
+              "error": "No module named 'arxiv'"
+            },
+            "search_books": {
+              "available": false,
+              "error": "No module named 'googleapiclient'"
+            },
+            "search_papers": {
+              "available": false,
+              "error": "No module named 'semanticscholar'"
+            },
+            "search_wikipedia": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            }
+          }
+        },
+        "mock_mode_available": true,
+        "models_loaded": 5,
+        "status": "ok",
+        "version": "0.1.0"
+      },
+      "ok": true,
+      "status": 200,
+      "url": "http://localhost:8000/health"
+    },
+    "api_url": "http://localhost:8000",
+    "autopilot_active": false,
+    "config_attest": {
+      "all_sampled_workers_enabled": false,
+      "any_sampled_worker_disabled": true,
+      "eval_batch_serving_by_pid": {
+        "1065552": false,
+        "1065553": false,
+        "1065554": false,
+        "1065557": false
+      },
+      "eval_batch_serving_sources_by_pid": {
+        "1065552": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "1065553": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "1065554": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "1065557": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING"
+      },
+      "samples_requested": 12,
+      "workers_seen": 4
+    },
+    "eval_batch_frontdoor_health": {
+      "elapsed_s": 0.00022455499856732786,
+      "error": "<urlopen error [Errno 111] Connection refused>",
+      "json_body": null,
+      "ok": false,
+      "status": null,
+      "url": "http://localhost:18070/health"
+    },
+    "eval_batch_url": "http://localhost:18070"
+  },
+  "probe_summary": null,
+  "rollback_commands": [
+    "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=0 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py stop eval_batch_frontdoor"
+  ],
+  "rollback_steps": [
+    {
+      "command": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=0 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+      "elapsed_s": 10.877102222002577,
+      "name": "rollback_reload_orchestrator_eval_batch_disabled",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "Reloading orchestrator...\n  Starting orchestrator API on port 8000\n    Fleet marker: /mnt/raid0/llm/tmp/orchestrator_fleet_started_at\n    PID: 1200554\n    Waiting for health...\n    [OK] Orchestrator ready\n    [oom-protect] oom_score_adj=-1000 on 8/8 pid(s)\n"
+    },
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py stop eval_batch_frontdoor",
+      "elapsed_s": 0.20968990502296947,
+      "name": "rollback_stop_eval_batch_frontdoor",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "  [?] eval_batch_frontdoor not found in state\n"
+    }
+  ],
+  "start_mode": "only",
+  "status": "activation_failed",
+  "steps": [
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+      "elapsed_s": 2.052821170014795,
+      "name": "start_eval_batch_frontdoor",
+      "returncode": 2,
+      "stderr_tail": "",
+      "stdout_tail": "[registry-compile] master=/mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml\n[registry-compile] active_roles=['architect_general', 'coder_escalation', 'embedder', 'embedder_1', 'embedder_2', 'embedder_3', 'embedder_4', 'embedder_5', 'embedder_bge_m3', 'embedder_granite_97m_r2', 'embedder_multilingual_e5_base', 'frontdoor', 'ingest_long_context', 'toolrunner', 'vision_escalation', 'worker_explore', 'worker_fast', 'worker_general', 'worker_math', 'worker_summarize', 'worker_vision']\n[registry-compile] OK \u2014 wrote /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml\n[stack-change-gate] Running canonical launch gate...\n  uv run python scripts/registry/stack_change_pipeline.py check --run-promotion-gate\ndescriptors: ok\n  detail: fresh: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml\nstack_priors: stale\n  error: stack-prior artifact is stale or missing: /mnt/raid0/llm/epyc-orchestrator/orchestration/derived/stack_priors.yaml\n  error: run: uv run python scripts/registry/stack_change_pipeline.py update\nprocedure_enums: ok\n  detail: checked: /mnt/raid0/llm/epyc-orchestrator/orchestration/procedures/add_model_to_registry.yaml, /mnt/raid0/llm/epyc-orchestrator/orchestration/procedure.schema.json\noperator_summary: ok\n  detail: fresh: /mnt/raid0/llm/epyc-orchestrator/docs/generated/current_stack_summary.md\nguard: failed\n  error: source_artifacts.orchestrator_stack hash mismatch: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py expected d5054c41ae1c455f8eafa22e76ca978ed1e308f9d0bdb4b1a57fd5f28321139c, got 9f567609af87879404e3e4774f45b1557c6a1fc4b5283859a60c575d4808fca8\nguard_all_surfaces: failed\n  error: source_artifacts.orchestrator_stack hash mismatch: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py expected d5054c41ae1c455f8eafa22e76ca978ed1e308f9d0bdb4b1a57fd5f28321139c, got 9f567609af87879404e3e4774f45b1557c6a1fc4b5283859a60c575d4808fca8\nguard_strict: failed\n  error: source_artifacts.orchestrator_stack hash mismatch: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py expected d5054c41ae1c455f8eafa22e76ca978ed1e308f9d0bdb4b1a57fd5f28321139c, got 9f567609af87879404e3e4774f45b1557c6a1fc4b5283859a60c575d4808fca8\nstack_manifest_registry: skipped\n  warn: skipped because earlier stack-change checks failed\nq_scorer_priors: skipped\n  warn: skipped because earlier stack-change checks failed\nruntime_attestation: skipped\n  warn: skipped because earlier stack-change checks failed\nsimulated_fixtures: reference\n  detail: data-only stack-change fixture target: uv run pytest -q tests/unit/test_stack_change_pipeline_simulated_fixtures.py\npromotion_gate: skipped\n  warn: skipped because earlier stack-change checks failed\nsummary: failed\nacceptance: blocked\npromotion_gate: fix 5 error(s) before promotion\n[stack-change-gate] FATAL: gate exited 1; refusing launch\n"
+    }
+  ]
+}

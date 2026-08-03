@@ -1,0 +1,25 @@
+{
+  "context": {
+    "api_url": "http://localhost:8000",
+    "full": true,
+    "mode": "calibration",
+    "n": null,
+    "resolved_eval_concurrency": 4,
+    "roles": [
+      "worker_general"
+    ],
+    "seed": 42,
+    "split": "HE-R+",
+    "suite": "scoring_verifiers"
+  },
+  "event": {
+    "completed_questions": 820,
+    "concurrency": 4,
+    "correct_pct": 65.60975609756098,
+    "correct_questions": 538,
+    "label": "cal-worker_general",
+    "total_questions": 820
+  },
+  "generated_at": "2026-07-22T13:00:08+00:00",
+  "seq": 853
+}

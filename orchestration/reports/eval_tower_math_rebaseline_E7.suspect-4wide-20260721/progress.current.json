@@ -1,0 +1,26 @@
+{
+  "context": {
+    "api_url": "http://localhost:8000",
+    "full": true,
+    "mode": "math_rebaseline",
+    "n": null,
+    "resolved_eval_concurrency": 4,
+    "roles": [
+      "worker_general",
+      "worker_math"
+    ],
+    "seed": 42,
+    "split": null,
+    "suite": null
+  },
+  "event": {
+    "completed_questions": 132,
+    "concurrency": 4,
+    "correct_pct": 25.0,
+    "correct_questions": 33,
+    "label": "ev11-worker_math",
+    "total_questions": 1819
+  },
+  "generated_at": "2026-07-21T21:36:04+00:00",
+  "seq": 1971
+}

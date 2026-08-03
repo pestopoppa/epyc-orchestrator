@@ -1,0 +1,174 @@
+{
+  "allow_autopilot_active": false,
+  "allow_serial": false,
+  "api_url": "http://localhost:8000",
+  "applied": true,
+  "blockers": [],
+  "confirm_clean_window": true,
+  "decision_grade": true,
+  "decision_grade_notes": [
+    "requires --apply --confirm-clean-window",
+    "requires AutoPilot inactive unless --allow-autopilot-active",
+    "verifier-model pass (EV-5/7/8) is MODEL-DOWNLOAD gated",
+    "requires every arm reliability >= 0.8 and real confidence provenance (see decision_grade_reasons)"
+  ],
+  "decision_grade_reasons": [],
+  "full": true,
+  "generated_at": "2026-07-22T23:13:53+00:00",
+  "live_stack_contract": {
+    "ok": true,
+    "warnings": []
+  },
+  "min_eval_concurrency": 4,
+  "mode": "math_rebaseline",
+  "n": null,
+  "pin_command": ".venv/bin/python scripts/benchmark/eval_batch_serving_evaltower_window.py --mode math_rebaseline --roles worker_general,worker_math --scoring math_verify --full --min-eval-concurrency 4 --seed 42 --api-url http://localhost:8000 --apply --confirm-clean-window",
+  "preflight": {
+    "autopilot_active": false
+  },
+  "resolved_eval_concurrency": 4,
+  "result": {
+    "dataset_sha256": "38e582cf652f1ecfea8e8f9704d7b08120920da41d789c0478c2dbfc2ab6fa91",
+    "full": true,
+    "mode": "math_rebaseline",
+    "paired_significance": {
+      "alpha": 0.05,
+      "arms": {
+        "ev11-math-rebaseline::worker_general::seed42::38e582cf652f": {
+          "accuracy": 0.7885985748218527,
+          "correct": 1328,
+          "n": 1684,
+          "wilson_lower": 0.768452,
+          "wilson_upper": 0.807432
+        },
+        "ev11-math-rebaseline::worker_math::seed42::38e582cf652f": {
+          "accuracy": 0.7800982800982801,
+          "correct": 1270,
+          "n": 1628,
+          "wilson_lower": 0.759333,
+          "wilson_upper": 0.799545
+        }
+      },
+      "mismatched_pairs": [],
+      "n_arms": 2,
+      "pairs": [
+        {
+          "a_correct_b_wrong": 61,
+          "a_wrong_b_correct": 58,
+          "accuracy_a": 0.782691,
+          "accuracy_b": 0.780796,
+          "arm_a": "ev11-math-rebaseline::worker_general::seed42::38e582cf652f",
+          "arm_b": "ev11-math-rebaseline::worker_math::seed42::38e582cf652f",
+          "delta_b_minus_a": -0.001895,
+          "mcnemar_p_two_sided": 0.85463004,
+          "odds_ratio_b_over_a": 0.95122,
+          "same_correct": 1178,
+          "same_wrong": 286,
+          "shared_qids": 1583,
+          "significant": false,
+          "wilson_a": [
+            0.761704,
+            0.80231
+          ],
+          "wilson_b": [
+            0.75975,
+            0.800483
+          ],
+          "wilson_ci_overlap": true
+        }
+      ],
+      "z": 1.959964
+    },
+    "per_role": {
+      "worker_general": {
+        "accuracy": 0.7885985748218527,
+        "arm": "ev11-math-rebaseline::worker_general::seed42::38e582cf652f",
+        "auroc": 0.4013025416271829,
+        "confidence_is_real": true,
+        "confidence_source_counts": {
+          "completion_probabilities_geomean": 1684
+        },
+        "correct": 1328,
+        "ece": 0.2113974416427804,
+        "n_questions": 1819,
+        "n_scored": 1684,
+        "quality": 2.365795724465558,
+        "reliability": 0.925783397471138,
+        "role": "worker_general",
+        "test_profile": {
+          "dataset_sha256": "38e582cf652f1ecfea8e8f9704d7b08120920da41d789c0478c2dbfc2ab6fa91",
+          "n_gsm8k": 1319,
+          "n_math500": 500,
+          "n_questions": 1819,
+          "production_sampling": true,
+          "sampling_profile": "production_temp_seed42",
+          "scoring": "math_verify",
+          "seed": 42,
+          "version": "ev11-math-rebaseline-v1"
+        }
+      },
+      "worker_math": {
+        "accuracy": 0.7800982800982801,
+        "arm": "ev11-math-rebaseline::worker_math::seed42::38e582cf652f",
+        "auroc": 0.4114393172920424,
+        "confidence_is_real": true,
+        "confidence_source_counts": {
+          "completion_probabilities_geomean": 1628
+        },
+        "correct": 1270,
+        "ece": 0.21989848853602278,
+        "n_questions": 1819,
+        "n_scored": 1628,
+        "quality": 2.34029484029484,
+        "reliability": 0.8949972512369434,
+        "role": "worker_math",
+        "test_profile": {
+          "dataset_sha256": "38e582cf652f1ecfea8e8f9704d7b08120920da41d789c0478c2dbfc2ab6fa91",
+          "n_gsm8k": 1319,
+          "n_math500": 500,
+          "n_questions": 1819,
+          "production_sampling": true,
+          "sampling_profile": "production_temp_seed42",
+          "scoring": "math_verify",
+          "seed": 42,
+          "version": "ev11-math-rebaseline-v1"
+        }
+      }
+    },
+    "production_sampling": true,
+    "roles": [
+      "worker_general",
+      "worker_math"
+    ],
+    "scoring": "math_verify",
+    "seed": 42,
+    "suite": "math",
+    "test_profile": {
+      "dataset_sha256": "38e582cf652f1ecfea8e8f9704d7b08120920da41d789c0478c2dbfc2ab6fa91",
+      "n_gsm8k": 1319,
+      "n_math500": 500,
+      "n_questions": 1819,
+      "production_sampling": true,
+      "sampling_profile": "production_temp_seed42",
+      "scoring": "math_verify",
+      "seed": 42,
+      "version": "ev11-math-rebaseline-v1"
+    }
+  },
+  "roles": [
+    "worker_general",
+    "worker_math"
+  ],
+  "schema_version": "eval_batch_serving_evaltower.verifier.v1",
+  "scoring": "math_verify",
+  "seed": 42,
+  "split": null,
+  "status": "complete",
+  "suite": null,
+  "verifier": null,
+  "verifier_counts": {
+    "n_questions": 3638,
+    "n_scored": 3312
+  },
+  "verifier_gate": null
+}

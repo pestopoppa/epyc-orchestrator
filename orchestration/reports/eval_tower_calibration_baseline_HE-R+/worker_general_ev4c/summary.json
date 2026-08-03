@@ -1,0 +1,83 @@
+{
+  "allow_autopilot_active": false,
+  "allow_serial": false,
+  "api_url": "http://localhost:8000",
+  "applied": true,
+  "blockers": [],
+  "confirm_clean_window": true,
+  "decision_grade": true,
+  "decision_grade_notes": [
+    "requires --apply --confirm-clean-window",
+    "requires AutoPilot inactive unless --allow-autopilot-active",
+    "verifier-model pass (EV-5/7/8) is MODEL-DOWNLOAD gated",
+    "requires every arm reliability >= 0.8 and real confidence provenance (see decision_grade_reasons)"
+  ],
+  "decision_grade_reasons": [],
+  "full": true,
+  "generated_at": "2026-07-22T13:00:08+00:00",
+  "live_stack_contract": {
+    "ok": true,
+    "warnings": []
+  },
+  "min_eval_concurrency": 4,
+  "mode": "calibration",
+  "n": null,
+  "pin_command": ".venv/bin/python scripts/benchmark/eval_batch_serving_evaltower_window.py --mode calibration --suite scoring_verifiers --split HE-R+ --roles worker_general --full --min-eval-concurrency 4 --seed 42 --api-url http://localhost:8000 --apply --confirm-clean-window",
+  "preflight": {
+    "autopilot_active": false
+  },
+  "resolved_eval_concurrency": 4,
+  "result": {
+    "dataset_sha256": "87eaabbdfd4adbbd12b1b6200d099aaa2dd4af83170b18d1f9909205d14059f0",
+    "metric_keys": [
+      "ece",
+      "auroc",
+      "top1_accuracy",
+      "bottom1_accuracy",
+      "spearman_rho",
+      "mae"
+    ],
+    "mode": "calibration",
+    "n_questions": 820,
+    "per_role": {
+      "worker_general": {
+        "accuracy": 0.6585067319461444,
+        "auroc": 0.5751155880667812,
+        "bottom1_accuracy": 0.0,
+        "confidence_is_real": true,
+        "confidence_source_counts": {
+          "completion_probabilities_geomean": 817
+        },
+        "ece": 0.321643058178994,
+        "mae": 0.3453870095268573,
+        "n_questions": 820,
+        "n_scored": 817,
+        "reliability": 0.9963414634146341,
+        "role": "worker_general",
+        "spearman_rho": 0.1233934948975394,
+        "top1_accuracy": 1.0
+      }
+    },
+    "roles": [
+      "worker_general"
+    ],
+    "seed": 42,
+    "split": "HE-R+",
+    "suite": "scoring_verifiers"
+  },
+  "roles": [
+    "worker_general"
+  ],
+  "schema_version": "eval_batch_serving_evaltower.verifier.v1",
+  "scoring": "math_verify",
+  "seed": 42,
+  "split": "HE-R+",
+  "status": "complete",
+  "suite": "scoring_verifiers",
+  "verifier": null,
+  "verifier_counts": {
+    "n_questions": 820,
+    "n_scored": 817
+  },
+  "verifier_gate": null
+}

@@ -1,0 +1,338 @@
+{
+  "activation_commands": [
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+    "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled --api-url http://localhost:8000 --eval-batch-url http://localhost:18070 --output-dir orchestration/reports/ev_baseline_e7_tier1/activation/smoke_probe --summary-only"
+  ],
+  "activation_steps": [
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+      "elapsed_s": 2.9136949009262025,
+      "name": "start_eval_batch_frontdoor",
+      "returncode": 2,
+      "stderr_tail": "runtime-facts selected-servers read failed (ImportError: cannot import name 'LLAMA_SERVER' from partially initialized module 'scripts.server.stack_paths' (most likely due to a circular import) (/mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py))\n",
+      "stdout_tail": " then run uv run python scripts/registry/stack_change_pipeline.py update\n  error: descriptor artifact is stale or missing: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml\n  error: run: uv run python scripts/registry/stack_change_pipeline.py update\nstack_priors: stale\n  error: stack-prior artifact is stale or missing: /mnt/raid0/llm/epyc-orchestrator/orchestration/derived/stack_priors.yaml\n  error: run: uv run python scripts/registry/stack_change_pipeline.py update\nprocedure_enums: ok\n  detail: checked: /mnt/raid0/llm/epyc-orchestrator/orchestration/procedures/add_model_to_registry.yaml, /mnt/raid0/llm/epyc-orchestrator/orchestration/procedure.schema.json\noperator_summary: ok\n  detail: fresh: /mnt/raid0/llm/epyc-orchestrator/docs/generated/current_stack_summary.md\nguard: failed\n  error: source_artifacts.orchestrator_stack hash mismatch: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py expected 82fa0f2349d78508946633ea151f5bd03948c3926936732615769ff5c432e4fa, got 2bb614fa7dbe6e19b5aaca4d23e15db51ed7a1bb6bf2903c586bc1c323704a9d\nguard_all_surfaces: failed\n  warn: hardcoded_surface.waived.legacy_test.retired_role_in_tests: tests/unit/test_chat_request_role_validation.py:62: reviewer_agent, architect_coding) that Role._missing_ resolves. If this [exception: classification=legacy_test; owner=test-infrastructure; expires=2026-12-31; rationale=Intentional retired-role coverage: asserts Role._missing_ resolves the legacy \"architect_coding\" label to live architect_general. This fixture must keep the legacy string to prove backward-compatible normalization.]\n  warn: hardcoded_surface.waived.legacy_test.retired_role_in_tests: tests/unit/test_chat_request_role_validation.py:74: \"architect_coding\", [exception: classification=legacy_test; owner=test-infrastructure; expires=2026-12-31; rationale=Intentional retired-role coverage: asserts Role._missing_ resolves the legacy \"architect_coding\" label to live architect_general. This fixture must keep the legacy string to prove backward-compatible normalization.]\n  warn: hardcoded_surface.waived.legacy_test.retired_role_in_tests: tests/unit/test_q_reward_role_key.py:106: for role in (\"architect_coding\", \"mock\"): [exception: classification=legacy_test; owner=test-infrastructure; expires=2026-12-31; rationale=Intentional retired-role coverage: iterates the legacy \"architect_coding\" key to prove q-reward role-key handling stays stable for historical replay data. Migrating would drop legacy-key regression coverage.]\n  error: source_artifacts.orchestrator_stack hash mismatch: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py expected 82fa0f2349d78508946633ea151f5bd03948c3926936732615769ff5c432e4fa, got 2bb614fa7dbe6e19b5aaca4d23e15db51ed7a1bb6bf2903c586bc1c323704a9d\nguard_strict: failed\n  error: source_artifacts.orchestrator_stack hash mismatch: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py expected 82fa0f2349d78508946633ea151f5bd03948c3926936732615769ff5c432e4fa, got 2bb614fa7dbe6e19b5aaca4d23e15db51ed7a1bb6bf2903c586bc1c323704a9d\nstack_manifest_registry: skipped\n  warn: skipped because earlier stack-change checks failed\nq_scorer_priors: skipped\n  warn: skipped because earlier stack-change checks failed\nruntime_attestation: skipped\n  warn: skipped because earlier stack-change checks failed\nsimulated_fixtures: reference\n  detail: data-only stack-change fixture target: uv run pytest -q tests/unit/test_stack_change_pipeline_simulated_fixtures.py\npromotion_gate: skipped\n  warn: skipped because earlier stack-change checks failed\nsummary: failed\nacceptance: blocked\npromotion_gate: fix 7 error(s) before promotion\nruntime-facts selected-servers read failed (ImportError: cannot import name 'LLAMA_SERVER' from partially initialized module 'scripts.server.stack_paths' (most likely due to a circular import) (/mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py))\n[stack-change-gate] FATAL: gate exited 1; refusing launch\n"
+    }
+  ],
+  "allow_autopilot_active": false,
+  "allow_serial": false,
+  "applied": true,
+  "blockers": [
+    "start_eval_batch_frontdoor failed with rc=2"
+  ],
+  "comparison": null,
+  "confirm_clean_window": true,
+  "current_arm": {
+    "error": null,
+    "metrics": {
+      "aggregate_tps": 43.18702117003061,
+      "core_id": "legacy_pool_seed_42_n50",
+      "cost": 0.5,
+      "errors": 5,
+      "eval_concurrency": 4,
+      "eval_wall_s": 866.2787797451019,
+      "goodput_qph": 108.04835832125696,
+      "mean_tools_used": 0.022222222222222223,
+      "median_request_tps": 10.344012705787376,
+      "n_questions": 50,
+      "n_scored": 45,
+      "partition_counts": {
+        "core": 45
+      },
+      "partition_quality": {
+        "core": 1.7333333333333332
+      },
+      "per_suite_counts": {
+        "agentic": 1,
+        "aime": 1,
+        "aime25": 1,
+        "bigcodebench": 1,
+        "coder": 1,
+        "cruxeval": 1,
+        "debugbench": 1,
+        "general": 2,
+        "gpqa": 1,
+        "gpqa_diamond": 1,
+        "gpqa_diamond_cot": 1,
+        "hotpotqa": 2,
+        "instruction_precision": 1,
+        "leval": 1,
+        "livecodebench": 1,
+        "long_context": 1,
+        "math": 1,
+        "mmlu_pro": 6,
+        "mode_advantage": 1,
+        "mode_advantage_hard": 1,
+        "needle_parameterized": 1,
+        "olympiadbench": 1,
+        "omniscience": 1,
+        "physics": 1,
+        "physreason": 1,
+        "real_suite_v1": 1,
+        "ruler": 1,
+        "scoring_verifiers": 3,
+        "simpleqa": 1,
+        "skill_transfer": 1,
+        "thinking": 2,
+        "usaco": 1,
+        "vl": 2,
+        "web_research": 1
+      },
+      "per_suite_quality": {
+        "agentic": 3.0,
+        "aime": 0.0,
+        "aime25": 0.0,
+        "bigcodebench": 0.0,
+        "coder": 3.0,
+        "cruxeval": 3.0,
+        "debugbench": 3.0,
+        "general": 1.5,
+        "gpqa": 0.0,
+        "gpqa_diamond": 0.0,
+        "gpqa_diamond_cot": 0.0,
+        "hotpotqa": 3.0,
+        "instruction_precision": 3.0,
+        "leval": 3.0,
+        "livecodebench": 3.0,
+        "long_context": 3.0,
+        "math": 3.0,
+        "mmlu_pro": 1.0,
+        "mode_advantage": 0.0,
+        "mode_advantage_hard": 0.0,
+        "needle_parameterized": 3.0,
+        "olympiadbench": 3.0,
+        "omniscience": 3.0,
+        "physics": 0.0,
+        "physreason": 0.0,
+        "real_suite_v1": 3.0,
+        "ruler": 0.0,
+        "scoring_verifiers": 3.0,
+        "simpleqa": 0.0,
+        "skill_transfer": 0.0,
+        "thinking": 3.0,
+        "usaco": 3.0,
+        "vl": 3.0,
+        "web_research": 0.0
+      },
+      "quality": 1.7333333333333332,
+      "question_results_count": 50,
+      "reliability": 0.9,
+      "speed": 43.18702117003061,
+      "speed_metric_mode": "aggregate_batch_tps",
+      "task_rate_qph": 207.78530446395567,
+      "tier": 1,
+      "tool_use_rate": 0.022222222222222223,
+      "total_tool_calls": 1,
+      "wall_minutes_per_eval": 14.508422242015756,
+      "wall_s": 870.5053345209453
+    },
+    "name": "current",
+    "ok": true
+  },
+  "decision_grade": false,
+  "decision_grade_notes": [
+    "requires --apply --confirm-clean-window",
+    "requires AutoPilot inactive unless --allow-autopilot-active is set",
+    "requires successful current and eval-batch EvalTower arms"
+  ],
+  "eval_batch_arm": null,
+  "eval_batch_url": "http://localhost:18070",
+  "eval_spec": {
+    "n": 50,
+    "seed": 42,
+    "tier": 1
+  },
+  "generated_at": "2026-07-23T08:11:35+00:00",
+  "keep_enabled": false,
+  "min_eval_concurrency": 4,
+  "planned_current_arm": {
+    "api_url": "http://localhost:8000",
+    "n": 50,
+    "name": "current",
+    "seed": 42,
+    "tier": 1,
+    "timeout_s": 420.0
+  },
+  "planned_eval_batch_arm": {
+    "api_url": "http://localhost:8000",
+    "n": 50,
+    "name": "eval_batch",
+    "seed": 42,
+    "tier": 1,
+    "timeout_s": 420.0
+  },
+  "preflight": {
+    "activation_commands": [
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+      "cd /mnt/raid0/llm/epyc-orchestrator && ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070 uv run python scripts/server/orchestrator_stack.py reload orchestrator",
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled"
+    ],
+    "api_health": {
+      "elapsed_s": 0.07118804007768631,
+      "error": null,
+      "json_body": {
+        "backend_health": {
+          "http://localhost:8080": {
+            "cooldown_s": 30.0,
+            "failure_count": 0,
+            "last_failure": 1777183.94213263,
+            "last_success": 1777959.731326052,
+            "state": "closed"
+          },
+          "http://localhost:8082": {
+            "cooldown_s": 30.0,
+            "failure_count": 0,
+            "last_failure": 1777864.1302218,
+            "last_success": 1778027.215653906,
+            "state": "closed"
+          },
+          "http://localhost:8086": {
+            "cooldown_s": 30.0,
+            "failure_count": 0,
+            "last_failure": 0.0,
+            "last_success": 1777696.477805646,
+            "state": "closed"
+          }
+        },
+        "backend_probes": {
+          "architect_general": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 14.7,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8083"
+          },
+          "coder_escalation/frontdoor/worker_summarize": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 20.6,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8080"
+          },
+          "ingest_long_context": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 6.4,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8185"
+          },
+          "toolrunner/worker_general/worker_math": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 17.6,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8082"
+          },
+          "vision_escalation": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 9.2,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8087"
+          },
+          "worker_vision": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 12.0,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8086"
+          }
+        },
+        "knowledge_tools": {
+          "available": true,
+          "tools": {
+            "get_wikipedia_article": {
+              "available": true,
+              "error": null
+            },
+            "search_arxiv": {
+              "available": true,
+              "error": null
+            },
+            "search_books": {
+              "available": true,
+              "error": null
+            },
+            "search_papers": {
+              "available": true,
+              "error": null
+            },
+            "search_wikipedia": {
+              "available": true,
+              "error": null
+            }
+          }
+        },
+        "mock_mode_available": true,
+        "models_loaded": 3,
+        "status": "ok",
+        "version": "0.1.0"
+      },
+      "ok": true,
+      "status": 200,
+      "url": "http://localhost:8000/health"
+    },
+    "api_url": "http://localhost:8000",
+    "autopilot_active": false,
+    "config_attest": {
+      "all_sampled_workers_enabled": false,
+      "any_sampled_worker_disabled": true,
+      "eval_batch_serving_by_pid": {
+        "2700795": false,
+        "2700797": false,
+        "2700798": false,
+        "2700800": false
+      },
+      "eval_batch_serving_sources_by_pid": {
+        "2700795": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "2700797": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "2700798": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "2700800": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING"
+      },
+      "samples_requested": 12,
+      "workers_seen": 4
+    },
+    "eval_batch_frontdoor_health": {
+      "elapsed_s": 0.0001988911535590887,
+      "error": "<urlopen error [Errno 111] Connection refused>",
+      "json_body": null,
+      "ok": false,
+      "status": null,
+      "url": "http://localhost:18070/health"
+    },
+    "eval_batch_url": "http://localhost:18070"
+  },
+  "probe_summary": null,
+  "resolved_eval_concurrency": 4,
+  "rollback_commands": [
+    "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=0 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py stop eval_batch_frontdoor"
+  ],
+  "rollback_steps": [
+    {
+      "command": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=0 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py reload orchestrator",
+      "elapsed_s": 15.012016325024888,
+      "name": "rollback_reload_orchestrator_eval_batch_disabled",
+      "returncode": 0,
+      "stderr_tail": "runtime-facts selected-servers read failed (ImportError: cannot import name 'LLAMA_SERVER' from partially initialized module 'scripts.server.stack_paths' (most likely due to a circular import) (/mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py))\n",
+      "stdout_tail": "Reloading orchestrator...\n  Starting orchestrator API on port 8000\n    Fleet marker: /mnt/raid0/llm/tmp/orchestrator_fleet_started_at\n    PID: 2716755\n    Waiting for health...\n    [OK] Orchestrator ready\n    [oom-protect] oom_score_adj=-1000 on 8/8 pid(s)\n[runtime-facts] Wrote /mnt/raid0/llm/tmp/orchestrator_runtime_facts.json\n"
+    },
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py stop eval_batch_frontdoor",
+      "elapsed_s": 0.3657540511339903,
+      "name": "rollback_stop_eval_batch_frontdoor",
+      "returncode": 0,
+      "stderr_tail": "runtime-facts selected-servers read failed (ImportError: cannot import name 'LLAMA_SERVER' from partially initialized module 'scripts.server.stack_paths' (most likely due to a circular import) (/mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py))\n",
+      "stdout_tail": "  [?] eval_batch_frontdoor not found in state\n[runtime-facts] Wrote /mnt/raid0/llm/tmp/orchestrator_runtime_facts.json\n"
+    }
+  ],
+  "schema_version": "eval_batch_serving_evaltower.tier.v1",
+  "skip_current_arm": false,
+  "status": "activation_failed"
+}

@@ -1,0 +1,25 @@
+{
+  "context": {
+    "api_url": "http://localhost:8000",
+    "full": true,
+    "mode": "calibration",
+    "n": null,
+    "resolved_eval_concurrency": 4,
+    "roles": [
+      "frontdoor"
+    ],
+    "seed": 42,
+    "split": "HE-R+",
+    "suite": "scoring_verifiers"
+  },
+  "event": {
+    "completed_questions": 820,
+    "concurrency": 4,
+    "correct_pct": 70.85365853658537,
+    "correct_questions": 581,
+    "label": "cal-frontdoor",
+    "total_questions": 820
+  },
+  "generated_at": "2026-07-22T12:13:46+00:00",
+  "seq": 853
+}

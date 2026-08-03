@@ -1,0 +1,285 @@
+{
+  "activation_commands": [
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+    "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled --api-url http://localhost:8000 --eval-batch-url http://localhost:18070 --output-dir orchestration/reports/ev_baseline_e7_tier1_diag/activation/smoke_probe --summary-only"
+  ],
+  "activation_steps": [],
+  "allow_autopilot_active": false,
+  "allow_serial": false,
+  "applied": true,
+  "blockers": [
+    "current EvalTower arm scored 26/50 non-error questions"
+  ],
+  "comparison": null,
+  "confirm_clean_window": true,
+  "current_arm": {
+    "error": null,
+    "metrics": {
+      "aggregate_tps": 27.469461869562075,
+      "core_id": "legacy_pool_seed_42_n50",
+      "cost": 0.5,
+      "errors": 24,
+      "eval_concurrency": 4,
+      "eval_wall_s": 475.10941648483276,
+      "goodput_qph": 128.8124332554746,
+      "mean_tools_used": 0.038461538461538464,
+      "median_request_tps": 15.15945348493994,
+      "n_questions": 50,
+      "n_scored": 26,
+      "partition_counts": {
+        "core": 26
+      },
+      "partition_quality": {
+        "core": 1.9615384615384617
+      },
+      "per_suite_counts": {
+        "coder": 1,
+        "cruxeval": 1,
+        "general": 1,
+        "gpqa_diamond": 1,
+        "gpqa_diamond_cot": 1,
+        "hotpotqa": 2,
+        "instruction_precision": 1,
+        "math": 1,
+        "mmlu_pro": 2,
+        "mode_advantage_hard": 1,
+        "olympiadbench": 1,
+        "omniscience": 1,
+        "physreason": 1,
+        "real_suite_v1": 1,
+        "ruler": 1,
+        "scoring_verifiers": 2,
+        "simpleqa": 1,
+        "skill_transfer": 1,
+        "thinking": 1,
+        "vl": 2,
+        "web_research": 1,
+        "zeroscrolls": 1
+      },
+      "per_suite_quality": {
+        "coder": 3.0,
+        "cruxeval": 3.0,
+        "general": 3.0,
+        "gpqa_diamond": 0.0,
+        "gpqa_diamond_cot": 0.0,
+        "hotpotqa": 3.0,
+        "instruction_precision": 3.0,
+        "math": 3.0,
+        "mmlu_pro": 1.5,
+        "mode_advantage_hard": 0.0,
+        "olympiadbench": 3.0,
+        "omniscience": 3.0,
+        "physreason": 0.0,
+        "real_suite_v1": 3.0,
+        "ruler": 0.0,
+        "scoring_verifiers": 3.0,
+        "simpleqa": 0.0,
+        "skill_transfer": 0.0,
+        "thinking": 3.0,
+        "vl": 3.0,
+        "web_research": 0.0,
+        "zeroscrolls": 3.0
+      },
+      "quality": 1.9615384615384617,
+      "question_results_count": 50,
+      "reliability": 0.52,
+      "speed": 27.469461869562075,
+      "speed_metric_mode": "aggregate_batch_tps",
+      "task_rate_qph": 378.8600978102194,
+      "tier": 1,
+      "tool_use_rate": 0.038461538461538464,
+      "total_tool_calls": 1,
+      "wall_minutes_per_eval": 7.989328595083983,
+      "wall_s": 479.359715705039
+    },
+    "name": "current",
+    "ok": true
+  },
+  "decision_grade": false,
+  "decision_grade_notes": [
+    "requires --apply --confirm-clean-window",
+    "requires AutoPilot inactive unless --allow-autopilot-active is set",
+    "requires successful current and eval-batch EvalTower arms"
+  ],
+  "eval_batch_arm": null,
+  "eval_batch_url": "http://localhost:18070",
+  "eval_spec": {
+    "n": 50,
+    "seed": 42,
+    "tier": 1
+  },
+  "generated_at": "2026-07-23T06:33:19+00:00",
+  "keep_enabled": false,
+  "min_eval_concurrency": 4,
+  "planned_current_arm": {
+    "api_url": "http://localhost:8000",
+    "n": 50,
+    "name": "current",
+    "seed": 42,
+    "tier": 1,
+    "timeout_s": 120.0
+  },
+  "planned_eval_batch_arm": {
+    "api_url": "http://localhost:8000",
+    "n": 50,
+    "name": "eval_batch",
+    "seed": 42,
+    "tier": 1,
+    "timeout_s": 120.0
+  },
+  "preflight": {
+    "activation_commands": [
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+      "cd /mnt/raid0/llm/epyc-orchestrator && ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070 uv run python scripts/server/orchestrator_stack.py reload orchestrator",
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled"
+    ],
+    "api_health": {
+      "elapsed_s": 0.0711830600630492,
+      "error": null,
+      "json_body": {
+        "backend_health": {
+          "http://localhost:8080": {
+            "cooldown_s": 30.0,
+            "failure_count": 1,
+            "last_failure": 1771958.191701461,
+            "last_success": 1771581.737524702,
+            "state": "closed"
+          },
+          "http://localhost:8082": {
+            "cooldown_s": 30.0,
+            "failure_count": 1,
+            "last_failure": 1771840.902768135,
+            "last_success": 1771838.558864917,
+            "state": "closed"
+          }
+        },
+        "backend_probes": {
+          "architect_general": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 15.0,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8083"
+          },
+          "coder_escalation/frontdoor/worker_summarize": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 21.0,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8080"
+          },
+          "ingest_long_context": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 6.6,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8185"
+          },
+          "toolrunner/worker_general/worker_math": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 17.7,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8082"
+          },
+          "vision_escalation": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 9.5,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8087"
+          },
+          "worker_vision": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 12.3,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8086"
+          }
+        },
+        "knowledge_tools": {
+          "available": true,
+          "tools": {
+            "get_wikipedia_article": {
+              "available": true,
+              "error": null
+            },
+            "search_arxiv": {
+              "available": true,
+              "error": null
+            },
+            "search_books": {
+              "available": true,
+              "error": null
+            },
+            "search_papers": {
+              "available": true,
+              "error": null
+            },
+            "search_wikipedia": {
+              "available": true,
+              "error": null
+            }
+          }
+        },
+        "mock_mode_available": true,
+        "models_loaded": 2,
+        "status": "ok",
+        "version": "0.1.0"
+      },
+      "ok": true,
+      "status": 200,
+      "url": "http://localhost:8000/health"
+    },
+    "api_url": "http://localhost:8000",
+    "autopilot_active": false,
+    "config_attest": {
+      "all_sampled_workers_enabled": false,
+      "any_sampled_worker_disabled": true,
+      "eval_batch_serving_by_pid": {
+        "2639628": false,
+        "2639629": false,
+        "2639630": false,
+        "2639631": false,
+        "2639632": false,
+        "2639633": false
+      },
+      "eval_batch_serving_sources_by_pid": {
+        "2639628": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "2639629": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "2639630": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "2639631": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "2639632": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "2639633": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING"
+      },
+      "samples_requested": 12,
+      "workers_seen": 6
+    },
+    "eval_batch_frontdoor_health": {
+      "elapsed_s": 0.00017443206161260605,
+      "error": "<urlopen error [Errno 111] Connection refused>",
+      "json_body": null,
+      "ok": false,
+      "status": null,
+      "url": "http://localhost:18070/health"
+    },
+    "eval_batch_url": "http://localhost:18070"
+  },
+  "probe_summary": null,
+  "resolved_eval_concurrency": 4,
+  "rollback_commands": [
+    "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=0 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py stop eval_batch_frontdoor"
+  ],
+  "rollback_steps": [],
+  "schema_version": "eval_batch_serving_evaltower.tier.v1",
+  "skip_current_arm": false,
+  "status": "current_eval_degenerate"
+}

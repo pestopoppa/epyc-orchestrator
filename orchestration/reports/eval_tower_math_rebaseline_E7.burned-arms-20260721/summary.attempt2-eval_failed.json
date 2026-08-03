@@ -1,0 +1,47 @@
+{
+  "allow_autopilot_active": false,
+  "allow_serial": true,
+  "api_url": "http://localhost:8000",
+  "applied": true,
+  "blockers": [
+    "verifier-mode eval failed: math re-baseline drew 0 questions \u2014 GSM8K/MATH-500 datasets unavailable (MODEL-DOWNLOAD/data required)"
+  ],
+  "confirm_clean_window": true,
+  "decision_grade": false,
+  "decision_grade_notes": [
+    "requires --apply --confirm-clean-window",
+    "requires AutoPilot inactive unless --allow-autopilot-active",
+    "verifier-model pass (EV-5/7/8) is MODEL-DOWNLOAD gated"
+  ],
+  "full": true,
+  "generated_at": "2026-07-21T12:17:32+00:00",
+  "live_stack_contract": {
+    "ok": true,
+    "warnings": []
+  },
+  "min_eval_concurrency": 1,
+  "mode": "math_rebaseline",
+  "n": null,
+  "pin_command": ".venv/bin/python scripts/benchmark/eval_batch_serving_evaltower_window.py --mode math_rebaseline --roles worker_general,worker_math --scoring math_verify --full --allow-serial --seed 42 --api-url http://localhost:8000 --apply --confirm-clean-window",
+  "preflight": {
+    "autopilot_active": false
+  },
+  "resolved_eval_concurrency": 1,
+  "result": null,
+  "roles": [
+    "worker_general",
+    "worker_math"
+  ],
+  "schema_version": "eval_batch_serving_evaltower.verifier.v1",
+  "scoring": "math_verify",
+  "seed": 42,
+  "split": null,
+  "status": "eval_failed",
+  "suite": null,
+  "verifier": null,
+  "verifier_counts": {
+    "n_questions": 0,
+    "n_scored": 0
+  },
+  "verifier_gate": null
+}

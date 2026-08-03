@@ -1,0 +1,326 @@
+{
+  "activation_commands": [
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+    "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled --api-url http://localhost:8000 --eval-batch-url http://localhost:18070 --output-dir /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/eval_batch_serving_activation_20260705T004631Z/smoke_probe --summary-only"
+  ],
+  "applied": true,
+  "blockers": [
+    "smoke_probe failed with rc=75"
+  ],
+  "decision_grade": false,
+  "eval_batch_url": "http://localhost:18070",
+  "generated_at": "2026-07-05T00:47:30+00:00",
+  "keep_enabled": false,
+  "preflight": {
+    "activation_commands": [
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+      "cd /mnt/raid0/llm/epyc-orchestrator && ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070 uv run python scripts/server/orchestrator_stack.py reload orchestrator",
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled"
+    ],
+    "api_health": {
+      "elapsed_s": 0.061886901006801054,
+      "error": null,
+      "json_body": {
+        "backend_health": {},
+        "backend_probes": {
+          "architect_general": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 15.0,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8083"
+          },
+          "coder_escalation/frontdoor/worker_summarize": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 21.5,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8070"
+          },
+          "ingest_long_context": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 11.4,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8085"
+          },
+          "toolrunner/worker_general/worker_math": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 18.0,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8072"
+          },
+          "vision_escalation": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 6.3,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8087"
+          },
+          "worker_vision": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 9.2,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8086"
+          }
+        },
+        "knowledge_tools": {
+          "available": false,
+          "tools": {
+            "get_wikipedia_article": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            },
+            "search_arxiv": {
+              "available": false,
+              "error": "No module named 'arxiv'"
+            },
+            "search_books": {
+              "available": false,
+              "error": "No module named 'googleapiclient'"
+            },
+            "search_papers": {
+              "available": false,
+              "error": "No module named 'semanticscholar'"
+            },
+            "search_wikipedia": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            }
+          }
+        },
+        "mock_mode_available": true,
+        "models_loaded": 6,
+        "status": "ok",
+        "version": "0.1.0"
+      },
+      "ok": true,
+      "status": 200,
+      "url": "http://localhost:8000/health"
+    },
+    "api_url": "http://localhost:8000",
+    "autopilot_active": false,
+    "config_attest": {
+      "all_sampled_workers_enabled": false,
+      "any_sampled_worker_disabled": true,
+      "eval_batch_serving_by_pid": {
+        "1200556": false,
+        "1200557": false,
+        "1200558": false,
+        "1200559": false,
+        "1200561": false
+      },
+      "eval_batch_serving_sources_by_pid": {
+        "1200556": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "1200557": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "1200558": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "1200559": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "1200561": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING"
+      },
+      "samples_requested": 12,
+      "workers_seen": 5
+    },
+    "eval_batch_frontdoor_health": {
+      "elapsed_s": 0.00017922301776707172,
+      "error": "<urlopen error [Errno 111] Connection refused>",
+      "json_body": null,
+      "ok": false,
+      "status": null,
+      "url": "http://localhost:18070/health"
+    },
+    "eval_batch_url": "http://localhost:18070"
+  },
+  "probe_summary": {
+    "blockers": [
+      "eval_batch_serving is not enabled on every sampled API worker"
+    ],
+    "decision_grade": false,
+    "generated_at": "2026-07-05T00:47:18+00:00",
+    "preflight": {
+      "activation_commands": [
+        "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+        "cd /mnt/raid0/llm/epyc-orchestrator && ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070 uv run python scripts/server/orchestrator_stack.py reload orchestrator",
+        "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled"
+      ],
+      "api_health": {
+        "elapsed_s": 0.06876644198200665,
+        "error": null,
+        "json_body": {
+          "backend_health": {},
+          "backend_probes": {
+            "architect_general": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 15.8,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8083"
+            },
+            "coder_escalation/frontdoor/worker_summarize": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 27.2,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8070"
+            },
+            "ingest_long_context": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 13.0,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8085"
+            },
+            "toolrunner/worker_general/worker_math": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 18.2,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8072"
+            },
+            "vision_escalation": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 6.4,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8087"
+            },
+            "worker_vision": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 10.0,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8086"
+            }
+          },
+          "knowledge_tools": {
+            "available": false,
+            "tools": {
+              "get_wikipedia_article": {
+                "available": false,
+                "error": "No module named 'mwclient'"
+              },
+              "search_arxiv": {
+                "available": false,
+                "error": "No module named 'arxiv'"
+              },
+              "search_books": {
+                "available": false,
+                "error": "No module named 'googleapiclient'"
+              },
+              "search_papers": {
+                "available": false,
+                "error": "No module named 'semanticscholar'"
+              },
+              "search_wikipedia": {
+                "available": false,
+                "error": "No module named 'mwclient'"
+              }
+            }
+          },
+          "mock_mode_available": true,
+          "models_loaded": 6,
+          "status": "ok",
+          "version": "0.1.0"
+        },
+        "ok": true,
+        "status": 200,
+        "url": "http://localhost:8000/health"
+      },
+      "api_url": "http://localhost:8000",
+      "autopilot_active": false,
+      "config_attest": {
+        "all_sampled_workers_enabled": false,
+        "any_sampled_worker_disabled": true,
+        "eval_batch_serving_by_pid": {
+          "1207537": false,
+          "1207538": false,
+          "1207540": false
+        },
+        "eval_batch_serving_sources_by_pid": {
+          "1207537": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+          "1207538": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+          "1207540": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING"
+        },
+        "samples_requested": 12,
+        "workers_seen": 3
+      },
+      "eval_batch_frontdoor_health": {
+        "elapsed_s": 0.0010624509886838496,
+        "error": null,
+        "json_body": {
+          "status": "ok"
+        },
+        "ok": true,
+        "status": 200,
+        "url": "http://localhost:18070/health"
+      },
+      "eval_batch_url": "http://localhost:18070"
+    },
+    "smoke": null,
+    "status": "blocked"
+  },
+  "rollback_commands": [
+    "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=0 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py stop eval_batch_frontdoor"
+  ],
+  "rollback_steps": [
+    {
+      "command": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=0 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+      "elapsed_s": 10.904527020989917,
+      "name": "rollback_reload_orchestrator_eval_batch_disabled",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "Reloading orchestrator...\n  Starting orchestrator API on port 8000\n    Fleet marker: /mnt/raid0/llm/tmp/orchestrator_fleet_started_at\n    PID: 1209186\n    Waiting for health...\n    [OK] Orchestrator ready\n    [oom-protect] oom_score_adj=-1000 on 8/8 pid(s)\n"
+    },
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py stop eval_batch_frontdoor",
+      "elapsed_s": 1.2407853990152944,
+      "name": "rollback_stop_eval_batch_frontdoor",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "Stopping eval_batch_frontdoor (PID 1206859)...\n  [OK] Stopped\n"
+    }
+  ],
+  "start_mode": "only",
+  "status": "activation_failed",
+  "steps": [
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+      "elapsed_s": 33.17826937302016,
+      "name": "start_eval_batch_frontdoor",
+      "returncode": 0,
+      "stderr_tail": "2026-07-05 00:46:56,473 [INFO] Loading faiss with AVX512 support.\n2026-07-05 00:46:56,505 [INFO] Successfully loaded faiss with AVX512 support.\n",
+      "stdout_tail": "ng model paths...\n  [OK] All model paths validated\n\n[0.7] Episodic embedding health check...\n\n========================================================================\nEpisodic Embedding Health Report\n========================================================================\n  Routing memories in db:         513,975\n  Vectors in FAISS index:          21,062\n  IDs in reembedded.npz:          275,960\n  FAISS coverage:                    4.1%  (threshold \u2265 50%)\n  reembedded \u22c2 live db:             53.7%  (threshold \u2265 50%)\n  Orphan count (db \u2212 FAISS):      492,913\n  Status:                      ORPHANED \u2014 repair recommended\n========================================================================\n[!] Episodic store is ORPHANED. KNN fallback path will silently degrade.\n    Repair: python3 scripts/maintenance/repair_episodic_embeddings.py --repair\n    Or re-run with --repair-embeddings to auto-repair.\n\n[1] Selective start: eval_batch_frontdoor\n  Including: port 18070 (eval_batch_frontdoor)\n\n[1.5] Page-cache prewarm (numactl --interleave=all)\n  [prewarm] skip port 18070 (roles=eval_batch_frontdoor): build_command failed: 'NoneType' object has no attribute 'model'\n  [prewarm] no GGUF targets resolved; skipping\n\n[2] Checking target ports...\n\n[3] Starting llama-servers...\n  Starting eval-batch frontdoor on port 18070: Qwen3.6-35B-A3B-MTP-Q8_0.gguf\n    Roles: eval_batch_frontdoor\n    Command: /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port...\n    PID: 1206859\n    Waiting for health...\n    [OK] Eval-batch frontdoor ready\n\n[4] Skipping orchestrator API (--only mode)\n  Orchestrator already healthy\n\n[i] State saved to /mnt/raid0/llm/epyc-orchestrator/logs/orchestrator_state.json\n\n============================================================\nSTACK READY\n============================================================\n\nCOMPONENT                 PORT     PID        STATUS     ATTEST       MODEL\n------------------------------------------------------------------------------------------------\narchitect_general         8083     1421205    healthy    ok           Qwen3.5-122B-A10B-UD-Q4_K_M-00\ncoder_escalation          8070     1420537    healthy    ok           Qwen3.6-35B-A3B-MTP-Q8_0\ncrawl4ai                  11235    docker     healthy    docker       crawl4ai:latest\ndocument_formalizer       9001     2081702    healthy    n/a          LightOnOCR-2\nembedder                  8090     1422516    healthy    ok           bge-large-en-v1.5-f16\nembedder_1                8091     1422763    healthy    ok           bge-large-en-v1.5-f16\nembedder_2                8092     1422982    healthy    ok           bge-large-en-v1.5-f16\nembedder_3                8093     1423208    healthy    ok           bge-large-en-v1.5-f16\nembedder_4                8094     1423441    healthy    ok           bge-large-en-v1.5-f16\nembedder_5                8095     1423658    healthy    ok           bge-large-en-v1.5-f16\neval_batch_frontdoor      18070    1206859    healthy    ok           Qwen3.6-35B-A3B-MTP-Q8_0\ningest_long_context       8085     1421589    healthy    ok           Qwen3-Next-80B-A3B-Instruct-Q4\nnextplaid-code            8088     docker     healthy    docker       LateOn-Code\nnextplaid-docs            8089     docker     healthy    docker       gte-moderncolbert-v1-onnx\norchestrator              8000     1200554    healthy    ok           uvicorn\nsd_server                 8190     2081739    running    n/a          ernie-image-turbo-Q8_0\nsearxng                   8888     docker     healthy    docker       searxng:latest\nserver_8072               8072     1420883    healthy    ok           gemma-4-26B-A4B-it-ORIG-Q4_K_M\nserver_8086               8086     1421952    healthy    ok           Qwen2.5-VL-7B-Instruct-Q4_K_M\nserver_8087               8087     1422205    healthy    ok           Qwen3-VL-30B-A3B-Instruct-Q4_K\n\nState file: /mnt/raid0/llm/epyc-orchestrator/logs/orchestrator_state.json\n"
+    },
+    {
+      "command": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+      "elapsed_s": 12.884525604982628,
+      "name": "reload_orchestrator_eval_batch_enabled",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "Reloading orchestrator...\n  Starting orchestrator API on port 8000\n    Fleet marker: /mnt/raid0/llm/tmp/orchestrator_fleet_started_at\n    PID: 1207534\n    Waiting for health...\n    [OK] Orchestrator ready\n    [oom-protect] oom_score_adj=-1000 on 8/8 pid(s)\n"
+    },
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled --api-url http://localhost:8000 --eval-batch-url http://localhost:18070 --output-dir /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/eval_batch_serving_activation_20260705T004631Z/smoke_probe --summary-only",
+      "elapsed_s": 0.7899391079845373,
+      "name": "smoke_probe",
+      "returncode": 75,
+      "stderr_tail": "",
+      "stdout_tail": ""
+    }
+  ]
+}
