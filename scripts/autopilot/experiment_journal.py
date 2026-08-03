@@ -548,6 +548,60 @@ class ExperimentJournal:
                 )
                 self._entries.append(entry)
 
+    def _emit_trace_event(self, entry: JournalEntry) -> None:
+        """Push this trial into the live trace store as well as the journal.
+
+        The trace store (data/trace/events.sqlite) carried role/trial/category/
+        detail for 10,488 events — every one of them INGESTED from a log file
+        after the fact. Nothing emitted live from the trial loop, so a trial's
+        trace existed only if someone later remembered to run ingest. Trial 1460
+        wrote 9 episodic rows and 0 trace events.
+
+        Emitting here rather than at the call sites because `record()` is the one
+        chokepoint every path goes through — completed trials, skips, and the
+        AUTOPILOT_KILLED crash placeholder alike.
+
+        FAILS OPEN. The trace store is an observability plane; it must never be
+        able to break the journal write that just succeeded above.
+        """
+        try:
+            from src.trace.emit import emit
+            from src.trace.store import Event, EventCategory, EventSource
+
+            status = getattr(entry, "outcome_status", None) or getattr(
+                entry, "pareto_status", None
+            )
+            detail = {
+                k: getattr(entry, k, None)
+                for k in (
+                    "trial_id", "species", "tier", "quality", "speed", "cost",
+                    "reliability", "pareto_status", "outcome_status",
+                    "failure_analysis", "deficiency_category", "memory_count",
+                    "config_snapshot", "reasoning",
+                )
+                if getattr(entry, k, None) is not None
+            }
+            emit(
+                Event(
+                    ts_utc="",  # emit() stamps it
+                    source=EventSource.AUTOPILOT_LIVE,
+                    source_path="",  # emit() assigns a content-addressed key
+                    trial_id=int(getattr(entry, "trial_id", 0) or 0) or None,
+                    role=str(getattr(entry, "species", "") or "") or None,
+                    category=EventCategory.TASK_END,
+                    status=str(status) if status else None,
+                    summary=(
+                        f"trial {getattr(entry, 'trial_id', '?')} "
+                        f"species={getattr(entry, 'species', '?')} "
+                        f"tier={getattr(entry, 'tier', '?')} "
+                        f"quality={getattr(entry, 'quality', '?')}"
+                    ),
+                    detail_json=json.dumps(json_sanitize(detail), default=str, allow_nan=False),
+                )
+            )
+        except Exception:  # noqa: BLE001 — observability must not break the journal
+            pass
+
     # ── writing ──────────────────────────────────────────────────
 
     def record(self, entry: JournalEntry) -> None:
@@ -582,6 +636,7 @@ class ExperimentJournal:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
         self._entries.append(entry)
+        self._emit_trace_event(entry)
 
     def append_ledger_event(self, event: dict[str, Any]) -> dict[str, Any]:
         """Append a non-trial ledger event row to JSONL."""

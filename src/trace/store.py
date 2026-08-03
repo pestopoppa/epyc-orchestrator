@@ -37,6 +37,12 @@ class EventSource:
     # Live in-process push source (TM-4). Rows carry a synthetic source_path
     # (see src/trace/emit.py) so they never collide with file-ingested rows.
     REVIEW_PLANE = "review_plane"
+    # Live in-process push from AutoPilot's trial loop (2026-08-03).
+    # DISTINCT from AUTOPILOT_JOURNAL, which is the same trials scraped
+    # back out of the journal file afterwards. Before this existed the
+    # trace store only ever learned about a trial if someone remembered to
+    # run ingest — trial 1460 wrote 9 episodic rows and 0 trace events.
+    AUTOPILOT_LIVE = "autopilot_live"
 
 
 class EventCategory:
