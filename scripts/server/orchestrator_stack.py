@@ -32,6 +32,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -2376,6 +2377,56 @@ def _verify_aux_ggml_linkage(binary: str, tree: Path, env: dict[str, str]) -> bo
     return True
 
 
+def _run_aux_smoke(service) -> str | None:
+    """Prove an aux service can actually WORK. Returns an error string, or None.
+
+    Declared per service as `smoke: {path, method, json, min_bytes, timeout}`.
+    A service with no `smoke` block is not checked, so this is additive.
+
+    `min_bytes` is the load-bearing part: the failure this exists to catch is a
+    200 response with an empty body, which every status-code check passes.
+    """
+    smoke = getattr(service, "smoke", None)
+    if not isinstance(smoke, dict) or not smoke.get("path"):
+        return None
+
+    url = f"http://127.0.0.1:{service.port}{smoke['path']}"
+    min_bytes = int(smoke.get("min_bytes", 1))
+    timeout = int(smoke.get("timeout", 120))
+    payload = smoke.get("json")
+    print(f"    smoke: {smoke.get('method', 'POST')} {smoke['path']} (expect >= {min_bytes} bytes)")
+    import urllib.error
+    import urllib.request
+
+    # Build the request OUTSIDE the try. A NameError or a malformed declaration
+    # is a bug in this file, not a sick service, and must not be reported as
+    # "smoke request failed" — that misattribution would send someone debugging
+    # a healthy server. Only the network call is caught below.
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"} if data else {},
+        method=str(smoke.get("method", "POST" if data else "GET")),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read()
+            code = resp.status
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        return f"smoke request failed: {type(exc).__name__}: {exc}"
+
+    if code != 200:
+        return f"smoke returned HTTP {code}"
+    if len(body) < min_bytes:
+        return (
+            f"smoke returned HTTP 200 but only {len(body)} bytes "
+            f"(need >= {min_bytes}) — the service is up but not producing output"
+        )
+    print(f"    smoke: OK ({len(body)} bytes)")
+    return None
+
+
 def start_aux_service(name: str) -> ProcessInfo | None:
     """Start one declared auxiliary service. Returns None on any failure."""
     service = AUX_SERVICES.get(name)
@@ -2434,6 +2485,23 @@ def start_aux_service(name: str) -> ProcessInfo | None:
     )
 
     if wait_for_health(service.port, timeout=service.health_timeout, path=service.health_path):
+        # `/health` proves the PORT answers, not that the service can do its job.
+        # The TTS server returns HTTP 200 with ZERO audio bytes for a request it
+        # cannot satisfy (e.g. an unknown `voice`), and whisper will answer
+        # /health while a model failed to load. A service that reports ready and
+        # then silently produces nothing is worse than one that fails to start,
+        # because the failure surfaces at first real use, far from the cause.
+        #
+        # `smoke:` in launch_manifest.yaml declares an OPTIONAL request whose
+        # response must exceed `min_bytes`. Absent -> no smoke check, which is
+        # the previous behaviour for every service that does not declare one.
+        smoke_error = _run_aux_smoke(service)
+        if smoke_error:
+            print(f"    [FAIL] {service.name} answered /health but failed its smoke check")
+            print(f"           {smoke_error}")
+            print(f"    Check log: {log_file}")
+            kill_process(proc.pid)
+            return None
         print(f"    [OK] {service.name} ready")
         return ProcessInfo(
             role=service.name,

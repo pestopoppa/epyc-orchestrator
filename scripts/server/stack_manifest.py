@@ -289,6 +289,12 @@ class AuxService(NamedTuple):
     verify_ggml_linkage: bool = False
     health_path: str = "/health"
     health_timeout: int = 60
+    # OPTIONAL post-health smoke request: {path, method, json, min_bytes,
+    # timeout}. `/health` proves the port answers; this proves the service
+    # can produce OUTPUT. The TTS server returns HTTP 200 with zero audio
+    # bytes for a request it cannot satisfy, which every status-code check
+    # passes. Absent -> not checked.
+    smoke: dict[str, Any] | None = None
 
 
 _AUX_LD_MODES = ("prepend", "replace")
@@ -332,6 +338,7 @@ def _aux_service(entry: dict[str, Any]) -> AuxService:
         verify_ggml_linkage=bool(entry.get("verify_ggml_linkage", False)),
         health_path=str(entry.get("health_path", "/health")),
         health_timeout=int(entry.get("health_timeout", 60)),
+        smoke=entry.get("smoke") if isinstance(entry.get("smoke"), dict) else None,
     )
 
 

@@ -781,6 +781,20 @@ aux_services:
     health_path: /health
     health_timeout: 90
     model_label: Qwen3-TTS-12Hz-0.6B Talker Q8_0 + 12hz codec (HIP gfx90a, ggml 0.17.0)
+    # Prove it can SYNTHESISE, not just answer /health. This server returns
+    # HTTP 200 with ZERO audio bytes for a request it cannot satisfy (an unknown
+    # `voice`, a codec that failed to load), so a status-code check passes while
+    # the service is mute. Deliberately sends NO `voice` field: the model ships
+    # zero built-in speakers and voices are registered at runtime, so naming one
+    # would make a fresh start fail for the wrong reason.
+    smoke:
+      path: /v1/audio/speech
+      method: POST
+      json:
+        input: "stack check"
+        response_format: wav
+      min_bytes: 1024
+      timeout: 180
     log: tts.log
 
   - name: handoff_dashboard
