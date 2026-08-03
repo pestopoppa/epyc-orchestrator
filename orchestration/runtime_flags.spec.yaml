@@ -1,0 +1,136 @@
+# Declared production posture for the runtime feature-flag overlay.
+#
+# GENERATED SHELL, HAND-MAINTAINED INTENT.
+#   * The flag NAMES below are derived from src/features.py::_FEATURE_REGISTRY
+#     by `scripts/validate/runtime_flags_drift.py --sync-spec`. Do not add or
+#     remove names by hand — add a FeatureSpec in code and re-sync.
+#   * Defaults, one-line meanings, env vars and dependencies are NOT restated
+#     here; they live in the registry and are joined in at report time
+#     (`runtime_flags_drift.py --show`).
+#   * `baseline` means "expect whatever src/features.py::default_prod plus
+#     scripts/server/orchestrator_stack.py::PRODUCTION_FEATURE_WAVE_OVERRIDES
+#     compute". It stays correct when those move.
+#
+# WHY: orchestration/runtime_flags.json is live state the API rewrites
+# (`set_by: api:127.0.0.1`); it is gitignored on purpose and must stay that
+# way. This file is the tracked record of what production is SUPPOSED to run,
+# so a fresh clone can reproduce behaviour and a changed flag has a reason.
+#
+# To pin a deviation, replace `baseline` with:
+#     flag_name:
+#       expected: on          # on | off | baseline
+#       reason: "one line — why production deviates, and what unpins it"
+#       since: YYYY-MM-DD
+# A pin without a reason is rejected by the loader.
+#
+# Check drift:  python scripts/validate/runtime_flags_drift.py
+#
+# NOTE: every flag starts at `baseline` because nobody recorded why the live
+# file deviates. `--strict` is therefore EXPECTED TO FAIL until each current
+# `undeclared_override` is triaged — either pinned here with a reason, or the
+# live value reverted through the API by the session that owns the stack. Do
+# not silence it by pinning values you cannot justify; that reproduces the
+# undocumented state in a tracked file instead of fixing it.
+
+version: 1
+
+flags:
+  accurate_token_counting: baseline
+  approval_gates: baseline
+  architect_delegation: baseline
+  batch_edit_mode: baseline
+  binding_routing: baseline
+  caching: baseline
+  cascading_tool_policy: baseline
+  claude_code_mcp_chat: baseline
+  content_cache: baseline
+  context_compression: baseline
+  credential_redaction: baseline
+  dcp_for_consult: baseline
+  dcp_pre_assembly: baseline
+  deep_research_mode: baseline
+  deepconf: baseline
+  deferred_tool_results: baseline
+  depth_model_overrides: baseline
+  escalation_compression: baseline
+  eval_batch_serving: baseline
+  final_schema_validation: baseline
+  generalized_interrupts: baseline
+  generation_monitor: baseline
+  gpu_shadow_lane: baseline
+  graph_router: baseline
+  helpfulness_scoring: baseline
+  hierarchical_speculation: baseline
+  ingest_triviality_guard: baseline
+  injection_scanning: baseline
+  input_formalizer: baseline
+  interleaved_edit_rider: baseline
+  langgraph_architect: baseline
+  langgraph_bridge: baseline
+  langgraph_coder: baseline
+  langgraph_coder_escalation: baseline
+  langgraph_frontdoor: baseline
+  langgraph_ingest: baseline
+  langgraph_worker: baseline
+  logit_probe: baseline
+  memrl: baseline
+  mock_mode: baseline
+  model_fallback: baseline
+  model_grading: baseline
+  openai_compat: baseline
+  output_formalizer: baseline
+  output_spill_to_file: baseline
+  parallel_execution: baseline
+  parallel_tools: baseline
+  personas: baseline
+  plan_review: baseline
+  process_reward_telemetry: baseline
+  react_mode: baseline
+  reasoning_length_alarm: baseline
+  repl: baseline
+  restricted_python: baseline
+  resume_tokens: baseline
+  review_before_commit_consult: baseline
+  review_before_commit_targeted_gate: baseline
+  review_decision_enforce: baseline
+  review_decision_shadow: baseline
+  role_aware_compaction: baseline
+  routing_classifier: baseline
+  script_interception: baseline
+  scripts: baseline
+  segment_cache_dedup: baseline
+  self_speculation: baseline
+  semantic_classifiers: baseline
+  session_compaction: baseline
+  session_log: baseline
+  session_scratchpad: baseline
+  session_token_budget: baseline
+  side_effect_tracking: baseline
+  skillbank: baseline
+  specialist_routing: baseline
+  staged_rewards: baseline
+  state_history_snapshots: baseline
+  streaming: baseline
+  structured_delimiters: baseline
+  structured_tool_output: baseline
+  swarm_fanout: baseline
+  task_token_budget: baseline
+  tool_output_compression: baseline
+  tool_result_clearing: baseline
+  tools: baseline
+  two_level_condensation: baseline
+  unified_streaming: baseline
+  ure_uncertainty_shadow_log: baseline
+  user_modeling: baseline
+  web_research_rerank: baseline
+  worker_call_budget: baseline
+
+# Behaviour-gating keys inside orchestration/autopilot_state.json.
+# That file has a code-derived bootstrap
+# (scripts/autopilot/autopilot.py::_default_state), so it is NOT restated
+# here — only the keys an operator flipped, which exist nowhere in code.
+autopilot_state:
+  baseline_ledger_authority_enabled:
+    expected: true
+    reason: "src/autopilot_core/baseline_ledger.py reads this fail-closed (absent => False); production runs it enabled. Transcribed from the live state's own baseline_ledger_authority_enabled_note: 'operator-authorized flip 2026-06-28; strict readiness restart_ready=True, all cutover gates green, W6 alarm clear'. Effective authority ALSO requires orchestration/authority_consent.json, which is operator-owned and gitignored by design."
+    since: 2026-06-28
