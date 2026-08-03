@@ -548,3 +548,53 @@ class TestGetConfig:
         assert isinstance(cfg.timeouts, TimeoutsConfig)
         assert isinstance(cfg.monitor, MonitorConfigData)
         assert isinstance(cfg.paths, PathsConfig)
+
+
+def test_server_urls_bridge_survives_a_field_the_settings_model_lacks():
+    """A dataclass URL field absent from the Pydantic model must NOT become MISSING.
+
+    The bridge used `getattr(settings.server_urls, name, f.default)`, and
+    `f.default` is `dataclasses.MISSING` for every field declared with
+    `default_factory`. So a field on the dataclass but not on the Pydantic model
+    was passed MISSING *explicitly*, defeating its own factory.
+
+    `architect_critic` hit this: added to the dataclass 2026-08-01 (W1), never
+    added to the settings model. `_normalise_role_urls` calls `.split(",")` on
+    every URL, so real-mode backend init raised and EVERY `real_mode=true`
+    request 503'd — for every role, not just that one. AutoPilot INFRA_SKIP'd
+    all 17 seeding calls against a stack whose servers were all healthy.
+
+    Asserts the PROPERTY (every URL is a usable string), not one field name, so
+    the next field added to only one of the two models is caught too.
+    """
+    import dataclasses
+
+    from src.config import get_config, reset_config
+    from src.config.models import ServerURLsConfig
+
+    reset_config()
+    urls = get_config().server_urls.as_dict()
+    assert urls, "server_urls resolved to nothing"
+
+    non_strings = {k: type(v).__name__ for k, v in urls.items() if not isinstance(v, str)}
+    assert not non_strings, f"non-string server URLs (the MISSING-sentinel bug): {non_strings}"
+
+    empties = [k for k, v in urls.items() if not v.strip()]
+    assert not empties, f"empty server URLs: {empties}"
+
+    # Every URL must survive the split the backend initialiser performs.
+    for role, value in urls.items():
+        parts = [u.strip() for u in value.split(",") if u.strip()]
+        assert parts, f"{role} has no usable URL after splitting: {value!r}"
+
+    # And no DECLARED field may hold the sentinel, whether or not it appears in
+    # as_dict(). `ocr_server` / `vision_api` are service URLs outside the role
+    # map, so membership in as_dict is not the invariant — being a real string
+    # is. Checking the instance catches a broken bridge for any field.
+    cfg = get_config().server_urls
+    sentinels = {
+        f.name: type(getattr(cfg, f.name)).__name__
+        for f in dataclasses.fields(ServerURLsConfig)
+        if not isinstance(getattr(cfg, f.name, None), str)
+    }
+    assert not sentinels, f"declared URL fields holding a non-string: {sentinels}"

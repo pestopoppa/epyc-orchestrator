@@ -6998,12 +6998,36 @@ def _run_loop_inner(
         else:
             async_tasks.submit_subprocess(f"plots-trial-{trial_counter}", cmd, cwd=ORCH_ROOT)
 
+    # `--max-trials N` means RUN N MORE, not "stop once the lifetime counter
+    # reaches N". It used to compare the cumulative counter directly, so with a
+    # counter of 1459 `--max-trials 1` exited immediately without running a
+    # single trial — a bounded smoke run silently did nothing, and the only way
+    # to get one trial was to pass 1460 and know the current count. A relative
+    # budget is what every caller actually wants and is safe by default: too
+    # small a number can no longer be a no-op.
+    trial_budget_start = trial_counter
+    trial_stop_at = trial_counter + max_trials if max_trials else None
+    if trial_stop_at is not None:
+        log.info(
+            "Trial budget: %d more (trial %d -> %d)",
+            max_trials, trial_budget_start, trial_stop_at,
+        )
+
     while not shutdown_requested:
         async_tasks.reap(logger=log)
         phase.set("loop_start", trial_id=trial_counter)
-        if max_trials and trial_counter >= max_trials:
-            log.info("Max trials reached (%d)", max_trials)
-            phase.set("max_trials_reached", trial_id=trial_counter, max_trials=max_trials)
+        if trial_stop_at is not None and trial_counter >= trial_stop_at:
+            log.info(
+                "Trial budget spent: ran %d of %d requested (trial %d -> %d)",
+                trial_counter - trial_budget_start, max_trials,
+                trial_budget_start, trial_counter,
+            )
+            phase.set(
+                "max_trials_reached",
+                trial_id=trial_counter,
+                max_trials=max_trials,
+                ran=trial_counter - trial_budget_start,
+            )
             break
 
         # 2026-05-24 pause-bug fix: re-read state from disk at the top of

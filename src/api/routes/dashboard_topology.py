@@ -51,14 +51,42 @@ _BASE_SERVICE_PORT_HINTS: dict[int, str] = {
     8093: "embedder_3",
     8094: "embedder_4",
     8095: "embedder_5",
-    8190: "sd_server",
-    9000: "whisper",
-    9001: "document_formalizer",
 }
 
 
+def _aux_service_port_hints() -> dict[int, str]:
+    """Auxiliary services, DERIVED from the launch manifest.
+
+    These used to be restated here as literals (`8190: sd_server`,
+    `9000: whisper`, `9001: document_formalizer`). The list drifted the moment a
+    service was added: TTS went live on :9002 on 2026-08-02 and the handoff
+    dashboard sits on :8100, and neither appeared here — so the dashboard showed
+    a fleet the stack does not have. `AUX_SERVICES` is the same table `start`
+    and `reload` dispatch off, so deriving from it means a newly declared
+    service is visible without a second edit here.
+
+    Lazy import: this module is imported by API routes, and stack_manifest pulls
+    in the launcher surface. Failure degrades to {} — the model-serving ports,
+    which are projected from stack priors below, are unaffected.
+    """
+    try:
+        from scripts.server.stack_manifest import AUX_SERVICES
+
+        return {
+            int(svc.port): str(svc.name)
+            for svc in AUX_SERVICES.values()
+            if isinstance(getattr(svc, "port", None), int)
+        }
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _service_port_hints() -> dict[int, str]:
-    return dict(_BASE_SERVICE_PORT_HINTS)
+    # Declared aux services win over the static hints: the manifest is the
+    # launch contract, this dict is only for ports no manifest owns.
+    hints = dict(_BASE_SERVICE_PORT_HINTS)
+    hints.update(_aux_service_port_hints())
+    return hints
 
 
 def _label_for_stack_prior_entry(role: str, entry: dict[str, Any]) -> tuple[int, str] | None:

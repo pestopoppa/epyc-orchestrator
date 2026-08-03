@@ -192,6 +192,12 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         architect_general: str = PydanticField(
             default_factory=lambda: _server_url_settings_default("architect_general")
         )
+        # Added 2026-08-03. The dataclass has carried this since W1
+        # (2026-08-01); its absence here made the bridge hand the
+        # dataclass a MISSING sentinel and 503 every real_mode request.
+        architect_critic: str = PydanticField(
+            default_factory=lambda: _server_url_settings_default("architect_critic")
+        )
         ingest_long_context: str = PydanticField(
             default_factory=lambda: _server_url_settings_default("ingest_long_context")
         )
@@ -778,10 +784,32 @@ def get_config() -> OrchestratorConfigData:
                 repl=settings.features.repl,
                 caching=settings.features.caching,
             ),
-            # Pydantic ServerURLsSettings → dataclass ServerURLsConfig (same fields)
+            # Pydantic ServerURLsSettings → dataclass ServerURLsConfig.
+            #
+            # OMIT absent fields rather than defaulting them. This used to read
+            # `getattr(settings.server_urls, f.name, f.default)`, and `f.default`
+            # is `dataclasses.MISSING` for every field declared with
+            # `default_factory` — which is all of them here. So a field present
+            # on the dataclass but NOT on the Pydantic model was passed
+            # MISSING *explicitly*, overriding its own factory.
+            #
+            # That is not hypothetical: `architect_critic` was added to the
+            # dataclass on 2026-08-01 (W1, when the 122B vacated
+            # architect_general) and never added to the Pydantic model, so
+            # `server_urls['architect_critic']` was the MISSING sentinel. The
+            # backend initialiser calls `.split(",")` on every URL, so EVERY
+            # real_mode=true request 503'd with "'_MISSING_TYPE' object has no
+            # attribute 'split'" — for every role, not just that one. AutoPilot
+            # INFRA_SKIP'd all 17 of its seeding calls.
+            #
+            # Omitting the key lets the dataclass apply its own default or
+            # default_factory, which is the behaviour the fallback was reaching
+            # for. Verified by test_server_urls_bridge_survives_a_field_the_
+            # settings_model_lacks.
             server_urls=ServerURLsConfig(
-                **{f.name: getattr(settings.server_urls, f.name, f.default)
-                   for f in dataclasses.fields(ServerURLsConfig)}
+                **{f.name: getattr(settings.server_urls, f.name)
+                   for f in dataclasses.fields(ServerURLsConfig)
+                   if hasattr(settings.server_urls, f.name)}
             ),
             timeouts=TimeoutsConfig(
                 worker_explore=settings.timeouts.worker_explore,

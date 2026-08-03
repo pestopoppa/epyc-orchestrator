@@ -867,6 +867,12 @@ def _filter_instance_regions_for_mode(
     return out
 
 
+_GPU_RESIDENT_ROLES = frozenset(
+    {"architect_general", "coder_escalation", "worker_vision", "vision_escalation"}
+)
+_SPEECH_ROLES = frozenset({"whisper", "tts"})
+
+
 def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     """Return the current per-region lock snapshot as plain JSON data."""
     import os
@@ -1152,14 +1158,17 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
             matrix,
         )
 
+    # Quarters are RETIRED as a deployable shape (2026-07-30): every CPU role
+    # runs 1 full + 2 halves. q0-q3 remain the atomic LOCK granularity
+    # internally — a full holds all four, a half holds two — but rendering a
+    # column per quarter implied four deployable instances per role and made
+    # the panel unreadable. Shapes are what the operator deploys, so shapes are
+    # what the panel shows. `entries` below still carries per-quarter lock
+    # state for anything that needs the atomic view.
     display_columns = [
         {"key": "full", "label": "Full"},
         {"key": "half0", "label": "Half0"},
         {"key": "half1", "label": "Half1"},
-        {"key": "q0", "label": "q0"},
-        {"key": "q1", "label": "q1"},
-        {"key": "q2", "label": "q2"},
-        {"key": "q3", "label": "q3"},
     ]
     held_by_region: dict[str, list[dict[str, Any]]] = {}
     for role, bucket in by_role.items():
@@ -1280,8 +1289,33 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         except (TypeError, ValueError):
             continue
     _NO_LOCK_STATE = "n/a (no lock domain)"
+    # Rows the operator does NOT want in a "what is holding compute" view: the
+    # 6-instance embedder pool and the default-off eval-batch lane. They have no
+    # lock domain, never will, and rendered as 7 all-dash rows that buried the
+    # roles that matter. Excluded from DISPLAY only — `non_lock_roles` and
+    # `entries` are unchanged, so nothing downstream loses them.
+    def _hidden_from_region_panel(name: str) -> bool:
+        return name.startswith("embedder") or name.startswith("eval_batch")
+
+    # Speech services are NOT llama-server processes, so port discovery never
+    # sees them and they were absent from the panel entirely — invisible since
+    # they went live on the MI210 on 2026-08-02. Fold them in from the launch
+    # manifest, the same table `start`/`reload` dispatch off, so a newly
+    # declared service appears without another edit here.
+    try:
+        from scripts.server.stack_manifest import AUX_SERVICES
+
+        for _svc in AUX_SERVICES.values():
+            _name = str(getattr(_svc, "name", ""))
+            if _name in _SPEECH_ROLES and isinstance(getattr(_svc, "port", None), int):
+                role_ports.setdefault(_name, []).append(int(_svc.port))
+    except Exception:  # noqa: BLE001 — fail open, never break the panel
+        pass
+
     for role in sorted(set(role_ports) | set(instance_topology_all)):
         if role in by_role:
+            continue
+        if _hidden_from_region_panel(role):
             continue
         insts = list(instance_topology_all.get(role) or [])
         ports = sorted(role_ports.get(role, []))
@@ -1312,13 +1346,25 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
                     {"state": "na", "label": "—", "title": f"{role} has no {col['label']} shape"}
                 )
             else:
-                # No NUMA shape at all (embedders / GPU-attached roles): the
-                # single informative cell rides in the Full column.
+                # No NUMA shape at all — GPU-resident roles and the speech
+                # services. "n/a" told the operator nothing: these ARE live and
+                # dispatchable, they simply hold no CPU region. Say what they
+                # are and that they are up, which is the question this panel is
+                # being read to answer.
+                if role in _GPU_RESIDENT_ROLES:
+                    where, mark = "GPU (MI210)", "▣"
+                elif role in _SPEECH_ROLES:
+                    where, mark = "GPU (MI210) · speech", "▣"
+                else:
+                    where, mark = "no CPU region", "·"
                 cells.append(
                     {
                         "state": "nolock",
-                        "label": "n/a",
-                        "title": f"{role} — no NUMA shape{ports_note} · {_NO_LOCK_STATE}",
+                        "label": f"{mark} {where}",
+                        "title": (
+                            f"{role} — resident on {where}{ports_note}; holds no CPU "
+                            f"region lock, so no Full/Half shape applies"
+                        ),
                     }
                 )
         display_rows.append(
