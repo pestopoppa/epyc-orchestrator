@@ -1008,7 +1008,7 @@ def test_pairwise_holdout_writes_guarded_collection_manifest_and_script(
     assert payload["batch_count"] == 1
     batch = payload["batches"][0]
     assert batch["target"] == "source_family:orchestrator_live_seed:architect_general>frontdoor"
-    assert batch["command_workdir"] == "/mnt/raid0/llm/epyc-orchestrator"
+    assert batch["command_workdir"] == str(mod.DEFAULT_COLLECTION_WORKDIR)
     assert batch["collection_timestamp"] == "20260628T120000Z"
     assert batch["sample_size"] == 2
     assert batch["max_tokens"] == 1024

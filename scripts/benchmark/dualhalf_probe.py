@@ -19,8 +19,9 @@ import argparse
 import statistics as st
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
-sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.server.contention_matrix import _http_bench  # noqa: E402
 
 

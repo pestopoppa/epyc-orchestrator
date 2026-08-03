@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 # Ensure src is importable
-sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.features import Features, set_features, reset_features
 from src.graph.helpers import _check_reasoning_length_alarm

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-ORCH_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+ORCH_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = (
     ORCH_ROOT
     / "orchestration"

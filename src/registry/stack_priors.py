@@ -26,7 +26,7 @@ import yaml
 _LOGGER = logging.getLogger(__name__)
 
 
-REPO_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRY = REPO_ROOT / "orchestration" / "model_registry.yaml"
 DEFAULT_DESCRIPTORS = REPO_ROOT / "orchestration" / "model_descriptors.yaml"
 DEFAULT_OUTPUT = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"

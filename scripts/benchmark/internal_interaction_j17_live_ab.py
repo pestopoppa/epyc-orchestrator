@@ -25,7 +25,7 @@ from typing import Any
 
 import httpx
 
-ORCH = Path("/mnt/raid0/llm/epyc-orchestrator")
+ORCH = Path(__file__).resolve().parents[2]
 TASKS_PATH = ORCH / "data" / "bep_sandbox" / "tasks.jsonl"
 DEFAULT_API_URL = "http://localhost:8000/chat"
 DEFAULT_OUTPUT_ROOT = ORCH / "orchestration" / "reports"

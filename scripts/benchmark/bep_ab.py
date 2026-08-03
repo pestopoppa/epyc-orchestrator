@@ -34,7 +34,7 @@ import sys
 import time
 from pathlib import Path
 
-ORCH = Path("/mnt/raid0/llm/epyc-orchestrator")
+ORCH = Path(__file__).resolve().parents[2]
 SANDBOX = ORCH / "data" / "bep_sandbox"
 API = "http://127.0.0.1:8000"
 ORCH_LOG = ORCH / "logs" / "orchestrator.log"

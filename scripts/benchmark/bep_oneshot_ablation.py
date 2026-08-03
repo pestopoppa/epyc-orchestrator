@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 import httpx
 
-ORCH = "/mnt/raid0/llm/epyc-orchestrator"
+ORCH = str(Path(__file__).resolve().parents[2])
 TASKS = [json.loads(line) for line in open(f"{ORCH}/data/bep_sandbox/tasks.jsonl") if line.strip()]
 SCRATCH = Path("/mnt/raid0/llm/tmp/bep_oneshot/work")
 OUTDIR = Path("/mnt/raid0/llm/tmp/bep_oneshot")

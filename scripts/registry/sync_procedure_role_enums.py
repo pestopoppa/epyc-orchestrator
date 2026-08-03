@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-REPO_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PRIORS = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 DEFAULT_PROCEDURE = REPO_ROOT / "orchestration" / "procedures" / "add_model_to_registry.yaml"
 DEFAULT_SCHEMA = REPO_ROOT / "orchestration" / "procedure.schema.json"

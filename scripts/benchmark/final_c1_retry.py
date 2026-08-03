@@ -24,7 +24,7 @@ import httpx
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CANONICAL_REPOSITORY = Path("/mnt/raid0/llm/epyc-orchestrator")
+CANONICAL_REPOSITORY = Path(__file__).resolve().parents[2]
 ORIGINAL_RECEIPT = Path(
     "/mnt/raid0/llm/epyc-root/artifacts/operator/"
     "ratify_e8_final_c1_retry_amendment_20260728.json"

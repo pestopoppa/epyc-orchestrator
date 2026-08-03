@@ -54,7 +54,7 @@ CCRAB_FUNNEL = CCRAB_DIR / "results_pipeline_funnel"
 SWECARE_DIR = DATASETS / "swe-care" / "data"
 SWECARE_TEST = SWECARE_DIR / "test-00000-of-00001.parquet"
 
-ORCH_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+ORCH_ROOT = Path(__file__).resolve().parents[3]
 JOURNAL_DIR = ORCH_ROOT / "orchestration"
 RESEARCH_ROOT = Path("/mnt/raid0/llm/epyc-inference-research")
 QUESTION_POOL = RESEARCH_ROOT / "benchmarks" / "prompts" / "question_pool.jsonl"

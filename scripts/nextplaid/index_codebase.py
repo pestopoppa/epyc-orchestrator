@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-PROJECT_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CODE_URL = "http://localhost:8088"
 DOCS_URL = "http://localhost:8089"
 

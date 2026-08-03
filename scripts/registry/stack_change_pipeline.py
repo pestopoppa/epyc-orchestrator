@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 import yaml
 
-REPO_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.registry.sync_procedure_role_enums import (  # noqa: E402

@@ -31,12 +31,13 @@ from __future__ import annotations
 
 import hashlib
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from orchestration.repl_memory.strategy_store import (  # noqa: E402
     StrategyStore,

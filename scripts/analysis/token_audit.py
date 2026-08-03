@@ -20,7 +20,7 @@ from typing import Any
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
-ORCHESTRATOR_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+ORCHESTRATOR_ROOT = Path(__file__).resolve().parents[2]
 if str(ORCHESTRATOR_ROOT) not in sys.path:
     sys.path.insert(0, str(ORCHESTRATOR_ROOT))
 

@@ -543,7 +543,9 @@ class TestPathsDefaults:
     def test_specific_paths(self):
         cfg = PathsConfig()
         expected_project_root = Path(
-            os.environ.get("ORCHESTRATOR_PATHS_PROJECT_ROOT", "/mnt/raid0/llm/epyc-orchestrator")
+            os.environ.get(
+                "ORCHESTRATOR_PATHS_PROJECT_ROOT", str(Path(__file__).resolve().parents[2])
+            )
         )
         expected_llm_root = Path(
             os.environ.get("ORCHESTRATOR_PATHS_LLM_ROOT", "/mnt/raid0/llm")
@@ -836,8 +838,8 @@ class TestWiringRegistryLoader:
     @_on_raid
     def test_default_registry_path_from_config(self):
         cfg = get_config()
-        assert cfg.paths.registry_path == Path(
-            "/mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml"
+        assert cfg.paths.registry_path == (
+            Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
         )
 
 

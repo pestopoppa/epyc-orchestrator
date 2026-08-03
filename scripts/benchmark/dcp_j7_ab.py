@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-ORCH = Path("/mnt/raid0/llm/epyc-orchestrator")
+ORCH = Path(__file__).resolve().parents[2]
 API_URL = "http://127.0.0.1:8000"
 RESULTS_ROOT = ORCH / "benchmarks" / "results" / "runs" / "dcp_j7"
 MIN_ROWS_PER_ARM = 3

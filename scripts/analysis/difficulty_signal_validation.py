@@ -50,7 +50,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-ORCH_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+ORCH_ROOT = Path(__file__).resolve().parents[2]
 DIAGNOSTICS_PATH = ORCH_ROOT / "logs" / "seeding_diagnostics.jsonl"
 PROGRESS_DIR = ORCH_ROOT / "logs" / "progress"
 

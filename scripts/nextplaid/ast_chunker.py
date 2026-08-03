@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
 # Tree-sitter Python parser (lazy-loaded)

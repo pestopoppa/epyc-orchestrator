@@ -48,7 +48,7 @@ from scripts.benchmark.seeding_types import DEFAULT_SUITES  # noqa: E402
 SUMMARY_SCHEMA_VERSION = "offline_reward_pairwise_holdout_expansion_plan.v1"
 COLLECTION_MANIFEST_SCHEMA_VERSION = "offline_reward_pairwise_collection_window.v1"
 COLLECTION_TIMESTAMP_PLACEHOLDER = "<YYYYMMDDTHHMMSSZ>"
-DEFAULT_COLLECTION_WORKDIR = Path("/mnt/raid0/llm/epyc-orchestrator")
+DEFAULT_COLLECTION_WORKDIR = Path(__file__).resolve().parents[2]
 DEFAULT_COLLECTION_MAX_TOKENS = 1024
 DEFAULT_RESULTS_ROOT = Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/results")
 REFERENCE_BACKED_PROMPTS_ROOT = Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts")
@@ -1178,7 +1178,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
             "commits_prompt_reference_response_text": False,
         },
         "collection_guidance": {
-            "workspace": "/mnt/raid0/llm/epyc-orchestrator",
+            "workspace": str(DEFAULT_COLLECTION_WORKDIR),
             "seeding_eval_command_template": (
                 "uv run python scripts/benchmark/seed_specialist_routing.py "
                 "--suites <suite> --roles <actions_to_evaluate_on_same_source_record> "

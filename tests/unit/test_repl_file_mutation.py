@@ -24,6 +24,10 @@ import pytest
 
 from src.repl_environment import REPLEnvironment
 
+# REPLEnvironment resolves logs/ and orchestration/patches through
+# get_config().paths.project_root, which follows the checkout it runs in.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -46,7 +50,7 @@ def tmp_write_dir(tmp_path):
 @pytest.fixture
 def patches_base(tmp_path):
     """Create a patches directory structure for patch tool tests."""
-    base = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/patches")
+    base = _PROJECT_ROOT / "orchestration" / "patches"
     for sub in ("pending", "approved", "rejected"):
         (base / sub).mkdir(parents=True, exist_ok=True)
     yield base
@@ -59,7 +63,7 @@ class TestLogAppend:
     """Test _log_append() method."""
 
     def test_append_writes_with_timestamp(self, repl):
-        log_file = "/mnt/raid0/llm/epyc-orchestrator/logs/test_mutation.log"
+        log_file = str(_PROJECT_ROOT / "logs" / "test_mutation.log")
         try:
             if os.path.exists(log_file):
                 os.remove(log_file)
@@ -83,7 +87,7 @@ class TestLogAppend:
 
     def test_append_increments_exploration_calls(self, repl):
         before = repl._exploration_calls
-        log_file = "/mnt/raid0/llm/epyc-orchestrator/logs/test_counter.log"
+        log_file = str(_PROJECT_ROOT / "logs" / "test_counter.log")
         try:
             repl._log_append("test_counter.log", "msg")
             assert repl._exploration_calls == before + 1

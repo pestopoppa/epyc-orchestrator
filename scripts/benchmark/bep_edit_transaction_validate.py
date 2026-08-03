@@ -21,7 +21,7 @@ from typing import Any
 
 import httpx
 
-ORCH = Path("/mnt/raid0/llm/epyc-orchestrator")
+ORCH = Path(__file__).resolve().parents[2]
 TASKS_PATH = ORCH / "data" / "bep_sandbox" / "tasks.jsonl"
 SOLUTIONS_PATH = ORCH / "data" / "bep_sandbox" / "solutions.jsonl"
 DEFAULT_SCRATCH = Path("/mnt/raid0/llm/tmp/bep_edittxn/work")

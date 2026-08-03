@@ -53,7 +53,7 @@ from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 
-REPO = Path("/mnt/raid0/llm/epyc-orchestrator")
+REPO = Path(__file__).resolve().parents[2]
 
 
 def log(msg: str = "") -> None:

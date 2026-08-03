@@ -255,10 +255,15 @@ def _get_default_llm_root() -> str:
     return os.environ.get("ORCHESTRATOR_PATHS_LLM_ROOT", "/mnt/raid0/llm")
 
 
+# The checkout this module was loaded from. Derived from __file__ rather than
+# from llm_root so a git worktree reads its OWN registry/priors/config instead
+# of the main checkout's — control-plane reads must follow the code, not the host.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 def _get_default_project_root() -> str:
-    """Get project root from environment or default."""
-    llm_root = _get_default_llm_root()
-    return os.environ.get("ORCHESTRATOR_PATHS_PROJECT_ROOT", f"{llm_root}/epyc-orchestrator")
+    """Get project root from environment, else the checkout this module lives in."""
+    return os.environ.get("ORCHESTRATOR_PATHS_PROJECT_ROOT", str(_REPO_ROOT))
 
 
 def _get_default_stack_priors_path() -> str:
@@ -539,7 +544,7 @@ def _bootstrap_runtime_selected_servers() -> list[dict[str, Any]] | None:
         log_dir = Path(
             os.environ.get(
                 "ORCHESTRATOR_PATHS_LOG_DIR",
-                f"{os.environ.get('ORCHESTRATOR_PATHS_PROJECT_ROOT', f'{llm_root}/epyc-orchestrator')}/logs",
+                f"{_get_default_project_root()}/logs",
             )
         )
         state_file = log_dir / "orchestrator_state.json"

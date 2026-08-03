@@ -24,7 +24,7 @@ from typing import Any
 
 import httpx
 
-ORCH = Path("/mnt/raid0/llm/epyc-orchestrator")
+ORCH = Path(__file__).resolve().parents[2]
 API_URL = os.environ.get("ORCHESTRATOR_API_URL", "http://127.0.0.1:8000")
 DEFAULT_TABLE = ORCH / "orchestration" / "xmas_winner_table.yaml"
 DEFAULT_MIN_DECISION_PROMPTS = 25

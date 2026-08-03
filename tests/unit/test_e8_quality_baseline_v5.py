@@ -1023,7 +1023,7 @@ def test_v5_cli_pins_tail_timeout_and_disallows_execute_mode() -> None:
 
 def test_v5_cli_separates_reviewed_source_from_live_runtime_paths() -> None:
     args = runner.parse_args(["--prepare"])
-    runtime_root = Path("/mnt/raid0/llm/epyc-orchestrator")
+    runtime_root = PROJECT_ROOT
     assert args.state_path == runtime_root / "orchestration/autopilot_state.json"
     assert args.registry_path == runtime_root / "orchestration/model_registry.yaml"
     # 2026-08-01: model_registry_lean.yaml deleted; the lean registry IS the
@@ -1879,6 +1879,9 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     sys.modules[adapter_spec.name] = adapter_module
     adapter_spec.loader.exec_module(adapter_module)
     canonical = adapter_module.module
+    # LIVE runtime state, not repo content: orchestration/autopilot_state.json is
+    # gitignored, so it exists only in the main checkout. Deliberately absolute —
+    # a __file__ anchor would point a worktree at a file that cannot exist there.
     state_path = Path("/mnt/raid0/llm/epyc-orchestrator") / "orchestration/autopilot_state.json"
     state_bytes = state_path.read_bytes()
     manifest = json.loads(evidence.read_text())

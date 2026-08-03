@@ -231,11 +231,14 @@ class TestPathsConfig:
             assert str(cfg.llm_root) == "/mnt/raid0/llm"
 
     def test_default_project_root(self) -> None:
+        # The default is derived from src/config/models.py's own __file__, so a
+        # git worktree resolves to ITS checkout, not the main one.
+        expected = Path(__file__).resolve().parents[2]
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ORCHESTRATOR_PATHS_LLM_ROOT", None)
             os.environ.pop("ORCHESTRATOR_PATHS_PROJECT_ROOT", None)
             cfg = PathsConfig()
-            assert str(cfg.project_root) == "/mnt/raid0/llm/epyc-orchestrator"
+            assert cfg.project_root == expected
 
     def test_raid_prefix_default(self) -> None:
         with patch.dict(os.environ, {}, clear=False):

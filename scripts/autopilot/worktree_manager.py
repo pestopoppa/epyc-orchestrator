@@ -40,7 +40,7 @@ from typing import Generator
 
 log = logging.getLogger("autopilot.worktree")
 
-DEFAULT_PROJECT_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKTREE_BASE = DEFAULT_PROJECT_ROOT / "tmp" / "worktrees"
 
 

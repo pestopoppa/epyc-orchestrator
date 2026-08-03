@@ -25,7 +25,7 @@ import uuid
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+RUNTIME_ROOT = Path(__file__).resolve().parents[2]
 V4_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_reseed.py"
 RUNNER_PATH = Path(__file__).resolve()
 PROTOCOL_ID = "e8_quality_full_pool_tier_baseline.v5"

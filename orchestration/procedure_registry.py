@@ -54,6 +54,7 @@ except ImportError:
 
 
 # Default paths
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROCEDURES_DIR = Path(__file__).resolve().parent / "procedures"
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "procedure.schema.json"
 DEFAULT_STATE_DIR = Path(__file__).resolve().parent / "procedures" / "state"
@@ -725,7 +726,7 @@ class ProcedureRegistry:
         """Execute a shell command using shlex for safe argument splitting."""
         command = action.get("command", "")
         timeout = action.get("timeout_seconds", 300)
-        working_dir = action.get("working_dir", "/mnt/raid0/llm/epyc-orchestrator")
+        working_dir = action.get("working_dir", str(_REPO_ROOT))
 
         # Validate working directory is on RAID
         if not working_dir.startswith("/mnt/raid0/"):
@@ -886,7 +887,7 @@ class ProcedureRegistry:
         """Run a verification gate."""
         gate_name = action.get("args", {}).get("gate")
 
-        cwd = "/mnt/raid0/llm/epyc-orchestrator"
+        cwd = str(_REPO_ROOT)
 
         # Map gates to argument lists (no shell=True needed)
         gate_commands: dict[str, list[str]] = {

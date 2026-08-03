@@ -29,7 +29,7 @@ from experiment_journal import failure_analysis_for_prompt, scrub_legacy_scale_t
 log = logging.getLogger("autopilot.evolution_manager")
 
 ORCH_ROOT = Path(__file__).resolve().parents[3]
-PROJECT_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 DISTILL_PROMPT_TEMPLATE = """\
 You are analyzing experiment results from an LLM orchestration optimization system.

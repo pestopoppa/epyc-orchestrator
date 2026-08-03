@@ -24,7 +24,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-ORCH_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+ORCH_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT = ORCH_ROOT / "orchestration" / "factual_risk_calibration_v2.jsonl"
 DEFAULT_SPLITS = ("train", "val", "test")
 RESULT_NAME_HINTS = ("g10", "g11")

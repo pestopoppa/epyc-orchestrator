@@ -25,7 +25,7 @@ import math
 
 ORCH_ROOT = Path(__file__).resolve().parents[3]
 PROMPTS_DIR = ORCH_ROOT / "orchestration" / "prompts"
-PROJECT_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Meta-Harness Tier 2: Python files that code mutations may touch.
 # This is the eval trust boundary — files NOT on this list are immutable.
