@@ -7,8 +7,8 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "autopilot" / "start_fable_authority_daemon.py"
-spec = importlib.util.spec_from_file_location("start_fable_authority_daemon", SCRIPT)
+SCRIPT = ROOT / "scripts" / "autopilot" / "start_authority_daemon.py"
+spec = importlib.util.spec_from_file_location("start_authority_daemon", SCRIPT)
 assert spec is not None and spec.loader is not None
 launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
@@ -31,8 +31,8 @@ def test_authority_env_forces_required_flags() -> None:
     # control (set to "0" on 2026-08-04 while SEQ-B was unreachable). Pinning the
     # literal made a deliberate operator flip look like a regression. A wrapper that
     # DROPS the key still fails here, which is what this test is for.
-    assert env["AUTOPILOT_SEQ_VERDICT"] == launcher.FABLE_AUTHORITY_ENV["AUTOPILOT_SEQ_VERDICT"]
-    assert env["AUTOPILOT_SEQ_P0_2_BRIDGE"] == launcher.FABLE_AUTHORITY_ENV["AUTOPILOT_SEQ_P0_2_BRIDGE"]
+    assert env["AUTOPILOT_SEQ_VERDICT"] == launcher.AUTHORITY_ENV["AUTOPILOT_SEQ_VERDICT"]
+    assert env["AUTOPILOT_SEQ_P0_2_BRIDGE"] == launcher.AUTHORITY_ENV["AUTOPILOT_SEQ_P0_2_BRIDGE"]
     assert env["AUTOPILOT_W6_AUDIT_BLOCK"] == "1"
     assert env["AUTOPILOT_PLANNER_TIMEOUT"] == "600"
     # The planner runs on local models by default; forcing the spend breaker on
@@ -154,8 +154,8 @@ def test_dry_run_prints_authority_payload(monkeypatch, tmp_path, capsys) -> None
     ]
     assert payload["supervised"] is True
     assert payload["env"]["AUTOPILOT_TOOL_SENTINELS"] == "1"
-    assert payload["env"]["AUTOPILOT_SEQ_VERDICT"] == launcher.FABLE_AUTHORITY_ENV["AUTOPILOT_SEQ_VERDICT"]
-    assert payload["env"]["AUTOPILOT_SEQ_P0_2_BRIDGE"] == launcher.FABLE_AUTHORITY_ENV["AUTOPILOT_SEQ_P0_2_BRIDGE"]
+    assert payload["env"]["AUTOPILOT_SEQ_VERDICT"] == launcher.AUTHORITY_ENV["AUTOPILOT_SEQ_VERDICT"]
+    assert payload["env"]["AUTOPILOT_SEQ_P0_2_BRIDGE"] == launcher.AUTHORITY_ENV["AUTOPILOT_SEQ_P0_2_BRIDGE"]
     assert payload["pid"] is None
 
 

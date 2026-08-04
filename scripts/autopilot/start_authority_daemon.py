@@ -33,7 +33,7 @@ DEFAULT_REPO_READINESS_DIRS = (
 )
 REPO_READINESS_PICKUP_GLOB = "repo_readiness_autopilot_pickup_*.json"
 
-FABLE_AUTHORITY_ENV: dict[str, str] = {
+AUTHORITY_ENV: dict[str, str] = {
     # 2026-08-04 OPERATOR UNBLOCK — the sequential gate is UNREACHABLE, so leaving it
     # armed means AutoPilot cannot ratchet a baseline at all. Measured over the whole
     # journal (1,362 seq rows, 396 sequenced trials):
@@ -118,7 +118,7 @@ LOCAL_PLANNER_DEFAULT_ENV: dict[str, str] = {
 def authority_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """Return an environment with required Fable authority keys enforced."""
     env = dict(os.environ if base is None else base)
-    env.update(FABLE_AUTHORITY_ENV)
+    env.update(AUTHORITY_ENV)
     for key, value in LOCAL_PLANNER_DEFAULT_ENV.items():
         env.setdefault(key, value)
     if REPO_READINESS_PICKUP_ENV not in env:
@@ -205,7 +205,7 @@ def _timestamp() -> str:
 
 
 def _env_subset(env: dict[str, str]) -> dict[str, str]:
-    keys = set(FABLE_AUTHORITY_ENV)
+    keys = set(AUTHORITY_ENV)
     keys.update(LOCAL_PLANNER_DEFAULT_ENV)
     keys.add(REPO_READINESS_PICKUP_ENV)
     return {key: env[key] for key in sorted(keys) if key in env}
@@ -299,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
             restart_delay_s=args.supervisor_restart_delay_s,
         )
     )
-    log_path = args.log_dir / f"autopilot_fable_authority_{_timestamp()}.log"
+    log_path = args.log_dir / f"autopilot_authority_{_timestamp()}.log"
 
     live = live_autopilot_processes()
     if live and not args.allow_existing and not args.dry_run:

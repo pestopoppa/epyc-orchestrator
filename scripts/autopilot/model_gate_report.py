@@ -26,6 +26,14 @@ import yaml
 SCRIPT_DIR = Path(__file__).resolve().parent
 ORCH_ROOT = SCRIPT_DIR.parents[1]
 SERVER_DIR = ORCH_ROOT / "scripts" / "server"
+
+# Single home for the AutoPilot launcher's path. These strings are OPERATOR-FACING
+# recovery commands, so a stale one sends the operator to a file that does not exist.
+# That is exactly what happened when `start_fable_authority_daemon.py` was renamed to
+# `start_authority_daemon.py` (2026-08-04, removing "FABLE" from core nomenclature): the
+# filename was restated at three call sites plus two test assertions, and every one of
+# them kept pointing at the old path. Restated literals are what made the rename unsafe.
+AUTHORITY_DAEMON_SCRIPT = "scripts/autopilot/start_authority_daemon.py"
 VALIDATE_DIR = ORCH_ROOT / "scripts" / "validate"
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SERVER_DIR))
@@ -145,8 +153,8 @@ STRICT_RESTART_READINESS_COMMAND = (
     "uv run python scripts/autopilot/restart_readiness_report.py "
     "--json --strict --require-seq-cutover --require-w6-audit --require-current-code"
 )
-STRICT_FABLE5_GATE_COMMAND = (
-    "uv run python scripts/autopilot/fable5_gate_report.py --json --strict"
+STRICT_MODEL_GATE_COMMAND = (
+    "uv run python scripts/autopilot/model_gate_report.py --json --strict"
 )
 REQUIRED_XMAS_AB_POLICY = "incumbent_constrained_cheapfirst_v2"
 TOOL_SENTINEL_ENV = "AUTOPILOT_TOOL_SENTINELS"
@@ -1581,7 +1589,7 @@ def _latest_xmas_ab_summary(root: Path) -> dict[str, Any] | None:
     return None
 
 
-def build_fable5_gate_report(
+def build_model_gate_report(
     *,
     state: dict[str, Any],
     journal_rows: list[dict[str, Any]],
@@ -1873,7 +1881,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 "status": "blocked",
                 "reason": "AutoPilot phase health is not ready; do not trust evidence accrual until recovered.",
                 "blocked_by": phase.blockers,
-                "command": "uv run python scripts/autopilot/start_fable_authority_daemon.py --preflight",
+                "command": f"uv run python {AUTHORITY_DAEMON_SCRIPT} --preflight",
                 "follow_up": (
                     "Use the preflight/advisor output as the recovery authority; "
                     "if it reports wait_for_boundary, do not restart until the "
@@ -1987,7 +1995,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     ),
                 },
                 "command": STRICT_RESTART_READINESS_COMMAND,
-                "follow_up": STRICT_FABLE5_GATE_COMMAND,
+                "follow_up": STRICT_MODEL_GATE_COMMAND,
             }
         )
 
@@ -2116,7 +2124,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                         "uv run python scripts/autopilot/w8_promotion_trajectory_report.py "
                         "--journal orchestration"
                     ),
-                    "follow_up": STRICT_FABLE5_GATE_COMMAND,
+                    "follow_up": STRICT_MODEL_GATE_COMMAND,
                 }
             )
 
@@ -2170,10 +2178,10 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "command": (
                         "Let the current sentinel-enabled AutoPilot eval finish, "
                         "then rerun "
-                        "uv run python scripts/autopilot/fable5_gate_report.py "
+                        "uv run python scripts/autopilot/model_gate_report.py "
                         "--json --strict"
                     ),
-                    "follow_up": STRICT_FABLE5_GATE_COMMAND,
+                    "follow_up": STRICT_MODEL_GATE_COMMAND,
                 }
             )
         else:
@@ -2203,12 +2211,11 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "command": (
                         "At a controlled trial boundary, reload the orchestrator API "
                         "with AUTOPILOT_TOOL_SENTINELS=1, restart AutoPilot with "
-                        "uv run python scripts/autopilot/"
-                        "start_fable_authority_daemon.py --max-trials 3000, "
+                        f"uv run python {AUTHORITY_DAEMON_SCRIPT} --max-trials 3000, "
                         "then run AUTOPILOT_TOOL_SENTINELS=1 uv run python "
                         "scripts/autopilot/gate3_tool_telemetry.py"
                     ),
-                    "follow_up": STRICT_FABLE5_GATE_COMMAND,
+                    "follow_up": STRICT_MODEL_GATE_COMMAND,
                 }
             )
 
@@ -2490,7 +2497,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                                 ),
                                 "follow_up": (
                                     "uv run python scripts/autopilot/"
-                                    "fable5_gate_report.py --json --strict"
+                                    "model_gate_report.py --json --strict"
                                 ),
                             }
                         )
@@ -2691,7 +2698,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     ),
                     "command": audit_target_command,
                     "follow_up": (
-                        "uv run python scripts/autopilot/fable5_gate_report.py "
+                        "uv run python scripts/autopilot/model_gate_report.py "
                         "--json --strict --require-current-code"
                     ),
                 }
@@ -2800,7 +2807,7 @@ def main(argv: list[str] | None = None) -> int:
             require_current_code=args.require_current_code or args.strict,
         )
         ds_e1_packet = build_ds_e1_packet()
-        report = build_fable5_gate_report(
+        report = build_model_gate_report(
             state=state,
             journal_rows=journal_rows,
             phase_report=phase_report,

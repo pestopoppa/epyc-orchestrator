@@ -18,6 +18,7 @@ sys.path.insert(0, str(AUTOPILOT_DIR))
 
 actions = importlib.import_module("actions")
 autopilot = importlib.import_module("autopilot")
+tier_specs = importlib.import_module("src.autopilot_core.tier_specs")
 
 
 def _ctx(**overrides):
@@ -825,6 +826,14 @@ def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
                 speed=10.0,
                 cost=0.1,
                 reliability=1.0,
+                # Axis 1 of the live objective is questions/hour (W3 flip, 2026-08-04), so
+                # a result must carry the wall clock and the question ledger to be
+                # scoreable at all. Without them the rate is UNMEASURED — and unmeasured
+                # deliberately raises rather than scoring 0 qph, which would archive this
+                # config as maximally slow on an axis it never measured.
+                n_questions=2,
+                eval_wall_s=120.0,
+                question_results=[{"qid": "q1"}, {"qid": "q2"}],
             )
 
     action = {"type": "numeric_trial", "surface": "monitor", "params": {}}
@@ -837,7 +846,17 @@ def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
     assert species == "numeric_swarm"
     assert action["params"] == {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42}
     assert result.details["numeric_trial_applied_params"] == action["params"]
-    assert swarm.reported == ("monitor", 7, result.objectives)
+    # Compare against the canonical chokepoint, NOT the raw `EvalResult.objectives`
+    # property — tier_specs.objectives_from is documented as the single source of truth
+    # and the property is the ad-hoc tuple it exists to replace. The two diverged at the
+    # W3 flip: the property still reports tokens/second on axis 1 while the swarm is
+    # correctly fed questions/hour, so asserting the property would have flagged the
+    # right behaviour as a regression.
+    expected_objectives = tier_specs.objectives_from(result)
+    assert swarm.reported == ("monitor", 7, expected_objectives)
+    assert expected_objectives[1] == pytest.approx(
+        tier_specs.seq_task_rate_qph_from(result)
+    )
 
 
 def test_numeric_trial_explicit_no_changes_skips_eval(monkeypatch) -> None:

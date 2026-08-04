@@ -36,6 +36,9 @@ def test_t1_excludes_tool_sentinel_from_decision_metrics(monkeypatch) -> None:
             {
                 "id": "core",
                 "suite": "math",
+                # Every production pool row carries a difficulty tier; the T1 draw is
+                # tier-stratified, so an untiered fixture row satisfies no tier target.
+                "tier": 1,
                 "prompt": "2+2?",
                 "expected": "4",
             }
@@ -90,6 +93,9 @@ def test_t1_audit_shadow_keeps_decision_dataset_identity(monkeypatch) -> None:
             {
                 "id": "core",
                 "suite": "math",
+                # Every production pool row carries a difficulty tier; the T1 draw is
+                # tier-stratified, so an untiered fixture row satisfies no tier target.
+                "tier": 1,
                 "prompt": "2+2?",
                 "expected": "4",
             }
@@ -144,6 +150,9 @@ def test_t2_excludes_tool_sentinel_from_decision_metrics(monkeypatch) -> None:
             {
                 "id": "core",
                 "suite": "math",
+                # Every production pool row carries a difficulty tier; the T1 draw is
+                # tier-stratified, so an untiered fixture row satisfies no tier target.
+                "tier": 1,
                 "prompt": "2+2?",
                 "expected": "4",
             }

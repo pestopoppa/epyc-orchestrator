@@ -557,24 +557,31 @@ def test_eval_t1_legacy_sampling_records_core_id(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_T1_CORE_ID", raising=False)
     monkeypatch.delenv("AUTOPILOT_T1_CORE_PATH", raising=False)
     tower = EvalTower()
+    # Every row in the production pool carries a difficulty tier (79,479/79,479 as of
+    # 2026-08-04), so a fixture pool without one does not model the real instrument —
+    # and since the draw is now tier-stratified, an untiered fixture draws nothing.
     tower._pool = {
         "math": [
             {
-                "id": "legacy-math",
+                "id": f"pool-math-{tier}",
                 "suite": "math",
-                "prompt": "1+1?",
-                "expected": "2",
+                "tier": tier,
+                "prompt": f"1+{tier}?",
+                "expected": str(1 + tier),
                 "scoring_method": "exact_match",
             }
+            for tier in (1, 2, 3)
         ],
         "coder": [
             {
-                "id": "legacy-coder",
+                "id": f"pool-coder-{tier}",
                 "suite": "coder",
-                "prompt": "Return x",
-                "expected": "x",
+                "tier": tier,
+                "prompt": f"Return x{tier}",
+                "expected": f"x{tier}",
                 "scoring_method": "exact_match",
             }
+            for tier in (1, 2, 3)
         ],
     }
 
@@ -594,16 +601,27 @@ def test_eval_t1_legacy_sampling_records_core_id(monkeypatch) -> None:
 
     monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
 
-    result = tower.eval_t1(n=2, seed=42)
+    result = tower.eval_t1(n=3, seed=42)
 
-    assert result.core_id == "legacy_pool_seed_42_n2"
-    assert result.details["core_selection"] == "legacy_pool_seed"
-    assert result.details["base_core_questions"] == 2
+    # Derived from the sampler's declared policy rather than restated: the core_id is the
+    # INSTRUMENT'S identity, so it has to change when the draw changes. Pinning the old
+    # literal would have let a genuinely different question set keep the old identity —
+    # and with it the old baseline and the old frontier.
+    assert result.core_id == f"tier_stratified_{eval_tower.EVAL_TIER_MIX_POLICY}_seed_42_n3"
+    assert result.details["core_selection"] == "tier_stratified"
+    assert result.details["test_profile"]["tier_mix_provenance"]["tier_mix_targets"] == {
+        str(k): v for k, v in eval_tower.declared_tier_targets(3).items()
+    }
+    assert result.details["base_core_questions"] == 3
     assert len(result.details["dataset_content_sha256"]) == 64
     assert result.details["dataset_sha256"] == result.details["dataset_content_sha256"]
     assert result.details["test_profile"]["tier"] == 1
-    assert result.details["test_profile"]["core_id"] == "legacy_pool_seed_42_n2"
-    assert result.details["test_profile"]["n_questions"] == 2
+    # The profile's core_id must agree with the result's — two spellings of one identity
+    # drifting apart is how a renamed instrument keeps an old baseline.
+    assert result.details["test_profile"]["core_id"] == result.core_id
+    assert result.details["test_profile"]["n_questions"] == 3
+    # One question per tier at n=3: the declared mix is honoured, not merely recorded.
+    assert result.details["question_tier_mix"] == {"1": 1, "2": 1, "3": 1}
     assert "test_profile_json" in result.details
 
 

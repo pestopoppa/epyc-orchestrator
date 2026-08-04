@@ -4729,6 +4729,15 @@ STARTUP_ATTESTATION_PATHS = (
     BLACKLIST_PATH,
 )
 MODEL_GATE_REPORT_GLOBS = (
+    # New name FIRST — the generator is `scripts/autopilot/model_gate_report.py` as of the
+    # 2026-08-04 de-FABLE rename, so reports it writes from now on carry the new prefix.
+    # Matching only the old spelling would have made every future report invisible here
+    # while the freshness check kept passing on the last pre-rename artifact: a stale-
+    # evidence failure that looks exactly like "no new reports", not like a bug.
+    "model_gate_report_*.json",
+    "model_gate_*.json",
+    # Old spelling still READ so the existing artifacts under orchestration/reports/
+    # keep resolving. Same doctrine as the env-var alias immediately below.
     "fable5_gate_report_*.json",
     "fable5_gate_*.json",
 )
@@ -8622,47 +8631,56 @@ def _run_loop_inner(
         # suppression remains tied to the mad_noise/reproduction_confirmed tag (criticism
         # below). Non-trusted exclusions (exogenous reload, etc.) still skip entirely.
         baseline_update = None
-        if not objectives_measurable(eval_result):
-            # W3 flip (2026-08-04): axis 1 of the live dominance vector is questions/hour.
-            # A trial that did not MEASURE a rate must not enter the archive at all — the
-            # pre-flip `task_rate_qph_from` returned 0.0 for "unavailable" on 128 of 1466
-            # journal rows, and 0 qph is a real, maximally-bad throughput that dominates
-            # the config out on an axis it never actually scored. Same doctrine as the
-            # safety gate's `throughput_unmeasured` category: absence is not zero.
-            pareto_status = "dominated"  # placeholder for JournalEntry only
+        # W3 flip (2026-08-04): axis 1 of the live dominance vector is questions/hour, so a
+        # trial that did not MEASURE a rate cannot be placed on the frontier — the pre-flip
+        # `task_rate_qph_from` returned 0.0 for "unavailable" on 128 of 1466 journal rows,
+        # and 0 qph is a real, maximally-bad throughput that would dominate the config out
+        # on an axis it never scored. Absence is not zero.
+        #
+        # This gates the ARCHIVE WRITES ONLY. It deliberately does not wrap the whole
+        # branch: `gate.update_baseline` sits inside it and promotes on QUALITY, an axis
+        # that was measured perfectly well. An earlier version of this guard skipped the
+        # branch wholesale and silently suppressed quality baseline promotion whenever the
+        # rate was missing — coupling two independent axes.
+        rate_measured = objectives_measurable(eval_result)
+        if not rate_measured:
             log.warning(
-                "Trial %d: archive.update SKIPPED — dominance axis unmeasured "
+                "Trial %d: Pareto archive write SKIPPED — dominance axis unmeasured "
                 "(no task rate: missing question ledger/eval_wall_s, or batch aborted "
-                "below the s/question validity floor). NOT archived as 0 qph.",
+                "below the s/question validity floor). NOT archived as 0 qph. Quality "
+                "baseline promotion is unaffected and still evaluated below.",
                 trial_counter,
             )
-        elif (
+        if (
             learning_excluded_by in ("mad_noise", "reproduction_confirmed")
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
         ):
             fingerprint = _config_fingerprint(action)
-            pareto_status, rep_objs = archive.upsert_representative(
-                fingerprint,
-                eval_result.tier,
-                objectives_from(eval_result),
-                trial_id=trial_counter,
-                config_snapshot=action,
-                species=species_name,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                memory_count=memory_count,
-                reasoning=json.dumps(action),
-            )
-            log.info(
-                "Trial %d: Pareto representative admission %s (T%d fp=%s n=%d) "
-                "median_objs=%s — AP-22/strategy learning still excluded (%s)",
-                trial_counter,
-                pareto_status,
-                eval_result.tier,
-                fingerprint,
-                archive.reproduction_count(eval_result.tier, fingerprint),
-                [round(float(x), 3) for x in rep_objs],
-                learning_excluded_by,
-            )
+            if rate_measured:
+                pareto_status, rep_objs = archive.upsert_representative(
+                    fingerprint,
+                    eval_result.tier,
+                    objectives_from(eval_result),
+                    trial_id=trial_counter,
+                    config_snapshot=action,
+                    species=species_name,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    memory_count=memory_count,
+                    reasoning=json.dumps(action),
+                )
+                log.info(
+                    "Trial %d: Pareto representative admission %s (T%d fp=%s n=%d) "
+                    "median_objs=%s — AP-22/strategy learning still excluded (%s)",
+                    trial_counter,
+                    pareto_status,
+                    eval_result.tier,
+                    fingerprint,
+                    archive.reproduction_count(eval_result.tier, fingerprint),
+                    [round(float(x), 3) for x in rep_objs],
+                    learning_excluded_by,
+                )
+            else:
+                pareto_status = "dominated"  # placeholder for JournalEntry only
             criticism = learning_exclusion_criticism(learning_excluded_by, learning_excluded_reason)
         elif learning_excluded_by:
             pareto_status = "dominated"  # placeholder for JournalEntry only
@@ -8688,18 +8706,22 @@ def _run_loop_inner(
                 ", ".join(verdict.categories) or "unspecified",
             )
         else:
-            pareto_status = archive.update(
-                ParetoEntry(
-                    trial_id=trial_counter,
-                    objectives=objectives_from(eval_result),
-                    config_snapshot=action,
-                    species=species_name,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                    eval_tier=eval_result.tier,
-                    memory_count=memory_count,
-                    reasoning=json.dumps(action),
+            if rate_measured:
+                pareto_status = archive.update(
+                    ParetoEntry(
+                        trial_id=trial_counter,
+                        objectives=objectives_from(eval_result),
+                        config_snapshot=action,
+                        species=species_name,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        eval_tier=eval_result.tier,
+                        memory_count=memory_count,
+                        reasoning=json.dumps(action),
+                    )
                 )
-            )
+            else:
+                pareto_status = "dominated"  # placeholder for JournalEntry only
+            # Runs whether or not the RATE was measured: this promotes on QUALITY.
             seq_confirmed = (
                 bool(verdict.seq.get("baseline_promotion_finalized"))
                 if verdict.seq is not None

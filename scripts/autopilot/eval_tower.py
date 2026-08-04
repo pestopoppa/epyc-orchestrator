@@ -605,6 +605,96 @@ def _question_pool_tier(q: dict[str, Any]) -> int | None:
         return None
 
 
+# ── Declared tier mix (2026-08-04, operator: "equal thirds") ────────────────────
+#
+# The mixed sampler stratifies by SUITE (`per_suite = n // len(suites)`) and never by
+# difficulty tier, so the realized mix was a byproduct: the seed-42 n=50 draw came out
+# T1:16 / T2:22 / T3:12, and it MOVED with n (n=100 gave 39/34/27) or with any edit to
+# the question pool. Under the questions/hour Pareto objective that byproduct is
+# load-bearing — T2/T3 questions cost far more wall-clock than T1 — so a pool edit could
+# move the objective with no config change at all.
+#
+# The mix is now DECLARED. Equal thirds across tiers 1/2/3, with a deterministic
+# remainder rule so a given n always yields the same targets.
+EVAL_TIER_MIX_POLICY = "equal_thirds_v1"
+EVAL_TIER_MIX_TIERS: tuple[int, ...] = (1, 2, 3)
+
+
+def declared_tier_targets(
+    n: int, tiers: tuple[int, ...] = EVAL_TIER_MIX_TIERS
+) -> dict[int, int]:
+    """Per-tier question counts for a draw of ``n``. Equal thirds; remainder to low tiers.
+
+    The targets always sum to exactly ``n`` — an off-by-one here would silently change the
+    questions/hour denominator.
+    """
+    if n <= 0 or not tiers:
+        return {}
+    base, remainder = divmod(n, len(tiers))
+    return {tier: base + (1 if i < remainder else 0) for i, tier in enumerate(tiers)}
+
+
+def _sample_tier_stratified_eval_questions(
+    pool: dict[str, list[dict]],
+    n: int,
+    rng: random.Random,
+    *,
+    exclude_qids: set[str] | None = None,
+    exclude_suites: set[str] | None = None,
+) -> tuple[list[dict], dict[str, Any]]:
+    """Draw ``n`` questions honouring the declared tier mix; report any shortfall.
+
+    Returns ``(questions, provenance)``. Within each tier the existing suite-stratified
+    sampler still runs, so suite balance is preserved *inside* a tier.
+
+    A tier that cannot be filled is NOT backfilled from another tier. Backfilling would
+    quietly return a draw that does not match the declared mix while still reporting the
+    declared policy — the exact "absence silently becomes something else" shape that has
+    bitten this system repeatedly. The shortfall is recorded and the draw comes back short.
+    """
+    targets = declared_tier_targets(n)
+    excluded: set[str] = set(exclude_qids or set())
+    questions: list[dict] = []
+    shortfalls: dict[str, Any] = {}
+
+    for tier in EVAL_TIER_MIX_TIERS:
+        want = targets.get(tier, 0)
+        if want <= 0:
+            continue
+        drawn = _sample_scoreable_eval_questions_for_pool_tier(
+            pool,
+            tier,
+            want,
+            rng,
+            exclude_qids=excluded,
+            exclude_suites=exclude_suites,
+        )
+        if len(drawn) < want:
+            shortfalls[str(tier)] = {"requested": want, "drawn": len(drawn)}
+            log.error(
+                "Tier %d could only supply %d of %d requested eval questions — the draw "
+                "does NOT match the declared %s mix. Not backfilling from another tier: "
+                "that would misreport the instrument.",
+                tier,
+                len(drawn),
+                want,
+                EVAL_TIER_MIX_POLICY,
+            )
+        for q in drawn:
+            excluded |= _question_identity_set(q)
+        questions.extend(drawn)
+
+    rng.shuffle(questions)
+    provenance = {
+        "tier_mix_policy": EVAL_TIER_MIX_POLICY,
+        "tier_mix_targets": {str(k): v for k, v in targets.items()},
+        "tier_mix_shortfalls": shortfalls,
+        "requested_n": int(n),
+        "drawn_n": len(questions),
+    }
+    return questions, provenance
+
+
 def _sample_scoreable_eval_questions_for_pool_tier(
     pool: dict[str, list[dict]],
     pool_tier: int,
@@ -4124,6 +4214,8 @@ class EvalTower:
         core_path = ""
         core_era_guard: dict[str, Any] = {}
         core_selection = "legacy_pool_seed"
+        # Empty for a designed core, which carries its own declared composition.
+        tier_mix_provenance: dict[str, Any] = {}
         resolved_trial_id = self._resolve_trial_id(trial_id)
         audit_policy: dict[str, Any] = {
             "enabled": os.environ.get("AUTOPILOT_W6_AUDIT_BLOCK") == "1",
@@ -4217,8 +4309,16 @@ class EvalTower:
                     },
                 )
             rng = random.Random(seed)
-            questions = _sample_scoreable_eval_questions(pool, n, rng)
-            core_id = f"legacy_pool_seed_{seed}_n{n}"
+            # Declared tier mix (operator, 2026-08-04). The core_id changes with the
+            # sampler because this IS a different instrument: same seed, same n, but a
+            # different question set and therefore a different achievable quality and a
+            # different questions/hour. Keeping `legacy_pool_seed_...` would have let the
+            # old baseline and the old frontier silently gate a draw they never measured.
+            questions, tier_mix_provenance = _sample_tier_stratified_eval_questions(
+                pool, n, rng
+            )
+            core_selection = "tier_stratified"
+            core_id = f"tier_stratified_{EVAL_TIER_MIX_POLICY}_seed_{seed}_n{n}"
 
         audit_questions: list[dict] = []
         if audit_policy["enabled"] and audit_policy["requested_n"] > 0:
@@ -4345,6 +4445,7 @@ class EvalTower:
                 "base_core_questions": base_core_questions,
                 "base_audit_questions": base_audit_questions,
                 "audit_policy": audit_policy,
+                "tier_mix_provenance": tier_mix_provenance,
             }
         )
         return _stamp_eval_instrument(
@@ -4364,6 +4465,9 @@ class EvalTower:
                 "base_core_questions": base_core_questions,
                 "base_audit_questions": base_audit_questions,
                 "audit_policy": audit_policy,
+                # Declared mix + any shortfall, so a reader can tell the instrument's
+                # INTENDED composition from the one actually drawn.
+                "tier_mix_provenance": tier_mix_provenance,
             },
         )
 

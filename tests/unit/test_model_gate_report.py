@@ -7,7 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
-import fable5_gate_report as report_mod  # noqa: E402
+import model_gate_report as report_mod  # noqa: E402
 
 
 def test_build_report_blocks_on_underlying_fable5_gates(monkeypatch, tmp_path: Path) -> None:
@@ -126,7 +126,7 @@ xmas_routing:
         },
     )
 
-    report = report_mod.build_fable5_gate_report(
+    report = report_mod.build_model_gate_report(
         state={"trial_counter": 896},
         journal_rows=[],
         phase_report={
@@ -378,7 +378,7 @@ xmas_routing:
         "next_actions"
     ][1]["command"]
     assert report["next_actions"][1]["follow_up"] == (
-        "uv run python scripts/autopilot/fable5_gate_report.py --json --strict"
+        "uv run python scripts/autopilot/model_gate_report.py --json --strict"
     )
     ds_e1 = [
         section for section in report["sections"] if section["key"] == "ds_e1_dynamic_stack"
@@ -784,7 +784,7 @@ xmas_routing:
         lambda path: {"ready": True, "status": "ready", "blockers": []},
     )
 
-    report = report_mod.build_fable5_gate_report(
+    report = report_mod.build_model_gate_report(
         state={},
         journal_rows=[],
         phase_report={
@@ -853,9 +853,11 @@ def test_phase_recovery_next_action_uses_current_code_preflight() -> None:
             "blocked_by": [
                 "autopilot process predates runtime source changes: autopilot.py",
             ],
+            # Derived from the source's own constant: restating this literal is what let
+            # the 2026-08-04 launcher rename ship a recovery command pointing at a
+            # nonexistent file, in BOTH the source and the test that was meant to catch it.
             "command": (
-                "uv run python "
-                "scripts/autopilot/start_fable_authority_daemon.py --preflight"
+                f"uv run python {report_mod.AUTHORITY_DAEMON_SCRIPT} --preflight"
             ),
             "follow_up": (
                 "Use the preflight/advisor output as the recovery authority; "
@@ -929,12 +931,12 @@ def test_tool_use_next_action_requires_controlled_restart() -> None:
             "command": (
                 "At a controlled trial boundary, reload the orchestrator API "
                 "with AUTOPILOT_TOOL_SENTINELS=1, restart AutoPilot with "
-                "uv run python scripts/autopilot/"
-                "start_fable_authority_daemon.py --max-trials 3000, "
+                f"uv run python {report_mod.AUTHORITY_DAEMON_SCRIPT} "
+                "--max-trials 3000, "
                 "then run AUTOPILOT_TOOL_SENTINELS=1 uv run python "
                 "scripts/autopilot/gate3_tool_telemetry.py"
             ),
-            "follow_up": report_mod.STRICT_FABLE5_GATE_COMMAND,
+            "follow_up": report_mod.STRICT_MODEL_GATE_COMMAND,
         }
     ]
 
@@ -2241,7 +2243,7 @@ def test_cli_strict_returns_one_when_gate_blocks(tmp_path: Path, monkeypatch, ca
     monkeypatch.setattr(report_mod, "build_ds_e1_packet", lambda: {"ready_for_profile_decision": True, "blockers": [], "sections": []})
     monkeypatch.setattr(
         report_mod,
-        "build_fable5_gate_report",
+        "build_model_gate_report",
         lambda **kwargs: {
             "ready": False,
             "blockers": ["phase_health: stale"],
@@ -2293,7 +2295,7 @@ def test_cli_writes_json_and_markdown_outputs(
     )
     monkeypatch.setattr(
         report_mod,
-        "build_fable5_gate_report",
+        "build_model_gate_report",
         lambda **kwargs: {
             "ready": False,
             "blockers": ["phase_health: stale"],

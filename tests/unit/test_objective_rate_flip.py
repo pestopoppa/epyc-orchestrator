@@ -6,6 +6,7 @@ literals, so they fail if the objective changes meaning — not merely if a numb
 from __future__ import annotations
 
 import types
+from pathlib import Path
 
 import pytest
 
@@ -124,6 +125,20 @@ def test_row_replay_uses_the_policy_the_row_was_recorded_under():
     assert rebuilt_rate is not None
     assert rebuilt_rate[1] == pytest.approx(50 / (900.0 / 3600.0))
     assert rebuilt_rate[1] != pytest.approx(rate_row["speed"])
+
+
+# The rate guard must gate the ARCHIVE WRITES only, never the whole post-eval branch:
+# `gate.update_baseline` lives inside that branch and promotes on QUALITY, an axis that is
+# measured perfectly well when the rate is missing. The first version of the guard
+# swallowed the branch and silently suppressed quality baseline promotion whenever a task
+# rate was unavailable — two independent axes coupled by one guard.
+#
+# That regression is covered behaviourally, not by scanning this source file: it was caught
+# by `test_autopilot_sequential_wiring.py::
+# test_run_loop_inner_forced_seq_fresh_eval_bypasses_controller_planner`, which asserts
+# `baseline_update_calls == [(True, 0)]` and went to `[]` the moment the guard over-reached.
+# A source-text assertion here was tried and removed: it counted `else:` tokens and matched
+# unrelated `else None` ternaries, i.e. it failed for reasons unrelated to the invariant.
 
 
 def test_unstamped_row_defaults_to_legacy():
