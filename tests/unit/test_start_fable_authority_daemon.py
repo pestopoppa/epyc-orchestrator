@@ -26,8 +26,13 @@ def test_authority_env_forces_required_flags() -> None:
     assert env["KEEP"] == "value"
     assert env["AUTOPILOT_TOOL_SENTINELS"] == "1"
     assert env["AUTOPILOT_PLANNER_HINTS"] == "1"
-    assert env["AUTOPILOT_SEQ_VERDICT"] == "1"
-    assert env["AUTOPILOT_SEQ_P0_2_BRIDGE"] == "1"
+    # Derived, not restated. The invariant is that the wrapper ENFORCES the authority
+    # env, not that a particular switch is on: AUTOPILOT_SEQ_VERDICT is an operator
+    # control (set to "0" on 2026-08-04 while SEQ-B was unreachable). Pinning the
+    # literal made a deliberate operator flip look like a regression. A wrapper that
+    # DROPS the key still fails here, which is what this test is for.
+    assert env["AUTOPILOT_SEQ_VERDICT"] == launcher.FABLE_AUTHORITY_ENV["AUTOPILOT_SEQ_VERDICT"]
+    assert env["AUTOPILOT_SEQ_P0_2_BRIDGE"] == launcher.FABLE_AUTHORITY_ENV["AUTOPILOT_SEQ_P0_2_BRIDGE"]
     assert env["AUTOPILOT_W6_AUDIT_BLOCK"] == "1"
     assert env["AUTOPILOT_PLANNER_TIMEOUT"] == "600"
     # The planner runs on local models by default; forcing the spend breaker on
@@ -149,8 +154,8 @@ def test_dry_run_prints_authority_payload(monkeypatch, tmp_path, capsys) -> None
     ]
     assert payload["supervised"] is True
     assert payload["env"]["AUTOPILOT_TOOL_SENTINELS"] == "1"
-    assert payload["env"]["AUTOPILOT_SEQ_VERDICT"] == "1"
-    assert payload["env"]["AUTOPILOT_SEQ_P0_2_BRIDGE"] == "1"
+    assert payload["env"]["AUTOPILOT_SEQ_VERDICT"] == launcher.FABLE_AUTHORITY_ENV["AUTOPILOT_SEQ_VERDICT"]
+    assert payload["env"]["AUTOPILOT_SEQ_P0_2_BRIDGE"] == launcher.FABLE_AUTHORITY_ENV["AUTOPILOT_SEQ_P0_2_BRIDGE"]
     assert payload["pid"] is None
 
 
