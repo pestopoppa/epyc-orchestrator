@@ -280,7 +280,7 @@ jobs:
         - repo: epyc-orchestrator
           path: scripts/autopilot/phase_status.py
         - repo: epyc-orchestrator
-          path: scripts/autopilot/start_fable_authority_daemon.py
+          path: scripts/autopilot/start_authority_daemon.py
       context_budget_tokens: 4000
       forbidden_actions:
         - stop_autopilot

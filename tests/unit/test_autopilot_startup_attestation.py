@@ -79,5 +79,5 @@ def test_cmd_start_refuses_bare_start_before_lock(monkeypatch, tmp_path, capsys)
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert "AutoPilot authority gate env mismatch" in err
-    assert "start_fable_authority_daemon.py" in err
+    assert "start_authority_daemon.py" in err
     assert "AUTOPILOT_SEQ_VERDICT" in err

@@ -1355,7 +1355,17 @@ def test_action_gate_check_threads_seq_inputs(monkeypatch) -> None:
             "core_id": "core-v",
         },
     )
-    monkeypatch.setattr(autopilot, "task_rate_qph_from", lambda _result: 42.0)
+    # SEQ-B: the action gate must resolve the PAIRED rate helper, not the Pareto/goodput
+    # one. `task_rate_qph_from` divides the decision-partition question count by the full
+    # batch's wall clock, which does not match the incumbent comparator
+    # `_seq_inputs_for_trial` builds — that mismatch scored an unchanged config as a 15%
+    # throughput regression on every trial and froze the rate e-process.
+    monkeypatch.setattr(autopilot, "seq_task_rate_qph_from", lambda _result: 42.0)
+    monkeypatch.setattr(
+        autopilot,
+        "task_rate_qph_from",
+        lambda _result: pytest.fail("action gate must not use the unpaired rate helper"),
+    )
 
     verdict = actions._action_gate_check(
         {"type": "prompt_mutation"},
@@ -3639,14 +3649,14 @@ def test_repo_readiness_advisory_ignores_authority_gate(tmp_path) -> None:
     assert "readiness:x" not in text
 
 
-def test_fable_gate_advisory_reports_missing_artifact(tmp_path) -> None:
-    text = autopilot._build_fable_gate_advisory(reports_dir=tmp_path)
+def test_model_gate_advisory_reports_missing_artifact(tmp_path) -> None:
+    text = autopilot._build_model_gate_advisory(reports_dir=tmp_path)
 
-    assert "no Fable gate report artifact found" in text
-    assert "fable5_gate_report.py" in text
+    assert "no model gate report artifact found" in text
+    assert "model_gate_report.py" in text
 
 
-def test_fable_gate_advisory_renders_latest_next_actions(tmp_path) -> None:
+def test_model_gate_advisory_renders_latest_next_actions(tmp_path) -> None:
     older = tmp_path / "fable5_gate_report_20260704T000000Z.json"
     older.write_text(json.dumps({"ready": True, "next_actions": []}))
     report = tmp_path / "fable5_gate_report_20260704T010000Z.json"
@@ -3701,7 +3711,7 @@ def test_fable_gate_advisory_renders_latest_next_actions(tmp_path) -> None:
         )
     )
 
-    text = autopilot._build_fable_gate_advisory(reports_dir=tmp_path, limit=3)
+    text = autopilot._build_model_gate_advisory(reports_dir=tmp_path, limit=3)
 
     assert "Planner context only" in text
     assert "NOT an acceptance gate" in text

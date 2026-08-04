@@ -91,7 +91,7 @@ def _recommended_start_command(max_trials: int) -> list[str]:
         "uv",
         "run",
         "python",
-        "scripts/autopilot/start_fable_authority_daemon.py",
+        "scripts/autopilot/start_authority_daemon.py",
         "--max-trials",
         str(max_trials),
     ]

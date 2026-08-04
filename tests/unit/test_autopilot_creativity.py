@@ -1420,7 +1420,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             slot_memory="slots",
             action_availability="actions",
             available_action_schemas="schemas",
-            fable_gate_advisory="fable-gate",
+            model_gate_advisory="fable-gate",
             higher_tier_pressure="higher-tier",
             eval_coverage_pressure="coverage",
             outcome_progress_pressure="outcome-progress",

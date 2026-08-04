@@ -352,7 +352,7 @@ def _required_gate_env() -> dict[str, str]:
     """The authority contract, DERIVED from the launcher that establishes it.
 
     2026-08-04: this used to be a second hand-maintained copy of the same contract.
-    `start_fable_authority_daemon.FABLE_AUTHORITY_ENV` sets the environment; this dict
+    `start_authority_daemon.AUTHORITY_ENV` sets the environment; this dict
     validated it; and the two drifted the moment an operator changed one. Flipping
     AUTOPILOT_SEQ_VERDICT to "0" in the launcher (SEQ-B was unreachable) left this
     copy at "1", so every daemon start was refused —
@@ -383,14 +383,14 @@ def _required_gate_env() -> dict[str, str]:
         import importlib.util as _ilu
 
         _spec = _ilu.spec_from_file_location(
-            "_fable_authority_contract",
-            str(Path(__file__).resolve().parent / "start_fable_authority_daemon.py"),
+            "_authority_contract",
+            str(Path(__file__).resolve().parent / "start_authority_daemon.py"),
         )
         if _spec is None or _spec.loader is None:
             raise ImportError("launcher spec unavailable")
         _mod = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)
-        declared = dict(_mod.FABLE_AUTHORITY_ENV)
+        declared = dict(_mod.AUTHORITY_ENV)
     except Exception:  # noqa: BLE001 — never make the gate unreachable
         # Fail SAFE, not open: if the launcher cannot be read we cannot know the
         # contract, so validate nothing rather than enforce a stale guess.
@@ -399,7 +399,7 @@ def _required_gate_env() -> dict[str, str]:
 
 
 AUTOPILOT_REQUIRED_GATE_ENV = _required_gate_env()
-AUTOPILOT_AUTHORITY_LAUNCHER = "scripts/autopilot/start_fable_authority_daemon.py"
+AUTOPILOT_AUTHORITY_LAUNCHER = "scripts/autopilot/start_authority_daemon.py"
 SAFE_FALLBACK_SEED_N = 14
 FALLBACK_SEED_CANDIDATES = (14, 16, 18, 20, 24, 30, 40, 50, 10)
 
@@ -4287,18 +4287,18 @@ def _build_repo_readiness_advisory(
     return "\n".join(lines)
 
 
-def _latest_fable_gate_report_path(reports_dir: Path | None = None) -> Path | None:
-    """Return the newest generated Fable gate report artifact, if present."""
+def _latest_model_gate_report_path(reports_dir: Path | None = None) -> Path | None:
+    """Return the newest generated model gate report artifact, if present."""
     base = reports_dir or ORCH_ROOT / "orchestration" / "reports"
     candidates: list[Path] = []
-    for pattern in FABLE_GATE_REPORT_GLOBS:
+    for pattern in MODEL_GATE_REPORT_GLOBS:
         candidates.extend(path for path in base.glob(pattern) if path.is_file())
     if not candidates:
         return None
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def _fable_gate_evidence_brief(action: dict[str, Any]) -> str:
+def _model_gate_evidence_brief(action: dict[str, Any]) -> str:
     evidence = action.get("evidence")
     if not isinstance(evidence, dict) or not evidence:
         return ""
@@ -4329,7 +4329,7 @@ def _fable_gate_evidence_brief(action: dict[str, Any]) -> str:
     return "; ".join(parts[:6])
 
 
-def _build_fable_gate_advisory(
+def _build_model_gate_advisory(
     report_path: Path | None = None,
     *,
     reports_dir: Path | None = None,
@@ -4338,22 +4338,22 @@ def _build_fable_gate_advisory(
     """Render latest generated Fable gate next-actions for planner context.
 
     This intentionally consumes an existing report artifact instead of running
-    fable5_gate_report.py in the planner loop. The report generator performs
+    model_gate_report.py in the planner loop. The report generator performs
     live process and evidence checks that are too expensive for every planner
     turn; this block only makes the latest durable snapshot visible.
     """
-    path = report_path or _latest_fable_gate_report_path(reports_dir)
+    path = report_path or _latest_model_gate_report_path(reports_dir)
     if path is None:
         return (
-            "  (no Fable gate report artifact found; run "
-            "uv run python scripts/autopilot/fable5_gate_report.py --json --strict)"
+            "  (no model gate report artifact found; run "
+            "uv run python scripts/autopilot/model_gate_report.py --json --strict)"
         )
 
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         stat = path.stat()
     except Exception as exc:
-        return f"  (Fable gate advisory unavailable: {exc})"
+        return f"  (model gate advisory unavailable: {exc})"
 
     summary = payload.get("summary") if isinstance(payload, dict) else {}
     if not isinstance(summary, dict):
@@ -4364,7 +4364,7 @@ def _build_fable_gate_advisory(
 
     now_s = datetime.now(timezone.utc).timestamp()
     age_s = max(0, int(now_s - stat.st_mtime))
-    freshness = "fresh" if age_s <= FABLE_GATE_ADVISORY_MAX_AGE_S else "stale"
+    freshness = "fresh" if age_s <= MODEL_GATE_ADVISORY_MAX_AGE_S else "stale"
     lines = [
         "  Planner context only. This is NOT an acceptance gate and MUST NOT "
         "override owning handoffs, GitNexus impact, or measurement gates.",
@@ -4401,7 +4401,7 @@ def _build_fable_gate_advisory(
         line = f"  - {priority} {status} {key}"
         if reason:
             line += f": {reason[:180]}"
-        evidence = _fable_gate_evidence_brief(action)
+        evidence = _model_gate_evidence_brief(action)
         if evidence:
             line += f" [{evidence}]"
         elif status == "blocked":
@@ -4657,12 +4657,16 @@ STARTUP_ATTESTATION_PATHS = (
     STACK_PRIORS_PATH,
     BLACKLIST_PATH,
 )
-FABLE_GATE_REPORT_GLOBS = (
+MODEL_GATE_REPORT_GLOBS = (
     "fable5_gate_report_*.json",
     "fable5_gate_*.json",
 )
-FABLE_GATE_ADVISORY_MAX_AGE_S = int(
-    os.environ.get("AUTOPILOT_FABLE_GATE_ADVISORY_MAX_AGE_S", "14400")
+MODEL_GATE_ADVISORY_MAX_AGE_S = int(
+    # New name preferred; the old spelling is still READ so an operator or script
+    # that exports it keeps working. Nothing sets it today (checked), but silently
+    # ignoring a knob someone relies on is worse than carrying one alias.
+    os.environ.get("AUTOPILOT_MODEL_GATE_ADVISORY_MAX_AGE_S")
+    or os.environ.get("AUTOPILOT_FABLE_GATE_ADVISORY_MAX_AGE_S", "14400")
 )
 
 
@@ -4943,7 +4947,7 @@ briefly in reasoning and still emit the closest valid AutoPilot action block.
 {action_availability}
 
 ### Fable 5 Gate Advisory (latest generated report, non-authority)
-{fable_gate_advisory}
+{model_gate_advisory}
 
 ### Higher-Tier Objective Pressure (same-tier, non-authority)
 {higher_tier_pressure}
@@ -7592,7 +7596,7 @@ def _run_loop_inner(
                     available_action_schemas=_format_available_action_schemas(
                         selectable_action_types
                     ),
-                    fable_gate_advisory=_build_fable_gate_advisory(),
+                    model_gate_advisory=_build_model_gate_advisory(),
                     higher_tier_pressure=higher_tier_pressure_text,
                     eval_coverage_pressure=eval_coverage_pressure_text,
                     outcome_progress_pressure=outcome_progress_pressure_text,

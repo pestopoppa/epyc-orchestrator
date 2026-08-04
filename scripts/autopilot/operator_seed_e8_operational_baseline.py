@@ -252,7 +252,7 @@ def main() -> int:
             "           Stop the daemon (supervisor FIRST, or it will restart the child):\n"
             "             kill -TERM <supervisor-pid> && kill -TERM <autopilot-pid>\n"
             "           verify both are gone, run this script, then start AutoPilot again with\n"
-            "             scripts/autopilot/start_fable_authority_daemon.py\n"
+            "             scripts/autopilot/start_authority_daemon.py\n"
             "           A fresh daemon loads state from disk and will see the new era."
         )
 

@@ -3923,7 +3923,7 @@ def _newest_autopilot_log() -> Path | None:
             candidates.append(AUTOPILOT_LOG)
         candidates.extend(_AUTOPILOT_LOG_DIR.glob("autopilot_restart_*.log"))
         candidates.extend(_AUTOPILOT_TMP_LOG_DIR.glob("autopilot_restart_*.log"))
-        candidates.extend(_AUTOPILOT_TMP_LOG_DIR.glob("autopilot_fable_authority_*.log"))
+        candidates.extend(_AUTOPILOT_TMP_LOG_DIR.glob("autopilot_authority_*.log"))
         candidates = sorted(
             (p for p in candidates if p.exists()),
             key=lambda p: p.stat().st_mtime,
