@@ -5458,7 +5458,19 @@ async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any
         # must not consume the whole per-request budget before first byte.
         resp = await client.get(
             f"http://127.0.0.1:{port}/slots",
-            timeout=httpx.Timeout(1.5, connect=0.5),
+            # 2026-08-04: raised 1.5s -> 8s. llama-server answers /slots on the SAME
+            # event loop that runs the batch, so a server inside a long prefill cannot
+            # reply. Measured: port 8182 at n_prompt_tokens=45057 timed out at 10s and
+            # answered in 0.9s once given 25s. At 1.5s the BUSIEST server was the one
+            # most likely to vanish from the occupancy count — the dashboard got more
+            # idle-looking the harder the fleet worked.
+            #
+            # 8s is a deliberate compromise, not a cure: no timeout reliably catches a
+            # server mid-45k-token prefill, and this endpoint is polled on a UI cadence
+            # so it cannot be unbounded. Ports still missed are now reported as
+            # `unanswered_ports` and the count is labelled a lower bound, so the blind
+            # spot is visible rather than silently folded into "idle".
+            timeout=httpx.Timeout(8.0, connect=0.5),
         )
         if resp.status_code != 200:
             return None
@@ -5475,7 +5487,7 @@ async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any
 # topology / region-locks / live-tap panels, so an unbounded fan-out stales all
 # three at once. Ports that miss the deadline report [] and are counted in
 # slots_poll_meta rather than dropped silently.
-_SLOTS_FANOUT_DEADLINE_S = 2.5
+_SLOTS_FANOUT_DEADLINE_S = 10.0
 
 
 async def _poll_all_slots() -> tuple[dict[int, list[dict[str, Any]]], dict[str, Any]]:
