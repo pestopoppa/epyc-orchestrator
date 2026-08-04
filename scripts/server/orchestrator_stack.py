@@ -1610,7 +1610,7 @@ def start_server(
         except Exception as exc:
             print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
 
-        with open(log_file, "w") as log:
+        with open(log_file, "a") as log:
             env = build_launch_env(source_role, os.environ.copy())
             proc = subprocess.Popen(
                 _numa_prefix(primary_role, numa_instance) + cmd,
@@ -1670,7 +1670,7 @@ def start_server(
         except Exception as exc:
             print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
 
-        with open(log_file, "w") as log:
+        with open(log_file, "a") as log:
             env = build_launch_env(source_role, os.environ.copy())
             # HIP tree binary + LD paths come from the tenant's compiled priors
             # (binary_dir/ld_library_path -> env_policy binary_override_strip_ggml).
@@ -1740,7 +1740,7 @@ def start_server(
         except Exception as exc:
             print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
 
-        with open(log_file, "w") as log:
+        with open(log_file, "a") as log:
             env = build_launch_env(roles[0], os.environ.copy())
             _apply_runtime_requirements_env(
                 env,
@@ -1797,7 +1797,7 @@ def start_server(
         except Exception as exc:
             print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
 
-        with open(log_file, "w") as log:
+        with open(log_file, "a") as log:
             env = build_launch_env(roles[0], os.environ.copy())
             # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
             proc = subprocess.Popen(
@@ -1858,7 +1858,7 @@ def start_server(
             print(f"    Binary override: {binary_override}")
         print(f"    Command: {' '.join(cmd[:6])}...")
 
-        with open(log_file, "w") as log:
+        with open(log_file, "a") as log:
             # Worker pool roles map their worker_type to the canonical "worker" role for env.
             env = build_launch_env("worker", os.environ.copy())
             _apply_runtime_requirements_env(
@@ -1945,7 +1945,7 @@ def start_server(
     print(f"    Command: {' '.join(cmd[:5])}...")
 
     # Start process — taskset CPU-pinned per NUMA config + canonical OMP env + per-role GGML
-    with open(log_file, "w") as log:
+    with open(log_file, "a") as log:
         env = build_launch_env(primary_role, os.environ.copy())
         binary_override, ld_paths = _stack_prior_runtime_overrides(primary_role)
         _apply_runtime_requirements_env(
@@ -2211,7 +2211,7 @@ def start_orchestrator(
     except Exception as exc:
         print(f"    [WARN] Failed to write orchestrator fleet marker: {exc}")
 
-    with open(log_file, "w") as log:
+    with open(log_file, "a") as log:
         workers = int(env.get("ORCHESTRATOR_UVICORN_WORKERS", "6"))
         # 2026-06-13: bumped default from 16 to 64 (env-overridable). The
         # lower cap still allowed dashboard/SSE traffic plus AutoPilot reward
@@ -2466,7 +2466,7 @@ def start_aux_service(name: str) -> ProcessInfo | None:
         if not _verify_aux_ggml_linkage(argv[0], tree, env):
             return None
 
-    with open(log_file, "w") as log:
+    with open(log_file, "a") as log:
         proc = subprocess.Popen(
             argv,
             cwd=service.cwd,
