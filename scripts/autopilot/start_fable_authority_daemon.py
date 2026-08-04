@@ -34,7 +34,62 @@ DEFAULT_REPO_READINESS_DIRS = (
 REPO_READINESS_PICKUP_GLOB = "repo_readiness_autopilot_pickup_*.json"
 
 FABLE_AUTHORITY_ENV: dict[str, str] = {
-    "AUTOPILOT_SEQ_VERDICT": "1",
+    # 2026-08-04 OPERATOR UNBLOCK — the sequential gate is UNREACHABLE, so leaving it
+    # armed means AutoPilot cannot ratchet a baseline at all. Measured over the whole
+    # journal (1,362 seq rows, 396 sequenced trials):
+    #
+    #     E_quality                     max  11.5507   (bar 20.0)
+    #     E_rate_noninf                 max   1.1100   (bar 20.0)   <- never accumulates
+    #     baseline_promotion_required_E max 100.0000   (a SECOND, 5x higher bar)
+    #     confirmed                       0 of 396
+    #
+    # Promotion needs `E_quality >= confirm_e AND E_rate_noninf >= confirm_e`. The rate
+    # e-process sits at its initial wealth of ~1.0 forever, so the conjunction is
+    # unsatisfiable by construction — no configuration, however good, can promote. The
+    # quality arm reached 11.55 and could never have mattered. This is SEQ-B, filed
+    # 2026-07-28 in autopilot-sequential-allocation.md and open since.
+    #
+    # Turning it OFF drops to the legacy promotion path, which is NOT ungated: the
+    # absolute quality floor, the reliability floor, same-tier regression, per-suite
+    # regression, the MAD noise band, the throughput floor, the routing-diversity cap
+    # and the consecutive-failure breaker all still bind. What is lost is the
+    # anytime-valid confirmation on top of them — a gate that has said "no" to
+    # everything for its entire life.
+    #
+    # RESTORE TO "1" once E_rate_noninf is fixed. The bug is in the EVIDENCE, not the
+    # threshold: an e-process pinned at 1.0 is multiplying a likelihood ratio of ~1
+    # every step, meaning the alternative is mis-specified or the rate statistic is not
+    # being fed. Lowering confirm_e instead would let unconfirmed configs promote, which
+    # is precisely what this gate exists to prevent.
+    #
+    # ── 2026-08-04, SEQ-B ROOT-CAUSED AND FIXED (uncommitted; awaiting operator) ──
+    # The diagnosis above was right that the EVIDENCE was broken, and wrong about which
+    # part. The rate statistic WAS being fed — with a mismatched pair of numbers:
+    #
+    #   `EvalTower._aggregate_decision_partitions` returns an EvalResult whose
+    #   `n_questions` counts only the DECISION partition (55) while `eval_wall_s` is the
+    #   FULL batch's wall clock (65 questions), and the incumbent comparator counted the
+    #   full 65. Candidate rate = 55/wall, incumbent rate = 65/wall, on the SAME trial.
+    #   An unchanged config therefore measured 0.846x its own throughput => z_rate =
+    #   -0.208 every trial => `next_lambda` clipped the negative running mean to 0 =>
+    #   the wealth factor became EXACTLY 1.0 and froze. That is the "likelihood ratio of
+    #   ~1 every step" — not a mis-specified alternative, a mis-paired measurement.
+    #
+    # Fixed in tier_specs.seq_task_rate_qph_* (one measurement, both sides), a median +
+    # validity-floor incumbent comparator, a skip-don't-fabricate guard for unmeasured
+    # rates, and a Ville-validity repair to `rate_noninferiority_z`. NO THRESHOLD WAS
+    # CHANGED. Historical replay of all 396 sequenced trials: z_rate at its clip floor
+    # drops 50% -> 0%, positive-evidence trials 8% -> 69%, three candidates cross
+    # E_rate = 20 and one reaches 222, ZERO false confirms (nothing confirms — the
+    # QUALITY axis, max 11.55, is now the binding constraint).
+    #
+    # RE-ARMING IS AN OPERATOR DECISION, deliberately left un-flipped here: it changes
+    # what counts as a promotion, which is human-amendment-only per MEASUREMENT.md.
+    # Two coupled switches:
+    #   * AUTOPILOT_SEQ_VERDICT "0" -> "1"  re-arms the sequential gate.
+    #   * AUTOPILOT_SEQ_P0_2_BRIDGE "1" -> "0" makes the rate axis BINDING again
+    #     (it is currently advisory, a bridge added while the axis was dead).
+    "AUTOPILOT_SEQ_VERDICT": "0",
     "AUTOPILOT_SEQ_P0_2_BRIDGE": "1",
     "AUTOPILOT_W6_AUDIT_BLOCK": "1",
     "AUTOPILOT_W6_AUDIT_N": "10",

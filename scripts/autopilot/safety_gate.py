@@ -1403,10 +1403,29 @@ class SafetyGate:
         )
         q_state, q_update = q_view.quality_state.update(stat.z, policy=policy, trial_id=trial_id)
 
-        # Rate-non-inferiority axis (only when a task_rate + positive baseline exist).
+        # Rate-non-inferiority axis (only when a MEASURED task_rate + positive baseline
+        # exist).
+        #
+        # SEQ-B: the guard used to be `task_rate is not None`. `task_rate_qph_from` returns
+        # 0.0 as its "wall/n unavailable" sentinel, so an unmeasurable trial was fed to
+        # `rate_noninferiority_z` as a measured throughput of ZERO questions/hour =>
+        # y = -1 => the clip floor z = -0.9. That fabricates the strongest possible
+        # negative observation out of a missing measurement, and because `next_lambda`
+        # clips a nonpositive running mean to lambda = 0, the wealth then freezes at
+        # `1 + 0.1*(-0.9) = 0.91` and multiplies by EXACTLY 1.0 forever after.
+        # `seq_task_rate_qph_from` now returns None for "not measured"; requiring
+        # `> 0` here additionally fails closed for any legacy caller still passing the
+        # 0.0 sentinel. A skipped axis leaves E_rate absent, which can never confirm —
+        # the conservative outcome, and the same skip-don't-fabricate doctrine
+        # `rebuild_candidate_view` applies to out-of-domain z (SEQ-3a).
         rate_state = None
         rate_update = None
-        if task_rate is not None and baseline_task_rate is not None and baseline_task_rate > 0:
+        rate_axis_skip_reason = ""
+        if task_rate is None or float(task_rate) <= 0.0:
+            rate_axis_skip_reason = "candidate_task_rate_not_measured"
+        elif baseline_task_rate is None or float(baseline_task_rate) <= 0.0:
+            rate_axis_skip_reason = "incumbent_task_rate_comparator_unavailable"
+        if not rate_axis_skip_reason:
             z_rate = rate_noninferiority_z(
                 float(task_rate),
                 float(baseline_task_rate),
@@ -1454,6 +1473,20 @@ class SafetyGate:
             rate_noninf_update=rate_update,
         )
         block["r_eff"] = stat.r_eff
+        # SEQ-B: make an OMITTED rate axis visible. Before, an absent E_rate_noninf was
+        # indistinguishable in the journal from an axis that ran and produced nothing, so
+        # "the gate is unreachable" could not be told apart from "the gate is unfed".
+        block["rate_axis_available"] = rate_update is not None
+        if rate_axis_skip_reason:
+            block["rate_axis_skip_reason"] = rate_axis_skip_reason
+        # SEQ-B: journal the two numbers z_rate is actually made of. Diagnosing why
+        # `z_rate` sat at its clip floor required reverse-engineering the candidate rate
+        # out of `eval_details.goodput_qph` and re-deriving the comparator from 120 prior
+        # rows; neither input was ever recorded next to the statistic it produced.
+        if task_rate is not None:
+            block["task_rate_qph"] = round(float(task_rate), 6)
+        if baseline_task_rate is not None:
+            block["baseline_task_rate_qph"] = round(float(baseline_task_rate), 6)
         if rate_axis_advisory:
             block["rate_axis_mode"] = SEQ_P0_2_BRIDGE_MODE
             block["rate_axis_binding"] = False

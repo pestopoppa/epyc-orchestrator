@@ -55,6 +55,25 @@ class SequentialPolicy:
     lambda_cap: float = 0.5
     rate_noninferiority_margin: float = 0.05
 
+    def __post_init__(self) -> None:
+        """SEQ-B: fail loudly if the policy can produce a negative wealth factor.
+
+        ``rate_noninferiority_z`` bottoms out at ``(-1 + margin) / 0.5``. The wealth
+        factor ``1 + lambda_t * z`` stays nonnegative — the property the anytime-valid
+        guarantee rests on — only while that floor is ``>= -1/lambda_cap``. Checked here
+        so a future policy edit cannot silently break Ville; ``replace()`` re-runs it.
+        """
+        if self.lambda_cap > 0.0:
+            rate_z_floor = (-1.0 + self.rate_noninferiority_margin) / 0.5
+            if rate_z_floor < -1.0 / self.lambda_cap - _SEQ_Z_RANGE_EPS:
+                raise ValueError(
+                    "SequentialPolicy would admit a negative wealth factor on the rate "
+                    f"axis: rate z floor {rate_z_floor} < -1/lambda_cap "
+                    f"{-1.0 / self.lambda_cap} (lambda_cap must be <= "
+                    f"{0.5 / (1.0 - self.rate_noninferiority_margin)} for margin "
+                    f"{self.rate_noninferiority_margin})"
+                )
+
 
 DEFAULT_POLICY = SequentialPolicy()
 
@@ -220,10 +239,36 @@ def rate_noninferiority_z(
 
     H0 is ``E[y] <= -margin`` where ``y`` is relative task-rate lift. The
     returned value has nonpositive expectation under that null.
+
+    SEQ-B validity fix — the lower clip was at ``-0.5`` and that docstring promise did
+    not hold. Clipping is only mean-decreasing when it truncates the UPPER tail; a
+    two-sided clip centered on 0 truncates the null-side (lower) tail too, which pulls
+    ``E[y]`` UP toward 0 and can drive ``E[z]`` strictly POSITIVE under H0. The wealth
+    process is then a SUBmartingale and Ville's inequality does not apply. Measured by
+    simulating the exact code path at the null boundary (``true lift = -margin``) with
+    Gaussian per-trial noise at the dispersion actually observed in the journal:
+    ``P(sup E >= 20)`` was 0.066 at horizon 120 and 0.146 at horizon 400, against an
+    alpha = 0.05 bound. This was latent only because the axis had never accumulated.
+
+    The fix moves the LOWER clip to ``-1.0``, which is not a truncation at all: both
+    rates are questions-per-hour and therefore nonnegative, so ``y = (r - b)/b >= -1``
+    identically and the lower bound is an unreachable numerical guard. What remains is
+    the UPPER clip at ``+0.5``, and ``E[clip_upper(y)] <= E[y] <= -margin`` under H0, so
+    ``E[z] <= 0`` and the wealth is a genuine nonnegative supermartingale.
+
+    The change is strictly CONSERVATIVE: ``z`` is unchanged for every ``y >= -0.5`` and
+    strictly lower (more negative) below it, so a genuinely slow candidate is now
+    penalized instead of having its penalty capped at the old floor.
+
+    Factor nonnegativity is preserved. ``z`` now ranges over ``[-2 + 2*margin, 1.1]``;
+    ``EProcessState.update`` requires ``z >= -1/lambda_cap``, which holds iff
+    ``lambda_cap <= 0.5 / (1 - margin)`` (0.526 for margin=0.05, vs the policy's 0.5).
+    The assertion below fails loudly rather than letting a future policy edit silently
+    produce a negative wealth factor.
     """
     if baseline_task_rate <= 0.0:
         raise ValueError("baseline_task_rate must be positive")
-    y = _clip((task_rate - baseline_task_rate) / baseline_task_rate, -0.5, 0.5)
+    y = _clip((task_rate - baseline_task_rate) / baseline_task_rate, -1.0, 0.5)
     return (y + margin) / 0.5
 
 
@@ -250,6 +295,14 @@ def journal_seq_block(
     if rate_noninf_update is not None:
         block["E_rate_noninf"] = round(rate_noninf_update.wealth, 6)
         block["z_rate"] = round(rate_noninf_update.z, 6)
+        # SEQ-B: the rate axis previously journaled only its wealth and its z. ``k`` and
+        # ``lambda`` in this block are the QUALITY axis's, so a rate e-process stuck at
+        # k=1, or frozen by lambda_rate=0 (which multiplies wealth by exactly 1.0 forever),
+        # was indistinguishable in the journal from one that was accumulating normally.
+        # That is why "E_rate_noninf never leaves ~1.0" survived undiagnosed for the
+        # statistic's entire life. Journal the rate axis's own k and lambda.
+        block["k_rate"] = rate_noninf_update.k
+        block["lambda_rate"] = round(rate_noninf_update.lambda_t, 6)
     return block
 
 
@@ -287,7 +340,12 @@ def rebuild_candidate_view(
     z_floor = _z_lower_bound(policy)
     skipped_out_of_range = 0
     for observation in observations:
-        parsed = _coerce_seq_observation(observation, candidate=candidate, core_id=core_id)
+        parsed = _coerce_seq_observation(
+            observation,
+            candidate=candidate,
+            core_id=core_id,
+            expected_axis=expected_axis,
+        )
         if parsed is None:
             continue
         trial_id, z = parsed
@@ -359,11 +417,26 @@ def _coerce_question_results(
     return outcomes
 
 
+# SEQ-B: which journal field carries each axis's per-trial statistic. `journal_seq_block`
+# writes the quality statistic as ``z`` and the rate statistic as ``z_rate``, so a
+# rate-axis rebuild fed journal ROWS must read ``z_rate``. It previously always read
+# ``z`` — `expected_axis` was accepted, stored on the view, and never consulted — so a
+# rate rebuild from journal rows would have silently folded QUALITY evidence into the
+# rate wealth. The live gate happens to pass ``(trial_id, z)`` tuples, so this was latent
+# rather than firing; it is fixed here because `rebuild_candidate_view` is the documented
+# public entry point for journal-derived evidence.
+_SEQ_AXIS_Z_FIELDS: dict[str, tuple[str, ...]] = {
+    "quality": ("z",),
+    "rate": ("z_rate",),
+}
+
+
 def _coerce_seq_observation(
     observation: Mapping[str, Any] | tuple[int | None, float],
     *,
     candidate: str,
     core_id: str,
+    expected_axis: str = "quality",
 ) -> tuple[int | None, float] | None:
     if isinstance(observation, tuple):
         trial_id, z = observation
@@ -376,11 +449,13 @@ def _coerce_seq_observation(
     block_core = block.get("core_id")
     if block_core is not None and str(block_core) != core_id:
         return None
-    if "z" not in block:
+    z_fields = _SEQ_AXIS_Z_FIELDS.get(expected_axis, _SEQ_AXIS_Z_FIELDS["quality"])
+    z_field = next((name for name in z_fields if name in block), None)
+    if z_field is None:
         return None
     raw_trial_id = observation.get("trial_id", block.get("trial_id"))
     trial_id = int(raw_trial_id) if raw_trial_id is not None else None
-    return trial_id, float(block["z"])
+    return trial_id, float(block[z_field])
 
 
 def _clip(value: float, low: float, high: float) -> float:

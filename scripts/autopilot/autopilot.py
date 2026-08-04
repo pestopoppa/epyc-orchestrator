@@ -146,10 +146,11 @@ from src.autopilot_core.tier_specs import (
     TASK_RATE_OBJECTIVE_POLICY,
     goodput_qph_from,
     objectives_from,
+    seq_task_rate_qph_from,
+    seq_task_rate_qph_from_row,
     spec_for,
     task_rate_objectives_from,
     task_rate_qph_from,
-    task_rate_qph_from_row,
 )
 from src.autopilot_core.baseline_ledger import (
     apply_baseline_ledger_authority,
@@ -287,6 +288,14 @@ SEQ_BASELINE_PROFILE_MIN_TRIALS = int(
     os.environ.get("AUTOPILOT_SEQ_BASELINE_PROFILE_MIN_TRIALS", "3")
 )
 SEQ_PRIOR_OBS_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_PRIOR_OBS_LIMIT", "120"))
+# SEQ-B: minimum number of incumbent-representative trials that must carry a VALID paired
+# rate before the rate axis has a comparator at all. Mirrors SEQ_BASELINE_PROFILE_MIN_TRIALS
+# on the quality axis. Journal evidence: trial 836 ran the rate axis against a comparator
+# built from a SINGLE prior row. Below this the rate comparator is UNAVAILABLE, which omits
+# the axis (conservative: no rate evidence => no baseline ratchet), never substitutes a guess.
+SEQ_BASELINE_RATE_MIN_TRIALS = int(
+    os.environ.get("AUTOPILOT_SEQ_BASELINE_RATE_MIN_TRIALS", "3")
+)
 SEQ_BASELINE_REFRESH_CADENCE = int(os.environ.get("AUTOPILOT_SEQ_BASELINE_REFRESH_CADENCE", "10"))
 SEQ_BASELINE_BLOCK_RETRY_CADENCE = int(
     os.environ.get("AUTOPILOT_SEQ_BASELINE_BLOCK_RETRY_CADENCE", "5")
@@ -2083,14 +2092,15 @@ def _seq_gate_reachability_report(
     for entry in entries:
         eval_details = getattr(entry, "eval_details", {}) or {}
         if isinstance(eval_details, dict):
-            outcome_map = _question_outcome_map(eval_details.get("question_results"))
+            # SEQ-B: the reachability report MUST measure the rate the same way the gate
+            # does, or it certifies a comparator the gate never uses. This report existed
+            # while the gate was unreachable and did not surface it.
             row = {
                 "quality": getattr(entry, "quality", 0.0),
-                "n_questions": len(outcome_map),
                 "eval_details": eval_details,
             }
-            task_rate = task_rate_qph_from_row(row)
-            if task_rate > 0.0:
+            task_rate = seq_task_rate_qph_from_row(row)
+            if task_rate is not None and task_rate > 0.0:
                 try:
                     task_rates.append((int(getattr(entry, "trial_id", 0) or 0), task_rate))
                 except (TypeError, ValueError):
@@ -2136,7 +2146,11 @@ def _seq_gate_reachability_report(
     task_rates.sort(key=lambda item: item[0])
     recent_rates = [rate for _, rate in task_rates[-max(1, window) :]]
     baseline_rates = [rate for _, rate in task_rates[-SEQ_BASELINE_PROFILE_LIMIT:]]
-    baseline_task_rate = sum(baseline_rates) / len(baseline_rates) if baseline_rates else None
+    # SEQ-B: median on BOTH sides. This compared a MEDIAN of recent rates against a MEAN
+    # of baseline rates — two different estimators of the same heavy-tailed quantity — so
+    # the report's own `recent_rate_z` inherited the outlier inflation it was supposed to
+    # detect, and `rate_axis_flat` read as an honest "candidates are slower".
+    baseline_task_rate = _median(baseline_rates)
     recent_median_rate = _median(recent_rates)
     recent_rate_z: float | None = None
     if baseline_task_rate and recent_median_rate is not None:
@@ -2973,13 +2987,19 @@ def _seq_inputs_for_trial(
         ):
             baseline_trials.append(outcome_map)
         if incumbent_representative and len(baseline_task_rates) < SEQ_BASELINE_PROFILE_LIMIT:
+            # SEQ-B: the incumbent comparator MUST be the same measurement as the
+            # candidate's (`seq_task_rate_qph_from`). `n_questions` is deliberately NOT
+            # passed: `seq_task_rate_qph` derives the numerator from question_results —
+            # the questions the wall clock actually covers — on both sides. Passing
+            # `len(outcome_map)` here while the candidate side divided by
+            # `EvalResult.n_questions` (decision partition only) is exactly what scored an
+            # unchanged config 15% slower on every trial.
             row = {
                 "quality": getattr(entry, "quality", 0.0),
-                "n_questions": len(outcome_map),
                 "eval_details": eval_details,
             }
-            task_rate = task_rate_qph_from_row(row)
-            if task_rate > 0.0:
+            task_rate = seq_task_rate_qph_from_row(row)
+            if task_rate is not None and task_rate > 0.0:
                 baseline_task_rates.append(task_rate)
 
         seq = getattr(entry, "seq", {}) or {}
@@ -3015,8 +3035,20 @@ def _seq_inputs_for_trial(
         baseline_task_rate: float | None = None
     else:
         baseline_profile = baseline_profile_from_trials(reversed(baseline_trials))
+        # SEQ-B: MEDIAN, not mean. Task rate (questions per eval-wall-hour) is a
+        # heavy-right-tailed statistic — an aborted batch divides its question count by a
+        # near-zero wall clock. The arithmetic mean is not a robust estimator of it: a
+        # single such row inside the 120-row pool moved the comparator by ~36,000 qph and
+        # pinned every subsequent candidate at the clip floor. The median is unaffected by
+        # a minority of corrupt rows regardless of where the validity floor sits, and it is
+        # already the house estimator for this quantity (`recent_median_task_rate` in
+        # `_seq_readiness_snapshot`). This changes the ESTIMATOR of the null, not the null:
+        # the comparator is still built only from PRIOR incumbent-representative trials, so
+        # it stays predictable (F_{t-1}-measurable) and the e-process stays anytime-valid.
         baseline_task_rate = (
-            sum(baseline_task_rates) / len(baseline_task_rates) if baseline_task_rates else None
+            _median(baseline_task_rates)
+            if len(baseline_task_rates) >= SEQ_BASELINE_RATE_MIN_TRIALS
+            else None
         )
     return {
         "candidate": candidate,
@@ -8288,7 +8320,10 @@ def _run_loop_inner(
                 verdict = gate.check(
                     eval_result,
                     question_results=list(getattr(eval_result, "question_results", []) or []),
-                    task_rate=task_rate_qph_from(eval_result),
+                    # SEQ-B: paired with the incumbent comparator built in
+                    # `_seq_inputs_for_trial`. NOT `task_rate_qph_from` — that divides the
+                    # decision-partition question count by the full batch's wall clock.
+                    task_rate=seq_task_rate_qph_from(eval_result),
                     baseline_profile=seq_inputs["baseline_profile"],
                     baseline_task_rate=seq_inputs["baseline_task_rate"],
                     prior_quality_obs=seq_inputs["prior_quality_obs"],

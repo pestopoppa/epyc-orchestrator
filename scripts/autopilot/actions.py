@@ -838,8 +838,11 @@ def _action_gate_check(
         return ctx.gate.check(eval_result)
 
     seq_inputs_for_trial = _autopilot_attr("_seq_inputs_for_trial")
-    task_rate_qph_from = _autopilot_attr("task_rate_qph_from")
-    if seq_inputs_for_trial is None or task_rate_qph_from is None:
+    # SEQ-B: the paired rate measurement, not the Pareto/goodput one. Must match the
+    # incumbent comparator `_seq_inputs_for_trial` builds or an unchanged config scores a
+    # rate regression on every trial.
+    seq_task_rate_qph_from = _autopilot_attr("seq_task_rate_qph_from")
+    if seq_inputs_for_trial is None or seq_task_rate_qph_from is None:
         _record_seq_action_gate(
             eval_result,
             applied=False,
@@ -861,7 +864,7 @@ def _action_gate_check(
         verdict = ctx.gate.check(
             eval_result,
             question_results=list(getattr(eval_result, "question_results", []) or []),
-            task_rate=task_rate_qph_from(eval_result),
+            task_rate=seq_task_rate_qph_from(eval_result),
             baseline_profile=seq_inputs["baseline_profile"],
             baseline_task_rate=seq_inputs["baseline_task_rate"],
             prior_quality_obs=seq_inputs["prior_quality_obs"],

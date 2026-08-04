@@ -118,6 +118,118 @@ def task_rate_qph_from_row(row: dict) -> float:
     return n_questions / (eval_wall_s / 3600.0)
 
 
+# ── SEQ-B: the paired rate measurement for the sequential non-inferiority axis ──
+#
+# `task_rate_qph_from` / `task_rate_qph_from_row` above are the Pareto/goodput rate
+# metrics. They are deliberately NOT changed here: they feed archived objectives and
+# `eval_details.goodput_qph`, and rescaling them would silently rewrite recorded history.
+#
+# The sequential rate axis needs something they do not provide: the CANDIDATE side and
+# the INCUMBENT side must be the SAME measurement, or an unchanged config scores a rate
+# regression. They were not the same measurement:
+#
+#   * `EvalTower._aggregate_decision_partitions` returns an EvalResult whose
+#     `n_questions` / `details.total` counts only the DECISION partition (audit-shadow
+#     questions excluded), while `eval_wall_s` is `max(r.eval_wall_s)` over the FULL
+#     batch — the wall clock of every question that was actually asked. So the
+#     candidate's `task_rate_qph_from` divides 55 questions by the wall time of 65.
+#   * the incumbent comparator built in `autopilot._seq_inputs_for_trial` passed
+#     `n_questions=len(outcome_map)`, i.e. the FULL question_results list that
+#     `_aggregate_decision_partitions` explicitly copies over from the full result — 65.
+#
+# Measured over the 396 journaled sequential trials (2026-08-04): 381 carry
+# `audit_shadow_excluded_partitions == ['audit']`, and the candidate/incumbent rate
+# ratio is exactly 55/65 = 0.8462 (median; 50/60 = 0.8333 at p25). A candidate
+# IDENTICAL to the incumbent therefore scored y = -0.1538 => z_rate = -0.208, i.e.
+# negative rate evidence on every single trial, forever.
+#
+# The functions below are the ONE measurement both sides of the rate axis use. The
+# numerator is the number of questions the wall clock ACTUALLY covers.
+
+# A trial whose eval wall clock implies less than this per question did not measure a
+# throughput — it aborted (fast-reject / crashed batch). Journal evidence: the 7 rows
+# below 1.0 s/question are ALL `pareto_status=dominated`, and the extreme is trial 1302
+# at 0.0008 s/question (65 questions in 0.054 s => 4.3 MILLION questions/hour). The
+# legitimate distribution is p10 = 11.7 s/question, median 17.4. One such row inside a
+# 120-row arithmetic MEAN moves the comparator by ~36,000 qph and pins every subsequent
+# candidate at the `rate_noninferiority_z` clip floor. 1.0 s/question is far below any
+# real LLM eval question and is a validity filter, not a tuning knob.
+SEQ_RATE_MIN_SECONDS_PER_QUESTION = 1.0
+
+
+def _seq_rate_question_count(question_results: Any, declared: Any) -> float:
+    """Questions the eval wall clock actually covers.
+
+    Prefers the observed per-question ledger (deduplicated by qid, matching
+    `autopilot._question_outcome_map`) over the declared decision-partition count, so
+    both sides of the paired comparison count the same questions.
+    """
+    if isinstance(question_results, (list, tuple)) and question_results:
+        qids = set()
+        for item in question_results:
+            if not isinstance(item, dict):
+                continue
+            qid = str(item.get("qid") or item.get("question_id") or "").strip()
+            if qid:
+                qids.add(qid)
+        if qids:
+            return float(len(qids))
+        return float(len(question_results))
+    return _as_float(declared)
+
+
+def seq_task_rate_qph(
+    *,
+    question_results: Any,
+    n_questions: Any,
+    eval_wall_s: Any,
+) -> float | None:
+    """Paired questions-per-eval-wall-hour for the sequential rate axis.
+
+    Returns ``None`` — never ``0.0`` — when the trial did not MEASURE a rate. The
+    distinction is load-bearing: `task_rate_qph_from` returns 0.0 as an "unavailable"
+    sentinel, and the safety gate's rate axis guard tested `task_rate is not None`, so an
+    unmeasurable trial was fed to `rate_noninferiority_z` as a *measured* throughput of
+    zero questions/hour => y = -1 => the clip floor z = -0.9. A missing measurement must
+    SKIP the axis (wealth multiplied by exactly 1.0), the same doctrine
+    `rebuild_candidate_view` already applies to out-of-domain z (SEQ-3a).
+    """
+    n = _seq_rate_question_count(question_results, n_questions)
+    wall = _as_float(eval_wall_s)
+    if n <= 0 or wall <= 0:
+        return None
+    if wall / n < SEQ_RATE_MIN_SECONDS_PER_QUESTION:
+        return None
+    return n / (wall / 3600.0)
+
+
+def seq_task_rate_qph_from(result: Any) -> float | None:
+    """Paired rate for a live EvalResult (candidate side of the rate axis)."""
+    details = getattr(result, "details", {}) or {}
+    return seq_task_rate_qph(
+        question_results=getattr(result, "question_results", None),
+        n_questions=(
+            getattr(result, "n_questions", None) or _nested(details, "total")
+        ),
+        eval_wall_s=(
+            getattr(result, "eval_wall_s", None) or _nested(details, "eval_wall_s")
+        ),
+    )
+
+
+def seq_task_rate_qph_from_row(row: dict) -> float | None:
+    """Paired rate for a journal row (incumbent side of the rate axis)."""
+    eval_details = row.get("eval_details") or {}
+    if not isinstance(eval_details, dict):
+        eval_details = {}
+    declared, eval_wall_s = _task_rate_inputs_from_row(row)
+    return seq_task_rate_qph(
+        question_results=eval_details.get("question_results"),
+        n_questions=declared,
+        eval_wall_s=eval_wall_s,
+    )
+
+
 def goodput_qph_from(result: Any) -> float:
     """Solved-question rate: quality-scaled task_rate on the 0-3 quality scale."""
     return (_as_float(getattr(result, "quality", 0.0)) / 3.0) * task_rate_qph_from(result)

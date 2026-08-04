@@ -45,8 +45,12 @@ from src.autopilot_core.sequential_verdict import (
 from src.autopilot_core.tier_specs import (
     LEGACY_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
+    SEQ_RATE_MIN_SECONDS_PER_QUESTION,
     goodput_qph_from,
     goodput_qph_from_row,
+    seq_task_rate_qph,
+    seq_task_rate_qph_from,
+    seq_task_rate_qph_from_row,
     task_rate_objectives_from,
     task_rate_objectives_from_row,
     task_rate_qph_from,
@@ -94,6 +98,10 @@ __all__ = [
     "spec_for_rlvr_tier",
     "task_rate_objectives_from",
     "task_rate_objectives_from_row",
+    "SEQ_RATE_MIN_SECONDS_PER_QUESTION",
+    "seq_task_rate_qph",
+    "seq_task_rate_qph_from",
+    "seq_task_rate_qph_from_row",
     "task_rate_qph_from",
     "task_rate_qph_from_row",
 ]
