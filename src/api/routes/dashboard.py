@@ -1032,6 +1032,12 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     # the flock with direct instance_idx attribution; older/no-payload holders
     # fall back to the SET of regions a worker is currently holding.
     out: list[dict[str, Any]] = []
+    # The host-wide GLOBAL.* lock domain is held for the duration of every CPU
+    # inference admission but is NOT a contention-matrix role, so the
+    # `role not in panel_roles` filter below silently dropped it. It was
+    # therefore possible for the panel to report "no locks held" while four
+    # GLOBAL quarters were flocked by a live request. Captured separately.
+    global_lock_regions: list[dict[str, Any]] = []
     role_pid_regions: dict[str, dict[str, set[str]]] = {}  # role → pid → held regions
     try:
         for p in sorted(tmp_dir.glob("cpu_region.*.lock")):
@@ -1040,6 +1046,19 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
             if len(parts) < 3:
                 continue
             _prefix, role, region = parts[0], parts[1], parts[2]
+            if role == "GLOBAL":
+                g_holders = _current_lock_owner_pids(p)
+                g_payload = read_region_lock_payload(p) if g_holders else None
+                global_lock_regions.append(
+                    {
+                        "region": region,
+                        "lock_path": str(p),
+                        "holder_pids": g_holders,
+                        "held": bool(g_holders),
+                        "lock_payload": g_payload,
+                    }
+                )
+                continue
             if role not in panel_roles:
                 continue  # role isn't in the matrix → don't surface lock state for it
             holders = _current_lock_owner_pids(p)
@@ -1387,8 +1406,24 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         "tmp_dir": str(tmp_dir),
         "entries": out,
         "by_role": by_role,
+        # Host-wide admission lock (cpu_region.GLOBAL.*). Not a matrix role, so
+        # it is not in `entries`/`by_role`; surfaced here so "held across N
+        # regions" can never read 0 while a global admission is in force.
+        "global_lock": {
+            "regions": sorted(global_lock_regions, key=lambda r: str(r.get("region"))),
+            "held": any(r["held"] for r in global_lock_regions),
+            "holder_pids": sorted(
+                {pid for r in global_lock_regions for pid in (r.get("holder_pids") or [])}
+            ),
+            "held_region_count": sum(1 for r in global_lock_regions if r["held"]),
+        },
         # Display-only completeness rows: active/configured serving roles with
         # NO cpu_region lock domain (full-span roles, aliases, embedders).
+        # NOTE: these roles (GPU-resident: architect_general, worker_vision,
+        # speech) NEVER take a CPU region lock by design. Inference on them is
+        # real but invisible to this panel — that is why the lock grid must
+        # never be read as the fleet's activity signal. `/slots` occupancy in
+        # `topology_activity` is the signal that covers them.
         "non_lock_roles": non_lock_roles,
         "display_matrix": {
             "columns": display_columns,
@@ -4777,10 +4812,30 @@ def _topology_activity_payload(
     *,
     now: float | None = None,
     structured_requests: list[dict[str, Any]] | None = None,
+    slots_by_port: dict[int, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Per-role recent activity stats for the topology strip.
 
-    Aggregates from two cheap sources:
+    TWO INDEPENDENT SIGNALS, never folded into each other (2026-08-04):
+
+      - REACHABILITY (`running`, `running_instance_count`, `running_ports`):
+        the listener exists in the ps(1) scan. This proves the server is UP.
+        It proves NOTHING about whether it is working. Rendering it as "idle"
+        was the defect this contract exists to prevent — a health probe cannot
+        carry an activity claim.
+      - OCCUPANCY (`slots_busy`, `slots_total`, `busy_ports`, `busy`,
+        `occupancy_observed`): llama-server `/slots` `is_processing` counted
+        across the role's instances. This is the ONLY field that may be
+        rendered as busy/idle, and only when `occupancy_observed` is true.
+        When `slots_by_port` is absent or every port failed to answer,
+        `occupancy_observed` is False and the state is UNKNOWN, not idle —
+        a failed probe must not read as "nothing is running".
+
+    Aggregates from these sources:
+      - llama-server /slots (via `slots_by_port`) — ground-truth occupancy.
+        Unlike the tap/journal sources below it sees ALL traffic, including
+        requests that never went through the orchestrator (direct benchmark
+        or eval hits), which are exactly the ones the old panel called "idle".
       - inference_tap_events.jsonl request groups — provides concurrency-safe
         request count, last activity timestamp, and TIMINGS (t/s).
       - recent_completed_tasks (last 10 min, from progress JSONL) —
@@ -4841,6 +4896,33 @@ def _topology_activity_payload(
             if port in live_ports and port not in bucket["running_ports"]:
                 bucket["running_ports"].append(port)
                 bucket["running"] = True
+
+    # Seed a bucket for every role the ps(1) scan actually sees serving. The
+    # topology strip builds its rows from that same scan, so without this a
+    # rendered row can have NO stats object at all and fall through to "—",
+    # which reads as "nothing happening" rather than "no data for this row".
+    for _port, _label in live_ports.items():
+        _role = base_role(_label)
+        if not _role:
+            continue
+        _b = per_role.setdefault(
+            _role,
+            {
+                "n_recent": 0,
+                "n_completed": 0,
+                "last_activity_age_s": None,
+                "_tps_samples": [],
+                "_live_tps_samples": [],
+                "_duration_samples": [],
+                "expected": False,
+                "expected_ports": [],
+                "running_ports": [],
+                "running": False,
+            },
+        )
+        if _port not in _b["running_ports"]:
+            _b["running_ports"].append(_port)
+            _b["running"] = True
 
     for req in structured_requests:
         role = base_role(req.get("topology_role") or req.get("role") or "")
@@ -4943,6 +5025,76 @@ def _topology_activity_payload(
         if isinstance(tps, (int, float)) and tps > 0:
             bucket["_tps_samples"].append(float(tps))
 
+    # Ground-truth occupancy from llama-server /slots, folded per BASE ROLE.
+    # `slots_by_port` maps port -> list of slot dicts; a port that failed the
+    # poll maps to [] and is recorded as unreachable rather than as 0 busy —
+    # "we could not ask" and "we asked and it said idle" are different states
+    # and must not collapse into the same rendering.
+    # Keyed by PORT first. A role's occupancy is then the union over the ports
+    # it is served by — which is what makes ALIAS roles correct: worker_explore
+    # / toolrunner are served by worker_general's llama-servers, so they must
+    # report that server's real occupancy rather than "unknown". Keying by the
+    # port's primary ps(1) label instead would leave every alias role blank.
+    occ_by_port: dict[int, dict[str, Any]] = {}
+    if slots_by_port is not None:
+        for port, slots in slots_by_port.items():
+            if not slots:
+                # Empty list == port did not answer (or has no slots array).
+                # NOT the same as "answered: zero busy" — kept distinguishable.
+                occ_by_port[port] = {"answered": False, "busy": 0, "total": 0}
+                continue
+            n_busy = sum(1 for s in slots if s.get("is_processing"))
+            occ_by_port[port] = {"answered": True, "busy": n_busy, "total": len(slots)}
+
+    # Ports grouped by the ps(1) SERVING label. This is the key the topology
+    # strip uses for its row ids (`activity_<base>`), so occupancy MUST be
+    # reachable under it. The stack manifest disagrees with the ps scan about
+    # role naming — the manifest files 8072 under `toolrunner` and 8082/8182
+    # under `worker_explore`, while ps reports all three as `worker_general*`.
+    # Keying on the manifest alone therefore left the `worker_general` strip
+    # row with expected_ports=[] and no occupancy at all, which is one of the
+    # reasons that row could read "idle" while its server was working.
+    ps_ports_by_role: dict[str, list[int]] = {}
+    for _port, _label in live_ports.items():
+        _r = base_role(_label)
+        if _r:
+            ps_ports_by_role.setdefault(_r, []).append(_port)
+
+    def _role_occupancy(role: str, ports: list[int]) -> dict[str, Any] | None:
+        """Fold measured per-port occupancy over one role's ports.
+
+        Union of (a) ports whose ps serving label maps to this role and
+        (b) the role's manifest/observed ports, so both naming schemes
+        resolve. Aliases legitimately overlap; the fleet roll-up is summed
+        per port, never per role, so overlap cannot double-count.
+        """
+        if slots_by_port is None:
+            return None
+        candidates = set(ports) | set(ps_ports_by_role.get(role, []))
+        seen = [p for p in sorted(candidates) if p in occ_by_port]
+        if not seen:
+            return None
+        acc = {
+            "slots_busy": 0,
+            "slots_total": 0,
+            "busy_ports": [],
+            "unreachable_ports": [],
+            "answered_ports": [],
+            "busy_by_port": {},
+        }
+        for p in seen:
+            o = occ_by_port[p]
+            if not o["answered"]:
+                acc["unreachable_ports"].append(p)
+                continue
+            acc["answered_ports"].append(p)
+            acc["slots_busy"] += o["busy"]
+            acc["slots_total"] += o["total"]
+            acc["busy_by_port"][str(p)] = {"busy": o["busy"], "total": o["total"]}
+            if o["busy"]:
+                acc["busy_ports"].append(p)
+        return acc
+
     # Collapse internal sample lists to aggregates.
     out: dict[str, dict[str, Any]] = {}
     for role, b in per_role.items():
@@ -4953,6 +5105,30 @@ def _topology_activity_payload(
         b["running_ports"] = sorted(b.get("running_ports") or [])
         b["expected_instance_count"] = len(b["expected_ports"])
         b["running_instance_count"] = len(b["running_ports"])
+        # `running*` above is REACHABILITY ONLY (ps scan). Occupancy below is
+        # the separate, stronger claim and is the only one the UI may render
+        # as busy/idle.
+        # Prefer the role's own expected ports (covers alias roles and roles
+        # whose listener is momentarily absent from the ps scan); fall back to
+        # the ports actually seen running for it.
+        occ = _role_occupancy(role, list(b["expected_ports"]) + list(b["running_ports"]))
+        if occ is None:
+            b["slots_busy"] = None
+            b["slots_total"] = None
+            b["busy_ports"] = []
+            b["busy_by_port"] = {}
+            b["unreachable_ports"] = []
+            b["occupancy_observed"] = False
+            b["busy"] = None
+        else:
+            b["slots_busy"] = occ["slots_busy"]
+            b["slots_total"] = occ["slots_total"]
+            b["busy_ports"] = sorted(occ["busy_ports"])
+            b["busy_by_port"] = occ["busy_by_port"]
+            b["unreachable_ports"] = sorted(occ["unreachable_ports"])
+            # Observed only if at least one instance actually answered /slots.
+            b["occupancy_observed"] = bool(occ["answered_ports"])
+            b["busy"] = (occ["slots_busy"] > 0) if occ["answered_ports"] else None
         b["avg_tps_recent"] = (sum(tps_samples) / len(tps_samples)) if tps_samples else None
         # Live in-flight decode rate (mean of running instances' estimates),
         # kept distinct from avg_tps_recent (completed-request average) so the
@@ -4963,12 +5139,43 @@ def _topology_activity_payload(
         b["live_tps_n"] = len(live_tps_samples)
         b["avg_duration_s"] = (sum(dur_samples) / len(dur_samples)) if dur_samples else None
         out[role] = b
-    return _stamp({"per_role": out, "window_s": window_s, "now": now}, "topology_activity", now=now)
+    # Fleet-level occupancy roll-up, so a consumer never has to re-derive it
+    # (and so the strip header and the load panel cannot disagree about it).
+    # Summed over PORTS, not over roles: alias roles share their host's ports,
+    # so folding the per-role numbers here would double-count them.
+    fleet_busy = sum(o["busy"] for o in occ_by_port.values() if o["answered"])
+    fleet_total = sum(o["total"] for o in occ_by_port.values() if o["answered"])
+    any_observed = any(o["answered"] for o in occ_by_port.values())
+    return _stamp(
+        {
+            "per_role": out,
+            "window_s": window_s,
+            "now": now,
+            # Names the SOURCE of the busy/idle claim so the operator can tell
+            # a real measurement from an absent one at a glance.
+            "occupancy_source": "llama_server_slots" if slots_by_port is not None else "unavailable",
+            "occupancy_observed": any_observed,
+            "fleet_slots_busy": fleet_busy if any_observed else None,
+            "fleet_slots_total": fleet_total if any_observed else None,
+        },
+        "topology_activity",
+        now=now,
+    )
 
 
 @router.get("/dashboard/api/topology_activity")
 async def topology_activity(window_s: float = 600.0) -> JSONResponse:
-    return JSONResponse(_topology_activity_payload(window_s=window_s))
+    # Poll llama-server /slots here so the STANDALONE panel carries the same
+    # ground-truth occupancy as the coherent snapshot. Without this the panel
+    # can only ever report reachability, which is what made a saturated role
+    # render as "idle · servers up".
+    try:
+        slots_by_port, _meta = await _poll_all_slots()
+    except Exception:
+        slots_by_port = None  # unknown, NOT zero — renders as "activity unknown"
+    return JSONResponse(
+        _topology_activity_payload(window_s=window_s, slots_by_port=slots_by_port)
+    )
 
 
 def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
@@ -5233,8 +5440,19 @@ async def topology() -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any]]:
-    """Fetch /slots from a single llama-server. Returns empty on failure."""
+async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any]] | None:
+    """Fetch /slots from a single llama-server.
+
+    Returns None on ANY failure (timeout, non-200, malformed body) — NOT [].
+    The distinction is load-bearing: [] means "this server answered and has no
+    slots", None means "we could not measure it". Collapsing the two made a
+    timing-out server indistinguishable from an idle one, and a llama-server
+    that is busy DECODING is precisely the one most likely to miss this
+    deadline — so the old behaviour dropped busy servers out of the occupancy
+    count and reported the remainder as if it were the whole fleet.
+    (Observed 2026-08-04: port 8182 timed out on nearly every poll while
+    generating, and `slots_poll_meta` still reported answered=18, timed_out=0.)
+    """
     try:
         # Split connect budget out of the 1.5s total: a SYN-blackholed port
         # must not consume the whole per-request budget before first byte.
@@ -5243,13 +5461,13 @@ async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any
             timeout=httpx.Timeout(1.5, connect=0.5),
         )
         if resp.status_code != 200:
-            return []
+            return None
         data = resp.json()
         if not isinstance(data, list):
-            return []
+            return None
         return data
     except Exception:
-        return []
+        return None
 
 
 # Overall wall-clock budget for the ~29-port fan-out. Per-request timeouts do
@@ -5266,28 +5484,51 @@ async def _poll_all_slots() -> tuple[dict[int, list[dict[str, Any]]], dict[str, 
     Returns (slots_by_port, slots_poll_meta). Every discovered port is present
     in slots_by_port; ports that errored or missed the fan-out deadline map to
     [] and are tallied in the meta.
+
+    `answered` counts ports that RETURNED SLOT DATA, not ports whose coroutine
+    completed. Previously a per-request timeout was swallowed inside
+    `_poll_slot` (which returned []), so its task completed normally and was
+    counted as answered — the meta reported a clean fan-out while a port
+    contributed nothing. `unanswered_ports` names them explicitly so a caller
+    can mark the affected roles' occupancy as a LOWER BOUND instead of
+    silently shrinking the denominator.
     """
     ports = list(_discover_llama_ports().keys())
     out: dict[int, list[dict[str, Any]]] = {}
     started = time.time()
     if not ports:
-        return out, {"ports": 0, "answered": 0, "timed_out": 0, "duration_s": 0.0}
+        return out, {
+            "ports": 0,
+            "answered": 0,
+            "timed_out": 0,
+            "duration_s": 0.0,
+            "unanswered_ports": [],
+        }
+    unanswered: list[int] = []
     async with httpx.AsyncClient() as client:
         tasks = {port: asyncio.ensure_future(_poll_slot(client, port)) for port in ports}
         await asyncio.wait(tasks.values(), timeout=_SLOTS_FANOUT_DEADLINE_S)
         answered = 0
         for port, task in tasks.items():
+            result = None
             if task.done() and not task.cancelled() and task.exception() is None:
-                out[port] = task.result()
-                answered += 1
+                result = task.result()
             else:
                 task.cancel()
+            if result is None:
+                # Could not measure: deadline miss, per-request timeout,
+                # non-200, or malformed body. NOT "answered with 0 slots".
                 out[port] = []
+                unanswered.append(port)
+            else:
+                out[port] = result
+                answered += 1
     meta = {
         "ports": len(ports),
         "answered": answered,
         "timed_out": len(ports) - answered,
         "duration_s": round(time.time() - started, 3),
+        "unanswered_ports": sorted(unanswered),
     }
     return out, meta
 
@@ -5599,6 +5840,10 @@ async def _snapshot_impl() -> JSONResponse:
         window_s=600.0,
         now=_snap_now,
         structured_requests=structured_requests,
+        # Reuse THIS tick's fan-out: the strip's busy/idle claim and the
+        # `activity` slot dots then derive from one and the same /slots read
+        # and cannot disagree within a frame.
+        slots_by_port=slots_by_port,
     )
     return JSONResponse(
         _stamp(

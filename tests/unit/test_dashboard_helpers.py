@@ -566,6 +566,130 @@ def test_topology_activity_initializes_expected_embedder_bucket(monkeypatch, tmp
     assert embedder["n_completed"] == 0
 
 
+def _quiet_activity_sources(monkeypatch, tmp_path) -> None:
+    """Silence tap/journal inputs so only /slots occupancy drives the result."""
+    monkeypatch.setattr(dashboard, "_read_tail", lambda *a, **kw: "")
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", lambda *a, **kw: "")
+    monkeypatch.setattr(dashboard, "_parse_inference_sections", lambda *a, **kw: [])
+    monkeypatch.setattr(dashboard, "_todays_progress_log", lambda: tmp_path / "missing.jsonl")
+
+
+def test_topology_activity_busy_slots_are_not_reported_as_idle(monkeypatch, tmp_path) -> None:
+    """A role whose llama-server has a processing slot must read BUSY.
+
+    Regression for the defect where the topology panel derived its busy/idle
+    claim from a reachability probe: a saturated role rendered "idle · servers
+    up" because no orchestrator-side tap record or CPU region lock existed for
+    the traffic. Occupancy comes from /slots and nothing else.
+    """
+    _quiet_activity_sources(monkeypatch, tmp_path)
+    monkeypatch.setattr(dashboard, "_discover_llama_ports", lambda: {8072: "worker_general"})
+
+    payload = dashboard._topology_activity_payload(
+        window_s=600.0,
+        # Two slots, one actively decoding, and ZERO tap/journal corroboration.
+        slots_by_port={8072: [{"is_processing": True}, {"is_processing": False}]},
+    )
+    role = payload["per_role"]["worker_general"]
+    assert role["occupancy_observed"] is True
+    assert role["busy"] is True
+    assert role["slots_busy"] == 1
+    assert role["slots_total"] == 2
+    assert role["busy_ports"] == [8072]
+    assert payload["occupancy_source"] == "llama_server_slots"
+    assert payload["fleet_slots_busy"] == 1
+    assert payload["fleet_slots_total"] == 2
+
+
+def test_topology_activity_unmeasured_port_is_unknown_not_idle(monkeypatch, tmp_path) -> None:
+    """A port that did not answer /slots must NOT read as idle.
+
+    `_poll_slot` maps every failure to [] in `slots_by_port`. Treating that as
+    "answered with zero busy slots" is what let a server too busy to service a
+    trivial GET disappear from the occupancy count and be rendered as idle.
+    """
+    _quiet_activity_sources(monkeypatch, tmp_path)
+    monkeypatch.setattr(dashboard, "_discover_llama_ports", lambda: {8182: "worker_general.q1"})
+
+    payload = dashboard._topology_activity_payload(
+        window_s=600.0,
+        slots_by_port={8182: []},  # did not answer
+    )
+    role = payload["per_role"]["worker_general"]
+    assert role["occupancy_observed"] is False
+    assert role["busy"] is None, "unmeasured must be None (unknown), never False (idle)"
+    assert role["unreachable_ports"] == [8182]
+    assert payload["occupancy_observed"] is False
+
+
+def test_topology_activity_partial_answer_marks_lower_bound(monkeypatch, tmp_path) -> None:
+    """Some instances measured, others not -> busy count is a lower bound."""
+    _quiet_activity_sources(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        dashboard,
+        "_discover_llama_ports",
+        lambda: {8072: "worker_general", 8182: "worker_general.q1"},
+    )
+    payload = dashboard._topology_activity_payload(
+        window_s=600.0,
+        slots_by_port={8072: [{"is_processing": False}], 8182: []},
+    )
+    role = payload["per_role"]["worker_general"]
+    assert role["occupancy_observed"] is True
+    assert role["slots_busy"] == 0
+    assert role["unreachable_ports"] == [8182], "the unmeasured instance must stay visible"
+
+
+def test_topology_activity_without_slots_is_unknown_not_idle(monkeypatch, tmp_path) -> None:
+    """No /slots data at all -> occupancy unknown, never a silent zero."""
+    _quiet_activity_sources(monkeypatch, tmp_path)
+    monkeypatch.setattr(dashboard, "_discover_llama_ports", lambda: {8072: "worker_general"})
+    payload = dashboard._topology_activity_payload(window_s=600.0, slots_by_port=None)
+    role = payload["per_role"]["worker_general"]
+    assert role["occupancy_observed"] is False
+    assert role["slots_busy"] is None
+    assert payload["occupancy_source"] == "unavailable"
+    assert payload["fleet_slots_busy"] is None
+    # Reachability is a SEPARATE signal and must survive independently.
+    assert role["running"] is True
+
+
+def test_poll_all_slots_marks_failed_port_unanswered(monkeypatch) -> None:
+    """A per-request failure must not be counted as a successful answer.
+
+    `_poll_slot` used to swallow timeouts and return [], so its task completed
+    normally and the fan-out meta reported answered=N, timed_out=0 while a port
+    contributed nothing to the occupancy total.
+    """
+    monkeypatch.setattr(dashboard, "_discover_llama_ports", lambda: {8072: "a", 8182: "b"})
+
+    async def fake_poll(_client, port):
+        return [{"is_processing": True}] if port == 8072 else None
+
+    monkeypatch.setattr(dashboard, "_poll_slot", fake_poll)
+    slots_by_port, meta = asyncio.run(dashboard._poll_all_slots())
+    assert slots_by_port == {8072: [{"is_processing": True}], 8182: []}
+    assert meta["answered"] == 1
+    assert meta["timed_out"] == 1
+    assert meta["unanswered_ports"] == [8182]
+
+
+def test_region_locks_payload_surfaces_global_lock_domain() -> None:
+    """The host-wide GLOBAL.* admission lock must be reported.
+
+    It is not a contention-matrix role, so the per-role filter dropped it
+    entirely — the panel could read "no locks held" while GLOBAL quarters were
+    flocked by a live request.
+    """
+    payload = dashboard._region_locks_payload()
+    assert "global_lock" in payload
+    g = payload["global_lock"]
+    assert set(g) >= {"regions", "held", "holder_pids", "held_region_count"}
+    for region in g["regions"]:
+        assert region["lock_path"].endswith(".lock")
+        assert "GLOBAL" in region["lock_path"]
+
+
 def test_service_port_hints_are_auxiliary_only() -> None:
     hints = dashboard_topology._service_port_hints()
     assert hints[8000] == "orchestrator"
@@ -3096,7 +3220,16 @@ def test_poll_all_slots_empty_ports_meta() -> None:
     with patch.object(dashboard, "_discover_llama_ports", lambda: {}):
         slots_by_port, meta = asyncio.run(dashboard._poll_all_slots())
     assert slots_by_port == {}
-    assert meta == {"ports": 0, "answered": 0, "timed_out": 0, "duration_s": 0.0}
+    assert meta == {
+        "ports": 0,
+        "answered": 0,
+        "timed_out": 0,
+        "duration_s": 0.0,
+        # `unanswered_ports` names the ports that could not be measured, so a
+        # caller can mark their roles' occupancy as a lower bound instead of
+        # letting an unmeasured port read as an idle one.
+        "unanswered_ports": [],
+    }
 
 
 # ----- region-locks cache + tap-enrich fail-open (serve-path decoupling) -----

@@ -1866,6 +1866,19 @@ function renderAutopilotRunStrip() {
 
     const openReqs = typeof openStructuredTapRequests === 'function' ? openStructuredTapRequests() : [];
     const activeReqs = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
+    // Ground-truth fleet occupancy from llama-server /slots. Computed here
+    // (before the run-state verdict below) because "is anything actually
+    // running" must not be answered by orchestrator-side proxies alone.
+    // NOTE: `snap.activity` is the RAW /slots read. `snap.display_activity`
+    // is a policy-FILTERED copy that zeroes uncorroborated occupancy — it must
+    // never be used to answer this question.
+    let fleetBusy = 0, fleetTotal = 0;
+    const busyPortList = [];
+    Object.entries(snap.activity || {}).forEach(([port, a]) => {
+        fleetBusy += a.n_active || 0;
+        fleetTotal += a.n_total || 0;
+        if ((a.n_active || 0) > 0) busyPortList.push(port);
+    });
     const stateCounts = {};
     for (const req of openReqs) {
         const a = structuredTapActivity(req);
@@ -1880,7 +1893,10 @@ function renderAutopilotRunStrip() {
     const activeInferenceCount = activeReqs.length;
     const activeLockCount = Number(lockSummary.activeLockCount || 0);
     const heldRegionCount = Number(lockSummary.heldRegions || 0);
-    const hasActiveInference = activeInferenceCount > 0 || activeLockCount > 0;
+    // `fleetBusy` is ground truth and outranks both proxies: a role generating
+    // for a non-orchestrator client shows 0 tap records and 0 CPU locks, and
+    // the run-state card used to call that "down".
+    const hasActiveInference = fleetBusy > 0 || activeInferenceCount > 0 || activeLockCount > 0;
 
     const lastLogAge = proc.last_autopilot_log_age_s;
     const evalLabel = prog.eval_label || phase.eval_label || '';
@@ -1972,9 +1988,31 @@ function renderAutopilotRunStrip() {
         trialSub = `${escapeHTML(String(phase.action_type || 'action unknown'))} · phase ${escapeHTML(String(phaseName))}`;
     }
 
-    const loadClass = stalled ? 'bad' : ((waitingCpu || queued || pending || quiet) ? 'warn' : (activeReqs.length ? 'good' : 'muted'));
-    const loadValue = `${activeReqs.length} active`;
-    const loadSub = `waiting ${waitingCpu} · queued ${queued} · pending ${pending} · quiet ${quiet} · stalled ${stalled}<br><strong>locks</strong> ${activeLockCount} held across ${heldRegionCount} regions`;
+    // ---- inference load: REAL fleet occupancy, not a tap-record count ------
+    // The headline used to be `${activeReqs.length} active`, sourced from the
+    // orchestrator's own tap JSONL. That number is 0 for any request the
+    // orchestrator did not broker (direct eval/benchmark traffic, GPU roles),
+    // which is how this panel read "0 active" while the fleet was saturated.
+    // The headline is now llama-server /slots occupancy and SAYS SO in its
+    // own label; the old tap-derived number is preserved below under an
+    // explicit "orchestrator tap" heading rather than being silently dropped
+    // or silently redefined.
+    // Fan-out degradation is data, not a silent gap: a port that missed the
+    // deadline contributes 0 busy AND 0 total, which is indistinguishable
+    // from idle unless we say so.
+    const pollMeta = snap.slots_poll_meta || {};
+    const pollTimedOut = Number(pollMeta.timed_out || 0);
+    const pollNote = pollTimedOut > 0
+        ? ` · <span style="color:var(--warn)">${pollTimedOut}/${pollMeta.ports} port(s) did not answer — occupancy is a LOWER BOUND</span>`
+        : '';
+    const loadClass = stalled ? 'bad'
+        : (pollTimedOut > 0 ? 'warn'
+        : ((waitingCpu || queued || pending || quiet) ? 'warn'
+        : (fleetBusy > 0 ? 'good' : 'muted')));
+    const loadValue = `${fleetBusy}/${fleetTotal} slots busy`;
+    const loadSub = `<strong>llama-server /slots</strong>${busyPortList.length ? ` :${busyPortList.join(' :')}` : ' — none processing'}${pollNote}`
+        + `<br><strong>orchestrator tap</strong> ${activeReqs.length} active · waiting ${waitingCpu} · queued ${queued} · pending ${pending} · quiet ${quiet} · stalled ${stalled}`
+        + `<br><strong>locks</strong> ${activeLockCount} held across ${heldRegionCount} regions`;
 
     const failures = completed.filter(t => t.outcome && t.outcome !== 'task_completed').length;
     const lastComplete = completed.length ? completed[0] : null;
@@ -2188,10 +2226,87 @@ function toggleRawTapRenderMode() {
     }
 })();
 
+// Which llama-server instances are ACTUALLY generating right now, from the
+// raw /slots read in the latest snapshot. The tap itself can only show what
+// the orchestrator wrote to inference_tap_events.jsonl, so when work is
+// happening off-tap the panel used to say "no tap output" beside a saturated
+// machine and give the operator no pointer to where the work actually was.
+// This answers "which instance/port is generating" unconditionally.
+function generatingNowLabel() {
+    const snap = _latestSnapshot || {};
+    const activity = snap.activity || {};
+    const nodes = (snap.topology || {}).nodes || [];
+    const roleByPort = new Map(nodes.map(n => [String(n.port), String(n.label || n.role || '')]));
+    const busy = [];
+    Object.entries(activity).forEach(([port, a]) => {
+        const n = Number(a.n_active || 0);
+        if (n > 0) {
+            const role = roleByPort.get(String(port)) || '?';
+            busy.push(`${role} :${port} (${n}/${Number(a.n_total || 0)})`);
+        }
+    });
+    const meta = snap.slots_poll_meta || {};
+    const timedOut = Number(meta.timed_out || 0);
+    const warn = timedOut > 0 ? ` · ${timedOut} port(s) unreachable` : '';
+    if (!busy.length) {
+        // Distinguish "measured nothing running" from "could not measure".
+        if (meta.ports != null && Number(meta.answered || 0) === 0) {
+            return { text: 'generating: unknown (no /slots answered)', good: false };
+        }
+        return { text: `generating: none${warn}`, good: false };
+    }
+    return { text: `generating now: ${busy.join(', ')}${warn}`, good: true };
+}
+
+// Context for the "no CPU region lock is held" case.
+//
+// Established 2026-08-04 by direct observation: the CPU region lock IS taken
+// on the serving path and DOES migrate role-to-role in lockstep with /slots
+// occupancy (worker_general -> frontdoor -> worker_general was observed while
+// /slots occupancy moved 8182 -> 8070 -> 8072). So an empty grid is usually a
+// TRUE reading. But it is not a complete one, for two structural reasons:
+//   1. GPU-resident roles have no CPU lock domain at all, so real generation
+//      on them is invisible here (measured: 4 of 40 samples had /slots busy
+//      with zero locks held, all of them port 8086 = worker_vision).
+//   2. the host-wide cpu_region.GLOBAL.* lock is a separate domain with no
+//      row in this grid.
+// This function supplies whichever of those is true so the panel never says
+// "no locks held" full stop while the machine is generating.
+function regionLockNoHolderContext(d) {
+    const bits = [];
+    let busy = false;
+    const g = (d && d.global_lock) || null;
+    if (g && g.held) {
+        busy = true;
+        bits.push(`GLOBAL admission lock HELD on ${g.held_region_count} region(s) by pid ${(g.holder_pids || []).join(',') || '?'}`);
+    }
+    const snap = _latestSnapshot || {};
+    const activity = snap.activity || {};
+    const nodes = (snap.topology || {}).nodes || [];
+    const roleByPort = new Map(nodes.map(n => [String(n.port), String(n.label || n.role || '')]));
+    const busyPorts = [];
+    Object.entries(activity).forEach(([port, a]) => {
+        if (Number(a.n_active || 0) > 0) busyPorts.push(`${roleByPort.get(String(port)) || '?'} :${port}`);
+    });
+    if (busyPorts.length) {
+        busy = true;
+        bits.push(`llama-server /slots reports GENERATION on ${busyPorts.join(', ')} (roles with no CPU lock domain, or off-orchestrator traffic)`);
+    }
+    if (!bits.length) {
+        const meta = snap.slots_poll_meta || {};
+        if (meta.ports != null && Number(meta.answered || 0) === 0) {
+            return { busy: false, text: 'and /slots could not be read, so fleet activity is UNKNOWN — this is not an idle claim' };
+        }
+        return { busy: false, text: 'and llama-server /slots reports 0 slots processing fleet-wide' };
+    }
+    return { busy, text: bits.join('; ') };
+}
+
 function buildRawTapStatusBar() {
     // Sticky header above the live tap. Pin indicator + render-mode toggle.
     const mode = _rawTapRenderMode;
     const holderCounts = mode === 'structured' ? structuredTapHolderCountLabel() : '';
+    const gen = generatingNowLabel();
     const toggleLabel = mode === 'structured' ? 'structured'
         : (mode === 'rendered' ? 'markdown' : 'raw');
     const toggleHint = mode === 'structured'
@@ -2200,7 +2315,7 @@ function buildRawTapStatusBar() {
             ? 'legacy section render: prompt/response through marked + KaTeX. click for raw bytes.'
             : 'raw legacy bytes. click for request-grouped structured events.');
     return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px">
-        <span style="color:var(--muted);font-size:10px">live tap (${mode} · inference_tap_events.jsonl + inference_tap.log${holderCounts ? ` · ${escapeHTML(holderCounts)}` : ''})</span>
+        <span style="color:var(--muted);font-size:10px">live tap (${mode} · inference_tap_events.jsonl + inference_tap.log${holderCounts ? ` · ${escapeHTML(holderCounts)}` : ''})<br><span style="color:${gen.good ? 'var(--good)' : 'var(--muted)'}" title="Source: llama-server /slots is_processing, independent of the tap. The tap can only show orchestrator-brokered requests; this line shows ALL generation, including traffic the tap never sees.">${escapeHTML(gen.text)}</span></span>
         <span style="display:flex;gap:8px;align-items:center">
             <button onclick="toggleRawTapRenderMode()" style="background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text);padding:2px 8px;border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit"
                 title="${toggleHint}">${toggleLabel}</button>
@@ -6180,6 +6295,60 @@ function formatTopologyActivityAge(age) {
     return `${(age / 3600).toFixed(1)}h`;
 }
 
+// A llama-server that fails to answer a trivial GET /slots inside the poll
+// budget is overwhelmingly likely to be SATURATED, not idle: HTTP is served
+// on the same loop as the batch, so a long prefill starves it. Measured
+// 2026-08-04: port 8182 was at 372% CPU with is_processing=true, mid-45k-token
+// prefill, and did not answer /slots within 10s.
+//
+// This badge exists so a role's "idle 0/N" can never be printed WITHOUT the
+// caveat that some of its instances could not be measured at all. It is
+// deliberately worded as an inference ("likely busy"), not a measurement —
+// the honest state here is unmeasured, and the count beside it is a LOWER
+// BOUND on real occupancy.
+function unreachableBadge(ports) {
+    return `<span style="color:var(--warn,#fbbf24)" title="These instances did not answer GET /slots inside the poll budget, so their occupancy is UNMEASURED and the busy count beside this badge is a LOWER BOUND. A llama-server too busy to answer a trivial GET is usually mid-prefill/decode, so treat 'likely busy', not idle.">${ports.length} unresponsive (likely busy) :${ports.join(' :')}</span>`;
+}
+
+// Per-role occupancy derived CLIENT-SIDE from the snapshot's raw /slots map.
+//
+// Two reasons this exists rather than relying only on topology_activity:
+//  1. dashboard.html is re-read from disk per request while Python route
+//     handlers need an API reload, so this file can run ahead of the backend.
+//     Without a fallback every role would read "activity unknown" until the
+//     operator reloads.
+//  2. `snap.activity` is the RAW /slots fan-out and has been present all
+//     along — it was simply never joined to the per-role strip rows.
+// Uses `snap.activity` (raw), never `snap.display_activity` (policy-filtered
+// copy that zeroes uncorroborated occupancy).
+function occupancyFromSnapshotForRole(base) {
+    const snap = _latestSnapshot || {};
+    const activity = snap.activity || {};
+    const nodes = (snap.topology || {}).nodes || [];
+    if (!nodes.length || !Object.keys(activity).length) return null;
+    let busy = 0, total = 0, answered = 0;
+    const busyPorts = [], unreachable = [];
+    for (const n of nodes) {
+        if (clientBaseRole(String(n.role || '')) !== base) continue;
+        const a = activity[String(n.port)];
+        if (a === undefined) continue;
+        const t = Number(a.n_total || 0);
+        if (t === 0) { unreachable.push(n.port); continue; }
+        answered += 1;
+        const b = Number(a.n_active || 0);
+        busy += b; total += t;
+        if (b > 0) busyPorts.push(n.port);
+    }
+    if (!answered && !unreachable.length) return null;
+    return {
+        occupancy_observed: answered > 0,
+        slots_busy: answered > 0 ? busy : null,
+        slots_total: answered > 0 ? total : null,
+        busy_ports: busyPorts.sort((x, y) => x - y),
+        unreachable_ports: unreachable.sort((x, y) => x - y),
+    };
+}
+
 function renderTopologyActivity() {
     const d = _latestTopologyActivity;
     if (!d) return;
@@ -6205,6 +6374,80 @@ function renderTopologyActivity() {
         const tapActiveCount = (lockInfo && lockInfo.tapInferredInstanceIdxs) ? lockInfo.tapInferredInstanceIdxs.size : 0;
         const liveActiveCount = Math.max(lockActiveCount, tapActiveCount);
         const stillInsideWindow = age == null || age <= windowS;
+
+        // ---- GROUND TRUTH: llama-server /slots occupancy -------------------
+        // Ranked ABOVE the lock/tap inference below because those are
+        // orchestrator-side proxies: they see only requests the orchestrator
+        // brokered, and they see nothing at all for GPU-resident roles (which
+        // hold no CPU region lock by design). `/slots` sees every request,
+        // whoever sent it. This is the ONLY source allowed to say busy/idle.
+        // Backend-supplied occupancy wins; otherwise derive it from the
+        // snapshot's raw /slots map so the claim never silently degrades to
+        // a reachability proxy.
+        const occ = (stats && stats.occupancy_observed !== undefined && stats.occupancy_observed !== null)
+            ? stats
+            : (occupancyFromSnapshotForRole(base) || stats || {});
+        const occObserved = !!occ.occupancy_observed;
+        const slotsBusy = occObserved ? Number(occ.slots_busy || 0) : null;
+        const slotsTotal = occObserved ? Number(occ.slots_total || 0) : null;
+        const busyPorts = Array.isArray(occ.busy_ports) ? occ.busy_ports : [];
+        const unreachablePorts = Array.isArray(occ.unreachable_ports) ? occ.unreachable_ports : [];
+        if (occObserved && slotsBusy > 0) {
+            const parts = [`<span class="stat-fresh">busy ${slotsBusy}/${slotsTotal}</span> slots`];
+            if (busyPorts.length) {
+                parts.push(`on <span class="stat-fresh">:${busyPorts.join(', :')}</span>`);
+            }
+            if (liveTps != null) {
+                parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
+            } else if (stats && stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+                parts.push(`<span class="stat-stale">${stats.avg_tps_recent.toFixed(1)}</span> t/s hist`);
+            }
+            // Corroboration from the orchestrator-side proxies. Their ABSENCE
+            // beside real occupancy is itself information: it means this work
+            // did not come through the orchestrator (direct/eval traffic) or
+            // the role has no CPU lock domain.
+            if (liveActiveCount > 0) {
+                parts.push(`<span class="stat-stale">${liveActiveCount}</span> lock/tap`);
+            } else {
+                parts.push(`<span class="stat-stale">off-orchestrator</span>`);
+            }
+            if (unreachablePorts.length) {
+                parts.push(`<span class="stat-stale">${unreachablePorts.length} unreachable</span>`);
+            }
+            el.innerHTML = parts.join('<span class="stat-sep">·</span>');
+            const busyTitleBits = [
+                `${base} is BUSY: ${slotsBusy} of ${slotsTotal} llama-server slots report is_processing=true`,
+                busyPorts.length ? `busy on port(s) ${busyPorts.join(', ')}` : null,
+                liveActiveCount > 0
+                    ? `${liveActiveCount} corroborating CPU-region-lock / live-tap holder(s)`
+                    : 'no CPU-region lock or live tap holder — traffic did not come through the orchestrator, or this role has no CPU lock domain (GPU-resident)',
+                unreachablePorts.length ? `WARNING: ${unreachablePorts.length} instance(s) did not answer /slots: ${unreachablePorts.join(', ')}` : null,
+                'source: llama-server /slots (ground truth), NOT a health probe',
+            ].filter(Boolean);
+            el.title = busyTitleBits.join(' · ');
+            return;
+        }
+        // Occupancy could not be measured at all -> UNKNOWN, never "idle".
+        // A failed or absent probe must not render as "nothing is running";
+        // that is the exact substitution this panel was rebuilt to eliminate.
+        if (stats && stats.running && !occObserved) {
+            const parts = [`<span class="stat-stale">activity unknown</span>`];
+            {
+                const runningN = Number(stats.running_instance_count || 0);
+                const expectedN = Number(stats.expected_instance_count || 0);
+                parts.push(`<span class="stat-fresh">servers up${expectedN > 1 && runningN > 0 ? ` ${runningN}/${expectedN}` : ''}</span>`);
+            }
+            if (unreachablePorts.length) {
+                parts.push(`<span class="stat-stale">${unreachablePorts.length} no /slots answer</span>`);
+            }
+            el.innerHTML = parts.join('<span class="stat-sep">·</span>');
+            el.title = [
+                `${base}: llama-server /slots did not answer, so occupancy is UNKNOWN — this is NOT a claim that the role is idle`,
+                stats.running ? 'the process exists in the ps(1) scan (reachability only)' : null,
+                unreachablePorts.length ? `ports with no /slots answer: ${unreachablePorts.join(', ')}` : null,
+            ].filter(Boolean).join(' · ');
+            return;
+        }
         if (liveActiveCount > 0) {
             const parts = [`<span class="stat-fresh">${liveActiveCount}</span> active`];
             if (nRecent) parts.push(`<span class="stat-stale">${nRecent}</span> recent req`);
@@ -6227,13 +6470,25 @@ function renderTopologyActivity() {
                 const running = Number(stats.running_instance_count || 0) || Number(stats.live_tps_n || 0);
                 const expected = Number(stats.expected_instance_count || 0);
                 const suffix = expected > 1 && running > 0 ? ` ${running}/${expected}` : '';
-                const parts = [`<span class="stat-stale">idle</span>`, `<span class="stat-fresh">servers up${suffix}</span>`];
+                // "idle" is now an EARNED claim: we reach here only when
+                // /slots was actually read and reported 0 busy of N. The
+                // slot ratio is printed with it so the operator can see the
+                // measurement, not just the verdict. "servers up" stays as
+                // its own separate reachability signal.
+                const idleLabel = occObserved
+                    ? `<span class="stat-stale">idle 0/${slotsTotal}</span> slots`
+                    : `<span class="stat-stale">activity unknown</span>`;
+                const parts = [idleLabel, `<span class="stat-fresh">servers up${suffix}</span>`];
+                if (unreachablePorts.length) parts.splice(1, 0, unreachableBadge(unreachablePorts));
                 if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
                     parts.push(`<span class="stat-stale">${stats.avg_tps_recent.toFixed(1)}</span> t/s hist`);
                 }
                 el.innerHTML = parts.join('<span class="stat-sep">·</span>');
                 const titleBits = [
-                    `${base} listener${running === 1 ? '' : 's'} running`,
+                    occObserved
+                        ? `${base} MEASURED idle: llama-server /slots reports 0 of ${slotsTotal} slots processing`
+                        : `${base} occupancy UNKNOWN — /slots was not read; this is not an idle claim`,
+                    `${running} listener${running === 1 ? '' : 's'} present in ps(1) scan (reachability, a separate signal)`,
                     `no recent requests in last ${Math.round(windowS)}s`,
                     stats.avg_tps_recent != null ? `historical summary ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
                 ].filter(Boolean);
@@ -6245,7 +6500,11 @@ function renderTopologyActivity() {
             return;
         }
         const parts = [];
-        parts.push(`<span class="stat-stale">idle</span>`);
+        // Same rule as above: only call it idle if /slots was actually read.
+        parts.push(occObserved
+            ? `<span class="stat-stale">idle 0/${slotsTotal}</span> slots`
+            : `<span class="stat-stale">activity unknown</span>`);
+        if (unreachablePorts.length) parts.push(unreachableBadge(unreachablePorts));
         if (nRecent) {
             parts.push(`last <span class="stat-stale">${formatTopologyActivityAge(age)}</span>`);
         } else {
@@ -6809,7 +7068,20 @@ async function updateRegionLocks(
                     `${tapLiveRequestCount} live tap request(s), but no CPU lock holder correlated in this frame`
                 );
             } else {
-                _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows configured free CPU shapes');
+                // "no locks held" must never be the operator's last word on
+                // whether the machine is working. Two things can be true at
+                // once: no CPU REGION lock is held, AND inference is running.
+                //  - GPU-resident roles (architect_general, worker_vision,
+                //    speech) have NO CPU lock domain by design — see
+                //    region_locks.non_lock_roles.
+                //  - the host-wide GLOBAL.* admission lock is a separate
+                //    domain that this grid does not have a row for.
+                const noLockCtx = regionLockNoHolderContext(d);
+                if (noLockCtx.busy) {
+                    _setDotState(regionDot, 'active', `no CPU REGION lock held, but ${noLockCtx.text}`);
+                } else {
+                    _setDotState(regionDot, 'idle', `no CPU region locks currently held; ${noLockCtx.text}; grid shows configured free CPU shapes`);
+                }
             }
             if (status && enabled) {
                 const liveTapSuffix = tapLiveRequestCount
@@ -6822,8 +7094,9 @@ async function updateRegionLocks(
                     status.textContent = `— no /proc holder correlated; ${tapLiveRequestCount} live tap request(s) visible${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}; waiting for coherent lock metadata; per-region locks ENABLED`;
                     status.style.color = 'var(--warn,#fbbf24)';
                 } else {
-                    status.textContent = '— no locks held; grid shows configured free CPU shapes; per-region locks ENABLED';
-                    status.style.color = 'var(--muted)';
+                    const noLockCtx = regionLockNoHolderContext(d);
+                    status.textContent = `— no CPU region lock held; ${noLockCtx.text}; grid shows configured free CPU shapes; per-region locks ENABLED`;
+                    status.style.color = noLockCtx.busy ? 'var(--warn,#fbbf24)' : 'var(--muted)';
                 }
             }
 
