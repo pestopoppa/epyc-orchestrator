@@ -103,7 +103,110 @@ _HOST_COVARIATE_NUMERIC_KEYS = (
     "loadavg_per_core",
 )
 _HOST_COVARIATE_CATEGORICAL_KEYS = ("cache_warm_state",)
+# Eval-instrument identity ledger.
+#
+# This was a module-level dict, which meant drift was only ever detectable WITHIN one
+# daemon process. The drift that actually matters happens while the daemon is DOWN: on
+# 2026-08-04 the debugbench python rows were retargeted `code_execution` -> `substring`
+# in the question pool, the daemon restarted, and the in-memory ledger came back empty,
+# so the changed instrument was silently accepted as the same one. `core_id` cannot
+# catch it either — it is `legacy_pool_seed_{seed}_n{n}`, which is identical for two
+# different pools.
+#
+# That matters far more now that the Pareto objective is questions/HOUR: the tier mix of
+# the drawn set drives wall-clock directly (T2/T3 questions are much slower than T1), so
+# a pool edit moves the objective with no config change at all. The ledger is therefore
+# persisted, and the realized tier mix is stamped alongside the content hash.
 _DATASET_SHA_BY_CORE_ID: dict[str, str] = {}
+_INSTRUMENT_LEDGER_LOCK = threading.Lock()
+_INSTRUMENT_LEDGER_PATH = Path(
+    os.environ.get(
+        "AUTOPILOT_EVAL_INSTRUMENT_LEDGER",
+        str(Path(__file__).resolve().parents[2] / "orchestration" / "eval_instrument_ledger.json"),
+    )
+)
+
+
+def question_tier_mix(questions: Sequence[dict[str, Any]]) -> dict[str, int]:
+    """Realized difficulty-tier histogram of a drawn question set.
+
+    The sampler stratifies by SUITE (`per_suite = n // len(suites)`); tier is never a
+    sampling dimension, so the mix is a byproduct rather than a declared quantity. Under a
+    questions/hour objective that byproduct is load-bearing, so it is at minimum recorded.
+    """
+    mix: dict[str, int] = {}
+    for q in questions:
+        tier = _question_pool_tier(q)
+        key = "unknown" if tier is None else str(tier)
+        mix[key] = mix.get(key, 0) + 1
+    return dict(sorted(mix.items()))
+
+
+def _read_instrument_ledger() -> dict[str, Any]:
+    """Load the durable ledger; a missing file is normal, a corrupt one is NOT silent."""
+    try:
+        if not _INSTRUMENT_LEDGER_PATH.exists():
+            return {}
+        return json.loads(_INSTRUMENT_LEDGER_PATH.read_text()) or {}
+    except (OSError, ValueError) as exc:
+        # Never fail the eval on a bad ledger, but never pretend drift detection ran
+        # either — a detector that quietly degrades to "no drift" is worse than none.
+        log.error(
+            "Eval instrument ledger unreadable at %s (%s) — drift detection DEGRADED "
+            "for this run; a changed question pool will NOT be flagged.",
+            _INSTRUMENT_LEDGER_PATH,
+            exc,
+        )
+        return {}
+
+
+def _record_instrument_identity(
+    core_id: str,
+    dataset_sha: str,
+    tier_mix: dict[str, int],
+    n_questions: int,
+) -> dict[str, Any] | None:
+    """Persist this core_id's instrument identity; return drift details if it changed."""
+    with _INSTRUMENT_LEDGER_LOCK:
+        ledger = _read_instrument_ledger()
+        entry = ledger.get(core_id) if isinstance(ledger.get(core_id), dict) else None
+        drift: dict[str, Any] | None = None
+        # Drift on EITHER axis. `dataset_content_sha256` hashes suite/id/prompt/expected/
+        # scoring_method/scoring_config — deliberately NOT `tier`. So a pure re-tiering of
+        # the pool changes every tier-stratified draw and the whole mix report while
+        # leaving the content hash identical. Under a questions/hour objective the mix is
+        # part of the instrument's identity, so compare it too.
+        content_changed = bool(entry) and entry.get("dataset_content_sha256") != dataset_sha
+        mix_changed = bool(entry) and entry.get("tier_mix") != tier_mix
+        if entry and (content_changed or mix_changed):
+            drift = {
+                "changed_content": content_changed,
+                "changed_tier_mix": mix_changed,
+                "core_id": core_id,
+                "previous_dataset_content_sha256": entry.get("dataset_content_sha256"),
+                "current_dataset_content_sha256": dataset_sha,
+                "previous_tier_mix": entry.get("tier_mix"),
+                "current_tier_mix": tier_mix,
+                "previous_n_questions": entry.get("n_questions"),
+                "current_n_questions": n_questions,
+                "previous_first_seen": entry.get("first_seen"),
+                "detected_across_restart": True,
+            }
+        ledger[core_id] = {
+            "dataset_content_sha256": dataset_sha,
+            "tier_mix": tier_mix,
+            "n_questions": n_questions,
+            "first_seen": (entry or {}).get("first_seen") or datetime.now(timezone.utc).isoformat(),
+            "last_seen": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            _INSTRUMENT_LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _INSTRUMENT_LEDGER_PATH.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(ledger, indent=2, sort_keys=True))
+            tmp.replace(_INSTRUMENT_LEDGER_PATH)  # atomic; concurrent evals last-writer-wins
+        except OSError as exc:
+            log.error("Could not persist eval instrument ledger: %s", exc)
+        return drift
 _EVAL_QUESTION_JSONL_SCHEMA_VERSION = 1
 _DEFAULT_EVAL_ARTIFACT_ROOT = Path("/mnt/raid0/llm/tmp/eval_tower_trials")
 
@@ -1683,6 +1786,7 @@ def _stamp_eval_instrument(
 ) -> EvalResult:
     """Attach machine-checkable dataset/profile identity to a tier result."""
     dataset_sha = dataset_content_sha256(questions)
+    tier_mix = question_tier_mix(questions)
     profile_json = json.dumps(test_profile, sort_keys=True, separators=(",", ":"), default=str)
     result.core_id = core_id
     result.details.update(
@@ -1690,6 +1794,11 @@ def _stamp_eval_instrument(
             "core_id": core_id,
             "dataset_content_sha256": dataset_sha,
             "dataset_sha256": dataset_sha,
+            # The tier mix is what couples this instrument to the questions/hour
+            # objective: T2/T3 questions cost far more wall-clock than T1, so a mix
+            # change moves the objective with no config change. Recorded per trial so a
+            # rate comparison can be checked against the set it was measured on.
+            "question_tier_mix": tier_mix,
             "test_profile": test_profile,
             "test_profile_json": profile_json,
         }
@@ -1710,6 +1819,27 @@ def _stamp_eval_instrument(
                 dataset_sha,
             )
         _DATASET_SHA_BY_CORE_ID[core_id] = dataset_sha
+
+        # Durable check — the in-memory one above cannot see across a daemon restart,
+        # which is when a question-pool edit actually lands.
+        durable_drift = _record_instrument_identity(
+            core_id, dataset_sha, tier_mix, len(questions)
+        )
+        if durable_drift:
+            result.details["instrument_drift_across_restart"] = durable_drift
+            log.error(
+                "EVAL INSTRUMENT CHANGED under an unchanged core_id=%s. content %s -> %s; "
+                "tier mix %s -> %s; n %s -> %s. Trials measured before and after this point "
+                "were scored on DIFFERENT question sets — quality and questions/hour are not "
+                "comparable across it, and core_id alone cannot express the difference.",
+                core_id,
+                durable_drift.get("previous_dataset_content_sha256"),
+                durable_drift.get("current_dataset_content_sha256"),
+                durable_drift.get("previous_tier_mix"),
+                durable_drift.get("current_tier_mix"),
+                durable_drift.get("previous_n_questions"),
+                durable_drift.get("current_n_questions"),
+            )
     return result
 
 
