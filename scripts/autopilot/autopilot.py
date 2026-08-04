@@ -1773,6 +1773,18 @@ def _critic_fallback_seed_skip(
     blacklist: list[dict[str, Any]],
 ) -> SkipOutcome | None:
     """Skip a critic seed fallback when the measured seed ladder is exhausted."""
+    # 2026-08-04: `action` can be None here. The planner's deterministic guard sets it
+    # to None to mean "revise/reject produced no materially different dispatch action"
+    # (logged as "Planner fallback/degraded mode"), and the whole critic-repair chain
+    # below assumed a dict. Trial 1470 died on `'NoneType' object has no attribute
+    # 'get'`, the supervisor burned its three restarts, and AutoPilot stayed down.
+    #
+    # The surrounding loop already knew this: line ~7719 reads
+    # `action.get("type") if isinstance(action, dict) else action`. The repair chain
+    # never got the same treatment. There is nothing to repair when there is no
+    # action, so pass it through untouched rather than inventing one.
+    if not isinstance(action, dict):
+        return None
     if action.get("type") != "seed_batch":
         return None
     reason = _seed_fallback_exhaustion_reason(blacklist)
@@ -1793,6 +1805,8 @@ def _replace_exhausted_critic_seed_fallback(
     trial_counter: int = 0,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, SkipOutcome | None]:
     """Replace an exhausted critic seed fallback with a metric-bearing action."""
+    if not isinstance(action, dict):
+        return action, rationale, None
     seed_skip = _critic_fallback_seed_skip(action, blacklist)
     if seed_skip is None:
         return action, rationale, None
@@ -5578,6 +5592,9 @@ def _repair_critic_reject_fallback_for_w8(
     w8_replay_pressure_text: str,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, SkipOutcome | None, bool]:
     """Keep critic fallback paths aligned with the active W8 replayability gate."""
+    if not isinstance(action, dict):
+        # No dispatchable action to repair — the planner guard already degraded it.
+        return action, rationale, None, False
     action, rationale, seed_skip = _replace_exhausted_critic_seed_fallback(
         action,
         blacklist,
