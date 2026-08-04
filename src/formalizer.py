@@ -208,6 +208,28 @@ def formalize_prompt(
     formalizer_prompt = _build_formalizer_prompt(prompt, problem_type_hint)
     roles_to_try = ["formalizer", "formalizer_q4"]
 
+    # A None registry is a DIFFERENT failure from a missing role, and it used to
+    # crash rather than degrade. `state.registry` is optional
+    # (`AppState.registry: RegistryLoaderProtocol | None`) and is nulled on
+    # lifespan shutdown; `src/api/services/memrl.py:444` already guards for it
+    # explicitly. This function did not: the loop below catches KeyError, but
+    # `None.get_role(...)` raises AttributeError, which escaped all the way out of
+    # `_preprocess` -> `_handle_chat` -> the /chat route and returned HTTP 500.
+    #
+    # On 2026-08-04 that produced 36 unhandled API exceptions during a single 100
+    # question calibration. The eval counts each 500 against RELIABILITY, so the
+    # run scored 0.69 and was refused by the baseline sanity gate — twice, for an
+    # hour each. The visible symptom (a reliability floor) was three layers away
+    # from the cause.
+    if registry is None:
+        log.warning(
+            "Input formalization SKIPPED: no registry on app state. The feature is "
+            "enabled but cannot run; prompts are passed through unformalized."
+        )
+        return FormalizationResult(
+            success=False, error="registry unavailable (state.registry is None)"
+        )
+
     for role_name in roles_to_try:
         try:
             registry.get_role(role_name)
