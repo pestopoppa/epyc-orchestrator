@@ -455,6 +455,59 @@ MAX_CONSECUTIVE_REJECTED_DRAFTS = int(
     os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_REJECTED_DRAFTS", "4")
 )
 
+# 2026-08-04 — the planner's deterministic pre-dispatch guard ("revise/reject must
+# produce a materially different action") used to HALT the daemon on its FIRST hit,
+# unlike every sibling breaker above, which substitutes a safe action and only halts
+# after a RUN. That is a category error: a critic returning 'revise' with an action
+# equal to the draft is a routine planner-quality event, not an unrecoverable one like
+# `planners_offline_no_deterministic_fallback` next to it. Evidence: the 15:23:54 halt
+# at trial 1472 ended the run on a single `revise` whose substituted action matched the
+# draft — one ordinary critic disagreement stopped the whole loop, which is a large part
+# of why AutoPilot was not ratcheting. Give it the same run-based discipline; a genuine
+# stuck planner still halts, just not on a single event.
+MAX_CONSECUTIVE_PLANNER_DETERMINISTIC_BLOCKS = int(
+    os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_PLANNER_DETERMINISTIC_BLOCKS", "4")
+)
+
+PLANNER_DETERMINISTIC_BLOCK_STATE_KEY = "consecutive_planner_deterministic_blocks"
+
+
+def _planner_deterministic_block_decision(
+    state: dict[str, Any],
+    planner_decision: Any,
+    max_blocks: int = MAX_CONSECUTIVE_PLANNER_DETERMINISTIC_BLOCKS,
+) -> tuple[str, int]:
+    """Record one deterministic pre-dispatch block; decide substitute-vs-halt.
+
+    Returns ``("substitute" | "halt", consecutive_count)``. Extracted from the trial loop
+    so the breaker's semantics are testable on their own — the behaviour it replaced was a
+    bare ``break`` buried a thousand lines into ``_run_loop_inner``, which is precisely why
+    a single ordinary critic disagreement could end a run unnoticed.
+
+    The rejected draft is always recorded as invalid-action feedback, so the planner learns
+    from a substituted trial exactly as it does from a critic-rejected one.
+    """
+    state["last_invalid_action"] = getattr(planner_decision, "draft_action", None)
+    state["last_invalid_reason"] = getattr(planner_decision, "deterministic_block_reason", "")
+    state["last_invalid_status"] = "planner_deterministic_guard"
+    # autopilot_state.json is operator-editable JSON and survives restarts, so this counter
+    # can arrive as junk or as a negative. Both used to DISABLE the breaker silently: a
+    # stored -3 counts up through -2, -1, 0 ... and never reaches the limit, and a
+    # non-numeric value raised straight out of the trial loop. Clamp to a sane floor and
+    # treat unparseable as "no prior blocks" — a guard that fails open is not a guard.
+    try:
+        prior = int(state.get(PLANNER_DETERMINISTIC_BLOCK_STATE_KEY, 0) or 0)
+    except (TypeError, ValueError):
+        log.warning(
+            "Ignoring non-numeric %s in autopilot state (%r); treating as 0.",
+            PLANNER_DETERMINISTIC_BLOCK_STATE_KEY,
+            state.get(PLANNER_DETERMINISTIC_BLOCK_STATE_KEY),
+        )
+        prior = 0
+    count = max(0, prior) + 1
+    state[PLANNER_DETERMINISTIC_BLOCK_STATE_KEY] = count
+    return ("halt" if count >= max_blocks else "substitute", count)
+
 # 2026-06-04 — experiment-quota policy (separate memory maintenance from the
 # optimization budget). Once the memory store is already large, an unbounded run
 # of passive seed/distill actions is the planner rationalizing no-op work; cap
@@ -7810,6 +7863,10 @@ def _run_loop_inner(
             else:
                 # Draft accepted (approve / not critiqued / no substitution).
                 state["consecutive_rejected_drafts"] = 0
+                # The deterministic guard's breaker counts a RUN, so a single clean
+                # dispatch clears it — otherwise isolated blocks spread across unrelated
+                # trials would eventually halt a perfectly healthy planner.
+                state["consecutive_planner_deterministic_blocks"] = 0
         elif not use_controller:
             # Autonomous mode: species selection by budget
             phase.set("autonomous_select", trial_id=trial_counter)
@@ -7819,6 +7876,7 @@ def _run_loop_inner(
             rationale = {"falsifier": "", "rubric_scores": {}}  # no controller call
             stagnation_signal = ""  # gate is controller-only; autonomous mode skips it
             state["consecutive_rejected_drafts"] = 0  # no critic in autonomous mode
+            state["consecutive_planner_deterministic_blocks"] = 0  # no planner guard either
             action, rationale = _replace_blacklisted_autonomous_action(
                 action,
                 blacklist,
@@ -7881,18 +7939,34 @@ def _run_loop_inner(
                     phase.set("planners_offline_halt", trial_id=trial_counter)
                     break
             elif getattr(planner_decision, "deterministic_block_reason", ""):
-                state["paused"] = True
-                state["_dispatch_deficiency"] = "planner_deterministic_guard"
-                state["last_invalid_action"] = planner_decision.draft_action
-                state["last_invalid_reason"] = planner_decision.deterministic_block_reason
-                state["last_invalid_status"] = "planner_deterministic_guard"
-                save_state(state)
-                log.error(
-                    "Planner action blocked deterministically before dispatch: %s",
-                    planner_decision.deterministic_block_reason,
+                block_reason = planner_decision.deterministic_block_reason
+                decision, consecutive_blocks = _planner_deterministic_block_decision(
+                    state, planner_decision
                 )
-                phase.set("planner_deterministic_guard_halt", trial_id=trial_counter)
-                break
+                if decision == "halt":
+                    # A RUN of these is a genuinely stuck planner — halt for the operator,
+                    # mirroring the critic-reject-loop breaker.
+                    state["paused"] = True
+                    state["_dispatch_deficiency"] = "planner_deterministic_guard"
+                    save_state(state)
+                    log.error(
+                        "Planner action blocked deterministically %d consecutive times "
+                        "— pausing for operator review. Last reason: %s",
+                        consecutive_blocks,
+                        block_reason,
+                    )
+                    phase.set("planner_deterministic_guard_halt", trial_id=trial_counter)
+                    break
+                save_state(state)
+                log.warning(
+                    "Planner action blocked deterministically (%d/%d consecutive): %s "
+                    "— substituting seed_batch and continuing. The rejected draft still "
+                    "feeds invalid-action feedback, so the planner learns from it.",
+                    consecutive_blocks,
+                    MAX_CONSECUTIVE_PLANNER_DETERMINISTIC_BLOCKS,
+                    block_reason,
+                )
+                action = {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}
             else:
                 log.warning("No action proposed, defaulting to seed_batch")
                 action = {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}
