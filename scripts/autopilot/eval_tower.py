@@ -389,6 +389,16 @@ def _is_scoreable_question(q: dict) -> bool:
     if scoring_method == "code_execution":
         return _has_code_execution_oracle(q)
     has_expected = expected is not None and str(expected) != ""
+    if not has_expected and scoring_method == "substring":
+        # The needle may live in scoring_config["substring"] instead of `expected`
+        # (instruction_precision, agentic). debug_scorer._score_substring reads it
+        # from there, so such a row IS scoreable — it was only unreachable while
+        # this predicate looked at `expected` alone. Keep the two in agreement:
+        # declaring a row scoreable that the scorer cannot actually grade would
+        # convert a dropped row into a systematically WRONG one.
+        cfg = q.get("scoring_config") or {}
+        if isinstance(cfg, dict) and str(cfg.get("substring", "") or "").strip():
+            return True
     return has_expected or scoring_method in _EXPECTED_FREE_SCORERS
 
 

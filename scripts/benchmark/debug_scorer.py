@@ -704,6 +704,18 @@ def _score_substring(
 
     needle = expected.strip()
     if not needle:
+        # Part of the pool carries the needle in `scoring_config["substring"]` and
+        # leaves `expected` empty — instruction_precision ("P.S.") and agentic
+        # ("send_email") are built that way. This function only ever read
+        # `expected`, so those rows had no reachable oracle: 25 questions that the
+        # tower then dropped as unscoreable, which is the `expected=='' never
+        # scored` defect recorded in instrument_eras.yaml:known_dead_instrument_items.
+        #
+        # Fail-closed either way: an empty needle still returns False rather than
+        # matching everything. Reading config here makes the oracle reachable; it
+        # does not weaken the check.
+        needle = _strip_digit_separators(str(config.get("substring", "") or "")).strip()
+    if not needle:
         return False
     return _contains_text_unit(answer, needle, case_sensitive=case_sensitive)
 
