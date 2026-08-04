@@ -619,6 +619,52 @@ def _question_pool_tier(q: dict[str, Any]) -> int | None:
 EVAL_TIER_MIX_POLICY = "equal_thirds_v1"
 EVAL_TIER_MIX_TIERS: tuple[int, ...] = (1, 2, 3)
 
+# ── Core rotation (operator, 2026-08-04: "the draw should be somewhat randomized") ──
+#
+# A permanently fixed seed lets AutoPilot overfit: it mutates prompts and configs against
+# the SAME 50 questions forever, and a gain on those need not generalize.
+#
+# But rotating PER TRIAL is the wrong cure. Quality is a fraction-correct on n questions,
+# so an independent draw each trial adds binomial sampling error of
+# sqrt(p(1-p)/n) ~= sqrt(0.25/50) = 7.1%, i.e. ~0.21 on the 0-3 quality scale against a
+# baseline near 1.5. That noise is several times the effect sizes the ratchet is trying to
+# detect, so every real improvement would drown and the frontier would be sampling noise.
+#
+# Rotate on an EPOCH instead: the draw is fixed within a block of trials (comparable —
+# the ratchet works) and changes between blocks (the optimizer cannot grind one set
+# forever). Because n, the tier mix, and the pool are all held constant, the instrument's
+# EXPECTED difficulty is unchanged across a rotation — only the specific sample differs —
+# so a rotation does NOT invalidate the quality baseline the way changing the mix did.
+def _rotation_period_from_env() -> int:
+    # Read inline rather than via `_env_int`, which is defined further down this module.
+    try:
+        return max(1, int(os.environ.get("AUTOPILOT_EVAL_CORE_ROTATION_TRIALS", "20")))
+    except (TypeError, ValueError):
+        return 20
+
+
+EVAL_CORE_ROTATION_TRIALS = _rotation_period_from_env()
+
+
+def core_rotation_index(trial_id: int | None) -> int:
+    """Which rotation block a trial belongs to. Deterministic; 0 when trial_id is unknown."""
+    if trial_id is None:
+        return 0
+    try:
+        return max(0, int(trial_id)) // EVAL_CORE_ROTATION_TRIALS
+    except (TypeError, ValueError):
+        return 0
+
+
+def rotated_core_seed(base_seed: int, rotation: int) -> int:
+    """Stable per-rotation seed. Derived by hash so consecutive blocks are unrelated draws.
+
+    `base_seed + rotation` would make block N+1 the seed-43 draw of block N, and adjacent
+    seeds are not independent samples in any useful sense — a stable digest is.
+    """
+    digest = hashlib.sha256(f"eval-core-rotation|{int(base_seed)}|{int(rotation)}".encode())
+    return int.from_bytes(digest.digest()[:8], "big") % (2**31 - 1)
+
 
 def declared_tier_targets(
     n: int, tiers: tuple[int, ...] = EVAL_TIER_MIX_TIERS
@@ -4308,17 +4354,33 @@ class EvalTower:
                         "n_questions": 0,
                     },
                 )
-            rng = random.Random(seed)
-            # Declared tier mix (operator, 2026-08-04). The core_id changes with the
-            # sampler because this IS a different instrument: same seed, same n, but a
-            # different question set and therefore a different achievable quality and a
-            # different questions/hour. Keeping `legacy_pool_seed_...` would have let the
-            # old baseline and the old frontier silently gate a draw they never measured.
+            # Declared tier mix + epoch rotation (operator, 2026-08-04). The core_id
+            # changes with the sampler because this IS a different instrument: same seed,
+            # same n, but a different question set and therefore a different achievable
+            # quality and a different questions/hour. Keeping `legacy_pool_seed_...` would
+            # have let the old baseline and old frontier gate a draw they never measured.
+            #
+            # The rotation index is part of the core_id too, so each block is its own
+            # instrument in the drift ledger — otherwise every rotation would be reported
+            # as corruption of an unchanged core_id.
+            rotation = core_rotation_index(resolved_trial_id)
+            effective_seed = rotated_core_seed(seed, rotation)
+            rng = random.Random(effective_seed)
             questions, tier_mix_provenance = _sample_tier_stratified_eval_questions(
                 pool, n, rng
             )
+            tier_mix_provenance.update(
+                {
+                    "core_rotation_index": rotation,
+                    "core_rotation_trials": EVAL_CORE_ROTATION_TRIALS,
+                    "base_seed": int(seed),
+                    "effective_seed": int(effective_seed),
+                }
+            )
             core_selection = "tier_stratified"
-            core_id = f"tier_stratified_{EVAL_TIER_MIX_POLICY}_seed_{seed}_n{n}"
+            core_id = (
+                f"tier_stratified_{EVAL_TIER_MIX_POLICY}_seed_{seed}_n{n}_rot{rotation}"
+            )
 
         audit_questions: list[dict] = []
         if audit_policy["enabled"] and audit_policy["requested_n"] > 0:

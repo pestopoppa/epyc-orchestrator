@@ -64,7 +64,25 @@ SESSIONS = _REPO_ROOT / "orchestration/repl_memory/sessions"
 MIN_DIVERSITY = 0.50
 MIN_SELF_MATCH = 0.90
 ROUNDTRIP_SAMPLE = 500
-SEMANTIC_SAMPLE = 8
+
+# 2026-08-04: this was a MEAN over 8 rows, which is both too fragile and too blind.
+#
+# Too fragile: ONE bad vector in a 60,340-row store failed the whole gate and refused to
+# start AutoPilot. Measured that day — 59 of 60 sampled rows self-matched at ~0.996 and a
+# single row scored 0.0212, giving (7 x 0.996 + 0.021) / 8 = 0.874 against a 0.90 floor.
+# The reported failure was exactly 0.8718.
+#
+# Too blind: a mean hides the corruption that matters. Ten rows at 0.55 — vectors that
+# belong to OTHER rows — among ninety perfect ones averages 0.955 and PASSES.
+#
+# A per-row threshold with a tolerated fraction fixes both, and a cross-row hit is now a
+# hard fail on its own because it is unambiguous: that vector resolves to a different
+# memory, no averaging required.
+SEMANTIC_SAMPLE = 60
+# Below this a vector is not a degraded self-match, it belongs to a DIFFERENT row.
+CROSS_ROW_CEILING = 0.55
+# Tolerated share of sampled rows under MIN_SELF_MATCH before the store is DEGRADED.
+MAX_BELOW_FLOOR_FRACTION = 0.02
 
 
 def main() -> int:
@@ -225,13 +243,31 @@ def main() -> int:
             else:
                 skip("semantic_self_match", detail)
         if sims:
-            mean = float(np.mean(sims))
+            arr = np.asarray(sims, dtype=np.float64)
+            mean = float(arr.mean())
+            median = float(np.median(arr))
+            cross_row = int((arr < CROSS_ROW_CEILING).sum())
+            below_floor = int((arr < MIN_SELF_MATCH).sum())
+            below_fraction = below_floor / len(arr)
+            # Per-row verdict, not an average. A cross-row hit is unambiguous corruption
+            # and fails on its own; otherwise a small share of degraded rows is tolerated.
+            passed = cross_row == 0 and below_fraction <= MAX_BELOW_FLOOR_FRACTION
             record(
                 "semantic_self_match",
-                mean >= MIN_SELF_MATCH,
-                f"mean cosine {mean:.4f} over {len(sims)} rows (floor {MIN_SELF_MATCH}; "
-                f"0.55 = vectors belong to other rows)",
+                passed,
+                (
+                    f"{below_floor}/{len(arr)} rows below floor {MIN_SELF_MATCH} "
+                    f"({below_fraction:.1%}, tolerated {MAX_BELOW_FLOOR_FRACTION:.0%}); "
+                    f"{cross_row} row(s) below {CROSS_ROW_CEILING} i.e. the vector belongs "
+                    f"to ANOTHER row (0 tolerated); mean {mean:.4f} median {median:.4f}"
+                ),
                 mean_cosine=round(mean, 4),
+                median_cosine=round(median, 4),
+                sampled=len(arr),
+                below_floor=below_floor,
+                below_floor_fraction=round(below_fraction, 4),
+                cross_row_hits=cross_row,
+                min_cosine=round(float(arr.min()), 4),
             )
         elif args.require_semantic and not any(
             check["check"] == "semantic_self_match" for check in checks

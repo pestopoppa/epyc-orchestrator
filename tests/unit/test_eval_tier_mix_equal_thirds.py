@@ -129,6 +129,67 @@ def test_new_sampler_is_a_different_instrument_than_the_suite_only_one(et):
     assert et.dataset_content_sha256(old) != et.dataset_content_sha256(new)
 
 
+def test_rotation_is_fixed_within_a_block(et):
+    """The ratchet needs a stable instrument to compare trials against."""
+    period = et.EVAL_CORE_ROTATION_TRIALS
+    assert et.core_rotation_index(0) == et.core_rotation_index(period - 1)
+    seed_first = et.rotated_core_seed(42, et.core_rotation_index(0))
+    seed_last = et.rotated_core_seed(42, et.core_rotation_index(period - 1))
+    assert seed_first == seed_last
+
+
+def test_rotation_changes_across_blocks(et):
+    """A permanently fixed seed lets the optimizer overfit one question set."""
+    period = et.EVAL_CORE_ROTATION_TRIALS
+    assert et.core_rotation_index(period) == et.core_rotation_index(0) + 1
+    assert et.rotated_core_seed(42, 0) != et.rotated_core_seed(42, 1)
+
+
+def test_consecutive_rotations_are_not_adjacent_seeds(et):
+    """`base_seed + rotation` would make block N+1 the seed-43 draw of block N."""
+    seeds = [et.rotated_core_seed(42, r) for r in range(5)]
+    assert len(set(seeds)) == len(seeds)
+    for a, b in zip(seeds, seeds[1:]):
+        assert abs(a - b) > 1
+
+
+def test_rotation_preserves_the_declared_mix_so_difficulty_is_unchanged(et):
+    """Rotation must change WHICH questions, never how hard the instrument is.
+
+    n, tier mix and pool are all held constant across a rotation, so expected difficulty
+    is unchanged and the quality baseline stays valid — unlike changing the mix itself.
+    """
+    pool = _pool(per_suite_per_tier=40)
+    targets = {str(k): v for k, v in et.declared_tier_targets(30).items()}
+    for rotation in range(4):
+        seed = et.rotated_core_seed(42, rotation)
+        questions, prov = et._sample_tier_stratified_eval_questions(
+            pool, 30, random.Random(seed)
+        )
+        assert et.question_tier_mix(questions) == targets
+        assert prov["tier_mix_shortfalls"] == {}
+
+
+def test_rotation_actually_draws_different_questions(et):
+    """Guards the failure where a 'rotation' returns the same set under a new label."""
+    pool = _pool(per_suite_per_tier=60)
+    sets = []
+    for rotation in range(3):
+        seed = et.rotated_core_seed(42, rotation)
+        questions, _ = et._sample_tier_stratified_eval_questions(
+            pool, 30, random.Random(seed)
+        )
+        sets.append({q["id"] for q in questions})
+    for a, b in zip(sets, sets[1:]):
+        assert a != b, "a rotation that redraws the same questions is not a rotation"
+
+
+def test_unknown_trial_id_is_deterministic_not_random(et):
+    """A missing trial_id must not silently randomize the instrument."""
+    assert et.core_rotation_index(None) == 0
+    assert et.core_rotation_index(-5) == 0
+
+
 def test_untiered_rows_cannot_satisfy_a_tier_target(et):
     """A row with no tier is unknown, not a free substitute for a declared tier."""
     pool = {

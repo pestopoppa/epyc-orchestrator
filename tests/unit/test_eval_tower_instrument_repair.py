@@ -607,8 +607,14 @@ def test_eval_t1_legacy_sampling_records_core_id(monkeypatch) -> None:
     # INSTRUMENT'S identity, so it has to change when the draw changes. Pinning the old
     # literal would have let a genuinely different question set keep the old identity —
     # and with it the old baseline and the old frontier.
-    assert result.core_id == f"tier_stratified_{eval_tower.EVAL_TIER_MIX_POLICY}_seed_42_n3"
+    rotation = result.details["test_profile"]["tier_mix_provenance"]["core_rotation_index"]
+    assert result.core_id == (
+        f"tier_stratified_{eval_tower.EVAL_TIER_MIX_POLICY}_seed_42_n3_rot{rotation}"
+    )
     assert result.details["core_selection"] == "tier_stratified"
+    # The rotation block must be part of the instrument's identity, or every rotation
+    # would be reported as corruption of an unchanged core_id by the drift ledger.
+    assert f"_rot{rotation}" in result.core_id
     assert result.details["test_profile"]["tier_mix_provenance"]["tier_mix_targets"] == {
         str(k): v for k, v in eval_tower.declared_tier_targets(3).items()
     }
