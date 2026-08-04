@@ -11,7 +11,20 @@ from src.autopilot_core.tier_specs import DEFAULT_REFERENCE_POINT
 
 
 def dominates(a: Sequence[float], b: Sequence[float]) -> bool:
-    """True if ``a`` Pareto-dominates ``b`` for max-objectives."""
+    """True if ``a`` Pareto-dominates ``b`` for max-objectives.
+
+    Raises on a dimensionality mismatch. ``zip`` truncates to the shorter sequence, so
+    comparing objective tuples built under DIFFERENT policies used to return a
+    confident, meaningless answer: a 3D ``(quality, qph, reliability)`` point against a
+    4D ``(quality, t/s, -cost, reliability)`` one lines qph (hundreds) up against t/s
+    (~50) and reliability against -cost. Mixed-policy comparison is always a bug —
+    surface it here rather than letting it decide keep/revert.
+    """
+    if len(a) != len(b):
+        raise ValueError(
+            f"objective dimensionality mismatch: {len(a)} vs {len(b)} — refusing to "
+            "compare tuples built under different objective policies"
+        )
     return all(x >= y for x, y in zip(a, b)) and any(x > y for x, y in zip(a, b))
 
 

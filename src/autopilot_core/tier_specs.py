@@ -262,18 +262,135 @@ def task_rate_objectives_from_row(row: dict) -> tuple[float, ...] | None:
         return None
 
 
+# ── W3 live-vector flip (2026-08-04, operator): dominance ranks TASKS/HOUR ──────
+#
+# The operator flipped the live dominance vector off tokens/second. Three findings
+# shaped HOW, and none of them is the flag-flip the W3b-C tripwire implied:
+#
+# 1. The 3D `task_rate_3d_v1` shadow vector CANNOT become the live vector. Consumers
+#    index the tuple POSITIONALLY past axis 1 — `safety_gate.py` reconstructs
+#    `cost=-objectives[2], reliability=objectives[3]` and refuses any entry with
+#    `len(objectives) < 4` ("frontier representative missing objective tuple"), and
+#    `pareto_archive.py` reads `[2]`/`[3]` for its frontier summaries. Going 3D would
+#    not have raised — it would have SILENTLY blocked every baseline promotion behind a
+#    misleading message. `objectives_from` is documented as the single chokepoint, but a
+#    chokepoint on CONSTRUCTION is not one on CONSUMPTION. So the 4D shape is preserved
+#    and only axis 1's UNIT changes: t/s -> questions/hour, still "rate, higher better".
+#
+# 2. The rate metric had to be the CORRECTED one. `task_rate_qph_from` divides the
+#    decision-partition question count by the FULL-batch wall clock, so `n` moving
+#    43 -> 38 drops the objective ~12% with no change in real throughput (measured:
+#    trial 775 qph=202.9 @ 51.5 t/s vs trial 778 qph=170.5 @ 49.8 t/s — a 19% objective
+#    gap from a 3% speed difference). It also returns 0.0 for "unavailable" on 128 of
+#    1466 journal rows, which archives an unmeasured trial as maximally slow.
+#    `seq_task_rate_qph_from` counts the questions the wall clock actually covers,
+#    returns None rather than 0.0, and rejects aborted batches.
+#
+# 3. An unmeasured rate must SKIP the archive, never enter it as a number. That is the
+#    same doctrine as the `throughput_unmeasured` safety-gate category and SEQ-3a's
+#    out-of-domain z handling: absence is not zero.
+RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v1"
+
+
+class UnmeasuredObjectiveError(ValueError):
+    """Raised when a dominance axis was not measured on this trial.
+
+    Callers MUST skip archiving rather than substituting a value. Zero is a real,
+    maximally-bad throughput and would silently dominate-out a config whose rate simply
+    was not captured.
+    """
+
+
+def _rate_objectives_from(result: Any) -> tuple[float, ...]:
+    """Live 4D vector: (quality, seq_task_rate_qph, -cost, reliability)."""
+    rate = seq_task_rate_qph_from(result)
+    if rate is None:
+        raise UnmeasuredObjectiveError(
+            "task rate unmeasured (missing question ledger / eval_wall_s, or the batch "
+            "aborted below the s/question validity floor)"
+        )
+    return (
+        _as_float(getattr(result, "quality", 0.0)),
+        float(rate),
+        -_as_float(getattr(result, "cost", 0.0)),
+        _as_float(getattr(result, "reliability", 0.0)),
+    )
+
+
+def _rate_objectives_from_row(row: dict) -> tuple[float, ...] | None:
+    """Live 4D vector from a journal row; None when the row did not measure a rate."""
+    rate = seq_task_rate_qph_from_row(row)
+    if rate is None:
+        return None
+    try:
+        return (
+            float(row.get("quality") or 0.0),
+            float(rate),
+            -float(row.get("cost") or 0.0),
+            float(row.get("reliability") or 0.0),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _policy_aware_objectives_from_row(row: dict) -> tuple[float, ...] | None:
+    """Objective tuple built under the policy the ROW was recorded under.
+
+    A journal row is evidence from a specific instrument. Pre-flip rows carry axis 1 in
+    tokens/second and have no question ledger at all, so building them with the rate
+    builder drops every one of them and reconstruction returns an EMPTY archive — which
+    is how this first showed up (52 tests, `assert archive is not None`).
+
+    Reading the policy off the row keeps historical replay faithful. It deliberately does
+    NOT make the two series comparable: both are 4D, so `dominates` cannot catch a mixed
+    frontier by shape. Separation is enforced at the ARCHIVE EPOCH instead — the live
+    frontier restarts at the flip so it only ever holds one unit.
+    """
+    eval_details = row.get("eval_details")
+    policy = ""
+    if isinstance(eval_details, dict):
+        policy = str(eval_details.get("objective_policy_live") or "")
+    if not policy:
+        policy = str(row.get("objective_policy_live") or "")
+    if policy == RATE_4D_OBJECTIVE_POLICY:
+        return _rate_objectives_from_row(row)
+    return _default_objectives_from_row(row)
+
+
+def objectives_measurable(result: Any) -> bool:
+    """True when this result carries every axis the live dominance vector needs."""
+    return seq_task_rate_qph_from(result) is not None
+
+
+# Public names for the PRE-FLIP tokens/second vector. Journalling and replay of the
+# legacy series must build it explicitly rather than calling `objectives_from`, which
+# now returns the live tasks/hour vector — the two are the same SHAPE and different
+# UNITS, so a mislabelled call is invisible at the call site.
+legacy_objectives_from = _default_objectives_from
+legacy_objectives_from_row = _default_objectives_from_row
+
+# Public names for the POST-FLIP tasks/hour vector, for callers that must pin a policy
+# explicitly rather than inherit the row's stamp.
+rate_objectives_from = _rate_objectives_from
+rate_objectives_from_row = _rate_objectives_from_row
+
+
 @dataclass(frozen=True)
 class TierSpec:
     """How one eval tier's quality is scored for the Pareto archive + safety gate."""
     tier: int
     label: str
     reference_point: tuple[float, ...] = DEFAULT_REFERENCE_POINT
-    objectives_from: Callable[[Any], tuple[float, ...]] = _default_objectives_from
-    objectives_from_row: Callable[[dict], tuple[float, ...] | None] = _default_objectives_from_row
+    objectives_from: Callable[[Any], tuple[float, ...]] = _rate_objectives_from
+    objectives_from_row: Callable[[dict], tuple[float, ...] | None] = _policy_aware_objectives_from_row
 
 
-# Registry: tier -> spec. All current tiers share the 4D shape. A future divergent-scoring tier is
-# a new entry here, NOT a re-plumb of the archive/gate.
+# Registry: tier -> spec. All current tiers share the 4D shape, with axis 1 = questions/hour
+# as of the 2026-08-04 W3 flip (`RATE_4D_OBJECTIVE_POLICY`). `_default_objectives_from{,_row}`
+# are retained for LEGACY replay of pre-flip archives, whose axis 1 is tokens/second — the two
+# units are not comparable, so a pre-flip archive must be replayed under its own policy, never
+# merged into the live frontier. A future divergent-scoring tier is a new entry here, NOT a
+# re-plumb of the archive/gate.
 TIER_SPECS: dict[int, TierSpec] = {
     0: TierSpec(0, "T0 (10q sentinel, fast-reject)"),
     1: TierSpec(1, "T1 (50q gate)"),

@@ -13,8 +13,11 @@ from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
+    RATE_4D_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
     TASK_RATE_REFERENCE_POINT,
+    legacy_objectives_from_row,
+    rate_objectives_from_row,
     spec_for,
     task_rate_objectives_from_row,
 )
@@ -124,8 +127,17 @@ def objectives_from_journal_row(
         tier = int(row.get("tier", DEFAULT_FRONTIER_TIER))
     except (TypeError, ValueError):
         tier = DEFAULT_FRONTIER_TIER
+    # Each policy pins its OWN builder. `spec_for(...).objectives_from_row` reads the
+    # policy stamped on the row, which is right for "replay whatever this row is" but
+    # wrong here: an explicit `objective_policy=LEGACY` replay of a post-flip row would
+    # have returned the tasks/hour vector labelled as tokens/second. Same 4D shape, so
+    # nothing downstream could have caught it.
     if objective_policy == TASK_RATE_OBJECTIVE_POLICY:
         objectives = task_rate_objectives_from_row(row)
+    elif objective_policy == RATE_4D_OBJECTIVE_POLICY:
+        objectives = rate_objectives_from_row(row)
+    elif objective_policy == LEGACY_OBJECTIVE_POLICY:
+        objectives = legacy_objectives_from_row(row)
     else:
         objectives = spec_for(tier).objectives_from_row(row)
     if objectives is None:

@@ -143,9 +143,13 @@ from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
+    RATE_4D_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
+    UnmeasuredObjectiveError,
     goodput_qph_from,
+    legacy_objectives_from,
     objectives_from,
+    objectives_measurable,
     seq_task_rate_qph_from,
     seq_task_rate_qph_from_row,
     spec_for,
@@ -8544,7 +8548,21 @@ def _run_loop_inner(
         # suppression remains tied to the mad_noise/reproduction_confirmed tag (criticism
         # below). Non-trusted exclusions (exogenous reload, etc.) still skip entirely.
         baseline_update = None
-        if (
+        if not objectives_measurable(eval_result):
+            # W3 flip (2026-08-04): axis 1 of the live dominance vector is questions/hour.
+            # A trial that did not MEASURE a rate must not enter the archive at all — the
+            # pre-flip `task_rate_qph_from` returned 0.0 for "unavailable" on 128 of 1466
+            # journal rows, and 0 qph is a real, maximally-bad throughput that dominates
+            # the config out on an axis it never actually scored. Same doctrine as the
+            # safety gate's `throughput_unmeasured` category: absence is not zero.
+            pareto_status = "dominated"  # placeholder for JournalEntry only
+            log.warning(
+                "Trial %d: archive.update SKIPPED — dominance axis unmeasured "
+                "(no task rate: missing question ledger/eval_wall_s, or batch aborted "
+                "below the s/question validity floor). NOT archived as 0 qph.",
+                trial_counter,
+            )
+        elif (
             learning_excluded_by in ("mad_noise", "reproduction_confirmed")
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
         ):
@@ -8859,8 +8877,17 @@ def _run_loop_inner(
         metric_schema_version = getattr(eval_result, "metric_schema_version", 1)
         harness_metrics = getattr(eval_result, "harness_metrics", {}) or {}
         oracle_adequacy = getattr(eval_result, "oracle_adequacy", {}) or {}
-        legacy_objectives = list(objectives_from(eval_result))
+        # Build each series with its OWN explicit builder. `objectives_from` now returns
+        # the live tasks/hour vector, which has the same 4D SHAPE as the legacy
+        # tokens/second one — calling it here would have relabelled the rate vector as
+        # "legacy" with nothing to catch it, and would additionally RAISE on a trial with
+        # no measured rate (this line runs for every trial, including archive-skipped ones).
+        legacy_objectives = list(legacy_objectives_from(eval_result))
         task_rate_objectives = list(task_rate_objectives_from(eval_result))
+        try:
+            live_objectives: list[float] | None = list(objectives_from(eval_result))
+        except UnmeasuredObjectiveError:
+            live_objectives = None
         eval_details_dict: dict[str, Any] = {
             "per_suite_quality": eval_result.per_suite_quality,
             "routing_distribution": eval_result.routing_distribution,
@@ -8871,10 +8898,16 @@ def _run_loop_inner(
             "harness_metrics": harness_metrics,
             "oracle_adequacy": oracle_adequacy,
             "bsv_observe": bsv_payload,  # J11/BSV-2 observe-only diff ({} unless AUTOPILOT_BSV_OBSERVE=1)
-            "objective_policy_live": LEGACY_OBJECTIVE_POLICY,
-            "objective_policy_shadow": TASK_RATE_OBJECTIVE_POLICY,
+            # W3 flip 2026-08-04 (operator): tasks/hour is the LIVE dominance vector.
+            # Legacy tokens/second is retained as shadow telemetry so the pre-flip series
+            # stays readable; it no longer decides keep/revert.
+            "objective_policy_live": RATE_4D_OBJECTIVE_POLICY,
+            "objective_policy_shadow": LEGACY_OBJECTIVE_POLICY,
             "objectives_legacy_v1": legacy_objectives,
             "objectives_task_rate_v1": task_rate_objectives,
+            # The vector dominance actually used, or None when the rate was unmeasured
+            # (such a trial is skipped by the archive rather than entered as 0 qph).
+            "objectives_live_v1": live_objectives,
             "task_rate_qph": task_rate_qph_from(eval_result),
             "goodput_qph": goodput_qph_from(eval_result),
             "speed_metric_mode": getattr(eval_result, "speed_metric_mode", "median_request_tps"),

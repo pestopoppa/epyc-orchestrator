@@ -21,6 +21,7 @@ from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
+    RATE_4D_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
     TASK_RATE_REFERENCE_POINT,
     spec_for,
@@ -253,7 +254,11 @@ def archive_payload_from_verified_snapshot(
     policy = str(
         snapshot_archive.get("objective_policy") or LEGACY_OBJECTIVE_POLICY
     )
-    if policy not in {LEGACY_OBJECTIVE_POLICY, TASK_RATE_OBJECTIVE_POLICY}:
+    if policy not in {
+        LEGACY_OBJECTIVE_POLICY,
+        TASK_RATE_OBJECTIVE_POLICY,
+        RATE_4D_OBJECTIVE_POLICY,
+    }:
         return None
     for row in tail_rows:
         if objectives_from_journal_row(row, objective_policy=policy) is None:
