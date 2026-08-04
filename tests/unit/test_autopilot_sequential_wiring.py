@@ -1083,7 +1083,36 @@ def test_seq_candidate_replay_payload_requires_neutral_quality_e(
         )
     )
 
-    assert autopilot._seq_candidate_replay_payload(journal, tier=1) is None
+    # 2026-08-04: WITHIN the grace period (k=1 < SEQ_CANDIDATE_REPLAY_MIN_K) a
+    # sub-neutral E is NOT evidence the candidate is dead — it is one noisy sample.
+    # This test previously asserted the opposite, and that assertion WAS the defect:
+    # measured over the journal, 89 of 141 candidates were stranded at k=1 with a
+    # median E_quality of 0.999 against this 1.0 filter, which is why `confirmed` was
+    # 0 in 396 trials. An e-process cannot clear any bar at k=1.
+    payload = autopilot._seq_candidate_replay_payload(journal, tier=1)
+    assert payload is not None, "a k=1 candidate must be replayed, not judged on one sample"
+    assert payload["k"] == 1
+
+    # ABOVE the grace period the filter still bites — the point is to delay the
+    # judgement until it means something, not to remove it.
+    journal_mature = ExperimentJournal(journal_dir=tmp_path / "mature")
+    journal_mature.record(
+        _entry(
+            11,
+            action,
+            seq={
+                "candidate": autopilot._config_fingerprint(action),
+                "core_id": "core_v1",
+                "k": autopilot.SEQ_CANDIDATE_REPLAY_MIN_K + 1,
+                "z": -0.01,
+                "z_rate": -0.1,
+                "E_quality": 0.99,
+                "E_rate_noninf": 0.96,
+                "state": "accumulating",
+            },
+        )
+    )
+    assert autopilot._seq_candidate_replay_payload(journal_mature, tier=1) is None
 
 
 def test_seq_candidate_replay_payload_allows_materialized_numeric_replay(

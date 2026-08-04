@@ -320,7 +320,34 @@ SEQ_CANDIDATE_REPLAY_MIN_COMBINED_E = float(
 SEQ_CANDIDATE_REPLAY_MIN_QUALITY_E = float(
     os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MIN_QUALITY_E", "1.0")
 )
-SEQ_CANDIDATE_REPLAY_MAX_K = int(os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MAX_K", "12"))
+# 2026-08-04 — GRACE PERIOD. Below this k, a candidate is replayed REGARDLESS of its
+# accumulated E. Without it the E filters above are applied to a candidate's FIRST
+# sample, and a single noisy observation decides whether it is ever measured again.
+#
+# Measured over the whole journal (141 candidates, 1,362 seq rows): 89 candidates
+# (63%) were stranded at k=1, and their E_quality distribution is
+#
+#     stranded  min 0.923   MEDIAN 0.999   max 1.019      (filter: 1.0)
+#     continued min 0.975   median 1.025   max 11.551
+#
+# The two populations overlap almost completely at the bottom; the median stranded
+# candidate missed by 0.001. That is a coin flip at the third decimal deciding a
+# candidate's entire life, and it is the direct cause of `confirmed = 0 in 396`:
+# an e-process accumulates evidence multiplicatively across trials, so a candidate
+# held at k=1 cannot clear ANY bar, however good it is.
+#
+# This is a COMPUTE-ALLOCATION heuristic and touches no statistical guarantee — the
+# same conclusion the 2026-07-28 re-adjudication reached about `budget=8`
+# ("no bearing on anytime-validity; confirm_e=20.0, the Ville bound for alpha=0.05,
+# untouched"). Ville holds for any stopping rule; giving a candidate MORE samples
+# cannot inflate the false-positive rate, it only reduces false negatives.
+SEQ_CANDIDATE_REPLAY_MIN_K = int(os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MIN_K", "6"))
+# Raised 12 -> 60. The cap must exceed the k at which a real candidate can reach
+# confirm_e, or replay abandons winners just short of the bar: the leading candidate
+# (70902e4b665474e7) reached E_quality 11.55 at k=40 and needed ~9 more trials at its
+# observed growth of 1.0631x/trial. A cap of 12 made confirmation unreachable by
+# construction for every candidate that needed sustained evidence.
+SEQ_CANDIDATE_REPLAY_MAX_K = int(os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MAX_K", "60"))
 AUTOPILOT_REQUIRED_GATE_ENV = {
     "AUTOPILOT_SEQ_VERDICT": "1",
     "AUTOPILOT_SEQ_P0_2_BRIDGE": "1",
@@ -2513,6 +2540,7 @@ def _seq_candidate_replay_payload(
     min_combined_e: float = SEQ_CANDIDATE_REPLAY_MIN_COMBINED_E,
     min_quality_e: float = SEQ_CANDIDATE_REPLAY_MIN_QUALITY_E,
     max_k: int = SEQ_CANDIDATE_REPLAY_MAX_K,
+    min_k: int = SEQ_CANDIDATE_REPLAY_MIN_K,
     core_id: str = DEFAULT_EVIDENCE_CORE_ID,
 ) -> dict[str, Any] | None:
     """Pick an accumulating replayable candidate that needs more W8 power."""
@@ -2573,14 +2601,22 @@ def _seq_candidate_replay_payload(
             combined_f = float(combined)
         except (TypeError, ValueError):
             continue
-        if combined_f < min_combined_e:
-            continue
         try:
             e_quality = float(seq.get("E_quality") or 0.0)
         except (TypeError, ValueError):
             e_quality = 0.0
-        if e_quality < min_quality_e:
-            continue
+        # GRACE PERIOD (2026-08-04): under min_k, accumulated E is not yet evidence of
+        # anything, so it must not be used to abandon the candidate. Applying these
+        # thresholds at k=1 stranded 89 of 141 candidates on a single noisy sample whose
+        # median missed the cut by 0.001 (0.999 vs 1.0). Above min_k the filters apply
+        # unchanged, so a genuinely dead candidate is still dropped — just not before it
+        # has been measured enough times for "dead" to mean something.
+        within_grace = min_k > 0 and k < min_k
+        if not within_grace:
+            if combined_f < min_combined_e:
+                continue
+            if e_quality < min_quality_e:
+                continue
         try:
             e_rate = float(seq.get("E_rate_noninf") or 0.0)
         except (TypeError, ValueError):
