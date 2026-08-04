@@ -348,15 +348,57 @@ SEQ_CANDIDATE_REPLAY_MIN_K = int(os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_
 # observed growth of 1.0631x/trial. A cap of 12 made confirmation unreachable by
 # construction for every candidate that needed sustained evidence.
 SEQ_CANDIDATE_REPLAY_MAX_K = int(os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MAX_K", "60"))
-AUTOPILOT_REQUIRED_GATE_ENV = {
-    "AUTOPILOT_SEQ_VERDICT": "1",
-    "AUTOPILOT_SEQ_P0_2_BRIDGE": "1",
-    "AUTOPILOT_W6_AUDIT_BLOCK": "1",
-    "AUTOPILOT_PLANNER_HINTS": "1",
-    "AUTOPILOT_TOOL_SENTINELS": "1",
-    "AUTOPILOT_STEPPING_STONES": "1",
-    "AUTOPILOT_PLANNER_SPEND_BREAKER": "0",
-}
+def _required_gate_env() -> dict[str, str]:
+    """The authority contract, DERIVED from the launcher that establishes it.
+
+    2026-08-04: this used to be a second hand-maintained copy of the same contract.
+    `start_fable_authority_daemon.FABLE_AUTHORITY_ENV` sets the environment; this dict
+    validated it; and the two drifted the moment an operator changed one. Flipping
+    AUTOPILOT_SEQ_VERDICT to "0" in the launcher (SEQ-B was unreachable) left this
+    copy at "1", so every daemon start was refused —
+
+        ERROR: AutoPilot authority gate env mismatch; refusing direct start.
+        Missing or mismatched env: {"AUTOPILOT_SEQ_VERDICT": {"actual":"0","expected":"1"}}
+
+    — and the supervisor burned its three restarts against a contradiction between two
+    files that are supposed to say the same thing. The 2026-08-04 architecture review
+    had already flagged this pair by name ("one contract, two hand-maintained copies").
+
+    Now there is one source. The launcher declares the contract; this validates the
+    subset the daemon must actually have. A key the launcher stops setting fails loudly
+    here, which is the check's real purpose — it exists to catch a bare `autopilot.py
+    start` that would silently drop sequential verdicts or tool sentinels, NOT to
+    second-guess an operator's deliberate switch.
+    """
+    keys = (
+        "AUTOPILOT_SEQ_VERDICT",
+        "AUTOPILOT_SEQ_P0_2_BRIDGE",
+        "AUTOPILOT_W6_AUDIT_BLOCK",
+        "AUTOPILOT_PLANNER_HINTS",
+        "AUTOPILOT_TOOL_SENTINELS",
+        "AUTOPILOT_STEPPING_STONES",
+        "AUTOPILOT_PLANNER_SPEND_BREAKER",
+    )
+    try:
+        import importlib.util as _ilu
+
+        _spec = _ilu.spec_from_file_location(
+            "_fable_authority_contract",
+            str(Path(__file__).resolve().parent / "start_fable_authority_daemon.py"),
+        )
+        if _spec is None or _spec.loader is None:
+            raise ImportError("launcher spec unavailable")
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        declared = dict(_mod.FABLE_AUTHORITY_ENV)
+    except Exception:  # noqa: BLE001 — never make the gate unreachable
+        # Fail SAFE, not open: if the launcher cannot be read we cannot know the
+        # contract, so validate nothing rather than enforce a stale guess.
+        return {}
+    return {k: declared[k] for k in keys if k in declared}
+
+
+AUTOPILOT_REQUIRED_GATE_ENV = _required_gate_env()
 AUTOPILOT_AUTHORITY_LAUNCHER = "scripts/autopilot/start_fable_authority_daemon.py"
 SAFE_FALLBACK_SEED_N = 14
 FALLBACK_SEED_CANDIDATES = (14, 16, 18, 20, 24, 30, 40, 50, 10)
