@@ -17,6 +17,10 @@ Public surface:
 """
 
 from scripts.autopilot.species.env_synth.etd_agent import ETDAgent
+from scripts.autopilot.species.env_synth.boundary_contract import (
+    HypothesisBoundaryContract,
+    boundary_evidence,
+)
 from scripts.autopilot.species.env_synth.task_synthesizer import (
     DifficultyBand,
     SynthesizedTask,
@@ -50,11 +54,26 @@ from scripts.autopilot.species.env_synth.eval_integration import (
 )
 
 __all__ = [
-    "EnvSynth", "EnvSynthAction", "PlanExecutionGuard", "PlanStep", "SolvabilityGate",
+    "EnvSynth",
+    "EnvSynthAction",
+    "PlanExecutionGuard",
+    "PlanStep",
+    "SolvabilityGate",
+    "HypothesisBoundaryContract",
+    "boundary_evidence",
     "ETDAgent",
-    "TaskSynthesizer", "SynthesizedTask", "DifficultyBand",
-    "VerifierBuilder", "VerifierSpec", "VerifierType",
-    "MCPToolRegistry", "MCPToolEntry",
-    "SuiteStagnation", "diagnose_stagnation", "render_arena_rollup",
-    "T1TaskEntry", "arena_to_t1", "flag_human_review",
+    "TaskSynthesizer",
+    "SynthesizedTask",
+    "DifficultyBand",
+    "VerifierBuilder",
+    "VerifierSpec",
+    "VerifierType",
+    "MCPToolRegistry",
+    "MCPToolEntry",
+    "SuiteStagnation",
+    "diagnose_stagnation",
+    "render_arena_rollup",
+    "T1TaskEntry",
+    "arena_to_t1",
+    "flag_human_review",
 ]

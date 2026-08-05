@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -24,6 +25,7 @@ from scripts.autopilot.species.env_synth import (
     SynthesizedTask,
     T1TaskEntry,
     TaskSynthesizer,
+    HypothesisBoundaryContract,
     VerifierBuilder,
     VerifierSpec,
     VerifierType,
@@ -37,12 +39,16 @@ from scripts.autopilot.species.env_synth.task_synthesizer import make_fake_llm
 
 # ── VerifierBuilder ────────────────────────────────────────────────
 
+
 def test_regex_verifier_accepts_exact_and_rejects_others():
-    scorer = VerifierBuilder.build(VerifierSpec(
-        type=VerifierType.REGEX, pattern=r"^\d{3}$",
-    ))
+    scorer = VerifierBuilder.build(
+        VerifierSpec(
+            type=VerifierType.REGEX,
+            pattern=r"^\d{3}$",
+        )
+    )
     assert scorer("123") == 1.0
-    assert scorer(" 123 ") == 1.0   # whitespace stripped
+    assert scorer(" 123 ") == 1.0  # whitespace stripped
     assert scorer("12") == 0.0
     assert scorer("abc") == 0.0
 
@@ -53,28 +59,37 @@ def test_regex_rejects_accept_all_pattern():
 
 
 def test_exact_match_case_insensitive_by_default():
-    scorer = VerifierBuilder.build(VerifierSpec(
-        type=VerifierType.EXACT_MATCH, reference="Canberra",
-    ))
+    scorer = VerifierBuilder.build(
+        VerifierSpec(
+            type=VerifierType.EXACT_MATCH,
+            reference="Canberra",
+        )
+    )
     assert scorer("canberra") == 1.0
     assert scorer(" CANBERRA  ") == 1.0
     assert scorer("Sydney") == 0.0
 
 
 def test_f1_verifier_partial_overlap_scores_between_zero_and_one():
-    scorer = VerifierBuilder.build(VerifierSpec(
-        type=VerifierType.F1,
-        reference="northern lights are caused by solar particles",
-    ))
+    scorer = VerifierBuilder.build(
+        VerifierSpec(
+            type=VerifierType.F1,
+            reference="northern lights are caused by solar particles",
+        )
+    )
     s = scorer("solar particles create northern lights")
     assert 0.3 < s < 1.0
     assert scorer("pasta recipes") == 0.0
 
 
 def test_f1_verifier_rejects_short_output():
-    scorer = VerifierBuilder.build(VerifierSpec(
-        type=VerifierType.F1, reference="answer", min_tokens=3,
-    ))
+    scorer = VerifierBuilder.build(
+        VerifierSpec(
+            type=VerifierType.F1,
+            reference="answer",
+            min_tokens=3,
+        )
+    )
     assert scorer("answer") == 0.0
 
 
@@ -84,6 +99,7 @@ def test_exact_match_rejects_empty_reference():
 
 
 # ── MCPToolRegistry ────────────────────────────────────────────────
+
 
 def _mk_tool(tool_id: str, env: str = "env_x") -> MCPToolEntry:
     return MCPToolEntry(
@@ -133,16 +149,16 @@ def test_registry_health_check_deactivates_after_failures(tmp_path):
 
 # ── TaskSynthesizer ────────────────────────────────────────────────
 
+
 def test_task_synthesizer_produces_valid_task_from_fake_llm():
     llm = make_fake_llm(
-        verifier_type=VerifierType.EXACT_MATCH, reference="42",
+        verifier_type=VerifierType.EXACT_MATCH,
+        reference="42",
     )
     synth = TaskSynthesizer(llm=llm)
     tools = [_mk_tool(f"t{i}") for i in range(3)]
 
-    task = asyncio.run(
-        synth.synthesize("env_x", tools, DifficultyBand.MEDIUM)
-    )
+    task = asyncio.run(synth.synthesize("env_x", tools, DifficultyBand.MEDIUM))
     assert task is not None
     assert task.environment_id == "env_x"
     assert task.difficulty_band == DifficultyBand.MEDIUM
@@ -161,22 +177,31 @@ def test_task_synthesizer_returns_none_on_bad_json():
 
     synth = TaskSynthesizer(llm=bad_llm, max_retries=1)
     tools = [_mk_tool("t0")]
-    task = asyncio.run(
-        synth.synthesize("env_x", tools, DifficultyBand.EASY)
-    )
+    task = asyncio.run(synth.synthesize("env_x", tools, DifficultyBand.EASY))
     assert task is None
 
 
 # ── ETDAgent ────────────────────────────────────────────────────────
 
+
 def test_etd_agent_enumerates_tools_and_persists(tmp_path):
     reg = MCPToolRegistry(tmp_path / "reg.jsonl")
 
     async def llm(sys, usr):
-        return json.dumps([
-            {"name": "MathTools", "description": "math MCP", "search_queries": ["math tools api"]},
-            {"name": "WebStats", "description": "web stats MCP", "search_queries": ["web stats mcp"]},
-        ])
+        return json.dumps(
+            [
+                {
+                    "name": "MathTools",
+                    "description": "math MCP",
+                    "search_queries": ["math tools api"],
+                },
+                {
+                    "name": "WebStats",
+                    "description": "web stats MCP",
+                    "search_queries": ["web stats mcp"],
+                },
+            ]
+        )
 
     async def web_search(query, n):
         return [
@@ -200,8 +225,11 @@ def test_etd_agent_enumerates_tools_and_persists(tmp_path):
         ]
 
     agent = ETDAgent(
-        llm=llm, web_search=web_search, fetch_url=fetch_url,
-        tool_enum=tool_enum, registry=reg,
+        llm=llm,
+        web_search=web_search,
+        fetch_url=fetch_url,
+        tool_enum=tool_enum,
+        registry=reg,
     )
     discoveries = asyncio.run(agent.discover("math tasks"))
     assert len(discoveries) == 2
@@ -213,13 +241,16 @@ def test_etd_agent_enumerates_tools_and_persists(tmp_path):
 
 # ── SolvabilityGate + EnvSynth end-to-end ──────────────────────────
 
+
 def _minimal_stack(tmp_path, reference_ok: bool = True):
     reg = MCPToolRegistry(tmp_path / "reg.jsonl")
 
     async def llm(sys, usr):
-        return json.dumps([
-            {"name": "MathEnv", "description": "math", "search_queries": ["math mcp"]},
-        ])
+        return json.dumps(
+            [
+                {"name": "MathEnv", "description": "math", "search_queries": ["math mcp"]},
+            ]
+        )
 
     async def web_search(query, n):
         return [{"url": "https://math.example.com/mcp"}]
@@ -239,12 +270,16 @@ def _minimal_stack(tmp_path, reference_ok: bool = True):
         ]
 
     etd = ETDAgent(
-        llm=llm, web_search=web_search, fetch_url=fetch_url,
-        tool_enum=tool_enum, registry=reg,
+        llm=llm,
+        web_search=web_search,
+        fetch_url=fetch_url,
+        tool_enum=tool_enum,
+        registry=reg,
     )
 
     synth_llm = make_fake_llm(
-        verifier_type=VerifierType.EXACT_MATCH, reference="42",
+        verifier_type=VerifierType.EXACT_MATCH,
+        reference="42",
     )
     synth = TaskSynthesizer(llm=synth_llm)
 
@@ -273,11 +308,39 @@ def _task_for_gate() -> SynthesizedTask:
     )
 
 
+def _boundary_contract() -> HypothesisBoundaryContract:
+    return HypothesisBoundaryContract(
+        boundary_id="awb-ak-g15-vs-g16",
+        parent_hypothesis_ids=("akh-g15", "akh-g16"),
+        owner_loop="autokernel",
+        common_vocabulary={
+            "regimes": ["decode"],
+            "surfaces": ["rms_norm"],
+            "outcomes": ["counter_change"],
+            "contradictions": ["counter_did_not_move"],
+        },
+        source_receipt_ids=("rcpt-profile-1",),
+        empirical_demand_receipt_id="rcpt-demand-1",
+        excluded_alternatives=("backend_rewrite",),
+        abstraction_construction_cost=4,
+        abstraction_cost_unit="typed_facts",
+        abstraction_cost_receipt_id="rcpt-cost-1",
+        matched_control_id="envsynth-control-g15-g16",
+        verifier_source_receipt_id="rcpt-verifier-1",
+        representation_frame_sha256=hashlib.sha256(b"frame").hexdigest(),
+        falsifier_feedback_ref="autokernel:hypotheses/akh-g15,akh-g16",
+    )
+
+
 def test_env_synth_full_pipeline_persists_accepted_tasks(tmp_path):
     es = _minimal_stack(tmp_path, reference_ok=True)
-    tasks = asyncio.run(es.discover_and_synthesize(
-        "math", band=DifficultyBand.MEDIUM, tasks_per_env=2,
-    ))
+    tasks = asyncio.run(
+        es.discover_and_synthesize(
+            "math",
+            band=DifficultyBand.MEDIUM,
+            tasks_per_env=2,
+        )
+    )
     assert tasks, "expected at least one accepted task"
     assert (tmp_path / "arena.jsonl").exists()
     assert (tmp_path / "journal.jsonl").exists()
@@ -291,9 +354,13 @@ def test_env_synth_full_pipeline_persists_accepted_tasks(tmp_path):
 
 def test_env_synth_rejects_when_reference_fails(tmp_path):
     es = _minimal_stack(tmp_path, reference_ok=False)
-    tasks = asyncio.run(es.discover_and_synthesize(
-        "math", band=DifficultyBand.MEDIUM, tasks_per_env=2,
-    ))
+    tasks = asyncio.run(
+        es.discover_and_synthesize(
+            "math",
+            band=DifficultyBand.MEDIUM,
+            tasks_per_env=2,
+        )
+    )
     assert tasks == []
 
 
@@ -452,7 +519,84 @@ def test_env_synth_propose_actions_shape():
     assert action["gap_descriptor"] == "more math"
 
 
+def test_boundary_task_uses_controller_verifier_and_persists_t1_contract(tmp_path):
+    es = _minimal_stack(tmp_path)
+    es.registry.register(_mk_tool("t_calc", env="env_x"))
+    # Fake LLM proposes exact-match 42; controller-supplied regex must win.
+    verifier = VerifierSpec(type=VerifierType.REGEX, pattern=r"^answer:42$")
+    task = asyncio.run(
+        es.synthesize_hypothesis_boundary(
+            "env_x",
+            _boundary_contract(),
+            verifier,
+            "controller-label-42",
+        )
+    )
+    assert task is not None
+    assert task.verifier.type == VerifierType.REGEX
+    assert task.ground_truth_hint == "controller-label-42"
+    assert task.boundary_contract is not None
+    record = json.loads((tmp_path / "arena.jsonl").read_text().splitlines()[0])
+    assert record["evaluation_tier"] == "dynamic_t1"
+    assert record["t0_eligible"] is False
+    assert record["boundary_contract"]["parent_hypothesis_ids"] == ["akh-g15", "akh-g16"]
+    entries = arena_to_t1(tmp_path / "arena.jsonl")
+    assert entries[0].provenance["evaluation_tier"] == "dynamic_t1"
+    assert entries[0].provenance["t0_eligible"] is False
+    assert entries[0].provenance["boundary_contract"]["matched_control_id"]
+
+
+def test_boundary_evidence_is_delivered_to_owning_loop_sink(tmp_path):
+    delivered = []
+    es = _minimal_stack(tmp_path)
+    es.registry.register(_mk_tool("t_calc", env="env_x"))
+    es.boundary_feedback_sink = delivered.append
+    task = asyncio.run(
+        es.synthesize_hypothesis_boundary(
+            "env_x",
+            _boundary_contract(),
+            VerifierSpec(type=VerifierType.EXACT_MATCH, reference="42"),
+            "42",
+        )
+    )
+    record = es.emit_boundary_evidence(
+        task,
+        evidence_receipt_id="rcpt-t1-result-1",
+        hypothesis_results={"akh-g15": "refuted", "akh-g16": "survived"},
+    )
+    assert delivered == [record]
+    assert record["owner_loop"] == "autokernel"
+    assert record["authority"] == "observe_only"
+    assert record["feedback_ref"].startswith("autokernel:")
+
+
+def test_boundary_evidence_refuses_to_pretend_local_journaling_is_delivery(tmp_path):
+    es = _minimal_stack(tmp_path)
+    task = _task_for_gate()
+    task.boundary_contract = _boundary_contract()
+    with pytest.raises(RuntimeError, match="boundary_feedback_sink"):
+        es.emit_boundary_evidence(
+            task,
+            evidence_receipt_id="rcpt-t1-result-1",
+            hypothesis_results={"akh-g15": "refuted", "akh-g16": "survived"},
+        )
+
+
+def test_boundary_contract_rejects_same_hypothesis_twice():
+    values = _boundary_contract().__dict__.copy()
+    values["parent_hypothesis_ids"] = ("akh-g15", "akh-g15")
+    with pytest.raises(ValueError, match="two distinct"):
+        HypothesisBoundaryContract(**values)
+
+
+def test_boundary_contract_freezes_nested_vocabulary():
+    contract = _boundary_contract()
+    with pytest.raises(TypeError):
+        contract.common_vocabulary["regimes"] = ("prefill",)
+
+
 # ── Gap diagnosis (AW-3) ───────────────────────────────────────────
+
 
 def test_diagnose_stagnation_flags_flat_suites(tmp_path):
     journal = tmp_path / "j.jsonl"
@@ -471,31 +615,44 @@ def test_diagnose_stagnation_flags_flat_suites(tmp_path):
 
 def test_render_arena_rollup_empty_and_populated():
     assert "No stagnation" in render_arena_rollup([])
-    rollup = render_arena_rollup([SuiteStagnation(
-        suite="math", latest_quality=1.2, window_slope=0.0, window_size=10,
-        gap_descriptor="need more",
-    )])
+    rollup = render_arena_rollup(
+        [
+            SuiteStagnation(
+                suite="math",
+                latest_quality=1.2,
+                window_slope=0.0,
+                window_size=10,
+                gap_descriptor="need more",
+            )
+        ]
+    )
     assert "math" in rollup
     assert "need more" in rollup
 
 
 # ── AW-5: EvalTower T1 integration ─────────────────────────────────
 
+
 def test_arena_to_t1_projects_records_and_preserves_provenance(tmp_path):
     arena = tmp_path / "arena.jsonl"
     with arena.open("w") as f:
-        f.write(json.dumps({
-            "task_id": "envsynth_abc",
-            "environment_id": "env_math",
-            "tool_set": ["t_calc"],
-            "prompt": "compute 6 × 7",
-            "difficulty_band": "medium",
-            "verifier": {"type": "exact_match", "reference": "42"},
-            "ground_truth_hint": "42",
-            "expected_tool_calls": [1, 2],
-            "metadata": {},
-            "persisted_at": "2026-04-22T00:00:00Z",
-        }) + "\n")
+        f.write(
+            json.dumps(
+                {
+                    "task_id": "envsynth_abc",
+                    "environment_id": "env_math",
+                    "tool_set": ["t_calc"],
+                    "prompt": "compute 6 × 7",
+                    "difficulty_band": "medium",
+                    "verifier": {"type": "exact_match", "reference": "42"},
+                    "ground_truth_hint": "42",
+                    "expected_tool_calls": [1, 2],
+                    "metadata": {},
+                    "persisted_at": "2026-04-22T00:00:00Z",
+                }
+            )
+            + "\n"
+        )
 
     entries = arena_to_t1(arena, only_bands={"medium", "hard"})
     assert len(entries) == 1

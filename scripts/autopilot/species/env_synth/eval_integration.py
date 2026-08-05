@@ -24,10 +24,10 @@ class T1TaskEntry:
     task_id: str
     suite: str = "env_synth_t1"
     prompt: str = ""
-    expected: str = ""                  # ground_truth_hint (for judge only)
-    scoring_method: str = "custom"      # "custom" → VerifierSpec scorer
-    scoring_config: dict = None         # verifier spec, expected_tool_calls
-    provenance: dict = None             # discovered_via, difficulty_band, verifier_type
+    expected: str = ""  # ground_truth_hint (for judge only)
+    scoring_method: str = "custom"  # "custom" → VerifierSpec scorer
+    scoring_config: dict = None  # verifier spec, expected_tool_calls
+    provenance: dict = None  # discovered_via, difficulty_band, verifier_type
     consecutive_model_failures: int = 0
     flagged_for_review: bool = False
 
@@ -69,23 +69,35 @@ def arena_to_t1(
         if bands is not None and band not in bands:
             continue
         verifier = rec.get("verifier") or {}
-        out.append(T1TaskEntry(
-            task_id=rec.get("task_id", ""),
-            prompt=rec.get("prompt", ""),
-            expected=rec.get("ground_truth_hint", ""),
-            scoring_method="custom",
-            scoring_config={
-                "verifier": verifier,
-                "expected_tool_calls": rec.get("expected_tool_calls", [1, 2]),
-            },
-            provenance={
-                "discovered_via": "env_synth",
-                "difficulty_band": band,
-                "verifier_type": verifier.get("type", ""),
-                "environment_id": rec.get("environment_id", ""),
-                "tool_set": rec.get("tool_set", []),
-            },
-        ))
+        boundary = rec.get("boundary_contract")
+        if boundary is not None and (
+            rec.get("evaluation_tier") != "dynamic_t1" or rec.get("t0_eligible") is not False
+        ):
+            raise ValueError(
+                "hypothesis-boundary task is not explicitly bound to dynamic T1 / T0-ineligible"
+            )
+        out.append(
+            T1TaskEntry(
+                task_id=rec.get("task_id", ""),
+                prompt=rec.get("prompt", ""),
+                expected=rec.get("ground_truth_hint", ""),
+                scoring_method="custom",
+                scoring_config={
+                    "verifier": verifier,
+                    "expected_tool_calls": rec.get("expected_tool_calls", [1, 2]),
+                },
+                provenance={
+                    "discovered_via": "env_synth",
+                    "difficulty_band": band,
+                    "verifier_type": verifier.get("type", ""),
+                    "environment_id": rec.get("environment_id", ""),
+                    "tool_set": rec.get("tool_set", []),
+                    "evaluation_tier": "dynamic_t1",
+                    "t0_eligible": False,
+                    "boundary_contract": boundary,
+                },
+            )
+        )
     return out
 
 

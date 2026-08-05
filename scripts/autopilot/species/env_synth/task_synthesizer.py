@@ -25,6 +25,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Awaitable, Callable, Optional
 
+from scripts.autopilot.species.env_synth.boundary_contract import (
+    HypothesisBoundaryContract,
+)
 from scripts.autopilot.species.env_synth.mcp_tool_registry import MCPToolEntry
 from scripts.autopilot.species.env_synth.verifier_builder import (
     VerifierBuilder,
@@ -36,9 +39,9 @@ log = logging.getLogger("autopilot.env_synth.task_synthesizer")
 
 
 class DifficultyBand(str, Enum):
-    EASY = "easy"        # 1-2 tool calls, linear chain
-    MEDIUM = "medium"    # 3-5 tool calls, some branching
-    HARD = "hard"        # 6+ tool calls, branching + distractors
+    EASY = "easy"  # 1-2 tool calls, linear chain
+    MEDIUM = "medium"  # 3-5 tool calls, some branching
+    HARD = "hard"  # 6+ tool calls, branching + distractors
 
 
 _BAND_TOOL_CALLS = {
@@ -51,13 +54,14 @@ _BAND_TOOL_CALLS = {
 @dataclass
 class SynthesizedTask:
     environment_id: str
-    tool_set: list[str]                     # tool_ids from the registry
+    tool_set: list[str]  # tool_ids from the registry
     prompt: str
     difficulty_band: DifficultyBand
     verifier: VerifierSpec
     ground_truth_hint: str = ""
     expected_tool_calls: tuple[int, int] = (1, 2)
     metadata: dict[str, Any] = field(default_factory=dict)
+    boundary_contract: Optional[HypothesisBoundaryContract] = None
 
 
 LLMCall = Callable[[str, str], Awaitable[str]]
@@ -96,10 +100,7 @@ class TaskSynthesizer:
             "deterministic."
         )
 
-        tool_section = "\n".join(
-            f"- {t.tool_id}: {t.name} — {t.description[:120]}"
-            for t in tools
-        )
+        tool_section = "\n".join(f"- {t.tool_id}: {t.name} — {t.description[:120]}" for t in tools)
         user = (
             f"Environment: {environment_id}\n"
             f"Difficulty band: {band.value}\n"
@@ -123,7 +124,68 @@ class TaskSynthesizer:
             except Exception as e:
                 log.warning(
                     "synthesize attempt %d/%d failed: %s",
-                    attempt + 1, self.max_retries + 1, e,
+                    attempt + 1,
+                    self.max_retries + 1,
+                    e,
+                )
+        return None
+
+    async def synthesize_boundary(
+        self,
+        environment_id: str,
+        tools: list[MCPToolEntry],
+        band: DifficultyBand,
+        *,
+        boundary: HypothesisBoundaryContract,
+        verifier: VerifierSpec,
+        ground_truth_hint: str,
+        seed: Optional[int] = None,
+    ) -> Optional[SynthesizedTask]:
+        """Compose one AW-10 task while keeping labels/verifiers out of planner prose.
+
+        The controller supplies the immutable boundary and verifier. The LLM may
+        phrase a prompt, but any verifier it returns is ignored.
+        """
+        if not tools:
+            return None
+        VerifierBuilder.build(verifier)
+        if not isinstance(ground_truth_hint, str) or not ground_truth_hint.strip():
+            raise ValueError("ground_truth_hint: controller-supplied label is required")
+        system = (
+            "Phrase ONE task at the supplied hypothesis disagreement boundary. "
+            "Return JSON keys prompt, ground_truth_hint, and metadata only. The "
+            "controller already owns the label and verifier; do not invent either."
+        )
+        tool_section = "\n".join(
+            f"- {tool.tool_id}: {tool.name} — {tool.description[:120]}" for tool in tools
+        )
+        user = (
+            f"Environment: {environment_id}\n"
+            f"Difficulty band: {band.value}\n"
+            f"Boundary contract: {json.dumps(boundary.to_dict(), sort_keys=True)}\n"
+            f"Tools available:\n{tool_section}\n\nGenerate the JSON task."
+        )
+        for attempt in range(self.max_retries + 1):
+            try:
+                raw = await self.llm(system, user)
+                task = self._parse(
+                    raw,
+                    environment_id=environment_id,
+                    tool_set=[tool.tool_id for tool in tools],
+                    band=band,
+                    seed=seed,
+                    trusted_verifier=verifier,
+                    trusted_ground_truth_hint=ground_truth_hint,
+                    boundary=boundary,
+                )
+                if task is not None:
+                    return task
+            except Exception as exc:  # noqa: BLE001 -- injected LLM boundary
+                log.warning(
+                    "boundary synthesize attempt %d/%d failed: %s",
+                    attempt + 1,
+                    self.max_retries + 1,
+                    exc,
                 )
         return None
 
@@ -137,6 +199,9 @@ class TaskSynthesizer:
         tool_set: list[str],
         band: DifficultyBand,
         seed: Optional[int],
+        trusted_verifier: Optional[VerifierSpec] = None,
+        trusted_ground_truth_hint: Optional[str] = None,
+        boundary: Optional[HypothesisBoundaryContract] = None,
     ) -> Optional[SynthesizedTask]:
         try:
             payload = json.loads(raw)
@@ -148,7 +213,7 @@ class TaskSynthesizer:
         if not prompt:
             return None
 
-        verifier = self._build_verifier(payload.get("verifier") or {})
+        verifier = trusted_verifier or self._build_verifier(payload.get("verifier") or {})
         if verifier is None:
             return None
 
@@ -158,12 +223,17 @@ class TaskSynthesizer:
             prompt=prompt,
             difficulty_band=band,
             verifier=verifier,
-            ground_truth_hint=(payload.get("ground_truth_hint") or "").strip(),
+            ground_truth_hint=(
+                trusted_ground_truth_hint
+                if trusted_ground_truth_hint is not None
+                else (payload.get("ground_truth_hint") or "").strip()
+            ),
             expected_tool_calls=_BAND_TOOL_CALLS[band],
             metadata={
                 "seed": seed,
                 "raw_metadata": payload.get("metadata") or {},
             },
+            boundary_contract=boundary,
         )
 
     @staticmethod
