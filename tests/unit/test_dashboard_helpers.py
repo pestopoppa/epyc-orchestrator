@@ -1202,6 +1202,71 @@ def test_offwindow_recovery_skipped_when_holder_already_in_window(monkeypatch) -
     assert wide_reads == []  # holder already visible → no wider read
 
 
+def test_offwindow_recovery_does_not_treat_same_pid_other_role_as_holder(
+    monkeypatch,
+) -> None:
+    """A uvicorn PID multiplexes roles; bare PID equality cannot represent a holder."""
+    now = 3_000.0
+    worker_in_window = json.dumps({
+        "event": "start",
+        "request_id": "chat-WORKER:1",
+        "task_id": "chat-WORKER",
+        "role": "worker_general",
+        "topology_role": "worker_general",
+        "lock_role": "worker_general",
+        "instance_idx": 0,
+        "port": 8072,
+        "pid": 999,
+        "ts_epoch": now - 2,
+        "prompt": "worker prompt",
+    })
+    frontdoor_offwindow = json.dumps({
+        "event": "start",
+        "request_id": "chat-FRONTDOOR:1",
+        "task_id": "chat-FRONTDOOR",
+        "role": "frontdoor",
+        "topology_role": "frontdoor",
+        "lock_role": "frontdoor",
+        "instance_idx": 0,
+        "port": 8070,
+        "pid": 999,
+        "ts_epoch": now - 3,
+        "prompt": "frontdoor prompt",
+    })
+
+    def fake_tail(_path, max_bytes=1024 * 1024):
+        if max_bytes > 1024 * 1024:
+            return "\n".join((worker_in_window, frontdoor_offwindow))
+        return worker_in_window
+
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", fake_tail)
+    region_locks = {
+        "by_role": {
+            "frontdoor": {
+                "instances": [{"idx": 0, "shape": "full", "regions": ["q0"]}],
+                "regions": [{
+                    "region": "q0",
+                    "held": True,
+                    "holder_pids": ["999"],
+                    "holder_instance_idxs": [0],
+                }],
+            },
+        },
+    }
+
+    recovered = dashboard._structured_tap_requests_for_dashboard(
+        max_requests=20,
+        now_epoch=now,
+        region_locks=region_locks,
+        port_roles={8070: "frontdoor", 8072: "worker_general"},
+    )
+
+    assert {request["request_id"] for request in recovered} == {
+        "chat-WORKER:1",
+        "chat-FRONTDOOR:1",
+    }
+
+
 def test_topology_activity_uses_structured_tap_not_legacy_sections(monkeypatch) -> None:
     now = 1_000.0
     structured_lines = [

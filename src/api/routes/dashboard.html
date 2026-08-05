@@ -7064,9 +7064,10 @@ async function updateRegionLocks(
                     instances: info.instances || [],
                 };
             }
-            // CPU-region lock state is sourced only from the lock payload/proc
-            // scan. Tap data stays in the live-tap panel and may explain visible
-            // work, but it must not synthesize lock ownership in the lock grid.
+            // CPU-region lease state is sourced from the backend's canonical
+            // display matrix: shared cohorts use the atomic occupancy ledger,
+            // while /proc corroborates flock liveness. Tap data may explain
+            // visible work, but it must not synthesize lock ownership.
             const tapLiveRequests = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
             const tapLiveRequestCount = tapLiveRequests.length;
             const tapLiveStateCounts = {};
@@ -7129,7 +7130,7 @@ async function updateRegionLocks(
                 activeLockCount,
                 heldRegions: globalHeldRegions.size,
                 enabled,
-                procHolderCount: actualActiveLockCount,
+                leaseHolderCount: actualActiveLockCount,
                 tapLiveRequestCount,
                 tapInferredCount: 0,
                 tapInferredPhysicalCount: 0,
@@ -7141,7 +7142,7 @@ async function updateRegionLocks(
             if (!enabled) {
                 _setDotState(regionDot, 'down', 'per-region CPU locks disabled');
             } else if (activeLockCount > 0) {
-                const titleBits = [`${actualActiveLockCount} /proc holder instance(s)`];
+                const titleBits = [`${actualActiveLockCount} placement lease instance(s)`];
                 if (tapLiveRequestCount) {
                     titleBits.push(`${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`);
                 }
@@ -7176,8 +7177,18 @@ async function updateRegionLocks(
                 const liveTapSuffix = tapLiveRequestCount
                     ? `; +${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`
                     : '';
-                if (activeLockCount > 0) {
-                    status.textContent = `— ${actualActiveLockCount} /proc holder instance(s): ${displayHeldBySummary || 'none'}${liveTapSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`;
+                const placementTelemetry = d.placement_telemetry || {};
+                if (placementTelemetry.conflict) {
+                    const busyRoles = (placementTelemetry.busy_roles || []).join(', ') || 'none';
+                    const leaseRoles = (placementTelemetry.lease_roles || []).join(', ') || 'none';
+                    status.textContent = `— ⚠ placement telemetry conflict: /slots busy=${busyRoles}; lease=${leaseRoles}; frame is not safe to interpret as a single holder`;
+                    status.style.color = 'var(--bad,#f87171)';
+                    _setDotState(regionDot, 'down', status.textContent);
+                } else if (placementTelemetry.status === 'transition' || (d.coherence || {}).status === 'transition') {
+                    status.textContent = '— placement lease changed during lock scan; transitional frame (automatic retry exhausted)';
+                    status.style.color = 'var(--warn,#fbbf24)';
+                } else if (activeLockCount > 0) {
+                    status.textContent = `— ${actualActiveLockCount} placement lease instance(s): ${displayHeldBySummary || 'none'}${liveTapSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`;
                     status.style.color = '#fbbf24';
                 } else if (tapLiveRequestCount > 0) {
                     status.textContent = `— no /proc holder correlated; ${tapLiveRequestCount} live tap request(s) visible${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}; waiting for coherent lock metadata; per-region locks ENABLED`;

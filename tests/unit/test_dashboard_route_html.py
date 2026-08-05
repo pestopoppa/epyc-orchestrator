@@ -149,35 +149,36 @@ def test_dashboard_task_detail_renders_available_input_image() -> None:
     assert "image.reason" in detail_body
 
 
-def test_dashboard_html_separates_proc_holders_from_live_tap_requests() -> None:
-    """The lock panel should distinguish real /proc holders from tap inference."""
+def test_dashboard_html_separates_placement_leases_from_live_tap_requests() -> None:
+    """The lock panel distinguishes canonical leases from tap inference."""
     html_path = (
         Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
     )
     body = html_path.read_text()
 
-    assert "procHolderCount" in body
+    assert "leaseHolderCount" in body
     assert "tapInferredCount" in body
     assert "slotInferredCount" in body
     assert "tapLiveStateBits" in body
     assert "live tap request(s)" in body
-    assert "/proc holder instance(s)" in body
+    assert "placement lease instance(s)" in body
+    assert "placement telemetry conflict" in body
     assert "structuredTapLockCandidates" in body
-    assert "CPU-region lock state is sourced only from the lock payload/proc" in body
+    assert "shared cohorts use the atomic occupancy ledger" in body
     assert "tap rows into synthetic lock holders" in body
     assert "tap-inferred request(s)" not in body
 
 
 def test_dashboard_html_keeps_tap_rows_out_of_lock_ownership() -> None:
-    """Live tap rows can describe work, but lock ownership comes from proc/payload."""
+    """Live tap rows describe work but cannot synthesize placement leases."""
     html_path = (
         Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
     )
     body = html_path.read_text()
 
     assert "function structuredTapLockCandidates()" in body
-    assert "CPU-region lock state is sourced only from the lock payload/proc" in body
-    assert "work, but it must not synthesize lock ownership in the lock grid" in body
+    assert "shared cohorts use the atomic occupancy ledger" in body
+    assert "visible work, but it must not synthesize lock ownership" in body
     assert "function buildTapInferredRegionLocks" not in body
     assert "tap-inferred" not in body
 
@@ -368,7 +369,7 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "startPanelSafely('snapshot-poll', updateSnapshotPoll);" in body
     assert "setTimeout(ensureRegionLocksPanelPainted, 750)" in body
     assert "_latestSnapshot = snap || {};" in body
-    assert "it must not synthesize lock ownership in the lock grid" in body
+    assert "it must not synthesize lock ownership" in body
     assert "tap rows into synthetic lock holders" in body
     assert "Tap PIDs identify backend llama-server processes" in body
     assert "active.instanceIdxs && active.instanceIdxs.has(Number(idx))" in body

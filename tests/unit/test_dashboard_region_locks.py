@@ -23,6 +23,7 @@ from src.api.routes.dashboard import (
     _shape_for_regions,
     _resolve_pid_to_instance_idx,
     _panel_shapes_from_matrix,
+    _placement_telemetry_status,
 )
 from src.scheduling.contention import ContentionMatrix, InstancePair, Pair, SameRole
 
@@ -284,6 +285,29 @@ class TestPanelShapesFromMatrix:
         assert _panel_shapes_from_matrix(sr, primary_shape="half1") == {"half1", "q0"}
 
 
+def test_slots_vs_lease_role_disagreement_is_explicit_conflict() -> None:
+    status = _placement_telemetry_status(
+        activity={8072: {"n_active": 2, "n_total": 4}},
+        port_roles={8072: "worker_general"},
+        region_locks={
+            "by_role": {"frontdoor": {}, "worker_general": {}},
+            "occupancy": {
+                "entries": [{
+                    "token": "frontdoor-lease",
+                    "role": "frontdoor",
+                    "instance_idx": 0,
+                }],
+            },
+            "coherence": {"status": "coherent"},
+        },
+    )
+
+    assert status["status"] == "conflict"
+    assert status["conflict"] is True
+    assert status["busy_roles"] == ["worker_general"]
+    assert status["lease_roles"] == ["frontdoor"]
+
+
 class TestRegionLocksSnapshot:
     def test_instance_regions_filter_tracks_stack_numa_mode(self) -> None:
         topology = {
@@ -309,6 +333,121 @@ class TestRegionLocksSnapshot:
             ("frontdoor", 1),
             ("worker_vision", 0),
         }
+
+    @pytest.mark.asyncio
+    async def test_shared_occupancy_is_canonical_when_proc_role_disagrees(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Never combine a torn proc role with another cohort's staged load."""
+        for region in ("q0", "q1", "q2", "q3"):
+            (tmp_path / f"cpu_region.frontdoor.{region}.lock").write_text("")
+
+        entries = [
+            {
+                "token": f"worker-{idx}",
+                "pid": 9000 + idx,
+                "role": "worker_general",
+                "regions": ["q0", "q1", "q2", "q3"],
+                "instance_idx": 0,
+                "capacity": 4,
+                "shared": True,
+                "request_tag": f"chat-worker-{idx}",
+            }
+            for idx in range(2)
+        ]
+        occupancy = {"entries": entries, "per_region": {}}
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids",
+            lambda path: ["777"] if ".frontdoor." in path.name else [],
+        )
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock.read_region_occupancy", lambda: occupancy
+        )
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                ("frontdoor", 0): frozenset({"q0", "q1", "q2", "q3"}),
+                ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
+            },
+        )
+        monkeypatch.setattr(
+            "src.scheduling.contention.load_contention_matrix",
+            lambda: type(
+                "Matrix",
+                (),
+                {
+                    "same_role": {
+                        "frontdoor": SameRole(role="frontdoor", verdict="allow"),
+                        "worker_general": SameRole(role="worker_general", verdict="allow"),
+                    },
+                },
+            )(),
+        )
+
+        payload = json.loads((await region_locks_snapshot()).body)
+
+        assert payload["by_role"]["frontdoor"]["proc_active_instance_idxs"] == [0]
+        assert payload["by_role"]["frontdoor"]["active_instance_idxs"] == []
+        assert payload["by_role"]["worker_general"]["active_instance_idxs"] == [0]
+        rows = {row["role"]: row for row in payload["display_matrix"]["rows"]}
+        assert rows["worker_general"]["cells"][0]["label"] == "⚡ 2/4"
+        assert rows["frontdoor"]["cells"][0]["state"] == "blocked"
+        assert payload["coherence"]["status"] == "mismatch"
+        assert payload["coherence"]["proc_pairs"] == [["frontdoor", 0]]
+        assert payload["coherence"]["occupancy_pairs"] == [["worker_general", 0]]
+
+    @pytest.mark.asyncio
+    async def test_region_snapshot_retries_when_occupancy_changes_during_proc_scan(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        first = {
+            "entries": [{
+                "token": "departing",
+                "pid": 123,
+                "role": "frontdoor",
+                "regions": ["q0"],
+                "instance_idx": 0,
+                "capacity": 1,
+                "shared": False,
+            }],
+            "per_region": {},
+        }
+        empty = {"entries": [], "per_region": {}}
+        observations = iter((first, empty, empty, empty))
+        calls = 0
+
+        def read_occupancy():
+            nonlocal calls
+            calls += 1
+            return next(observations)
+
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: []
+        )
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock.read_region_occupancy", read_occupancy
+        )
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {("frontdoor", 0): frozenset({"q0"})},
+        )
+        monkeypatch.setattr(
+            "src.scheduling.contention.load_contention_matrix",
+            lambda: type(
+                "Matrix",
+                (),
+                {"same_role": {"frontdoor": SameRole(role="frontdoor", verdict="allow")}},
+            )(),
+        )
+
+        payload = json.loads((await region_locks_snapshot()).body)
+
+        assert calls == 4
+        assert payload["coherence"]["status"] == "coherent"
+        assert payload["coherence"]["retries"] == 1
+        assert payload["occupancy"]["entries"] == []
 
     @pytest.mark.asyncio
     async def test_region_lock_grid_keeps_configured_quarters_visible_in_full_mode(

@@ -500,22 +500,24 @@ def _recover_offwindow_lock_holder_requests(
         return parsed_requests
 
     represented: set[tuple[str, int]] = set()
-    represented_pids: set[str] = set()
+    represented_role_pids: set[tuple[str, str]] = set()
     for req in parsed_requests:
         pid = req.get("pid")
+        role_keys = _tap_request_role_keys(req)
         if pid not in (None, ""):
-            represented_pids.add(str(pid))
+            represented_role_pids.update((role_key, str(pid)) for role_key in role_keys)
         idx_raw = req.get("instance_idx")
         if not str(idx_raw if idx_raw is not None else "").lstrip("-").isdigit():
             continue
         idx = int(idx_raw)
-        for role_key in _tap_request_role_keys(req):
+        for role_key in role_keys:
             represented.add((role_key, idx))
 
     unmatched = {
         (role, idx)
         for role, idx, pids in holders
-        if (role, idx) not in represented and not (set(pids) & represented_pids)
+        if (role, idx) not in represented
+        and not any((role, str(pid)) in represented_role_pids for pid in pids)
     }
     if not unmatched:
         return parsed_requests
@@ -842,6 +844,104 @@ def _region_lock_blocked_by_roles(
     return sorted(blocked)
 
 
+def _occupancy_tokens(occupancy: dict[str, Any] | None) -> tuple[str, ...]:
+    """Stable identity for one occupancy-ledger observation."""
+    entries = occupancy.get("entries") if isinstance(occupancy, dict) else []
+    if not isinstance(entries, list):
+        return ()
+    return tuple(
+        sorted(
+            str(entry.get("token") or "")
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("token")
+        )
+    )
+
+
+def _occupancy_instance_pairs(
+    occupancy: dict[str, Any] | None,
+    *,
+    shared_only: bool = False,
+) -> set[tuple[str, int]]:
+    """Return exact ``(role, instance_idx)`` leases from the occupancy ledger."""
+    entries = occupancy.get("entries") if isinstance(occupancy, dict) else []
+    if not isinstance(entries, list):
+        return set()
+    pairs: set[tuple[str, int]] = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or (shared_only and not entry.get("shared")):
+            continue
+        role = str(entry.get("role") or "")
+        idx = entry.get("instance_idx")
+        if role and str(idx if idx is not None else "").lstrip("-").isdigit():
+            pairs.add((role, int(idx)))
+    return pairs
+
+
+def _proc_instance_pairs(by_role: dict[str, Any]) -> set[tuple[str, int]]:
+    pairs: set[tuple[str, int]] = set()
+    for role, bucket in by_role.items():
+        if not isinstance(bucket, dict):
+            continue
+        for idx in bucket.get("proc_active_instance_idxs", bucket.get("active_instance_idxs", [])):
+            if str(idx).lstrip("-").isdigit():
+                pairs.add((str(role), int(idx)))
+    return pairs
+
+
+def _placement_telemetry_status(
+    *,
+    activity: dict[int, dict[str, Any]],
+    port_roles: dict[int, str],
+    region_locks: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare live CPU `/slots` roles with the canonical placement lease.
+
+    The sources are sampled sequentially, so disagreement is telemetry to
+    surface, not permission to rewrite either fact. A stable disagreement is
+    exactly the placement-vs-dashboard failure class operators need to see.
+    """
+    by_role = region_locks.get("by_role") if isinstance(region_locks, dict) else {}
+    lock_roles = set(by_role) if isinstance(by_role, dict) else set()
+    busy_roles: set[str] = set()
+    busy_ports: dict[str, list[int]] = {}
+    for raw_port, slot_state in activity.items():
+        if not isinstance(slot_state, dict) or int(slot_state.get("n_active") or 0) <= 0:
+            continue
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError):
+            continue
+        role, _shape = _port_role_shape(port_roles.get(port, ""))
+        role = _canonical_role_name(role)
+        if role and role in lock_roles:
+            busy_roles.add(role)
+            busy_ports.setdefault(role, []).append(port)
+
+    occupancy = region_locks.get("occupancy") if isinstance(region_locks, dict) else {}
+    lease_roles = {role for role, _idx in _occupancy_instance_pairs(occupancy)}
+    coherence = region_locks.get("coherence") if isinstance(region_locks, dict) else {}
+    region_status = str((coherence or {}).get("status") or "unknown")
+    conflict = bool(busy_roles and lease_roles and busy_roles != lease_roles)
+    if conflict:
+        status = "conflict"
+    elif region_status == "transition":
+        status = "transition"
+    elif busy_roles == lease_roles or (not busy_roles and not lease_roles):
+        status = "coherent"
+    else:
+        status = "uncorroborated"
+    return {
+        "status": status,
+        "conflict": conflict,
+        "busy_roles": sorted(busy_roles),
+        "busy_ports": {role: sorted(ports) for role, ports in sorted(busy_ports.items())},
+        "lease_roles": sorted(lease_roles),
+        "region_lock_status": region_status,
+        "observed_at": time.time(),
+    }
+
+
 def _filter_instance_regions_for_mode(
     topology: dict[tuple[str, int], frozenset[str]],
     numa_mode: str,
@@ -875,7 +975,12 @@ _GPU_RESIDENT_ROLES = frozenset(
 _SPEECH_ROLES = frozenset({"whisper", "tts"})
 
 
-def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
+def _region_locks_payload(
+    numa_mode: str | None = None,
+    *,
+    _coherence_retries: int = 1,
+    _coherence_attempt: int = 0,
+) -> dict[str, Any]:
     """Return the current per-region lock snapshot as plain JSON data."""
     import os
     from pathlib import Path
@@ -895,10 +1000,12 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         )
 
         tmp_dir = _tmp_dir()
+        occupancy_before_observed_at = time.time()
         occupancy = read_region_occupancy()
     except Exception:
         tmp_dir = Path("/mnt/raid0/llm/tmp")
         occupancy = {"entries": [], "per_region": {}}
+        occupancy_before_observed_at = time.time()
         from src.runtime.cpu_region_lock import _current_lock_owner_pids
 
         def read_region_lock_payload(_path: Path) -> None:  # type: ignore[no-redef]
@@ -1093,6 +1200,28 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     except Exception as exc:
         return {"error": str(exc), "entries": []}
 
+    proc_observed_at = time.time()
+    try:
+        occupancy_after_observed_at = time.time()
+        occupancy_after = read_region_occupancy()
+    except Exception:
+        occupancy_after_observed_at = time.time()
+        occupancy_after = occupancy
+    tokens_before = _occupancy_tokens(occupancy)
+    tokens_after = _occupancy_tokens(occupancy_after)
+    occupancy_changed_during_scan = tokens_before != tokens_after
+    if occupancy_changed_during_scan and _coherence_retries > 0:
+        return _region_locks_payload(
+            active_mode,
+            _coherence_retries=_coherence_retries - 1,
+            _coherence_attempt=_coherence_attempt + 1,
+        )
+    if occupancy_changed_during_scan:
+        # The after-sample is the newest placement fact. The coherence block
+        # below marks this frame transitional so consumers do not interpret a
+        # mixed proc/ledger frame as a confident holder identity.
+        occupancy = occupancy_after
+
     # Pass 1b: resolve held-region SET per PID to a NUMA_CONFIG instance idx.
     pid_to_instance = _resolve_pid_to_instance_idx(role_pid_regions, role_instances_by_regions)
     for entry in out:
@@ -1168,14 +1297,50 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         for idx in entry["holder_instance_idxs"]:
             bucket["active_instance_idxs"].add(idx)
 
+    # `/proc` is the live flock witness; the occupancy ledger is the atomic
+    # cross-process admission boundary. Shared native-batch cohorts cannot put
+    # mutable attribution in their flock files, so the ledger is canonical for
+    # their role, instance and staged load. Preserve the raw proc view alongside
+    # the canonical view for coherence diagnostics.
+    occupancy_pairs = _occupancy_instance_pairs(occupancy)
+    shared_occupancy_pairs = _occupancy_instance_pairs(occupancy, shared_only=True)
+    shared_regions = {
+        str(region)
+        for entry in (occupancy.get("entries", []) if isinstance(occupancy, dict) else [])
+        if isinstance(entry, dict) and entry.get("shared")
+        for region in (entry.get("regions") or [])
+    }
+    for role, bucket in by_role.items():
+        proc_idxs = {int(idx) for idx in bucket["active_instance_idxs"]}
+        bucket["proc_active_instance_idxs"] = sorted(proc_idxs)
+        canonical_idxs = set(proc_idxs)
+        if shared_occupancy_pairs:
+            # A proc holder on regions governed by a stable shared ledger is
+            # corroboration only. Do not let a torn/misattributed proc sample
+            # override the ledger's serving-process cohort.
+            for idx in tuple(canonical_idxs):
+                inst = next(
+                    (
+                        item
+                        for item in bucket.get("instances", [])
+                        if str(item.get("idx", "")).lstrip("-").isdigit()
+                        and int(item["idx"]) == idx
+                    ),
+                    None,
+                )
+                if inst is not None and shared_regions.intersection(
+                    str(region) for region in inst.get("regions", [])
+                ) and (role, idx) not in shared_occupancy_pairs:
+                    canonical_idxs.discard(idx)
+        canonical_idxs.update(idx for pair_role, idx in occupancy_pairs if pair_role == role)
+        bucket["active_instance_idxs"] = sorted(canonical_idxs)
+
     active_lock_roles = {
         role
         for role, bucket in by_role.items()
         if bucket["active_instance_idxs"]
-        or any(region.get("held") for region in bucket.get("regions", []))
     }
     for role, bucket in by_role.items():
-        bucket["active_instance_idxs"] = sorted(bucket["active_instance_idxs"])
         bucket["blocked_by_roles"] = _region_lock_blocked_by_roles(
             role,
             active_lock_roles,
@@ -1201,24 +1366,16 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
             for inst in bucket.get("instances", [])
             if str(inst.get("idx", "")).lstrip("-").isdigit()
         }
-        for region in bucket.get("regions", []):
-            if not region.get("held"):
+        for idx in bucket.get("active_instance_idxs", []):
+            inst = inst_by_idx.get(int(idx))
+            if inst is None:
                 continue
-            for idx in region.get("holder_instance_idxs", []):
-                inst = inst_by_idx.get(int(idx))
-                held_by_region.setdefault(str(region.get("region")), []).append(
+            for region in inst.get("regions", []):
+                held_by_region.setdefault(str(region), []).append(
                     {
                         "role": role,
                         "idx": int(idx),
-                        "shape": (inst or {}).get("shape", f"idx{idx}"),
-                    }
-                )
-            if not region.get("holder_instance_idxs"):
-                held_by_region.setdefault(str(region.get("region")), []).append(
-                    {
-                        "role": role,
-                        "idx": None,
-                        "shape": "?",
+                        "shape": inst.get("shape", f"idx{idx}"),
                     }
                 )
 
@@ -1426,6 +1583,29 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
             }
         )
 
+    proc_pairs = _proc_instance_pairs(by_role)
+    ledger_pairs = _occupancy_instance_pairs(occupancy)
+    if occupancy_changed_during_scan:
+        coherence_status = "transition"
+    elif proc_pairs == ledger_pairs:
+        coherence_status = "coherent"
+    else:
+        coherence_status = "mismatch"
+    coherence = {
+        "status": coherence_status,
+        "retries": _coherence_attempt,
+        "occupancy_changed_during_scan": occupancy_changed_during_scan,
+        "retry_exhausted": occupancy_changed_during_scan and _coherence_retries <= 0,
+        "proc_pairs": [list(pair) for pair in sorted(proc_pairs)],
+        "occupancy_pairs": [list(pair) for pair in sorted(ledger_pairs)],
+        "shared_occupancy_pairs": [list(pair) for pair in sorted(shared_occupancy_pairs)],
+        "tokens_before": list(tokens_before),
+        "tokens_after": list(tokens_after),
+        "occupancy_before_observed_at": occupancy_before_observed_at,
+        "proc_observed_at": proc_observed_at,
+        "occupancy_after_observed_at": occupancy_after_observed_at,
+    }
+
     feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
     return {
         "per_region_locks_enabled": feature_flag in {"1", "true", "yes", "on"},
@@ -1447,6 +1627,7 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
             "held_region_count": sum(1 for r in global_lock_regions if r["held"]),
         },
         "occupancy": occupancy,
+        "coherence": coherence,
         # Display-only completeness rows: active/configured serving roles with
         # NO cpu_region lock domain (full-span roles, aliases, embedders).
         # NOTE: these roles (GPU-resident: architect_general, worker_vision,
@@ -1475,14 +1656,14 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
 
 @router.get("/dashboard/api/region_locks")
 async def region_locks_snapshot() -> JSONResponse:
-    """Per-CPU-region lock state — which (role, region) lock files are
-    currently held, and by which PIDs.
+    """Per-CPU-region placement state and its `/proc` lock corroboration.
 
-    Built from /proc/locks scan of the orchestrator's lock files, plus
-    the static topology from `instance_topology.get_instance_regions()`
-    so the panel surfaces ALL roles that *have* quartered instances —
-    not just the ones whose dispatch path created a lock file. Roles
-    with quarter instances but no lock files are tagged
+    Shared cohorts are attributed by the atomic occupancy ledger; a
+    `/proc/locks` scan corroborates flock liveness. Static topology from
+    `instance_topology.get_instance_regions()` lets the panel surface
+    ALL roles that *have* quartered instances — not just the ones whose
+    dispatch path created a lock file. Roles with quarter instances but no
+    lock files are tagged
     ``wired=False`` so the dashboard can render them greyed out with
     an explanatory badge (they were quartered at launch but their
     backend never acquires `cpu_region_lock`, so cross-process
@@ -5864,6 +6045,12 @@ async def _snapshot_impl() -> JSONResponse:
     # fresher direct `/dashboard/api/region_locks` poll in the same browser
     # session.
     region_locks = _region_locks_payload(active_mode)
+    placement_telemetry = _placement_telemetry_status(
+        activity=activity,
+        port_roles=port_roles,
+        region_locks=region_locks,
+    )
+    region_locks["placement_telemetry"] = placement_telemetry
     structured_requests = _structured_tap_requests_for_dashboard(
         max_requests=80,
         now_epoch=_snap_now,
@@ -5906,6 +6093,7 @@ async def _snapshot_impl() -> JSONResponse:
                 },
                 "activity": activity,
                 "display_activity": display_activity,
+                "placement_telemetry": placement_telemetry,
                 # Fan-out degradation is data, not a silent gap: timed_out > 0 means
                 # some ports' slots are missing from `activity` this frame.
                 "slots_poll_meta": slots_poll_meta,
