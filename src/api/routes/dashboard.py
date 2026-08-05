@@ -30,11 +30,12 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import quote
 
 import httpx
 import yaml
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 from src.roles import Role
 from src.api.routes.dashboard_snapshot import (
@@ -69,6 +70,7 @@ from src.api.routes.dashboard_tasks import (
     _find_section_by_objective,
     _find_structured_request_by_id,
     _find_structured_request_by_task_id,
+    _image_reference_for_task,
     _objective_for_task,
     _task_events,
     _task_text_snapshot,
@@ -6141,6 +6143,78 @@ async def multiplex_stream(request: Request) -> StreamingResponse:
 # ---------------------------------------------------------------------------
 
 
+_TASK_IMAGE_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+}
+
+
+def _task_image_metadata(task_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Describe whether a task's input image can be rendered by the dashboard."""
+    ref = _image_reference_for_task(events)
+    metadata: dict[str, Any] = {
+        "has_image": ref["has_image"],
+        "source": ref["source"],
+        "available": False,
+        "url": None,
+        "filename": "",
+        "reason": "",
+    }
+    if not ref["has_image"]:
+        return metadata
+    if ref["source"] != "path" or not ref["path"]:
+        metadata["reason"] = "Image bytes were not retained in task telemetry."
+        return metadata
+
+    from src.api.routes.path_validation import validate_api_path
+
+    try:
+        image_path = validate_api_path(ref["path"])
+    except HTTPException:
+        metadata["reason"] = "The recorded image path is outside the dashboard allowlist."
+        return metadata
+    metadata["filename"] = image_path.name
+    if image_path.suffix.lower() not in _TASK_IMAGE_MEDIA_TYPES:
+        metadata["reason"] = "The recorded image format is not browser-renderable."
+        return metadata
+    if not image_path.is_file():
+        metadata["reason"] = "The recorded image file is no longer available."
+        return metadata
+    metadata["available"] = True
+    metadata["url"] = f"/dashboard/api/task/{quote(task_id, safe='')}/image"
+    return metadata
+
+
+@router.get("/dashboard/api/task/{task_id}/image")
+async def task_image(task_id: str) -> FileResponse:
+    """Serve the path-backed input image recorded for a vision task."""
+    events = _task_events(task_id, _todays_progress_log())
+    ref = _image_reference_for_task(events)
+    if ref["source"] != "path" or not ref["path"]:
+        raise HTTPException(status_code=404, detail="Task has no path-backed image")
+
+    from src.api.routes.path_validation import validate_api_path
+
+    image_path = validate_api_path(ref["path"])
+    media_type = _TASK_IMAGE_MEDIA_TYPES.get(image_path.suffix.lower())
+    if media_type is None:
+        raise HTTPException(status_code=415, detail="Unsupported dashboard image format")
+    if not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Task image is no longer available")
+    return FileResponse(
+        image_path,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/dashboard/api/task/{task_id}.txt")
 async def task_text(task_id: str) -> Any:
     """Return a plain-text snapshot of a task — for clipboard, curl, downstream LLMs.
@@ -6219,6 +6293,7 @@ async def task_detail(task_id: str) -> JSONResponse:
                 "active_slot_id": None,
                 "slot": None,
                 "tap_section": structured_tap,
+                "image": _task_image_metadata(task_id, events),
             }
         )
 
@@ -6256,6 +6331,7 @@ async def task_detail(task_id: str) -> JSONResponse:
             "active_slot_id": None,
             "slot": None,
             "tap_section": tap_section,
+            "image": _task_image_metadata(task_id, events),
         }
     )
 

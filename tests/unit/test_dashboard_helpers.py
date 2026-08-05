@@ -3638,3 +3638,114 @@ def test_scan_orchestrator_tasks_text_task_has_no_image(tmp_path) -> None:
 
     assert in_flight[0]["has_image"] is False
     assert in_flight[0]["image_path"] == ""
+
+
+def test_image_reference_for_task_reads_routing_metadata() -> None:
+    events = [
+        {"event_type": "task_started", "data": {"objective": "read this"}},
+        {
+            "event_type": "routing_decision",
+            "data": {
+                "has_image": True,
+                "image_source": "path",
+                "image_path": "/tmp/example.png",
+            },
+        },
+    ]
+
+    assert dashboard_tasks._image_reference_for_task(events) == {
+        "has_image": True,
+        "source": "path",
+        "path": "/tmp/example.png",
+    }
+
+
+def test_task_detail_exposes_renderable_image_url(tmp_path, monkeypatch) -> None:
+    image_path = tmp_path / "input.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    log_path = tmp_path / "progress.jsonl"
+    log_path.write_text(
+        json.dumps(
+            {
+                "event_type": "task_started",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "task_id": "chat-image",
+                "data": {"objective": "read this"},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "event_type": "routing_decision",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "task_id": "chat-image",
+                "data": {
+                    "has_image": True,
+                    "image_source": "path",
+                    "image_path": str(image_path),
+                },
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(dashboard, "_todays_progress_log", lambda: log_path)
+    monkeypatch.setattr(
+        dashboard, "_find_structured_request_by_task_id", lambda _task_id: None
+    )
+    monkeypatch.setattr(
+        dashboard, "_find_section_by_objective", lambda *_args, **_kwargs: None
+    )
+
+    payload = json.loads(asyncio.run(dashboard.task_detail("chat-image")).body)
+
+    assert payload["image"] == {
+        "has_image": True,
+        "source": "path",
+        "available": True,
+        "url": "/dashboard/api/task/chat-image/image",
+        "filename": "input.png",
+        "reason": "",
+    }
+
+
+def test_task_image_serves_recorded_path_with_safe_headers(tmp_path, monkeypatch) -> None:
+    image_path = tmp_path / "input.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    events = [
+        {
+            "event_type": "routing_decision",
+            "data": {
+                "has_image": True,
+                "image_source": "path",
+                "image_path": str(image_path),
+            },
+        }
+    ]
+    monkeypatch.setattr(
+        dashboard, "_todays_progress_log", lambda: tmp_path / "progress.jsonl"
+    )
+    monkeypatch.setattr(dashboard, "_task_events", lambda *_args, **_kwargs: events)
+
+    response = asyncio.run(dashboard.task_image("chat-image"))
+
+    assert response.path == image_path
+    assert response.media_type == "image/png"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_task_detail_marks_base64_image_unavailable() -> None:
+    events = [
+        {
+            "event_type": "routing_decision",
+            "data": {"has_image": True, "image_source": "base64"},
+        }
+    ]
+
+    metadata = dashboard._task_image_metadata("chat-base64", events)
+
+    assert metadata["has_image"] is True
+    assert metadata["source"] == "base64"
+    assert metadata["available"] is False
+    assert metadata["url"] is None
+    assert "not retained" in metadata["reason"]

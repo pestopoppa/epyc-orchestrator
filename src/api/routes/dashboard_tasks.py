@@ -153,6 +153,33 @@ def _objective_for_task(events: list[dict[str, Any]]) -> str:
     return ""
 
 
+def _image_reference_for_task(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Extract the image reference captured on a task's routing decision.
+
+    Image bytes are deliberately not copied into the progress log. Path-backed
+    vision requests retain a bounded host path, while base64 requests retain
+    only their source marker. The dashboard uses this helper both to describe
+    availability in task detail and to resolve the path through a guarded
+    serving endpoint.
+    """
+    for ev in reversed(events):
+        if ev.get("event_type") != "routing_decision":
+            continue
+        data = ev.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        image_path = str(data.get("image_path") or "").strip()
+        image_source = str(data.get("image_source") or "").strip()
+        has_image = bool(data.get("has_image") or image_path or image_source)
+        if has_image:
+            return {
+                "has_image": True,
+                "source": image_source or ("path" if image_path else "unknown"),
+                "path": image_path,
+            }
+    return {"has_image": False, "source": "", "path": ""}
+
+
 def _find_structured_request_by_id(task_id: str, max_requests: int = 400) -> dict | None:
     """Find a structured tap request by dashboard task id.
 

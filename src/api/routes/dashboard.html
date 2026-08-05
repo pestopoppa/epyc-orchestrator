@@ -616,6 +616,30 @@ details.tap-section .tap-content.stream-text {
 #detail-content .stream-text {
     max-height: min(48vh, 420px);
 }
+#detail-content .task-image-frame {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 120px;
+    max-height: min(48vh, 480px);
+    padding: 10px;
+    overflow: auto;
+    background: rgba(0,0,0,0.22);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+#detail-content .task-image-frame img {
+    display: block;
+    max-width: 100%;
+    max-height: min(44vh, 440px);
+    object-fit: contain;
+}
+#detail-content .task-image-note {
+    color: var(--muted);
+    font-size: 10px;
+    margin-top: 5px;
+    overflow-wrap: anywhere;
+}
 
 /* Detail actions */
 .detail-actions {
@@ -5650,6 +5674,24 @@ async function openDetail(taskId, port, slotId) {
         const decodeLine = dTps != null
             ? `<div style="color:var(--muted);font-size:10px;margin-bottom:6px">decode: <span style="color:var(--good)">${dTps.toFixed(1)} t/s</span>${dTok ? ` · ${dTok} tok` : ''}${dGen ? ` · gen ${dGen.toFixed(0)}ms` : ''}</div>`
             : '';
+        const image = (d.image && typeof d.image === 'object') ? d.image : null;
+        let imageBlock = '';
+        if (image && image.has_image) {
+            if (image.available && image.url) {
+                imageBlock = `
+                    <div class="detail-box-label">input image</div>
+                    <a class="task-image-frame" href="${escapeHTML(image.url)}" target="_blank" rel="noopener" title="open input image at full resolution">
+                        <img src="${escapeHTML(image.url)}" alt="Input image for task ${escapeHTML(String(taskId))}" loading="lazy">
+                    </a>
+                    <div class="task-image-note">${escapeHTML(image.filename || 'task image')} · click to open full resolution</div>
+                `;
+            } else {
+                imageBlock = `
+                    <div class="detail-box-label">input image</div>
+                    <div class="task-image-note">${escapeHTML(image.reason || 'The input image is not available for display.')}</div>
+                `;
+            }
+        }
         content.innerHTML = `
             <div class="detail-actions">
                 <button onclick="copySnapshotToClipboard()">📋 copy snapshot</button>
@@ -5659,6 +5701,7 @@ async function openDetail(taskId, port, slotId) {
             </div>
             <div style="color:var(--muted);font-size:10px;margin-bottom:6px">source: ${escapeHTML(dataSource)}</div>
             ${decodeLine}
+            ${imageBlock}
             <div class="detail-box-label">prompt</div>
             <div class="prompt-text" id="prompt-text"></div>
             <div class="detail-box-label response-label">${d.slot ? 'live inference' : (d.tap_section ? 'inference (from tap)' : 'inference')}</div>

@@ -130,6 +130,25 @@ def test_dashboard_html_copy_snapshot_stays_on_the_click_activation_path() -> No
     assert "clipboard write failed:" in copy_body
 
 
+def test_dashboard_task_detail_renders_available_input_image() -> None:
+    html_path = (
+        Path(__file__).resolve().parents[1].parent
+        / "src"
+        / "api"
+        / "routes"
+        / "dashboard.html"
+    )
+    body = html_path.read_text()
+    detail_start = body.index("async function openDetail(taskId, port, slotId) {")
+    detail_end = body.index("function closeDetail()", detail_start)
+    detail_body = body[detail_start:detail_end]
+
+    assert "if (image.available && image.url)" in detail_body
+    assert 'class="task-image-frame"' in detail_body
+    assert 'src="${escapeHTML(image.url)}"' in detail_body
+    assert "image.reason" in detail_body
+
+
 def test_dashboard_html_separates_proc_holders_from_live_tap_requests() -> None:
     """The lock panel should distinguish real /proc holders from tap inference."""
     html_path = (
