@@ -191,6 +191,32 @@ class ContentionGate:
             log.warning("active_region_holder_instances failed: %s", exc)
             return fallback
 
+    @staticmethod
+    def _gpu_candidate_is_disjoint_from_cpu_holders(
+        role: str,
+        holders: dict[str, list[int]],
+    ) -> bool:
+        """Return true only for a resolved GPU candidate against resolved CPU holders.
+
+        Region-lock holders represent CPU decode placements.  The legacy pair
+        matrix predates the device axis and can therefore falsely queue a GPU
+        role (for example coder_escalation on :8083) behind frontdoor CPU work.
+        Device declarations are authoritative here; any missing/disagreeing
+        declaration fails closed into the existing matrix path.
+        """
+        try:
+            from src.scheduling.device_model import DeviceClass, resolve_role_device
+
+            if resolve_role_device(role).device_class is not DeviceClass.GPU:
+                return False
+            return all(
+                resolve_role_device(active_role).device_class is DeviceClass.CPU
+                for active_role in holders
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("device-aware contention resolution failed for %s: %s", role, exc)
+            return False
+
     # ── admission core ──────────────────────────────────────────────
 
     def evaluate(
@@ -236,6 +262,13 @@ class ContentionGate:
 
         if not holders:
             return GateDecision(admitted=True, decision=PairDecision.ALLOW, reason="no active decodes")
+
+        if self._gpu_candidate_is_disjoint_from_cpu_holders(role, holders):
+            return GateDecision(
+                admitted=True,
+                decision=PairDecision.ALLOW,
+                reason="resolved GPU lane is disjoint from active CPU region holders",
+            )
 
         # Topology-freshness fail-closed (#2, operator audit 2026-05-27): if the matrix is not
         # certified-fresh against the LIVE stack (STALE/MISSING/INVALID) while concurrency is

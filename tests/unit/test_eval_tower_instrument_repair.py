@@ -629,6 +629,13 @@ def test_eval_t1_legacy_sampling_records_core_id(monkeypatch) -> None:
     # One question per tier at n=3: the declared mix is honoured, not merely recorded.
     assert result.details["question_tier_mix"] == {"1": 1, "2": 1, "3": 1}
     assert "test_profile_json" in result.details
+    assert result.details["eval_execution_instrument_id"] == (
+        eval_tower.EVAL_EXECUTION_INSTRUMENT_ID
+    )
+    assert result.details["eval_scoring_schedule_id"] == (
+        eval_tower.EVAL_SCORING_SCHEDULE_ID
+    )
+    assert len(result.details["eval_execution_profile_sha256"]) == 64
 
 
 def test_dataset_content_sha256_includes_suite_and_scoring_oracle() -> None:
@@ -676,6 +683,37 @@ def test_eval_instrument_stamp_warns_on_core_id_drift() -> None:
     assert warning["core_id"] == "core-v"
     assert warning["previous_dataset_content_sha256"] == first.details["dataset_content_sha256"]
     assert warning["current_dataset_content_sha256"] == second.details["dataset_content_sha256"]
+
+
+def test_durable_instrument_ledger_detects_execution_scheduler_drift(
+    monkeypatch, tmp_path
+) -> None:
+    eval_tower._DATASET_SHA_BY_CORE_ID.clear()
+    monkeypatch.setattr(
+        eval_tower, "_INSTRUMENT_LEDGER_PATH", tmp_path / "eval_instrument_ledger.json"
+    )
+    questions = [{"id": "q1", "suite": "math", "prompt": "2+2?", "expected": "4"}]
+    monkeypatch.setattr(eval_tower, "EVAL_EXECUTION_INSTRUMENT_ID", "scheduler-v1")
+    eval_tower._stamp_eval_instrument(
+        eval_tower.EvalResult(tier=1, quality=3.0, speed=1.0, cost=0.0, reliability=1.0),
+        questions=questions,
+        core_id="core-execution",
+        test_profile={"tier": 1},
+    )
+
+    monkeypatch.setattr(eval_tower, "EVAL_EXECUTION_INSTRUMENT_ID", "scheduler-v2")
+    second = eval_tower._stamp_eval_instrument(
+        eval_tower.EvalResult(tier=1, quality=3.0, speed=1.0, cost=0.0, reliability=1.0),
+        questions=questions,
+        core_id="core-execution",
+        test_profile={"tier": 1},
+    )
+
+    drift = second.details["instrument_drift_across_restart"]
+    assert drift["changed_content"] is False
+    assert drift["changed_execution_instrument"] is True
+    assert drift["previous_execution_instrument_id"] == "scheduler-v1"
+    assert drift["current_execution_instrument_id"] == "scheduler-v2"
 
 
 def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(

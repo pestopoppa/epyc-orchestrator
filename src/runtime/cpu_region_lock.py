@@ -52,7 +52,9 @@ import fcntl
 import json
 import logging
 import os
+import threading
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, IO, Optional
@@ -120,6 +122,273 @@ def region_lock_path(role: str, region: str) -> Path:
 _GLOBAL_MUTEX_ROLE = "GLOBAL"
 
 
+def _occupancy_path() -> Path:
+    return _tmp_dir() / "cpu_region.occupancy.json"
+
+
+def _occupancy_mutex_path() -> Path:
+    return _tmp_dir() / "cpu_region.occupancy.lock"
+
+
+def _pid_is_alive(pid: object) -> bool:
+    try:
+        numeric_pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if numeric_pid <= 0:
+        return False
+    try:
+        os.kill(numeric_pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _read_occupancy_entries_unlocked() -> list[dict[str, object]]:
+    try:
+        raw = json.loads(_occupancy_path().read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        return []
+    entries = raw.get("entries") if isinstance(raw, dict) else None
+    if not isinstance(entries, list):
+        return []
+    return [dict(entry) for entry in entries if isinstance(entry, dict)]
+
+
+def _write_occupancy_entries_unlocked(entries: list[dict[str, object]]) -> None:
+    path = _occupancy_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    payload = {
+        "schema_version": 1,
+        "updated_at": time.time(),
+        "entries": entries,
+    }
+    tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _update_region_occupancy(
+    *,
+    add: dict[str, object] | None = None,
+    remove_token: str | None = None,
+) -> None:
+    mutex_path = _occupancy_mutex_path()
+    mutex_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(mutex_path, "a+b") as mutex:
+        fcntl.flock(mutex.fileno(), fcntl.LOCK_EX)
+        entries = [
+            entry
+            for entry in _read_occupancy_entries_unlocked()
+            if _pid_is_alive(entry.get("pid"))
+            and str(entry.get("token") or "") != str(remove_token or "")
+        ]
+        if add is not None:
+            entries.append(add)
+        _write_occupancy_entries_unlocked(entries)
+
+
+def _new_occupancy_entry(
+    *,
+    role: str,
+    regions: list[str],
+    instance_idx: Optional[int],
+    capacity: int,
+    request_tag: Optional[str],
+    shared: bool,
+) -> dict[str, object]:
+    return {
+        "token": f"{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex}",
+        "pid": os.getpid(),
+        "role": role,
+        "regions": list(regions),
+        "instance_idx": instance_idx,
+        "capacity": max(1, int(capacity)),
+        "shared": bool(shared),
+        "request_tag": request_tag or "",
+        "started_at": time.time(),
+    }
+
+
+def _reserve_region_admission(
+    *,
+    role: str,
+    regions: list[str],
+    instance_idx: Optional[int],
+    capacity: int,
+    request_tag: Optional[str],
+    shared: bool,
+    timeout_s: float,
+    deadline_s: Optional[float],
+    cancel_check: Optional[Callable[[], bool]],
+) -> str:
+    """Atomically join or establish one cross-process placement cohort.
+
+    ``flock(LOCK_SH)`` alone cannot express "readers from the same serving
+    process only": two different overlapping llama-server processes would
+    both be admitted as readers.  This crash-pruned registry is therefore the
+    cohort admission boundary.  Same-role/same-instance shared requests may
+    join up to the certified capacity; every other overlapping placement waits.
+    """
+    entry = _new_occupancy_entry(
+        role=role,
+        regions=regions,
+        instance_idx=instance_idx,
+        capacity=capacity,
+        request_tag=request_tag,
+        shared=shared,
+    )
+    token = str(entry["token"])
+    requested = set(regions)
+    started = time.perf_counter()
+    timeout_deadline = None if timeout_s <= 0 else started + timeout_s
+    last_log = started
+    mutex_path = _occupancy_mutex_path()
+    mutex_path.parent.mkdir(parents=True, exist_ok=True)
+
+    while True:
+        blockers: list[dict[str, object]] = []
+        with open(mutex_path, "a+b") as mutex:
+            fcntl.flock(mutex.fileno(), fcntl.LOCK_EX)
+            previous = _read_occupancy_entries_unlocked()
+            entries = [item for item in previous if _pid_is_alive(item.get("pid"))]
+            overlaps = [
+                item
+                for item in entries
+                if requested.intersection(str(region) for region in item.get("regions") or [])
+            ]
+            same_cohort = bool(shared) and all(
+                bool(item.get("shared"))
+                and str(item.get("role") or "") == role
+                and item.get("instance_idx") == instance_idx
+                for item in overlaps
+            )
+            per_region_active = max(
+                (
+                    sum(
+                        1
+                        for item in overlaps
+                        if region in {str(value) for value in item.get("regions") or []}
+                    )
+                    for region in requested
+                ),
+                default=0,
+            )
+            cohort_capacity = min(
+                [max(1, int(item.get("capacity") or 1)) for item in overlaps]
+                + [max(1, int(capacity))]
+            )
+            compatible = not overlaps or (
+                same_cohort and per_region_active < cohort_capacity
+            )
+            if compatible:
+                entries.append(entry)
+                _write_occupancy_entries_unlocked(entries)
+                return token
+            blockers = overlaps
+            if len(entries) != len(previous):
+                _write_occupancy_entries_unlocked(entries)
+
+        if cancel_check is not None and cancel_check():
+            raise CpuRegionLockTimeout(
+                f"region admission cancelled before acquire (role={role}, tag={request_tag})"
+            )
+        now = time.perf_counter()
+        if deadline_s is not None and now >= deadline_s:
+            raise CpuRegionLockTimeout(
+                f"region admission deadline exceeded (role={role}, tag={request_tag})"
+            )
+        if timeout_deadline is not None and now >= timeout_deadline:
+            blocker_roles = sorted({str(item.get("role") or "") for item in blockers})
+            raise CpuRegionLockTimeout(
+                f"region admission timeout after {timeout_s:.1f}s "
+                f"(role={role}, blockers={blocker_roles}, tag={request_tag})"
+            )
+        if now - last_log >= _lock_log_every_s():
+            logger.info(
+                "still waiting for region cohort role=%s regions=%s elapsed=%.1fs blockers=%s",
+                role,
+                ",".join(regions),
+                now - started,
+                ",".join(sorted({str(item.get("role") or "") for item in blockers}))
+                or "(unknown)",
+            )
+            last_log = now
+        wake_at = now + _lock_poll_s()
+        if deadline_s is not None:
+            wake_at = min(wake_at, deadline_s)
+        if timeout_deadline is not None:
+            wake_at = min(wake_at, timeout_deadline)
+        time.sleep(max(0.001, wake_at - now))
+
+
+@contextmanager
+def cpu_region_occupancy(
+    *,
+    role: str,
+    regions: list[str],
+    instance_idx: Optional[int],
+    capacity: int,
+    request_tag: Optional[str],
+    shared: bool,
+):
+    """Register one live inference for staged dashboard occupancy telemetry."""
+    if not regions:
+        yield
+        return
+    entry = _new_occupancy_entry(
+        role=role,
+        regions=regions,
+        instance_idx=instance_idx,
+        capacity=capacity,
+        request_tag=request_tag,
+        shared=shared,
+    )
+    token = str(entry["token"])
+    _update_region_occupancy(add=entry)
+    try:
+        yield
+    finally:
+        try:
+            _update_region_occupancy(remove_token=token)
+        except Exception:
+            logger.warning("failed to remove region occupancy token %s", token, exc_info=True)
+
+
+def read_region_occupancy() -> dict[str, object]:
+    """Return live occupancy records and an aggregated per-region load view."""
+    mutex_path = _occupancy_mutex_path()
+    mutex_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(mutex_path, "a+b") as mutex:
+        fcntl.flock(mutex.fileno(), fcntl.LOCK_SH)
+        entries = [
+            entry
+            for entry in _read_occupancy_entries_unlocked()
+            if _pid_is_alive(entry.get("pid"))
+        ]
+    per_region: dict[str, dict[str, object]] = {}
+    for entry in entries:
+        capacity = max(1, int(entry.get("capacity") or 1))
+        for region in entry.get("regions") or []:
+            key = str(region)
+            bucket = per_region.setdefault(
+                key,
+                {"active": 0, "capacity": 0, "roles": [], "tokens": []},
+            )
+            bucket["active"] = int(bucket["active"]) + 1
+            bucket["capacity"] = max(int(bucket["capacity"]), capacity)
+            role = str(entry.get("role") or "")
+            if role and role not in bucket["roles"]:
+                bucket["roles"].append(role)
+            bucket["tokens"].append(str(entry.get("token") or ""))
+    for bucket in per_region.values():
+        cap = max(1, int(bucket["capacity"]))
+        bucket["load"] = min(1.0, int(bucket["active"]) / cap)
+    return {"entries": entries, "per_region": per_region}
+
+
 def global_region_lock_path(region: str) -> Path:
     """Lock-file path for the role-AGNOSTIC global mutex on one atomic region.
 
@@ -154,6 +423,68 @@ class CpuRegionLockTimeout(RuntimeError):
     """
 
 
+_LOCAL_REGION_COND = threading.Condition()
+_LOCAL_SHARED_HOLDERS: dict[tuple[str, str], int] = {}
+_LOCAL_EXCLUSIVE_HOLDERS: dict[tuple[str, str], int] = {}
+
+
+def _acquire_local_region_locks(
+    keys: list[tuple[str, str]],
+    *,
+    shared: bool,
+    timeout_s: float,
+    deadline_s: Optional[float],
+    cancel_check: Optional[Callable[[], bool]],
+    request_tag: Optional[str],
+) -> None:
+    """Same-process reader/writer guard complementing cross-process flock."""
+    started = time.perf_counter()
+    timeout_deadline = None if timeout_s <= 0 else started + timeout_s
+    with _LOCAL_REGION_COND:
+        while True:
+            blocked = any(
+                _LOCAL_EXCLUSIVE_HOLDERS.get(key, 0) > 0
+                or (not shared and _LOCAL_SHARED_HOLDERS.get(key, 0) > 0)
+                for key in keys
+            )
+            if not blocked:
+                target = _LOCAL_SHARED_HOLDERS if shared else _LOCAL_EXCLUSIVE_HOLDERS
+                for key in keys:
+                    target[key] = target.get(key, 0) + 1
+                return
+            if cancel_check is not None and cancel_check():
+                raise CpuRegionLockTimeout(
+                    f"local region lock cancelled before acquire (tag={request_tag})"
+                )
+            now = time.perf_counter()
+            if deadline_s is not None and now >= deadline_s:
+                raise CpuRegionLockTimeout(
+                    f"local region lock deadline exceeded (tag={request_tag})"
+                )
+            if timeout_deadline is not None and now >= timeout_deadline:
+                raise CpuRegionLockTimeout(
+                    f"local region lock timeout after {timeout_s:.1f}s (tag={request_tag})"
+                )
+            wake_candidates = [now + _lock_poll_s()]
+            if deadline_s is not None:
+                wake_candidates.append(deadline_s)
+            if timeout_deadline is not None:
+                wake_candidates.append(timeout_deadline)
+            _LOCAL_REGION_COND.wait(timeout=max(0.001, min(wake_candidates) - now))
+
+
+def _release_local_region_locks(keys: list[tuple[str, str]], *, shared: bool) -> None:
+    target = _LOCAL_SHARED_HOLDERS if shared else _LOCAL_EXCLUSIVE_HOLDERS
+    with _LOCAL_REGION_COND:
+        for key in keys:
+            remaining = max(0, target.get(key, 0) - 1)
+            if remaining:
+                target[key] = remaining
+            else:
+                target.pop(key, None)
+        _LOCAL_REGION_COND.notify_all()
+
+
 def _try_flock(fd: int, lock_type: int) -> bool:
     """Non-blocking fcntl.flock — returns True on success, False if the
     lock is held by another process. Any other OSError propagates.
@@ -176,8 +507,9 @@ def _acquire_one_with_timeout(
     deadline_s: Optional[float],
     cancel_check: Optional[Callable[[], bool]],
     request_tag: Optional[str],
+    lock_type: int = fcntl.LOCK_EX,
 ) -> float:
-    """Block until LOCK_EX is acquired on `fh`, or raise on timeout/cancel.
+    """Block until the requested flock mode is acquired, or raise on timeout/cancel.
 
     Returns elapsed wait seconds. Logs every ~15s while waiting.
     """
@@ -189,7 +521,7 @@ def _acquire_one_with_timeout(
     abs_deadline = None if timeout_s <= 0 else (start + timeout_s)
 
     while True:
-        if _try_flock(fh.fileno(), fcntl.LOCK_EX):
+        if _try_flock(fh.fileno(), lock_type):
             return time.perf_counter() - start
         if cancel_check is not None and cancel_check():
             raise CpuRegionLockTimeout(
@@ -526,8 +858,17 @@ def cpu_region_lock(
     deadline_s: Optional[float] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
     request_tag: Optional[str] = None,
+    shared: bool = False,
+    capacity: int = 1,
 ):
-    """Acquire LOCK_EX on each region's file lock, in lexicographic order.
+    """Acquire each region's file lock in exclusive or certified-shared mode.
+
+    ``shared=True`` is reserved for requests sent to the *same* serving
+    process, where llama-server's native slots are the concurrency boundary.
+    When cross-role placement is enabled, the crash-pruned occupancy registry
+    atomically establishes a serving-process cohort: only matching shared
+    requests may join it, and every overlapping different process waits until
+    it drains. Per-role flock files remain the attribution/legacy boundary.
 
     Yields a dict {region: Path} so callers can inspect / log which lock
     files were taken. Releases all locks (LIFO order) on context exit,
@@ -576,6 +917,7 @@ def cpu_region_lock(
     started_at = time.time()
     handles: list[tuple[str, Path, IO[bytes]]] = []
     acquired_paths: dict[str, Path] = {}
+    lock_type = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
 
     def _acquire(lock_role: str, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -591,11 +933,15 @@ def cpu_region_lock(
                 deadline_s=deadline_s,
                 cancel_check=cancel_check,
                 request_tag=request_tag,
+                lock_type=lock_type,
             )
         except BaseException:
             fh.close()
             raise
-        if lock_role != _GLOBAL_MUTEX_ROLE:
+        # Shared holders cannot safely own one mutable attribution payload:
+        # one completion would clear another live request's JSON.  /proc lock
+        # ownership + the occupancy ledger provide exact shared attribution.
+        if lock_role != _GLOBAL_MUTEX_ROLE and not shared:
             _write_lock_payload(
                 fh,
                 _lock_payload_for_region(
@@ -610,31 +956,81 @@ def cpu_region_lock(
         handles.append((region, path, fh))
 
     cross_role_mutex = _cross_role_mutex_enabled()
+    reservation_token: str | None = None
+    local_keys = (
+        [(_GLOBAL_MUTEX_ROLE, region) for region in sorted_regions]
+        if cross_role_mutex
+        else []
+    ) + [(role, region) for region in sorted_regions]
+    local_acquired = False
 
     try:
-        # A-1: when enabled, acquire the role-AGNOSTIC global region mutex for
-        # ALL regions first (sorted) — true cross-role exclusion — then the
-        # per-role attribution locks (also sorted). Consistent global ordering
-        # (GLOBAL-all-then-role-all, each region-sorted) across every caller
-        # prevents deadlock. Flag off → skip the GLOBAL layer entirely →
-        # legacy behavior unchanged.
         if cross_role_mutex:
+            reservation_token = _reserve_region_admission(
+                role=role,
+                regions=sorted_regions,
+                instance_idx=instance_idx,
+                capacity=max(1, int(capacity)),
+                request_tag=request_tag,
+                shared=shared,
+                timeout_s=timeout_s,
+                deadline_s=deadline_s,
+                cancel_check=cancel_check,
+            )
+        _acquire_local_region_locks(
+            local_keys,
+            shared=shared,
+            timeout_s=timeout_s,
+            deadline_s=deadline_s,
+            cancel_check=cancel_check,
+            request_tag=request_tag,
+        )
+        local_acquired = True
+        # A-1: when enabled, acquire the role-AGNOSTIC global region mutex for
+        # exclusive cohort only. Shared cohorts are mutually excluded by the
+        # atomic admission registry; taking LOCK_SH here would incorrectly let
+        # two different serving-process cohorts overlap. Consistent ordering
+        # (GLOBAL-all-then-role-all, each region-sorted) prevents deadlock.
+        if cross_role_mutex and not shared:
             for region in sorted_regions:
                 _acquire(_GLOBAL_MUTEX_ROLE, global_region_lock_path(region))
         for region in sorted_regions:
             path = region_lock_path(role, region)
             _acquire(role, path)
             acquired_paths[region] = path
-        yield acquired_paths
+        if reservation_token is not None:
+            yield acquired_paths
+        else:
+            with cpu_region_occupancy(
+                role=role,
+                regions=sorted_regions,
+                instance_idx=instance_idx,
+                capacity=max(1, int(capacity)),
+                request_tag=request_tag,
+                shared=shared,
+            ):
+                yield acquired_paths
     finally:
         # LIFO release: close in reverse acquire order. Closing the file
         # descriptor releases the fcntl lock automatically.
         for _region, _path, fh in reversed(handles):
             try:
-                _clear_lock_payload(fh)
+                if not shared:
+                    _clear_lock_payload(fh)
                 fh.close()
             except Exception:
                 pass
+        if local_acquired:
+            _release_local_region_locks(local_keys, shared=shared)
+        if reservation_token is not None:
+            try:
+                _update_region_occupancy(remove_token=reservation_token)
+            except Exception:
+                logger.warning(
+                    "failed to remove region admission token %s",
+                    reservation_token,
+                    exc_info=True,
+                )
 
 
 @contextmanager
@@ -646,6 +1042,8 @@ def cpu_region_lock_for_instance(
     deadline_s: Optional[float] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
     request_tag: Optional[str] = None,
+    shared: bool = False,
+    capacity: int = 1,
 ):
     """Convenience: look up regions for (role, instance_idx) via
     `instance_topology.get_instance_regions()` and acquire them.
@@ -667,5 +1065,7 @@ def cpu_region_lock_for_instance(
         deadline_s=deadline_s,
         cancel_check=cancel_check,
         request_tag=request_tag,
+        shared=shared,
+        capacity=capacity,
     ) as paths:
         yield paths

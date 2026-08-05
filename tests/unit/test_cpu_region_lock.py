@@ -49,6 +49,7 @@ from src.runtime.cpu_region_lock import (  # noqa: E402
     CpuRegionLockTimeout,
     cpu_region_lock,
     cpu_region_lock_for_instance,
+    read_region_occupancy,
     read_region_lock_payload,
     region_lock_path,
     sweep_stale_region_lock_payloads,
@@ -413,6 +414,26 @@ class TestCpuRegionLockCrossProcess:
             Path(ready_path).touch()
             time.sleep(hold_s)
 
+    @staticmethod
+    def _hold_shared_cohort(role, regions, hold_s, tmp_dir, ready_path):
+        os.environ["ORCHESTRATOR_TMP_DIR"] = tmp_dir
+        os.environ["ORCHESTRATOR_INFERENCE_LOCK_POLL_MS"] = "10"
+        os.environ["ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT"] = "1"
+        import importlib
+        import src.runtime.cpu_region_lock as crl
+
+        importlib.reload(crl)
+        with crl.cpu_region_lock(
+            role,
+            set(regions),
+            instance_idx=0,
+            timeout_s=10,
+            shared=True,
+            capacity=4,
+        ):
+            Path(ready_path).touch()
+            time.sleep(hold_s)
+
     def test_cross_process_exclusion(self, tmp_path, monkeypatch):
         """fcntl locks are per-fd-pair — verify they hold across
         processes too. Spawn a subprocess that takes q0; assert the
@@ -450,6 +471,46 @@ class TestCpuRegionLockCrossProcess:
                 p.terminate()
             p.join(timeout=2)
 
+    def test_cross_process_shared_cohort_allows_same_server_only(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+        ctx = multiprocessing.get_context("fork")
+        ready_path = tmp_path / "shared_child_ready"
+        p = ctx.Process(
+            target=self._hold_shared_cohort,
+            args=("frontdoor", ["q0"], 1.5, str(tmp_path), str(ready_path)),
+        )
+        p.start()
+        try:
+            deadline = time.time() + 5
+            while time.time() < deadline and not ready_path.exists():
+                time.sleep(0.05)
+            assert ready_path.exists(), "child failed to establish shared cohort"
+
+            with cpu_region_lock(
+                "frontdoor",
+                {"q0"},
+                instance_idx=0,
+                timeout_s=0.5,
+                shared=True,
+                capacity=4,
+            ):
+                assert p.is_alive(), "same-server request should join before child exits"
+
+            with pytest.raises(CpuRegionLockTimeout, match="admission timeout"):
+                with cpu_region_lock(
+                    "worker_general",
+                    {"q0"},
+                    instance_idx=0,
+                    timeout_s=0.2,
+                    shared=True,
+                    capacity=4,
+                ):
+                    pytest.fail("different serving process must not join shared cohort")
+        finally:
+            if p.is_alive():
+                p.terminate()
+            p.join(timeout=2)
+
 
 class TestForInstanceConvenience:
     def test_known_instance_uses_topology(self, monkeypatch):
@@ -475,3 +536,42 @@ class TestForInstanceConvenience:
         )
         with cpu_region_lock_for_instance("unknown_role", 999) as paths:
             assert paths == {}
+
+
+class TestSharedNativeBatchOccupancy:
+    def test_shared_holders_report_fractional_load_and_block_exclusive(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+        with cpu_region_lock(
+            "frontdoor", {"q0"}, shared=True, capacity=4, request_tag="batch-a"
+        ):
+            with cpu_region_lock(
+                "frontdoor", {"q0"}, shared=True, capacity=4, request_tag="batch-a"
+            ):
+                q0 = read_region_occupancy()["per_region"]["q0"]
+                assert q0["active"] == 2
+                assert q0["capacity"] == 4
+                assert q0["load"] == pytest.approx(0.5)
+                with pytest.raises(CpuRegionLockTimeout):
+                    with cpu_region_lock("other", {"q0"}, timeout_s=0.05):
+                        pytest.fail("exclusive placement must conflict with shared lease")
+
+        assert read_region_occupancy()["entries"] == []
+
+    def test_shared_cohort_enforces_certified_capacity(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+        with cpu_region_lock(
+            "frontdoor", {"q0"}, instance_idx=0, shared=True, capacity=2
+        ):
+            with cpu_region_lock(
+                "frontdoor", {"q0"}, instance_idx=0, shared=True, capacity=2
+            ):
+                with pytest.raises(CpuRegionLockTimeout, match="admission timeout"):
+                    with cpu_region_lock(
+                        "frontdoor",
+                        {"q0"},
+                        instance_idx=0,
+                        shared=True,
+                        capacity=2,
+                        timeout_s=0.05,
+                    ):
+                        pytest.fail("cohort exceeded certified native slot capacity")

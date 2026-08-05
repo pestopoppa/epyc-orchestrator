@@ -38,6 +38,14 @@ def test_cmd_start_self_protects_via_oom_score_adj(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr(autopilot.fcntl, "flock", lambda *_a, **_k: None)
     monkeypatch.setattr(autopilot, "run_loop", lambda **_k: None)
     monkeypatch.setattr(autopilot, "_set_oom_score_adj", _spy)
+    monkeypatch.setattr(
+        autopilot,
+        "load_state",
+        lambda: {
+            "pareto_objective_policy": autopilot.RATE_4D_OBJECTIVE_POLICY,
+            "eval_execution_instrument_id": autopilot.EVAL_EXECUTION_INSTRUMENT_ID,
+        },
+    )
 
     args = argparse.Namespace(max_trials=1, dry_run=True, no_controller=True, tui=False)
     autopilot.cmd_start(args)

@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from src.llm_primitives import LLMPrimitives
+from src.llm_primitives.backend import _certified_native_batch_width
 from src.llm_primitives.inference import _extract_port, _primary_url, _sampling_cache_key
 from src.config import reset_config
 from src.model_server import InferenceRequest, InferenceResult
@@ -23,6 +24,29 @@ from src.registry_loader import (
     PerformanceMetrics,
     RoleConfig,
 )
+
+
+def test_certified_native_batch_width_resolves_worker_registry_alias(monkeypatch):
+    monkeypatch.setenv(
+        "ORCHESTRATOR_NATIVE_BATCH_SHARED_ROLES", "frontdoor,worker_general"
+    )
+    owner = Mock()
+    owner.registry._raw = {
+        "server_mode": {
+            "worker": {
+                "model_role": "worker_general",
+                "slots": 4,
+                "serving_shape": {"slots_by_shape": {"full": 4}},
+            }
+        }
+    }
+    owner.admission_controller._limits = {"http://localhost:8072": 4}
+
+    assert _certified_native_batch_width(
+        owner,
+        topology_role="worker_general",
+        full_url="http://localhost:8072",
+    ) == 4
 
 
 @pytest.fixture
@@ -550,6 +574,59 @@ class TestCallCachingBackend:
         )
 
         assert prims._call_caching_backend(backend, "hi", "frontdoor") == "ok"
+
+    def test_direct_full_eval_backend_joins_certified_native_batch_lease(
+        self, mock_backend, monkeypatch
+    ):
+        monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+        monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {("frontdoor", 0): frozenset({"q0", "q1", "q2", "q3"})},
+        )
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.topology_idx_for_port",
+            lambda role, port: 0 if (role, port) == ("frontdoor", 8070) else None,
+        )
+        monkeypatch.setattr(
+            "src.llm_primitives.backend._certified_native_batch_width",
+            lambda *_args, **_kwargs: 4,
+        )
+        calls = []
+
+        class FakeRegionLock:
+            def __enter__(self):
+                return {}
+
+            def __exit__(self, *_exc):
+                return False
+
+        def fake_region_lock(role, instance_idx, **kwargs):
+            calls.append((role, instance_idx, kwargs))
+            return FakeRegionLock()
+
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock.cpu_region_lock_for_instance",
+            fake_region_lock,
+        )
+        mock_backend.infer.return_value = InferenceResult(
+            role="frontdoor",
+            output="ok",
+            tokens_generated=1,
+            generation_speed=1.0,
+            elapsed_time=0.1,
+            success=True,
+        )
+        prims = LLMPrimitives(
+            mock_mode=False,
+            server_urls={"frontdoor": "http://localhost:8070"},
+        )
+        with prims.request_context(workload_class="eval_batch", batch_id="batch-1"):
+            assert prims._call_caching_backend(mock_backend, "hi", "frontdoor") == "ok"
+
+        assert calls[0][2]["shared"] is True
+        assert calls[0][2]["capacity"] == 4
+        assert calls[0][2]["request_tag"] == "batch-1"
 
     def test_shape_aware_concurrency_backend_defers_contention_gate_to_dispatch(
         self, monkeypatch

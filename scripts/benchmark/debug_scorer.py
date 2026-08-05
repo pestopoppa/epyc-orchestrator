@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import math
 import os
 import re
@@ -33,6 +34,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+
+log = logging.getLogger(__name__)
 
 _SCORER_TMP_ROOT = Path("/mnt/raid0/llm/tmp")
 
@@ -67,6 +70,15 @@ class ScoringUnavailableError(RuntimeError):
     ``math_verify`` parses were mis-scored en masse; this exception makes the
     failure loud instead of catastrophic-and-quiet.
     """
+
+
+class _JudgeResponseError(ValueError):
+    """Internal, non-sensitive classification of an unusable judge response."""
+
+    def __init__(self, category: str, detail: str) -> None:
+        super().__init__(detail)
+        self.category = category
+        self.detail = detail
 
 
 def score_answer(
@@ -922,15 +934,17 @@ def _score_llm_judge(
             resp.raise_for_status()
             data = resp.json()
             verdict = str(data.get("answer") or "").strip().lower()
-            if data.get("error") or not verdict:
+            if data.get("error"):
                 # A structured backend error (200-with-error body) or an empty
                 # answer is scorer-unavailability, NOT a "false" verdict. Route
                 # it through the shared handler below so it becomes an honest
                 # ERROR row instead of a silently-wrong score.
-                raise ValueError(
-                    "orchestrator judge returned no usable answer "
-                    f"(error={data.get('error')!r})"
+                raise _JudgeResponseError(
+                    "backend_error",
+                    f"{type(data.get('error')).__name__}: {str(data.get('error'))[:120]}",
                 )
+            if not verdict:
+                raise _JudgeResponseError("empty_answer", "answer field was empty")
         else:
             # Explicit judge_url / judge_host+judge_port override: a direct
             # llama-server target — keep the raw OpenAI-compatible protocol.
@@ -944,21 +958,54 @@ def _score_llm_judge(
                 timeout=timeout,
             )
             resp.raise_for_status()
-            verdict = resp.json()["choices"][0]["message"]["content"].strip().lower()
-    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
-        # HTTP/transport failure (httpx.*), non-2xx (HTTPStatusError from
-        # raise_for_status), bad JSON (json.JSONDecodeError <: ValueError), an
-        # unexpected response shape (KeyError/IndexError/TypeError), or an
-        # orchestrator error/empty-answer body (ValueError raised just above).
-        # A judge that is down or malformed is scorer-unavailability — surface
-        # it as an ERROR; do NOT silently fall back to substring (audit item B7
-        # owns the substring fast-path extraction semantics).
-        raise ScoringUnavailableError(
-            f"llm_judge unreachable or returned a malformed response at "
-            f"{judge_url}; refusing to silently fall back to substring"
-        ) from exc
+            data = resp.json()
+            try:
+                verdict = str(data["choices"][0]["message"]["content"]).strip().lower()
+            except (KeyError, IndexError, TypeError) as exc:
+                raise _JudgeResponseError(
+                    "unexpected_shape", type(exc).__name__
+                ) from exc
+            if not verdict:
+                raise _JudgeResponseError("empty_answer", "content field was empty")
+    except httpx.TimeoutException as exc:
+        cause = exc
+        category = "transport_timeout"
+        detail = f"{type(exc).__name__}: {str(exc)[:120]}"
+    except httpx.HTTPStatusError as exc:
+        cause = exc
+        status = getattr(getattr(exc, "response", None), "status_code", "unknown")
+        category = f"http_status_{status}"
+        detail = f"{type(exc).__name__}: {str(exc)[:120]}"
+    except httpx.RequestError as exc:
+        cause = exc
+        category = "transport_error"
+        detail = f"{type(exc).__name__}: {str(exc)[:120]}"
+    except _JudgeResponseError as exc:
+        cause = exc
+        category = exc.category
+        detail = exc.detail
+    except json.JSONDecodeError as exc:
+        cause = exc
+        category = "invalid_json"
+        detail = f"{type(exc).__name__}: {str(exc)[:120]}"
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        cause = exc
+        # Some response stand-ins and older HTTP clients raise plain ValueError
+        # for invalid JSON. Preserve that distinction from transport failure.
+        category = "invalid_json" if isinstance(exc, ValueError) else "unexpected_shape"
+        detail = f"{type(exc).__name__}: {str(exc)[:120]}"
+    else:
+        return verdict.startswith("true")
 
-    return verdict.startswith("true")
+    # The category and original exception class/message are deliberately first:
+    # compact per-question sidecars truncate long errors. Never include prompts
+    # or response bodies here.
+    message = (
+        f"llm_judge_{category}: endpoint={judge_url}; cause={detail}; "
+        "refusing scorer fallback"
+    )
+    log.warning("LLM judge unavailable: %s", message)
+    raise ScoringUnavailableError(message) from cause
 
 
 def _resolve_llm_judge_base_url(config: dict[str, Any]) -> str:

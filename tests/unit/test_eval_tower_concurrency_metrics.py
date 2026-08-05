@@ -439,8 +439,8 @@ def test_eval_concurrency_uses_min_cap_across_forced_roles(monkeypatch) -> None:
     assert eval_tower._eval_concurrency(["frontdoor", "worker_general"]) == 2
 
 
-def test_eval_batch_resolves_concurrency_from_actual_forced_roles(monkeypatch) -> None:
-    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+def test_eval_batch_uses_certified_native_lanes_for_forced_cpu_roles(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
     tower = EvalTower()
     observed: list[tuple[str, ...]] = []
 
@@ -470,7 +470,122 @@ def test_eval_batch_resolves_concurrency_from_actual_forced_roles(monkeypatch) -
         label="forced",
     )
 
-    assert observed == [("worker_general", "frontdoor")]
+    # Both full CPU serving processes have four certified native slots, so
+    # neither falls back to the legacy disjoint-instance concurrency probe.
+    assert observed == []
+
+
+def test_eval_resource_lanes_collapse_gpu_alias_and_use_native_width(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    lanes, capacities = eval_tower._eval_resource_lanes(
+        [
+            {"force_role": "frontdoor"},
+            {"force_role": "architect_general"},
+            {"force_role": "coder_escalation"},
+        ]
+    )
+
+    assert lanes[0].capacity == 4
+    assert lanes[0].units == 1
+    assert lanes[0].device == "cpu-native-batch"
+    assert lanes[1].key == lanes[2].key == "http://localhost:8083"
+    assert capacities["http://localhost:8083"] == 2
+
+
+def test_eval_resource_lanes_group_overlapping_full_cpu_process_cohorts(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    lanes, capacities = eval_tower._eval_resource_lanes(
+        [
+            {"force_role": "frontdoor"},
+            {"force_role": "worker_general"},
+        ]
+    )
+
+    assert lanes[0].key == lanes[1].key == "cpu:full-regions"
+    assert capacities["cpu:full-regions"] == 4
+    assert lanes[0].units == 1
+    assert lanes[1].units == 1
+    assert lanes[0].cohort == "frontdoor"
+    assert lanes[1].cohort == "worker_general"
+
+
+def test_eval_resource_lane_weights_near_full_context_prompt(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+
+    lane = eval_tower._eval_resource_lane(
+        {"force_role": "worker_general", "prompt": "x" * 260_000}
+    )
+
+    assert lane.capacity == 4
+    assert lane.units == 4
+
+
+def test_eval_resource_lanes_compute_prompt_load_per_question(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+
+    lanes, capacities = eval_tower._eval_resource_lanes(
+        [
+            {"force_role": "worker_general", "prompt": "short"},
+            {"force_role": "worker_general", "prompt": "x" * 260_000},
+        ]
+    )
+
+    assert capacities["cpu:full-regions"] == 4
+    assert [lane.units for lane in lanes] == [1, 4]
+
+
+def test_eval_batch_never_overlaps_different_native_cpu_process_cohorts(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    tower = EvalTower(timeout=2)
+    native = eval_tower._EvalResourceLane(
+        key="cpu:full-regions", role="frontdoor", capacity=4, units=1,
+        device="cpu-native-batch", cohort="frontdoor",
+    )
+    worker_native = eval_tower._EvalResourceLane(
+        key="cpu:full-regions", role="worker_general", capacity=4, units=1,
+        device="cpu-native-batch", cohort="worker_general",
+    )
+    monkeypatch.setattr(
+        eval_tower,
+        "_eval_resource_lanes",
+        lambda _questions: ([native, worker_native, native], {"cpu:full-regions": 4}),
+    )
+    active: set[str] = set()
+    observed: list[set[str]] = []
+    active_lock = threading.Lock()
+    native_barrier = threading.Barrier(2)
+
+    def fake_generate(q: dict, client: object) -> "eval_tower._GenOutcome":
+        role = str(q["force_role"])
+        with active_lock:
+            active.add(str(q["id"]))
+            observed.append(set(active))
+        if role == "frontdoor":
+            native_barrier.wait(timeout=1)
+        time.sleep(0.02)
+        with active_lock:
+            active.remove(str(q["id"]))
+        return eval_tower._GenOutcome(
+            gen_ended_at_s=time.time(),
+            final_result=QuestionResult(
+                question_id=str(q["id"]), suite="unit", prompt="", expected="ok", correct=True
+            ),
+        )
+
+    monkeypatch.setattr(tower, "_generate_question", fake_generate)
+    results = tower._eval_batch(
+        [
+            {"id": "frontdoor-1", "force_role": "frontdoor"},
+            {"id": "worker", "force_role": "worker_general"},
+            {"id": "frontdoor-2", "force_role": "frontdoor"},
+        ],
+        client=object(),  # type: ignore[arg-type]
+        label="weighted-lane",
+    )
+
+    assert all(result.correct for result in results)
+    assert {"frontdoor-1", "frontdoor-2"} in observed
+    assert not any("worker" in state and len(state) > 1 for state in observed)
 
 
 def test_eval_concurrency_caps_to_live_fleet_when_static_topology_allows(monkeypatch) -> None:

@@ -158,6 +158,34 @@ def test_gate_allows_known_good_pair(matrix) -> None:
     assert d.decision == contention.PairDecision.ALLOW
 
 
+def test_gate_allows_resolved_gpu_candidate_while_cpu_regions_are_active(
+    matrix, monkeypatch
+) -> None:
+    from src.scheduling.device_model import DeviceClass, RoleDevice
+
+    def resolve(role: str) -> RoleDevice:
+        device_class = (
+            DeviceClass.GPU if role == "coder_escalation" else DeviceClass.CPU
+        )
+        return RoleDevice(
+            role=role,
+            device_class=device_class,
+            device="ROCm0" if device_class is DeviceClass.GPU else None,
+            source="unit",
+            corroborated=True,
+            accounting_key=role,
+        )
+
+    monkeypatch.setattr("src.scheduling.device_model.resolve_role_device", resolve)
+    gate = make_gate(gate_mod, {"frontdoor": [0]}, matrix=matrix)
+
+    decision = gate.evaluate("coder_escalation", contention.TrafficClass.BACKGROUND)
+
+    assert decision.admitted
+    assert decision.decision == contention.PairDecision.ALLOW
+    assert "GPU lane" in decision.reason
+
+
 def test_gate_allows_same_role_when_matrix_says_allow(matrix) -> None:
     """frontdoor is same-role-allow. A second frontdoor request should be
     admitted even while frontdoor is decoding."""

@@ -174,6 +174,54 @@ def test_journal_archive_authority_uses_current_snapshot(
     assert called_full_replay is False
 
 
+def test_journal_archive_authority_rejects_snapshot_from_other_objective_policy(
+    journal: ExperimentJournal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal.record(_make_entry(1, quality=1.4, speed=40.0))
+    rows = autopilot._journal_rows_for_archive(journal)
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+    assert archive is not None
+    journal.append_journal_snapshot_event(
+        through_trial_id=1,
+        snapshot={"archive": archive},
+        policy_version="unit-policy-v1",
+        actor="unit-test",
+    )
+    sentinel = {"objective_policy": autopilot.RATE_4D_OBJECTIVE_POLICY, "all_entries": []}
+    calls: list[str] = []
+
+    def _full_replay(*args, **kwargs):
+        calls.append(kwargs["objective_policy"])
+        return sentinel
+
+    monkeypatch.setattr(autopilot, "reconstruct_archive_from_journal_rows", _full_replay)
+
+    payload = autopilot._journal_archive_payload_for_authority(
+        journal, objective_policy=autopilot.RATE_4D_OBJECTIVE_POLICY
+    )
+
+    assert payload == sentinel
+    assert calls == [autopilot.RATE_4D_OBJECTIVE_POLICY]
+
+
+def test_autopilot_start_fails_closed_until_execution_instrument_is_ratified() -> None:
+    with pytest.raises(RuntimeError, match="not ratified"):
+        autopilot._assert_eval_execution_instrument_state(
+            {
+                "pareto_objective_policy": "task_rate_4d_v1",
+                "eval_execution_instrument_id": "serial-v1",
+            }
+        )
+
+    autopilot._assert_eval_execution_instrument_state(
+        {
+            "pareto_objective_policy": autopilot.RATE_4D_OBJECTIVE_POLICY,
+            "eval_execution_instrument_id": autopilot.EVAL_EXECUTION_INSTRUMENT_ID,
+        }
+    )
+
+
 def test_journal_archive_authority_folds_safe_snapshot_tail(
     journal: ExperimentJournal,
     monkeypatch: pytest.MonkeyPatch,
@@ -650,6 +698,27 @@ def test_restart_after_first_current_era_point_loads_payload_and_clears_rebase(
             "next AutoPilot startup observed at least one current-era Pareto point"
         ),
     }
+
+
+def test_resource_lane_bootstrap_marker_completes_without_reusing_e8_marker(
+    journal: ExperimentJournal,
+) -> None:
+    journal.record(_make_entry(1, quality=1.2))
+    payload = autopilot._journal_archive_payload_for_authority(journal)
+    assert payload is not None
+    state = {
+        "_allow_empty_frontier_rebase": True,
+        "eval_instrument_empty_frontier_bootstrap": {"status": "pending"},
+        "e8_empty_frontier_bootstrap": {"status": "completed"},
+    }
+
+    _archive, rebase_completed = autopilot._startup_archive_from_current_era_payload(
+        state, payload
+    )
+
+    assert rebase_completed is True
+    assert state["eval_instrument_empty_frontier_bootstrap"]["status"] == "completed"
+    assert state["e8_empty_frontier_bootstrap"]["status"] == "completed"
 
 
 def test_save_state_with_journal_archive_authority_removes_state_cache(

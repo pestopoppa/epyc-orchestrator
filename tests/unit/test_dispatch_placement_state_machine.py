@@ -17,6 +17,7 @@ import importlib
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -77,6 +78,48 @@ _FRONTDOOR_REGIONS = {
     ("frontdoor", 3): frozenset({"q2"}),
     ("frontdoor", 4): frozenset({"q3"}),
 }
+
+
+def test_eval_batch_uses_certified_shared_full_lease(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+    monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+    full = _StubBackend("http://localhost:8070")
+    backend = ca_mod.ConcurrencyAwareBackend(
+        full_backend=full,
+        quarter_backends=[_StubBackend("http://localhost:8080")],
+        role="frontdoor",
+        full_port=8070,
+        native_batch_width=4,
+    )
+    calls: list[dict] = []
+
+    @contextlib.contextmanager
+    def fake_region_lock(role, instance_idx, **kwargs):
+        calls.append({"role": role, "instance_idx": instance_idx, **kwargs})
+        yield {"q0": Path("/tmp/q0")}
+
+    from src.runtime import cpu_region_lock
+
+    monkeypatch.setattr(cpu_region_lock, "cpu_region_lock_for_instance", fake_region_lock)
+    request = SimpleNamespace(
+        workload_class="eval_batch", batch_id="t1-batch", timeout=1200
+    )
+
+    with backend._dispatch(request=request) as (selected, idx, is_full):
+        assert selected is full
+        assert idx == -1
+        assert is_full is True
+
+    assert calls == [
+        {
+            "role": "frontdoor",
+            "instance_idx": 0,
+            "timeout_s": 1200.0,
+            "request_tag": "t1-batch",
+            "shared": True,
+            "capacity": 4,
+        }
+    ]
 
 
 def test_dispatcher_uses_topology_safe_candidate_when_full_held(
@@ -351,6 +394,16 @@ def test_full_disabled_places_four_concurrent_on_four_quarters(
         lambda: {"worker_general": sorted(held)},
     )
     monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.held_regions_by_role",
+        lambda *args, **kwargs: {
+            "worker_general": frozenset().union(
+                *(_WORKER_GENERAL_REGIONS[("worker_general", idx)] for idx in held)
+            )
+            if held
+            else frozenset(),
+        },
+    )
+    monkeypatch.setattr(
         "src.runtime.instance_topology.get_instance_regions",
         lambda: dict(_WORKER_GENERAL_REGIONS),
     )
@@ -396,6 +449,9 @@ def test_burst_prefer_quarters_solo_request_goes_full(
 
     monkeypatch.setattr("src.runtime.cpu_region_lock.cpu_region_lock_for_instance", _mock_lock)
     monkeypatch.setattr("src.runtime.cpu_region_lock.active_region_holders", lambda: {})
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.held_regions_by_role", lambda *args, **kwargs: {}
+    )
     # Third seam (570200ff): without this patch the test reads LIVE host lock
     # state — a real frontdoor decode holding q0 flips is_full to False
     # (deterministically reproduced by the WP-12 session, 2026-07-23). Siblings
@@ -436,6 +492,10 @@ def test_burst_prefer_quarters_under_load_prefers_quarter_over_free_full(
         lambda: {"frontdoor": [3]},
     )
     monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.held_regions_by_role",
+        lambda *a, **k: {"frontdoor": frozenset({"q2"})},
+    )
+    monkeypatch.setattr(
         "src.runtime.instance_topology.get_instance_regions",
         lambda: dict(_FRONTDOOR_REGIONS),
     )
@@ -471,6 +531,10 @@ def test_full_slot_port_mismatch_skips_full_candidate(
 
     monkeypatch.setattr("src.runtime.cpu_region_lock.cpu_region_lock_for_instance", _mock_lock)
     monkeypatch.setattr("src.runtime.cpu_region_lock.active_region_holders", lambda: {})
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.held_regions_by_role",
+        lambda *args, **kwargs: {},
+    )
     monkeypatch.setattr(
         "src.runtime.instance_topology.get_instance_regions",
         lambda: dict(_FRONTDOOR_REGIONS),

@@ -193,6 +193,7 @@ class ConcurrencyAwareBackend:
         topology_role: str | None = None,
         quarter_topology_idxs: list[int] | None = None,
         health_tracker: Any = None,
+        native_batch_width: int = 1,
     ):
         if not quarter_backends:
             raise ValueError("ConcurrencyAwareBackend requires at least one quarter backend")
@@ -201,6 +202,8 @@ class ConcurrencyAwareBackend:
         self._role = role
         self._topology_role = topology_role or role
         self._full_port = full_port
+        self._native_batch_width = max(1, int(native_batch_width))
+        self._native_full_active = 0
         self._lock = threading.Lock()
 
         # WP-12 fleet layer: when this backend IS the fleet (one CAB per
@@ -628,13 +631,21 @@ class ConcurrencyAwareBackend:
         saved = _slot_save(self._full_url, filename=slot_filename)
         if not saved:
             transaction.advance(MigrationState.ABORTED, detail="save_failed")
-            self._finalize_quarter_assignment(
-                session_id,
-                target_quarter,
-                state=_STATE_MIGRATION_FAILED_COLD,
-                detail="save_failed",
-            )
+            # State-only update, NOT _finalize_quarter_assignment: an ABORTED
+            # migration must not write the HARD affinity map (`_session_quarter`),
+            # which is the SUCCESS path's commit record. The asymmetry is safe
+            # because `_quarter_for_session_locked` falls back to the session
+            # STATE and already treats _STATE_MIGRATION_FAILED_COLD as a reserved
+            # quarter assignment — so dispatch still pins this session to
+            # `target_quarter` while nothing downstream mistakes a failed
+            # handover for a committed one.
             with self._lock:
+                self._set_session_state(
+                    session_id,
+                    state=_STATE_MIGRATION_FAILED_COLD,
+                    quarter=target_quarter,
+                    detail="save_failed",
+                )
                 self._migration_failures += 1
             logger.warning(
                 "KV migration save failed for %s session=%s, quarter %d starts cold (txn=%s)",
@@ -646,13 +657,14 @@ class ConcurrencyAwareBackend:
         restored = _slot_restore(target_url, filename=slot_filename)
         if not restored:
             transaction.advance(MigrationState.ABORTED, detail="restore_failed")
-            self._finalize_quarter_assignment(
-                session_id,
-                target_quarter,
-                state=_STATE_MIGRATION_FAILED_COLD,
-                detail="restore_failed",
-            )
+            # See the save_failed branch above: state-only, no hard affinity.
             with self._lock:
+                self._set_session_state(
+                    session_id,
+                    state=_STATE_MIGRATION_FAILED_COLD,
+                    quarter=target_quarter,
+                    detail="restore_failed",
+                )
                 self._migration_failures += 1
             logger.warning(
                 "KV migration restore failed for %s session=%s quarter %d; session will run cold (txn=%s)",
@@ -1131,7 +1143,54 @@ class ConcurrencyAwareBackend:
         from src.runtime.cpu_region_lock import (
             cpu_region_lock_for_instance,
             CpuRegionLockTimeout,
+            _cross_role_mutex_enabled,
         )
+
+        # Certified EvalTower requests share one placement lease on the same
+        # full llama-server process.  LOCK_SH lets its native slots co-run;
+        # every other CPU placement still takes LOCK_EX and remains mutually
+        # exclusive with this lane.  Requiring both workload_class and batch_id
+        # keeps ordinary/background clients off the shared path.
+        native_batch = (
+            self._native_batch_width > 1
+            and _cross_role_mutex_enabled()
+            and self._full is not None
+            and self._full_slot_aligned
+            and str(getattr(request, "workload_class", "") or "") == "eval_batch"
+            and bool(str(getattr(request, "batch_id", "") or "").strip())
+        )
+        if native_batch:
+            request_tag = str(getattr(request, "batch_id", "") or "")
+            try:
+                placement_timeout_s = max(
+                    60.0, float(getattr(request, "timeout", 60.0) or 60.0)
+                )
+            except (TypeError, ValueError):
+                placement_timeout_s = 60.0
+            shared_ctx = cpu_region_lock_for_instance(
+                self._topology_role,
+                0,
+                timeout_s=placement_timeout_s,
+                request_tag=request_tag,
+                shared=True,
+                capacity=self._native_batch_width,
+            )
+            shared_ctx.__enter__()
+            with self._lock:
+                self._total_requests += 1
+                self._full_requests += 1
+                self._native_full_active += 1
+                self._full_active = True
+            try:
+                yield (self._full, -1, True)
+            finally:
+                with self._lock:
+                    self._native_full_active = max(0, self._native_full_active - 1)
+                    self._full_active = self._native_full_active > 0
+                    if not self._full_active:
+                        self._full_idle_since = time.monotonic()
+                shared_ctx.__exit__(None, None, None)
+            return
 
         deadline_s = None  # caller's deadline carried in via request.timeout
 

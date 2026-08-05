@@ -7,6 +7,62 @@ from typing import Any, Mapping
 _log = logging.getLogger(__name__)
 
 
+def _certified_native_batch_width(
+    owner: Any,
+    *,
+    topology_role: str,
+    full_url: str | None,
+) -> int:
+    """Return the realized shared-lease width for a full CPU endpoint.
+
+    Shared region locks are safe only among aliases of the same physical
+    server.  Certification is therefore explicit by topology role and capped
+    by both the registry's full-shape slot declaration and live admission.
+    """
+    allowed = {
+        role.strip()
+        for role in os.environ.get(
+            "ORCHESTRATOR_NATIVE_BATCH_SHARED_ROLES", "frontdoor,worker_general"
+        ).split(",")
+        if role.strip()
+    }
+    if topology_role not in allowed or not full_url:
+        return 1
+    registry = getattr(owner, "registry", None)
+    raw = getattr(registry, "_raw", {}) if registry is not None else {}
+    server_mode = (raw.get("server_mode") or {}) if isinstance(raw, dict) else {}
+    server = server_mode.get(topology_role, {}) if isinstance(server_mode, dict) else {}
+    if not server and isinstance(server_mode, dict):
+        server = next(
+            (
+                cfg
+                for name, cfg in server_mode.items()
+                if isinstance(cfg, dict)
+                and (
+                    cfg.get("model_role") == topology_role
+                    or topology_role in (cfg.get("shared_with") or [])
+                    or (name == "worker" and topology_role == "worker_general")
+                )
+            ),
+            {},
+        )
+    serving_shape = server.get("serving_shape") if isinstance(server, dict) else {}
+    slots_by_shape = (
+        serving_shape.get("slots_by_shape") if isinstance(serving_shape, dict) else {}
+    )
+    try:
+        declared = int((slots_by_shape or {}).get("full", server.get("slots", 1)))
+    except (TypeError, ValueError):
+        return 1
+    admission = getattr(owner, "admission_controller", None)
+    limits = getattr(admission, "_limits", {}) if admission is not None else {}
+    try:
+        admitted = int(limits.get(full_url, declared))
+    except (TypeError, ValueError):
+        admitted = declared
+    return max(1, min(declared, admitted))
+
+
 def _url_str_ports(url_str: str) -> list[int]:
     """Ports named by a config URL value (``full:`` marker ignored)."""
     ports: list[int] = []
@@ -213,6 +269,11 @@ class BackendMixin:
                         full_port=ca_full_port,
                         topology_role=topology_role,
                         quarter_topology_idxs=quarter_topology_idxs,
+                        native_batch_width=_certified_native_batch_width(
+                            self,
+                            topology_role=topology_role,
+                            full_url=full_url if full_backend is not None else None,
+                        ),
                     )
                     if topology_role != role:
                         _log.info(
@@ -352,6 +413,11 @@ class BackendMixin:
                         topology_role=fleet.topology_role,
                         quarter_topology_idxs=quarter_topology_idxs,
                         health_tracker=health_tracker,
+                        native_batch_width=_certified_native_batch_width(
+                            self,
+                            topology_role=fleet.topology_role,
+                            full_url=full_ep.url if full_ep is not None else None,
+                        ),
                     )
                 fleet_backend[fleet_id] = backend
                 _log.info(

@@ -6,13 +6,13 @@ literals, so they fail if the objective changes meaning — not merely if a numb
 from __future__ import annotations
 
 import types
-from pathlib import Path
 
 import pytest
 
 from src.autopilot_core.pareto_math import dominates
 from src.autopilot_core.tier_specs import (
     LEGACY_OBJECTIVE_POLICY,
+    PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
     RATE_4D_OBJECTIVE_POLICY,
     UnmeasuredObjectiveError,
     legacy_objectives_from,
@@ -50,6 +50,12 @@ def test_live_axis1_is_questions_per_hour_not_tokens_per_second():
     assert objs[1] == pytest.approx(50 / (900.0 / 3600.0))
     # And it is a genuinely different axis from the legacy one.
     assert objs[1] != pytest.approx(legacy_objectives_from(r)[1])
+
+
+def test_resource_lane_scheduler_bumps_live_rate_policy_version():
+    assert PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY == "task_rate_4d_v1"
+    assert RATE_4D_OBJECTIVE_POLICY == "task_rate_4d_v2_resource_lanes"
+    assert RATE_4D_OBJECTIVE_POLICY != PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY
 
 
 def test_live_vector_keeps_the_4d_shape_consumers_index_positionally():
@@ -125,6 +131,17 @@ def test_row_replay_uses_the_policy_the_row_was_recorded_under():
     assert rebuilt_rate is not None
     assert rebuilt_rate[1] == pytest.approx(50 / (900.0 / 3600.0))
     assert rebuilt_rate[1] != pytest.approx(rate_row["speed"])
+
+    prior_rate_row = {
+        **rate_row,
+        "eval_details": {
+            **rate_row["eval_details"],
+            "objective_policy_live": PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
+        },
+    }
+    rebuilt_prior_rate = from_row(prior_rate_row)
+    assert rebuilt_prior_rate is not None
+    assert rebuilt_prior_rate[1] == pytest.approx(50 / (900.0 / 3600.0))
 
 
 # The rate guard must gate the ARCHIVE WRITES only, never the whole post-eval branch:

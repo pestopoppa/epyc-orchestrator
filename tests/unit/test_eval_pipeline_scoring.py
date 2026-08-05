@@ -4,8 +4,8 @@ The workers>1 path splits ``_eval_question`` into ``_generate_question`` (runs o
 the topology-capped generation pool) and ``_score_generation`` (runs on a
 separate, wider SCORING pool sized by ``AUTOPILOT_EVAL_SCORING_CONCURRENCY``) so a
 scoring-bound suite stops capping total throughput at the serving fan-out. These
-tests pin: verdict/order parity vs the serial path, the throughput property
-(wider scoring => proportionally lower wall), the no-progress watchdog tripping on
+tests pin: verdict/order parity vs the serial path, realized scoring-pool width,
+the no-progress watchdog tripping on
 a hung SCORER, the sidecar's scored_at_s >= ended_at_s separation, and the serial
 path's byte-identical behavior (no scored_at_s, no pipeline leakage).
 
@@ -159,37 +159,51 @@ def test_pipelined_verdicts_and_order_match_serial(monkeypatch, tmp_path) -> Non
     assert any(r[1] for r in serial) and any(not r[1] for r in serial)
 
 
-# ── (b) throughput property: wider scoring => proportionally lower wall ─────────
+# ── (b) wider scoring pool is actually admitted ────────────────────────────────
 
 
-def test_wider_scoring_pool_lowers_wall_proportionally(monkeypatch, tmp_path) -> None:
+def test_wider_scoring_pool_increases_observed_parallelism(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("AUTOPILOT_EVAL_ARTIFACT_ROOT", str(tmp_path))
     monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "4")  # fixed generation width
-    n = 24
-    score_latency = 0.03  # >> generation latency (0), so scoring gates the wall
+    n = 32
     questions = [
         {"id": f"q{i}", "suite": "unit", "prompt": f"p{i}", "expected": "x", "_mock_answer": "x"}
         for i in range(n)
     ]
 
-    def wall_for(scoring_width: int) -> float:
+    def peak_for(scoring_width: int) -> int:
         monkeypatch.setenv("AUTOPILOT_EVAL_SCORING_CONCURRENCY", str(scoring_width))
         tower = EvalTower()
+        lock = threading.Lock()
+        active = 0
+        peak = 0
+
+        def observed_score(
+            q: dict, outcome: "eval_tower._GenOutcome", client: object
+        ) -> QuestionResult:
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            try:
+                # Hold the slot long enough for the scheduler to fill the pool.
+                time.sleep(0.08)
+                return _mk_score(0)(q, outcome, client)
+            finally:
+                with lock:
+                    active -= 1
+
         monkeypatch.setattr(tower, "_generate_question", _mk_generate(latency_s=0.0))
-        monkeypatch.setattr(tower, "_score_generation", _mk_score(latency_s=score_latency))
-        t0 = time.perf_counter()
+        monkeypatch.setattr(tower, "_score_generation", observed_score)
         results = tower._eval_batch(list(questions), client=object(), label="tput")
-        wall = time.perf_counter() - t0
         assert len(results) == n and all(r.correct for r in results)
-        return wall
+        return peak
 
-    wall4 = wall_for(4)
-    wall8 = wall_for(8)
-    ratio = wall4 / wall8
+    peak4 = peak_for(4)
+    peak8 = peak_for(8)
 
-    # Ideal ~2x (n/4 vs n/8 waves of score_latency). Assert loosely.
-    assert wall8 < wall4
-    assert ratio > 1.4, f"expected wider scoring ~2x faster, got ratio={ratio:.2f} (wall4={wall4:.3f} wall8={wall8:.3f})"
+    assert peak4 == 4
+    assert peak8 == 8
 
 
 # ── (c) no-progress watchdog trips on a hung SCORER ────────────────────────────
@@ -315,3 +329,66 @@ def test_scoring_concurrency_env_override_clamped_to_gen_width(monkeypatch) -> N
     assert eval_tower._eval_scoring_concurrency(4) == 4  # clamped up
     monkeypatch.setenv("AUTOPILOT_EVAL_SCORING_CONCURRENCY", "not-an-int")
     assert eval_tower._eval_scoring_concurrency(4) >= 4  # falls back to default
+
+
+def test_model_backed_scoring_waits_for_generation_tail(monkeypatch, tmp_path) -> None:
+    """Nested judge inference starts only after all generation lanes drain.
+
+    Client-CPU scoring remains pipelined: its first completion releases the two
+    deliberately blocked generation calls, proving the fix is selective rather
+    than a global generate-then-score barrier.
+    """
+    monkeypatch.setenv("AUTOPILOT_EVAL_ARTIFACT_ROOT", str(tmp_path))
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "2")
+    monkeypatch.setenv("AUTOPILOT_EVAL_SCORING_CONCURRENCY", "4")
+    tower = EvalTower(timeout=2)
+    lock = threading.Lock()
+    release_tail = threading.Event()
+    completed_generations = 0
+    deterministic_started = threading.Event()
+    model_score_generation_counts: list[int] = []
+
+    def generate(q: dict, client: object) -> "eval_tower._GenOutcome":
+        nonlocal completed_generations
+        if q["id"] in {"q2", "q3"}:
+            assert release_tail.wait(1.0)
+        outcome = _mk_generate()(q, client)
+        with lock:
+            completed_generations += 1
+        return outcome
+
+    def score(q: dict, outcome: "eval_tower._GenOutcome", client: object) -> QuestionResult:
+        if q.get("scoring_method") == "llm_judge":
+            with lock:
+                model_score_generation_counts.append(completed_generations)
+        else:
+            deterministic_started.set()
+            release_tail.set()
+        return _mk_score(0)(q, outcome, client)
+
+    monkeypatch.setattr(tower, "_generate_question", generate)
+    monkeypatch.setattr(tower, "_score_generation", score)
+    monkeypatch.setattr(eval_tower, "_model_scoring_concurrency", lambda *_args: 1)
+    questions = [
+        {"id": "q0", "suite": "u", "prompt": "p0", "expected": "x"},
+        {
+            "id": "q1", "suite": "u", "prompt": "p1", "expected": "x",
+            "scoring_method": "llm_judge",
+        },
+        {"id": "q2", "suite": "u", "prompt": "p2", "expected": "x"},
+        {"id": "q3", "suite": "u", "prompt": "p3", "expected": "x"},
+    ]
+
+    results = tower._eval_batch(questions, client=object(), label="judge-tail")
+
+    assert deterministic_started.is_set()
+    assert model_score_generation_counts == [len(questions)]
+    assert [result.question_id for result in results] == [q["id"] for q in questions]
+
+
+def test_rubric_scoring_is_deferred_only_when_judges_are_configured(monkeypatch) -> None:
+    question = {"suite": "deep_research_unit", "scoring_method": "rubric"}
+    monkeypatch.delenv("AUTOPILOT_RUBRIC_JUDGE_ROLES", raising=False)
+    assert eval_tower._scoring_uses_model_judge(question) is False
+    monkeypatch.setenv("AUTOPILOT_RUBRIC_JUDGE_ROLES", "architect_general")
+    assert eval_tower._scoring_uses_model_judge(question) is True

@@ -126,6 +126,13 @@ _INSTRUMENT_LEDGER_PATH = Path(
     )
 )
 
+# Changes to either identifier are measurement-instrument boundaries for the
+# questions/hour objective.  Generation placement changes the denominator;
+# model-backed scoring placement can change both wall time and error exclusion.
+# Keep these human-readable and stamp them into every EvalResult/journal row.
+EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v2_prompt_load"
+EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v1"
+
 
 def question_tier_mix(questions: Sequence[dict[str, Any]]) -> dict[str, int]:
     """Realized difficulty-tier histogram of a drawn question set.
@@ -165,6 +172,8 @@ def _record_instrument_identity(
     dataset_sha: str,
     tier_mix: dict[str, int],
     n_questions: int,
+    execution_instrument_id: str = EVAL_EXECUTION_INSTRUMENT_ID,
+    scoring_schedule_id: str = EVAL_SCORING_SCHEDULE_ID,
 ) -> dict[str, Any] | None:
     """Persist this core_id's instrument identity; return drift details if it changed."""
     with _INSTRUMENT_LEDGER_LOCK:
@@ -178,10 +187,23 @@ def _record_instrument_identity(
         # part of the instrument's identity, so compare it too.
         content_changed = bool(entry) and entry.get("dataset_content_sha256") != dataset_sha
         mix_changed = bool(entry) and entry.get("tier_mix") != tier_mix
-        if entry and (content_changed or mix_changed):
+        execution_changed = bool(entry) and (
+            entry.get("execution_instrument_id") != execution_instrument_id
+        )
+        scoring_schedule_changed = bool(entry) and (
+            entry.get("scoring_schedule_id") != scoring_schedule_id
+        )
+        if entry and (
+            content_changed
+            or mix_changed
+            or execution_changed
+            or scoring_schedule_changed
+        ):
             drift = {
                 "changed_content": content_changed,
                 "changed_tier_mix": mix_changed,
+                "changed_execution_instrument": execution_changed,
+                "changed_scoring_schedule": scoring_schedule_changed,
                 "core_id": core_id,
                 "previous_dataset_content_sha256": entry.get("dataset_content_sha256"),
                 "current_dataset_content_sha256": dataset_sha,
@@ -189,6 +211,12 @@ def _record_instrument_identity(
                 "current_tier_mix": tier_mix,
                 "previous_n_questions": entry.get("n_questions"),
                 "current_n_questions": n_questions,
+                "previous_execution_instrument_id": entry.get(
+                    "execution_instrument_id"
+                ),
+                "current_execution_instrument_id": execution_instrument_id,
+                "previous_scoring_schedule_id": entry.get("scoring_schedule_id"),
+                "current_scoring_schedule_id": scoring_schedule_id,
                 "previous_first_seen": entry.get("first_seen"),
                 "detected_across_restart": True,
             }
@@ -196,6 +224,8 @@ def _record_instrument_identity(
             "dataset_content_sha256": dataset_sha,
             "tier_mix": tier_mix,
             "n_questions": n_questions,
+            "execution_instrument_id": execution_instrument_id,
+            "scoring_schedule_id": scoring_schedule_id,
             "first_seen": (entry or {}).get("first_seen") or datetime.now(timezone.utc).isoformat(),
             "last_seen": datetime.now(timezone.utc).isoformat(),
         }
@@ -1435,6 +1465,245 @@ def _forced_roles_for_questions(questions: Sequence[Mapping[str, Any]]) -> list[
     return roles
 
 
+@dataclass(frozen=True)
+class _EvalResourceLane:
+    key: str
+    role: str
+    capacity: int
+    units: int
+    device: str
+    cohort: str = ""
+
+
+def _eval_server_mode() -> dict[str, dict[str, Any]]:
+    """Lean serving declarations used to collapse roles onto physical lanes."""
+    path = Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError, TypeError, yaml.YAMLError):
+        return {}
+    mode = raw.get("server_mode") if isinstance(raw, dict) else None
+    if not isinstance(mode, dict):
+        return {}
+    return {str(role): dict(cfg) for role, cfg in mode.items() if isinstance(cfg, dict)}
+
+
+def _eval_resource_lane(
+    question: Mapping[str, Any],
+    *,
+    mode: Mapping[str, Mapping[str, Any]] | None = None,
+) -> _EvalResourceLane:
+    """Map one question to a physical serving lane and its certified width."""
+    role = str(question.get("force_role") or "").strip() or os.environ.get(
+        "AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor"
+    )
+    mode = dict(mode) if mode is not None else _eval_server_mode()
+    cfg = mode.get(role)
+    if cfg is None:
+        for candidate in mode.values():
+            shared = candidate.get("shared_with") or []
+            if candidate.get("model_role") == role or role in shared:
+                cfg = candidate
+                break
+    cfg = cfg or {}
+    url = str(cfg.get("url") or "").strip()
+    if not url:
+        try:
+            from src.config import get_config
+
+            configured = get_config().server_urls.as_dict().get(role, "")
+            url = str(configured).split(",", 1)[0].removeprefix("full:")
+        except Exception:
+            url = ""
+    lane_key = url or f"role:{role}"
+
+    # Aliases on one process inherit the process's largest declared slot count.
+    same_process = [entry for entry in mode.values() if url and entry.get("url") == url]
+    physical_cfg = max(
+        same_process or [cfg],
+        key=lambda entry: int(entry.get("slots") or 1),
+    )
+    slots = max(1, int(physical_cfg.get("slots") or 1))
+    gpu = bool(
+        physical_cfg.get("device")
+        or physical_cfg.get("vram_gib")
+        or physical_cfg.get("vram_mb")
+        or role in {"architect_general", "coder_escalation", "worker_vision", "vision_escalation"}
+    )
+
+    allowed_shared = {
+        item.strip()
+        for item in os.environ.get(
+            "ORCHESTRATOR_NATIVE_BATCH_SHARED_ROLES", "frontdoor,worker_general"
+        ).split(",")
+        if item.strip()
+    }
+    physical_role_name = next(
+        (
+            name
+            for name, entry in mode.items()
+            if entry is physical_cfg
+        ),
+        role,
+    )
+    try:
+        from src.config.models import _canonical_server_url_name
+
+        physical_role = _canonical_server_url_name(physical_role_name)
+    except Exception:
+        physical_role = "worker_general" if physical_role_name == "worker" else physical_role_name
+    shape = physical_cfg.get("serving_shape") or {}
+    by_shape = shape.get("slots_by_shape") if isinstance(shape, dict) else {}
+    native_full = int((by_shape or {}).get("full", 1))
+    if gpu:
+        capacity = slots
+        units = 1
+        device = "gpu"
+    elif physical_role in allowed_shared and native_full > 1:
+        capacity = min(slots, native_full)
+        units = 1
+        device = "cpu-native-batch"
+    else:
+        capacity = _eval_concurrency([physical_role])
+        units = 1
+        device = "cpu-placement"
+
+    # Every primary full CPU serving process covers the same four NUMA regions.
+    # Model those processes as one weighted placement lane: a certified native
+    # request consumes one unit, while an uncertified/exclusive process consumes
+    # the entire lane.  Keeping separate URL lanes here lets the client submit a
+    # worker request while frontdoor shared leases are active; the request then
+    # waits inside the placement lock and can time out or starve behind newly
+    # admitted frontdoor work.  The scheduler must avoid that invalid placement,
+    # not merely rely on the lock to reject it after admission.
+    if not gpu and isinstance(by_shape, dict) and int(by_shape.get("full", 0) or 0) > 0:
+        native_group_capacity = max(
+            (
+                min(
+                    max(1, int(entry.get("slots") or 1)),
+                    max(
+                        1,
+                        int(
+                            ((entry.get("serving_shape") or {}).get("slots_by_shape") or {}).get(
+                                "full", 1
+                            )
+                        ),
+                    ),
+                )
+                for name, entry in mode.items()
+                if (
+                    "worker_general" if name == "worker" else name
+                ) in allowed_shared
+                and not (entry.get("device") or entry.get("vram_gib") or entry.get("vram_mb"))
+            ),
+            default=1,
+        )
+        lane_key = "cpu:full-regions"
+        if device == "cpu-native-batch":
+            capacity = native_group_capacity
+            units = 1
+        else:
+            capacity = native_group_capacity
+            units = native_group_capacity
+
+    raw_override = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
+    if raw_override is not None:
+        try:
+            capacity = min(capacity, max(1, int(raw_override)))
+        except (TypeError, ValueError):
+            pass
+    if device == "cpu-native-batch" and capacity > 1:
+        # Native slots are a request-count ceiling, not a promise that four
+        # near-context-limit prompts can ingest concurrently inside the normal
+        # eval deadline. Derive a context load quantum from declared geometry:
+        # one unit is one native-width fraction of a slot's context window.
+        # Short prompts remain one unit; a near-full-slot prompt consumes the
+        # lane. This keeps batching useful without manufacturing timeout tails.
+        try:
+            n_ctx = max(1, int(shape.get("n_ctx") or 0))
+            per_slot_ctx = max(1, n_ctx // max(1, slots))
+            tokens_per_unit = max(1, per_slot_ctx // capacity)
+            estimated_prompt_tokens = max(
+                1, (len(str(question.get("prompt") or "")) + 3) // 4
+            )
+            prompt_units = (
+                estimated_prompt_tokens + tokens_per_unit - 1
+            ) // tokens_per_unit
+            units = max(units, min(capacity, prompt_units))
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+    return _EvalResourceLane(
+        key=lane_key,
+        role=physical_role,
+        capacity=max(1, capacity),
+        units=max(1, min(units, capacity)),
+        device=device,
+        cohort=lane_key if gpu else physical_role,
+    )
+
+
+def _eval_resource_lanes(
+    questions: Sequence[Mapping[str, Any]],
+) -> tuple[list[_EvalResourceLane], dict[str, int]]:
+    # Lane CAPACITY is process/role dependent, but lane UNITS are prompt
+    # dependent.  Do not cache the first question's lane by role: doing so lets
+    # a short first prompt make a later near-context-limit prompt look cheap.
+    # Registry I/O is batch-static; prompt load is not. Read topology once,
+    # then derive each question's weighted units independently.
+    mode = _eval_server_mode()
+    lanes = [_eval_resource_lane(question, mode=mode) for question in questions]
+    capacities: dict[str, int] = {}
+    for lane in lanes:
+        capacities[lane.key] = max(capacities.get(lane.key, 0), lane.capacity)
+    return lanes, capacities
+
+
+def _scoring_uses_model_judge(question: Mapping[str, Any]) -> bool:
+    """Whether scoring performs nested inference through a serving lane."""
+    if str(question.get("scoring_method") or "exact_match") == "llm_judge":
+        return True
+    return bool(_is_rubric_scored_question(dict(question))) and bool(
+        _configured_rubric_judge_roles()
+    )
+
+
+def _model_scoring_concurrency(
+    questions: Sequence[Mapping[str, Any]], scoring_workers: int
+) -> int:
+    """Certified width for the model-backed scorer tail.
+
+    Explicit direct judge URLs cannot be mapped to a registered process, so
+    they fail safe to one request. Orchestrator-routed judges use the serving
+    process's certified lane capacity; distinct physical lanes add.
+    """
+    capacities: dict[str, int] = {}
+    for question in questions:
+        if not _scoring_uses_model_judge(question):
+            continue
+        config = question.get("scoring_config") or {}
+        if not isinstance(config, Mapping):
+            config = {}
+        if str(question.get("scoring_method") or "") == "llm_judge":
+            if config.get("judge_url") or (
+                config.get("judge_host") and config.get("judge_port")
+            ):
+                capacities["direct:unknown"] = 1
+                continue
+            roles = [
+                str(
+                    config.get("judge_role")
+                    or os.environ.get("LLM_JUDGE_ROLE")
+                    or "worker_general"
+                )
+            ]
+        else:
+            roles = _configured_rubric_judge_roles()
+        for role in roles:
+            lane = _eval_resource_lane({"force_role": role, "prompt": ""})
+            capacities[lane.key] = max(capacities.get(lane.key, 0), lane.capacity)
+    return max(1, min(max(1, int(scoring_workers)), sum(capacities.values()) or 1))
+
+
 def _eval_concurrency(roles: Sequence[str] | None = None) -> int:
     raw = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
     if raw is not None:
@@ -1924,6 +2193,22 @@ def _stamp_eval_instrument(
     dataset_sha = dataset_content_sha256(questions)
     tier_mix = question_tier_mix(questions)
     profile_json = json.dumps(test_profile, sort_keys=True, separators=(",", ":"), default=str)
+    execution_profile = {
+        "execution_instrument_id": EVAL_EXECUTION_INSTRUMENT_ID,
+        "scoring_schedule_id": EVAL_SCORING_SCHEDULE_ID,
+        "eval_concurrency_override": os.environ.get("AUTOPILOT_EVAL_CONCURRENCY"),
+        "scoring_concurrency_override": os.environ.get(
+            "AUTOPILOT_EVAL_SCORING_CONCURRENCY"
+        ),
+        "native_batch_shared_roles": os.environ.get(
+            "ORCHESTRATOR_NATIVE_BATCH_SHARED_ROLES", "frontdoor,worker_general"
+        ),
+        "rubric_judge_roles": os.environ.get("AUTOPILOT_RUBRIC_JUDGE_ROLES", ""),
+        "llm_judge_role": os.environ.get("LLM_JUDGE_ROLE", "worker_general"),
+    }
+    execution_profile_json = json.dumps(
+        execution_profile, sort_keys=True, separators=(",", ":"), default=str
+    )
     result.core_id = core_id
     result.details.update(
         {
@@ -1937,6 +2222,12 @@ def _stamp_eval_instrument(
             "question_tier_mix": tier_mix,
             "test_profile": test_profile,
             "test_profile_json": profile_json,
+            "eval_execution_instrument_id": EVAL_EXECUTION_INSTRUMENT_ID,
+            "eval_scoring_schedule_id": EVAL_SCORING_SCHEDULE_ID,
+            "eval_execution_profile": execution_profile,
+            "eval_execution_profile_sha256": hashlib.sha256(
+                execution_profile_json.encode("utf-8")
+            ).hexdigest(),
         }
     )
     if core_id:
@@ -1959,7 +2250,12 @@ def _stamp_eval_instrument(
         # Durable check — the in-memory one above cannot see across a daemon restart,
         # which is when a question-pool edit actually lands.
         durable_drift = _record_instrument_identity(
-            core_id, dataset_sha, tier_mix, len(questions)
+            core_id,
+            dataset_sha,
+            tier_mix,
+            len(questions),
+            EVAL_EXECUTION_INSTRUMENT_ID,
+            EVAL_SCORING_SCHEDULE_ID,
         )
         if durable_drift:
             result.details["instrument_drift_across_restart"] = durable_drift
@@ -2872,6 +3168,9 @@ class EvalTower:
                 client=client,
                 allow_delegation=False,
                 scoring_method="rubric_judge",
+                request_priority="background",
+                workload_class="eval_batch",
+                batch_id=str(q.get("_eval_batch_id") or "") or None,
                 watcher=getattr(self, "watcher", None),
             )
             if resp.get("error"):
@@ -3226,17 +3525,31 @@ class EvalTower:
     ) -> list[QuestionResult]:
         """Evaluate a batch of questions, fanning out across N workers.
 
-        Results are returned in the same order as `questions`. With
-        AUTOPILOT_EVAL_CONCURRENCY > 1, the orchestrator's
-        ConcurrencyAwareBackend spreads inflight requests across the
-        full instance + idle quarter instances (frontdoor: 1 full + 4
-        quarters). With concurrency=1, behavior matches the legacy
-        serial loop.
+        Results are returned in the same order as `questions`. Resource lanes
+        admit native slots on one certified serving process concurrently,
+        collapse aliases on the same GPU process, and serialize mutually
+        exclusive full-region CPU processes using weighted capacity. With
+        concurrency=1, behavior matches the legacy serial loop.
         """
         n = len(questions)
         if n == 0:
             return []
-        workers = min(n, _eval_concurrency(_forced_roles_for_questions(questions)))
+        question_lanes, lane_capacities = _eval_resource_lanes(questions)
+        workers = min(n, sum(lane_capacities.values()))
+        raw_worker_override = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
+        if raw_worker_override is not None:
+            try:
+                workers = min(workers, max(1, int(raw_worker_override)))
+            except (TypeError, ValueError):
+                pass
+        log.info(
+            "%s resource lanes: %s (generation_workers=%d)",
+            label or "eval",
+            ", ".join(
+                f"{key}={capacity}" for key, capacity in sorted(lane_capacities.items())
+            ),
+            workers,
+        )
         eval_batch_id = _eval_batch_id(
             label=label,
             n_questions=n,
@@ -3460,7 +3773,11 @@ class EvalTower:
         pending_gen: deque[tuple[int, dict]] = deque(enumerate(dispatch_questions))
         gen_future_to_idx: dict[Future, int] = {}
         score_future_to_idx: dict[Future, int] = {}
+        model_score_futures: set[Future] = set()
+        deferred_model_scores: deque[tuple[int, _GenOutcome]] = deque()
         gen_ended_at: dict[int, float] = {}
+        lane_active: dict[str, int] = {key: 0 for key in lane_capacities}
+        lane_cohort: dict[str, str] = {}
 
         def _idx_of(fut: Future) -> int:
             idx = gen_future_to_idx.get(fut)
@@ -3474,8 +3791,54 @@ class EvalTower:
                 and pending_gen
                 and len(score_future_to_idx) < backpressure_cap
             ):
-                idx, gq = pending_gen.popleft()
-                gen_future_to_idx[gen_ex.submit(self._generate_question, gq, client)] = idx
+                admitted = False
+                for _ in range(len(pending_gen)):
+                    idx, gq = pending_gen.popleft()
+                    lane = question_lanes[idx]
+                    lane_key = lane.key
+                    lane_units = lane.units
+                    active_cohort = lane_cohort.get(lane_key)
+                    if (
+                        lane_active[lane_key] + lane_units > lane_capacities[lane_key]
+                        or (lane_active[lane_key] > 0 and active_cohort != lane.cohort)
+                    ):
+                        pending_gen.append((idx, gq))
+                        continue
+                    lane_active[lane_key] += lane_units
+                    lane_cohort[lane_key] = lane.cohort
+                    gen_future_to_idx[
+                        gen_ex.submit(self._generate_question, gq, client)
+                    ] = idx
+                    admitted = True
+                    break
+                if not admitted:
+                    break
+
+        model_scoring_workers = _model_scoring_concurrency(
+            dispatch_questions, scoring_workers
+        )
+
+        def admit_deferred_model_scoring() -> None:
+            # Nested judge inference must not contend with the generation
+            # cohort. Start the model-backed scorer tail only after every
+            # generation lane has drained, and keep it within the target
+            # serving processes' certified width.
+            if pending_gen or gen_future_to_idx:
+                return
+            while (
+                deferred_model_scores
+                and len(model_score_futures) < model_scoring_workers
+                and len(score_future_to_idx) < backpressure_cap
+            ):
+                idx, outcome = deferred_model_scores.popleft()
+                score_fut = score_ex.submit(
+                    self._score_generation,
+                    dispatch_questions[idx],
+                    outcome,
+                    client,
+                )
+                score_future_to_idx[score_fut] = idx
+                model_score_futures.add(score_fut)
 
         def finalize_scored(idx: int, result: QuestionResult, *, generated_at_s: float | None) -> None:
             nonlocal done
@@ -3511,11 +3874,17 @@ class EvalTower:
                 )
 
         try:
-            while pending_gen or gen_future_to_idx or score_future_to_idx:
+            while (
+                pending_gen
+                or gen_future_to_idx
+                or score_future_to_idx
+                or deferred_model_scores
+            ):
                 admit_generation()
+                admit_deferred_model_scoring()
                 pending = set(gen_future_to_idx) | set(score_future_to_idx)
                 if not pending:
-                    # Nothing in flight but generation still queued should be
+                    # Nothing in flight but generation/scoring still queued should be
                     # unreachable (admit fills lanes whenever the scoring pool is
                     # not saturated, and saturation implies live score futures).
                     # Break defensively rather than spin.
@@ -3588,14 +3957,30 @@ class EvalTower:
                         )
                         results[idx].eval_concurrency = workers
                         append_question_result(idx, results[idx])
+                    for idx, _outcome in deferred_model_scores:
+                        results[idx] = self._failed_question_result(
+                            questions[idx],
+                            elapsed_s=time.time() - batch_start,
+                            error="eval_cancelled_after_no_progress_timeout",
+                        )
+                        results[idx].eval_concurrency = workers
+                        append_question_result(idx, results[idx])
                     pending_gen.clear()
+                    deferred_model_scores.clear()
                     gen_future_to_idx.clear()
                     score_future_to_idx.clear()
+                    model_score_futures.clear()
                     break
 
                 for fut in completed:
                     if fut in gen_future_to_idx:
                         idx = gen_future_to_idx.pop(fut)
+                        lane_key = question_lanes[idx].key
+                        lane_active[lane_key] = max(
+                            0, lane_active[lane_key] - question_lanes[idx].units
+                        )
+                        if lane_active[lane_key] == 0:
+                            lane_cohort.pop(lane_key, None)
                         try:
                             outcome = fut.result()
                         except Exception as exc:  # noqa: BLE001
@@ -3612,14 +3997,24 @@ class EvalTower:
                                 generated_at_s=gen_ended,
                             )
                             continue
-                        # Generation done → lane is free; hand off to scoring pool.
+                        # Generation done → lane is free. Deterministic/client-CPU
+                        # scoring stays pipelined; model-backed scoring waits for the
+                        # generation cohort to drain so nested inference cannot starve
+                        # or time out behind generation leases.
                         gen_ended_at[idx] = outcome.gen_ended_at_s
-                        score_fut = score_ex.submit(
-                            self._score_generation, dispatch_questions[idx], outcome, client
-                        )
-                        score_future_to_idx[score_fut] = idx
+                        if _scoring_uses_model_judge(dispatch_questions[idx]):
+                            deferred_model_scores.append((idx, outcome))
+                        else:
+                            score_fut = score_ex.submit(
+                                self._score_generation,
+                                dispatch_questions[idx],
+                                outcome,
+                                client,
+                            )
+                            score_future_to_idx[score_fut] = idx
                     else:
                         idx = score_future_to_idx.pop(fut)
+                        model_score_futures.discard(fut)
                         try:
                             result = fut.result()
                         except Exception as exc:  # noqa: BLE001

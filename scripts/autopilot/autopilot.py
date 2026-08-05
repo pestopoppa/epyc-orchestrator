@@ -71,7 +71,7 @@ from pareto_archive import (
     pareto_archive_from_journal_rows,
 )
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate, _atomic_write_text
-from eval_tower import EvalTower
+from eval_tower import EVAL_EXECUTION_INSTRUMENT_ID, EvalTower
 from config_applicator import apply_params  # noqa: F401 - re-export for actions.py tests
 from config_applicator import health_check
 from meta_optimizer import MetaOptimizer, SpeciesBudget
@@ -144,7 +144,6 @@ from src.autopilot_core.tier_specs import (
     LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
     RATE_4D_OBJECTIVE_POLICY,
-    TASK_RATE_OBJECTIVE_POLICY,
     UnmeasuredObjectiveError,
     goodput_qph_from,
     legacy_objectives_from,
@@ -6288,6 +6287,7 @@ def _journal_archive_payload_for_authority(
     deinflate_before_ts: float | None = None,
     deinflate_factor: float = 1.0,
     exclude_before_ts: float | None = None,
+    objective_policy: str = LEGACY_OBJECTIVE_POLICY,
 ) -> dict[str, Any] | None:
     rows = _journal_rows_for_archive(journal)
     if hasattr(journal, "ledger_events"):
@@ -6295,7 +6295,11 @@ def _journal_archive_payload_for_authority(
             rows,
             journal.ledger_events(),
         )
-        if snapshot_payload is not None:
+        if (
+            snapshot_payload is not None
+            and str(snapshot_payload.get("objective_policy") or LEGACY_OBJECTIVE_POLICY)
+            == objective_policy
+        ):
             return snapshot_payload
     return reconstruct_archive_from_journal_rows(
         rows,
@@ -6304,7 +6308,37 @@ def _journal_archive_payload_for_authority(
         deinflate_before_ts=deinflate_before_ts,
         deinflate_factor=deinflate_factor,
         exclude_before_ts=exclude_before_ts,
+        objective_policy=objective_policy,
     )
+
+
+def _live_objective_policy_from_state(state: Mapping[str, Any]) -> str:
+    return str(
+        state.get("pareto_objective_policy") or LEGACY_OBJECTIVE_POLICY
+    ).strip()
+
+
+def _assert_eval_execution_instrument_state(state: Mapping[str, Any]) -> None:
+    """Fail closed until the human-owned measurement boundary is applied."""
+    policy = _live_objective_policy_from_state(state)
+    execution_id = str(state.get("eval_execution_instrument_id") or "").strip()
+    errors: list[str] = []
+    if policy != RATE_4D_OBJECTIVE_POLICY:
+        errors.append(
+            f"pareto_objective_policy={policy or '<missing>'} "
+            f"(required {RATE_4D_OBJECTIVE_POLICY})"
+        )
+    if execution_id != EVAL_EXECUTION_INSTRUMENT_ID:
+        errors.append(
+            f"eval_execution_instrument_id={execution_id or '<missing>'} "
+            f"(required {EVAL_EXECUTION_INSTRUMENT_ID})"
+        )
+    if errors:
+        raise RuntimeError(
+            "AutoPilot eval instrument is not ratified for this code: "
+            + "; ".join(errors)
+            + ". Apply the consolidated resource-lanes instrument ratifier before restart."
+        )
 
 
 def _archive_epoch_params_from_state(
@@ -6478,6 +6512,7 @@ def _apply_journal_archive_authority(
         deinflate_before_ts=deinflate_before_ts,
         deinflate_factor=deinflate_factor,
         exclude_before_ts=exclude_before_ts,
+        objective_policy=_live_objective_policy_from_state(state),
     )
     if archive_payload is None:
         return None
@@ -6511,6 +6546,7 @@ def _sync_startup_archive_from_journal_authority(
             deinflate_before_ts=deinflate_before_ts,
             deinflate_factor=deinflate_factor,
             exclude_before_ts=exclude_before_ts,
+            objective_policy=_live_objective_policy_from_state(state),
         )
     )
     changed = _apply_journal_archive_authority(state, journal, archive)
@@ -6867,14 +6903,19 @@ def _startup_archive_from_current_era_payload(
     )
     if rebase_completed:
         state.pop("_allow_empty_frontier_rebase", None)
-        bootstrap = state.get("e8_empty_frontier_bootstrap")
+        bootstrap_key = (
+            "eval_instrument_empty_frontier_bootstrap"
+            if isinstance(state.get("eval_instrument_empty_frontier_bootstrap"), dict)
+            else "e8_empty_frontier_bootstrap"
+        )
+        bootstrap = state.get(bootstrap_key)
         if isinstance(bootstrap, dict):
             bootstrap["status"] = "completed"
             bootstrap["completion_condition"] = (
                 "next AutoPilot startup observed at least one current-era Pareto point"
             )
         else:
-            state["e8_empty_frontier_bootstrap"] = {
+            state[bootstrap_key] = {
                 "status": "completed",
                 "completion_condition": (
                     "next AutoPilot startup observed at least one current-era Pareto point"
@@ -6932,6 +6973,7 @@ def _run_loop_inner(
         deinflate_before_ts=_deinfl_ts,
         deinflate_factor=_deinfl_factor,
         exclude_before_ts=_exclude_ts,
+        objective_policy=_live_objective_policy_from_state(state),
     )
     archive, rebase_completed = _startup_archive_from_current_era_payload(
         state,
@@ -9386,6 +9428,7 @@ def cmd_start(args: argparse.Namespace) -> None:
     """Start the optimization loop."""
     _enforce_startup_gate_env()
     _enforce_episodic_integrity_gate()
+    _assert_eval_execution_instrument_state(load_state())
 
     # Process lock
     lock_file = open(LOCK_PATH, "w")
@@ -9444,6 +9487,7 @@ def _archive_for_read_command(
         deinflate_before_ts=deinflate_before_ts,
         deinflate_factor=deinflate_factor,
         exclude_before_ts=exclude_before_ts,
+        objective_policy=_live_objective_policy_from_state(state),
     )
     if archive is None:
         return (

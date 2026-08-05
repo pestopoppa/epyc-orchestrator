@@ -191,6 +191,7 @@ def test_llm_judge_unreachable_default_reports_resolved_url(monkeypatch) -> None
             scoring_config={"timeout": 2},
         )
     assert "127.0.0.1:1" in str(excinfo.value)
+    assert "llm_judge_transport_error" in str(excinfo.value)
 
 
 # ── llm_judge: protocol per endpoint (orchestrator /chat vs raw llama) ───
@@ -287,13 +288,15 @@ def test_llm_judge_orchestrator_error_body_raises(monkeypatch) -> None:
     """200-with-error (or empty answer) is scorer-unavailability, not False."""
     monkeypatch.delenv("ORCHESTRATOR_API_URL", raising=False)
     _patch_httpx_post(monkeypatch, {"answer": "", "error": "backend unavailable"})
-    with pytest.raises(ScoringUnavailableError):
+    with pytest.raises(ScoringUnavailableError) as excinfo:
         score_answer(
             answer="the student wrote something else entirely",
             expected="mg/2",
             scoring_method="llm_judge",
             scoring_config={"timeout": 5},
         )
+    assert "llm_judge_backend_error" in str(excinfo.value)
+    assert "backend unavailable" in str(excinfo.value)
 
 
 def test_llm_judge_llama_shape_success_via_override(monkeypatch) -> None:
@@ -316,7 +319,7 @@ def test_llm_judge_llama_shape_success_via_override(monkeypatch) -> None:
 def test_llm_judge_llama_shape_malformed_raises(monkeypatch) -> None:
     """Override target returning a non-llama body => malformed => raises."""
     _patch_httpx_post(monkeypatch, {"unexpected": "shape"})
-    with pytest.raises(ScoringUnavailableError):
+    with pytest.raises(ScoringUnavailableError) as excinfo:
         score_answer(
             answer="the student wrote something else entirely",
             expected="mg/2",
@@ -326,6 +329,7 @@ def test_llm_judge_llama_shape_malformed_raises(monkeypatch) -> None:
                 "timeout": 5,
             },
         )
+    assert "llm_judge_unexpected_shape" in str(excinfo.value)
 
 
 # ── programmatic: unknown verifier is a config defect ────────────────────
