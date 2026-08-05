@@ -43,8 +43,8 @@ STATE_PATH = REPO_ROOT / "orchestration" / "autopilot_state.json"
 AUTOPILOT_LOCK = REPO_ROOT / "orchestration" / ".autopilot.lock"
 API_URL = "http://127.0.0.1:8000"
 POLICY = "task_rate_4d_v2_resource_lanes"
-QUALITY_ERA = "E9-eval-resource-lanes-quality"
-SPEED_ERA = "E9-autopilot-resource-lanes-speed"
+QUALITY_ERA = "E10-eval-model-judge-tail-v2-quality"
+SPEED_ERA = "E10-autopilot-model-judge-tail-v2-speed"
 SCHEMA = "epyc.e9_operational_baseline_candidate.v1"
 MIN_RELIABILITY = 0.80
 SOURCE_PATHS = (
@@ -62,6 +62,13 @@ def _sha256_bytes(data: bytes) -> str:
 
 def _sha256_path(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
+
+
+def _source_hashes() -> dict[str, str]:
+    """Hash the actual measurement trust boundary, independent of repository HEAD."""
+    return {
+        str(path.relative_to(REPO_ROOT)): _sha256_path(path) for path in SOURCE_PATHS
+    }
 
 
 def _utc_now() -> str:
@@ -260,6 +267,7 @@ def main() -> int:
         state, state_raw = _load_state()
         _validate_instrument_state(state)
         commit, tracked_status, sources_clean = _git_identity()
+        source_hashes = _source_hashes()
         health = _health_status()
         preflight = {
             "autopilot_lock_free": True,
@@ -292,7 +300,8 @@ def main() -> int:
         if state_after_raw != state_raw:
             raise RuntimeError("autopilot_state.json changed during collection; refusing candidate")
         commit_after, _tracked_status_after, sources_clean_after = _git_identity()
-        if commit_after != commit or not sources_clean_after:
+        source_hashes_after = _source_hashes()
+        if not sources_clean_after or source_hashes_after != source_hashes:
             raise RuntimeError("baseline instrument sources changed during collection")
 
         payload = {
@@ -302,10 +311,10 @@ def main() -> int:
             "started_at": started_at,
             "completed_at": completed_at,
             "preflight": preflight,
+            "git_commit_completed": commit_after,
+            "repository_head_changed_during_collection": commit_after != commit,
             "generation_probe": probe,
-            "source_sha256": {
-                str(path.relative_to(REPO_ROOT)): _sha256_path(path) for path in SOURCE_PATHS
-            },
+            "source_sha256": source_hashes_after,
             "eval_result": _json_safe(asdict(result)),
             "candidate_baseline_state": candidate_baseline_state(result),
             "state_preimage_sha256": _sha256_bytes(state_after_raw),

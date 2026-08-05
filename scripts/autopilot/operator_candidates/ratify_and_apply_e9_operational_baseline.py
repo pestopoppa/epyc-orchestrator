@@ -152,8 +152,6 @@ def main() -> int:
             capture_output=True,
             text=True,
         ).stdout.strip()
-        if commit != (evidence.get("preflight") or {}).get("git_commit"):
-            raise SystemExit("ERROR: code commit changed since evidence collection")
         for source in SOURCE_PATHS:
             source_arg = str(source.relative_to(REPO_ROOT))
             for mode in (("--quiet",), ("--cached", "--quiet")):
@@ -210,6 +208,13 @@ def main() -> int:
             "evidence": {
                 "path": str(evidence_path),
                 "sha256": _sha256_bytes(evidence_raw),
+            },
+            "repository_provenance": {
+                "collection_started_commit": (evidence.get("preflight") or {}).get(
+                    "git_commit"
+                ),
+                "collection_completed_commit": evidence.get("git_commit_completed"),
+                "ratification_commit": commit,
             },
             "state_backup": str(backup_path),
             "policy": POLICY,

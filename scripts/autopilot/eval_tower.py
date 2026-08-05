@@ -131,7 +131,7 @@ _INSTRUMENT_LEDGER_PATH = Path(
 # model-backed scoring placement can change both wall time and error exclusion.
 # Keep these human-readable and stamp them into every EvalResult/journal row.
 EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v2_prompt_load"
-EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v1"
+EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v2_cohort_serial"
 
 
 def question_tier_mix(questions: Sequence[dict[str, Any]]) -> dict[str, int]:
@@ -1673,8 +1673,15 @@ def _model_scoring_concurrency(
     """Certified width for the model-backed scorer tail.
 
     Explicit direct judge URLs cannot be mapped to a registered process, so
-    they fail safe to one request. Orchestrator-routed judges use the serving
-    process's certified lane capacity; distinct physical lanes add.
+    they fail safe to one request. Orchestrator-routed judge prompts include
+    the generated answer and therefore do not share generation's predictable
+    prompt-load geometry. Admit one score per physical serving cohort while
+    still allowing distinct physical lanes to score independently.
+
+    This deliberately does not borrow a server's native generation width. The
+    v1 scorer did so and four long prefills exhausted the 30-second judge
+    timeout together; the next four repeated the same failure. Generation
+    retains native batching—only the short scorer tail is cohort-serial.
     """
     capacities: dict[str, int] = {}
     for question in questions:
@@ -1700,7 +1707,7 @@ def _model_scoring_concurrency(
             roles = _configured_rubric_judge_roles()
         for role in roles:
             lane = _eval_resource_lane({"force_role": role, "prompt": ""})
-            capacities[lane.key] = max(capacities.get(lane.key, 0), lane.capacity)
+            capacities[lane.key] = 1
     return max(1, min(max(1, int(scoring_workers)), sum(capacities.values()) or 1))
 
 

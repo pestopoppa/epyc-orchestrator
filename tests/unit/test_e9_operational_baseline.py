@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -70,3 +71,19 @@ def test_instrument_state_requires_ratified_e9_ids():
     state["eval_execution_instrument_id"] = "old"
     with pytest.raises(RuntimeError, match="execution_instrument"):
         collector._validate_instrument_state(state)
+
+
+def test_source_hashes_bind_files_not_repository_head(monkeypatch, tmp_path: Path):
+    source = tmp_path / "instrument.py"
+    source.write_text("stable\n", encoding="utf-8")
+    monkeypatch.setattr(collector, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(collector, "SOURCE_PATHS", (source,))
+
+    before = collector._source_hashes()
+    # An unrelated file (and therefore an unrelated commit) is outside the
+    # measurement trust boundary.
+    (tmp_path / "dashboard.py").write_text("changed\n", encoding="utf-8")
+    assert collector._source_hashes() == before
+
+    source.write_text("drifted\n", encoding="utf-8")
+    assert collector._source_hashes() != before

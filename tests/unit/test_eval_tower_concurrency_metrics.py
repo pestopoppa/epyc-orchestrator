@@ -534,6 +534,25 @@ def test_eval_resource_lanes_compute_prompt_load_per_question(monkeypatch) -> No
     assert [lane.units for lane in lanes] == [1, 4]
 
 
+def test_model_scoring_is_serial_per_physical_cohort(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    questions = [
+        {
+            "scoring_method": "llm_judge",
+            "scoring_config": {"judge_role": "worker_general"},
+        },
+        {
+            "scoring_method": "llm_judge",
+            "scoring_config": {"judge_role": "frontdoor"},
+        },
+    ]
+
+    # Both roles are different processes over the same full CPU regions. The
+    # generation servers each expose four native slots, but judge prompts have
+    # answer-dependent load and must not be admitted four-at-once.
+    assert eval_tower._model_scoring_concurrency(questions, scoring_workers=8) == 1
+
+
 def test_eval_batch_never_overlaps_different_native_cpu_process_cohorts(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
     tower = EvalTower(timeout=2)
