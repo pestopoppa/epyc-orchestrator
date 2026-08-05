@@ -112,6 +112,94 @@ class TestKnowledgeDistiller:
         assert convention_rows[0]["evidence_trial_ids"] == [100, 101, 102, 103]
         assert store.retrieve("alpha", k=10, excluded_trial_ids={102}) == []
 
+    def test_longest_member_overgeneralization_is_advisory_delta(self, store, distiller):
+        common_description = "alpha tag disable speculation on measured dense CPU full shape"
+        common_insight = "alpha tag overhead exceeded the measured decode benefit"
+        for index in range(4):
+            overgeneralized = index == 3
+            store.store(
+                description=(
+                    common_description
+                    + (" across every model GPU and workload without exception" if overgeneralized else "")
+                ),
+                insight=(
+                    common_insight
+                    + (" therefore always disable it globally" if overgeneralized else "")
+                ),
+                source_trial_id=300 + index,
+                species="structural_lab",
+                evidence_trial_ids=[300 + index],
+                metadata={
+                    "bind_status": "live",
+                    "bind_identifiers": ["self_speculation"],
+                    "qualifiers": (
+                        {"device": "gpu", "scope": "all"}
+                        if overgeneralized
+                        else {"device": "cpu", "shape": "full"}
+                    ),
+                    "support_outcome": "failure" if overgeneralized else "success",
+                },
+            )
+
+        stats = distiller.distill(trial_id=399)
+
+        assert stats.patterns_created == 1
+        row = store._conn.execute(
+            "SELECT * FROM strategies WHERE entry_type = 'pattern'"
+        ).fetchone()
+        metadata = json.loads(row["metadata_json"])
+        assert row["description"].startswith("[PATTERN][ADVISORY ONLY]")
+        assert "every model" not in row["description"]
+        assert metadata["binding_mode"] == "advisory_only"
+        assert metadata["bind_identifiers"] == []
+        assert len(metadata["source_members"]) == 4
+        assert sorted(metadata["source_members"][0]) == [
+            "bind_identifiers",
+            "bind_status",
+            "evidence_trial_ids",
+            "id",
+            "qualifiers",
+            "source_trial_id",
+        ]
+        assert any(
+            "every" in delta["claims"].get("description", "")
+            for delta in metadata["advisory_member_claims"]
+        )
+
+    def test_binding_recoding_change_fails_closed(self):
+        from orchestration.repl_memory.commitment_contract import (
+            derive_commitment_contract,
+        )
+
+        entries = [
+            {
+                "id": f"s{index}",
+                "description": "same harmless paraphrase",
+                "insight": "same claim",
+                "source_trial_id": index,
+                "evidence_trial_ids": [index],
+                "metadata": {
+                    "bind_status": "live",
+                    "bind_identifiers": ["kv_compaction"],
+                    "qualifiers": {"role": "frontdoor"},
+                    "binding_recodings": [
+                        {
+                            "bind_status": "live",
+                            "bind_identifiers": ["different_surface"],
+                            "qualifiers": {"role": "frontdoor"},
+                        }
+                    ],
+                },
+            }
+            for index in range(3)
+        ]
+
+        contract = derive_commitment_contract(entries)
+
+        assert contract["binding_mode"] == "advisory_only"
+        assert contract["recoding_stable"] is False
+        assert "binding_changes_under_recoding" in contract["failure_reasons"]
+
     def test_distill_skips_folded_journal_excluded_raw_evidence(self, store, distiller):
         excluded_id = store.store(
             description="alpha tag detailed strategy excluded long version",

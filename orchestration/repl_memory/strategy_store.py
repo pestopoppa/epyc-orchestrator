@@ -395,12 +395,19 @@ class StrategyStore:
                 compression_ratio REAL NOT NULL,
                 span_trials TEXT NOT NULL,
                 evidence_trial_ids TEXT DEFAULT '[]',
+                metadata_json TEXT DEFAULT '{}',
                 promoted_at TEXT NOT NULL
             )
         """)
         try:
             self._conn.execute(
                 "ALTER TABLE strategy_conventions ADD COLUMN evidence_trial_ids TEXT DEFAULT '[]'"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already present
+        try:
+            self._conn.execute(
+                "ALTER TABLE strategy_conventions ADD COLUMN metadata_json TEXT DEFAULT '{}'"
             )
         except sqlite3.OperationalError:
             pass  # Column already present
@@ -432,6 +439,7 @@ class StrategyStore:
         compression_ratio: float,
         span_trials: tuple[int, int],
         evidence_trial_ids: list[int] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Persist a promoted MDL convention."""
         conv_id = str(uuid.uuid4())
@@ -445,8 +453,8 @@ class StrategyStore:
         self._conn.execute(
             """INSERT INTO strategy_conventions
                (id, representative, member_ids, compression_ratio, span_trials,
-                evidence_trial_ids, promoted_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                evidence_trial_ids, metadata_json, promoted_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 conv_id,
                 representative,
@@ -454,6 +462,7 @@ class StrategyStore:
                 float(compression_ratio),
                 json.dumps(list(span_trials)),
                 evidence_json,
+                json.dumps(metadata or {}, sort_keys=True),
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -479,7 +488,7 @@ class StrategyStore:
 
         rows = self._conn.execute(
             "SELECT id, representative, member_ids, compression_ratio, span_trials, "
-            "evidence_trial_ids, promoted_at "
+            "evidence_trial_ids, metadata_json, promoted_at "
             "FROM strategy_conventions ORDER BY promoted_at DESC"
         ).fetchall()
         conventions: list[dict[str, Any]] = []
@@ -504,6 +513,7 @@ class StrategyStore:
                 "compression_ratio": r["compression_ratio"],
                 "span_trials": json.loads(r["span_trials"]),
                 "evidence_trial_ids": evidence_trial_ids,
+                "metadata": json.loads(r["metadata_json"] or "{}"),
                 "promoted_at": r["promoted_at"],
             })
         return conventions

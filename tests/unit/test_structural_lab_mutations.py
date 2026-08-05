@@ -79,6 +79,52 @@ def test_mdl_compresses_near_duplicate_cluster(store, lab):
     assert conventions[0]["evidence_trial_ids"] == [10, 11, 12, 20, 21, 22]
 
 
+def test_mdl_longest_overgeneralization_cannot_become_live_binding(store, lab):
+    common = "Disable self speculation when dense CPU decode overhead dominates"
+    rows = [
+        (common, "success", {"device": "cpu", "shape": "full"}),
+        (common + " for measured full shape", "success", {"device": "cpu", "shape": "full"}),
+        (
+            common + " on every model including all GPU deployments without exception",
+            "failure",
+            {"device": "gpu", "shape": "all"},
+        ),
+    ]
+    for index, (insight, outcome, qualifiers) in enumerate(rows):
+        store.store(
+            description=f"commitment-{index}",
+            insight=insight,
+            source_trial_id=200 + index,
+            species="structural_lab",
+            evidence_trial_ids=[200 + index],
+            metadata={
+                "bind_status": "live",
+                "bind_identifiers": ["self_speculation"],
+                "qualifiers": qualifiers,
+                "support_outcome": outcome,
+            },
+        )
+
+    result = lab.mdl_compress_strategies(
+        strategy_store=store,
+        min_cluster_size=3,
+        jaccard_threshold=0.40,
+        compression_threshold=0.0,
+    )
+
+    assert result["conventions_promoted"] == 1
+    convention = store.list_conventions()[0]
+    assert convention["representative"] == common
+    assert convention["metadata"]["binding_mode"] == "advisory_only"
+    assert convention["metadata"]["bind_status"] == "context"
+    assert convention["metadata"]["bind_identifiers"] == []
+    assert "supporting_trials_disagree" in convention["metadata"]["failure_reasons"]
+    assert any(
+        "every" in delta["claims"]["insight"]
+        for delta in convention["metadata"]["advisory_member_claims"]
+    )
+
+
 def test_mdl_compress_skips_folded_journal_excluded_evidence(store, lab):
     """Convention promotion must not aggregate evidence quarantined by journal view."""
     base = "Disable self-speculation for dense models because HSD overhead dominates on CPU"

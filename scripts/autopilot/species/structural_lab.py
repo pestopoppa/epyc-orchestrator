@@ -777,6 +777,9 @@ class StructuralLab:
         MDL proxied by ``zlib.compress(text.encode())`` length.
         """
         import zlib
+        from orchestration.repl_memory.commitment_contract import (
+            derive_commitment_contract,
+        )
 
         if strategy_store is None:
             import sys as _sys
@@ -801,7 +804,7 @@ class StructuralLab:
                         "StrategyStore.strategy_rows_for_compression()"
                     )
                 rows = strategy_store._conn.execute(
-                    "SELECT id, insight, source_trial_id, evidence_trial_ids "
+                    "SELECT id, insight, source_trial_id, evidence_trial_ids, metadata_json "
                     "FROM strategies ORDER BY source_trial_id DESC"
                 ).fetchall()
                 if window_trials is not None:
@@ -815,12 +818,22 @@ class StructuralLab:
             def tokens(text: str) -> set[str]:
                 return {t for t in text.lower().split() if len(t) >= 3}
 
-            entries = [
-                {"id": r["id"], "insight": r["insight"], "trial": r["source_trial_id"],
-                 "evidence": strategy_store._evidence_trial_ids_for_row(r),
-                 "toks": tokens(r["insight"])}
-                for r in rows
-            ]
+            entries = []
+            for row in rows:
+                try:
+                    metadata = json.loads(row["metadata_json"] or "{}")
+                except (KeyError, TypeError, json.JSONDecodeError):
+                    metadata = {}
+                entries.append({
+                    "id": row["id"],
+                    "insight": row["insight"],
+                    "source_trial_id": row["source_trial_id"],
+                    "trial": row["source_trial_id"],
+                    "evidence_trial_ids": strategy_store._evidence_trial_ids_for_row(row),
+                    "evidence": strategy_store._evidence_trial_ids_for_row(row),
+                    "metadata": metadata if isinstance(metadata, dict) else {},
+                    "toks": tokens(row["insight"]),
+                })
 
             # Agglomerative Jaccard clustering (simple O(n^2), fine for <10k entries).
             clusters: list[list[int]] = []
@@ -857,8 +870,12 @@ class StructuralLab:
                     if trial_id is not None
                 })
 
-                # Representative = longest insight (most tokens of the shared semantics).
-                rep = max(insights, key=len)
+                # Text is presentation only. Planner applicability/binding is
+                # derived from the intersection of every supporting member.
+                rep = min(insights, key=lambda text: (len(text), text))
+                contract = derive_commitment_contract(
+                    [entries[idx] for idx in cluster], claim_fields=("insight",)
+                )
                 rep_bytes = len(zlib.compress(rep.encode()))
 
                 mdl_before = sum(len(zlib.compress(ins.encode())) for ins in insights)
@@ -884,6 +901,7 @@ class StructuralLab:
                         compression_ratio=ratio,
                         span_trials=(min(trials), max(trials)),
                         evidence_trial_ids=evidence_trial_ids,
+                        metadata=contract,
                     )
                 conventions_promoted += 1
                 bytes_saved += (mdl_before - mdl_after)

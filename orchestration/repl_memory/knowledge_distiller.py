@@ -31,6 +31,8 @@ from typing import Any
 
 import numpy as np
 
+from .commitment_contract import derive_commitment_contract
+
 logger = logging.getLogger(__name__)
 
 # AP-29 tunables — kept module-level so tests can monkeypatch.
@@ -271,15 +273,25 @@ class KnowledgeDistiller:
                 continue
             cluster_entries = [entries[i] for i in cluster]
 
-            # MDL check: representative description must compress the cluster.
-            seed = max(cluster_entries, key=lambda e: e["validity"])
+            # Choose the shortest source text for storage only. Binding and
+            # applicability come from the intersection contract below.
+            seed = min(
+                cluster_entries,
+                key=lambda e: (len(e["description"]) + len(e["insight"]), e["id"]),
+            )
+            contract = derive_commitment_contract(cluster_entries)
             seed_len = len(seed["description"]) + len(seed["insight"])
             total_len = sum(
                 len(e["description"]) + len(e["insight"]) for e in cluster_entries
             )
+            retained_delta_len = sum(
+                len(value)
+                for delta in contract["advisory_member_claims"]
+                for value in delta["claims"].values()
+            )
             # Compression ratio = what we save by replacing N entries with 1.
             # Reject if pattern would not be < 60% of cluster total.
-            if seed_len * 2 >= total_len:
+            if (seed_len + retained_delta_len) * 2 >= total_len:
                 skipped += 1
                 continue
 
@@ -294,7 +306,11 @@ class KnowledgeDistiller:
             ])
 
             pattern_id = self.store.store(
-                description=f"[PATTERN] {seed['description']}",
+                description=(
+                    f"[PATTERN] {seed['description']}"
+                    if contract["binding_mode"] == "planner_binding"
+                    else f"[PATTERN][ADVISORY ONLY] {seed['description']}"
+                ),
                 insight=(
                     f"Consolidated from {len(cluster_entries)} trials "
                     f"(mean_validity={mean_validity:.2f}). {seed['insight']}"
@@ -306,6 +322,7 @@ class KnowledgeDistiller:
                     "source_count": len(cluster_entries),
                     "source_ids": source_ids,
                     "compression_ratio": seed_len / max(total_len, 1),
+                    **contract,
                 },
                 entry_type="pattern",
                 evidence_trial_ids=evidence_trial_ids,
@@ -330,6 +347,7 @@ class KnowledgeDistiller:
                     compression_ratio=seed_len / max(total_len, 1),
                     span_trials=span,
                     evidence_trial_ids=evidence_trial_ids,
+                    metadata=contract,
                 )
             except Exception:
                 # add_convention is best-effort — the pattern row is already
@@ -371,7 +389,11 @@ class KnowledgeDistiller:
             ):
                 continue
 
-            seed = max(cluster_entries, key=lambda e: e["validity"])
+            seed = min(
+                cluster_entries,
+                key=lambda e: (len(e["description"]) + len(e["insight"]), e["id"]),
+            )
+            contract = derive_commitment_contract(cluster_entries)
             description = seed["description"].replace("[PATTERN]", "[CONVENTION]").strip()
             convention_id = self.store.store(
                 description=description if description.startswith("[CONVENTION]")
@@ -390,6 +412,7 @@ class KnowledgeDistiller:
                     "species_sources": sorted(species_set),
                     "total_source_trials": total_sources,
                     "source_pattern_ids": [e["id"] for e in cluster_entries],
+                    **contract,
                 },
                 entry_type="convention",
                 evidence_trial_ids=evidence_trial_ids,
