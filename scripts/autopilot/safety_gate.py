@@ -1013,6 +1013,76 @@ class Baseline:
 
     def apply_state(self, state: dict[str, Any], path: Path | None = None) -> None:
         state_path = path or self.source_path or DEFAULT_BASELINE_PATH
+        # ``baseline_state`` is the live authority while present (see
+        # ``_baseline_state_for_startup_gate``). Historically this method only
+        # applied tier maps and era stamps, silently retaining the frozen YAML's
+        # top-level scalars. An operator reseed could therefore persist a complete
+        # state payload and still start with stale speed/reliability floors. Apply
+        # every field emitted by ``to_state_dict``.
+        if "quality" in state:
+            quality = self._validate_quality(
+                state.get("quality"), self.quality, "state.quality", state_path
+            )
+            archive_max = _pareto_frontier_best_quality(DEFAULT_FRONTIER_TIER)
+            if (
+                quality is not None
+                and archive_max is not None
+                and quality > archive_max + BASELINE_ARCHIVE_TOLERANCE
+            ):
+                log.error(
+                    "State baseline quality %.3f in %s exceeds Pareto archive max %.3f; "
+                    "retaining %.3f.",
+                    quality,
+                    state_path,
+                    archive_max,
+                    self.quality,
+                )
+            elif quality is not None:
+                self.quality = quality
+        if "speed" in state:
+            self.speed = self._validate_positive_float(
+                state.get("speed"), self.speed, "state.speed", state_path
+            )
+        if "cost" in state:
+            self.cost = self._validate_positive_float(
+                state.get("cost"),
+                self.cost,
+                "state.cost",
+                state_path,
+                allow_zero=True,
+            )
+        if "reliability" in state:
+            reliability = state.get("reliability")
+            if (
+                isinstance(reliability, bool)
+                or not isinstance(reliability, (int, float))
+                or not 0.0 <= reliability <= RELIABILITY_MAX
+            ):
+                log.error(
+                    "Corrupt state baseline reliability %r in %s; retaining %.3f.",
+                    reliability,
+                    state_path,
+                    self.reliability,
+                )
+            else:
+                self.reliability = float(reliability)
+        if "frontdoor_speed" in state:
+            self.frontdoor_speed = self._validate_positive_float(
+                state.get("frontdoor_speed"),
+                self.frontdoor_speed,
+                "state.frontdoor_speed",
+                state_path,
+            )
+        if "per_suite_quality" in state:
+            self.per_suite_quality = {
+                suite: self._validate_quality(
+                    value,
+                    None,
+                    f"state.per_suite_quality[{suite}]",
+                    state_path,
+                )
+                for suite, value in (state.get("per_suite_quality") or {}).items()
+            }
         self.baselines_by_tier.update(
             _normalize_float_by_tier(state.get("baselines_by_tier", {}), state_path)
         )

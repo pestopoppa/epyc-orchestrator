@@ -87,13 +87,18 @@ def _e7_pre_state(canonical) -> dict:
     ``e8_quality_rebaseline.status`` ``hold_open -> closed_operational``.  The
     ratification-grade applier is a one-shot E7 -> E8 transaction and correctly
     refuses that post-seed state, so these tests must reconstruct the pre-state
-    rather than copy the live file.  ``active_instrument_eras.eval_quality`` is
-    read straight off the live state (the operational seeder never touched it).
+    rather than copy the live file. The live active era is also mutable: E9 moved
+    it on 2026-08-05, so this historical one-shot fixture must explicitly restore
+    the applier's E8 era instead of borrowing today's value.
     """
     state = json.loads(CANONICAL_STATE_PATH.read_bytes())
     state["baseline_state"] = {
         **state["baseline_state"],
         "eval_quality_era": E7_EVAL_INSTRUMENT_ERA_ID,
+    }
+    state["active_instrument_eras"] = {
+        **(state.get("active_instrument_eras") or {}),
+        "eval_quality": "E8",
     }
     hold = {
         key: value

@@ -159,6 +159,45 @@ def test_baseline_state_round_trips_per_tier(tmp_path, monkeypatch):
     assert restored.baseline.per_suite_for_tier(2, strict=True)["coder"] == pytest.approx(2.9)
 
 
+def test_baseline_state_overrides_all_live_scalar_authority(tmp_path, monkeypatch):
+    """A complete state reseed must not retain stale scalars from frozen YAML."""
+    import safety_gate as sg  # type: ignore[import-not-found]
+
+    baseline_path = tmp_path / "baseline.yaml"
+    baseline_path.write_text(
+        "quality: 1.0\n"
+        "speed: 10.0\n"
+        "cost: 0.5\n"
+        "reliability: 0.9\n"
+        "frontdoor_speed: 9.0\n"
+        "per_suite_quality: {old: 1.0}\n"
+    )
+    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: None)
+    state = {
+        "quality": 1.75,
+        "speed": 42.0,
+        "cost": 0.25,
+        "reliability": 0.98,
+        "frontdoor_speed": 42.0,
+        "per_suite_quality": {"new": 2.25},
+        "baselines_by_tier": {"1": 1.75},
+        "per_suite_quality_by_tier": {"1": {"new": 2.25}},
+        "per_suite_counts_by_tier": {"1": {"new": 4}},
+        "eval_quality_era": "E9-quality",
+        "autopilot_speed_era": "E9-speed",
+    }
+
+    loaded = sg.Baseline.load(baseline_path, state=state)
+
+    assert loaded.quality == 1.75
+    assert loaded.speed == 42.0
+    assert loaded.cost == 0.25
+    assert loaded.reliability == 0.98
+    assert loaded.frontdoor_speed == 42.0
+    assert loaded.per_suite_quality == {"new": 2.25}
+    assert loaded.to_state_dict() == state
+
+
 def test_reproduced_promotion_uses_representative_median_and_refreshes_frontdoor_speed(
     tmp_path, monkeypatch
 ):

@@ -171,6 +171,33 @@ eras:
       pre-v8/E7 baseline and MAD observations are historical priors until an operator-ratified
       E8 quality-baseline reseed writes fresh values and windows. No model-lineup or model-registry change.
 
+  - id: E9-eval-resource-lanes-quality
+    from: "2026-08-05T07:55:59Z"
+    scope: eval_quality
+    policy_version: "task_rate_4d_v2_resource_lanes"
+    execution_instrument_id: "resource_lanes_v2_prompt_load"
+    scoring_schedule_id: "model_judge_tail_v1"
+    note: >
+      EvalTower resource-lane execution boundary. Prompt-weighted per-question admission
+      replaces role-cached load, and model-backed llm_judge/rubric scoring runs as a
+      certified scorer tail after generation lanes drain. LLM-judge transport, HTTP,
+      backend, JSON, and response-shape failures retain exact error categories. Pre-boundary
+      reliability/error-exclusion and aggregate quality are historical priors; preserve the
+      journal and rebaseline within this era from banked outputs where replay is possible.
+
+  - id: E9-autopilot-resource-lanes-speed
+    from: "2026-08-05T07:55:59Z"
+    scope: autopilot_speed
+    policy_version: "task_rate_4d_v2_resource_lanes"
+    execution_instrument_id: "resource_lanes_v2_prompt_load"
+    scoring_schedule_id: "model_judge_tail_v1"
+    note: >
+      Questions/hour denominator boundary for certified per-resource eval lanes. v1 serial
+      and v2 resource-lane task rates are not comparable even though both objective vectors
+      are 4D. Retire the pre-boundary frontier view and rebuild from post-boundary trials;
+      do not rescale or merge v1 snapshots into the v2 frontier.
+
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.
