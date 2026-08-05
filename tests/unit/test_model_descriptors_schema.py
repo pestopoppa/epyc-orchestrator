@@ -90,18 +90,37 @@ def test_every_model_has_consumer_ready_sections() -> None:
 
 
 def test_vision_descriptors_expose_projector_requirements() -> None:
+    """Every descriptor serving a vision role must declare its projector.
+
+    The set under test is DERIVED from `role_bindings` — the same field the
+    loaders resolve roles through — rather than from a model-id roster: the VL
+    fleet gets re-modelled and consolidated between lineups (one server can
+    back both vision roles), but a vision descriptor shipping without an
+    `mmproj_path` would launch multimodal serving with no projector.
+    """
     descriptors = _load_yaml(DESCRIPTOR_PATH)
-    by_id = {model["model_id"]: model for model in descriptors["models"]}
+    vision_roles = {"worker_vision", "vision_escalation"}
 
-    worker = by_id["qwen2.5-vl-7b-q4_k_m"]
-    escalation = by_id["qwen3-vl-30b-a3b-q4_k_m"]
+    vision_models = [
+        model
+        for model in descriptors["models"]
+        if vision_roles & set(model["role_bindings"].get("roles") or [])
+    ]
 
-    assert worker["serving"]["requirements"]["mmproj_path"].endswith(
-        "Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf"
-    )
-    assert escalation["serving"]["requirements"]["mmproj_path"].endswith(
-        "Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf"
-    )
+    assert vision_models, "no descriptor binds a vision role"
+    covered_roles = {
+        role
+        for model in vision_models
+        for role in model["role_bindings"]["roles"]
+        if role in vision_roles
+    }
+    assert covered_roles == vision_roles
+
+    for model in vision_models:
+        mmproj = model["serving"]["requirements"].get("mmproj_path")
+        assert isinstance(mmproj, str) and mmproj, model["model_id"]
+        assert mmproj.endswith(".gguf"), model["model_id"]
+        assert Path(mmproj).name.startswith("mmproj"), model["model_id"]
 
 
 def test_shared_runtime_aliases_do_not_emit_role_server_conflicts() -> None:

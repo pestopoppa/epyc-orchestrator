@@ -612,20 +612,91 @@ class TestLease:
 # ---------------------------------------------------------------------------
 # P2-3 — Stage-0 hardening
 # ---------------------------------------------------------------------------
+def _cpus(spec: str) -> set[int]:
+    """Expand a cpuset string — a second implementation, kept out of the module
+    under test so the recert expectations below are not derived from it."""
+    out: set[int] = set()
+    for chunk in spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            lo, hi = chunk.split("-", 1)
+            out.update(range(int(lo), int(hi) + 1))
+        else:
+            out.add(int(chunk))
+    return out
+
+
+_LANE = "184-191"
+
+
+# The host folds logical CPU n and n+96 onto the same physical core (SMT
+# siblings; 184-191 fold to 88-95). This is the machine fact the recert set is
+# built on, restated here so the expectation does not come from the fold under
+# test.
+def _physical(spec: str) -> set[int]:
+    return {cpu % 96 for cpu in _cpus(spec)}
+
+
+def _lane_instances() -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+    """(literal-overlap, fold-only-overlap) instances, from stack_numa directly."""
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    literal: list[tuple[str, int]] = []
+    folded: list[tuple[str, int]] = []
+    for role, cfg in NUMA_CONFIG.items():
+        for cpu_list, port, _threads in cfg.get("instances", []):
+            if not (_physical(cpu_list) & _physical(_LANE)):
+                continue
+            if _cpus(cpu_list) & _cpus(_LANE):
+                literal.append((role, port))
+            else:
+                folded.append((role, port))
+    return literal, folded
+
+
 class TestRecertSet:
     def test_recert_set_includes_the_smt_blind_spot(self):
-        roles = stage0.recert_roles("184-191")
-        by_role = {item.role for item in roles}
-        # architect_general pins "0-95" — physical cores only, no literal
-        # overlap with 184-191, yet it owns the lane's physical cores.
-        assert "architect_general" in by_role
-        missed = {i.role for i in roles if i.basis == "physical_core_overlap"}
-        assert "architect_general" in missed
+        """Every instance that shares the lane's PHYSICAL cores without naming any
+        of its logical CPUs must be in the set, flagged `physical_core_overlap`.
+
+        Derived since 2026-08-04. This used to name architect_general as "the
+        role that pins 0-95". The W1 cutover moved architect_general ONTO the
+        lane (184-191), so it is now a literal `smt_sibling_overlap` entry and
+        the example went stale while the mechanism did not — four other
+        full-machine instances are still caught by the fold alone. Naming the
+        blind spot by its DEFINITION instead of by one role is what stops that
+        recurring.
+        """
+        _literal, folded = _lane_instances()
+        assert folded, "no fold-only instance left to detect — check the topology"
+
+        roles = stage0.recert_roles(_LANE)
+        missed = {(i.role, i.port) for i in roles if i.basis == "physical_core_overlap"}
+        assert set(folded) <= missed
+        # ...and the fold is what a raw string check would have missed.
+        for role, port in folded:
+            assert (role, port) not in {
+                (i.role, i.port) for i in roles if i.basis == "smt_sibling_overlap"
+            }
 
     def test_recert_set_includes_q1b_quarters(self):
-        roles = stage0.recert_roles("184-191")
-        ports = {item.port for item in roles}
-        assert {8380, 8382, 8485, 8087} <= ports
+        """Every instance sharing the lane must be recertified, folded or literal.
+
+        Derived since 2026-08-04. The old literals {8380, 8382, 8485, 8087} are
+        all RETIRED ports: 8280/8380/8282/8382/8385/8485 were freed by the
+        2026-07-31 "retire quarters, deploy 1 full + 2 halves" topology change
+        which records that they must not be revived, and :8087 went away when
+        vision_escalation became an alias on worker_vision's :8086. Re-adding
+        them would mean reviving retired processes so a test has something to
+        match. The property — no lane-sharing instance is omitted — is unchanged.
+        """
+        literal, folded = _lane_instances()
+        assert literal and folded
+
+        ports = {item.port for item in stage0.recert_roles(_LANE)}
+        assert {port for _role, port in literal + folded} <= ports
 
     def test_recert_command_names_the_lane_and_every_contender(self):
         roles = stage0.recert_roles("184-191")

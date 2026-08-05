@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -89,34 +90,72 @@ def test_quartered_roles_per_instance_thread_count() -> None:
 
 
 def test_vision_escalation_stays_single_instance() -> None:
-    """`vision_escalation` is single-instance on NUMA_Q1B (NPS4 node3).
+    """`vision_escalation` is served by ONE instance — worker_vision's :8086.
 
-    Added 2026-07-30 to pin the actual shape, replacing the stale expectation in
-    `test_quartered_roles_per_instance_thread_count`. Node-aligned, so it is not
-    exposed to the straddling-cpuset defect — but it does share one VL GGUF with
-    `worker_vision` on a different node, so under shared mmap only one of the two
-    can hold node-local weights. See handoffs/active/numa-placement-defect-20260730.md.
+    Rewritten 2026-08-04. It used to assert its own process on :8087 @24t on
+    NUMA_Q1B. The 2026-08-01 W1 cutover deleted that entry, with the reason
+    committed in stack_topology.yaml: worker_vision and vision_escalation are ONE
+    MI210 server on :8086 serving both role names, bound by
+    `server_mode.worker_vision.shared_with`. Two processes would also mean two
+    loads of one 17 GB VL GGUF. So the coverage is not deleted, it is
+    re-pointed: the role must have NO instance of its own (it must not silently
+    become a process again) and must resolve to its host's single instance.
+    Every expectation is read from the registry / topology, not restated.
     """
-    instances = _instances("vision_escalation")
-    assert len(instances) == 1, (
-        f"vision_escalation should be single-instance (got {len(instances)})"
+    registry = yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text()
+    )["server_mode"]
+
+    # Master says vision_escalation rides worker_vision's process.
+    assert "vision_escalation" in registry["worker_vision"]["shared_with"]
+
+    assert _instances("vision_escalation") == [], (
+        "vision_escalation must not have a NUMA_CONFIG instance of its own — it is "
+        "an alias on worker_vision's server, not a process"
     )
-    cpus, port, threads = instances[0]
-    assert port == 8087
-    assert threads == 24
-    assert cpus == "72-95,168-191"  # NUMA_Q1B == NPS4 node3
-    assert _nodes_spanned(cpus) == {3}, "should be node-aligned, not straddling"
+    assert "vision_escalation" not in stack_numa.NUMA_CONFIG
+
+    host = _instances("worker_vision")
+    assert len(host) == 1, "the process serving both vision roles is single-instance"
+    assert orchestrator_stack.PORT_MAP["vision_escalation"] == host[0][1]
+    assert (
+        orchestrator_stack.PORT_MAP["vision_escalation"]
+        == orchestrator_stack.PORT_MAP["worker_vision"]
+        == registry["worker_vision"]["port"]
+    )
+    assert "vision_escalation" in orchestrator_stack.ROLE_LAUNCH_META["worker_vision"][
+        "shared_with_first_n"
+    ]
 
 
 def test_worker_vision_stays_single_instance() -> None:
-    """Phase 0.5 bench showed Qwen2.5-VL-7B is flat between 24t/48t and not
-    worth quartering. Stays single instance on NUMA_Q0B."""
+    """`worker_vision` is single-instance on the shared GPU host lane.
+
+    Rewritten 2026-08-04. The old docstring's premise — "Phase 0.5 bench showed
+    Qwen2.5-VL-7B is flat between 24t/48t" — retired with the model: the W1
+    cutover moved the role to Qwen3-VL-30B-A3B Q4_K_M on MI210 (device ROCm0,
+    ngl all, MMMU-250 63.6% vs 52.4%, +11.2 pp, paired exact McNemar p=0.0011),
+    so its host threads now sit on GPU_HOST_LANE (184-191 @8t, the SMT siblings
+    of physical 88-95) instead of a 24-thread NPS4 quarter. Host threads on a
+    fully-offloaded role serve tokenization/dispatch; applying a CPU-inference
+    thread count to it would be the defect. The shape is DERIVED from
+    stack_numa's shape table so a lane change fails here instead of a literal
+    going stale.
+    """
+    registry = yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text()
+    )["server_mode"]
+    assert registry["worker_vision"]["device"] == "ROCm0"
+
     instances = _instances("worker_vision")
-    assert len(instances) == 1, "worker_vision should be single-instance (too small to quarter)"
+    assert len(instances) == 1, "worker_vision should be single-instance (one GPU server)"
     cpus, port, threads = instances[0]
-    assert port == 8086
-    assert threads == 24
-    assert cpus == "24-47,120-143"  # NUMA_Q0B
+
+    assert port == registry["worker_vision"]["port"]
+    assert stack_numa.NUMA_INSTANCE_SHAPE_CLASSES["worker_vision"] == ("gpu_host_lane",)
+    assert (cpus, threads) == stack_numa.GPU_HOST_LANE
+    assert stack_numa.NUMA_CONFIG["worker_vision"]["gpu_host_lane"] is True
+    assert _nodes_spanned(cpus) == {3}, "the GPU host lane is node-aligned on node 3"
 
 
 # Live NPS4 topology, verified 2026-07-30 via `numactl --hardware`.

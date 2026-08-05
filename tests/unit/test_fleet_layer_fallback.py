@@ -5,7 +5,8 @@ Acceptance plan coverage (wp12-fleet-layer-design.md §6):
     the request fails fast, fallback churn stays 0 (regression bound for the
     ~90x forced_role_fallback churn)
   * case 6 — cross-fleet fallback stays real: architect_general falls back to
-    coder_escalation's distinct fleet and succeeds
+    the distinct fleet its declared fallback target rides (architect_critic's
+    :8074 CPU fleet since the 2026-08-01 W1 cutover) and succeeds
 
 Plus flag-off byte-identity of get_fallback_roles and the fail-safe when the
 fleet build is unavailable. All offline.
@@ -21,7 +22,7 @@ import yaml
 
 import src.features
 import src.fleet as fleet_mod
-from src.roles import Role, get_fallback_roles
+from src.roles import Role, get_fallback_roles, _FALLBACK_MAP
 
 FD_PORTS = [8080, 8180, 8280, 8380]
 WG_PORTS = [8082, 8182, 8282, 8382]
@@ -37,7 +38,14 @@ SERVER_MODE = {
         "model_role": "worker_general",
         "shared_with": ["worker_math", "toolrunner"],
     },
-    "architect_general": {"port": 8083, "model_role": "qwen35_122b_q4km"},
+    "architect_general": {"port": 8083, "model_role": "qwen36_27b_mtp_q8_local"},
+    # 2026-08-01 W1 cutover: architect_critic is its OWN fleet — the 122B on a
+    # separate CPU process, registry server_mode.architect_critic.port == 8074.
+    # It must be bound here, not merely named: compiled_fleet_fallback_map keeps
+    # edges "involving unbound roles ... verbatim", so an unbound architect_critic
+    # would let the case-6 assertions pass through the UNBOUND branch and stop
+    # testing cross-fleet retention at all.
+    "architect_critic": {"port": 8074, "model_role": "qwen35_122b_q4km"},
     "ingest_long_context": {"port": 8085, "model_role": "ingest_long_context"},
 }
 
@@ -57,6 +65,7 @@ def _fleet_state(tmp_path: Path):
                 "worker_math": WG_PORTS,
                 "toolrunner": WG_PORTS,
                 "architect_general": [8083],
+                "architect_critic": [8074],
                 "ingest_long_context": [8185, 8285, 8385, 8485],
             }.items()
         }
@@ -81,11 +90,23 @@ def fleet_on(monkeypatch, tmp_path):
 
 
 def test_flag_off_fallback_map_unchanged(monkeypatch):
+    """Flag off, get_fallback_roles is a pure pass-through of the legacy map.
+
+    Asserted against ``_FALLBACK_MAP`` itself rather than an inline copy of its
+    contents: this test's contract is the PASS-THROUGH, and re-encoding the map
+    made a legitimate topology edit (architect_general -> architect_critic after
+    the W1 cutover) look like a failure of the flag-off path.
+    """
     monkeypatch.delenv("ORCHESTRATOR_FLEET_LAYER", raising=False)
-    assert get_fallback_roles(Role.WORKER_MATH) == [Role.WORKER_GENERAL]
-    assert get_fallback_roles(Role.CODER_ESCALATION) == [Role.FRONTDOOR]
-    assert get_fallback_roles(Role.ARCHITECT_GENERAL) == [Role.CODER_ESCALATION]
-    assert get_fallback_roles("worker_math") == [Role.WORKER_GENERAL]
+    assert _FALLBACK_MAP, "legacy fallback map is empty — test is vacuous"
+    for role, targets in _FALLBACK_MAP.items():
+        assert get_fallback_roles(role) == list(targets)
+    # Returned list is a copy, not the live table (mutating it must not poison it).
+    returned = get_fallback_roles(Role.WORKER_MATH)
+    returned.clear()
+    assert get_fallback_roles(Role.WORKER_MATH) == list(_FALLBACK_MAP[Role.WORKER_MATH])
+    # String input and unknown-role input behave as before.
+    assert get_fallback_roles("worker_math") == list(_FALLBACK_MAP[Role.WORKER_MATH])
     assert get_fallback_roles("not_a_role") == []
 
 
@@ -99,11 +120,40 @@ def test_case5_same_fleet_edges_compiled_to_noops(fleet_on):
     assert get_fallback_roles(Role.WORKER_VISION) == []
 
 
+def _assert_cross_fleet_edges_kept(role, bindings):
+    """The role's DECLARED fallback targets all ride a different fleet and survive
+    compilation.
+
+    Every target is asserted BOUND first: an unbound target is kept verbatim by
+    ``compiled_fleet_fallback_map``, so without this guard the retention assertion
+    could pass through the unbound branch and case 6 would test nothing.
+    """
+    declared = list(_FALLBACK_MAP[role])
+    assert declared, f"{role.value} declares no fallback — nothing to keep"
+
+    source = fleet_mod.resolve_binding(role.value, bindings)
+    assert source is not None, f"{role.value} is unbound in the fixture topology"
+    for target in declared:
+        target_binding = fleet_mod.resolve_binding(target.value, bindings)
+        assert target_binding is not None, (
+            f"{target.value} is unbound — the edge would be kept verbatim, not "
+            f"because it crosses fleets"
+        )
+        assert target_binding.fleet_id != source.fleet_id, (
+            f"{role.value} -> {target.value} is same-fleet ({source.fleet_id})"
+        )
+
+    assert get_fallback_roles(role) == declared
+
+
 def test_case6_cross_fleet_edges_stay_real(fleet_on):
-    # architect fleet (8083) → frontdoor fleet: distinct → kept.
-    assert get_fallback_roles(Role.ARCHITECT_GENERAL) == [Role.CODER_ESCALATION]
+    _, bindings = fleet_on
+    # architect_general fleet (:8083) → architect_critic fleet (:8074): distinct → kept.
+    _assert_cross_fleet_edges_kept(Role.ARCHITECT_GENERAL, bindings)
+    # …and the reverse edge, which the W1 cutover also declares.
+    _assert_cross_fleet_edges_kept(Role.ARCHITECT_CRITIC, bindings)
     # ingest fleet → architect fleet: distinct → kept.
-    assert get_fallback_roles(Role.INGEST_LONG_CONTEXT) == [Role.ARCHITECT_GENERAL]
+    _assert_cross_fleet_edges_kept(Role.INGEST_LONG_CONTEXT, bindings)
 
 
 def test_fleet_build_unavailable_falls_back_to_legacy_map(monkeypatch):
@@ -174,8 +224,14 @@ def test_case5_flag_off_control_shows_legacy_churn(prims, monkeypatch):
 
 
 def test_case6_cross_fleet_fallback_succeeds(fleet_on, prims, monkeypatch):
-    """architect_general with its (distinct) fleet down falls back to
-    coder_escalation's fleet and the request SUCCEEDS."""
+    """architect_general with its (distinct) fleet down falls back to its declared
+    cross-fleet target and the request SUCCEEDS."""
+    _, bindings = fleet_on
+    # Derive the target instead of naming it, and prove it is a real cross-fleet
+    # hop in this topology before asserting the retry lands on it.
+    _assert_cross_fleet_edges_kept(Role.ARCHITECT_GENERAL, bindings)
+    fallback_target = _FALLBACK_MAP[Role.ARCHITECT_GENERAL][0].value
+
     calls: list[str] = []
 
     def _single(prompt, role, *args, **kwargs):
@@ -190,4 +246,4 @@ def test_case6_cross_fleet_fallback_succeeds(fleet_on, prims, monkeypatch):
 
     result = prims._real_call_impl("prompt", "architect_general")
     assert result == "cross-fleet-ok"
-    assert calls == ["architect_general", "coder_escalation"]
+    assert calls == ["architect_general", fallback_target]

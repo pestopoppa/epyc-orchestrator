@@ -15,7 +15,16 @@ from src.registry.stack_priors import (
 
 LEGACY_VISION_ROLES = frozenset({"worker_vision", "vision_escalation"})
 VISION_ROLES = LEGACY_VISION_ROLES
-_LEGACY_VL_PORTS = {"worker_vision": 8086, "vision_escalation": 8087}
+# Degraded-mode last resort, reached only when the launch manifest is
+# unreadable. 2026-08-01 W1 vision unification: vision_escalation's standalone
+# 7B on :8087 was retired and the role became an alias on worker_vision's
+# Qwen3-VL-30B-A3B MI210 process, so BOTH roles resolve to :8086. The 8087 that
+# stood here named a port that no longer exists — a degraded fallback pointing
+# at a dead server is worse than no fallback, because it fails at connect time
+# instead of at resolution time. Mirrors
+# `_LEGACY_SERVER_URL_FALLBACKS["vision_escalation"]` in src/config/models.py
+# and `VisionConfig.vl_escalation_server_port`, both already on :8086.
+_LEGACY_VL_PORTS = {"worker_vision": 8086, "vision_escalation": 8086}
 
 
 def _vision_roles_from_records(records: dict[str, dict[str, Any]]) -> frozenset[str]:

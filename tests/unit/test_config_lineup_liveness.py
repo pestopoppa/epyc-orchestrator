@@ -271,15 +271,36 @@ def test_bootstrap_runtime_facts_rejects_stale_or_dead_facts(tmp_path, monkeypat
 
 
 def test_runtime_selected_aliases_do_not_fall_back_to_dead_static_ports() -> None:
-    urls = models._selected_server_url_values(
-        [
-            _server(8080, "frontdoor"),
-            _server(8082, "worker_general"),
-            _server(8182, "worker_explore"),
-        ]
-    )
+    """Every same-process alias is completed from its host's REALIZED lineup.
 
-    assert urls["coder_escalation"] == "http://localhost:8080"
-    assert urls["worker_summarize"] == "http://localhost:8080"
-    assert urls["toolrunner"] == "http://localhost:8082,http://localhost:8182"
-    assert urls["worker_math"] == "http://localhost:8082,http://localhost:8182"
+    The alias -> host pairs are read from ``_RUNTIME_SELECTED_ROLE_ALIASES``
+    itself rather than restated, so a re-pointed alias (the 2026-08-01 W1
+    cutover moved coder_escalation frontdoor -> architect_general) is covered
+    automatically instead of leaving this guard asserting a dead static port.
+    """
+    aliases = models._RUNTIME_SELECTED_ROLE_ALIASES
+    host_ports = {
+        "frontdoor": [8080],
+        "worker_general": [8082, 8182],
+        "architect_general": [8083],
+        "worker_vision": [8086],
+    }
+    # Every host named by the alias table must be represented in the fixture —
+    # otherwise a newly added alias would be silently untested.
+    assert set(aliases.values()) <= set(host_ports)
+
+    lineup = [
+        _server(port, host) for host, ports in host_ports.items() for port in ports
+    ]
+    urls = models._selected_server_url_values(lineup)
+
+    for host, ports in host_ports.items():
+        assert urls[host] == ",".join(f"http://localhost:{port}" for port in ports)
+
+    for alias, host in aliases.items():
+        assert urls[alias] == urls[host], f"{alias} did not follow its host {host}"
+
+    # Teeth: no alias may resolve to a static full port absent from the lineup.
+    for value in urls.values():
+        for dead_port in _FULL_HOST_PORTS:
+            assert str(dead_port) not in value

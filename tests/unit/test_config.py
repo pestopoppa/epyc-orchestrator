@@ -28,9 +28,48 @@ from src.config import (
     get_config,
     reset_config,
 )
+from src.config import models as config_models
 from src.config.models import reset_stack_prior_server_url_cache
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
+# ----------------------------------------------------------------------------
+# Topology-derived expectations.
+#
+# Serving ports are NOT restated here: they are read from the same source of
+# truth the resolver reads (`scripts.server.stack_numa.NUMA_CONFIG`, itself a
+# thin loader over orchestration/stack_topology.yaml). Hardcoding a fleet
+# literal is how these tests went stale twice — first at the 2026-07-23
+# big+quarters restoration, again at the 2026-07-30 quarters retirement
+# (1 full + 2 halves), each time asserting ports the launcher had already freed.
+# ----------------------------------------------------------------------------
+
+
+def _topology_fleet_ports(role: str) -> tuple[int, list[int]]:
+    """Return (full_port, sibling_ports) for a quarterable role."""
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    cfg = NUMA_CONFIG[role]
+    instances = cfg["instances"]
+    full_idx = cfg["full_instance_idx"]
+    return instances[full_idx][1], [
+        inst[1] for idx, inst in enumerate(instances) if idx != full_idx
+    ]
+
+
+def _expected_full_mode_fleet_url(role: str) -> str:
+    """The `full:`-prefixed fleet URL string the topology implies for ``role``."""
+    full_port, sibling_ports = _topology_fleet_ports(role)
+    urls = [f"http://localhost:{p}" for p in [full_port, *sibling_ports]]
+    if len(urls) > 1:
+        urls[0] = f"full:{urls[0]}"
+    return ",".join(urls)
+
+
+def _expected_quarter_mode_fleet_url(role: str) -> str:
+    """The fleet URL string for quarter mode: siblings only, no full, no prefix."""
+    _, sibling_ports = _topology_fleet_ports(role)
+    return ",".join(f"http://localhost:{p}" for p in sibling_ports)
 
 
 # ============================================================================
@@ -272,24 +311,22 @@ class TestServerURLsConfig:
     def test_as_dict_includes_role_urls(self) -> None:
         cfg = ServerURLsConfig()
         d = cfg.as_dict()
-        expected_keys = {
-            "frontdoor",
-            "coder",
-            "coder_escalation",
-            "worker",
-            "worker_general",
-            "toolrunner",
-            "worker_explore",
-            "worker_math",
-            "worker_vision",
-            "vision_escalation",
-            "worker_coder",
-            "worker_fast",
-            "worker_summarize",
-            "architect_general",
-            "ingest_long_context",
-        }
+        # Derived, not restated: every serving role the resolver can resolve
+        # (the last-resort fallback table) plus every compatibility alias the
+        # resolver knows about, minus the three service URLs as_dict() drops.
+        # A role added to those tables without a matching field now fails here
+        # instead of silently vanishing from the LLMPrimitives backend map —
+        # which is how `architect_critic` (W1, 2026-08-01) slipped past the old
+        # hand-enumerated literal.
+        service_urls = {"api_url", "ocr_server", "vision_api"}
+        expected_keys = (
+            set(config_models._LEGACY_SERVER_URL_FALLBACKS)
+            | set(config_models._CANONICAL_SERVER_URL_ALIASES)
+            | set(config_models._STACK_PRIOR_SERVER_URL_ALIASES)
+            | set(config_models._RUNTIME_SELECTED_ROLE_ALIASES)
+        ) - service_urls
         assert expected_keys == set(d.keys())
+        assert not (service_urls & set(d.keys()))
 
     def test_as_dict_values_are_strings(self) -> None:
         cfg = ServerURLsConfig()
@@ -299,10 +336,14 @@ class TestServerURLsConfig:
 
     def test_default_frontdoor_url(self) -> None:
         cfg = ServerURLsConfig()
-        assert cfg.frontdoor.startswith("full:http://localhost:8080")
-        assert "http://localhost:8180" in cfg.frontdoor
-        assert "http://localhost:8280" in cfg.frontdoor
-        assert "http://localhost:8380" in cfg.frontdoor
+        full_port, sibling_ports = _topology_fleet_ports("frontdoor")
+        # The fleet must fan out: a single-endpoint frontdoor is the EV-11c
+        # serialization failure, so assert the topology still has siblings.
+        assert sibling_ports
+        assert cfg.frontdoor == _expected_full_mode_fleet_url("frontdoor")
+        assert cfg.frontdoor.startswith(f"full:http://localhost:{full_port}")
+        for port in sibling_ports:
+            assert f"http://localhost:{port}" in cfg.frontdoor
 
     def test_default_architect_urls(self) -> None:
         cfg = ServerURLsConfig()
@@ -373,7 +414,24 @@ roles:
 
         reset_config()
 
-    def test_quarter_numa_mode_urls_skip_dead_full_ports(self, tmp_path: Path) -> None:
+    def test_quarter_numa_mode_urls_skip_dead_full_ports(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        quarterable_roles = ("frontdoor", "worker_general", "ingest_long_context")
+        live_ports: set[int] = set()
+        for role in quarterable_roles:
+            _, sibling_ports = _topology_fleet_ports(role)
+            live_ports.update(sibling_ports)
+
+        # Hermetic fleet: the quarters/halves are up, the aligned fulls are
+        # down — the exact "quarters-only fleet" shape ESC-8 Fix 5 exists to
+        # survive. Patching the documented `_port_listening` seam means no real
+        # socket is opened and the outcome does not depend on what happens to be
+        # running on this shared host.
+        monkeypatch.setattr(
+            config_models, "_port_listening", lambda port: port in live_ports
+        )
+
         with patch.dict(
             os.environ,
             {
@@ -383,22 +441,16 @@ roles:
         ):
             reset_stack_prior_server_url_cache()
             cfg = ServerURLsConfig()
-            assert cfg.frontdoor == (
-                "http://localhost:8080,http://localhost:8180,"
-                "http://localhost:8280,http://localhost:8380"
-            )
-            assert cfg.worker_general == (
-                "http://localhost:8082,http://localhost:8182,"
-                "http://localhost:8282,http://localhost:8382"
-            )
-            assert cfg.ingest_long_context == (
-                "http://localhost:8185,http://localhost:8285,"
-                "http://localhost:8385,http://localhost:8485"
-            )
-            assert "8070" not in cfg.frontdoor
-            assert "8072" not in cfg.worker_general
-            assert "8085" not in cfg.ingest_long_context
-            assert not cfg.frontdoor.startswith("full:")
+            for role in quarterable_roles:
+                full_port, sibling_ports = _topology_fleet_ports(role)
+                resolved = getattr(cfg, role)
+                assert resolved == _expected_quarter_mode_fleet_url(role)
+                # Teeth: the dead aligned-full port never appears, and the
+                # "full:" prefix (which arms ConcurrencyAwareBackend's full slot)
+                # is absent because no full instance was selected.
+                assert str(full_port) not in resolved
+                assert not resolved.startswith("full:")
+                assert len(resolved.split(",")) == len(sibling_ports)
 
         reset_stack_prior_server_url_cache()
 

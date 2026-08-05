@@ -491,9 +491,10 @@ def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
     first-touch). architect_GENERAL held that placement when this docstring was
     written and no longer does: the 2026-07-31 cutover moved the 122B to
     architect_critic and re-placed architect_general as a GPU role whose HOST
-    threads sit on a 24-thread node-3 quarter (taskset -c 72-95,168-191,
-    numactl_policy membind=3). Citing it as the interleave=all exemplar sent
-    readers to a membind role.
+    threads sit on the 8-thread GPU host lane (taskset -c 184-191,
+    numactl_policy membind=3 — the SMT siblings of 88-95, per
+    stack_topology.yaml's GPU_HOST_LANE shape class). Citing it as the
+    interleave=all exemplar sent readers to a membind role.
     """
     cfg = NUMA_CONFIG.get(role)
     if cfg and instance_idx < len(cfg["instances"]):

@@ -157,10 +157,83 @@ def test_core_includes_vl_and_bigcodebench_demotion(monkeypatch):
     assert "vl" in policy["single_slot_suites"]
 
 
-def test_activation_guard_fails_closed_on_live_registry(monkeypatch):
-    """The operator has NOT authorized core_v2 yet: activation must fail closed."""
+def test_activation_guard_matches_the_live_operator_registry(monkeypatch):
+    """The guard's verdict on the LIVE registry must equal what that file declares.
+
+    This test used to assert a flat "not authorized yet". That premise expired:
+    the operator applied the ``E4-quality-core-v2`` row to
+    ``orchestration/instrument_eras.yaml`` in f60646e9 (2026-07-23), so the guard
+    correctly returns ``authorized`` and the old literal was asserting the absence
+    of a row that exists. The durable claim — the guard reads the real
+    operator-owned registry rather than a fixture, and agrees with it — is derived
+    from the file here instead of being restated, so the next operator edit moves
+    the expectation with it rather than turning this red.
+
+    The fail-closed branch keeps its own coverage below, driven by a registry that
+    genuinely lacks an authorizing row.
+    """
+    import yaml
+
+    from src.autopilot_core.instrument_era_guard import (
+        AUTOPILOT_QUALITY_SCOPE,
+        instrument_eras_path,
+    )
+
     monkeypatch.delenv("AUTOPILOT_INSTRUMENT_ERAS_PATH", raising=False)
+    live_path = instrument_eras_path()
+    declared = [
+        era
+        for era in yaml.safe_load(live_path.read_text())["eras"]
+        if str(era.get("scope", "")) == AUTOPILOT_QUALITY_SCOPE
+        and str(era.get("core_id", "")) == CORE_ID
+    ]
+
     verdict = designed_core_activation_guard(CORE_ID, now=_NOW)
+
+    assert verdict["path"] == str(live_path)
+    assert verdict["ok"] is bool(declared), (
+        f"guard says ok={verdict['ok']} but {live_path} declares "
+        f"{len(declared)} authorizing {CORE_ID} row(s)"
+    )
+    if declared:
+        assert verdict["status"] == "authorized"
+        assert verdict["era"]["core_id"] == CORE_ID
+        assert verdict["era"]["id"] in {str(era["id"]) for era in declared}
+    else:
+        assert verdict["status"] == "missing_core_era"
+        assert "human-owned E4/core row" in verdict["reason"]
+
+
+def test_activation_guard_fails_closed_without_an_operator_core_row(tmp_path, monkeypatch):
+    """A live-shaped registry with no authorizing core row must fail closed.
+
+    Built by taking the REAL registry and dropping only the rows that name this
+    core, so the negative case is the live file minus its authorization — not a
+    hand-written stub that could drift away from the real schema.
+    """
+    import yaml
+
+    from src.autopilot_core.instrument_era_guard import (
+        AUTOPILOT_QUALITY_SCOPE,
+        instrument_eras_path,
+    )
+
+    monkeypatch.delenv("AUTOPILOT_INSTRUMENT_ERAS_PATH", raising=False)
+    data = yaml.safe_load(instrument_eras_path().read_text())
+    kept = [
+        era
+        for era in data["eras"]
+        if not (
+            str(era.get("scope", "")) == AUTOPILOT_QUALITY_SCOPE
+            and str(era.get("core_id", "")) == CORE_ID
+        )
+    ]
+    assert len(kept) < len(data["eras"]), "live registry has no core row to remove"
+    stripped = tmp_path / "instrument_eras.yaml"
+    stripped.write_text(yaml.safe_dump({**data, "eras": kept}, sort_keys=False))
+
+    verdict = designed_core_activation_guard(CORE_ID, path=stripped, now=_NOW)
+
     assert verdict["ok"] is False
     assert verdict["status"] == "missing_core_era"
     assert "human-owned E4/core row" in verdict["reason"]

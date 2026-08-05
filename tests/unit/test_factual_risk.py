@@ -5,17 +5,41 @@ from __future__ import annotations
 import pytest
 
 from src.classifiers.factual_risk import (
+    DEFAULT_STACK_PRIORS_PATH,
     FactualRiskResult,
+    _DEFAULT_ROLE_TIERS,
+    _degraded_role_tier,
     _extract_features,
     _canary_roll,
     _compute_score,
     _role_tier_for_role,
     _role_adjustment,
+    _tier_from_model_mem,
     _band,
     assess_risk,
     get_configured_mode,
     get_mode,
 )
+
+
+def _live_roles_by_tier() -> dict[str, list[str]]:
+    """Live role -> factual-risk tier, derived exactly as the module derives it.
+
+    Source of truth is the generated stack-prior artifact plus the module's own
+    ``_tier_from_model_mem`` thresholds — never a pasted role name. The role that
+    occupies a given tier changes whenever a model moves between roles (the
+    2026-08-01 W1 cutover swapped the 122B from architect_general to
+    architect_critic and every hardcoded exemplar in this class went stale).
+    """
+    from src.registry.stack_priors import live_stack_role_records, stack_prior_model_mem_gb
+
+    by_tier: dict[str, list[str]] = {}
+    for role, record in live_stack_role_records(DEFAULT_STACK_PRIORS_PATH).items():
+        mem_gb = stack_prior_model_mem_gb(record)
+        if mem_gb is None:
+            continue
+        by_tier.setdefault(_tier_from_model_mem(mem_gb), []).append(role)
+    return {tier: sorted(roles) for tier, roles in by_tier.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +196,53 @@ class TestRoleAdjustment:
     """Per-role capability factors."""
 
     def test_architect_is_tier_1(self):
-        assert _role_adjustment("architect_general") == pytest.approx(0.727978)
+        """The tier-1 exemplar is derived from the module's own memory threshold.
+
+        ``architect_general`` was the tier-1 role only because it served the 69 GB
+        122B. On 2026-08-01 that model moved to ``architect_critic`` and
+        architect_general took the 27.05 GB MI210 model, so it is legitimately
+        tier_2 now. Deriving keeps this test correct across the next model swap.
+        """
+        tier_1_roles = _live_roles_by_tier().get("tier_1", [])
+        assert tier_1_roles, "no live role meets the tier-1 model-memory threshold"
+
+        for role in tier_1_roles:
+            assert _role_tier_for_role(role) == "tier_1"
+            assert _role_adjustment(role) == pytest.approx(_DEFAULT_ROLE_TIERS["tier_1"])
+
+        # The tier-1 discount is still an architect-family capability.
+        assert any(role.startswith("architect_") for role in tier_1_roles)
+        # Calibrated multiplier itself is still pinned (G12 AA-Omniscience).
+        assert _DEFAULT_ROLE_TIERS["tier_1"] == pytest.approx(0.727978)
+
+    def test_degraded_role_tiers_agree_with_live_derivation(self):
+        """The hand degraded table must not contradict the live derivation.
+
+        The degraded table is consulted only when stack priors are missing, so it
+        cannot be derived — but a role whose degraded tier disagrees with its live
+        tier is scored differently depending on whether an artifact happens to be
+        on disk. That drift is exactly what the W1 cutover left behind
+        (architect_general stuck at tier_1, architect_critic absent, and
+        vision_escalation at tier_2 against a live tier_3).
+        """
+        live = {
+            role: tier
+            for tier, roles in _live_roles_by_tier().items()
+            for role in roles
+        }
+        assert live, "live stack priors produced no role tiers"
+
+        mismatches = {
+            role: (degraded, live_tier)
+            for role, live_tier in live.items()
+            if (degraded := _degraded_role_tier(role)) is not None and degraded != live_tier
+        }
+        assert not mismatches, f"degraded table disagrees with live priors: {mismatches}"
+
+        # And the strongest live roles must actually be covered by the table,
+        # otherwise degraded mode silently gives them no discount.
+        for role in _live_roles_by_tier().get("tier_1", []):
+            assert _degraded_role_tier(role) == "tier_1", role
 
     def test_coder_is_tier_2(self):
         assert _role_adjustment("coder_escalation") == pytest.approx(0.824178)
@@ -225,9 +295,25 @@ roles:
         assert _role_adjustment("unknown_new_role") == 1.0
 
     def test_config_override(self):
+        """Caller-supplied role_adjustments are consulted per DERIVED tier.
+
+        The tier-1 exemplar is derived (it moved from architect_general to
+        architect_critic on 2026-08-01); all three tier branches are covered so
+        the override map cannot be half-ignored.
+        """
         config = {"role_adjustments": {"tier_1": 0.5, "tier_2": 0.7, "tier_3": 0.9}}
-        assert _role_adjustment("architect_general", config) == 0.5
+        by_tier = _live_roles_by_tier()
+
+        for tier, expected in (("tier_1", 0.5), ("tier_2", 0.7), ("tier_3", 0.9)):
+            roles = by_tier.get(tier, [])
+            assert roles, f"no live role in {tier}"
+            for role in roles:
+                assert _role_adjustment(role, config) == expected, (role, tier)
+
+        # coder_escalation stayed tier_2 across the cutover — explicit coverage
+        # that the override, not the default table, produced the value.
         assert _role_adjustment("coder_escalation", config) == 0.7
+        assert _role_adjustment("coder_escalation") != 0.7
 
 
 # ---------------------------------------------------------------------------

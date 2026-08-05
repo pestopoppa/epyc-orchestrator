@@ -163,6 +163,7 @@ def scan_orchestrator_tasks(
     started: dict[str, dict[str, Any]] = {}
     terminal_events: dict[str, dict[str, Any]] = {}
     routing_meta: dict[str, dict[str, Any]] = {}
+    plan_reviews: dict[str, dict[str, Any]] = {}
     try:
         with open(path) as f:
             for line in f:
@@ -207,6 +208,15 @@ def scan_orchestrator_tasks(
                         "has_image": bool(data.get("has_image")),
                         "image_source": data.get("image_source") or "",
                     }
+                elif ev == "plan_reviewed":
+                    # A terminal failure following a plan review is materially
+                    # different from an inference/server failure. Preserve the
+                    # architect's decision on the outcome card.
+                    plan_reviews[tid] = {
+                        "plan_review_decision": data.get("decision") or "",
+                        "plan_review_feedback": (data.get("feedback") or "")[:200],
+                        "plan_review_role": e.get("agent_role") or "architect_general",
+                    }
                 elif ev in ("task_completed", "task_failed", "escalation_triggered"):
                     terminal_events[tid] = {
                         "event_type": ev,
@@ -243,6 +253,7 @@ def scan_orchestrator_tasks(
             s["outcome"] = t["event_type"]
             s["duration_s"] = round(t["ended_at"] - s["started_at"], 2)
             s["final_role"] = t.get("final_role")
+            s.update(plan_reviews.get(tid, {}))
             # Decode t/s = generated tokens / generation time. Guard missing
             # fields (e.g. failure completions with no completion_meta) so the
             # `tps` key is simply absent — downstream must null-check.

@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 from controller_io import suppressed_numeric_surfaces, validate_single_variable
 from safety_gate import EvalResult, SafetyGate
 from species.prompt_forge import diversity_coverage_penalty
-from src.autopilot_core.tier_specs import objectives_from
+from src.autopilot_core.tier_specs import UnmeasuredObjectiveError, objectives_from
 
 ORCH_ROOT = Path(__file__).resolve().parents[2]
 
@@ -692,9 +692,28 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
     # (the default spec returns the same (quality, speed, -cost, reliability) tuple).
     if "_current_optuna_trial" in ctx.state and eval_result:
         t = ctx.state.pop("_current_optuna_trial")
-        ctx.swarm.report_result(
-            t["surface"], t["trial_number"], objectives_from(eval_result)
-        )
+        # objectives_from() raises when a dominance axis is unmeasured — e.g. an
+        # aborted / fast-rejected batch where seq_task_rate_qph_from() lands below
+        # the 1.0 s/question validity floor and returns None. The trial has already
+        # been popped, so letting that escape kills _action_numeric_trial and
+        # strands an Optuna trial that is neither reported nor failed, permanently
+        # occupying a slot in the study. autopilot.py guards the identical
+        # condition at both of its objectives_from() call sites; this one was
+        # missed. An unmeasured axis is a FAILED trial, not a crash.
+        try:
+            objectives = objectives_from(eval_result)
+        except UnmeasuredObjectiveError:
+            log.warning(
+                "Numeric trial %s/%s: dominance axis unmeasured; marking the "
+                "Optuna trial failed instead of reporting a fabricated objective",
+                t["surface"],
+                t["trial_number"],
+            )
+            ctx.swarm.mark_failed(
+                t["surface"], t["trial_number"], "dominance axis unmeasured"
+            )
+        else:
+            ctx.swarm.report_result(t["surface"], t["trial_number"], objectives)
     return eval_result, "numeric_swarm"
 
 

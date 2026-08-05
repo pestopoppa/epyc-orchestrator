@@ -102,7 +102,11 @@ roles:
         encoding="utf-8",
     )
 
-    roles = _MOD._read_stack_prior_active_roles(stack_priors)
+    # The fixture declares no model.mem_gb, so heaviness resolves through the
+    # port fallback. Declare the heavy topology this assertion is about instead
+    # of inheriting whatever the live machine happens to be running.
+    with patch.object(_MOD, "HEAVY_PORTS", {8087}):
+        roles = _MOD._read_stack_prior_active_roles(stack_priors)
 
     by_name = {role["name"]: role for role in roles}
     assert list(by_name) == ["worker_vision", "frontdoor", "vision_escalation"]
@@ -289,8 +293,18 @@ def test_discover_active_roles_prefers_stack_priors_over_registry(
 
 def test_default_roles_and_architect_roles_exclude_retired_architect_role():
     assert _RETIRED_ARCHITECT_ROLE not in _MOD.DEFAULT_ROLES
-    assert _MOD.ARCHITECT_ROLES == {"architect_general"}
+    assert _RETIRED_ARCHITECT_ROLE not in _MOD.ARCHITECT_ROLES
     assert _RETIRED_ARCHITECT_ROLE not in _MOD.ROLE_COST_TIER
+
+    # Derive the expected roster from the same artifact DEFAULT_ROLES is
+    # compiled from (live, seedable stack-prior roles) rather than restating a
+    # lineup snapshot: the architect count moves whenever the fleet changes,
+    # but the derivation must not.
+    live_architect_roles = {
+        role for role in _MOD._read_stack_prior_default_roles() if role.startswith("architect_")
+    }
+    assert live_architect_roles, "live stack priors declare no architect_* role"
+    assert _MOD.ARCHITECT_ROLES == live_architect_roles
 
 
 def test_discover_default_roles_fallback_prefers_active_discovery(monkeypatch):

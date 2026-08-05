@@ -165,13 +165,25 @@ def _read_stack_prior_active_roles(
         if port is None:
             continue
 
+        # Heaviness is a property of the model this record declares, not of a
+        # port number: shared runtimes re-alias ports between lineups. Derive it
+        # from the record we just read (same rule as _read_stack_prior_topology)
+        # and only fall back to the module-level HEAVY_PORTS snapshot when the
+        # record carries no model memory footprint.
+        model = record.get("model")
+        mem_gb = model.get("mem_gb") if isinstance(model, dict) else None
+        try:
+            is_heavy = float(mem_gb) >= HEAVY_MODEL_MEM_GB_THRESHOLD
+        except (TypeError, ValueError):
+            is_heavy = port in HEAVY_PORTS
+
         canonical_role_name = _canonical_role_name(str(role_name))
         active.append({
             "name": canonical_role_name,
             "registry_key": str(serving.get("server_role") or role_name),
             "model_role": canonical_role_name,
             "port": port,
-            "is_heavy": port in HEAVY_PORTS,
+            "is_heavy": is_heavy,
             "cost_tier": _cost_tier_from_stack_priors(canonical_role_name, record),
             "timeout_s": _read_registry_timeout("roles", canonical_role_name, DEFAULT_TIMEOUT),
         })

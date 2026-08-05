@@ -384,10 +384,53 @@ def build_fleets_and_bindings(
     fleets: dict[str, ServerFleet] = {}
     bindings: dict[str, RoleBinding] = {}
 
+    # 2026-08-04: `alias_of` is the registry's SECOND way of declaring a role
+    # co-hosted on another row's process, and this builder knew only the first
+    # (`shared_with`). The W1 cutover expressed coder_escalation -> :8083 as an
+    # `alias_of: architect_general` row that keeps its own model/quality facts,
+    # while architect_general lists it in `shared_with` — two mutually
+    # consistent declarations of ONE physical server. Iterating every row as a
+    # fleet built a phantom 'coder_escalation' fleet on :8083 and then tripped
+    # the double-binding guard against the real architect_general fleet, so
+    # ORCHESTRATOR_FLEET_LAYER=1 could not build at all against the production
+    # registry (latent only because the flag defaults off).
+    #
+    # An alias row is not a physical resource, so it gets no fleet: it is bound
+    # onto its host's fleet exactly like a `shared_with` member. The
+    # double-binding guard below is untouched and still fires on a genuine
+    # conflict (two different hosts claiming one role).
+    alias_rows: dict[str, str] = {}
+    for key, cfg in server_mode.items():
+        if not isinstance(cfg, Mapping):
+            continue
+        target = cfg.get("alias_of")
+        if not isinstance(target, str) or not target:
+            continue
+        if target not in server_mode:
+            raise FleetBuildError(
+                f"server_mode row {key!r} declares alias_of={target!r}, which is "
+                "not a server_mode row — an alias must name its host fleet"
+            )
+        alias_id = _canonical_role(str(key))
+        host_id = _canonical_role(target)
+        if alias_id == host_id:
+            raise FleetBuildError(
+                f"server_mode row {key!r} declares alias_of={target!r}, which "
+                "resolves to itself — an alias cannot host itself"
+            )
+        alias_rows[alias_id] = host_id
+
+    aliases_by_host: dict[str, list[str]] = {}
+    for alias_id, host_id in alias_rows.items():
+        aliases_by_host.setdefault(host_id, []).append(alias_id)
+
     for key, cfg in server_mode.items():
         if not isinstance(cfg, Mapping):
             continue
         fleet_id = _canonical_role(str(key))
+        if fleet_id in alias_rows:
+            # Logical alias row: no fleet of its own; bound onto its host below.
+            continue
         if fleet_id in fleets:
             raise FleetBuildError(
                 f"server_mode rows {key!r} and a prior row both resolve to fleet "
@@ -427,6 +470,10 @@ def build_fleets_and_bindings(
                     canonical = _canonical_role(alias)
                     if canonical not in bound:
                         bound.append(canonical)
+        # Rows that named THIS fleet via `alias_of` bind here too.
+        for canonical in aliases_by_host.get(fleet_id, ()):
+            if canonical not in bound:
+                bound.append(canonical)
 
         model_binding = cfg.get("model_role") or cfg.get("model")
         ncfg = numa.get(fleet_id) if isinstance(numa, Mapping) else None

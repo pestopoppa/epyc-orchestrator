@@ -368,6 +368,28 @@ class TestEnvVarOverride:
 class TestRegistryConsistency:
     """Validate that the FeatureSpec registry stays in sync with the Features dataclass."""
 
+    @staticmethod
+    def _isolate_flag_env(monkeypatch) -> None:
+        """Strip every per-flag env override before asserting about DEFAULTS.
+
+        `_compute_feature_flags` lets `ORCHESTRATOR_<env_var>` /
+        `ORCHESTRATOR_FEATURE_<env_var>` beat the registry default — correct for
+        a flag override, wrong input for a test whose whole claim is about the
+        defaults. Ambient values leak in: tests/unit/test_odl_structured.py sets
+        `ORCHESTRATOR_MOCK_MODE=1` at MODULE IMPORT time with no teardown, so
+        merely COLLECTING the suite poisoned this process and
+        `get_features(production=True).mock_mode` came back True against
+        `default_prod=False`. Same remedy as conftest.py's
+        `_pin_runtime_feature_flags`, which pins the runtime flag FILE for the
+        identical reproducibility reason. The assertion loops are untouched and
+        gain strength: they can no longer be satisfied OR broken by ambient env.
+        """
+        from src.features import ENV_PREFIX, FEATURE_ENV_PREFIX, _FEATURE_REGISTRY
+
+        for spec in _FEATURE_REGISTRY:
+            monkeypatch.delenv(f"{ENV_PREFIX}{spec.env_var}", raising=False)
+            monkeypatch.delenv(f"{FEATURE_ENV_PREFIX}{spec.env_var}", raising=False)
+
     def test_registry_matches_dataclass_fields(self):
         """Every registry entry must have a matching dataclass field and vice versa."""
         import dataclasses
@@ -388,6 +410,7 @@ class TestRegistryConsistency:
             "ORCHESTRATOR_RUNTIME_FLAGS_PATH",
             str(tmp_path / "missing-runtime-flags.json"),
         )
+        self._isolate_flag_env(monkeypatch)
         f = get_features(production=False)
         for spec in _FEATURE_REGISTRY:
             actual = getattr(f, spec.name)
@@ -404,6 +427,7 @@ class TestRegistryConsistency:
             "ORCHESTRATOR_RUNTIME_FLAGS_PATH",
             str(tmp_path / "missing-runtime-flags.json"),
         )
+        self._isolate_flag_env(monkeypatch)
         f = get_features(production=True)
         for spec in _FEATURE_REGISTRY:
             actual = getattr(f, spec.name)

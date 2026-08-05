@@ -685,16 +685,30 @@ async def architect_node(state: dict[str, Any], config: RunnableConfig) -> dict[
 # Node name -> role mapping (for select_start_node equivalent)
 # ---------------------------------------------------------------------------
 
+# Every LIVE routable role must appear here. ``select_start_lg_node`` degrades an
+# unmapped role to "frontdoor", which is correct for RETIRED roles (thinking_reasoning
+# has no weights on disk) but silently wrong for a live one: the request starts on the
+# frontdoor node instead of the node that dispatches its backend.
+#
+# 2026-08-01 W1 cutover additions — both were live, registry-declared, routable roles
+# that the cutover added to the Role enum without adding here:
+#   * architect_critic — the terminal escalation rung (122B, :8074). Unmapped, the
+#     whole boosted-reasoning ladder started at the frontdoor node.
+#   * vision_escalation — alias on worker_vision's :8086 MI210 process.
+# tests/unit/test_langgraph_migration.py derives this table's completeness from the
+# live stack priors so the next role addition cannot repeat the omission.
 ROLE_TO_LG_NODE: dict[str, str] = {
     "frontdoor": "frontdoor",
     "worker_general": "worker",
     "worker_math": "worker",
     "worker_summarize": "worker",
     "worker_vision": "worker",
+    "vision_escalation": "worker",
     "toolrunner": "worker",
     "coder_escalation": "coder_escalation",
     "ingest_long_context": "ingest",
     "architect_general": "architect",
+    "architect_critic": "architect",
 }
 
 

@@ -44,7 +44,13 @@ class TestModelFeatures:
         assert "architect_general" in features
         assert "worker_general" in features
         assert "worker_explore" not in features
-        assert features["frontdoor"].baseline_tps == 24.3
+        # The claim under test is that extract_model_features PLUMBS the
+        # ScoringConfig priors into ModelFeatures untransformed. The priors
+        # themselves are measured (frontdoor's throughput moved 24.3 -> 40.22
+        # with the draft-MTP cutover), so derive the expectation from the same
+        # source of truth the code reads instead of pinning a bench number.
+        assert features["frontdoor"].baseline_tps == cfg.baseline_tps_by_role["frontdoor"]
+        assert features["frontdoor"].baseline_quality == cfg.baseline_quality_by_role["frontdoor"]
         assert features["frontdoor"].is_moe == 1.0
         assert features["frontdoor"].quant_bits == 8.0
 

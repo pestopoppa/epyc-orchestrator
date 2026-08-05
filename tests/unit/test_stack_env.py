@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import yaml
+
 from scripts.server.stack_env import (
     _CANONICAL_OMP_ENV,
     _LLVM20_LIBDIR,
@@ -105,5 +109,32 @@ def test_role_overrides_returns_independent_dict_copies() -> None:
 
 
 def test_architect_general_overrides_repack_interleave() -> None:
-    env = build_launch_env("architect_general", base_env={})
+    """The 122B's Probe-B repack override follows the MODEL, not the role name.
+
+    Retargeted 2026-08-04. `GGML_NUMA_REPACK_INTERLEAVE=0` is the Qwen3.5-122B-A10B
+    Probe-B tuning (c2, +1.28%, σ ~0.4%, z ~3; bundle
+    data/cpu_optimization/2026-05-04-qwen35-122b-arch-probe/). The 2026-07-31 W1
+    cutover moved that GGUF from architect_general to architect_critic, and
+    stack_env moved the block with it — architect_general is now Qwen3.6-27B
+    dense Q8 on MI210 (ROCm0), where a CPU NUMA repack setting is at best inert
+    and at worst misleading provenance. Nothing was dropped, so nothing is
+    deleted here: the assertion is retargeted to the role that serves the model,
+    and the complementary guard below is ADDED so the setting cannot silently
+    come back on a ROCm process.
+    """
+    registry = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml")
+        .read_text()
+    )["server_mode"]
+
+    # The premise is read from master, not asserted here: whichever role serves
+    # the 122B on the CPU is the one that must carry the override.
+    assert "Qwen3.5-122B" in str(registry["architect_critic"]["model"])
+    assert registry["architect_critic"].get("device") in (None, "cpu", "CPU")
+    env = build_launch_env("architect_critic", base_env={})
     assert env["GGML_NUMA_REPACK_INTERLEAVE"] == "0"
+
+    # ...and a ROCm role must not inherit a CPU NUMA repack setting.
+    assert registry["architect_general"]["device"] == "ROCm0"
+    gpu_env = build_launch_env("architect_general", base_env={})
+    assert "GGML_NUMA_REPACK_INTERLEAVE" not in gpu_env

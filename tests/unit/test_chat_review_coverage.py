@@ -15,6 +15,7 @@ from src.api.routes.chat_review import (
     _needs_plan_review,
     _should_review,
     _store_plan_review_episode,
+    _synthesized_plan_action,
 )
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
@@ -472,6 +473,12 @@ class TestArchitectPlanReview:
         assert len(steps) == 2
         assert steps[0]["actor"] == "coder_escalation"
         assert steps[1]["actor"] == "worker_general"
+        assert steps[0]["action"] == "Analyze the request and produce a directly supported answer"
+
+    def test_synthesized_code_plan_describes_verification_work(self):
+        assert _synthesized_plan_action("Verify this Python candidate solution") == (
+            "Inspect the candidate code and verify expected behavior"
+        )
 
     def test_uses_explicit_plan_steps(self):
         """Uses explicit plan steps when provided."""

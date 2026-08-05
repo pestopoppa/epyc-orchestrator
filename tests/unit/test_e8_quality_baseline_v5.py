@@ -12,12 +12,34 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.autopilot_core.instrument_era_guard import E7_EVAL_INSTRUMENT_ERA_ID
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INTEGRATED_E8_ROOT = PROJECT_ROOT
-INTEGRATED_E8_HEAD = subprocess.check_output(
-    ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
-).strip()
+
+
+def _integrated_e8_head() -> str:
+    """Sample the live source HEAD at pin-construction time.
+
+    Both wrappers re-read ``git rev-parse HEAD`` in the subprocess and refuse when
+    it differs from ``E8_V5_ORCHESTRATOR_HEAD``.  This is a SHARED clone, so a
+    module-import-time snapshot leaves a whole test-session-long window in which
+    another session's commit invalidates every pin this module hands out.  Sampling
+    per call shrinks that window to the subprocess spawn and weakens nothing: the
+    wrappers still fail closed when the live HEAD differs from the supplied pin.
+    """
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True
+    ).strip()
+
+
+# The canonical AutoPilot state is LIVE runtime state, not repo content: it is
+# gitignored, so it exists only in the main checkout.  Deliberately absolute — a
+# __file__ anchor would point a worktree at a file that cannot exist there.
+CANONICAL_STATE_PATH = Path(
+    "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json"
+)
 MODULE_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
 spec = importlib.util.spec_from_file_location("e8_v5", MODULE_PATH)
 assert spec is not None and spec.loader is not None
@@ -28,6 +50,67 @@ spec.loader.exec_module(runner)
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _canonical_applier_module(name: str):
+    """Load the reviewed v5 adapter and hand back the canonical applier module."""
+    adapter = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    )
+    adapter_spec = importlib.util.spec_from_file_location(name, adapter)
+    assert adapter_spec is not None and adapter_spec.loader is not None
+    adapter_module = importlib.util.module_from_spec(adapter_spec)
+    sys.modules[adapter_spec.name] = adapter_module
+    adapter_spec.loader.exec_module(adapter_module)
+    return adapter_module.module
+
+
+# apply_e8_quality_baseline_state.validate_state_precondition() requires the E8
+# quality-rebaseline hold to still be OPEN at the E8 boundary.  There is no shared
+# constant for the status string (the applier's SHA-256 is pinned by ratified
+# operator receipts and by scripts/benchmark/final_c1_retry.py, so it cannot be
+# refactored to export one).  _e7_pre_state() therefore re-checks every value it
+# writes against the applier's OWN predicate, so a contract change fails loudly
+# here instead of silently seeding an invalid fixture.
+_E8_HOLD_OPEN_STATUS = "hold_open"
+
+
+def _e7_pre_state(canonical) -> dict:
+    """Derive the E7 baseline pre-state that the canonical applier accepts.
+
+    The live AutoPilot state is the only realistic pre-state shape (four populated
+    quality tiers with real provenance), but it is MUTABLE runtime state, not a
+    fixture: on 2026-08-04T09:48:42Z the operator ran
+    ``scripts/autopilot/operator_seed_e8_operational_baseline.py --apply``, which
+    stamped ``baseline_state.eval_quality_era`` to the active era and moved
+    ``e8_quality_rebaseline.status`` ``hold_open -> closed_operational``.  The
+    ratification-grade applier is a one-shot E7 -> E8 transaction and correctly
+    refuses that post-seed state, so these tests must reconstruct the pre-state
+    rather than copy the live file.  ``active_instrument_eras.eval_quality`` is
+    read straight off the live state (the operational seeder never touched it).
+    """
+    state = json.loads(CANONICAL_STATE_PATH.read_bytes())
+    state["baseline_state"] = {
+        **state["baseline_state"],
+        "eval_quality_era": E7_EVAL_INSTRUMENT_ERA_ID,
+    }
+    hold = {
+        key: value
+        for key, value in (state.get("e8_quality_rebaseline") or {}).items()
+        if key not in ("closed_at", "closed_by")
+    }
+    hold["boundary"] = canonical.E8_BOUNDARY
+    hold["status"] = _E8_HOLD_OPEN_STATUS
+    state["e8_quality_rebaseline"] = hold
+    # Fail loudly if the applier's pre-state contract ever moves away from what
+    # this helper reconstructs, instead of handing tests a silently stale fixture.
+    canonical.validate_state_precondition(state)
+    return state
+
+
+def _e7_pre_state_bytes(canonical) -> bytes:
+    return (json.dumps(_e7_pre_state(canonical), indent=2, sort_keys=True) + "\n").encode()
 
 
 def test_durable_candidate_writer_marks_new_staging_and_published_namespaces(
@@ -239,7 +322,7 @@ def _integrated_e8_pins(*, wrapper: Path | None = None, validator_wrapper: Path 
     benchmark = INTEGRATED_E8_ROOT / "scripts/benchmark"
     pins = {
         "E8_V5_SOURCE_ROOT": str(INTEGRATED_E8_ROOT),
-        "E8_V5_ORCHESTRATOR_HEAD": INTEGRATED_E8_HEAD,
+        "E8_V5_ORCHESTRATOR_HEAD": _integrated_e8_head(),
         "E8_V5_PRODUCER_SHA256": _sha(benchmark / "terminalize_e8_quality_baseline_source.py"),
         "E8_V5_RUNNER_SHA256": _sha(benchmark / "run_e8_quality_baseline_v5.py"),
         "E8_V5_BASE_RUNNER_SHA256": _sha(benchmark / "run_e8_quality_baseline_reseed.py"),
@@ -1866,40 +1949,15 @@ def test_v5_applier_adapter_plan_is_read_only(tmp_path: Path) -> None:
 def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     tmp_path: Path,
 ) -> None:
-    evidence = _bind_synthetic_candidate_to_integrated_source(_synthetic_candidate(tmp_path))
-    adapter = (
-        PROJECT_ROOT
-        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
+    # The reviewed transaction is computed against a DERIVED E7 pre-state in a
+    # sandbox: the live production state is no longer a valid one-shot E7 -> E8
+    # pre-state (see _e7_pre_state).  The canonical production state, the canonical
+    # operator root, and the canonical apply lock must all still come out untouched.
+    wrapper, env, state, sandbox_root, evidence, pre_sha, candidate_sha = (
+        _v5_wrapper_integration_fixture(tmp_path)
     )
-    adapter_spec = importlib.util.spec_from_file_location(
-        "e8_v5_applier_prevalidation_test", adapter
-    )
-    assert adapter_spec is not None and adapter_spec.loader is not None
-    adapter_module = importlib.util.module_from_spec(adapter_spec)
-    sys.modules[adapter_spec.name] = adapter_module
-    adapter_spec.loader.exec_module(adapter_module)
-    canonical = adapter_module.module
-    # LIVE runtime state, not repo content: orchestration/autopilot_state.json is
-    # gitignored, so it exists only in the main checkout. Deliberately absolute —
-    # a __file__ anchor would point a worktree at a file that cannot exist there.
-    state_path = Path("/mnt/raid0/llm/epyc-orchestrator") / "orchestration/autopilot_state.json"
-    state_bytes = state_path.read_bytes()
-    manifest = json.loads(evidence.read_text())
-    candidate = canonical.candidate_state(json.loads(state_bytes), manifest["replacement"])
-    candidate_bytes = (json.dumps(candidate, indent=2, sort_keys=True) + "\n").encode()
-    pre_sha = hashlib.sha256(state_bytes).hexdigest()
-    candidate_sha = hashlib.sha256(candidate_bytes).hexdigest()
-    wrapper = (
-        PROJECT_ROOT
-        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
-    )
-    validator_shell = (
-        PROJECT_ROOT
-        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
-    )
-    canonical_applier = Path(
-        "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
-    )
+    state_bytes = state.read_bytes()
+    canonical_state_bytes = CANONICAL_STATE_PATH.read_bytes()
     evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
     operator_root = Path("/mnt/raid0/llm/epyc-root/artifacts/operator")
     before_outputs = set(operator_root.glob(f"*{evidence_sha}*"))
@@ -1915,32 +1973,35 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         else None
     )
     completed = subprocess.run(
-        [
-            "bash",
-            str(wrapper),
-            "--prevalidate",
-            "--evidence",
-            str(evidence),
-            "--expected-pre-state-sha256",
-            pre_sha,
-            "--expected-candidate-state-sha256",
-            candidate_sha,
-        ],
-        env={
-            **__import__("os").environ,
-            **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
-            "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
-            "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(
-                canonical_applier.read_bytes()
-            ).hexdigest(),
-        },
+        _v5_wrapper_command(wrapper, "--prevalidate", evidence, pre_sha, candidate_sha),
+        env=env,
         capture_output=True,
         text=True,
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
     assert "prevalidation passed" in completed.stdout
-    assert state_path.read_bytes() == state_bytes
+    # The printed review IS the exact transaction the human binds: the reviewed
+    # hashes and precisely the applier's own six state-review rows.
+    canonical = _canonical_applier_module("e8_v5_applier_prevalidation_test")
+    # stdout is the sealed validator's own report, then the retained review, then
+    # the human-readable trailer; the review is the last JSON document printed.
+    printed = completed.stdout.split("E8 v5 prevalidation passed")[0]
+    decoder = json.JSONDecoder()
+    review = None
+    offset = 0
+    while (offset := printed.find("{", offset)) != -1:
+        review, end = decoder.raw_decode(printed, offset)
+        offset = end
+    assert review is not None
+    assert review["pre_state_sha256"] == pre_sha
+    assert review["candidate_state_sha256"] == candidate_sha
+    assert [row["path"] for row in review["exact_state_diff"]] == [
+        "/" + "/".join(path) for path in canonical.STATE_REVIEW_PATHS
+    ]
+    assert state.read_bytes() == state_bytes
+    assert set((sandbox_root / "artifacts/operator").iterdir()) == set()
+    assert CANONICAL_STATE_PATH.read_bytes() == canonical_state_bytes
     assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
     lock_after = (
         (
@@ -1954,27 +2015,9 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     )
     assert lock_after == lock_before
 
-    bad_env = {
-        **__import__("os").environ,
-        **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
-        "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
-        "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(
-            canonical_applier.read_bytes()
-        ).hexdigest(),
-    }
-    bad_env["E8_V5_FINAL_C1_VALIDATOR_SHA256"] = "0" * 64
+    bad_env = {**env, "E8_V5_FINAL_C1_VALIDATOR_SHA256": "0" * 64}
     rejected = subprocess.run(
-        [
-            "bash",
-            str(wrapper),
-            "--prevalidate",
-            "--evidence",
-            str(evidence),
-            "--expected-pre-state-sha256",
-            pre_sha,
-            "--expected-candidate-state-sha256",
-            candidate_sha,
-        ],
+        _v5_wrapper_command(wrapper, "--prevalidate", evidence, pre_sha, candidate_sha),
         env=bad_env,
         capture_output=True,
         text=True,
@@ -1982,7 +2025,9 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     )
     assert rejected.returncode != 0
     assert "E8_V5_FINAL_C1_VALIDATOR_SHA256" in rejected.stderr
-    assert state_path.read_bytes() == state_bytes
+    assert state.read_bytes() == state_bytes
+    assert set((sandbox_root / "artifacts/operator").iterdir()) == set()
+    assert CANONICAL_STATE_PATH.read_bytes() == canonical_state_bytes
     assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
 
 
@@ -2009,43 +2054,30 @@ def test_final_wrapper_uses_dynamic_confirmation_and_post_commit_receipt_only() 
 def test_final_wrapper_prevalidation_rejects_stale_reviewed_hashes_without_writes(
     tmp_path: Path,
 ) -> None:
-    evidence = _bind_synthetic_candidate_to_integrated_source(_synthetic_candidate(tmp_path))
-    wrapper = (
-        PROJECT_ROOT
-        / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    # The state under review must be a VALID E7 pre-state, otherwise the wrapper
+    # refuses at the precondition and never reaches the reviewed-hash comparison
+    # this test exists to cover.
+    wrapper, env, state, sandbox_root, evidence, _pre_sha, _candidate_sha = (
+        _v5_wrapper_integration_fixture(tmp_path)
     )
-    validator_shell = (
-        PROJECT_ROOT
-        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
-    )
-    adapter = (
-        PROJECT_ROOT
-        / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
-    )
-    canonical_applier = Path(
-        "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
-    )
-    state_path = PROJECT_ROOT / "orchestration/autopilot_state.json"
-    state_before = state_path.read_bytes()
+    state_before = state.read_bytes()
+    canonical_state_before = CANONICAL_STATE_PATH.read_bytes()
     completed = subprocess.run(
         [
             "bash", str(wrapper), "--prevalidate", "--evidence", str(evidence),
             "--expected-pre-state-sha256", "0" * 64,
             "--expected-candidate-state-sha256", "1" * 64,
         ],
-        env={
-            **__import__("os").environ,
-            **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
-            "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
-            "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
-        },
+        env=env,
         capture_output=True,
         text=True,
         check=False,
     )
     assert completed.returncode != 0
     assert "reviewed pre-state" in completed.stderr
-    assert state_path.read_bytes() == state_before
+    assert state.read_bytes() == state_before
+    assert set((sandbox_root / "artifacts/operator").iterdir()) == set()
+    assert CANONICAL_STATE_PATH.read_bytes() == canonical_state_before
 
 
 def _v5_wrapper_integration_fixture(tmp_path: Path) -> tuple[Path, dict[str, str], Path, Path, Path, str, str]:
@@ -2078,9 +2110,7 @@ def _v5_wrapper_integration_fixture(tmp_path: Path) -> tuple[Path, dict[str, str
     canonical = adapter_module.module
 
     state = tmp_path / "state.json"
-    state.write_bytes(
-        (PROJECT_ROOT / "orchestration/autopilot_state.json").read_bytes()
-    )
+    state.write_bytes(_e7_pre_state_bytes(canonical))
     manifest = json.loads(evidence.read_text())
     candidate = canonical.candidate_state(json.loads(state.read_text()), manifest["replacement"])
     candidate_bytes = (json.dumps(candidate, indent=2, sort_keys=True) + "\n").encode()
@@ -2310,35 +2340,56 @@ def test_final_wrapper_integration_recovers_only_missing_post_commit_receipt(
 def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
     tmp_path: Path,
 ) -> None:
-    evidence = _bind_synthetic_candidate_to_integrated_source(_synthetic_candidate(tmp_path))
+    """Forged pytest markers must never let --apply write on canonical paths.
+
+    ``E8_V5_TEST_AUTO_CONFIRM`` is only honoured when TEST_SANDBOX==1, i.e. when all
+    four sandbox overrides are set and resolve below /tmp.  With canonical paths the
+    wrapper must therefore refuse and leave the production state, the canonical
+    operator root, and the canonical apply lock untouched — the first half below.
+    The wrapper runs the (state-dependent) six-row review BEFORE the TTY gate, so on
+    canonical paths the refusal now lands at the E7 pre-state precondition rather
+    than at the TTY prompt; the second half drives the TTY gate directly on sandbox
+    paths so the gate itself stays covered.
+    """
     wrapper = (
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/ratify_and_apply_e8_quality_baseline_v5.sh"
+    )
+    validator_shell = (
+        PROJECT_ROOT
+        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
     )
     adapter = (
         PROJECT_ROOT
         / "scripts/benchmark/operator_candidates/apply_e8_quality_baseline_state_v5_candidate.py"
     )
-    spec = importlib.util.spec_from_file_location("e8_v5_canonical_tty_adapter", adapter)
-    assert spec is not None and spec.loader is not None
-    adapter_module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = adapter_module
-    spec.loader.exec_module(adapter_module)
-    canonical = adapter_module.module
-    state_path = PROJECT_ROOT / "orchestration/autopilot_state.json"
-    state_before = state_path.read_bytes()
+    canonical_applier = Path(
+        "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
+    )
+    canonical = _canonical_applier_module("e8_v5_canonical_tty_adapter")
+    evidence_root = tmp_path / "canonical-evidence"
+    evidence_root.mkdir()
+    evidence = _bind_synthetic_candidate_to_integrated_source(
+        _synthetic_candidate(evidence_root)
+    )
+    state_before = CANONICAL_STATE_PATH.read_bytes()
+    # A genuinely well-formed transaction binding: the true live pre-state hash and
+    # a real candidate hash for this sealed evidence, so nothing but the canonical
+    # paths distinguishes this attempt from an authorised one.
     candidate = canonical.candidate_state(
-        json.loads(state_before), json.loads(evidence.read_text())["replacement"]
+        _e7_pre_state(canonical), json.loads(evidence.read_text())["replacement"]
     )
     candidate_sha = hashlib.sha256(
         (json.dumps(candidate, indent=2, sort_keys=True) + "\n").encode()
     ).hexdigest()
-    validator_shell = (
-        PROJECT_ROOT
-        / "scripts/benchmark/operator_candidates/prepare_e8_quality_baseline_v5_candidate.sh"
-    )
-    canonical_applier = Path(
-        "/mnt/raid0/llm/epyc-root/artifacts/operator/apply_e8_quality_baseline_state.py"
+    evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    operator_root = Path("/mnt/raid0/llm/epyc-root/artifacts/operator")
+    before_outputs = set(operator_root.glob(f"*{evidence_sha}*"))
+    lock_path = Path("/mnt/raid0/llm/tmp/e8-quality-baseline-v5-apply.lock")
+    lock_before = (
+        (lock_path.stat().st_ino, lock_path.stat().st_mtime_ns, lock_path.read_bytes())
+        if lock_path.exists()
+        else None
     )
     completed = subprocess.run(
         _v5_wrapper_command(
@@ -2353,7 +2404,6 @@ def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
             **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
             "E8_V5_TEST_MODE": "1",
             "E8_V5_TEST_AUTO_CONFIRM": "1",
-            "E8_V5_TEST_SKIP_AUTOPILOT": "1",
             "PYTEST_CURRENT_TEST": "forged",
             "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
             "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
@@ -2363,8 +2413,73 @@ def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
         check=False,
     )
     assert completed.returncode != 0
-    assert "interactive terminal confirmation" in completed.stderr
-    assert state_path.read_bytes() == state_before
+    assert CANONICAL_STATE_PATH.read_bytes() == state_before
+    assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
+    lock_after = (
+        (lock_path.stat().st_ino, lock_path.stat().st_mtime_ns, lock_path.read_bytes())
+        if lock_path.exists()
+        else None
+    )
+    assert lock_after == lock_before
+
+    # The TTY gate itself, reached on sandbox paths through the receipt-recovery
+    # branch.  Without E8_V5_TEST_AUTO_CONFIRM the wrapper must demand an
+    # interactive terminal; with it, the gate is passed and the run fails later, on
+    # the retained-review checks.
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    sandbox_root = sandbox / "operator-root"
+    sandbox_operator = sandbox_root / "artifacts/operator"
+    sandbox_operator.mkdir(parents=True)
+    sandbox_state = sandbox / "state.json"
+    sandbox_state.write_bytes(_e7_pre_state_bytes(canonical))
+    transaction = sandbox_operator / f"e8_quality_baseline_state_v5_{evidence_sha}.transaction"
+    transaction.mkdir()
+    (transaction / "canonical_apply_attestation.json").write_text("{}\n")
+    (
+        sandbox_operator / f"e8_quality_baseline_state_v5_{evidence_sha}.six_row_review.json"
+    ).write_text("{}\n")
+    receipt = (
+        sandbox_operator
+        / f"e8_quality_baseline_state_v5_{evidence_sha}.consolidated_receipt.json"
+    )
+    sandbox_env = {
+        **__import__("os").environ,
+        **_integrated_e8_pins(wrapper=wrapper, validator_wrapper=validator_shell),
+        "E8_V5_OPERATOR_ROOT": str(sandbox_root),
+        "E8_V5_STATE": str(sandbox_state),
+        "E8_V5_LOCK_PATH": str(sandbox / "apply.lock"),
+        "E8_V5_TRUST_LOCK": str(sandbox / "measurement-trust.lock"),
+        "E8_V5_TEST_MODE": "1",
+        "E8_V5_APPLIER_SHA256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+        "E8_V5_CANONICAL_APPLIER_SHA256": hashlib.sha256(canonical_applier.read_bytes()).hexdigest(),
+    }
+    sandbox_env.pop("E8_V5_TEST_AUTO_CONFIRM", None)
+    without_tty = subprocess.run(
+        _v5_wrapper_command(
+            wrapper, "--finalize-receipt", evidence, "0" * 64, candidate_sha
+        ),
+        env=sandbox_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert without_tty.returncode != 0
+    assert "apply requires an interactive terminal confirmation" in without_tty.stderr
+    assert not receipt.exists()
+    passed_gate = subprocess.run(
+        _v5_wrapper_command(
+            wrapper, "--finalize-receipt", evidence, "0" * 64, candidate_sha
+        ),
+        env={**sandbox_env, "E8_V5_TEST_AUTO_CONFIRM": "1"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert passed_gate.returncode != 0
+    assert "interactive terminal confirmation" not in passed_gate.stderr
+    assert not receipt.exists()
+    assert CANONICAL_STATE_PATH.read_bytes() == state_before
 
 
 def test_final_wrapper_rejects_symlinked_test_sandbox_state_escape(tmp_path: Path) -> None:

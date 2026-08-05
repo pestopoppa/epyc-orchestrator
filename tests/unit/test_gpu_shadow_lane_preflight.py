@@ -19,6 +19,65 @@ from scripts.server.gpu_shadow_lane import LANE_BINARY_COMMIT, LANE_BINARY_VERSI
 STOCK_SHA = "5927dc06c2b19f732fb6e2a6546dff4c130b552f2ab5f91feb3daafe43897b2a"
 
 
+# ---------------------------------------------------------------------------
+# Topology expectations, DERIVED. 2026-08-04: several tests below restated live
+# ports and role names (frontdoor's 8380 quarter, vision_escalation's :8087,
+# architect_general's "0-95") that the 2026-07-31 quarter retirement and the
+# 2026-08-01 W1 cutover moved. The mechanisms they cover — the SMT-sibling fold
+# and the static-cpuset explanation — did not move. These helpers re-derive the
+# expectations from stack_numa with their own cpuset arithmetic, so a topology
+# reshuffle no longer looks like a probe regression while a real fold/explain
+# regression still fails.
+# ---------------------------------------------------------------------------
+def _expand(spec: str) -> set[int]:
+    out: set[int] = set()
+    for chunk in spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            lo, hi = chunk.split("-", 1)
+            out.update(range(int(lo), int(hi) + 1))
+        else:
+            out.add(int(chunk))
+    return out
+
+
+def _fold(cpus: set[int]) -> set[int]:
+    """cpu N and N+96 are SMT siblings on this host — fold to physical cores."""
+    return {cpu % 96 for cpu in cpus}
+
+
+def _numa_instances() -> list[tuple[str, int, set[int]]]:
+    """(role, port, cpus) for every declared production instance."""
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    return [
+        (role, port, _expand(cpu_list))
+        for role, cfg in NUMA_CONFIG.items()
+        for cpu_list, port, _threads in cfg.get("instances", [])
+    ]
+
+
+def _expected_lane_overlaps(lane: str = "184-191") -> dict[str, list[int]]:
+    lane_folded = _fold(_expand(lane))
+    out: dict[str, list[int]] = {}
+    for role, port, cpus in _numa_instances():
+        if _fold(cpus) & lane_folded:
+            out.setdefault(role, []).append(port)
+    return out
+
+
+def _expected_static_matches(mask: str) -> set[str]:
+    """`role[port]` labels whose instance cpuset explains this affinity mask."""
+    proc = _expand(mask)
+    return {
+        f"{role}[{port}]"
+        for role, port, cpus in _numa_instances()
+        if proc and proc <= cpus
+    }
+
+
 def make_facts(**overrides) -> probe.PreflightFacts:
     base = dict(
         flag_enabled=False,
@@ -102,10 +161,25 @@ class TestParsers:
         assert probe.folded_overlap("184-191", "0-47,96-143") == set()
 
     def test_static_smt_overlap_includes_q1b_roles(self):
+        """Every instance sharing the lane's physical cores is reported, with its port.
+
+        Derived 2026-08-04. The old form asserted `vision_escalation[8087]`;
+        vision_escalation has had no NUMA_CONFIG instance since the W1 cutover
+        made it an alias on worker_vision's :8086 process, so a function that
+        iterates NUMA_CONFIG instances cannot report it and no live vision
+        process is missed — worker_vision[8086] IS reported. Asserting the whole
+        derived mapping is stricter than the two spot-checks it replaces.
+        """
+        expected = _expected_lane_overlaps("184-191")
+        assert expected, "no instance overlaps the lane — check the topology"
+
         overlaps = probe.static_smt_overlap_roles("184-191")
-        assert "vision_escalation" in overlaps
-        assert "frontdoor" in overlaps
-        assert 8087 in overlaps["vision_escalation"]
+        assert {role: sorted(ports) for role, ports in overlaps.items()} == {
+            role: sorted(ports) for role, ports in expected.items()
+        }
+        # The vision arm is still covered, under the role/port that exists today.
+        assert "worker_vision" in overlaps
+        assert "vision_escalation" not in overlaps
 
     def test_static_smt_overlap_folds_in_full_instances(self):
         # P1-2: sibling fold surfaces the 0-95 full instances as co-tenants.
@@ -167,19 +241,37 @@ class TestClassifyLiveOverlap:
         assert set(overlap) == set(range(88, 96)) | set(range(184, 192))
 
     def test_q1b_quarter_is_static_co_tenant(self):
+        """A mask contained in a declared instance cpuset is EXPLAINED, not blocked.
+
+        Derived 2026-08-04: the `vision_escalation[...]` arm named a role that no
+        longer has an instance (alias on worker_vision's :8086 since the W1
+        cutover). The mask is a subset of the half-B cpuset, so the explaining
+        matches are now the three half-B instances; asserting the full derived
+        set is stricter than the two spot-checks and cannot go stale the same way.
+        """
+        expected = _expected_static_matches("72-95,168-191")
+        assert expected, "no instance explains this mask — check the topology"
+
         cls, _overlap, matches = probe.classify_live_overlap("72-95,168-191")
         assert cls == "static-co-tenant"
-        assert any(m.startswith("frontdoor[") for m in matches)
-        assert any(m.startswith("vision_escalation[") for m in matches)
+        assert set(matches) == expected
 
     def test_full_0_95_instance_is_static_co_tenant_via_fold(self):
-        # P1-2: architect_general / worker_general full (0-95) — disjoint mask,
-        # physical co-tenant of 184-191 through siblings 88-95.
+        """P1-2: a full-machine instance (0-95) — a mask literally DISJOINT from
+        184-191 — is a physical co-tenant through siblings 88-95.
+
+        Derived 2026-08-04: the `architect_general[...]` arm went stale when that
+        role moved onto the GPU host lane; architect_critic now holds the 122B on
+        the full machine. The fold is demonstrably intact — every full-machine
+        instance is matched, and the folded overlap is still the 88-95 slice.
+        """
+        expected = _expected_static_matches("0-95")
+        assert expected, "no instance explains a full-machine mask"
+
         cls, overlap, matches = probe.classify_live_overlap("0-95")
         assert cls == "static-co-tenant"
         assert set(overlap) >= set(range(88, 96))
-        assert any(m.startswith("architect_general[") for m in matches)
-        assert any(m.startswith("worker_general[") for m in matches)
+        assert set(matches) == expected
 
     def test_unmatched_pinned_overlap_is_unexplained(self):
         cls, overlap, matches = probe.classify_live_overlap("90-100")
@@ -270,13 +362,26 @@ class TestEvaluate:
         assert any("static-co-tenant" in w and "pid 111" in w for w in warnings)
 
     def test_folded_full_instance_is_warning_not_blocker(self):
-        # P1-2: architect_general (0-95) visible as a physical co-tenant.
+        """P1-2: a full-machine (0-95) process is a WARNING, never a blocker.
+
+        Derived 2026-08-04: the assertion named architect_general, which left the
+        full machine for the GPU host lane in the W1 cutover. The property is
+        unchanged — the process is explained by the static topology and therefore
+        warns instead of blocking — and the warning must still name every role
+        that explains it.
+        """
+        expected = _expected_static_matches("0-95")
+        assert expected
+
         facts = make_facts(
             live_llama_processes=[{"pid": 222, "cpus_allowed_list": "0-95"}]
         )
         blockers, warnings, _ = evaluate(facts)
         assert blockers == []
-        assert any("architect_general" in w for w in warnings)
+        matching = [w for w in warnings if "pid 222" in w and "static-co-tenant" in w]
+        assert len(matching) == 1
+        for label in expected:
+            assert label in matching[0]
 
     def test_unpinned_process_is_informational(self):
         facts = make_facts(

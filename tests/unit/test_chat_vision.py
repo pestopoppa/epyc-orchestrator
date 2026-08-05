@@ -24,6 +24,44 @@ from src.api.routes.chat_vision import (
 )
 from src.api.routes.vision_serving import stack_prior_vision_roles, vision_roles
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _registry_serving_port(role: str) -> int:
+    """The port of the process that actually serves ``role``, per the registry.
+
+    Follows `alias_of` (a row that launches no server of its own) and
+    `shared_with` (a role co-hosted on another row's process) — the two forms
+    orchestration/model_registry.yaml uses. Reading it here rather than pinning
+    a literal is what keeps these tests honest across a role move: the
+    2026-08-01 W1 vision unification retired vision_escalation's standalone
+    :8087 7B and made the role an alias on worker_vision's :8086 process, and a
+    pinned 8087 asserted a degraded fallback onto a port that no longer exists.
+    """
+    import yaml
+
+    server_mode = yaml.safe_load(
+        (_REPO_ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )["server_mode"]
+    seen: set[str] = set()
+    while role not in seen:
+        seen.add(role)
+        entry = server_mode.get(role)
+        if entry is not None:
+            target = entry.get("alias_of")
+            if target and target not in seen:
+                role = target
+                continue
+            return int(entry["port"])
+        hosts = [
+            host
+            for host, row in server_mode.items()
+            if role in (row.get("shared_with") or [])
+        ]
+        assert len(hosts) == 1, f"role {role!r} is not hosted by exactly one row: {hosts}"
+        role = hosts[0]
+    raise AssertionError(f"role {role!r} has no resolvable server_mode port")
+
 
 class TestStructuredAnalysisDetection:
     """Test structured analysis keyword detection."""
@@ -145,8 +183,17 @@ roles:
         assert vision_roles(priors) == frozenset()
 
     def test_vl_url_for_role_falls_back_to_config_url(self, tmp_path: Path):
+        """No priors artifact -> degraded resolution, which must still land on
+        the port the REGISTRY declares for the role's serving process."""
+        expected = _registry_serving_port("vision_escalation")
         assert _vl_url_for_role("vision_escalation", tmp_path / "missing.yaml") == (
-            "http://localhost:8087"
+            f"http://localhost:{expected}"
+        )
+        # W1: the escalation tier rides worker_vision's process, so both roles
+        # resolve to the same endpoint.
+        assert expected == _registry_serving_port("worker_vision")
+        assert _vl_url_for_role("worker_vision", tmp_path / "missing.yaml") == (
+            f"http://localhost:{expected}"
         )
 
     def test_vl_url_for_role_rejects_stale_degraded_fallback_when_priors_exist(
@@ -200,9 +247,19 @@ roles:
         assert _fallback_vl_port_for_role("worker_vision") == 9991
         assert _fallback_vl_port_for_role("vision_escalation") == 9997
 
-    def test_fallback_vl_port_uses_legacy_fallback_when_manifest_missing(self):
-        assert _fallback_vl_port_for_role("worker_vision") == 8086
-        assert _fallback_vl_port_for_role("vision_escalation") == 8087
+    def test_fallback_vl_port_uses_legacy_fallback_when_manifest_missing(self, monkeypatch):
+        """With the launch manifest unreadable the hardcoded legacy table is the
+        last resort — and its literals must still be the ports the registry
+        declares. A legacy entry that drifts off the registry is a degraded
+        fallback onto a dead server, which fails at CONNECT time instead of at
+        resolution time (that is exactly what `vision_escalation: 8087` became
+        after the W1 vision unification)."""
+        monkeypatch.setattr(
+            "src.api.routes.vision_serving.manifest_vl_port_for_role",
+            lambda _role: None,
+        )
+        for role in ("worker_vision", "vision_escalation"):
+            assert _fallback_vl_port_for_role(role) == _registry_serving_port(role), role
 
     def test_fallback_vl_port_rejects_unknown_degraded_role(self):
         with pytest.raises(ValueError, match="No degraded VL port fallback"):

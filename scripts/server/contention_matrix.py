@@ -39,6 +39,7 @@ import itertools
 import json
 import logging
 import platform
+import re
 import socket
 import subprocess
 import sys
@@ -355,6 +356,85 @@ def _host_metadata() -> dict[str, str]:
 
 # ── YAML emission ────────────────────────────────────────────────────
 
+# Top-level sections this emitter regenerates from a fresh bench run.  EVERY
+# other top-level section in an existing matrix file is hand-authored runtime
+# policy (`nway_light_roles`, `nway_heavy_roles`, `same_role`,
+# `same_role_certifications`, `n_way`, `triples`,
+# `n_way_full_instance_coarse`, ...) that `src/scheduling/contention.py`
+# reads at admission time and that only the `bench-nway` / `bench-within-role`
+# subcommands produce — as FRAGMENTS, for hand-merge.  A pairwise re-bench
+# therefore MUST carry them through verbatim instead of truncating the file
+# (origin: cd42def3 / a517793c silently deleted the whole N-way policy block
+# while claiming only "matrix refreshed on the restored lineup", which
+# degraded the N-way admission gate to conservative QUEUE).
+_EMITTER_OWNED_SECTIONS = frozenset(
+    {
+        "version",
+        "measured_at",
+        "host",
+        "binary",
+        "topology_hash",
+        "default_floor",
+        "pairs",
+        "unknown_pairs",
+    }
+)
+
+_TOP_LEVEL_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):")
+
+
+def _split_top_level_sections(text: str) -> list[tuple[str, list[str]]]:
+    """Split a matrix YAML document into ordered (top_level_key, lines) blocks.
+
+    Comment / blank lines immediately preceding a key are attached to that key's
+    block so provenance comments travel with the section they annotate.
+    """
+    sections: list[tuple[str, list[str]]] = []
+    pending: list[str] = []
+    current_key: str | None = None
+    current_lines: list[str] = []
+
+    def _flush() -> None:
+        if current_key is not None:
+            sections.append((current_key, list(current_lines)))
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "" or stripped.startswith("#"):
+            pending.append(line)
+            continue
+        m = _TOP_LEVEL_KEY_RE.match(line)
+        if m:
+            _flush()
+            current_key = m.group(1)
+            current_lines = [*pending, line]
+            pending = []
+            continue
+        if current_key is None:
+            # Content before any top-level key — malformed for our purposes.
+            raise ValueError(f"unparseable line before first top-level key: {line!r}")
+        current_lines.extend(pending)
+        current_lines.append(line)
+        pending = []
+    _flush()
+    return sections
+
+
+def _carry_forward_sections(existing_path: Path | None) -> list[tuple[str, list[str]]]:
+    """Return the hand-authored policy sections of an existing matrix file.
+
+    Returns [] when there is no existing file.  Raises when the file exists but
+    cannot be split — refusing to write is strictly better than silently
+    dropping the runtime policy the admission gate reads.
+    """
+    if existing_path is None or not existing_path.exists():
+        return []
+    text = existing_path.read_text()
+    if not text.strip():
+        return []
+    sections = _split_top_level_sections(text)
+    return [(k, lines) for k, lines in sections if k not in _EMITTER_OWNED_SECTIONS]
+
 
 def _emit_yaml(
     pairs: list[PairBench],
@@ -365,6 +445,7 @@ def _emit_yaml(
     binary: dict[str, str] | None = None,
     host: str = "",
     floor: float = DEFAULT_FLOOR,
+    preserve_sections: list[tuple[str, list[str]]] | None = None,
 ) -> str:
     """Render the matrix as YAML (no PyYAML dump dependency — handle ourselves)."""
     def _inline(value: Any) -> str:
@@ -412,6 +493,15 @@ def _emit_yaml(
         for a, b, reason in sorted(unknown_pairs):
             lines.append(f"  - roles: [{repr(a)}, {repr(b)}]")
             lines.append(f'    reason: "{reason}"')
+
+    # Carry every hand-authored runtime-policy section through verbatim.  A
+    # freshly measured `same_role:` block (from same_role_verdicts) supersedes
+    # the preserved one; everything else is preserved unconditionally.
+    for key, block in preserve_sections or []:
+        if key == "same_role" and same_role_verdicts:
+            continue
+        lines.append("")
+        lines.extend(block)
 
     lines.append("")
     return "\n".join(lines)
@@ -1446,6 +1536,19 @@ def cmd_run(args: argparse.Namespace) -> int:
         {role: NUMA_CONFIG[role] for role in _matrix_roles(NUMA_CONFIG, measured_roles)}
     )
 
+    out_path = Path(args.output) if args.output else DEFAULT_OUTPUT
+    try:
+        preserved = _carry_forward_sections(out_path)
+    except ValueError as exc:
+        log.error(
+            "refusing to overwrite %s: existing matrix could not be parsed for "
+            "hand-authored policy sections (%s); a blind rewrite would delete the "
+            "runtime N-way / same-role policy the admission gate reads",
+            out_path,
+            exc,
+        )
+        return 2
+
     yaml_str = _emit_yaml(
         measured,
         unknown_pairs=skipped,
@@ -1453,10 +1556,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         binary=bin_meta,
         host=host_meta["hostname"],
         floor=DEFAULT_FLOOR,
+        preserve_sections=preserved,
     )
 
-    out_path = Path(args.output) if args.output else DEFAULT_OUTPUT
     out_path.write_text(yaml_str)
+    if preserved:
+        log.info(
+            "carried forward %d hand-authored policy section(s): %s",
+            len(preserved),
+            ", ".join(k for k, _ in preserved),
+        )
     log.info("wrote %s (%d pairs, topology_hash=%s)", out_path, len(measured), topo_hash[:8])
     log.info("catastrophic pairs (ratio < %.2f): %s", CATASTROPHIC_FLOOR, blocked_pairs)
     return 0

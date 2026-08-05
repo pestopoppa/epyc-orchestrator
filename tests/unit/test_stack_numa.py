@@ -55,9 +55,37 @@ def test_every_live_role_declares_a_memory_policy() -> None:
 
 
 def test_numa_prefix_wraps_with_numactl_when_policy_present() -> None:
-    # architect_general has numactl_policy="interleave=all"
-    prefix = _numa_prefix("architect_general", instance_idx=0)
-    assert prefix == ["numactl", "--interleave=all", "--", "taskset", "-c", "0-95"]
+    """A role-level `numactl_policy` becomes `numactl --<policy> --` ahead of taskset.
+
+    Retargeted 2026-08-04. This used to name `architect_general` as "the role
+    with numactl_policy=interleave=all" and restate `["numactl",
+    "--interleave=all", "--", "taskset", "-c", "0-95"]`. Both halves of that went
+    stale together in the 2026-07-31 W1 cutover: the 122B moved to
+    architect_critic (which now holds the full-machine interleave placement) and
+    architect_general became a ROCm role whose HOST threads sit on the GPU lane
+    (membind=3, taskset -c 184-191). Nothing was lost — the interleave placement
+    followed the model. Both forms are asserted below, and both expectations are
+    read out of NUMA_CONFIG rather than restated, so a genuine placement
+    regression still fails here while a role reshuffle does not.
+    """
+    for role in ("architect_critic", "architect_general"):
+        cfg = NUMA_CONFIG[role]
+        cpus, _port, _threads = cfg["instances"][0]
+        policy = cfg["numactl_policy"]
+        assert _numa_prefix(role, instance_idx=0) == [
+            "numactl",
+            f"--{policy}",
+            "--",
+            "taskset",
+            "-c",
+            cpus,
+        ]
+
+    # The two live forms are genuinely different: a full-machine CPU role
+    # interleaves across every node, a GPU host lane binds to the card's node.
+    assert NUMA_CONFIG["architect_critic"]["numactl_policy"].startswith("interleave")
+    assert NUMA_CONFIG["architect_general"]["numactl_policy"].startswith("membind")
+    assert NUMA_CONFIG["architect_general"].get("gpu_host_lane") is True
 
 
 def test_numa_prefix_returns_empty_for_unknown_role() -> None:

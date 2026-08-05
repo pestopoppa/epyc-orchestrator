@@ -4,6 +4,7 @@
 from src.roles import (
     Role,
     Tier,
+    _ESCALATION_MAP,
     chain_name_to_role,
     get_escalation_chain,
     get_tier,
@@ -11,6 +12,64 @@ from src.roles import (
 )
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
+
+# ── Derivation helpers ───────────────────────────────────────────────────────
+#
+# The tables in src/roles.py (_TIER_MAP, _ESCALATION_MAP) are hand restatements
+# of registry data / topology. Tests below DERIVE their expectations from those
+# same sources instead of re-pasting literals, so a future role move fails on
+# the real invariant rather than on a stale name (the 2026-08-01 W1 cutover
+# moved the 122B from architect_general to architect_critic and broke every
+# literal here at once).
+
+
+def _registry_role(role_name: str):
+    """RoleConfig for ``role_name`` from the compiled registry, or None."""
+    from src.registry_loader import RegistryLoader
+
+    try:
+        return RegistryLoader().get_role(role_name)
+    except Exception:
+        return None
+
+
+def _registry_tier(role_name: str) -> str | None:
+    cfg = _registry_role(role_name)
+    return None if cfg is None else cfg.tier
+
+
+def _registry_model_path(role: Role) -> str | None:
+    cfg = _registry_role(role.value)
+    return None if cfg is None else cfg.model.path
+
+
+def _terminal_role(start: Role) -> Role:
+    """Walk _ESCALATION_MAP from ``start`` to the rung that does not escalate."""
+    current = start
+    seen = {current}
+    while True:
+        nxt = _ESCALATION_MAP.get(current)
+        if nxt is None or nxt in seen:
+            return current
+        seen.add(nxt)
+        current = nxt
+
+
+def _assert_walks_escalation_map(chain: list[Role]) -> None:
+    """Every consecutive pair is a declared edge and the last rung is terminal.
+
+    Derived directly from ``_ESCALATION_MAP`` — the table the chain builder
+    consumes — so no test below has to name the terminal role.
+    """
+    assert chain, "escalation chain must not be empty"
+    for src_role, dst_role in zip(chain, chain[1:]):
+        assert _ESCALATION_MAP.get(src_role) is dst_role, (
+            f"{src_role.value} -> {dst_role.value} is not a declared escalation edge"
+        )
+    assert _ESCALATION_MAP.get(chain[-1]) is None, (
+        f"chain does not terminate: {chain[-1].value} still escalates"
+    )
 
 
 class TestTierEnum:
@@ -88,11 +147,42 @@ class TestRoleEnum:
         assert Role.DRAFT_CODER.tier == Tier.D
 
     def test_role_is_specialist(self):
-        """Test Role.is_specialist property."""
-        assert Role.CODER_ESCALATION.is_specialist is True
-        assert Role.ARCHITECT_GENERAL.is_specialist is True
-        assert Role.WORKER_GENERAL.is_specialist is False
-        assert Role.FRONTDOOR.is_specialist is False
+        """is_specialist must agree with the registry's DECLARED tier for every role.
+
+        ``_TIER_MAP`` in roles.py is a hand restatement of ``roles.<name>.tier`` in
+        the compiled registry, and it has drifted before (architect_critic was
+        missing entirely, so the whole-machine 122B read as Tier.C and the approval
+        gate never fired). Deriving from the registry means the next drift fails
+        here instead of passing silently, and it removes the pre-W1 literal that
+        claimed architect_general is tier B (the registry declares A since the 27B
+        took over that role and the 122B moved to architect_critic).
+        """
+        declared = {
+            role: _registry_tier(role.value)
+            for role in Role
+            if _registry_tier(role.value) is not None
+        }
+
+        # Coverage floor: these roles must stay registry-declared, so the loop
+        # below cannot quietly degrade into asserting nothing.
+        for role in (
+            Role.CODER_ESCALATION,
+            Role.ARCHITECT_GENERAL,
+            Role.ARCHITECT_CRITIC,
+            Role.WORKER_GENERAL,
+            Role.FRONTDOOR,
+        ):
+            assert role in declared, f"{role.value} is not declared in the registry"
+
+        for role, tier in declared.items():
+            assert role.is_specialist is (tier == Tier.B.value), (
+                f"{role.value}: is_specialist={role.is_specialist} but the registry "
+                f"declares tier {tier}"
+            )
+
+        # Both polarities are genuinely exercised.
+        assert any(role.is_specialist for role in declared)
+        assert any(not role.is_specialist for role in declared)
 
     def test_role_is_worker(self):
         """Test Role.is_worker property."""
@@ -121,17 +211,60 @@ class TestEscalationChain:
         assert Role.FRONTDOOR.escalates_to() == Role.CODER_ESCALATION
 
     def test_coder_escalates_to_architect(self):
-        """Test coder roles escalate to architect."""
-        assert Role.CODER_ESCALATION.escalates_to() == Role.ARCHITECT_GENERAL
+        """Coder escalation reaches an architect rung, and it is a REAL hop.
+
+        The literal ARCHITECT_GENERAL was stale after the 2026-08-01 W1 cutover:
+        the registry declares ``roles.coder_escalation.alias_of: architect_general``
+        and ``server_mode.architect_general.shared_with: [coder_escalation]``, i.e.
+        both names are the SAME :8083 process serving the SAME GGUF. That edge
+        could not change model or hardware — it only burned a rung of the ladder.
+        The invariant the literal stood for is asserted directly here: the hop
+        lands on an architect and serves a different model, derived from the
+        registry rather than restated.
+        """
+        target = Role.CODER_ESCALATION.escalates_to()
+        assert target is not None, "coder escalation must have a target"
+        assert target.value.startswith("architect_"), target.value
+        assert target is _terminal_role(Role.CODER_ESCALATION)
+
+        coder_model = _registry_model_path(Role.CODER_ESCALATION)
+        target_model = _registry_model_path(target)
+        assert coder_model and target_model
+        assert target_model != coder_model, (
+            f"coder_escalation escalates to {target.value}, which serves the same "
+            f"GGUF ({coder_model}) — a null hop, not an escalation"
+        )
 
     def test_ingest_escalates_to_architect(self):
         """Test ingest escalates to architect."""
         assert Role.INGEST_LONG_CONTEXT.escalates_to() == Role.ARCHITECT_GENERAL
 
     def test_architect_no_escalation(self):
-        """Test architects have no escalation (top of chain)."""
-        assert Role.ARCHITECT_GENERAL.escalates_to() is None
-        assert Role.ARCHITECT_CODING.escalates_to() is None
+        """The ladder terminates on exactly one architect rung, from every entry point.
+
+        ARCHITECT_GENERAL stopped being that rung on 2026-08-01 when the 122B moved
+        to ARCHITECT_CRITIC, so the terminal role is derived rather than named. The
+        second original line was really protecting the alias equivalence
+        (ARCHITECT_CODING is the live architect), which is asserted explicitly.
+        """
+        terminal = _terminal_role(Role.CODER_ESCALATION)
+        assert terminal.escalates_to() is None
+        assert terminal.value.startswith("architect_"), terminal.value
+
+        # Every entry point converges on the SAME terminal rung — no second top,
+        # no cycle (the walk would otherwise not terminate).
+        for start in (
+            Role.WORKER_GENERAL,
+            Role.WORKER_MATH,
+            Role.FRONTDOOR,
+            Role.CODER_ESCALATION,
+            Role.ARCHITECT_GENERAL,
+            Role.INGEST_LONG_CONTEXT,
+        ):
+            assert _terminal_role(start) is terminal, start.value
+
+        # Retired alias behaves identically to the live architect it normalizes to.
+        assert Role.ARCHITECT_CODING.escalates_to() is Role.ARCHITECT_GENERAL.escalates_to()
 
     def test_draft_no_escalation(self):
         """Test draft models don't escalate."""
@@ -165,33 +298,47 @@ class TestGetEscalationChain:
     """Test get_escalation_chain() function."""
 
     def test_worker_escalation_chain(self):
-        """Test escalation chain from worker."""
+        """Test escalation chain from worker (terminal rung derived, not named)."""
         chain = get_escalation_chain(Role.WORKER_GENERAL)
+        _assert_walks_escalation_map(chain)
         assert len(chain) == 3
         assert chain[0] == Role.WORKER_GENERAL
         assert chain[1] == Role.CODER_ESCALATION
-        assert chain[2] == Role.ARCHITECT_GENERAL
+        assert chain[2] == _terminal_role(Role.WORKER_GENERAL)
 
     def test_frontdoor_escalation_chain(self):
         """Test escalation chain from frontdoor."""
         chain = get_escalation_chain(Role.FRONTDOOR)
+        _assert_walks_escalation_map(chain)
         assert len(chain) == 3
         assert chain[0] == Role.FRONTDOOR
         assert chain[1] == Role.CODER_ESCALATION
-        assert chain[2] == Role.ARCHITECT_GENERAL
+        assert chain[2] == _terminal_role(Role.FRONTDOOR)
 
     def test_coder_escalation_chain(self):
         """Test escalation chain from coder."""
         chain = get_escalation_chain(Role.CODER_ESCALATION)
+        _assert_walks_escalation_map(chain)
         assert len(chain) == 2
         assert chain[0] == Role.CODER_ESCALATION
-        assert chain[1] == Role.ARCHITECT_GENERAL
+        assert chain[1] == _terminal_role(Role.CODER_ESCALATION)
 
     def test_architect_escalation_chain(self):
-        """Test escalation chain from architect (terminal)."""
-        chain = get_escalation_chain(Role.ARCHITECT_GENERAL)
-        assert len(chain) == 1
-        assert chain[0] == Role.ARCHITECT_GENERAL
+        """The terminal architect rung's chain is length 1; architect_general ends there.
+
+        Pre-W1 architect_general WAS the terminal rung, so this asserted length 1 on
+        it directly. Since the 122B moved to architect_critic the terminal rung is
+        derived; architect_general's chain must still converge on it.
+        """
+        terminal = _terminal_role(Role.ARCHITECT_GENERAL)
+        terminal_chain = get_escalation_chain(terminal)
+        _assert_walks_escalation_map(terminal_chain)
+        assert terminal_chain == [terminal]
+
+        general_chain = get_escalation_chain(Role.ARCHITECT_GENERAL)
+        _assert_walks_escalation_map(general_chain)
+        assert general_chain[0] == Role.ARCHITECT_GENERAL
+        assert general_chain[-1] == terminal
 
     def test_escalation_chain_from_string(self):
         """Test get_escalation_chain with string role."""

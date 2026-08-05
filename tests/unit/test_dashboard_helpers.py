@@ -264,27 +264,56 @@ def test_expected_stack_services_are_numa_mode_filtered() -> None:
     # the scripts.server import chain is partially initialized inside pytest —
     # a known circular-import flake, filed 2026-07-23; the contract itself is
     # deterministic).
+    #
+    # The full/non-full port split is DERIVED from NUMA_CONFIG — the same table
+    # `_filter_by_numa_mode` itself branches on — rather than restated as port
+    # literals. The deployable shape moves (982adb0c retired the 4-quarter shape
+    # on 2026-07-30 for 1 full + 2 halves and freed 8280/8380/8282/8382 with an
+    # explicit "must not be revived"); what must NOT move is the contract: full
+    # mode keeps exactly the full instances, quarter mode keeps exactly the
+    # non-full ones, and the two modes never overlap.
     from scripts.server.stack_manifest import (
         HOT_SERVERS,
         WARM_SERVERS,
+        NUMA_CONFIG,
         _filter_by_numa_mode,
     )
+
+    def _port(instance) -> int:
+        return instance["port"] if isinstance(instance, dict) else instance[1]
+
+    expected_full: set[int] = set()
+    expected_non_full: set[int] = set()
+    for cfg in NUMA_CONFIG.values():
+        instances = cfg.get("instances") or []
+        # Same guard as the filter: single-shape roles pass through untouched.
+        if "full_instance_idx" not in cfg or len(instances) <= 1:
+            continue
+        full_idx = cfg["full_instance_idx"]
+        for idx, instance in enumerate(instances):
+            target = expected_full if idx == full_idx else expected_non_full
+            target.add(_port(instance))
+
+    # Teeth: if the manifest ever loses one side of the split entirely, the
+    # disjointness assertions below would pass vacuously.
+    assert expected_full, "no role declares a full instance alongside siblings"
+    assert expected_non_full, "no role declares a non-full sibling instance"
 
     full_ports = {
         s["port"]
         for s in _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, "full")
         if isinstance(s, dict) and "port" in s
     }
-    assert {8070, 8072, 8085}.issubset(full_ports)
-    assert full_ports.isdisjoint({8080, 8180, 8280, 8380, 8082, 8182, 8282, 8382})
+    assert expected_full.issubset(full_ports)
+    assert full_ports.isdisjoint(expected_non_full)
 
     quarter_ports = {
         s["port"]
         for s in _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, "quarter")
         if isinstance(s, dict) and "port" in s
     }
-    assert {8080, 8180, 8280, 8380, 8082, 8182, 8282, 8382}.issubset(quarter_ports)
-    assert quarter_ports.isdisjoint({8070, 8072, 8085})
+    assert expected_non_full.issubset(quarter_ports)
+    assert quarter_ports.isdisjoint(expected_full)
 
     both_ports = {
         s["port"]
@@ -292,7 +321,7 @@ def test_expected_stack_services_are_numa_mode_filtered() -> None:
         if isinstance(s, dict) and "port" in s
     }
     # The restored 2026-07-23 lineup: both mode carries big + quarters.
-    assert {8070, 8072, 8085, 8080, 8082}.issubset(both_ports)
+    assert (expected_full | expected_non_full).issubset(both_ports)
 
 
 def test_expected_stack_services_uses_runtime_facts_manifest(monkeypatch) -> None:
@@ -408,17 +437,35 @@ def test_topology_emits_expected_unloaded_stack_servers(monkeypatch) -> None:
     assert embedder["running"] is False
 
 
-_LIVE_QUARTER_PORTS = {
-    8080: "frontdoor.q0",
-    8180: "frontdoor.q1",
-    8280: "frontdoor.q2",
-    8380: "frontdoor.q3",
-    8082: "worker_general.q0",
-    8182: "worker_general.q1",
-    8282: "worker_general.q2",
-    8382: "worker_general.q3",
-}
-_DEAD_FULL_PORTS = (8070, 8072, 8085)
+def _split_full_and_non_full_ports() -> tuple[dict[int, str], tuple[int, ...]]:
+    """Derive (non-full ports -> hint, full ports) from the LIVE NUMA_CONFIG.
+
+    Hard-coding these used to name 8280/8380/8282/8382, which 982adb0c
+    ("topology: retire quarters, deploy 1 full + 2 halves", 2026-07-30) FREED
+    with an explicit "must not be revived". A port that appears on no launch
+    surface is correctly rendered rogue, so a fixture that still lists it is
+    describing a fleet that does not exist — and the fix must be to describe the
+    real one, never to teach the dashboard to expect a retired port.
+    """
+    from scripts.server.stack_manifest import NUMA_CONFIG
+
+    non_full: dict[int, str] = {}
+    full: list[int] = []
+    for cfg in NUMA_CONFIG.values():
+        instances = cfg.get("instances") or []
+        if "full_instance_idx" not in cfg or len(instances) <= 1:
+            continue
+        full_idx = cfg["full_instance_idx"]
+        for idx, instance in enumerate(instances):
+            port = instance["port"] if isinstance(instance, dict) else instance[1]
+            if idx == full_idx:
+                full.append(port)
+            else:
+                non_full[port] = dashboard_topology._port_hint(port)
+    return non_full, tuple(sorted(full))
+
+
+_LIVE_QUARTER_PORTS, _DEAD_FULL_PORTS = _split_full_and_non_full_ports()
 
 
 def test_topology_inversion_regression_live_quarters_not_rogue_under_env_full(monkeypatch) -> None:
@@ -437,6 +484,11 @@ def test_topology_inversion_regression_live_quarters_not_rogue_under_env_full(mo
     monkeypatch.setattr(dashboard, "_discover_llama_ports", lambda: dict(_LIVE_QUARTER_PORTS))
     monkeypatch.setattr(dashboard, "_discover_llama_models", lambda: {})
     monkeypatch.setattr(dashboard, "_load_state_services", lambda: [])
+
+    # Both halves of the fixture must be non-empty or the loops below pass
+    # vacuously and the inversion pin has no teeth.
+    assert _LIVE_QUARTER_PORTS and _DEAD_FULL_PORTS
+    assert set(_LIVE_QUARTER_PORTS).isdisjoint(_DEAD_FULL_PORTS)
 
     response = asyncio.run(dashboard.topology())
     data = json.loads(response.body)
@@ -1864,6 +1916,23 @@ def test_scan_orchestrator_tasks_separates_in_flight_from_completed(tmp_path) ->
     in_flight, completed = dashboard_snapshot.scan_orchestrator_tasks(log)
     assert [t["task_id"] for t in in_flight] == ["chat-1"]
     assert [t["task_id"] for t in completed] == ["chat-2"]
+
+
+def test_scan_orchestrator_tasks_attaches_plan_review_to_terminal_outcome(tmp_path) -> None:
+    log = tmp_path / "p.jsonl"
+    ts = datetime.now(timezone.utc).isoformat()
+    log.write_text(
+        json.dumps({"event_type": "task_started", "timestamp": ts, "task_id": "chat-1",
+                    "data": {"objective": "verify code"}}) + "\n"
+        + json.dumps({"event_type": "plan_reviewed", "timestamp": ts, "task_id": "chat-1",
+                      "agent_role": "architect_general",
+                      "data": {"decision": "drop", "feedback": "Synthetic plan repeated prompt"}}) + "\n"
+        + json.dumps({"event_type": "task_failed", "timestamp": ts, "task_id": "chat-1",
+                      "data": {}}) + "\n"
+    )
+    _in_flight, completed = dashboard_snapshot.scan_orchestrator_tasks(log)
+    assert completed[0]["plan_review_decision"] == "drop"
+    assert completed[0]["plan_review_role"] == "architect_general"
 
 
 def test_scan_orchestrator_tasks_skips_non_chat_task_ids(tmp_path) -> None:

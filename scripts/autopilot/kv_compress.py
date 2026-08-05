@@ -333,9 +333,14 @@ MODEL_LAYER_COUNTS = {
     "ingest_long_context": 32,  # Qwen3-Next-80B-A3B (SSM layers excluded)
 }
 
+# Degraded fallback only (used when stack priors carry no layer metadata).
+# Each alias MUST name the role whose SERVER it actually shares — a stale entry
+# hands the alias the wrong layer count and builds a mis-sized weight vector.
 MODEL_LAYER_COUNT_ALIASES = {
-    "coder_escalation": "frontdoor",  # shared Qwen3.6 runtime
-    "worker_summarize": "frontdoor",  # shared Qwen3.6 runtime
+    # 2026-08-01 W1 cutover: coder_escalation moved off frontdoor's 35B and is
+    # now an alias on architect_general's :8083 122B (64 attention layers).
+    "coder_escalation": "architect_general",  # shared :8083 runtime
+    "worker_summarize": "frontdoor",  # shared :8070 runtime
 }
 
 

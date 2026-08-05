@@ -152,11 +152,19 @@ def static_smt_overlap_roles(host_cpuset: str = LANE_HOST_CPUSET) -> dict[str, l
     lane's host cpuset, SMT-sibling-folded (static topology fact — this is the
     Step-4 contention-recert set, not a live blocker).
 
-    P1-2: folding makes architect_general (0-95) and worker_general's full
-    instance (0-95) visible as co-tenants of 184-191 — their physical cores
-    88-95 ARE the lane slice's SMT siblings — alongside the direct Q1B
-    overlaps (frontdoor 8380, worker_general 8382, ingest 8485,
-    vision_escalation 8087).
+    P1-2: folding makes the full-machine instances (0-95 — architect_critic
+    8074, frontdoor 8070, ingest_long_context 8085, worker_general 8072) visible
+    as co-tenants of 184-191 — their physical cores 88-95 ARE the lane slice's
+    SMT siblings — alongside the instances that name the lane's logical CPUs
+    directly: the half-B instances (frontdoor 8180, worker_general 8182, ingest
+    8285, cpuset 48-95,144-191) and the two GPU host-lane roles themselves
+    (architect_general 8083, worker_vision 8086).
+
+    The parenthetical here used to read "frontdoor 8380, worker_general 8382,
+    ingest 8485, vision_escalation 8087". Those ports are retired: the quarter
+    fleet was replaced by 1 full + 2 halves on 2026-07-31 (8280/8380/8282/8382/
+    8385/8485 freed, not to be revived) and :8087 went away when
+    vision_escalation became an alias on worker_vision's :8086.
     """
     lane_folded = smt_fold(parse_cpu_list(host_cpuset))
     overlaps: dict[str, list[int]] = {}

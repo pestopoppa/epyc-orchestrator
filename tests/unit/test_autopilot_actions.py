@@ -859,6 +859,76 @@ def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
     )
 
 
+def test_numeric_trial_unmeasured_rate_fails_the_trial_instead_of_killing_it(
+    monkeypatch,
+) -> None:
+    """An aborted batch must FAIL its Optuna trial, never raise out of the action.
+
+    `objectives_from` raises `UnmeasuredObjectiveError` when the rate axis is
+    unmeasured — here an `eval_wall_s` below the s/question validity floor, the
+    shape a fast-rejected batch really produces. The trial dict has already been
+    popped from `ctx.state` by then, so an escaping exception strands an Optuna
+    trial that is neither reported nor failed and permanently occupies a slot in
+    the study. autopilot.py guards the same condition at both of its
+    `objectives_from` call sites.
+    """
+
+    monkeypatch.setattr(
+        actions,
+        "_apply_params",
+        lambda params: {"status": "ok", "applied": dict(params)},
+    )
+
+    class FakeSwarm:
+        def __init__(self):
+            self.reported = None
+            self.failed = None
+
+        def suggest_trial(self, surface):
+            return {"trial_number": 11, "surface": surface, "params": {}}
+
+        def report_result(self, surface, trial_number, objectives):
+            self.reported = (surface, trial_number, objectives)
+
+        def mark_failed(self, surface, trial_number, reason=""):
+            self.failed = (surface, trial_number, reason)
+
+    unmeasured = actions.EvalResult(
+        tier=1,
+        quality=2.0,
+        speed=10.0,
+        cost=0.1,
+        reliability=1.0,
+        n_questions=2,
+        eval_wall_s=0.5,  # below the 1.0 s/question validity floor
+        question_results=[{"qid": "q1"}, {"qid": "q2"}],
+    )
+    # Precondition: this really is the raising shape, so the test cannot pass
+    # merely because the guard is unreachable.
+    with pytest.raises(tier_specs.UnmeasuredObjectiveError):
+        tier_specs.objectives_from(unmeasured)
+
+    class FakeTower:
+        def hybrid_eval(self):
+            return unmeasured
+
+    swarm = FakeSwarm()
+    state: dict = {}
+    result, species = actions._action_numeric_trial(
+        {"type": "numeric_trial", "surface": "monitor", "params": {}},
+        _ctx(swarm=swarm, tower=FakeTower(), state=state),
+    )
+
+    assert species == "numeric_swarm"
+    assert result is unmeasured
+    assert swarm.reported is None, "must not fabricate an objective for an unmeasured axis"
+    assert swarm.failed is not None, "the Optuna trial must be closed out, not stranded"
+    assert swarm.failed[0] == "monitor" and swarm.failed[1] == 11
+    assert "unmeasured" in swarm.failed[2]
+    # The trial is consumed exactly once either way.
+    assert "_current_optuna_trial" not in state
+
+
 def test_numeric_trial_explicit_no_changes_skips_eval(monkeypatch) -> None:
     monkeypatch.setattr(
         actions,

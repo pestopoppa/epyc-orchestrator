@@ -228,16 +228,46 @@ class TestNodeRouting:
     """Test that node functions set next_node correctly."""
 
     def test_role_to_lg_node_mapping(self):
-        from src.graph.langgraph.nodes import ROLE_TO_LG_NODE
+        from src.graph.langgraph.graph import build_orchestration_graph
+        from src.graph.langgraph.nodes import ROLE_TO_LG_NODE, select_start_lg_node
+        from src.registry.stack_priors import live_stack_role_records
 
         assert ROLE_TO_LG_NODE["frontdoor"] == "frontdoor"
         assert ROLE_TO_LG_NODE["worker_general"] == "worker"
         assert ROLE_TO_LG_NODE["worker_math"] == "worker"
-        assert ROLE_TO_LG_NODE["thinking_reasoning"] == "coder"
         assert ROLE_TO_LG_NODE["coder_escalation"] == "coder_escalation"
         assert ROLE_TO_LG_NODE["ingest_long_context"] == "ingest"
         assert ROLE_TO_LG_NODE["architect_general"] == "architect"
         assert ROLE_TO_LG_NODE[str(Role.ARCHITECT_CODING)] == "architect"
+
+        # Every mapped node must be a node the graph actually registers, or the
+        # start node is unreachable.
+        registered = set(build_orchestration_graph().nodes)
+        assert registered
+        for role, node in ROLE_TO_LG_NODE.items():
+            assert node in registered, f"{role} maps to unregistered node {node!r}"
+
+        # COMPLETENESS, derived from the live stack priors rather than a pasted
+        # row list: every live routable role must have an entry. Unmapped live
+        # roles silently start at the frontdoor node — the defect that left
+        # architect_critic (the terminal 122B rung) and vision_escalation
+        # misrouted after the 2026-08-01 W1 cutover.
+        live_roles = set(live_stack_role_records())
+        assert live_roles, "live stack priors produced no roles"
+        for raw_role in sorted(live_roles):
+            resolved = Role.from_string(raw_role)
+            assert resolved is not None, f"live role {raw_role!r} is not a Role"
+            assert str(resolved) in ROLE_TO_LG_NODE, (
+                f"live role {raw_role!r} has no ROLE_TO_LG_NODE entry — it would "
+                f"silently start at the frontdoor node"
+            )
+
+        # RETIRED roles are deliberately absent (weights deleted 2026-03-06) and
+        # degrade to the frontdoor node rather than dispatching into a live backend.
+        retired = "thinking_" "reasoning"
+        assert retired not in ROLE_TO_LG_NODE
+        assert retired not in live_roles
+        assert select_start_lg_node(retired) == "frontdoor"
 
     def test_select_start_lg_node_default(self):
         from src.graph.langgraph.nodes import select_start_lg_node

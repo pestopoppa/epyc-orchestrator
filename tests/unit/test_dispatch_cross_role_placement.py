@@ -267,6 +267,29 @@ def _wire_model(monkeypatch: pytest.MonkeyPatch, model: _RegionMutexModel) -> No
     )
 
 
+def _pin_full_disabled(monkeypatch: pytest.MonkeyPatch, role: str) -> None:
+    """Pin `role` to FULL_DISABLED as a SYNTHETIC policy, not a live read.
+
+    2026-07-23 lineup restoration (95dffc88, operator-directed) redeployed the
+    big instances, so worker_general's LIVE policy is burst_prefer_quarters —
+    under which a solo dispatch legitimately takes the full candidate first.
+    That commit moved the DISPATCH-A full_disabled pins in
+    test_dispatch_placement_state_machine.py onto a synthetic policy for exactly
+    this reason but never reached this file. The regression the pins guard (a
+    FULL_DISABLED role must never acquire the all-region set) is a property of
+    the POLICY, not of whichever role happens to carry it this week, so inject
+    the policy rather than relaxing the assertions.
+    """
+    from src.scheduling.placement_policy import RolePlacementPolicy, get_placement_policy
+
+    import scripts.server.stack_numa as _stack_numa
+
+    monkeypatch.setitem(
+        _stack_numa.NUMA_CONFIG[role], "placement_policy", "full_disabled"
+    )
+    assert get_placement_policy(role) is RolePlacementPolicy.FULL_DISABLED
+
+
 def _make_role_backend(monkeypatch: pytest.MonkeyPatch, role: str, full_port: int):
     monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
     monkeypatch.setenv("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "1")
@@ -288,6 +311,7 @@ def test_cross_role_disjoint_quarters_coplace_no_machine_wide_block(
     model = _RegionMutexModel(_XROLE_REGIONS)
     _wire_model(monkeypatch, model)
 
+    _pin_full_disabled(monkeypatch, "worker_general")  # synthetic, see helper
     wg = _make_role_backend(monkeypatch, "worker_general", 8072)  # FULL_DISABLED
     fd = _make_role_backend(monkeypatch, "frontdoor", 8070)       # BURST_PREFER_QUARTERS
 
@@ -352,9 +376,12 @@ def test_worker_general_never_acquires_more_than_candidate_region_set(
     """DISPATCH-A (c) regression pin: a worker_general dispatch acquires ONLY its
     chosen quarter's region set — NEVER the all-region idx-0 set (the amplifier
     bug this fix kills). FULL_DISABLED makes the whole-machine grab structurally
-    impossible."""
+    impossible. The policy is injected synthetically (see `_pin_full_disabled`)
+    because the LIVE worker_general policy is burst_prefer_quarters since the
+    2026-07-23 lineup restoration."""
     model = _RegionMutexModel(_XROLE_REGIONS)
     _wire_model(monkeypatch, model)
+    _pin_full_disabled(monkeypatch, "worker_general")
     wg = _make_role_backend(monkeypatch, "worker_general", 8072)
 
     with wg._dispatch(session_id="wg-solo") as (_b, idx, is_full):

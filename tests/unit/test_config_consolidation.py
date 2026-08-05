@@ -43,6 +43,67 @@ def _clean_config():
     reset_config()
 
 
+# ----------------------------------------------------------------------------
+# Registry-derived expectations.
+#
+# Serving ports are read from `orchestration/model_registry.yaml` — the same
+# declaration the resolver's tables are compiled from — so a role that is
+# repointed (the 2026-08-01 W1 cutover moved coder_escalation frontdoor ->
+# architect_general and collapsed vision_escalation onto worker_vision) updates
+# the expectation instead of leaving a stale literal pinned to a freed port.
+# ----------------------------------------------------------------------------
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _registry_server_mode() -> dict:
+    import yaml
+
+    registry = yaml.safe_load(
+        (_REPO_ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )
+    return registry["server_mode"]
+
+
+def _registry_serving_port(role: str) -> int:
+    """Resolve a role to the port of the process that actually serves it.
+
+    Follows `alias_of` (an alias row that launches no server of its own) and
+    `shared_with` (a role co-hosted on another row's process).
+    """
+    server_mode = _registry_server_mode()
+    seen: set[str] = set()
+    while role not in seen:
+        seen.add(role)
+        entry = server_mode.get(role)
+        if entry is not None:
+            target = entry.get("alias_of")
+            if target and target not in seen:
+                role = target
+                continue
+            return int(entry["port"])
+        hosts = [
+            host
+            for host, row in server_mode.items()
+            if role in (row.get("shared_with") or [])
+        ]
+        assert len(hosts) == 1, f"role {role!r} is not hosted by exactly one row: {hosts}"
+        role = hosts[0]
+    raise AssertionError(f"role {role!r} has no resolvable server_mode port")
+
+
+def _topology_fleet_ports(role: str) -> tuple[int, list[int]]:
+    """Return (full_port, sibling_ports) for a quarterable role."""
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    cfg = NUMA_CONFIG[role]
+    instances = cfg["instances"]
+    full_idx = cfg["full_instance_idx"]
+    return instances[full_idx][1], [
+        inst[1] for idx, inst in enumerate(instances) if idx != full_idx
+    ]
+
+
 # ── Module import ─────────────────────────────────────────────────────────
 
 
@@ -195,19 +256,41 @@ class TestServerURLsDefaults:
     def test_specific_role_urls(self):
         """Spot-check specific role->URL mappings (multi-instance since ConcurrencyAware)."""
         cfg = ServerURLsConfig()
-        # Multi-instance roles use "full:" prefix or comma-separated URLs
-        assert "http://localhost:8080" in cfg.frontdoor
-        assert "http://localhost:8070" in cfg.coder_escalation
-        assert "http://localhost:8082" in cfg.worker_explore
+        # Multi-instance roles use "full:" prefix or comma-separated URLs.
+        fd_full, fd_siblings = _topology_fleet_ports("frontdoor")
+        assert cfg.frontdoor.startswith(f"full:http://localhost:{fd_full}")
+        for port in fd_siblings:
+            assert f"http://localhost:{port}" in cfg.frontdoor
+
+        wg_full, wg_siblings = _topology_fleet_ports("worker_general")
+        for port in (wg_full, *wg_siblings):
+            assert f"http://localhost:{port}" in cfg.worker_explore
         assert cfg.worker_explore == cfg.worker_general
-        # Single-instance roles keep simple URLs; quartered roles use full:.
-        assert cfg.worker_vision == "http://localhost:8086"
-        assert cfg.vision_escalation.startswith("full:http://localhost:8087")
-        assert cfg.ingest_long_context.startswith("full:http://localhost:8085")
+
+        ing_full, _ = _topology_fleet_ports("ingest_long_context")
+        assert cfg.ingest_long_context.startswith(f"full:http://localhost:{ing_full}")
+
+        # Single-process roles keep simple URLs; each is pinned to the port the
+        # registry declares for the process that actually serves it (following
+        # `alias_of` / `shared_with`), never to a hand-copied literal.
+        assert cfg.worker_vision == f"http://localhost:{_registry_serving_port('worker_vision')}"
+        assert cfg.vision_escalation == (
+            f"http://localhost:{_registry_serving_port('vision_escalation')}"
+        )
+        assert cfg.architect_general == (
+            f"http://localhost:{_registry_serving_port('architect_general')}"
+        )
+        # W1 cutover: coder_escalation is an `alias_of: architect_general` row —
+        # it must resolve to architect_general's process, not to frontdoor's.
+        assert cfg.coder_escalation == (
+            f"http://localhost:{_registry_serving_port('coder_escalation')}"
+        )
+        assert cfg.coder_escalation == cfg.architect_general
         assert cfg.worker_fast == "http://localhost:8102"
-        assert "http://localhost:8083" in cfg.architect_general
-        # Worker summarize shares the frontdoor/coder_escalation server.
-        assert "http://localhost:8070" in cfg.worker_summarize
+        # worker_summarize is declared in frontdoor.shared_with, so it must carry
+        # frontdoor's whole fleet string, not just its own endpoint.
+        assert _registry_serving_port("worker_summarize") == fd_full
+        assert cfg.worker_summarize == cfg.frontdoor
 
 
 # ── TimeoutsConfig defaults match ROLE_TIMEOUTS in chat_utils.py ─────────
@@ -460,8 +543,13 @@ class TestVisionDefaults:
 
     def test_server_ports(self):
         cfg = VisionConfig()
-        assert cfg.vl_server_port == 8086
-        assert cfg.vl_escalation_server_port == 8087
+        # Derived from the registry, which declares vision_escalation inside
+        # worker_vision's `shared_with` (2026-08-01 W1 vision unification: the
+        # standalone 7B on :8087 was retired and the role became an alias on the
+        # 30B-A3B MI210 process). A pinned literal here would point the offline
+        # batch analyzer at a port that no longer exists.
+        assert cfg.vl_server_port == _registry_serving_port("worker_vision")
+        assert cfg.vl_escalation_server_port == _registry_serving_port("vision_escalation")
 
 
 # ── DelegationConfig defaults ────────────────────────────────────────────
@@ -642,7 +730,18 @@ class TestEnvVarOverrides:
             cfg = get_config()
             assert cfg.memrl_retrieval.cost_tau == 2.3
 
-    def test_server_url_defaults_come_from_stack_priors(self, tmp_path: Path):
+    def test_server_url_defaults_come_from_stack_priors(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Isolation, not expectation-loosening: the stack-priors producer is the
+        # LOWEST-precedence one. On a host where the real fleet is up, the
+        # runtime-facts producer (which reads
+        # /mnt/raid0/llm/tmp/orchestrator_runtime_facts.json and TCP-probes the
+        # ports it names) legitimately wins and this test never reaches the
+        # producer it is named after. Same isolation pattern as
+        # tests/unit/test_config.py::TestServerURLsConfig.
+        monkeypatch.setenv("ORCHESTRATOR_IGNORE_RUNTIME_STACK_FACTS", "1")
+        monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
         priors = tmp_path / "stack_priors.yaml"
         priors.write_text(
             """

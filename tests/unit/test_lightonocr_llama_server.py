@@ -10,6 +10,15 @@ from src.services.lightonocr_llama_server import (
 )
 
 
+# `_resolve_mtmd_cli` selects a candidate by RUNNING it (`--version`) and
+# matching `version: <build> (<commit>)` — exists()+X_OK is deliberately NOT a
+# runnability check, because several build trees on this host carry an
+# executable llama-mtmd-cli that dies at startup on a missing libomp.so. A
+# fixture binary therefore has to answer the probe. This is the ratified
+# production-consolidated-v8 identity.
+_RUNNABLE_STUB = '#!/bin/sh\necho "version: 10107 (67a433bf)"\n'
+
+
 def test_resolve_mtmd_cli_falls_back_when_default_missing(tmp_path, monkeypatch):
     monkeypatch.delenv("LLAMA_MTMD_CLI", raising=False)
     monkeypatch.delenv("ORCHESTRATOR_PATHS_LLAMA_MTMD", raising=False)
@@ -18,10 +27,30 @@ def test_resolve_mtmd_cli_falls_back_when_default_missing(tmp_path, monkeypatch)
     configured = llama_root / "build/bin/llama-mtmd-cli"
     fallback = llama_root / "build-v2/bin/llama-mtmd-cli"
     fallback.parent.mkdir(parents=True)
-    fallback.write_text("#!/bin/sh\n")
+    fallback.write_text(_RUNNABLE_STUB)
     fallback.chmod(0o755)
 
     assert _resolve_mtmd_cli(str(configured)) == str(fallback)
+
+
+def test_resolve_mtmd_cli_rejects_present_but_unrunnable_candidate(tmp_path, monkeypatch):
+    """A candidate that exists and is +x but does not RUN must not be selected.
+
+    This is the defect the probe was added to close: the configured path is
+    kept so the failure surfaces at launch instead of silently running a
+    wrong/broken binary.
+    """
+    monkeypatch.delenv("LLAMA_MTMD_CLI", raising=False)
+    monkeypatch.delenv("ORCHESTRATOR_PATHS_LLAMA_MTMD", raising=False)
+
+    llama_root = tmp_path / "llama.cpp"
+    configured = llama_root / "build/bin/llama-mtmd-cli"
+    broken = llama_root / "build-v2/bin/llama-mtmd-cli"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("#!/bin/sh\nexit 127\n")  # runs, prints no version
+    broken.chmod(0o755)
+
+    assert _resolve_mtmd_cli(str(configured)) == str(configured)
 
 
 def test_resolve_mtmd_cli_preserves_explicit_override(monkeypatch):

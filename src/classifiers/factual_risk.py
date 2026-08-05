@@ -223,19 +223,42 @@ def _stack_prior_role_tiers(
 
 
 def _degraded_role_tier(role_name: str) -> str | None:
-    """Return the explicit degraded role tier for a canonical role name."""
-    if role_name in {"architect_general", "thinking_exploration"}:
+    """Return the explicit degraded role tier for a canonical role name.
+
+    Used ONLY when generated stack priors are unavailable, so it cannot itself be
+    derived — it is a hand table and therefore has to be kept in agreement with
+    the live derivation (``_tier_from_model_mem`` over stack-prior ``mem_gb``).
+    ``tests/unit/test_factual_risk.py`` guards that agreement.
+
+    2026-08-01 W1 cutover corrections (all three previously disagreed with the
+    live derivation, so the degraded path scored these roles differently from the
+    healthy path):
+      * ``architect_general`` tier_1 -> tier_2 — the 122B moved off it onto
+        ``architect_critic``; it now serves the 27.05 GB MI210 model.
+      * ``architect_critic`` added as tier_1 — it inherited the 69 GB 122B. It was
+        absent entirely, so degraded mode fell through to tier_3 and gave the
+        STRONGEST model in the fleet no risk discount at all.
+      * ``vision_escalation`` tier_2 -> tier_3 — it is an alias on the 17.3 GB
+        worker_vision process, which is below ``_TIER_2_MIN_MODEL_MEM_GB``.
+    """
+    if role_name in {"architect_critic", "thinking_exploration"}:
         return "tier_1"
     if role_name in {
+        "architect_general",
         "coder_escalation",
         "coder_general",
         "frontdoor",
         "ingest_long_context",
         "worker_summarize",
-        "vision_escalation",
     }:
         return "tier_2"
-    if role_name in {"worker_general", "worker_math", "worker_vision", "toolrunner"}:
+    if role_name in {
+        "worker_general",
+        "worker_math",
+        "worker_vision",
+        "vision_escalation",
+        "toolrunner",
+    }:
         return "tier_3"
     return None
 

@@ -588,36 +588,54 @@ def _runtime_or_env_selected_servers() -> list[dict[str, Any]] | None:
     quarters-only fleet, or a poisoned valid full manifest) is rejected and we
     fall through to the next producer (ultimately stack priors).
     """
-    if os.environ.get("ORCHESTRATOR_IGNORE_RUNTIME_STACK_FACTS") == "1":
-        return None
+    # 2026-08-04: this flag suppresses the RUNTIME-FACTS producers only — the
+    # bootstrap reader and producer 1, both of which read
+    # orchestrator_runtime_facts.json off the live host. It must NOT suppress
+    # producer 2 (the env-declared NUMA mode -> static stack-manifest filter),
+    # which is a different producer reading a different artifact; the flag name,
+    # its docstring, and the producer-2 comment below all draw that line.
+    # e923a40b reordered the producers so realized facts outrank launch intent
+    # (correct, ESC-8 Fix 5) but hoisted this guard from just above the
+    # runtime-facts read to the top of the function, silently widening it to
+    # kill every producer. That made the quarter/both-mode tests in
+    # tests/unit/test_config.py::TestServerURLsConfig dead by construction —
+    # their class fixture sets this flag, so they landed on
+    # _LEGACY_SERVER_URL_FALLBACKS and never exercised producer 2 at all.
+    # tests/unit/test_full_slot_demotion.py::_fallback_env separately
+    # `delenv`s ORCHESTRATOR_STACK_NUMA_MODE to reach the literal fallbacks,
+    # which is only meaningful under the narrow scope restored here.
+    ignore_runtime_facts = os.environ.get("ORCHESTRATOR_IGNORE_RUNTIME_STACK_FACTS") == "1"
 
-    # Bootstrap producer: an API starts while scripts.server modules can
-    # still be partially initialized.  Prefer the fresh launcher artifact over
-    # importing that cycle; full-mode behavior remains on the normal chain.
-    bootstrap_candidate = _bootstrap_runtime_selected_servers()
-    if bootstrap_candidate is not None:
-        return bootstrap_candidate
+    if not ignore_runtime_facts:
+        # Bootstrap producer: an API starts while scripts.server modules can
+        # still be partially initialized.  Prefer the fresh launcher artifact over
+        # importing that cycle; full-mode behavior remains on the normal chain.
+        bootstrap_candidate = _bootstrap_runtime_selected_servers()
+        if bootstrap_candidate is not None:
+            return bootstrap_candidate
 
-    # Producer 1: validated runtime-facts manifest.  Launcher facts describe
-    # realized ports; an inherited env value is launch intent only.
-    try:
-        from scripts.server.runtime_facts_manifest import read_runtime_stack_selected_servers
+        # Producer 1: validated runtime-facts manifest.  Launcher facts describe
+        # realized ports; an inherited env value is launch intent only.
+        try:
+            from scripts.server.runtime_facts_manifest import (
+                read_runtime_stack_selected_servers,
+            )
 
-        candidate = read_runtime_stack_selected_servers()
-    except Exception as exc:
-        _LOGGER.warning(
-            "runtime-facts selected-servers read failed (%s: %s)",
-            type(exc).__name__,
-            exc,
-        )
-        candidate = None
-    if candidate is not None:
-        if _selected_servers_are_live(candidate):
-            return candidate
-        _LOGGER.warning(
-            "runtime-facts lineup rejected: host-role ports not listening; "
-            "falling through to env/stack priors"
-        )
+            candidate = read_runtime_stack_selected_servers()
+        except Exception as exc:
+            _LOGGER.warning(
+                "runtime-facts selected-servers read failed (%s: %s)",
+                type(exc).__name__,
+                exc,
+            )
+            candidate = None
+        if candidate is not None:
+            if _selected_servers_are_live(candidate):
+                return candidate
+            _LOGGER.warning(
+                "runtime-facts lineup rejected: host-role ports not listening; "
+                "falling through to env/stack priors"
+            )
 
     # Producer 2: env-declared mode → static stack-manifest filter.  This is a
     # startup fallback only; it must never outrank validated realized facts.

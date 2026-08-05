@@ -13,7 +13,25 @@ from src.escalation import (
     decide,
     get_policy,
 )
-from src.roles import Role
+from src.roles import Role, _ESCALATION_MAP
+
+
+def _terminal_role(start: Role) -> Role:
+    """Walk ``_ESCALATION_MAP`` to the rung that has no escalation target.
+
+    Derived rather than named: the 2026-08-01 W1 cutover moved the terminal rung
+    from architect_general to architect_critic when the 122B changed roles, and
+    every test that hardcoded the old name broke while the MECHANISM under test
+    (explore/fail at the top of the ladder) was untouched.
+    """
+    current = start
+    seen = {current}
+    while True:
+        nxt = _ESCALATION_MAP.get(current)
+        if nxt is None or nxt in seen:
+            return current
+        seen.add(nxt)
+        current = nxt
 
 
 class TestErrorCategory:
@@ -219,17 +237,31 @@ class TestEscalationPolicy:
         assert decision.action == EscalationAction.FAIL
 
     def test_terminal_role_explore_fallback(self, policy):
-        """Test terminal role (architect) falls back to EXPLORE."""
+        """Test terminal role falls back to EXPLORE (terminal rung derived)."""
+        terminal = _terminal_role(Role.ARCHITECT_GENERAL)
+        assert terminal.escalates_to() is None
+
         context = EscalationContext(
-            current_role=Role.ARCHITECT_GENERAL,
+            current_role=terminal,
             failure_count=3,
             error_category=ErrorCategory.CODE,
         )
         decision = policy.decide(context)
 
-        # Architect has no escalation target
+        # The terminal rung has no escalation target → EXPLORE.
         assert decision.action == EscalationAction.EXPLORE
         assert "exploration" in decision.reason.lower()
+
+        # Contrast case: a NON-terminal rung at the same failure_count still
+        # escalates, so the assertion above cannot pass merely because every
+        # role explores.
+        non_terminal = EscalationContext(
+            current_role=Role.CODER_ESCALATION,
+            failure_count=3,
+            error_category=ErrorCategory.CODE,
+        )
+        assert Role.CODER_ESCALATION.escalates_to() is not None
+        assert policy.decide(non_terminal).action == EscalationAction.ESCALATE
 
     def test_max_escalations_enforced(self, policy):
         """Test max escalations limit is enforced."""
@@ -259,7 +291,11 @@ class TestEscalationPolicy:
         assert len(path) == 3
         assert path[0] == Role.WORKER_GENERAL
         assert path[1] == Role.CODER_ESCALATION
-        assert path[2] == Role.ARCHITECT_GENERAL
+        # Terminal rung derived from _ESCALATION_MAP, not restated.
+        assert path[2] == _terminal_role(Role.WORKER_GENERAL)
+        for src_role, dst_role in zip(path, path[1:]):
+            assert _ESCALATION_MAP.get(src_role) is dst_role
+        assert _ESCALATION_MAP.get(path[-1]) is None
 
 
 class TestThinkHarder:

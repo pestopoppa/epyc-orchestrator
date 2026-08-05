@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 from types import SimpleNamespace
@@ -1362,36 +1363,62 @@ def test_protocol_contract_rejects_request_timeout_mismatch(tmp_path: Path, monk
 
 
 def test_fixed_t2_source_vector_fails_closed_on_zero_group_extract_patterns() -> None:
+    t1_n, t2_n = 50, 500
     tower = runner.EvalTower(url="http://127.0.0.1:8000", timeout=1)
     t1_questions, _t1_core_id = runner.question_vector(
         tower,
         tier=1,
         t1_core_id="core_v2",
-        n=50,
+        n=t1_n,
         seed=runner.EVAL_SPEC_SEED,
     )
     questions, _core_id = runner.question_vector(
         tower,
         tier=2,
         t1_core_id="core_v2",
-        n=500,
+        n=t2_n,
         seed=runner.EVAL_SPEC_SEED,
     )
-    assert sum(question["scoring_method"] == "llm_judge" for question in t1_questions) == 4
-    assert sum(question["scoring_method"] == "llm_judge" for question in questions) == 38
+    # The tier-2 vector is a SEEDED SAMPLE of the scoreable question pool, so any
+    # change to pool scoreability reshuffles which questions are drawn (2f366e6b
+    # recovered 1,439 previously-unscoreable rows and moved this draw).  Assert the
+    # properties the scorer contract actually depends on — derived from the runner's
+    # own constant — instead of a census of one historical draw.
+    assert len(t1_questions) == t1_n
+    assert len(questions) == t2_n
+    t1_methods = {question["scoring_method"] for question in t1_questions}
+    t2_methods = {question["scoring_method"] for question in questions}
+    assert t1_methods <= runner.INDEPENDENTLY_REPRODUCIBLE_SCORERS
+    assert t2_methods <= runner.INDEPENDENTLY_REPRODUCIBLE_SCORERS
+    # Both vectors really are the mixed real-data vectors, judge rows included —
+    # what the removed llm_judge censuses were there to witness.
+    assert "llm_judge" in t1_methods
+    assert "llm_judge" in t2_methods
+    assert len(t2_methods) > 1
+
+    # Corrupt the FIRST TWO exact_match rows in vector order, so the qid the
+    # validator names on first failure is deterministic without hardcoding a pool
+    # question id.  validate_source_vector_scorer_config only inspects exact_match
+    # rows carrying an extract_pattern, so these are the rows under test.
+    targets = [
+        runner._question_qid(question)
+        for question in questions
+        if question["scoring_method"] == "exact_match"
+    ][:2]
+    assert len(targets) == 2
     invalid_questions = []
     for question in questions:
         scoring_config = dict(question.get("scoring_config") or {})
-        if question["id"] in {"real_suite_v1_0043", "needle_039"}:
+        if runner._question_qid(question) in targets:
             scoring_config["extract_pattern"] = r"\d+"
         invalid_questions.append({**question, "scoring_config": scoring_config})
     invalid = {
-        question["id"]: question["scoring_config"]["extract_pattern"]
+        runner._question_qid(question): question["scoring_config"]["extract_pattern"]
         for question in invalid_questions
-        if question["id"] in {"real_suite_v1_0043", "needle_039"}
+        if runner._question_qid(question) in targets
     }
-    assert invalid == {"real_suite_v1_0043": r"\d+", "needle_039": r"\d+"}
-    with pytest.raises(ValueError, match="one capture group.*real_suite_v1_0043"):
+    assert invalid == {target: r"\d+" for target in targets}
+    with pytest.raises(ValueError, match=f"one capture group.*{re.escape(targets[0])}"):
         runner.validate_source_vector_scorer_config(invalid_questions, tier=2)
 
 

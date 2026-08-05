@@ -513,15 +513,40 @@ def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path
     assert priors["status"] == "compiled"
     assert priors["stack_priors_version"] == STACK_PRIORS_VERSION
     assert priors["contract"]["schema"] == "epyc.stack_priors"
-    assert sorted(priors["source_artifacts"]) == [
-        "descriptors",
-        "orchestrator_stack",
-        "registry",
-        "stack_manifest",
-        "stack_numa",
-        "stack_paths",
-        "stack_runtime",
-    ]
+    # Derived, not restated. A literal pin list here is a SECOND copy of the
+    # compiler's own `source_artifacts` block, and that duplication has already
+    # failed once: scripts/validate/stack_change_guard.py carried the same
+    # 7-item list while the compiler emitted 9, so launch_manifest.yaml and
+    # stack_topology.yaml — the files that now hold the launcher configuration
+    # the .py loaders used to contain — were pinned and never verified
+    # (a517793c fixed the guard by iterating the producer's keys and demoting
+    # the list to a FLOOR). This test is the last surviving restatement.
+    from scripts.validate.stack_change_guard import REQUIRED_SOURCE_ARTIFACTS
+
+    source_artifacts = priors["source_artifacts"]
+    # (1) The floor the guard enforces: a pin the compiler silently stopped
+    #     emitting is still caught.
+    assert set(source_artifacts) >= set(REQUIRED_SOURCE_ARTIFACTS), (
+        f"compiler dropped a required pin: "
+        f"{sorted(set(REQUIRED_SOURCE_ARTIFACTS) - set(source_artifacts))}"
+    )
+    # (2) The property actually worth guarding: every pin is a complete
+    #     provenance triple, so the chain can be verified rather than trusted.
+    for label, pin in source_artifacts.items():
+        assert set(pin) == {"path", "sha256", "repo_commit"}, label
+        assert pin["path"] and pin["sha256"], label
+    # (3) Cross-check against the SHIPPED compiled artifact, which is this
+    #     compiler's own committed output: a pin added or removed without a
+    #     recompile shows up as a set mismatch here.
+    shipped = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[2]
+            / "orchestration"
+            / "derived"
+            / "stack_priors.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    assert set(source_artifacts) == set(shipped["source_artifacts"])
     assert validate_stack_priors_contract(priors) == []
     assert frontdoor["priors"]["memory_cost"] == 1.0
     assert frontdoor["evidence"]["precedence"]["memory_cost"] == "server_mode.tier"
@@ -529,7 +554,27 @@ def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path
     assert frontdoor["model"]["attention_layers"] == 16
     frontdoor_runtime = frontdoor["serving"]["launch"]["runtime"]
     assert frontdoor_runtime["binary_family"] == "llama.cpp"
-    assert frontdoor_runtime["cache"]["slots"] == 1
+    # This synthetic registry declares no `slots`, so the compiler falls back to
+    # the DECLARED default in orchestration/launch_manifest.yaml
+    # (launch_shape.fallback_slots.default) — read here rather than restated.
+    # The literal `1` that stood here was the SERIAL_ROLES clamp, deliberately
+    # removed on 2026-08-02: it applied an ADMISSION policy to a SERVING number,
+    # so this record shipped two disagreeing slot counts (serving.slots vs
+    # runtime.cache.slots, the latter becoming the launcher's `-np`). Serial
+    # admission now lives in src/api/admission.py; frontdoor is still in
+    # launch_manifest serial_roles, which is exactly why re-pinning 1 here would
+    # resurrect the clamp in test form.
+    _launch_manifest = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[2]
+            / "orchestration"
+            / "launch_manifest.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    assert (
+        frontdoor_runtime["cache"]["slots"]
+        == _launch_manifest["launch_shape"]["fallback_slots"]["default"]
+    )
     assert frontdoor_runtime["cache"]["ubatch"] == 8192
     assert frontdoor_runtime["cache"]["kv_type_k"] == "q8_0"
     assert frontdoor_runtime["cache"]["kv_type_v"] == "q8_0"

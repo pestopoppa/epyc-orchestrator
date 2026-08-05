@@ -628,6 +628,7 @@ class InferenceMixin:
         # placement-aware contention gate. The local dataclass has no slots.
         request.request_priority = self.get_request_priority()
         request.workload_class = self.get_request_workload_class()
+        request.batch_id = self.get_request_batch_id()
         request.max_queue_wait_ms = self.get_max_queue_wait_ms()
         request.session_id = self.get_request_session_id()
         wants_probabilities = n_probs is not None and int(n_probs) > 0
@@ -692,13 +693,39 @@ class InferenceMixin:
                 from src.runtime.cpu_region_lock import cpu_region_lock_for_instance
 
                 direct_region_metadata = _direct_region_lock_metadata(role, backend_url, _cb_port)
-                lock_ctx = cpu_region_lock_for_instance(
-                    role,
-                    0,
-                    cancel_check=self.get_request_cancel_check(),
-                    deadline_s=self.get_request_deadline_s(),
-                    request_tag=self.get_request_task_id(),
-                )
+                lock_kwargs: dict[str, Any] = {
+                    "cancel_check": self.get_request_cancel_check(),
+                    "deadline_s": self.get_request_deadline_s(),
+                    "request_tag": self.get_request_task_id(),
+                }
+                try:
+                    from src.llm_primitives.backend import _certified_native_batch_width
+                    from src.runtime.cpu_region_lock import _cross_role_mutex_enabled
+                    from src.runtime.instance_topology import topology_idx_for_port
+
+                    native_width = _certified_native_batch_width(
+                        self,
+                        topology_role=role,
+                        full_url=backend_url,
+                    )
+                    direct_native_batch = (
+                        native_width > 1
+                        and _cross_role_mutex_enabled()
+                        and str(getattr(request, "workload_class", "") or "")
+                        == "eval_batch"
+                        and bool(str(getattr(request, "batch_id", "") or "").strip())
+                        and topology_idx_for_port(role, _cb_port or 0) == 0
+                    )
+                except Exception:
+                    native_width = 1
+                    direct_native_batch = False
+                if direct_native_batch:
+                    lock_kwargs.update(
+                        shared=True,
+                        capacity=native_width,
+                        request_tag=str(getattr(request, "batch_id", "") or ""),
+                    )
+                lock_ctx = cpu_region_lock_for_instance(role, 0, **lock_kwargs)
             else:
                 lock_ctx = (
                     inference_lock(

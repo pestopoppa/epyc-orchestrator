@@ -225,17 +225,87 @@ def test_launch_kv_quant_configs_keep_canonical_worker_roles_only() -> None:
     declared `shared_with` alias of `worker` — it rides that process and therefore
     genuinely has that process's KV types. Its presence is the derivation working,
     not drift. What the test still pins is that no alias contradicts its host.
+
+    2026-08-04: this test used to end on a hardcoded ABSENCE — "worker_vision is
+    not in the table, because it declares no kv_quant while a q8_0 VL quality
+    check runs separately". That check has since landed (MMMU-250 paired A/B,
+    f16 153/250 vs q8_0 155/250, +0.80 pp, CI [-1.90,+3.03], non-inferior at the
+    pre-registered 3 pp margin) and `server_mode.worker_vision.serving_shape.kv_quant`
+    is now q8_0/q8_0, so the row exists and MUST exist. Restating a literal
+    absence was the defect; every expectation below is now read out of
+    `orchestration/model_registry.yaml` directly — the same source of truth the
+    resolver reads, resolved independently of it.
     """
     from scripts.server.stack_manifest import LAUNCH_KV_QUANT_CONFIGS
 
-    assert LAUNCH_KV_QUANT_CONFIGS["worker_general"] == ("q8_0", "q8_0")
+    registry = yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text()
+    )["server_mode"]
+
+    def master_kv(launcher_role: str) -> tuple[str, str] | None:
+        """Master's KV types for a LAUNCHER role name, resolved from the YAML.
+
+        Deliberately a second implementation of the documented binding order
+        (a row named for the role -> a row whose `model_role` is the role -> a
+        row whose `shared_with` contains it), grouped `serving_shape` first and
+        the flat key second, so the expectation is not produced by the code
+        under test.
+        """
+        row = registry.get(launcher_role)
+        if not isinstance(row, dict):
+            row = next(
+                (
+                    cfg
+                    for cfg in registry.values()
+                    if cfg.get("model_role") == launcher_role
+                    or launcher_role in (cfg.get("shared_with") or [])
+                ),
+                None,
+            )
+        if not isinstance(row, dict):
+            return None
+        shape = row.get("serving_shape")
+        raw = (shape or {}).get("kv_quant") if isinstance(shape, dict) else None
+        if raw is None:
+            raw = row.get("kv_quant")
+        if not isinstance(raw, dict) or not raw.get("k") or not raw.get("v"):
+            return None
+        return (str(raw["k"]), str(raw["v"]))
+
+    # Every emitted row equals master's declaration for that role — no launcher
+    # row may exist that master does not back.
+    assert LAUNCH_KV_QUANT_CONFIGS
+    for role, pair in sorted(LAUNCH_KV_QUANT_CONFIGS.items()):
+        assert pair == master_kv(role), f"{role} disagrees with master"
+
+    # ...and every role master declares KV types for is present, hosts and
+    # aliases alike.
+    for role in (
+        "frontdoor",
+        "worker_general",
+        "worker_explore",
+        "worker_math",
+        "toolrunner",
+        "worker_summarize",
+        "worker_vision",
+        "vision_escalation",
+    ):
+        expected = master_kv(role)
+        assert expected is not None, f"master no longer declares kv_quant for {role}"
+        assert LAUNCH_KV_QUANT_CONFIGS[role] == expected
+
+    # No alias may contradict the process it rides — the property this test has
+    # always been for.
     for alias in ("worker_explore", "worker_math", "toolrunner"):
         assert LAUNCH_KV_QUANT_CONFIGS[alias] == LAUNCH_KV_QUANT_CONFIGS["worker_general"]
     assert LAUNCH_KV_QUANT_CONFIGS["worker_summarize"] == LAUNCH_KV_QUANT_CONFIGS["frontdoor"]
-    # worker_vision stays ABSENT: it declares no kv_quant, so no -ctk/-ctv is
-    # emitted and llama-server's f16 default stands. A q8_0 VL quality check is
-    # running separately; do not pre-empt it by adding a row.
-    assert "worker_vision" not in LAUNCH_KV_QUANT_CONFIGS
+    assert LAUNCH_KV_QUANT_CONFIGS["vision_escalation"] == LAUNCH_KV_QUANT_CONFIGS["worker_vision"]
+
+    # The "no declaration -> no row -> no -ctk/-ctv, llama-server's f16 default
+    # stands" branch, pinned on roles master genuinely says nothing about.
+    for undeclared in ("worker_fast", "embedder"):
+        assert master_kv(undeclared) is None
+        assert undeclared not in LAUNCH_KV_QUANT_CONFIGS
 
 
 def test_validate_against_registry_checks_port_map_alias_drift(
@@ -400,42 +470,90 @@ def test_resolve_slots_returns_the_master_declaration_not_the_serial_policy() ->
     the old launcher formula (`1 if role in SERIAL_ROLES else 2`) answered the
     admission question with a serving number and returned 1 for both.
 
-    The declared values moved on 2026-08-02 (frontdoor 2 -> 16, architect_critic
-    2 -> 4, operator-ratified), so this compares against the DECLARATION rather
-    than a literal — the property under test is "resolve_slots returns what master
-    says", which must survive master saying something different.
+    The declared values move (frontdoor 2 -> 16 -> 4, architect_critic 2 -> 4 -> 1
+    as master divided every `-np` by 4 on 2026-08-03, operator-ratified), so this
+    compares against the DECLARATION rather than a literal — the property under
+    test is "resolve_slots returns what master says", which must survive master
+    saying something different.
+
+    2026-08-04: the old `slots > 1` line was deleted, not weakened. It was a
+    literal proxy for "the SERIAL_ROLES formula did not win", and it cannot
+    express that: after the /4 ratification architect_critic legitimately
+    declares 1, which is indistinguishable BY VALUE from the old
+    `1 if role in SERIAL_ROLES else 2` clamp. The clamp is detectable by SOURCE,
+    which is what the `declared` / `source.startswith("master:")` assertions
+    below do — the formula could never produce a `master:<role>/...` source. The
+    value is checked against a second, independent read of the registry file.
     """
     from scripts.server.stack_manifest import DECLARED_SLOTS, SERIAL_ROLES, resolve_slots
+
+    registry = yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text()
+    )["server_mode"]
 
     for role in ("frontdoor", "architect_critic"):
         assert role in SERIAL_ROLES
         decision = resolve_slots(role, "default")
         assert decision.slots == DECLARED_SLOTS[role]
-        assert decision.slots > 1, "a serial role must still not be clamped to 1 slot"
         assert decision.declared
         assert decision.source.startswith("master:")
+        master_role = decision.source.split(":", 1)[1].split("/", 1)[0]
+        assert registry[master_role]["slots"] == decision.slots
 
 
 def test_resolve_slots_is_per_instance_for_a_split_role() -> None:
-    """One role, two shapes, two answers — what a per-role `slots` cannot express."""
+    """One role, two shapes, two answers — what a per-role `slots` cannot express.
+
+    2026-08-04: the 16/4/8 literals were replaced by a second, independent read
+    of `serving_shape.slots_by_shape` out of the registry file. They went stale
+    when master divided every `-np` by 4 (16 -> 4, 8 -> 2, 4 -> 1) on 2026-08-03;
+    the MECHANISM under test — full and half resolve through DIFFERENT shape
+    classes, and `declared_slots_by_port` joins that against the topology's ports
+    — never moved, and the `.full`/`.half` source suffixes below are what pin it.
+    """
     from scripts.server.stack_manifest import declared_slots_by_port, resolve_slots
+
+    registry = yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text()
+    )["server_mode"]
+
+    def master_row(launcher_role: str) -> dict:
+        row = registry.get(launcher_role)
+        if not isinstance(row, dict):
+            row = next(
+                cfg for cfg in registry.values() if cfg.get("model_role") == launcher_role
+            )
+        return row
 
     for role, full_port, half_ports in (
         ("frontdoor", 8070, (8080, 8180)),
         ("worker_general", 8072, (8082, 8182)),
     ):
+        by_shape = master_row(role)["serving_shape"]["slots_by_shape"]
+        full_slots, half_slots = by_shape["full"], by_shape["half"]
+
         full = resolve_slots(role, numa_instance=0)
-        assert full.slots == 16
+        assert full.slots == full_slots
         assert full.source.endswith(".full")
         for idx in (1, 2):
             half = resolve_slots(role, numa_instance=idx)
-            assert half.slots == 4
+            assert half.slots == half_slots
             assert half.source.endswith(".half")
-        assert declared_slots_by_port(role) == {full_port: 16, half_ports[0]: 4, half_ports[1]: 4}
+        assert declared_slots_by_port(role) == {
+            full_port: full_slots,
+            half_ports[0]: half_slots,
+            half_ports[1]: half_slots,
+        }
 
     # A single-shape role has no split and resolves through the flat compat scalar.
     gpu = resolve_slots("architect_general", numa_instance=0)
-    assert (gpu.slots, gpu.source) == (8, "master:architect_general/direct")
+    assert "slots_by_shape" not in (
+        master_row("architect_general").get("serving_shape") or {}
+    )
+    assert (gpu.slots, gpu.source) == (
+        registry["architect_general"]["slots"],
+        "master:architect_general/direct",
+    )
 
 
 def test_resolve_slots_matches_master_for_every_declared_role() -> None:
@@ -574,9 +692,40 @@ def test_parity_guard_fails_when_a_derived_field_is_redeclared(monkeypatch) -> N
         sm.validate_declaration_parity()
 
 
+def _with_launcher_only_alias(sm, monkeypatch, alias: str, *, role: str = "worker_general"):
+    """Give `role` a SYNTHETIC `launcher_only_aliases` row for the duration of a test.
+
+    The two guards below exercise step 3 of `validate_declaration_parity()`,
+    which only runs for roles that declare `launcher_only_aliases`. The live
+    manifest declares none: the sole real one (worker_general/worker_explore) was
+    deleted on 2026-08-02 when the research master started declaring
+    `server_mode.worker.shared_with: [worker_explore, worker_math, toolrunner]`,
+    which made the launcher-side extra redundant. Both tests used to depend on
+    that production row still existing and silently went VACUOUS when it went
+    away — `pytest.raises` then failed loudly, which is how this was found. They
+    are hermetic now, exactly like the sibling
+    `test_numa_prefix_taskset_only_when_no_policy` in tests/unit/test_stack_numa.py:
+    the branch stays covered without requiring the shipped config to keep a
+    redundant entry alive purely so a unit test has something to assert.
+    """
+    manifest = {**sm._MANIFEST}
+    manifest["role_launch_meta"] = {
+        name: ({**meta, "launcher_only_aliases": [alias]} if name == role else meta)
+        for name, meta in sm._MANIFEST["role_launch_meta"].items()
+    }
+    monkeypatch.setattr(sm, "_MANIFEST", manifest)
+
+
 def test_parity_guard_fails_on_an_unargued_launcher_only_alias(monkeypatch) -> None:
+    """A launcher-only alias with no `parity.exceptions` entry must raise."""
     from scripts.server import stack_manifest as sm
 
+    # A name master declares nowhere — a genuine launcher-only shadow alias.
+    assert not any(
+        "_fixture_shadow_alias" in (cfg.get("shared_with") or [])
+        for cfg in sm.MASTER_SERVER_MODE.values()
+    )
+    _with_launcher_only_alias(sm, monkeypatch, "_fixture_shadow_alias")
     monkeypatch.setattr(sm, "_PARITY", {**sm._PARITY, "exceptions": []})
 
     with pytest.raises(ValueError, match="written reason"):
@@ -587,6 +736,21 @@ def test_parity_guard_fails_on_a_stale_exception(monkeypatch) -> None:
     """When master starts declaring the alias, the exception must be deleted."""
     from scripts.server import stack_manifest as sm
 
+    _with_launcher_only_alias(sm, monkeypatch, "worker_explore")
+    monkeypatch.setattr(
+        sm,
+        "_PARITY",
+        {
+            **sm._PARITY,
+            "exceptions": [
+                {
+                    "field": "shared_with",
+                    "launcher_role": "worker_general",
+                    "reason": "fixture: argued at the time it was written",
+                }
+            ],
+        },
+    )
     mutated = {
         name: (
             {**cfg, "shared_with": ["worker_explore", *cfg.get("shared_with", [])]}

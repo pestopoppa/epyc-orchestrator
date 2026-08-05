@@ -889,11 +889,14 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
             _current_lock_owner_pids,
             _tmp_dir,
             read_region_lock_payload,
+            read_region_occupancy,
         )
 
         tmp_dir = _tmp_dir()
+        occupancy = read_region_occupancy()
     except Exception:
         tmp_dir = Path("/mnt/raid0/llm/tmp")
+        occupancy = {"entries": [], "per_region": {}}
         from src.runtime.cpu_region_lock import _current_lock_owner_pids
 
         def read_region_lock_payload(_path: Path) -> None:  # type: ignore[no-redef]
@@ -1218,6 +1221,9 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
                 )
 
     display_rows: list[dict[str, Any]] = []
+    occupancy_entries = occupancy.get("entries") if isinstance(occupancy, dict) else []
+    if not isinstance(occupancy_entries, list):
+        occupancy_entries = []
     for role in sorted(by_role):
         bucket = by_role[role]
         insts = list(bucket.get("instances", []))
@@ -1233,12 +1239,29 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
                 continue
             idx = int(inst["idx"])
             regions = [str(r) for r in inst.get("regions", [])]
+            instance_load = [
+                entry
+                for entry in occupancy_entries
+                if str(entry.get("role") or "") == role
+                and entry.get("instance_idx") == idx
+            ]
+            active = len(instance_load)
+            capacity = max(
+                [int(entry.get("capacity") or 1) for entry in instance_load] or [1]
+            )
             if idx in active_idxs:
                 cells.append(
                     {
                         "state": "active",
-                        "label": "⚡",
-                        "title": f"{role}.{col['label']} ACTIVE — instance idx={idx} holding {{{','.join(regions)}}}",
+                        "label": f"⚡ {active}/{capacity}" if active else "⚡",
+                        "active": active,
+                        "capacity": capacity,
+                        "load": min(1.0, active / capacity) if active else 1.0,
+                        "title": (
+                            f"{role}.{col['label']} ACTIVE — {active or 'unknown'} of "
+                            f"{capacity} certified slot(s); instance idx={idx} holding "
+                            f"{{{','.join(regions)}}}"
+                        ),
                     }
                 )
                 continue
@@ -1334,15 +1357,19 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     for role in sorted(set(role_ports) | set(instance_topology_all)):
         if role in by_role:
             continue
-        if _hidden_from_region_panel(role):
-            continue
         insts = list(instance_topology_all.get(role) or [])
         ports = sorted(role_ports.get(role, []))
+        # Populated for EVERY non-lock role, hidden or not: the exclusion above
+        # is a DISPLAY filter, and the `continue` used to sit here, which silently
+        # dropped the embedder pool and the eval-batch lane out of the API payload
+        # too — the opposite of what that comment promises.
         non_lock_roles[role] = {
             "ports": ports,
             "instances": insts,
             "lock_state": _NO_LOCK_STATE,
         }
+        if _hidden_from_region_panel(role):
+            continue
         ports_note = f" · ports {','.join(str(p) for p in ports)}" if ports else ""
         inst_by_shape = {str(i.get("shape")): i for i in insts}
         cells = []
@@ -1417,6 +1444,7 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
             ),
             "held_region_count": sum(1 for r in global_lock_regions if r["held"]),
         },
+        "occupancy": occupancy,
         # Display-only completeness rows: active/configured serving roles with
         # NO cpu_region lock domain (full-span roles, aliases, embedders).
         # NOTE: these roles (GPU-resident: architect_general, worker_vision,

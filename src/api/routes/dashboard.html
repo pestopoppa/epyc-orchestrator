@@ -961,6 +961,8 @@ body.insight-fullscreen-open { overflow: hidden; }
         .rl-inactive { background: rgba(148,163,184,0.12); color: var(--muted, #94a3b8); }
         .rl-na      { background: rgba(100,100,100,0.10); color: var(--dim, #6b7280); font-style: italic; }
         .rl-nolock  { background: rgba(100,116,139,0.12); color: var(--muted, #94a3b8); font-style: italic; font-size: 10px; }
+        .rl-gpu-ready { background: rgba(168,85,247,0.16); color: #c084fc; font-size: 10px; }
+        .rl-gpu-active { background: rgba(251,191,36,0.30); color: #fbbf24; animation: regionLockActivePulse 1.4s ease-in-out infinite; }
         /* Uniform per-panel freshness badge (dashboard_freshness contract). */
         .freshness-badge { display:inline-block; margin-left:8px; padding:1px 6px; border-radius:8px;
           font-size:10px; font-weight:600; font-family:var(--font-mono,ui-monospace,monospace);
@@ -1095,6 +1097,7 @@ body.insight-fullscreen-open { overflow: hidden; }
 
     <div class="panel">
       <h2>topology <span class="count-suffix" id="inflight-count"></span><span class="numa-mode-badge" id="topology-numa-badge"></span></h2>
+      <div id="topology-flow" style="margin:4px 0 8px;padding:6px 8px;border:1px solid var(--border);border-radius:4px;background:rgba(56,189,248,0.04);font-size:10px;line-height:1.55"></div>
       <div class="topology-strip" id="topology-strip"></div>
       <div id="inflight-explainer" style="color:var(--dim);font-size:10px;margin-top:10px;line-height:1.5;display:none">
         Each role row's ▸ expands to show its live activity. Three signals in priority order:
@@ -1107,7 +1110,7 @@ body.insight-fullscreen-open { overflow: hidden; }
     </div>
 
     <div class="panel">
-      <h2>completed <span class="count-suffix" id="completed-count"></span></h2>
+      <h2>recent outcomes <span class="count-suffix" id="completed-count"></span></h2>
       <div id="completed-tasks"></div>
     </div>
 
@@ -1785,7 +1788,35 @@ function updateTopology(activity, inflight, snapshotSeq = null) {
     // (B: merged in-flight panel into topology.)
     if (inflight !== undefined) {
         updateTopologyInflight(inflight, snapshotSeq);
+        updateTopologyFlow(inflight, snapshotSeq);
     }
+}
+
+// A task-centric complement to the server-centric strip below. The strip says
+// what the fleet is; this small map answers where each currently brokered task
+// is travelling: logical route -> serving topology role -> port. Direct traffic
+// cannot carry a chat task id, so it remains visible through the slot dots and
+// is explicitly labelled rather than being invented as a route.
+function updateTopologyFlow(inflight, snapshotSeq = null) {
+    const el = document.getElementById('topology-flow');
+    if (!el) return;
+    const tasks = snapshotSeq == null ? [] : (inflight || []);
+    const nodes = (topology && topology.nodes) || [];
+    if (!tasks.length) {
+        el.innerHTML = '<span style="color:var(--dim)">live task flow: no orchestrator-tracked chat task. Slot dots still include direct/eval traffic.</span>';
+        return;
+    }
+    const routes = tasks.slice(0, 6).map(task => {
+        const logical = String(task.chosen_action || task.role || '?');
+        const physical = String(task.topology_role || logical);
+        const node = nodes.find(n => String(n.role || n.label || '') === physical)
+            || nodes.find(n => clientBaseRole(String(n.role || n.label || '')) === clientBaseRole(physical));
+        const target = node ? `${physical} :${node.port}` : physical;
+        const state = String(task.live_state || 'active');
+        return `<div><span style="color:var(--accent)">${escapeHTML(task.task_id || 'chat')}</span> <span style="color:var(--dim)">→</span> ${escapeHTML(logical)} <span style="color:var(--dim)">→</span> <span style="color:var(--good)">${escapeHTML(target)}</span> <span style="color:var(--dim)">(${escapeHTML(state)})</span></div>`;
+    });
+    const overflow = tasks.length > 6 ? `<div style="color:var(--dim)">+${tasks.length - 6} more tracked task(s)</div>` : '';
+    el.innerHTML = `<div style="color:var(--muted);margin-bottom:2px">live task flow · logical route → serving instance</div>${routes.join('')}${overflow}`;
 }
 
 let _latestSnapshot = null;
@@ -2077,10 +2108,14 @@ function renderTaskCard(t, kind) {
         const age = Number(t.age_s || 0);
         outcome = `<span style="float:right;color:${stateColor};font-size:10px">${stateLabel} ${age.toFixed(0)}s</span>`;
     }
+    const review = (kind === 'completed' && t.plan_review_decision)
+        ? `<div class="meta" style="color:${t.plan_review_decision === 'drop' ? 'var(--bad)' : 'var(--warn)'}">architect review: ${escapeHTML(t.plan_review_decision)}${t.plan_review_feedback ? ` — ${escapeHTML(t.plan_review_feedback)}` : ''}</div>`
+        : '';
     return `
         <div class="task-card" onclick="openDetail('${t.task_id}', null, null)">
             <div class="role" style="color:${color}">${role}${outcome}</div>
             <div class="meta">${t.task_id}${conf}${src}${verifier}${physical}${liveHint}</div>
+            ${review}
             <div class="prompt">${escapeHTML(t.objective || '')}</div>
         </div>
     `;
@@ -2113,11 +2148,12 @@ function updateTasks(snap) {
     }
     const cpEl = document.getElementById('completed-tasks');
     const cpCount = document.getElementById('completed-count');
-    if (cpCount) cpCount.textContent = `${completed.length} in last 10m`;
+    const failed = completed.filter(t => t.outcome === 'task_failed').length;
+    if (cpCount) cpCount.textContent = `${completed.length} terminal · ${failed} failed · last 10m`;
     if (cpEl) {
         cpEl.innerHTML = completed.length
             ? completed.slice(0, 12).map(t => renderTaskCard(t, 'completed')).join('')
-            : '<div style="color:var(--muted);font-size:11px">no completed tasks in last 10 min</div>';
+            : '<div style="color:var(--muted);font-size:11px">no terminal task outcomes in last 10 min</div>';
     }
     // Feed in-flight tasks into the topology strip — each role row's
     // active-badge + nested .role-active-tasks container is populated by
@@ -2823,12 +2859,13 @@ function gpuDeviceRegionRows() {
         if (n.kind !== 'gpu-llama-server' && n.kind !== 'external-llama-server') continue;
         const act = activity[String(n.port)] || activity[n.port] || {};
         const nActive = act.n_active || 0;
+        const nSlots = act.n_slots || n.slots || Math.max(1, nActive);
         const isGpu = n.kind === 'gpu-llama-server';
         const deviceLabel = isGpu ? 'GPU device' : `extern :${n.port}`;
         const color = isGpu ? '#f97316' : 'var(--muted)';
         rows.push(`<div style="overflow:hidden;color:${color};font-size:11px;line-height:1.3" title="${escapeHTML(deviceLabel)}${n.model ? ' · ' + escapeHTML(n.model) : ''}">${escapeHTML(n.role)}</div>`);
         if (nActive) {
-            rows.push(`<div class="rl-cell rl-active" style="grid-column:2/-1;text-align:left;padding:0 8px" title="${escapeHTML(n.role)} — device occupancy from /slots, not a CPU region lock">⚡ ${nActive} slot(s) decoding · ${escapeHTML(deviceLabel)} · off-pipeline${n.model ? ` · ${escapeHTML(n.model)}` : ''}</div>`);
+            rows.push(`<div class="rl-cell rl-active" style="grid-column:2/-1;text-align:left;padding:0 8px" title="${escapeHTML(n.role)} — device occupancy from /slots, not a CPU region lock">⚡ ${nActive}/${nSlots} slots decoding · ${escapeHTML(deviceLabel)} · off-pipeline${n.model ? ` · ${escapeHTML(n.model)}` : ''}</div>`);
         } else {
             rows.push(`<div class="rl-cell rl-ready" style="grid-column:2/-1;text-align:left;padding:0 8px" title="${escapeHTML(n.role)} — device occupancy from /slots, not a CPU region lock">✅ idle · ${escapeHTML(deviceLabel)}${n.model ? ` · ${escapeHTML(n.model)}` : ''}</div>`);
         }
@@ -2840,6 +2877,7 @@ function renderRegionLocksDisplayMatrix(grid, d) {
     const matrix = d && d.display_matrix ? d.display_matrix : null;
     const columns = matrix && Array.isArray(matrix.columns) ? matrix.columns : [];
     const rowsIn = matrix && Array.isArray(matrix.rows) ? matrix.rows : [];
+    const activity = ((_latestSnapshot || {}).activity || {});
     if (!grid || !columns.length || !rowsIn.length) return false;
     grid.dataset.regionLocksPainted = '1';
     grid.style.gridTemplateColumns = `160px repeat(${columns.length},1fr)`;
@@ -2858,12 +2896,20 @@ function renderRegionLocksDisplayMatrix(grid, d) {
     );
     for (const row of rowsIn) {
         if (row.no_lock_domain && deviceRoles.has(String(row.role || '').split('.')[0])) continue;
-        const labelColor = row.no_lock_domain ? 'var(--muted)' : 'var(--fg)';
+        const gpuResident = (row.cells || []).some(cell => String(cell.label || '').includes('GPU'));
+        const labelColor = gpuResident ? '#c084fc' : (row.no_lock_domain ? 'var(--muted)' : 'var(--fg)');
         rows.push(`<div style="overflow:hidden;text-overflow:ellipsis;color:${labelColor};font-size:11px;line-height:1.3" title="${escapeHTML((row.label || row.role || '') + (row.no_lock_domain ? ' — ' + (row.lock_state || 'n/a (no lock domain)') : ''))}">${escapeHTML(row.label || row.role || '')}</div>`);
         for (const cell of (row.cells || [])) {
             const state = String(cell.state || 'na');
-            const cls = stateClass[state] || 'rl-na';
-            rows.push(`<div class="rl-cell ${cls}" title="${escapeHTML(cell.title || '')}">${escapeHTML(cell.label || '—')}</div>`);
+            const isGpuCell = gpuResident && state === 'nolock';
+            const gpuBusy = isGpuCell && (activity[String((row.ports || [])[0])] || {}).n_active > 0;
+            const cls = isGpuCell ? (gpuBusy ? 'rl-gpu-active' : 'rl-gpu-ready') : (stateClass[state] || 'rl-na');
+            const load = Math.max(0, Math.min(1, Number(cell.load || 0)));
+            const loadColor = load >= 0.75 ? 'rgba(248,113,113,.50)' : (load >= 0.5 ? 'rgba(251,191,36,.45)' : 'rgba(34,197,94,.38)');
+            const loadStyle = state === 'active' && load > 0
+                ? `background:linear-gradient(90deg,${loadColor} ${Math.round(load * 100)}%,rgba(0,0,0,.08) ${Math.round(load * 100)}%)`
+                : '';
+            rows.push(`<div class="rl-cell ${cls}" style="${loadStyle}" title="${escapeHTML(cell.title || '')}">${escapeHTML(cell.label || '—')}</div>`);
         }
     }
     const gpuRows = gpuDeviceRegionRows();

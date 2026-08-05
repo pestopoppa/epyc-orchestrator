@@ -112,9 +112,19 @@ orchestration/.autopilot.lock
 orchestration/archived_backups/
 orchestration/autopilot_checkpoints/
 orchestration/autopilot_journal.*
+# The journal ROTATES to `autopilot_journal_<n>.jsonl`, which the pattern above does not
+# match (it requires a literal dot after "journal"). Shard 1 reached 17 MB tracked before
+# anyone noticed. Runtime data belongs on disk, not in the repo.
+orchestration/autopilot_journal_*
 orchestration/autopilot_plots/
 orchestration/autopilot_short_term_memory.md
 orchestration/autopilot_state.json*
+orchestration/autopilot_state.pre-*.json
+# Eval-instrument identity ledger (2026-08-04): per-core_id content hash + tier mix, written
+# on every eval. Runtime state, same class as autopilot_state.json.
+orchestration/eval_instrument_ledger.json
+# Kuzu graph stores + their write-ahead logs.
+orchestration/repl_memory/kuzu_db/
 
 # One-off local observation helpers from contention/autopilot experiments.
 scripts/server/_step1_obs_sampler.sh

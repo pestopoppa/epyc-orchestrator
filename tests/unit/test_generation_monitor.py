@@ -529,18 +529,34 @@ class TestIntegrationWithEscalationPolicy:
         assert decision.target_role is not None
 
     def test_early_abort_at_architect_fails(self):
-        """Test early abort at architect tier fails gracefully."""
+        """Test early abort at the TERMINAL architect rung fails gracefully.
+
+        The terminal rung is derived from ``_ESCALATION_MAP`` rather than named:
+        the 2026-08-01 W1 cutover moved the 122B off architect_general onto
+        architect_critic, so architect_general gained a real escalation target
+        while the FAIL-at-the-top mechanism this test covers was unchanged.
+        """
         from src.escalation import (
             ErrorCategory,
             EscalationContext,
             EscalationPolicy,
             EscalationAction,
         )
-        from src.roles import Role
+        from src.roles import Role, _ESCALATION_MAP
+
+        terminal = Role.ARCHITECT_GENERAL
+        seen = {terminal}
+        while True:
+            nxt = _ESCALATION_MAP.get(terminal)
+            if nxt is None or nxt in seen:
+                break
+            seen.add(nxt)
+            terminal = nxt
+        assert terminal.escalates_to() is None
 
         policy = EscalationPolicy()
         context = EscalationContext(
-            current_role=Role.ARCHITECT_GENERAL,
+            current_role=terminal,
             failure_count=0,
             error_category=ErrorCategory.EARLY_ABORT,
             error_message="High entropy detected",
@@ -548,8 +564,18 @@ class TestIntegrationWithEscalationPolicy:
 
         decision = policy.decide(context)
 
-        # No escalation from architect (terminal role)
+        # No escalation from the terminal rung.
         assert decision.action == EscalationAction.FAIL
+
+        # Complementary case: the same early abort one rung down DOES escalate,
+        # so the FAIL assertion above is not trivially satisfiable.
+        non_terminal = EscalationContext(
+            current_role=Role.CODER_ESCALATION,
+            failure_count=0,
+            error_category=ErrorCategory.EARLY_ABORT,
+            error_message="High entropy detected",
+        )
+        assert policy.decide(non_terminal).action == EscalationAction.ESCALATE
 
 
 class TestIntegrationWithLLMPrimitives:

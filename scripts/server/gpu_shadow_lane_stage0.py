@@ -239,7 +239,13 @@ def recert_roles(host_cpuset: str = LANE_HOST_CPUSET) -> list[RecertRole]:
     a reviewer can see which entries a string-overlap check would have found
     (``smt_sibling_overlap``: the instance literally lists 168-191) and which it
     would have MISSED (``physical_core_overlap``: the instance lists physical
-    cores only, e.g. architect_general's "0-95").
+    cores only, e.g. architect_critic's "0-95").
+
+    The example used to be architect_general's "0-95"; the 2026-08-01 W1 cutover
+    moved that role ONTO the lane (184-191), so it is now a literal
+    ``smt_sibling_overlap`` entry. The full-machine instances the fold catches
+    today are architect_critic:8074, frontdoor:8070, ingest_long_context:8085
+    and worker_general:8072.
     """
     lane_cores = fold_smt_to_physical(host_cpuset)
     found: list[RecertRole] = []

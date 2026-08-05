@@ -236,8 +236,27 @@ class TestConstants:
         assert _ARCHITECT_DECISION_BUDGET["architect_general"] == 512
 
     def test_budgets_have_expected_keys(self):
-        assert set(_ARCHITECT_TOKEN_BUDGET.keys()) == {"architect_general"}
-        assert set(_ARCHITECT_DECISION_BUDGET.keys()) == {"architect_general"}
+        """Both budget maps are keyed by the LIVE architect roles.
+
+        These maps stopped being literals in 80ed046e — module ``__getattr__``
+        builds them from ``_architect_budget_roles()``, which reads the generated
+        stack-prior artifact ("Preserve legacy budget-map imports without freezing
+        live role tables"). Freezing the key set here re-froze exactly what the
+        source was refactored to stop freezing, and broke when the W1 cutover
+        added architect_critic as a live architect role. Derive from the same
+        function the source reads.
+        """
+        expected = set(_architect_budget_roles())
+        assert expected, "architect budget-role derivation must not be empty"
+        assert all(role.startswith("architect_") for role in expected)
+
+        assert set(_ARCHITECT_TOKEN_BUDGET.keys()) == expected
+        assert set(_ARCHITECT_DECISION_BUDGET.keys()) == expected
+
+        # Every derived key carries the architect-sized budget, not the
+        # non-architect default — including any newly live architect role.
+        assert set(_ARCHITECT_TOKEN_BUDGET.values()) == {768}
+        assert set(_ARCHITECT_DECISION_BUDGET.values()) == {512}
 
     def test_architect_budgets_derive_from_live_stack_priors(self, tmp_path):
         priors = tmp_path / "stack_priors.yaml"

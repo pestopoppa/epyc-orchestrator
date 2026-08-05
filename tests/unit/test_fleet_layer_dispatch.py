@@ -24,9 +24,50 @@ import yaml
 import src.fleet as fleet_mod
 from src.llm_primitives.backend import BackendMixin
 
-WG_QUARTERS = [8082, 8182, 8282, 8382]
-FD_QUARTERS = [8080, 8180, 8280, 8380]
-ING_ALL = [8085, 8185, 8285, 8385, 8485]
+# The synthetic fleets below are dispatched against the REAL region-lock model
+# (`_real_regions_model` -> `get_instance_regions()`), so their port sets must
+# describe the same machine. When they did not — the literals here pinned the
+# retired 4-quarter lineup — the extra ports resolved to NO topology index,
+# picked up EMPTY region sets, and therefore could never conflict: dispatch
+# handed out one quarter twice and the test read that as a double-booking
+# defect. Derive both from NUMA_CONFIG so fixture and lock model agree.
+
+
+def _topology_ports(role: str) -> tuple[int, list[int]]:
+    """(aligned-full port, sibling instance ports) for ``role``."""
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    cfg = NUMA_CONFIG[role]
+    instances = cfg["instances"]
+    full_idx = cfg["full_instance_idx"]
+    return instances[full_idx][1], [
+        inst[1] for idx, inst in enumerate(instances) if idx != full_idx
+    ]
+
+
+def _topology_idxs(role: str, ports: list[int]) -> list[int]:
+    from src.runtime.instance_topology import topology_idx_for_port
+
+    return [topology_idx_for_port(role, port) for port in ports]
+
+
+def _regions_for(role: str, idxs: list[int]) -> set[str]:
+    from src.runtime.instance_topology import get_instance_regions
+
+    regions = get_instance_regions()
+    out: set[str] = set()
+    for idx in idxs:
+        out |= set(regions[(role, idx)])
+    return out
+
+
+WG_FULL, WG_QUARTERS = _topology_ports("worker_general")
+FD_FULL, FD_QUARTERS = _topology_ports("frontdoor")
+_ING_FULL, _ING_QUARTERS = _topology_ports("ingest_long_context")
+ING_ALL = [_ING_FULL, *_ING_QUARTERS]
+
+WG_Q_IDXS = _topology_idxs("worker_general", WG_QUARTERS)
+FD_Q_IDXS = _topology_idxs("frontdoor", FD_QUARTERS)
 
 SERVER_MODE = {
     "frontdoor": {
@@ -95,8 +136,8 @@ def _url_str(ports: list[int], full_port: int | None = None) -> str:
 
 
 def _default_urls() -> dict[str, str]:
-    wg = _url_str(WG_QUARTERS, full_port=8072)
-    fd = _url_str(FD_QUARTERS, full_port=8070)
+    wg = _url_str(WG_QUARTERS, full_port=WG_FULL)
+    fd = _url_str(FD_QUARTERS, full_port=FD_FULL)
     return {
         "worker_general": wg,
         # Stale 2-endpoint copy — the EV-11c serialization incident class.
@@ -199,7 +240,7 @@ def test_case2_shared_roles_share_one_backend_object(monkeypatch, tmp_path):
     assert wg._topology_role == "worker_general"
     # Realized quarters-only: no full backend, quarters at TRUE topology idxs.
     assert wg._full is None
-    assert wg._quarter_topology_idx == [1, 2, 3, 4]
+    assert wg._quarter_topology_idx == WG_Q_IDXS
 
     fd = host._backends["frontdoor"]
     assert host._backends["coder_escalation"] is fd
@@ -232,24 +273,29 @@ def test_case2_worker_math_four_wide_four_disjoint_quarters_real_locks(
     model = _real_regions_model()
     _wire(monkeypatch, model)
 
+    width = len(WG_QUARTERS)
+    assert width >= 2, "fixture can no longer express concurrent disjoint placement"
+
     chosen: list[tuple[int, bool]] = []
     with contextlib.ExitStack() as stack:
-        for i in range(4):
+        for i in range(width):
             _backend, idx, is_full = stack.enter_context(
                 cab._dispatch(session_id=f"wm{i}")
             )
             chosen.append((idx, is_full))
 
-        # 4 disjoint busy quarters; the full (all-region) shape never placed.
+        # N disjoint busy quarters; the full (all-region) shape never placed.
         assert all(not is_full for _idx, is_full in chosen)
         idxs = [idx for idx, _ in chosen]
-        assert sorted(idxs) == [0, 1, 2, 3]
+        # No double-booking: N concurrent requests occupy N DISTINCT slots.
+        assert sorted(idxs) == list(range(width))
         # Real lock identity: every acquisition under the fleet's ONE
-        # topology role, at 4 distinct quarter topology idxs.
+        # topology role, at the quarters' true topology idxs.
         assert {role for role, _ in model.acquired} == {"worker_general"}
-        assert sorted(idx for _, idx in model.acquired) == [1, 2, 3, 4]
-        # All four atomic regions busy — physically disjoint placements.
-        assert set(model.owner) == {"q0", "q1", "q2", "q3"}
+        assert sorted(idx for _, idx in model.acquired) == sorted(WG_Q_IDXS)
+        # Every atomic region those instances cover is busy — physically
+        # disjoint placements, no region held twice.
+        assert set(model.owner) == _regions_for("worker_general", WG_Q_IDXS)
     assert model.owner == {}
 
 
@@ -260,15 +306,18 @@ def test_case2_mirror_frontdoor_four_wide_quarters_half_idle(monkeypatch, tmp_pa
     model = _real_regions_model()
     _wire(monkeypatch, model)
 
+    width = len(FD_QUARTERS)
+    assert width >= 2, "fixture can no longer express concurrent disjoint placement"
     with contextlib.ExitStack() as stack:
         chosen = [
             stack.enter_context(cab._dispatch(session_id=f"fd{i}"))[1:]
-            for i in range(4)
+            for i in range(width)
         ]
         assert all(not is_full for _idx, is_full in chosen)
-        assert sorted(idx for idx, _ in chosen) == [0, 1, 2, 3]
+        assert sorted(idx for idx, _ in chosen) == list(range(width))
         assert {role for role, _ in model.acquired} == {"frontdoor"}
-        # half0 idle: the all-region idx-0 lock is never acquired.
+        assert sorted(idx for _, idx in model.acquired) == sorted(FD_Q_IDXS)
+        # full idle: the all-region idx-0 lock is never acquired.
         assert 0 not in {idx for _, idx in model.acquired}
 
 
@@ -284,11 +333,11 @@ def test_case7_full_disabled_never_emits_full(monkeypatch, tmp_path):
     monkeypatch.setitem(
         _stack_numa.NUMA_CONFIG["worker_general"], "placement_policy", "full_disabled"
     )
-    state = _fleet_state(tmp_path, wg_ports=[8072] + WG_QUARTERS)
+    state = _fleet_state(tmp_path, wg_ports=[WG_FULL] + WG_QUARTERS)
     host, _urls, _st = _build_host(monkeypatch, tmp_path, state=state)
     cab = host._backends["worker_general"]
     assert cab._full is not None  # mixed-mode fleet: full realized
-    assert cab._full_port == 8072
+    assert cab._full_port == WG_FULL
 
     model = _real_regions_model()
     _wire(monkeypatch, model)
@@ -305,11 +354,11 @@ def test_case7_burst_prefer_quarters_full_first_solo_abandoned_under_load(
     """frontdoor (burst_prefer_quarters): solo keeps full first for peak
     latency; the moment a self-role holder exists the full is abandoned and
     placement goes to a disjoint quarter."""
-    state = _fleet_state(tmp_path, fd_ports=[8070] + FD_QUARTERS)
+    state = _fleet_state(tmp_path, fd_ports=[FD_FULL] + FD_QUARTERS)
     host, _urls, _st = _build_host(monkeypatch, tmp_path, state=state)
     cab = host._backends["frontdoor"]
     assert cab._full is not None
-    assert cab._full_port == 8070
+    assert cab._full_port == FD_FULL
 
     model = _real_regions_model()
     _wire(monkeypatch, model)
@@ -322,7 +371,7 @@ def test_case7_burst_prefer_quarters_full_first_solo_abandoned_under_load(
 
     # A self-role quarter holder exists (q3 busy) → burst mode: full
     # abandoned, placement lands on a quarter disjoint from the holder.
-    model.owner["q3"] = ("frontdoor", 4)
+    model.owner["q3"] = ("frontdoor", FD_Q_IDXS[-1])
     with cab._dispatch(session_id="burst") as (_b, idx, is_full):
         assert not is_full
         topo = cab._quarter_topology_idx[idx]
@@ -342,7 +391,7 @@ def test_case7_solo_prefer_full_keeps_full_at_concurrency_one(monkeypatch, tmp_p
     host, _urls, _st = _build_host(monkeypatch, tmp_path, state=state, urls=urls)
     cab = host._backends["ingest_long_context"]
     assert cab._full is not None
-    assert cab._full_port == 8085
+    assert cab._full_port == _ING_FULL
 
     model = _real_regions_model()
     _wire(monkeypatch, model)

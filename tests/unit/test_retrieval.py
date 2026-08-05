@@ -535,6 +535,12 @@ def test_cross_encoder_real_model_discriminates() -> None:
 
     if not cross_encoder.is_available():
         pytest.skip("cross-encoder ONNX model not on disk")
+    # is_available() checks FILES ONLY (documented: "does not load"). The load
+    # path additionally needs the runtime, which pyproject keeps behind the
+    # optional `colbert-export` extra — so the skip condition must cover it too,
+    # otherwise this test reports a missing optional dep as a source defect.
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("tokenizers")
     assert cross_encoder.ensure_loaded()
     logits = cross_encoder.score_pairs(
         "How do I reset my password?",

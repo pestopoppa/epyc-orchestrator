@@ -417,6 +417,73 @@ def test_topology_fingerprint_for_matrix_excludes_unmeasured_auxiliary_role() ->
     )
 
 
+def test_topology_fingerprint_scoped_to_the_stamp_but_still_catches_real_drift() -> None:
+    """The comparable subset is the PAIRWISE-stamped set, and only that.
+
+    `topology_hash` is emitted by `contention_matrix.py::cmd_run` over the roles of
+    the pairwise run it is writing. A carried-forward N-way / same-role fragment
+    may legitimately name a role that has since been folded onto another server's
+    process, and that must not make a freshly re-benched `pairs` block read as
+    uncertified. Everything the guard is FOR must still fire, so all three
+    genuine-drift cases are pinned here too.
+    """
+    measured = {
+        "frontdoor": {"instances": [("0-1", 8070, 2)]},
+        "worker_general": {"instances": [("2-3", 8072, 2)]},
+    }
+    stamp = contention.topology_fingerprint(measured)
+
+    def _matrix(**kwargs):
+        return contention.ContentionMatrix(
+            version=1,
+            measured_at="",
+            host="",
+            topology_hash=stamp,
+            default_floor=0.85,
+            pairs={
+                ("frontdoor", "worker_general"): contention.Pair(
+                    roles=("frontdoor", "worker_general"), ratio=1.0, verdict="allow"
+                )
+            },
+            **kwargs,
+        )
+
+    retired_fragment = _matrix(
+        same_role={"retired_role": contention.SameRole(role="retired_role", verdict="allow")},
+        n_way={
+            ("frontdoor", "retired_role", "worker_general"): contention.Nway(
+                roles=("frontdoor", "retired_role", "worker_general"),
+                ratio=1.5,
+                verdict="allow",
+            )
+        },
+    )
+    # The broad view still reports the fragment's role; only the STAMPED view drops it.
+    assert "retired_role" in contention.matrix_measured_roles(retired_fragment)
+    assert "retired_role" not in contention.matrix_stamped_roles(retired_fragment)
+    assert contention.topology_fingerprint_for_matrix(measured, retired_fragment) == stamp
+
+    # 1. A stamped role whose topology CHANGED is still caught.
+    moved = {**measured, "worker_general": {"instances": [("2-3", 8072, 4)]}}
+    assert contention.topology_fingerprint_for_matrix(moved, retired_fragment) != stamp
+
+    # 2. A stamped role that VANISHED still forces the conservative full-topology
+    #    fallback rather than silently fingerprinting a smaller set.
+    without_stamped = {"frontdoor": measured["frontdoor"]}
+    assert contention.topology_fingerprint_for_matrix(
+        without_stamped, retired_fragment
+    ) == contention.topology_fingerprint(without_stamped)
+    assert contention.topology_fingerprint_for_matrix(without_stamped, retired_fragment) != stamp
+
+    # 3. A role named only by `unknown_pairs` is part of the pairwise run, so it
+    #    stays inside the stamped set.
+    with_unknown = _matrix(unknown_pairs=[("frontdoor", "ingest_long_context")])
+    assert "ingest_long_context" in contention.matrix_stamped_roles(with_unknown)
+    assert contention.topology_fingerprint_for_matrix(measured, with_unknown) == (
+        contention.topology_fingerprint(measured)
+    )
+
+
 def test_real_matrix_against_live_numa_config() -> None:
     """The committed matrix must be certified against the live measured topology."""
     sys.path.insert(0, str(ROOT / "scripts" / "server"))
@@ -492,3 +559,109 @@ def test_nway_policy_order_independent():
     a = contention.nway_policy(["vision_escalation", "frontdoor", "ingest_long_context"], "background", matrix=m)
     b = contention.nway_policy(["ingest_long_context", "vision_escalation", "frontdoor"], "background", matrix=m)
     assert a == b == contention.PairDecision.QUEUE
+
+
+# ── Generator: a pairwise re-bench must NOT truncate runtime policy ───
+#
+# Regression pin for the defect behind the two `real_matrix` failures above:
+# `scripts/server/contention_matrix.py::_emit_yaml` rendered ONLY `pairs` and
+# `cmd_bench` wrote it with a whole-file `write_text`, so every pairwise
+# re-bench silently deleted the hand-authored `nway_*` / `same_role` / `n_way`
+# policy this module's admission gate reads (cd42def3, again at a517793c).
+# The gate then degraded to conservative QUEUE with no error anywhere.
+
+
+def _load_matrix_generator():
+    sys.path.insert(0, str(ROOT / "scripts" / "server"))
+    return importlib.import_module("contention_matrix")
+
+
+def test_emitter_carries_hand_authored_policy_across_a_rebench(tmp_path: Path) -> None:
+    """A fresh pairwise emit must preserve every non-`pairs` policy section."""
+    gen = _load_matrix_generator()
+
+    existing = tmp_path / "contention_matrix.yaml"
+    existing.write_text(
+        """version: 1
+measured_at: "2026-01-01T00:00:00Z"
+host: "test"
+topology_hash: "OLD"
+default_floor: 0.85
+
+pairs:
+  - roles: ['frontdoor', 'worker_general']
+    ratio: 1.10
+    verdict: "allow"
+
+# provenance comment that must travel with its section
+nway_light_roles: ["frontdoor", "worker_general"]
+nway_heavy_roles: ["ingest_long_context"]
+same_role:
+  - role: "vision_escalation"
+    verdict: "allow"
+n_way:
+  - roles: ["frontdoor", "ingest_long_context", "worker_general"]
+    ratio: 1.535
+    verdict: "allow"
+"""
+    )
+
+    preserved = gen._carry_forward_sections(existing)
+    assert [key for key, _ in preserved] == [
+        "nway_light_roles",
+        "nway_heavy_roles",
+        "same_role",
+        "n_way",
+    ]
+
+    rewritten = gen._emit_yaml(
+        [],
+        topology_hash="NEW",
+        host="test",
+        preserve_sections=preserved,
+    )
+
+    # The regenerated header/pairs are fresh...
+    assert 'topology_hash: "NEW"' in rewritten
+    assert '"OLD"' not in rewritten
+    # ...and every hand-authored section survived, comments included.
+    assert 'nway_light_roles: ["frontdoor", "worker_general"]' in rewritten
+    assert 'nway_heavy_roles: ["ingest_long_context"]' in rewritten
+    assert 'role: "vision_escalation"' in rewritten
+    assert "ratio: 1.535" in rewritten
+    assert "# provenance comment that must travel with its section" in rewritten
+
+    # And the rewritten document still parses into a usable policy.
+    out = tmp_path / "rewritten.yaml"
+    out.write_text(rewritten)
+    m = contention.load_contention_matrix(out)
+    assert m.light_roles == frozenset({"frontdoor", "worker_general"})
+    assert m.heavy_roles == frozenset({"ingest_long_context"})
+    assert m.get_same_role("vision_escalation").verdict == "allow"
+    assert ("frontdoor", "ingest_long_context", "worker_general") in m.n_way
+
+
+def test_emitter_freshly_measured_same_role_supersedes_the_preserved_block(
+    tmp_path: Path,
+) -> None:
+    """A `bench-within-role` result must WIN over the carried-forward block."""
+    gen = _load_matrix_generator()
+
+    existing = tmp_path / "contention_matrix.yaml"
+    existing.write_text(
+        'version: 1\ndefault_floor: 0.85\n\n'
+        'same_role:\n  - role: "worker_general"\n    verdict: "block"\n'
+        'nway_light_roles: ["frontdoor"]\n'
+    )
+    preserved = gen._carry_forward_sections(existing)
+
+    rewritten = gen._emit_yaml(
+        [],
+        same_role_verdicts={"worker_general": "allow"},
+        preserve_sections=preserved,
+    )
+    assert rewritten.count("same_role:") == 1
+    assert 'verdict: "allow"' in rewritten
+    assert 'verdict: "block"' not in rewritten
+    # Unrelated policy is still carried through.
+    assert 'nway_light_roles: ["frontdoor"]' in rewritten

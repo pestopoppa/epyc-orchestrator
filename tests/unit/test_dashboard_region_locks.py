@@ -372,10 +372,24 @@ class TestRegionLocksSnapshot:
         worker_display = next(
             row for row in payload["display_matrix"]["rows"] if row["role"] == "worker_general"
         )
+        # The grid renders one column per DEPLOYABLE SHAPE (bc1da61f: quarters
+        # were retired as a deployable shape on 2026-07-30, so a column per
+        # quarter implied four deployable instances per role). Derive the cell
+        # expectation from the payload's own declared columns instead of a fixed
+        # 7-element literal, and pin the shape contract itself.
+        columns = [col["key"] for col in payload["display_matrix"]["columns"]]
+        assert columns == ["full", "half0", "half1"]
         states = [cell["state"] for cell in worker_display["cells"]]
         labels = [cell["label"] for cell in worker_display["cells"]]
-        assert states == ["active", "na", "na", "blocked", "blocked", "blocked", "blocked"]
-        assert labels == ["⚡", "—", "—", "×", "×", "×", "×"]
+        # Full is ACTIVE (it holds all four regions); this synthetic topology
+        # declares q0..q3 and no half shapes, so every other column is "na".
+        assert states == ["active"] + ["na"] * (len(columns) - 1)
+        assert labels == ["⚡"] + ["—"] * (len(columns) - 1)
+        # The quarter granularity the columns no longer show is NOT lost: it is
+        # still carried per-instance and per-region for anything that needs the
+        # atomic view (the guarantee the source comment makes).
+        assert [inst["shape"] for inst in worker["instances"][1:]] == ["q0", "q1", "q2", "q3"]
+        assert {str(r["region"]) for r in worker["regions"]} == {"q0", "q1", "q2", "q3"}
 
     @pytest.mark.asyncio
     async def test_region_lock_grid_renders_unselected_free_quarters_as_ready(
@@ -415,24 +429,33 @@ class TestRegionLocksSnapshot:
         worker_display = next(
             row for row in payload["display_matrix"]["rows"] if row["role"] == "worker_general"
         )
+        columns = [col["key"] for col in payload["display_matrix"]["columns"]]
+        assert columns == ["full", "half0", "half1"]
+        # A configured, unheld shape reads "ready" — never "blocked", never
+        # hidden. Shapes with no matching instance in this synthetic topology
+        # read "na".
         assert [cell["state"] for cell in worker_display["cells"]] == [
-            "ready",
-            "na",
-            "na",
-            "ready",
-            "ready",
-            "ready",
-            "ready",
-        ]
-        assert [cell["label"] for cell in worker_display["cells"]] == [
-            "✅",
-            "—",
-            "—",
-            "✅",
-            "✅",
-            "✅",
-            "✅",
-        ]
+            "ready"
+        ] + ["na"] * (len(columns) - 1)
+        assert [cell["label"] for cell in worker_display["cells"]] == ["✅"] + [
+            "—"
+        ] * (len(columns) - 1)
+
+        # "configured quarters stay visible" — the property this test is named
+        # for — is now enforced at the layer that still models quarters: the
+        # unselected quarter instances are present with launch_selected False.
+        worker = payload["by_role"]["worker_general"]
+        unselected = [i for i in worker["instances"] if not i["launch_selected"]]
+        assert [i["shape"] for i in unselected] == ["q0", "q1", "q2", "q3"]
+        # The rendered FREE cell is the launch-SELECTED full in this mode, so it
+        # carries the region list and no "not selected" annotation. (The
+        # annotation path itself is covered by
+        # test_region_lock_grid_shapes_follow_quarter_mode, where the full is the
+        # unselected shape.)
+        full_title = worker_display["cells"][0]["title"]
+        assert worker["instances"][0]["launch_selected"] is True
+        assert "FREE" in full_title and "q0,q1,q2,q3" in full_title
+        assert "not selected by stack_numa_mode" not in full_title
 
     @pytest.mark.asyncio
     async def test_region_lock_grid_shapes_follow_quarter_mode(self, tmp_path, monkeypatch) -> None:
@@ -784,6 +807,27 @@ class TestNonLockRoleCompleteness:
     render display-only rows with lock state "n/a (no lock domain)"."""
 
     @staticmethod
+    def _manifest_speech_roles() -> dict[str, int]:
+        """Speech rows the panel folds in, DERIVED from the two sources it reads.
+
+        bc1da61f folds whisper/tts in from the launch manifest because they are
+        not llama-server processes, so ps(1) port discovery never sees them and
+        they were invisible in the panel since going live on the MI210 on
+        2026-08-02. Reading `_SPEECH_ROLES` and `AUX_SERVICES` here keeps the
+        expectation honest if another speech service is declared later.
+        """
+        from scripts.server.stack_manifest import AUX_SERVICES
+
+        import src.api.routes.dashboard as dash_mod
+
+        return {
+            str(getattr(svc, "name", "")): int(svc.port)
+            for svc in AUX_SERVICES.values()
+            if str(getattr(svc, "name", "")) in dash_mod._SPEECH_ROLES
+            and isinstance(getattr(svc, "port", None), int)
+        }
+
+    @staticmethod
     def _base_env(tmp_path, monkeypatch) -> None:
         monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
         monkeypatch.setattr(
@@ -828,13 +872,24 @@ class TestNonLockRoleCompleteness:
 
         payload = json.loads((await region_locks_snapshot()).body)
 
+        speech = self._manifest_speech_roles()
+        assert speech, "no speech service declared in AUX_SERVICES"
+
         # Lock-domain role keeps its normal lock row.
         assert "worker_general" in payload["by_role"]
-        # Every other active/configured serving role appears as a non-lock row.
+        # Every other active/configured serving role appears as a non-lock row —
+        # including the manifest-sourced speech services, which ps(1) discovery
+        # can never see.
         nlr = payload["non_lock_roles"]
-        assert set(nlr) == {"architect_general", "embedder", "coder_escalation"}
+        assert set(nlr) == {
+            "architect_general",
+            "embedder",
+            "coder_escalation",
+        } | set(speech)
         for info in nlr.values():
             assert info["lock_state"] == "n/a (no lock domain)"
+        for name, port in speech.items():
+            assert nlr[name]["ports"] == [port]
         # Configured full instance rides along with its shape/regions.
         assert [i["shape"] for i in nlr["architect_general"]["instances"]] == ["full"]
         assert nlr["architect_general"]["instances"][0]["regions"] == ["q0", "q1", "q2", "q3"]
@@ -846,13 +901,12 @@ class TestNonLockRoleCompleteness:
         assert "worker_general.q0" not in nlr and "worker_general" not in nlr
 
         rows = {r["role"]: r for r in payload["display_matrix"]["rows"]}
-        assert rows["embedder"]["no_lock_domain"] is True
-        assert rows["embedder"]["lock_state"] == "n/a (no lock domain)"
-        # Shapeless role: informative n/a cell in the Full column, "—" elsewhere.
-        emb_cells = rows["embedder"]["cells"]
-        assert emb_cells[0]["state"] == "nolock"
-        assert "no lock domain" in emb_cells[0]["title"]
-        assert {c["state"] for c in emb_cells[1:]} == {"na"}
+        # The embedder pool / eval-batch lane are hidden from DISPLAY only
+        # (bc1da61f: 7 all-dash rows buried the roles that matter). The payload
+        # contract is that hiding is display-only, so `embedder` must be absent
+        # from the grid rows AND present in `non_lock_roles` above — pinning both
+        # halves is what stops "legible" from silently becoming "lossy".
+        assert "embedder" not in rows
         # Shaped non-lock role: the n/a cell sits in its configured shape column.
         arch_cells = rows["architect_general"]["cells"]
         assert arch_cells[0]["state"] == "nolock"  # column 0 == "full"
@@ -865,7 +919,13 @@ class TestNonLockRoleCompleteness:
         self, tmp_path, monkeypatch
     ) -> None:
         """Broken ps discovery must not break the panel: lock rows render,
-        and configured-but-unmatched roles still appear (with no ports)."""
+        and configured-but-unmatched roles still appear (with no ports).
+
+        The manifest-sourced speech rows survive too — they come from
+        AUX_SERVICES, a source INDEPENDENT of ps(1) discovery, so a discovery
+        outage must not make the panel LESS accurate. Their expected names are
+        derived from the same two sources the code reads.
+        """
         self._base_env(tmp_path, monkeypatch)
         import src.api.routes.dashboard as dash_mod
 
@@ -876,6 +936,13 @@ class TestNonLockRoleCompleteness:
 
         payload = json.loads((await region_locks_snapshot()).body)
 
+        speech = self._manifest_speech_roles()
+        assert speech, "no speech service declared in AUX_SERVICES"
+
         assert "worker_general" in payload["by_role"]
-        assert set(payload["non_lock_roles"]) == {"architect_general"}
+        assert set(payload["non_lock_roles"]) == {"architect_general"} | set(speech)
         assert payload["non_lock_roles"]["architect_general"]["ports"] == []
+        # Ports prove the speech rows came from the manifest, not from the
+        # failed discovery path.
+        for name, port in speech.items():
+            assert payload["non_lock_roles"][name]["ports"] == [port]

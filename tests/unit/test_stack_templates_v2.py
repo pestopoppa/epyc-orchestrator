@@ -143,11 +143,51 @@ class TestDefaultYamlRoundTrip:
         assert t.name == "default"
         assert "frontdoor" in t.roles
         assert t.resource_budget.max_mlock_gb == 800  # from default.yaml
-        assert t.roles["coder_escalation"].alias_to == "frontdoor"
-        assert t.roles["worker_explore"].alias_to == "worker_general"
         assert _RETIRED_ARCHITECT_ROLE not in t.roles
-        assert t.roles["architect_general"].instance_count == 1
-        assert t.roles["ingest_long_context"].instance_count == 5
+
+        # Alias targets and instance counts are DERIVED from the compiled
+        # stack priors — the same artifact `validate_template` checks the
+        # template against. default.yaml's own header says these rows must be
+        # restated from the compiled artifact and not hand-maintained, so
+        # pinning them here would just be a second hand-maintained copy: it is
+        # how this test kept asserting `coder_escalation -> frontdoor` after the
+        # 2026-08-01 W1 cutover repointed that role at architect_general's
+        # :8083 process, and a 5-instance ingest fleet after the 2026-07-30
+        # quarters retirement left 1 full + 2 halves.
+        records = stack_templates.live_stack_role_records()
+
+        def _prior_ports(role_name: str) -> list[int]:
+            return sorted(stack_templates._stack_prior_record_ports(records[role_name]))
+
+        def _expected_alias_target(alias: str) -> str:
+            """The deployable template role that serves the alias's prior ports."""
+            ports = _prior_ports(alias)
+            hosts = [
+                name
+                for name, role in t.roles.items()
+                if not role.alias_to
+                and role.tier.upper() != "ALIAS"
+                and role.mode != "embedding"
+                and sorted(stack_templates._role_instance_ports(role)) == ports
+            ]
+            assert len(hosts) == 1, (
+                f"prior ports {ports} for alias {alias!r} are served by "
+                f"{hosts!r} in the template — expected exactly one host role"
+            )
+            return hosts[0]
+
+        assert t.roles["coder_escalation"].alias_to == _expected_alias_target(
+            "coder_escalation"
+        )
+        assert t.roles["worker_explore"].alias_to == _expected_alias_target(
+            "worker_explore"
+        )
+        assert t.roles["architect_general"].instance_count == len(
+            _prior_ports("architect_general")
+        )
+        assert t.roles["ingest_long_context"].instance_count == len(
+            _prior_ports("ingest_long_context")
+        )
         embedder_roles = [
             "embedder",
             "embedder_1",
@@ -191,6 +231,16 @@ class TestDefaultYamlRoundTrip:
         assert any("frontdoor" in error and "generated stack-prior ports" in error for error in result.errors)
 
     def test_default_yaml_allows_generated_alias_ports_on_alias_target(self, monkeypatch):
+        """An alias's generated ports validate when its TARGET serves them.
+
+        The synthetic alias ports are taken from the alias's own declared target
+        instead of being restated as literals. The old literals (coder_escalation
+        -> 8070, worker_math -> 8072/8082) encoded a target that has since moved:
+        the 2026-08-01 W1 cutover repointed coder_escalation from frontdoor to
+        architect_general's :8083. Pinning 8070 stopped testing "served by the
+        target" and started testing "served by frontdoor specifically", which is
+        a different — and now false — claim.
+        """
         t = load_template("default")
         live_records = {
             role_name: _live_record(stack_templates._role_instance_ports(role))
@@ -199,8 +249,31 @@ class TestDefaultYamlRoundTrip:
             and role.tier.upper() != "ALIAS"
             and role.mode != "embedding"
         }
-        live_records["coder_escalation"] = _live_record([8070])
-        live_records["worker_math"] = _live_record([8072, 8082])
+
+        # Two shapes an alias's generated record can take: the target's FULL port
+        # list, and a strict subset of it. Both must validate.
+        alias_names = [
+            name
+            for name, role in t.roles.items()
+            if role.alias_to and role.mode != "embedding"
+        ]
+        assert alias_names, "default template must declare alias roles"
+        checked_full = checked_subset = None
+        for name in sorted(alias_names):
+            target_ports = stack_templates._role_instance_ports(
+                t.roles[t.roles[name].alias_to]
+            )
+            assert target_ports, f"alias target for {name} serves no ports"
+            if len(target_ports) > 1 and checked_subset is None:
+                live_records[name] = _live_record(target_ports[:-1])
+                checked_subset = name
+            else:
+                live_records[name] = _live_record(target_ports)
+                if checked_full is None:
+                    checked_full = name
+        assert checked_full and checked_subset, (
+            "both the full-port and subset alias shapes must be exercised"
+        )
         monkeypatch.setattr(
             stack_templates,
             "live_stack_role_records",
@@ -210,6 +283,21 @@ class TestDefaultYamlRoundTrip:
         result = validate_template(t)
 
         assert result.valid, result.errors
+
+        # Negative control: a port the target does NOT serve must still be
+        # rejected, so the assertion above cannot pass by accepting anything.
+        target_ports = stack_templates._role_instance_ports(
+            t.roles[t.roles[checked_full].alias_to]
+        )
+        stray = max(target_ports) + 1000
+        assert stray not in target_ports
+        live_records[checked_full] = _live_record([*target_ports, stray])
+        rejected = validate_template(t)
+        assert not rejected.valid
+        assert any(
+            checked_full in error and "not served by target ports" in error
+            for error in rejected.errors
+        ), rejected.errors
 
     def test_non_default_template_does_not_require_stack_prior_port_parity(self, monkeypatch):
         t = StackTemplate(

@@ -3,18 +3,27 @@
 # DS-E1 profile decision on 2026-07-04.
 #
 # System: 2×AMD EPYC 9004, 192 cores (384 threads), 1130 GB RAM
-# NUMA topology: 2 nodes × 2 quarters = 4 quarters (Q0A, Q0B, Q1A, Q1B)
+# Host CPU shapes are declared in scripts/server/stack_numa.py (_CPU_SHAPES);
+# the `numa:` values below name those shapes without the NUMA_ prefix.
 #
-# Pre-warm launch roles (frontdoor, worker_general, ingest_long_context, vision_escalation):
-#   1×96t full-speed instance + 4×48t quarter instances
-#   ConcurrencyAwareBackend routes single→full, concurrent→quarters
+# 2026-07-30/31 quarter retirement + 2026-08-01 W1 cutover, restated here from
+# the compiled artifacts (see the `roles:` note below):
+#   * CPU pre-warm roles (frontdoor, worker_general, ingest_long_context) run
+#     1×96t FULL instance + 2×48t HALF instances. The four-quarter lineup
+#     (8280/8380, 8282/8382, 8385/8485, 8187..8487) was RETIRED and its ports
+#     freed — they must not be revived here.
+#   * architect_general and worker_vision are MI210 roles: the model is on the
+#     GPU and only 8 HOST threads are pinned, on GPU_HOST_LANE (184-191).
+#   * architect_critic (:8074) is the whole-machine 122B that vacated
+#     architect_general; coder_escalation now aliases architect_general, and
+#     vision_escalation aliases worker_vision (both are the SAME server process
+#     as their target, not a second instance).
 #
 # Embedding roles (embedder, embedder_1..5):
 #   6×BGE single-port embedding servers, no NUMA pinning, optional at launch
 #
 # Aliases are represented with tier=ALIAS + alias_to; they do not launch separate servers.
-# Architect roles: 1×96t full-machine canonical instance
-# Single-instance roles: 1×96t, 1×24t, or embedding-mode dedicated
+# Single-instance roles: 1×96t full-machine, 1×8t GPU host lane, or embedding-mode dedicated
 
 name: default
 description: Production steady-state static-prewarm baseline (DS-E1 retained 2026-07-04) — current manifest topology with explicit aliases
@@ -50,18 +59,19 @@ roles:
     ram_gb: 37
     full:
       port: 8070
-      numa: NODE0
+      numa: FULL
       threads: 96
       slot_save_path: /tmp/kv_frontdoor_full
     quarters:
-      - { port: 8080, numa: Q0A, threads: 48 }
-      - { port: 8180, numa: Q0B, threads: 48 }
-      - { port: 8280, numa: Q1A, threads: 48 }
-      - { port: 8380, numa: Q1B, threads: 48 }
+      - { port: 8080, numa: HALF_A, threads: 48 }
+      - { port: 8180, numa: HALF_B, threads: 48 }
 
   coder_escalation:
+    # 2026-08-01 W1: moved off frontdoor's 35B onto architect_general's :8083
+    # 27B (registry: roles.coder_escalation.alias_of + server_mode
+    # architect_general.shared_with) — one process, two names.
     tier: ALIAS
-    alias_to: frontdoor
+    alias_to: architect_general
 
   worker_summarize:
     tier: ALIAS
@@ -81,10 +91,8 @@ roles:
         draft_max: 2
         p_split: 0
     quarters:
-      - { port: 8082, numa: Q0A, threads: 48 }
-      - { port: 8182, numa: Q0B, threads: 48 }
-      - { port: 8282, numa: Q1A, threads: 48 }
-      - { port: 8382, numa: Q1B, threads: 48 }
+      - { port: 8082, numa: HALF_A, threads: 48 }
+      - { port: 8182, numa: HALF_B, threads: 48 }
 
   worker_explore:
     tier: ALIAS
@@ -107,11 +115,23 @@ roles:
     ram_gb: 27.05
     full:
       port: 8083
-      numa: FULL
-      threads: 96
+      numa: GPU_HOST_LANE
+      threads: 8
       spec_overrides:
         draft_max: 24
         p_split: 0
+
+  architect_critic:
+    # 2026-07-31/08-01: the 122B that used to sit on architect_general. Whole
+    # machine, CPU-resident. Terminal rung of the escalation ladder.
+    model: Qwen3.5-122B-A10B
+    quant: Q4_K_M
+    tier: HOT
+    ram_gb: 69
+    full:
+      port: 8074
+      numa: FULL
+      threads: 96
 
   ingest_long_context:
     model: Qwen3-Next-80B-A3B
@@ -120,13 +140,11 @@ roles:
     ram_gb: 45
     full:
       port: 8085
-      numa: NODE0
+      numa: FULL
       threads: 96
     quarters:
-      - { port: 8185, numa: Q0A, threads: 48 }
-      - { port: 8285, numa: Q0B, threads: 48 }
-      - { port: 8385, numa: Q1A, threads: 48 }
-      - { port: 8485, numa: Q1B, threads: 48 }
+      - { port: 8185, numa: HALF_A, threads: 48 }
+      - { port: 8285, numa: HALF_B, threads: 48 }
 
   worker_vision:
     # 2026-07-31: Qwen2.5-VL-7B retired on both vision roles (MMMU-250 52.4% ->
@@ -137,23 +155,14 @@ roles:
     ram_gb: 17.3
     full:
       port: 8086
-      numa: Q0B
-      threads: 24
+      numa: GPU_HOST_LANE
+      threads: 8
 
   vision_escalation:
-    model: Qwen3-VL-30B-A3B
-    quant: Q4_K_M
-    tier: HOT
-    ram_gb: 18
-    full:
-      port: 8087
-      numa: NODE1
-      threads: 96
-    quarters:
-      - { port: 8187, numa: Q0A, threads: 48 }
-      - { port: 8287, numa: Q0B, threads: 48 }
-      - { port: 8387, numa: Q1A, threads: 48 }
-      - { port: 8487, numa: Q1B, threads: 48 }
+    # 2026-08-01 W1 vision unification: the standalone :8087 instance was
+    # retired; the escalation tier rides worker_vision's :8086 MI210 process.
+    tier: ALIAS
+    alias_to: worker_vision
 
   embedder:
     model: bge-large-en-v1.5-f16

@@ -10,6 +10,7 @@ from scripts.autopilot.kv_compress import (
     production_ports_from_stack_priors,
     _layer_count_for_role,
     _stack_prior_layer_count_for_role,
+    live_stack_role_records,
 )
 import scripts.autopilot.kv_compress as kv_compress
 
@@ -79,12 +80,39 @@ class TestComputeLayerAdaptiveWeights:
             assert all(v > 0 for v in w)
 
     def test_live_shared_role_aliases_reuse_current_layer_count(self):
-        """Shared runtimes must not carry stale independent layer counts."""
-        assert _stack_prior_layer_count_for_role("coder_escalation") == MODEL_LAYER_COUNTS["frontdoor"]
-        assert _stack_prior_layer_count_for_role("worker_summarize") == MODEL_LAYER_COUNTS["frontdoor"]
-        assert _layer_count_for_role("coder_escalation") == MODEL_LAYER_COUNTS["frontdoor"]
-        assert _layer_count_for_role("worker_summarize") == MODEL_LAYER_COUNTS["frontdoor"]
-        assert MODEL_LAYER_COUNT_ALIASES["coder_escalation"] == "frontdoor"
+        """Shared runtimes must not carry stale independent layer counts.
+
+        The peer each alias points at is DERIVED from the live stack priors
+        (the role it actually shares a serving endpoint with), not restated:
+        shared runtimes get re-aliased between lineups, and a stale entry in
+        the degraded fallback table silently builds a wrong-length weight
+        vector for the alias role.
+        """
+        records = live_stack_role_records()
+
+        def _endpoint(role: str) -> str:
+            record = records.get(role) or {}
+            serving = record.get("serving") or {}
+            return str(serving.get("endpoint") or "")
+
+        assert MODEL_LAYER_COUNT_ALIASES, "no shared-runtime aliases declared"
+        for alias, declared_peer in MODEL_LAYER_COUNT_ALIASES.items():
+            endpoint = _endpoint(alias)
+            assert endpoint, f"{alias} is aliased but not live in stack priors"
+
+            # Roles with their own fallback layer count that serve the SAME
+            # llama-server instance as this alias.
+            peers = sorted(r for r in MODEL_LAYER_COUNTS if _endpoint(r) == endpoint)
+            assert peers, f"{alias} shares {endpoint} with no known-layer role"
+            assert declared_peer in peers, (
+                f"{alias} is aliased to {declared_peer!r} but serves {endpoint}, "
+                f"shared with {peers}"
+            )
+
+            # Both paths (priors and degraded fallback) must agree.
+            stack_prior_layers = _stack_prior_layer_count_for_role(alias)
+            assert stack_prior_layers == MODEL_LAYER_COUNTS[declared_peer]
+            assert _layer_count_for_role(alias) == stack_prior_layers
 
     def test_current_live_roles_expose_stack_prior_layer_counts(self):
         """Current live KV-adaptive roles should use generated stack-prior metadata."""

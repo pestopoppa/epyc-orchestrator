@@ -991,7 +991,12 @@ def role_topology_fingerprint(
 
 
 def matrix_measured_roles(matrix: ContentionMatrix | None) -> set[str]:
-    """Return NUMA roles whose topology is represented by a contention matrix."""
+    """Return every NUMA role a contention matrix says anything about.
+
+    This is the BROAD set (pairs + same_role + n_way + unknown_pairs) and is what
+    reporting surfaces want. It is deliberately NOT the set the top-level
+    ``topology_hash`` stamp covers — see ``matrix_stamped_roles``.
+    """
     if matrix is None:
         return set()
     roles: set[str] = set(matrix.same_role)
@@ -1001,6 +1006,35 @@ def matrix_measured_roles(matrix: ContentionMatrix | None) -> set[str]:
         roles.update(pair)
     for roles_key in matrix.n_way:
         roles.update(roles_key)
+    return roles
+
+
+def matrix_stamped_roles(matrix: ContentionMatrix | None) -> set[str]:
+    """Return the roles the matrix's top-level ``topology_hash`` was computed over.
+
+    ``scripts/server/contention_matrix.py::cmd_run`` computes that stamp as
+    ``topology_fingerprint({role: NUMA_CONFIG[role] for role in measured_roles})``
+    where ``measured_roles`` are exactly the roles of the PAIRWISE run it is
+    writing — the same run that emits ``pairs`` and ``unknown_pairs``. The other
+    sections come from the separate ``bench-nway`` / ``bench-within-role``
+    subcommands, are hand-merged as fragments, and carry their own provenance
+    (``same_role_certifications`` entries even hold a per-entry ``topology_hash``).
+    They never (re)stamp the top-level hash.
+
+    Comparing the stamp against a role set WIDER than the one it was computed
+    over cannot succeed: it is a hash of a different input. That mismatch is what
+    made a matrix carrying a correctly re-benched ``pairs`` block read as
+    uncertified merely because a preserved N-way fragment still names a role that
+    has since been folded onto another server's process (``vision_escalation`` ->
+    ``worker_vision``'s :8086 in the 2026-08-01 W1 cutover).
+    """
+    if matrix is None:
+        return set()
+    roles: set[str] = set()
+    for pair in matrix.pairs:
+        roles.update(pair)
+    for pair in matrix.unknown_pairs:
+        roles.update(pair)
     return roles
 
 
@@ -1015,8 +1049,14 @@ def topology_fingerprint_for_matrix(
     subset, compare only that subset. If the matrix is unavailable or references
     missing roles, fall back to the full topology so stale detection remains
     conservative.
+
+    The subset is the STAMPED set (``matrix_stamped_roles``), because that is the
+    input the committed ``topology_hash`` was computed from. Staleness detection
+    is not weakened: if any pairwise-measured role has vanished from the live
+    NUMA_CONFIG the fallback below still fires, and a topology CHANGE to any
+    stamped role still changes the fingerprint.
     """
-    roles = matrix_measured_roles(matrix)
+    roles = matrix_stamped_roles(matrix)
     if roles and roles.issubset(numa_config):
         return topology_fingerprint({role: numa_config[role] for role in sorted(roles)})
     return topology_fingerprint(numa_config)

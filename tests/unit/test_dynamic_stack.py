@@ -266,22 +266,64 @@ class TestStackTemplates:
         assert template.total_ram_gb > 0
 
     def test_frontdoor_has_full_and_quarters(self):
+        """frontdoor declares an aligned full plus EVERY sibling instance.
+
+        The counts and ports are derived from ``scripts.server.stack_numa.NUMA_CONFIG``
+        — the host-facts table default.yaml restates — rather than pinned. The
+        sibling count has moved twice (4×48t quarters -> 2×48t halves on the
+        2026-07-30/31 retirement), and a pinned ``== 4`` asserted a lineup whose
+        ports had already been freed.
+        """
+        from scripts.server.stack_numa import NUMA_CONFIG
         from src.config.stack_templates import load_template
+
+        cfg = NUMA_CONFIG["frontdoor"]
+        full_idx = cfg["full_instance_idx"]
+        expected_full_port = cfg["instances"][full_idx][1]
+        expected_sibling_ports = [
+            inst[1] for idx, inst in enumerate(cfg["instances"]) if idx != full_idx
+        ]
+        assert expected_sibling_ports, "frontdoor must declare sibling instances"
+
         template = load_template("default")
         fd = template.roles["frontdoor"]
         assert fd.full is not None
-        assert fd.full.port == 8070
-        assert len(fd.quarters) == 4
-        assert fd.quarters[0].port == 8080
+        assert fd.full.port == expected_full_port
+        assert [q.port for q in fd.quarters] == expected_sibling_ports
+        # Thread counts must match the shape too, or the template describes a
+        # fleet the launcher cannot produce.
+        assert fd.full.threads == cfg["instances"][full_idx][2]
+        assert [q.threads for q in fd.quarters] == [
+            inst[2] for idx, inst in enumerate(cfg["instances"]) if idx != full_idx
+        ]
 
     def test_architect_has_single_full_instance(self):
+        """architect_general is one instance whose shape matches NUMA_CONFIG.
+
+        ``numa: FULL`` was correct while the role served the whole-machine 122B;
+        the 2026-07-31/08-01 cutover moved that model to architect_critic and
+        re-placed architect_general on the MI210 with only 8 pinned host threads.
+        Derive the shape from the same host-facts table instead of restating it.
+        """
+        from scripts.server.stack_numa import _CPU_SHAPES, NUMA_CONFIG
         from src.config.stack_templates import load_template
+
+        instances = NUMA_CONFIG["architect_general"]["instances"]
+        assert len(instances) == 1
+        cpuset, expected_port, expected_threads = instances[0]
+
         template = load_template("default")
         arch = template.roles["architect_general"]
         assert arch.full is not None
-        assert arch.full.port == 8083
-        assert arch.full.numa == "FULL"
+        assert arch.full.port == expected_port
+        assert arch.full.threads == expected_threads
         assert len(arch.replicas) == 0
+        assert not arch.quarters
+        # The declared shape name must resolve to the cpuset actually pinned.
+        shape = arch.full.numa
+        shape_key = shape if shape in _CPU_SHAPES else f"NUMA_{shape}"
+        assert shape_key in _CPU_SHAPES, f"unknown CPU shape {shape!r}"
+        assert _CPU_SHAPES[shape_key] == (cpuset, expected_threads)
 
     def test_embedder_fleet_has_single_embedding_instances(self):
         from src.config.stack_templates import load_template

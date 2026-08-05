@@ -8,7 +8,7 @@ Phase 3A (compaction state), and feature flag validation.
 from unittest.mock import patch
 
 from src.features import Features
-from src.roles import Role, FailoverReason, get_fallback_roles
+from src.roles import Role, FailoverReason, get_fallback_roles, _FALLBACK_MAP
 from src.tool_registry import (
     SideEffect,
     Tool,
@@ -21,6 +21,16 @@ from src.api.health_tracker import BackendHealthTracker
 from src.graph.state import TaskState
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
+
+def _registry_model_path(role: Role) -> str | None:
+    """GGUF path the compiled registry declares for ``role`` (source of truth)."""
+    from src.registry_loader import RegistryLoader
+
+    try:
+        return RegistryLoader().get_role(role.value).model.path
+    except Exception:
+        return None
 
 
 # ============================================================================
@@ -210,8 +220,45 @@ class TestFallbackMap:
     """Tests for get_fallback_roles()."""
 
     def test_architect_general_fallbacks(self):
+        """The architect's infrastructure fallback must leave the failing backend.
+
+        This asserted ``[CODER_ESCALATION]`` until the 2026-08-01 W1 cutover made
+        coder_escalation an alias on architect_general's own :8083 process
+        (registry: ``roles.coder_escalation.alias_of`` +
+        ``server_mode.architect_general.shared_with``) — the fallback then retried
+        the exact backend whose circuit had just opened. The property is asserted
+        against the registry instead of re-pasting a role name.
+        """
         roles = get_fallback_roles(Role.ARCHITECT_GENERAL)
-        assert roles == [Role.CODER_ESCALATION]
+        assert roles == list(_FALLBACK_MAP[Role.ARCHITECT_GENERAL])
+        assert roles, "architect_general must declare a real fallback"
+        for target in roles:
+            assert _registry_model_path(target) != _registry_model_path(
+                Role.ARCHITECT_GENERAL
+            ), f"architect_general -> {target.value} serves the same GGUF"
+
+    def test_every_fallback_edge_leaves_the_failing_model(self):
+        """No declared fallback edge may point at the same physical model.
+
+        Table-wide guard for the whole regression class rather than one literal:
+        a same-model fallback retries the identical backend behind the identical
+        (already-open) circuit — the ``forced_role_fallback`` churn WP-12 exists
+        to remove.
+        """
+        checked = 0
+        for role, targets in _FALLBACK_MAP.items():
+            source_model = _registry_model_path(role)
+            if source_model is None:
+                continue
+            for target in targets:
+                target_model = _registry_model_path(target)
+                assert target_model is not None, f"{target.value} is not registry-declared"
+                assert target_model != source_model, (
+                    f"{role.value} -> {target.value} falls back onto the same GGUF "
+                    f"({source_model})"
+                )
+                checked += 1
+        assert checked >= 4, "fallback table lost its edges — guard is vacuous"
 
     def test_coder_escalation_fallbacks(self):
         roles = get_fallback_roles(Role.CODER_ESCALATION)
@@ -234,8 +281,15 @@ class TestFallbackMap:
         assert Role.FRONTDOOR in roles
 
     def test_retired_architect_role_string_uses_live_architect_fallbacks(self):
+        """A retired architect role string resolves to the LIVE architect's fallbacks.
+
+        Asserted as the equivalence the test name claims, instead of re-encoding
+        the fallback topology in a second place (which is what went stale when
+        architect_general's fallback moved to architect_critic on 2026-08-01).
+        """
         roles = get_fallback_roles(_RETIRED_ARCHITECT_ROLE)
-        assert roles == [Role.CODER_ESCALATION]
+        assert roles == get_fallback_roles(Role.ARCHITECT_GENERAL)
+        assert roles, "the live architect must have a fallback for this to have teeth"
 
     def test_unknown_role(self):
         roles = get_fallback_roles("unknown_role")

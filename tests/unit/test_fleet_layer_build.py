@@ -33,6 +33,67 @@ REAL_REGISTRY = REPO_ROOT / "orchestration" / "model_registry.yaml"
 REAL_PRIORS = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 
 
+# ── Expectations derived from the REAL artifacts, never restated ─────────────
+#
+# The "case 1" tests exist to check the builder against the production sources,
+# so their expectations must come from those same sources. Restating them
+# hardcoded the machine of the day: the port tuples pinned the 2026-07-23
+# big+quarters lineup and went stale at the 2026-07-30 quarters retirement,
+# and the frontdoor membership set pinned the pre-W1 alias roster and went
+# stale when coder_escalation moved to architect_general's :8083 process.
+
+
+def _real_server_mode() -> dict:
+    return yaml.safe_load(REAL_REGISTRY.read_text(encoding="utf-8"))["server_mode"]
+
+
+def _expected_bound_roles(server_mode: dict, fleet_id: str) -> set[str]:
+    """Roles the REGISTRY declares on ``fleet_id``'s process.
+
+    Both alias forms count: `shared_with` members of the fleet's own row, and
+    any row that declares `alias_of` this fleet (the form the W1 cutover used).
+    """
+    from src.fleet import _canonical_role
+
+    bound = {fleet_id}
+    for name, row in server_mode.items():
+        if not isinstance(row, dict):
+            continue
+        target = row.get("alias_of")
+        if target:
+            if _canonical_role(str(target)) == fleet_id:
+                bound.add(_canonical_role(str(name)))
+            continue
+        if _canonical_role(str(name)) != fleet_id:
+            continue
+        for shared in row.get("shared_with") or []:
+            bound.add(_canonical_role(str(shared)))
+    return bound
+
+
+def _config_alias_names() -> set[str]:
+    """Config-layer role labels that have no registry row of their own."""
+    from src.config import models as config_models
+
+    return set(config_models._CANONICAL_SERVER_URL_ALIASES) | set(
+        config_models._RUNTIME_SELECTED_ROLE_ALIASES
+    )
+
+
+def _real_priors_ports(role: str) -> list[int]:
+    data = yaml.safe_load(REAL_PRIORS.read_text(encoding="utf-8"))
+    return sorted(data["roles"][role]["serving"]["ports"])
+
+
+def _real_topology_ports(role: str) -> tuple[int, list[int]]:
+    """(aligned-full port, all instance ports) for ``role`` from NUMA_CONFIG."""
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    cfg = NUMA_CONFIG[role]
+    instances = cfg["instances"]
+    return instances[cfg["full_instance_idx"]][1], [inst[1] for inst in instances]
+
+
 # ── Synthetic topology (house pattern: worker_general-shaped fleet) ──────────
 
 SYN_NUMA = {
@@ -133,7 +194,9 @@ def test_fleet_layer_flag_default_off(monkeypatch):
 
 
 def test_case1_real_registry_collapses_shared_roles_to_one_fleet():
-    server_mode = yaml.safe_load(REAL_REGISTRY.read_text(encoding="utf-8"))["server_mode"]
+    from src.fleet import _canonical_role
+
+    server_mode = _real_server_mode()
     fleets, bindings = build_fleets_and_bindings(
         registry_server_mode=server_mode,
         priors_path=REAL_PRIORS,
@@ -142,31 +205,43 @@ def test_case1_real_registry_collapses_shared_roles_to_one_fleet():
     assert "worker_general" in fleets
     assert "frontdoor" in fleets
 
-    worker_fleet = fleets["worker_general"]
-    assert set(worker_fleet.bound_roles) == {"worker_general", "worker_math", "toolrunner"}
+    # Membership is exactly what the registry declares, for EVERY fleet.
+    for fleet_id, fleet in fleets.items():
+        assert set(fleet.bound_roles) == _expected_bound_roles(server_mode, fleet_id), (
+            fleet_id
+        )
 
-    frontdoor_fleet = fleets["frontdoor"]
-    assert set(frontdoor_fleet.bound_roles) == {
-        "frontdoor",
-        "coder_escalation",
-        "worker_summarize",
-    }
-
-    # Every bound role — including the coder/worker canonical aliases — resolves
+    # Every declared member — plus the config-layer aliases that have no
+    # registry row of their own (worker, coder, worker_explore, ...) — resolves
     # to the IDENTICAL endpoint tuple + topology_role (the §3 invariant).
-    for role in ("worker_general", "worker_math", "toolrunner", "worker", "worker_explore"):
-        binding = resolve_binding(role, bindings)
-        assert binding is not None, role
-        assert binding.fleet_id == "worker_general"
-        assert fleets[binding.fleet_id].endpoints == worker_fleet.endpoints
-        assert fleets[binding.fleet_id].topology_role == "worker_general"
+    alias_names = _config_alias_names()
+    for fleet_id, fleet in fleets.items():
+        members = set(fleet.bound_roles)
+        members |= {a for a in alias_names if _canonical_role(a) in members}
+        for role in sorted(members):
+            binding = resolve_binding(role, bindings)
+            assert binding is not None, role
+            assert binding.fleet_id == fleet_id, role
+            assert fleets[binding.fleet_id].endpoints == fleet.endpoints
+            assert fleets[binding.fleet_id].topology_role == fleet_id
 
-    for role in ("frontdoor", "coder", "coder_escalation", "worker_summarize"):
-        binding = resolve_binding(role, bindings)
-        assert binding is not None, role
-        assert binding.fleet_id == "frontdoor"
-        assert fleets[binding.fleet_id].endpoints == frontdoor_fleet.endpoints
-        assert fleets[binding.fleet_id].topology_role == "frontdoor"
+    # Non-vacuity: the collapse must actually collapse several roles onto one
+    # fleet, or the loop above would pass over singletons.
+    assert {"worker_general", "worker_math", "toolrunner"} <= set(
+        fleets["worker_general"].bound_roles
+    )
+    assert "worker_summarize" in fleets["frontdoor"].bound_roles
+    assert resolve_binding("worker_explore", bindings).fleet_id == "worker_general"
+
+    # W1 cutover: coder_escalation is declared `alias_of: architect_general`, so
+    # it rides THAT process — it is neither a fleet of its own (the phantom the
+    # builder used to create, which then tripped the double-binding guard) nor a
+    # frontdoor member any more.
+    assert "coder_escalation" not in fleets
+    assert "coder_escalation" not in fleets["frontdoor"].bound_roles
+    ce = resolve_binding("coder_escalation", bindings)
+    assert ce is not None and ce.fleet_id == "architect_general"
+    assert resolve_binding("coder", bindings).fleet_id == "architect_general"
 
     # worker_fast is a DISTINCT physical server, never a worker alias.
     wf = resolve_binding("worker_fast", bindings)
@@ -174,21 +249,32 @@ def test_case1_real_registry_collapses_shared_roles_to_one_fleet():
 
 
 def test_case1_real_worker_fleet_realizes_full_plus_quarters():
-    """The checked-in priors describe the RESTORED big+quarters lineup
-    (2026-07-23 operator-directed restoration): the worker fleet realizes the
-    true full 8072 plus the 4 quarter ports in mixed mode. (The pre-restoration
-    quarters-only shape stays covered by the synthetic case-3 fixtures.)"""
-    server_mode = yaml.safe_load(REAL_REGISTRY.read_text(encoding="utf-8"))["server_mode"]
+    """The worker fleet realizes exactly what the CHECKED-IN priors declare:
+    the aligned idx-0 full plus every sibling instance, in mixed mode. Ports are
+    read from the priors artifact under test (cross-checked against NUMA_CONFIG)
+    rather than restated — the literal that stood here pinned the 2026-07-23
+    big+quarters lineup and survived the 2026-07-30 retirement of two of those
+    ports. (The quarters-only shape stays covered by the synthetic case-3
+    fixtures.)"""
+    server_mode = _real_server_mode()
     fleets, _ = build_fleets_and_bindings(
         registry_server_mode=server_mode,
         priors_path=REAL_PRIORS,
     )
     worker_fleet = fleets["worker_general"]
-    assert sorted(worker_fleet.ports) == [8072, 8082, 8182, 8282, 8382]
+    expected_ports = _real_priors_ports("worker_general")
+    full_port, topology_ports = _real_topology_ports("worker_general")
+
+    assert sorted(worker_fleet.ports) == expected_ports
+    # The priors and the topology must describe the same machine.
+    assert expected_ports == sorted(topology_ports)
     assert worker_fleet.full_endpoint is not None
-    assert worker_fleet.full_endpoint.port == 8072
+    assert worker_fleet.full_endpoint.port == full_port
     assert worker_fleet.mode == "mixed"
     assert not worker_fleet.degraded
+    # Mixed mode means full + at least one sibling; a 1-endpoint fleet would
+    # make the mode assertion meaningless.
+    assert len(expected_ports) >= 2
 
 
 # ── Case 3 — no phantom-full ─────────────────────────────────────────────────
@@ -337,11 +423,17 @@ def test_degraded_bootstrap_uses_per_fleet_literal(tmp_path):
         priors_path=tmp_path / "missing.yaml",
     )
     wf = fleets["worker_general"]
+    full_port, topology_ports = _real_topology_ports("worker_general")
     assert wf.degraded
-    assert sorted(wf.ports) == [8072, 8082, 8182, 8282, 8382]
-    # The literal resolves through the same port→topology alignment: 8072 IS
-    # the true idx-0 full for worker_general in the real NUMA_CONFIG.
-    assert wf.full_endpoint is not None and wf.full_endpoint.port == 8072
+    # `_derive_degraded_fallback_ports` reads NUMA_CONFIG (2026-07-30: "fleet.py
+    # derives degraded-fallback ports instead of hardcoding retired ones"), so
+    # the expectation is derived from that upstream topology artifact — not from
+    # the derivation function itself, which would be tautological. A regression
+    # that decoupled the fallback from the topology still fails here.
+    assert sorted(wf.ports) == sorted(topology_ports)
+    # The literal resolves through the same port→topology alignment: the idx-0
+    # port IS the true full for worker_general in the real NUMA_CONFIG.
+    assert wf.full_endpoint is not None and wf.full_endpoint.port == full_port
     # Shared roles reference the fleet — no per-role literals resurface.
     assert resolve_binding("worker_math", bindings).fleet_id == "worker_general"
     assert resolve_binding("toolrunner", bindings).fleet_id == "worker_general"

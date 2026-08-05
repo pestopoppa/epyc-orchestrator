@@ -21,6 +21,23 @@ from src.prompt_builders import (
 
 log = logging.getLogger(__name__)
 
+
+def _synthesized_plan_action(objective: str) -> str:
+    """Describe the work to be reviewed, rather than echoing the user prompt.
+
+    Chat requests normally arrive without an explicit multi-step plan. The
+    review gate therefore creates a one-step plan for the architect. Passing
+    the first 50 characters of the objective as that step's ``action`` made a
+    request such as "You are an expert code verifier..." look like a plan that
+    merely repeated the prompt. A ``drop`` verdict was then correct, but it
+    rejected our synthetic plan rather than the user's task.
+    """
+    text = objective.lower()
+    code_markers = ("code", "python", "function", "candidate solution", "assert ")
+    if any(marker in text for marker in code_markers):
+        return "Inspect the candidate code and verify expected behavior"
+    return "Analyze the request and produce a directly supported answer"
+
 if TYPE_CHECKING:
     from src.api.state import AppState
     from src.llm_primitives import LLMPrimitives
@@ -266,7 +283,7 @@ def _architect_plan_review(
             {
                 "id": f"S{i + 1}",
                 "actor": str(role),
-                "action": objective[:50],
+                "action": _synthesized_plan_action(objective),
                 "outputs": [],
             }
             for i, role in enumerate(routing_decision)

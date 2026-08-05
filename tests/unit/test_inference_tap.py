@@ -3,6 +3,7 @@
 
 import json
 import threading
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import yaml
@@ -53,12 +54,54 @@ class TestStreamPolicy:
         assert stream_mode() == "safe"
 
     def test_should_stream_role_safe_mode(self, monkeypatch):
+        """Safe mode streams every role EXCEPT the ones whose live model is heavy.
+
+        The heavy set is DERIVED from orchestration/derived/stack_priors.yaml —
+        the same artifact `_safe_non_stream_roles_from_stack_priors` reads — and
+        from the module's own default threshold, never from hard-coded role
+        names. Which role carries the big model moves with the fleet (W1 moved
+        the 122B off architect_general onto architect_critic and put a 27 GB
+        Qwen3.6 on architect_general), but the RULE — mem_gb >= threshold means
+        do not stream — is the contract and is what is pinned here.
+        """
+        import src.runtime.inference_tap as tap
+
         monkeypatch.setenv("INFERENCE_TAP_STREAM_MODE", "safe")
-        assert should_stream_role("frontdoor") is True
-        assert should_stream_role("architect_general") is False
-        assert should_stream_role("vision_escalation") is True
-        assert should_stream_role("ingest_long_context") is True
-        assert should_stream_role("worker_explore") is True
+        monkeypatch.delenv("INFERENCE_TAP_SAFE_NON_STREAM_MIN_MEM_GB", raising=False)
+
+        threshold = tap._DEFAULT_SAFE_NON_STREAM_MIN_MEM_GB
+        artifact = yaml.safe_load(Path(tap.DEFAULT_STACK_PRIORS).read_text()) or {}
+        mem_gb_by_role = {
+            role: (record.get("model") or {}).get("mem_gb")
+            for role, record in (artifact.get("roles") or {}).items()
+            if isinstance(record, dict)
+            and record.get("deployment_status") == "live_stack"
+        }
+        heavy = {
+            role
+            for role, mem_gb in mem_gb_by_role.items()
+            if isinstance(mem_gb, (int, float)) and float(mem_gb) >= threshold
+        }
+        light = {
+            role
+            for role, mem_gb in mem_gb_by_role.items()
+            if isinstance(mem_gb, (int, float)) and float(mem_gb) < threshold
+        }
+
+        # Teeth: the policy must be a real partition of the live fleet. An empty
+        # `heavy` would mean safe mode streams EVERYTHING (the fail-open the
+        # non-stream policy exists to prevent); an empty `light` would mean it
+        # streams nothing.
+        assert heavy, f"no live role at/above {threshold} GB in stack priors"
+        assert light
+
+        for role in sorted(heavy):
+            assert should_stream_role(role) is False, role
+        for role in sorted(light):
+            assert should_stream_role(role) is True, role
+
+        # A role with no live prior at all is not heavy → still streams.
+        assert "worker_fast" not in mem_gb_by_role
         assert should_stream_role("worker_fast") is True
 
     def test_safe_non_stream_roles_derive_from_stack_priors(self, tmp_path, monkeypatch):
