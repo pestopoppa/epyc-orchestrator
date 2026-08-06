@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Canonical E11 entry point for the human-owned baseline apply transaction."""
+
+from __future__ import annotations
+
+from ratify_and_apply_e9_operational_baseline import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

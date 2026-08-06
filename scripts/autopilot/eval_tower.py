@@ -54,6 +54,7 @@ import importlib.util
 import threading
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 import httpx
 import yaml
@@ -131,7 +132,7 @@ _INSTRUMENT_LEDGER_PATH = Path(
 # model-backed scoring placement can change both wall time and error exclusion.
 # Keep these human-readable and stamp them into every EvalResult/journal row.
 EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v2_prompt_load"
-EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v2_cohort_serial"
+EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v3_backend_drain"
 
 
 def question_tier_mix(questions: Sequence[dict[str, Any]]) -> dict[str, int]:
@@ -271,6 +272,36 @@ def _eval_orphan_drain_timeout_s(request_timeout_s: int) -> float:
         else:
             return max(0.0, value)
     return min(30.0, max(1.0, float(request_timeout_s) / 2.0))
+
+
+def _eval_backend_drain_timeout_s(request_timeout_s: int) -> float:
+    """Bounded wait used to prove serving backends idle at eval boundaries."""
+    raw = os.environ.get("AUTOPILOT_EVAL_BACKEND_DRAIN_TIMEOUT_S", "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            log.warning(
+                "Invalid AUTOPILOT_EVAL_BACKEND_DRAIN_TIMEOUT_S=%r; using default",
+                raw,
+            )
+    # A client timeout can happen just before a long-running backend notices its
+    # propagated deadline. Give that request one full request budget plus a small
+    # cancellation/slot-accounting grace period before declaring contamination.
+    return min(15 * 60.0, max(30.0, float(request_timeout_s) + 30.0))
+
+
+def _eval_backend_drain_stable_s() -> float:
+    raw = os.environ.get("AUTOPILOT_EVAL_BACKEND_DRAIN_STABLE_S", "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            log.warning(
+                "Invalid AUTOPILOT_EVAL_BACKEND_DRAIN_STABLE_S=%r; using default",
+                raw,
+            )
+    return 2.0
 
 
 def _eval_batch_wall_budget_s(
@@ -1488,6 +1519,168 @@ def _eval_server_mode() -> dict[str, dict[str, Any]]:
     return {str(role): dict(cfg) for role, cfg in mode.items() if isinstance(cfg, dict)}
 
 
+def _configured_eval_backend_urls(
+    mode: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[str]:
+    """Return every configured model-serving URL that eval traffic can occupy.
+
+    The primary URL alone is insufficient: CPU roles can be placed on their
+    half/quarter NUMA ports.  Conversely, runtime ``server_*`` markers also
+    contain embedding services, which are not part of the generation/judge
+    resource boundary.  The registry's primary + ``numa_ports`` declarations
+    are the narrow, authoritative set for this drain certificate.
+    """
+    mode = dict(mode) if mode is not None else _eval_server_mode()
+    urls: set[str] = set()
+    for cfg in mode.values():
+        raw_url = str(cfg.get("url") or "").strip().rstrip("/")
+        if not raw_url:
+            continue
+        parsed = urlsplit(raw_url)
+        if not parsed.scheme or not parsed.hostname:
+            continue
+        primary_port = parsed.port
+        ports: set[int] = set()
+        if primary_port is not None:
+            ports.add(primary_port)
+        for raw_port in cfg.get("numa_ports") or []:
+            try:
+                ports.add(int(raw_port))
+            except (TypeError, ValueError):
+                continue
+        for port in ports:
+            urls.add(f"{parsed.scheme}://{parsed.hostname}:{port}")
+    return sorted(urls)
+
+
+def _eval_slots_active_count(payload: Any) -> int:
+    """Parse llama.cpp ``/slots`` strictly and return active request count."""
+    if not isinstance(payload, list):
+        raise ValueError("/slots response is not a list")
+    active = 0
+    for slot in payload:
+        if not isinstance(slot, dict) or "is_processing" not in slot:
+            raise ValueError("/slots entry lacks is_processing")
+        active += int(bool(slot.get("is_processing")))
+    return active
+
+
+def _wait_for_eval_backend_drain(
+    *,
+    timeout_s: float,
+    stable_s: float | None = None,
+    poll_interval_s: float = 0.5,
+    request_timeout_s: float = 1.0,
+    urls: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Prove all currently-live eval model servers idle for a stable window.
+
+    Client futures are not backend lifecycle evidence: a transport timeout can
+    return while llama.cpp continues decoding.  This certificate is therefore
+    required before nested model scoring and before a timeout-bearing batch is
+    finalized.  Configured-but-down servers are excluded after discovery;
+    losing a server that was live during the certificate fails closed.
+    """
+    started = time.monotonic()
+    deadline = started + max(0.0, float(timeout_s))
+    stable_required = (
+        _eval_backend_drain_stable_s() if stable_s is None else max(0.0, float(stable_s))
+    )
+    candidates = list(urls) if urls is not None else _configured_eval_backend_urls()
+    live: list[str] = []
+    discovery_errors: dict[str, str] = {}
+    last_active: dict[str, int] = {}
+    peak_active = 0
+    polls = 0
+
+    for base_url in candidates:
+        try:
+            response = httpx.get(
+                f"{str(base_url).rstrip('/')}/slots",
+                timeout=max(0.05, float(request_timeout_s)),
+            )
+            response.raise_for_status()
+            active = _eval_slots_active_count(response.json())
+        except Exception as exc:  # noqa: BLE001
+            discovery_errors[str(base_url)] = type(exc).__name__
+            continue
+        live.append(str(base_url).rstrip("/"))
+        last_active[str(base_url).rstrip("/")] = active
+        peak_active = max(peak_active, active)
+
+    if not live:
+        return {
+            "success": False,
+            "reason": "no_live_eval_backends",
+            "waited_s": round(time.monotonic() - started, 3),
+            "stable_s": stable_required,
+            "ports": [],
+            "polls": polls,
+            "peak_active": peak_active,
+            "last_active": last_active,
+            "discovery_errors": discovery_errors,
+        }
+
+    idle_since: float | None = None
+    poll_errors: dict[str, str] = {}
+    while True:
+        now = time.monotonic()
+        all_idle = True
+        current_active: dict[str, int] = {}
+        for base_url in live:
+            try:
+                response = httpx.get(
+                    f"{base_url}/slots",
+                    timeout=max(0.05, float(request_timeout_s)),
+                )
+                response.raise_for_status()
+                active = _eval_slots_active_count(response.json())
+            except Exception as exc:  # noqa: BLE001
+                poll_errors[base_url] = type(exc).__name__
+                all_idle = False
+                continue
+            current_active[base_url] = active
+            peak_active = max(peak_active, active)
+            if active:
+                all_idle = False
+        polls += 1
+        last_active = current_active
+        if all_idle and len(current_active) == len(live):
+            if idle_since is None:
+                idle_since = now
+            if now - idle_since >= stable_required:
+                return {
+                    "success": True,
+                    "reason": "stable_idle",
+                    "waited_s": round(time.monotonic() - started, 3),
+                    "stable_s": stable_required,
+                    "ports": sorted(
+                        int(urlsplit(url).port or 0) for url in live
+                    ),
+                    "polls": polls,
+                    "peak_active": peak_active,
+                    "last_active": last_active,
+                    "discovery_errors": discovery_errors,
+                    "poll_errors": poll_errors,
+                }
+        else:
+            idle_since = None
+        if time.monotonic() >= deadline:
+            return {
+                "success": False,
+                "reason": "backend_drain_timeout",
+                "waited_s": round(time.monotonic() - started, 3),
+                "stable_s": stable_required,
+                "ports": sorted(int(urlsplit(url).port or 0) for url in live),
+                "polls": polls,
+                "peak_active": peak_active,
+                "last_active": last_active,
+                "discovery_errors": discovery_errors,
+                "poll_errors": poll_errors,
+            }
+        time.sleep(max(0.01, float(poll_interval_s)))
+
+
 def _eval_resource_lane(
     question: Mapping[str, Any],
     *,
@@ -2087,6 +2280,10 @@ class QuestionResult:
     # heuristic-scored questions are not indistinguishable downstream.
     rubric_source: str = ""
     host_covariates: dict[str, Any] = field(default_factory=dict)
+    # Batch-level backend lifecycle certificates. Populated only when nested
+    # model scoring or a client transport timeout makes an explicit drain
+    # necessary; aggregate telemetry deduplicates the shared reports.
+    eval_backend_drain_reports: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -3394,7 +3591,12 @@ class EvalTower:
         error = outcome.error
         expected = outcome.expected
         scoring_method = outcome.scoring_method
-        scoring_config = outcome.scoring_config
+        scoring_config = dict(outcome.scoring_config)
+        eval_batch_id = str(q.get("_eval_batch_id") or "").strip()
+        if eval_batch_id:
+            # Internal scorer lifecycle metadata. debug_scorer forwards this to
+            # /chat so judge inference is correlated with the same eval batch.
+            scoring_config["_eval_batch_id"] = eval_batch_id
 
         correct = False
         rubric_scores: dict[str, float] = {}
@@ -3643,6 +3845,7 @@ class EvalTower:
 
         if workers <= 1:
             ex = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"eval-{label}-serial")
+            serial_backend_drain_reports: list[dict[str, Any]] = []
             try:
                 wall_budget_s = _eval_batch_wall_budget_s(
                     n_questions=n,
@@ -3706,8 +3909,43 @@ class EvalTower:
                             elapsed_s=time.time() - batch_start,
                             error=str(exc),
                         )
+                    result_provenance = results[i].failure_provenance or {}
+                    if (
+                        _scoring_uses_model_judge(q)
+                        or result_provenance.get("class") == "client_transport_timeout"
+                    ):
+                        report = {
+                            "phase": f"serial_question_{i}_finalize",
+                            **_wait_for_eval_backend_drain(
+                                timeout_s=_eval_backend_drain_timeout_s(self.timeout),
+                            ),
+                        }
+                        serial_backend_drain_reports.append(report)
+                        if not report.get("success"):
+                            suffix = (
+                                "eval_backend_drain_unproven: serial eval backend "
+                                f"lifecycle not certified ({report.get('reason')})"
+                            )
+                            results[i].degraded = True
+                            results[i].error = (
+                                f"{results[i].error}; {suffix}"
+                                if results[i].error
+                                else suffix
+                            )
                     results[i].eval_concurrency = workers
                     append_question_result(i, results[i])
+                    if serial_backend_drain_reports and not serial_backend_drain_reports[-1].get(
+                        "success"
+                    ):
+                        for j in range(i + 1, n):
+                            results[j] = self._failed_question_result(
+                                questions[j],
+                                elapsed_s=time.time() - batch_start,
+                                error="eval_cancelled_after_backend_drain_failure",
+                            )
+                            results[j].eval_concurrency = workers
+                            append_question_result(j, results[j])
+                        break
                     elapsed = time.time() - batch_start
                     correct_so_far = sum(1 for r in results if r and r.correct)
                     self._emit_progress(
@@ -3751,6 +3989,9 @@ class EvalTower:
                 for r in out:
                     r.eval_concurrency = workers
                     r.eval_wall_s = batch_wall_s
+                    r.eval_backend_drain_reports = [
+                        dict(item) for item in serial_backend_drain_reports
+                    ]
                 append_complete_marker(len(out), batch_wall_s)
                 return out
             finally:
@@ -3785,6 +4026,34 @@ class EvalTower:
         gen_ended_at: dict[int, float] = {}
         lane_active: dict[str, int] = {key: 0 for key in lane_capacities}
         lane_cohort: dict[str, str] = {}
+        backend_drain_reports: list[dict[str, Any]] = []
+        pre_model_drain_attempted = False
+        generation_client_timeout_seen = False
+
+        def certify_backend_drain(phase: str) -> dict[str, Any]:
+            report = _wait_for_eval_backend_drain(
+                timeout_s=_eval_backend_drain_timeout_s(self.timeout),
+            )
+            stamped = {"phase": phase, **report}
+            backend_drain_reports.append(stamped)
+            if report.get("success"):
+                log.info(
+                    "%s backend drain %s certified across ports=%s in %.1fs",
+                    label,
+                    phase,
+                    report.get("ports") or [],
+                    float(report.get("waited_s") or 0.0),
+                )
+            else:
+                log.error(
+                    "%s backend drain %s FAILED: reason=%s active=%s ports=%s",
+                    label,
+                    phase,
+                    report.get("reason"),
+                    report.get("last_active"),
+                    report.get("ports") or [],
+                )
+            return stamped
 
         def _idx_of(fut: Future) -> int:
             idx = gen_future_to_idx.get(fut)
@@ -3826,12 +4095,32 @@ class EvalTower:
         )
 
         def admit_deferred_model_scoring() -> None:
+            nonlocal pre_model_drain_attempted
             # Nested judge inference must not contend with the generation
-            # cohort. Start the model-backed scorer tail only after every
-            # generation lane has drained, and keep it within the target
-            # serving processes' certified width.
+            # cohort. Client futures being done is insufficient: a transport
+            # timeout can leave llama.cpp decoding after the future returns.
+            # Require a live /slots idle certificate before admitting judges.
             if pending_gen or gen_future_to_idx:
                 return
+            if deferred_model_scores and not pre_model_drain_attempted:
+                pre_model_drain_attempted = True
+                report = certify_backend_drain("pre_model_scoring")
+                if not report.get("success"):
+                    while deferred_model_scores:
+                        idx, _outcome = deferred_model_scores.popleft()
+                        finalize_scored(
+                            idx,
+                            self._failed_question_result(
+                                questions[idx],
+                                elapsed_s=time.time() - batch_start,
+                                error=(
+                                    "eval_backend_drain_unproven: model-backed "
+                                    f"scoring not admitted ({report.get('reason')})"
+                                ),
+                            ),
+                            generated_at_s=gen_ended_at.pop(idx, None),
+                        )
+                    return
             while (
                 deferred_model_scores
                 and len(model_score_futures) < model_scoring_workers
@@ -4004,6 +4293,17 @@ class EvalTower:
                                 generated_at_s=gen_ended,
                             )
                             continue
+                        failure_provenance = (
+                            outcome.resp.get("failure_provenance")
+                            if isinstance(outcome.resp, dict)
+                            else None
+                        )
+                        if (
+                            isinstance(failure_provenance, dict)
+                            and failure_provenance.get("class")
+                            == "client_transport_timeout"
+                        ):
+                            generation_client_timeout_seen = True
                         # Generation done → lane is free. Deterministic/client-CPU
                         # scoring stays pipelined; model-backed scoring waits for the
                         # generation cohort to drain so nested inference cannot starve
@@ -4037,6 +4337,12 @@ class EvalTower:
             gen_ex.shutdown(wait=False, cancel_futures=True)
             score_ex.shutdown(wait=False, cancel_futures=True)
 
+        # A model-scoring tail can itself hit a client timeout, and generation
+        # transport timeouts can occur in batches without a model judge. Never
+        # finalize either case until the model fleet is proven stably idle.
+        if pre_model_drain_attempted or generation_client_timeout_seen:
+            certify_backend_drain("pre_batch_finalize")
+
         for i, q in enumerate(questions):
             if results[i] is None:
                 results[i] = self._failed_question_result(
@@ -4068,6 +4374,7 @@ class EvalTower:
         for r in out:
             r.eval_concurrency = workers
             r.eval_wall_s = batch_wall_s
+            r.eval_backend_drain_reports = [dict(item) for item in backend_drain_reports]
         append_complete_marker(len(out), batch_wall_s)
         if writer is not None:
             writer.close()
@@ -4355,6 +4662,26 @@ class EvalTower:
         orphan_contamination_count = sum(
             1 for r in results if r.error and "eval_orphan_contamination" in r.error
         )
+        backend_drain_by_key: dict[str, dict[str, Any]] = {}
+        for r in results:
+            for report in r.eval_backend_drain_reports:
+                if not isinstance(report, dict):
+                    continue
+                key = json.dumps(report, sort_keys=True, default=str)
+                backend_drain_by_key.setdefault(key, dict(report))
+        backend_drain_reports = list(backend_drain_by_key.values())
+        backend_drain_failure_count = sum(
+            1 for report in backend_drain_reports if not report.get("success")
+        )
+        client_transport_timeout_count = sum(
+            1
+            for r in results
+            if isinstance(r.failure_provenance, dict)
+            and r.failure_provenance.get("class") == "client_transport_timeout"
+        )
+        eval_contaminated = bool(
+            orphan_contamination_count or backend_drain_failure_count
+        )
 
         return EvalResult(
             tier=tier,
@@ -4382,8 +4709,11 @@ class EvalTower:
                 "partition_total_counts": partition_total_counts,
                 "partition_suite_quality": partition_suite_quality,
                 "errors": sum(1 for r in results if r.error),
-                "eval_contaminated_by_abandoned_requests": orphan_contamination_count > 0,
+                "eval_contaminated_by_abandoned_requests": eval_contaminated,
                 "eval_orphan_contamination_count": orphan_contamination_count,
+                "eval_backend_drain_reports": backend_drain_reports,
+                "eval_backend_drain_failure_count": backend_drain_failure_count,
+                "eval_client_transport_timeout_count": client_transport_timeout_count,
                 "speed_semantics": "speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components",
                 "speed_metric_mode": speed_metric_mode,
                 "objective_speed_tps": speed,

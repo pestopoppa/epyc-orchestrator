@@ -246,7 +246,7 @@ def test_llm_judge_orchestrator_shape_success(monkeypatch) -> None:
         answer="the student wrote something else entirely",
         expected="mg/2",
         scoring_method="llm_judge",
-        scoring_config={"timeout": 5},
+        scoring_config={"timeout": 5, "_eval_batch_id": "evaltower-test-100q"},
     )
     assert result is True
     assert len(calls) == 1
@@ -257,6 +257,10 @@ def test_llm_judge_orchestrator_shape_success(monkeypatch) -> None:
     assert body["force_mode"] == "direct"
     assert body["workload_class"] == "eval_batch"
     assert body["force_role"] == "worker_general"
+    assert body["batch_id"] == "evaltower-test-100q"
+    assert body["client_deadline_unix_s"] > 0
+    assert body["max_queue_wait_ms"] == 5000
+    assert calls[0]["timeout"] == 10.0
     assert "prompt" in body and "messages" not in body
 
 

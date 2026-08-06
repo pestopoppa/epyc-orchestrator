@@ -31,6 +31,7 @@ import signal
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -879,6 +880,7 @@ def _score_llm_judge(
         judge_role: Text role to pin the orchestrator judge to (force_role).
             Defaults to ``LLM_JUDGE_ROLE`` env, else ``worker_general``.
         timeout: HTTP timeout in seconds (default: 30).
+        _eval_batch_id: Internal EvalTower batch correlation identifier.
     """
     timeout = config.get("timeout", 30)
     judge_url = _resolve_llm_judge_base_url(config)
@@ -915,21 +917,31 @@ def _score_llm_judge(
             # LLM call (no REPL loop); force_role pins the judge to a text role
             # so the equivalence prompt isn't auto-routed to a vision/code
             # specialist. Mirrors seeding_orchestrator.call_orchestrator_forced.
+            client_deadline_unix_s = time.time() + float(timeout)
+            payload = {
+                "prompt": judge_prompt,
+                "real_mode": True,
+                "mock_mode": False,
+                "force_mode": "direct",
+                "force_role": _llm_judge_force_role(config),
+                "workload_class": "eval_batch",
+                "request_priority": "background",
+                "max_queue_wait_ms": min(int(float(timeout) * 1000), 90_000),
+                "max_tokens": 8,
+                "timeout_s": int(timeout),
+                "client_deadline_unix_s": client_deadline_unix_s,
+                "allow_delegation": False,
+            }
+            eval_batch_id = str(config.get("_eval_batch_id") or "").strip()
+            if eval_batch_id:
+                payload["batch_id"] = eval_batch_id
             resp = httpx.post(
                 f"{judge_url}/chat",
-                json={
-                    "prompt": judge_prompt,
-                    "real_mode": True,
-                    "mock_mode": False,
-                    "force_mode": "direct",
-                    "force_role": _llm_judge_force_role(config),
-                    "workload_class": "eval_batch",
-                    "request_priority": "background",
-                    "max_tokens": 8,
-                    "timeout_s": int(timeout),
-                    "allow_delegation": False,
-                },
-                timeout=timeout,
+                json=payload,
+                # The server receives the authoritative deadline above. A small
+                # transport grace lets it return its structured timeout instead
+                # of making the client abandon a still-running backend request.
+                timeout=float(timeout) + 5.0,
             )
             resp.raise_for_status()
             data = resp.json()

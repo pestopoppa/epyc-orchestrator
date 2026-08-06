@@ -20,6 +20,7 @@ def _result(**overrides):
         "n_questions": collector.EVAL_T1_SPEC_N,
         "eval_concurrency": 6,
         "speed_metric_mode": "aggregate_batch_tps",
+        "question_results": [],
         "details": {
             "eval_execution_instrument_id": collector.EVAL_EXECUTION_INSTRUMENT_ID,
             "eval_scoring_schedule_id": collector.EVAL_SCORING_SCHEDULE_ID,
@@ -106,3 +107,18 @@ def test_generation_probe_requires_explicit_real_inference_attestation():
         collector._validate_generation_probe_response(
             {"answer": "[MOCK] 4", "mock_mode": False, "real_mode": True}
         )
+
+
+def test_result_gate_rejects_scorer_infrastructure_errors_at_reliability_floor():
+    result = _result(
+        reliability=0.80,
+        question_results=[
+            {
+                "error": True,
+                "error_detail": "scoring_unavailable: llm_judge_transport_timeout",
+            }
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="scorer-infrastructure"):
+        collector._validate_result(result)

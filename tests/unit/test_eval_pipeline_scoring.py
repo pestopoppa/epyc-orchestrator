@@ -134,6 +134,31 @@ def test_score_generation_preserves_completed_output_when_scorer_is_unavailable(
     assert result.route_used == "frontdoor"
 
 
+def test_score_generation_propagates_eval_batch_id_to_model_scorer(monkeypatch) -> None:
+    tower = EvalTower()
+    question = {
+        "id": "q",
+        "suite": "unit",
+        "prompt": "p",
+        "expected": "gold",
+        "scoring_method": "llm_judge",
+        "scoring_config": {"timeout": 5},
+        "_eval_batch_id": "evaltower-unit-100q",
+    }
+    outcome = _mk_generate()(question, object())
+    observed: dict = {}
+
+    def capture(**kwargs):
+        observed.update(kwargs["scoring_config"])
+        return False, None
+
+    monkeypatch.setattr(eval_tower, "score_answer_or_error", capture)
+
+    tower._score_generation(question, outcome, object())
+
+    assert observed["_eval_batch_id"] == "evaltower-unit-100q"
+
+
 # ── (a) verdict / order parity: serial vs pipelined ────────────────────────────
 
 
@@ -347,6 +372,7 @@ def test_model_backed_scoring_waits_for_generation_tail(monkeypatch, tmp_path) -
     completed_generations = 0
     deterministic_started = threading.Event()
     model_score_generation_counts: list[int] = []
+    drain_phases: list[str] = []
 
     def generate(q: dict, client: object) -> "eval_tower._GenOutcome":
         nonlocal completed_generations
@@ -369,6 +395,17 @@ def test_model_backed_scoring_waits_for_generation_tail(monkeypatch, tmp_path) -
     monkeypatch.setattr(tower, "_generate_question", generate)
     monkeypatch.setattr(tower, "_score_generation", score)
     monkeypatch.setattr(eval_tower, "_model_scoring_concurrency", lambda *_args: 1)
+    monkeypatch.setattr(
+        eval_tower,
+        "_wait_for_eval_backend_drain",
+        lambda **_kwargs: {
+            "success": True,
+            "reason": "stable_idle",
+            "waited_s": 0.0,
+            "ports": [8070, 8072],
+            "peak_active": 0,
+        },
+    )
     questions = [
         {"id": "q0", "suite": "u", "prompt": "p0", "expected": "x"},
         {
@@ -384,6 +421,60 @@ def test_model_backed_scoring_waits_for_generation_tail(monkeypatch, tmp_path) -
     assert deterministic_started.is_set()
     assert model_score_generation_counts == [len(questions)]
     assert [result.question_id for result in results] == [q["id"] for q in questions]
+    drain_phases.extend(
+        report["phase"] for report in results[0].eval_backend_drain_reports
+    )
+    assert drain_phases == ["pre_model_scoring", "pre_batch_finalize"]
+
+
+def test_model_backed_scoring_fails_closed_when_backend_drain_is_unproven(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_ARTIFACT_ROOT", str(tmp_path))
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "2")
+    tower = EvalTower(timeout=2)
+    model_scored = False
+
+    def score(q: dict, outcome: "eval_tower._GenOutcome", client: object) -> QuestionResult:
+        nonlocal model_scored
+        if q.get("scoring_method") == "llm_judge":
+            model_scored = True
+        return _mk_score(0)(q, outcome, client)
+
+    monkeypatch.setattr(tower, "_generate_question", _mk_generate())
+    monkeypatch.setattr(tower, "_score_generation", score)
+    monkeypatch.setattr(
+        eval_tower,
+        "_wait_for_eval_backend_drain",
+        lambda **_kwargs: {
+            "success": False,
+            "reason": "backend_drain_timeout",
+            "waited_s": 1.0,
+            "ports": [8072],
+            "peak_active": 1,
+        },
+    )
+
+    results = tower._eval_batch(
+        [
+            {
+                "id": "judge",
+                "suite": "u",
+                "prompt": "p",
+                "expected": "x",
+                "scoring_method": "llm_judge",
+            },
+            {"id": "plain", "suite": "u", "prompt": "p", "expected": "x"},
+        ],
+        client=object(),
+        label="judge-drain-fail",
+    )
+
+    assert model_scored is False
+    assert "eval_backend_drain_unproven" in str(results[0].error)
+    aggregate = tower._aggregate(results, tier=1)
+    assert aggregate.details["eval_contaminated_by_abandoned_requests"] is True
+    assert aggregate.details["eval_backend_drain_failure_count"] == 2
 
 
 def test_rubric_scoring_is_deferred_only_when_judges_are_configured(monkeypatch) -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect a fresh E9 operational T1 baseline without mutating AutoPilot state.
+"""Collect a fresh E11 operational T1 baseline without mutating AutoPilot state.
 
 ``--preflight`` performs no inference. ``--collect`` performs one small live
 generation probe and one canonical T1 EvalTower run, then writes an immutable
@@ -43,9 +43,9 @@ STATE_PATH = REPO_ROOT / "orchestration" / "autopilot_state.json"
 AUTOPILOT_LOCK = REPO_ROOT / "orchestration" / ".autopilot.lock"
 API_URL = "http://127.0.0.1:8000"
 POLICY = "task_rate_4d_v2_resource_lanes"
-QUALITY_ERA = "E10-eval-model-judge-tail-v2-quality"
-SPEED_ERA = "E10-autopilot-model-judge-tail-v2-speed"
-SCHEMA = "epyc.e9_operational_baseline_candidate.v1"
+QUALITY_ERA = "E11-eval-model-judge-tail-v3-quality"
+SPEED_ERA = "E11-autopilot-model-judge-tail-v3-speed"
+SCHEMA = "epyc.e11_operational_baseline_candidate.v1"
 MIN_RELIABILITY = 0.80
 SOURCE_PATHS = (
     REPO_ROOT / "scripts/autopilot/eval_tower.py",
@@ -111,7 +111,7 @@ def _validate_instrument_state(state: dict[str, Any]) -> None:
         if actual != wanted
     ]
     if mismatches:
-        raise RuntimeError("E9 instrument state is not ready: " + "; ".join(mismatches))
+        raise RuntimeError("E11 instrument state is not ready: " + "; ".join(mismatches))
 
 
 def _git_identity() -> tuple[str, str, bool]:
@@ -216,12 +216,22 @@ def _validate_result(result: Any) -> None:
         errors.append("task_rate_qph is missing or non-positive")
     if details.get("eval_contaminated_by_abandoned_requests"):
         errors.append("eval is contaminated by abandoned/orphan requests")
+    scoring_unavailable = [
+        row
+        for row in (getattr(result, "question_results", None) or [])
+        if isinstance(row, dict)
+        and "scoring_unavailable:" in str(row.get("error_detail") or "")
+    ]
+    if scoring_unavailable:
+        errors.append(
+            f"{len(scoring_unavailable)} scorer-infrastructure error(s) are present"
+        )
     if errors:
-        raise RuntimeError("E9 baseline result is not admissible: " + "; ".join(errors))
+        raise RuntimeError("E11 baseline result is not admissible: " + "; ".join(errors))
 
 
 def candidate_baseline_state(result: Any) -> dict[str, Any]:
-    """Build a fresh T1-only state; never relabel old-tier E8 rows as E9."""
+    """Build a fresh T1-only state; never relabel pre-E11 measurements."""
     suites = dict(sorted((result.per_suite_quality or {}).items()))
     counts = dict(sorted((result.per_suite_counts or {}).items()))
     return {
@@ -342,7 +352,7 @@ def main() -> int:
             ),
             "ratify_command": (
                 ".venv/bin/python scripts/autopilot/operator_candidates/"
-                f"ratify_and_apply_e9_operational_baseline.py {args.output.resolve()}"
+                f"ratify_and_apply_e11_operational_baseline.py {args.output.resolve()}"
             ),
         }
         _write_immutable(args.output.resolve(), payload)

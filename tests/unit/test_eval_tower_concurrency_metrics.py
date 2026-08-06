@@ -553,6 +553,55 @@ def test_model_scoring_is_serial_per_physical_cohort(monkeypatch) -> None:
     assert eval_tower._model_scoring_concurrency(questions, scoring_workers=8) == 1
 
 
+def test_configured_eval_backend_urls_include_numa_ports_and_dedupe_aliases() -> None:
+    urls = eval_tower._configured_eval_backend_urls(
+        {
+            "frontdoor": {
+                "url": "http://localhost:8070",
+                "numa_ports": [8080, 8180],
+            },
+            "frontdoor_alias": {"url": "http://localhost:8070"},
+            "worker": {"url": "http://127.0.0.1:8072", "numa_ports": [8082]},
+        }
+    )
+
+    assert urls == [
+        "http://127.0.0.1:8072",
+        "http://127.0.0.1:8082",
+        "http://localhost:8070",
+        "http://localhost:8080",
+        "http://localhost:8180",
+    ]
+
+
+def test_backend_drain_waits_for_stable_idle_after_busy_slot(monkeypatch) -> None:
+    observations = iter([1, 1, 0, 0])
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> list[dict]:
+            return [{"is_processing": bool(next(observations))}]
+
+    monkeypatch.setattr(eval_tower.httpx, "get", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(eval_tower.time, "sleep", lambda _seconds: None)
+    clock = iter([0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 0.8])
+    monkeypatch.setattr(eval_tower.time, "monotonic", lambda: next(clock))
+
+    report = eval_tower._wait_for_eval_backend_drain(
+        timeout_s=2.0,
+        stable_s=0.2,
+        poll_interval_s=0.01,
+        urls=["http://localhost:8070"],
+    )
+
+    assert report["success"] is True
+    assert report["reason"] == "stable_idle"
+    assert report["ports"] == [8070]
+    assert report["peak_active"] == 1
+
+
 def test_eval_batch_never_overlaps_different_native_cpu_process_cohorts(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
     tower = EvalTower(timeout=2)

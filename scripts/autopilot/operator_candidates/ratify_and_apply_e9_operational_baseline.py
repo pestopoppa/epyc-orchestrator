@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Human-owned apply transaction for an E9 operational baseline candidate."""
+"""Human-owned apply transaction for an E11 operational baseline candidate."""
 
 from __future__ import annotations
 
@@ -93,6 +93,18 @@ def _validate_evidence(evidence: dict[str, Any], evidence_path: Path) -> None:
         errors.append("execution instrument stamp mismatch")
     if details.get("eval_scoring_schedule_id") != EVAL_SCORING_SCHEDULE_ID:
         errors.append("scoring schedule stamp mismatch")
+    if details.get("eval_contaminated_by_abandoned_requests"):
+        errors.append("eval is contaminated by abandoned/orphan requests")
+    scoring_unavailable = [
+        row
+        for row in (result.get("question_results") or [])
+        if isinstance(row, dict)
+        and "scoring_unavailable:" in str(row.get("error_detail") or "")
+    ]
+    if scoring_unavailable:
+        errors.append(
+            f"{len(scoring_unavailable)} scorer-infrastructure error(s) are present"
+        )
     if candidate.get("eval_quality_era") != QUALITY_ERA:
         errors.append("candidate quality era mismatch")
     if candidate.get("autopilot_speed_era") != SPEED_ERA:
@@ -174,16 +186,17 @@ def main() -> int:
         prior_hold = state.get("e8_quality_rebaseline") or {}
         state["e8_quality_rebaseline"] = {
             **prior_hold,
-            "status": "closed_operational_e9",
+            "status": "closed_operational_e11",
             "boundary": QUALITY_ERA,
             "closed_at": _utc_now(),
             "closed_by": (
-                "operator via ratify_and_apply_e9_operational_baseline.py"
+                "operator via ratify_and_apply_e11_operational_baseline.py"
             ),
             "evidence_path": str(evidence_path),
             "evidence_sha256": _sha256_bytes(evidence_raw),
             "basis": (
-                "Fresh E9 T1 operational baseline under resource_lanes_v2_prompt_load; "
+                "Fresh E11 T1 operational baseline under resource_lanes_v2_prompt_load "
+                "and model_judge_tail_v3_backend_drain; "
                 "sufficient for AutoPilot config-search gates, not an externally citable "
                 "publication-grade three-repetition baseline."
             ),
@@ -201,7 +214,7 @@ def main() -> int:
         if applied.get("baseline_state") != candidate:
             raise SystemExit("ERROR: baseline write verification failed")
         receipt = {
-            "schema_version": "epyc.e9_operational_baseline_ratification.v1",
+            "schema_version": "epyc.e11_operational_baseline_ratification.v1",
             "status": "ratified_and_applied",
             "ratified_at": _utc_now(),
             "operator_uid": os.getuid(),
