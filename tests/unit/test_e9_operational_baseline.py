@@ -87,3 +87,22 @@ def test_source_hashes_bind_files_not_repository_head(monkeypatch, tmp_path: Pat
 
     source.write_text("drifted\n", encoding="utf-8")
     assert collector._source_hashes() != before
+
+
+def test_generation_probe_requires_explicit_real_inference_attestation():
+    assert (
+        collector._validate_generation_probe_response(
+            {"answer": "4", "mock_mode": False, "real_mode": True}
+        )
+        == "4"
+    )
+
+    with pytest.raises(RuntimeError, match="did not attest real inference"):
+        collector._validate_generation_probe_response(
+            {"answer": "4", "mock_mode": True, "real_mode": False}
+        )
+
+    with pytest.raises(RuntimeError, match="mock content"):
+        collector._validate_generation_probe_response(
+            {"answer": "[MOCK] 4", "mock_mode": False, "real_mode": True}
+        )

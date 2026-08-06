@@ -154,15 +154,18 @@ def _health_status() -> dict[str, Any]:
 
 def _generation_probe() -> dict[str, Any]:
     payload = {
-        "model": "frontdoor",
-        "messages": [
-            {"role": "user", "content": "What is 2+2? Reply with only the number."}
-        ],
+        "prompt": "What is 2+2? Reply with only the number.",
+        "mock_mode": False,
+        "real_mode": True,
+        "force_role": "frontdoor",
+        "force_mode": "direct",
+        "allow_delegation": False,
         "max_tokens": 8,
-        "temperature": 0,
+        "max_turns": 1,
+        "cache_prompt": False,
     }
     request = urllib.request.Request(
-        f"{API_URL}/v1/chat/completions",
+        f"{API_URL}/chat",
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
     )
@@ -170,10 +173,22 @@ def _generation_probe() -> dict[str, Any]:
         body = json.loads(response.read())
         if response.status != 200:
             raise RuntimeError(f"generation probe returned {response.status}")
-    answer = str(body["choices"][0]["message"]["content"] or "").strip()
+    answer = _validate_generation_probe_response(body)
+    return {"http_status": 200, "answer": answer}
+
+
+def _validate_generation_probe_response(body: dict[str, Any]) -> str:
+    answer = str(body.get("answer") or "").strip()
+    if body.get("mock_mode") is not False or body.get("real_mode") is not True:
+        raise RuntimeError(
+            "generation probe did not attest real inference: "
+            f"mock_mode={body.get('mock_mode')!r}, real_mode={body.get('real_mode')!r}"
+        )
+    if answer.lstrip().startswith("[MOCK]"):
+        raise RuntimeError(f"generation probe returned mock content: {answer!r}")
     if "4" not in answer:
         raise RuntimeError(f"generation probe returned an untrustworthy answer: {answer!r}")
-    return {"http_status": 200, "answer": answer}
+    return answer
 
 
 def _validate_result(result: Any) -> None:
