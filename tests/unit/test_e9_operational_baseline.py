@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from scripts.autopilot import collect_e9_operational_baseline as collector
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _result(**overrides):
@@ -122,3 +127,24 @@ def test_result_gate_rejects_scorer_infrastructure_errors_at_reliability_floor()
 
     with pytest.raises(RuntimeError, match="scorer-infrastructure"):
         collector._validate_result(result)
+
+
+def test_e11_ratifier_help_is_a_real_cli_surface():
+    script = (
+        REPO_ROOT
+        / "scripts"
+        / "autopilot"
+        / "operator_candidates"
+        / "ratify_and_apply_e11_operational_baseline.py"
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "EVIDENCE.json" in result.stdout
+    assert "Traceback" not in result.stderr

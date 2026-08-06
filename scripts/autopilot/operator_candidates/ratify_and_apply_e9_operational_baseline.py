@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import fcntl
 import json
 import os
@@ -119,12 +120,19 @@ def _validate_evidence(evidence: dict[str, Any], evidence_path: Path) -> None:
         )
 
 
-def main() -> int:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Ratify and apply one E11 operational baseline candidate."
+    )
+    parser.add_argument("evidence", type=Path, metavar="EVIDENCE.json")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
     if os.getuid() == 0:
         raise SystemExit("ERROR: run as the normal operator account, not root")
-    if len(sys.argv) != 2:
-        raise SystemExit(f"usage: {Path(sys.argv[0]).name} EVIDENCE.json")
-    evidence_path = Path(sys.argv[1]).resolve()
+    evidence_path = args.evidence.resolve()
     evidence_raw = evidence_path.read_bytes()
     evidence = json.loads(evidence_raw)
     _validate_evidence(evidence, evidence_path)
