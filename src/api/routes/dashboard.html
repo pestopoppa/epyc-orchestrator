@@ -2944,7 +2944,7 @@ function renderRegionLocksDisplayMatrix(grid, d) {
     const launchMode = matrix && matrix.launch_mode ? ` · launch ${escapeHTML(matrix.launch_mode)}` : '';
     const rowKind = matrix && matrix.row_kind === 'instance' ? 'instance' : 'role';
     const roleCount = rowKind === 'instance' && matrix && Number.isFinite(Number(matrix.role_count)) ? ` across ${Number(matrix.role_count)} role(s)` : '';
-    footer.innerHTML = `${rowsIn.length} ${rowKind}(s) from backend display matrix${roleCount}${launchMode} · Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ configured and free</span> · <span style="color:var(--muted)">n/a — serving instance with no lock domain (display-only)</span> · <span style="color:var(--dim)">— shape not configured for this role</span>.`;
+    footer.innerHTML = `${rowsIn.length} ${rowKind}(s) from backend display matrix${roleCount}${launchMode} · Legend: <span style="color:#fbbf24">⚡ active holder (active/configured serving slots)</span> · <span style="color:#f87171">× overlaps an active CPU placement lease</span> · <span style="color:var(--good,#34d399)">✅ configured and free</span> · <span style="color:var(--muted)">n/a — serving instance with no lock domain (display-only)</span> · <span style="color:var(--dim)">— shape not configured for this role</span>.`;
     grid.appendChild(footer);
     return true;
 }
@@ -7094,8 +7094,9 @@ async function updateRegionLocks(
             _latestRegionLockActivitySignature = lockActivitySignature;
 
             // Cross-role physical-core occupancy: { quarter: [{role, shape}] }.
-            // The grid combines this with blocked_by_roles, so matrix-allowed
-            // overlaps stay ready while same-role or matrix-blocked overlaps wait.
+            // The backend display matrix treats every overlap as locked. The
+            // contention matrix still governs admission, but it must not make an
+            // occupied CPU region look physically free in this lock panel.
             const globalHeldBy = {};   // quarter -> [{role, shape}]
             for (const [role, info] of roleEntries) {
                 const instByIdx = new Map((info.instances || []).map(i => [i.idx, i]));
@@ -7178,17 +7179,28 @@ async function updateRegionLocks(
                     ? `; +${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`
                     : '';
                 const placementTelemetry = d.placement_telemetry || {};
-                if (placementTelemetry.conflict) {
+                const lockRoot = d.lock_root || placementTelemetry.lock_root || {};
+                if (lockRoot.suspicious_test_root || placementTelemetry.provenance_invalid) {
+                    const lockPath = lockRoot.path || 'unknown';
+                    status.textContent = `— ⚠ invalid placement telemetry provenance: lock root ${lockPath} is a pytest temporary directory; API restart with production environment required`;
+                    status.style.color = 'var(--bad,#f87171)';
+                    _setDotState(regionDot, 'down', status.textContent);
+                } else if (placementTelemetry.conflict) {
                     const busyRoles = (placementTelemetry.busy_roles || []).join(', ') || 'none';
                     const leaseRoles = (placementTelemetry.lease_roles || []).join(', ') || 'none';
                     status.textContent = `— ⚠ placement telemetry conflict: /slots busy=${busyRoles}; lease=${leaseRoles}; frame is not safe to interpret as a single holder`;
+                    status.style.color = 'var(--bad,#f87171)';
+                    _setDotState(regionDot, 'down', status.textContent);
+                } else if (placementTelemetry.status === 'capacity_conflict') {
+                    const conflicts = (placementTelemetry.capacity_conflicts || []).map(item => `${item.role}.${item.shape}:${item.observed}/${item.configured}`).join(', ') || 'unknown';
+                    status.textContent = `— ⚠ serving-capacity telemetry conflict (/slots observed/configured): ${conflicts}`;
                     status.style.color = 'var(--bad,#f87171)';
                     _setDotState(regionDot, 'down', status.textContent);
                 } else if (placementTelemetry.status === 'transition' || (d.coherence || {}).status === 'transition') {
                     status.textContent = '— placement lease changed during lock scan; transitional frame (automatic retry exhausted)';
                     status.style.color = 'var(--warn,#fbbf24)';
                 } else if (activeLockCount > 0) {
-                    status.textContent = `— ${actualActiveLockCount} placement lease instance(s): ${displayHeldBySummary || 'none'}${liveTapSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`;
+                    status.textContent = `— ${actualActiveLockCount} placement lease instance(s): ${displayHeldBySummary || 'none'}${liveTapSuffix}; × cells overlap active placement leases; per-region locks ENABLED`;
                     status.style.color = '#fbbf24';
                 } else if (tapLiveRequestCount > 0) {
                     status.textContent = `— no /proc holder correlated; ${tapLiveRequestCount} live tap request(s) visible${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}; waiting for coherent lock metadata; per-region locks ENABLED`;

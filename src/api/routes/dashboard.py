@@ -889,6 +889,35 @@ def _proc_instance_pairs(by_role: dict[str, Any]) -> set[tuple[str, int]]:
     return pairs
 
 
+def _lock_root_provenance(tmp_dir: Path) -> dict[str, Any]:
+    """Describe whether region-lock telemetry is rooted in a test sandbox."""
+    path = str(tmp_dir)
+    normalized = path.replace("\\", "/").lower()
+    suspicious_test_root = any(
+        marker in normalized
+        for marker in ("/pytest-of-", "/pytest-", "/.pytest_tmp/", "/pytest_tmp/")
+    )
+    if os.environ.get("ORCHESTRATOR_TMP_DIR"):
+        source = "ORCHESTRATOR_TMP_DIR"
+    elif os.environ.get("ORCHESTRATOR_PATHS_TMP_DIR"):
+        source = "ORCHESTRATOR_PATHS_TMP_DIR"
+    else:
+        source = "default"
+    issue = ""
+    if suspicious_test_root:
+        issue = (
+            "region-lock root points into a pytest temporary directory; "
+            "serving-process placement telemetry has invalid production provenance"
+        )
+    return {
+        "path": path,
+        "source": source,
+        "suspicious_test_root": suspicious_test_root,
+        "valid_for_production": not suspicious_test_root,
+        "issue": issue,
+    }
+
+
 def _placement_telemetry_status(
     *,
     activity: dict[int, dict[str, Any]],
@@ -905,26 +934,68 @@ def _placement_telemetry_status(
     lock_roles = set(by_role) if isinstance(by_role, dict) else set()
     busy_roles: set[str] = set()
     busy_ports: dict[str, list[int]] = {}
+    capacity_observations: list[dict[str, Any]] = []
+    matrix = region_locks.get("display_matrix") if isinstance(region_locks, dict) else {}
+    matrix_rows = matrix.get("rows") if isinstance(matrix, dict) else []
+    configured_capacity: dict[tuple[str, str], int] = {}
+    if isinstance(matrix_rows, list):
+        for row in matrix_rows:
+            if not isinstance(row, dict):
+                continue
+            row_role = _canonical_role_name(row.get("role"))
+            cells = row.get("cells")
+            if not row_role or not isinstance(cells, list):
+                continue
+            for cell in cells:
+                if not isinstance(cell, dict) or cell.get("capacity") is None:
+                    continue
+                shape = str(cell.get("shape") or "")
+                if shape:
+                    configured_capacity[(row_role, shape)] = max(
+                        1, int(cell.get("capacity") or 1)
+                    )
     for raw_port, slot_state in activity.items():
-        if not isinstance(slot_state, dict) or int(slot_state.get("n_active") or 0) <= 0:
+        if not isinstance(slot_state, dict):
             continue
         try:
             port = int(raw_port)
         except (TypeError, ValueError):
             continue
-        role, _shape = _port_role_shape(port_roles.get(port, ""))
+        role, shape = _port_role_shape(port_roles.get(port, ""))
         role = _canonical_role_name(role)
-        if role and role in lock_roles:
+        if role and role in lock_roles and int(slot_state.get("n_active") or 0) > 0:
             busy_roles.add(role)
             busy_ports.setdefault(role, []).append(port)
+        observed_capacity = max(0, int(slot_state.get("n_total") or 0))
+        expected_capacity = configured_capacity.get((role, shape or "full"))
+        if role and expected_capacity is not None and observed_capacity > 0:
+            capacity_observations.append(
+                {
+                    "role": role,
+                    "shape": shape or "full",
+                    "port": port,
+                    "configured": expected_capacity,
+                    "observed": observed_capacity,
+                    "matches": observed_capacity == expected_capacity,
+                }
+            )
 
     occupancy = region_locks.get("occupancy") if isinstance(region_locks, dict) else {}
     lease_roles = {role for role, _idx in _occupancy_instance_pairs(occupancy)}
     coherence = region_locks.get("coherence") if isinstance(region_locks, dict) else {}
     region_status = str((coherence or {}).get("status") or "unknown")
+    lock_root = region_locks.get("lock_root") if isinstance(region_locks, dict) else {}
+    provenance_invalid = bool(
+        isinstance(lock_root, dict) and lock_root.get("suspicious_test_root")
+    )
+    capacity_conflicts = [item for item in capacity_observations if not item["matches"]]
     conflict = bool(busy_roles and lease_roles and busy_roles != lease_roles)
-    if conflict:
+    if provenance_invalid:
+        status = "invalid_provenance"
+    elif conflict:
         status = "conflict"
+    elif capacity_conflicts:
+        status = "capacity_conflict"
     elif region_status == "transition":
         status = "transition"
     elif busy_roles == lease_roles or (not busy_roles and not lease_roles):
@@ -934,6 +1005,10 @@ def _placement_telemetry_status(
     return {
         "status": status,
         "conflict": conflict,
+        "provenance_invalid": provenance_invalid,
+        "lock_root": lock_root if isinstance(lock_root, dict) else {},
+        "capacity_observations": capacity_observations,
+        "capacity_conflicts": capacity_conflicts,
         "busy_roles": sorted(busy_roles),
         "busy_ports": {role: sorted(ports) for role, ports in sorted(busy_ports.items())},
         "lease_roles": sorted(lease_roles),
@@ -1383,11 +1458,28 @@ def _region_locks_payload(
     occupancy_entries = occupancy.get("entries") if isinstance(occupancy, dict) else []
     if not isinstance(occupancy_entries, list):
         occupancy_entries = []
+
+    def _configured_serving_capacity(role: str, instance_idx: int) -> tuple[int, str]:
+        """Declared llama-server slots for this physical serving instance.
+
+        The occupancy ledger's ``capacity`` is the placement-lease admission
+        width.  Ordinary requests take an exclusive lease, so that value is 1
+        even when the selected server has several native slots.  The lock grid
+        labels active/available SERVING slots, therefore its denominator must
+        come from the same per-shape declaration the launcher uses for ``-np``.
+        """
+        try:
+            from scripts.server.stack_manifest import resolve_slots
+
+            decision = resolve_slots(role, numa_instance=instance_idx)
+            return max(1, int(decision.slots)), str(decision.source)
+        except Exception as exc:
+            return 1, f"fallback:error:{type(exc).__name__}"
+
     for role in sorted(by_role):
         bucket = by_role[role]
         insts = list(bucket.get("instances", []))
         active_idxs = {int(idx) for idx in bucket.get("active_instance_idxs", [])}
-        blocked_by = {str(r) for r in bucket.get("blocked_by_roles", [])}
         cells: list[dict[str, Any]] = []
         for col in display_columns:
             inst = next((i for i in insts if i.get("shape") == col["key"]), None)
@@ -1398,6 +1490,9 @@ def _region_locks_payload(
                 continue
             idx = int(inst["idx"])
             regions = [str(r) for r in inst.get("regions", [])]
+            configured_capacity, configured_capacity_source = _configured_serving_capacity(
+                role, idx
+            )
             instance_load = [
                 entry
                 for entry in occupancy_entries
@@ -1405,21 +1500,30 @@ def _region_locks_payload(
                 and entry.get("instance_idx") == idx
             ]
             active = len(instance_load)
-            capacity = max(
+            lease_capacity = max(
                 [int(entry.get("capacity") or 1) for entry in instance_load] or [1]
+            )
+            capacity = max(
+                lease_capacity,
+                configured_capacity,
             )
             if idx in active_idxs:
                 cells.append(
                     {
                         "state": "active",
+                        "shape": col["key"],
                         "label": f"⚡ {active}/{capacity}" if active else "⚡",
                         "active": active,
                         "capacity": capacity,
+                        "lease_capacity": lease_capacity,
+                        "configured_capacity": configured_capacity,
+                        "configured_capacity_source": configured_capacity_source,
                         "load": min(1.0, active / capacity) if active else 1.0,
                         "title": (
                             f"{role}.{col['label']} ACTIVE — {active or 'unknown'} of "
-                            f"{capacity} certified slot(s); instance idx={idx} holding "
-                            f"{{{','.join(regions)}}}"
+                            f"{capacity} configured serving slot(s); placement lease "
+                            f"admission capacity={lease_capacity}; instance idx={idx} "
+                            f"holding {{{','.join(regions)}}}"
                         ),
                     }
                 )
@@ -1429,7 +1533,6 @@ def _region_locks_payload(
                 blockers = [
                     f"{h['role']}.{h['shape']}"
                     for h in held_by_region.get(region, [])
-                    if h.get("role") == role or str(h.get("role")) in blocked_by
                 ]
                 if blockers:
                     blocking.append(f"{region}←{','.join(blockers)}")
@@ -1437,10 +1540,12 @@ def _region_locks_payload(
                 cells.append(
                     {
                         "state": "blocked",
+                        "shape": col["key"],
                         "label": "×",
                         "title": (
-                            f"{role}.{col['label']} WAITING — physical cores "
-                            f"{','.join(regions)} occupied by {' · '.join(blocking)}"
+                            f"{role}.{col['label']} LOCKED — physical cores "
+                            f"{','.join(regions)} overlap active placement leases: "
+                            f"{' · '.join(blocking)}"
                         ),
                     }
                 )
@@ -1613,6 +1718,7 @@ def _region_locks_payload(
         "stack_numa_mode_provenance": resolution,
         "matrix_loaded": matrix is not None,
         "tmp_dir": str(tmp_dir),
+        "lock_root": _lock_root_provenance(tmp_dir),
         "entries": out,
         "by_role": by_role,
         # Host-wide admission lock (cpu_region.GLOBAL.*). Not a matrix role, so

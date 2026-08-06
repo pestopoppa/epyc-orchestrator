@@ -78,7 +78,9 @@ def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
     assert "const roleCandidates = [" in body
     assert "roleCandidates.find(r => byRole[r])" in body
     assert "status === 'quiet'" in body
-    assert "blocked_by_roles" in body
+    assert "every overlap as locked" in body
+    assert "must not make an" in body
+    assert "occupied CPU region look physically free" in body
     assert "lockOnlyStructuredTapHolders" in body
     assert "chat.* tap absent" in body
     assert "holders · ${tapped} tapped · ${offTap} off-tap" in body
@@ -231,6 +233,10 @@ def test_dashboard_html_region_lock_grid_uses_backend_display_matrix() -> None:
     assert "const matrix = d && d.display_matrix ? d.display_matrix : null;" in body
     assert "row.label || row.role" in body
     assert "configured and free" in body
+    assert "× overlaps an active CPU placement lease" in body
+    assert "× cells overlap active placement leases" in body
+    assert "invalid placement telemetry provenance" in body
+    assert "serving-capacity telemetry conflict" in body
     assert "configured but not selected by this launch mode" not in body
     assert "if (!renderRegionLocksDisplayMatrix(grid, d))" in body
     assert "backend display_matrix unavailable; lock-grid rendering is intentionally disabled" in body

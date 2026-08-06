@@ -13,6 +13,7 @@ Covers the three pure functions that drive the new CPU REGION LOCKS panel:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +24,7 @@ from src.api.routes.dashboard import (
     _shape_for_regions,
     _resolve_pid_to_instance_idx,
     _panel_shapes_from_matrix,
+    _lock_root_provenance,
     _placement_telemetry_status,
 )
 from src.scheduling.contention import ContentionMatrix, InstancePair, Pair, SameRole
@@ -306,6 +308,59 @@ def test_slots_vs_lease_role_disagreement_is_explicit_conflict() -> None:
     assert status["conflict"] is True
     assert status["busy_roles"] == ["worker_general"]
     assert status["lease_roles"] == ["frontdoor"]
+
+
+def test_serving_capacity_is_verified_against_live_slots() -> None:
+    region_locks = {
+        "by_role": {"frontdoor": {}},
+        "occupancy": {
+            "entries": [{"role": "frontdoor", "instance_idx": 0}],
+        },
+        "coherence": {"status": "coherent"},
+        "lock_root": {"suspicious_test_root": False},
+        "display_matrix": {
+            "rows": [{
+                "role": "frontdoor",
+                "cells": [{"state": "active", "shape": "full", "capacity": 4}],
+            }],
+        },
+    }
+
+    matched = _placement_telemetry_status(
+        activity={8070: {"n_active": 1, "n_total": 4}},
+        port_roles={8070: "frontdoor"},
+        region_locks=region_locks,
+    )
+    assert matched["status"] == "coherent"
+    assert matched["capacity_conflicts"] == []
+    assert matched["capacity_observations"] == [{
+        "role": "frontdoor",
+        "shape": "full",
+        "port": 8070,
+        "configured": 4,
+        "observed": 4,
+        "matches": True,
+    }]
+
+    mismatched = _placement_telemetry_status(
+        activity={8070: {"n_active": 1, "n_total": 2}},
+        port_roles={8070: "frontdoor"},
+        region_locks=region_locks,
+    )
+    assert mismatched["status"] == "capacity_conflict"
+    assert mismatched["capacity_conflicts"][0]["observed"] == 2
+    assert mismatched["capacity_conflicts"][0]["configured"] == 4
+
+
+def test_pytest_lock_root_is_explicitly_invalid_for_production(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_TMP_DIR", "/tmp/pytest-of-node/pytest-1/live-api")
+
+    provenance = _lock_root_provenance(Path("/tmp/pytest-of-node/pytest-1/live-api"))
+
+    assert provenance["source"] == "ORCHESTRATOR_TMP_DIR"
+    assert provenance["suspicious_test_root"] is True
+    assert provenance["valid_for_production"] is False
+    assert "invalid production provenance" in provenance["issue"]
 
 
 class TestRegionLocksSnapshot:
@@ -889,7 +944,7 @@ class TestRegionLocksSnapshot:
     async def test_blocked_by_roles_uses_contention_matrix_not_raw_overlap(
         self, tmp_path, monkeypatch
     ) -> None:
-        """Cross-role occupied quarters should only render as waits when the matrix queues."""
+        """Admission metadata still distinguishes allowed and queued cross-role pairs."""
         for region in ("q0", "q1", "q2", "q3"):
             (tmp_path / f"cpu_region.worker_general.{region}.lock").write_text("")
 
@@ -938,6 +993,203 @@ class TestRegionLocksSnapshot:
         assert payload["by_role"]["worker_general"]["blocked_by_roles"] == ["worker_general"]
         assert payload["by_role"]["ingest_long_context"]["blocked_by_roles"] == []
         assert payload["by_role"]["architect_general"]["blocked_by_roles"] == ["worker_general"]
+
+    @pytest.mark.asyncio
+    async def test_two_worker_halves_lock_every_overlapping_display_shape(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Two half-machine leases occupy all regions even for matrix-allowed roles."""
+        occupancy = {
+            "entries": [
+                {
+                    "token": "worker-half0",
+                    "pid": 9001,
+                    "role": "worker_general",
+                    "regions": ["q0", "q1"],
+                    "instance_idx": 1,
+                    "capacity": 1,
+                    "shared": False,
+                },
+                {
+                    "token": "worker-half1",
+                    "pid": 9002,
+                    "role": "worker_general",
+                    "regions": ["q2", "q3"],
+                    "instance_idx": 2,
+                    "capacity": 1,
+                    "shared": False,
+                },
+            ],
+            "per_region": {},
+        }
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: []
+        )
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock.read_region_occupancy", lambda: occupancy
+        )
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                (role, idx): regions
+                for role in (
+                    "architect_critic",
+                    "frontdoor",
+                    "ingest_long_context",
+                    "worker_general",
+                )
+                for idx, regions in (
+                    (0, frozenset({"q0", "q1", "q2", "q3"})),
+                    (1, frozenset({"q0", "q1"})),
+                    (2, frozenset({"q2", "q3"})),
+                )
+            },
+        )
+        roles = {
+            role: SameRole(role=role, verdict="allow")
+            for role in (
+                "architect_critic",
+                "frontdoor",
+                "ingest_long_context",
+                "worker_general",
+            )
+        }
+        allowed_pairs = {
+            tuple(sorted((role, "worker_general"))): Pair(
+                roles=tuple(sorted((role, "worker_general"))),
+                ratio=1.0,
+                verdict="allow",
+            )
+            for role in ("architect_critic", "frontdoor", "ingest_long_context")
+        }
+        matrix = ContentionMatrix(
+            version=1,
+            measured_at="test",
+            host="test",
+            topology_hash="test",
+            default_floor=0.85,
+            same_role=roles,
+            pairs=allowed_pairs,
+        )
+        monkeypatch.setattr("src.scheduling.contention.load_contention_matrix", lambda: matrix)
+        monkeypatch.setattr("src.api.routes.dashboard._port_roles_cached", lambda: {})
+
+        payload = json.loads((await region_locks_snapshot()).body)
+
+        rows = {row["role"]: row for row in payload["display_matrix"]["rows"]}
+        assert [cell["state"] for cell in rows["worker_general"]["cells"]] == [
+            "blocked",
+            "active",
+            "active",
+        ]
+        for role in ("architect_critic", "frontdoor", "ingest_long_context"):
+            assert [cell["state"] for cell in rows[role]["cells"]] == [
+                "blocked",
+                "blocked",
+                "blocked",
+            ]
+            assert all("LOCKED" in cell["title"] for cell in rows[role]["cells"])
+
+    @pytest.mark.asyncio
+    async def test_frontdoor_full_locks_all_cpu_models_and_shows_serving_capacity(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Exact live regression: frontdoor.full occupies q0-q3 and has four slots."""
+        occupancy = {
+            "entries": [
+                {
+                    "token": "frontdoor-full",
+                    "pid": 9100,
+                    "role": "frontdoor",
+                    "regions": ["q0", "q1", "q2", "q3"],
+                    "instance_idx": 0,
+                    # Ordinary traffic owns one EXCLUSIVE placement lease even
+                    # though the selected llama-server exposes four slots.
+                    "capacity": 1,
+                    "shared": False,
+                }
+            ],
+            "per_region": {},
+        }
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: []
+        )
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock.read_region_occupancy", lambda: occupancy
+        )
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                (role, idx): regions
+                for role in (
+                    "architect_critic",
+                    "frontdoor",
+                    "ingest_long_context",
+                    "worker_general",
+                )
+                for idx, regions in (
+                    (0, frozenset({"q0", "q1", "q2", "q3"})),
+                    (1, frozenset({"q0", "q1"})),
+                    (2, frozenset({"q2", "q3"})),
+                )
+                if role != "architect_critic" or idx == 0
+            },
+        )
+        roles = {
+            role: SameRole(role=role, verdict="allow")
+            for role in (
+                "architect_critic",
+                "frontdoor",
+                "ingest_long_context",
+                "worker_general",
+            )
+        }
+        matrix = ContentionMatrix(
+            version=1,
+            measured_at="test",
+            host="test",
+            topology_hash="test",
+            default_floor=0.85,
+            same_role=roles,
+            pairs={
+                tuple(sorted((role, "frontdoor"))): Pair(
+                    roles=tuple(sorted((role, "frontdoor"))),
+                    ratio=1.0,
+                    verdict="allow",
+                )
+                for role in (
+                    "architect_critic",
+                    "ingest_long_context",
+                    "worker_general",
+                )
+            },
+        )
+        monkeypatch.setattr("src.scheduling.contention.load_contention_matrix", lambda: matrix)
+        monkeypatch.setattr("src.api.routes.dashboard._port_roles_cached", lambda: {})
+
+        payload = json.loads((await region_locks_snapshot()).body)
+
+        rows = {row["role"]: row for row in payload["display_matrix"]["rows"]}
+        active = rows["frontdoor"]["cells"][0]
+        assert active["state"] == "active"
+        assert active["label"] == "⚡ 1/4"
+        assert active["capacity"] == 4
+        assert active["lease_capacity"] == 1
+        assert "1 of 4 configured serving slot(s)" in active["title"]
+        assert "placement lease admission capacity=1" in active["title"]
+        assert [cell["state"] for cell in rows["frontdoor"]["cells"][1:]] == [
+            "blocked",
+            "blocked",
+        ]
+        assert rows["architect_critic"]["cells"][0]["state"] == "blocked"
+        for role in ("ingest_long_context", "worker_general"):
+            assert [cell["state"] for cell in rows[role]["cells"]] == [
+                "blocked",
+                "blocked",
+                "blocked",
+            ]
 
 
 class TestNonLockRoleCompleteness:
