@@ -29,6 +29,8 @@ from src.registry.stack_priors import (
 from src.autopilot_core.baseline_ledger import canonical_jsonable
 from src.autopilot_core.journal_reconstruction import (
     fold_supersession_events,
+    objectives_from_journal_row,
+    parse_journal_ts,
     reconstruct_archive_from_journal_rows,
 )
 from src.autopilot_core.journal_snapshot_replay import build_snapshot_replay_diagnostic
@@ -311,6 +313,118 @@ def archive_replay_kwargs_from_state(state: dict) -> dict[str, float]:
     return kwargs
 
 
+def empty_frontier_bootstrap_diagnostic(
+    state: dict,
+    journal_rows: list[dict],
+    *,
+    reconstructed_archive: dict | None,
+) -> dict:
+    """Validate a ratified, intentionally empty current-era frontier.
+
+    A new measurement era deliberately removes the cached archive and excludes
+    every older journal row. That makes normal replay return ``None`` until the
+    first current-era numeric point lands. Treat that state as safe only when
+    the full ratified bootstrap contract agrees with live state and there is no
+    reconstructable current-era row or cached archive to hide.
+    """
+    reasons: list[str] = []
+    bootstrap = state.get("eval_instrument_empty_frontier_bootstrap")
+    note = state.get("_allow_empty_frontier_rebase_note")
+    state_archive = state.get("pareto_archive")
+    state_archive_present = isinstance(state_archive, dict) and bool(state_archive)
+
+    if state.get("_allow_empty_frontier_rebase") is not True:
+        reasons.append("_allow_empty_frontier_rebase is not true")
+    if not isinstance(note, str) or not note.strip():
+        reasons.append("_allow_empty_frontier_rebase_note is missing")
+    if state_archive_present:
+        reasons.append("state pareto_archive is present")
+    if reconstructed_archive is not None:
+        reasons.append("journal already reconstructs a current-era archive")
+    if not isinstance(bootstrap, dict):
+        reasons.append("eval_instrument_empty_frontier_bootstrap is missing")
+        bootstrap = {}
+    elif bootstrap.get("status") != "pending":
+        reasons.append("empty-frontier bootstrap status is not pending")
+
+    expected_fields = {
+        "objective_policy": state.get("pareto_objective_policy"),
+        "execution_instrument_id": state.get("eval_execution_instrument_id"),
+        "scoring_schedule_id": state.get("eval_scoring_schedule_id"),
+    }
+    for field, expected in expected_fields.items():
+        actual = bootstrap.get(field)
+        if not isinstance(expected, str) or not expected:
+            reasons.append(f"state {field} is missing")
+        elif actual != expected:
+            reasons.append(
+                f"bootstrap {field}={actual!r} does not match state {expected!r}"
+            )
+
+    boundary_values: dict[str, float] = {}
+    for field in (
+        "pareto_epoch_ts",
+        "pareto_exclude_before_ts",
+        "quality_exclude_before_ts",
+    ):
+        try:
+            value = float(state.get(field))
+        except (TypeError, ValueError):
+            value = 0.0
+        if value <= 0.0:
+            reasons.append(f"state {field} is missing")
+        else:
+            boundary_values[field] = value
+    boundary = boundary_values.get("pareto_exclude_before_ts")
+    if boundary is not None:
+        for field, value in boundary_values.items():
+            if abs(value - boundary) > 0.001:
+                reasons.append(f"state {field} does not match pareto exclusion boundary")
+        opened_at = parse_journal_ts(bootstrap.get("opened_at"))
+        if opened_at is None or abs(opened_at - boundary) > 0.001:
+            reasons.append("bootstrap opened_at does not match pareto exclusion boundary")
+
+    objective_policy = expected_fields["objective_policy"]
+    current_era_trial_rows = 0
+    current_era_objective_rows = 0
+    if boundary is not None:
+        for row in journal_rows:
+            ts = parse_journal_ts(row.get("timestamp"))
+            if _trial_id(row) is None or ts is None or ts < boundary:
+                continue
+            current_era_trial_rows += 1
+            bug = row.get("bug_corrupted_by") or ""
+            if bug and bug != "mad_noise":
+                continue
+            if isinstance(objective_policy, str):
+                try:
+                    objectives = objectives_from_journal_row(
+                        row,
+                        objective_policy=objective_policy,
+                    )
+                except ValueError:
+                    objectives = None
+                if objectives is not None:
+                    current_era_objective_rows += 1
+    if current_era_objective_rows:
+        reasons.append(
+            f"journal contains {current_era_objective_rows} reconstructable current-era row(s)"
+        )
+
+    return {
+        "authorized": not reasons,
+        "status": "authorized_empty_current_era" if not reasons else "invalid",
+        "reasons": reasons,
+        "state_archive_present": state_archive_present,
+        "boundary_ts": boundary,
+        "current_era_trial_row_count": current_era_trial_rows,
+        "current_era_objective_row_count": current_era_objective_rows,
+        "objective_policy": expected_fields["objective_policy"],
+        "execution_instrument_id": expected_fields["execution_instrument_id"],
+        "scoring_schedule_id": expected_fields["scoring_schedule_id"],
+    }
+
+
 def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
     """Check journal archive authority and any legacy state cache."""
     trial_ids = [_trial_id(row) for row in journal_rows]
@@ -339,12 +453,42 @@ def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
         **replay_kwargs,
     )
     if journal_archive is None:
+        empty_bootstrap = empty_frontier_bootstrap_diagnostic(
+            state,
+            journal_rows,
+            reconstructed_archive=journal_archive,
+        )
+        if empty_bootstrap["authorized"]:
+            return {
+                "status": "match" if not warnings else "drift",
+                "authority_mode": empty_bootstrap["status"],
+                "state_archive_present": False,
+                "state_trial_counter": state_trial_counter,
+                "journal_max_trial_id": journal_max_trial_id,
+                "state_entry_count": 0,
+                "journal_entry_count": 0,
+                "state_frontier_count": 0,
+                "journal_frontier_count": 0,
+                "snapshot_readiness": empty_bootstrap["status"],
+                "snapshot_replay_status": empty_bootstrap["status"],
+                "snapshot_through_trial_id": None,
+                "snapshot_tail_trial_count": 0,
+                "snapshot_tail_max_trial_id": None,
+                "snapshot_journal_max_trial_id": journal_max_trial_id,
+                "snapshot_warnings": [],
+                "replay_kwargs": replay_kwargs,
+                "empty_frontier_bootstrap": empty_bootstrap,
+                "warnings": warnings,
+            }
         return {
             "status": "journal_unreconstructable",
             "state_trial_counter": state_trial_counter,
             "journal_max_trial_id": journal_max_trial_id,
             "replay_kwargs": replay_kwargs,
-            "warnings": warnings + ["journal rows did not reconstruct an archive"],
+            "empty_frontier_bootstrap": empty_bootstrap,
+            "warnings": warnings
+            + ["journal rows did not reconstruct an archive"]
+            + empty_bootstrap["reasons"],
         }
 
     state_archive = state.get("pareto_archive")

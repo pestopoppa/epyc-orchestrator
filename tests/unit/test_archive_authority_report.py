@@ -48,6 +48,29 @@ def _archive(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return archive
 
 
+def _empty_frontier_state() -> dict[str, Any]:
+    boundary = 1781481600.0
+    return {
+        "trial_counter": 2,
+        "pareto_objective_policy": "legacy_4d_v1",
+        "eval_execution_instrument_id": "resource-lanes-test",
+        "eval_scoring_schedule_id": "judge-tail-test",
+        "pareto_epoch_ts": boundary,
+        "pareto_exclude_before_ts": boundary,
+        "quality_exclude_before_ts": boundary,
+        "_allow_empty_frontier_rebase": True,
+        "_allow_empty_frontier_rebase_note": "Operator-ratified test boundary.",
+        "eval_instrument_empty_frontier_bootstrap": {
+            "status": "pending",
+            "opened_at": "2026-06-15T00:00:00Z",
+            "objective_policy": "legacy_4d_v1",
+            "execution_instrument_id": "resource-lanes-test",
+            "scoring_schedule_id": "judge-tail-test",
+            "completion_condition": "first post-boundary Pareto point",
+        },
+    }
+
+
 def test_report_marks_aligned_archive_ok() -> None:
     rows = [_row(1, quality=1.2)]
     report = build_archive_authority_report(
@@ -96,6 +119,18 @@ def test_report_replays_with_state_epoch_exclusion() -> None:
     assert report["diagnostic"]["replay_kwargs"] == {
         "exclude_before_ts": 1781481600.0
     }
+
+
+def test_report_accepts_ratified_empty_current_era() -> None:
+    rows = [_row_at(1, "2026-06-14T00:00:01Z")]
+
+    report = build_archive_authority_report(_empty_frontier_state(), rows)
+
+    assert report["ok"] is True
+    assert report["state_archive_present"] is False
+    assert report["diagnostic"]["status"] == "match"
+    assert report["diagnostic"]["authority_mode"] == "authorized_empty_current_era"
+    assert report["diagnostic"]["empty_frontier_bootstrap"]["authorized"] is True
 
 
 def test_report_summarizes_id_and_value_drift() -> None:

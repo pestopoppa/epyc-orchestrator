@@ -29,6 +29,7 @@ from preflight_audit import (  # noqa: E402
     STATE_PATH,
     _load_jsonl,
     archive_replay_kwargs_from_state,
+    empty_frontier_bootstrap_diagnostic,
 )
 from phase_status import (  # noqa: E402
     DEFAULT_STALE_AFTER_S,
@@ -73,7 +74,14 @@ def _snapshot_restart_report(
         current_run_only=False,
         **replay_kwargs,
     )
-    if diagnostic.bounded_replay_readiness == "current":
+    empty_bootstrap = empty_frontier_bootstrap_diagnostic(
+        state,
+        journal_rows,
+        reconstructed_archive=full_replay_payload,
+    )
+    if empty_bootstrap["authorized"]:
+        readiness = empty_bootstrap["status"]
+    elif diagnostic.bounded_replay_readiness == "current":
         readiness = "current"
     elif payload is not None:
         readiness = "tail_fold_ready"
@@ -83,10 +91,11 @@ def _snapshot_restart_report(
         readiness = diagnostic.bounded_replay_readiness
     restart_payload = payload or full_replay_payload
     return {
-        "ok": restart_payload is not None,
+        "ok": restart_payload is not None or empty_bootstrap["authorized"],
         "restart_readiness": readiness,
         "payload_available": payload is not None,
         "full_replay_payload_available": full_replay_payload is not None,
+        "empty_frontier_bootstrap": empty_bootstrap,
         "payload_journal_max_trial_id": (
             restart_payload.get("journal_max_trial_id")
             if isinstance(restart_payload, dict)

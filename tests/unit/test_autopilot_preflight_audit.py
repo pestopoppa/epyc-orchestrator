@@ -38,6 +38,29 @@ def _archive(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return archive
 
 
+def _empty_frontier_state(*, scoring_schedule_id: str = "judge-tail-test") -> dict[str, Any]:
+    boundary = 1781481600.0
+    return {
+        "trial_counter": 2,
+        "pareto_objective_policy": "legacy_4d_v1",
+        "eval_execution_instrument_id": "resource-lanes-test",
+        "eval_scoring_schedule_id": scoring_schedule_id,
+        "pareto_epoch_ts": boundary,
+        "pareto_exclude_before_ts": boundary,
+        "quality_exclude_before_ts": boundary,
+        "_allow_empty_frontier_rebase": True,
+        "_allow_empty_frontier_rebase_note": "Operator-ratified test boundary.",
+        "eval_instrument_empty_frontier_bootstrap": {
+            "status": "pending",
+            "opened_at": "2026-06-15T00:00:00Z",
+            "objective_policy": "legacy_4d_v1",
+            "execution_instrument_id": "resource-lanes-test",
+            "scoring_schedule_id": scoring_schedule_id,
+            "completion_condition": "first post-boundary Pareto point",
+        },
+    }
+
+
 def test_model_server_targets_derive_from_stack_priors(tmp_path: Path) -> None:
     priors = tmp_path / "stack_priors.yaml"
     priors.write_text(
@@ -355,6 +378,68 @@ def test_archive_authority_diagnostic_honors_epoch_exclusion() -> None:
     assert diagnostic["journal_entry_count"] == 1
     assert diagnostic["journal_frontier_count"] == 1
     assert diagnostic["replay_kwargs"] == {"exclude_before_ts": 1781481600.0}
+
+
+def test_archive_authority_accepts_ratified_empty_current_era() -> None:
+    rows = [_journal_row(1, timestamp="2026-06-14T00:00:01Z")]
+
+    diagnostic = _MOD.archive_authority_diagnostic(
+        _empty_frontier_state(),
+        rows,
+    )
+
+    assert diagnostic["status"] == "match"
+    assert diagnostic["authority_mode"] == "authorized_empty_current_era"
+    assert diagnostic["journal_entry_count"] == 0
+    assert diagnostic["empty_frontier_bootstrap"]["authorized"] is True
+    assert diagnostic["empty_frontier_bootstrap"]["current_era_trial_row_count"] == 0
+
+
+def test_archive_authority_rejects_incomplete_empty_frontier_marker() -> None:
+    rows = [_journal_row(1, timestamp="2026-06-14T00:00:01Z")]
+    state = _empty_frontier_state()
+    state["_allow_empty_frontier_rebase"] = False
+
+    diagnostic = _MOD.archive_authority_diagnostic(state, rows)
+
+    assert diagnostic["status"] == "journal_unreconstructable"
+    assert diagnostic["empty_frontier_bootstrap"]["authorized"] is False
+    assert "_allow_empty_frontier_rebase is not true" in diagnostic["warnings"]
+
+
+def test_archive_authority_rejects_mismatched_empty_frontier_marker() -> None:
+    rows = [_journal_row(1, timestamp="2026-06-14T00:00:01Z")]
+    state = _empty_frontier_state()
+    state["eval_instrument_empty_frontier_bootstrap"]["scoring_schedule_id"] = "stale"
+
+    diagnostic = _MOD.archive_authority_diagnostic(state, rows)
+
+    assert diagnostic["status"] == "journal_unreconstructable"
+    assert any("scoring_schedule_id" in warning for warning in diagnostic["warnings"])
+
+
+def test_archive_authority_rejects_hidden_current_era_objective_row(
+    monkeypatch,
+) -> None:
+    rows = [_journal_row(2, timestamp="2026-06-15T00:00:01Z")]
+    monkeypatch.setattr(_MOD, "reconstruct_archive_from_journal_rows", lambda *a, **k: None)
+
+    diagnostic = _MOD.archive_authority_diagnostic(_empty_frontier_state(), rows)
+
+    assert diagnostic["status"] == "journal_unreconstructable"
+    assert diagnostic["empty_frontier_bootstrap"]["current_era_objective_row_count"] == 1
+    assert any("reconstructable current-era" in warning for warning in diagnostic["warnings"])
+
+
+def test_archive_authority_rejects_empty_bootstrap_with_state_archive() -> None:
+    old_rows = [_journal_row(1, timestamp="2026-06-14T00:00:01Z")]
+    state = _empty_frontier_state()
+    state["pareto_archive"] = _archive(old_rows)
+
+    diagnostic = _MOD.archive_authority_diagnostic(state, old_rows)
+
+    assert diagnostic["status"] == "journal_unreconstructable"
+    assert "state pareto_archive is present" in diagnostic["warnings"]
 
 
 def test_archive_authority_diagnostic_ignores_nonsemantic_entry_metadata() -> None:
