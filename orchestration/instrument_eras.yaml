@@ -197,6 +197,29 @@ eras:
       are 4D. Retire the pre-boundary frontier view and rebuild from post-boundary trials;
       do not rescale or merge v1 snapshots into the v2 frontier.
 
+  - id: E10-eval-model-judge-tail-v2-quality
+    from: "2026-08-06T09:56:30.876813Z"
+    scope: eval_quality
+    policy_version: "task_rate_4d_v2_resource_lanes"
+    execution_instrument_id: "resource_lanes_v2_prompt_load"
+    scoring_schedule_id: "model_judge_tail_v2_cohort_serial"
+    note: >
+      Model-judge scorer-tail repair boundary. Generation retains certified native
+      batching. Model-backed scoring admits one request per physical serving cohort
+      because judge prompt load includes answer-dependent context; distinct physical
+      lanes may still score concurrently. Pre-boundary reliability and quality rows
+      remain historical and must not be merged across this boundary.
+
+  - id: E10-autopilot-model-judge-tail-v2-speed
+    from: "2026-08-06T09:56:30.876813Z"
+    scope: autopilot_speed
+    policy_version: "task_rate_4d_v2_resource_lanes"
+    execution_instrument_id: "resource_lanes_v2_prompt_load"
+    scoring_schedule_id: "model_judge_tail_v2_cohort_serial"
+    note: >
+      Questions/hour denominator boundary for cohort-serial model judging. Generation
+      lane concurrency is unchanged, but scorer-tail wall time differs from
+      model_judge_tail_v1. Rebuild the frontier from post-boundary trials only.
 
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
