@@ -41,6 +41,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, MutableMapping
 
+_ORIGINAL_SUBPROCESS_POPEN = subprocess.Popen
+
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -2051,6 +2053,20 @@ def start_orchestrator(
     stack_numa_mode: str | None = None,
 ) -> ProcessInfo | None:
     """Start the orchestrator API."""
+    # A unit test that misses one lifecycle monkeypatch must fail inside pytest,
+    # never escape as a long-lived production listener.  On 2026-08-05
+    # test_cmd_start_infers_missing_numa_mode_from_realized_fleet launched the
+    # real six-worker API on :8000; it inherited PYTEST_CURRENT_TEST, TMPDIR and
+    # ORCHESTRATOR_TMP_DIR, then served production traffic against pytest lock
+    # files for 21 hours.  Tests that intentionally exercise this function may
+    # proceed only after replacing Popen with a fake. Comparing against the
+    # captured real callable makes the guard structural; there is no ambient
+    # allow flag a leaking test process could accidentally inherit.
+    if os.environ.get("PYTEST_CURRENT_TEST") and subprocess.Popen is _ORIGINAL_SUBPROCESS_POPEN:
+        raise RuntimeError(
+            "refusing to start the orchestrator API from pytest; mock the lifecycle "
+            "boundary with a fake Popen"
+        )
     log_file = LOG_DIR / "orchestrator.log"
 
     print("  Starting orchestrator API on port 8000")

@@ -113,6 +113,13 @@ def test_start_orchestrator_sets_tool_sentinels_by_default(monkeypatch, tmp_path
     assert env["ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT"] == "1"
 
 
+def test_start_orchestrator_refuses_unmocked_pytest_spawn(monkeypatch) -> None:
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "unit-test")
+
+    with pytest.raises(RuntimeError, match="refusing to start the orchestrator API from pytest"):
+        stack.start_orchestrator()
+
+
 def test_start_parser_compiles_registry_by_default(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -221,6 +228,18 @@ def test_cmd_start_infers_missing_numa_mode_from_realized_fleet(
             role=roles[0],
             pid=123,
             port=port,
+            started_at="now",
+            model_path="dev",
+            log_file="dev.log",
+        ),
+    )
+    monkeypatch.setattr(
+        stack_commands,
+        "start_orchestrator",
+        lambda *_args, **_kwargs: stack_commands.ProcessInfo(
+            role="orchestrator",
+            pid=456,
+            port=8000,
             started_at="now",
             model_path="dev",
             log_file="dev.log",

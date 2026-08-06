@@ -25,6 +25,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -126,7 +128,9 @@ def test_flag_off_allows_cross_role_same_region_overlap(tmp_path: Path) -> None:
     )
 
 
-def test_flag_on_serializes_cross_role_same_region(tmp_path: Path) -> None:
+def test_flag_on_serializes_cross_role_same_region(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A-1: with the flag ON, the GLOBAL region mutex serializes cross-role
     same-region acquisition — hold windows are disjoint (one waits)."""
     w1, w2 = _run_two_role_race(tmp_path, flag_on=True)
@@ -136,7 +140,7 @@ def test_flag_on_serializes_cross_role_same_region(tmp_path: Path) -> None:
     # And no leftover GLOBAL lock is held after both exit (clean release):
     from src.runtime.cpu_region_lock import global_region_lock_path
 
-    os.environ["ORCHESTRATOR_TMP_DIR"] = str(tmp_path)
+    monkeypatch.setenv("ORCHESTRATOR_TMP_DIR", str(tmp_path))
     gpath = global_region_lock_path("q0")
     # File may exist (created on demand) but must be acquirable now.
     import fcntl
@@ -148,10 +152,12 @@ def test_flag_on_serializes_cross_role_same_region(tmp_path: Path) -> None:
         fh.close()
 
 
-def test_active_region_holders_ignores_global_pseudo_role(tmp_path: Path) -> None:
+def test_active_region_holders_ignores_global_pseudo_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Attribution must stay role-only: a held GLOBAL lock must NOT surface as
     a 'GLOBAL' role in active_region_holders()."""
-    os.environ["ORCHESTRATOR_TMP_DIR"] = str(tmp_path)
+    monkeypatch.setenv("ORCHESTRATOR_TMP_DIR", str(tmp_path))
     from src.runtime.cpu_region_lock import active_region_holders, global_region_lock_path
     import fcntl
 
