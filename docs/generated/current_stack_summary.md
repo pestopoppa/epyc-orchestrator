@@ -9,9 +9,9 @@ uv run python scripts/registry/stack_change_pipeline.py update
 Source: `orchestration/derived/stack_priors.yaml`
 
 Source fingerprints:
-- orchestration/derived/stack_priors.yaml: `cad7623e4106f7813fc6e48a52d1623475d46f2d88096e4a37328cda822edda1`
+- orchestration/derived/stack_priors.yaml: `777fa2e31ba0b25e9f3cb51eecf78545c352fc446be6e5e33683a6b2380ff7da`
 - orchestration/model_registry.yaml: `4bcba5d7fce3951c3e2c4da275d19397f5d35893ab6345a1f3f1ef619e738635`
-- orchestration/model_descriptors.yaml: `5d41c5de318a46a160459815452db7cbd1811c55e3b6bf1acfbdeefe6fb97380`
+- orchestration/model_descriptors.yaml: `9005339cdd191311346458284e38e46aca1d10964e20d54fc8fa0af56b7d6cc2`
 
 | Role | Port | Model | Tier | Acceleration | Requirements | Throughput | Description |
 |---|---:|---|---|---|---|---:|---|
