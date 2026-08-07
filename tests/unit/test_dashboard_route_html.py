@@ -394,6 +394,121 @@ process.stdout.write(JSON.stringify({{status, badge}}));
     assert rendered["badge"]["dataset"]["panelError"] == "region_locks"
 
 
+def test_region_render_error_replaces_loading_state_with_exact_diagnostic() -> None:
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+    constant_line = next(
+        line for line in body.splitlines() if "const _REGION_LOCK_DIAGNOSTIC_BUILD =" in line
+    )
+    render_start = body.index("function renderPanelErrorChip(name, err)")
+    render_end = body.index("\nfunction clearPanelErrorChip", render_start)
+    renderer = body[render_start:render_end]
+    script = f"""
+const _PANEL_ERROR_BADGE_KEYS = {{region_locks:'region_locks'}};
+{constant_line}
+const _buildRevLoaded = {{git_sha:'9b85bc7'}};
+const badge = {{textContent:'', className:'', title:'', dataset:{{}}}};
+const status = {{textContent:'— loading CPU region-lock matrix…', style:{{}}}};
+const grid = {{innerHTML:'', dataset:{{}}, style:{{}}}};
+const elements = {{'fresh-region_locks':badge, 'region-locks-status':status, 'region-locks-grid':grid}};
+const document = {{getElementById: id => elements[id] || null}};
+const window = {{}};
+const console = {{error(){{}}}};
+const escapeHTML = value => String(value).replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+{renderer}
+renderPanelErrorChip('region_locks', new ReferenceError('activity is not defined'));
+process.stdout.write(JSON.stringify({{badge, status, grid, last:window.__dashboardLastPanelError}}));
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rendered = json.loads(result.stdout)
+
+    diagnostic = "region lock render error [git 9b85bc7]: activity is not defined"
+    assert rendered["status"]["textContent"] == f"— {diagnostic}"
+    assert diagnostic in rendered["grid"]["innerHTML"]
+    assert rendered["grid"]["dataset"]["regionLocksPainted"] == "1"
+    assert rendered["badge"]["textContent"] == "⚠ render error"
+    assert rendered["last"]["message"] == "activity is not defined"
+
+
+def test_full_dashboard_script_snapshot_can_resolve_region_lock_writer() -> None:
+    """Exercise the real lexical scope, not an extracted renderer function."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+    script_start = body.index("<script>\nconst NODE_RADIUS") + len("<script>\n")
+    script_end = body.index("\n</script>", script_start)
+    dashboard_script = body[script_start:script_end]
+    harness = f"""
+const vm = require('vm');
+const elements = {{
+  'topology-strip': {{dataset:{{}}, children:[{{}}]}},
+  'status': {{textContent:''}},
+}};
+let domReadyHandler = null;
+const document = {{
+  readyState:'loading',
+  addEventListener(name, handler) {{ if (name === 'DOMContentLoaded') domReadyHandler = handler; }},
+  getElementById:id => elements[id] || null,
+  querySelectorAll:() => [],
+}};
+const window = {{addEventListener(){{}}}};
+const localStorage = {{getItem:() => null, setItem(){{}}, removeItem(){{}}}};
+const sessionStorage = {{getItem:() => null, setItem(){{}}, removeItem(){{}}}};
+const context = {{
+  document, window, console, Date, Math, JSON, Promise, Map, Set, URLSearchParams,
+  AbortController, TextDecoder, setTimeout, clearTimeout, setInterval, clearInterval,
+  localStorage, sessionStorage,
+}};
+context.globalThis = context;
+vm.createContext(context);
+vm.runInContext({json.dumps(dashboard_script)}, context);
+vm.runInContext(`
+  updateTopology = () => {{}};
+  updateContentionGate = () => {{}};
+  updateCounters = () => {{}};
+  updateTasks = () => {{}};
+  updateDecisions = () => {{}};
+  activeStream = null;
+  _latestRegionLockFrame = {{valid:true, frameId:'existing-coupled'}};
+  window.__dashboardLastPanelError = null;
+  applyDashboardSnapshot({{
+    generated_at:100,
+    region_locks:{{live_frame:{{frame_id:null}}}},
+    activity:{{}},
+    in_flight_tasks:[],
+  }}, 'stream');
+`, context);
+process.stdout.write(JSON.stringify({{
+  writerType:vm.runInContext('typeof updateRegionLocks', context),
+  startupType:vm.runInContext('typeof startDashboard', context),
+  domReadyHandlerType:typeof domReadyHandler,
+  lastError:context.window.__dashboardLastPanelError,
+}}));
+"""
+    result = subprocess.run(
+        ["node", "-"],
+        input=harness,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    rendered = json.loads(result.stdout)
+
+    assert rendered["writerType"] == "function"
+    assert rendered["startupType"] == "function"
+    assert rendered["domReadyHandlerType"] == "function"
+    assert rendered["lastError"] is None
+
+
 def test_valid_live_region_frame_clears_stale_error_and_paints_full_matrix() -> None:
     html_path = (
         Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"

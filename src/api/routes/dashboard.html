@@ -5804,11 +5804,13 @@ const _PANEL_ERROR_BADGE_KEYS = {
     gepa: 'gepa',
     pareto: 'pareto',
 };
+const _REGION_LOCK_DIAGNOSTIC_BUILD = 'region-lock-diag-v1';
 
 function renderPanelErrorChip(name, err) {
+    const errorMessage = err && err.message ? err.message : String(err);
     window.__dashboardLastPanelError = {
         name,
-        message: err && err.message ? err.message : String(err),
+        message: errorMessage,
         at: new Date().toISOString(),
     };
     console.error(`[dashboard:${name}]`, err);
@@ -5819,6 +5821,24 @@ function renderPanelErrorChip(name, err) {
     el.textContent = '⚠ render error';
     el.title = `${name}: ${window.__dashboardLastPanelError.message}`;
     el.dataset.panelError = name;
+    if (name === 'region_locks') {
+        const loadedSha = (_buildRevLoaded && _buildRevLoaded.git_sha)
+            ? String(_buildRevLoaded.git_sha)
+            : '';
+        const buildMarker = loadedSha ? `git ${loadedSha}` : _REGION_LOCK_DIAGNOSTIC_BUILD;
+        const diagnostic = `region lock render error [${buildMarker}]: ${errorMessage}`;
+        const status = document.getElementById('region-locks-status');
+        if (status) {
+            status.textContent = `— ${diagnostic}`;
+            status.style.color = 'var(--bad,#f87171)';
+        }
+        const grid = document.getElementById('region-locks-grid');
+        if (grid) {
+            grid.dataset.regionLocksPainted = '1';
+            grid.style.gridTemplateColumns = '1fr';
+            grid.innerHTML = `<div style="grid-column:1/-1;color:var(--bad,#f87171);font-size:11px">${escapeHTML(diagnostic)}</div>`;
+        }
+    }
 }
 
 function clearPanelErrorChip(name) {
@@ -6885,9 +6905,7 @@ function checkRenderLibs() {
     document.body.insertBefore(banner, document.body.firstChild);
 }
 
-function startDashboard() {
-    checkRenderLibs();
-    async function updateAutopilotProgress() {
+async function updateAutopilotProgress() {
         try {
             const d = await fetchJSON('/dashboard/api/autopilot_progress');
             _latestAutopilotProgress = d;
@@ -7406,6 +7424,8 @@ async function updateRegionLocks(
         }
     }
 
+function startDashboard() {
+    checkRenderLibs();
     (async function () {
         startPanelSafely('freshness-badges', injectFreshnessBadges);
         startPanelSafely('region-locks-primer', ensureRegionLocksPanelPainted);
