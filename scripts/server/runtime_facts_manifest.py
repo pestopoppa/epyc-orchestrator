@@ -152,7 +152,10 @@ def _realized_selected_servers(
     recorded declarative ports (dead full 8070/8072/8085) rather than what the
     launcher actually realized.
     """
-    from src.runtime.instance_topology import topology_idx_for_port
+    from src.runtime.instance_topology import (
+        topology_idx_for_port,
+        topology_instance_for_port,
+    )
 
     known = _known_llama_roles()
     roles_by_port: dict[int, set[str]] = {}
@@ -184,9 +187,25 @@ def _realized_selected_servers(
         if primary not in roles:
             primary = roles[0]
         server: dict[str, Any] = {"port": port, "roles": roles}
-        idx = topology_idx_for_port(primary, port)
-        if idx is not None:
+        # ProcessInfo.role is a logical serving alias for several shared fleets
+        # (the worker processes are launched as ``worker_explore`` while their
+        # physical NUMA topology is keyed by ``worker_general``). Resolving only
+        # the ProcessInfo primary silently dropped ``numa_instance`` from runtime
+        # facts, which in turn degraded config to plain round-robin URLs and
+        # bypassed split-aware placement. Try every realized alias and retain the
+        # first role whose topology actually owns this port.
+        physical_owner = topology_instance_for_port(port)
+        if physical_owner is not None:
+            topology_role, idx = physical_owner
             server["numa_instance"] = idx
+            server["topology_role"] = topology_role
+        else:
+            for topology_role in [primary, *roles]:
+                idx = topology_idx_for_port(topology_role, port)
+                if idx is not None:
+                    server["numa_instance"] = idx
+                    server["topology_role"] = topology_role
+                    break
         servers.append(server)
     return servers
 
@@ -439,9 +458,13 @@ def read_runtime_stack_selected_servers(
     if not isinstance(runtime_stack, Mapping):
         return None
     mode = runtime_stack.get("stack_numa_mode")
-    if not isinstance(mode, str) or read_runtime_stack_numa_mode(
-        manifest_path=path,
-        state_file=state_file,
-    ) is None:
+    if (
+        not isinstance(mode, str)
+        or read_runtime_stack_numa_mode(
+            manifest_path=path,
+            state_file=state_file,
+        )
+        is None
+    ):
         return None
     return _normalized_selected_servers(runtime_stack)

@@ -218,15 +218,41 @@ def test_collect_targets_skips_build_command_failures(
     assert "9999" in out
 
 
+def test_collect_targets_propagates_eval_batch_frontdoor_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inodes = {"/models/frontdoor.gguf": (1, 70, 10**9)}
+    _patch_path_resolution(monkeypatch, inodes)
+    observed: dict[str, Any] = {}
+
+    def build(role_config: Any, port: int, **kwargs: Any) -> list[str]:
+        observed.update({"role_config": role_config, "port": port, **kwargs})
+        return ["llama-server", "-m", "/models/frontdoor.gguf"]
+
+    targets = stack_prewarm.collect_targets(
+        [
+            {
+                "port": 18070,
+                "roles": ["eval_batch_frontdoor"],
+                "eval_batch_frontdoor": True,
+            }
+        ],
+        build,
+        _fake_registry(),
+    )
+
+    assert len(targets) == 1
+    assert observed["port"] == 18070
+    assert observed["eval_batch_frontdoor_mode"] is True
+
+
 # ---------------------------------------------------------------------------
 # prewarm_file — subprocess contract
 # ---------------------------------------------------------------------------
 
 
 def test_prewarm_file_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        stack_prewarm.shutil, "which", lambda binary: f"/usr/bin/{binary}"
-    )
+    monkeypatch.setattr(stack_prewarm.shutil, "which", lambda binary: f"/usr/bin/{binary}")
     calls: list[list[str]] = []
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
@@ -238,15 +264,11 @@ def test_prewarm_file_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert ok is True
     assert msg == "ok"
     assert elapsed >= 0.0
-    assert calls == [
-        ["/usr/bin/numactl", "--interleave=all", "/usr/bin/cat", "/models/x.gguf"]
-    ]
+    assert calls == [["/usr/bin/numactl", "--interleave=all", "/usr/bin/cat", "/models/x.gguf"]]
 
 
 def test_prewarm_file_called_process_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        stack_prewarm.shutil, "which", lambda binary: f"/usr/bin/{binary}"
-    )
+    monkeypatch.setattr(stack_prewarm.shutil, "which", lambda binary: f"/usr/bin/{binary}")
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr=b"cat: missing")
@@ -261,7 +283,9 @@ def test_prewarm_file_called_process_error(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_prewarm_file_missing_numactl(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        stack_prewarm.shutil, "which", lambda binary: None if binary == "numactl" else "/bin/" + binary
+        stack_prewarm.shutil,
+        "which",
+        lambda binary: None if binary == "numactl" else "/bin/" + binary,
     )
     ok, elapsed, msg = stack_prewarm.prewarm_file(Path("/models/x.gguf"))
     assert ok is False
@@ -317,9 +341,7 @@ def test_prewarm_all_happy_path(
         "/models/small.gguf": (1, 2, 1 * 1024**3),
     }
     _patch_path_resolution(monkeypatch, inodes)
-    monkeypatch.setattr(
-        stack_prewarm.shutil, "which", lambda binary: f"/usr/bin/{binary}"
-    )
+    monkeypatch.setattr(stack_prewarm.shutil, "which", lambda binary: f"/usr/bin/{binary}")
     calls: list[list[str]] = []
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
@@ -352,15 +374,11 @@ def test_prewarm_all_returns_nonzero_when_any_warm_fails(
 ) -> None:
     inodes = {"/models/a.gguf": (1, 1, 1), "/models/b.gguf": (1, 2, 1)}
     _patch_path_resolution(monkeypatch, inodes)
-    monkeypatch.setattr(
-        stack_prewarm.shutil, "which", lambda binary: f"/usr/bin/{binary}"
-    )
+    monkeypatch.setattr(stack_prewarm.shutil, "which", lambda binary: f"/usr/bin/{binary}")
 
     def fake_run(cmd: list[str], **kwargs: Any) -> Any:
         if cmd[-1] == "/models/b.gguf":
-            raise subprocess.CalledProcessError(
-                returncode=1, cmd=cmd, stderr=b"disk read error"
-            )
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr=b"disk read error")
         return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
     monkeypatch.setattr(stack_prewarm.subprocess, "run", fake_run)

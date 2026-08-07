@@ -246,6 +246,31 @@ eras:
       unchanged; drain wait is now part of measured wall time. Rebuild the
       frontier from post-boundary trials only.
 
+  - id: E12-eval-mixed-role-split-v3-quality
+    from: "2026-08-07T12:32:51.554623Z"
+    scope: eval_quality
+    policy_version: "task_rate_4d_v3_mixed_role_split"
+    execution_instrument_id: "resource_lanes_v3_mixed_role_split"
+    scoring_schedule_id: "model_judge_tail_v4_gpu_lifecycle_quiescence"
+    note: >
+      Route-aware EvalTower placement boundary. Forced-role homogeneous cohorts retain
+      certified full-server native batching; router-owned mixed pipelines begin on
+      split CPU instances so frontdoor and downstream worker roles can occupy disjoint
+      regions. The auxiliary frontdoor lane is corrected to the post-reduction -np 2 width
+      and locks its physical half topology. API lifecycle plus llama slot quiescence
+      remains mandatory around model-backed scoring.
+
+  - id: E12-autopilot-mixed-role-split-v3-speed
+    from: "2026-08-07T12:32:51.554623Z"
+    scope: autopilot_speed
+    policy_version: "task_rate_4d_v3_mixed_role_split"
+    execution_instrument_id: "resource_lanes_v3_mixed_role_split"
+    scoring_schedule_id: "model_judge_tail_v4_gpu_lifecycle_quiescence"
+    note: >
+      Questions/hour denominator boundary for workload-sensitive native-versus-split
+      burst placement. v2 full-native and v3 mixed-split task rates are not comparable;
+      rebuild the frontier from post-boundary trials only.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.

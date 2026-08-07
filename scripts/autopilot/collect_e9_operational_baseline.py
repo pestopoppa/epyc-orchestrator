@@ -67,9 +67,7 @@ def _sha256_path(path: Path) -> str:
 
 def _source_hashes() -> dict[str, str]:
     """Hash the actual measurement trust boundary, independent of repository HEAD."""
-    return {
-        str(path.relative_to(REPO_ROOT)): _sha256_path(path) for path in SOURCE_PATHS
-    }
+    return {str(path.relative_to(REPO_ROOT)): _sha256_path(path) for path in SOURCE_PATHS}
 
 
 def _utc_now() -> str:
@@ -220,15 +218,12 @@ def _validate_result(result: Any) -> None:
     scoring_unavailable = [
         row
         for row in (getattr(result, "question_results", None) or [])
-        if isinstance(row, dict)
-        and "scoring_unavailable:" in str(row.get("error_detail") or "")
+        if isinstance(row, dict) and "scoring_unavailable:" in str(row.get("error_detail") or "")
     ]
     if scoring_unavailable:
-        errors.append(
-            f"{len(scoring_unavailable)} scorer-infrastructure error(s) are present"
-        )
+        errors.append(f"{len(scoring_unavailable)} scorer-infrastructure error(s) are present")
     if errors:
-        raise RuntimeError("E11 baseline result is not admissible: " + "; ".join(errors))
+        raise RuntimeError("E12 baseline result is not admissible: " + "; ".join(errors))
 
 
 def candidate_baseline_state(result: Any) -> dict[str, Any]:
@@ -288,7 +283,9 @@ def main() -> int:
         try:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise SystemExit("AutoPilot is running; baseline collection requires it stopped") from exc
+            raise SystemExit(
+                "AutoPilot is running; baseline collection requires it stopped"
+            ) from exc
 
         state, state_raw = _load_state()
         _validate_instrument_state(state)
@@ -353,22 +350,28 @@ def main() -> int:
             ),
             "ratify_command": (
                 ".venv/bin/python scripts/autopilot/operator_candidates/"
-                f"ratify_and_apply_e11_operational_baseline.py {args.output.resolve()}"
+                f"ratify_and_apply_e12_operational_baseline.py {args.output.resolve()}"
             ),
         }
         _write_immutable(args.output.resolve(), payload)
-        print(json.dumps({
-            "status": "candidate_written",
-            "path": str(args.output.resolve()),
-            "sha256": _sha256_path(args.output.resolve()),
-            "quality": result.quality,
-            "reliability": result.reliability,
-            "n_questions": result.n_questions,
-            "eval_concurrency": result.eval_concurrency,
-            "eval_wall_s": result.eval_wall_s,
-            "task_rate_qph": result.details.get("task_rate_qph"),
-            "human_apply_required": True,
-        }, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "status": "candidate_written",
+                    "path": str(args.output.resolve()),
+                    "sha256": _sha256_path(args.output.resolve()),
+                    "quality": result.quality,
+                    "reliability": result.reliability,
+                    "n_questions": result.n_questions,
+                    "eval_concurrency": result.eval_concurrency,
+                    "eval_wall_s": result.eval_wall_s,
+                    "task_rate_qph": result.details.get("task_rate_qph"),
+                    "human_apply_required": True,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
     return 0
 
 

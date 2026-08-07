@@ -84,6 +84,7 @@ def collect_targets(
                 worker_type=server.get("worker_type"),
                 vision_mode=server.get("vision", False),
                 vision_type=server.get("vision_type"),
+                eval_batch_frontdoor_mode=server.get("eval_batch_frontdoor", False),
                 numa_instance=server.get("numa_instance", 0),
             )
         except Exception as exc:
@@ -206,10 +207,7 @@ def prewarm_all(
         ports_label = ",".join(str(p) for p in sorted(entry["ports"]))
         ok, elapsed, msg = prewarm_file(entry["path"])
         status = f"OK in {elapsed:.1f}s" if ok else f"FAIL ({msg})"
-        print(
-            f"  [{size_gib:5.1f} GiB] {entry['path'].name} "
-            f"→ ports [{ports_label}]: {status}"
-        )
+        print(f"  [{size_gib:5.1f} GiB] {entry['path'].name} → ports [{ports_label}]: {status}")
         if not ok:
             any_fail = True
     return 1 if any_fail else 0

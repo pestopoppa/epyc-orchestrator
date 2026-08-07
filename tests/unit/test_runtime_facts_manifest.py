@@ -165,6 +165,58 @@ def test_realized_stack_numa_mode_from_state_derives_quarter_and_ignores_dead() 
     assert realized_stack_numa_mode_from_state({}, pid_alive=_alive_only(set())) is None
 
 
+def test_runtime_facts_resolve_worker_logical_alias_to_physical_topology(
+    tmp_path: Path,
+) -> None:
+    full = ProcessInfo(
+        role="worker_explore",
+        pid=201,
+        port=8072,
+        started_at="2026-08-07T00:00:00Z",
+        model_path="/models/worker.gguf",
+        log_file="/logs/worker-8072.log",
+    )
+    half0 = ProcessInfo(
+        role="worker_explore",
+        pid=202,
+        port=8082,
+        started_at="2026-08-07T00:00:00Z",
+        model_path="/models/worker.gguf",
+        log_file="/logs/worker-8082.log",
+    )
+    half1 = ProcessInfo(
+        role="worker_explore",
+        pid=203,
+        port=8182,
+        started_at="2026-08-07T00:00:00Z",
+        model_path="/models/worker.gguf",
+        log_file="/logs/worker-8182.log",
+    )
+    manifest = build_runtime_facts_manifest(
+        state={
+            "server_8072": full,
+            "server_8082": half0,
+            "server_8182": half1,
+            "worker_general": full,
+            "worker_explore": full,
+        },
+        launch_contracts={},
+        stack_priors_path=_write_yaml(
+            tmp_path / "stack_priors.yaml",
+            "stack_priors_version: 4\nstatus: live\nroles: {}\n",
+        ),
+        tmp_dir=tmp_path,
+        source="unit-test",
+        pid_alive=_alive_only({201, 202, 203}),
+    )
+
+    by_port = {row["port"]: row for row in manifest["runtime_stack"]["selected_servers"]}
+    assert by_port[8072]["numa_instance"] == 0
+    assert by_port[8072]["topology_role"] == "worker_general"
+    assert by_port[8082]["numa_instance"] == 1
+    assert by_port[8182]["numa_instance"] == 2
+
+
 def test_write_runtime_facts_manifest_writes_valid_json_and_handles_missing_inputs(
     tmp_path: Path,
 ) -> None:
@@ -184,9 +236,7 @@ def test_write_runtime_facts_manifest_writes_valid_json_and_handles_missing_inpu
                 log_file="/logs/frontdoor.log",
             )
         },
-        launch_contracts={
-            "frontdoor": {"ports": [8070], "launch": {"entries": []}}
-        },
+        launch_contracts={"frontdoor": {"ports": [8070], "launch": {"entries": []}}},
         stack_priors_path=malformed_stack_priors_path,
         stack_numa_mode="full",
         tmp_dir=tmp_path,
@@ -253,48 +303,61 @@ def test_read_runtime_stack_selected_servers_rejects_malformed_or_stale_manifest
     state_file = tmp_path / "orchestrator_state.json"
 
     manifest_path.write_text("{}", encoding="utf-8")
-    assert read_runtime_stack_selected_servers(
-        manifest_path=manifest_path,
-        state_file=state_file,
-    ) is None
+    assert (
+        read_runtime_stack_selected_servers(
+            manifest_path=manifest_path,
+            state_file=state_file,
+        )
+        is None
+    )
 
     manifest_path.write_text(
-        json.dumps({
-            "schema": "epyc.orchestrator.runtime_facts",
-            "schema_version": 1,
-            "runtime_stack": {
-                "stack_numa_mode": "full",
-                "selected_ports": [8070],
-                "selected_servers": [
-                    {"port": 8070, "roles": ["frontdoor"]},
-                    {"port": 8070, "roles": ["duplicate"]},
-                ],
-            },
-        }),
+        json.dumps(
+            {
+                "schema": "epyc.orchestrator.runtime_facts",
+                "schema_version": 1,
+                "runtime_stack": {
+                    "stack_numa_mode": "full",
+                    "selected_ports": [8070],
+                    "selected_servers": [
+                        {"port": 8070, "roles": ["frontdoor"]},
+                        {"port": 8070, "roles": ["duplicate"]},
+                    ],
+                },
+            }
+        ),
         encoding="utf-8",
     )
-    assert read_runtime_stack_selected_servers(
-        manifest_path=manifest_path,
-        state_file=state_file,
-    ) is None
+    assert (
+        read_runtime_stack_selected_servers(
+            manifest_path=manifest_path,
+            state_file=state_file,
+        )
+        is None
+    )
 
     manifest_path.write_text(
-        json.dumps({
-            "schema": "epyc.orchestrator.runtime_facts",
-            "schema_version": 1,
-            "runtime_stack": {
-                "stack_numa_mode": "full",
-                "selected_ports": [8070],
-                "selected_servers": [{"port": 8070, "roles": ["frontdoor"]}],
-            },
-        }),
+        json.dumps(
+            {
+                "schema": "epyc.orchestrator.runtime_facts",
+                "schema_version": 1,
+                "runtime_stack": {
+                    "stack_numa_mode": "full",
+                    "selected_ports": [8070],
+                    "selected_servers": [{"port": 8070, "roles": ["frontdoor"]}],
+                },
+            }
+        ),
         encoding="utf-8",
     )
     state_file.write_text("{}", encoding="utf-8")
-    assert read_runtime_stack_selected_servers(
-        manifest_path=manifest_path,
-        state_file=state_file,
-    ) is None
+    assert (
+        read_runtime_stack_selected_servers(
+            manifest_path=manifest_path,
+            state_file=state_file,
+        )
+        is None
+    )
 
 
 def test_read_runtime_stack_numa_mode_rejects_malformed_stale_or_unknown_mode(
@@ -304,37 +367,50 @@ def test_read_runtime_stack_numa_mode_rejects_malformed_stale_or_unknown_mode(
     state_file = tmp_path / "orchestrator_state.json"
 
     manifest_path.write_text("{}", encoding="utf-8")
-    assert read_runtime_stack_numa_mode(
-        manifest_path=manifest_path,
-        state_file=state_file,
-    ) is None
+    assert (
+        read_runtime_stack_numa_mode(
+            manifest_path=manifest_path,
+            state_file=state_file,
+        )
+        is None
+    )
 
     manifest_path.write_text(
-        json.dumps({
-            "schema": "epyc.orchestrator.runtime_facts",
-            "schema_version": 1,
-            "runtime_stack": {"stack_numa_mode": "bogus"},
-        }),
+        json.dumps(
+            {
+                "schema": "epyc.orchestrator.runtime_facts",
+                "schema_version": 1,
+                "runtime_stack": {"stack_numa_mode": "bogus"},
+            }
+        ),
         encoding="utf-8",
     )
-    assert read_runtime_stack_numa_mode(
-        manifest_path=manifest_path,
-        state_file=state_file,
-    ) is None
+    assert (
+        read_runtime_stack_numa_mode(
+            manifest_path=manifest_path,
+            state_file=state_file,
+        )
+        is None
+    )
 
     manifest_path.write_text(
-        json.dumps({
-            "schema": "epyc.orchestrator.runtime_facts",
-            "schema_version": 1,
-            "runtime_stack": {"stack_numa_mode": "quarter"},
-        }),
+        json.dumps(
+            {
+                "schema": "epyc.orchestrator.runtime_facts",
+                "schema_version": 1,
+                "runtime_stack": {"stack_numa_mode": "quarter"},
+            }
+        ),
         encoding="utf-8",
     )
     state_file.write_text("{}", encoding="utf-8")
-    assert read_runtime_stack_numa_mode(
-        manifest_path=manifest_path,
-        state_file=state_file,
-    ) is None
+    assert (
+        read_runtime_stack_numa_mode(
+            manifest_path=manifest_path,
+            state_file=state_file,
+        )
+        is None
+    )
 
 
 def test_read_runtime_stack_selected_servers_accepts_valid_manifest(tmp_path: Path) -> None:
@@ -370,10 +446,13 @@ roles: {}
     # Realized quarter ports are recorded; the dead full port never is.
     assert 8080 in ports
     assert 8070 not in ports
-    assert read_runtime_stack_numa_mode(
-        manifest_path=manifest_path,
-        state_file=tmp_path / "missing-state.json",
-    ) == "quarter"
+    assert (
+        read_runtime_stack_numa_mode(
+            manifest_path=manifest_path,
+            state_file=tmp_path / "missing-state.json",
+        )
+        == "quarter"
+    )
 
 
 def test_read_runtime_stack_numa_mode_accepts_valid_manifest(tmp_path: Path) -> None:
@@ -398,7 +477,10 @@ roles: {}
         source="unit-test",
     )
 
-    assert read_runtime_stack_numa_mode(
-        manifest_path=manifest_path,
-        state_file=tmp_path / "missing-state.json",
-    ) == "quarter"
+    assert (
+        read_runtime_stack_numa_mode(
+            manifest_path=manifest_path,
+            state_file=tmp_path / "missing-state.json",
+        )
+        == "quarter"
+    )

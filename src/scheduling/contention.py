@@ -47,7 +47,9 @@ CONTENTION_RATIO_FLOOR = 0.85
 # days. Re-bench workflow surfaces the warning even if topology hasn't changed.
 MATRIX_STALENESS_DAYS = 30
 
-DEFAULT_MATRIX_PATH = Path(__file__).resolve().parents[2] / "orchestration" / "contention_matrix.yaml"
+DEFAULT_MATRIX_PATH = (
+    Path(__file__).resolve().parents[2] / "orchestration" / "contention_matrix.yaml"
+)
 
 
 class MatrixStatus(str, enum.Enum):
@@ -94,6 +96,7 @@ class InstancePair:
     instance — could be a true full or a half depending on NUMA_CONFIG) or
     "q0".."q3" (single-quarter instances).
     """
+
     a: str
     b: str
     ratio: float = 0.0
@@ -136,6 +139,7 @@ class SameRoleCertification:
 @dataclass(frozen=True)
 class Nway:
     """A measured N-way (>=2 role) cross-role active set (quarter-level)."""
+
     roles: tuple[str, ...]  # sorted
     ratio: float
     verdict: str  # "allow" / "borderline" / "block"
@@ -196,6 +200,7 @@ def load_contention_matrix(path: Path | None = None) -> ContentionMatrix:
     gracefully (fail-open per handoff line 113).
     """
     import yaml  # imported here so missing yaml doesn't import-break the module
+
     path = path or DEFAULT_MATRIX_PATH
     if not path.exists():
         raise FileNotFoundError(f"contention matrix not found: {path}")
@@ -230,12 +235,15 @@ def load_contention_matrix(path: Path | None = None) -> ContentionMatrix:
             a, b = ip.get("a"), ip.get("b")
             if not a or not b:
                 continue
-            pairs_parsed.append(InstancePair(
-                a=str(a), b=str(b),
-                ratio=float(ip.get("ratio", 0.0)),
-                verdict=str(ip.get("verdict", "")),
-                cv=float(ip.get("cv", 0.0)),
-            ))
+            pairs_parsed.append(
+                InstancePair(
+                    a=str(a),
+                    b=str(b),
+                    ratio=float(ip.get("ratio", 0.0)),
+                    verdict=str(ip.get("verdict", "")),
+                    cv=float(ip.get("cv", 0.0)),
+                )
+            )
         same_role[role] = SameRole(
             role=role,
             verdict=str(entry.get("verdict", "")),
@@ -339,6 +347,7 @@ def matrix_status(
     try:
         mtime = path.stat().st_mtime
         import time
+
         age_days = (time.time() - mtime) / 86400.0
         if age_days > max_age_days:
             return MatrixStatus.STALE
@@ -460,7 +469,14 @@ def nway_policy(
         4-way 1.605x + within-role 1.88-2.86x; covers mixed multi-instance light sets)
       * unmeasured, contains a heavy full/half instance -> QUEUE (fail-closed)
     """
-    rs = tuple(sorted(set(roles)))
+    # Launcher-only lanes are physical placements, not new model/contention
+    # classes. ``eval_batch_frontdoor`` deliberately stays out of the measured
+    # matrix, but its disjoint co-residency verdict must inherit the frontdoor
+    # measurements rather than fail closed forever as an unknown heavy role.
+    # Physical overlap is decided before this function from the auxiliary lane's
+    # own regions, so this alias changes policy identity only—not lock ownership.
+    policy_aliases = {"eval_batch_frontdoor": "frontdoor"}
+    rs = tuple(sorted({policy_aliases.get(str(role), str(role)) for role in roles}))
     if len(rs) < 2:
         return PairDecision.ALLOW
     if isinstance(traffic_class, str):
@@ -472,7 +488,11 @@ def nway_policy(
         try:
             matrix = load_contention_matrix()
         except FileNotFoundError:
-            return PairDecision.QUEUE if traffic_class == TrafficClass.BACKGROUND else PairDecision.ALLOW
+            return (
+                PairDecision.QUEUE
+                if traffic_class == TrafficClass.BACKGROUND
+                else PairDecision.ALLOW
+            )
 
     is_background = traffic_class == TrafficClass.BACKGROUND
 
@@ -663,10 +683,7 @@ def admit_set(
     # means we cannot trust the shape-keyed path; foreground keeps the legacy
     # role-keyed fallback for compatibility. A resolved GPU placement is exempt:
     # it legitimately holds no CPU region, which is an ANSWER, not an absence.
-    if any(
-        claims_cpu_regions(p) and not p.regions
-        for p in (candidate_placement, *active)
-    ):
+    if any(claims_cpu_regions(p) and not p.regions for p in (candidate_placement, *active)):
         if is_background:
             return PairDecision.QUEUE
         if matrix is None:
@@ -725,9 +742,8 @@ def shape_aware_contention_enabled() -> bool:
     disabled → `seam_admit` returns None → callers keep their legacy
     pair_policy/nway_policy path. Default OFF; no live behavior change until an
     operator flips BOTH."""
-    return (
-        _env_on("ORCHESTRATOR_SHAPE_AWARE_CONTENTION")
-        and _env_on("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT")
+    return _env_on("ORCHESTRATOR_SHAPE_AWARE_CONTENTION") and _env_on(
+        "ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT"
     )
 
 
@@ -813,6 +829,7 @@ def seam_admit(
     if active_holders is None:
         try:
             from src.runtime.cpu_region_lock import held_regions_by_role
+
             active_holders = held_regions_by_role(instance_regions)
         except Exception:
             # Audit #2: snapshot failure → occupancy UNKNOWN. Never silently
@@ -920,14 +937,10 @@ def select_backfill_candidate(
     holder, which is the RIGHT answer physically but a live-behaviour change in
     a path C has not authorized yet. Resolve devices here when C is wired.
     """
-    active_placements = [
-        Placement(role, regions) for role, regions in active_holders.items()
-    ]
+    active_placements = [Placement(role, regions) for role, regions in active_holders.items()]
     for role, topology_idx in candidates:
         cand = placement_for_instance(role, topology_idx, instance_regions)
-        decision = admit_set(
-            active_placements, cand, traffic_class, matrix=matrix, floor=floor
-        )
+        decision = admit_set(active_placements, cand, traffic_class, matrix=matrix, floor=floor)
         if decision == PairDecision.ALLOW:
             return (role, topology_idx)
     return None

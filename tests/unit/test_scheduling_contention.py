@@ -195,7 +195,9 @@ def test_matrix_status_stale_topology(minimal_matrix_yaml: Path) -> None:
 
 def test_matrix_status_stale_age(minimal_matrix_yaml: Path) -> None:
     # File just-created; with max_age_days=-1 anything is stale
-    status = contention.matrix_status(minimal_matrix_yaml, current_topology_hash="TEST_HASH", max_age_days=-1)
+    status = contention.matrix_status(
+        minimal_matrix_yaml, current_topology_hash="TEST_HASH", max_age_days=-1
+    )
     assert status == contention.MatrixStatus.STALE
 
 
@@ -216,7 +218,10 @@ def test_policy_block_below_floor(minimal_matrix_yaml: Path) -> None:
         contention.TrafficClass.FOREGROUND_SPECIALIST,
         contention.TrafficClass.BACKGROUND,
     ]:
-        assert contention.pair_policy("frontdoor", "architect_general", tc, matrix=m) == contention.PairDecision.QUEUE
+        assert (
+            contention.pair_policy("frontdoor", "architect_general", tc, matrix=m)
+            == contention.PairDecision.QUEUE
+        )
 
 
 def test_policy_allow_above_one(minimal_matrix_yaml: Path) -> None:
@@ -226,21 +231,34 @@ def test_policy_allow_above_one(minimal_matrix_yaml: Path) -> None:
         contention.TrafficClass.FOREGROUND_INTERACTIVE,
         contention.TrafficClass.BACKGROUND,
     ]:
-        assert contention.pair_policy("frontdoor", "worker_general", tc, matrix=m) == contention.PairDecision.ALLOW
+        assert (
+            contention.pair_policy("frontdoor", "worker_general", tc, matrix=m)
+            == contention.PairDecision.ALLOW
+        )
 
 
 def test_policy_borderline_below_floor_queues_all(minimal_matrix_yaml: Path) -> None:
     """frontdoor + vision_escalation at 0.84 is BELOW the 0.85 floor → QUEUE for
     all classes. Foreground caller can promote to DEGRADED_ALLOW based on SLO."""
     m = contention.load_contention_matrix(minimal_matrix_yaml)
-    assert contention.pair_policy(
-        "frontdoor", "vision_escalation",
-        contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m,
-    ) == contention.PairDecision.QUEUE
-    assert contention.pair_policy(
-        "frontdoor", "vision_escalation",
-        contention.TrafficClass.BACKGROUND, matrix=m,
-    ) == contention.PairDecision.QUEUE
+    assert (
+        contention.pair_policy(
+            "frontdoor",
+            "vision_escalation",
+            contention.TrafficClass.FOREGROUND_INTERACTIVE,
+            matrix=m,
+        )
+        == contention.PairDecision.QUEUE
+    )
+    assert (
+        contention.pair_policy(
+            "frontdoor",
+            "vision_escalation",
+            contention.TrafficClass.BACKGROUND,
+            matrix=m,
+        )
+        == contention.PairDecision.QUEUE
+    )
 
 
 def test_policy_at_floor_allows_foreground(minimal_matrix_yaml: Path) -> None:
@@ -248,62 +266,107 @@ def test_policy_at_floor_allows_foreground(minimal_matrix_yaml: Path) -> None:
     Test by passing a custom floor that puts vision_escalation at-or-just-below."""
     m = contention.load_contention_matrix(minimal_matrix_yaml)
     # With floor=0.80, the 0.84 pair becomes "at-or-above" → foreground ALLOW
-    assert contention.pair_policy(
-        "frontdoor", "vision_escalation",
-        contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m, floor=0.80,
-    ) == contention.PairDecision.ALLOW
-    assert contention.pair_policy(
-        "frontdoor", "vision_escalation",
-        contention.TrafficClass.BACKGROUND, matrix=m, floor=0.80,
-    ) == contention.PairDecision.QUEUE
+    assert (
+        contention.pair_policy(
+            "frontdoor",
+            "vision_escalation",
+            contention.TrafficClass.FOREGROUND_INTERACTIVE,
+            matrix=m,
+            floor=0.80,
+        )
+        == contention.PairDecision.ALLOW
+    )
+    assert (
+        contention.pair_policy(
+            "frontdoor",
+            "vision_escalation",
+            contention.TrafficClass.BACKGROUND,
+            matrix=m,
+            floor=0.80,
+        )
+        == contention.PairDecision.QUEUE
+    )
 
 
 def test_policy_unknown_pair(minimal_matrix_yaml: Path) -> None:
     """Unknown pair → ALLOW foreground, QUEUE background."""
     m = contention.load_contention_matrix(minimal_matrix_yaml)
-    assert contention.pair_policy(
-        "ingest_long_context", "worker_vision",
-        contention.TrafficClass.BACKGROUND, matrix=m,
-    ) == contention.PairDecision.QUEUE
-    assert contention.pair_policy(
-        "ingest_long_context", "worker_vision",
-        contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m,
-    ) == contention.PairDecision.ALLOW
+    assert (
+        contention.pair_policy(
+            "ingest_long_context",
+            "worker_vision",
+            contention.TrafficClass.BACKGROUND,
+            matrix=m,
+        )
+        == contention.PairDecision.QUEUE
+    )
+    assert (
+        contention.pair_policy(
+            "ingest_long_context",
+            "worker_vision",
+            contention.TrafficClass.FOREGROUND_INTERACTIVE,
+            matrix=m,
+        )
+        == contention.PairDecision.ALLOW
+    )
 
 
 def test_policy_same_role_allowed(minimal_matrix_yaml: Path) -> None:
     """frontdoor + frontdoor → ALLOW (matrix says same-role frontdoor is allow)."""
     m = contention.load_contention_matrix(minimal_matrix_yaml)
-    assert contention.pair_policy(
-        "frontdoor", "frontdoor",
-        contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m,
-    ) == contention.PairDecision.ALLOW
+    assert (
+        contention.pair_policy(
+            "frontdoor",
+            "frontdoor",
+            contention.TrafficClass.FOREGROUND_INTERACTIVE,
+            matrix=m,
+        )
+        == contention.PairDecision.ALLOW
+    )
 
 
 def test_policy_same_role_blocked(minimal_matrix_yaml: Path) -> None:
     """vision_escalation + vision_escalation → QUEUE background, DEGRADED_ALLOW foreground."""
     m = contention.load_contention_matrix(minimal_matrix_yaml)
-    assert contention.pair_policy(
-        "vision_escalation", "vision_escalation",
-        contention.TrafficClass.BACKGROUND, matrix=m,
-    ) == contention.PairDecision.QUEUE
-    assert contention.pair_policy(
-        "vision_escalation", "vision_escalation",
-        contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m,
-    ) == contention.PairDecision.DEGRADED_ALLOW
+    assert (
+        contention.pair_policy(
+            "vision_escalation",
+            "vision_escalation",
+            contention.TrafficClass.BACKGROUND,
+            matrix=m,
+        )
+        == contention.PairDecision.QUEUE
+    )
+    assert (
+        contention.pair_policy(
+            "vision_escalation",
+            "vision_escalation",
+            contention.TrafficClass.FOREGROUND_INTERACTIVE,
+            matrix=m,
+        )
+        == contention.PairDecision.DEGRADED_ALLOW
+    )
 
 
 def test_policy_fail_open_on_missing_matrix(monkeypatch, tmp_path: Path) -> None:
     """When matrix is missing, foreground ALLOW, background QUEUE."""
     monkeypatch.setattr(contention, "DEFAULT_MATRIX_PATH", tmp_path / "absent.yaml")
-    assert contention.pair_policy(
-        "frontdoor", "architect_general",
-        contention.TrafficClass.FOREGROUND_INTERACTIVE,
-    ) == contention.PairDecision.ALLOW
-    assert contention.pair_policy(
-        "frontdoor", "architect_general",
-        contention.TrafficClass.BACKGROUND,
-    ) == contention.PairDecision.QUEUE
+    assert (
+        contention.pair_policy(
+            "frontdoor",
+            "architect_general",
+            contention.TrafficClass.FOREGROUND_INTERACTIVE,
+        )
+        == contention.PairDecision.ALLOW
+    )
+    assert (
+        contention.pair_policy(
+            "frontdoor",
+            "architect_general",
+            contention.TrafficClass.BACKGROUND,
+        )
+        == contention.PairDecision.QUEUE
+    )
 
 
 def test_traffic_class_string_coerces(minimal_matrix_yaml: Path) -> None:
@@ -313,7 +376,9 @@ def test_traffic_class_string_coerces(minimal_matrix_yaml: Path) -> None:
     decision = contention.pair_policy("frontdoor", "architect_general", "background", matrix=m)
     assert decision == contention.PairDecision.QUEUE
     # "foreground_interactive" string should work
-    decision = contention.pair_policy("frontdoor", "architect_general", "foreground_interactive", matrix=m)
+    decision = contention.pair_policy(
+        "frontdoor", "architect_general", "foreground_interactive", matrix=m
+    )
     assert decision == contention.PairDecision.QUEUE
 
 
@@ -332,8 +397,14 @@ def test_topology_fingerprint_deterministic() -> None:
 
 def test_topology_fingerprint_order_independent() -> None:
     """Same content in different insertion order should hash identically."""
-    a = {"frontdoor": {"instances": [("0-47", 8070, 96)]}, "worker_general": {"instances": [("0-95", 8072, 96)]}}
-    b = {"worker_general": {"instances": [("0-95", 8072, 96)]}, "frontdoor": {"instances": [("0-47", 8070, 96)]}}
+    a = {
+        "frontdoor": {"instances": [("0-47", 8070, 96)]},
+        "worker_general": {"instances": [("0-95", 8072, 96)]},
+    }
+    b = {
+        "worker_general": {"instances": [("0-95", 8072, 96)]},
+        "frontdoor": {"instances": [("0-47", 8070, 96)]},
+    }
     assert contention.topology_fingerprint(a) == contention.topology_fingerprint(b)
 
 
@@ -353,7 +424,13 @@ def test_topology_fingerprint_detects_change() -> None:
 def test_topology_fingerprint_ignores_metadata() -> None:
     """mlock and numactl_policy should NOT change the topology fingerprint."""
     a = {"frontdoor": {"instances": [("0-47", 8070, 96)], "mlock": True}}
-    b = {"frontdoor": {"instances": [("0-47", 8070, 96)], "mlock": False, "numactl_policy": "interleave=all"}}
+    b = {
+        "frontdoor": {
+            "instances": [("0-47", 8070, 96)],
+            "mlock": False,
+            "numactl_policy": "interleave=all",
+        }
+    }
     assert contention.topology_fingerprint(a) == contention.topology_fingerprint(b)
 
 
@@ -414,6 +491,33 @@ def test_topology_fingerprint_for_matrix_excludes_unmeasured_auxiliary_role() ->
     )
     assert contention.topology_fingerprint_for_matrix(live, matrix) != (
         contention.topology_fingerprint(live)
+    )
+
+
+def test_nway_policy_maps_eval_batch_lane_to_measured_frontdoor_identity() -> None:
+    matrix = contention.ContentionMatrix(
+        version=1,
+        measured_at="",
+        host="",
+        topology_hash="synthetic",
+        default_floor=0.85,
+        pairs={},
+        n_way={
+            ("frontdoor", "worker_general"): contention.Nway(
+                roles=("frontdoor", "worker_general"),
+                ratio=1.2,
+                verdict="allow",
+            )
+        },
+    )
+
+    assert (
+        contention.nway_policy(
+            ["eval_batch_frontdoor", "worker_general"],
+            contention.TrafficClass.BACKGROUND,
+            matrix=matrix,
+        )
+        == contention.PairDecision.ALLOW
     )
 
 
@@ -503,16 +607,27 @@ def _nway_test_matrix():
     with the production light/heavy role classification."""
     Nway = contention.Nway
     return contention.ContentionMatrix(
-        version=1, measured_at="", host="", topology_hash="t", default_floor=0.85,
+        version=1,
+        measured_at="",
+        host="",
+        topology_hash="t",
+        default_floor=0.85,
         n_way={
             ("frontdoor", "ingest_long_context", "vision_escalation"): Nway(
                 roles=("frontdoor", "ingest_long_context", "vision_escalation"),
-                ratio=0.847, verdict="block", contains_heavy=True),
+                ratio=0.847,
+                verdict="block",
+                contains_heavy=True,
+            ),
             ("frontdoor", "vision_escalation", "worker_general"): Nway(
                 roles=("frontdoor", "vision_escalation", "worker_general"),
-                ratio=1.607, verdict="allow"),
+                ratio=1.607,
+                verdict="allow",
+            ),
         },
-        light_roles=frozenset({"frontdoor", "vision_escalation", "worker_general", "worker_vision"}),
+        light_roles=frozenset(
+            {"frontdoor", "vision_escalation", "worker_general", "worker_vision"}
+        ),
         heavy_roles=frozenset({"ingest_long_context", "architect_general"}),
     )
 
@@ -522,30 +637,53 @@ def test_nway_policy_measured_block_queues_even_when_pairs_allow():
     constituent pair is allow ({frontdoor,ingest,vision} = 0.847)."""
     m = _nway_test_matrix()
     roles = ["frontdoor", "ingest_long_context", "vision_escalation"]
-    assert contention.nway_policy(roles, contention.TrafficClass.BACKGROUND, matrix=m) == contention.PairDecision.QUEUE
-    assert contention.nway_policy(roles, contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m) == contention.PairDecision.QUEUE
+    assert (
+        contention.nway_policy(roles, contention.TrafficClass.BACKGROUND, matrix=m)
+        == contention.PairDecision.QUEUE
+    )
+    assert (
+        contention.nway_policy(roles, contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m)
+        == contention.PairDecision.QUEUE
+    )
 
 
 def test_nway_policy_measured_allow():
     m = _nway_test_matrix()
-    assert contention.nway_policy(
-        ["frontdoor", "vision_escalation", "worker_general"],
-        contention.TrafficClass.BACKGROUND, matrix=m) == contention.PairDecision.ALLOW
+    assert (
+        contention.nway_policy(
+            ["frontdoor", "vision_escalation", "worker_general"],
+            contention.TrafficClass.BACKGROUND,
+            matrix=m,
+        )
+        == contention.PairDecision.ALLOW
+    )
 
 
 def test_nway_policy_all_light_unmeasured_allows_both_classes():
     """Unmeasured but all-light (covers mixed multi-instance via role-set dedup)."""
     m = _nway_test_matrix()
     roles = ["frontdoor", "worker_general", "worker_vision"]  # not in n_way, all light
-    assert contention.nway_policy(roles, contention.TrafficClass.BACKGROUND, matrix=m) == contention.PairDecision.ALLOW
-    assert contention.nway_policy(roles, contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m) == contention.PairDecision.ALLOW
+    assert (
+        contention.nway_policy(roles, contention.TrafficClass.BACKGROUND, matrix=m)
+        == contention.PairDecision.ALLOW
+    )
+    assert (
+        contention.nway_policy(roles, contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m)
+        == contention.PairDecision.ALLOW
+    )
 
 
 def test_nway_policy_heavy_unmeasured_fail_open_fg_closed_bg():
     m = _nway_test_matrix()
     roles = ["ingest_long_context", "worker_vision"]  # not in n_way, contains heavy
-    assert contention.nway_policy(roles, contention.TrafficClass.BACKGROUND, matrix=m) == contention.PairDecision.QUEUE
-    assert contention.nway_policy(roles, contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m) == contention.PairDecision.ALLOW
+    assert (
+        contention.nway_policy(roles, contention.TrafficClass.BACKGROUND, matrix=m)
+        == contention.PairDecision.QUEUE
+    )
+    assert (
+        contention.nway_policy(roles, contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m)
+        == contention.PairDecision.ALLOW
+    )
 
 
 def test_nway_policy_single_role_is_allow():
@@ -556,8 +694,12 @@ def test_nway_policy_single_role_is_allow():
 
 def test_nway_policy_order_independent():
     m = _nway_test_matrix()
-    a = contention.nway_policy(["vision_escalation", "frontdoor", "ingest_long_context"], "background", matrix=m)
-    b = contention.nway_policy(["ingest_long_context", "vision_escalation", "frontdoor"], "background", matrix=m)
+    a = contention.nway_policy(
+        ["vision_escalation", "frontdoor", "ingest_long_context"], "background", matrix=m
+    )
+    b = contention.nway_policy(
+        ["ingest_long_context", "vision_escalation", "frontdoor"], "background", matrix=m
+    )
     assert a == b == contention.PairDecision.QUEUE
 
 
@@ -649,7 +791,7 @@ def test_emitter_freshly_measured_same_role_supersedes_the_preserved_block(
 
     existing = tmp_path / "contention_matrix.yaml"
     existing.write_text(
-        'version: 1\ndefault_floor: 0.85\n\n'
+        "version: 1\ndefault_floor: 0.85\n\n"
         'same_role:\n  - role: "worker_general"\n    verdict: "block"\n'
         'nway_light_roles: ["frontdoor"]\n'
     )

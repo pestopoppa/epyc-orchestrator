@@ -70,6 +70,7 @@ def _extract_port(url: str) -> int | None:
         return None
     try:
         from urllib.parse import urlparse
+
         parsed = urlparse(_primary_url(url))
         return parsed.port
     except Exception:
@@ -129,16 +130,70 @@ def _role_config_for_backend(registry: Any | None, role: str):
 
 def _per_region_locks_enabled() -> bool:
     return os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip() in {
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     }
 
 
 def _backend_manages_region_locks(backend: Any) -> bool:
     """True for backends that acquire cpu_region_lock internally."""
-    return (
-        hasattr(backend, "_dispatch")
-        and hasattr(backend, "_tap_dispatch_metadata")
-    )
+    return hasattr(backend, "_dispatch") and hasattr(backend, "_tap_dispatch_metadata")
+
+
+def _direct_native_batch_lock_spec(
+    owner: Any,
+    role: str,
+    backend_url: str,
+    *,
+    request: Any | None = None,
+) -> tuple[str, int, int] | None:
+    """Return the certified shared-lock spec for one direct CPU backend.
+
+    Direct auxiliary lanes do not have a ``ConcurrencyAwareBackend`` dispatcher,
+    but their external region lock still owns placement and native-slot capacity.
+    This helper is shared by the coarse-gate bypass and the actual lock acquire so
+    the two decisions cannot drift apart.
+    """
+    if not backend_url or not _per_region_locks_enabled():
+        return None
+    try:
+        from src.llm_primitives.backend import _certified_native_batch_width
+        from src.runtime.cpu_region_lock import _cross_role_mutex_enabled
+        from src.runtime.instance_topology import topology_instance_for_port
+
+        resolved = topology_instance_for_port(_extract_port(backend_url) or 0)
+        lock_role, lock_idx = resolved or (role, 0)
+        if request is None:
+            workload_class = owner.get_request_workload_class()
+            batch_id = owner.get_request_batch_id()
+            placement_mode = owner.get_batch_placement_mode()
+        else:
+            workload_class = getattr(request, "workload_class", "")
+            batch_id = getattr(request, "batch_id", "")
+            placement_mode = getattr(request, "batch_placement_mode", "auto")
+        native_width = _certified_native_batch_width(
+            owner,
+            topology_role=lock_role,
+            full_url=backend_url,
+            logical_role=role,
+        )
+        if (
+            native_width > 1
+            and _cross_role_mutex_enabled()
+            and str(workload_class or "") == "eval_batch"
+            and bool(str(batch_id or "").strip())
+            and (
+                str(placement_mode or "auto") != "mixed_role_split"
+                or lock_role == "eval_batch_frontdoor"
+            )
+            and lock_idx == 0
+        ):
+            return lock_role, lock_idx, native_width
+    except Exception:
+        return None
+    return None
 
 
 def _shape_for_regions(regions: frozenset[str] | set[str] | list[str]) -> str:
@@ -309,9 +364,12 @@ class InferenceMixin:
         )
         from src.scheduling.contention import TrafficClass, shape_aware_contention_enabled
 
-        priority = self.get_request_priority() if hasattr(self, "get_request_priority") else "interactive"
+        priority = (
+            self.get_request_priority() if hasattr(self, "get_request_priority") else "interactive"
+        )
         traffic_class = (
-            TrafficClass.BACKGROUND if str(priority).lower() == "background"
+            TrafficClass.BACKGROUND
+            if str(priority).lower() == "background"
             else TrafficClass.FOREGROUND_INTERACTIVE
         )
         max_wait_ms = (
@@ -331,10 +389,16 @@ class InferenceMixin:
             )
 
         backend = self._backends.get(role) if hasattr(self, "_backends") else None
+        backend_url = _primary_url(self.server_urls.get(role, "")) if self.server_urls else ""
+        direct_native_lock = (
+            _direct_native_batch_lock_spec(self, role, backend_url)
+            if backend is not None and not _backend_manages_region_locks(backend)
+            else None
+        )
         defer_to_dispatch = (
             backend is not None
-            and _backend_manages_region_locks(backend)
             and shape_aware_contention_enabled()
+            and (_backend_manages_region_locks(backend) or direct_native_lock is not None)
         )
         if not defer_to_dispatch:
             gate = get_gate()
@@ -353,15 +417,29 @@ class InferenceMixin:
         if acquire:
             with acquire(role):
                 return self._real_call_impl(
-                    prompt, role, n_tokens, stop_sequences,
-                    json_schema=json_schema, grammar=grammar,
-                    temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
+                    prompt,
+                    role,
+                    n_tokens,
+                    stop_sequences,
+                    json_schema=json_schema,
+                    grammar=grammar,
+                    temperature=temperature,
+                    seed=seed,
+                    top_p=top_p,
+                    top_k=top_k,
                     n_probs=n_probs,
                 )
         return self._real_call_impl(
-            prompt, role, n_tokens, stop_sequences,
-            json_schema=json_schema, grammar=grammar,
-            temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
+            prompt,
+            role,
+            n_tokens,
+            stop_sequences,
+            json_schema=json_schema,
+            grammar=grammar,
+            temperature=temperature,
+            seed=seed,
+            top_p=top_p,
+            top_k=top_k,
             n_probs=n_probs,
         )
 
@@ -385,14 +463,21 @@ class InferenceMixin:
 
         cache = getattr(self, "_content_cache", None)
         cache_key = None
-        if cache is not None and _get_features().content_cache and stop_sequences is None and n_probs is None:
+        if (
+            cache is not None
+            and _get_features().content_cache
+            and stop_sequences is None
+            and n_probs is None
+        ):
             from src.llm_cache import ContentAddressableCache
 
             sampling_key = _sampling_cache_key(
                 temperature=temperature, seed=seed, top_p=top_p, top_k=top_k
             )
             cache_key = ContentAddressableCache.make_key(
-                prompt, role, n_tokens,
+                prompt,
+                role,
+                n_tokens,
                 model_hash=getattr(self, "_model_hash", ""),
                 sampling_key=sampling_key,
             )
@@ -403,9 +488,16 @@ class InferenceMixin:
         result = None
         try:
             result = self._real_call_single(
-                prompt, role, n_tokens, stop_sequences,
-                json_schema=json_schema, grammar=grammar,
-                temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
+                prompt,
+                role,
+                n_tokens,
+                stop_sequences,
+                json_schema=json_schema,
+                grammar=grammar,
+                temperature=temperature,
+                seed=seed,
+                top_p=top_p,
+                top_k=top_k,
                 n_probs=n_probs,
             )
         except RuntimeError as primary_error:
@@ -429,13 +521,22 @@ class InferenceMixin:
                 fb_role_str = str(fallback_role)
                 log.warning(
                     "Model fallback: %s → %s (reason: %s)",
-                    role, fb_role_str, reason,
+                    role,
+                    fb_role_str,
+                    reason,
                 )
                 try:
                     result = self._real_call_single(
-                        prompt, fb_role_str, n_tokens, stop_sequences,
-                        json_schema=json_schema, grammar=grammar,
-                        temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
+                        prompt,
+                        fb_role_str,
+                        n_tokens,
+                        stop_sequences,
+                        json_schema=json_schema,
+                        grammar=grammar,
+                        temperature=temperature,
+                        seed=seed,
+                        top_p=top_p,
+                        top_k=top_k,
                         n_probs=n_probs,
                     )
                     break
@@ -470,9 +571,17 @@ class InferenceMixin:
         backend = self._backends.get(role)
         if backend is not None:
             return self._call_caching_backend(
-                backend, prompt, role, n_tokens, stop_sequences,
-                json_schema=json_schema, grammar=grammar,
-                temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
+                backend,
+                prompt,
+                role,
+                n_tokens,
+                stop_sequences,
+                json_schema=json_schema,
+                grammar=grammar,
+                temperature=temperature,
+                seed=seed,
+                top_p=top_p,
+                top_k=top_k,
                 n_probs=n_probs,
             )
 
@@ -485,8 +594,8 @@ class InferenceMixin:
         from src.model_server import InferenceRequest
         from src.config import get_config
 
-        role_timeout = get_config().timeouts.role_timeouts_dict().get(
-            role, self.config.call_timeout
+        role_timeout = (
+            get_config().timeouts.role_timeouts_dict().get(role, self.config.call_timeout)
         )
         role_timeout = self._clamp_timeout_to_request_budget(role_timeout)
 
@@ -605,12 +714,13 @@ class InferenceMixin:
             Model response.
         """
         from src.model_server import InferenceRequest
+
         role_config = _role_config_for_backend(getattr(self, "registry", None), role)
 
         from src.config import get_config
 
-        role_timeout = get_config().timeouts.role_timeouts_dict().get(
-            role, self.config.call_timeout
+        role_timeout = (
+            get_config().timeouts.role_timeouts_dict().get(role, self.config.call_timeout)
         )
         role_timeout = self._clamp_timeout_to_request_budget(role_timeout)
 
@@ -667,9 +777,7 @@ class InferenceMixin:
                 deadline_s=deadline_s,
                 cancel_check=cancel_check,
             ):
-                raise RuntimeError(
-                    f"[ERROR: admission] Backend queue full for {backend_url}"
-                )
+                raise RuntimeError(f"[ERROR: admission] Backend queue full for {backend_url}")
             admitted = True
 
         # WP-12 fleet layer: a fleet-shared backend records health per
@@ -700,13 +808,12 @@ class InferenceMixin:
             if backend_url and self.health_tracker:
                 if fleet_managed:
                     if not backend.any_endpoint_available():
-                        raise RuntimeError(
-                            f"Backend unavailable (circuit open): {backend_url}"
-                        )
+                        raise RuntimeError(f"Backend unavailable (circuit open): {backend_url}")
                 elif not self.health_tracker.is_available(backend_url):
                     raise RuntimeError(f"Backend unavailable (circuit open): {backend_url}")
 
             from src.inference_lock import inference_lock
+
             can_stream = False
             _cb_port = _extract_port(backend_url)
             # Phase 3 of per-region-lock migration (2026-05-22): while the
@@ -735,37 +842,14 @@ class InferenceMixin:
                     "deadline_s": self.get_request_deadline_s(),
                     "request_tag": self.get_request_task_id(),
                 }
-                try:
-                    from src.llm_primitives.backend import _certified_native_batch_width
-                    from src.runtime.cpu_region_lock import _cross_role_mutex_enabled
-
-                    native_width = _certified_native_batch_width(
-                        self,
-                        topology_role=lock_role,
-                        full_url=backend_url,
-                        logical_role=role,
-                    )
-                    direct_native_batch = (
-                        native_width > 1
-                        and _cross_role_mutex_enabled()
-                        and str(getattr(request, "workload_class", "") or "")
-                        == "eval_batch"
-                        and bool(str(getattr(request, "batch_id", "") or "").strip())
-                        # Mixed pipelines must not share an all-region full
-                        # lease, but the auxiliary frontdoor process is already
-                        # physically half-sized. Its two native slots can share
-                        # that half while a worker occupies the disjoint half.
-                        and (
-                            str(getattr(request, "batch_placement_mode", "auto"))
-                            != "mixed_role_split"
-                            or lock_role == "eval_batch_frontdoor"
-                        )
-                        and lock_idx == 0
-                    )
-                except Exception:
-                    native_width = 1
-                    direct_native_batch = False
-                if direct_native_batch:
+                direct_native_lock = _direct_native_batch_lock_spec(
+                    self,
+                    role,
+                    backend_url,
+                    request=request,
+                )
+                if direct_native_lock is not None:
+                    _native_lock_role, _native_lock_idx, native_width = direct_native_lock
                     lock_kwargs.update(
                         shared=True,
                         capacity=native_width,
@@ -812,12 +896,8 @@ class InferenceMixin:
                             "backend_dispatched",
                             details={
                                 "backend_url": backend_url,
-                                "topology_role": direct_region_metadata.get(
-                                    "topology_role", role
-                                ),
-                                "instance_idx": direct_region_metadata.get(
-                                    "instance_idx", 0
-                                ),
+                                "topology_role": direct_region_metadata.get("topology_role", role),
+                                "instance_idx": direct_region_metadata.get("instance_idx", 0),
                                 "instance_shape": direct_region_metadata.get(
                                     "instance_shape", "unknown"
                                 ),
@@ -840,9 +920,7 @@ class InferenceMixin:
                             port=_cb_port,
                             task_id=self.get_request_task_id(),
                             parent_request_id=(
-                                self.get_request_id()
-                                if hasattr(self, "get_request_id")
-                                else None
+                                self.get_request_id() if hasattr(self, "get_request_id") else None
                             ),
                             context_trial_id=(
                                 self.get_request_trial_id()
@@ -897,7 +975,9 @@ class InferenceMixin:
                                 )
                             else:
                                 # Prefer streaming for cancellation support
-                                if not wants_probabilities and hasattr(backend, "infer_stream_text"):
+                                if not wants_probabilities and hasattr(
+                                    backend, "infer_stream_text"
+                                ):
                                     _cancel_tap = self.get_request_cancel_check()
 
                                     def _on_chunk_tap(content: str) -> None:
@@ -970,7 +1050,9 @@ class InferenceMixin:
                 "prompt_ms": result.prompt_eval_ms,
                 "gen_ms": result.generation_ms,
                 "overhead_ms": result.http_overhead_ms,
-                "completion_probabilities": list(getattr(result, "completion_probabilities", []) or []),
+                "completion_probabilities": list(
+                    getattr(result, "completion_probabilities", []) or []
+                ),
             }
             if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
                 log.warning(

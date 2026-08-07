@@ -198,7 +198,9 @@ def test_env_branch_importerror_is_logged_not_swallowed(monkeypatch, caplog) -> 
     assert any("env-filter branch failed" in rec.message for rec in caplog.records)
 
 
-def test_bootstrap_runtime_facts_accepts_quarter_without_scripts_server_imports(tmp_path, monkeypatch) -> None:
+def test_bootstrap_runtime_facts_accepts_quarter_without_scripts_server_imports(
+    tmp_path, monkeypatch
+) -> None:
     servers = [
         _server(8080, "frontdoor"),
         _server(8082, "worker_general"),
@@ -218,17 +220,38 @@ def test_bootstrap_runtime_facts_accepts_quarter_without_scripts_server_imports(
 @pytest.mark.parametrize(
     ("mode", "servers"),
     [
-        ("full", [_server(8070, "frontdoor"), _server(8072, "worker_general"), _server(8085, "ingest_long_context")]),
-        ("both", [_server(8070, "frontdoor"), _server(8080, "frontdoor"), _server(8072, "worker_general"), _server(8082, "worker_general"), _server(8085, "ingest_long_context"), _server(8185, "ingest_long_context")]),
+        (
+            "full",
+            [
+                _server(8070, "frontdoor"),
+                _server(8072, "worker_general"),
+                _server(8085, "ingest_long_context"),
+            ],
+        ),
+        (
+            "both",
+            [
+                _server(8070, "frontdoor"),
+                _server(8080, "frontdoor"),
+                _server(8072, "worker_general"),
+                _server(8082, "worker_general"),
+                _server(8085, "ingest_long_context"),
+                _server(8185, "ingest_long_context"),
+            ],
+        ),
     ],
 )
-def test_bootstrap_runtime_facts_preserves_realized_full_and_both_modes(tmp_path, monkeypatch, mode, servers) -> None:
+def test_bootstrap_runtime_facts_preserves_realized_full_and_both_modes(
+    tmp_path, monkeypatch, mode, servers
+) -> None:
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", mode)
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setattr(models, "_bootstrap_port_listening", _fulls_live)
     # A partially initialized scripts.server module must not affect the
     # stdlib-only bootstrap reader.
-    monkeypatch.setitem(sys.modules, "scripts.server.runtime_facts_manifest", types.ModuleType("partial"))
+    monkeypatch.setitem(
+        sys.modules, "scripts.server.runtime_facts_manifest", types.ModuleType("partial")
+    )
     (tmp_path / "orchestrator_runtime_facts.json").write_text(
         json.dumps(_runtime_facts(mode, servers)), encoding="utf-8"
     )
@@ -289,9 +312,7 @@ def test_runtime_selected_aliases_do_not_fall_back_to_dead_static_ports() -> Non
     # otherwise a newly added alias would be silently untested.
     assert set(aliases.values()) <= set(host_ports)
 
-    lineup = [
-        _server(port, host) for host, ports in host_ports.items() for port in ports
-    ]
+    lineup = [_server(port, host) for host, ports in host_ports.items() for port in ports]
     urls = models._selected_server_url_values(lineup)
 
     for host, ports in host_ports.items():
@@ -304,3 +325,32 @@ def test_runtime_selected_aliases_do_not_fall_back_to_dead_static_ports() -> Non
     for value in urls.values():
         for dead_port in _FULL_HOST_PORTS:
             assert str(dead_port) not in value
+
+
+def test_runtime_selected_worker_shape_preserves_full_marker() -> None:
+    lineup = [
+        {
+            "port": 8072,
+            "roles": ["worker_explore", "worker_general"],
+            "numa_instance": 0,
+            "topology_role": "worker_general",
+        },
+        {
+            "port": 8082,
+            "roles": ["worker_explore"],
+            "numa_instance": 1,
+            "topology_role": "worker_general",
+        },
+        {
+            "port": 8182,
+            "roles": ["worker_explore"],
+            "numa_instance": 2,
+            "topology_role": "worker_general",
+        },
+    ]
+
+    urls = models._selected_server_url_values(lineup)
+
+    expected = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182"
+    assert urls["worker_general"] == expected
+    assert urls["worker_explore"] == expected

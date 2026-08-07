@@ -43,6 +43,8 @@ _FD_REGIONS = {
     ("frontdoor", 4): frozenset({"q3"}),
     ("ingest_long_context", 0): frozenset({"q0", "q1"}),
     ("ingest_long_context", 3): frozenset({"q2"}),
+    ("eval_batch_frontdoor", 0): frozenset({"q0", "q1"}),
+    ("worker_general", 2): frozenset({"q2", "q3"}),
 }
 
 
@@ -57,34 +59,46 @@ def shape_aware_on(monkeypatch):
 
 def _matrix(*, n_way=None, pairs=None, same_role=None, light=(), heavy=()):
     nway = {}
-    for roles, ratio, verdict in (n_way or []):
+    for roles, ratio, verdict in n_way or []:
         key = tuple(sorted(roles))
-        nway[key] = Nway(roles=key, ratio=ratio, verdict=verdict,
-                         contains_heavy=any(r in heavy for r in key))
+        nway[key] = Nway(
+            roles=key, ratio=ratio, verdict=verdict, contains_heavy=any(r in heavy for r in key)
+        )
     pair_map = {}
-    for roles, ratio, verdict in (pairs or []):
+    for roles, ratio, verdict in pairs or []:
         key = tuple(sorted(roles))
         pair_map[key] = Pair(roles=key, ratio=ratio, verdict=verdict)
     sr = {}
-    for role, verdict in (same_role or []):
+    for role, verdict in same_role or []:
         sr[role] = SameRole(role=role, verdict=verdict)
     return ContentionMatrix(
-        version=1, measured_at="", host="", topology_hash="synthetic",
-        default_floor=0.85, pairs=pair_map, same_role=sr,
-        unknown_pairs=[], n_way=nway,
-        light_roles=frozenset(light), heavy_roles=frozenset(heavy),
+        version=1,
+        measured_at="",
+        host="",
+        topology_hash="synthetic",
+        default_floor=0.85,
+        pairs=pair_map,
+        same_role=sr,
+        unknown_pairs=[],
+        n_way=nway,
+        light_roles=frozenset(light),
+        heavy_roles=frozenset(heavy),
     )
 
 
 # ── P2b: default-off / dual-flag gate ─────────────────────────────────
+
 
 def test_seam_default_off_returns_none(monkeypatch) -> None:
     monkeypatch.delenv("ORCHESTRATOR_SHAPE_AWARE_CONTENTION", raising=False)
     monkeypatch.delenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", raising=False)
     assert shape_aware_contention_enabled() is False
     out = seam_admit(
-        "frontdoor", 3, {"frontdoor": frozenset({"q0"})},
-        traffic_class=TrafficClass.BACKGROUND, instance_regions=_FD_REGIONS,
+        "frontdoor",
+        3,
+        {"frontdoor": frozenset({"q0"})},
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
         matrix=_matrix(same_role=[("frontdoor", "block")]),
     )
     assert out is None
@@ -114,8 +128,11 @@ def test_seam_only_shape_flag_makes_seam_return_none(monkeypatch) -> None:
     monkeypatch.setenv("ORCHESTRATOR_SHAPE_AWARE_CONTENTION", "1")
     monkeypatch.delenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", raising=False)
     out = seam_admit(
-        "frontdoor", 3, {"frontdoor": frozenset({"q0"})},
-        traffic_class=TrafficClass.BACKGROUND, instance_regions=_FD_REGIONS,
+        "frontdoor",
+        3,
+        {"frontdoor": frozenset({"q0"})},
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
         matrix=_matrix(same_role=[("frontdoor", "block")]),
     )
     assert out is None
@@ -124,14 +141,18 @@ def test_seam_only_shape_flag_makes_seam_return_none(monkeypatch) -> None:
 def test_seam_flag_on_enables(shape_aware_on) -> None:
     assert shape_aware_contention_enabled() is True
     out = seam_admit(
-        "frontdoor", 3, {},  # no holders
-        traffic_class=TrafficClass.BACKGROUND, instance_regions=_FD_REGIONS,
+        "frontdoor",
+        3,
+        {},  # no holders
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
         matrix=_matrix(),
     )
     assert out == PairDecision.ALLOW
 
 
 # ── P2a: same-role preservation ───────────────────────────────────────
+
 
 def test_seam_same_role_block_queues_where_admit_set_allows(shape_aware_on) -> None:
     """The crux. frontdoor holds q0; candidate frontdoor.q2 (disjoint). With a
@@ -141,8 +162,14 @@ def test_seam_same_role_block_queues_where_admit_set_allows(shape_aware_on) -> N
     m = _matrix(same_role=[("frontdoor", "block")])
     active = {"frontdoor": frozenset({"q0"})}
 
-    seam = seam_admit("frontdoor", 3, active, traffic_class=TrafficClass.BACKGROUND,
-                      instance_regions=_FD_REGIONS, matrix=m)
+    seam = seam_admit(
+        "frontdoor",
+        3,
+        active,
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
+        matrix=m,
+    )
     assert seam == PairDecision.QUEUE
 
     # Plain admit_set on the same scenario collapses to ALLOW — the bug the
@@ -150,56 +177,101 @@ def test_seam_same_role_block_queues_where_admit_set_allows(shape_aware_on) -> N
     naive = admit_set(
         (Placement("frontdoor", frozenset({"q0"})),),
         Placement("frontdoor", frozenset({"q2"})),
-        TrafficClass.BACKGROUND, matrix=m,
+        TrafficClass.BACKGROUND,
+        matrix=m,
     )
     assert naive == PairDecision.ALLOW
 
 
 def test_seam_same_role_allow_passes(shape_aware_on) -> None:
     m = _matrix(same_role=[("frontdoor", "allow")])
-    out = seam_admit("frontdoor", 3, {"frontdoor": frozenset({"q0"})},
-                     traffic_class=TrafficClass.BACKGROUND,
-                     instance_regions=_FD_REGIONS, matrix=m)
+    out = seam_admit(
+        "frontdoor",
+        3,
+        {"frontdoor": frozenset({"q0"})},
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
+        matrix=m,
+    )
     assert out == PairDecision.ALLOW
 
 
 def test_seam_same_role_overlap_queues(shape_aware_on) -> None:
     """Candidate frontdoor.q0 against held frontdoor q0 → physical overlap → QUEUE."""
     m = _matrix(same_role=[("frontdoor", "allow")])
-    out = seam_admit("frontdoor", 1, {"frontdoor": frozenset({"q0"})},
-                     traffic_class=TrafficClass.BACKGROUND,
-                     instance_regions=_FD_REGIONS, matrix=m)
+    out = seam_admit(
+        "frontdoor",
+        1,
+        {"frontdoor": frozenset({"q0"})},
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
+        matrix=m,
+    )
     assert out == PairDecision.QUEUE
 
 
 def test_seam_same_role_block_foreground_degraded_allow(shape_aware_on) -> None:
     """Foreground same_role block → DEGRADED_ALLOW (pair_policy), not QUEUE."""
     m = _matrix(same_role=[("frontdoor", "block")])
-    out = seam_admit("frontdoor", 3, {"frontdoor": frozenset({"q0"})},
-                     traffic_class=TrafficClass.FOREGROUND_INTERACTIVE,
-                     instance_regions=_FD_REGIONS, matrix=m)
+    out = seam_admit(
+        "frontdoor",
+        3,
+        {"frontdoor": frozenset({"q0"})},
+        traffic_class=TrafficClass.FOREGROUND_INTERACTIVE,
+        instance_regions=_FD_REGIONS,
+        matrix=m,
+    )
     assert out == PairDecision.DEGRADED_ALLOW
 
 
 # ── cross-role delegation ─────────────────────────────────────────────
 
+
 def test_seam_cross_role_disjoint_allows(shape_aware_on) -> None:
-    m = _matrix(n_way=[(("frontdoor", "ingest_long_context"), 1.7, "allow")],
-                heavy=("ingest_long_context",))
-    out = seam_admit("ingest_long_context", 3,  # ingest q2
-                     {"frontdoor": frozenset({"q0"})},
-                     traffic_class=TrafficClass.BACKGROUND,
-                     instance_regions=_FD_REGIONS, matrix=m)
+    m = _matrix(
+        n_way=[(("frontdoor", "ingest_long_context"), 1.7, "allow")], heavy=("ingest_long_context",)
+    )
+    out = seam_admit(
+        "ingest_long_context",
+        3,  # ingest q2
+        {"frontdoor": frozenset({"q0"})},
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
+        matrix=m,
+    )
+    assert out == PairDecision.ALLOW
+
+
+def test_seam_aux_frontdoor_allows_disjoint_worker_half(shape_aware_on) -> None:
+    m = _matrix(
+        n_way=[(("frontdoor", "worker_general"), 1.2, "allow")],
+        heavy=("worker_general",),
+    )
+
+    out = seam_admit(
+        "worker_general",
+        2,
+        {"eval_batch_frontdoor": frozenset({"q0", "q1"})},
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
+        matrix=m,
+    )
+
     assert out == PairDecision.ALLOW
 
 
 def test_seam_cross_role_overlap_queues(shape_aware_on) -> None:
-    m = _matrix(n_way=[(("frontdoor", "ingest_long_context"), 9.9, "allow")],
-                heavy=("ingest_long_context",))
-    out = seam_admit("ingest_long_context", 0,  # ingest {q0,q1} overlaps frontdoor q0
-                     {"frontdoor": frozenset({"q0"})},
-                     traffic_class=TrafficClass.BACKGROUND,
-                     instance_regions=_FD_REGIONS, matrix=m)
+    m = _matrix(
+        n_way=[(("frontdoor", "ingest_long_context"), 9.9, "allow")], heavy=("ingest_long_context",)
+    )
+    out = seam_admit(
+        "ingest_long_context",
+        0,  # ingest {q0,q1} overlaps frontdoor q0
+        {"frontdoor": frozenset({"q0"})},
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
+        matrix=m,
+    )
     assert out == PairDecision.QUEUE
 
 
@@ -212,37 +284,58 @@ def test_seam_combines_same_and_cross_worst(shape_aware_on) -> None:
     )
     # active: frontdoor q0 (same-role) + ingest q1 (cross-role). candidate frontdoor q2.
     active = {"frontdoor": frozenset({"q0"}), "ingest_long_context": frozenset({"q1"})}
-    out = seam_admit("frontdoor", 3, active, traffic_class=TrafficClass.BACKGROUND,
-                     instance_regions=_FD_REGIONS, matrix=m)
+    out = seam_admit(
+        "frontdoor",
+        3,
+        active,
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
+        matrix=m,
+    )
     assert out == PairDecision.QUEUE
 
 
 # ── unknown candidate placement ───────────────────────────────────────
 
+
 def test_seam_unknown_candidate_bg_fails_closed(shape_aware_on) -> None:
     m = _matrix(same_role=[("frontdoor", "allow")])
-    out = seam_admit("frontdoor", 99,  # unknown idx → empty regions
-                     {"frontdoor": frozenset({"q0"})},
-                     traffic_class=TrafficClass.BACKGROUND,
-                     instance_regions=_FD_REGIONS, matrix=m)
+    out = seam_admit(
+        "frontdoor",
+        99,  # unknown idx → empty regions
+        {"frontdoor": frozenset({"q0"})},
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
+        matrix=m,
+    )
     assert out == PairDecision.QUEUE
 
 
 # ── live-read path (active_holders=None) ──────────────────────────────
 
+
 def test_seam_reads_held_regions_when_active_holders_none(shape_aware_on, monkeypatch) -> None:
     import src.runtime.cpu_region_lock as crl
+
     monkeypatch.setattr(
-        crl, "held_regions_by_role",
+        crl,
+        "held_regions_by_role",
         lambda instance_regions=None: {"frontdoor": frozenset({"q0"})},
     )
     m = _matrix(same_role=[("frontdoor", "block")])
-    out = seam_admit("frontdoor", 3, None, traffic_class=TrafficClass.BACKGROUND,
-                     instance_regions=_FD_REGIONS, matrix=m)
+    out = seam_admit(
+        "frontdoor",
+        3,
+        None,
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
+        matrix=m,
+    )
     assert out == PairDecision.QUEUE
 
 
 # ── snapshot failure (audit #2): unknown occupancy must not silently ALLOW ──
+
 
 def test_seam_snapshot_failure_background_fails_closed(shape_aware_on, monkeypatch) -> None:
     """If held_regions_by_role raises, occupancy is unknown. Background must
@@ -253,8 +346,14 @@ def test_seam_snapshot_failure_background_fails_closed(shape_aware_on, monkeypat
         raise RuntimeError("proc-lock scan failed")
 
     monkeypatch.setattr(crl, "held_regions_by_role", _boom)
-    out = seam_admit("frontdoor", 3, None, traffic_class=TrafficClass.BACKGROUND,
-                     instance_regions=_FD_REGIONS, matrix=_matrix())
+    out = seam_admit(
+        "frontdoor",
+        3,
+        None,
+        traffic_class=TrafficClass.BACKGROUND,
+        instance_regions=_FD_REGIONS,
+        matrix=_matrix(),
+    )
     assert out == PairDecision.QUEUE
 
 
@@ -267,7 +366,12 @@ def test_seam_snapshot_failure_foreground_falls_back_to_legacy(shape_aware_on, m
         raise RuntimeError("proc-lock scan failed")
 
     monkeypatch.setattr(crl, "held_regions_by_role", _boom)
-    out = seam_admit("frontdoor", 3, None,
-                     traffic_class=TrafficClass.FOREGROUND_INTERACTIVE,
-                     instance_regions=_FD_REGIONS, matrix=_matrix())
+    out = seam_admit(
+        "frontdoor",
+        3,
+        None,
+        traffic_class=TrafficClass.FOREGROUND_INTERACTIVE,
+        instance_regions=_FD_REGIONS,
+        matrix=_matrix(),
+    )
     assert out is None

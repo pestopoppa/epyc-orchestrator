@@ -1,0 +1,1380 @@
+{
+  "activation_commands": [
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+    "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://127.0.0.1:18070 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled --api-url http://127.0.0.1:8000 --eval-batch-url http://127.0.0.1:18070 --output-dir orchestration/reports/e12_eval_batch_activation_20260807/smoke_probe --summary-only"
+  ],
+  "applied": true,
+  "blockers": [],
+  "decision_grade": true,
+  "eval_batch_url": "http://127.0.0.1:18070",
+  "generated_at": "2026-08-07T13:19:52+00:00",
+  "keep_enabled": true,
+  "preflight": {
+    "activation_commands": [
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+      "cd /mnt/raid0/llm/epyc-orchestrator && ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://127.0.0.1:18070 uv run python scripts/server/orchestrator_stack.py reload orchestrator",
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled"
+    ],
+    "api_health": {
+      "elapsed_s": 0.11488183797337115,
+      "error": null,
+      "json_body": {
+        "backend_health": {},
+        "backend_probes": {
+          "architect_critic": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 15.2,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8074"
+          },
+          "architect_general/coder_escalation": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 12.7,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8083"
+          },
+          "frontdoor/worker_summarize": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 21.6,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8070"
+          },
+          "ingest_long_context": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 9.8,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8085"
+          },
+          "toolrunner/worker_explore/worker_general/worker_math": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 18.2,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8072"
+          },
+          "vision_escalation/worker_vision": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 6.9,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8086"
+          }
+        },
+        "knowledge_tools": {
+          "available": false,
+          "tools": {
+            "get_wikipedia_article": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            },
+            "search_arxiv": {
+              "available": false,
+              "error": "No module named 'arxiv'"
+            },
+            "search_books": {
+              "available": false,
+              "error": "No module named 'googleapiclient'"
+            },
+            "search_papers": {
+              "available": false,
+              "error": "No module named 'semanticscholar'"
+            },
+            "search_wikipedia": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            }
+          }
+        },
+        "mock_mode_available": true,
+        "models_loaded": 6,
+        "status": "ok",
+        "version": "0.1.0"
+      },
+      "ok": true,
+      "status": 200,
+      "url": "http://127.0.0.1:8000/health"
+    },
+    "api_url": "http://127.0.0.1:8000",
+    "autopilot_active": false,
+    "config_attest": {
+      "all_sampled_workers_enabled": false,
+      "any_sampled_worker_disabled": true,
+      "eval_batch_serving_by_pid": {
+        "1563750": false,
+        "1563751": false,
+        "1563752": false,
+        "1563753": false,
+        "1563755": false
+      },
+      "eval_batch_serving_sources_by_pid": {
+        "1563750": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "1563751": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "1563752": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "1563753": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "1563755": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING"
+      },
+      "samples_requested": 12,
+      "workers_seen": 5
+    },
+    "eval_batch_frontdoor_health": {
+      "elapsed_s": 0.0006854060338810086,
+      "error": null,
+      "json_body": {
+        "status": "ok"
+      },
+      "ok": true,
+      "status": 200,
+      "url": "http://127.0.0.1:18070/health"
+    },
+    "eval_batch_url": "http://127.0.0.1:18070"
+  },
+  "probe_summary": {
+    "blockers": [],
+    "decision_grade": true,
+    "generated_at": "2026-08-07T13:19:52+00:00",
+    "preflight": {
+      "activation_commands": [
+        "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+        "cd /mnt/raid0/llm/epyc-orchestrator && ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://127.0.0.1:18070 uv run python scripts/server/orchestrator_stack.py reload orchestrator",
+        "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled"
+      ],
+      "api_health": {
+        "elapsed_s": 0.18738304998259991,
+        "error": null,
+        "json_body": {
+          "backend_health": {},
+          "backend_probes": {
+            "architect_critic": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 16.9,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8074"
+            },
+            "architect_general/coder_escalation": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 14.0,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8083"
+            },
+            "frontdoor/worker_summarize": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 90.6,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8070"
+            },
+            "ingest_long_context": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 10.9,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8085"
+            },
+            "toolrunner/worker_explore/worker_general/worker_math": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 19.7,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8072"
+            },
+            "vision_escalation/worker_vision": {
+              "failure_detail": "",
+              "failure_reason": "",
+              "latency_ms": 7.7,
+              "ok": true,
+              "status_code": 200,
+              "url": "http://localhost:8086"
+            }
+          },
+          "knowledge_tools": {
+            "available": false,
+            "tools": {
+              "get_wikipedia_article": {
+                "available": false,
+                "error": "No module named 'mwclient'"
+              },
+              "search_arxiv": {
+                "available": false,
+                "error": "No module named 'arxiv'"
+              },
+              "search_books": {
+                "available": false,
+                "error": "No module named 'googleapiclient'"
+              },
+              "search_papers": {
+                "available": false,
+                "error": "No module named 'semanticscholar'"
+              },
+              "search_wikipedia": {
+                "available": false,
+                "error": "No module named 'mwclient'"
+              }
+            }
+          },
+          "mock_mode_available": true,
+          "models_loaded": 6,
+          "status": "ok",
+          "version": "0.1.0"
+        },
+        "ok": true,
+        "status": 200,
+        "url": "http://127.0.0.1:8000/health"
+      },
+      "api_url": "http://127.0.0.1:8000",
+      "autopilot_active": false,
+      "config_attest": {
+        "all_sampled_workers_enabled": true,
+        "any_sampled_worker_disabled": false,
+        "eval_batch_serving_by_pid": {
+          "1578780": true
+        },
+        "eval_batch_serving_sources_by_pid": {
+          "1578780": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING"
+        },
+        "samples_requested": 12,
+        "workers_seen": 1
+      },
+      "eval_batch_frontdoor_health": {
+        "elapsed_s": 0.0005142349982634187,
+        "error": null,
+        "json_body": {
+          "status": "ok"
+        },
+        "ok": true,
+        "status": 200,
+        "url": "http://127.0.0.1:18070/health"
+      },
+      "eval_batch_url": "http://127.0.0.1:18070"
+    },
+    "smoke": {
+      "batch_id": "eval-batch-probe-20260807T131948Z",
+      "payload": {
+        "batch_id": "eval-batch-probe-20260807T131948Z",
+        "cache_prompt": false,
+        "force_mode": "direct",
+        "force_role": "frontdoor",
+        "max_turns": 1,
+        "mock_mode": false,
+        "prompt": "Answer only the final number: a worker processes 18 items in 6 minutes. How many items per minute?",
+        "real_mode": true,
+        "request_id": "eval-batch-probe-20260807T131948Z:request",
+        "request_priority": "background",
+        "timeout_s": 180,
+        "workload_class": "eval_batch"
+      },
+      "request_id": "eval-batch-probe-20260807T131948Z:request",
+      "response": {
+        "elapsed_s": 1.8387491409666836,
+        "error": null,
+        "json_body": {
+          "answer": "3",
+          "budget_diagnostics": {
+            "batch_id": "eval-batch-probe-20260807T131948Z",
+            "batch_placement_mode": "auto",
+            "budget_applied": true,
+            "deadline_present": true,
+            "deadline_remaining_ms_end": null,
+            "deadline_remaining_ms_start": 180000.0,
+            "depth_override_enabled": true,
+            "depth_override_events": 0,
+            "depth_override_roles": [],
+            "depth_override_skip_events": 0,
+            "depth_override_skip_reasons": [],
+            "request_id": "eval-batch-probe-20260807T131948Z:request",
+            "request_priority": "background",
+            "session_id": null,
+            "timeout_clamp_events": 1,
+            "trial_id": null,
+            "workload_class": "eval_batch"
+          },
+          "cache_affinity_bonus": 0.0,
+          "cache_stats": {
+            "architect_critic": {
+              "backend_hit_rate": 0.0,
+              "backend_token_savings": 0.0,
+              "cached_prompt_tokens": 0,
+              "frontdoor_repl_bypass_count": 0,
+              "frontdoor_repl_bypass_enabled": true,
+              "router_hit_rate": 0.0,
+              "router_total_routes": 0,
+              "slot_stats": [
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.1266384,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 0
+                },
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.126639,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 1
+                }
+              ],
+              "token_savings_pct": 0.0,
+              "total_prompt_tokens": 0
+            },
+            "architect_general": {
+              "backend_hit_rate": 0.0,
+              "backend_token_savings": 0.0,
+              "cached_prompt_tokens": 0,
+              "frontdoor_repl_bypass_count": 0,
+              "frontdoor_repl_bypass_enabled": true,
+              "router_hit_rate": 0.0,
+              "router_total_routes": 0,
+              "slot_stats": [
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.1238658,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 0
+                },
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.123866,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 1
+                }
+              ],
+              "token_savings_pct": 0.0,
+              "total_prompt_tokens": 0
+            },
+            "coder": {
+              "backend_hit_rate": 0.0,
+              "backend_token_savings": 0.0,
+              "cached_prompt_tokens": 0,
+              "frontdoor_repl_bypass_count": 0,
+              "frontdoor_repl_bypass_enabled": true,
+              "router_hit_rate": 0.0,
+              "router_total_routes": 0,
+              "slot_stats": [
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.0645368,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 0
+                },
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.0645375,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 1
+                }
+              ],
+              "token_savings_pct": 0.0,
+              "total_prompt_tokens": 0
+            },
+            "coder_escalation": {
+              "backend_hit_rate": 0.0,
+              "backend_token_savings": 0.0,
+              "cached_prompt_tokens": 0,
+              "frontdoor_repl_bypass_count": 0,
+              "frontdoor_repl_bypass_enabled": true,
+              "router_hit_rate": 0.0,
+              "router_total_routes": 0,
+              "slot_stats": [
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.0618432,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 0
+                },
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.0618439,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 1
+                }
+              ],
+              "token_savings_pct": 0.0,
+              "total_prompt_tokens": 0
+            },
+            "frontdoor": {
+              "backend_hit_rate": 0.0,
+              "backend_token_savings": 0.0,
+              "cached_prompt_tokens": 0,
+              "frontdoor_repl_bypass_count": 0,
+              "frontdoor_repl_bypass_enabled": true,
+              "router_hit_rate": 0.0,
+              "router_total_routes": 1,
+              "slot_stats": [
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.5548058,
+                  "miss_count": 1,
+                  "prefix_hash": "855cb23d...",
+                  "slot_id": 0
+                },
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.0590746,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 1
+                }
+              ],
+              "token_savings_pct": 0.0,
+              "total_prompt_tokens": 0
+            },
+            "ingest_long_context": {
+              "backend_type": "concurrency_aware",
+              "full_instance": {
+                "active": false,
+                "current_session": null,
+                "port": 8085,
+                "total_served": 0
+              },
+              "full_requests": 0,
+              "idle_quarters": 2,
+              "kv_migration_enabled": true,
+              "migration_failures": 0,
+              "migration_pending": {},
+              "migrations": 0,
+              "quarter_active": [
+                false,
+                false
+              ],
+              "quarter_instances": 2,
+              "quarter_requests": 0,
+              "role": "ingest_long_context",
+              "session_affinity": {},
+              "session_states": {},
+              "topology_role": "ingest_long_context",
+              "total_active": 0,
+              "total_requests": 0
+            },
+            "toolrunner": {
+              "active_per_instance": [
+                0,
+                0,
+                0
+              ],
+              "idle_instances": 3,
+              "per_instance": [
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 0,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0843918,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0843925,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                },
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 1,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0874596,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.08746,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                },
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 2,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0902393,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0902398,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                }
+              ],
+              "role": "toolrunner",
+              "round_robin_instances": 3,
+              "round_robin_requests": 0,
+              "seconds_since_last_request": null,
+              "total_active": 0,
+              "total_per_instance": [
+                0,
+                0,
+                0
+              ]
+            },
+            "vision_escalation": {
+              "backend_hit_rate": 0.0,
+              "backend_token_savings": 0.0,
+              "cached_prompt_tokens": 0,
+              "frontdoor_repl_bypass_count": 0,
+              "frontdoor_repl_bypass_enabled": true,
+              "router_hit_rate": 0.0,
+              "router_total_routes": 0,
+              "slot_stats": [
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.112483,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 0
+                },
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.1124833,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 1
+                }
+              ],
+              "token_savings_pct": 0.0,
+              "total_prompt_tokens": 0
+            },
+            "worker": {
+              "active_per_instance": [
+                0,
+                0,
+                0
+              ],
+              "idle_instances": 3,
+              "per_instance": [
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 0,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0672584,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0672593,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                },
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 1,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0700321,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0700326,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                },
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 2,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0731094,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.07311,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                }
+              ],
+              "role": "worker",
+              "round_robin_instances": 3,
+              "round_robin_requests": 0,
+              "seconds_since_last_request": null,
+              "total_active": 0,
+              "total_per_instance": [
+                0,
+                0,
+                0
+              ]
+            },
+            "worker_coder": {
+              "backend_hit_rate": 0.0,
+              "backend_token_savings": 0.0,
+              "cached_prompt_tokens": 0,
+              "frontdoor_repl_bypass_count": 0,
+              "frontdoor_repl_bypass_enabled": true,
+              "router_hit_rate": 0.0,
+              "router_total_routes": 0,
+              "slot_stats": [
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.115536,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 0
+                },
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.1155365,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 1
+                }
+              ],
+              "token_savings_pct": 0.0,
+              "total_prompt_tokens": 0
+            },
+            "worker_explore": {
+              "active_per_instance": [
+                0,
+                0,
+                0
+              ],
+              "idle_instances": 3,
+              "per_instance": [
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 0,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.093075,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0930755,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                },
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 1,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0958607,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.095861,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                },
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 2,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0986383,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0986385,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                }
+              ],
+              "role": "worker_explore",
+              "round_robin_instances": 3,
+              "round_robin_requests": 0,
+              "seconds_since_last_request": null,
+              "total_active": 0,
+              "total_per_instance": [
+                0,
+                0,
+                0
+              ]
+            },
+            "worker_fast": {
+              "backend_hit_rate": 0.0,
+              "backend_token_savings": 0.0,
+              "cached_prompt_tokens": 0,
+              "frontdoor_repl_bypass_count": 0,
+              "frontdoor_repl_bypass_enabled": true,
+              "router_hit_rate": 0.0,
+              "router_total_routes": 0,
+              "slot_stats": [
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.1183167,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 0
+                },
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.118317,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 1
+                }
+              ],
+              "token_savings_pct": 0.0,
+              "total_prompt_tokens": 0
+            },
+            "worker_general": {
+              "active_per_instance": [
+                0,
+                0,
+                0
+              ],
+              "idle_instances": 3,
+              "per_instance": [
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 0,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0759509,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0759513,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                },
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 1,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0787652,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0787656,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                },
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 2,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0815709,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.0815713,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                }
+              ],
+              "role": "worker_general",
+              "round_robin_instances": 3,
+              "round_robin_requests": 0,
+              "seconds_since_last_request": null,
+              "total_active": 0,
+              "total_per_instance": [
+                0,
+                0,
+                0
+              ]
+            },
+            "worker_math": {
+              "active_per_instance": [
+                0,
+                0,
+                0
+              ],
+              "idle_instances": 3,
+              "per_instance": [
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 0,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.1014109,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.1014113,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                },
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 1,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.1041725,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.1041727,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                },
+                {
+                  "active": 0,
+                  "backend_hit_rate": 0.0,
+                  "backend_token_savings": 0.0,
+                  "cached_prompt_tokens": 0,
+                  "frontdoor_repl_bypass_count": 0,
+                  "frontdoor_repl_bypass_enabled": true,
+                  "instance": 2,
+                  "router_hit_rate": 0.0,
+                  "router_total_routes": 0,
+                  "slot_stats": [
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.1069324,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 0
+                    },
+                    {
+                      "hit_count": 0,
+                      "hit_rate": 0.0,
+                      "last_access": 1786108790.1069326,
+                      "miss_count": 0,
+                      "prefix_hash": "",
+                      "slot_id": 1
+                    }
+                  ],
+                  "token_savings_pct": 0.0,
+                  "total_prompt_tokens": 0,
+                  "total_served": 0
+                }
+              ],
+              "role": "worker_math",
+              "round_robin_instances": 3,
+              "round_robin_requests": 0,
+              "seconds_since_last_request": null,
+              "total_active": 0,
+              "total_per_instance": [
+                0,
+                0,
+                0
+              ]
+            },
+            "worker_summarize": {
+              "backend_hit_rate": 0.0,
+              "backend_token_savings": 0.0,
+              "cached_prompt_tokens": 0,
+              "frontdoor_repl_bypass_count": 0,
+              "frontdoor_repl_bypass_enabled": true,
+              "router_hit_rate": 0.0,
+              "router_total_routes": 0,
+              "slot_stats": [
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.1210914,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 0
+                },
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.1210918,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 1
+                }
+              ],
+              "token_savings_pct": 0.0,
+              "total_prompt_tokens": 0
+            },
+            "worker_vision": {
+              "backend_hit_rate": 0.0,
+              "backend_token_savings": 0.0,
+              "cached_prompt_tokens": 0,
+              "frontdoor_repl_bypass_count": 0,
+              "frontdoor_repl_bypass_enabled": true,
+              "router_hit_rate": 0.0,
+              "router_total_routes": 0,
+              "slot_stats": [
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.109713,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 0
+                },
+                {
+                  "hit_count": 0,
+                  "hit_rate": 0.0,
+                  "last_access": 1786108790.1097133,
+                  "miss_count": 0,
+                  "prefix_hash": "",
+                  "slot_id": 1
+                }
+              ],
+              "token_savings_pct": 0.0,
+              "total_prompt_tokens": 0
+            }
+          },
+          "cheap_first_attempted": false,
+          "cheap_first_passed": null,
+          "compaction_tokens_saved": 0,
+          "compaction_triggered": false,
+          "completion_probabilities": [],
+          "compression_metrics": {},
+          "cost_dimensions": {},
+          "delegation_diagnostics": {},
+          "delegation_events": [],
+          "delegation_success": null,
+          "difficulty_band": "easy",
+          "difficulty_score": 0.0072,
+          "elapsed_seconds": 1.8139264259953052,
+          "error_code": null,
+          "error_detail": null,
+          "factual_risk_band": "low",
+          "factual_risk_score": 0.1328,
+          "formalization_applied": false,
+          "generation_ms": 887.5231742858887,
+          "grammar_enforced": false,
+          "http_overhead_ms": 0.0,
+          "mock_mode": false,
+          "mode": "direct",
+          "parallel_tools_used": false,
+          "predicted_tps": 1.1267311423215642,
+          "prompt_eval_ms": 0.0,
+          "real_mode": true,
+          "role_history": [
+            "frontdoor"
+          ],
+          "routed_to": "frontdoor",
+          "routing_strategy": "forced",
+          "scratchpad_insights": [],
+          "session_persistence": {},
+          "skill_ids": [],
+          "skills_retrieved": 0,
+          "think_harder_attempted": false,
+          "think_harder_expected_roi": 0.0,
+          "think_harder_succeeded": null,
+          "tokens_generated": 1,
+          "tokens_used": 1,
+          "tool_chains": [],
+          "tool_output_tokens": 0,
+          "tool_results_cleared": 0,
+          "tool_timings": [],
+          "tools_called": [],
+          "tools_success": null,
+          "tools_used": 0,
+          "turns": 1,
+          "web_research_results": [],
+          "xmas_meta": {
+            "applied": false,
+            "candidate_metrics": {
+              "architect_general": {
+                "accuracy": 1.0,
+                "correct": 5,
+                "failures": {},
+                "ok": 5,
+                "total": 5,
+                "wall_mean_s": 26.618632674915716
+              },
+              "frontdoor": {
+                "accuracy": 1.0,
+                "correct": 5,
+                "failures": {},
+                "ok": 5,
+                "total": 5,
+                "wall_mean_s": 18.903771578567103
+              },
+              "ingest_long_context": {
+                "accuracy": 0.8,
+                "correct": 4,
+                "failures": {
+                  "empty_content": 1
+                },
+                "ok": 4,
+                "total": 5,
+                "wall_mean_s": 32.76936210631393
+              },
+              "worker_general": {
+                "accuracy": 1.0,
+                "correct": 5,
+                "failures": {},
+                "ok": 5,
+                "total": 5,
+                "wall_mean_s": 5.5695961638819425
+              }
+            },
+            "cell": "math:solve",
+            "cell_sample_count": 5,
+            "confidence": 0.57,
+            "confidence_threshold": 0.55,
+            "domain": "math",
+            "domain_confidence": 0.57,
+            "function": "solve",
+            "function_confidence": 0.57,
+            "is_confident": true,
+            "matched_terms": {
+              "domain": [
+                "how many"
+              ],
+              "function": [
+                "answer"
+              ]
+            },
+            "mode": "shadow",
+            "suggested_role": "worker_general",
+            "winner_table_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/xmas_winner_table.yaml",
+            "winner_table_status": "loaded",
+            "winner_table_version": "xmas-v1"
+          }
+        },
+        "ok": true,
+        "status": 200,
+        "url": "http://127.0.0.1:8000/chat"
+      },
+      "tap_events_path": "/mnt/raid0/llm/tmp/inference_tap_events.jsonl",
+      "tap_summary": {
+        "event_count": 4,
+        "expected_port": 18070,
+        "hit_expected_port": true,
+        "median_tps": 1.1267311423215642,
+        "ports": [
+          18070
+        ],
+        "request_ids": [
+          "eval-batch-probe-20260807T131948Z:request:a8e3fdcd"
+        ],
+        "roles": [
+          "frontdoor"
+        ],
+        "timing_event_count": 1,
+        "tps_values": [
+          1.1267311423215642
+        ]
+      }
+    },
+    "status": "smoke_passed"
+  },
+  "rollback_commands": [
+    "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=0 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py stop eval_batch_frontdoor"
+  ],
+  "rollback_steps": [],
+  "start_mode": "only",
+  "status": "smoke_passed_enabled_left_on",
+  "steps": [
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
+      "elapsed_s": 52.84826990996953,
+      "name": "start_eval_batch_frontdoor",
+      "returncode": 0,
+      "stderr_tail": "2026-08-07 13:19:26,624 [INFO] Loading faiss with AVX512 support.\n2026-08-07 13:19:26,635 [INFO] Successfully loaded faiss with AVX512 support.\n",
+      "stdout_tail": "e running fleet\n\n[1.5] Page-cache prewarm (numactl --interleave=all)\n  [prewarm] 1 unique GGUF(s), 35.2 GiB total, across 1 server instance(s)\n  [ 35.2 GiB] Qwen3.6-35B-A3B-MTP-Q8_0.gguf \u2192 ports [18070]: OK in 0.8s\n\n[2] Checking target ports...\n  Port 18070 already healthy, skipping\n  Preserved 1 healthy server(s)\n\n[3] Starting llama-servers...\n  Skipping port 18070: eval_batch_frontdoor (already healthy)\n\n[4] Skipping orchestrator API (--only mode)\n  Orchestrator already healthy\n\n[i] State saved to /mnt/raid0/llm/epyc-orchestrator/logs/orchestrator_state.json\n[runtime-facts] Wrote /mnt/raid0/llm/tmp/orchestrator_runtime_facts.json\n\n============================================================\nSTACK READY\n============================================================\n\nCOMPONENT                 PORT     PID        STATUS     ATTEST       MODEL\n------------------------------------------------------------------------------------------------\narchitect_critic          8074     1213335    healthy    ok           Qwen3.5-122B-A10B-UD-Q4_K_M-00\narchitect_general         8083     1213041    healthy    ok           Qwen3.6-27B-MTP-Q8_0\ncrawl4ai                  11235    docker     healthy    docker       crawl4ai:latest\ndocument_formalizer       9001     3692020    healthy    n/a          LightOnOCR-2-1B-bbox\nembedder                  8090     1215594    healthy    ok           bge-large-en-v1.5-f16\nembedder_1                8091     1215820    healthy    ok           bge-large-en-v1.5-f16\nembedder_2                8092     1216040    healthy    ok           bge-large-en-v1.5-f16\nembedder_3                8093     1216309    healthy    ok           bge-large-en-v1.5-f16\nembedder_4                8094     1216584    healthy    ok           bge-large-en-v1.5-f16\nembedder_5                8095     1216825    healthy    ok           bge-large-en-v1.5-f16\neval_batch_frontdoor      18070    1570638    healthy    ok           Qwen3.6-35B-A3B-MTP-Q8_0\nfrontdoor                 8070     1209839    healthy    ok           Qwen3.6-35B-A3B-MTP-Q8_0\nhandoff_dashboard         8100     3359733    healthy    n/a          epyc-root handoff progress hub\ningest_long_context       8085     1214011    healthy    ok           Qwen3-Next-80B-A3B-Instruct-Q4\nnextplaid-code            8088     docker     healthy    docker       LateOn-Code\nnextplaid-docs            8089     docker     healthy    docker       gte-moderncolbert-v1-onnx\norchestrator              8000     1563748    healthy    ok           uvicorn\nsd_server                 8190     3692041    running    n/a          ernie-image-turbo-Q8_0.gguf + \nsearxng                   8888     docker     healthy    docker       searxng:latest\nserver_8072               8072     1211647    healthy    ok           gemma-4-26B-A4B-it-ORIG-Q4_K_M\nserver_8080               8080     1210724    healthy    ok           Qwen3.6-35B-A3B-MTP-Q8_0\nserver_8082               8082     1212103    healthy    ok           gemma-4-26B-A4B-it-ORIG-Q4_K_M\nserver_8086               8086     1215322    healthy    ok           Qwen3-VL-30B-A3B-Instruct-Q4_K\nserver_8180               8180     1211170    healthy    ok           Qwen3.6-35B-A3B-MTP-Q8_0\nserver_8182               8182     1212639    healthy    ok           gemma-4-26B-A4B-it-ORIG-Q4_K_M\nserver_8185               8185     1214469    healthy    ok           Qwen3-Next-80B-A3B-Instruct-Q4\nserver_8285               8285     1214873    healthy    ok           Qwen3-Next-80B-A3B-Instruct-Q4\ntts                       9002     3692805    healthy    n/a          Qwen3-TTS-12Hz-0.6B Talker Q8_\nwhisper                   9000     3692563    healthy    n/a          whisper.cpp large-v3-turbo (HI\n\nEpisodic FAISS: healthy \u2014 61,286/61,286 indexed vectors (100.0%), id_map 61,286 ids / overlap 100.0% missing 0 stale 0, 0 live repairable lag/stale; training artifact reembedded overlap 40.3% (non-blocking, 502,021 stale)\n\nState file: /mnt/raid0/llm/epyc-orchestrator/logs/orchestrator_state.json\n"
+    },
+    {
+      "command": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://127.0.0.1:18070 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/server/orchestrator_stack.py reload orchestrator",
+      "elapsed_s": 15.556803690036759,
+      "name": "reload_orchestrator_eval_batch_enabled",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "Reloading orchestrator...\n  Starting orchestrator API on port 8000\n    Fleet marker: /mnt/raid0/llm/tmp/orchestrator_fleet_started_at\n    PID: 1578775\n    Waiting for health...\n    [OK] Orchestrator ready\n    [oom-protect] oom_score_adj=-1000 on 8/8 pid(s)\n[runtime-facts] Wrote /mnt/raid0/llm/tmp/orchestrator_runtime_facts.json\n"
+    },
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled --api-url http://127.0.0.1:8000 --eval-batch-url http://127.0.0.1:18070 --output-dir orchestration/reports/e12_eval_batch_activation_20260807/smoke_probe --summary-only",
+      "elapsed_s": 3.9288462159456685,
+      "name": "smoke_probe",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": ""
+    }
+  ]
+}

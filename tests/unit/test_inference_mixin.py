@@ -27,9 +27,7 @@ from src.registry_loader import (
 
 
 def test_certified_native_batch_width_resolves_worker_registry_alias(monkeypatch):
-    monkeypatch.setenv(
-        "ORCHESTRATOR_NATIVE_BATCH_SHARED_ROLES", "frontdoor,worker_general"
-    )
+    monkeypatch.setenv("ORCHESTRATOR_NATIVE_BATCH_SHARED_ROLES", "frontdoor,worker_general")
     owner = Mock()
     owner.registry._raw = {
         "server_mode": {
@@ -42,11 +40,14 @@ def test_certified_native_batch_width_resolves_worker_registry_alias(monkeypatch
     }
     owner.admission_controller._limits = {"http://localhost:8072": 4}
 
-    assert _certified_native_batch_width(
-        owner,
-        topology_role="worker_general",
-        full_url="http://localhost:8072",
-    ) == 4
+    assert (
+        _certified_native_batch_width(
+            owner,
+            topology_role="worker_general",
+            full_url="http://localhost:8072",
+        )
+        == 4
+    )
 
 
 @pytest.fixture
@@ -192,7 +193,9 @@ class TestInferenceMixinRealCall:
         assert request.top_p == 0.8
         assert request.top_k == 64
 
-    def test_real_call_records_inference_meta_for_non_frontdoor_model_server(self, mock_model_server):
+    def test_real_call_records_inference_meta_for_non_frontdoor_model_server(
+        self, mock_model_server
+    ):
         """Specialist roles should also publish timing metadata."""
         prims = LLMPrimitives(
             mock_mode=False,
@@ -385,9 +388,7 @@ class TestCallCachingBackend:
             completion_reason="stop",
         )
 
-        prims._call_caching_backend(
-            mock_backend, "Do work", "worker_fast", n_tokens=96
-        )
+        prims._call_caching_backend(mock_backend, "Do work", "worker_fast", n_tokens=96)
 
         meta = getattr(prims, "_last_inference_meta", {})
         assert meta["role"] == "worker_fast"
@@ -524,9 +525,7 @@ class TestCallCachingBackend:
         )
 
         assert result == "done"
-        assert [(role, idx) for role, idx, _kwargs in lock_calls] == [
-            ("architect_general", 0)
-        ]
+        assert [(role, idx) for role, idx, _kwargs in lock_calls] == [("architect_general", 0)]
         assert lock_calls[0][2]["request_tag"] is None
 
         events_path = tmp_path / "inference_tap_events.jsonl"
@@ -539,9 +538,7 @@ class TestCallCachingBackend:
         assert first["instance_shape"] == "full"
         assert first["instance_regions"] == ["q0", "q1", "q2", "q3"]
 
-    def test_call_caching_backend_does_not_double_lock_concurrency_aware_backend(
-        self, monkeypatch
-    ):
+    def test_call_caching_backend_does_not_double_lock_concurrency_aware_backend(self, monkeypatch):
         """CAB owns per-instance locking internally; the mixin must not wrap it."""
         monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
 
@@ -628,11 +625,10 @@ class TestCallCachingBackend:
         assert calls[0][2]["capacity"] == 4
         assert calls[0][2]["request_tag"] == "batch-1"
 
-    def test_eval_batch_frontdoor_alias_locks_physical_half_lane(
-        self, mock_backend, monkeypatch
-    ):
+    def test_eval_batch_frontdoor_alias_locks_physical_half_lane(self, mock_backend, monkeypatch):
         monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
         monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+        monkeypatch.setenv("ORCHESTRATOR_SHAPE_AWARE_CONTENTION", "1")
         monkeypatch.setattr(
             "src.runtime.instance_topology.topology_instance_for_port",
             lambda port: ("eval_batch_frontdoor", 0) if port == 18070 else None,
@@ -661,6 +657,12 @@ class TestCallCachingBackend:
         monkeypatch.setattr(
             "src.runtime.cpu_region_lock.cpu_region_lock_for_instance", fake_region_lock
         )
+
+        class FailGate:
+            def admit(self, *_args, **_kwargs):
+                raise AssertionError("coarse gate must defer to the certified shared region lock")
+
+        monkeypatch.setattr("src.scheduling.contention_gate.get_gate", lambda: FailGate())
         mock_backend.infer.return_value = InferenceResult(
             role="frontdoor",
             output="ok",
@@ -694,9 +696,7 @@ class TestCallCachingBackend:
             )
         ]
 
-    def test_shape_aware_concurrency_backend_defers_contention_gate_to_dispatch(
-        self, monkeypatch
-    ):
+    def test_shape_aware_concurrency_backend_defers_contention_gate_to_dispatch(self, monkeypatch):
         """When B is armed, the pre-dispatch role-keyed gate must not mask the
         candidate-aware gate inside ConcurrencyAwareBackend._dispatch."""
         monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
