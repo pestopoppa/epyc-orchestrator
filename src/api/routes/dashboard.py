@@ -204,11 +204,31 @@ def _autopilot_phase_health() -> dict[str, Any]:
         }
 
 
-def _port_role_shape(role_label: Any) -> tuple[str, str]:
-    """Return canonical topology role + shape suffix for a port role label."""
+def _port_role_shape(role_label: Any, port: int | None = None) -> tuple[str, str]:
+    """Return the physical topology role and shape serving ``port``.
+
+    Discovery labels are logical names and still contain retired ``.qN``
+    suffixes.  NUMA_CONFIG owns physical placement, including auxiliary lanes
+    such as unsuffixed ``eval_batch_frontdoor`` on a real half-machine shape.
+    """
     label = str(role_label or "")
     if not label:
         return "", ""
+    if port is not None:
+        try:
+            from src.runtime.instance_topology import (
+                get_instance_regions,
+                topology_instance_for_port,
+            )
+
+            owner = topology_instance_for_port(int(port))
+            if owner is not None:
+                role, idx = owner
+                regions = get_instance_regions().get((role, idx), frozenset())
+                if regions:
+                    return base_role(role), _shape_for_regions(regions)
+        except Exception:  # noqa: BLE001 — topology enrichment must fail open
+            pass
     raw = label.split(":", 1)[0]
     match = re.match(r"^(.+?)\.(q\d+|half\d+|full)$", raw)
     if match:
@@ -294,7 +314,7 @@ def _enrich_structured_tap_requests(
             except (TypeError, ValueError):
                 port = None
             port_role, port_shape = (
-                _port_role_shape(port_roles.get(port, "")) if port is not None else ("", "")
+                _port_role_shape(port_roles.get(port, ""), port) if port is not None else ("", "")
             )
             logical_role = base_role(str(out.get("role") or ""))
             topology_role = (
@@ -956,9 +976,7 @@ def _placement_telemetry_status(
                     continue
                 shape = str(cell.get("shape") or "")
                 if shape:
-                    configured_capacity[(row_role, shape)] = max(
-                        1, int(cell.get("capacity") or 1)
-                    )
+                    configured_capacity[(row_role, shape)] = max(1, int(cell.get("capacity") or 1))
     for raw_port, slot_state in activity.items():
         if not isinstance(slot_state, dict):
             continue
@@ -966,7 +984,7 @@ def _placement_telemetry_status(
             port = int(raw_port)
         except (TypeError, ValueError):
             continue
-        role, shape = _port_role_shape(port_roles.get(port, ""))
+        role, shape = _port_role_shape(port_roles.get(port, ""), port)
         role = _canonical_role_name(role)
         if role and role in lock_roles and int(slot_state.get("n_active") or 0) > 0:
             busy_roles.add(role)
@@ -990,9 +1008,7 @@ def _placement_telemetry_status(
     coherence = region_locks.get("coherence") if isinstance(region_locks, dict) else {}
     region_status = str((coherence or {}).get("status") or "unknown")
     lock_root = region_locks.get("lock_root") if isinstance(region_locks, dict) else {}
-    provenance_invalid = bool(
-        isinstance(lock_root, dict) and lock_root.get("suspicious_test_root")
-    )
+    provenance_invalid = bool(isinstance(lock_root, dict) and lock_root.get("suspicious_test_root"))
     capacity_conflicts = [item for item in capacity_observations if not item["matches"]]
     conflict = bool(busy_roles and lease_roles and busy_roles != lease_roles)
     if provenance_invalid:
@@ -1171,7 +1187,7 @@ def _annotate_live_observability_frame(
             port = int(raw_port)
         except (TypeError, ValueError):
             continue
-        role, shape = _port_role_shape(port_roles.get(port, ""))
+        role, shape = _port_role_shape(port_roles.get(port, ""), port)
         role = _canonical_role_name(role)
         if not role:
             continue
@@ -1294,7 +1310,9 @@ def _annotate_live_observability_frame(
             continue
         if request_state.get("stage") not in {"backend_dispatched", "first_output"}:
             continue
-        event_role = _canonical_role_name(request_state.get("role"))
+        event_role = _canonical_role_name(
+            request_state.get("topology_role") or request_state.get("role")
+        )
         if event_role:
             event_backend_by_role[event_role] = event_backend_by_role.get(event_role, 0) + 1
     watchdog_backend_by_role = {
@@ -1551,10 +1569,10 @@ def _region_locks_payload(
         launch_selected_instances = set()
         all_regions = ["q0", "q1", "q2", "q3"]
 
-    # Role INCLUSION source of truth: the operator-curated contention matrix
-    # (`orchestration/contention_matrix.yaml`). Include every role whose topology
-    # it represents, whether it appears in same-role or cross-role measurements;
-    # this keeps non-CPU-lock roles like eval_batch_frontdoor out.
+    # Role INCLUSION starts with the operator-curated contention matrix, then
+    # adds every topology-backed role present in the atomic occupancy ledger.
+    # Auxiliary lanes need not be benchmarked matrix roles to own real CPU
+    # regions; an admitted placement can never be projected as "no lock domain".
     # Visible SHAPES, however, are the role's actual configured/running instances
     # (built below), NOT the matrix `same_role.instance_pairs`. Those pairs encode
     # which within-role shapes can CO-PLACE (a measured contention property) —
@@ -1591,6 +1609,9 @@ def _region_locks_payload(
     for role in instance_topology_all:
         instance_topology_all[role].sort(key=lambda x: (-x["span"], x["regions"]))
 
+    raw_occupancy_entries = occupancy.get("entries") if isinstance(occupancy, dict) else []
+    occupancy_entries = raw_occupancy_entries if isinstance(raw_occupancy_entries, list) else []
+
     # Determine the panel rows + per-role visible shapes. A role is INCLUDED iff
     # the matrix represents it; its VISIBLE SHAPES are its configured instances
     # (numa-mode-filtered above), so every dispatchable instance shows.
@@ -1617,6 +1638,15 @@ def _region_locks_payload(
             if len(insts) >= 2:
                 panel_roles.add(role)
                 role_allowed_shapes[role] = {i["shape"] for i in insts}
+    for entry in occupancy_entries:
+        if not isinstance(entry, dict):
+            continue
+        role = str(entry.get("role") or "")
+        insts = instance_topology_all.get(role) or []
+        if not insts:
+            continue
+        panel_roles.add(role)
+        role_allowed_shapes[role] = {i["shape"] for i in insts}
 
     # Filter the per-role instance list to the role's visible (configured) shapes.
     instance_topology: dict[str, list[dict[str, Any]]] = {}
@@ -1851,18 +1881,18 @@ def _region_locks_payload(
                     ),
                     None,
                 )
-                if inst is not None and shared_regions.intersection(
-                    str(region) for region in inst.get("regions", [])
-                ) and (role, idx) not in shared_occupancy_pairs:
+                if (
+                    inst is not None
+                    and shared_regions.intersection(
+                        str(region) for region in inst.get("regions", [])
+                    )
+                    and (role, idx) not in shared_occupancy_pairs
+                ):
                     canonical_idxs.discard(idx)
         canonical_idxs.update(idx for pair_role, idx in occupancy_pairs if pair_role == role)
         bucket["active_instance_idxs"] = sorted(canonical_idxs)
 
-    active_lock_roles = {
-        role
-        for role, bucket in by_role.items()
-        if bucket["active_instance_idxs"]
-    }
+    active_lock_roles = {role for role, bucket in by_role.items() if bucket["active_instance_idxs"]}
     for role, bucket in by_role.items():
         bucket["blocked_by_roles"] = _region_lock_blocked_by_roles(
             role,
@@ -1883,6 +1913,39 @@ def _region_locks_payload(
         {"key": "half1", "label": "Half1"},
     ]
     held_by_region: dict[str, list[dict[str, Any]]] = {}
+    held_region_identities: set[tuple[str, int, str]] = set()
+
+    def _record_held_region(role: str, idx: int, shape: str, region: str) -> None:
+        identity = (role, idx, region)
+        if identity in held_region_identities:
+            return
+        held_region_identities.add(identity)
+        held_by_region.setdefault(region, []).append({"role": role, "idx": idx, "shape": shape})
+
+    # Fail-safe source: the occupancy ledger is the admission authority. Seed
+    # physical occupancy directly from it before any display-role projection so
+    # a missing matrix row or /proc attribution can never paint occupied cores
+    # as ready.
+    for entry in occupancy_entries:
+        if not isinstance(entry, dict):
+            continue
+        role = str(entry.get("role") or "unknown")
+        try:
+            idx = int(entry.get("instance_idx"))
+        except (TypeError, ValueError):
+            idx = -1
+        inst = next(
+            (
+                item
+                for item in (instance_topology_all.get(role) or [])
+                if int(item.get("idx", -2)) == idx
+            ),
+            None,
+        )
+        shape = str((inst or {}).get("shape") or f"idx{idx}")
+        regions = entry.get("regions") if isinstance(entry.get("regions"), list) else []
+        for region in regions:
+            _record_held_region(role, idx, shape, str(region))
     for role, bucket in by_role.items():
         inst_by_idx = {
             int(inst["idx"]): inst
@@ -1894,18 +1957,14 @@ def _region_locks_payload(
             if inst is None:
                 continue
             for region in inst.get("regions", []):
-                held_by_region.setdefault(str(region), []).append(
-                    {
-                        "role": role,
-                        "idx": int(idx),
-                        "shape": inst.get("shape", f"idx{idx}"),
-                    }
+                _record_held_region(
+                    role,
+                    int(idx),
+                    str(inst.get("shape", f"idx{idx}")),
+                    str(region),
                 )
 
     display_rows: list[dict[str, Any]] = []
-    occupancy_entries = occupancy.get("entries") if isinstance(occupancy, dict) else []
-    if not isinstance(occupancy_entries, list):
-        occupancy_entries = []
 
     def _configured_serving_capacity(role: str, instance_idx: int) -> tuple[int, str]:
         """Declared llama-server slots for this physical serving instance.
@@ -1944,8 +2003,7 @@ def _region_locks_payload(
             instance_load = [
                 entry
                 for entry in occupancy_entries
-                if str(entry.get("role") or "") == role
-                and entry.get("instance_idx") == idx
+                if str(entry.get("role") or "") == role and entry.get("instance_idx") == idx
             ]
             active = len(instance_load)
             lease_capacity = max(
@@ -1978,10 +2036,7 @@ def _region_locks_payload(
                 continue
             blocking: list[str] = []
             for region in regions:
-                blockers = [
-                    f"{h['role']}.{h['shape']}"
-                    for h in held_by_region.get(region, [])
-                ]
+                blockers = [f"{h['role']}.{h['shape']}" for h in held_by_region.get(region, [])]
                 if blockers:
                     blocking.append(f"{region}←{','.join(blockers)}")
             if blocking:
@@ -2043,11 +2098,12 @@ def _region_locks_payload(
         except (TypeError, ValueError):
             continue
     _NO_LOCK_STATE = "n/a (no lock domain)"
+
     # Rows the operator does NOT want in a "what is holding compute" view: the
-    # 6-instance embedder pool and the default-off eval-batch lane. They have no
-    # lock domain, never will, and rendered as 7 all-dash rows that buried the
-    # roles that matter. Excluded from DISPLAY only — `non_lock_roles` and
-    # `entries` are unchanged, so nothing downstream loses them.
+    # 6-instance embedder pool and an IDLE default-off eval-batch lane add noisy
+    # rows. Active eval-batch lanes are promoted into `by_role` above because
+    # their occupancy entry proves a real lock domain; only an idle auxiliary
+    # lane reaches this display filter.
     def _hidden_from_region_panel(name: str) -> bool:
         return name.startswith("embedder") or name.startswith("eval_batch")
 
@@ -3351,7 +3407,9 @@ def _attach_task_rate_telemetry(
                 tid = int(entry.get("trial_id"))
             except (TypeError, ValueError):
                 tid = None
-            entry.update(_task_rate_fields_from_row(rows_by_tid.get(tid) if tid is not None else None))
+            entry.update(
+                _task_rate_fields_from_row(rows_by_tid.get(tid) if tid is not None else None)
+            )
 
 
 def _task_rate_divergence_summary(
@@ -5484,9 +5542,7 @@ async def _autopilot_snapshot_impl(scope: str = "current") -> JSONResponse:
     for panel in panels.values():
         if isinstance(panel, dict):
             panel["state_generation"] = gen
-    consistency = _value_consistency(
-        frame["state_trial_counter"], frame["journal_max_trial"]
-    )
+    consistency = _value_consistency(frame["state_trial_counter"], frame["journal_max_trial"])
     body: dict[str, Any] = {
         "generated_at": now,
         "state_generation": gen,
@@ -5929,7 +5985,9 @@ def _topology_activity_payload(
             "now": now,
             # Names the SOURCE of the busy/idle claim so the operator can tell
             # a real measurement from an absent one at a glance.
-            "occupancy_source": "llama_server_slots" if slots_by_port is not None else "unavailable",
+            "occupancy_source": "llama_server_slots"
+            if slots_by_port is not None
+            else "unavailable",
             "occupancy_observed": any_observed,
             "fleet_slots_busy": fleet_busy if any_observed else None,
             "fleet_slots_total": fleet_total if any_observed else None,
@@ -5949,9 +6007,7 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
         slots_by_port, _meta = await _poll_all_slots()
     except Exception:
         slots_by_port = None  # unknown, NOT zero — renders as "activity unknown"
-    return JSONResponse(
-        _topology_activity_payload(window_s=window_s, slots_by_port=slots_by_port)
-    )
+    return JSONResponse(_topology_activity_payload(window_s=window_s, slots_by_port=slots_by_port))
 
 
 def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
@@ -6449,7 +6505,7 @@ def _coherent_display_activity(
     locks_by_role = region_locks.get("by_role") if isinstance(region_locks, dict) else {}
     locks_by_role = locks_by_role if isinstance(locks_by_role, dict) else {}
     for port, role_label in port_roles.items():
-        role, shape = _port_role_shape(role_label)
+        role, shape = _port_role_shape(role_label, port)
         if not role:
             continue
         info = locks_by_role.get(role) or {}
@@ -6750,7 +6806,7 @@ async def _snapshot_payloads():
     producers would race the ASGI receive channel.  A two-second watchdog frame
     independently re-polls ``/slots`` even when no lifecycle transition lands.
     """
-    last_event_sequence = -1
+    last_event_sequence: tuple[tuple[str, int], ...] = ()
     last_emit_monotonic = 0.0
     while True:
         now_monotonic = time.monotonic()
@@ -6763,8 +6819,12 @@ async def _snapshot_payloads():
                 resp = await snapshot()
                 payload = resp.body.decode("utf-8")  # type: ignore[union-attr]
                 payload_frame = json.loads(payload)
-                emitted_event_sequence = int(
-                    (payload_frame.get("live_frame") or {}).get("event_sequence") or 0
+                lifecycle = (payload_frame.get("live_frame") or {}).get("lifecycle") or {}
+                emitted_event_sequence = tuple(
+                    sorted(
+                        (str(pid), int(sequence or 0))
+                        for pid, sequence in (lifecycle.get("source_sequences") or {}).items()
+                    )
                 )
             except Exception as exc:
                 payload = json.dumps({"error": str(exc)})

@@ -7085,7 +7085,12 @@ async function updateRegionLocks(
 ) {
         try {
             const d = regionLocks || await fetchJSON('/dashboard/api/region_locks');
-            if (!regionLocks && refreshSeq !== _regionLocksRefreshSeq) return;
+            if (refreshSeq !== _regionLocksRefreshSeq) return;
+            const incomingFrameId = String((((d || {}).live_frame || {}).frame_id) || '');
+            // Coupled panels have one writer: /dashboard/api/snapshot. A late
+            // standalone primer/fallback must never replace an already-painted
+            // topology/lock/tap frame with an explicitly uncoupled sample.
+            if (!incomingFrameId && _latestRegionLockFrame.valid) return;
             const status = document.getElementById('region-locks-status');
             const grid = document.getElementById('region-locks-grid');
             if (!grid) return;
@@ -7347,17 +7352,7 @@ async function updateRegionLocks(
             status.textContent = '— loading CPU region-lock matrix…';
             status.style.color = 'var(--muted)';
         }
-        try {
-            const d = await fetchJSON('/dashboard/api/region_locks');
-            _lastRegionLocksPayload = d;
-            await updateRegionLocks(++_regionLocksRefreshSeq, d);
-        } catch (err) {
-            const msg = err && err.message ? err.message : String(err);
-            if (status) {
-                status.textContent = `— region lock fetch failed: ${msg}`;
-                status.style.color = 'var(--bad,#f87171)';
-            }
-        }
+        requestCoherentDashboardSnapshot('region_locks_primer');
     }
 
     function startPanelSafely(name, fn) {

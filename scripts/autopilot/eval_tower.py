@@ -1784,6 +1784,7 @@ def _wait_for_eval_api_lifecycle_drain(
     observed_batch = False
     polls = 0
     last_sequence: int | None = None
+    last_source_sequences: dict[str, int] = {}
     last_batch: dict[str, Any] = {}
     last_error = ""
 
@@ -1799,6 +1800,35 @@ def _wait_for_eval_api_lifecycle_drain(
             if not isinstance(payload, dict):
                 raise ValueError("live_activity response is not an object")
             sequence = int(payload.get("event_sequence") or 0)
+            raw_source_sequences = payload.get("source_sequences") or {}
+            source_sequences = (
+                {
+                    str(pid): int(worker_sequence or 0)
+                    for pid, worker_sequence in raw_source_sequences.items()
+                }
+                if isinstance(raw_source_sequences, Mapping)
+                else {}
+            )
+            reset_sources = {
+                pid: {
+                    "previous": previous,
+                    "current": source_sequences.get(pid),
+                }
+                for pid, previous in last_source_sequences.items()
+                if pid in source_sequences and source_sequences[pid] < previous
+            }
+            if reset_sources:
+                return {
+                    "success": False,
+                    "reason": "api_lifecycle_sequence_reset",
+                    "waited_s": round(time.monotonic() - started, 3),
+                    "stable_s": stable_required,
+                    "polls": polls,
+                    "batch_id": batch_id,
+                    "event_sequence": sequence,
+                    "source_sequences": source_sequences,
+                    "reset_sources": reset_sources,
+                }
             if last_sequence is not None and sequence < last_sequence:
                 return {
                     "success": False,
@@ -1811,6 +1841,8 @@ def _wait_for_eval_api_lifecycle_drain(
                     "previous_event_sequence": last_sequence,
                 }
             last_sequence = sequence
+            if source_sequences:
+                last_source_sequences = source_sequences
             overflow = payload.get("overflow") or {
                 "total": payload.get("overflow_total", 0),
                 "critical": payload.get("overflow_critical", 0),
@@ -1853,6 +1885,7 @@ def _wait_for_eval_api_lifecycle_drain(
                             "polls": polls + 1,
                             "batch_id": batch_id,
                             "event_sequence": sequence,
+                            "source_sequences": source_sequences,
                             "last_batch": last_batch,
                         }
                 else:
@@ -1879,6 +1912,7 @@ def _wait_for_eval_api_lifecycle_drain(
                 "polls": polls,
                 "batch_id": batch_id,
                 "event_sequence": last_sequence,
+                "source_sequences": last_source_sequences,
                 "last_batch": last_batch,
                 "last_error": last_error,
             }

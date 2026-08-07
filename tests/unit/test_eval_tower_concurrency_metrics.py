@@ -625,7 +625,8 @@ def test_api_lifecycle_drain_waits_for_same_batch_handler_exit(monkeypatch) -> N
             return {
                 "certificate_valid": True,
                 "degraded": False,
-                "event_sequence": next(sequences),
+                "event_sequence": (sequence := next(sequences)),
+                "source_sequences": {"worker-1": sequence},
                 "batches": {
                     "batch-1": {
                         "batch_id": "batch-1",
@@ -651,6 +652,42 @@ def test_api_lifecycle_drain_waits_for_same_batch_handler_exit(monkeypatch) -> N
     assert report["success"] is True
     assert report["reason"] == "stable_api_lifecycle_idle"
     assert report["last_batch"]["active_unresolved"] == 0
+    assert report["source_sequences"] == {"worker-1": 11}
+
+
+def test_api_lifecycle_drain_refuses_per_worker_sequence_reset(monkeypatch) -> None:
+    observations = iter(({"101": 5, "102": 8}, {"101": 5, "102": 2}))
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            sequences = next(observations)
+            return {
+                "certificate_valid": True,
+                "degraded": False,
+                "event_sequence": sum(sequences.values()),
+                "source_sequences": sequences,
+                "batches": {"batch-1": {"active_unresolved": 1}},
+            }
+
+    monkeypatch.setattr(eval_tower.httpx, "get", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(eval_tower.time, "sleep", lambda _seconds: None)
+    tick = iter(i / 10 for i in range(20))
+    monkeypatch.setattr(eval_tower.time, "monotonic", lambda: next(tick))
+
+    report = eval_tower._wait_for_eval_api_lifecycle_drain(
+        api_url="http://localhost:8000",
+        batch_id="batch-1",
+        timeout_s=2.0,
+        stable_s=0.0,
+        poll_interval_s=0.01,
+    )
+
+    assert report["success"] is False
+    assert report["reason"] == "api_lifecycle_sequence_reset"
+    assert report["reset_sources"] == {"102": {"previous": 8, "current": 2}}
 
 
 def test_api_lifecycle_drain_refuses_absent_batch_after_possible_reload(

@@ -7,7 +7,8 @@ from types import SimpleNamespace
 from fastapi.responses import JSONResponse
 
 from src.api.routes import dashboard
-from src.runtime.live_telemetry import LiveTelemetryReducer
+from src.runtime.live_telemetry import LiveTelemetryReducer, _merge_worker_frames
+import src.runtime.live_telemetry as live_telemetry_module
 from src.runtime.live_telemetry import (
     emit_lifecycle_transition,
     lifecycle_context,
@@ -179,7 +180,7 @@ def test_live_activity_endpoint_is_read_only_and_fail_closed() -> None:
 
 
 def test_snapshot_sse_is_transition_driven_and_frame_coupled(monkeypatch) -> None:
-    sequences = iter((0, 1))
+    sequences = iter(((("101", 0), ("102", 0)), (("101", 0), ("102", 1))))
     monotonic = iter((3.0, 3.1, 3.7, 3.8))
     calls = 0
 
@@ -193,6 +194,9 @@ def test_snapshot_sse_is_transition_driven_and_frame_coupled(monkeypatch) -> Non
                     "frame_id": f"frame-{calls}",
                     "frame_sequence": calls,
                     "event_sequence": calls - 1,
+                    "lifecycle": {
+                        "source_sequences": {"101": 0, "102": calls - 1},
+                    },
                 },
                 "region_locks": {"frame_id": f"frame-{calls}"},
             }
@@ -326,3 +330,129 @@ def test_reconciliation_surfaces_drift_then_recovery_without_overwriting_history
     assert recovered["reconciliation"]["history_overwritten"] is False
     assert event_frame["transitions"] == original_history
     assert recovered["lifecycle"]["event_sequence"] == 2
+
+
+def _worker_frame(
+    pid: int,
+    reducer: LiveTelemetryReducer,
+    *,
+    source_ts: float = 100.0,
+) -> dict:
+    frame = reducer.publication_frame()
+    frame["process_id"] = pid
+    frame["process_start_id"] = f"start-{pid}"
+    frame["source_ts"] = source_ts
+    frame["source_sequences"] = {str(pid): frame["event_sequence"]}
+    frame["batch_activity"]["process_id"] = pid
+    for event in frame["transitions"] + frame["pending_transitions"]:
+        event["process_id"] = pid
+    return frame
+
+
+def test_host_reducer_aggregates_split_batch_and_vector_sequences() -> None:
+    active = LiveTelemetryReducer()
+    active.emit("api_request_started", request_id="req-active", batch_id="batch-host")
+    drained = LiveTelemetryReducer()
+    drained.emit("api_request_started", request_id="req-drained", batch_id="batch-host")
+    drained.emit("api_request_finished", request_id="req-drained", batch_id="batch-host")
+
+    merged = _merge_worker_frames(
+        {101: _worker_frame(101, active), 102: _worker_frame(102, drained)},
+        expected_pids=[101, 102],
+        now=101.0,
+        stale_after_s=3.0,
+    )
+
+    assert merged["source_sequences"] == {"101": 1, "102": 2}
+    assert merged["worker_coverage"]["complete"] is True
+    assert merged["batch_activity"]["certificate_valid"] is True
+    batch = merged["batch_activity"]["batches"]["batch-host"]
+    assert batch["active_unresolved"] == 1
+    assert batch["worker_pids"] == [101, 102]
+
+    # Any uvicorn worker can serve the dashboard. Merge order/local worker must
+    # not change the host certificate or lifecycle watermark.
+    alternate = _merge_worker_frames(
+        {102: _worker_frame(102, drained), 101: _worker_frame(101, active)},
+        expected_pids=[101, 102],
+        now=101.0,
+        stale_after_s=3.0,
+    )
+    assert alternate["source_sequences"] == merged["source_sequences"]
+    assert alternate["batch_activity"] == merged["batch_activity"]
+
+
+def test_host_reducer_fails_closed_for_missing_stale_or_degraded_worker() -> None:
+    healthy = LiveTelemetryReducer()
+    healthy.emit("api_request_started", request_id="req", batch_id="batch-host")
+    stale = _worker_frame(102, LiveTelemetryReducer(), source_ts=90.0)
+
+    incomplete = _merge_worker_frames(
+        {101: _worker_frame(101, healthy), 102: stale},
+        expected_pids=[101, 102, 103],
+        now=101.0,
+        stale_after_s=3.0,
+    )
+
+    assert incomplete["degraded"] is True
+    assert incomplete["batch_activity"]["certificate_valid"] is False
+    assert incomplete["worker_coverage"]["missing_pids"] == [103]
+    assert incomplete["worker_coverage"]["stale_pids"] == [102]
+
+    incomplete_roster = _merge_worker_frames(
+        {101: _worker_frame(101, healthy), 102: _worker_frame(102, LiveTelemetryReducer())},
+        expected_pids=[101, 102],
+        expected_worker_count=3,
+        now=101.0,
+        stale_after_s=3.0,
+    )
+    assert incomplete_roster["worker_coverage"]["roster_incomplete"] is True
+    assert incomplete_roster["batch_activity"]["certificate_valid"] is False
+
+    overflowed = LiveTelemetryReducer(queue_capacity=1)
+    overflowed.emit("route_selected", request_id="overflow")
+    overflowed.emit("route_selected", request_id="overflow")
+    degraded = _merge_worker_frames(
+        {101: _worker_frame(101, healthy), 102: _worker_frame(102, overflowed)},
+        expected_pids=[101, 102],
+        now=101.0,
+        stale_after_s=3.0,
+    )
+    assert degraded["batch_activity"]["certificate_valid"] is False
+    assert degraded["overflow"]["total"] == 1
+
+
+def test_configured_worker_count_reads_uvicorn_parent(monkeypatch) -> None:
+    monkeypatch.setattr(live_telemetry_module.os, "getppid", lambda: 77)
+    monkeypatch.setattr(
+        live_telemetry_module,
+        "_process_cmdline",
+        lambda pid: "python -m uvicorn src.main:app --workers 6" if pid == 77 else "",
+    )
+
+    assert live_telemetry_module._configured_api_worker_count() == 6
+
+
+def test_worker_publication_rejects_pid_reuse(tmp_path, monkeypatch) -> None:
+    frame = _worker_frame(4242, LiveTelemetryReducer())
+    frame["process_start_id"] = "boot-a"
+    monkeypatch.setattr(live_telemetry_module, "_process_start_id", lambda _pid: "boot-a")
+
+    live_telemetry_module._write_worker_state(frame, root=tmp_path)
+    assert live_telemetry_module._read_worker_frame(4242, root=tmp_path) == frame
+
+    monkeypatch.setattr(live_telemetry_module, "_process_start_id", lambda _pid: "boot-b")
+    assert live_telemetry_module._read_worker_frame(4242, root=tmp_path) is None
+
+
+def test_worker_publisher_acknowledges_queue_without_losing_history() -> None:
+    reducer = LiveTelemetryReducer(queue_capacity=2, history_capacity=4)
+    reducer.emit("queued", request_id="req-publish")
+
+    published = reducer.publisher_frame()
+    heartbeat = reducer.publisher_frame()
+
+    assert [event["transition"] for event in published["pending_transitions"]] == ["queued"]
+    assert heartbeat["pending_transitions"] == []
+    assert [event["transition"] for event in heartbeat["transitions"]] == ["queued"]
+    assert heartbeat["degraded"] is False

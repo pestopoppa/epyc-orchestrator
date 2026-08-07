@@ -19,6 +19,8 @@ import pytest
 
 from src.api.routes import dashboard_topology
 from src.api.routes.dashboard import (
+    _port_role_shape,
+    _region_locks_payload,
     region_locks_snapshot,
     _filter_instance_regions_for_mode,
     _shape_for_regions,
@@ -294,11 +296,13 @@ def test_slots_vs_lease_role_disagreement_is_explicit_conflict() -> None:
         region_locks={
             "by_role": {"frontdoor": {}, "worker_general": {}},
             "occupancy": {
-                "entries": [{
-                    "token": "frontdoor-lease",
-                    "role": "frontdoor",
-                    "instance_idx": 0,
-                }],
+                "entries": [
+                    {
+                        "token": "frontdoor-lease",
+                        "role": "frontdoor",
+                        "instance_idx": 0,
+                    }
+                ],
             },
             "coherence": {"status": "coherent"},
         },
@@ -319,10 +323,12 @@ def test_serving_capacity_is_verified_against_live_slots() -> None:
         "coherence": {"status": "coherent"},
         "lock_root": {"suspicious_test_root": False},
         "display_matrix": {
-            "rows": [{
-                "role": "frontdoor",
-                "cells": [{"state": "active", "shape": "full", "capacity": 4}],
-            }],
+            "rows": [
+                {
+                    "role": "frontdoor",
+                    "cells": [{"state": "active", "shape": "full", "capacity": 4}],
+                }
+            ],
         },
     }
 
@@ -333,14 +339,16 @@ def test_serving_capacity_is_verified_against_live_slots() -> None:
     )
     assert matched["status"] == "coherent"
     assert matched["capacity_conflicts"] == []
-    assert matched["capacity_observations"] == [{
-        "role": "frontdoor",
-        "shape": "full",
-        "port": 8070,
-        "configured": 4,
-        "observed": 4,
-        "matches": True,
-    }]
+    assert matched["capacity_observations"] == [
+        {
+            "role": "frontdoor",
+            "shape": "full",
+            "port": 8070,
+            "configured": 4,
+            "observed": 4,
+            "matches": True,
+        }
+    ]
 
     mismatched = _placement_telemetry_status(
         activity={8070: {"n_active": 1, "n_total": 2}},
@@ -416,9 +424,7 @@ class TestRegionLocksSnapshot:
             "src.runtime.cpu_region_lock._current_lock_owner_pids",
             lambda path: ["777"] if ".frontdoor." in path.name else [],
         )
-        monkeypatch.setattr(
-            "src.runtime.cpu_region_lock.read_region_occupancy", lambda: occupancy
-        )
+        monkeypatch.setattr("src.runtime.cpu_region_lock.read_region_occupancy", lambda: occupancy)
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {
@@ -457,15 +463,17 @@ class TestRegionLocksSnapshot:
         self, tmp_path, monkeypatch
     ) -> None:
         first = {
-            "entries": [{
-                "token": "departing",
-                "pid": 123,
-                "role": "frontdoor",
-                "regions": ["q0"],
-                "instance_idx": 0,
-                "capacity": 1,
-                "shared": False,
-            }],
+            "entries": [
+                {
+                    "token": "departing",
+                    "pid": 123,
+                    "role": "frontdoor",
+                    "regions": ["q0"],
+                    "instance_idx": 0,
+                    "capacity": 1,
+                    "shared": False,
+                }
+            ],
             "per_region": {},
         }
         empty = {"entries": [], "per_region": {}}
@@ -481,9 +489,7 @@ class TestRegionLocksSnapshot:
         monkeypatch.setattr(
             "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: []
         )
-        monkeypatch.setattr(
-            "src.runtime.cpu_region_lock.read_region_occupancy", read_occupancy
-        )
+        monkeypatch.setattr("src.runtime.cpu_region_lock.read_region_occupancy", read_occupancy)
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {("frontdoor", 0): frozenset({"q0"})},
@@ -628,12 +634,12 @@ class TestRegionLocksSnapshot:
         # A configured, unheld shape reads "ready" — never "blocked", never
         # hidden. Shapes with no matching instance in this synthetic topology
         # read "na".
-        assert [cell["state"] for cell in worker_display["cells"]] == [
-            "ready"
-        ] + ["na"] * (len(columns) - 1)
-        assert [cell["label"] for cell in worker_display["cells"]] == ["✅"] + [
-            "—"
-        ] * (len(columns) - 1)
+        assert [cell["state"] for cell in worker_display["cells"]] == ["ready"] + ["na"] * (
+            len(columns) - 1
+        )
+        assert [cell["label"] for cell in worker_display["cells"]] == ["✅"] + ["—"] * (
+            len(columns) - 1
+        )
 
         # "configured quarters stay visible" — the property this test is named
         # for — is now enforced at the layer that still models quarters: the
@@ -1026,9 +1032,7 @@ class TestRegionLocksSnapshot:
         monkeypatch.setattr(
             "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: []
         )
-        monkeypatch.setattr(
-            "src.runtime.cpu_region_lock.read_region_occupancy", lambda: occupancy
-        )
+        monkeypatch.setattr("src.runtime.cpu_region_lock.read_region_occupancy", lambda: occupancy)
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {
@@ -1116,9 +1120,7 @@ class TestRegionLocksSnapshot:
         monkeypatch.setattr(
             "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: []
         )
-        monkeypatch.setattr(
-            "src.runtime.cpu_region_lock.read_region_occupancy", lambda: occupancy
-        )
+        monkeypatch.setattr("src.runtime.cpu_region_lock.read_region_occupancy", lambda: occupancy)
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {
@@ -1244,9 +1246,7 @@ class TestNonLockRoleCompleteness:
         monkeypatch.setattr("src.scheduling.contention.load_contention_matrix", lambda: matrix)
 
     @pytest.mark.asyncio
-    async def test_non_lock_roles_rendered_with_na_lock_state(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    async def test_non_lock_roles_rendered_with_na_lock_state(self, tmp_path, monkeypatch) -> None:
         self._base_env(tmp_path, monkeypatch)
         import src.api.routes.dashboard as dash_mod
 
@@ -1337,3 +1337,148 @@ class TestNonLockRoleCompleteness:
         # failed discovery path.
         for name, port in speech.items():
             assert payload["non_lock_roles"][name]["ports"] == [port]
+
+
+def test_auxiliary_occupancy_is_rendered_and_blocks_every_overlapping_shape(
+    tmp_path, monkeypatch
+) -> None:
+    topology = {
+        ("frontdoor", 0): frozenset({"q0", "q1", "q2", "q3"}),
+        ("frontdoor", 1): frozenset({"q0", "q1"}),
+        ("frontdoor", 2): frozenset({"q2", "q3"}),
+        ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
+        ("worker_general", 1): frozenset({"q0", "q1"}),
+        ("worker_general", 2): frozenset({"q2", "q3"}),
+        ("eval_batch_frontdoor", 0): frozenset({"q0", "q1"}),
+    }
+    occupancy = {
+        "entries": [
+            {
+                "token": "eval-lease",
+                "pid": 101,
+                "role": "eval_batch_frontdoor",
+                "regions": ["q0", "q1"],
+                "instance_idx": 0,
+                "capacity": 2,
+                "shared": True,
+            },
+            {
+                "token": "worker-lease",
+                "pid": 102,
+                "role": "worker_general",
+                "regions": ["q2", "q3"],
+                "instance_idx": 2,
+                "capacity": 1,
+                "shared": False,
+            },
+        ],
+        "per_region": {},
+    }
+    for role, regions in {
+        "eval_batch_frontdoor": ("q0", "q1"),
+        "worker_general": ("q2", "q3"),
+    }.items():
+        for region in regions:
+            (tmp_path / f"cpu_region.{role}.{region}.lock").write_text("")
+
+    def holders(path: Path) -> list[str]:
+        return ["101"] if ".eval_batch_frontdoor." in path.name else ["102"]
+
+    matrix = ContentionMatrix(
+        version=1,
+        measured_at="test",
+        host="test",
+        topology_hash="test",
+        default_floor=0.85,
+        same_role={
+            "frontdoor": SameRole(role="frontdoor", verdict="allow"),
+            "worker_general": SameRole(role="worker_general", verdict="allow"),
+        },
+        pairs={},
+    )
+    monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+    monkeypatch.setattr("src.runtime.cpu_region_lock._current_lock_owner_pids", holders)
+    monkeypatch.setattr("src.runtime.cpu_region_lock.read_region_occupancy", lambda: occupancy)
+    monkeypatch.setattr("src.runtime.instance_topology.get_instance_regions", lambda: topology)
+    monkeypatch.setattr("src.scheduling.contention.load_contention_matrix", lambda: matrix)
+    monkeypatch.setattr(
+        "src.api.routes.dashboard._port_roles_cached",
+        lambda: {18070: "eval_batch_frontdoor", 8182: "worker_general.q1"},
+    )
+
+    payload = _region_locks_payload("both")
+    rows = {row["role"]: row for row in payload["display_matrix"]["rows"]}
+
+    assert rows["eval_batch_frontdoor"]["cells"][1]["state"] == "active"
+    assert rows["eval_batch_frontdoor"]["cells"][1]["label"] == "⚡ 1/2"
+    assert [cell["state"] for cell in rows["frontdoor"]["cells"]] == [
+        "blocked",
+        "blocked",
+        "blocked",
+    ]
+    assert payload["display_matrix"]["held_regions"] == ["q0", "q1", "q2", "q3"]
+    assert payload["coherence"]["proc_pairs"] == [
+        ["eval_batch_frontdoor", 0],
+        ["worker_general", 2],
+    ]
+    assert payload["coherence"]["occupancy_pairs"] == payload["coherence"]["proc_pairs"]
+    assert "eval_batch_frontdoor" not in payload["non_lock_roles"]
+
+
+def test_unprojected_occupancy_still_prevents_ready_cell(tmp_path, monkeypatch) -> None:
+    topology = {
+        ("frontdoor", 0): frozenset({"q0", "q1", "q2", "q3"}),
+        ("frontdoor", 1): frozenset({"q0", "q1"}),
+        ("frontdoor", 2): frozenset({"q2", "q3"}),
+    }
+    occupancy = {
+        "entries": [
+            {
+                "token": "unknown-lease",
+                "pid": 103,
+                "role": "future_auxiliary",
+                "regions": ["q0", "q1"],
+                "instance_idx": 9,
+                "capacity": 1,
+                "shared": False,
+            }
+        ],
+        "per_region": {},
+    }
+    matrix = ContentionMatrix(
+        version=1,
+        measured_at="test",
+        host="test",
+        topology_hash="test",
+        default_floor=0.85,
+        same_role={"frontdoor": SameRole(role="frontdoor", verdict="allow")},
+        pairs={},
+    )
+    monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+    monkeypatch.setattr("src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: [])
+    monkeypatch.setattr("src.runtime.cpu_region_lock.read_region_occupancy", lambda: occupancy)
+    monkeypatch.setattr("src.runtime.instance_topology.get_instance_regions", lambda: topology)
+    monkeypatch.setattr("src.scheduling.contention.load_contention_matrix", lambda: matrix)
+    monkeypatch.setattr("src.api.routes.dashboard._port_roles_cached", lambda: {})
+
+    payload = _region_locks_payload("both")
+    row = next(row for row in payload["display_matrix"]["rows"] if row["role"] == "frontdoor")
+
+    assert row["cells"][1]["state"] == "blocked"
+    assert "future_auxiliary.idx9" in row["cells"][1]["title"]
+
+
+def test_unsuffixed_auxiliary_port_resolves_physical_half_shape(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.runtime.instance_topology.topology_instance_for_port",
+        lambda port: ("eval_batch_frontdoor", 0) if port == 18070 else None,
+    )
+    monkeypatch.setattr(
+        "src.runtime.instance_topology.get_instance_regions",
+        lambda: {("eval_batch_frontdoor", 0): frozenset({"q0", "q1"})},
+    )
+
+    assert _port_role_shape("eval_batch_frontdoor", 18070) == (
+        "eval_batch_frontdoor",
+        "half0",
+    )

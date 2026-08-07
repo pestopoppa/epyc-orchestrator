@@ -257,6 +257,44 @@ def test_dashboard_html_region_lock_grid_uses_backend_display_matrix() -> None:
     assert "SLOT ACTIVE" not in body
 
 
+def test_region_lock_primer_cannot_overwrite_a_coupled_frame() -> None:
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+    update_start = body.index("async function updateRegionLocks(")
+    update_end = body.index("async function ensureRegionLocksPanelPainted()", update_start)
+    update_function = body[update_start:update_end]
+    primer_start = update_end
+    primer_end = body.index("function startPanelSafely", primer_start)
+    primer_function = body[primer_start:primer_end]
+
+    assert "if (refreshSeq !== _regionLocksRefreshSeq) return;" in update_function
+    assert "if (!incomingFrameId && _latestRegionLockFrame.valid) return;" in update_function
+    assert "fetchJSON('/dashboard/api/region_locks')" not in primer_function
+    assert "requestCoherentDashboardSnapshot('region_locks_primer');" in primer_function
+
+    script = f"""
+let _regionLocksRefreshSeq = 7;
+let _latestRegionLockFrame = {{valid:true, frameId:'live-coupled'}};
+let touched = false;
+const fetchJSON = async () => {{ throw new Error('standalone fetch forbidden'); }};
+const document = {{getElementById: () => {{ touched = true; throw new Error('painted'); }}}};
+{update_function}
+(async () => {{
+  await updateRegionLocks(7, {{live_frame: {{frame_id:null}}}});
+  process.stdout.write(JSON.stringify({{touched, frame:_latestRegionLockFrame.frameId}}));
+}})().catch(err => {{ console.error(err); process.exit(1); }});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(proc.stdout) == {"touched": False, "frame": "live-coupled"}
+
+
 def test_region_lock_renderer_replaces_owner_and_frame_identity() -> None:
     """Actual JS renderer must replace stale role HTML on every frame."""
     html_path = (
