@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect a fresh E11 operational T1 baseline without mutating AutoPilot state.
+"""Collect a fresh E12 operational T1 baseline without mutating AutoPilot state.
 
 ``--preflight`` performs no inference. ``--collect`` performs one small live
 generation probe and one canonical T1 EvalTower run, then writes an immutable
@@ -37,15 +37,16 @@ from eval_tower import (  # noqa: E402
     EVAL_T1_SPEC_N,
     EvalTower,
 )
+from src.autopilot_core.tier_specs import RATE_4D_OBJECTIVE_POLICY  # noqa: E402
 
 
 STATE_PATH = REPO_ROOT / "orchestration" / "autopilot_state.json"
 AUTOPILOT_LOCK = REPO_ROOT / "orchestration" / ".autopilot.lock"
 API_URL = "http://127.0.0.1:8000"
-POLICY = "task_rate_4d_v2_resource_lanes"
-QUALITY_ERA = "E11-eval-model-judge-tail-v3-quality"
-SPEED_ERA = "E11-autopilot-model-judge-tail-v3-speed"
-SCHEMA = "epyc.e11_operational_baseline_candidate.v1"
+POLICY = RATE_4D_OBJECTIVE_POLICY
+QUALITY_ERA = "E12-eval-mixed-role-split-v3-quality"
+SPEED_ERA = "E12-autopilot-mixed-role-split-v3-speed"
+SCHEMA = "epyc.e12_operational_baseline_candidate.v1"
 MIN_RELIABILITY = 0.80
 SOURCE_PATHS = (
     REPO_ROOT / "scripts/autopilot/eval_tower.py",
@@ -111,7 +112,7 @@ def _validate_instrument_state(state: dict[str, Any]) -> None:
         if actual != wanted
     ]
     if mismatches:
-        raise RuntimeError("E11 instrument state is not ready: " + "; ".join(mismatches))
+        raise RuntimeError("E12 instrument state is not ready: " + "; ".join(mismatches))
 
 
 def _git_identity() -> tuple[str, str, bool]:

@@ -509,12 +509,22 @@ def test_eval_resource_lanes_group_overlapping_full_cpu_process_cohorts(monkeypa
     assert lanes[1].cohort == "worker_general"
 
 
+def test_router_owned_eval_uses_mixed_split_backlog_lane(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    lanes, capacities = eval_tower._eval_resource_lanes(
+        [{"prompt": "route me"}, {"prompt": "route me too"}]
+    )
+
+    assert {lane.key for lane in lanes} == {"cpu:mixed-role-split"}
+    assert {lane.device for lane in lanes} == {"cpu-mixed-split"}
+    assert capacities == {"cpu:mixed-role-split": 4}
+    assert [lane.units for lane in lanes] == [1, 1]
+
+
 def test_eval_resource_lane_weights_near_full_context_prompt(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
 
-    lane = eval_tower._eval_resource_lane(
-        {"force_role": "worker_general", "prompt": "x" * 260_000}
-    )
+    lane = eval_tower._eval_resource_lane({"force_role": "worker_general", "prompt": "x" * 260_000})
 
     assert lane.capacity == 4
     assert lane.units == 4
@@ -602,16 +612,156 @@ def test_backend_drain_waits_for_stable_idle_after_busy_slot(monkeypatch) -> Non
     assert report["peak_active"] == 1
 
 
+def test_api_lifecycle_drain_waits_for_same_batch_handler_exit(monkeypatch) -> None:
+    observations = iter([1, 0])
+    sequences = iter([10, 11])
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            active = next(observations)
+            return {
+                "certificate_valid": True,
+                "degraded": False,
+                "event_sequence": next(sequences),
+                "batches": {
+                    "batch-1": {
+                        "batch_id": "batch-1",
+                        "active_unresolved": active,
+                        "queued_unresolved": active,
+                    }
+                },
+            }
+
+    monkeypatch.setattr(eval_tower.httpx, "get", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(eval_tower.time, "sleep", lambda _seconds: None)
+    tick = iter(i / 10 for i in range(30))
+    monkeypatch.setattr(eval_tower.time, "monotonic", lambda: next(tick))
+
+    report = eval_tower._wait_for_eval_api_lifecycle_drain(
+        api_url="http://localhost:8000",
+        batch_id="batch-1",
+        timeout_s=2.0,
+        stable_s=0.0,
+        poll_interval_s=0.01,
+    )
+
+    assert report["success"] is True
+    assert report["reason"] == "stable_api_lifecycle_idle"
+    assert report["last_batch"]["active_unresolved"] == 0
+
+
+def test_api_lifecycle_drain_refuses_absent_batch_after_possible_reload(
+    monkeypatch,
+) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "certificate_valid": True,
+                "degraded": False,
+                "event_sequence": 1,
+                "batches": {},
+            }
+
+    monkeypatch.setattr(eval_tower.httpx, "get", lambda *_args, **_kwargs: Response())
+
+    report = eval_tower._wait_for_eval_api_lifecycle_drain(
+        api_url="http://localhost:8000",
+        batch_id="batch-never-observed",
+        timeout_s=0.0,
+        stable_s=0.0,
+    )
+
+    assert report["success"] is False
+    assert report["reason"] == "api_lifecycle_batch_not_observed"
+
+
+def test_api_lifecycle_drain_refuses_degraded_reducer(monkeypatch) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "certificate_valid": False,
+                "degraded": True,
+                "overflow_critical": 1,
+                "event_sequence": 9,
+                "batches": {"batch-1": {"active_unresolved": 0}},
+            }
+
+    monkeypatch.setattr(eval_tower.httpx, "get", lambda *_args, **_kwargs: Response())
+
+    report = eval_tower._wait_for_eval_api_lifecycle_drain(
+        api_url="http://localhost:8000",
+        batch_id="batch-1",
+        timeout_s=1.0,
+        stable_s=0.0,
+    )
+
+    assert report["success"] is False
+    assert report["reason"] == "api_lifecycle_reducer_degraded"
+    assert report["overflow"]["critical"] == 1
+
+
+def test_combined_quiescence_requires_lifecycle_before_slots(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        eval_tower,
+        "_wait_for_eval_api_lifecycle_drain",
+        lambda **_kwargs: (
+            calls.append("lifecycle")
+            or {"success": True, "reason": "stable_api_lifecycle_idle", "stable_s": 0.0}
+        ),
+    )
+    monkeypatch.setattr(
+        eval_tower,
+        "_wait_for_eval_backend_drain",
+        lambda **_kwargs: (
+            calls.append("slots")
+            or {
+                "success": True,
+                "reason": "stable_idle",
+                "waited_s": 0.0,
+                "ports": [8070],
+            }
+        ),
+    )
+
+    report = eval_tower._wait_for_eval_quiescence(
+        api_url="http://localhost:8000",
+        batch_id="batch-1",
+        timeout_s=1.0,
+    )
+
+    assert calls == ["lifecycle", "slots"]
+    assert report["success"] is True
+    assert report["reason"] == "stable_api_and_backend_idle"
+
+
 def test_eval_batch_never_overlaps_different_native_cpu_process_cohorts(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
     tower = EvalTower(timeout=2)
     native = eval_tower._EvalResourceLane(
-        key="cpu:full-regions", role="frontdoor", capacity=4, units=1,
-        device="cpu-native-batch", cohort="frontdoor",
+        key="cpu:full-regions",
+        role="frontdoor",
+        capacity=4,
+        units=1,
+        device="cpu-native-batch",
+        cohort="frontdoor",
     )
     worker_native = eval_tower._EvalResourceLane(
-        key="cpu:full-regions", role="worker_general", capacity=4, units=1,
-        device="cpu-native-batch", cohort="worker_general",
+        key="cpu:full-regions",
+        role="worker_general",
+        capacity=4,
+        units=1,
+        device="cpu-native-batch",
+        cohort="worker_general",
     )
     monkeypatch.setattr(
         eval_tower,
@@ -703,7 +853,9 @@ def test_live_safe_concurrency_uses_quarter_mode_live_ports(monkeypatch) -> None
 
     monkeypatch.setenv("AUTOPILOT_EVAL_REQUIRE_LIVE_FLEET", "1")
     monkeypatch.setattr(stack_numa, "NUMA_CONFIG", cfg)
-    monkeypatch.setattr(runtime_facts_manifest, "read_runtime_stack_numa_mode", lambda **_: "quarter")
+    monkeypatch.setattr(
+        runtime_facts_manifest, "read_runtime_stack_numa_mode", lambda **_: "quarter"
+    )
     # WP-14: the runtime-facts reader seam now also requires a non-empty,
     # consistent selected-server lineup (the URL reader's fail-closed contract)
     # before honoring the manifest mode, so provide a well-formed quarter lineup.
@@ -734,8 +886,16 @@ _PHANTOM_RUNTIME_FACTS = {
         # left-behind full-era server lineup.
         "stack_numa_mode": None,
         "selected_servers": [
-            {"port": 8070, "roles": ["frontdoor", "coder_escalation", "worker_summarize"], "numa_instance": 0},
-            {"port": 8072, "roles": ["worker_general", "worker_math", "toolrunner"], "numa_instance": 0},
+            {
+                "port": 8070,
+                "roles": ["frontdoor", "coder_escalation", "worker_summarize"],
+                "numa_instance": 0,
+            },
+            {
+                "port": 8072,
+                "roles": ["worker_general", "worker_math", "toolrunner"],
+                "numa_instance": 0,
+            },
         ],
         "selected_ports": [],
     },
@@ -802,9 +962,7 @@ def test_runtime_facts_stack_numa_mode_consumes_wellformed_quarter_manifest(
     ]
 
 
-def test_live_safe_concurrency_falls_back_when_manifest_is_phantom(
-    monkeypatch, tmp_path
-) -> None:
+def test_live_safe_concurrency_falls_back_when_manifest_is_phantom(monkeypatch, tmp_path) -> None:
     """WP-14: with a phantom manifest present and no env override, the live-fleet
     seam does NOT take the quarter disjoint-concurrency path; it falls back to the
     conservative topology bound instead of the phantom's 4-wide quarter lineup."""
@@ -950,7 +1108,9 @@ def test_eval_concurrency_allows_stale_global_matrix_with_fresh_role_cert(monkey
 
     monkeypatch.setattr(stack_numa, "NUMA_CONFIG", cfg)
     monkeypatch.setattr(contention, "load_contention_matrix", lambda: matrix)
-    monkeypatch.setattr(contention, "topology_fingerprint_for_matrix", lambda _cfg, _matrix: "new-whole")
+    monkeypatch.setattr(
+        contention, "topology_fingerprint_for_matrix", lambda _cfg, _matrix: "new-whole"
+    )
     monkeypatch.setattr(
         contention,
         "matrix_status",
@@ -1001,7 +1161,9 @@ def test_eval_concurrency_rejects_role_cert_when_live_ports_drift(monkeypatch) -
 
     monkeypatch.setattr(stack_numa, "NUMA_CONFIG", cfg)
     monkeypatch.setattr(contention, "load_contention_matrix", lambda: matrix)
-    monkeypatch.setattr(contention, "topology_fingerprint_for_matrix", lambda _cfg, _matrix: "new-whole")
+    monkeypatch.setattr(
+        contention, "topology_fingerprint_for_matrix", lambda _cfg, _matrix: "new-whole"
+    )
     monkeypatch.setattr(
         contention,
         "matrix_status",
@@ -1535,9 +1697,7 @@ def test_eval_question_uses_completion_probabilities_for_confidence(monkeypatch)
     assert result.confidence == pytest.approx(math.sqrt(0.81 * 0.64))
 
     aggregate = tower._aggregate([result], tier=1)
-    assert aggregate.details["confidence_source_counts"] == {
-        "completion_probabilities_geomean": 1
-    }
+    assert aggregate.details["confidence_source_counts"] == {"completion_probabilities_geomean": 1}
     assert aggregate.details["confidence_is_real"] is True
 
 
@@ -1636,11 +1796,7 @@ def test_eval_question_stamps_rubric_source_heuristic_fallback(monkeypatch) -> N
 
     def _fake_call(**_kwargs):  # noqa: ANN001
         return {
-            "answer": (
-                "# Summary\n"
-                "- alpha beta evidence\n"
-                "Source: https://example.test/report\n"
-            ),
+            "answer": ("# Summary\n- alpha beta evidence\nSource: https://example.test/report\n"),
             "tokens_generated": 12,
             "model": "fake",
         }
@@ -1768,9 +1924,7 @@ def test_aggregate_confidence_is_real_fails_closed_on_mixed_proxy_batch() -> Non
 
     all_real = tower._aggregate([real_code, real_math], tier=1)
     assert all_real.details["confidence_is_real"] is True
-    assert all_real.details["confidence_source_counts"] == {
-        "completion_probabilities_geomean": 2
-    }
+    assert all_real.details["confidence_source_counts"] == {"completion_probabilities_geomean": 2}
 
     mixed = tower._aggregate([real_code, real_math, proxy_code], tier=1)
     assert mixed.details["confidence_is_real"] is False
@@ -1867,9 +2021,7 @@ def test_eval_question_code_execution_confidence_uses_geomean_when_probs_present
     assert result.confidence_source == "completion_probabilities_geomean"
 
     aggregate = tower._aggregate([result], tier=1)
-    assert aggregate.details["confidence_source_counts"] == {
-        "completion_probabilities_geomean": 1
-    }
+    assert aggregate.details["confidence_source_counts"] == {"completion_probabilities_geomean": 1}
     assert aggregate.details["confidence_is_real"] is True
 
 
@@ -1971,6 +2123,7 @@ def test_eval_question_stamps_eval_batch_request_metadata(monkeypatch) -> None:
     assert calls[0]["request_priority"] == "background"
     assert calls[0]["workload_class"] == "eval_batch"
     assert calls[0]["batch_id"] == "evaltower-T1-123-1q"
+    assert calls[0]["batch_placement_mode"] == "mixed_role_split"
     assert calls[0]["allow_delegation"] is False
 
 

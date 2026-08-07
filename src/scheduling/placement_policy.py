@@ -44,10 +44,10 @@ class RolePlacementPolicy(str, enum.Enum):
         instance for peak per-request latency; concurrent requests spill
         to NUMA-disjoint quarters. Migration may evict full→quarter under
         load (WP-3). This is the conservative default.
-      * BURST_PREFER_QUARTERS — at N≥2, prefer quarters even when full is
-        free. Avoids paying the migration cost on every load transition.
-        Single requests still go to full when load is 0.
-      * FULL_DISABLED — never place on full; quarters only. Reclaims the
+      * BURST_PREFER_SPLIT — at N≥2, prefer the topology's sub-full instances
+        even when full is free. Avoids paying the migration cost on every load
+        transition. Single requests still go to full when load is 0.
+      * FULL_DISABLED — never place on full; split instances only. Reclaims the
         full instance's mlock at the cost of solo per-request latency.
         Useful for roles whose full overlaps all quarters (worker_general).
       * QUEUE_ONLY — single-flight per role; no concurrent placement at
@@ -55,14 +55,53 @@ class RolePlacementPolicy(str, enum.Enum):
     """
 
     SOLO_PREFER_FULL = "solo_prefer_full"
-    BURST_PREFER_QUARTERS = "burst_prefer_quarters"
+    BURST_PREFER_SPLIT = "burst_prefer_split"
     FULL_DISABLED = "full_disabled"
     QUEUE_ONLY = "queue_only"
+
+
+class BatchPlacementMode(str, enum.Enum):
+    """Request-scoped placement intent for burst/eval admission.
+
+    ``AUTO`` preserves ordinary workload-sensitive placement. A known
+    homogeneous cohort may share the full server's certified native slots.
+    A routed pipeline cohort uses split CPU instances from its first dispatch
+    so downstream roles can occupy disjoint regions without mid-decode moves.
+    """
+
+    AUTO = "auto"
+    HOMOGENEOUS_NATIVE_BATCH = "homogeneous_native_batch"
+    MIXED_ROLE_SPLIT = "mixed_role_split"
+
+
+def coerce_batch_placement_mode(raw: object) -> BatchPlacementMode:
+    """Validate a request-scoped batch placement mode.
+
+    Invalid internal values fail closed to split placement. Public API callers
+    are rejected earlier by Pydantic, but internal callers must never turn a
+    typo into an all-region shared lease.
+    """
+    if isinstance(raw, BatchPlacementMode):
+        return raw
+    text = str(raw or BatchPlacementMode.AUTO.value).strip().lower()
+    try:
+        return BatchPlacementMode(text)
+    except ValueError:
+        return BatchPlacementMode.MIXED_ROLE_SPLIT
 
 
 # Conservative default — preserves 2026-05-25 dispatcher behavior for every
 # role until WP-5 ratifies per-role values.
 DEFAULT_PLACEMENT_POLICY = RolePlacementPolicy.SOLO_PREFER_FULL
+
+# Read compatibility only.  The deployed fleet retired quarter instances in
+# favor of halves on 2026-07-30, so the canonical policy vocabulary must not
+# describe a physical shape that no longer exists.  Keeping the old spelling
+# out of the enum and runtime configuration makes every newly rendered/logged
+# value accurate while still allowing an older external config to boot safely.
+_LEGACY_POLICY_ALIASES = {
+    "burst_prefer_quarters": RolePlacementPolicy.BURST_PREFER_SPLIT,
+}
 
 
 def _coerce(raw: object) -> Optional[RolePlacementPolicy]:
@@ -76,13 +115,9 @@ def _coerce(raw: object) -> Optional[RolePlacementPolicy]:
     request acquire a full instance's every region lock and serialize the
     machine (the DISPATCH-A shape, 2026-07-21).
 
-    This matters imminently: the enum's vocabulary is quarter-shaped
-    (BURST_PREFER_QUARTERS, and SOLO_PREFER_FULL's own docstring says "spill to
-    NUMA-disjoint quarters") while the deployed topology is now 1 full + 2
-    halves. Renaming toward shape-agnostic values is queued work, and under the
-    old behaviour a typo or a half-finished alias map would have degraded roles
-    to SOLO_PREFER_FULL without a single log line. A rename that looks safe and
-    is not.
+    The deployed topology is 1 full + 2 halves, so the canonical vocabulary is
+    shape-agnostic. The explicit legacy alias above prevents an older external
+    config from degrading to SOLO_PREFER_FULL during the rename.
     """
     if isinstance(raw, RolePlacementPolicy):
         return raw
@@ -92,6 +127,8 @@ def _coerce(raw: object) -> Optional[RolePlacementPolicy]:
         text = raw.strip().lower()
         if not text:
             return None
+        if text in _LEGACY_POLICY_ALIASES:
+            return _LEGACY_POLICY_ALIASES[text]
         try:
             return RolePlacementPolicy(text)
         except ValueError as exc:

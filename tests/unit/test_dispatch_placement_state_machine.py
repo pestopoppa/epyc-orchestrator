@@ -122,6 +122,46 @@ def test_eval_batch_uses_certified_shared_full_lease(monkeypatch: pytest.MonkeyP
     ]
 
 
+def test_mixed_role_eval_bypasses_native_full_and_starts_split(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+    monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+    full = _StubBackend("http://localhost:8070")
+    split = _StubBackend("http://localhost:8080")
+    backend = ca_mod.ConcurrencyAwareBackend(
+        full_backend=full,
+        quarter_backends=[split],
+        role="frontdoor",
+        full_port=8070,
+        native_batch_width=4,
+    )
+    calls: list[dict] = []
+
+    @contextlib.contextmanager
+    def fake_region_lock(role, instance_idx, **kwargs):
+        calls.append({"role": role, "instance_idx": instance_idx, **kwargs})
+        yield {"q0": Path("/tmp/q0")}
+
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.cpu_region_lock_for_instance", fake_region_lock
+    )
+    request = SimpleNamespace(
+        workload_class="eval_batch",
+        batch_id="t1-mixed",
+        batch_placement_mode="mixed_role_split",
+        timeout=1200,
+    )
+
+    with backend._dispatch(request=request) as (selected, idx, is_full):
+        assert selected is split
+        assert idx == 0
+        assert is_full is False
+
+    assert calls[0]["instance_idx"] == 1
+    assert calls[0].get("shared") is not True
+
+
 def test_dispatcher_uses_topology_safe_candidate_when_full_held(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -360,7 +400,7 @@ def test_full_disabled_places_four_concurrent_on_four_quarters(
     )
 
     # 2026-07-23 lineup restoration: worker_general's LIVE policy reverted to
-    # burst_prefer_quarters (operator-directed full redeploy). This test keeps
+    # burst_prefer_split (operator-directed full redeploy). This test keeps
     # pinning the DISPATCH-A fix for the FULL_DISABLED policy itself, so the
     # policy is monkeypatched onto the role rather than read from live config.
     import scripts.server.stack_numa as _stack_numa
@@ -419,10 +459,10 @@ def test_full_disabled_places_four_concurrent_on_four_quarters(
     assert 0 not in attempted  # all-region idx-0 lock never acquired
 
 
-def test_worker_general_live_policy_is_burst_prefer_quarters() -> None:
+def test_worker_general_live_policy_is_burst_prefer_split() -> None:
     """2026-07-23 lineup restoration pin (operator-directed): worker_general's
-    full (8072) is redeployed, so the live policy is BURST_PREFER_QUARTERS —
-    solo gets the full for peak throughput, bursts spread on quarters. A
+    full (8072) is redeployed, so the live policy is BURST_PREFER_SPLIT —
+    solo gets the full for peak throughput, bursts spread on split instances. A
     revert to full_disabled must be a deliberate config change, not drift."""
     from src.scheduling.placement_policy import (
         RolePlacementPolicy,
@@ -431,14 +471,14 @@ def test_worker_general_live_policy_is_burst_prefer_quarters() -> None:
 
     assert (
         get_placement_policy("worker_general")
-        is RolePlacementPolicy.BURST_PREFER_QUARTERS
+        is RolePlacementPolicy.BURST_PREFER_SPLIT
     )
 
 
-def test_burst_prefer_quarters_solo_request_goes_full(
+def test_burst_prefer_split_solo_request_goes_full(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DISPATCH-A (b1): BURST_PREFER_QUARTERS with ZERO same-role holders →
+    """DISPATCH-A (b1): BURST_PREFER_SPLIT with ZERO same-role holders →
     single-request mode routes to the full instance for peak latency."""
     backend = _make_backend(monkeypatch, role="frontdoor")  # full_port 8070 (aligned)
     acquired: list[int] = []
@@ -470,12 +510,12 @@ def test_burst_prefer_quarters_solo_request_goes_full(
         assert acquired[-1] == 0  # full (topology idx 0)
 
 
-def test_burst_prefer_quarters_under_load_prefers_quarter_over_free_full(
+def test_burst_prefer_split_under_load_prefers_split_over_free_full(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DISPATCH-A (b2): BURST_PREFER_QUARTERS with a same-role holder present →
-    the router prefers a quarter EVEN THOUGH the full is free and disjoint from
-    the single held quarter. A full-first policy would grab the free full; this
+    """DISPATCH-A (b2): BURST_PREFER_SPLIT with a same-role holder present →
+    the router prefers a split instance EVEN THOUGH the full is free and disjoint
+    from the held split instance. A full-first policy would grab the free full; this
     proves mode abandonment under concurrent load."""
     backend = _make_backend(monkeypatch, role="frontdoor")
     acquired: list[int] = []
@@ -617,7 +657,7 @@ def test_full_disabled_four_concurrent_spread_despite_attribution_over_report(
     from types import SimpleNamespace
 
     # 2026-07-23 lineup restoration: live worker_general policy is now
-    # burst_prefer_quarters; pin FULL_DISABLED synthetically (see the note in
+    # burst_prefer_split; pin FULL_DISABLED synthetically (see the note in
     # test_full_disabled_places_four_concurrent_on_four_quarters).
     import scripts.server.stack_numa as _stack_numa
 

@@ -34,6 +34,7 @@ _PLAN_REVIEW_FALLBACK = """Review plan. Reply JSON ONLY:
 {{"d":"ok|reorder|drop|add|reroute","s":0.0-1.0,"f":"<15 words","p":[]}}
 
 d=decision, s=confidence, f=feedback, p=patches (optional)
+drop=discard this plan and continue with the normal no-plan route; never refuse the task
 Patch format: {{"step":"S1","op":"reroute|drop|add|reorder","v":"new_value"}}
 
 Task: {objective}
@@ -86,6 +87,7 @@ def _architect_investigate_valid_roles_section() -> str:
     allowed = [role for role in _ARCHITECT_INVESTIGATE_ROLE_ORDER if role in live_roles]
     roles = allowed or list(_ARCHITECT_INVESTIGATE_ROLE_ORDER)
     return ", ".join(roles)
+
 
 _ARCHITECT_SYNTHESIS_FALLBACK = """The specialist has investigated and reported back. Extract the answer from their report.
 
@@ -154,7 +156,8 @@ def build_review_verdict_prompt(
         digest_section = f"\nContext: {context_digest[:800]}\n"
 
     return resolve_prompt(
-        "review_verdict", _REVIEW_VERDICT_FALLBACK,
+        "review_verdict",
+        _REVIEW_VERDICT_FALLBACK,
         digest_section=digest_section,
         question=question[:300],
         answer=answer[:1500],
@@ -173,7 +176,8 @@ def build_revision_prompt(question: str, original: str, corrections: str) -> str
         Prompt string for the revision model.
     """
     return resolve_prompt(
-        "revision", _REVISION_FALLBACK,
+        "revision",
+        _REVISION_FALLBACK,
         question=question[:300],
         original=original[:1500],
         corrections=corrections,
@@ -222,7 +226,8 @@ def build_plan_review_prompt(
     steps_block = "\n".join(step_lines)
 
     return resolve_prompt(
-        "plan_review", _PLAN_REVIEW_FALLBACK,
+        "plan_review",
+        _PLAN_REVIEW_FALLBACK,
         objective=objective[:200],
         task_type=task_type,
         steps_section=steps_block,
@@ -254,12 +259,12 @@ def build_architect_investigate_prompt(
     context_section = ""
     if context:
         context_section = (
-            "\nEvidence bundle (for discovery; not a solution plan):\n"
-            f"{context[:3000]}\n"
+            f"\nEvidence bundle (for discovery; not a solution plan):\n{context[:3000]}\n"
         )
 
     return resolve_prompt(
-        "architect_investigate", _ARCHITECT_INVESTIGATE_FALLBACK,
+        "architect_investigate",
+        _ARCHITECT_INVESTIGATE_FALLBACK,
         context_section=context_section,
         valid_roles_section=_architect_investigate_valid_roles_section(),
         question=question[:2000],
@@ -297,21 +302,18 @@ def build_architect_synthesis_prompt(
         Prompt string for architect synthesis.
     """
     # Only offer re-delegation if specialist clearly failed AND loops remain
-    can_reinvestigate = (
-        loop_num < max_loops and _specialist_clearly_failed(report)
-    )
+    can_reinvestigate = loop_num < max_loops and _specialist_clearly_failed(report)
     if can_reinvestigate:
         investigate_option = (
             f"\nThe specialist FAILED. If you need to retry (loop {loop_num}/{max_loops}), respond with:\n"
             "I|brief:<what to investigate differently>|to:coder_escalation\n"
         )
     else:
-        investigate_option = (
-            "\nDo NOT delegate or request further investigation. Answer now.\n"
-        )
+        investigate_option = "\nDo NOT delegate or request further investigation. Answer now.\n"
 
     return resolve_prompt(
-        "architect_synthesis", _ARCHITECT_SYNTHESIS_FALLBACK,
+        "architect_synthesis",
+        _ARCHITECT_SYNTHESIS_FALLBACK,
         investigate_option=investigate_option,
         question=question[:2000],
         report=report[:6000],

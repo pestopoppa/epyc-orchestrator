@@ -72,7 +72,7 @@ port_map:
   toolrunner: 8072         # Shares with worker_general
   worker_vision: 8086      # Dedicated VL server — Qwen3-VL-30B-A3B Q4_K_M on MI210 (2026-08-01)
   vision_escalation: 8086  # Alias -> worker_vision, SAME process (was :8087 own 7B server)
-  eval_batch_frontdoor: 18070  # Warm eval-batch Qwen3.6 frontdoor lane (-np 8)
+  eval_batch_frontdoor: 18070  # Warm eval-batch Qwen3.6 frontdoor lane (-np 2)
   worker_coder: 8102       # Fast coding worker semantic role (1.5B backend) — DEPRECATED (worker_pool)
   worker_fast: 8102        # Fast worker (1.5B, WARM, 4 slots) — DEPRECATED (worker_pool)
   # Specialists (no pre-warm — already multi-instance or too large for quarters)
@@ -453,7 +453,10 @@ launch_shape:
                                # it shadowed `server_mode.worker_vision.slots: 1`
                                # and launched a serial-admitted role with -np 2
     embedding: 4               # matches embedding.pool_recipe.slots
-    eval_batch_frontdoor: 8    # P-BENCH-3/E2 measured lane shape, not a guess
+    # The August-3 fleet-wide /4 ratification reduced serving widths
+    # 16->4, 8->2, and 4->1. This launcher-only lane was outside the registry
+    # compiler and was accidentally left at its pre-boundary width of 8.
+    eval_batch_frontdoor: 2
 
   # ---------------------------------------------------------------------------
   # CONTEXT FALLBACKS — the ONLY -c values the launcher still owns.
@@ -473,8 +476,8 @@ launch_shape:
   # row here rather than reconciling the two.
   context_tokens:
     worker_fast: 16384
-    # The P-BENCH-3/E2 eval-batch lane's OWN context, declared for the same
-    # reason its `-np 8` is declared in fallback_slots rather than inherited:
+    # The eval-batch lane's OWN context, declared for the same
+    # reason its `-np 2` is declared in fallback_slots rather than inherited:
     # the lane borrows frontdoor's MODEL and runtime priors but not its serving
     # shape. It had no row here and read frontdoor's compiled context instead,
     # so when frontdoor moved 32768 -> 262144 on 2026-08-02 this lane silently

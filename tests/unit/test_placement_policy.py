@@ -24,7 +24,7 @@ def test_enum_values_are_kebab_strings() -> None:
     """Values must be string-comparable so NUMA_CONFIG entries can use bare
     strings without an enum import."""
     assert RolePlacementPolicy.SOLO_PREFER_FULL.value == "solo_prefer_full"
-    assert RolePlacementPolicy.BURST_PREFER_QUARTERS.value == "burst_prefer_quarters"
+    assert RolePlacementPolicy.BURST_PREFER_SPLIT.value == "burst_prefer_split"
     assert RolePlacementPolicy.FULL_DISABLED.value == "full_disabled"
     assert RolePlacementPolicy.QUEUE_ONLY.value == "queue_only"
 
@@ -43,10 +43,12 @@ def test_missing_policy_field_returns_default() -> None:
     "raw,expected",
     [
         ("solo_prefer_full", RolePlacementPolicy.SOLO_PREFER_FULL),
-        ("burst_prefer_quarters", RolePlacementPolicy.BURST_PREFER_QUARTERS),
+        ("burst_prefer_split", RolePlacementPolicy.BURST_PREFER_SPLIT),
+        # Compatibility is input-only; runtime output remains shape-agnostic.
+        ("burst_prefer_quarters", RolePlacementPolicy.BURST_PREFER_SPLIT),
         ("full_disabled", RolePlacementPolicy.FULL_DISABLED),
         ("queue_only", RolePlacementPolicy.QUEUE_ONLY),
-        ("  burst_prefer_quarters  ", RolePlacementPolicy.BURST_PREFER_QUARTERS),  # whitespace
+        ("  burst_prefer_split  ", RolePlacementPolicy.BURST_PREFER_SPLIT),  # whitespace
         ("FULL_DISABLED", RolePlacementPolicy.FULL_DISABLED),  # case
     ],
 )
@@ -91,10 +93,8 @@ def test_unrecognised_value_raises_rather_than_silently_degrading(
 
     `"solo-prefer-full"` is the case that matters: hyphens where the enum uses
     underscores. It is one keystroke from valid and it degraded silently. This is
-    imminent, not hypothetical — the enum vocabulary is still quarter-shaped
-    (BURST_PREFER_QUARTERS) while the deployed topology is 1 full + 2 halves, so a
-    rename is queued, and a half-finished alias map would have degraded live roles
-    without a trace.
+    The explicit legacy alias is the only accepted old spelling; any other
+    half-finished rename must fail rather than silently changing placement.
     """
     cfg = {"r": {"placement_policy": bad}}
     with pytest.raises(exc):

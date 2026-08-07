@@ -131,7 +131,7 @@ class TestDirectModePipeline:
             },
         )
         data = response.json()
-        assert data["routed_to"] == "worker_explore"
+        assert data["routed_to"] == "worker_general"
         assert data["routing_strategy"] == "explicit"
 
     def test_direct_mode_tracks_call_log(self, client_and_primitives):
@@ -233,7 +233,7 @@ class TestDirectModePipeline:
         data = response.json()
         assert "role_history" in data
         assert isinstance(data["role_history"], list)
-        assert "worker_explore" in data["role_history"]
+        assert "worker_general" in data["role_history"]
 
 
 # ── Group 2: Error annotation ─────────────────────────────────────────
@@ -659,7 +659,7 @@ class TestPipelineStageInteraction:
                 assert len(prims.call_log) >= 2
                 roles_used = {entry.role for entry in prims.call_log}
                 assert "coder_escalation" in roles_used
-                assert "worker_explore" in roles_used
+                assert "worker_general" in roles_used
 
     def test_mock_mode_bypasses_real_pipeline(self, app):
         """mock_mode=True should return early without calling _init_primitives."""

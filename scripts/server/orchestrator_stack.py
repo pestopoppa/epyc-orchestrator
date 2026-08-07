@@ -1049,10 +1049,10 @@ def _build_dev_command(port: int) -> list[str]:
 
 
 def _build_eval_batch_frontdoor_command(port: int, numa_instance: int = 0) -> list[str]:
-    """Warm eval-batch frontdoor lane measured by P-BENCH-3/E2.
+    """Warm eval-batch frontdoor lane derived from the certified fleet shape.
 
     This intentionally reuses the frontdoor model/runtime priors but overrides
-    the serving shape to a single `-np 8` process on a dedicated high port. The
+    the serving shape to a single `-np 2` process on a dedicated high port. The
     role is launcher-only; normal routing still speaks in frontdoor aliases.
     """
     source_role = "frontdoor"
@@ -1076,7 +1076,8 @@ def _build_eval_batch_frontdoor_command(port: int, numa_instance: int = 0) -> li
         # The lane's defining shape (P-BENCH-3/E2), declared as
         # launch_shape.fallback_slots.eval_batch_frontdoor rather than as a
         # literal. It deliberately does NOT read the source role's slot prior:
-        # this lane exists to serve batch traffic wider than frontdoor does.
+        # this lane exists to serve a separately certified batch shape without
+        # mutating the interactive frontdoor process.
         "-np",
         str(resolve_slots("eval_batch_frontdoor", "eval_batch_frontdoor").slots),
         # 2026-08-02: reads the LANE'S declared context, not `cache` — i.e. not

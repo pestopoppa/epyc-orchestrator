@@ -159,7 +159,7 @@ INDEPENDENTLY_REPRODUCIBLE_SCORERS = {
     "structural_exact_match",
     "substring",
 }
-JUDGE_DEFAULT_ROLE = "worker_general"
+JUDGE_DEFAULT_ROLE = "architect_general"
 _JUDGE_TRACE_INSTALL_LOCK = threading.Lock()
 _JUDGE_TRACE_WRITE_LOCK = threading.Lock()
 _JUDGE_TRACE_LOCAL = threading.local()
@@ -437,11 +437,31 @@ def _normalized_scorer_answer(answer: str) -> str:
 
 
 def _judge_candidate(answer: str) -> str:
+    boxed = re.findall(r"\\boxed\{(.+?)\}", answer, re.DOTALL)
+    return boxed[-1].strip() if boxed else answer.strip()
+
+
+def _judge_prompt(expected: str, candidate: str) -> str:
+    return (
+        "You are a strict semantic answer judge. Decide whether the candidate "
+        "conveys the same correct substantive answer as the reference.\n\n"
+        "For mathematical or physics answers, accept equivalent notation, "
+        "symbolic rearrangements, and equivalent units. For summaries or "
+        "long-form answers, require the reference's central claims without "
+        "material contradiction; ignore harmless wording and formatting "
+        "differences. Do not reward an answer merely for sharing keywords.\n\n"
+        f"REFERENCE ANSWER:\n{expected}\n\n"
+        f"CANDIDATE ANSWER:\n{candidate}\n\n"
+        "Return only the JSON boolean true or false."
+    )
+
+
+def _historical_judge_candidate(answer: str) -> str:
     boxed = re.search(r"\\boxed\{(.+?)\}", answer, re.DOTALL)
     return boxed.group(1).strip() if boxed else answer.strip().split("\n")[-1].strip()
 
 
-def _judge_prompt(expected: str, candidate: str) -> str:
+def _historical_judge_prompt(expected: str, candidate: str) -> str:
     return (
         "You are a physics answer equivalence judge. Determine whether two "
         "mathematical/physics answers are semantically equivalent.\n\n"
@@ -474,12 +494,22 @@ def expected_judge_request(
     *,
     default_api_url: str,
     default_role: str = JUDGE_DEFAULT_ROLE,
+    client_deadline_unix_s: float | None = None,
+    historical: bool = False,
 ) -> dict[str, Any]:
     """Reconstruct the exact request contract without contacting inference."""
     normalized_answer = _normalized_scorer_answer(answer)
     normalized_expected = "" if expected is None else str(expected)
-    candidate = _judge_candidate(normalized_answer)
-    prompt = _judge_prompt(normalized_expected, candidate)
+    candidate = (
+        _historical_judge_candidate(normalized_answer)
+        if historical
+        else _judge_candidate(normalized_answer)
+    )
+    prompt = (
+        _historical_judge_prompt(normalized_expected, candidate)
+        if historical
+        else _judge_prompt(normalized_expected, candidate)
+    )
     timeout = config.get("timeout", 30)
     explicit_url = str(config.get("judge_url") or "").strip()
     host = config.get("judge_host")
@@ -492,7 +522,9 @@ def expected_judge_request(
     else:
         base_url = default_api_url.rstrip("/")
     if use_orchestrator:
-        role = str(config.get("judge_role") or "").strip() or default_role
+        role = str(config.get("judge_role") or "").strip() or (
+            "worker_general" if historical else default_role
+        )
         request_json = {
             "prompt": prompt,
             "real_mode": True,
@@ -505,6 +537,20 @@ def expected_judge_request(
             "timeout_s": int(timeout),
             "allow_delegation": False,
         }
+        if not historical:
+            request_json.update(
+                {
+                    "max_queue_wait_ms": min(
+                        5_000,
+                        max(1_000, int(float(timeout) * 250)),
+                    ),
+                    "client_deadline_unix_s": client_deadline_unix_s,
+                    "output_schema": {"type": "boolean"},
+                }
+            )
+            eval_batch_id = str(config.get("_eval_batch_id") or "").strip()
+            if eval_batch_id:
+                request_json["batch_id"] = eval_batch_id
         url = f"{base_url}/chat"
     else:
         role = None
@@ -518,9 +564,24 @@ def expected_judge_request(
         "candidate": candidate,
         "judge_prompt": prompt,
         "judge_role": role,
-        "request": {"url": url, "json": request_json, "timeout": timeout},
+        "request": {
+            "url": url,
+            "json": request_json,
+            "timeout": float(timeout) + 5.0 if use_orchestrator and not historical else timeout,
+        },
         "use_orchestrator": use_orchestrator,
     }
+
+
+def _sealed_judge_deadline(trace: dict[str, Any]) -> float | None:
+    request = trace.get("request")
+    request_json = request.get("json") if isinstance(request, dict) else None
+    deadline = (
+        request_json.get("client_deadline_unix_s")
+        if isinstance(request_json, dict)
+        else None
+    )
+    return deadline if isinstance(deadline, (int, float)) else None
 
 
 def _http_response_trace(response: Any) -> dict[str, Any]:
@@ -770,6 +831,12 @@ def validate_llm_judge_trace(
         config,
         default_api_url=default_api_url,
         default_role=default_role,
+        client_deadline_unix_s=_sealed_judge_deadline(trace),
+        historical=(
+            historical_source_sha256 is not None
+            and trace_sources == historical_source_sha256
+            and trace_sources != expected_sources
+        ),
     )
     if (
         trace.get("mode") != "network_judge"
@@ -815,6 +882,12 @@ def _validate_failed_llm_judge_trace(
     expected_call = expected_judge_request(
         normalized_answer, str(expected), config,
         default_api_url=default_api_url, default_role=default_role,
+        client_deadline_unix_s=_sealed_judge_deadline(trace),
+        historical=(
+            historical_source_sha256 is not None
+            and trace.get("source_sha256") == historical_source_sha256
+            and trace.get("source_sha256") != expected_sources
+        ),
     )
     error = trace.get("error")
     if (

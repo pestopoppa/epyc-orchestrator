@@ -290,11 +290,13 @@ def task_rate_objectives_from_row(row: dict) -> tuple[float, ...] | None:
 #    same doctrine as the `throughput_unmeasured` safety-gate category and SEQ-3a's
 #    out-of-domain z handling: absence is not zero.
 # The serving scheduler is part of a questions/hour instrument. v1 measured
-# serial/client-global eval placement; v2 measures certified per-resource lanes
-# with prompt-weighted admission and a model-judge scorer tail. Same tuple
-# shape, different denominator instrument: never mix them in one frontier.
+# serial/client-global eval placement; v2 measured full-instance resource lanes;
+# v3 classifies homogeneous native batches versus mixed-role split pipelines
+# before dispatch. Same tuple shape, different denominator instruments: never
+# mix them in one frontier.
 PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v1"
-RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v2_resource_lanes"
+RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v2_resource_lanes"
+RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v3_mixed_role_split"
 
 
 class UnmeasuredObjectiveError(ValueError):
@@ -359,6 +361,7 @@ def _policy_aware_objectives_from_row(row: dict) -> tuple[float, ...] | None:
         policy = str(row.get("objective_policy_live") or "")
     if policy in {
         PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
+        RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
         RATE_4D_OBJECTIVE_POLICY,
     }:
         return _rate_objectives_from_row(row)

@@ -158,22 +158,26 @@ def _direct_region_lock_metadata(
     role: str,
     backend_url: str,
     port: int | None,
+    *,
+    topology_role: str | None = None,
+    topology_idx: int = 0,
 ) -> dict[str, Any]:
-    """Tap metadata for direct single-instance roles locked at topology idx 0."""
+    """Tap metadata for a direct backend's resolved physical topology instance."""
     try:
         from src.runtime.instance_topology import get_instance_regions
 
         instance_regions = get_instance_regions()
     except Exception:
         return {}
-    key = (role, 0)
+    lock_role = topology_role or role
+    key = (lock_role, topology_idx)
     if key not in instance_regions:
         return {}
     regions = instance_regions.get(key, frozenset())
     return {
-        "topology_role": role,
-        "lock_role": role,
-        "instance_idx": 0,
+        "topology_role": lock_role,
+        "lock_role": lock_role,
+        "instance_idx": topology_idx,
         "concurrency_idx": -1,
         "instance_shape": _shape_for_regions(regions),
         "instance_regions": sorted(regions),
@@ -248,6 +252,7 @@ def _build_tap_metadata(
         "task_id": task_id or getattr(request, "task_id", None),
         "trial_id": trial_id,
         "batch_id": batch_id,
+        "batch_placement_mode": getattr(request, "batch_placement_mode", "auto"),
         "role": role,
         "backend_url": backend_url,
         "port": port,
@@ -628,6 +633,7 @@ class InferenceMixin:
         # placement-aware contention gate. The local dataclass has no slots.
         request.request_priority = self.get_request_priority()
         request.workload_class = self.get_request_workload_class()
+        request.batch_placement_mode = self.get_batch_placement_mode()
         request.batch_id = self.get_request_batch_id()
         request.max_queue_wait_ms = self.get_max_queue_wait_ms()
         request.session_id = self.get_request_session_id()
@@ -713,8 +719,17 @@ class InferenceMixin:
             direct_region_metadata: dict[str, Any] = {}
             if backend_url and _per_region_on and not _backend_manages_region_locks(backend):
                 from src.runtime.cpu_region_lock import cpu_region_lock_for_instance
+                from src.runtime.instance_topology import topology_instance_for_port
 
-                direct_region_metadata = _direct_region_lock_metadata(role, backend_url, _cb_port)
+                resolved_topology = topology_instance_for_port(_cb_port or 0)
+                lock_role, lock_idx = resolved_topology or (role, 0)
+                direct_region_metadata = _direct_region_lock_metadata(
+                    role,
+                    backend_url,
+                    _cb_port,
+                    topology_role=lock_role,
+                    topology_idx=lock_idx,
+                )
                 lock_kwargs: dict[str, Any] = {
                     "cancel_check": self.get_request_cancel_check(),
                     "deadline_s": self.get_request_deadline_s(),
@@ -723,12 +738,12 @@ class InferenceMixin:
                 try:
                     from src.llm_primitives.backend import _certified_native_batch_width
                     from src.runtime.cpu_region_lock import _cross_role_mutex_enabled
-                    from src.runtime.instance_topology import topology_idx_for_port
 
                     native_width = _certified_native_batch_width(
                         self,
-                        topology_role=role,
+                        topology_role=lock_role,
                         full_url=backend_url,
+                        logical_role=role,
                     )
                     direct_native_batch = (
                         native_width > 1
@@ -736,7 +751,16 @@ class InferenceMixin:
                         and str(getattr(request, "workload_class", "") or "")
                         == "eval_batch"
                         and bool(str(getattr(request, "batch_id", "") or "").strip())
-                        and topology_idx_for_port(role, _cb_port or 0) == 0
+                        # Mixed pipelines must not share an all-region full
+                        # lease, but the auxiliary frontdoor process is already
+                        # physically half-sized. Its two native slots can share
+                        # that half while a worker occupies the disjoint half.
+                        and (
+                            str(getattr(request, "batch_placement_mode", "auto"))
+                            != "mixed_role_split"
+                            or lock_role == "eval_batch_frontdoor"
+                        )
+                        and lock_idx == 0
                     )
                 except Exception:
                     native_width = 1
@@ -747,7 +771,7 @@ class InferenceMixin:
                         capacity=native_width,
                         request_tag=str(getattr(request, "batch_id", "") or ""),
                     )
-                lock_ctx = cpu_region_lock_for_instance(role, 0, **lock_kwargs)
+                lock_ctx = cpu_region_lock_for_instance(lock_role, lock_idx, **lock_kwargs)
             else:
                 lock_ctx = (
                     inference_lock(
@@ -786,7 +810,21 @@ class InferenceMixin:
                     if not _backend_manages_region_locks(backend):
                         emit_lifecycle_transition(
                             "backend_dispatched",
-                            details={"backend_url": backend_url},
+                            details={
+                                "backend_url": backend_url,
+                                "topology_role": direct_region_metadata.get(
+                                    "topology_role", role
+                                ),
+                                "instance_idx": direct_region_metadata.get(
+                                    "instance_idx", 0
+                                ),
+                                "instance_shape": direct_region_metadata.get(
+                                    "instance_shape", "unknown"
+                                ),
+                                "batch_placement_mode": getattr(
+                                    request, "batch_placement_mode", "auto"
+                                ),
+                            },
                         )
                     can_stream = (
                         tap_enabled

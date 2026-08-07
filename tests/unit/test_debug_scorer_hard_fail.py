@@ -54,9 +54,7 @@ def test_math_verify_thread_signal_error_raises_not_silent(monkeypatch) -> None:
     stub = types.ModuleType("math_verify")
 
     def _parse(*args, **kwargs):  # noqa: ANN002, ANN003
-        raise ValueError(
-            "signal only works in main thread of the main interpreter"
-        )
+        raise ValueError("signal only works in main thread of the main interpreter")
 
     def _verify(gold, pred):  # pragma: no cover - never reached
         return True
@@ -170,9 +168,7 @@ def test_llm_judge_explicit_overrides_win() -> None:
     from debug_scorer import _resolve_llm_judge_base_url
 
     # judge_url wins over everything.
-    assert (
-        _resolve_llm_judge_base_url({"judge_url": "http://h:9/"}) == "http://h:9"
-    )
+    assert _resolve_llm_judge_base_url({"judge_url": "http://h:9/"}) == "http://h:9"
     # host+port (BOTH) take the legacy direct path.
     assert (
         _resolve_llm_judge_base_url({"judge_host": "127.0.0.1", "judge_port": 8200})
@@ -215,7 +211,9 @@ class _FakeResp:
             import httpx
 
             raise httpx.HTTPStatusError(
-                "err", request=None, response=None  # type: ignore[arg-type]
+                "err",
+                request=None,
+                response=None,  # type: ignore[arg-type]
             )
 
     def json(self) -> dict:
@@ -256,12 +254,35 @@ def test_llm_judge_orchestrator_shape_success(monkeypatch) -> None:
     assert body["mock_mode"] is False
     assert body["force_mode"] == "direct"
     assert body["workload_class"] == "eval_batch"
-    assert body["force_role"] == "worker_general"
+    assert body["force_role"] == "architect_general"
     assert body["batch_id"] == "evaltower-test-100q"
     assert body["client_deadline_unix_s"] > 0
-    assert body["max_queue_wait_ms"] == 5000
+    assert body["max_queue_wait_ms"] == 1250
+    assert body["output_schema"] == {"type": "boolean"}
     assert calls[0]["timeout"] == 10.0
     assert "prompt" in body and "messages" not in body
+
+
+def test_llm_judge_preserves_full_long_form_candidate(monkeypatch) -> None:
+    """Summary/table rows must not be silently reduced to their last line."""
+    monkeypatch.delenv("ORCHESTRATOR_API_URL", raising=False)
+    calls = _patch_httpx_post(monkeypatch, {"answer": "true"})
+    candidate = "Central claim and evidence.\n| final table row |"
+
+    assert (
+        score_answer(
+            answer=candidate,
+            expected="Central claim supported by evidence.",
+            scoring_method="llm_judge",
+            scoring_config={"timeout": 5},
+        )
+        is True
+    )
+
+    prompt = calls[0]["json"]["prompt"]
+    assert candidate in prompt
+    assert "strict semantic answer judge" in prompt
+    assert "physics answer equivalence judge" not in prompt
 
 
 def test_llm_judge_orchestrator_shape_false_verdict(monkeypatch) -> None:
@@ -305,9 +326,7 @@ def test_llm_judge_orchestrator_error_body_raises(monkeypatch) -> None:
 
 def test_llm_judge_llama_shape_success_via_override(monkeypatch) -> None:
     """Explicit judge_host+judge_port => raw llama /v1/chat/completions."""
-    calls = _patch_httpx_post(
-        monkeypatch, {"choices": [{"message": {"content": "true"}}]}
-    )
+    calls = _patch_httpx_post(monkeypatch, {"choices": [{"message": {"content": "true"}}]})
     result = score_answer(
         answer="the student wrote something else entirely",
         expected="mg/2",
@@ -380,9 +399,7 @@ def test_seeding_scoring_binds_orchestrator_copy() -> None:
         import seeding_scoring  # noqa: E402
 
         # Trivial exact_match: last-line "42" numerically equals expected "42".
-        result = seeding_scoring.score_answer_deterministic(
-            "42", "42", "exact_match"
-        )
+        result = seeding_scoring.score_answer_deterministic("42", "42", "exact_match")
         assert result is True
 
         bound = sys.modules["epyc_orch_debug_scorer"]
@@ -392,8 +409,7 @@ def test_seeding_scoring_binds_orchestrator_copy() -> None:
         # (which breaks in worktree checkouts): the bound scorer must be the
         # sibling debug_scorer.py of the seeding_scoring module that ran.
         assert (
-            Path(bound.__file__).resolve().parent
-            == Path(seeding_scoring.__file__).resolve().parent
+            Path(bound.__file__).resolve().parent == Path(seeding_scoring.__file__).resolve().parent
         )
     finally:
         sys.path[:] = saved_path

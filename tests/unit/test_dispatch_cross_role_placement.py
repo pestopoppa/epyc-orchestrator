@@ -271,7 +271,7 @@ def _pin_full_disabled(monkeypatch: pytest.MonkeyPatch, role: str) -> None:
     """Pin `role` to FULL_DISABLED as a SYNTHETIC policy, not a live read.
 
     2026-07-23 lineup restoration (95dffc88, operator-directed) redeployed the
-    big instances, so worker_general's LIVE policy is burst_prefer_quarters —
+    big instances, so worker_general's LIVE policy is burst_prefer_split —
     under which a solo dispatch legitimately takes the full candidate first.
     That commit moved the DISPATCH-A full_disabled pins in
     test_dispatch_placement_state_machine.py onto a synthetic policy for exactly
@@ -313,7 +313,7 @@ def test_cross_role_disjoint_quarters_coplace_no_machine_wide_block(
 
     _pin_full_disabled(monkeypatch, "worker_general")  # synthetic, see helper
     wg = _make_role_backend(monkeypatch, "worker_general", 8072)  # FULL_DISABLED
-    fd = _make_role_backend(monkeypatch, "frontdoor", 8070)       # BURST_PREFER_QUARTERS
+    fd = _make_role_backend(monkeypatch, "frontdoor", 8070)       # BURST_PREFER_SPLIT
 
     with wg._dispatch(session_id="wg") as (_b1, idx1, is_full1):
         assert is_full1 is False
@@ -377,7 +377,7 @@ def test_worker_general_never_acquires_more_than_candidate_region_set(
     chosen quarter's region set — NEVER the all-region idx-0 set (the amplifier
     bug this fix kills). FULL_DISABLED makes the whole-machine grab structurally
     impossible. The policy is injected synthetically (see `_pin_full_disabled`)
-    because the LIVE worker_general policy is burst_prefer_quarters since the
+    because the LIVE worker_general policy is burst_prefer_split since the
     2026-07-23 lineup restoration."""
     model = _RegionMutexModel(_XROLE_REGIONS)
     _wire_model(monkeypatch, model)

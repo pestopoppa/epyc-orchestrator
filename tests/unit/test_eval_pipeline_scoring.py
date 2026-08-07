@@ -109,11 +109,17 @@ def _fixture_questions(n: int = 8) -> list[dict]:
     ]
 
 
-def test_score_generation_preserves_completed_output_when_scorer_is_unavailable(monkeypatch) -> None:
+def test_score_generation_preserves_completed_output_when_scorer_is_unavailable(
+    monkeypatch,
+) -> None:
     tower = EvalTower()
     question = {
-        "id": "q", "qid": "fixed-q", "suite": "unit", "prompt": "p",
-        "expected": "gold", "scoring_method": "llm_judge",
+        "id": "q",
+        "qid": "fixed-q",
+        "suite": "unit",
+        "prompt": "p",
+        "expected": "gold",
+        "scoring_method": "llm_judge",
     }
     outcome = _mk_generate()(question, object())
     outcome.answer = "completed answer"
@@ -249,17 +255,22 @@ def test_no_progress_trips_on_hung_scorer(monkeypatch, tmp_path) -> None:
     def hung_score(q, outcome, client):  # noqa: ANN001
         release.wait(5.0)
         return outcome.final_result or QuestionResult(
-            question_id=outcome.question_id, suite=outcome.suite,
-            prompt=outcome.prompt, expected=outcome.expected, correct=True,
+            question_id=outcome.question_id,
+            suite=outcome.suite,
+            prompt=outcome.prompt,
+            expected=outcome.expected,
+            correct=True,
         )
 
     monkeypatch.setattr(tower, "_score_generation", hung_score)
 
     try:
         results = tower._eval_batch(
-            [{"id": "a", "suite": "u", "prompt": "a", "expected": "a", "_mock_answer": "a"},
-             {"id": "b", "suite": "u", "prompt": "b", "expected": "b", "_mock_answer": "b"},
-             {"id": "c", "suite": "u", "prompt": "c", "expected": "c", "_mock_answer": "c"}],
+            [
+                {"id": "a", "suite": "u", "prompt": "a", "expected": "a", "_mock_answer": "a"},
+                {"id": "b", "suite": "u", "prompt": "b", "expected": "b", "_mock_answer": "b"},
+                {"id": "c", "suite": "u", "prompt": "c", "expected": "c", "_mock_answer": "c"},
+            ],
             client=object(),
             label="hung",
         )
@@ -284,8 +295,14 @@ def test_sidecar_rows_carry_scored_at_after_generation(monkeypatch, tmp_path) ->
     monkeypatch.setattr(tower, "_score_generation", _mk_score(latency_s=0.02))
 
     questions = [
-        {"id": f"q{i}", "suite": "unit", "prompt": f"p{i}", "expected": "x", "_mock_answer": "x",
-         "_mock_elapsed": 0.01}
+        {
+            "id": f"q{i}",
+            "suite": "unit",
+            "prompt": f"p{i}",
+            "expected": "x",
+            "_mock_answer": "x",
+            "_mock_elapsed": 0.01,
+        }
         for i in range(6)
     ]
     tower._eval_batch(questions, client=object(), label="timing")
@@ -397,7 +414,7 @@ def test_model_backed_scoring_waits_for_generation_tail(monkeypatch, tmp_path) -
     monkeypatch.setattr(eval_tower, "_model_scoring_concurrency", lambda *_args: 1)
     monkeypatch.setattr(
         eval_tower,
-        "_wait_for_eval_backend_drain",
+        "_wait_for_eval_quiescence",
         lambda **_kwargs: {
             "success": True,
             "reason": "stable_idle",
@@ -409,7 +426,10 @@ def test_model_backed_scoring_waits_for_generation_tail(monkeypatch, tmp_path) -
     questions = [
         {"id": "q0", "suite": "u", "prompt": "p0", "expected": "x"},
         {
-            "id": "q1", "suite": "u", "prompt": "p1", "expected": "x",
+            "id": "q1",
+            "suite": "u",
+            "prompt": "p1",
+            "expected": "x",
             "scoring_method": "llm_judge",
         },
         {"id": "q2", "suite": "u", "prompt": "p2", "expected": "x"},
@@ -421,9 +441,7 @@ def test_model_backed_scoring_waits_for_generation_tail(monkeypatch, tmp_path) -
     assert deterministic_started.is_set()
     assert model_score_generation_counts == [len(questions)]
     assert [result.question_id for result in results] == [q["id"] for q in questions]
-    drain_phases.extend(
-        report["phase"] for report in results[0].eval_backend_drain_reports
-    )
+    drain_phases.extend(report["phase"] for report in results[0].eval_backend_drain_reports)
     assert drain_phases == ["pre_model_scoring", "pre_batch_finalize"]
 
 
@@ -445,7 +463,7 @@ def test_model_backed_scoring_fails_closed_when_backend_drain_is_unproven(
     monkeypatch.setattr(tower, "_score_generation", score)
     monkeypatch.setattr(
         eval_tower,
-        "_wait_for_eval_backend_drain",
+        "_wait_for_eval_quiescence",
         lambda **_kwargs: {
             "success": False,
             "reason": "backend_drain_timeout",

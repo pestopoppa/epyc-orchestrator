@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Human-owned apply transaction for an E11 operational baseline candidate."""
+"""Human-owned apply transaction for the current E12 operational baseline candidate."""
 
 from __future__ import annotations
 
@@ -122,7 +122,7 @@ def _validate_evidence(evidence: dict[str, Any], evidence_path: Path) -> None:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Ratify and apply one E11 operational baseline candidate."
+        description="Ratify and apply one E12 operational baseline candidate."
     )
     parser.add_argument("evidence", type=Path, metavar="EVIDENCE.json")
     return parser.parse_args(argv)
@@ -194,17 +194,17 @@ def main(argv: list[str] | None = None) -> int:
         prior_hold = state.get("e8_quality_rebaseline") or {}
         state["e8_quality_rebaseline"] = {
             **prior_hold,
-            "status": "closed_operational_e11",
+            "status": "closed_operational_e12",
             "boundary": QUALITY_ERA,
             "closed_at": _utc_now(),
             "closed_by": (
-                "operator via ratify_and_apply_e11_operational_baseline.py"
+                "operator via ratify_and_apply_e12_operational_baseline.py"
             ),
             "evidence_path": str(evidence_path),
             "evidence_sha256": _sha256_bytes(evidence_raw),
             "basis": (
-                "Fresh E11 T1 operational baseline under resource_lanes_v2_prompt_load "
-                "and model_judge_tail_v3_backend_drain; "
+                "Fresh E12 T1 operational baseline under resource_lanes_v3_mixed_role_split "
+                "and model_judge_tail_v4_gpu_lifecycle_quiescence; "
                 "sufficient for AutoPilot config-search gates, not an externally citable "
                 "publication-grade three-repetition baseline."
             ),
@@ -222,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         if applied.get("baseline_state") != candidate:
             raise SystemExit("ERROR: baseline write verification failed")
         receipt = {
-            "schema_version": "epyc.e11_operational_baseline_ratification.v1",
+            "schema_version": "epyc.e12_operational_baseline_ratification.v1",
             "status": "ratified_and_applied",
             "ratified_at": _utc_now(),
             "operator_uid": os.getuid(),

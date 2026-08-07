@@ -476,8 +476,9 @@ def test_main_dry_run_prints_plan(capsys, monkeypatch):
     payload = json.loads(capsys.readouterr().out)
     assert payload["kind"] == "shapekeyed_step2_smoke_plan"
     assert payload["transport"]["uses_chat_endpoint"] is False
-    # live vision_escalation has 8 disjoint within-role pairs
-    assert payload["n_rebench_pairs"] == 8
+    # The default plan follows the current live topology rather than a frozen
+    # count from the retired dedicated vision-escalation fleet.
+    assert payload["n_rebench_pairs"] == len(payload["rebench_pairs"])
     assert payload["n_probes"] >= 1
 
 

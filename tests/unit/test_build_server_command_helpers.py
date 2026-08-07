@@ -944,11 +944,11 @@ def test_build_role_command_omits_md_for_embedded_nextn_stack_prior(
     assert _command_runtime_signature(cmd) == _stack_prior_runtime_signature(runtime)
 
 
-def test_eval_batch_frontdoor_command_uses_pbench3_serving_shape() -> None:
+def test_eval_batch_frontdoor_command_uses_declared_serving_shape() -> None:
     cmd = oss._build_eval_batch_frontdoor_command(18070)
 
     assert _flag_value(cmd, "--port") == "18070"
-    assert _flag_value(cmd, "-np") == "8"
+    assert _flag_value(cmd, "-np") == "2"
     assert _flag_value(cmd, "-c") == "32768"
     # 2026-07-31 HALF FLEET: 18070 sits on NUMA_HALF_A, which is 48 physical cores.
     # The prior value 96 pinned the 2x SMT oversubscription that 982adb0c removed.

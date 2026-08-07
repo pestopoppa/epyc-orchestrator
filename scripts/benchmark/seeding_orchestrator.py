@@ -394,6 +394,7 @@ def _call_orchestrator_with_slot_poll(
     request_priority: str | None = None,
     workload_class: str | None = None,
     batch_id: int | str | None = None,
+    batch_placement_mode: str | None = None,
     watcher: Any | None = None,
 ) -> tuple[dict[str, Any], float, dict[str, Any]]:
     """Call orchestrator while polling slot progress for live visibility.
@@ -452,6 +453,7 @@ def _call_orchestrator_with_slot_poll(
             request_priority=request_priority,
             workload_class=workload_class,
             batch_id=batch_id,
+            batch_placement_mode=batch_placement_mode,
             watcher=watcher,
         )
 
@@ -783,6 +785,7 @@ def call_orchestrator_forced(
     request_priority: str | None = None,
     workload_class: str | None = None,
     batch_id: int | str | None = None,
+    batch_placement_mode: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     max_tokens: int | None = None,
@@ -810,6 +813,8 @@ def call_orchestrator_forced(
         workload_class: Optional traffic-class stamp for attribution/shadow
             routing. Omitted when not supplied to preserve legacy payload shape.
         batch_id: Optional batch identifier for inference-tap attribution.
+        batch_placement_mode: Optional burst placement intent forwarded to the
+            orchestrator. Omitted by default for old-server compatibility.
         tools: Optional OpenAI-compatible function-tool schemas to forward to the
             orchestrator request. Omitted by default to preserve legacy eval traffic.
         tool_choice: Optional OpenAI-compatible tool choice policy for tools.
@@ -910,6 +915,8 @@ def call_orchestrator_forced(
         payload["workload_class"] = workload_class
     if batch_id is not None:
         payload["batch_id"] = batch_id
+    if batch_placement_mode:
+        payload["batch_placement_mode"] = batch_placement_mode
     if tools is not None:
         payload["tools"] = tools
     if tool_choice is not None:

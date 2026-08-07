@@ -1118,6 +1118,9 @@ class ConcurrencyAwareBackend:
                     "topology_role": metadata.get("topology_role"),
                     "instance_idx": metadata.get("instance_idx"),
                     "instance_shape": metadata.get("instance_shape"),
+                    "batch_placement_mode": getattr(
+                        request, "batch_placement_mode", "auto"
+                    ),
                 },
             )
         except Exception:
@@ -1167,6 +1170,17 @@ class ConcurrencyAwareBackend:
             CpuRegionLockTimeout,
             _cross_role_mutex_enabled,
         )
+        from src.scheduling.placement_policy import (
+            BatchPlacementMode,
+            RolePlacementPolicy,
+            coerce_batch_placement_mode,
+            get_placement_policy,
+        )
+
+        placement_policy = get_placement_policy(self._topology_role)
+        batch_placement_mode = coerce_batch_placement_mode(
+            getattr(request, "batch_placement_mode", None)
+        )
 
         # Certified EvalTower requests share one placement lease on the same
         # full llama-server process.  LOCK_SH lets its native slots co-run;
@@ -1180,6 +1194,7 @@ class ConcurrencyAwareBackend:
             and self._full_slot_aligned
             and str(getattr(request, "workload_class", "") or "") == "eval_batch"
             and bool(str(getattr(request, "batch_id", "") or "").strip())
+            and batch_placement_mode is not BatchPlacementMode.MIXED_ROLE_SPLIT
         )
         if native_batch:
             request_tag = str(getattr(request, "batch_id", "") or "")
@@ -1248,7 +1263,7 @@ class ConcurrencyAwareBackend:
         # DISPATCH-A: the placement policy governs whether/where the full
         # (-1, 0) all-region candidate is emitted.
         #   * FULL_DISABLED    — never emit full (quarters only).
-        #   * BURST_PREFER_QUARTERS — full FIRST only in single-request mode
+        #   * BURST_PREFER_SPLIT — full FIRST only in single-request mode
         #     (zero current holders for the role); once any holder is present,
         #     quarters are preferred and the full trails. Because full="0-95"
         #     overlaps every quarter, a trailing full never places while a
@@ -1258,22 +1273,18 @@ class ConcurrencyAwareBackend:
         #     (full first, then quarters).
         # The alignment guard (`_full_slot_aligned`) independently suppresses
         # the full candidate when the full slot is a mislabeled quarter.
-        from src.scheduling.placement_policy import (
-            RolePlacementPolicy,
-            get_placement_policy,
-        )
-        placement_policy = get_placement_policy(self._topology_role)
         emit_full = (
             self._full is not None
             and self._full_slot_aligned
             and placement_policy is not RolePlacementPolicy.FULL_DISABLED
+            and batch_placement_mode is not BatchPlacementMode.MIXED_ROLE_SPLIT
         )
         full_candidate = (-1, 0)
 
         # Base (single-request / legacy) ordering: sticky quarter (if any),
         # then full, then quarters in NUMA-disjoint preference order. `emit_full`
         # drops the full candidate entirely for FULL_DISABLED roles and for a
-        # misaligned full slot. BURST_PREFER_QUARTERS re-orders this list to
+        # misaligned full slot. BURST_PREFER_SPLIT re-orders this list to
         # quarters-first inside the WP-2 poll loop below, but only once the role
         # has an in-flight holder (single-request mode keeps full first).
         candidates: list[tuple[int, int]] = []
@@ -1335,8 +1346,8 @@ class ConcurrencyAwareBackend:
             while True:
                 all_holders = active_region_holders()
                 holders_for_role = all_holders.get(self._topology_role, [])
-                # DISPATCH-A: BURST_PREFER_QUARTERS abandons the full/half for
-                # quarters the moment the role has an in-flight holder (design
+                # DISPATCH-A: BURST_PREFER_SPLIT abandons the full instance for
+                # split instances the moment the role has an in-flight holder (design
                 # contract: full is single-request-throughput ONLY; under
                 # concurrent load the router prefers quarters and lets the full
                 # trail). Single-request (no self-role holder) keeps full first
@@ -1346,7 +1357,10 @@ class ConcurrencyAwareBackend:
                 # while any quarter holds a region — no explicit eviction needed.
                 loop_candidates = candidates
                 if (
-                    placement_policy is RolePlacementPolicy.BURST_PREFER_QUARTERS
+                    (
+                        placement_policy is RolePlacementPolicy.BURST_PREFER_SPLIT
+                        or batch_placement_mode is BatchPlacementMode.MIXED_ROLE_SPLIT
+                    )
                     and emit_full
                     and holders_for_role
                 ):
@@ -1480,7 +1494,7 @@ class ConcurrencyAwareBackend:
                     break
 
             if chosen_ctx is None:
-                if self._full is not None:
+                if emit_full:
                     # All non-blocking attempts failed → block on full's region
                     # locks. Lock layer's union-acquisition prevents overlap
                     # (full's lock takes all of full's regions), but this can
@@ -1520,12 +1534,12 @@ class ConcurrencyAwareBackend:
         migrate_old_session: str | None = None
         migrate_target_quarter: int | None = None
         # WP-3 policy gate: FULL_DISABLED + QUEUE_ONLY skip migration; the
-        # other two policies (SOLO_PREFER_FULL = default, BURST_PREFER_QUARTERS)
+        # other two policies (SOLO_PREFER_FULL = default, BURST_PREFER_SPLIT)
         # leave the existing session-handover migration trigger active.
         # Reuse the policy resolved during candidate construction (same scope).
         _migration_allowed_by_policy = placement_policy in (
             RolePlacementPolicy.SOLO_PREFER_FULL,
-            RolePlacementPolicy.BURST_PREFER_QUARTERS,
+            RolePlacementPolicy.BURST_PREFER_SPLIT,
         )
         with self._lock:
             self._total_requests += 1

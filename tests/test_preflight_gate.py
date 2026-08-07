@@ -116,13 +116,9 @@ def test_role_scoped_require_servers_uses_primary_role_ports(monkeypatch):
         8070,
         8080,
         8180,
-        8280,
-        8380,
         8072,
         8082,
         8182,
-        8282,
-        8382,
     ]
 
 

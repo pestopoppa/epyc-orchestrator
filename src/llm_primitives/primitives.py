@@ -205,6 +205,10 @@ class LLMPrimitives(
             "llm_primitives_request_workload_class",
             default=None,
         )
+        self._batch_placement_mode_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+            "llm_primitives_batch_placement_mode",
+            default=None,
+        )
         self._budget_diagnostics: dict[str, Any] = {
             "deadline_present": False,
             "budget_applied": False,
@@ -330,6 +334,12 @@ class LLMPrimitives(
             return str(value)
         return str(self._request_workload_class or "interactive")
 
+    def get_batch_placement_mode(self) -> str:
+        """Get validated request-local burst placement intent."""
+        from src.scheduling.placement_policy import coerce_batch_placement_mode
+
+        return coerce_batch_placement_mode(self._batch_placement_mode_ctx.get()).value
+
     def get_max_queue_wait_ms(self) -> int | None:
         """Get request-local cross-role contention gate budget, if set.
 
@@ -354,6 +364,7 @@ class LLMPrimitives(
         batch_id=None,
         priority: str = "interactive",
         workload_class: str | None = None,
+        batch_placement_mode: str | None = None,
         max_queue_wait_ms: int | None = None,
     ):
         """Bind cancellation/deadline metadata to the current request context.
@@ -395,6 +406,9 @@ class LLMPrimitives(
             "trial_id": trial_id,
             "batch_id": batch_id,
             "workload_class": normalized_workload_class,
+            "batch_placement_mode": self.get_batch_placement_mode()
+            if batch_placement_mode is None
+            else batch_placement_mode,
         }
         token_cancel = self._request_cancel_check_ctx.set(cancel_check)
         token_deadline = self._request_deadline_s_ctx.set(deadline_s)
@@ -405,6 +419,7 @@ class LLMPrimitives(
         token_batch = self._request_batch_id_ctx.set(batch_id)
         token_priority = self._request_priority_ctx.set(normalized_priority)
         token_workload_class = self._request_workload_class_ctx.set(normalized_workload_class)
+        token_batch_placement = self._batch_placement_mode_ctx.set(batch_placement_mode)
         token_queue_wait = self._max_queue_wait_ms_ctx.set(max_queue_wait_ms)
         try:
             yield
@@ -424,6 +439,7 @@ class LLMPrimitives(
             self._request_batch_id_ctx.reset(token_batch)
             self._request_priority_ctx.reset(token_priority)
             self._request_workload_class_ctx.reset(token_workload_class)
+            self._batch_placement_mode_ctx.reset(token_batch_placement)
             self._max_queue_wait_ms_ctx.reset(token_queue_wait)
 
     def _remaining_deadline_s(self) -> float | None:

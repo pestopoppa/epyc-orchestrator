@@ -39,6 +39,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 _SCORER_TMP_ROOT = Path("/mnt/raid0/llm/tmp")
+DEFAULT_LLM_JUDGE_ROLE = "architect_general"
 
 # ``start_new_session`` keeps an untrusted scorer's descendants out of the
 # caller's process group, but it also means an externally interrupted caller
@@ -104,7 +105,7 @@ def score_answer(
         return False
 
     # Strip <think>...</think> blocks before scoring (architect models produce these)
-    answer = re.sub(r'<think>.*?</think>', '', answer, flags=re.DOTALL).strip()
+    answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
     if not answer:
         return False
 
@@ -131,9 +132,7 @@ def score_answer(
     return scorer(answer, expected, config)
 
 
-def _score_exact_match(
-    answer: str, expected: str, config: dict[str, Any]
-) -> bool:
+def _score_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """Extract answer via regex, compare to expected.
 
     Used for: GSM8K, MATH — where the answer is a number or expression.
@@ -169,12 +168,29 @@ def _score_exact_match(
 
     # Numeric comparison for numbers (including word forms like "three" vs "3")
     _NUMBER_WORDS = {
-        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-        "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
-        "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
-        "nineteen": 19, "twenty": 20,
+        "zero": 0,
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+        "thirteen": 13,
+        "fourteen": 14,
+        "fifteen": 15,
+        "sixteen": 16,
+        "seventeen": 17,
+        "eighteen": 18,
+        "nineteen": 19,
+        "twenty": 20,
     }
+
     def _to_number(s: str) -> float | None:
         try:
             return float(s.replace(",", ""))
@@ -201,7 +217,7 @@ def _score_exact_match(
             if idx >= 0:
                 end = answer_lower.find(q_end, idx + 1)
                 if end > idx:
-                    candidate = answer_lower[idx + 1:end].strip().rstrip(".")
+                    candidate = answer_lower[idx + 1 : end].strip().rstrip(".")
                     if candidate == expected_norm:
                         return True
         # Check after colon on last meaningful line
@@ -214,9 +230,7 @@ def _score_exact_match(
     return False
 
 
-def _score_multiple_choice(
-    answer: str, expected: str, config: dict[str, Any]
-) -> bool:
+def _score_multiple_choice(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """Parse A/B/C/D or configured choice text from output.
 
     Used for: ARC-Challenge, MMLU, HellaSwag.
@@ -270,7 +284,7 @@ def _expected_choice_index(expected: str, choices: list[Any]) -> int | None:
 
 
 def _normalize_choice_text(text: str) -> str:
-    text = re.sub(r'<think>.*?</think>', '', str(text), flags=re.DOTALL)
+    text = re.sub(r"<think>.*?</think>", "", str(text), flags=re.DOTALL)
     text = re.sub(r"[*_`~]+", "", text)
     text = text.strip().lower()
     text = text.strip("\"'“”‘’()[]{}")
@@ -334,9 +348,7 @@ def _extract_multiple_choice_text_index(answer: str, choices: list[Any]) -> int 
     return max(matches)[2]
 
 
-def _score_stdin_program(
-    code: str, test_code: str, preamble: str, timeout: int
-) -> bool:
+def _score_stdin_program(code: str, test_code: str, preamble: str, timeout: int) -> bool:
     """Run a stdin/stdout program against TEST_CASES.
 
     For competitive programming (USACO, etc.) where solutions read from stdin
@@ -404,11 +416,7 @@ def _has_executable_assertion(test_code: str) -> bool:
         if not stripped or stripped.startswith("#"):
             continue
         if stripped.startswith("assert ") or stripped.startswith("assert("):
-            expr = (
-                stripped[6:].strip()
-                if stripped.startswith("assert ")
-                else stripped[7:].strip()
-            )
+            expr = stripped[6:].strip() if stripped.startswith("assert ") else stripped[7:].strip()
             expr = expr.split(",", 1)[0].strip().strip("()")
             if expr == "True":
                 continue
@@ -420,9 +428,7 @@ def _has_unittest_case(test_code: str) -> bool:
     return "unittest.TestCase" in test_code or "(TestCase)" in test_code
 
 
-def _score_code_execution(
-    answer: str, expected: str, config: dict[str, Any]
-) -> bool:
+def _score_code_execution(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """Extract code from model output, run against test cases.
 
     Used for: HumanEval, MBPP.
@@ -466,9 +472,7 @@ def _score_code_execution(
             return False
         return _score_stdin_program(code, test_code, _TYPING_PREAMBLE, timeout)
 
-    has_test_oracle = (
-        _has_executable_assertion(test_code) or _has_unittest_case(test_code)
-    )
+    has_test_oracle = _has_executable_assertion(test_code) or _has_unittest_case(test_code)
     has_entrypoint_oracle = bool(
         entry_point and isinstance(entry_point_cases, list) and entry_point_cases
     )
@@ -492,8 +496,7 @@ def _score_code_execution(
     elif entry_point:
         if not _is_safe_entry_point(entry_point):
             raise ScoringUnavailableError(
-                f"code_execution entry_point {entry_point!r} is not a safe "
-                "Python identifier path"
+                f"code_execution entry_point {entry_point!r} is not a safe Python identifier path"
             )
         cases_literal = repr(entry_point_cases)
         full_code += (
@@ -532,9 +535,7 @@ def _score_code_execution(
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.communicate()
-                raise ScoringUnavailableError(
-                    "code_execution exceeded its configured timeout"
-                )
+                raise ScoringUnavailableError("code_execution exceeded its configured timeout")
             return process.returncode == 0
     except subprocess.TimeoutExpired:
         return False
@@ -544,9 +545,7 @@ def _score_code_execution(
         ) from exc
 
 
-def _score_programmatic(
-    answer: str, expected: str, config: dict[str, Any]
-) -> bool:
+def _score_programmatic(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """Run IFEval-style programmatic verifiers.
 
     Used for: IFEval — checks format constraints.
@@ -635,47 +634,54 @@ def _score_programmatic(
         "all_uppercase": lambda: answer_stripped == answer_stripped.upper(),
         "all_lowercase": lambda: answer_stripped == answer_stripped.lower(),
         "bullet_list": lambda: any(
-            line.strip().startswith(("- ", "* ", "• "))
-            for line in lines if line.strip()
+            line.strip().startswith(("- ", "* ", "• ")) for line in lines if line.strip()
         ),
         "numbered_list": lambda: any(
-            re.match(r"^\d+[\.\)]\s", line.strip())
-            for line in lines if line.strip()
+            re.match(r"^\d+[\.\)]\s", line.strip()) for line in lines if line.strip()
         ),
-        "paragraph_count": lambda: len([
-            p for p in re.split(r"\n\s*\n", answer_stripped) if p.strip()
-        ]) == (count or threshold),
-        "sentence_count_min": lambda: len(re.findall(r"[.!?]+", answer_stripped)) >= (count or threshold),
+        "paragraph_count": lambda: (
+            len([p for p in re.split(r"\n\s*\n", answer_stripped) if p.strip()])
+            == (count or threshold)
+        ),
+        "sentence_count_min": lambda: (
+            len(re.findall(r"[.!?]+", answer_stripped)) >= (count or threshold)
+        ),
         "comma_separated": lambda: "," in answer_stripped and "\n" not in answer_stripped.strip(),
         # IFEval adapter verifiers (dataset_adapters.py emits these names)
         "no_comma": lambda: "," not in answer_stripped,
-        "has_title": lambda: bool(
-            lines[0].strip() and len(lines[0].strip().split()) <= 10
-            and lines[0].strip().istitle()
-        ) if lines else False,
-        "placeholder_count": lambda: len(re.findall(r'\[.*?\]', answer_stripped)) >= (count or 1),
-        "bullet_count": lambda: sum(
-            1 for line in lines
-            if line.strip().startswith(("- ", "* ", "• "))
-        ) >= (count or 1),
-        "contains_keywords": lambda: all(
-            kw.lower() in answer_stripped.lower() for kw in keywords
-        ) if keywords else True,
-        "no_forbidden_words": lambda: not any(
-            fw.lower() in answer_stripped.lower() for fw in forbidden
-        ) if forbidden else True,
+        "has_title": lambda: (
+            bool(
+                lines[0].strip()
+                and len(lines[0].strip().split()) <= 10
+                and lines[0].strip().istitle()
+            )
+            if lines
+            else False
+        ),
+        "placeholder_count": lambda: len(re.findall(r"\[.*?\]", answer_stripped)) >= (count or 1),
+        "bullet_count": lambda: (
+            sum(1 for line in lines if line.strip().startswith(("- ", "* ", "• "))) >= (count or 1)
+        ),
+        "contains_keywords": lambda: (
+            all(kw.lower() in answer_stripped.lower() for kw in keywords) if keywords else True
+        ),
+        "no_forbidden_words": lambda: (
+            not any(fw.lower() in answer_stripped.lower() for fw in forbidden)
+            if forbidden
+            else True
+        ),
         "language": lambda: True,  # Cannot verify without langdetect; pass through
         "non_empty": lambda: len(answer_stripped) > 0,
         "highlighted_sections": lambda: bool(
-            re.search(r'\*\*[^*]+\*\*', answer_stripped)
-            or re.search(r'^##\s+', answer_stripped, re.MULTILINE)
+            re.search(r"\*\*[^*]+\*\*", answer_stripped)
+            or re.search(r"^##\s+", answer_stripped, re.MULTILINE)
         ),
         # IFEval relation-based verifiers (word_count with at_least/at_most/exactly)
         "word_count": _word_count_by_relation,
         "sentence_count": _sentence_count_by_relation,
-        "title_case": lambda: all(
-            w[0].isupper() for w in words if w and w[0].isalpha()
-        ) if words else False,
+        "title_case": lambda: (
+            all(w[0].isupper() for w in words if w and w[0].isalpha()) if words else False
+        ),
     }
 
     fn = verifiers.get(verifier)
@@ -688,9 +694,7 @@ def _score_programmatic(
     return fn()
 
 
-def _score_substring(
-    answer: str, expected: str, config: dict[str, Any]
-) -> bool:
+def _score_substring(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """Check if expected text appears in output.
 
     Used for: Needle-in-haystack, simple factoid QA.
@@ -733,9 +737,7 @@ def _score_substring(
     return _contains_text_unit(answer, needle, case_sensitive=case_sensitive)
 
 
-def _score_f1(
-    answer: str, expected: str, config: dict[str, Any]
-) -> bool:
+def _score_f1(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """Token-level F1 scoring for QA tasks.
 
     Used for: HotpotQA, SQuAD-style reading comprehension.
@@ -813,8 +815,7 @@ def _normalize_text(text: str) -> str:
     # Fold diacritics before punctuation stripping so answer variants like
     # "Dusan Lajovic" and "Dušan Lajović" score as the same tokens.
     text = "".join(
-        ch for ch in unicodedata.normalize("NFKD", text)
-        if not unicodedata.combining(ch)
+        ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)
     )
 
     # Lowercase
@@ -832,13 +833,12 @@ def _normalize_text(text: str) -> str:
     return text
 
 
-def _score_llm_judge(
-    answer: str, expected: str, config: dict[str, Any]
-) -> bool:
+def _score_llm_judge(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """Score using a local LLM as semantic equivalence judge.
 
-    Used for: PhysReason — symbolic physics/math answers where substring
-    matching misses equivalent forms (e.g. mg/2 vs \\frac{mg}{2}).
+    Used for semantic-oracle rows, including symbolic physics/math answers and
+    long-form summary/reference-answer tasks where deterministic matching is
+    insufficient.
 
     Calls an OpenAI-compatible endpoint to judge whether the model's answer is
     semantically equivalent to the expected answer.
@@ -878,7 +878,8 @@ def _score_llm_judge(
         judge_url: Explicit full base URL override (wins over host/port; raw
             llama-server protocol).
         judge_role: Text role to pin the orchestrator judge to (force_role).
-            Defaults to ``LLM_JUDGE_ROLE`` env, else ``worker_general``.
+            Defaults to ``LLM_JUDGE_ROLE`` env, else the disjoint GPU
+            ``architect_general`` lane.
         timeout: HTTP timeout in seconds (default: 30).
         _eval_batch_id: Internal EvalTower batch correlation identifier.
     """
@@ -891,22 +892,24 @@ def _score_llm_judge(
     if _contains_text_unit(answer, expected.strip()):
         return True
 
-    # Extract answer from \boxed{} if present
-    boxed = re.search(r'\\boxed\{(.+?)\}', answer, re.DOTALL)
-    candidate = boxed.group(1).strip() if boxed else answer.strip().split("\n")[-1].strip()
+    # Preserve the whole candidate. The former last-line fallback silently
+    # reduced summaries/tables to one trailing row, making the judge answer a
+    # different question than the benchmark asked. A boxed mathematical answer
+    # remains a useful compact specialization when present.
+    boxed = re.findall(r"\\boxed\{(.+?)\}", answer, re.DOTALL)
+    candidate = boxed[-1].strip() if boxed else answer.strip()
 
     judge_prompt = (
-        "You are a physics answer equivalence judge. Determine whether two "
-        "mathematical/physics answers are semantically equivalent.\n\n"
-        "Consider:\n"
-        "- Different but equivalent LaTeX forms (e.g. \\frac{mg}{2} vs mg/2)\n"
-        "- Equivalent symbolic rearrangements\n"
-        "- Same numerical value with different units notation\n"
-        "- Simplified vs expanded forms\n\n"
-        f"Expected answer: {expected}\n\n"
-        f"Student answer: {candidate}\n\n"
-        "Are these answers semantically equivalent? Reply with ONLY "
-        "\"true\" or \"false\", nothing else."
+        "You are a strict semantic answer judge. Decide whether the candidate "
+        "conveys the same correct substantive answer as the reference.\n\n"
+        "For mathematical or physics answers, accept equivalent notation, "
+        "symbolic rearrangements, and equivalent units. For summaries or "
+        "long-form answers, require the reference's central claims without "
+        "material contradiction; ignore harmless wording and formatting "
+        "differences. Do not reward an answer merely for sharing keywords.\n\n"
+        f"REFERENCE ANSWER:\n{expected}\n\n"
+        f"CANDIDATE ANSWER:\n{candidate}\n\n"
+        "Return only the JSON boolean true or false."
     )
 
     import httpx
@@ -926,11 +929,18 @@ def _score_llm_judge(
                 "force_role": _llm_judge_force_role(config),
                 "workload_class": "eval_batch",
                 "request_priority": "background",
-                "max_queue_wait_ms": min(int(float(timeout) * 1000), 90_000),
+                # Queueing must not consume the entire end-to-end judge
+                # deadline. Scoring is admitted only after a quiescence guard;
+                # five seconds is therefore a fault signal, not useful work.
+                "max_queue_wait_ms": min(
+                    5_000,
+                    max(1_000, int(float(timeout) * 250)),
+                ),
                 "max_tokens": 8,
                 "timeout_s": int(timeout),
                 "client_deadline_unix_s": client_deadline_unix_s,
                 "allow_delegation": False,
+                "output_schema": {"type": "boolean"},
             }
             eval_batch_id = str(config.get("_eval_batch_id") or "").strip()
             if eval_batch_id:
@@ -974,9 +984,7 @@ def _score_llm_judge(
             try:
                 verdict = str(data["choices"][0]["message"]["content"]).strip().lower()
             except (KeyError, IndexError, TypeError) as exc:
-                raise _JudgeResponseError(
-                    "unexpected_shape", type(exc).__name__
-                ) from exc
+                raise _JudgeResponseError("unexpected_shape", type(exc).__name__) from exc
             if not verdict:
                 raise _JudgeResponseError("empty_answer", "content field was empty")
     except httpx.TimeoutException as exc:
@@ -1013,8 +1021,7 @@ def _score_llm_judge(
     # compact per-question sidecars truncate long errors. Never include prompts
     # or response bodies here.
     message = (
-        f"llm_judge_{category}: endpoint={judge_url}; cause={detail}; "
-        "refusing scorer fallback"
+        f"llm_judge_{category}: endpoint={judge_url}; cause={detail}; refusing scorer fallback"
     )
     log.warning("LLM judge unavailable: %s", message)
     raise ScoringUnavailableError(message) from cause
@@ -1066,19 +1073,17 @@ def _llm_judge_force_role(config: dict[str, Any]) -> str:
 
     An equivalence judge must land on a text model, not be auto-routed to a
     vision/code specialist. Precedence: ``scoring_config['judge_role']`` >
-    ``LLM_JUDGE_ROLE`` env > ``worker_general`` (the general text worker).
+    ``LLM_JUDGE_ROLE`` env > ``architect_general`` (the disjoint GPU judge).
     """
     import os
 
     role = str(config.get("judge_role") or "").strip()
     if role:
         return role
-    return os.environ.get("LLM_JUDGE_ROLE", "").strip() or "worker_general"
+    return os.environ.get("LLM_JUDGE_ROLE", "").strip() or DEFAULT_LLM_JUDGE_ROLE
 
 
-def _score_math_verify(
-    answer: str, expected: str, config: dict[str, Any]
-) -> bool:
+def _score_math_verify(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """Score using Math-Verify library for symbolic mathematical comparison.
 
     Used for: MATH-500 — where equivalent expressions should match
@@ -1150,8 +1155,7 @@ def _score_math_verify(
         return bool(verify(gold, pred, **verify_kwargs))
     except Exception as exc:
         raise ScoringUnavailableError(
-            "math_verify.verify() raised while comparing parsed answers "
-            "(scorer defect)"
+            "math_verify.verify() raised while comparing parsed answers (scorer defect)"
         ) from exc
 
 
@@ -1167,9 +1171,7 @@ def _score_math_verify(
 # normaliser) and do not fork or modify any existing scorer's semantics.
 
 
-def _score_f1_list(
-    answer: str, expected: str, config: dict[str, Any]
-) -> bool:
+def _score_f1_list(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """Item-level (set-level) F1 for episodic-memory *list* answers.
 
     Used for: tulving_episodic — questions whose gold is a JSON list of answer
@@ -1202,9 +1204,7 @@ def _score_f1_list(
     return f1 >= threshold
 
 
-def _score_structural_exact_match(
-    answer: str, expected: str, config: dict[str, Any]
-) -> bool:
+def _score_structural_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bool:
     r"""Structural (canonicalized) equality for longcot_mini answers.
 
     Used for: longcot_mini — every prompt instructs the model to end with
@@ -1344,7 +1344,18 @@ def _extract_code_block(text: str, language: str = "python") -> str | None:
     stripped = text.strip()
     if stripped and any(
         stripped.startswith(prefix)
-        for prefix in ("def ", "class ", "import ", "from ", "n ", "t ", "for ", "while ", "if ", "#")
+        for prefix in (
+            "def ",
+            "class ",
+            "import ",
+            "from ",
+            "n ",
+            "t ",
+            "for ",
+            "while ",
+            "if ",
+            "#",
+        )
     ):
         return stripped
 
@@ -1514,7 +1525,7 @@ def _extract_solution_tail(response: str) -> str | None:
     matches = list(_SOLUTION_MARKER_RE.finditer(response))
     if not matches:
         return None
-    tail = response[matches[-1].end():]
+    tail = response[matches[-1].end() :]
     return tail.strip() or None
 
 
@@ -1652,11 +1663,13 @@ def score_batch(
             scoring_method=q.get("scoring_method", "exact_match"),
             scoring_config=q.get("scoring_config"),
         )
-        results.append({
-            "id": q.get("id", "unknown"),
-            "suite": q.get("suite", "unknown"),
-            "passed": passed,
-            "expected": q.get("expected", ""),
-            "answer_preview": ans[:200] if ans else "",
-        })
+        results.append(
+            {
+                "id": q.get("id", "unknown"),
+                "suite": q.get("suite", "unknown"),
+                "passed": passed,
+                "expected": q.get("expected", ""),
+                "answer_preview": ans[:200] if ans else "",
+            }
+        )
     return results

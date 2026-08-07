@@ -155,6 +155,7 @@ class TestNeedsPlanReview:
     @patch("src.proactive_delegation.classify_task_complexity")
     def test_skips_trivial_tasks(self, mock_classify):
         from src.proactive_delegation import TaskComplexity
+
         mock_classify.return_value = (TaskComplexity.TRIVIAL, {})
         state = MagicMock(plan_review_phase="A")
         assert _needs_plan_review({"objective": "hi"}, ["frontdoor"], state) is False
@@ -162,6 +163,7 @@ class TestNeedsPlanReview:
     @patch("src.proactive_delegation.classify_task_complexity")
     def test_skips_architect_self_review(self, mock_classify):
         from src.proactive_delegation import TaskComplexity
+
         mock_classify.return_value = (TaskComplexity.MODERATE, {})
         state = MagicMock(plan_review_phase="A")
         assert _needs_plan_review({"objective": "design"}, ["architect_general"], state) is False
@@ -169,6 +171,7 @@ class TestNeedsPlanReview:
     @patch("src.proactive_delegation.classify_task_complexity")
     def test_allows_moderate_non_architect(self, mock_classify):
         from src.proactive_delegation import TaskComplexity
+
         mock_classify.return_value = (TaskComplexity.MODERATE, {})
         state = MagicMock(plan_review_phase="A", hybrid_router=None)
         result = _needs_plan_review({"objective": "moderate task"}, ["frontdoor"], state)
@@ -212,9 +215,9 @@ class TestApplyPlanReview:
 
 
 class TestPlanReviewAbort:
-    """Test terminal plan-review rejection helpers."""
+    """Plan edits are non-terminal; only an explicit abort may stop work."""
 
-    def test_drop_aborts_even_without_patches(self):
+    def test_drop_discards_plan_without_aborting_task(self):
         review = PlanReviewResult(
             decision="drop",
             score=0.9,
@@ -222,10 +225,14 @@ class TestPlanReviewAbort:
             patches=[],
         )
 
-        assert _plan_review_should_abort(review) is True
+        assert _plan_review_should_abort(review) is False
         assert _plan_review_abort_message(review) == (
             "Plan rejected by architect review: Plan incomplete; missing problem logic."
         )
+
+    def test_explicit_abort_is_reserved_terminal_verdict(self):
+        review = PlanReviewResult(decision="abort", score=1.0, feedback="Unsafe")
+        assert _plan_review_should_abort(review) is True
 
     def test_reroute_does_not_abort(self):
         review = PlanReviewResult(

@@ -117,7 +117,7 @@ SYN_NUMA = {
             ("72-95,168-191", 9380, 48),
         ],
         "full_instance_idx": 0,
-        "placement_policy": "burst_prefer_quarters",
+        "placement_policy": "burst_prefer_split",
     },
     "architect_general": {
         "instances": [("0-95", 9083, 96)],

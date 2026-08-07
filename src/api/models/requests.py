@@ -199,6 +199,14 @@ class ChatRequest(BaseModel):
         "'interactive', 'eval_batch', or 'campaign'. When unset, the server "
         "infers it from existing request metadata without changing admission priority.",
     )
+    batch_placement_mode: Literal[
+        "auto", "homogeneous_native_batch", "mixed_role_split"
+    ] | None = Field(
+        default=None,
+        description="Optional burst placement intent. Homogeneous cohorts may share "
+        "one full server's certified native slots; mixed routed pipelines start on "
+        "sub-full instances so different CPU roles can occupy disjoint regions.",
+    )
     x_orchestrator_prompt_root: str | None = Field(
         default=None,
         description=(

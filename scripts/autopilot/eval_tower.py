@@ -131,8 +131,9 @@ _INSTRUMENT_LEDGER_PATH = Path(
 # questions/hour objective.  Generation placement changes the denominator;
 # model-backed scoring placement can change both wall time and error exclusion.
 # Keep these human-readable and stamp them into every EvalResult/journal row.
-EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v2_prompt_load"
-EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v3_backend_drain"
+EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v3_mixed_role_split"
+EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v4_gpu_lifecycle_quiescence"
+DEFAULT_LLM_JUDGE_ROLE = "architect_general"
 
 
 def question_tier_mix(questions: Sequence[dict[str, Any]]) -> dict[str, int]:
@@ -195,10 +196,7 @@ def _record_instrument_identity(
             entry.get("scoring_schedule_id") != scoring_schedule_id
         )
         if entry and (
-            content_changed
-            or mix_changed
-            or execution_changed
-            or scoring_schedule_changed
+            content_changed or mix_changed or execution_changed or scoring_schedule_changed
         ):
             drift = {
                 "changed_content": content_changed,
@@ -212,9 +210,7 @@ def _record_instrument_identity(
                 "current_tier_mix": tier_mix,
                 "previous_n_questions": entry.get("n_questions"),
                 "current_n_questions": n_questions,
-                "previous_execution_instrument_id": entry.get(
-                    "execution_instrument_id"
-                ),
+                "previous_execution_instrument_id": entry.get("execution_instrument_id"),
                 "current_execution_instrument_id": execution_instrument_id,
                 "previous_scoring_schedule_id": entry.get("scoring_schedule_id"),
                 "current_scoring_schedule_id": scoring_schedule_id,
@@ -238,6 +234,60 @@ def _record_instrument_identity(
         except OSError as exc:
             log.error("Could not persist eval instrument ledger: %s", exc)
         return drift
+
+
+def _instrument_drift_log_message(drift: Mapping[str, Any]) -> tuple[int, str]:
+    """Return an honest log level/message for a durable instrument transition.
+
+    Dataset/tier changes alter the question population under an unchanged core
+    identity and remain hard errors. Execution/scoring policy changes are also
+    measurement boundaries, but are expected when a new era is deliberately
+    ratified; report their actual axes instead of falsely printing identical
+    content hashes as the apparent cause.
+    """
+    changed_axes = [
+        axis
+        for axis, changed in (
+            ("dataset_content", drift.get("changed_content")),
+            ("tier_mix", drift.get("changed_tier_mix")),
+            ("execution_instrument", drift.get("changed_execution_instrument")),
+            ("scoring_schedule", drift.get("changed_scoring_schedule")),
+        )
+        if bool(changed)
+    ]
+    pairs = (
+        (
+            "content",
+            drift.get("previous_dataset_content_sha256"),
+            drift.get("current_dataset_content_sha256"),
+        ),
+        ("tier_mix", drift.get("previous_tier_mix"), drift.get("current_tier_mix")),
+        (
+            "execution",
+            drift.get("previous_execution_instrument_id"),
+            drift.get("current_execution_instrument_id"),
+        ),
+        (
+            "scoring",
+            drift.get("previous_scoring_schedule_id"),
+            drift.get("current_scoring_schedule_id"),
+        ),
+    )
+    detail = "; ".join(f"{name} {before!r} -> {after!r}" for name, before, after in pairs)
+    axes = ",".join(changed_axes) or "none"
+    if drift.get("changed_content") or drift.get("changed_tier_mix"):
+        return (
+            logging.ERROR,
+            f"EVAL DATASET INSTRUMENT DRIFT axes={axes}; {detail}. "
+            "Question populations before and after are not comparable.",
+        )
+    return (
+        logging.WARNING,
+        f"EVAL POLICY INSTRUMENT TRANSITION axes={axes}; {detail}. "
+        "Comparisons require the corresponding ratified era boundary.",
+    )
+
+
 _EVAL_QUESTION_JSONL_SCHEMA_VERSION = 1
 _DEFAULT_EVAL_ARTIFACT_ROOT = Path("/mnt/raid0/llm/tmp/eval_tower_trials")
 
@@ -680,6 +730,7 @@ def _question_pool_tier(q: dict[str, Any]) -> int | None:
 EVAL_TIER_MIX_POLICY = "equal_thirds_v1"
 EVAL_TIER_MIX_TIERS: tuple[int, ...] = (1, 2, 3)
 
+
 # ── Core rotation (operator, 2026-08-04: "the draw should be somewhat randomized") ──
 #
 # A permanently fixed seed lets AutoPilot overfit: it mutates prompts and configs against
@@ -727,9 +778,7 @@ def rotated_core_seed(base_seed: int, rotation: int) -> int:
     return int.from_bytes(digest.digest()[:8], "big") % (2**31 - 1)
 
 
-def declared_tier_targets(
-    n: int, tiers: tuple[int, ...] = EVAL_TIER_MIX_TIERS
-) -> dict[int, int]:
+def declared_tier_targets(n: int, tiers: tuple[int, ...] = EVAL_TIER_MIX_TIERS) -> dict[int, int]:
     """Per-tier question counts for a draw of ``n``. Equal thirds; remainder to low tiers.
 
     The targets always sum to exactly ``n`` — an off-by-one here would silently change the
@@ -914,9 +963,7 @@ def _inband_error_text(answer: Any) -> str | None:
     return None
 
 
-def _forced_role_serving_mismatch(
-    force_role: Any, resp: Mapping[str, Any]
-) -> str | None:
+def _forced_role_serving_mismatch(force_role: Any, resp: Mapping[str, Any]) -> str | None:
     """Return the serving role when it differs from the forced role, else None.
 
     Guard 2: when the eval pins ``force_role`` for a role-attributed
@@ -1304,7 +1351,9 @@ def _iso_within_days(value: str, days: int) -> bool:
     return 0 <= age_s <= days * 86400
 
 
-def _same_role_certification_allows_eval_fanout(role: str, *, matrix: object, numa_config: dict) -> bool:
+def _same_role_certification_allows_eval_fanout(
+    role: str, *, matrix: object, numa_config: dict
+) -> bool:
     try:
         from src.scheduling.contention import (
             MATRIX_STALENESS_DAYS,
@@ -1354,7 +1403,10 @@ def _same_role_matrix_allows_eval_fanout(role: str) -> bool:
         current_hash = topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
         status = matrix_status(current_topology_hash=current_hash)
         if status == MatrixStatus.OK:
-            return pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix) == PairDecision.ALLOW
+            return (
+                pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix)
+                == PairDecision.ALLOW
+            )
         if status != MatrixStatus.STALE:
             return False
         return _same_role_certification_allows_eval_fanout(
@@ -1506,6 +1558,30 @@ class _EvalResourceLane:
     cohort: str = ""
 
 
+_BATCH_PLACEMENT_MODES = frozenset(
+    {"auto", "homogeneous_native_batch", "mixed_role_split"}
+)
+
+
+def _eval_batch_placement_mode(question: Mapping[str, Any]) -> str:
+    """Classify an eval question before any model dispatch begins.
+
+    Forced-role questions are homogeneous physical cohorts and retain the full
+    server's certified native batching. Router-owned questions can traverse
+    frontdoor, worker, verifier, and escalation roles, so they enter split mode
+    before the first decode. This avoids relying on impossible mid-decode CPU
+    migration after a downstream backlog has already formed.
+    """
+    explicit = str(question.get("_batch_placement_mode") or "").strip().lower()
+    if explicit:
+        if explicit not in _BATCH_PLACEMENT_MODES:
+            raise ValueError(f"invalid _batch_placement_mode: {explicit!r}")
+        return explicit
+    if str(question.get("force_role") or "").strip():
+        return "homogeneous_native_batch"
+    return "mixed_role_split"
+
+
 def _eval_server_mode() -> dict[str, dict[str, Any]]:
     """Lean serving declarations used to collapse roles onto physical lanes."""
     path = Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
@@ -1654,9 +1730,7 @@ def _wait_for_eval_backend_drain(
                     "reason": "stable_idle",
                     "waited_s": round(time.monotonic() - started, 3),
                     "stable_s": stable_required,
-                    "ports": sorted(
-                        int(urlsplit(url).port or 0) for url in live
-                    ),
+                    "ports": sorted(int(urlsplit(url).port or 0) for url in live),
                     "polls": polls,
                     "peak_active": peak_active,
                     "last_active": last_active,
@@ -1681,12 +1755,178 @@ def _wait_for_eval_backend_drain(
         time.sleep(max(0.01, float(poll_interval_s)))
 
 
+def _wait_for_eval_api_lifecycle_drain(
+    *,
+    api_url: str,
+    batch_id: str,
+    timeout_s: float,
+    stable_s: float | None = None,
+    poll_interval_s: float = 0.5,
+    request_timeout_s: float = 2.0,
+) -> dict[str, Any]:
+    """Prove the API has no unresolved handler for one eval batch.
+
+    llama.cpp ``/slots`` does not expose requests queued in its HTTP/placement
+    path. During E11, a timed-out EvalTower client left one such request alive
+    for another 5m30s; ``/slots`` briefly read zero and the scorer tail entered
+    the contaminated CPU lane. The API lifecycle reducer observes ``/chat``
+    entry through the handler's real ``finally`` exit, including work that
+    outlives a disconnected client, and is therefore the missing first half of
+    the quiescence certificate.
+    """
+    started = time.monotonic()
+    deadline = started + max(0.0, float(timeout_s))
+    stable_required = (
+        _eval_backend_drain_stable_s() if stable_s is None else max(0.0, float(stable_s))
+    )
+    endpoint = f"{api_url.rstrip('/')}/dashboard/api/live_activity"
+    idle_since: float | None = None
+    observed_batch = False
+    polls = 0
+    last_sequence: int | None = None
+    last_batch: dict[str, Any] = {}
+    last_error = ""
+
+    while True:
+        now = time.monotonic()
+        try:
+            response = httpx.get(
+                endpoint,
+                timeout=max(0.05, float(request_timeout_s)),
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("live_activity response is not an object")
+            sequence = int(payload.get("event_sequence") or 0)
+            if last_sequence is not None and sequence < last_sequence:
+                return {
+                    "success": False,
+                    "reason": "api_lifecycle_sequence_reset",
+                    "waited_s": round(time.monotonic() - started, 3),
+                    "stable_s": stable_required,
+                    "polls": polls,
+                    "batch_id": batch_id,
+                    "event_sequence": sequence,
+                    "previous_event_sequence": last_sequence,
+                }
+            last_sequence = sequence
+            overflow = payload.get("overflow") or {
+                "total": payload.get("overflow_total", 0),
+                "critical": payload.get("overflow_critical", 0),
+                "history_evictions": payload.get("history_evictions", 0),
+                "request_evictions": payload.get("request_evictions", 0),
+            }
+            degraded = (
+                payload.get("certificate_valid") is False
+                or bool(payload.get("degraded"))
+                or bool(isinstance(overflow, Mapping) and overflow.get("critical"))
+            )
+            if degraded:
+                return {
+                    "success": False,
+                    "reason": "api_lifecycle_reducer_degraded",
+                    "waited_s": round(time.monotonic() - started, 3),
+                    "stable_s": stable_required,
+                    "polls": polls,
+                    "batch_id": batch_id,
+                    "event_sequence": sequence,
+                    "overflow": dict(overflow) if isinstance(overflow, Mapping) else {},
+                }
+            batches = payload.get("batches") or {}
+            if not isinstance(batches, Mapping):
+                raise ValueError("live_activity batches is not an object")
+            batch = batches.get(batch_id)
+            if isinstance(batch, Mapping):
+                observed_batch = True
+                last_batch = dict(batch)
+                active = int(batch.get("active_unresolved") or 0)
+                if active == 0:
+                    if idle_since is None:
+                        idle_since = now
+                    if now - idle_since >= stable_required:
+                        return {
+                            "success": True,
+                            "reason": "stable_api_lifecycle_idle",
+                            "waited_s": round(time.monotonic() - started, 3),
+                            "stable_s": stable_required,
+                            "polls": polls + 1,
+                            "batch_id": batch_id,
+                            "event_sequence": sequence,
+                            "last_batch": last_batch,
+                        }
+                else:
+                    idle_since = None
+            else:
+                # Absence is not zero: it can mean the API reloaded and forgot
+                # the batch. Require a retained zero-count bucket as proof.
+                idle_since = None
+            last_error = ""
+        except Exception as exc:  # noqa: BLE001
+            idle_since = None
+            last_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+        polls += 1
+        if time.monotonic() >= deadline:
+            return {
+                "success": False,
+                "reason": (
+                    "api_lifecycle_drain_timeout"
+                    if observed_batch
+                    else "api_lifecycle_batch_not_observed"
+                ),
+                "waited_s": round(time.monotonic() - started, 3),
+                "stable_s": stable_required,
+                "polls": polls,
+                "batch_id": batch_id,
+                "event_sequence": last_sequence,
+                "last_batch": last_batch,
+                "last_error": last_error,
+            }
+        time.sleep(max(0.01, float(poll_interval_s)))
+
+
+def _wait_for_eval_quiescence(
+    *,
+    api_url: str,
+    batch_id: str,
+    timeout_s: float,
+) -> dict[str, Any]:
+    """Require API-handler quiescence, then the unchanged llama slot drain."""
+    started = time.monotonic()
+    lifecycle = _wait_for_eval_api_lifecycle_drain(
+        api_url=api_url,
+        batch_id=batch_id,
+        timeout_s=timeout_s,
+    )
+    if not lifecycle.get("success"):
+        return {
+            "success": False,
+            "reason": lifecycle.get("reason") or "api_lifecycle_unproven",
+            "waited_s": round(time.monotonic() - started, 3),
+            "stable_s": lifecycle.get("stable_s"),
+            "ports": [],
+            "polls": lifecycle.get("polls", 0),
+            "peak_active": 0,
+            "last_active": {},
+            "api_lifecycle": lifecycle,
+        }
+    remaining_s = max(0.0, float(timeout_s) - (time.monotonic() - started))
+    slots = _wait_for_eval_backend_drain(timeout_s=remaining_s)
+    report = dict(slots)
+    report["api_lifecycle"] = lifecycle
+    report["waited_s"] = round(time.monotonic() - started, 3)
+    if report.get("success"):
+        report["reason"] = "stable_api_and_backend_idle"
+    return report
+
+
 def _eval_resource_lane(
     question: Mapping[str, Any],
     *,
     mode: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> _EvalResourceLane:
     """Map one question to a physical serving lane and its certified width."""
+    placement_mode = _eval_batch_placement_mode(question)
     role = str(question.get("force_role") or "").strip() or os.environ.get(
         "AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor"
     )
@@ -1732,11 +1972,7 @@ def _eval_resource_lane(
         if item.strip()
     }
     physical_role_name = next(
-        (
-            name
-            for name, entry in mode.items()
-            if entry is physical_cfg
-        ),
+        (name for name, entry in mode.items() if entry is physical_cfg),
         role,
     )
     try:
@@ -1769,6 +2005,7 @@ def _eval_resource_lane(
     # waits inside the placement lock and can time out or starve behind newly
     # admitted frontdoor work.  The scheduler must avoid that invalid placement,
     # not merely rely on the lock to reject it after admission.
+    native_group_capacity = capacity
     if not gpu and isinstance(by_shape, dict) and int(by_shape.get("full", 0) or 0) > 0:
         native_group_capacity = max(
             (
@@ -1784,9 +2021,7 @@ def _eval_resource_lane(
                     ),
                 )
                 for name, entry in mode.items()
-                if (
-                    "worker_general" if name == "worker" else name
-                ) in allowed_shared
+                if ("worker_general" if name == "worker" else name) in allowed_shared
                 and not (entry.get("device") or entry.get("vram_gib") or entry.get("vram_mb"))
             ),
             default=1,
@@ -1798,6 +2033,17 @@ def _eval_resource_lane(
         else:
             capacity = native_group_capacity
             units = native_group_capacity
+
+    if not gpu and placement_mode == "mixed_role_split":
+        # This is a bounded client-side pipeline backlog, not a claim that all
+        # requests decode simultaneously. The backend's region leases admit the
+        # actual half instances. Keeping the certified native width outstanding
+        # lets one cohort wait downstream while newly-routed work fills the
+        # complementary half, eliminating the old 2/4 full-instance dead zone.
+        lane_key = "cpu:mixed-role-split"
+        capacity = max(1, native_group_capacity)
+        units = 1
+        device = "cpu-mixed-split"
 
     raw_override = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
     if raw_override is not None:
@@ -1816,12 +2062,8 @@ def _eval_resource_lane(
             n_ctx = max(1, int(shape.get("n_ctx") or 0))
             per_slot_ctx = max(1, n_ctx // max(1, slots))
             tokens_per_unit = max(1, per_slot_ctx // capacity)
-            estimated_prompt_tokens = max(
-                1, (len(str(question.get("prompt") or "")) + 3) // 4
-            )
-            prompt_units = (
-                estimated_prompt_tokens + tokens_per_unit - 1
-            ) // tokens_per_unit
+            estimated_prompt_tokens = max(1, (len(str(question.get("prompt") or "")) + 3) // 4)
+            prompt_units = (estimated_prompt_tokens + tokens_per_unit - 1) // tokens_per_unit
             units = max(units, min(capacity, prompt_units))
         except (TypeError, ValueError, ZeroDivisionError):
             pass
@@ -1860,9 +2102,7 @@ def _scoring_uses_model_judge(question: Mapping[str, Any]) -> bool:
     )
 
 
-def _model_scoring_concurrency(
-    questions: Sequence[Mapping[str, Any]], scoring_workers: int
-) -> int:
+def _model_scoring_concurrency(questions: Sequence[Mapping[str, Any]], scoring_workers: int) -> int:
     """Certified width for the model-backed scorer tail.
 
     Explicit direct judge URLs cannot be mapped to a registered process, so
@@ -1884,16 +2124,14 @@ def _model_scoring_concurrency(
         if not isinstance(config, Mapping):
             config = {}
         if str(question.get("scoring_method") or "") == "llm_judge":
-            if config.get("judge_url") or (
-                config.get("judge_host") and config.get("judge_port")
-            ):
+            if config.get("judge_url") or (config.get("judge_host") and config.get("judge_port")):
                 capacities["direct:unknown"] = 1
                 continue
             roles = [
                 str(
                     config.get("judge_role")
                     or os.environ.get("LLM_JUDGE_ROLE")
-                    or "worker_general"
+                    or DEFAULT_LLM_JUDGE_ROLE
                 )
             ]
         else:
@@ -2025,7 +2263,11 @@ class _EvalQuestionJsonlWriter:
         if path is not None:
             self.path = Path(path)
         else:
-            self.path = root / _safe_artifact_name(trial_name, fallback="trial_unknown") / "question_results.jsonl"
+            self.path = (
+                root
+                / _safe_artifact_name(trial_name, fallback="trial_unknown")
+                / "question_results.jsonl"
+            )
         self._eval_batch_id = eval_batch_id
         self._trial_id = trial_id
         self._label = str(label or "")
@@ -2126,9 +2368,9 @@ class _EvalQuestionJsonlWriter:
         self.append_row(row)
 
     def append_row(self, row: dict[str, Any]) -> None:
-        data = (json.dumps(row, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode(
-            "utf-8"
-        )
+        data = (
+            json.dumps(row, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+        ).encode("utf-8")
         with self._lock:
             if self._fd is None:
                 raise OSError("eval question JSONL writer is closed")
@@ -2401,14 +2643,12 @@ def _stamp_eval_instrument(
         "execution_instrument_id": EVAL_EXECUTION_INSTRUMENT_ID,
         "scoring_schedule_id": EVAL_SCORING_SCHEDULE_ID,
         "eval_concurrency_override": os.environ.get("AUTOPILOT_EVAL_CONCURRENCY"),
-        "scoring_concurrency_override": os.environ.get(
-            "AUTOPILOT_EVAL_SCORING_CONCURRENCY"
-        ),
+        "scoring_concurrency_override": os.environ.get("AUTOPILOT_EVAL_SCORING_CONCURRENCY"),
         "native_batch_shared_roles": os.environ.get(
             "ORCHESTRATOR_NATIVE_BATCH_SHARED_ROLES", "frontdoor,worker_general"
         ),
         "rubric_judge_roles": os.environ.get("AUTOPILOT_RUBRIC_JUDGE_ROLES", ""),
-        "llm_judge_role": os.environ.get("LLM_JUDGE_ROLE", "worker_general"),
+        "llm_judge_role": os.environ.get("LLM_JUDGE_ROLE", DEFAULT_LLM_JUDGE_ROLE),
     }
     execution_profile_json = json.dumps(
         execution_profile, sort_keys=True, separators=(",", ":"), default=str
@@ -2463,19 +2703,8 @@ def _stamp_eval_instrument(
         )
         if durable_drift:
             result.details["instrument_drift_across_restart"] = durable_drift
-            log.error(
-                "EVAL INSTRUMENT CHANGED under an unchanged core_id=%s. content %s -> %s; "
-                "tier mix %s -> %s; n %s -> %s. Trials measured before and after this point "
-                "were scored on DIFFERENT question sets — quality and questions/hour are not "
-                "comparable across it, and core_id alone cannot express the difference.",
-                core_id,
-                durable_drift.get("previous_dataset_content_sha256"),
-                durable_drift.get("current_dataset_content_sha256"),
-                durable_drift.get("previous_tier_mix"),
-                durable_drift.get("current_tier_mix"),
-                durable_drift.get("previous_n_questions"),
-                durable_drift.get("current_n_questions"),
-            )
+            level, message = _instrument_drift_log_message(durable_drift)
+            log.log(level, "core_id=%s: %s", core_id, message)
     return result
 
 
@@ -2776,9 +3005,7 @@ def score_math_rebaseline_answers(
     ``_eval_question`` takes — so a fixture test exercises the real scorer.
     """
     if len(questions) != len(answers):
-        raise ValueError(
-            f"questions/answers length mismatch: {len(questions)} != {len(answers)}"
-        )
+        raise ValueError(f"questions/answers length mismatch: {len(questions)} != {len(answers)}")
     _require_math_verify()
     out: list[bool] = []
     for q, answer in zip(questions, answers):
@@ -3098,7 +3325,9 @@ class EvalTower:
             _research_root_path = _research_root()
             question_pool = _load_research_benchmark_module("question_pool")
 
-            default_pool_path = _research_root_path / "benchmarks" / "prompts" / "question_pool.jsonl"
+            default_pool_path = (
+                _research_root_path / "benchmarks" / "prompts" / "question_pool.jsonl"
+            )
             pool_path = Path(getattr(question_pool, "POOL_FILE", default_pool_path))
             mtime_ns = _file_mtime_ns(pool_path)
             if self._pool is not None and self._pool_mtime_ns == mtime_ns:
@@ -3454,6 +3683,7 @@ class EvalTower:
                 "watcher": getattr(self, "watcher", None),
                 "request_priority": "background",
                 "workload_class": "eval_batch",
+                "batch_placement_mode": _eval_batch_placement_mode(q),
             }
             eval_batch_id = str(q.get("_eval_batch_id") or "").strip()
             if eval_batch_id:
@@ -3511,15 +3741,10 @@ class EvalTower:
             # rather than mis-attributing a cross-role number. Log loudly with
             # both roles.
             if not error:
-                _served_by = _forced_role_serving_mismatch(
-                    q.get("force_role"), resp
-                )
+                _served_by = _forced_role_serving_mismatch(q.get("force_role"), resp)
                 if _served_by is not None:
                     _forced = str(q.get("force_role") or "").strip()
-                    error = (
-                        f"forced_role_fallback: forced={_forced} "
-                        f"served_by={_served_by}"
-                    )
+                    error = f"forced_role_fallback: forced={_forced} served_by={_served_by}"
                     log.error(
                         "REL-1 forced-role integrity violation "
                         "(qid=%s suite=%s): forced=%s but served_by=%s — "
@@ -3659,9 +3884,7 @@ class EvalTower:
             else None
         )
         provenance_role = (
-            str(failure_provenance.get("role") or "")
-            if failure_provenance is not None
-            else ""
+            str(failure_provenance.get("role") or "") if failure_provenance is not None else ""
         )
         return QuestionResult(
             question_id=outcome.question_id,
@@ -3675,9 +3898,7 @@ class EvalTower:
             failure_provenance=failure_provenance,
             tokens_generated=outcome.tokens,
             elapsed_s=outcome.elapsed,
-            route_used=str(
-                resp.get("routed_to") or resp.get("model") or provenance_role
-            ),
+            route_used=str(resp.get("routed_to") or resp.get("model") or provenance_role),
             cost_tier=resp.get("cost_tier", 0),
             scoring_method=scoring_method,
             partial=bool(resp.get("partial", False)),
@@ -3754,9 +3975,7 @@ class EvalTower:
         log.info(
             "%s resource lanes: %s (generation_workers=%d)",
             label or "eval",
-            ", ".join(
-                f"{key}={capacity}" for key, capacity in sorted(lane_capacities.items())
-            ),
+            ", ".join(f"{key}={capacity}" for key, capacity in sorted(lane_capacities.items())),
             workers,
         )
         eval_batch_id = _eval_batch_id(
@@ -3916,7 +4135,9 @@ class EvalTower:
                     ):
                         report = {
                             "phase": f"serial_question_{i}_finalize",
-                            **_wait_for_eval_backend_drain(
+                            **_wait_for_eval_quiescence(
+                                api_url=self.url,
+                                batch_id=eval_batch_id,
                                 timeout_s=_eval_backend_drain_timeout_s(self.timeout),
                             ),
                         }
@@ -3928,9 +4149,7 @@ class EvalTower:
                             )
                             results[i].degraded = True
                             results[i].error = (
-                                f"{results[i].error}; {suffix}"
-                                if results[i].error
-                                else suffix
+                                f"{results[i].error}; {suffix}" if results[i].error else suffix
                             )
                     results[i].eval_concurrency = workers
                     append_question_result(i, results[i])
@@ -4031,7 +4250,9 @@ class EvalTower:
         generation_client_timeout_seen = False
 
         def certify_backend_drain(phase: str) -> dict[str, Any]:
-            report = _wait_for_eval_backend_drain(
+            report = _wait_for_eval_quiescence(
+                api_url=self.url,
+                batch_id=eval_batch_id,
                 timeout_s=_eval_backend_drain_timeout_s(self.timeout),
             )
             stamped = {"phase": phase, **report}
@@ -4074,25 +4295,20 @@ class EvalTower:
                     lane_key = lane.key
                     lane_units = lane.units
                     active_cohort = lane_cohort.get(lane_key)
-                    if (
-                        lane_active[lane_key] + lane_units > lane_capacities[lane_key]
-                        or (lane_active[lane_key] > 0 and active_cohort != lane.cohort)
+                    if lane_active[lane_key] + lane_units > lane_capacities[lane_key] or (
+                        lane_active[lane_key] > 0 and active_cohort != lane.cohort
                     ):
                         pending_gen.append((idx, gq))
                         continue
                     lane_active[lane_key] += lane_units
                     lane_cohort[lane_key] = lane.cohort
-                    gen_future_to_idx[
-                        gen_ex.submit(self._generate_question, gq, client)
-                    ] = idx
+                    gen_future_to_idx[gen_ex.submit(self._generate_question, gq, client)] = idx
                     admitted = True
                     break
                 if not admitted:
                     break
 
-        model_scoring_workers = _model_scoring_concurrency(
-            dispatch_questions, scoring_workers
-        )
+        model_scoring_workers = _model_scoring_concurrency(dispatch_questions, scoring_workers)
 
         def admit_deferred_model_scoring() -> None:
             nonlocal pre_model_drain_attempted
@@ -4136,7 +4352,9 @@ class EvalTower:
                 score_future_to_idx[score_fut] = idx
                 model_score_futures.add(score_fut)
 
-        def finalize_scored(idx: int, result: QuestionResult, *, generated_at_s: float | None) -> None:
+        def finalize_scored(
+            idx: int, result: QuestionResult, *, generated_at_s: float | None
+        ) -> None:
             nonlocal done
             result.eval_concurrency = workers
             results[idx] = result
@@ -4170,12 +4388,7 @@ class EvalTower:
                 )
 
         try:
-            while (
-                pending_gen
-                or gen_future_to_idx
-                or score_future_to_idx
-                or deferred_model_scores
-            ):
+            while pending_gen or gen_future_to_idx or score_future_to_idx or deferred_model_scores:
                 admit_generation()
                 admit_deferred_model_scoring()
                 pending = set(gen_future_to_idx) | set(score_future_to_idx)
@@ -4300,8 +4513,7 @@ class EvalTower:
                         )
                         if (
                             isinstance(failure_provenance, dict)
-                            and failure_provenance.get("class")
-                            == "client_transport_timeout"
+                            and failure_provenance.get("class") == "client_transport_timeout"
                         ):
                             generation_client_timeout_seen = True
                         # Generation done → lane is free. Deterministic/client-CPU
@@ -4330,9 +4542,7 @@ class EvalTower:
                                 elapsed_s=time.time() - batch_start,
                                 error=str(exc),
                             )
-                        finalize_scored(
-                            idx, result, generated_at_s=gen_ended_at.pop(idx, None)
-                        )
+                        finalize_scored(idx, result, generated_at_s=gen_ended_at.pop(idx, None))
         finally:
             gen_ex.shutdown(wait=False, cancel_futures=True)
             score_ex.shutdown(wait=False, cancel_futures=True)
@@ -4442,12 +4652,8 @@ class EvalTower:
         speed_analytics = _speed_analytics_ge_128(results, eval_wall_s=eval_wall_s)
         host_timing_covariates = _summarize_host_timing_covariates(results)
         task_rate_qph = (total_count / (eval_wall_s / 3600.0)) if eval_wall_s > 0 else 0.0
-        scored_task_rate_qph = (
-            n_scored / (eval_wall_s / 3600.0) if eval_wall_s > 0 else 0.0
-        )
-        goodput_qph = (
-            correct_count / (eval_wall_s / 3600.0) if eval_wall_s > 0 else 0.0
-        )
+        scored_task_rate_qph = n_scored / (eval_wall_s / 3600.0) if eval_wall_s > 0 else 0.0
+        goodput_qph = correct_count / (eval_wall_s / 3600.0) if eval_wall_s > 0 else 0.0
         tokens_per_solved_task = (
             total_tokens_generated / correct_count if correct_count > 0 else 0.0
         )
@@ -4528,9 +4734,9 @@ class EvalTower:
         # EV-CONF provenance (computed once, reused in details below): confidence
         # is "real" only when EVERY scored row carried the completion-probability
         # geomean. A binary-correctness proxy or a mixed batch is fail-closed False.
-        confidence_is_real = bool(confidence_source_counts) and set(
-            confidence_source_counts
-        ) <= {"completion_probabilities_geomean"}
+        confidence_is_real = bool(confidence_source_counts) and set(confidence_source_counts) <= {
+            "completion_probabilities_geomean"
+        }
         # EV-11c honesty (2026-07-22): when NO confidence data is present (every row
         # errored) the calibration metrics are UNDEFINED — emit None, never a 0.0
         # that masquerades as a real measurement (the EV-11c math re-baseline shipped
@@ -4679,9 +4885,7 @@ class EvalTower:
             if isinstance(r.failure_provenance, dict)
             and r.failure_provenance.get("class") == "client_transport_timeout"
         )
-        eval_contaminated = bool(
-            orphan_contamination_count or backend_drain_failure_count
-        )
+        eval_contaminated = bool(orphan_contamination_count or backend_drain_failure_count)
 
         return EvalResult(
             tier=tier,
@@ -4795,9 +4999,7 @@ class EvalTower:
 
         full_result = self._aggregate(results, tier=tier)
         decision_results = [
-            r
-            for r in results
-            if (r.eval_partition or "core") not in excluded_partitions
+            r for r in results if (r.eval_partition or "core") not in excluded_partitions
         ]
         if len(decision_results) == len(results):
             return full_result
@@ -5098,9 +5300,7 @@ class EvalTower:
             rotation = core_rotation_index(resolved_trial_id)
             effective_seed = rotated_core_seed(seed, rotation)
             rng = random.Random(effective_seed)
-            questions, tier_mix_provenance = _sample_tier_stratified_eval_questions(
-                pool, n, rng
-            )
+            questions, tier_mix_provenance = _sample_tier_stratified_eval_questions(pool, n, rng)
             tier_mix_provenance.update(
                 {
                     "core_rotation_index": rotation,
@@ -5110,9 +5310,7 @@ class EvalTower:
                 }
             )
             core_selection = "tier_stratified"
-            core_id = (
-                f"tier_stratified_{EVAL_TIER_MIX_POLICY}_seed_{seed}_n{n}_rot{rotation}"
-            )
+            core_id = f"tier_stratified_{EVAL_TIER_MIX_POLICY}_seed_{seed}_n{n}_rot{rotation}"
 
         audit_questions: list[dict] = []
         if audit_policy["enabled"] and audit_policy["requested_n"] > 0:
@@ -5220,14 +5418,10 @@ class EvalTower:
                 }
             )
         instrument_questions = [
-            q
-            for q in questions
-            if q.get("eval_partition", "core") not in excluded_partitions
+            q for q in questions if q.get("eval_partition", "core") not in excluded_partitions
         ]
         if excluded_partitions:
-            result.details["full_batch_dataset_content_sha256"] = dataset_content_sha256(
-                questions
-            )
+            result.details["full_batch_dataset_content_sha256"] = dataset_content_sha256(questions)
             result.details["full_batch_n_questions"] = len(questions)
         result.details.update(
             {
@@ -5449,14 +5643,10 @@ class EvalTower:
                 }
             )
         instrument_questions = [
-            q
-            for q in questions
-            if q.get("eval_partition", "core") not in excluded_partitions
+            q for q in questions if q.get("eval_partition", "core") not in excluded_partitions
         ]
         if excluded_partitions:
-            result.details["full_batch_dataset_content_sha256"] = dataset_content_sha256(
-                questions
-            )
+            result.details["full_batch_dataset_content_sha256"] = dataset_content_sha256(questions)
             result.details["full_batch_n_questions"] = len(questions)
         core_id = f"legacy_pool_t2_seed_{draw_seed}_n{requested_n}"
         if promotion_eval:
@@ -5704,9 +5894,7 @@ class EvalTower:
             suite, split, n=n, seed=int(seed), full=full
         )
         if not questions:
-            raise ValueError(
-                f"calibration suite {suite!r} split {split!r} yielded 0 questions"
-            )
+            raise ValueError(f"calibration suite {suite!r} split {split!r} yielded 0 questions")
         dataset_sha256 = dataset_content_sha256(questions)
         per_role: dict[str, Any] = {}
         with httpx.Client(timeout=self.timeout) as client:
@@ -5726,9 +5914,9 @@ class EvalTower:
                 for r in scored:
                     src = r.confidence_source or "unknown"
                     cal_source_counts[src] = cal_source_counts.get(src, 0) + 1
-                cal_real = bool(cal_source_counts) and set(
-                    cal_source_counts
-                ) <= {"completion_probabilities_geomean"}
+                cal_real = bool(cal_source_counts) and set(cal_source_counts) <= {
+                    "completion_probabilities_geomean"
+                }
                 reliability = (len(scored) / len(results)) if results else 0.0
                 per_role[role] = {
                     "role": role,
@@ -5807,9 +5995,7 @@ class EvalTower:
             "production_sampling": bool(production_sampling),
             # Per feedback_production_sampling_seed_not_temp0: sampling-sensitive
             # (math_verify/spec-dec) arms record production temp + seed42 intent.
-            "sampling_profile": "production_temp_seed42"
-            if production_sampling
-            else "greedy_temp0",
+            "sampling_profile": "production_temp_seed42" if production_sampling else "greedy_temp0",
             "n_questions": len(questions),
             "n_gsm8k": n_gsm8k,
             "n_math500": n_math500,
@@ -5945,9 +6131,7 @@ class EvalTower:
         with httpx.Client(timeout=self.timeout) as client:
             for role in roles:
                 role_qs = [self._with_forced_role(q, role) for q in questions]
-                results = self._eval_batch(
-                    role_qs, client, log_every=100, label=f"retry-{role}"
-                )
+                results = self._eval_batch(role_qs, client, log_every=100, label=f"retry-{role}")
                 agg = self._aggregate(results, tier=2)
                 scored = [r for r in results if not r.error]
                 correct = sum(1 for r in scored if r.correct)
@@ -6012,9 +6196,7 @@ class EvalTower:
             suite, split, n=n, seed=int(seed), full=full
         )
         if not questions:
-            raise ValueError(
-                f"resume suite {suite!r} split {split!r} yielded 0 questions"
-            )
+            raise ValueError(f"resume suite {suite!r} split {split!r} yielded 0 questions")
         dataset_sha256 = dataset_content_sha256(questions)
         if expected_dataset_sha256 and dataset_sha256 != str(expected_dataset_sha256):
             raise ValueError(
@@ -6042,8 +6224,7 @@ class EvalTower:
         with httpx.Client(timeout=self.timeout) as client:
             for role in roles:
                 role_qs = [
-                    {**self._with_forced_role(q, role), "_ordinal": int(i)}
-                    for i, q in remainder
+                    {**self._with_forced_role(q, role), "_ordinal": int(i)} for i, q in remainder
                 ]
                 results = (
                     self._eval_batch(role_qs, client, log_every=100, label=f"resume-{role}")

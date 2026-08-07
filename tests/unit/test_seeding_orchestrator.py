@@ -345,6 +345,7 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
         request_priority="background",
         workload_class="eval_batch",
         batch_id="evaltower-T1-123-43q",
+        batch_placement_mode="mixed_role_split",
         tools=[
             {
                 "type": "function",
@@ -368,6 +369,7 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
     assert payload["request_priority"] == "background"
     assert payload["workload_class"] == "eval_batch"
     assert payload["batch_id"] == "evaltower-T1-123-43q"
+    assert payload["batch_placement_mode"] == "mixed_role_split"
     assert payload["tools"][0]["function"]["name"] == "web_search"
     assert payload["tool_choice"]["function"]["name"] == "web_search"
     assert payload["max_tokens"] == 1024

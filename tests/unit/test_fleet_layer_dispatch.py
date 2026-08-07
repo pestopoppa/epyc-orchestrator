@@ -4,7 +4,7 @@ Acceptance plan coverage (wp12-fleet-layer-design.md §6):
   * case 2 — worker_math 4-wide lands on 4 disjoint busy quarters of the
     SHARED gemma4 fleet under REAL region-lock identity (fixes WP-10);
     mirror: frontdoor 4-wide → 4 quarters, half0 idle
-  * case 7 — mode-exclusivity policies (full_disabled / burst_prefer_quarters
+  * case 7 — mode-exclusivity policies (full_disabled / burst_prefer_split
     / solo_prefer_full) hold against the one-CAB-per-fleet object
 
 House patterns: real NUMA_CONFIG topology + real placement policies, mocked
@@ -18,7 +18,6 @@ import contextlib
 from contextlib import contextmanager
 from pathlib import Path
 
-import pytest
 import yaml
 
 import src.fleet as fleet_mod
@@ -326,7 +325,7 @@ def test_case2_mirror_frontdoor_four_wide_quarters_half_idle(monkeypatch, tmp_pa
 
 def test_case7_full_disabled_never_emits_full(monkeypatch, tmp_path):
     """FULL_DISABLED policy (synthetic since the 2026-07-23 lineup restoration
-    reverted worker_general's live policy to burst_prefer_quarters): even with
+    reverted worker_general's live policy to burst_prefer_split): even with
     a realized full endpoint, the fleet CAB never places the all-region full."""
     import scripts.server.stack_numa as _stack_numa
 
@@ -348,10 +347,10 @@ def test_case7_full_disabled_never_emits_full(monkeypatch, tmp_path):
         assert ("worker_general", 0) not in model.acquired
 
 
-def test_case7_burst_prefer_quarters_full_first_solo_abandoned_under_load(
+def test_case7_burst_prefer_split_full_first_solo_abandoned_under_load(
     monkeypatch, tmp_path
 ):
-    """frontdoor (burst_prefer_quarters): solo keeps full first for peak
+    """frontdoor (burst_prefer_split): solo keeps full first for peak
     latency; the moment a self-role holder exists the full is abandoned and
     placement goes to a disjoint quarter."""
     state = _fleet_state(tmp_path, fd_ports=[FD_FULL] + FD_QUARTERS)

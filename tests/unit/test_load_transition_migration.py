@@ -200,15 +200,15 @@ def test_migration_skipped_under_queue_only_policy(
     assert spawned_threads == []
 
 
-def test_migration_fires_under_burst_prefer_quarters_policy(
+def test_migration_fires_under_burst_prefer_split_policy(
     monkeypatch: pytest.MonkeyPatch, _quiet_dispatcher
 ) -> None:
-    """Policy BURST_PREFER_QUARTERS → migration still fires."""
+    """Policy BURST_PREFER_SPLIT → migration still fires."""
     from src.scheduling.placement_policy import RolePlacementPolicy
 
     monkeypatch.setattr(
         "src.scheduling.placement_policy.get_placement_policy",
-        lambda role, numa_config=None: RolePlacementPolicy.BURST_PREFER_QUARTERS,
+        lambda role, numa_config=None: RolePlacementPolicy.BURST_PREFER_SPLIT,
     )
     backend = _make_backend(monkeypatch)
     backend._full_last_session = "old-sess"

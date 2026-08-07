@@ -1016,9 +1016,14 @@ def test_ap7_checkpoint_compat_does_not_overwrite_existing() -> None:
 
 
 def test_ap8_no_ledger_renders_no_data_gracefully() -> None:
+    class EmptyLedger:
+        @staticmethod
+        def calibration_summary():
+            return {}
+
     section = digest._reviewer_calibration_section(
         datetime.now(timezone.utc),
-        ledger_module=None,
+        ledger_module=EmptyLedger,
         emission_stats=rpt.CritiqueEmissionStats(),  # fresh/empty => no dogfood line
     )
     assert section[0].startswith("### Reviewer calibration")

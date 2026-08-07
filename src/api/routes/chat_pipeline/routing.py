@@ -109,6 +109,33 @@ def _eval_batch_frontdoor_healthy(url: str) -> bool:
         return False
 
 
+def _eval_batch_frontdoor_fits(request: ChatRequest) -> bool:
+    """Whether the auxiliary lane can admit this request without truncation.
+
+    The corrected lane has two slots over a 32K total context. Long EvalTower
+    prompts must remain on the primary half fleet, whose per-slot context is
+    much larger, rather than making the auxiliary look fast by rejecting or
+    truncating them.
+    """
+    try:
+        from scripts.server.stack_manifest import (
+            LAUNCH_CONTEXT_TOKENS,
+            resolve_slots,
+        )
+
+        slots = resolve_slots(
+            "eval_batch_frontdoor", "eval_batch_frontdoor"
+        ).slots
+        per_slot_tokens = int(LAUNCH_CONTEXT_TOKENS["eval_batch_frontdoor"]) // max(
+            1, int(slots)
+        )
+    except Exception:
+        return False
+    prompt_tokens = max(1, (len(str(request.prompt or "")) + 3) // 4)
+    output_reserve = max(1, int(request.max_tokens or 4096))
+    return prompt_tokens + output_reserve <= per_slot_tokens
+
+
 def _server_urls_with_eval_batch_frontdoor(
     request: ChatRequest,
     server_urls: dict[str, str],
@@ -124,6 +151,11 @@ def _server_urls_with_eval_batch_frontdoor(
     if request.workload_class != "eval_batch":
         return server_urls, False
     if not features().eval_batch_serving:
+        return server_urls, False
+    if not _eval_batch_frontdoor_fits(request):
+        log.info(
+            "eval-batch request exceeds auxiliary per-slot context; keeping primary split fleet"
+        )
         return server_urls, False
 
     url = _eval_batch_frontdoor_url()
@@ -243,13 +275,15 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
     before execution begins. Includes failure graph veto and MemRL logging.
     """
     task_id = f"chat-{uuid.uuid4().hex[:8]}"
-    task_ir = canonicalize_task_ir({
-        "task_type": "chat",
-        "objective": request.prompt[:TASK_IR_OBJECTIVE_LEN],
-        "priority": "interactive",
-        "context_preview": request.context or "",
-        "routing_preferences": request.routing_preferences,
-    })
+    task_ir = canonicalize_task_ir(
+        {
+            "task_type": "chat",
+            "objective": request.prompt[:TASK_IR_OBJECTIVE_LEN],
+            "priority": "interactive",
+            "context_preview": request.context or "",
+            "routing_preferences": request.routing_preferences,
+        }
+    )
 
     use_mock = request.mock_mode and not request.real_mode
     has_image = bool(request.image_path or request.image_base64)
@@ -473,9 +507,7 @@ def _init_primitives(request: ChatRequest, state) -> LLMPrimitives:
                     health_tracker=getattr(state, "health_tracker", None),
                     admission_controller=getattr(state, "admission", None),
                     num_slots=get_config().server.num_slots,
-                    server_urls_source=(
-                        "request" if request_specific_urls else "config"
-                    ),
+                    server_urls_source=("request" if request_specific_urls else "config"),
                 )
                 if not request_specific_urls:
                     state._real_primitives = primitives
@@ -530,15 +562,17 @@ def _plan_review_gate(
         )
     risk_forced = routing.factual_risk_band == "high" and factual_risk_mode == "enforce"
     needs_review = _needs_plan_review(routing.task_ir, routing.routing_decision, state)
-    if (
-        request.real_mode
-        and features().plan_review
-        and (needs_review or risk_forced)
-    ):
+    if request.real_mode and features().plan_review and (needs_review or risk_forced):
         plan_review_result = _architect_plan_review(
             routing.task_ir, routing.routing_decision, primitives, state, routing.task_id
         )
-        if (
+        if plan_review_result and plan_review_result.decision == "drop":
+            # A rejected plan falls back to the normal route. In particular,
+            # synthesized one-step plans often only restate the objective; the
+            # architect should be able to discard that scaffolding without
+            # refusing the user's underlying task.
+            routing.task_ir.pop("plan", None)
+        elif (
             plan_review_result
             and plan_review_result.decision != "ok"
             and not _plan_review_should_abort(plan_review_result)

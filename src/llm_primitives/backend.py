@@ -12,6 +12,7 @@ def _certified_native_batch_width(
     *,
     topology_role: str,
     full_url: str | None,
+    logical_role: str | None = None,
 ) -> int:
     """Return the realized shared-lease width for a full CPU endpoint.
 
@@ -26,8 +27,25 @@ def _certified_native_batch_width(
         ).split(",")
         if role.strip()
     }
-    if topology_role not in allowed or not full_url:
+    admitted_role = logical_role or topology_role
+    if admitted_role not in allowed or not full_url:
         return 1
+    if topology_role == "eval_batch_frontdoor":
+        try:
+            from scripts.server.stack_manifest import resolve_slots
+
+            declared = resolve_slots(
+                "eval_batch_frontdoor", "eval_batch_frontdoor"
+            ).slots
+        except Exception:
+            return 1
+        admission = getattr(owner, "admission_controller", None)
+        limits = getattr(admission, "_limits", {}) if admission is not None else {}
+        try:
+            admitted = int(limits.get(full_url, declared))
+        except (TypeError, ValueError):
+            admitted = declared
+        return max(1, min(int(declared), admitted))
     registry = getattr(owner, "registry", None)
     raw = getattr(registry, "_raw", {}) if registry is not None else {}
     server_mode = (raw.get("server_mode") or {}) if isinstance(raw, dict) else {}

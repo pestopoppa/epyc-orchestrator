@@ -171,7 +171,7 @@ class TestGenerateStream:
     @patch("src.api.routes.chat_pipeline.stream_adapter._init_primitives")
     @patch("src.api.routes.chat_pipeline.stream_adapter._preprocess")
     @patch("src.api.routes.chat_pipeline.stream_adapter._route_request")
-    def test_plan_review_drop_stops_before_repl(
+    def test_plan_review_drop_continues_with_default_repl(
         self, mock_route, mock_preprocess, mock_init, mock_plan, mock_repl
     ):
         routing = _mock_routing(use_mock=False)
@@ -188,22 +188,23 @@ class TestGenerateStream:
         logger = MagicMock()
         state = MagicMock(progress_logger=logger)
 
+        async def repl_events():
+            yield {"event": "token", "data": json.dumps({"content": "answer"})}
+            yield {"event": "done", "data": "[DONE]"}
+
+        mock_repl.return_value = repl_events()
+
         events = _collect(generate_stream(request, state))
 
-        assert [e.get("event") for e in events] == ["error", "final", "done"]
-        assert "Plan incomplete" in json.loads(events[0]["data"])["message"]
-        assert "Plan incomplete" in json.loads(events[1]["data"])["answer"]
-        mock_repl.assert_not_called()
-        logger.log_task_completed.assert_called_once()
-        assert logger.log_task_completed.call_args.kwargs["success"] is False
+        assert [e.get("event") for e in events] == ["token", "done"]
+        mock_repl.assert_called_once()
+        logger.log_task_completed.assert_not_called()
 
     @patch("src.api.routes.chat_pipeline.stream_adapter._plan_review_gate")
     @patch("src.api.routes.chat_pipeline.stream_adapter._init_primitives")
     @patch("src.api.routes.chat_pipeline.stream_adapter._preprocess")
     @patch("src.api.routes.chat_pipeline.stream_adapter._route_request")
-    def test_calls_plan_review_gate(
-        self, mock_route, mock_preprocess, mock_init, mock_plan
-    ):
+    def test_calls_plan_review_gate(self, mock_route, mock_preprocess, mock_init, mock_plan):
         routing = _mock_routing(use_mock=False)
         mock_route.return_value = routing
         mock_init.side_effect = RuntimeError("fail")  # Short-circuit after init

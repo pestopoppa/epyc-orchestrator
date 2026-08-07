@@ -14,6 +14,7 @@ from src.autopilot_core.tier_specs import (
     LEGACY_OBJECTIVE_POLICY,
     PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
     RATE_4D_OBJECTIVE_POLICY,
+    RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
     UnmeasuredObjectiveError,
     legacy_objectives_from,
     objectives_from,
@@ -52,9 +53,11 @@ def test_live_axis1_is_questions_per_hour_not_tokens_per_second():
     assert objs[1] != pytest.approx(legacy_objectives_from(r)[1])
 
 
-def test_resource_lane_scheduler_bumps_live_rate_policy_version():
+def test_mixed_split_scheduler_bumps_live_rate_policy_version():
     assert PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY == "task_rate_4d_v1"
-    assert RATE_4D_OBJECTIVE_POLICY == "task_rate_4d_v2_resource_lanes"
+    assert RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY == "task_rate_4d_v2_resource_lanes"
+    assert RATE_4D_OBJECTIVE_POLICY == "task_rate_4d_v3_mixed_role_split"
+    assert RATE_4D_OBJECTIVE_POLICY != RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY
     assert RATE_4D_OBJECTIVE_POLICY != PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY
 
 

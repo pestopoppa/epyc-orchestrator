@@ -22,7 +22,14 @@ from fastapi.testclient import TestClient
 
 from src.api.dependencies import dep_app_state
 from src.api.models import ChatRequest, ChatResponse, RewardRequest
-from src.api.routes.chat import _handle_chat, _try_cheap_first, chat, chat_stream, inject_reward, router
+from src.api.routes.chat import (
+    _handle_chat,
+    _try_cheap_first,
+    chat,
+    chat_stream,
+    inject_reward,
+    router,
+)
 from src.api.routes.chat_utils import RoutingResult
 from src.api.state import AppState
 from src.prompt_builders.resolver import current_prompt_dir, resolve_prompt
@@ -53,7 +60,9 @@ def mock_state():
 def mock_primitives():
     """Create a mock LLMPrimitives."""
     primitives = MagicMock()
-    primitives.llm_call = MagicMock(return_value="This is a sufficiently long mock answer for testing purposes.")
+    primitives.llm_call = MagicMock(
+        return_value="This is a sufficiently long mock answer for testing purposes."
+    )
     return primitives
 
 
@@ -121,9 +130,7 @@ class TestTryCheapFirstEdgeCases:
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_none_for_forced_mode(
-        self, base_routing, mock_primitives, mock_state
-    ):
+    async def test_returns_none_for_forced_mode(self, base_routing, mock_primitives, mock_state):
         """When request has force_mode set, returns None."""
         request = ChatRequest(
             prompt="test prompt",
@@ -145,9 +152,7 @@ class TestTryCheapFirstEdgeCases:
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_none_for_forced_role(
-        self, base_routing, mock_primitives, mock_state
-    ):
+    async def test_returns_none_for_forced_role(self, base_routing, mock_primitives, mock_state):
         """When request has force_role set, returns None."""
         request = ChatRequest(
             prompt="test prompt",
@@ -412,7 +417,9 @@ class TestChatEndpoint:
             return mock_response
 
         with patch("src.api.routes.chat._handle_chat", new=fake_handle_chat):
-            response = await chat(ChatRequest(prompt="Hello", mock_mode=True), _FakeRequest(), mock_state)
+            response = await chat(
+                ChatRequest(prompt="Hello", mock_mode=True), _FakeRequest(), mock_state
+            )
             assert response is mock_response
             data = response.model_dump()
             assert data["mock_mode"] is True
@@ -566,11 +573,14 @@ class TestRewardEndpoint:
     @pytest.mark.asyncio
     async def test_inject_reward_returns_success(self, mock_state):
         """inject_reward endpoint returns success dict."""
+
         async def fake_to_thread(func, *args, **kwargs):
             return func(*args, **kwargs)
 
-        with patch("src.api.routes.chat.store_external_reward", return_value=True) as mock_store, \
-             patch("src.api.routes.chat.asyncio.to_thread", new=fake_to_thread):
+        with (
+            patch("src.api.routes.chat.store_external_reward", return_value=True) as mock_store,
+            patch("src.api.routes.chat.asyncio.to_thread", new=fake_to_thread),
+        ):
             response = await inject_reward(
                 RewardRequest(
                     task_description="Solve fizzbuzz",
@@ -585,11 +595,14 @@ class TestRewardEndpoint:
     @pytest.mark.asyncio
     async def test_inject_reward_returns_failure(self, mock_state):
         """inject_reward returns success=False when store fails."""
+
         async def fake_to_thread(func, *args, **kwargs):
             return func(*args, **kwargs)
 
-        with patch("src.api.routes.chat.store_external_reward", return_value=False), \
-             patch("src.api.routes.chat.asyncio.to_thread", new=fake_to_thread):
+        with (
+            patch("src.api.routes.chat.store_external_reward", return_value=False),
+            patch("src.api.routes.chat.asyncio.to_thread", new=fake_to_thread),
+        ):
             response = await inject_reward(
                 RewardRequest(
                     task_description="Hard problem",
@@ -604,11 +617,14 @@ class TestRewardEndpoint:
     async def test_inject_reward_with_embedding(self, mock_state):
         """inject_reward passes precomputed embedding to store."""
         embedding = [0.1, 0.2, 0.3]
+
         async def fake_to_thread(func, *args, **kwargs):
             return func(*args, **kwargs)
 
-        with patch("src.api.routes.chat.store_external_reward", return_value=True) as mock_store, \
-             patch("src.api.routes.chat.asyncio.to_thread", new=fake_to_thread):
+        with (
+            patch("src.api.routes.chat.store_external_reward", return_value=True) as mock_store,
+            patch("src.api.routes.chat.asyncio.to_thread", new=fake_to_thread),
+        ):
             response = await inject_reward(
                 RewardRequest(
                     task_description="Test task",
@@ -638,8 +654,13 @@ class TestHandleChat:
             real_mode=True,
         )
 
-        with patch("src.api.routes.chat.features", return_value=SimpleNamespace(script_interception=True)), \
-             patch("src.api.routes.chat._route_request") as mock_route:
+        with (
+            patch(
+                "src.api.routes.chat.features",
+                return_value=SimpleNamespace(script_interception=True),
+            ),
+            patch("src.api.routes.chat._route_request") as mock_route,
+        ):
             result = await _handle_chat(request, mock_state)
 
         mock_route.assert_not_called()
@@ -669,9 +690,11 @@ class TestHandleChat:
             elapsed_seconds=0.01,
             mock_mode=True,
         )
-        with patch("src.api.routes.chat._route_request", return_value=mock_routing) as mock_route, \
-             patch("src.api.routes.chat._preprocess"), \
-             patch("src.api.routes.chat._execute_mock", return_value=mock_response) as mock_exec:
+        with (
+            patch("src.api.routes.chat._route_request", return_value=mock_routing) as mock_route,
+            patch("src.api.routes.chat._preprocess"),
+            patch("src.api.routes.chat._execute_mock", return_value=mock_response) as mock_exec,
+        ):
             result = await _handle_chat(request, mock_state)
             mock_route.assert_called_once_with(request, mock_state)
             mock_exec.assert_called_once()
@@ -695,9 +718,11 @@ class TestHandleChat:
             elapsed_seconds=0.01,
             mock_mode=True,
         )
-        with patch("src.api.routes.chat._route_request", return_value=mock_routing) as mock_route, \
-             patch("src.api.routes.chat._preprocess"), \
-             patch("src.api.routes.chat._execute_mock", return_value=mock_response):
+        with (
+            patch("src.api.routes.chat._route_request", return_value=mock_routing) as mock_route,
+            patch("src.api.routes.chat._preprocess"),
+            patch("src.api.routes.chat._execute_mock", return_value=mock_response),
+        ):
             await _handle_chat(request, mock_state)
             mock_route.assert_called_once_with(request, mock_state)
 
@@ -718,9 +743,11 @@ class TestHandleChat:
             elapsed_seconds=0.01,
             mock_mode=True,
         )
-        with patch("src.api.routes.chat._route_request", return_value=mock_routing), \
-             patch("src.api.routes.chat._preprocess") as mock_pre, \
-             patch("src.api.routes.chat._execute_mock", return_value=mock_response):
+        with (
+            patch("src.api.routes.chat._route_request", return_value=mock_routing),
+            patch("src.api.routes.chat._preprocess") as mock_pre,
+            patch("src.api.routes.chat._execute_mock", return_value=mock_response),
+        ):
             await _handle_chat(request, mock_state)
             mock_pre.assert_called_once_with(request, mock_state, mock_routing)
 
@@ -768,10 +795,10 @@ class TestChatStreamEndpoint:
 
 
 class TestPlanReviewDrop:
-    """Plan-review drop verdicts must stop execution before worker dispatch."""
+    """Plan-review drop discards scaffolding and continues normal execution."""
 
     @pytest.mark.asyncio
-    async def test_drop_returns_structured_response_before_execution(
+    async def test_drop_falls_back_to_default_route_execution(
         self, mock_state, mock_primitives, base_routing
     ):
         from contextlib import nullcontext
@@ -792,26 +819,47 @@ class TestPlanReviewDrop:
             mock_mode=False,
             real_mode=True,
         )
+        executed = ChatResponse(
+            answer="implemented",
+            turns=1,
+            elapsed_seconds=0.1,
+            mock_mode=False,
+            real_mode=True,
+            routed_to="frontdoor",
+            mode="direct",
+        )
 
-        with patch("src.api.routes.chat._route_request", return_value=base_routing), \
-             patch("src.api.routes.chat._preprocess", return_value=None), \
-             patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
-             patch("src.api.routes.chat._plan_review_gate", return_value=review), \
-             patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)) as mock_vision, \
-             patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)) as mock_vision_mm, \
-             patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)) as mock_proactive, \
-             patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)) as mock_cheap:
+        with (
+            patch("src.api.routes.chat._route_request", return_value=base_routing),
+            patch("src.api.routes.chat._preprocess", return_value=None),
+            patch("src.api.routes.chat._init_primitives", return_value=mock_primitives),
+            patch("src.api.routes.chat._plan_review_gate", return_value=review),
+            patch(
+                "src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)
+            ) as mock_vision,
+            patch(
+                "src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)
+            ) as mock_vision_mm,
+            patch(
+                "src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)
+            ) as mock_proactive,
+            patch(
+                "src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)
+            ) as mock_cheap,
+            patch("src.api.routes.chat._select_mode", return_value="direct"),
+            patch("src.api.routes.chat._execute_direct", return_value=executed) as mock_direct,
+        ):
             result = await _handle_chat(req, mock_state)
 
-        assert result.mode == "plan_review_drop"
-        assert result.error_code == 422
-        assert "Plan incomplete" in result.answer
-        assert result.routed_to == "architect_general"
-        assert result.tokens_used == 49
-        mock_vision.assert_not_called()
+        assert result.mode == "direct"
+        assert result.error_code is None
+        assert result.answer == "implemented"
+        assert result.routed_to == "frontdoor"
+        mock_vision.assert_awaited_once()
         mock_vision_mm.assert_not_called()
-        mock_proactive.assert_not_called()
-        mock_cheap.assert_not_called()
+        mock_proactive.assert_awaited_once()
+        mock_cheap.assert_awaited_once()
+        mock_direct.assert_called_once()
 
 
 class TestEditModeFailClosed:
@@ -837,20 +885,27 @@ class TestEditModeFailClosed:
         mock_primitives.request_context = MagicMock(return_value=nullcontext())
 
         req = ChatRequest(
-            prompt="add a helper to utils.py", mock_mode=False, real_mode=True,
-            force_mode="edit", force_role="coder_escalation",
+            prompt="add a helper to utils.py",
+            mock_mode=False,
+            real_mode=True,
+            force_mode="edit",
+            force_role="coder_escalation",
         )
 
         # Mock the pre-dispatch pipeline stages so _handle_chat reaches the 8b2 edit branch;
         # the 412 fires there BEFORE any model call.
-        with patch("src.api.routes.chat._route_request", return_value=base_routing), \
-             patch("src.api.routes.chat._preprocess", return_value=None), \
-             patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
-             patch("src.api.routes.chat._plan_review_gate", return_value=None), \
-             patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)):
+        with (
+            patch("src.api.routes.chat._route_request", return_value=base_routing),
+            patch("src.api.routes.chat._preprocess", return_value=None),
+            patch("src.api.routes.chat._init_primitives", return_value=mock_primitives),
+            patch("src.api.routes.chat._plan_review_gate", return_value=None),
+            patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)),
+            patch(
+                "src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)
+            ),
+            patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)),
+            patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)),
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 await _handle_chat(req, mock_state)
 
@@ -899,15 +954,21 @@ class TestEditModeFailClosed:
                 mode="edit",
             )
 
-        with patch("src.api.routes.chat._route_request", return_value=base_routing), \
-             patch("src.api.routes.chat._preprocess", return_value=None), \
-             patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
-             patch("src.api.routes.chat._plan_review_gate", return_value=None), \
-             patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._execute_direct", side_effect=_fake_execute_direct) as mock_execute_direct:
+        with (
+            patch("src.api.routes.chat._route_request", return_value=base_routing),
+            patch("src.api.routes.chat._preprocess", return_value=None),
+            patch("src.api.routes.chat._init_primitives", return_value=mock_primitives),
+            patch("src.api.routes.chat._plan_review_gate", return_value=None),
+            patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)),
+            patch(
+                "src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)
+            ),
+            patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)),
+            patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)),
+            patch(
+                "src.api.routes.chat._execute_direct", side_effect=_fake_execute_direct
+            ) as mock_execute_direct,
+        ):
             result = await _handle_chat(req, mock_state)
 
         assert mock_execute_direct.call_count == 1
@@ -977,16 +1038,25 @@ class TestEditModeFailClosed:
             }, {"schema_hash": "schema123"}
 
         try:
-            with patch("src.api.routes.chat._route_request", return_value=base_routing), \
-                 patch("src.api.routes.chat._preprocess", return_value=None), \
-                 patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
-                 patch("src.api.routes.chat._plan_review_gate", return_value=None), \
-                 patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
-                 patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
-                 patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
-                 patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)), \
-                 patch("src.api.routes.chat._execute_direct", side_effect=_fake_execute_direct) as mock_execute_direct, \
-                 patch("src.orchestration.consultation.consult", side_effect=_fake_consult) as mock_consult:
+            with (
+                patch("src.api.routes.chat._route_request", return_value=base_routing),
+                patch("src.api.routes.chat._preprocess", return_value=None),
+                patch("src.api.routes.chat._init_primitives", return_value=mock_primitives),
+                patch("src.api.routes.chat._plan_review_gate", return_value=None),
+                patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)),
+                patch(
+                    "src.api.routes.chat._execute_vision_multimodal",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)),
+                patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)),
+                patch(
+                    "src.api.routes.chat._execute_direct", side_effect=_fake_execute_direct
+                ) as mock_execute_direct,
+                patch(
+                    "src.orchestration.consultation.consult", side_effect=_fake_consult
+                ) as mock_consult,
+            ):
                 result = await _handle_chat(req, mock_state)
         finally:
             reset_features()
@@ -1048,16 +1118,23 @@ class TestEditModeFailClosed:
             )
 
         try:
-            with patch("src.api.routes.chat._route_request", return_value=base_routing), \
-                 patch("src.api.routes.chat._preprocess", return_value=None), \
-                 patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
-                 patch("src.api.routes.chat._plan_review_gate", return_value=None), \
-                 patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
-                 patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
-                 patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
-                 patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)), \
-                 patch("src.api.routes.chat._execute_direct", side_effect=_fake_execute_direct) as mock_execute_direct, \
-                 patch("src.orchestration.consultation.consult") as mock_consult:
+            with (
+                patch("src.api.routes.chat._route_request", return_value=base_routing),
+                patch("src.api.routes.chat._preprocess", return_value=None),
+                patch("src.api.routes.chat._init_primitives", return_value=mock_primitives),
+                patch("src.api.routes.chat._plan_review_gate", return_value=None),
+                patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)),
+                patch(
+                    "src.api.routes.chat._execute_vision_multimodal",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)),
+                patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)),
+                patch(
+                    "src.api.routes.chat._execute_direct", side_effect=_fake_execute_direct
+                ) as mock_execute_direct,
+                patch("src.orchestration.consultation.consult") as mock_consult,
+            ):
                 result = await _handle_chat(req, mock_state)
         finally:
             reset_features()
@@ -1114,20 +1191,28 @@ class TestHandleChatXmasCheapFirst:
             )
         )
 
-        with patch("src.api.routes.chat.features") as mock_features, \
-             patch("src.api.routes.chat.get_config", return_value=cfg), \
-             patch("src.api.routes.chat._route_request", return_value=routing), \
-             patch("src.api.routes.chat._preprocess", return_value=None), \
-             patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
-             patch("src.api.routes.chat._plan_review_gate", return_value=None), \
-             patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._select_mode", return_value="direct"), \
-             patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=cheap_response)) as mock_cheap:
+        with (
+            patch("src.api.routes.chat.features") as mock_features,
+            patch("src.api.routes.chat.get_config", return_value=cfg),
+            patch("src.api.routes.chat._route_request", return_value=routing),
+            patch("src.api.routes.chat._preprocess", return_value=None),
+            patch("src.api.routes.chat._init_primitives", return_value=mock_primitives),
+            patch("src.api.routes.chat._plan_review_gate", return_value=None),
+            patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)),
+            patch(
+                "src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)
+            ),
+            patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)),
+            patch("src.api.routes.chat._select_mode", return_value="direct"),
+            patch(
+                "src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=cheap_response)
+            ) as mock_cheap,
+        ):
             mock_features.return_value.script_interception = False
             result = await _handle_chat(
-                ChatRequest(prompt="Solve this arithmetic problem.", mock_mode=False, real_mode=True),
+                ChatRequest(
+                    prompt="Solve this arithmetic problem.", mock_mode=False, real_mode=True
+                ),
                 mock_state,
             )
 
@@ -1175,18 +1260,24 @@ class TestHandleChatXmasCheapFirst:
             )
         )
 
-        with patch("src.api.routes.chat.features") as mock_features, \
-             patch("src.api.routes.chat.get_config", return_value=cfg), \
-             patch("src.api.routes.chat._route_request", return_value=routing), \
-             patch("src.api.routes.chat._preprocess", return_value=None), \
-             patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
-             patch("src.api.routes.chat._plan_review_gate", return_value=None), \
-             patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
-             patch("src.api.routes.chat._select_mode", return_value="direct"), \
-             patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)) as mock_cheap, \
-             patch("src.api.routes.chat._execute_direct", return_value=direct_response):
+        with (
+            patch("src.api.routes.chat.features") as mock_features,
+            patch("src.api.routes.chat.get_config", return_value=cfg),
+            patch("src.api.routes.chat._route_request", return_value=routing),
+            patch("src.api.routes.chat._preprocess", return_value=None),
+            patch("src.api.routes.chat._init_primitives", return_value=mock_primitives),
+            patch("src.api.routes.chat._plan_review_gate", return_value=None),
+            patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)),
+            patch(
+                "src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)
+            ),
+            patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)),
+            patch("src.api.routes.chat._select_mode", return_value="direct"),
+            patch(
+                "src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)
+            ) as mock_cheap,
+            patch("src.api.routes.chat._execute_direct", return_value=direct_response),
+        ):
             mock_features.return_value.script_interception = False
             result = await _handle_chat(
                 ChatRequest(prompt="Verify this reasoning.", mock_mode=False, real_mode=True),

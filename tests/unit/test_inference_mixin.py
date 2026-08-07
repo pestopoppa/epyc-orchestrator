@@ -628,6 +628,72 @@ class TestCallCachingBackend:
         assert calls[0][2]["capacity"] == 4
         assert calls[0][2]["request_tag"] == "batch-1"
 
+    def test_eval_batch_frontdoor_alias_locks_physical_half_lane(
+        self, mock_backend, monkeypatch
+    ):
+        monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+        monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.topology_instance_for_port",
+            lambda port: ("eval_batch_frontdoor", 0) if port == 18070 else None,
+        )
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {("eval_batch_frontdoor", 0): frozenset({"q0", "q1"})},
+        )
+        monkeypatch.setattr(
+            "src.llm_primitives.backend._certified_native_batch_width",
+            lambda *_args, **_kwargs: 2,
+        )
+        calls = []
+
+        class FakeRegionLock:
+            def __enter__(self):
+                return {}
+
+            def __exit__(self, *_exc):
+                return False
+
+        def fake_region_lock(role, instance_idx, **kwargs):
+            calls.append((role, instance_idx, kwargs))
+            return FakeRegionLock()
+
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock.cpu_region_lock_for_instance", fake_region_lock
+        )
+        mock_backend.infer.return_value = InferenceResult(
+            role="frontdoor",
+            output="ok",
+            tokens_generated=1,
+            generation_speed=1.0,
+            elapsed_time=0.1,
+            success=True,
+        )
+        prims = LLMPrimitives(
+            mock_mode=False,
+            server_urls={"frontdoor": "http://localhost:18070"},
+        )
+        with prims.request_context(
+            workload_class="eval_batch",
+            batch_id="batch-aux",
+            batch_placement_mode="mixed_role_split",
+        ):
+            assert prims._call_caching_backend(mock_backend, "hi", "frontdoor") == "ok"
+
+        assert calls == [
+            (
+                "eval_batch_frontdoor",
+                0,
+                {
+                    "cancel_check": None,
+                    "deadline_s": None,
+                    "request_tag": "batch-aux",
+                    "shared": True,
+                    "capacity": 2,
+                },
+            )
+        ]
+
     def test_shape_aware_concurrency_backend_defers_contention_gate_to_dispatch(
         self, monkeypatch
     ):

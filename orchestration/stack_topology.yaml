@@ -116,7 +116,7 @@ numa_config:
     # Prefer the split shape under burst, full for solo. See the enum note in
     # src/scheduling/placement_policy.py — "split" resolves to whatever
     # sub-full shape the role declares, which is now halves, not quarters.
-    placement_policy: burst_prefer_quarters
+    placement_policy: burst_prefer_split
     numactl_policy_instances:
       0: interleave=all
       1: interleave=0,1
@@ -128,10 +128,9 @@ numa_config:
 
   # P-BENCH-3/A7 eval-batch serving lane. Warm/explicit-only; normal stack start
   # does not launch it. Uses the frontdoor model on a dedicated high port with
-  # -np 8 so EvalTower batches can be tested without mutating the interactive
-  # frontdoor process. CPU shape intentionally matches frontdoor's full instance
-  # so existing frontdoor region locks remain conservative when traffic is
-  # routed to this endpoint.
+  # -np 2 so EvalTower batches can be tested without mutating the interactive
+  # frontdoor process. Its physical half-A shape is registered explicitly so
+  # traffic to this endpoint leases only the regions the process actually owns.
   eval_batch_frontdoor:
     # 2026-07-30: two corrections, both the same defect class as the fleet fix.
     # (1) -t was NUMA_NODE0[1] = 96 on a cpuset holding 48 PHYSICAL cores, i.e.
@@ -251,7 +250,7 @@ numa_config:
     # shape (2026-07-21). frontdoor and worker_general were protected; this
     # role was not. Parity, not a preference: autopilot can tune it via the
     # AXA3 placement_policy knob surface once the enum is shape-agnostic.
-    placement_policy: burst_prefer_quarters
+    placement_policy: burst_prefer_split
     numactl_policy_instances:
       0: interleave=all
       1: interleave=0,1
@@ -305,10 +304,10 @@ numa_config:
     # instance and quarter instances for concurrent aggregate boost;
     # overlapping instances cannot infer concurrently." The full is being
     # redeployed (the condition named above), so FULL_DISABLED reverts to
-    # BURST_PREFER_QUARTERS: solo keeps full-first for peak throughput;
+    # BURST_PREFER_SPLIT: solo keeps full-first for peak throughput;
     # any self-role holder demotes the full to a trailing candidate, and
     # 0-95 overlapping every quarter keeps it region-vetoed under burst.
-    placement_policy: burst_prefer_quarters
+    placement_policy: burst_prefer_split
     mlock: true
     spec_overrides: {draft_max: 2, p_split: 0}   # gemma4 MTP recipe (was dm=8 for Qwen3-Coder)
     # Every instance now declares a policy. Previously only idx0 did, which

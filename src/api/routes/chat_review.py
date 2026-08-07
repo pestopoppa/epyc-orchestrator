@@ -38,6 +38,7 @@ def _synthesized_plan_action(objective: str) -> str:
         return "Inspect the candidate code and verify expected behavior"
     return "Analyze the request and produce a directly supported answer"
 
+
 if TYPE_CHECKING:
     from src.api.state import AppState
     from src.llm_primitives import LLMPrimitives
@@ -380,8 +381,16 @@ def _normalize_plan_review_reroute_role(value: object) -> str:
 
 
 def _plan_review_should_abort(review: "PlanReviewResult | None") -> bool:
-    """Return True when architect review explicitly rejects execution."""
-    return bool(review and str(review.decision).strip().lower() == "drop")
+    """Return True only for an explicit execution-abort verdict.
+
+    ``drop`` is a plan operation: discard the reviewed plan and proceed through
+    the normal no-plan/default route. Treating it as a task rejection violated
+    ``ArchitectReviewService.review_plan``'s non-blocking contract and turned a
+    reviewer correctly spotting a bad synthesized plan into an HTTP 422 task
+    failure. ``abort`` is reserved for a future separately-specified safety
+    verdict; the current reviewer schema does not emit it.
+    """
+    return bool(review and str(review.decision).strip().lower() == "abort")
 
 
 def _plan_review_abort_message(review: "PlanReviewResult") -> str:

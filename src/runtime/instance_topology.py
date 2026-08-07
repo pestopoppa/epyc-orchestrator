@@ -344,6 +344,35 @@ def topology_idx_for_port(
     return None
 
 
+def topology_instance_for_port(
+    port: int, numa_config: dict | None = None
+) -> tuple[str, int] | None:
+    """Return the physical ``(topology_role, instance_idx)`` owning a port.
+
+    Logical aliases normally resolve within their role, but launcher-only lanes
+    such as ``eval_batch_frontdoor`` deliberately serve a frontdoor alias on a
+    separate topology role. Port ownership is unambiguous in NUMA_CONFIG and is
+    therefore the authoritative bridge for direct single-endpoint backends.
+    """
+    if numa_config is None:
+        try:
+            from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+
+            numa_config = NUMA_CONFIG
+        except Exception:
+            numa_config = {}
+    for role, cfg in (numa_config or {}).items():
+        for idx, entry in enumerate((cfg or {}).get("instances") or []):
+            if not entry or len(entry) < 2:
+                continue
+            try:
+                if int(entry[1]) == int(port):
+                    return str(role), idx
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 _MAX_SAFE_CONCURRENCY_CACHE: dict[str, int] = {}
 
 

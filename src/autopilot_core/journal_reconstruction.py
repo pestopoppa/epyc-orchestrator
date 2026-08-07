@@ -14,6 +14,7 @@ from src.autopilot_core.tier_specs import (
     LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
     PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
+    RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
     RATE_4D_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
     TASK_RATE_REFERENCE_POINT,
@@ -137,6 +138,7 @@ def objectives_from_journal_row(
         objectives = task_rate_objectives_from_row(row)
     elif objective_policy in {
         PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
+        RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
         RATE_4D_OBJECTIVE_POLICY,
     }:
         objectives = rate_objectives_from_row(row)
@@ -190,6 +192,7 @@ def reconstruct_archive_from_journal_rows(
         LEGACY_OBJECTIVE_POLICY,
         TASK_RATE_OBJECTIVE_POLICY,
         PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
+        RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
         RATE_4D_OBJECTIVE_POLICY,
     }:
         raise ValueError(f"unknown objective_policy: {objective_policy}")

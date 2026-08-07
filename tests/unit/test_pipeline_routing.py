@@ -28,7 +28,7 @@ from src.config import reset_config
 from src.proactive_delegation.types import PlanReviewResult
 from src.roles import Role
 
-_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+_RETIRED_ARCHITECT_ROLE = "architect_coding"
 
 
 class TestRouteRequest:
@@ -72,7 +72,9 @@ class TestRouteRequest:
 
     def test_mock_mode_with_explicit_role(self):
         """Mock mode uses explicit role when provided."""
-        request = ChatRequest(prompt="test", mock_mode=True, real_mode=False, role="coder_escalation")
+        request = ChatRequest(
+            prompt="test", mock_mode=True, real_mode=False, role="coder_escalation"
+        )
         state = MagicMock()
         state.hybrid_router = None
         state.failure_graph = None
@@ -227,7 +229,9 @@ class TestRouteRequest:
 
     def test_failure_graph_skips_mock_mode(self):
         """Failure veto skipped for mock mode."""
-        request = ChatRequest(prompt="test", mock_mode=True, real_mode=False, role="coder_escalation")
+        request = ChatRequest(
+            prompt="test", mock_mode=True, real_mode=False, role="coder_escalation"
+        )
         state = MagicMock()
         state.failure_graph.get_failure_risk.return_value = 0.9
         state.progress_logger = None
@@ -402,9 +406,7 @@ class TestRouteRequest:
 
         with patch("src.api.routes.chat_pipeline.routing._classify_and_route") as mock_classify:
             mock_classify.return_value = (str(Role.FRONTDOOR), "rules")
-            with patch(
-                "src.classifiers.xmas_routing.build_xmas_routing_metadata"
-            ) as mock_xmas:
+            with patch("src.classifiers.xmas_routing.build_xmas_routing_metadata") as mock_xmas:
                 mock_xmas.return_value = {
                     "mode": "shadow",
                     "cell": "code:refine",
@@ -508,10 +510,7 @@ class TestRouteRequest:
         assert result.routing_strategy == "learned"
         call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
         assert call_kwargs["routing_meta"]["xmas"]["applied"] is False
-        assert (
-            call_kwargs["routing_meta"]["xmas"]["apply_reason"]
-            == "incumbent_role_not_evaluated"
-        )
+        assert call_kwargs["routing_meta"]["xmas"]["apply_reason"] == "incumbent_role_not_evaluated"
         assert call_kwargs["routing_meta"]["xmas"]["incumbent_role"] == "coder_escalation"
 
     def test_xmas_enforce_keeps_incumbent_without_evidence_lift(self):
@@ -546,8 +545,7 @@ class TestRouteRequest:
         call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
         assert call_kwargs["routing_meta"]["xmas"]["applied"] is False
         assert (
-            call_kwargs["routing_meta"]["xmas"]["apply_reason"]
-            == "evidence_no_lift_over_incumbent"
+            call_kwargs["routing_meta"]["xmas"]["apply_reason"] == "evidence_no_lift_over_incumbent"
         )
 
     def test_xmas_enforce_low_confidence_does_not_rewrite(self):
@@ -718,9 +716,7 @@ class TestRouteRequest:
                 )
                 assert resolve_timeout(extend, [str(Role.FRONTDOOR)]) == 300
                 # Interactive traffic with the same long timeout_s still clamps DOWN.
-                interactive = ChatRequest(
-                    prompt="q", workload_class="interactive", timeout_s=300
-                )
+                interactive = ChatRequest(prompt="q", workload_class="interactive", timeout_s=300)
                 assert resolve_timeout(interactive, [str(Role.FRONTDOOR)]) == 60
                 # Unset workload_class == legacy DOWN-only clamp.
                 legacy = ChatRequest(prompt="q", timeout_s=300)
@@ -984,6 +980,29 @@ class TestInitPrimitives:
         assert kwargs["server_urls"]["frontdoor"] == "http://localhost:18070"
         assert state._real_primitives is cached_primitives
 
+    def test_eval_batch_serving_keeps_long_prompt_on_primary_split_fleet(
+        self, monkeypatch
+    ):
+        request = ChatRequest(
+            prompt="x" * 60_000,
+            real_mode=True,
+            workload_class="eval_batch",
+            max_tokens=4096,
+        )
+        monkeypatch.setattr(
+            "src.api.routes.chat_pipeline.routing.features",
+            lambda: SimpleNamespace(eval_batch_serving=True),
+        )
+
+        original = {
+            "frontdoor": "full:http://localhost:8070,http://localhost:8080",
+            "worker_general": "http://localhost:8072",
+        }
+        urls, changed = _server_urls_with_eval_batch_frontdoor(request, original)
+
+        assert changed is False
+        assert urls == original
+
     def test_real_mode_raises_on_init_failure(self):
         """Real mode raises HTTPException on init failure."""
         request = ChatRequest(prompt="test", real_mode=True)
@@ -1134,9 +1153,7 @@ class TestPlanReviewGate:
                     "src.api.routes.chat_pipeline.routing._architect_plan_review"
                 ) as mock_review:
                     mock_review.return_value = mock_review_result
-                    with patch(
-                        "src.api.routes.chat_pipeline.routing._store_plan_review_episode"
-                    ):
+                    with patch("src.api.routes.chat_pipeline.routing._store_plan_review_episode"):
                         with patch("src.classifiers.factual_risk.get_mode") as mock_get_mode:
                             result = _plan_review_gate(request, routing, primitives, state)
 
@@ -1204,11 +1221,14 @@ class TestPlanReviewGate:
         mock_apply.assert_called_once()
         assert routing.routing_decision == ["architect_general"]
 
-    def test_plan_review_drop_does_not_rewrite_route(self):
-        """Drop is terminal for callers and should not be converted into a reroute."""
+    def test_plan_review_drop_discards_plan_and_keeps_default_route(self):
+        """Drop means no-plan fallback, not a terminal task rejection."""
         request = ChatRequest(prompt="test", real_mode=True)
         routing = MagicMock()
-        routing.task_ir = {"task_type": "code"}
+        routing.task_ir = {
+            "task_type": "code",
+            "plan": {"steps": [{"id": "S1", "action": "bad"}]},
+        }
         routing.routing_decision = ["worker_general"]
         routing.task_id = "test-123"
         primitives = MagicMock()
@@ -1239,6 +1259,7 @@ class TestPlanReviewGate:
 
         assert result is review_result
         assert routing.routing_decision == ["worker_general"]
+        assert "plan" not in routing.task_ir
         mock_apply.assert_not_called()
         mock_store.assert_called_once()
 
@@ -1425,7 +1446,9 @@ class TestTrinityRoleShadow:
         state = self._state()
         state.progress_logger = MagicMock()
 
-        with patch("src.classifiers.factual_risk.get_mode", return_value="enforce") as mock_get_mode:
+        with patch(
+            "src.classifiers.factual_risk.get_mode", return_value="enforce"
+        ) as mock_get_mode:
             result = _route_request(request, state)
 
         assert result.factual_risk_mode == "enforce"
@@ -1580,7 +1603,5 @@ def test_routing_meta_bounds_image_path_length(monkeypatch):
     """A pathological path is capped so it cannot balloon every log line."""
     from src.api.routes.chat_pipeline.routing_decision import MAX_IMAGE_PATH_LEN
 
-    meta = _vision_meta(
-        monkeypatch, ChatRequest(prompt="p", image_path="/mnt/raid0/" + "x" * 4096)
-    )
+    meta = _vision_meta(monkeypatch, ChatRequest(prompt="p", image_path="/mnt/raid0/" + "x" * 4096))
     assert len(meta["image_path"]) == MAX_IMAGE_PATH_LEN

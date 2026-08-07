@@ -23,6 +23,7 @@ from src.autopilot_core.tier_specs import (
     MIN_FRONTIER_EVAL_TIER,
     RATE_4D_OBJECTIVE_POLICY,
     PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
+    RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
     TASK_RATE_REFERENCE_POINT,
     spec_for,
@@ -260,6 +261,7 @@ def archive_payload_from_verified_snapshot(
         TASK_RATE_OBJECTIVE_POLICY,
         RATE_4D_OBJECTIVE_POLICY,
         PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
+        RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
     }:
         return None
     for row in tail_rows:

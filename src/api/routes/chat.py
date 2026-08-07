@@ -703,6 +703,7 @@ async def _handle_chat(
             else "interactive"
         ),
         workload_class=request.workload_class,
+        batch_placement_mode=request.batch_placement_mode,
         max_queue_wait_ms=request.max_queue_wait_ms,  # Phase B: cross-role gate budget
     ):
         def _attach_routing_telemetry(resp: ChatResponse) -> ChatResponse:

@@ -247,6 +247,7 @@ class TestRequestContext:
         assert primitives.get_request_batch_id() is None
         assert primitives.get_request_session_id() is None
         assert primitives.get_request_workload_class() == "interactive"
+        assert primitives.get_batch_placement_mode() == "auto"
 
         marker = object()
         with primitives.request_context(
@@ -258,6 +259,7 @@ class TestRequestContext:
             trial_id=42,
             batch_id="batch-a",
             workload_class="campaign",
+            batch_placement_mode="mixed_role_split",
         ):
             assert primitives.get_request_deadline_s() == 123.45
             assert primitives.get_request_task_id() == "chat-ctx-test"
@@ -267,6 +269,7 @@ class TestRequestContext:
             assert primitives.get_request_batch_id() == "batch-a"
             assert primitives.get_request_session_id() == "session-ctx-test"
             assert primitives.get_request_workload_class() == "campaign"
+            assert primitives.get_batch_placement_mode() == "mixed_role_split"
 
         assert primitives.get_request_deadline_s() is None
         assert primitives.get_request_task_id() is None
@@ -276,6 +279,7 @@ class TestRequestContext:
         assert primitives.get_request_batch_id() is None
         assert primitives.get_request_session_id() is None
         assert primitives.get_request_workload_class() == "interactive"
+        assert primitives.get_batch_placement_mode() == "auto"
 
     def test_request_context_infers_eval_batch_workload_class(self):
         primitives = LLMPrimitives(mock_mode=True)

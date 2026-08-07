@@ -252,8 +252,7 @@ def test_instruction_route_labels_map_to_runtime_roles() -> None:
 
 def test_instruction_token_accounting_uses_active_prompts_not_prompt_library() -> None:
     prompt_library_tokens = sum(
-        md.stat().st_size
-        for md in (REPO_ROOT / "orchestration" / "prompts").rglob("*.md")
+        md.stat().st_size for md in (REPO_ROOT / "orchestration" / "prompts").rglob("*.md")
     )
     prompt_library_tokens //= 4
     tower = EvalTower()
@@ -383,7 +382,8 @@ def test_eval_t1_uses_designed_core_when_enabled(tmp_path, monkeypatch) -> None:
 def test_eval_t1_designed_core_requires_matching_instrument_era(tmp_path, monkeypatch) -> None:
     core_path = tmp_path / "core_v2.jsonl"
     core_path.write_text(
-        json.dumps({"__core_metadata__": True, "core_id": "core_v2"}) + "\n"
+        json.dumps({"__core_metadata__": True, "core_id": "core_v2"})
+        + "\n"
         + json.dumps(
             {
                 "id": "core-a",
@@ -632,9 +632,7 @@ def test_eval_t1_legacy_sampling_records_core_id(monkeypatch) -> None:
     assert result.details["eval_execution_instrument_id"] == (
         eval_tower.EVAL_EXECUTION_INSTRUMENT_ID
     )
-    assert result.details["eval_scoring_schedule_id"] == (
-        eval_tower.EVAL_SCORING_SCHEDULE_ID
-    )
+    assert result.details["eval_scoring_schedule_id"] == (eval_tower.EVAL_SCORING_SCHEDULE_ID)
     assert len(result.details["eval_execution_profile_sha256"]) == 64
 
 
@@ -685,9 +683,7 @@ def test_eval_instrument_stamp_warns_on_core_id_drift() -> None:
     assert warning["current_dataset_content_sha256"] == second.details["dataset_content_sha256"]
 
 
-def test_durable_instrument_ledger_detects_execution_scheduler_drift(
-    monkeypatch, tmp_path
-) -> None:
+def test_durable_instrument_ledger_detects_execution_scheduler_drift(monkeypatch, tmp_path) -> None:
     eval_tower._DATASET_SHA_BY_CORE_ID.clear()
     monkeypatch.setattr(
         eval_tower, "_INSTRUMENT_LEDGER_PATH", tmp_path / "eval_instrument_ledger.json"
@@ -714,6 +710,47 @@ def test_durable_instrument_ledger_detects_execution_scheduler_drift(
     assert drift["changed_execution_instrument"] is True
     assert drift["previous_execution_instrument_id"] == "scheduler-v1"
     assert drift["current_execution_instrument_id"] == "scheduler-v2"
+
+
+def test_instrument_transition_message_names_policy_axis_not_stable_dataset() -> None:
+    level, message = eval_tower._instrument_drift_log_message(
+        {
+            "changed_content": False,
+            "changed_tier_mix": False,
+            "changed_execution_instrument": False,
+            "changed_scoring_schedule": True,
+            "previous_dataset_content_sha256": "same-sha",
+            "current_dataset_content_sha256": "same-sha",
+            "previous_tier_mix": {"1": 100},
+            "current_tier_mix": {"1": 100},
+            "previous_execution_instrument_id": "lanes-v2",
+            "current_execution_instrument_id": "lanes-v2",
+            "previous_scoring_schedule_id": "judge-v3",
+            "current_scoring_schedule_id": "judge-v4",
+        }
+    )
+
+    assert level == eval_tower.logging.WARNING
+    assert "axes=scoring_schedule" in message
+    assert "judge-v3" in message and "judge-v4" in message
+    assert "DIFFERENT question sets" not in message
+
+
+def test_instrument_transition_message_keeps_dataset_drift_loud() -> None:
+    level, message = eval_tower._instrument_drift_log_message(
+        {
+            "changed_content": True,
+            "changed_tier_mix": False,
+            "changed_execution_instrument": False,
+            "changed_scoring_schedule": False,
+            "previous_dataset_content_sha256": "old-sha",
+            "current_dataset_content_sha256": "new-sha",
+        }
+    )
+
+    assert level == eval_tower.logging.ERROR
+    assert "DATASET INSTRUMENT DRIFT" in message
+    assert "old-sha" in message and "new-sha" in message
 
 
 def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(
