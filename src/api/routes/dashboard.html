@@ -1190,9 +1190,12 @@ let _latestSnapshotFrameTs = 0;
 // half-open socket across an API restart) can wedge a boolean forever, and this
 // poll is the fallback that keeps topology/region-lock badges alive.
 let _snapshotPollInFlightSince = 0;
-const _SNAPSHOT_POLL_TIMEOUT_MS = 8000;
+// A torn placement bracket retries the server's bounded 10s /slots fan-out
+// once. Leave another 10s for lock scans, tap reduction, serialization, and
+// local transport so the client covers the complete two-attempt contract.
+const _SNAPSHOT_POLL_TIMEOUT_MS = 30000;
 const _FETCH_JSON_TIMEOUT_MS = 5000;
-// Initialized to page-load time: "no snapshot applied within 15s of load" is
+// Initialized to page-load time: "no snapshot applied within 35s of load" is
 // itself a stall the watchdog should recover from.
 let _lastSnapshotAppliedAt = Date.now();
 let _lastWatchdogRecoveryAt = 0;
@@ -5815,6 +5818,37 @@ function renderPanelErrorChip(name, err) {
     el.className = 'freshness-badge stale';
     el.textContent = '⚠ render error';
     el.title = `${name}: ${window.__dashboardLastPanelError.message}`;
+    el.dataset.panelError = name;
+}
+
+function clearPanelErrorChip(name) {
+    if (window.__dashboardLastPanelError && window.__dashboardLastPanelError.name === name) {
+        window.__dashboardLastPanelError = null;
+    }
+    const key = _PANEL_ERROR_BADGE_KEYS[name];
+    const el = key ? document.getElementById('fresh-' + key) : null;
+    if (el && el.dataset.panelError === name) delete el.dataset.panelError;
+}
+
+function renderSnapshotTransportError(err) {
+    const timedOut = !!(err && err.name === 'AbortError');
+    const detail = err && err.message ? err.message : String(err || 'unknown transport error');
+    const status = document.getElementById('region-locks-status');
+    const timeoutS = Math.round(_SNAPSHOT_POLL_TIMEOUT_MS / 1000);
+    const message = timedOut
+        ? `snapshot transport timed out after ${timeoutS}s; last coupled CPU-region frame retained`
+        : `snapshot transport failed: ${detail}; last coupled CPU-region frame retained`;
+    if (status) {
+        status.textContent = `— ⚠ ${message}`;
+        status.style.color = 'var(--bad,#f87171)';
+    }
+    const badge = document.getElementById('fresh-region_locks');
+    if (badge) {
+        badge.className = 'freshness-badge stale';
+        badge.textContent = timedOut ? '⚠ transport timeout' : '⚠ transport error';
+        badge.title = message;
+        badge.dataset.panelError = 'region_locks';
+    }
 }
 
 function updatePanelSafely(name, fn) {
@@ -5927,6 +5961,7 @@ async function updateSnapshotPoll() {
         applyDashboardSnapshot(snap, 'poll');
     } catch (err) {
         console.error('[dashboard:snapshot_poll]', err);
+        renderSnapshotTransportError(err);
     } finally {
         _snapshotPollInFlightSince = 0;
     }
@@ -6028,12 +6063,14 @@ function tickFreshnessBadges() {
 }
 
 // Universal transport self-heal. If no snapshot has been APPLIED — via any
-// transport — in >15s, the stream and/or poll are wedged in a way their own
+// transport — in >35s, the stream and/or poll are wedged in a way their own
 // error handlers didn't catch (fatally-closed EventSource, half-open socket
 // across an API restart, laptop sleep/wake, poisoned frame watermark). Reset
 // the watermark, rebuild the live connection, fire an immediate poll. AutoPilot
 // restarts this API at every trial boundary, so this path is routine, not rare.
-const _SNAPSHOT_WATCHDOG_STALL_MS = 15000;
+// This must exceed the full snapshot poll budget; otherwise the watchdog
+// repeatedly tears down a healthy-but-slow multiplex stream during retry #2.
+const _SNAPSHOT_WATCHDOG_STALL_MS = 35000;
 const _SNAPSHOT_WATCHDOG_MIN_GAP_MS = 10000;
 function snapshotTransportWatchdog() {
     const now = Date.now();
@@ -7315,6 +7352,7 @@ async function updateRegionLocks(
                 appliedAtMs: Date.now(),
                 source: regionLocks ? 'snapshot' : 'direct',
             };
+            clearPanelErrorChip('region_locks');
             setPanelFreshness('region_locks', liveFrameFreshness({
                 generated_at: _latestRegionLockFrame.generatedAt,
                 live_frame: d.live_frame || {},

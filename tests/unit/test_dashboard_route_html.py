@@ -345,6 +345,150 @@ process.stdout.write(JSON.stringify(out));
     assert frames[0]["html"] != frames[1]["html"] != frames[2]["html"]
 
 
+def test_snapshot_poll_budget_covers_retrying_server_fanout_and_surfaces_timeout() -> None:
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+    timeout_line = next(
+        line for line in body.splitlines() if "const _SNAPSHOT_POLL_TIMEOUT_MS =" in line
+    )
+    timeout_ms = int(timeout_line.split("=", 1)[1].strip().rstrip(";"))
+    watchdog_line = next(
+        line for line in body.splitlines() if "const _SNAPSHOT_WATCHDOG_STALL_MS =" in line
+    )
+    watchdog_ms = int(watchdog_line.split("=", 1)[1].strip().rstrip(";"))
+
+    # A torn placement window permits two bounded 10s /slots fan-outs. The
+    # poll covers both plus overhead, and self-heal must not cancel retry #2.
+    assert timeout_ms == 30_000
+    assert timeout_ms > 2 * 10_000 > 9_000
+    assert watchdog_ms == 35_000
+    assert watchdog_ms > timeout_ms
+    assert "renderSnapshotTransportError(err);" in body
+
+    helper_start = body.index("function renderSnapshotTransportError(err)")
+    helper_end = body.index("\nfunction updatePanelSafely", helper_start)
+    helper = body[helper_start:helper_end]
+    script = f"""
+const _SNAPSHOT_POLL_TIMEOUT_MS = {timeout_ms};
+const status = {{textContent:'— loading CPU region-lock matrix…', style:{{}}}};
+const badge = {{textContent:'', className:'', title:'', dataset:{{}}}};
+const document = {{getElementById: id => id === 'region-locks-status' ? status : badge}};
+{helper}
+const err = new Error('This operation was aborted');
+err.name = 'AbortError';
+renderSnapshotTransportError(err);
+process.stdout.write(JSON.stringify({{status, badge}}));
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rendered = json.loads(result.stdout)
+
+    assert "timed out after 30s" in rendered["status"]["textContent"]
+    assert rendered["badge"]["textContent"] == "⚠ transport timeout"
+    assert rendered["badge"]["dataset"]["panelError"] == "region_locks"
+
+
+def test_valid_live_region_frame_clears_stale_error_and_paints_full_matrix() -> None:
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+    clear_start = body.index("function clearPanelErrorChip(name)")
+    clear_end = body.index("\nfunction renderSnapshotTransportError", clear_start)
+    clear_helper = body[clear_start:clear_end]
+    renderer_start = body.index("function renderRegionLocksDisplayMatrix")
+    renderer_end = body.index("\nfunction rememberStructuredTapAccordion", renderer_start)
+    renderer = body[renderer_start:renderer_end]
+    update_start = body.index("async function updateRegionLocks(")
+    update_end = body.index("async function ensureRegionLocksPanelPainted()", update_start)
+    update_function = body[update_start:update_end]
+
+    script = f"""
+const badge = {{textContent:'⚠ render error', className:'freshness-badge stale', title:'old', dataset:{{panelError:'region_locks'}}}};
+const status = {{textContent:'— loading CPU region-lock matrix…', style:{{}}, dataset:{{}}}};
+const grid = {{dataset:{{}}, style:{{}}, innerHTML:'', appendChild(el) {{ this.innerHTML += el.innerHTML; }}}};
+const dot = {{classList:{{remove(){{}}, add(){{}}}}, title:''}};
+const elements = {{'fresh-region_locks':badge, 'region-locks-status':status, 'region-locks-grid':grid, 'region-locks-dot':dot}};
+const document = {{
+  getElementById: id => elements[id] || null,
+  createElement: () => ({{style:{{}}, innerHTML:''}}),
+}};
+const window = {{__dashboardLastPanelError:{{name:'region_locks', message:'old renderer failure'}}}};
+const _PANEL_ERROR_BADGE_KEYS = {{region_locks:'region_locks'}};
+let _regionLocksRefreshSeq = 4;
+let _latestRegionLockFrame = {{valid:false, generatedAt:0, appliedAtMs:0, source:'error'}};
+let _latestRegionLocksByRole = {{}};
+let _lastRegionLocksPayload = null;
+let _latestRegionLockActivitySignature = '';
+let _latestRegionLockSummary = null;
+const _latestSnapshot = {{activity:{{'8083':{{n_active:1}}}}, topology:{{nodes:[]}}, in_flight_tasks:[]}};
+const _rawTapRenderMode = 'structured';
+const escapeHTML = value => String(value == null ? '' : value);
+const fetchJSON = async () => {{ throw new Error('unexpected fetch'); }};
+const liveStructuredTapRequests = () => [];
+const structuredTapActivity = () => ({{state:'queued'}});
+const paintRawTap = () => {{}};
+const formatRegionLockHolderSummary = () => 'frontdoor.half0';
+const renderAutopilotRunStrip = () => {{}};
+const _setDotState = () => {{}};
+const regionLockNoHolderContext = () => ({{busy:false, text:'fleet idle'}});
+const regionLockPayloadFrameEpoch = () => 100;
+const gpuDeviceRegionRows = () => [];
+const liveFrameFreshness = () => ({{generated_at:100, staleness_class:'fresh'}});
+const setPanelFreshness = () => {{ badge.textContent='live'; badge.className='freshness-badge fresh'; badge.title='healthy'; }};
+const updateTopologyInflight = () => {{}};
+{clear_helper}
+{renderer}
+{update_function}
+const payload = {{
+  per_region_locks_enabled:true,
+  by_role:{{frontdoor:{{wired:true, active_instance_idxs:[1], instances:[{{idx:1, shape:'half0'}}], regions:[{{region:'q0', held:true, holder_pids:['77'], holder_instance_idxs:[1]}}]}}}},
+  placement_telemetry:{{status:'coherent', conflict:false, capacity_conflicts:[]}},
+  coherence:{{status:'coherent'}},
+  lock_root:{{suspicious_test_root:false}},
+  live_frame:{{frame_id:'live-e12', status:'coherent', reason:'signals agree', observed_at:{{tap:100}}, reconciliation:{{status:'agreement'}}}},
+  display_matrix:{{
+    columns:[{{key:'full',label:'Full'}},{{key:'half0',label:'Half0'}},{{key:'half1',label:'Half1'}}],
+    row_kind:'role', launch_mode:'both',
+    rows:[
+      {{role:'frontdoor', cells:[{{state:'blocked',label:'×'}},{{state:'active',label:'🔒 1/1 lease · ⚙ 1/1 slots',load:1}},{{state:'na',label:'—'}}]}},
+      {{role:'architect_general',label:'architect_general :8083',ports:[8083],no_lock_domain:true,lock_state:'n/a (no lock domain)',cells:[{{state:'nolock',label:'▣ GPU (MI210)'}},{{state:'na',label:'—'}},{{state:'na',label:'—'}}]}},
+    ],
+  }},
+}};
+(async () => {{
+  await updateRegionLocks(4, payload, 9, []);
+  process.stdout.write(JSON.stringify({{
+    badge, status, gridHtml:grid.innerHTML, gridFrame:grid.dataset.liveFrameId,
+    latest:_latestRegionLockFrame, lastError:window.__dashboardLastPanelError,
+  }}));
+}})().catch(err => {{ console.error(err); process.exit(1); }});
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rendered = json.loads(result.stdout)
+
+    assert rendered["gridFrame"] == "live-e12"
+    assert "frontdoor" in rendered["gridHtml"]
+    assert "linear-gradient" in rendered["gridHtml"]
+    assert "architect_general :8083" in rendered["gridHtml"]
+    assert rendered["latest"]["valid"] is True
+    assert rendered["badge"]["textContent"] == "live"
+    assert "panelError" not in rendered["badge"]["dataset"]
+    assert rendered["lastError"] is None
+    assert "loading CPU region-lock matrix" not in rendered["status"]["textContent"]
+
+
 def test_coupled_panels_advance_freshness_only_after_same_frame_paint() -> None:
     html_path = (
         Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"

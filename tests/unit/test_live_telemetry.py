@@ -382,6 +382,45 @@ def test_host_reducer_aggregates_split_batch_and_vector_sequences() -> None:
     assert alternate["batch_activity"] == merged["batch_activity"]
 
 
+def test_host_reducer_scales_protected_history_bound_across_workers() -> None:
+    pids = list(range(101, 107))
+    frames = {}
+    for pid in pids:
+        reducer = LiveTelemetryReducer()
+        for sequence in range(100):
+            reducer.emit(
+                "api_request_started",
+                request_id=f"req-{pid}-{sequence}",
+            )
+        frame = _worker_frame(pid, reducer)
+        assert frame["degraded"] is False
+        assert frame["overflow"]["history_critical_evictions"] == 0
+        frames[pid] = frame
+
+    merged = _merge_worker_frames(
+        frames,
+        expected_pids=pids,
+        expected_worker_count=6,
+        now=101.0,
+        stale_after_s=3.0,
+    )
+
+    assert len(merged["transitions"]) == 600  # Greater than one worker's 512 bound.
+    expected_limits = {
+        "worker_count": 6,
+        "history_per_worker": 512,
+        "history_fleet": 3072,
+        "pending_per_worker": 1024,
+        "pending_fleet": 6144,
+    }
+    assert merged["aggregation_limits"] == expected_limits
+    assert merged["batch_activity"]["aggregation_limits"] == expected_limits
+    assert merged["overflow"]["history_evictions"] == 0
+    assert merged["overflow"]["history_critical_evictions"] == 0
+    assert merged["degraded"] is False
+    assert merged["batch_activity"]["certificate_valid"] is True
+
+
 def test_host_reducer_fails_closed_for_missing_stale_or_degraded_worker() -> None:
     healthy = LiveTelemetryReducer()
     healthy.emit("api_request_started", request_id="req", batch_id="batch-host")
@@ -412,8 +451,10 @@ def test_host_reducer_fails_closed_for_missing_stale_or_degraded_worker() -> Non
     overflowed = LiveTelemetryReducer(queue_capacity=1)
     overflowed.emit("route_selected", request_id="overflow")
     overflowed.emit("route_selected", request_id="overflow")
+    overflowed_frame = _worker_frame(102, overflowed)
+    assert overflowed_frame["degraded"] is True
     degraded = _merge_worker_frames(
-        {101: _worker_frame(101, healthy), 102: _worker_frame(102, overflowed)},
+        {101: _worker_frame(101, healthy), 102: overflowed_frame},
         expected_pids=[101, 102],
         now=101.0,
         stale_after_s=3.0,

@@ -50,6 +50,9 @@ _IDENTITY_FIELDS = (
     "port",
     "lease_token",
 )
+_WORKER_PENDING_CAPACITY = 1024
+_WORKER_HISTORY_CAPACITY = 512
+_WORKER_REQUEST_CAPACITY = 512
 
 _context: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
     "live_telemetry_context",
@@ -95,9 +98,9 @@ class LiveTelemetryReducer:
     def __init__(
         self,
         *,
-        queue_capacity: int = 1024,
-        history_capacity: int = 512,
-        request_capacity: int = 512,
+        queue_capacity: int = _WORKER_PENDING_CAPACITY,
+        history_capacity: int = _WORKER_HISTORY_CAPACITY,
+        request_capacity: int = _WORKER_REQUEST_CAPACITY,
     ) -> None:
         self.queue_capacity = max(1, int(queue_capacity))
         self.history_capacity = max(1, int(history_capacity))
@@ -594,6 +597,9 @@ def _merge_worker_frames(
     missing_pids = sorted(set(expected_pids) - set(frames))
     observed_pids = sorted(frames)
     expected_count = max(len(expected_pids), int(expected_worker_count or 0))
+    fleet_worker_bound = max(1, expected_count)
+    fleet_history_capacity = _WORKER_HISTORY_CAPACITY * fleet_worker_bound
+    fleet_pending_capacity = _WORKER_PENDING_CAPACITY * fleet_worker_bound
     roster_incomplete = len(expected_pids) < expected_count
     coverage_complete = not missing_pids and not stale_pids and not roster_incomplete
     ordered_frames = [frames[pid] for pid in observed_pids]
@@ -634,8 +640,16 @@ def _merge_worker_frames(
         key: sum(int((frame.get("overflow") or {}).get(key) or 0) for frame in ordered_frames)
         for key in overflow_keys
     }
-    transitions, merged_history_evictions, merged_history_critical = retain_events(transitions, 512)
-    pending, merged_pending_evictions, merged_pending_critical = retain_events(pending, 1024)
+    # Every publication is already bounded in its worker. Re-bounding the host
+    # merge to one worker's limit falsely evicted protected lifecycle events as
+    # soon as healthy histories from multiple workers exceeded 512 entries.
+    # Keep a finite fleet bound, scaled by the configured worker certificate.
+    transitions, merged_history_evictions, merged_history_critical = retain_events(
+        transitions, fleet_history_capacity
+    )
+    pending, merged_pending_evictions, merged_pending_critical = retain_events(
+        pending, fleet_pending_capacity
+    )
     overflow["total"] += merged_pending_evictions
     overflow["critical"] += merged_pending_critical
     overflow["history_evictions"] += merged_history_evictions
@@ -650,6 +664,13 @@ def _merge_worker_frames(
         merged_history_critical or merged_pending_critical
     )
     degraded = worker_degraded or not coverage_complete
+    aggregation_limits = {
+        "worker_count": fleet_worker_bound,
+        "history_per_worker": _WORKER_HISTORY_CAPACITY,
+        "history_fleet": fleet_history_capacity,
+        "pending_per_worker": _WORKER_PENDING_CAPACITY,
+        "pending_fleet": fleet_pending_capacity,
+    }
 
     batches: dict[str, dict[str, Any]] = {}
     for frame in ordered_frames:
@@ -691,6 +712,7 @@ def _merge_worker_frames(
         "source_ts": now,
         "certificate_valid": not degraded,
         "degraded": degraded,
+        "aggregation_limits": aggregation_limits,
         "overflow_total": overflow["total"],
         "overflow_critical": overflow["critical"] + overflow["history_critical_evictions"],
         "history_evictions": overflow["history_evictions"],
@@ -723,6 +745,7 @@ def _merge_worker_frames(
         "batch_activity": batch_activity,
         "transitions": transitions,
         "pending_transitions": pending,
+        "aggregation_limits": aggregation_limits,
         "degraded": degraded,
         "overflow": overflow,
         "worker_coverage": batch_activity["worker_coverage"],
