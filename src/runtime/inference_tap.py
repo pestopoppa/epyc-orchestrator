@@ -400,7 +400,13 @@ class TapWriter:
         self._append(text + "\n" + "-" * 72 + "\nRESPONSE:\n")
         if not self._start_emitted:
             self._start_emitted = True
-            self._emit_event("start", prompt=text, prompt_len=len(text))
+            self._emit_event(
+                "start",
+                prompt=text,
+                prompt_len=len(prompt),
+                prompt_preview_len=len(text),
+                prompt_truncated=len(prompt) > max_chars,
+            )
 
     def write_chunk(self, chunk: str) -> None:
         """Write a single streaming chunk (called per SSE event)."""

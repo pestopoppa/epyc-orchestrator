@@ -320,6 +320,12 @@ def _parse_structured_tap_requests(
         event_type = str(event.get("event") or "").lower()
         if event_type == "start":
             rec["prompt"] = str(event.get("prompt") or "")
+            try:
+                rec["prompt_len"] = int(event.get("prompt_len"))
+            except (TypeError, ValueError):
+                rec["prompt_len"] = len(rec["prompt"])
+            rec["prompt_preview_len"] = len(rec["prompt"])
+            rec["prompt_truncated"] = bool(event.get("prompt_truncated", False))
             rec["started_at"] = event.get("ts") or rec.get("started_at")
             rec["started_at_epoch"] = event.get("ts_epoch") or rec.get("started_at_epoch") or 0
         elif event_type == "chunk":
@@ -348,7 +354,8 @@ def _parse_structured_tap_requests(
     out = []
     for rec in requests.values():
         public = {k: v for k, v in rec.items() if not k.startswith("_")}
-        public["prompt_len"] = len(public.get("prompt") or "")
+        public.setdefault("prompt_len", len(public.get("prompt") or ""))
+        public.setdefault("prompt_preview_len", len(public.get("prompt") or ""))
         public["response_len"] = len(public.get("response") or "")
         if now_epoch is not None:
             try:

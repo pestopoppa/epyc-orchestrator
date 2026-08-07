@@ -7,7 +7,7 @@ from pathlib import Path
 
 from src.api.models import ChatRequest
 from src.api.routes.chat_routing import _classify_and_route
-from src.api.routes.chat_utils import role_timeout_for
+from src.api.routes.chat_utils import LONG_CONTEXT_CONFIG, role_timeout_for
 from src.api.structured_logging import task_extra
 from src.features import features
 from src.roles import Role
@@ -145,6 +145,25 @@ def select_initial_route(
         return [normalize_ingress_role(request.role)], "explicit", skill_context
     if request.image_path or request.image_base64:
         return ["worker_vision"], "vision_input", skill_context
+    # Capacity/specialist fence: learned routing only sees a bounded task-IR
+    # objective and may therefore choose frontdoor for a request whose full
+    # prompt is hundreds of thousands of characters.  That failure mode sends
+    # long-context prefill to a latency-oriented worker and can outlive the
+    # request budget.  Preserve explicit/forced and image routing above, but
+    # keep ordinary oversized text on the role provisioned for it.
+    long_context_enabled = bool(LONG_CONTEXT_CONFIG.get("enabled", True))
+    long_context_threshold = max(
+        1,
+        int(LONG_CONTEXT_CONFIG.get("threshold_chars", 20_000)),
+    )
+    effective_chars = len(request.prompt or "") + len(request.context or "")
+    if long_context_enabled and effective_chars > long_context_threshold:
+        log.info(
+            "Long-context routing guard: %d chars > %d → ingest_long_context",
+            effective_chars,
+            long_context_threshold,
+        )
+        return [str(Role.INGEST_LONG_CONTEXT)], "long_context_guard", skill_context
     # Below this point the request has NO image data and NO forced/explicit
     # role (those returned above). The learned/hybrid router and the rules
     # classifier can still emit a vision-only role for a text prompt, which a

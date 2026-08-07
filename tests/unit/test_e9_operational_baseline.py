@@ -129,13 +129,13 @@ def test_result_gate_rejects_scorer_infrastructure_errors_at_reliability_floor()
         collector._validate_result(result)
 
 
-def test_e12_ratifier_help_is_a_real_cli_surface():
+def test_e13_ratifier_help_is_a_real_cli_surface():
     script = (
         REPO_ROOT
         / "scripts"
         / "autopilot"
         / "operator_candidates"
-        / "ratify_and_apply_e12_operational_baseline.py"
+        / "ratify_and_apply_e13_operational_baseline.py"
     )
 
     result = subprocess.run(

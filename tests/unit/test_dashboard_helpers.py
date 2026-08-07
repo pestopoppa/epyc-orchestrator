@@ -953,7 +953,16 @@ def test_parse_structured_tap_requests_groups_events_by_request() -> None:
         lines.append(json.dumps(payload))
 
     lines: list[str] = []
-    event("start", "req-1", prompt="hello", task_id="task-1", trial_id=3, batch_id="b1")
+    event(
+        "start",
+        "req-1",
+        prompt="hello",
+        prompt_len=629_310,
+        prompt_truncated=True,
+        task_id="task-1",
+        trial_id=3,
+        batch_id="b1",
+    )
     event("metadata", "req-1", instance_idx=2, instance_shape="q1", port=8082, topology_hash="abc123")
     event("chunk", "req-1", text="hi ")
     event("chunk", "req-1", text="there")
@@ -973,6 +982,9 @@ def test_parse_structured_tap_requests_groups_events_by_request() -> None:
     assert req["port"] == 8082
     assert req["topology_hash"] == "abc123"
     assert req["prompt"] == "hello"
+    assert req["prompt_len"] == 629_310
+    assert req["prompt_preview_len"] == 5
+    assert req["prompt_truncated"] is True
     assert req["response"] == "hi there"
     assert req["status"] == "complete"
     assert req["is_live"] is False

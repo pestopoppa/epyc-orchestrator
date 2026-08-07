@@ -113,6 +113,36 @@ class TestRouteRequest:
         # hybrid_router should NOT be called
         state.hybrid_router.route.assert_not_called()
 
+    def test_long_prompt_bypasses_learned_router_for_ingest(self):
+        request = ChatRequest(prompt="x" * 20_001, real_mode=True)
+        state = MagicMock()
+        state.hybrid_router = MagicMock()
+        state.failure_graph = None
+        state.progress_logger = None
+
+        result = _route_request(request, state)
+
+        assert result.routing_strategy == "long_context_guard"
+        assert result.routing_decision == ["ingest_long_context"]
+        state.hybrid_router.route.assert_not_called()
+
+    def test_explicit_role_bypasses_long_context_guard(self):
+        request = ChatRequest(
+            prompt="x" * 20_001,
+            real_mode=True,
+            role="worker_general",
+        )
+        state = MagicMock()
+        state.hybrid_router = MagicMock()
+        state.failure_graph = None
+        state.progress_logger = None
+
+        result = _route_request(request, state)
+
+        assert result.routing_strategy == "explicit"
+        assert result.routing_decision == ["worker_general"]
+        state.hybrid_router.route.assert_not_called()
+
     def test_force_role_normalizes_legacy_ingress_alias(self):
         """force_role should not route legacy labels into stale config endpoints."""
         request = ChatRequest(prompt="test", real_mode=True, force_role="worker_fast")

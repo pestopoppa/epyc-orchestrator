@@ -253,6 +253,13 @@ class TestTapWriter:
 
         assert "1000 chars truncated" in content
 
+        event_path = tmp_path / "tap.log.events.jsonl"
+        events = [json.loads(line) for line in event_path.read_text().splitlines()]
+        start = next(event for event in events if event["event"] == "start")
+        assert start["prompt_len"] == 3000
+        assert start["prompt_preview_len"] < start["prompt_len"]
+        assert start["prompt_truncated"] is True
+
     def test_concurrent_writes(self, tmp_path):
         """4 threads writing simultaneously — no corruption."""
         path = str(tmp_path / "tap.log")

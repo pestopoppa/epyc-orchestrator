@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compatibility entry point; the current operational baseline era is E13."""
+"""Canonical E13 entry point for operational baseline collection."""
 
 from __future__ import annotations
 

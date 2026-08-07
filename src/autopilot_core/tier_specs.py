@@ -292,11 +292,12 @@ def task_rate_objectives_from_row(row: dict) -> tuple[float, ...] | None:
 # The serving scheduler is part of a questions/hour instrument. v1 measured
 # serial/client-global eval placement; v2 measured full-instance resource lanes;
 # v3 classifies homogeneous native batches versus mixed-role split pipelines
-# before dispatch. Same tuple shape, different denominator instruments: never
-# mix them in one frontier.
+# before dispatch; v4 adds the pre-dispatch long-context capacity guard after
+# E12 exposed a 175K-token prompt on a latency worker. Same tuple shape,
+# different denominator instruments: never mix them in one frontier.
 PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v1"
 RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v2_resource_lanes"
-RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v3_mixed_role_split"
+RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v4_long_context_guard"
 
 
 class UnmeasuredObjectiveError(ValueError):
