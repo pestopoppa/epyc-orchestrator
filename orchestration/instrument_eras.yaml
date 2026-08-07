@@ -221,6 +221,31 @@ eras:
       lane concurrency is unchanged, but scorer-tail wall time differs from
       model_judge_tail_v1. Rebuild the frontier from post-boundary trials only.
 
+  - id: E11-eval-model-judge-tail-v3-quality
+    from: "2026-08-07T08:43:01.948984Z"
+    scope: eval_quality
+    policy_version: "task_rate_4d_v2_resource_lanes"
+    execution_instrument_id: "resource_lanes_v2_prompt_load"
+    scoring_schedule_id: "model_judge_tail_v3_backend_drain"
+    note: >
+      Backend-lifecycle-certified model-judge boundary. EvalTower proves all
+      configured generation backends stably idle before nested model scoring,
+      propagates scorer batch/deadline metadata, and proves the fleet idle again
+      before finalizing timeout-bearing batches. Scorer infrastructure errors
+      remain reliability errors and make operational baseline evidence inadmissible.
+
+  - id: E11-autopilot-model-judge-tail-v3-speed
+    from: "2026-08-07T08:43:01.948984Z"
+    scope: autopilot_speed
+    policy_version: "task_rate_4d_v2_resource_lanes"
+    execution_instrument_id: "resource_lanes_v2_prompt_load"
+    scoring_schedule_id: "model_judge_tail_v3_backend_drain"
+    note: >
+      Questions/hour denominator boundary for backend drain certification and
+      server-side judge deadlines. Generation resource-lane concurrency remains
+      unchanged; drain wait is now part of measured wall time. Rebuild the
+      frontier from post-boundary trials only.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.
