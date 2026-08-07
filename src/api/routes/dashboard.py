@@ -1017,6 +1017,371 @@ def _placement_telemetry_status(
     }
 
 
+def _placement_frame_signature(region_locks: dict[str, Any]) -> tuple[Any, ...]:
+    """Identity of placement ownership at one side of a `/slots` sample."""
+    occupancy = region_locks.get("occupancy") if isinstance(region_locks, dict) else {}
+    entries = occupancy.get("entries") if isinstance(occupancy, dict) else []
+    leases = tuple(
+        sorted(
+            (
+                str(entry.get("token") or ""),
+                str(entry.get("role") or ""),
+                int(entry.get("instance_idx") or 0),
+                int(entry.get("capacity") or 1),
+                bool(entry.get("shared")),
+            )
+            for entry in (entries if isinstance(entries, list) else [])
+            if isinstance(entry, dict)
+        )
+    )
+    global_lock = region_locks.get("global_lock") if isinstance(region_locks, dict) else {}
+    global_pids = tuple(sorted(str(pid) for pid in ((global_lock or {}).get("holder_pids") or [])))
+    return leases, global_pids
+
+
+async def _sample_slots_with_placement_window(
+    active_mode: str,
+    *,
+    max_attempts: int = 2,
+) -> dict[str, Any]:
+    """Bracket `/slots` with placement reads and retry one torn window.
+
+    The raw signals are never coerced. A stable bracket certifies that any
+    lease-vs-backend count difference is a real lifecycle-stage difference;
+    an unstable bracket remains explicitly torn after the bounded retry.
+    """
+    attempts = max(1, int(max_attempts))
+    result: dict[str, Any] = {}
+    for attempt in range(1, attempts + 1):
+        frame_started_at = time.time()
+        placement_before = _region_locks_payload(active_mode)
+        placement_before_at = time.time()
+        slots_started_at = time.time()
+        slots_by_port, slots_poll_meta = await _poll_all_slots()
+        slots_completed_at = time.time()
+        placement_after = _region_locks_payload(active_mode)
+        placement_after_at = time.time()
+        stable = _placement_frame_signature(placement_before) == _placement_frame_signature(
+            placement_after
+        )
+        result = {
+            "attempt": attempt,
+            "max_attempts": attempts,
+            "frame_started_at": frame_started_at,
+            "placement_before": placement_before,
+            "placement_before_at": placement_before_at,
+            "slots_by_port": slots_by_port,
+            "slots_poll_meta": slots_poll_meta,
+            "slots_started_at": slots_started_at,
+            "slots_completed_at": slots_completed_at,
+            "placement_after": placement_after,
+            "placement_after_at": placement_after_at,
+            "placement_stable": stable,
+        }
+        # Retrying unavailable slots would turn an explicit unknown into delay,
+        # not knowledge. Retry only a genuinely torn ownership window.
+        if stable or attempt >= attempts:
+            break
+    return result
+
+
+def _annotate_live_observability_frame(
+    *,
+    region_locks: dict[str, Any],
+    activity: dict[int, dict[str, Any]],
+    port_roles: dict[int, str],
+    structured_requests: list[dict[str, Any]],
+    placement_telemetry: dict[str, Any],
+    sample: dict[str, Any],
+    tap_observed_at: float,
+) -> dict[str, Any]:
+    """Attach faithful lease/backend/tap lifecycle signals to one frame."""
+    frame_id = (
+        f"live-{int(float(sample.get('frame_started_at') or tap_observed_at) * 1000)}"
+        f"-p{os.getpid()}-a{int(sample.get('attempt') or 1)}"
+    )
+    meta = sample.get("slots_poll_meta") if isinstance(sample, dict) else {}
+    meta = meta if isinstance(meta, dict) else {}
+    unanswered_ports = {
+        int(port) for port in (meta.get("unanswered_ports") or []) if str(port).isdigit()
+    }
+    slots_complete = bool(
+        int(meta.get("ports") or 0) > 0
+        and int(meta.get("answered") or 0) == int(meta.get("ports") or 0)
+        and int(meta.get("timed_out") or 0) == 0
+    )
+
+    role_signals: dict[str, dict[str, Any]] = {}
+
+    def role_bucket(role: str) -> dict[str, Any]:
+        return role_signals.setdefault(
+            role,
+            {
+                "role": role,
+                "lock_domain": "cpu" if role in (region_locks.get("by_role") or {}) else "none",
+                "placement": {"active": 0, "capacity": None, "tokens": [], "request_tags": []},
+                "backend": {
+                    "active": 0,
+                    "capacity": 0,
+                    "ports": [],
+                    "task_ids": [],
+                    "by_shape": {},
+                },
+                "tap": {
+                    "live": 0,
+                    "decoding": 0,
+                    "quiet": 0,
+                    "request_ids": [],
+                    "by_shape": {},
+                },
+            },
+        )
+
+    occupancy = region_locks.get("occupancy") if isinstance(region_locks, dict) else {}
+    occupancy_entries = occupancy.get("entries") if isinstance(occupancy, dict) else []
+    for entry in occupancy_entries if isinstance(occupancy_entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        role = _canonical_role_name(entry.get("role"))
+        if not role:
+            continue
+        placement = role_bucket(role)["placement"]
+        placement["active"] += 1
+        placement["capacity"] = max(
+            int(placement.get("capacity") or 0), int(entry.get("capacity") or 1)
+        )
+        placement["tokens"].append(str(entry.get("token") or ""))
+        request_tag = str(entry.get("request_tag") or "")
+        if request_tag and request_tag not in placement["request_tags"]:
+            placement["request_tags"].append(request_tag)
+
+    for raw_port, state in activity.items():
+        if not isinstance(state, dict):
+            continue
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError):
+            continue
+        role, shape = _port_role_shape(port_roles.get(port, ""))
+        role = _canonical_role_name(role)
+        if not role:
+            continue
+        backend = role_bucket(role)["backend"]
+        backend["ports"].append(port)
+        shape = shape or "full"
+        shape_backend = backend["by_shape"].setdefault(
+            shape, {"active": 0, "capacity": 0, "ports": [], "task_ids": []}
+        )
+        shape_backend["ports"].append(port)
+        if port in unanswered_ports or int(state.get("n_total") or 0) <= 0:
+            backend["unknown"] = True
+            shape_backend["unknown"] = True
+            continue
+        observed_active = max(0, int(state.get("n_active") or 0))
+        observed_capacity = max(0, int(state.get("n_total") or 0))
+        task_ids = [
+            slot.get("task_id")
+            for slot in (state.get("active_slots") or [])
+            if isinstance(slot, dict) and slot.get("task_id") is not None
+        ]
+        backend["active"] += observed_active
+        backend["capacity"] += observed_capacity
+        backend["task_ids"].extend(task_ids)
+        shape_backend["active"] += observed_active
+        shape_backend["capacity"] += observed_capacity
+        shape_backend["task_ids"].extend(task_ids)
+
+    causal_observations: list[dict[str, Any]] = []
+    for request in structured_requests:
+        if not isinstance(request, dict):
+            continue
+        role = _canonical_role_name(
+            request.get("topology_role") or request.get("lock_role") or request.get("role")
+        )
+        status = str(request.get("status") or "").lower()
+        is_live = bool(request.get("is_live")) or status in {"running", "quiet"}
+        if request.get("request_id"):
+            causal_observations.append(
+                {
+                    "request_id": str(request.get("request_id")),
+                    "parent_request_id": request.get("parent_request_id"),
+                    "role": role,
+                    "status": status or "unknown",
+                    "event_count": int(request.get("event_count") or 0),
+                    "updated_at_epoch": request.get("updated_at_epoch"),
+                }
+            )
+        if not role or not is_live:
+            continue
+        tap = role_bucket(role)["tap"]
+        request_shape = str(request.get("instance_shape") or "full")
+        shape_tap = tap["by_shape"].setdefault(
+            request_shape, {"live": 0, "decoding": 0, "quiet": 0, "request_ids": []}
+        )
+        tap["live"] += 1
+        shape_tap["live"] += 1
+        if status == "running" and int(request.get("chunk_count") or 0) > 0:
+            tap["decoding"] += 1
+            shape_tap["decoding"] += 1
+        elif status == "quiet":
+            tap["quiet"] += 1
+            shape_tap["quiet"] += 1
+        request_id = str(request.get("request_id") or "")
+        if request_id:
+            tap["request_ids"].append(request_id)
+            shape_tap["request_ids"].append(request_id)
+
+    count_disagreements: list[dict[str, Any]] = []
+    for role, signals in sorted(role_signals.items()):
+        placement = signals["placement"]
+        backend = signals["backend"]
+        tap = signals["tap"]
+        lease_active = int(placement.get("active") or 0)
+        backend_active = int(backend.get("active") or 0)
+        backend_unknown = bool(backend.get("unknown"))
+        if (
+            signals["lock_domain"] == "cpu"
+            and not backend_unknown
+            and lease_active != backend_active
+        ):
+            count_disagreements.append(
+                {
+                    "role": role,
+                    "placement_active": lease_active,
+                    "backend_active": backend_active,
+                    "meaning": "lifecycle_stage_difference_or_torn_sample",
+                }
+            )
+        if tap["live"] and lease_active == 0 and signals["lock_domain"] == "cpu":
+            lifecycle = "waiting_for_placement"
+        elif lease_active and backend_unknown:
+            lifecycle = "lease_admitted_backend_unknown"
+        elif lease_active > backend_active:
+            lifecycle = "lease_admitted_backend_queued"
+        elif backend_active and tap["decoding"]:
+            lifecycle = "decoding_observed"
+        elif backend_active:
+            lifecycle = "backend_processing_tap_quiet"
+        elif lease_active:
+            lifecycle = "lease_admitted"
+        elif tap["quiet"]:
+            lifecycle = "post_model_or_quiet"
+        elif tap["live"]:
+            lifecycle = "routed_waiting_signal"
+        else:
+            lifecycle = "idle_or_released"
+        signals["lifecycle"] = lifecycle
+        signals["identity_join"] = "role/cohort; per-request backend join unavailable"
+        signals["observed_at"] = {
+            "placement": sample.get("placement_after_at"),
+            "backend_window_start": sample.get("slots_started_at"),
+            "backend_window_end": sample.get("slots_completed_at"),
+            "tap": tap_observed_at,
+        }
+
+    placement_stable = bool(sample.get("placement_stable"))
+    if not placement_stable:
+        status = "torn"
+        reason = "placement ownership changed across the /slots sampling window"
+    elif not slots_complete:
+        status = "unknown"
+        reason = "one or more /slots sources were unavailable"
+    elif placement_telemetry.get("conflict") or placement_telemetry.get("capacity_conflicts"):
+        status = "conflict"
+        reason = "placement role/capacity conflicts with backend telemetry"
+    elif count_disagreements:
+        status = "stage_divergence"
+        reason = "lease admission and backend processing counts differ"
+    else:
+        status = "certified"
+        reason = "placement was stable across a complete /slots sample"
+
+    live_frame = {
+        "frame_id": frame_id,
+        "status": status,
+        "window_certified": placement_stable and slots_complete,
+        "reason": reason,
+        "attempt": int(sample.get("attempt") or 1),
+        "max_attempts": int(sample.get("max_attempts") or 1),
+        "placement_stable": placement_stable,
+        "slots_complete": slots_complete,
+        "unanswered_ports": sorted(unanswered_ports),
+        "count_disagreements": count_disagreements,
+        "observed_at": {
+            "frame_started": sample.get("frame_started_at"),
+            "placement_before": sample.get("placement_before_at"),
+            "slots_started": sample.get("slots_started_at"),
+            "slots_completed": sample.get("slots_completed_at"),
+            "placement_after": sample.get("placement_after_at"),
+            "tap": tap_observed_at,
+        },
+        "roles": role_signals,
+        "source_contract": {
+            "placement": "cpu_region occupancy ledger",
+            "backend": "llama-server /slots reconciliation watchdog",
+            "tap": "sequenced inference tap transitions",
+        },
+        "push_bridge": {
+            "transition_source": "structured inference tap request events",
+            "coalescing": "request-level lifecycle counters per frame",
+            "token_events_excluded": True,
+            "delivery": "existing multiplex SSE triggers coupled snapshot reduction",
+            "reconciliation": "/slots remains independent and never overwrites transitions",
+            "gap_status": "unknown_without_global_transition_sequence",
+        },
+        "causal_observations": sorted(
+            causal_observations,
+            key=lambda item: (
+                float(item.get("updated_at_epoch") or 0.0),
+                str(item.get("request_id") or ""),
+            ),
+        )[-40:],
+    }
+
+    # Annotate, never replace, the raw placement matrix. Its numerator remains
+    # a lease-reference count; backend and tap signals stay independently named.
+    rows = (region_locks.get("display_matrix") or {}).get("rows") or []
+    for row in rows if isinstance(rows, list) else []:
+        role = _canonical_role_name(row.get("role")) if isinstance(row, dict) else ""
+        signals = role_signals.get(role)
+        if not signals:
+            continue
+        for cell in row.get("cells") or []:
+            if not isinstance(cell, dict) or cell.get("state") != "active":
+                continue
+            lease_active = int(cell.get("active") or 0)
+            capacity = max(1, int(cell.get("capacity") or 1))
+            shape = str(cell.get("shape") or "full")
+            backend = signals["backend"].get("by_shape", {}).get(shape, {})
+            shape_tap = signals["tap"].get("by_shape", {}).get(shape, {})
+            backend_text = "?" if backend.get("unknown") else str(backend.get("active") or 0)
+            tap_decoding = int(shape_tap.get("decoding") or 0)
+            cell["lease_active"] = lease_active
+            cell["backend_active"] = (
+                None if backend.get("unknown") else int(backend.get("active") or 0)
+            )
+            cell["backend_capacity"] = int(backend.get("capacity") or 0) or None
+            cell["tap_decoding"] = tap_decoding
+            cell["lifecycle"] = signals["lifecycle"]
+            cell["label"] = (
+                f"🔒 {lease_active}/{capacity} lease · "
+                f"⚙ {backend_text}/{capacity} slots · ✦ {tap_decoding} tap"
+            )
+            cell["title"] = (
+                f"{role}.{cell.get('shape') or 'instance'} — placement lease refs "
+                f"{lease_active}/{capacity}; backend /slots processing "
+                f"{backend_text}/{capacity}; tap decoding observed {tap_decoding}; "
+                f"lifecycle={signals['lifecycle']}; frame={frame_id} ({status})"
+            )
+
+    placement_telemetry["status"] = status
+    placement_telemetry["count_disagreements"] = count_disagreements
+    placement_telemetry["frame_id"] = frame_id
+    region_locks["live_frame"] = live_frame
+    region_locks["frame_id"] = frame_id
+    return live_frame
+
+
 def _filter_instance_regions_for_mode(
     topology: dict[tuple[str, int], frozenset[str]],
     numa_mode: str,
@@ -1775,7 +2140,18 @@ async def region_locks_snapshot() -> JSONResponse:
     backend never acquires `cpu_region_lock`, so cross-process
     concurrency isn't actually enforced for them yet).
     """
-    return JSONResponse(_stamp(_region_locks_payload(), "region_locks"))
+    payload = _region_locks_payload()
+    payload["live_frame"] = {
+        "frame_id": None,
+        "status": "unknown",
+        "window_certified": False,
+        "reason": (
+            "standalone region-lock sample is uncoupled from /slots and tap; "
+            "use /dashboard/api/snapshot for live cross-panel claims"
+        ),
+        "observed_at": {"placement_after": payload.get("now")},
+    }
+    return JSONResponse(_stamp(payload, "region_locks"))
 
 
 # Severity ranking for folding many panels into one dashboard-data health verdict.
@@ -6092,6 +6468,14 @@ async def _snapshot_impl() -> JSONResponse:
         },
     )
 
+    # Live-plane coherence bracket. Placement is sampled on both sides of the
+    # independently polled backend watchdog, with one bounded retry if the
+    # owner changes during that window. Raw disagreements survive into the
+    # frame; this only determines whether their timing is certifiable.
+    live_sample = await _sample_slots_with_placement_window(active_mode)
+    slots_by_port = live_sample["slots_by_port"]
+    slots_poll_meta = live_sample["slots_poll_meta"]
+
     # Derive per-node activity from slot states + live busy slots per base role.
     port_roles = _discover_llama_ports()
     role_busy: dict[str, int] = {}
@@ -6146,11 +6530,7 @@ async def _snapshot_impl() -> JSONResponse:
     )
 
     _snap_now = time.time()
-    # The snapshot stream is the coherence source for the dashboard UI. Use a
-    # fresh lock scan here so an older per-worker cache cannot overwrite a
-    # fresher direct `/dashboard/api/region_locks` poll in the same browser
-    # session.
-    region_locks = _region_locks_payload(active_mode)
+    region_locks = live_sample["placement_after"]
     placement_telemetry = _placement_telemetry_status(
         activity=activity,
         port_roles=port_roles,
@@ -6162,6 +6542,16 @@ async def _snapshot_impl() -> JSONResponse:
         now_epoch=_snap_now,
         region_locks=region_locks,
         port_roles=port_roles,
+    )
+    tap_observed_at = time.time()
+    live_frame = _annotate_live_observability_frame(
+        region_locks=region_locks,
+        activity=activity,
+        port_roles=port_roles,
+        structured_requests=structured_requests,
+        placement_telemetry=placement_telemetry,
+        sample=live_sample,
+        tap_observed_at=tap_observed_at,
     )
     topology_nodes = _topology_nodes_cached(active_mode)
     display_activity = _coherent_display_activity(
@@ -6184,6 +6574,8 @@ async def _snapshot_impl() -> JSONResponse:
         _stamp(
             {
                 "generated_at": _snap_now,
+                "frame_id": live_frame["frame_id"],
+                "live_frame": live_frame,
                 # Coherent live correlation: topology + region locks + activity are all
                 # built within THIS single snapshot() call and stamped with one
                 # generated_at, so the strip, the region-lock grid, and the slot/activity

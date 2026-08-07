@@ -8,7 +8,9 @@ loader path breaking after future refactors.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -103,16 +105,26 @@ def test_dashboard_html_live_tap_ignores_stale_region_lock_frames() -> None:
     assert "function latestRegionLockFrameUsableForTap(req = null)" in body
     assert "_REGION_LOCK_TAP_REQ_SKEW_S" not in body
     assert "structuredTapRequestStartEpoch" not in body
-    assert "if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return false;" in body
-    assert "if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return [];" in body
+    assert (
+        "if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return false;"
+        in body
+    )
+    assert (
+        "if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return [];"
+        in body
+    )
     assert "if (!latestRegionLockFrameUsableForTap()) return [];" in body
     assert body.index("if (!hasOutput && lockActive)") < body.index(
         "if (quietS >= _STRUCTURED_TAP_STALLED_S)"
     )
     assert "long prompt prefill may produce no tap chunks until the first token" in body
-    assert "generatedAt: regionLockPayloadFrameEpoch(d)" in body
+    assert "generatedAt: Number((((d.live_frame || {}).observed_at || {}).tap)" in body
+    assert "frameId," in body
     assert "source: regionLocks ? 'snapshot' : 'direct'" in body
-    assert "_latestRegionLockFrame = { valid: false, generatedAt: 0, appliedAtMs: Date.now(), source: 'error' };" in body
+    assert (
+        "_latestRegionLockFrame = { valid: false, generatedAt: 0, appliedAtMs: Date.now(), source: 'error' };"
+        in body
+    )
 
 
 def test_dashboard_html_copy_snapshot_stays_on_the_click_activation_path() -> None:
@@ -134,11 +146,7 @@ def test_dashboard_html_copy_snapshot_stays_on_the_click_activation_path() -> No
 
 def test_dashboard_task_detail_renders_available_input_image() -> None:
     html_path = (
-        Path(__file__).resolve().parents[1].parent
-        / "src"
-        / "api"
-        / "routes"
-        / "dashboard.html"
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
     )
     body = html_path.read_text()
     detail_start = body.index("async function openDetail(taskId, port, slotId) {")
@@ -238,13 +246,85 @@ def test_dashboard_html_region_lock_grid_uses_backend_display_matrix() -> None:
     assert "invalid placement telemetry provenance" in body
     assert "serving-capacity telemetry conflict" in body
     assert "configured but not selected by this launch mode" not in body
-    assert "if (!renderRegionLocksDisplayMatrix(grid, d))" in body
-    assert "backend display_matrix unavailable; lock-grid rendering is intentionally disabled" in body
+    assert "const matrixPainted = renderRegionLocksDisplayMatrix(grid, d);" in body
+    assert (
+        "backend display_matrix unavailable; lock-grid rendering is intentionally disabled" in body
+    )
     assert "using by_role fallback" not in body
     assert "display_matrix render failed" in body
     assert "renderRegionLocksBasicGrid(grid," not in body
     assert "pickInstForCol" not in body
     assert "SLOT ACTIVE" not in body
+
+
+def test_region_lock_renderer_replaces_owner_and_frame_identity() -> None:
+    """Actual JS renderer must replace stale role HTML on every frame."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+    start = body.index("function renderRegionLocksDisplayMatrix")
+    end = body.index("\nfunction rememberStructuredTapAccordion", start)
+    renderer = body[start:end]
+    script = f"""
+const _latestSnapshot = {{activity: {{}}, topology: {{nodes: []}}}};
+const escapeHTML = value => String(value);
+const gpuDeviceRegionRows = () => [];
+const document = {{createElement: () => ({{style: {{}}, innerHTML: ''}})}};
+{renderer}
+const grid = {{dataset: {{}}, style: {{}}, innerHTML: '', appendChild(el) {{ this.innerHTML += el.innerHTML; }}}};
+const payload = (frame, role, count) => ({{
+  live_frame: {{frame_id: frame, observed_at: {{tap: Number(frame.slice(1))}}}},
+  display_matrix: {{
+    columns: [{{key: 'full', label: 'Full'}}], row_kind: 'role', launch_mode: 'both',
+    rows: ['frontdoor', 'worker_general'].map(name => ({{
+      role: name,
+      cells: [name === role
+        ? {{state: 'active', label: `🔒 ${{count}}/4 lease · ⚙ ${{count}}/4 slots · ✦ ${{count}} tap`, load: count / 4}}
+        : {{state: 'ready', label: '✅'}}],
+    }})),
+  }},
+}});
+const out = [];
+for (const [frame, role, count] of [['f1','frontdoor',2], ['f2','worker_general',2], ['f3','frontdoor',1]]) {{
+  renderRegionLocksDisplayMatrix(grid, payload(frame, role, count));
+  out.push({{frame:grid.dataset.liveFrameId, html:grid.innerHTML}});
+}}
+process.stdout.write(JSON.stringify(out));
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    frames = json.loads(result.stdout)
+
+    assert [item["frame"] for item in frames] == ["f1", "f2", "f3"]
+    assert "frontdoor" in frames[0]["html"] and "🔒 2/4" in frames[0]["html"]
+    assert "worker_general" in frames[1]["html"] and "🔒 2/4" in frames[1]["html"]
+    assert "🔒 1/4" in frames[2]["html"]
+    assert frames[0]["html"] != frames[1]["html"] != frames[2]["html"]
+
+
+def test_coupled_panels_advance_freshness_only_after_same_frame_paint() -> None:
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+
+    assert "function liveFrameFreshness(snap)" in body
+    assert "grid.dataset.liveFrameId = frameId;" in body
+    assert "strip.dataset.liveFrameId = String(snap.frame_id || 'unknown');" in body
+    assert "tapPanel.dataset.liveFrameId = String(snap.frame_id || 'unknown');" in body
+    assert "setPanelFreshness('region_locks', liveFrameFreshness" in body
+    assert "setPanelFreshness('topology', liveFrameFreshness(snap));" in body
+    assert "setPanelFreshness('inference_tap', liveFrameFreshness(snap));" in body
+    assert "setPanelFreshness('region_locks', snap._freshness)" not in body
+    assert "setPanelFreshness('topology', snap._freshness)" not in body
+    assert "paintTap: false" in body
+    assert "? slots unknown" in body
+    assert "? partial /slots" in body
 
 
 def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:
@@ -322,11 +402,11 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     )
     assert "const refreshSeq = ++_regionLocksRefreshSeq;" in body
     assert "updatePanelSafely('contention', () => updateContentionGate(refreshSeq));" in body
-    assert "function updateTopology(activity, inflight, snapshotSeq = null)" in body
     assert (
-        "updateTopology(snap.display_activity || snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq)"
-        in body
+        "function updateTopology(activity, inflight, snapshotSeq = null, liveFrame = null)" in body
     )
+    assert "snap.activity || {}" in body
+    assert "snap.live_frame || {}" in body
     assert "let _latestStructuredTapFrameTs = 0;" in body
     assert "function applyStructuredTapFrame(data, {" in body
     assert "if (Array.isArray(snap.structured_requests))" in body
@@ -396,11 +476,10 @@ def test_dashboard_topology_active_badge_does_not_create_fake_counts() -> None:
     assert ".topology-row .active-badge.zero {\n    display: none;" in body
     assert (
         '<span class="active-badge zero" id="active_badge_${g.base}" '
-        'title="${g.base}: priority chat-XXX tasks'
-        in body
+        'title="${g.base}: priority chat-XXX tasks' in body
     )
     assert ">0</span>${aliasChip}</div>`" in body
-    assert "${aliasChip}` +\n            `<span class=\"active-badge zero\"" not in body
+    assert '${aliasChip}` +\n            `<span class="active-badge zero"' not in body
 
 
 def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() -> None:
@@ -459,7 +538,9 @@ def test_dashboard_snapshot_to_region_lock_overlay_choreography() -> None:
         "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || []);"
         in body
     )
-    assert "function updateTopology(activity, inflight, snapshotSeq = null)" in body
+    assert (
+        "function updateTopology(activity, inflight, snapshotSeq = null, liveFrame = null)" in body
+    )
     assert "updateTopologyInflight(inflight, snapshotSeq)" in body
     assert "const safeInflight = snapshotSeq == null ? [] : (inflight || []);" in body
     assert "const overlayInflight = snapshotSeq != null" in body

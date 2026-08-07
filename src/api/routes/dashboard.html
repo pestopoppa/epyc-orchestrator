@@ -1228,7 +1228,6 @@ function applyTopologyPayload(topo) {
     // snapshot means it re-syncs on the same 2 Hz tick as its overlays.
     if (!topo || !Array.isArray(topo.nodes)) return;
     topology = topo;
-    if (topo._freshness) setPanelFreshness('topology', topo._freshness);
     // Provenance badge repaints every poll (cheap, DOM-only): the realized fleet
     // vs a stale env/manifest can diverge WITHOUT a structural topology change, so
     // this must not be gated on the structure-signature rebuild below.
@@ -1739,7 +1738,7 @@ async function openNodeDetail(port, label) {
     }
 }
 
-function updateTopology(activity, inflight, snapshotSeq = null) {
+function updateTopology(activity, inflight, snapshotSeq = null, liveFrame = null) {
     // Update slot-dot rows. Two passes:
     //   1) Each individual node's dots (children + bare-role rows) come from its
     //      own activity entry — same behavior as before grouping.
@@ -1748,10 +1747,16 @@ function updateTopology(activity, inflight, snapshotSeq = null) {
     //      so the collapsed view reflects fleet-wide activity for that role.
     if (!topology) return;
 
+    const unknownPorts = new Set(((liveFrame || {}).unanswered_ports || []).map(Number));
     // Per-instance pass.
     for (const n of topology.nodes) {
         const dotsEl = document.getElementById(`slotdots_${n.id}`);
         if (!dotsEl) continue;
+        if (unknownPorts.has(Number(n.port))) {
+            dotsEl.innerHTML = '<span style="color:var(--warn,#fbbf24);font-size:10px">? slots unknown</span>';
+            dotsEl.title = `frame ${(liveFrame || {}).frame_id || 'unknown'}: /slots unavailable`;
+            continue;
+        }
         const a = activity[n.port] || {};
         const nActive = a.n_active || 0;
         const nTotal = a.n_total || 0;
@@ -1783,6 +1788,14 @@ function updateTopology(activity, inflight, snapshotSeq = null) {
     }
     for (const [base, g] of groups.entries()) {
         if (g.instances.length < 2 || !g.parent) continue;  // not a grouped row
+        if (g.instances.some(inst => unknownPorts.has(Number(inst.port)))) {
+            const dotsEl = document.getElementById(`slotdots_${g.parent.id}`);
+            if (dotsEl) {
+                dotsEl.innerHTML = '<span style="color:var(--warn,#fbbf24);font-size:10px">? partial /slots</span>';
+                dotsEl.title = `frame ${(liveFrame || {}).frame_id || 'unknown'}: grouped activity incomplete`;
+            }
+            continue;
+        }
         let totalActive = 0, totalTotal = 0;
         for (const inst of g.instances) {
             const a = activity[inst.port] || {};
@@ -2904,6 +2917,8 @@ function renderRegionLocksDisplayMatrix(grid, d) {
     const activity = ((_latestSnapshot || {}).activity || {});
     if (!grid || !columns.length || !rowsIn.length) return false;
     grid.dataset.regionLocksPainted = '1';
+    grid.dataset.liveFrameId = String((((d || {}).live_frame || {}).frame_id) || 'uncoupled');
+    grid.dataset.liveFrameObservedAt = String(((((d || {}).live_frame || {}).observed_at || {}).tap) || '');
     grid.style.gridTemplateColumns = `160px repeat(${columns.length},1fr)`;
     const rows = [];
     rows.push(`<div style="color:var(--muted);font-size:10px">role / instance shape</div>`);
@@ -3777,11 +3792,17 @@ function applyStructuredTapFrame(data, {
     requestSnapshot = true,
     refreshDetail = true,
     acceptCoherentSnapshot = false,
+    observeOnly = false,
 } = {}) {
     const frameTs = structuredTapFrameTs(data);
     if (frameTs !== null) {
         if (!acceptCoherentSnapshot && frameTs + 0.001 < _latestStructuredTapFrameTs) return false;
         if (frameTs > _latestStructuredTapFrameTs) _latestStructuredTapFrameTs = frameTs;
+    }
+    if (observeOnly) {
+        _lastStructuredTapAppliedAt = Date.now();
+        if (requestSnapshot) requestCoherentDashboardSnapshot('structured_tap_transition');
+        return false;
     }
     _structuredTapRequests = data.structured_requests || [];
     _lastStructuredTapAppliedAt = Date.now();
@@ -3804,7 +3825,16 @@ function applyStructuredTapFrame(data, {
 }
 
 function applyStructuredTapData(data) {
-    applyStructuredTapFrame(data);
+    // Push-first bridge: transition events request a coupled snapshot but do
+    // not independently repaint a panel that must agree with placement and
+    // topology. The reducer remains bounded to request-level events, not tokens.
+    applyStructuredTapFrame(data, {
+        updateFreshness: false,
+        paintTap: false,
+        requestSnapshot: true,
+        refreshDetail: false,
+        observeOnly: true,
+    });
 }
 
 // Tap-content fetch fallback: the tap panel's content is otherwise stream-only,
@@ -5786,6 +5816,21 @@ function updatePanelSafely(name, fn) {
     }
 }
 
+function liveFrameFreshness(snap) {
+    const frame = (snap && snap.live_frame) || {};
+    const observed = (frame.observed_at || {}).tap || (snap && snap.generated_at) || null;
+    const status = String(frame.status || 'unknown');
+    let cls = 'fresh';
+    if (status === 'torn' || status === 'unknown' || status === 'conflict') cls = 'stale';
+    else if (status === 'stage_divergence') cls = 'aging';
+    return {
+        generated_at: observed,
+        staleness_class: cls,
+        worst_age_s: 0,
+        reason: `frame ${frame.frame_id || 'unknown'}: ${frame.reason || status}`,
+    };
+}
+
 function applyDashboardSnapshot(snap, source) {
     if (!snap || snap.error) {
         if (snap && snap.error) document.getElementById('status').textContent = `error: ${snap.error}`;
@@ -5805,13 +5850,18 @@ function applyDashboardSnapshot(snap, source) {
     // tap activity and proc/payload lock state share one frame without turning
     // tap rows into synthetic lock holders.
     if (Array.isArray(snap.structured_requests)) {
-        applyStructuredTapFrame(snap, {
+        const tapPainted = applyStructuredTapFrame(snap, {
             updateFreshness: false,
             paintTap: true,
             requestSnapshot: false,
             refreshDetail: false,
             acceptCoherentSnapshot: true,
         });
+        if (tapPainted) {
+            const tapPanel = document.getElementById('inference-tap');
+            if (tapPanel) tapPanel.dataset.liveFrameId = String(snap.frame_id || 'unknown');
+            setPanelFreshness('inference_tap', liveFrameFreshness(snap));
+        }
     }
     // Keystone coherence: drive the topology strip STRUCTURE from the SAME
     // snapshot as the region-lock grid + activity overlay, so all three reflect
@@ -5825,18 +5875,24 @@ function applyDashboardSnapshot(snap, source) {
             return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || []);
         }
     });
-    updatePanelSafely('topology', () => updateTopology(snap.display_activity || snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq));
+    updatePanelSafely('topology', () => {
+        updateTopology(
+            snap.activity || {},
+            snap.in_flight_tasks || [],
+            snapshotSeq,
+            snap.live_frame || {},
+        );
+        const strip = document.getElementById('topology-strip');
+        if (!strip) throw new Error('topology strip missing after paint');
+        strip.dataset.liveFrameId = String(snap.frame_id || 'unknown');
+        setPanelFreshness('topology', liveFrameFreshness(snap));
+    });
     updatePanelSafely('contention', () => updateContentionGate(refreshSeq));
     updatePanelSafely('topology_activity', () => {
         if (snap.topology_activity) applyTopologyActivityPayload(snap.topology_activity);
     });
-    // Topology + region-lock panels are live-recomputed server-side; their real
-    // staleness signal is the coherent stream's own age, so feed both badges
-    // from the snapshot envelope — a dropped stream then visibly ages them.
-    if (snap._freshness) {
-        setPanelFreshness('topology', snap._freshness);
-        setPanelFreshness('region_locks', snap._freshness);
-    }
+    // Coupled-panel freshness advances only after each panel successfully
+    // paints this exact frame. A transport tick cannot make stale DOM say live.
     updatePanelSafely('counters', () => updateCounters(snap));
     updatePanelSafely('completed', () => updateTasks(snap));
     updatePanelSafely('decisions', () => updateDecisions(snap));
@@ -7020,12 +7076,6 @@ async function updateRegionLocks(
             if (!grid) return;
             const enabled = d.per_region_locks_enabled;
             _lastRegionLocksPayload = d;
-            _latestRegionLockFrame = {
-                valid: true,
-                generatedAt: regionLockPayloadFrameEpoch(d),
-                appliedAtMs: Date.now(),
-                source: regionLocks ? 'snapshot' : 'direct',
-            };
             if (status) {
                 status.textContent = enabled
                     ? '— per-region cross-process locks ENABLED'
@@ -7179,10 +7229,15 @@ async function updateRegionLocks(
                     ? `; +${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`
                     : '';
                 const placementTelemetry = d.placement_telemetry || {};
+                const liveFrame = d.live_frame || {};
                 const lockRoot = d.lock_root || placementTelemetry.lock_root || {};
                 if (lockRoot.suspicious_test_root || placementTelemetry.provenance_invalid) {
                     const lockPath = lockRoot.path || 'unknown';
                     status.textContent = `— ⚠ invalid placement telemetry provenance: lock root ${lockPath} is a pytest temporary directory; API restart with production environment required`;
+                    status.style.color = 'var(--bad,#f87171)';
+                    _setDotState(regionDot, 'down', status.textContent);
+                } else if (liveFrame.status === 'torn' || liveFrame.status === 'unknown') {
+                    status.textContent = `— ⚠ ${liveFrame.status} live frame ${liveFrame.frame_id || 'uncoupled'}: ${liveFrame.reason || 'cross-panel signals cannot be certified'}`;
                     status.style.color = 'var(--bad,#f87171)';
                     _setDotState(regionDot, 'down', status.textContent);
                 } else if (placementTelemetry.conflict) {
@@ -7196,6 +7251,11 @@ async function updateRegionLocks(
                     status.textContent = `— ⚠ serving-capacity telemetry conflict (/slots observed/configured): ${conflicts}`;
                     status.style.color = 'var(--bad,#f87171)';
                     _setDotState(regionDot, 'down', status.textContent);
+                } else if (liveFrame.status === 'stage_divergence') {
+                    const differences = (liveFrame.count_disagreements || []).map(item => `${item.role}:lease ${item.placement_active}, slots ${item.backend_active}`).join(' · ') || 'named signals differ';
+                    status.textContent = `— ⚠ lifecycle-stage divergence in frame ${liveFrame.frame_id}: ${differences}; counts are not interchangeable`;
+                    status.style.color = 'var(--warn,#fbbf24)';
+                    _setDotState(regionDot, 'standby', status.textContent);
                 } else if (placementTelemetry.status === 'transition' || (d.coherence || {}).status === 'transition') {
                     status.textContent = '— placement lease changed during lock scan; transitional frame (automatic retry exhausted)';
                     status.style.color = 'var(--warn,#fbbf24)';
@@ -7212,11 +7272,27 @@ async function updateRegionLocks(
                 }
             }
 
-            if (!renderRegionLocksDisplayMatrix(grid, d)) {
+            const matrixPainted = renderRegionLocksDisplayMatrix(grid, d);
+            if (!matrixPainted) {
                 grid.dataset.regionLocksPainted = '1';
                 grid.style.gridTemplateColumns = '1fr';
                 grid.innerHTML = `<div style="grid-column:1/-1;color:var(--warn,#fbbf24);font-size:11px;line-height:1.4">backend display_matrix unavailable; lock-grid rendering is intentionally disabled to avoid legacy by_role reconstruction drift</div>`;
+                throw new Error('backend display_matrix unavailable for live frame paint');
             }
+            const frameId = String(((d.live_frame || {}).frame_id) || 'uncoupled');
+            grid.dataset.liveFrameId = frameId;
+            if (status) status.dataset.liveFrameId = frameId;
+            _latestRegionLockFrame = {
+                valid: true,
+                frameId,
+                generatedAt: Number((((d.live_frame || {}).observed_at || {}).tap) || regionLockPayloadFrameEpoch(d) || 0),
+                appliedAtMs: Date.now(),
+                source: regionLocks ? 'snapshot' : 'direct',
+            };
+            setPanelFreshness('region_locks', liveFrameFreshness({
+                generated_at: _latestRegionLockFrame.generatedAt,
+                live_frame: d.live_frame || {},
+            }));
             if (typeof updateTopologyInflight === 'function') {
                 const overlayInflight = snapshotSeq != null
                     ? ((Array.isArray(snapshotInflightTasks) ? snapshotInflightTasks : ((_latestSnapshot && _latestSnapshot.in_flight_tasks) || [])))

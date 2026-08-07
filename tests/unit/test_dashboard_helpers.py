@@ -3415,7 +3415,9 @@ def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
     monkeypatch.setattr(dashboard, "_scan_recent_decisions", lambda _path: ([], {}, {}))
     monkeypatch.setattr(dashboard, "_count_log_events", lambda *_a, **_k: {})
     monkeypatch.setattr(dashboard, "_discover_llama_ports", lambda: {})
-    monkeypatch.setattr(dashboard, "_gate_inflight_by_live_slots", lambda in_flight, *_a, **_k: in_flight)
+    monkeypatch.setattr(
+        dashboard, "_gate_inflight_by_live_slots", lambda in_flight, *_a, **_k: in_flight
+    )
     monkeypatch.setattr(dashboard, "_region_locks_payload", lambda _numa_mode=None: fresh)
     monkeypatch.setattr(dashboard, "_region_locks_cached", fake_cached)
     monkeypatch.setattr(dashboard, "_structured_tap_requests_for_dashboard", lambda **_k: [])
@@ -3426,13 +3428,285 @@ def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
     response = asyncio.run(dashboard._snapshot_impl())
     payload = json.loads(response.body)
 
-    assert payload["region_locks"] == fresh
+    assert payload["region_locks"]["entries"] == fresh["entries"]
+    assert payload["region_locks"]["live_frame"]["status"] == "unknown"
+    assert payload["frame_id"] == payload["region_locks"]["frame_id"]
     assert payload["topology_activity"] == activity
     assert payload["display_activity"] == {}
     # active_stack_numa_mode() now defaults to "both" (env unset) so the dashboard
     # reflects the running full + quarter instances.
     assert payload["stack_numa_mode"] == "both"
     assert payload["topology"]["stack_numa_mode"] == "both"
+
+
+def _live_region_payload(role: str, tokens: list[str]) -> dict[str, object]:
+    entries = [
+        {
+            "token": token,
+            "role": role,
+            "instance_idx": 0,
+            "capacity": 4,
+            "shared": True,
+            "request_tag": "eval-batch",
+        }
+        for token in tokens
+    ]
+    return {
+        "by_role": {role: {}},
+        "occupancy": {"entries": entries},
+        "coherence": {"status": "coherent"},
+        "global_lock": {"holder_pids": []},
+        "display_matrix": {
+            "rows": [
+                {
+                    "role": role,
+                    "cells": [
+                        {
+                            "state": "active",
+                            "shape": "full",
+                            "active": len(entries),
+                            "capacity": 4,
+                            "label": f"⚡ {len(entries)}/4",
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+
+
+def test_live_window_retries_request_handoff_between_slots_and_lease(monkeypatch) -> None:
+    observations = iter(
+        (
+            _live_region_payload("frontdoor", ["fd-1"]),
+            _live_region_payload("worker_general", ["wg-1", "wg-2"]),
+            _live_region_payload("worker_general", ["wg-1", "wg-2"]),
+            _live_region_payload("worker_general", ["wg-1", "wg-2"]),
+        )
+    )
+    polls = 0
+
+    async def fake_poll():
+        nonlocal polls
+        polls += 1
+        return {8072: [{"is_processing": True}, {"is_processing": True}]}, {
+            "ports": 1,
+            "answered": 1,
+            "timed_out": 0,
+            "duration_s": 0.01,
+            "unanswered_ports": [],
+        }
+
+    monkeypatch.setattr(dashboard, "_region_locks_payload", lambda _mode: next(observations))
+    monkeypatch.setattr(dashboard, "_poll_all_slots", fake_poll)
+
+    sample = asyncio.run(dashboard._sample_slots_with_placement_window("both"))
+
+    assert polls == 2
+    assert sample["attempt"] == 2
+    assert sample["placement_stable"] is True
+    assert dashboard._placement_frame_signature(sample["placement_after"])[0][0][1] == (
+        "worker_general"
+    )
+
+
+def test_live_window_does_not_retry_unavailable_slots_into_false_certainty(monkeypatch) -> None:
+    region = _live_region_payload("frontdoor", ["fd-1"])
+    region_reads = 0
+    polls = 0
+
+    def fake_region(_mode):
+        nonlocal region_reads
+        region_reads += 1
+        return region
+
+    async def fake_poll():
+        nonlocal polls
+        polls += 1
+        return {8070: []}, {
+            "ports": 1,
+            "answered": 0,
+            "timed_out": 1,
+            "duration_s": 8.0,
+            "unanswered_ports": [8070],
+        }
+
+    monkeypatch.setattr(dashboard, "_region_locks_payload", fake_region)
+    monkeypatch.setattr(dashboard, "_poll_all_slots", fake_poll)
+
+    sample = asyncio.run(dashboard._sample_slots_with_placement_window("both"))
+
+    assert region_reads == 2
+    assert polls == 1
+    assert sample["attempt"] == 1
+    assert sample["placement_stable"] is True
+    assert sample["slots_poll_meta"]["unanswered_ports"] == [8070]
+
+
+def test_live_window_exhaustion_remains_torn(monkeypatch) -> None:
+    observations = iter(
+        (
+            _live_region_payload("frontdoor", ["fd-1"]),
+            _live_region_payload("worker_general", ["wg-1"]),
+            _live_region_payload("worker_general", ["wg-1"]),
+            _live_region_payload("frontdoor", ["fd-2"]),
+        )
+    )
+
+    async def fake_poll():
+        return {8070: [{"is_processing": True}]}, {
+            "ports": 1,
+            "answered": 1,
+            "timed_out": 0,
+            "duration_s": 0.1,
+            "unanswered_ports": [],
+        }
+
+    monkeypatch.setattr(dashboard, "_region_locks_payload", lambda _mode: next(observations))
+    monkeypatch.setattr(dashboard, "_poll_all_slots", fake_poll)
+
+    sample = asyncio.run(dashboard._sample_slots_with_placement_window("both"))
+
+    assert sample["attempt"] == 2
+    assert sample["placement_stable"] is False
+
+
+def test_live_frame_exposes_stage_divergence_without_normalizing_counts() -> None:
+    region = _live_region_payload("frontdoor", ["fd-1", "fd-2", "fd-3"])
+    telemetry = {"conflict": False, "capacity_conflicts": []}
+    sample = {
+        "attempt": 1,
+        "max_attempts": 2,
+        "frame_started_at": 100.0,
+        "placement_before_at": 100.0,
+        "slots_started_at": 101.0,
+        "slots_completed_at": 102.0,
+        "placement_after_at": 103.0,
+        "placement_stable": True,
+        "slots_poll_meta": {
+            "ports": 1,
+            "answered": 1,
+            "timed_out": 0,
+            "unanswered_ports": [],
+        },
+    }
+    activity = {
+        8070: {
+            "n_total": 4,
+            "n_active": 1,
+            "active_slots": [{"task_id": 91}],
+        },
+    }
+    taps = [
+        {
+            "request_id": f"chat-{idx}",
+            "topology_role": "frontdoor",
+            "status": "running",
+            "is_live": True,
+            "chunk_count": 2,
+            "event_count": idx + 1,
+            "updated_at_epoch": 103.0 + idx / 10,
+        }
+        for idx in range(3)
+    ]
+
+    frame = dashboard._annotate_live_observability_frame(
+        region_locks=region,
+        activity=activity,
+        port_roles={8070: "frontdoor"},
+        structured_requests=taps,
+        placement_telemetry=telemetry,
+        sample=sample,
+        tap_observed_at=104.0,
+    )
+
+    assert frame["status"] == "stage_divergence"
+    assert frame["window_certified"] is True
+    assert frame["roles"]["frontdoor"]["placement"]["active"] == 3
+    assert frame["roles"]["frontdoor"]["backend"]["active"] == 1
+    assert frame["roles"]["frontdoor"]["tap"]["decoding"] == 3
+    cell = region["display_matrix"]["rows"][0]["cells"][0]
+    assert cell["lease_active"] == 3
+    assert cell["backend_active"] == 1
+    assert cell["label"] == "🔒 3/4 lease · ⚙ 1/4 slots · ✦ 3 tap"
+    assert telemetry["status"] == "stage_divergence"
+    assert frame["push_bridge"]["token_events_excluded"] is True
+    assert frame["push_bridge"]["gap_status"] == "unknown_without_global_transition_sequence"
+    assert [item["request_id"] for item in frame["causal_observations"]] == [
+        "chat-0",
+        "chat-1",
+        "chat-2",
+    ]
+
+
+def test_live_frame_marks_unavailable_slots_unknown_without_hiding_lease() -> None:
+    region = _live_region_payload("worker_general", ["wg-1"])
+    telemetry = {"conflict": False, "capacity_conflicts": []}
+    frame = dashboard._annotate_live_observability_frame(
+        region_locks=region,
+        activity={8072: {"n_total": 0, "n_active": 0, "active_slots": []}},
+        port_roles={8072: "worker_general"},
+        structured_requests=[],
+        placement_telemetry=telemetry,
+        sample={
+            "attempt": 1,
+            "max_attempts": 2,
+            "frame_started_at": 200.0,
+            "placement_before_at": 200.0,
+            "slots_started_at": 201.0,
+            "slots_completed_at": 202.0,
+            "placement_after_at": 203.0,
+            "placement_stable": True,
+            "slots_poll_meta": {
+                "ports": 1,
+                "answered": 0,
+                "timed_out": 1,
+                "unanswered_ports": [8072],
+            },
+        },
+        tap_observed_at=204.0,
+    )
+
+    assert frame["status"] == "unknown"
+    assert frame["window_certified"] is False
+    assert frame["roles"]["worker_general"]["placement"]["active"] == 1
+    assert frame["roles"]["worker_general"]["backend"]["unknown"] is True
+    assert region["display_matrix"]["rows"][0]["cells"][0]["label"] == (
+        "🔒 1/4 lease · ⚙ ?/4 slots · ✦ 0 tap"
+    )
+
+
+def test_live_frame_preserves_gpu_no_lock_semantics() -> None:
+    region = {"by_role": {}, "occupancy": {"entries": []}, "display_matrix": {"rows": []}}
+    frame = dashboard._annotate_live_observability_frame(
+        region_locks=region,
+        activity={8083: {"n_total": 2, "n_active": 1, "active_slots": []}},
+        port_roles={8083: "architect_general"},
+        structured_requests=[],
+        placement_telemetry={"conflict": False, "capacity_conflicts": []},
+        sample={
+            "attempt": 1,
+            "max_attempts": 2,
+            "frame_started_at": 300.0,
+            "placement_before_at": 300.0,
+            "slots_started_at": 301.0,
+            "slots_completed_at": 302.0,
+            "placement_after_at": 303.0,
+            "placement_stable": True,
+            "slots_poll_meta": {
+                "ports": 1,
+                "answered": 1,
+                "timed_out": 0,
+                "unanswered_ports": [],
+            },
+        },
+        tap_observed_at=304.0,
+    )
+
+    assert frame["status"] == "certified"
+    assert frame["roles"]["architect_general"]["lock_domain"] == "none"
+    assert frame["roles"]["architect_general"]["backend"]["active"] == 1
+    assert frame["count_disagreements"] == []
 
 
 def test_coherent_display_activity_suppresses_uncorroborated_cpu_slots() -> None:
