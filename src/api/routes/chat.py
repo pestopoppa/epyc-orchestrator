@@ -190,6 +190,34 @@ async def chat(
     - Cache statistics in response
     - Full orchestration loop with Root LM (Phase 8)
     """
+    from src.runtime.live_telemetry import emit_lifecycle_transition
+
+    if not request.request_id:
+        request.request_id = f"api-{uuid.uuid4().hex[:12]}"
+    api_identity = {
+        "request_id": request.request_id,
+        "batch_id": request.batch_id,
+        "role": request.force_role or request.role or None,
+    }
+    emit_lifecycle_transition(
+        "queued",
+        details={
+            "handler": "/chat",
+            "workload_class": request.workload_class,
+            "request_priority": request.request_priority,
+        },
+        **api_identity,
+    )
+    emit_lifecycle_transition(
+        "api_request_started",
+        details={
+            "handler": "/chat",
+            "workload_class": request.workload_class,
+            "request_priority": request.request_priority,
+        },
+        **api_identity,
+    )
+    handler_outcome = "failed"
     # Track active requests for idle-time Q-scoring (thread-safe)
     state.increment_active()
     cancel_event = threading.Event()
@@ -215,6 +243,7 @@ async def chat(
             response = await _handle_chat(request, state, cancel_event=cancel_event)
         # Return appropriate HTTP status instead of silent 200 OK on failure
         if response.error_code:
+            handler_outcome = "failed"
             headers = {}
             if response.error_code == 503:
                 headers["Retry-After"] = "30"
@@ -223,8 +252,36 @@ async def chat(
                 content=response.model_dump(),
                 headers=headers or None,
             )
+        handler_outcome = "completed"
         return response
+    except asyncio.CancelledError:
+        handler_outcome = "disconnected"
+        raise
+    except TimeoutError:
+        handler_outcome = "timeout"
+        raise
     finally:
+        if cancel_event.is_set() and handler_outcome == "failed":
+            handler_outcome = "disconnected"
+        emit_lifecycle_transition(
+            "completed" if handler_outcome == "completed" else "failed",
+            details={
+                "handler": "/chat",
+                "outcome": handler_outcome,
+                "workload_class": request.workload_class,
+            },
+            **api_identity,
+        )
+        emit_lifecycle_transition(
+            "api_request_finished",
+            details={
+                "handler": "/chat",
+                "outcome": handler_outcome,
+                "client_disconnected": cancel_event.is_set(),
+                "workload_class": request.workload_class,
+            },
+            **api_identity,
+        )
         cancel_event.set()
         if watcher is not None:
             watcher.cancel()

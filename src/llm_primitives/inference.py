@@ -631,6 +631,13 @@ class InferenceMixin:
         request.batch_id = self.get_request_batch_id()
         request.max_queue_wait_ms = self.get_max_queue_wait_ms()
         request.session_id = self.get_request_session_id()
+        request.task_id = self.get_request_task_id()
+        request.parent_request_id = self.get_request_id()
+        request.inference_request_id = (
+            f"{request.parent_request_id or request.task_id}:{uuid.uuid4().hex[:8]}"
+            if (request.parent_request_id or request.task_id)
+            else uuid.uuid4().hex
+        )
         wants_probabilities = n_probs is not None and int(n_probs) > 0
         req_started = time.perf_counter()
 
@@ -666,6 +673,21 @@ class InferenceMixin:
         # (fleet circuit open == all endpoints open). Legacy backends
         # (attribute absent) keep the existing behavior byte-identical.
         fleet_managed = bool(getattr(backend, "fleet_health_managed", False))
+        from src.runtime.live_telemetry import (
+            bind_lifecycle_context,
+            emit_lifecycle_transition,
+            reset_lifecycle_context,
+        )
+
+        lifecycle_identity = {
+            "request_id": request.inference_request_id,
+            "task_id": request.task_id,
+            "batch_id": request.batch_id,
+            "role": role,
+            "model": getattr(getattr(role_config, "model", None), "name", None),
+            "port": _extract_port(backend_url),
+        }
+        lifecycle_token = bind_lifecycle_context(**lifecycle_identity)
 
         try:
             # Circuit breaker: fast-fail if backend is known to be down
@@ -749,6 +771,23 @@ class InferenceMixin:
                     )
 
                     tap_enabled = _tap_active() and bool(backend_url)
+                    first_output_emitted = False
+
+                    def _emit_first_output(content: str = "") -> None:
+                        nonlocal first_output_emitted
+                        if first_output_emitted:
+                            return
+                        first_output_emitted = True
+                        emit_lifecycle_transition(
+                            "first_output",
+                            details={"content_chars": len(content)},
+                        )
+
+                    if not _backend_manages_region_locks(backend):
+                        emit_lifecycle_transition(
+                            "backend_dispatched",
+                            details={"backend_url": backend_url},
+                        )
                     can_stream = (
                         tap_enabled
                         and hasattr(backend, "infer_stream_text")
@@ -795,6 +834,7 @@ class InferenceMixin:
 
                                 def _on_chunk_guarded(content: str) -> None:
                                     nonlocal _chunk_count
+                                    _emit_first_output(content)
                                     tap.write_chunk(content)
                                     _acc.append(content)
                                     _chunk_count += 1
@@ -823,6 +863,7 @@ class InferenceMixin:
                                     _cancel_tap = self.get_request_cancel_check()
 
                                     def _on_chunk_tap(content: str) -> None:
+                                        _emit_first_output(content)
                                         if _cancel_tap is not None and _cancel_tap():
                                             raise StopIteration
 
@@ -831,7 +872,9 @@ class InferenceMixin:
                                     )
                                 else:
                                     result = backend.infer(role_config, request)
+                                _emit_first_output(result.output)
                                 tap.write_response(result.output)
+                            _emit_first_output(result.output)
                             tap.write_timings(
                                 result.tokens_generated,
                                 result.prompt_eval_ms,
@@ -846,6 +889,7 @@ class InferenceMixin:
                             _cancel_nt = self.get_request_cancel_check()
 
                             def _cancel_only(content: str) -> None:
+                                _emit_first_output(content)
                                 if _cancel_nt is not None and _cancel_nt():
                                     raise StopIteration
 
@@ -854,6 +898,7 @@ class InferenceMixin:
                             )
                         else:
                             result = backend.infer(role_config, request)
+                        _emit_first_output(result.output)
             except Exception as exc:
                 req_elapsed_ms = (time.perf_counter() - req_started) * 1000
                 transport = "stream" if can_stream else "batch"
@@ -935,6 +980,7 @@ class InferenceMixin:
                 self._last_predicted_tps = result.predicted_per_second
             return result.output
         finally:
+            reset_lifecycle_context(lifecycle_token)
             if admitted and admission:
                 admission.release(backend_url)
 

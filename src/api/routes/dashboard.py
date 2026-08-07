@@ -38,6 +38,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 from src.roles import Role
+from src.runtime.live_telemetry import (
+    live_batch_activity_summary,
+    live_telemetry_frame,
+    live_telemetry_sequence,
+)
 from src.api.routes.dashboard_snapshot import (
     INFLIGHT_MAX_AGE_DEFAULT_S,
     count_log_events as _count_log_events_impl,
@@ -1094,11 +1099,15 @@ def _annotate_live_observability_frame(
     placement_telemetry: dict[str, Any],
     sample: dict[str, Any],
     tap_observed_at: float,
+    event_frame: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Attach faithful lease/backend/tap lifecycle signals to one frame."""
+    event_frame = dict(event_frame or {})
+    frame_sequence = int(event_frame.get("frame_sequence") or 0)
+    event_sequence = int(event_frame.get("event_sequence") or 0)
     frame_id = (
-        f"live-{int(float(sample.get('frame_started_at') or tap_observed_at) * 1000)}"
-        f"-p{os.getpid()}-a{int(sample.get('attempt') or 1)}"
+        f"live-p{os.getpid()}-f{frame_sequence}-e{event_sequence}"
+        f"-a{int(sample.get('attempt') or 1)}"
     )
     meta = sample.get("slots_poll_meta") if isinstance(sample, dict) else {}
     meta = meta if isinstance(meta, dict) else {}
@@ -1279,7 +1288,61 @@ def _annotate_live_observability_frame(
             "tap": tap_observed_at,
         }
 
+    event_backend_by_role: dict[str, int] = {}
+    for request_state in event_frame.get("requests") or []:
+        if not isinstance(request_state, dict) or request_state.get("terminal"):
+            continue
+        if request_state.get("stage") not in {"backend_dispatched", "first_output"}:
+            continue
+        event_role = _canonical_role_name(request_state.get("role"))
+        if event_role:
+            event_backend_by_role[event_role] = event_backend_by_role.get(event_role, 0) + 1
+    watchdog_backend_by_role = {
+        role: int(signals.get("backend", {}).get("active") or 0)
+        for role, signals in role_signals.items()
+        if not signals.get("backend", {}).get("unknown")
+    }
+    reconciliation_differences = [
+        {
+            "role": role,
+            "event_backend_active": event_backend_by_role.get(role, 0),
+            "watchdog_backend_active": watchdog_backend_by_role.get(role, 0),
+        }
+        for role in sorted(set(event_backend_by_role) | set(watchdog_backend_by_role))
+        if event_backend_by_role.get(role, 0) != watchdog_backend_by_role.get(role, 0)
+    ]
+
     placement_stable = bool(sample.get("placement_stable"))
+    newest_active_event_ts = max(
+        (
+            float(state.get("source_ts") or 0.0)
+            for state in event_frame.get("requests") or []
+            if isinstance(state, dict) and not state.get("terminal")
+        ),
+        default=0.0,
+    )
+    event_age_s = (
+        max(0.0, tap_observed_at - newest_active_event_ts) if newest_active_event_ts else None
+    )
+    if not placement_stable:
+        reconciliation_status = "torn"
+        reconciliation_reason = "placement changed across the watchdog window"
+    elif not slots_complete:
+        reconciliation_status = "unknown"
+        reconciliation_reason = "backend watchdog is incomplete"
+    elif event_frame.get("degraded"):
+        reconciliation_status = "degraded"
+        reconciliation_reason = "lifecycle queue/history overflow is surfaced"
+    elif reconciliation_differences and event_age_s is not None and event_age_s > 10.0:
+        reconciliation_status = "stale"
+        reconciliation_reason = "active lifecycle state has not advanced for over 10 seconds"
+    elif reconciliation_differences:
+        reconciliation_status = "drift"
+        reconciliation_reason = "event lifecycle and /slots watchdog counts disagree"
+    else:
+        reconciliation_status = "agreement"
+        reconciliation_reason = "event lifecycle agrees with the independent /slots watchdog"
+
     if not placement_stable:
         status = "torn"
         reason = "placement ownership changed across the /slots sampling window"
@@ -1289,6 +1352,9 @@ def _annotate_live_observability_frame(
     elif placement_telemetry.get("conflict") or placement_telemetry.get("capacity_conflicts"):
         status = "conflict"
         reason = "placement role/capacity conflicts with backend telemetry"
+    elif event_frame.get("degraded"):
+        status = "degraded"
+        reason = "lifecycle reducer overflow/eviction is explicitly degraded"
     elif count_disagreements:
         status = "stage_divergence"
         reason = "lease admission and backend processing counts differ"
@@ -1298,6 +1364,8 @@ def _annotate_live_observability_frame(
 
     live_frame = {
         "frame_id": frame_id,
+        "frame_sequence": frame_sequence,
+        "event_sequence": event_sequence,
         "status": status,
         "window_certified": placement_stable and slots_complete,
         "reason": reason,
@@ -1316,18 +1384,33 @@ def _annotate_live_observability_frame(
             "tap": tap_observed_at,
         },
         "roles": role_signals,
+        "lifecycle": event_frame,
+        "reconciliation": {
+            "status": reconciliation_status,
+            "reason": reconciliation_reason,
+            "event_age_s": event_age_s,
+            "event_backend_by_role": event_backend_by_role,
+            "watchdog_backend_by_role": watchdog_backend_by_role,
+            "differences": reconciliation_differences,
+            "history_overwritten": False,
+        },
         "source_contract": {
             "placement": "cpu_region occupancy ledger",
             "backend": "llama-server /slots reconciliation watchdog",
-            "tap": "sequenced inference tap transitions",
+            "tap": "structured inference tap request observations",
+            "lifecycle": "bounded in-process sequenced lifecycle reducer",
         },
         "push_bridge": {
-            "transition_source": "structured inference tap request events",
-            "coalescing": "request-level lifecycle counters per frame",
+            "transition_source": "orchestrator lifecycle reducer",
+            "coalescing": "SSE frame emission at no more than 2 Hz",
             "token_events_excluded": True,
             "delivery": "existing multiplex SSE triggers coupled snapshot reduction",
             "reconciliation": "/slots remains independent and never overwrites transitions",
-            "gap_status": "unknown_without_global_transition_sequence",
+            "gap_status": (
+                "degraded_overflow_surfaced"
+                if event_frame.get("degraded")
+                else "sequenced_in_process"
+            ),
         },
         "causal_observations": sorted(
             causal_observations,
@@ -6451,10 +6534,15 @@ async def snapshot() -> JSONResponse:
     return resp
 
 
+@router.get("/dashboard/api/live_activity")
+async def live_activity() -> JSONResponse:
+    """Read-only API request lifecycle counts for safe batch drain checks."""
+    return JSONResponse(live_batch_activity_summary())
+
+
 async def _snapshot_impl() -> JSONResponse:
     numa_resolution = active_stack_numa_mode_resolution()
     active_mode = numa_resolution["mode"]
-    slots_by_port, slots_poll_meta = await _poll_all_slots()
     progress_log = _todays_progress_log()
     recent, rolling, cumulative = _scan_recent_decisions(progress_log)
     orch_log = ORCHESTRATOR_LOG_DIR / "orchestrator.log"
@@ -6544,6 +6632,7 @@ async def _snapshot_impl() -> JSONResponse:
         port_roles=port_roles,
     )
     tap_observed_at = time.time()
+    reducer_frame = live_telemetry_frame()
     live_frame = _annotate_live_observability_frame(
         region_locks=region_locks,
         activity=activity,
@@ -6552,6 +6641,7 @@ async def _snapshot_impl() -> JSONResponse:
         placement_telemetry=placement_telemetry,
         sample=live_sample,
         tap_observed_at=tap_observed_at,
+        event_frame=reducer_frame,
     )
     topology_nodes = _topology_nodes_cached(active_mode)
     display_activity = _coherent_display_activity(
@@ -6576,6 +6666,7 @@ async def _snapshot_impl() -> JSONResponse:
                 "generated_at": _snap_now,
                 "frame_id": live_frame["frame_id"],
                 "live_frame": live_frame,
+                "api_lifecycle": reducer_frame.get("batch_activity") or {},
                 # Coherent live correlation: topology + region locks + activity are all
                 # built within THIS single snapshot() call and stamped with one
                 # generated_at, so the strip, the region-lock grid, and the slot/activity
@@ -6621,23 +6712,13 @@ async def _snapshot_impl() -> JSONResponse:
 
 @router.get("/dashboard/events/stream")
 async def stream(request: Request) -> StreamingResponse:
-    """1Hz Server-Sent Events stream of full snapshots."""
+    """Push-first Server-Sent Events stream of authoritative live frames."""
 
     async def event_gen():
-        while True:
+        async for payload in _snapshot_payloads():
             if await request.is_disconnected():
                 return
-            try:
-                resp = await snapshot()
-                payload = resp.body.decode("utf-8")  # type: ignore[union-attr]
-            except Exception as exc:
-                payload = json.dumps({"error": str(exc)})
             yield f"data: {payload}\n\n"
-            # 2 Hz instead of 1 Hz: more responsive in-flight panel updates
-            # so short-lived tasks (sub-second) are more likely to be caught.
-            # Snapshot is cheap (file mtime + JSONL tail + /slots fan-out is
-            # parallel + bounded), so doubling the rate is a small cost.
-            await asyncio.sleep(0.5)
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
@@ -6662,20 +6743,40 @@ _PLANNER_TAP_PATH = Path("/mnt/raid0/llm/tmp/planner_tap.log")
 
 
 async def _snapshot_payloads():
-    """Yield full-snapshot JSON payload strings at 2 Hz (mirrors /events/stream).
+    """Yield transition-driven snapshots, coalesced to at most 2 Hz.
 
     Runs until cancelled — the multiplex main loop is the SOLE reader of the
     request's disconnect channel; concurrent is_disconnected() reads across
-    producers would race the ASGI receive channel.
+    producers would race the ASGI receive channel.  A two-second watchdog frame
+    independently re-polls ``/slots`` even when no lifecycle transition lands.
     """
+    last_event_sequence = -1
+    last_emit_monotonic = 0.0
     while True:
-        try:
-            resp = await snapshot()
-            payload = resp.body.decode("utf-8")  # type: ignore[union-attr]
-        except Exception as exc:
-            payload = json.dumps({"error": str(exc)})
-        yield payload
-        await asyncio.sleep(0.5)
+        now_monotonic = time.monotonic()
+        event_sequence = live_telemetry_sequence()
+        transition_due = event_sequence != last_event_sequence
+        watchdog_due = now_monotonic - last_emit_monotonic >= 2.0
+        coalesce_ready = now_monotonic - last_emit_monotonic >= 0.5
+        if watchdog_due or (transition_due and coalesce_ready):
+            try:
+                resp = await snapshot()
+                payload = resp.body.decode("utf-8")  # type: ignore[union-attr]
+                payload_frame = json.loads(payload)
+                emitted_event_sequence = int(
+                    (payload_frame.get("live_frame") or {}).get("event_sequence") or 0
+                )
+            except Exception as exc:
+                payload = json.dumps({"error": str(exc)})
+                emitted_event_sequence = last_event_sequence
+            # A transition may land while the independent /slots watchdog is
+            # building this payload. Acknowledge only the sequence actually
+            # present in the emitted frame so that transition triggers the
+            # next coalesced push instead of waiting for the watchdog tick.
+            last_event_sequence = emitted_event_sequence
+            last_emit_monotonic = time.monotonic()
+            yield payload
+        await asyncio.sleep(0.1)
 
 
 async def _structured_tap_payloads():

@@ -1825,7 +1825,7 @@ function updateTopology(activity, inflight, snapshotSeq = null, liveFrame = null
     // (B: merged in-flight panel into topology.)
     if (inflight !== undefined) {
         updateTopologyInflight(inflight, snapshotSeq);
-        updateTopologyFlow(inflight, snapshotSeq);
+        updateTopologyFlow(inflight, snapshotSeq, liveFrame || {});
     }
 }
 
@@ -1834,13 +1834,17 @@ function updateTopology(activity, inflight, snapshotSeq = null, liveFrame = null
 // is travelling: logical route -> serving topology role -> port. Direct traffic
 // cannot carry a chat task id, so it remains visible through the slot dots and
 // is explicitly labelled rather than being invented as a route.
-function updateTopologyFlow(inflight, snapshotSeq = null) {
+function updateTopologyFlow(inflight, snapshotSeq = null, liveFrame = null) {
     const el = document.getElementById('topology-flow');
     if (!el) return;
-    const tasks = snapshotSeq == null ? [] : (inflight || []);
+    const lifecycleRequests = ((((liveFrame || {}).lifecycle || {}).requests) || [])
+        .filter(req => req && !req.terminal && (
+            req.api_active || ['route_selected', 'placement_lease_acquired', 'backend_dispatched', 'first_output'].includes(String(req.stage || ''))
+        ));
+    const tasks = snapshotSeq == null ? [] : (lifecycleRequests.length ? lifecycleRequests : (inflight || []));
     const nodes = (topology && topology.nodes) || [];
     if (!tasks.length) {
-        el.innerHTML = '<span style="color:var(--dim)">live task flow: no orchestrator-tracked chat task. Slot dots still include direct/eval traffic.</span>';
+        el.innerHTML = '<span style="color:var(--dim)">live task flow: no unresolved API/model lifecycle. Slot dots still include direct traffic and remain the independent backend watchdog.</span>';
         return;
     }
     const routes = tasks.slice(0, 6).map(task => {
@@ -1848,12 +1852,15 @@ function updateTopologyFlow(inflight, snapshotSeq = null) {
         const physical = String(task.topology_role || logical);
         const node = nodes.find(n => String(n.role || n.label || '') === physical)
             || nodes.find(n => clientBaseRole(String(n.role || n.label || '')) === clientBaseRole(physical));
-        const target = node ? `${physical} :${node.port}` : physical;
-        const state = String(task.live_state || 'active');
-        return `<div><span style="color:var(--accent)">${escapeHTML(task.task_id || 'chat')}</span> <span style="color:var(--dim)">→</span> ${escapeHTML(logical)} <span style="color:var(--dim)">→</span> <span style="color:var(--good)">${escapeHTML(target)}</span> <span style="color:var(--dim)">(${escapeHTML(state)})</span></div>`;
+        const observedPort = task.port || (node && node.port) || null;
+        const target = observedPort ? `${physical} :${observedPort}` : physical;
+        const state = String(task.stage || task.live_state || 'active');
+        const identity = task.request_id || task.task_id || task.batch_id || 'request';
+        return `<div><span style="color:var(--accent)">${escapeHTML(identity)}</span> <span style="color:var(--dim)">→</span> ${escapeHTML(logical)} <span style="color:var(--dim)">→</span> <span style="color:var(--good)">${escapeHTML(target)}</span> <span style="color:var(--dim)">(${escapeHTML(state)})</span></div>`;
     });
     const overflow = tasks.length > 6 ? `<div style="color:var(--dim)">+${tasks.length - 6} more tracked task(s)</div>` : '';
-    el.innerHTML = `<div style="color:var(--muted);margin-bottom:2px">live task flow · logical route → serving instance</div>${routes.join('')}${overflow}`;
+    const seq = Number((liveFrame || {}).event_sequence || 0);
+    el.innerHTML = `<div style="color:var(--muted);margin-bottom:2px">live task flow · lifecycle seq ${seq} · route → lease → backend → output</div>${routes.join('')}${overflow}`;
 }
 
 let _latestSnapshot = null;
@@ -2380,6 +2387,11 @@ function buildRawTapStatusBar() {
     const mode = _rawTapRenderMode;
     const holderCounts = mode === 'structured' ? structuredTapHolderCountLabel() : '';
     const gen = generatingNowLabel();
+    const lifecycle = ((_latestSnapshot || {}).api_lifecycle || {});
+    const liveFrame = ((_latestSnapshot || {}).live_frame || {});
+    const unresolved = Number(lifecycle.active_unresolved || 0);
+    const queued = Number(lifecycle.queued_unresolved || 0);
+    const lifecycleText = `API lifecycle seq ${Number(lifecycle.event_sequence || 0)}: ${unresolved} unresolved · ${queued} queued`;
     const toggleLabel = mode === 'structured' ? 'structured'
         : (mode === 'rendered' ? 'markdown' : 'raw');
     const toggleHint = mode === 'structured'
@@ -2388,7 +2400,7 @@ function buildRawTapStatusBar() {
             ? 'legacy section render: prompt/response through marked + KaTeX. click for raw bytes.'
             : 'raw legacy bytes. click for request-grouped structured events.');
     return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px">
-        <span style="color:var(--muted);font-size:10px">live tap (${mode} · inference_tap_events.jsonl + inference_tap.log${holderCounts ? ` · ${escapeHTML(holderCounts)}` : ''})<br><span style="color:${gen.good ? 'var(--good)' : 'var(--muted)'}" title="Source: llama-server /slots is_processing, independent of the tap. The tap can only show orchestrator-brokered requests; this line shows ALL generation, including traffic the tap never sees.">${escapeHTML(gen.text)}</span></span>
+        <span style="color:var(--muted);font-size:10px">live tap (${mode} · frame ${escapeHTML(liveFrame.frame_id || 'unknown')}${holderCounts ? ` · ${escapeHTML(holderCounts)}` : ''})<br><span style="color:${gen.good ? 'var(--good)' : 'var(--muted)'}" title="Source: llama-server /slots is_processing, independent of the tap. The tap can only show orchestrator-brokered requests; this line shows ALL generation, including traffic the tap never sees.">${escapeHTML(gen.text)}</span><br><span style="color:${unresolved ? 'var(--warn,#fbbf24)' : 'var(--dim)'}" title="Source: in-process /chat handler lifecycle, independent of tap and /slots. Unresolved remains nonzero until the handler finally exits.">${escapeHTML(lifecycleText)}</span></span>
         <span style="display:flex;gap:8px;align-items:center">
             <button onclick="toggleRawTapRenderMode()" style="background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text);padding:2px 8px;border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit"
                 title="${toggleHint}">${toggleLabel}</button>
@@ -5818,16 +5830,19 @@ function updatePanelSafely(name, fn) {
 
 function liveFrameFreshness(snap) {
     const frame = (snap && snap.live_frame) || {};
+    const reconciliation = frame.reconciliation || {};
     const observed = (frame.observed_at || {}).tap || (snap && snap.generated_at) || null;
     const status = String(frame.status || 'unknown');
     let cls = 'fresh';
-    if (status === 'torn' || status === 'unknown' || status === 'conflict') cls = 'stale';
+    if (status === 'torn' || status === 'unknown' || status === 'conflict' || status === 'degraded') cls = 'stale';
     else if (status === 'stage_divergence') cls = 'aging';
+    if (['torn', 'unknown', 'stale', 'degraded'].includes(String(reconciliation.status || ''))) cls = 'stale';
+    else if (reconciliation.status === 'drift' && cls === 'fresh') cls = 'aging';
     return {
         generated_at: observed,
         staleness_class: cls,
         worst_age_s: 0,
-        reason: `frame ${frame.frame_id || 'unknown'}: ${frame.reason || status}`,
+        reason: `frame ${frame.frame_id || 'unknown'} seq ${frame.frame_sequence || 0}/${frame.event_sequence || 0}: ${frame.reason || status}; reconciliation=${reconciliation.status || 'unknown'}`,
     };
 }
 
@@ -7256,6 +7271,12 @@ async function updateRegionLocks(
                     status.textContent = `— ⚠ lifecycle-stage divergence in frame ${liveFrame.frame_id}: ${differences}; counts are not interchangeable`;
                     status.style.color = 'var(--warn,#fbbf24)';
                     _setDotState(regionDot, 'standby', status.textContent);
+                } else if (['drift', 'stale', 'degraded'].includes(String(((liveFrame.reconciliation || {}).status) || ''))) {
+                    const reconciliation = liveFrame.reconciliation || {};
+                    const differences = (reconciliation.differences || []).map(item => `${item.role}:events ${item.event_backend_active}, slots ${item.watchdog_backend_active}`).join(' · ') || reconciliation.reason || 'signals differ';
+                    status.textContent = `— ⚠ lifecycle reconciliation ${reconciliation.status} in frame ${liveFrame.frame_id}: ${differences}; event history was not overwritten`;
+                    status.style.color = reconciliation.status === 'drift' ? 'var(--warn,#fbbf24)' : 'var(--bad,#f87171)';
+                    _setDotState(regionDot, reconciliation.status === 'drift' ? 'standby' : 'down', status.textContent);
                 } else if (placementTelemetry.status === 'transition' || (d.coherence || {}).status === 'transition') {
                     status.textContent = '— placement lease changed during lock scan; transitional frame (automatic retry exhausted)';
                     status.style.color = 'var(--warn,#fbbf24)';

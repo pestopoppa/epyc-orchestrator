@@ -465,6 +465,12 @@ def routing_meta(
             meta["image_source"] = "base64"
     except Exception:
         pass
+    # Request-lifecycle join fields for the in-process live telemetry reducer.
+    # These are observability-only and do not alter the routing decision.
+    meta["request_id"] = getattr(request, "request_id", None)
+    meta["batch_id"] = getattr(request, "batch_id", None)
+    meta["workload_class"] = getattr(request, "workload_class", None)
+    meta["request_priority"] = getattr(request, "request_priority", None)
     return meta
 
 

@@ -384,6 +384,40 @@ class ProgressLogger:
             routing_strategy,
             task_started_entry.timestamp,
         )
+        try:
+            from src.runtime.live_telemetry import emit_lifecycle_transition
+
+            identity = {
+                "task_id": task_id,
+                "request_id": (routing_meta or {}).get("request_id"),
+                "batch_id": (routing_meta or {}).get("batch_id"),
+                "role": str(routing_decision[0]) if routing_decision else None,
+            }
+            workload_class = (routing_meta or {}).get("workload_class") or self._task_workload_class(
+                task_ir
+            )
+            emit_lifecycle_transition(
+                "queued",
+                source_ts=task_started_entry.timestamp.timestamp(),
+                details={
+                    "task_type": task_ir.get("task_type"),
+                    "workload_class": workload_class,
+                    "request_priority": (routing_meta or {}).get("request_priority"),
+                },
+                **identity,
+            )
+            emit_lifecycle_transition(
+                "route_selected",
+                details={
+                    "routing": [str(role) for role in routing_decision],
+                    "strategy": routing_strategy,
+                },
+                **identity,
+            )
+        except Exception:
+            # Live telemetry is strictly observational and must never affect
+            # durable progress logging or request execution.
+            pass
 
     # Current policy version — bump when delegation logic changes materially
     DELEGATION_POLICY_VERSION = "1.0"
@@ -524,6 +558,19 @@ class ProgressLogger:
                 outcome_details=details,
             )
         )
+        try:
+            from src.runtime.live_telemetry import emit_lifecycle_transition
+
+            cached_route = (task_record or {}).get("route_taken") or []
+            emit_lifecycle_transition(
+                "completed" if success else "failed",
+                task_id=task_id,
+                role=(completion_data.get("producer_role") or (cached_route[-1] if cached_route else None)),
+                source_ts=completed_at.timestamp(),
+                details={"outcome": "success" if success else "failure"},
+            )
+        except Exception:
+            pass
 
     def log_gate_result(
         self,
@@ -571,6 +618,28 @@ class ProgressLogger:
                 memory_id=memory_id,
             )
         )
+        try:
+            from src.runtime.live_telemetry import emit_lifecycle_transition
+
+            transition_details = {
+                "from_role": from_tier,
+                "to_role": to_tier,
+                "reason": reason,
+            }
+            emit_lifecycle_transition(
+                "rerouted",
+                task_id=task_id,
+                role=to_tier,
+                details=transition_details,
+            )
+            emit_lifecycle_transition(
+                "escalated",
+                task_id=task_id,
+                role=to_tier,
+                details=transition_details,
+            )
+        except Exception:
+            pass
 
     def log_escalation_outcome(
         self,

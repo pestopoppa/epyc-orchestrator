@@ -325,6 +325,13 @@ def test_coupled_panels_advance_freshness_only_after_same_frame_paint() -> None:
     assert "paintTap: false" in body
     assert "? slots unknown" in body
     assert "? partial /slots" in body
+    assert "const reconciliation = frame.reconciliation || {};" in body
+    assert "reconciliation.status === 'drift'" in body
+    assert "event history was not overwritten" in body
+    assert "updateTopologyFlow(inflight, snapshotSeq, liveFrame || {});" in body
+    assert "route → lease → backend → output" in body
+    assert "API lifecycle seq" in body
+    assert "Unresolved remains nonzero until the handler finally exits." in body
 
 
 def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:

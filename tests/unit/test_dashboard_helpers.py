@@ -3631,7 +3631,7 @@ def test_live_frame_exposes_stage_divergence_without_normalizing_counts() -> Non
     assert cell["label"] == "🔒 3/4 lease · ⚙ 1/4 slots · ✦ 3 tap"
     assert telemetry["status"] == "stage_divergence"
     assert frame["push_bridge"]["token_events_excluded"] is True
-    assert frame["push_bridge"]["gap_status"] == "unknown_without_global_transition_sequence"
+    assert frame["push_bridge"]["gap_status"] == "sequenced_in_process"
     assert [item["request_id"] for item in frame["causal_observations"]] == [
         "chat-0",
         "chat-1",

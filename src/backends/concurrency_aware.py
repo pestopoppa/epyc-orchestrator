@@ -1090,16 +1090,38 @@ class ConcurrencyAwareBackend:
         }
 
     def _annotate_current_tap_dispatch(
-        self, idx: int, backend: Any, logical_role: str | None = None
+        self,
+        idx: int,
+        backend: Any,
+        logical_role: str | None = None,
+        request: Any = None,
     ) -> None:
+        metadata = self._tap_dispatch_metadata(idx, backend, logical_role=logical_role)
         try:
             from src.inference_tap import annotate_current_tap
 
-            annotate_current_tap(
-                **self._tap_dispatch_metadata(idx, backend, logical_role=logical_role)
+            annotate_current_tap(**metadata)
+        except Exception:
+            pass
+        try:
+            from src.runtime.live_telemetry import emit_lifecycle_transition
+
+            emit_lifecycle_transition(
+                "backend_dispatched",
+                request_id=getattr(request, "inference_request_id", None),
+                task_id=getattr(request, "task_id", None),
+                batch_id=getattr(request, "batch_id", None),
+                role=metadata.get("role"),
+                port=metadata.get("port"),
+                details={
+                    "backend_url": metadata.get("backend_url"),
+                    "topology_role": metadata.get("topology_role"),
+                    "instance_idx": metadata.get("instance_idx"),
+                    "instance_shape": metadata.get("instance_shape"),
+                },
             )
         except Exception:
-            return
+            pass
 
     @contextmanager
     def _dispatch(
@@ -1604,7 +1626,9 @@ class ConcurrencyAwareBackend:
         mb = self._extract_migration_budget_ms(request)
         logical_role = getattr(request, "role", None)
         with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
-            self._annotate_current_tap_dispatch(_idx, backend, logical_role=logical_role)
+            self._annotate_current_tap_dispatch(
+                _idx, backend, logical_role=logical_role, request=request
+            )
             # Endpoint health is recorded from RESULT objects only (the
             # backend folds transport errors into success=False results;
             # raw exceptions are cancellation/lock control flow and must
@@ -1618,7 +1642,9 @@ class ConcurrencyAwareBackend:
         mb = self._extract_migration_budget_ms(request)
         logical_role = getattr(request, "role", None)
         with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
-            self._annotate_current_tap_dispatch(_idx, backend, logical_role=logical_role)
+            self._annotate_current_tap_dispatch(
+                _idx, backend, logical_role=logical_role, request=request
+            )
             # Streaming handle: outcome is not observable here — endpoint
             # health for this path stays with the consumer (as today).
             return backend.infer_streaming(role_config, request)
@@ -1628,7 +1654,9 @@ class ConcurrencyAwareBackend:
         mb = self._extract_migration_budget_ms(request)
         logical_role = getattr(request, "role", None)
         with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
-            self._annotate_current_tap_dispatch(_idx, backend, logical_role=logical_role)
+            self._annotate_current_tap_dispatch(
+                _idx, backend, logical_role=logical_role, request=request
+            )
             result = backend.infer_stream_text(role_config, request, on_chunk=on_chunk)
             self._record_endpoint_result(_idx, result)
             return result

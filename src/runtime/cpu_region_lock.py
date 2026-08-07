@@ -57,7 +57,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, IO, Optional
+from typing import Any, Callable, IO, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -860,6 +860,7 @@ def cpu_region_lock(
     request_tag: Optional[str] = None,
     shared: bool = False,
     capacity: int = 1,
+    telemetry: Optional[dict[str, Any]] = None,
 ):
     """Acquire each region's file lock in exclusive or certified-shared mode.
 
@@ -957,6 +958,7 @@ def cpu_region_lock(
 
     cross_role_mutex = _cross_role_mutex_enabled()
     reservation_token: str | None = None
+    emitted_lease_token: str | None = None
     local_keys = (
         [(_GLOBAL_MUTEX_ROLE, region) for region in sorted_regions]
         if cross_role_mutex
@@ -998,6 +1000,33 @@ def cpu_region_lock(
             path = region_lock_path(role, region)
             _acquire(role, path)
             acquired_paths[region] = path
+        emitted_lease_token = reservation_token or (
+            f"flock-{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex}"
+        )
+        try:
+            from src.runtime.live_telemetry import emit_lifecycle_transition
+
+            identity = dict(telemetry or {})
+            identity.setdefault("role", role)
+            if not any(identity.get(key) for key in ("request_id", "task_id", "batch_id")):
+                tag = str(request_tag or "")
+                if tag.startswith(("chat-", "task-")):
+                    identity["task_id"] = tag
+                elif tag:
+                    identity["batch_id"] = tag
+            emit_lifecycle_transition(
+                "placement_lease_acquired",
+                lease_token=emitted_lease_token,
+                details={
+                    "regions": sorted_regions,
+                    "instance_idx": instance_idx,
+                    "capacity": max(1, int(capacity)),
+                    "shared": bool(shared),
+                },
+                **identity,
+            )
+        except Exception:
+            pass
         if reservation_token is not None:
             yield acquired_paths
         else:
@@ -1031,6 +1060,25 @@ def cpu_region_lock(
                     reservation_token,
                     exc_info=True,
                 )
+        if emitted_lease_token is not None:
+            try:
+                from src.runtime.live_telemetry import emit_lifecycle_transition
+
+                identity = dict(telemetry or {})
+                identity.setdefault("role", role)
+                emit_lifecycle_transition(
+                    "placement_lease_released",
+                    lease_token=emitted_lease_token,
+                    details={
+                        "regions": sorted_regions,
+                        "instance_idx": instance_idx,
+                        "capacity": max(1, int(capacity)),
+                        "shared": bool(shared),
+                    },
+                    **identity,
+                )
+            except Exception:
+                pass
 
 
 @contextmanager
@@ -1044,6 +1092,7 @@ def cpu_region_lock_for_instance(
     request_tag: Optional[str] = None,
     shared: bool = False,
     capacity: int = 1,
+    telemetry: Optional[dict[str, Any]] = None,
 ):
     """Convenience: look up regions for (role, instance_idx) via
     `instance_topology.get_instance_regions()` and acquire them.
@@ -1067,5 +1116,6 @@ def cpu_region_lock_for_instance(
         request_tag=request_tag,
         shared=shared,
         capacity=capacity,
+        telemetry=telemetry,
     ) as paths:
         yield paths
