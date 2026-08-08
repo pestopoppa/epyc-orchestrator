@@ -54,6 +54,7 @@ SOURCE_PATHS = (
     REPO_ROOT / "scripts/benchmark/seeding_orchestrator.py",
     REPO_ROOT / "src/autopilot_core/tier_specs.py",
     REPO_ROOT / "src/api/routes/chat.py",
+    REPO_ROOT / "src/api/routes/chat_utils.py",
     REPO_ROOT / "src/api/routes/chat_pipeline/routing_decision.py",
     REPO_ROOT / "src/runtime/inference_tap.py",
     REPO_ROOT / "src/runtime/live_telemetry.py",
@@ -228,7 +229,7 @@ def _validate_result(result: Any) -> None:
     if scoring_unavailable:
         errors.append(f"{len(scoring_unavailable)} scorer-infrastructure error(s) are present")
     if errors:
-        raise RuntimeError("E14 baseline result is not admissible: " + "; ".join(errors))
+        raise RuntimeError("operational baseline result is not admissible: " + "; ".join(errors))
 
 
 def candidate_baseline_state(result: Any) -> dict[str, Any]:

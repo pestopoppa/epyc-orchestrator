@@ -368,6 +368,24 @@ class TestFormalizeOutput:
 
         assert result == "Original answer"
 
+    def test_formalization_inband_error_returns_original(self):
+        """An in-band placement/transport error is not accepted as formatted output."""
+        mock_primitives = MagicMock()
+        mock_primitives.llm_call.return_value = (
+            "[ERROR: placement timeout role=worker_general "
+            "reason=placement_topology_overlap_timeout holders=[] after 90.0s]"
+        )
+
+        with patch("src.api.routes.chat_utils.build_formalizer_prompt"):
+            result = _formalize_output(
+                "Original answer",
+                "User prompt",
+                "table format",
+                mock_primitives,
+            )
+
+        assert result == "Original answer"
+
 
 class TestRoutingResult:
     """Tests for RoutingResult dataclass."""

@@ -430,6 +430,13 @@ def _formalize_output(
             skip_suffix=True,
         )
         reformatted = result.strip()
+        # LLMPrimitives uses in-band error sentinels for some admission and
+        # transport failures.  They are failures, not candidate formatting;
+        # preserve the substantive answer exactly as the fail-open contract
+        # promises instead of replacing it with a long error string.
+        if reformatted.startswith("[ERROR:"):
+            log.warning("Output formalization returned an in-band error; preserving answer")
+            return answer
         if reformatted and len(reformatted) > 5:
             log.info(f"Formalized output for constraint: {format_spec}")
             return reformatted
