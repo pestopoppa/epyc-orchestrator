@@ -292,7 +292,7 @@ class TestPromptAwareEvalBudget:
         assert eval_tower._eval_question_timeout_s("x" * 131_073, 600) == 1200
 
     def test_over_512k_chars_uses_extended_giant_budget(self):
-        assert eval_tower._eval_question_timeout_s("x" * 524_289, 600) == 1800
+        assert eval_tower._eval_question_timeout_s("x" * 524_289, 600) == 3600
 
     def test_explicit_larger_base_is_never_reduced(self):
         assert eval_tower._eval_question_timeout_s("short", 2400) == 2400

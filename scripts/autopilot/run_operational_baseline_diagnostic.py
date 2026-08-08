@@ -53,6 +53,36 @@ CANDIDATE_QUALITY_ERA = "E15-eval-baseline-hardening-v6-quality"
 CANDIDATE_SPEED_ERA = "E15-autopilot-baseline-hardening-v6-speed"
 
 
+def _diagnostic_source_hashes() -> dict[str, str]:
+    """Hash the canonical boundary plus this diagnostic admission instrument."""
+    hashes = _source_hashes()
+    path = Path(__file__).resolve()
+    hashes[str(path.relative_to(REPO_ROOT))] = _sha256_path(path)
+    return hashes
+
+
+def _validate_clean_result(result: object) -> None:
+    """Require a genuinely clean diagnostic, not merely a promotable one."""
+    _validate_result(result)
+    details = getattr(result, "details", {}) or {}
+    errors: list[str] = []
+    if float(getattr(result, "reliability", 0.0)) != 1.0:
+        errors.append(f"reliability={getattr(result, 'reliability', None)} (expected 1.0)")
+    for key in (
+        "errors",
+        "scoring_errors",
+        "eval_client_transport_timeout_count",
+        "eval_backend_drain_failure_count",
+        "eval_orphan_contamination_count",
+    ):
+        if int(details.get(key) or 0) != 0:
+            errors.append(f"{key}={details.get(key)} (expected 0)")
+    if details.get("eval_contaminated_by_abandoned_requests"):
+        errors.append("eval_contaminated_by_abandoned_requests=true")
+    if errors:
+        raise RuntimeError("diagnostic is not clean: " + "; ".join(errors))
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -84,7 +114,7 @@ def main() -> int:
                 f"tracked_status={tracked_status!r}, sources_clean={sources_clean}"
             )
         state_raw = STATE_PATH.read_bytes()
-        source_hashes = _source_hashes()
+        source_hashes = _diagnostic_source_hashes()
         preflight = {
             "autopilot_lock_free": True,
             "canonical_state_mutated": False,
@@ -106,12 +136,12 @@ def main() -> int:
 
         validation_error = ""
         try:
-            _validate_result(result)
+            _validate_clean_result(result)
         except RuntimeError as exc:
             validation_error = str(exc)
 
         commit_after, tracked_after, sources_clean_after = _git_identity()
-        sources_after = _source_hashes()
+        sources_after = _diagnostic_source_hashes()
         if tracked_after or not sources_clean_after or sources_after != source_hashes:
             raise RuntimeError("diagnostic sources changed during collection")
         state_after_raw = STATE_PATH.read_bytes()

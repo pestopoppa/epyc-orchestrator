@@ -1318,7 +1318,10 @@ def _eval_question_timeout_s(prompt: str, base_timeout_s: int | float) -> int:
     prompt_chars = len(str(prompt or ""))
     giant = max(base, _read_registry_timeout("benchmark", "timeout_giant", 1200))
     if prompt_chars > 524_288:
-        return max(giant, 1800)
+        # The T1 longbench tail contains ~637K-character / ~90K-token prompts.
+        # A certified half instance can spend nearly 30 minutes on prefill alone;
+        # retain another full 30-minute window for decode and response handling.
+        return max(giant, 3600)
     if prompt_chars > 131_072:
         return giant
     return base
