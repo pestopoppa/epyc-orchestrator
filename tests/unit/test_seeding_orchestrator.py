@@ -463,7 +463,7 @@ def test_eval_reconnect_does_not_retry_timeouts():
         "exception_reason": "read_timeout",
         "role": "worker_math",
         "workload_class": "eval_batch",
-        "max_queue_wait_ms": 90_000,
+        "max_queue_wait_ms": 300_000,
     }
     assert "generation_started" not in data["failure_provenance"]
     assert "tokens_generated" not in data["failure_provenance"]

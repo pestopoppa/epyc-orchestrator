@@ -215,8 +215,25 @@ class TestClientPayloadCarriesEvalBudget:
         )
         assert payload["timeout_s"] == 300
         assert payload["workload_class"] == "eval_batch"
+        assert payload["max_queue_wait_ms"] == 150_000
         # client_deadline_unix_s is derived from timeout -> a >60s remaining budget.
         assert payload["client_deadline_unix_s"] > 0
+
+    def test_eval_queue_reserves_at_most_half_the_deadline(self, monkeypatch):
+        monkeypatch.delenv("AUTOPILOT_EVAL_MIN_LLAMA_BUDGET_S", raising=False)
+        payload = _capture_payload(
+            prompt="q",
+            force_role="frontdoor",
+            timeout=600,
+            workload_class="eval_batch",
+        )
+        assert payload["timeout_s"] == 600
+        assert payload["max_queue_wait_ms"] == 300_000
+
+    def test_non_eval_queue_cap_remains_legacy_90_seconds(self, monkeypatch):
+        monkeypatch.delenv("AUTOPILOT_EVAL_MIN_LLAMA_BUDGET_S", raising=False)
+        payload = _capture_payload(prompt="q", force_role="frontdoor", timeout=600)
+        assert payload["max_queue_wait_ms"] == 90_000
 
     def test_legacy_payload_omits_workload_class_when_unset(self, monkeypatch):
         """Old-server-safe: no workload_class key when the caller doesn't set it."""
@@ -258,13 +275,49 @@ class TestWindowRunnerBudgetDefault:
         # Registry-derived eval default (frontdoor SLA + queue allowance), never
         # the old silent 120.0 cap.
         assert args.evaltower_timeout_s == float(eval_tower._default_eval_timeout())
-        assert args.evaltower_timeout_s > 120.0
+        assert args.evaltower_timeout_s == 600.0
 
     def test_explicit_flag_still_wins(self, monkeypatch):
         monkeypatch.setenv("AUTOPILOT_EVAL_REQUEST_TIMEOUT_S", "420")
         runner = self._runner()
         args = runner.parse_args(["--evaltower-timeout-s", "90"])
         assert args.evaltower_timeout_s == 90.0
+
+
+class TestPromptAwareEvalBudget:
+    def test_ordinary_prompt_uses_base_budget(self):
+        assert eval_tower._eval_question_timeout_s("short", 600) == 600
+
+    def test_over_128k_chars_uses_giant_budget(self):
+        assert eval_tower._eval_question_timeout_s("x" * 131_073, 600) == 1200
+
+    def test_over_512k_chars_uses_extended_giant_budget(self):
+        assert eval_tower._eval_question_timeout_s("x" * 524_289, 600) == 1800
+
+    def test_explicit_larger_base_is_never_reduced(self):
+        assert eval_tower._eval_question_timeout_s("short", 2400) == 2400
+
+    def test_generation_dispatch_uses_prompt_aware_budget(self, monkeypatch):
+        seen: dict[str, object] = {}
+
+        def _fake_call(**kwargs):
+            seen.update(kwargs)
+            return {"answer": "ok", "tokens_generated": 1, "routed_to": "ingest_long_context"}
+
+        monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+        tower = eval_tower.EvalTower(timeout=600)
+        question = {
+            "id": "long-context",
+            "suite": "longbench",
+            "prompt": "x" * 131_073,
+            "expected": "ok",
+        }
+        with eval_tower.httpx.Client(timeout=1) as client:
+            outcome = tower._generate_question(question, client)
+
+        assert outcome.error is None
+        assert seen["timeout"] == 1200
+        assert seen["workload_class"] == "eval_batch"
 
 
 # ── end-to-end: a tier-style eval request carries its 420s budget to the backend ─

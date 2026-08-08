@@ -1293,15 +1293,35 @@ def _default_eval_timeout() -> int:
     so a rebaseline never *starts* with a per-call budget that would later be
     whittled below the deadline-starvation floor (see
     ``AUTOPILOT_EVAL_MIN_LLAMA_BUDGET_S`` in ``call_orchestrator_forced``).
-    Unset / <=0 preserves the current behavior EXACTLY: registry frontdoor role
-    timeout plus ``AUTOPILOT_EVAL_QUEUE_ALLOWANCE_S``, capped at 600.
+    Unset / <=0 uses the registry's ``timeout_huge`` benchmark budget.  Eval
+    requests are routed after admission and may legitimately reach the 300s
+    ingest or 600s architect roles, so deriving this value from frontdoor's
+    interactive SLA under-budgets those routes before the router can select
+    them.
     """
     override = _env_int("AUTOPILOT_EVAL_REQUEST_TIMEOUT_S", 0)
     if override > 0:
         return override
-    role_timeout = _read_registry_timeout("roles", "frontdoor", 180)
-    queue_allowance = _env_int("AUTOPILOT_EVAL_QUEUE_ALLOWANCE_S", 90)
-    return min(600, max(role_timeout, role_timeout + max(0, queue_allowance)))
+    return min(600, max(1, _read_registry_timeout("benchmark", "timeout_huge", 600)))
+
+
+def _eval_question_timeout_s(prompt: str, base_timeout_s: int | float) -> int:
+    """Return the deterministic end-to-end budget for one eval question.
+
+    ``base_timeout_s`` covers ordinary questions.  Large-context questions get
+    the registry's established giant budget, with one additional tier for
+    prompts above roughly 128K tokens.  The character thresholds deliberately
+    avoid tokenizer/model coupling in the measurement client while remaining
+    conservative for mixed prose/code corpora.
+    """
+    base = max(1, int(math.ceil(float(base_timeout_s))))
+    prompt_chars = len(str(prompt or ""))
+    giant = max(base, _read_registry_timeout("benchmark", "timeout_giant", 1200))
+    if prompt_chars > 524_288:
+        return max(giant, 1800)
+    if prompt_chars > 131_072:
+        return giant
+    return base
 
 
 DEFAULT_TIMEOUT = _default_eval_timeout()
@@ -3701,6 +3721,7 @@ class EvalTower:
 
         start = time.time()
         try:
+            question_timeout_s = _eval_question_timeout_s(prompt, self.timeout)
             call_kwargs = {
                 "prompt": prompt,
                 # Let routing decide unless the question pins a mode/role. The
@@ -3711,7 +3732,7 @@ class EvalTower:
                 "force_role": q.get("force_role", ""),
                 "force_mode": q.get("force_mode", ""),
                 "url": self.url,
-                "timeout": self.timeout,
+                "timeout": question_timeout_s,
                 "image_path": image_path,
                 "client": client,
                 "watcher": getattr(self, "watcher", None),
@@ -3998,6 +4019,10 @@ class EvalTower:
         n = len(questions)
         if n == 0:
             return []
+        batch_request_timeout_s = max(
+            _eval_question_timeout_s(str(q.get("prompt", "")), self.timeout)
+            for q in questions
+        )
         question_lanes, lane_capacities = _eval_resource_lanes(questions)
         workers = min(n, sum(lane_capacities.values()))
         raw_worker_override = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
@@ -4103,10 +4128,10 @@ class EvalTower:
                 wall_budget_s = _eval_batch_wall_budget_s(
                     n_questions=n,
                     workers=workers,
-                    request_timeout_s=self.timeout,
+                    request_timeout_s=batch_request_timeout_s,
                 )
-                no_progress_timeout_s = _eval_no_progress_timeout_s(self.timeout)
-                drain_timeout_s = _eval_orphan_drain_timeout_s(self.timeout)
+                no_progress_timeout_s = _eval_no_progress_timeout_s(batch_request_timeout_s)
+                drain_timeout_s = _eval_orphan_drain_timeout_s(batch_request_timeout_s)
                 for i, q in enumerate(dispatch_questions):
                     fut = ex.submit(self._eval_question, q, client)
                     completed, not_done = wait(
@@ -4172,7 +4197,9 @@ class EvalTower:
                             **_wait_for_eval_quiescence(
                                 api_url=self.url,
                                 batch_id=eval_batch_id,
-                                timeout_s=_eval_backend_drain_timeout_s(self.timeout),
+                                timeout_s=_eval_backend_drain_timeout_s(
+                                    batch_request_timeout_s
+                                ),
                             ),
                         }
                         serial_backend_drain_reports.append(report)
@@ -4264,8 +4291,8 @@ class EvalTower:
         # holds >= 2x its width of un-scored work, so a fast generator cannot pile
         # unbounded memory on a slow scorer.
         backpressure_cap = max(2 * scoring_workers, workers)
-        no_progress_timeout_s = _eval_no_progress_timeout_s(self.timeout)
-        drain_timeout_s = _eval_orphan_drain_timeout_s(self.timeout)
+        no_progress_timeout_s = _eval_no_progress_timeout_s(batch_request_timeout_s)
+        drain_timeout_s = _eval_orphan_drain_timeout_s(batch_request_timeout_s)
         gen_ex = ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"eval-{label}-gen")
         score_ex = ThreadPoolExecutor(
             max_workers=scoring_workers, thread_name_prefix=f"eval-{label}-score"
@@ -4287,7 +4314,7 @@ class EvalTower:
             report = _wait_for_eval_quiescence(
                 api_url=self.url,
                 batch_id=eval_batch_id,
-                timeout_s=_eval_backend_drain_timeout_s(self.timeout),
+                timeout_s=_eval_backend_drain_timeout_s(batch_request_timeout_s),
             )
             stamped = {"phase": phase, **report}
             backend_drain_reports.append(stamped)

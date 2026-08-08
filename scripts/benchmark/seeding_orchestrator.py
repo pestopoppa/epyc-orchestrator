@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import math
 import os
 import socket
 import subprocess
@@ -847,6 +848,8 @@ def call_orchestrator_forced(
     """
     import httpx
 
+    timeout = max(1, int(math.ceil(float(timeout))))
+
     # ── Guard 3 (REL-1 eval-honesty): deadline-starvation floor ──────────
     # 2026-07-21 EV-11c incident: client-deadline starvation on long MATH-tail
     # questions shrank the effective per-call budget to ~1s; those doomed calls
@@ -877,6 +880,17 @@ def call_orchestrator_forced(
                 "failure_reason": "deadline_starved",
             }
 
+    if str(workload_class or "") == "eval_batch":
+        # Queueing and inference share one absolute request deadline.  Reserving
+        # at most half of that deadline for placement guarantees that a request
+        # admitted at the queue limit still retains an equally large inference
+        # budget.  The 300s ceiling is finite but accommodates mixed-role burst
+        # waves; the former fixed 90s cap failed healthy requests whenever all
+        # EvalTower workers temporarily occupied another physical cohort.
+        max_queue_wait_ms = min(int(timeout * 500), 300_000)
+    else:
+        max_queue_wait_ms = min(int(timeout * 1000), 90_000)
+
     payload: dict[str, Any] = {
         "prompt": prompt,
         "real_mode": True,
@@ -895,9 +909,7 @@ def call_orchestrator_forced(
             if str(request_priority or "").strip()
             else "background"
         ),
-        # Background autopilot can wait up to 90 s for the gate; foreground
-        # chats default to 5 s. Adjust if seed timeouts shorten in future.
-        "max_queue_wait_ms": min(int(timeout * 1000), 90_000),
+        "max_queue_wait_ms": max_queue_wait_ms,
     }
     if image_path:
         payload["image_path"] = image_path
