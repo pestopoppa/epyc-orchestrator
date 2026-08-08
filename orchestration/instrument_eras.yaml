@@ -271,6 +271,28 @@ eras:
       burst placement. v2 full-native and v3 mixed-split task rates are not comparable;
       rebuild the frontier from post-boundary trials only.
 
+  - id: E13-eval-long-context-guard-v4-quality
+    from: "2026-08-08T06:14:55.579260Z"
+    scope: eval_quality
+    policy_version: "task_rate_4d_v4_long_context_guard"
+    execution_instrument_id: "resource_lanes_v4_long_context_guard"
+    scoring_schedule_id: "model_judge_tail_v4_gpu_lifecycle_quiescence"
+    note: >
+      E13 routing-capacity boundary after the failed E12 baseline exposed a roughly
+      175K-token request on worker_general. Unforced text above the configured
+      long-context threshold is routed to ingest_long_context before learned routing.
+      Structured tap events retain preview text but report the full prompt length.
+
+  - id: E13-autopilot-long-context-guard-v4-speed
+    from: "2026-08-08T06:14:55.579260Z"
+    scope: autopilot_speed
+    policy_version: "task_rate_4d_v4_long_context_guard"
+    execution_instrument_id: "resource_lanes_v4_long_context_guard"
+    scoring_schedule_id: "model_judge_tail_v4_gpu_lifecycle_quiescence"
+    note: >
+      Questions/hour denominator boundary for pre-dispatch long-context capacity
+      routing. E12 mixed-split and E13 long-context-guard task rates do not mix.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.
