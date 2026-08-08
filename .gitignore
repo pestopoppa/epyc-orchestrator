@@ -109,6 +109,7 @@ perf-*.data
 
 # Autopilot runtime state (checkpoints can be multi-GB; journals + plots are ephemeral)
 orchestration/.autopilot.lock
+orchestration/autopilot.lock
 orchestration/archived_backups/
 orchestration/autopilot_checkpoints/
 orchestration/autopilot_journal.*
