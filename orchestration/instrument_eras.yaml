@@ -293,6 +293,28 @@ eras:
       Questions/hour denominator boundary for pre-dispatch long-context capacity
       routing. E12 mixed-split and E13 long-context-guard task rates do not mix.
 
+  - id: E14-eval-long-context-capacity-v5-quality
+    from: "2026-08-08T09:33:15.872967Z"
+    scope: eval_quality
+    policy_version: "task_rate_4d_v5_long_context_capacity_enforced"
+    execution_instrument_id: "resource_lanes_v5_long_context_capacity_enforced"
+    scoring_schedule_id: "model_judge_tail_v4_gpu_lifecycle_quiescence"
+    note: >
+      E14 execution-capacity boundary after the E13 collection attempt proved that
+      try-cheap-first could send an ingest-routed 637K-character prompt to
+      worker_general before the ingest specialist ran. Ingest routes now bypass
+      cheap-first so the logical capacity decision is preserved through dispatch.
+
+  - id: E14-autopilot-long-context-capacity-v5-speed
+    from: "2026-08-08T09:33:15.872967Z"
+    scope: autopilot_speed
+    policy_version: "task_rate_4d_v5_long_context_capacity_enforced"
+    execution_instrument_id: "resource_lanes_v5_long_context_capacity_enforced"
+    scoring_schedule_id: "model_judge_tail_v4_gpu_lifecycle_quiescence"
+    note: >
+      Questions/hour denominator boundary for end-to-end long-context capacity
+      enforcement. E13 guard-only and E14 capacity-enforced task rates do not mix.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.
