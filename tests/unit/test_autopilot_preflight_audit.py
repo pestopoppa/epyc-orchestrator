@@ -395,6 +395,20 @@ def test_archive_authority_accepts_ratified_empty_current_era() -> None:
     assert diagnostic["empty_frontier_bootstrap"]["current_era_trial_row_count"] == 0
 
 
+def test_archive_authority_accepts_admitted_baseline_pending_frontier() -> None:
+    rows = [_journal_row(1, timestamp="2026-06-14T00:00:01Z")]
+    state = _empty_frontier_state()
+    state["eval_instrument_empty_frontier_bootstrap"]["status"] = (
+        "baseline_admitted_frontier_pending"
+    )
+
+    diagnostic = _MOD.archive_authority_diagnostic(state, rows)
+
+    assert diagnostic["status"] == "match"
+    assert diagnostic["authority_mode"] == "authorized_empty_current_era"
+    assert diagnostic["empty_frontier_bootstrap"]["authorized"] is True
+
+
 def test_archive_authority_rejects_incomplete_empty_frontier_marker() -> None:
     rows = [_journal_row(1, timestamp="2026-06-14T00:00:01Z")]
     state = _empty_frontier_state()

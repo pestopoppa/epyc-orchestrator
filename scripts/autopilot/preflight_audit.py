@@ -344,7 +344,10 @@ def empty_frontier_bootstrap_diagnostic(
     if not isinstance(bootstrap, dict):
         reasons.append("eval_instrument_empty_frontier_bootstrap is missing")
         bootstrap = {}
-    elif bootstrap.get("status") != "pending":
+    elif bootstrap.get("status") not in {
+        "pending",
+        "baseline_admitted_frontier_pending",
+    }:
         reasons.append("empty-frontier bootstrap status is not pending")
 
     expected_fields = {
