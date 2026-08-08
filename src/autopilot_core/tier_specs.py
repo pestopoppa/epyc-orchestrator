@@ -297,7 +297,7 @@ def task_rate_objectives_from_row(row: dict) -> tuple[float, ...] | None:
 # different denominator instruments: never mix them in one frontier.
 PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v1"
 RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v2_resource_lanes"
-RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v4_long_context_guard"
+RATE_4D_OBJECTIVE_POLICY = "task_rate_4d_v5_long_context_capacity_enforced"
 
 
 class UnmeasuredObjectiveError(ValueError):

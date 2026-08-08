@@ -211,6 +211,30 @@ class TestTryCheapFirstEdgeCases:
             assert result is None
 
     @pytest.mark.asyncio
+    async def test_returns_none_for_long_context_capacity_route(
+        self, base_request, base_routing, mock_primitives, mock_state
+    ):
+        """Long-context routing must never speculate with the cheap worker."""
+        base_routing.routing_decision = ["ingest_long_context"]
+        base_routing.routing_strategy = "long_context_guard"
+        with patch("src.api.routes.chat.get_config") as mock_cfg:
+            mock_cfg.return_value.chat.try_cheap_first_enabled = True
+            mock_cfg.return_value.chat.try_cheap_first_role = "worker_general"
+            mock_cfg.return_value.chat.try_cheap_first_phase = "A"
+            result = await _try_cheap_first(
+                base_request,
+                base_routing,
+                mock_primitives,
+                mock_state,
+                time.perf_counter(),
+                "ingest_long_context",
+                "direct",
+            )
+
+        assert result is None
+        mock_primitives.llm_call.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_returns_none_for_delegated_mode(
         self, base_request, base_routing, mock_primitives, mock_state
     ):

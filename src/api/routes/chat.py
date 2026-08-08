@@ -365,6 +365,21 @@ async def _try_cheap_first(
         )
         return None
     normalized_initial_role = Role.from_string(str(initial_role)) if initial_role is not None else None
+    if normalized_initial_role == Role.INGEST_LONG_CONTEXT:
+        # The long-context route is a capacity boundary, not merely a model
+        # preference.  Sending the full prompt through the speculative cheap
+        # worker first defeats that boundary and can strand an oversized
+        # request on worker_general before ingest ever runs.
+        _log_cheap_first_counter(
+            state,
+            routing.task_id,
+            attempted=False,
+            passed=None,
+            reason="long_context_capacity_route",
+            cheap_role=cheap_role,
+            phase=cfg.try_cheap_first_phase,
+        )
+        return None
     if normalized_initial_role in {Role.WORKER_GENERAL, Role.WORKER_MATH, Role.WORKER_VISION}:
         _log_cheap_first_counter(
             state,

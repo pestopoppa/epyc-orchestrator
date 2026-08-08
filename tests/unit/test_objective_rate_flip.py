@@ -56,7 +56,7 @@ def test_live_axis1_is_questions_per_hour_not_tokens_per_second():
 def test_mixed_split_scheduler_bumps_live_rate_policy_version():
     assert PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY == "task_rate_4d_v1"
     assert RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY == "task_rate_4d_v2_resource_lanes"
-    assert RATE_4D_OBJECTIVE_POLICY == "task_rate_4d_v4_long_context_guard"
+    assert RATE_4D_OBJECTIVE_POLICY == "task_rate_4d_v5_long_context_capacity_enforced"
     assert RATE_4D_OBJECTIVE_POLICY != RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY
     assert RATE_4D_OBJECTIVE_POLICY != PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY
 

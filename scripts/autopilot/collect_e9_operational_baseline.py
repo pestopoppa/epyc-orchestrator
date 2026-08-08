@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect a fresh E13 operational T1 baseline without mutating AutoPilot state.
+"""Collect a fresh E14 operational T1 baseline without mutating AutoPilot state.
 
 ``--preflight`` performs no inference. ``--collect`` performs one small live
 generation probe and one canonical T1 EvalTower run, then writes an immutable
@@ -44,15 +44,16 @@ STATE_PATH = REPO_ROOT / "orchestration" / "autopilot_state.json"
 AUTOPILOT_LOCK = REPO_ROOT / "orchestration" / ".autopilot.lock"
 API_URL = "http://127.0.0.1:8000"
 POLICY = RATE_4D_OBJECTIVE_POLICY
-QUALITY_ERA = "E13-eval-long-context-guard-v4-quality"
-SPEED_ERA = "E13-autopilot-long-context-guard-v4-speed"
-SCHEMA = "epyc.e13_operational_baseline_candidate.v1"
+QUALITY_ERA = "E14-eval-long-context-capacity-v5-quality"
+SPEED_ERA = "E14-autopilot-long-context-capacity-v5-speed"
+SCHEMA = "epyc.e14_operational_baseline_candidate.v1"
 MIN_RELIABILITY = 0.80
 SOURCE_PATHS = (
     REPO_ROOT / "scripts/autopilot/eval_tower.py",
     REPO_ROOT / "scripts/autopilot/safety_gate.py",
     REPO_ROOT / "scripts/benchmark/seeding_orchestrator.py",
     REPO_ROOT / "src/autopilot_core/tier_specs.py",
+    REPO_ROOT / "src/api/routes/chat.py",
     REPO_ROOT / "src/api/routes/chat_pipeline/routing_decision.py",
     REPO_ROOT / "src/runtime/inference_tap.py",
     REPO_ROOT / "src/runtime/live_telemetry.py",
@@ -114,7 +115,7 @@ def _validate_instrument_state(state: dict[str, Any]) -> None:
         if actual != wanted
     ]
     if mismatches:
-        raise RuntimeError("E13 instrument state is not ready: " + "; ".join(mismatches))
+        raise RuntimeError("E14 instrument state is not ready: " + "; ".join(mismatches))
 
 
 def _git_identity() -> tuple[str, str, bool]:
@@ -227,7 +228,7 @@ def _validate_result(result: Any) -> None:
     if scoring_unavailable:
         errors.append(f"{len(scoring_unavailable)} scorer-infrastructure error(s) are present")
     if errors:
-        raise RuntimeError("E13 baseline result is not admissible: " + "; ".join(errors))
+        raise RuntimeError("E14 baseline result is not admissible: " + "; ".join(errors))
 
 
 def candidate_baseline_state(result: Any) -> dict[str, Any]:
@@ -354,7 +355,7 @@ def main() -> int:
             ),
             "ratify_command": (
                 ".venv/bin/python scripts/autopilot/operator_candidates/"
-                f"ratify_and_apply_e13_operational_baseline.py {args.output.resolve()}"
+                f"ratify_and_apply_e14_operational_baseline.py {args.output.resolve()}"
             ),
         }
         _write_immutable(args.output.resolve(), payload)

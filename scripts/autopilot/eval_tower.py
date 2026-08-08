@@ -131,7 +131,7 @@ _INSTRUMENT_LEDGER_PATH = Path(
 # questions/hour objective.  Generation placement changes the denominator;
 # model-backed scoring placement can change both wall time and error exclusion.
 # Keep these human-readable and stamp them into every EvalResult/journal row.
-EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v4_long_context_guard"
+EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v5_long_context_capacity_enforced"
 EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v4_gpu_lifecycle_quiescence"
 DEFAULT_LLM_JUDGE_ROLE = "architect_general"
 

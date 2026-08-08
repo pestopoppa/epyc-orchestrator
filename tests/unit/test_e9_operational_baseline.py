@@ -135,7 +135,7 @@ def test_e13_ratifier_help_is_a_real_cli_surface():
         / "scripts"
         / "autopilot"
         / "operator_candidates"
-        / "ratify_and_apply_e13_operational_baseline.py"
+        / "ratify_and_apply_e14_operational_baseline.py"
     )
 
     result = subprocess.run(
