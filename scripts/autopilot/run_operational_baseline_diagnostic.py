@@ -49,8 +49,8 @@ from eval_tower import (  # noqa: E402
 
 
 SCHEMA = "epyc.operational_baseline_diagnostic.v1"
-CANDIDATE_QUALITY_ERA = "E15-eval-baseline-hardening-v6-quality"
-CANDIDATE_SPEED_ERA = "E15-autopilot-baseline-hardening-v6-speed"
+CANDIDATE_QUALITY_ERA = "E15-eval-physical-cohort-v7-quality"
+CANDIDATE_SPEED_ERA = "E15-autopilot-physical-cohort-v7-speed"
 
 
 def _diagnostic_source_hashes() -> dict[str, str]:

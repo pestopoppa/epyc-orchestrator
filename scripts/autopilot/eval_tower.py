@@ -131,7 +131,7 @@ _INSTRUMENT_LEDGER_PATH = Path(
 # questions/hour objective.  Generation placement changes the denominator;
 # model-backed scoring placement can change both wall time and error exclusion.
 # Keep these human-readable and stamp them into every EvalResult/journal row.
-EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v6_baseline_hardening"
+EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v7_physical_cohort_exclusion"
 EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v4_gpu_lifecycle_quiescence"
 DEFAULT_LLM_JUDGE_ROLE = "architect_general"
 
@@ -2012,6 +2012,7 @@ def _eval_resource_lane(
         except Exception:
             url = ""
     lane_key = url or f"role:{role}"
+    lane_cohort = role
 
     # Aliases on one process inherit the process's largest declared slot count.
     same_process = [entry for entry in mode.values() if url and entry.get("url") == url]
@@ -2089,7 +2090,13 @@ def _eval_resource_lane(
             ),
             default=1,
         )
-        lane_key = "cpu:full-regions"
+        # Full and split processes overlap the same four CPU regions.  They
+        # must therefore share one client-side exclusion lane even though the
+        # backend uses different serving processes for each shape.  Distinct
+        # cohorts let homogeneous native requests batch with the same physical
+        # role while preventing them from being admitted alongside split work.
+        lane_key = "cpu:regions"
+        lane_cohort = f"cpu:full:{physical_role}"
         if device == "cpu-native-batch":
             capacity = native_group_capacity
             units = 1
@@ -2103,7 +2110,8 @@ def _eval_resource_lane(
         # actual half instances. Keeping the certified native width outstanding
         # lets one cohort wait downstream while newly-routed work fills the
         # complementary half, eliminating the old 2/4 full-instance dead zone.
-        lane_key = "cpu:mixed-role-split"
+        lane_key = "cpu:regions"
+        lane_cohort = "cpu:mixed-role-split"
         capacity = max(1, native_group_capacity)
         units = 1
         device = "cpu-mixed-split"
@@ -2136,7 +2144,7 @@ def _eval_resource_lane(
         capacity=max(1, capacity),
         units=max(1, min(units, capacity)),
         device=device,
-        cohort=lane_key if gpu else physical_role,
+        cohort=lane_key if gpu else lane_cohort,
     )
 
 

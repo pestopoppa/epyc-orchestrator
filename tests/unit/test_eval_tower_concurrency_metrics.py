@@ -501,12 +501,12 @@ def test_eval_resource_lanes_group_overlapping_full_cpu_process_cohorts(monkeypa
         ]
     )
 
-    assert lanes[0].key == lanes[1].key == "cpu:full-regions"
-    assert capacities["cpu:full-regions"] == 4
+    assert lanes[0].key == lanes[1].key == "cpu:regions"
+    assert capacities["cpu:regions"] == 4
     assert lanes[0].units == 1
     assert lanes[1].units == 1
-    assert lanes[0].cohort == "frontdoor"
-    assert lanes[1].cohort == "worker_general"
+    assert lanes[0].cohort == "cpu:full:frontdoor"
+    assert lanes[1].cohort == "cpu:full:worker_general"
 
 
 def test_router_owned_eval_uses_mixed_split_backlog_lane(monkeypatch) -> None:
@@ -515,10 +515,27 @@ def test_router_owned_eval_uses_mixed_split_backlog_lane(monkeypatch) -> None:
         [{"prompt": "route me"}, {"prompt": "route me too"}]
     )
 
-    assert {lane.key for lane in lanes} == {"cpu:mixed-role-split"}
+    assert {lane.key for lane in lanes} == {"cpu:regions"}
     assert {lane.device for lane in lanes} == {"cpu-mixed-split"}
-    assert capacities == {"cpu:mixed-role-split": 4}
+    assert {lane.cohort for lane in lanes} == {"cpu:mixed-role-split"}
+    assert capacities == {"cpu:regions": 4}
     assert [lane.units for lane in lanes] == [1, 1]
+
+
+def test_giant_full_request_excludes_mixed_split_work(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    lanes, capacities = eval_tower._eval_resource_lanes(
+        [
+            {"prompt": "route me"},
+            {"prompt": "x" * (eval_tower._GIANT_EVAL_PROMPT_CHARS + 1)},
+        ]
+    )
+
+    split, giant = lanes
+    assert split.key == giant.key == "cpu:regions"
+    assert split.cohort == "cpu:mixed-role-split"
+    assert giant.cohort == "cpu:full:frontdoor"
+    assert giant.units == capacities["cpu:regions"] == 4
 
 
 def test_eval_resource_lane_weights_near_full_context_prompt(monkeypatch) -> None:
@@ -540,7 +557,7 @@ def test_eval_resource_lanes_compute_prompt_load_per_question(monkeypatch) -> No
         ]
     )
 
-    assert capacities["cpu:full-regions"] == 4
+    assert capacities["cpu:regions"] == 4
     assert [lane.units for lane in lanes] == [1, 4]
 
 
@@ -785,25 +802,25 @@ def test_eval_batch_never_overlaps_different_native_cpu_process_cohorts(monkeypa
     monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
     tower = EvalTower(timeout=2)
     native = eval_tower._EvalResourceLane(
-        key="cpu:full-regions",
+        key="cpu:regions",
         role="frontdoor",
         capacity=4,
         units=1,
         device="cpu-native-batch",
-        cohort="frontdoor",
+        cohort="cpu:full:frontdoor",
     )
     worker_native = eval_tower._EvalResourceLane(
-        key="cpu:full-regions",
+        key="cpu:regions",
         role="worker_general",
         capacity=4,
         units=1,
         device="cpu-native-batch",
-        cohort="worker_general",
+        cohort="cpu:full:worker_general",
     )
     monkeypatch.setattr(
         eval_tower,
         "_eval_resource_lanes",
-        lambda _questions: ([native, worker_native, native], {"cpu:full-regions": 4}),
+        lambda _questions: ([native, worker_native, native], {"cpu:regions": 4}),
     )
     active: set[str] = set()
     observed: list[set[str]] = []
@@ -841,6 +858,64 @@ def test_eval_batch_never_overlaps_different_native_cpu_process_cohorts(monkeypa
     assert all(result.correct for result in results)
     assert {"frontdoor-1", "frontdoor-2"} in observed
     assert not any("worker" in state and len(state) > 1 for state in observed)
+
+
+def test_eval_batch_drains_split_cohort_before_full_exclusive_request(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    tower = EvalTower(timeout=2)
+    split = eval_tower._EvalResourceLane(
+        key="cpu:regions",
+        role="frontdoor",
+        capacity=4,
+        units=1,
+        device="cpu-mixed-split",
+        cohort="cpu:mixed-role-split",
+    )
+    full = eval_tower._EvalResourceLane(
+        key="cpu:regions",
+        role="ingest_long_context",
+        capacity=4,
+        units=4,
+        device="cpu-placement",
+        cohort="cpu:full:ingest_long_context",
+    )
+    monkeypatch.setattr(
+        eval_tower,
+        "_eval_resource_lanes",
+        lambda _questions: ([split, full, split], {"cpu:regions": 4}),
+    )
+    active: set[str] = set()
+    observed: list[set[str]] = []
+    active_lock = threading.Lock()
+    split_barrier = threading.Barrier(2)
+
+    def fake_generate(q: dict, client: object) -> "eval_tower._GenOutcome":
+        qid = str(q["id"])
+        with active_lock:
+            active.add(qid)
+            observed.append(set(active))
+        if qid.startswith("split"):
+            split_barrier.wait(timeout=1)
+        time.sleep(0.02)
+        with active_lock:
+            active.remove(qid)
+        return eval_tower._GenOutcome(
+            gen_ended_at_s=time.time(),
+            final_result=QuestionResult(
+                question_id=qid, suite="unit", prompt="", expected="ok", correct=True
+            ),
+        )
+
+    monkeypatch.setattr(tower, "_generate_question", fake_generate)
+    results = tower._eval_batch(
+        [{"id": "split-1"}, {"id": "full"}, {"id": "split-2"}],
+        client=object(),  # type: ignore[arg-type]
+        label="split-before-full",
+    )
+
+    assert all(result.correct for result in results)
+    assert {"split-1", "split-2"} in observed
+    assert not any("full" in state and len(state) > 1 for state in observed)
 
 
 def test_eval_concurrency_caps_to_live_fleet_when_static_topology_allows(monkeypatch) -> None:
