@@ -2164,6 +2164,19 @@ def test_eval_question_stamps_eval_batch_request_metadata(monkeypatch) -> None:
     assert calls[0]["allow_delegation"] is False
 
 
+def test_giant_router_owned_question_uses_full_native_placement() -> None:
+    question = {"prompt": "x" * (eval_tower._GIANT_EVAL_PROMPT_CHARS + 1)}
+    assert eval_tower._eval_batch_placement_mode(question) == "homogeneous_native_batch"
+
+
+def test_explicit_giant_placement_override_still_wins() -> None:
+    question = {
+        "prompt": "x" * (eval_tower._GIANT_EVAL_PROMPT_CHARS + 1),
+        "_batch_placement_mode": "mixed_role_split",
+    }
+    assert eval_tower._eval_batch_placement_mode(question) == "mixed_role_split"
+
+
 def test_eval_question_forwards_prompt_root_when_present(monkeypatch) -> None:
     tower = EvalTower()
     calls: list[dict] = []

@@ -290,6 +290,7 @@ def _instrument_drift_log_message(drift: Mapping[str, Any]) -> tuple[int, str]:
 
 _EVAL_QUESTION_JSONL_SCHEMA_VERSION = 1
 _DEFAULT_EVAL_ARTIFACT_ROOT = Path("/mnt/raid0/llm/tmp/eval_tower_trials")
+_GIANT_EVAL_PROMPT_CHARS = 524_288
 
 
 def _eval_no_progress_timeout_s(request_timeout_s: int) -> float:
@@ -1317,7 +1318,7 @@ def _eval_question_timeout_s(prompt: str, base_timeout_s: int | float) -> int:
     base = max(1, int(math.ceil(float(base_timeout_s))))
     prompt_chars = len(str(prompt or ""))
     giant = max(base, _read_registry_timeout("benchmark", "timeout_giant", 1200))
-    if prompt_chars > 524_288:
+    if prompt_chars > _GIANT_EVAL_PROMPT_CHARS:
         # The T1 longbench tail contains ~637K-character / ~90K-token prompts.
         # A certified half instance can spend nearly 30 minutes on prefill alone;
         # retain another full 30-minute window for decode and response handling.
@@ -1600,6 +1601,11 @@ def _eval_batch_placement_mode(question: Mapping[str, Any]) -> str:
         if explicit not in _BATCH_PLACEMENT_MODES:
             raise ValueError(f"invalid _batch_placement_mode: {explicit!r}")
         return explicit
+    if len(str(question.get("prompt") or "")) > _GIANT_EVAL_PROMPT_CHARS:
+        # A giant singleton is a critical-path prefill, not a mixed-role burst
+        # cohort. Let existing split work drain, then use the certified full
+        # process and all CPU regions instead of spending an hour on one half.
+        return "homogeneous_native_batch"
     if str(question.get("force_role") or "").strip():
         return "homogeneous_native_batch"
     return "mixed_role_split"
