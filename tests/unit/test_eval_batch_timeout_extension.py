@@ -37,6 +37,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from src.api.models import ChatRequest
 from src.api.routes.chat_pipeline.routing_decision import resolve_timeout
@@ -76,6 +77,13 @@ def pinned_worker_sla():
 
 
 class TestResolveTimeoutEvalBatchExtension:
+    def test_request_shape_accepts_giant_eval_budget(self):
+        request = ChatRequest(prompt="q", workload_class="eval_batch", timeout_s=3600)
+        assert request.timeout_s == 3600
+
+        with pytest.raises(ValidationError):
+            ChatRequest(prompt="q", workload_class="eval_batch", timeout_s=3601)
+
     def test_eval_batch_extends_beyond_role_sla(self, pinned_worker_sla):
         """eval_batch + explicit timeout_s longer than the SLA -> the LONGER value."""
         request = ChatRequest(
@@ -93,8 +101,8 @@ class TestResolveTimeoutEvalBatchExtension:
 
     def test_non_eval_traffic_clamps_down_unchanged(self, pinned_worker_sla):
         """Interactive traffic can only SHORTEN below the SLA, never extend."""
-        request = ChatRequest(prompt="q", workload_class="interactive", timeout_s=300)
-        # min(60, 300) == 60 — the DOWN-only clamp is preserved exactly.
+        request = ChatRequest(prompt="q", workload_class="interactive", timeout_s=3600)
+        # min(60, 3600) == 60 — the DOWN-only clamp is preserved exactly.
         assert resolve_timeout(request, [_WORKER_ROLE]) == pinned_worker_sla
 
     def test_unset_workload_class_clamps_down_unchanged(self, pinned_worker_sla):

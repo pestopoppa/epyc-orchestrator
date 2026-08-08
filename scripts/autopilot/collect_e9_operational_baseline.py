@@ -56,6 +56,7 @@ SOURCE_PATHS = (
     REPO_ROOT / "src/api/routes/chat.py",
     REPO_ROOT / "src/api/routes/chat_utils.py",
     REPO_ROOT / "src/api/routes/chat_pipeline/routing_decision.py",
+    REPO_ROOT / "src/api/models/requests.py",
     REPO_ROOT / "src/runtime/inference_tap.py",
     REPO_ROOT / "src/runtime/live_telemetry.py",
     REPO_ROOT / "orchestration/model_registry.yaml",
