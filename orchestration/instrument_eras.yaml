@@ -315,6 +315,30 @@ eras:
       Questions/hour denominator boundary for end-to-end long-context capacity
       enforcement. E13 guard-only and E14 capacity-enforced task rates do not mix.
 
+  - id: E15-eval-physical-cohort-v7-quality
+    from: "2026-08-08T14:47:08.081912Z"
+    scope: eval_quality
+    policy_version: "task_rate_4d_v7_physical_cohort_exclusion"
+    execution_instrument_id: "resource_lanes_v7_physical_cohort_exclusion"
+    scoring_schedule_id: "model_judge_tail_v4_gpu_lifecycle_quiescence"
+    note: >
+      E15 consolidated baseline-hardening boundary. EvalTower rejects error sentinels,
+      uses certified long-context deadlines, and models full and split CPU processes as
+      mutually exclusive cohorts over one physical region lane. The admitted 100-question
+      diagnostic at commit 498675be achieved reliability 1.0 with zero
+      scorer, transport, drain, overflow, or orphan-contamination errors.
+
+  - id: E15-autopilot-physical-cohort-v7-speed
+    from: "2026-08-08T14:47:08.081912Z"
+    scope: autopilot_speed
+    policy_version: "task_rate_4d_v7_physical_cohort_exclusion"
+    execution_instrument_id: "resource_lanes_v7_physical_cohort_exclusion"
+    scoring_schedule_id: "model_judge_tail_v4_gpu_lifecycle_quiescence"
+    note: >
+      Questions/hour denominator boundary for physical-cohort exclusion and certified
+      full-instance giant placement. E14 and E15 task rates do not mix. The admitted
+      baseline measured four-way client concurrency and 169.17287179198564 questions/hour.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.
