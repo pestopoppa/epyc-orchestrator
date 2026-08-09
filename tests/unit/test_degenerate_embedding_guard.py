@@ -1,9 +1,9 @@
 """The episodic write chokepoint must refuse embeddings an outage would produce.
 
-`use_fallback` defaults to True in both EmbeddingConfig and EmbedderPoolConfig,
-and every live site builds a bare `TaskEmbedder()`. So an embedder outage does
-not fail a write — it silently substitutes a SHA-256 pseudo-vector. Measured
-over 5,000 real task texts:
+The original TaskEmbedder fallback and the former parallel-pool fallback used
+two different deterministic pseudo-vector algorithms. Both must be recognized
+at the write boundary. The parallel pool now fails upward instead of returning
+its fallback, allowing TaskEmbedder to try its other real embedding paths.
 
     all-zero        89.0%   float32 norm overflows to inf; v/inf == 0
     contains NaN     2.8%   permanently unretrievable (FAISS scores it -inf)
@@ -14,9 +14,7 @@ caught only by exact comparison against the deterministic fallback.
 """
 from __future__ import annotations
 
-import tempfile
 import warnings
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -35,6 +33,11 @@ from orchestration.repl_memory.episodic_store import (
 from orchestration.repl_memory.memory_record import (
     build_memory_record,
     record_from_legacy_context,
+)
+from orchestration.repl_memory.parallel_embedder import (
+    EmbedderPoolConfig,
+    is_parallel_hash_fallback_embedding,
+    parallel_hash_fallback_embedding,
 )
 
 warnings.filterwarnings("ignore")
@@ -127,6 +130,17 @@ class TestDetectors:
         assert is_hash_fallback_embedding(ta, va)
         assert not is_hash_fallback_embedding(ta + " (different)", va)
 
+    def test_parallel_fallback_detection_is_exact_and_text_specific(self):
+        text = "type:chat | objective:target task | priority:interactive"
+        vector = parallel_hash_fallback_embedding(text)
+
+        assert is_parallel_hash_fallback_embedding(text, vector)
+        assert not is_parallel_hash_fallback_embedding(text + "!", vector)
+        assert is_degenerate_embedding(vector) is None
+
+    def test_parallel_pool_fallback_is_disabled_by_default(self):
+        assert EmbedderPoolConfig().use_fallback is False
+
 
 class TestChokepointRefuses:
     @pytest.mark.parametrize(
@@ -152,6 +166,15 @@ class TestChokepointRefuses:
                     store.store(v, "route", "routing", ctx_for(obj))
                 return
         pytest.fail("no well-formed fallback vector found in 4000 tries")
+
+    def test_parallel_pool_fallback_is_refused(self, store):
+        objective = "target task"
+        context = ctx_for(objective)
+        text = record_from_legacy_context(context).embedding_text()
+        vector = parallel_hash_fallback_embedding(text)
+
+        with pytest.raises(DegenerateEmbeddingError, match="parallel_hash_fallback"):
+            store.store(vector, "route", "routing", context)
 
     def test_a_real_embedding_stores_normally(self, store):
         mid = store.store(unit_vector(), "route", "routing", ctx_for("sort a list"))

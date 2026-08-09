@@ -26,14 +26,44 @@ import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import concurrent.futures
+
+    import httpx
 
 logger = logging.getLogger(__name__)
 
 # Default ports for the 6 BGE embedder instances
 DEFAULT_EMBEDDER_PORTS = [8090, 8091, 8092, 8093, 8094, 8095]
+
+
+def parallel_hash_fallback_embedding(
+    text: str, embedding_dim: int = 1024
+) -> np.ndarray:
+    """Reproduce the legacy parallel-pool pseudo-vector exactly."""
+    hash_bytes = hashlib.sha256(text.encode()).digest()
+    seed = int.from_bytes(hash_bytes[:8], byteorder="little")
+    rng = np.random.Generator(np.random.PCG64(seed))
+    embedding = rng.standard_normal(embedding_dim).astype(np.float32)
+    norm = np.linalg.norm(embedding)
+    if norm > 0:
+        embedding = embedding / norm
+    return embedding
+
+
+def is_parallel_hash_fallback_embedding(text: str, vec: np.ndarray) -> bool:
+    """Whether ``vec`` is exactly the legacy parallel-pool fallback."""
+    if vec is None or not text:
+        return False
+    candidate = np.asarray(vec, dtype=np.float32).ravel()
+    if candidate.size == 0:
+        return False
+    reference = parallel_hash_fallback_embedding(text, candidate.shape[0])
+    return bool(np.allclose(candidate, reference, rtol=1e-5, atol=1e-6))
 
 
 @dataclass
@@ -50,7 +80,12 @@ class EmbedderPoolConfig:
     embedding_dim: int = 1024  # BGE-large embedding dimension
     max_retries: int = 2  # Max retries per server on transient errors
     backoff_base: float = 0.5  # Base backoff time in seconds
-    use_fallback: bool = True  # Fall back to hash if all servers fail
+    # A random unit vector is structurally valid but semantically meaningless.
+    # Returning one here bypassed TaskEmbedder's server/subprocess retry chain
+    # and poisoned three live memories during the 2026-08-09 T2 run. Fail up to
+    # the owning TaskEmbedder instead; it can try the single-server and strict
+    # subprocess paths before its own (detectable and write-refused) fallback.
+    use_fallback: bool = False
 
 
 class ParallelEmbedderClient:
@@ -393,20 +428,7 @@ class ParallelEmbedderClient:
         Returns:
             Pseudo-embedding vector (normalized)
         """
-        # Use hash as seed for deterministic random generation
-        hash_bytes = hashlib.sha256(text.encode()).digest()
-        seed = int.from_bytes(hash_bytes[:8], byteorder="little")
-
-        # Create deterministic embedding using seeded random generator
-        rng = np.random.Generator(np.random.PCG64(seed))
-        embedding = rng.standard_normal(self.config.embedding_dim).astype(np.float32)
-
-        # Normalize to unit vector
-        norm = np.linalg.norm(embedding)
-        if norm > 0:
-            embedding = embedding / norm
-
-        return embedding
+        return parallel_hash_fallback_embedding(text, self.config.embedding_dim)
 
     async def health_check_all(self) -> dict[str, bool]:
         """Check health of all configured servers.

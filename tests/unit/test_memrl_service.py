@@ -38,6 +38,7 @@ class StubQScorer:
         reward: float,
         context: dict,
         embedding: list[float] | None = None,
+        action_type: str = "routing",
     ) -> dict:
         """Stub external result scoring."""
         return {"memories_created": 1, "memories_updated": 0}

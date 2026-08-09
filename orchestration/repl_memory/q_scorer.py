@@ -1608,6 +1608,7 @@ class QScorer:
         reward: float,
         context: Dict[str, Any] | None = None,
         embedding: List[float] | None = None,
+        action_type: str = "routing",
     ) -> Dict[str, Any]:
         """Score an externally-evaluated result.
 
@@ -1621,6 +1622,8 @@ class QScorer:
             reward: Pre-computed reward (-1.0 to 1.0).
             context: Additional context to store with the memory.
             embedding: Precomputed embedding for task_description (avoids re-embedding).
+            action_type: Episodic namespace for the action. Control-plane
+                actions such as plan review must not enter the routing index.
 
         Returns:
             Dict with memories_created and memories_updated counts.
@@ -1659,12 +1662,16 @@ class QScorer:
             logger.warning("Refusing external Q-score with a fallback or degenerate embedding")
             return result
 
+        action_type = str(action_type or "").strip()
+        if not action_type:
+            raise ValueError("action_type must be a non-empty string")
+
         # Search for existing similar memory with same action
         # Note: retrieve_by_similarity returns memories sorted by similarity
         similar = self.store.retrieve_by_similarity(
             query_embedding=emb_array,
             k=5,
-            action_type="routing",
+            action_type=action_type,
         )
         # Filter to high-similarity matches (similarity_score >= 0.85)
         similar = [m for m in similar if m.similarity_score >= 0.85]
@@ -1740,7 +1747,7 @@ class QScorer:
             memory_id = self.store.store(
                 embedding=emb_array,
                 action=action,
-                action_type="routing",
+                action_type=action_type,
                 model_id=_model_id_for_action(action),
                 context=record.to_context(),
                 outcome="success" if reward > 0 else "failure",
@@ -1753,7 +1760,7 @@ class QScorer:
                     task_id="external",
                     memory_id=memory_id,
                     data={
-                        "action_type": "routing",
+                        "action_type": action_type,
                         "initial_q": initial_q,
                         "source": "external_score",
                     },

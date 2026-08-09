@@ -27,6 +27,7 @@ from src.api.routes.chat_pipeline.routing_decision import (
     derive_task_type_from_route,
     estimate_routing_cost,
     extract_skill_ids,
+    fence_nonserving_route,
     log_routing_start,
     resolve_timeout,
     select_initial_route,
@@ -322,6 +323,12 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         )
     except Exception:
         xmas_meta = None
+
+    if not use_mock:
+        routing_decision, routing_strategy = fence_nonserving_route(
+            routing_decision,
+            routing_strategy,
+        )
 
     role_for_signals = str(routing_decision[0]) if routing_decision else ""
     _factual_risk_score, _factual_risk_band = assess_factual_risk(

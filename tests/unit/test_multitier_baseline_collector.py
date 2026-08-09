@@ -68,3 +68,24 @@ def test_state_readiness_accepts_paused_quiescent_state() -> None:
         "in_flight_trial_clear": True,
         "in_flight_trial_id": None,
     }
+
+
+def test_source_guard_covers_learned_routing_instrument() -> None:
+    guarded = {
+        str(path.relative_to(collector.REPO_ROOT)) for path in collector.SOURCE_PATHS
+    }
+
+    assert {
+        "orchestration/repl_memory/hybrid_router.py",
+        "orchestration/repl_memory/embedder.py",
+        "orchestration/repl_memory/episodic_store.py",
+        "orchestration/repl_memory/parallel_embedder.py",
+        "orchestration/repl_memory/q_scorer.py",
+        "src/api/routes/chat_review.py",
+        "src/api/routes/chat_pipeline/routing.py",
+        "src/api/routes/chat_pipeline/routing_decision.py",
+        "src/api/services/memrl.py",
+        "src/registry/stack_priors.py",
+        "src/roles.py",
+        "orchestration/derived/stack_priors.yaml",
+    } <= guarded

@@ -627,6 +627,7 @@ class TestStorePlanReviewEpisode:
         call_kwargs = state.q_scorer.score_external_result.call_args.kwargs
         assert call_kwargs["reward"] == 0.0  # 0.5 * 2 - 1 = 0
         assert "plan_review" in call_kwargs["action"]
+        assert call_kwargs["action_type"] == "plan_review"
 
     def test_memrl_exception_handled(self):
         """MemRL exception doesn't crash."""

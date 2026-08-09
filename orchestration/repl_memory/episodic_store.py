@@ -115,6 +115,9 @@ def _embedding_rejection_reason(embedding, context) -> Optional[str]:
         is_degenerate_embedding,
         is_hash_fallback_embedding,
     )
+    from orchestration.repl_memory.parallel_embedder import (
+        is_parallel_hash_fallback_embedding,
+    )
 
     reason = is_degenerate_embedding(embedding)
     if reason is not None:
@@ -127,6 +130,8 @@ def _embedding_rejection_reason(embedding, context) -> Optional[str]:
         return None
     if text and is_hash_fallback_embedding(text, embedding):
         return "hash_fallback"
+    if text and is_parallel_hash_fallback_embedding(text, embedding):
+        return "parallel_hash_fallback"
     return None
 
 

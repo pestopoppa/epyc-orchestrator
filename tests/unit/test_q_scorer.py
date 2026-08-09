@@ -1146,3 +1146,34 @@ class TestExternalScoreIdentity:
         )
         assert result == {"memories_updated": 0, "memories_created": 0}
         scorer.store.retrieve_by_similarity.assert_not_called()
+
+    def test_external_score_preserves_non_routing_action_namespace(self):
+        scorer = _scorer()
+        scorer.store.retrieve_by_similarity.return_value = []
+        scorer.store.store.return_value = "plan-review-memory"
+
+        scorer.score_external_result(
+            "target task",
+            "plan_review:drop",
+            0.9,
+            context={"task_type": "chat"},
+            embedding=[1.0] * 1024,
+            action_type="plan_review",
+        )
+
+        assert scorer.store.retrieve_by_similarity.call_args.kwargs["action_type"] == "plan_review"
+        assert scorer.store.store.call_args.kwargs["action_type"] == "plan_review"
+        progress_entry = scorer.logger.log.call_args.args[0]
+        assert progress_entry.data["action_type"] == "plan_review"
+
+    def test_external_score_rejects_empty_action_namespace(self):
+        scorer = _scorer()
+        with pytest.raises(ValueError, match="action_type"):
+            scorer.score_external_result(
+                "target task",
+                "frontdoor",
+                1.0,
+                context={"task_type": "chat"},
+                embedding=[1.0] * 1024,
+                action_type="",
+            )

@@ -82,6 +82,27 @@ class HybridRouter:
         )
         self.last_decision_meta: Dict[str, Any] = {}
 
+        # Serving routes and control-plane actions share the episodic store but
+        # must never share an action namespace. Cache the realized serving
+        # action set once per API process; a reload is already required when the
+        # generated stack-priors contract changes.
+        try:
+            from src.registry.stack_priors import live_stack_role_ids
+
+            self._live_routing_roles = set(live_stack_role_ids())
+        except Exception:
+            self._live_routing_roles = set()
+        if not self._live_routing_roles:
+            # Explicit degraded fallback: retain current serving roles while
+            # excluding draft-only and retired compatibility enum members.
+            from src.roles import Role
+
+            self._live_routing_roles = {
+                role.value
+                for role in Role
+                if role.value not in {"draft_coder", "draft_general", "thinking_reasoning"}
+            }
+
         # DAR-4: Bilinear scorer for zero cold-start model routing.
         # Initialized lazily on first use when BILINEAR_SCORER_ENABLED=1.
         self._bilinear_scorer = None
@@ -305,6 +326,31 @@ class HybridRouter:
             r.posterior_score = r.selection_score + r.prior_term
         return sorted(results, key=lambda x: x.posterior_score, reverse=True)
 
+    def _canonical_routable_role(self, role_name: str) -> Optional[str]:
+        """Return a live serving role, or ``None`` for control/invalid labels."""
+        from src.roles import Role
+
+        role = Role.from_string(str(role_name).strip())
+        if role is None or role.value not in self._live_routing_roles:
+            return None
+        return role.value
+
+    def _filter_routable_results(
+        self, results: List[RetrievalResult]
+    ) -> List[RetrievalResult]:
+        """Exclude non-serving memories before any learned action selection."""
+        filtered = [
+            result
+            for result in results
+            if self._parse_routing_action(result.memory.action)
+        ]
+        rejected = len(results) - len(filtered)
+        if rejected:
+            logger.warning(
+                "Rejected %d non-serving episodic routing candidate(s)", rejected
+            )
+        return filtered
+
     # Task types matching extract_training_data.py (order must be stable)
     _CLASSIFIER_TASK_TYPES = ["code", "chat", "architecture", "ingest", "general"]
 
@@ -458,6 +504,7 @@ class HybridRouter:
 
         # Try learned routing first
         results = self.retriever.retrieve_for_routing(task_ir)
+        results = self._filter_routable_results(results)
         results = self._apply_priors(results, priors)
 
         # Blend GraphRouter signal if available
@@ -569,6 +616,7 @@ class HybridRouter:
 
         # Try learned routing first
         results = self.retriever.retrieve_for_routing(task_ir)
+        results = self._filter_routable_results(results)
         results = self._apply_priors(results, priors)
 
         # Blend GraphRouter signal if available
@@ -613,7 +661,7 @@ class HybridRouter:
         return (routing, "rules", mode)
 
     def _parse_routing_action(self, action: str) -> List[str]:
-        """Parse stored action string to routing list."""
+        """Parse a stored action only when every target is a live serving role."""
         # Actions are stored as comma-separated role names
         # Also handle "role:mode" format by stripping mode suffix
         roles = []
@@ -621,7 +669,10 @@ class HybridRouter:
             r = r.strip()
             if ":" in r:
                 r = r.split(":")[0]  # Strip mode suffix
-            roles.append(r)
+            role = self._canonical_routable_role(r)
+            if role is None:
+                return []
+            roles.append(role)
         return roles
 
     def _parse_routing_action_with_mode(
@@ -645,9 +696,15 @@ class HybridRouter:
             r = r.strip()
             if ":" in r:
                 role_part, mode_part = r.split(":", 1)
-                roles.append(role_part)
+                role = self._canonical_routable_role(role_part)
+                if role is None:
+                    return ([], "direct")
+                roles.append(role)
                 if i == 0:  # Mode from first role
                     mode = mode_part if mode_part in ("direct", "react", "repl") else "direct"
             else:
-                roles.append(r)
+                role = self._canonical_routable_role(r)
+                if role is None:
+                    return ([], "direct")
+                roles.append(role)
         return roles, mode

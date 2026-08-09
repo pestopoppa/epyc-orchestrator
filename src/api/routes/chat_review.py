@@ -458,6 +458,7 @@ def _store_plan_review_episode(
                 task_description=task_ir.get("objective", "")[:TASK_IR_OBJECTIVE_LEN],
                 action=f"plan_review:{review.decision}",
                 reward=reward,
+                action_type="plan_review",
                 context={
                     "task_type": task_ir.get("task_type", "chat"),
                     "review_decision": review.decision,

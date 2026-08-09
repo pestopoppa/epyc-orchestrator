@@ -115,6 +115,76 @@ class TestHybridRouterGraphBlending:
         assert strategy == "learned"
         assert "frontdoor" in routing
 
+    def test_control_plane_memory_is_filtered_before_learned_selection(
+        self, retriever, rule_router
+    ):
+        """A high-Q plan-review episode can never become a serving route."""
+        from orchestration.repl_memory.retriever import HybridRouter, RetrievalResult
+
+        poisoned = RetrievalResult(
+            memory=MockMemoryEntry(action="plan_review:drop", q_value=1.0),
+            similarity=0.99,
+            q_value=1.0,
+            combined_score=1.0,
+            selection_score=1.0,
+            posterior_score=1.0,
+            q_confidence=1.0,
+        )
+        valid = RetrievalResult(
+            memory=MockMemoryEntry(action="frontdoor:direct", q_value=0.8),
+            similarity=0.8,
+            q_value=0.8,
+            combined_score=0.8,
+            selection_score=0.8,
+            posterior_score=0.8,
+            q_confidence=0.8,
+        )
+        retriever.retrieve_for_routing.return_value = [poisoned, valid]
+        retriever.should_use_learned.side_effect = lambda results: bool(results)
+        retriever.get_best_action.side_effect = (
+            lambda results: (results[0].memory.action, results[0].q_confidence)
+        )
+
+        router = HybridRouter(retriever=retriever, rule_based_router=rule_router)
+        routing, strategy = router.route({"task_type": "chat"})
+
+        assert (routing, strategy) == (["frontdoor"], "learned")
+        assert router.last_decision_meta["action_topk"] == ["frontdoor:direct"]
+
+    def test_only_control_plane_memories_fall_back_to_rules(
+        self, retriever, rule_router
+    ):
+        """An all-invalid learned neighborhood fails closed to rule routing."""
+        from orchestration.repl_memory.retriever import HybridRouter, RetrievalResult
+
+        retriever.retrieve_for_routing.return_value = [
+            RetrievalResult(
+                memory=MockMemoryEntry(action="plan_review:add", q_value=1.0),
+                similarity=0.99,
+                q_value=1.0,
+                combined_score=1.0,
+                selection_score=1.0,
+                posterior_score=1.0,
+                q_confidence=1.0,
+            )
+        ]
+        retriever.should_use_learned.side_effect = lambda results: bool(results)
+
+        router = HybridRouter(retriever=retriever, rule_based_router=rule_router)
+        routing, strategy = router.route({"task_type": "chat"})
+
+        assert (routing, strategy) == (["frontdoor"], "rules")
+        retriever.get_best_action.assert_not_called()
+
+    def test_route_parser_rejects_non_serving_and_canonicalizes_alias(
+        self, retriever, rule_router
+    ):
+        from orchestration.repl_memory.retriever import HybridRouter
+
+        router = HybridRouter(retriever=retriever, rule_based_router=rule_router)
+        assert router._parse_routing_action("plan_review:drop") == []
+        assert router._parse_routing_action("reviewer:direct") == ["architect_general"]
+
     def test_with_graph_router(self, retriever, rule_router):
         """With graph_router, blending happens before routing decision."""
         from orchestration.repl_memory.retriever import HybridRouter

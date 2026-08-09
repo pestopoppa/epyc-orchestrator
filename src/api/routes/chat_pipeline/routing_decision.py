@@ -100,6 +100,47 @@ def normalize_ingress_role(role: object) -> object:
     return role
 
 
+def fence_nonserving_route(
+    routing_decision: list, routing_strategy: str
+) -> tuple[list, str]:
+    """Fail closed when an automatic route names a non-serving action.
+
+    Episodic control-plane actions and model-serving routes coexist in the
+    same database. The learned router filters its own retrievals, but this
+    pipeline boundary also protects against a future router or override
+    returning an action that has no realized serving endpoint.
+    """
+    try:
+        from src.registry.stack_priors import live_stack_role_ids
+
+        live_roles = set(live_stack_role_ids())
+    except Exception:
+        live_roles = set()
+    if not live_roles:
+        live_roles = {
+            role.value
+            for role in Role
+            if role.value not in {"draft_coder", "draft_general", "thinking_reasoning"}
+        }
+
+    canonical: list[str] = []
+    for raw_role in routing_decision:
+        role = Role.from_string(str(raw_role).strip())
+        if role is None or role.value not in live_roles:
+            log.error(
+                "Non-serving route fenced: strategy=%s route=%s → frontdoor",
+                routing_strategy,
+                [str(candidate) for candidate in routing_decision],
+            )
+            return [str(Role.FRONTDOOR)], f"{routing_strategy}:nonserving_fenced"
+        canonical.append(role.value)
+
+    if not canonical:
+        log.error("Empty route fenced: strategy=%s → frontdoor", routing_strategy)
+        return [str(Role.FRONTDOOR)], f"{routing_strategy}:nonserving_fenced"
+    return canonical, routing_strategy
+
+
 def assess_factual_risk(prompt: str, role: str, task_id: str) -> tuple[float, str]:
     """Return factual-risk score and band, falling back to no-risk on failure."""
     try:

@@ -19,6 +19,7 @@ from src.api.routes.chat_pipeline.routing import (
     _server_urls_with_eval_batch_frontdoor,
 )
 from src.api.routes.chat_pipeline.routing_decision import (
+    fence_nonserving_route,
     normalize_ingress_role,
     resolve_timeout,
     routing_meta,
@@ -796,6 +797,47 @@ def test_normalize_ingress_role_legacy_aliases() -> None:
 def test_normalize_ingress_role_returns_canonical_worker_general_enum() -> None:
     assert normalize_ingress_role("worker_coder") == Role.WORKER_GENERAL
     assert normalize_ingress_role("worker_code") == Role.WORKER_GENERAL
+
+
+def test_nonserving_route_is_fenced_to_frontdoor(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.registry.stack_priors.live_stack_role_ids",
+        lambda: ["frontdoor", "worker_general"],
+    )
+
+    route, strategy = fence_nonserving_route(["plan_review"], "learned")
+
+    assert route == ["frontdoor"]
+    assert strategy == "learned:nonserving_fenced"
+
+
+def test_serving_route_is_canonicalized(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.registry.stack_priors.live_stack_role_ids",
+        lambda: ["frontdoor", "worker_general"],
+    )
+
+    route, strategy = fence_nonserving_route(["worker_fast"], "learned")
+
+    assert route == ["worker_general"]
+    assert strategy == "learned"
+
+
+def test_route_request_fences_nonserving_learned_action(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.registry.stack_priors.live_stack_role_ids",
+        lambda: ["frontdoor", "worker_general"],
+    )
+    request = ChatRequest(prompt="test", real_mode=True)
+    state = MagicMock()
+    state.hybrid_router.route.return_value = (["plan_review"], "learned")
+    state.failure_graph = None
+    state.progress_logger = None
+
+    result = _route_request(request, state)
+
+    assert result.routing_decision == ["frontdoor"]
+    assert result.routing_strategy == "learned:nonserving_fenced"
 
 
 class TestPreprocess:

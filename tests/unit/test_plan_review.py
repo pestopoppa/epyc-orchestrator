@@ -465,6 +465,7 @@ class TestStorePlanReviewEpisode:
         mock_state.q_scorer.score_external_result.assert_called_once()
         call_kwargs = mock_state.q_scorer.score_external_result.call_args[1]
         assert call_kwargs["action"] == "plan_review:reroute"
+        assert call_kwargs["action_type"] == "plan_review"
         # reward = 0.4 * 2 - 1 = -0.2
         assert abs(call_kwargs["reward"] - (-0.2)) < 0.01
 
