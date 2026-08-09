@@ -124,8 +124,7 @@ from src.autopilot_core.tier_specs import (
     RATE_4D_OBJECTIVE_POLICY,
     RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
-    goodput_qph_from_row,
-    task_rate_qph_from_row,
+    seq_task_rate_qph_from_row,
 )
 
 # The replay tool owns the canonical counterfactual archive pass and the
@@ -3395,11 +3394,18 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
 # owns live dominance. These fields let the dashboard compare rate/goodput and
 # offered load without feeding the archive, safety gate, or keep/revert logic.
 
+_CERTIFIED_RATE_OBJECTIVE_POLICIES = {
+    PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
+    RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
+    RATE_4D_OBJECTIVE_POLICY,
+}
 _TASK_RATE_NULL_FIELDS: dict[str, Any] = {
     "task_rate_qph": None,
     "goodput_qph": None,
     "tokens_per_solved": None,
     "offered_load": None,
+    "task_rate_status": "unavailable",
+    "task_rate_policy": None,
 }
 
 
@@ -3434,24 +3440,52 @@ def _offered_load_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _task_rate_fields_from_row(row: dict[str, Any] | None) -> dict[str, Any]:
-    """Canonical task-rate telemetry fields for one folded journal row.
+    """Certified task-rate telemetry fields for one folded journal row.
 
-    Null-safe: rows lacking the wall/n inputs (the canonical helpers return 0.0
-    for those) ship explicit ``None`` so the client renders them as
-    "lacks task_rate" instead of plotting a fake 0 q/h point.
+    Legacy/unstamped rows did not run under a task-rate objective instrument,
+    so deriving q/h from whatever historical ``total`` and ``eval_wall_s``
+    happen to exist is a counterfactual reconstruction, not measured evidence.
+    Fail closed for those rows. Certified rate-policy rows use the same paired
+    sequential rate helper as the live objective; aborted/implausibly short
+    measurements therefore return ``None`` rather than giant fake rates.
     """
     if not isinstance(row, dict):
         return dict(_TASK_RATE_NULL_FIELDS)
+    eval_details = row.get("eval_details")
+    if not isinstance(eval_details, dict):
+        eval_details = {}
+    policy = str(eval_details.get("objective_policy_live") or row.get("objective_policy_live") or "")
+    if policy not in _CERTIFIED_RATE_OBJECTIVE_POLICIES:
+        return {
+            **_TASK_RATE_NULL_FIELDS,
+            "tokens_per_solved": _task_rate_tokens_per_solved(row),
+            "offered_load": _offered_load_from_row(row),
+            "task_rate_status": "legacy_or_unstamped_policy",
+            "task_rate_policy": policy or None,
+        }
     try:
-        task_rate = task_rate_qph_from_row(row)
+        task_rate = seq_task_rate_qph_from_row(row)
     except Exception:
-        return dict(_TASK_RATE_NULL_FIELDS)
-    has_rate = task_rate > 0.0
+        task_rate = None
+    if task_rate is None:
+        return {
+            **_TASK_RATE_NULL_FIELDS,
+            "tokens_per_solved": _task_rate_tokens_per_solved(row),
+            "offered_load": _offered_load_from_row(row),
+            "task_rate_status": "invalid_measurement",
+            "task_rate_policy": policy,
+        }
+    try:
+        quality = float(row.get("quality") or 0.0)
+    except (TypeError, ValueError):
+        quality = 0.0
     return {
-        "task_rate_qph": round(task_rate, 2) if has_rate else None,
-        "goodput_qph": round(goodput_qph_from_row(row), 2) if has_rate else None,
+        "task_rate_qph": round(task_rate, 2),
+        "goodput_qph": round((quality / 3.0) * task_rate, 2),
         "tokens_per_solved": _task_rate_tokens_per_solved(row),
         "offered_load": _offered_load_from_row(row),
+        "task_rate_status": "measured",
+        "task_rate_policy": policy,
     }
 
 

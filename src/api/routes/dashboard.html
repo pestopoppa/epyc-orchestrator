@@ -1061,7 +1061,7 @@ body.insight-fullscreen-open { overflow: hidden; }
             </div>
             <div id="pareto-speed-axis-toggle" style="display:inline-flex;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden">
               <button type="button" class="pareto-scope-btn" data-axis="legacy" onclick="setParetoSpeedAxis('legacy')">archive objective</button>
-              <button type="button" class="pareto-scope-btn" data-axis="task_rate" onclick="setParetoSpeedAxis('task_rate')">task-rate telemetry</button>
+              <button type="button" class="pareto-scope-btn" data-axis="task_rate" onclick="setParetoSpeedAxis('task_rate')">certified task-rate telemetry</button>
             </div>
             <span id="pareto-divergence-badge" style="display:none;background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid #f59e0b;border-radius:6px;padding:1px 6px;font-size:10px"></span>
             <span id="pareto-task-rate-note" style="color:var(--dim);font-size:10px"></span>
@@ -4805,8 +4805,8 @@ function renderParetoScatter(d) {
         + (isHistorical(p) ? ' · historical prior (earlier instrument era)' : '');
     // y = the archive's policy-owned objective[1] or per-entry task_rate_qph
     // companion telemetry. Points
-    // lacking task_rate return null and are SKIPPED in task-rate mode (no y
-    // coordinate exists for them) with a count note beside the toggle.
+    // without a certified task-rate-policy measurement return null and are
+    // SKIPPED in telemetry mode, with a count note beside the toggle.
     const axisTaskRate = paretoSpeedAxis === 'task_rate';
     const speedOf = p => {
         if (!axisTaskRate) return (p && Array.isArray(p.objectives)) ? p.objectives[1] : null;
@@ -4820,7 +4820,8 @@ function renderParetoScatter(d) {
         const tr = Number(p.task_rate_qph), gp = Number(p.goodput_qph), tok = Number(p.tokens_per_solved);
         return ` · task_rate=${Number.isFinite(tr) ? tr.toFixed(1) + ' q/h' : 'n/a'}`
             + ` · goodput=${Number.isFinite(gp) ? gp.toFixed(1) + ' q/h' : 'n/a'}`
-            + ` · tok/solved=${Number.isFinite(tok) ? tok.toFixed(0) : 'n/a'}`;
+            + ` · tok/solved=${Number.isFinite(tok) ? tok.toFixed(0) : 'n/a'}`
+            + ` · rate evidence=${p.task_rate_status || 'unknown'}`;
     };
     const suiteTip = p => {
         const rs = p.real_suite_v1;
@@ -4847,12 +4848,12 @@ function renderParetoScatter(d) {
     if (noteEl2) {
         const skipped = allPtsRaw.length - allPts.length;
         noteEl2.textContent = axisTaskRate && skipped > 0
-            ? `${skipped} of ${allPtsRaw.length} points lack task_rate (skipped)`
+            ? `${skipped} of ${allPtsRaw.length} points lack certified task-rate evidence (skipped)`
             : '';
     }
     if (!allPts.length) {
         const msg = axisTaskRate && allPtsRaw.length
-            ? 'no points carry task_rate telemetry yet'
+            ? 'no points carry certified task-rate telemetry yet'
             : 'no trial data yet';
         svg.innerHTML = `<text x="200" y="140" text-anchor="middle" fill="#64748b" font-size="11">${msg}</text>`;
         return;
@@ -4896,7 +4897,7 @@ function renderParetoScatter(d) {
     parts.push(`<text class="axis-label" x="${PAD.l + plotW / 2}" y="${VB.h - 4}" text-anchor="middle" font-size="10" fill="#94a3b8">quality →</text>`);
     const axisMeta = Array.isArray(d.objective_axes) ? d.objective_axes[1] : null;
     const yAxisTitle = axisTaskRate
-        ? 'task-rate telemetry (questions/hour) →'
+        ? 'certified task-rate telemetry (questions/hour) →'
         : `${axisMeta && axisMeta.label ? axisMeta.label : 'archive rate objective'} →`;
     parts.push(`<text class="axis-label" x="9" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 9 ${PAD.t + plotH / 2})">${yAxisTitle}</text>`);
 

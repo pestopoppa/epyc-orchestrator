@@ -13,15 +13,15 @@ from pathlib import Path
 import src.api.routes.dashboard as dash
 from src.autopilot_core.tier_specs import (
     RATE_4D_OBJECTIVE_POLICY,
-    goodput_qph_from_row,
-    task_rate_qph_from_row,
+    seq_task_rate_qph_from_row,
 )
 
 DASHBOARD_HTML = Path(dash.__file__).with_name("dashboard.html")
 
 
 def _row(tid, q, s, ts="2026-07-27T12:00:00+00:00", *, tier=1, cost=0.5, rel=1.0,
-         n_questions=None, eval_wall_s=None, details=None, eval_concurrency=None):
+         n_questions=None, eval_wall_s=None, details=None, eval_concurrency=None,
+         objective_policy=RATE_4D_OBJECTIVE_POLICY):
     row = {
         "trial_id": tid, "tier": tier, "quality": q, "speed": s, "cost": cost,
         "reliability": rel, "timestamp": ts,
@@ -31,7 +31,7 @@ def _row(tid, q, s, ts="2026-07-27T12:00:00+00:00", *, tier=1, cost=0.5, rel=1.0
         row["n_questions"] = n_questions
     if eval_wall_s is not None:
         row["eval_wall_s"] = eval_wall_s
-    eval_details = {}
+    eval_details = {"objective_policy_live": objective_policy} if objective_policy else {}
     if details is not None:
         eval_details["details"] = details
     if eval_concurrency is not None:
@@ -136,13 +136,35 @@ def test_toggle_data_integrity_matches_canonical_helpers(tmp_path, monkeypatch):
     assert set(pts) == {1, 2, 3, 4}
     for tid, entry in pts.items():
         row = rows_by_tid[tid]
-        expected_rate = task_rate_qph_from_row(row)
-        if expected_rate > 0:
+        expected_rate = seq_task_rate_qph_from_row(row)
+        if expected_rate is not None:
             assert entry["task_rate_qph"] == round(expected_rate, 2)
-            assert entry["goodput_qph"] == round(goodput_qph_from_row(row), 2)
+            assert entry["goodput_qph"] == round((row["quality"] / 3.0) * expected_rate, 2)
+            assert entry["task_rate_status"] == "measured"
         else:
             assert entry["task_rate_qph"] is None
             assert entry["goodput_qph"] is None
+
+
+def test_all_eras_scrubs_counterfactual_legacy_task_rates(tmp_path, monkeypatch):
+    legacy = _row(
+        1,
+        1.8,
+        50.0,
+        n_questions=55,
+        eval_wall_s=0.054,
+        objective_policy="legacy_4d_v1",
+    )
+    active = _row(2, 1.9, 40.0, n_questions=10, eval_wall_s=360.0)
+    _journal(tmp_path, monkeypatch, [legacy, active])
+    _state(tmp_path, monkeypatch, pareto_objective_policy=RATE_4D_OBJECTIVE_POLICY)
+
+    pts = _points(_call(scope="all_eras"))
+
+    assert pts[1]["task_rate_qph"] is None
+    assert pts[1]["task_rate_status"] == "legacy_or_unstamped_policy"
+    assert pts[2]["task_rate_qph"] == 100.0
+    assert pts[2]["task_rate_status"] == "measured"
 
 
 def test_current_frontier_follows_active_policy_and_compares_legacy(tmp_path, monkeypatch):
@@ -218,7 +240,7 @@ def test_dashboard_html_ships_dual_report_ui():
     assert 'id="pareto-dual-report-banner"' in html
     assert 'id="pareto-speed-axis-toggle"' in html
     assert "archive objective" in html
-    assert "task-rate telemetry" in html
+    assert "certified task-rate telemetry" in html
     assert 'id="pareto-divergence-badge"' in html
     assert 'id="pareto-task-rate-note"' in html
     assert "setParetoSpeedAxis" in html
