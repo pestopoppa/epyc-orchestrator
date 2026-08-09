@@ -18,6 +18,22 @@ class _Embedder:
         return self.values
 
 
+def test_checked_batch_prefers_parallel_pool() -> None:
+    values = np.ones((2, 1024), dtype=np.float32)
+
+    class Parallel:
+        def embed_batch_sync(self, texts: list[str]) -> np.ndarray:
+            assert texts == ["a", "b"]
+            return values
+
+    embedder = _Embedder(np.zeros((2, 1024), dtype=np.float32))
+    embedder._parallel_client = Parallel()
+
+    result = reseed._checked_batch(embedder, ["a", "b"])
+
+    assert np.allclose(np.linalg.norm(result, axis=1), 1.0)
+
+
 def _write_persisted_state(
     tmp_path, id_map: list[str], rows: list[tuple[str, int | None]]
 ) -> None:

@@ -67,7 +67,10 @@ import numpy as np
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SESSIONS = _REPO_ROOT / "orchestration/repl_memory/sessions"
-BATCH = 256
+# Six BGE servers complete 64-way fan-out in ~2.4s on this host; 256-way fan-out
+# overloads their request queues and regresses to ~34s.  Keep the transaction
+# window bounded by using the measured saturation knee.
+BATCH = 64
 
 
 class ReseedVerificationError(RuntimeError):
@@ -178,7 +181,16 @@ def _strict_embedder():
 
 
 def _checked_batch(embedder, texts: list[str]) -> np.ndarray:
-    vecs = np.asarray(embedder.embed_batch(texts), dtype=np.float32)
+    # TaskEmbedder.embed_batch is a serial Python loop even when its parallel
+    # six-server client is configured.  A full 60k-row rebuild would therefore
+    # hold the SQLite write transaction for hours.  Use the already-supported
+    # async batch fan-out directly; retain the generic method for test doubles.
+    parallel = getattr(embedder, "_parallel_client", None)
+    if parallel is not None and hasattr(parallel, "embed_batch_sync"):
+        raw = parallel.embed_batch_sync(texts)
+    else:
+        raw = embedder.embed_batch(texts)
+    vecs = np.asarray(raw, dtype=np.float32)
     if vecs.shape != (len(texts), 1024):
         raise ReseedVerificationError(
             f"embedding batch shape {vecs.shape}, expected {(len(texts), 1024)}"
