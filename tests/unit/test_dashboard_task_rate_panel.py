@@ -1,11 +1,10 @@
-"""W3b-C dual-report interim (2026-07-27, objective-task-rate-goodput.md W3c).
+"""Pareto dashboard objective-policy truthfulness.
 
 The Pareto panel payload must surface task_rate/goodput/tokens-per-solved (+
 offered_load) telemetry per shipped point — computed via the CANONICAL helpers
 in src.autopilot_core.tier_specs, joined from the same folded journal rows the
-panel reconstructs from — plus a server-side divergence tripwire between the
-legacy and task-rate objective policies. All of it is display-only: legacy
-`median_request_tps` remains the live dominance vector.
+panel reconstructs from. Current-scope frontier membership must follow the live
+policy stamped in AutoPilot state; legacy t/s is historical comparison only.
 """
 import asyncio
 import json
@@ -13,6 +12,7 @@ from pathlib import Path
 
 import src.api.routes.dashboard as dash
 from src.autopilot_core.tier_specs import (
+    RATE_4D_OBJECTIVE_POLICY,
     goodput_qph_from_row,
     task_rate_qph_from_row,
 )
@@ -145,55 +145,82 @@ def test_toggle_data_integrity_matches_canonical_helpers(tmp_path, monkeypatch):
             assert entry["goodput_qph"] is None
 
 
-def test_divergence_tripwire_reports_dropped_legacy_points(tmp_path, monkeypatch):
+def test_current_frontier_follows_active_policy_and_compares_legacy(tmp_path, monkeypatch):
     _journal(tmp_path, monkeypatch, [ROW_1, ROW_2, ROW_3])
-    _state(tmp_path, monkeypatch)
+    _state(tmp_path, monkeypatch, pareto_objective_policy=RATE_4D_OBJECTIVE_POLICY)
     d = _call()
 
-    div = d["task_rate_divergence"]
+    assert d["objective_policy"] == RATE_4D_OBJECTIVE_POLICY
+    assert d["active_objective_policy"] == RATE_4D_OBJECTIVE_POLICY
+    assert d["decision_grade"] is True
+    assert sorted(e["trial_id"] for e in d["frontier"]) == [2]
+
+    div = d["objective_policy_comparison"]
     assert div["error"] is None
     assert div["legacy_policy"] == "legacy_4d_v1"
-    assert div["task_rate_policy"] == "task_rate_3d_v1"
+    assert div["active_policy"] == RATE_4D_OBJECTIVE_POLICY
     # All three points are legacy-frontier (quality/speed trade-off), but trial 2
-    # dominates 1 and 3 on (quality, task_rate, reliability).
+    # dominates 1 and 3 under the active 4D task-rate policy.
     assert div["legacy_frontier_trial_ids"] == [1, 2, 3]
-    assert div["task_rate_frontier_trial_ids"] == [2]
+    assert div["active_frontier_trial_ids"] == [2]
     assert div["dropped_legacy_trial_ids"] == [1, 3]
     assert div["dropped_legacy_count"] == 2
-    assert div["divergence_criterion_met"] is True
-
-    # Dominance vector UNCHANGED: the shipped legacy frontier still holds all 3.
-    assert sorted(e["trial_id"] for e in d["frontier"]) == [1, 2, 3]
+    assert div["added_active_count"] == 0
+    assert div["frontiers_differ"] is True
 
 
-def test_divergence_tripwire_quiet_when_frontiers_agree(tmp_path, monkeypatch):
+def test_objective_comparison_quiet_when_frontiers_agree(tmp_path, monkeypatch):
     # Single admitted trial → identical frontiers under both policies.
     _journal(tmp_path, monkeypatch, [ROW_2])
-    _state(tmp_path, monkeypatch)
-    div = _call()["task_rate_divergence"]
+    _state(tmp_path, monkeypatch, pareto_objective_policy=RATE_4D_OBJECTIVE_POLICY)
+    div = _call()["objective_policy_comparison"]
     assert div["error"] is None
     assert div["legacy_frontier_trial_ids"] == [2]
-    assert div["task_rate_frontier_trial_ids"] == [2]
+    assert div["active_frontier_trial_ids"] == [2]
     assert div["dropped_legacy_count"] == 0
-    assert div["divergence_criterion_met"] is False
+    assert div["frontiers_differ"] is False
 
 
-def test_divergence_summary_null_safe_without_rows():
-    div = dash._task_rate_divergence_summary(None, {})
+def test_objective_comparison_null_safe_without_rows():
+    div = dash._objective_policy_comparison_summary(None, {}, RATE_4D_OBJECTIVE_POLICY)
     assert div["error"] == "no journal rows available"
     assert div["dropped_legacy_count"] == 0
-    assert div["divergence_criterion_met"] is False
+    assert div["frontiers_differ"] is False
+
+
+def test_unknown_active_policy_fails_visibly_to_legacy_comparator(tmp_path, monkeypatch):
+    _journal(tmp_path, monkeypatch, [ROW_1, ROW_2])
+    _state(tmp_path, monkeypatch, pareto_objective_policy="future_unknown_v99")
+
+    d = _call()
+
+    assert d["objective_policy"] == "legacy_4d_v1"
+    assert d["decision_grade"] is False
+    assert "unknown pareto_objective_policy" in d["objective_policy_warning"]
+
+
+def test_all_eras_is_explicitly_non_decision_grade_legacy_comparator(tmp_path, monkeypatch):
+    _journal(tmp_path, monkeypatch, [ROW_1, ROW_2, ROW_3])
+    _state(tmp_path, monkeypatch, pareto_objective_policy=RATE_4D_OBJECTIVE_POLICY)
+
+    d = _call(scope="all_eras")
+
+    assert d["objective_policy"] == "legacy_4d_v1"
+    assert d["active_objective_policy"] == RATE_4D_OBJECTIVE_POLICY
+    assert d["objective_policy_context"] == "historical_legacy_comparator"
+    assert d["decision_grade"] is False
+    assert d["objective_axes"][1]["label"] == "median request t/s (historical comparator)"
 
 
 def test_dashboard_html_ships_dual_report_ui():
     html = DASHBOARD_HTML.read_text()
-    # One-line dual-report banner (W3b-C).
-    assert "dominance = legacy t/s · task_rate telemetry live (W3b-C, flip armed on divergence)" in html
-    # Speed-axis toggle with both labels; amber divergence badge; count note slot.
+    # Policy-aware banner and descriptive comparison controls.
+    assert 'id="pareto-dual-report-banner"' in html
     assert 'id="pareto-speed-axis-toggle"' in html
-    assert "median request t/s (end-to-end)" in html
-    assert "task_rate (quality-units/h)" in html
+    assert "archive objective" in html
+    assert "task-rate telemetry" in html
     assert 'id="pareto-divergence-badge"' in html
     assert 'id="pareto-task-rate-note"' in html
     assert "setParetoSpeedAxis" in html
-    assert "divergence criterion met — W3 flip decision live" in html
+    assert "W3 flip decision live" not in html
+    assert "objective comparison" in html

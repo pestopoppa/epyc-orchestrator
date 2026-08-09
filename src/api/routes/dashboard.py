@@ -120,15 +120,17 @@ from src.autopilot_core.pareto_math import (
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
+    PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
+    RATE_4D_OBJECTIVE_POLICY,
+    RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
     goodput_qph_from_row,
     task_rate_qph_from_row,
 )
 
-# W3b-C dual-report interim (2026-07-27, objective-task-rate-goodput.md): the
-# replay tool owns the canonical task-rate archive/frontier pass and the
-# tokens-per-solved derivation — REUSE them rather than reimplementing the math
-# here, so the panel's telemetry can never drift from the replay reports.
+# The replay tool owns the canonical counterfactual archive pass and the
+# tokens-per-solved derivation. Reuse it for the historical policy comparison
+# and companion telemetry rather than reimplementing either calculation.
 from scripts.analysis.task_rate_goodput_replay import (
     _archive as _task_rate_replay_archive,
     _frontier_for as _task_rate_replay_frontier,
@@ -3388,12 +3390,10 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ── W3b-C dual-report task-rate telemetry (display-only) ────────────────────
-# Operator decision W3b-C (2026-07-27, objective-task-rate-goodput.md): legacy
-# `median_request_tps` REMAINS the live dominance vector; task_rate/goodput
-# become VISIBLE telemetry on the Pareto panel immediately, with the live-vector
-# flip armed on first observed divergence. Everything below is display-only —
-# it never feeds the archive, safety gate, or any keep/revert decision.
+# ── Pareto companion telemetry (display-only) ───────────────────────────────
+# W3 was flipped on 2026-08-04: the archive policy, not this telemetry helper,
+# owns live dominance. These fields let the dashboard compare rate/goodput and
+# offered load without feeding the archive, safety gate, or keep/revert logic.
 
 _TASK_RATE_NULL_FIELDS: dict[str, Any] = {
     "task_rate_qph": None,
@@ -3477,28 +3477,51 @@ def _attach_task_rate_telemetry(
             )
 
 
-def _task_rate_divergence_summary(
+_DASHBOARD_OBJECTIVE_POLICIES = {
+    LEGACY_OBJECTIVE_POLICY,
+    TASK_RATE_OBJECTIVE_POLICY,
+    PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
+    RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
+    RATE_4D_OBJECTIVE_POLICY,
+}
+
+
+def _active_pareto_objective_policy(state: dict[str, Any]) -> tuple[str, str | None]:
+    """Return the state-declared live policy, failing visibly to legacy replay."""
+    raw = str(state.get("pareto_objective_policy") or LEGACY_OBJECTIVE_POLICY)
+    if raw in _DASHBOARD_OBJECTIVE_POLICIES:
+        return raw, None
+    return (
+        LEGACY_OBJECTIVE_POLICY,
+        f"unknown pareto_objective_policy={raw!r}; showing legacy comparator",
+    )
+
+
+def _objective_policy_comparison_summary(
     rows: list[dict[str, Any]] | None,
     state: dict[str, Any],
+    active_policy: str,
 ) -> dict[str, Any]:
-    """Cheap server-side divergence tripwire between the two objective policies.
+    """Compare the historical t/s frontier with the already-live objective.
 
-    Reuses the replay tool's archive pass to rebuild the current-era canonical
-    -tier frontier under BOTH policies and reports which legacy frontier trials
-    fall off under task-rate. `dropped_legacy_count >= 2` is the pre-registered
-    W3 divergence criterion (amber badge client-side; the flip itself stays an
-    operator decision). Display-only — never gates anything.
+    This is descriptive telemetry, not a flip gate: W3 was ratified on
+    2026-08-04. The active policy comes from ``autopilot_state.json`` so the
+    dashboard never compares legacy t/s against the obsolete 3D shadow policy
+    while AutoPilot is actually ranking a newer 4D task-rate instrument.
     """
     out: dict[str, Any] = {
         "legacy_policy": LEGACY_OBJECTIVE_POLICY,
-        "task_rate_policy": TASK_RATE_OBJECTIVE_POLICY,
+        "active_policy": active_policy,
         "canonical_tier": DEFAULT_FRONTIER_TIER,
         "legacy_frontier_trial_ids": [],
-        "task_rate_frontier_trial_ids": [],
+        "active_frontier_trial_ids": [],
         "dropped_legacy_count": 0,
-        "divergence_criterion_met": False,
+        "added_active_count": 0,
+        "frontiers_differ": False,
         "error": None,
     }
+    if active_policy == LEGACY_OBJECTIVE_POLICY:
+        return out
     if not rows:
         out["error"] = "no journal rows available"
         return out
@@ -3509,10 +3532,10 @@ def _task_rate_divergence_summary(
             objective_policy=LEGACY_OBJECTIVE_POLICY,
             current_run_only=True,
         )
-        task_rate = _task_rate_replay_archive(
+        active = _task_rate_replay_archive(
             rows,
             state,
-            objective_policy=TASK_RATE_OBJECTIVE_POLICY,
+            objective_policy=active_policy,
             current_run_only=True,
         )
     except (Exception, SystemExit) as exc:  # SystemExit: replay raises on empty archive
@@ -3529,15 +3552,18 @@ def _task_rate_divergence_summary(
         return sorted(ids)
 
     legacy_ids = _frontier_ids(legacy)
-    task_rate_ids = _frontier_ids(task_rate)
-    dropped = sorted(set(legacy_ids) - set(task_rate_ids))
+    active_ids = _frontier_ids(active)
+    dropped = sorted(set(legacy_ids) - set(active_ids))
+    added = sorted(set(active_ids) - set(legacy_ids))
     out.update(
         {
             "legacy_frontier_trial_ids": legacy_ids,
-            "task_rate_frontier_trial_ids": task_rate_ids,
+            "active_frontier_trial_ids": active_ids,
             "dropped_legacy_trial_ids": dropped,
             "dropped_legacy_count": len(dropped),
-            "divergence_criterion_met": len(dropped) >= 2,
+            "added_active_trial_ids": added,
+            "added_active_count": len(added),
+            "frontiers_differ": legacy_ids != active_ids,
         }
     )
     return out
@@ -4830,6 +4856,7 @@ def _pareto_from_journal(
     deinflate_before_ts: float | None = None,
     deinflate_factor: float = 1.0,
     exclude_before_ts: float | None = None,
+    objective_policy: str = LEGACY_OBJECTIVE_POLICY,
     rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Reconstruct Pareto data from the append-only journal."""
@@ -4846,6 +4873,7 @@ def _pareto_from_journal(
         deinflate_before_ts=deinflate_before_ts,
         deinflate_factor=deinflate_factor,
         exclude_before_ts=exclude_before_ts,
+        objective_policy=objective_policy,
     )
 
 
@@ -5189,10 +5217,10 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
     keeps the dashboard useful when autopilot is down and protects the panel
     from a stale `pareto_archive` cache inside autopilot_state.json.
 
-    Objectives in the archive are (quality, speed, -cost, reliability).
-    The dashboard plots the first two by default since they're the most
-    operationally meaningful; -cost and reliability ride along as
-    per-point fields the client can surface in tooltips.
+    Objectives in the current archive follow ``pareto_objective_policy`` from
+    AutoPilot state. Their stable 4D shape is (quality, rate, -cost,
+    reliability), but the rate unit is policy-owned: legacy rows use request
+    t/s while the live W3 policy uses questions/hour.
 
     `scope` selects the reconstruction window:
       - "current" (default): the operational current-era progress view —
@@ -5222,6 +5250,7 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
         state_trial_counter = int(data.get("trial_counter"))
     except (TypeError, ValueError):
         state_trial_counter = None
+    active_objective_policy, objective_policy_warning = _active_pareto_objective_policy(data)
 
     # The operator-facing Pareto/GEPA plots are current-run progress charts,
     # not "this API process since reload" and not all historical campaigns.
@@ -5292,6 +5321,10 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             deinflate_before_ts=deinflate_e2_ts,
             deinflate_factor=deinflate_factor if deinflate_e2_ts is not None else 1.0,
             exclude_before_ts=None,
+            # One common, explicitly historical coordinate system for the
+            # cross-era cloud. It is never decision-grade and is not described
+            # as AutoPilot's live frontier.
+            objective_policy=LEGACY_OBJECTIVE_POLICY,
             rows=journal_rows,
         )
         source = "journal_all_eras"
@@ -5307,6 +5340,7 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             deinflate_before_ts=pareto_epoch_ts,
             deinflate_factor=deinflate_factor,
             exclude_before_ts=pareto_exclude_before_ts,
+            objective_policy=active_objective_policy,
             rows=journal_rows,
         )
         source = "journal_current_run"
@@ -5415,10 +5449,10 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             except (TypeError, ValueError):
                 continue
 
-    # W3b-C dual-report telemetry: join task_rate/goodput/tokens-per-solved (+
-    # offered_load) back onto every shipped point from the SAME folded journal
-    # rows this panel already reconstructs from. Display-only; dominance and
-    # frontier membership above remain purely legacy-policy.
+    # Join task_rate/goodput/tokens-per-solved (+ offered_load) back onto every
+    # shipped point from the SAME folded journal rows this panel reconstructs.
+    # These are descriptive companions; current-scope dominance is owned by
+    # ``active_objective_policy`` above.
     rows_by_tid: dict[int, dict[str, Any]] = {}
     for row in _effective_journal_trial_rows(journal_rows or []):
         try:
@@ -5434,7 +5468,11 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
         ),
         rows_by_tid,
     )
-    task_rate_divergence = _task_rate_divergence_summary(journal_rows, data)
+    objective_policy_comparison = _objective_policy_comparison_summary(
+        journal_rows,
+        data,
+        active_objective_policy,
+    )
 
     # All-era view: stamp every shipped point with its era region, and report
     # per-region trial ranges so the client can shade era bands on the timeline.
@@ -5487,6 +5525,15 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
                 "source": source,
                 "source_reason": source_reason,
                 "scope": "all_eras" if all_eras else "current",
+                "objective_policy": (
+                    LEGACY_OBJECTIVE_POLICY if all_eras else active_objective_policy
+                ),
+                "active_objective_policy": active_objective_policy,
+                "objective_policy_warning": objective_policy_warning,
+                "decision_grade": not all_eras and objective_policy_warning is None,
+                "objective_policy_context": (
+                    "historical_legacy_comparator" if all_eras else "active"
+                ),
                 "active_instrument_eras": active_instrument_eras,
                 "pareto_epoch_ts": pareto_epoch_ts,
                 "pareto_exclude_before_ts": pareto_exclude_before_ts,
@@ -5504,8 +5551,9 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
                     "state_error": state_error,
                     "using_legacy_state_archive": source == "state_archive",
                 },
-                # W3b-C dual-report tripwire (display-only; dominance unchanged).
-                "task_rate_divergence": task_rate_divergence,
+                # Historical comparator only. W3 already flipped; this never
+                # presents a pending decision or gates AutoPilot.
+                "objective_policy_comparison": objective_policy_comparison,
                 "state_trial_counter": state_trial_counter,
                 "journal_max_trial_id": archive.get("journal_max_trial_id")
                 if isinstance(archive, dict)
@@ -5530,7 +5578,16 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
                 "journal_run_start_ts": archive.get("journal_run_start_ts"),
                 "objective_axes": [
                     {"key": "quality", "index": 0, "direction": "max", "label": "quality"},
-                    {"key": "speed", "index": 1, "direction": "max", "label": "speed (t/s)"},
+                    {
+                        "key": "rate",
+                        "index": 1,
+                        "direction": "max",
+                        "label": (
+                            "median request t/s (historical comparator)"
+                            if all_eras or active_objective_policy == LEGACY_OBJECTIVE_POLICY
+                            else "task rate (questions/hour)"
+                        ),
+                    },
                     {"key": "neg_cost", "index": 2, "direction": "max", "label": "-cost"},
                     {"key": "reliability", "index": 3, "direction": "max", "label": "reliability"},
                 ],
@@ -7525,9 +7582,28 @@ async def gepa_status() -> JSONResponse:
     try:
         from scripts.autopilot.optimization_brief import GEPA_PROVENANCE_WINDOWS
 
-        provenance_windows = list(GEPA_PROVENANCE_WINDOWS)
+        all_provenance_windows = list(GEPA_PROVENANCE_WINDOWS)
     except Exception:
-        provenance_windows = []
+        all_provenance_windows = []
+
+    # Only ship caveats that apply to at least one row actually rendered in
+    # ``recent_trials``. The historical window remains canonical and will
+    # reappear whenever an affected row is in view; showing it over an entirely
+    # post-fix trajectory falsely claimed that "trials below" were hatched.
+    recent_trial_timestamps = [
+        ts
+        for trial in recent_trials
+        if (ts := _parse_journal_ts(trial.get("timestamp"))) is not None
+    ]
+    provenance_windows = [
+        window
+        for window in all_provenance_windows
+        if any(
+            (window.get("from_ts") is None or ts >= float(window["from_ts"]))
+            and (window.get("until_ts") is None or ts < float(window["until_ts"]))
+            for ts in recent_trial_timestamps
+        )
+    ]
 
     return JSONResponse(
         _stamp(

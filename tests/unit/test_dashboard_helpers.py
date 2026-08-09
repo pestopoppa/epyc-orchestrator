@@ -3966,6 +3966,36 @@ def test_gepa_status_ships_provenance_windows(tmp_path: Path, monkeypatch) -> No
     assert [t["trial_id"] for t in payload["recent_trials"]] == [900]
 
 
+def test_gepa_status_hides_provenance_window_when_visible_rows_are_post_fix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    log_path = tmp_path / "autopilot.log"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    log_path.write_text("2026-08-09 00:00:00,000 Trial active\n")
+    journal_path.write_text(
+        json.dumps(
+            {
+                "trial_id": 1498,
+                "timestamp": "2026-08-09T09:38:08+00:00",
+                "species": "numeric_swarm",
+                "quality": 1.5,
+                "speed": 12.0,
+                "cost": 0.5,
+                "reliability": 1.0,
+                "pareto_status": "dominated",
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", log_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    payload = json.loads(asyncio.run(dashboard.gepa_status()).body)
+
+    assert [t["trial_id"] for t in payload["recent_trials"]] == [1498]
+    assert payload["provenance_windows"] == []
+
+
 def test_scan_orchestrator_tasks_carries_vision_image_reference(tmp_path) -> None:
     """Vision image reference reaches BOTH in-flight and completed task cards.
 

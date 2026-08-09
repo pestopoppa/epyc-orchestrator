@@ -1053,16 +1053,15 @@ body.insight-fullscreen-open { overflow: hidden; }
       <details class="section-accordion" style="margin-top:14px" open>
         <summary>GEPA + Pareto frontier <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px;font-size:10px" id="pareto-summary"></span></summary>
         <div id="pareto-container">
-          <!-- W3b-C dual-report banner: dominance stays legacy; task_rate is visible telemetry. -->
-          <div id="pareto-dual-report-banner" style="color:var(--dim);font-size:10px;margin-bottom:6px">dominance = legacy t/s · task_rate telemetry live (W3b-C, flip armed on divergence)</div>
+          <div id="pareto-dual-report-banner" style="color:var(--dim);font-size:10px;margin-bottom:6px">loading objective policy…</div>
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
             <div id="pareto-scope-toggle" style="display:inline-flex;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden">
               <button type="button" class="pareto-scope-btn" data-scope="all_eras" onclick="setParetoScope('all_eras')">all eras</button>
               <button type="button" class="pareto-scope-btn" data-scope="current" onclick="setParetoScope('current')">current era</button>
             </div>
             <div id="pareto-speed-axis-toggle" style="display:inline-flex;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden">
-              <button type="button" class="pareto-scope-btn" data-axis="legacy" onclick="setParetoSpeedAxis('legacy')">median request t/s (end-to-end)</button>
-              <button type="button" class="pareto-scope-btn" data-axis="task_rate" onclick="setParetoSpeedAxis('task_rate')">task_rate (quality-units/h)</button>
+              <button type="button" class="pareto-scope-btn" data-axis="legacy" onclick="setParetoSpeedAxis('legacy')">archive objective</button>
+              <button type="button" class="pareto-scope-btn" data-axis="task_rate" onclick="setParetoSpeedAxis('task_rate')">task-rate telemetry</button>
             </div>
             <span id="pareto-divergence-badge" style="display:none;background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid #f59e0b;border-radius:6px;padding:1px 6px;font-size:10px"></span>
             <span id="pareto-task-rate-note" style="color:var(--dim);font-size:10px"></span>
@@ -4345,14 +4344,24 @@ async function updateGepa() {
         // GEPA provenance windows (2026-07-25 no-op incident): trials inside a
         // window ran while the reflective-mutation path was a guaranteed no-op —
         // hatch/grey them and show a caveat badge. Display-only.
-        const provWindows = Array.isArray(d.provenance_windows) ? d.provenance_windows : [];
+        const suppliedProvWindows = Array.isArray(d.provenance_windows) ? d.provenance_windows : [];
         const provFmt = ts => (ts == null ? '…' : new Date(ts * 1000).toISOString().slice(0, 10));
         const rowTsOf = t => { const v = Date.parse(t && t.timestamp || ''); return Number.isFinite(v) ? v / 1000 : null; };
         const inProvWindow = t => {
             const ts = rowTsOf(t);
-            return ts != null && provWindows.some(w =>
+            return ts != null && suppliedProvWindows.some(w =>
                 (w.from_ts == null || ts >= w.from_ts) && (w.until_ts == null || ts < w.until_ts));
         };
+        // Defence in depth for older API workers: only show windows that
+        // overlap a row actually rendered below. New workers already scope the
+        // payload server-side, but HTML is hot-reloaded independently.
+        const visibleTrials = Array.isArray(d.recent_trials) ? d.recent_trials : [];
+        const provWindows = suppliedProvWindows.filter(w => visibleTrials.some(t => {
+            const ts = rowTsOf(t);
+            return ts != null
+                && (w.from_ts == null || ts >= w.from_ts)
+                && (w.until_ts == null || ts < w.until_ts);
+        }));
         let header = '';
         if (provWindows.length) {
             header += provWindows.map(w =>
@@ -4470,10 +4479,10 @@ function syncParetoScopeButtons() {
         b.classList.toggle('active', b.dataset.scope === paretoScope));
 }
 
-// W3b-C dual-report speed-axis toggle: 'legacy' plots objectives[1]
-// (median request t/s, end-to-end — the LIVE dominance axis); 'task_rate'
-// re-plots y from per-entry task_rate_qph (quality-units/h) telemetry.
-// Display-only: frontier membership/lines always reflect legacy dominance.
+// Speed-axis toggle: 'legacy' is retained as a local-storage-compatible key,
+// but now means the archive's policy-owned objective[1]. 'task_rate' plots the
+// descriptive task_rate_qph companion telemetry. Frontier membership always
+// follows the archive objective declared by the API.
 let paretoSpeedAxis = (() => {
     try { return localStorage.getItem('paretoSpeedAxis') || 'legacy'; }
     catch (e) { return 'legacy'; }
@@ -4500,6 +4509,19 @@ async function updatePareto() {
         const url = '/dashboard/api/pareto?scope=' + encodeURIComponent(paretoScope)
             + (paretoScope === 'all_eras' ? '&max_dominated=5000' : '');
         const d = await fetchJSON(url);
+        const bannerEl = document.getElementById('pareto-dual-report-banner');
+        const archiveAxisButton = document.querySelector('#pareto-speed-axis-toggle [data-axis="legacy"]');
+        const axisMeta = Array.isArray(d.objective_axes) ? d.objective_axes[1] : null;
+        if (archiveAxisButton) archiveAxisButton.textContent = axisMeta && axisMeta.label
+            ? axisMeta.label
+            : 'archive objective';
+        if (bannerEl) {
+            const shownPolicy = d.objective_policy || 'unknown';
+            const activePolicy = d.active_objective_policy || shownPolicy;
+            bannerEl.textContent = d.objective_policy_context === 'historical_legacy_comparator'
+                ? `historical comparator · legacy request t/s · not decision-grade · live ${activePolicy}`
+                : `dominance = ${shownPolicy} · decision-grade current-era frontier`;
+        }
         const activeEras = d.active_instrument_eras || {};
         const activeSpeedEra = activeEras.autopilot_speed || '';
         const activeCpuEra = activeEras.cpu_bench || '';
@@ -4564,18 +4586,22 @@ async function updatePareto() {
                 sumEl.textContent = '(no autopilot_state.json yet)';
             }
         }
-        // W3b-C divergence tripwire badge (display-only): amber when >=2 legacy
-        // frontier points fall off under the task-rate policy — the pre-registered
-        // criterion that puts the W3 live-vector flip decision in front of the operator.
+        // Historical objective comparison. W3 already flipped on 2026-08-04;
+        // this is neutral context, never a pending decision or warning.
         const divEl = document.getElementById('pareto-divergence-badge');
         if (divEl) {
-            const div = d.task_rate_divergence || null;
+            const div = d.objective_policy_comparison || null;
             const dropped = div ? Number(div.dropped_legacy_count) : NaN;
-            const met = !!(div && (div.divergence_criterion_met === true
-                || (Number.isFinite(dropped) && dropped >= 2)));
-            if (met) {
+            const added = div ? Number(div.added_active_count) : NaN;
+            if (div && div.frontiers_differ && Number.isFinite(dropped) && Number.isFinite(added)) {
                 divEl.style.display = 'inline-block';
-                divEl.textContent = `⚠ divergence criterion met — W3 flip decision live (${dropped} legacy frontier points drop under task-rate)`;
+                divEl.style.background = 'rgba(96,165,250,0.12)';
+                divEl.style.color = '#60a5fa';
+                divEl.style.borderColor = '#60a5fa';
+                const changes = [];
+                if (dropped) changes.push(`${dropped} legacy-only point${dropped === 1 ? '' : 's'}`);
+                if (added) changes.push(`${added} active-only point${added === 1 ? '' : 's'}`);
+                divEl.textContent = `objective comparison · ${changes.join(' · ')}`;
             } else {
                 divEl.style.display = 'none';
                 divEl.textContent = '';
@@ -4740,8 +4766,8 @@ function paretoFrontierOf(points) {
 // the visible quality×speed trade-off edge and is drawable from >=2 points, so
 // every tier with enough data shows an actual frontier line over its cloud.
 function paretoEnvelope2D(points, yOf) {
-    // Optional yOf accessor (W3b-C speed-axis toggle): defaults to the legacy
-    // speed objective. Points whose y is null/non-finite are excluded.
+    // Optional yOf accessor: defaults to the archive's policy-owned rate
+    // objective. Points whose y is null/non-finite are excluded.
     const y = yOf || (p => p.objectives[1]);
     const pts = (points || []).filter(
         p => p && Array.isArray(p.objectives) && p.objectives.length >= 2
@@ -4777,8 +4803,8 @@ function renderParetoScatter(d) {
     const eraTip = p => (eraMode && p.era ? ` · ${p.era}` : '')
         + (p.speed_deinflated ? ' · sp×0.5' : '')
         + (isHistorical(p) ? ' · historical prior (earlier instrument era)' : '');
-    // W3b-C speed-axis toggle: y = legacy median request t/s (objectives[1],
-    // the live dominance axis) or per-entry task_rate_qph telemetry. Points
+    // y = the archive's policy-owned objective[1] or per-entry task_rate_qph
+    // companion telemetry. Points
     // lacking task_rate return null and are SKIPPED in task-rate mode (no y
     // coordinate exists for them) with a count note beside the toggle.
     const axisTaskRate = paretoSpeedAxis === 'task_rate';
@@ -4868,11 +4894,10 @@ function renderParetoScatter(d) {
     }
     // Axis titles — own lane below/left of the tick numbers, never fused.
     parts.push(`<text class="axis-label" x="${PAD.l + plotW / 2}" y="${VB.h - 4}" text-anchor="middle" font-size="10" fill="#94a3b8">quality →</text>`);
-    // Axis title per E8-PANELS-a relabel: the legacy axis is explicitly the
-    // end-to-end median request rate (the live dominance axis under W3b-C).
+    const axisMeta = Array.isArray(d.objective_axes) ? d.objective_axes[1] : null;
     const yAxisTitle = axisTaskRate
-        ? 'task_rate (quality-units/h) →'
-        : 'median request t/s (end-to-end) →';
+        ? 'task-rate telemetry (questions/hour) →'
+        : `${axisMeta && axisMeta.label ? axisMeta.label : 'archive rate objective'} →`;
     parts.push(`<text class="axis-label" x="9" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 9 ${PAD.t + plotH / 2})">${yAxisTitle}</text>`);
 
     // Era clouds FIRST so every mark paints on top of them: per era, the convex
@@ -4955,8 +4980,8 @@ function renderParetoScatter(d) {
         // decision-grade cross-era frontier.
         if (!eraMode) {
             // Envelope follows the selected y-axis (null-y points excluded by
-            // paretoEnvelope2D). In task-rate mode it is a telemetry trade-off
-            // edge, not a dominance frontier — dominance stays legacy (W3b-C).
+            // paretoEnvelope2D). In telemetry mode it is a descriptive trade-off
+            // edge, not the archive's dominance frontier.
             const envelope = paretoEnvelope2D(ptsByTier[String(tier)] || front || [], speedOf);
             if (envelope.length > 1) {
                 const path = envelope.map((p, i) =>
