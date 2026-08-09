@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import sqlite3
@@ -32,6 +33,28 @@ def test_checked_batch_prefers_parallel_pool() -> None:
     result = reseed._checked_batch(embedder, ["a", "b"])
 
     assert np.allclose(np.linalg.norm(result, axis=1), 1.0)
+
+
+def test_balanced_batch_round_robins_servers() -> None:
+    calls: list[tuple[str, str]] = []
+
+    class Parallel:
+        config = type("Config", (), {"server_urls": ["a", "b", "c"]})()
+
+        async def _get_client(self):
+            return object()
+
+        async def _embed_single_server(self, _client, url: str, text: str):
+            calls.append((url, text))
+            return np.ones(1024, dtype=np.float32)
+
+        async def close(self) -> None:
+            await asyncio.sleep(0)
+
+    result = reseed._balanced_parallel_batch(Parallel(), ["x", "y", "z", "w"])
+
+    assert result.shape == (4, 1024)
+    assert calls == [("a", "x"), ("b", "y"), ("c", "z"), ("a", "w")]
 
 
 def _write_persisted_state(

@@ -52,6 +52,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import argparse
 import fcntl
 import json
@@ -67,10 +68,10 @@ import numpy as np
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SESSIONS = _REPO_ROOT / "orchestration/repl_memory/sessions"
-# Six BGE servers complete 64-way fan-out in ~2.4s on this host; 256-way fan-out
-# overloads their request queues and regresses to ~34s.  Keep the transaction
-# window bounded by using the measured saturation knee.
-BATCH = 64
+# Six four-slot BGE servers complete 24-way balanced fan-out in ~1.3s on this
+# host; larger waves overload their request queues.  Use the certified fleet
+# width so the full rebuild does not hold its SQLite transaction for hours.
+BATCH = 24
 
 
 class ReseedVerificationError(RuntimeError):
@@ -186,7 +187,9 @@ def _checked_batch(embedder, texts: list[str]) -> np.ndarray:
     # hold the SQLite write transaction for hours.  Use the already-supported
     # async batch fan-out directly; retain the generic method for test doubles.
     parallel = getattr(embedder, "_parallel_client", None)
-    if parallel is not None and hasattr(parallel, "embed_batch_sync"):
+    if parallel is not None and hasattr(parallel, "_embed_single_server"):
+        raw = _balanced_parallel_batch(parallel, texts)
+    elif parallel is not None and hasattr(parallel, "embed_batch_sync"):
         raw = parallel.embed_batch_sync(texts)
     else:
         raw = embedder.embed_batch(texts)
@@ -201,6 +204,36 @@ def _checked_batch(embedder, texts: list[str]) -> np.ndarray:
     if np.any(norms <= 0):
         raise ReseedVerificationError("embedding batch contains a zero vector")
     return vecs / norms[:, None]
+
+
+def _balanced_parallel_batch(parallel, texts: list[str]) -> np.ndarray:
+    """Fan a maintenance batch evenly across every configured BGE server."""
+
+    async def run() -> np.ndarray:
+        urls = list(parallel.config.server_urls)
+        if not urls:
+            raise RuntimeError("no embedding servers configured")
+        client = await parallel._get_client()
+
+        async def embed_one(index: int, text: str) -> np.ndarray:
+            for offset in range(len(urls)):
+                url = urls[(index + offset) % len(urls)]
+                embedding = await parallel._embed_single_server(client, url, text)
+                if embedding is not None:
+                    return embedding
+            raise RuntimeError(f"all embedding servers failed for batch item {index}")
+
+        try:
+            return np.asarray(
+                await asyncio.gather(
+                    *(embed_one(index, text) for index, text in enumerate(texts))
+                ),
+                dtype=np.float32,
+            )
+        finally:
+            await parallel.close()
+
+    return asyncio.run(run())
 
 
 def verify_persisted(sessions: Path, expected_task_ids: set[str]) -> dict:
