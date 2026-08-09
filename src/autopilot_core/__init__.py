@@ -17,6 +17,15 @@ from src.autopilot_core.learning_exclusions import (
     WITHIN_NOISE_EXCLUSIONS,
     classify_learning_exclusion,
 )
+from src.autopilot_core.multitier_decision import (
+    DEFAULT_MAX_ATTEMPTS_PER_TIER,
+    MULTITIER_POLICY_VERSION,
+    REQUIRED_VALIDATION_TIERS,
+    TierValidationVerdict,
+    build_tier_baseline_evidence,
+    build_tier_candidate_evidence,
+    evaluate_tier_validation,
+)
 from src.autopilot_core.pareto_math import dominates, hypervolume, median_objectives
 from src.autopilot_core.rlvr_tiers import (
     RLVR_REWARD_POLICY,
@@ -65,7 +74,9 @@ __all__ = [
     "EProcessUpdate",
     "EPHEMERAL_ACTION_KEYS",
     "LEGACY_OBJECTIVE_POLICY",
+    "MULTITIER_POLICY_VERSION",
     "NON_CORRUPT_LEARNING_EXCLUSIONS",
+    "REQUIRED_VALIDATION_TIERS",
     "RLVR_REWARD_POLICY",
     "RLVRReward",
     "RLVRTierSpec",
@@ -74,16 +85,20 @@ __all__ = [
     "STATE_REFUTED",
     "SequentialPolicy",
     "TASK_RATE_OBJECTIVE_POLICY",
+    "TierValidationVerdict",
     "TrialStatistic",
     "WITHIN_NOISE_EXCLUSIONS",
     "action_signature",
     "baseline_profile_from_trials",
+    "build_tier_baseline_evidence",
+    "build_tier_candidate_evidence",
     "canonical_action",
     "classify_learning_exclusion",
     "config_fingerprint",
     "config_fingerprint_from_row",
     "dominates",
     "empirical_ville_false_positive_rate",
+    "evaluate_tier_validation",
     "goodput_qph_from",
     "goodput_qph_from_row",
     "hypervolume",
@@ -104,4 +119,5 @@ __all__ = [
     "seq_task_rate_qph_from_row",
     "task_rate_qph_from",
     "task_rate_qph_from_row",
+    "DEFAULT_MAX_ATTEMPTS_PER_TIER",
 ]

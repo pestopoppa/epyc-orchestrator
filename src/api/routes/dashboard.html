@@ -4544,9 +4544,16 @@ async function updatePareto() {
             const canonicalLane = Number.isFinite(Number(d.canonical_tier)) ? `lane T${Number(d.canonical_tier)}` : 'lane T1';
             const activeMix = decisionQuestionMixLabel(d.current_decision_question_mix, false);
             const instrument = `${canonicalLane}${activeMix ? ` · decision target ${activeMix}` : ''}`;
+            const mt = d.multitier_promotion || {};
+            const mtStage = mt.next_tier === 'final_t1'
+                ? 'fresh T1'
+                : (mt.next_tier != null ? `T${mt.next_tier}` : mt.status || 'idle');
+            const promotion = mt.enabled
+                ? ` · promotion T1 screen → T2 → T3 → fresh T1 (${mtStage})`
+                : ' · promotion policy disabled';
             bannerEl.textContent = d.objective_policy_context === 'historical_legacy_comparator'
-                ? `historical comparator · legacy request t/s · not decision-grade · live ${activePolicy} · ${instrument}`
-                : `dominance = ${shownPolicy} · decision-grade current-era frontier · ${instrument}`;
+                ? `historical comparator · legacy request t/s · not decision-grade · live ${activePolicy} · ${instrument}${promotion}`
+                : `dominance = ${shownPolicy} · decision-grade current-era frontier · ${instrument}${promotion}`;
         }
         const activeEras = d.active_instrument_eras || {};
         const activeSpeedEra = activeEras.autopilot_speed || '';
@@ -4589,6 +4596,13 @@ async function updatePareto() {
                 const mixText = decisionQuestionMixLabel(d.current_decision_question_mix, false);
                 const mixSummary = mixText ? ` · decision mix ${mixText}` : '';
                 let txt = `${canonicalTier} ${d.totals.frontier_size} frontier${mixSummary} · ${d.totals.all_entries} trials · ${source}${tierText}`;
+                const mt = d.multitier_promotion || {};
+                if (mt.enabled) {
+                    const baselines = Array.isArray(mt.baseline_tiers) && mt.baseline_tiers.length
+                        ? mt.baseline_tiers.map(t => `T${t}`).join('/')
+                        : 'none';
+                    txt += ` · staged promotion ${mt.status || 'ready'} · matched baselines ${baselines}`;
+                }
                 if (Array.isArray(d.eras) && d.eras.length) {
                     txt += ` · ${d.eras.filter(e => e.n_points > 0).length} eras`;
                 }

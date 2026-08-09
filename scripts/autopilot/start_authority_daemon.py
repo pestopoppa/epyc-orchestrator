@@ -100,6 +100,9 @@ AUTHORITY_ENV: dict[str, str] = {
     "AUTOPILOT_PLANNER_HINTS": "1",
     "AUTOPILOT_TOOL_SENTINELS": "1",
     "AUTOPILOT_STEPPING_STONES": "1",
+    # staged-multitier-v1: T1 screens; matched T2/T3 evidence is binding
+    # before the final fresh T1 baseline-promotion draw.
+    "AUTOPILOT_MULTITIER_PROMOTION": "1",
 }
 
 LOCAL_PLANNER_DEFAULT_ENV: dict[str, str] = {

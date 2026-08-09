@@ -1078,3 +1078,91 @@ def test_live_api_env_none_when_no_process(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr(applicator.subprocess, "run", lambda *a, **kw: FakeCompleted())
     assert applicator._live_api_env(["ANY"]) is None
+
+
+def test_capture_reversible_param_preimage_reads_attested_worker_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"pid": 4242, "flags": {"memrl": True}}
+
+    environ_file = tmp_path / "environ"
+    environ_file.write_bytes(
+        b"ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI=0.025\0OTHER=x\0"
+    )
+    real_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(self):
+        if str(self) == "/proc/4242/environ":
+            return real_read_bytes(environ_file)
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(applicator.httpx, "get", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+
+    result = applicator.capture_reversible_param_preimage(
+        {"think_harder.min_expected_roi": 0.05, "memrl": False}
+    )
+
+    assert result["status"] == "ok"
+    assert result["reversible"] is True
+    assert result["hot_swap"] == {"memrl": True}
+    assert result["env"] == {
+        "ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI": {
+            "present": True,
+            "value": "0.025",
+        }
+    }
+
+
+def test_capture_preimage_rejects_nonreversible_surface() -> None:
+    result = applicator.capture_reversible_param_preimage({"kv.keep_ratio": 0.5})
+
+    assert result["status"] == "unsupported"
+    assert result["reversible"] is False
+    assert result["unsupported"] == {"kv_compact": ["kv.keep_ratio"]}
+
+
+def test_restore_reversible_param_preimage_preserves_absent_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preimage = {
+        "schema_version": applicator.PARAM_PREIMAGE_SCHEMA,
+        "status": "ok",
+        "reversible": True,
+        "params": ["think_harder.min_expected_roi"],
+        "hot_swap": {},
+        "env": {
+            "ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI": {
+                "present": False,
+                "value": None,
+            }
+        },
+    }
+    reload_calls: list[dict] = []
+    monkeypatch.setattr(
+        applicator,
+        "_reload_api_via_stack",
+        lambda **kwargs: reload_calls.append(kwargs) or {"status": "ok"},
+    )
+    monkeypatch.setattr(
+        applicator,
+        "capture_reversible_param_preimage",
+        lambda params, url="": {**preimage, "source_pid": 5252},
+    )
+
+    result = applicator.restore_reversible_param_preimage(preimage, url="http://test")
+
+    assert result["status"] == "ok"
+    assert reload_calls == [
+        {
+            "env_overrides": {},
+            "env_unset": ["ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI"],
+            "url": "http://test",
+        }
+    ]

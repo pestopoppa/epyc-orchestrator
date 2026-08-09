@@ -62,6 +62,34 @@ def _apply_params(*args, **kwargs):
     return _ap(*args, **kwargs)
 
 
+def _capture_param_preimage(params: dict[str, Any]) -> dict[str, Any]:
+    """Lazy import keeps action-module test monkeypatching and load order intact."""
+    try:
+        from config_applicator import capture_reversible_param_preimage
+    except ImportError:  # pragma: no cover - package-path invocation
+        from scripts.autopilot.config_applicator import capture_reversible_param_preimage
+
+    return capture_reversible_param_preimage(params)
+
+
+def _restore_param_preimage(preimage: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from config_applicator import restore_reversible_param_preimage
+    except ImportError:  # pragma: no cover - package-path invocation
+        from scripts.autopilot.config_applicator import restore_reversible_param_preimage
+
+    return restore_reversible_param_preimage(preimage)
+
+
+def _multitier_runtime_enabled() -> bool:
+    return os.environ.get("AUTOPILOT_MULTITIER_PROMOTION", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _normalize_numeric_trial_params(
     surface: str,
     params: dict[str, Any],
@@ -624,7 +652,34 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
             "numeric_swarm",
         )
 
+    # A staged candidate must survive T2/T3 replays and be exactly reversible
+    # on rejection.  KV compaction mutates request-local cache state, while the
+    # AP-3 role-restart surface does not yet expose a production-grade inverse;
+    # neither may enter the binding promotion path.
+    if _multitier_runtime_enabled() and surface in {
+        "kv_compaction",
+        "spec_decode_role_restart",
+    }:
+        return (
+            SkipOutcome(
+                "skipped",
+                f"staged multi-tier policy requires a reversible surface: {surface}",
+                "numeric_trial",
+            ),
+            "numeric_swarm",
+        )
+
     if explicit_params:
+        preimage = _capture_param_preimage(explicit_params) if _multitier_runtime_enabled() else None
+        if preimage is not None and preimage.get("status") != "ok":
+            return (
+                SkipOutcome(
+                    "skipped",
+                    f"exact numeric restore preimage unavailable: {preimage}",
+                    "numeric_trial",
+                ),
+                "numeric_swarm",
+            )
         # Apply explicit params
         apply_result = _apply_params(explicit_params)
         if _numeric_apply_no_changes(apply_result):
@@ -646,9 +701,20 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
                 "numeric_swarm",
             )
         action["params"] = dict(explicit_params)
+        if preimage is not None:
+            action["_multitier_restore_preimage"] = preimage
     else:
         # Let Optuna suggest
         trial = ctx.swarm.suggest_trial(surface)
+        preimage = (
+            _capture_param_preimage(dict(trial["params"]))
+            if _multitier_runtime_enabled()
+            else None
+        )
+        if preimage is not None and preimage.get("status") != "ok":
+            reason = f"exact numeric restore preimage unavailable: {preimage}"
+            ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
+            return SkipOutcome("skipped", reason, "numeric_trial"), "numeric_swarm"
         apply_result = _apply_params(trial["params"])
         if _numeric_apply_no_changes(apply_result):
             reason = "suggested params produced no live config changes"
@@ -674,6 +740,8 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
                 "numeric_swarm",
             )
         action["params"] = dict(trial["params"])
+        if preimage is not None:
+            action["_multitier_restore_preimage"] = preimage
         ctx.state["_current_optuna_trial"] = {
             "surface": surface,
             "trial_number": trial["trial_number"],
@@ -709,9 +777,7 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
                 t["surface"],
                 t["trial_number"],
             )
-            ctx.swarm.mark_failed(
-                t["surface"], t["trial_number"], "dominance axis unmeasured"
-            )
+            ctx.swarm.mark_failed(t["surface"], t["trial_number"], "dominance axis unmeasured")
         else:
             ctx.swarm.report_result(t["surface"], t["trial_number"], objectives)
     return eval_result, "numeric_swarm"
@@ -1976,7 +2042,12 @@ def _recent_eval_qids(
 
 def _action_deep_eval(action: dict[str, Any], ctx: _ActionContext):
     tier = action.get("tier", 2)
-    replay_marker = ctx.state.pop("_seq_promotion_candidate_replay", None)
+    multitier_marker = ctx.state.pop("_multitier_candidate_validation", None)
+    replay_marker = (
+        multitier_marker
+        if isinstance(multitier_marker, dict)
+        else ctx.state.pop("_seq_promotion_candidate_replay", None)
+    )
     candidate_action = replay_marker.get("action") if isinstance(replay_marker, dict) else None
     replay_detail: dict[str, Any] | None = None
     if isinstance(candidate_action, dict):
@@ -2049,7 +2120,7 @@ def _action_deep_eval(action: dict[str, Any], ctx: _ActionContext):
                 "seeder",
             )
     eval_kwargs: dict[str, Any] = {"tier": tier}
-    if replay_detail is not None:
+    if replay_detail is not None and not isinstance(multitier_marker, dict):
         eval_kwargs.update(
             {
                 "promotion_eval": True,
@@ -2060,15 +2131,97 @@ def _action_deep_eval(action: dict[str, Any], ctx: _ActionContext):
     eval_result = ctx.tower.evaluate(**eval_kwargs)
     if replay_detail is not None:
         eval_result.details.setdefault("seq_promotion_candidate_replay", replay_detail)
+    if isinstance(multitier_marker, dict):
+        eval_result.details.setdefault(
+            "multitier_candidate_validation",
+            {
+                "policy_version": multitier_marker.get("policy_version"),
+                "stage": multitier_marker.get("stage"),
+                "tier": multitier_marker.get("tier"),
+                "candidate": multitier_marker.get("candidate"),
+                "source_trial_id": multitier_marker.get("source_trial_id"),
+                "candidate_replay": replay_detail,
+            },
+        )
     return eval_result, "seeder"
 
 
 def _action_rollback(action: dict[str, Any], ctx: _ActionContext):
     to_cp = action.get("to_checkpoint", "production_best")
+    runtime_restore: dict[str, Any] | None = None
+    pending = ctx.state.get("multitier_pending_validation")
+    if ctx.state.get("multitier_rollback_pending") and isinstance(pending, dict):
+        candidate_action = pending.get("candidate_action") or {}
+        candidate_type = str(candidate_action.get("type") or "")
+        if candidate_type == "numeric_trial":
+            preimage = candidate_action.get("_multitier_restore_preimage")
+            runtime_restore = _restore_param_preimage(preimage) if isinstance(preimage, dict) else {
+                "status": "error",
+                "error": "numeric candidate lacks restore preimage",
+            }
+        elif candidate_type == "structural_experiment":
+            restore_flags = candidate_action.get("_multitier_restore_flags")
+            runtime_restore = (
+                ctx.lab.apply_flag_experiment(restore_flags)
+                if isinstance(restore_flags, dict) and restore_flags
+                else {"status": "error", "error": "structural candidate lacks restore flags"}
+            )
+            attestation = (
+                runtime_restore.get("attestation")
+                if isinstance(runtime_restore, dict)
+                else None
+            )
+            if (
+                isinstance(runtime_restore, dict)
+                and runtime_restore.get("status") == "ok"
+                and (not isinstance(attestation, dict) or attestation.get("status") != "ok")
+            ):
+                runtime_restore = {
+                    **runtime_restore,
+                    "status": "error",
+                    "error": "structural restore attestation failed",
+                }
+        else:
+            runtime_restore = {
+                "status": "error",
+                "error": f"unsupported multitier rollback candidate type: {candidate_type}",
+            }
+        if runtime_restore.get("status") != "ok":
+            reason = f"multitier runtime rollback failed: {runtime_restore}"
+            return (
+                SkipOutcome(
+                    "skipped",
+                    reason,
+                    "rollback",
+                    bug_corrupted_by="multitier_rollback_failure",
+                    bug_corrupted_reason=reason,
+                ),
+                "structural_lab",
+            )
     if to_cp == "production_best":
-        ctx.lab.restore_checkpoint()
+        restore_result = ctx.lab.restore_checkpoint()
     else:
-        ctx.lab.restore_checkpoint(Path(to_cp))
+        restore_result = ctx.lab.restore_checkpoint(Path(to_cp))
+    if ctx.state.get("multitier_rollback_pending"):
+        if not isinstance(restore_result, dict) or restore_result.get("status") != "ok":
+            reason = f"multitier rollback failed: {restore_result}"
+            return (
+                SkipOutcome(
+                    "skipped",
+                    reason,
+                    "rollback",
+                    bug_corrupted_by="multitier_rollback_failure",
+                    bug_corrupted_reason=reason,
+                ),
+                "structural_lab",
+            )
+        ctx.state.pop("multitier_rollback_pending", None)
+        ctx.state.pop("multitier_pending_validation", None)
+        ctx.state["multitier_last_event"] = {
+            "event": "rollback_applied",
+            "result": restore_result,
+            "runtime_restore": runtime_restore,
+        }
     ctx.gate.reset_failures()
     eval_result = ctx.tower.hybrid_eval()
     return eval_result, "structural_lab"
@@ -2277,7 +2430,9 @@ def _action_screening_tier_driver(action: dict[str, Any], ctx: _ActionContext):
     )
     if error is not None or plan is None:
         return (
-            SkipOutcome("invalid", error or "screening_tier_driver: no plan", "screening_tier_driver"),
+            SkipOutcome(
+                "invalid", error or "screening_tier_driver: no plan", "screening_tier_driver"
+            ),
             "review_plane",
         )
 

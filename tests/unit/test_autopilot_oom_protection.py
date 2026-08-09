@@ -38,6 +38,9 @@ def test_cmd_start_self_protects_via_oom_score_adj(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr(autopilot.fcntl, "flock", lambda *_a, **_k: None)
     monkeypatch.setattr(autopilot, "run_loop", lambda **_k: None)
     monkeypatch.setattr(autopilot, "_set_oom_score_adj", _spy)
+    # This test owns only cmd_start's OOM wiring.  Do not let the live episodic
+    # store turn it into a host-state-dependent integration test.
+    monkeypatch.setattr(autopilot, "_enforce_episodic_integrity_gate", lambda: None)
     monkeypatch.setattr(
         autopilot,
         "load_state",

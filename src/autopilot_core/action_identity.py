@@ -19,6 +19,10 @@ EPHEMERAL_ACTION_KEYS = frozenset({
     "hypothesis",
     "reasoning",
     "expected_mechanism",
+    # Recovery metadata describes the configuration that preceded a staged
+    # candidate; it is not part of the deployed candidate's behavior.
+    "_multitier_restore_preimage",
+    "_multitier_restore_flags",
 })
 
 

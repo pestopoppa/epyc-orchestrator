@@ -5536,6 +5536,45 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
         if isinstance(data.get("frontier_rerun_required"), dict)
         else None
     )
+    multitier_policy = (
+        data.get("multitier_promotion_policy")
+        if isinstance(data.get("multitier_promotion_policy"), dict)
+        else {}
+    )
+    multitier_bundle = (
+        data.get("multitier_baseline_bundle")
+        if isinstance(data.get("multitier_baseline_bundle"), dict)
+        else {}
+    )
+    multitier_pending = (
+        data.get("multitier_pending_validation")
+        if isinstance(data.get("multitier_pending_validation"), dict)
+        else None
+    )
+    multitier_tiers = multitier_bundle.get("tiers") or {}
+    multitier_promotion = {
+        "enabled": multitier_policy.get("enabled") is True,
+        "policy_version": multitier_policy.get("policy_version")
+        or multitier_bundle.get("policy_version"),
+        "required_tiers": multitier_policy.get("required_tiers") or [2, 3],
+        "baseline_tiers": sorted(
+            int(tier)
+            for tier in multitier_tiers
+            if str(tier).isdigit()
+        )
+        if isinstance(multitier_tiers, dict)
+        else [],
+        "status": (
+            str(multitier_pending.get("status") or "pending")
+            if multitier_pending
+            else "ready" if multitier_policy.get("enabled") is True else "disabled"
+        ),
+        "next_tier": multitier_pending.get("next_tier") if multitier_pending else None,
+        "candidate": multitier_pending.get("candidate") if multitier_pending else None,
+        "last_event": data.get("multitier_last_event")
+        if isinstance(data.get("multitier_last_event"), dict)
+        else None,
+    }
     frontiers_by_tier_raw = archive.get("frontiers_by_tier", {}) or {}
     hv_history_by_tier_raw = archive.get("hv_history_by_tier", {}) or {}
     frontier_raw = (
@@ -5679,6 +5718,7 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
                 "pareto_epoch_ts": pareto_epoch_ts,
                 "pareto_exclude_before_ts": pareto_exclude_before_ts,
                 "frontier_rerun_required": frontier_rerun_required,
+                "multitier_promotion": multitier_promotion,
                 "eras": eras_payload,
                 "era_registry_error": era_registry_error if all_eras else None,
                 # Visibility into why trials may be missing from the frontier, so the

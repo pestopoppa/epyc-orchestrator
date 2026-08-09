@@ -1005,6 +1005,184 @@ class HotSwapApplicator:
             )
 
 
+PARAM_PREIMAGE_SCHEMA = "autopilot-param-preimage.v1"
+
+
+def capture_reversible_param_preimage(
+    params: dict[str, Any],
+    *,
+    url: str = ORCHESTRATOR_URL,
+) -> dict[str, Any]:
+    """Capture the exact live values needed to undo a staged numeric trial.
+
+    Multi-tier validation spans several evaluations.  A rejected candidate must
+    therefore restore the runtime configuration that preceded its T1 screen,
+    not merely restore AutoPilot's file checkpoint.  Only surfaces with an
+    exact, independently attestable inverse are admitted here.
+    """
+    params = normalize_review_plane_params(params)
+    params = normalize_axa3_policy_params(params)
+    params = normalize_ap3_role_restart_params(params)
+    classified = classify_params(params)
+    unsupported = {
+        name: sorted(values)
+        for name, values in classified.items()
+        if name in {"role_restart", "kv_compact", "unknown"} and values
+    }
+    if unsupported:
+        return {
+            "schema_version": PARAM_PREIMAGE_SCHEMA,
+            "status": "unsupported",
+            "reversible": False,
+            "unsupported": unsupported,
+        }
+
+    try:
+        response = httpx.get(f"{url}/config/attest", timeout=10)
+        response.raise_for_status()
+        attestation = response.json()
+        pid = int(attestation["pid"])
+        flags = attestation.get("flags") or {}
+        if not isinstance(flags, dict):
+            raise ValueError("/config/attest flags is not an object")
+        raw = Path(f"/proc/{pid}/environ").read_bytes()
+        live_env = dict(
+            pair.split("=", 1)
+            for pair in raw.decode("utf-8", errors="strict").split("\0")
+            if "=" in pair
+        )
+    except Exception as exc:
+        return {
+            "schema_version": PARAM_PREIMAGE_SCHEMA,
+            "status": "error",
+            "reversible": False,
+            "error": f"live config preimage unavailable: {type(exc).__name__}: {exc}",
+        }
+
+    hot_swap: dict[str, bool] = {}
+    for name in classified["hot_swap"]:
+        if name not in flags:
+            return {
+                "schema_version": PARAM_PREIMAGE_SCHEMA,
+                "status": "error",
+                "reversible": False,
+                "error": f"live flag preimage missing {name!r}",
+            }
+        hot_swap[name] = bool(flags[name])
+
+    env: dict[str, dict[str, Any]] = {}
+    for dotted_name in classified["env_restart"]:
+        section, param = dotted_name.split(".", 1)
+        env_name = ENV_PARAMS[section][param]
+        env[env_name] = {
+            "present": env_name in live_env,
+            "value": live_env.get(env_name),
+        }
+
+    return {
+        "schema_version": PARAM_PREIMAGE_SCHEMA,
+        "status": "ok",
+        "reversible": True,
+        "source_pid": pid,
+        "params": sorted(params),
+        "hot_swap": hot_swap,
+        "env": env,
+    }
+
+
+def restore_reversible_param_preimage(
+    preimage: dict[str, Any],
+    *,
+    url: str = ORCHESTRATOR_URL,
+) -> dict[str, Any]:
+    """Restore and attest a preimage produced by the capture helper."""
+    if (
+        not isinstance(preimage, dict)
+        or preimage.get("schema_version") != PARAM_PREIMAGE_SCHEMA
+        or preimage.get("status") != "ok"
+        or preimage.get("reversible") is not True
+    ):
+        return {"status": "error", "error": "invalid or non-reversible parameter preimage"}
+
+    hot_swap = preimage.get("hot_swap") or {}
+    env_records = preimage.get("env") or {}
+    if not isinstance(hot_swap, dict) or not isinstance(env_records, dict):
+        return {"status": "error", "error": "malformed parameter preimage"}
+
+    hot_result: dict[str, Any] | None = None
+    if hot_swap:
+        hot_result = apply_hot_swap(hot_swap, url=url)
+        if ApplyResult.from_payload(hot_result).failed:
+            return {
+                "status": "error",
+                "error": "hot-swap preimage restore failed",
+                "hot_swap_result": hot_result,
+            }
+
+    env_overrides: dict[str, str] = {}
+    env_unset: list[str] = []
+    for env_name, record in env_records.items():
+        if not isinstance(record, dict) or not isinstance(record.get("present"), bool):
+            return {"status": "error", "error": f"malformed env preimage for {env_name}"}
+        if record["present"]:
+            value = record.get("value")
+            if not isinstance(value, str):
+                return {"status": "error", "error": f"missing env value for {env_name}"}
+            env_overrides[str(env_name)] = value
+        else:
+            env_unset.append(str(env_name))
+
+    env_result: dict[str, Any] | None = None
+    if env_overrides or env_unset:
+        env_result = _reload_api_via_stack(
+            env_overrides=env_overrides,
+            env_unset=env_unset,
+            url=url,
+        )
+        if env_result.get("status") != "ok":
+            return {
+                "status": "error",
+                "error": "environment preimage restore failed",
+                "env_result": env_result,
+                "hot_swap_result": hot_result,
+            }
+
+    # Verify both surfaces against the replacement API worker rather than
+    # trusting the reload command's exit code.
+    check = capture_reversible_param_preimage(
+        {
+            **{name: value for name, value in hot_swap.items()},
+            **{
+                dotted_name: 0
+                for dotted_name in preimage.get("params", [])
+                if isinstance(dotted_name, str)
+                and "." in dotted_name
+                and dotted_name.split(".", 1)[0] in ENV_PARAMS
+            },
+        },
+        url=url,
+    )
+    if check.get("status") != "ok":
+        return {
+            "status": "error",
+            "error": "restored configuration could not be attested",
+            "attestation": check,
+        }
+    if check.get("hot_swap") != hot_swap or check.get("env") != env_records:
+        return {
+            "status": "error",
+            "error": "restored configuration does not match preimage",
+            "expected": {"hot_swap": hot_swap, "env": env_records},
+            "actual": {"hot_swap": check.get("hot_swap"), "env": check.get("env")},
+        }
+    return {
+        "status": "ok",
+        "hot_swap_result": hot_result,
+        "env_result": env_result,
+        "attestation": check,
+    }
+
+
 def _live_api_env(keys: "list[str] | tuple[str, ...]") -> dict[str, str | None] | None:
     """Exec-time env of the live API parent process, for the given keys.
 
@@ -2250,6 +2428,7 @@ def _reload_role_via_stack(
 def _reload_api_via_stack(
     env_overrides: dict[str, str] | None,
     url: str,
+    env_unset: list[str] | None = None,
 ) -> dict[str, Any]:
     """Reload the orchestrator through the stack manager."""
     import os
@@ -2259,6 +2438,8 @@ def _reload_api_via_stack(
         return {"status": "error", "error": f"Stack script not found: {stack_script}"}
 
     env = os.environ.copy()
+    for key in env_unset or []:
+        env.pop(key, None)
     if env_overrides:
         env.update(env_overrides)
 
@@ -2277,6 +2458,7 @@ def _reload_api_via_stack(
                 "status": "ok",
                 "method": "stack_reload",
                 "env_keys": sorted((env_overrides or {}).keys()),
+                "env_unset": sorted(env_unset or []),
             }
         return {
             "status": "error",
@@ -2284,10 +2466,16 @@ def _reload_api_via_stack(
             "error": health.failure_reason,
             "detail": health.failure_detail,
             "env_keys": sorted((env_overrides or {}).keys()),
+            "env_unset": sorted(env_unset or []),
         }
     except Exception as e:
         log.error("Stack reload failed: %s", e)
-        return {"status": "error", "error": str(e), "method": "stack_reload"}
+        return {
+            "status": "error",
+            "error": str(e),
+            "method": "stack_reload",
+            "env_unset": sorted(env_unset or []),
+        }
 
 
 def _stack_reload_python() -> str:

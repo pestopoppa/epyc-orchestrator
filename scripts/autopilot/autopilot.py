@@ -126,6 +126,13 @@ from src.autopilot_core.learning_exclusions import (
     NON_CORRUPT_LEARNING_EXCLUSIONS,
     classify_learning_exclusion,
 )
+from src.autopilot_core.multitier_decision import (
+    DEFAULT_MAX_ATTEMPTS_PER_TIER,
+    MULTITIER_POLICY_VERSION,
+    REQUIRED_VALIDATION_TIERS,
+    build_tier_candidate_evidence,
+    evaluate_tier_validation,
+)
 from src.autopilot_core.planner_evidence import (
     DEFAULT_EVIDENCE_CORE_ID,
     format_planner_evidence_section,
@@ -218,6 +225,17 @@ EXIT_BREADCRUMB_PATH = ORCH_ROOT / "logs" / "autopilot_exit_breadcrumb.jsonl"
 # by check_blacklist()). Keeps the unbounded-growth blacklist from dominating the
 # ~80KB prompt. Operator-tunable.
 BLACKLIST_RENDER_CAP = int(os.environ.get("AUTOPILOT_BLACKLIST_RENDER_CAP", "18"))
+MULTITIER_PROMOTION_ENABLED = os.environ.get(
+    "AUTOPILOT_MULTITIER_PROMOTION", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
+MULTITIER_MAX_ATTEMPTS_PER_TIER = int(
+    os.environ.get(
+        "AUTOPILOT_MULTITIER_MAX_ATTEMPTS_PER_TIER",
+        str(DEFAULT_MAX_ATTEMPTS_PER_TIER),
+    )
+)
+MULTITIER_BASELINE_STATE_KEY = "multitier_baseline_bundle"
+MULTITIER_PENDING_STATE_KEY = "multitier_pending_validation"
 
 
 class ExitBreadcrumb:
@@ -272,6 +290,8 @@ class ExitBreadcrumb:
     def register_atexit(self) -> None:
         """Classify any otherwise-unclassified interpreter teardown."""
         atexit.register(self.mark_terminal, "interpreter_exit")
+
+
 OPERATOR_OUTBOX_RENDER_CAP = int(os.environ.get("AUTOPILOT_OPERATOR_OUTBOX_RENDER_CAP", "5"))
 PRIOR_DECISION_DIGEST_CAP = int(os.environ.get("AUTOPILOT_PRIOR_DECISION_DIGEST_CAP", "4"))
 PLANNER_JOURNAL_SUMMARY_LIMIT = int(os.environ.get("AUTOPILOT_PLANNER_JOURNAL_SUMMARY_LIMIT", "12"))
@@ -296,9 +316,7 @@ SEQ_PRIOR_OBS_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_PRIOR_OBS_LIMIT", "120")
 # on the quality axis. Journal evidence: trial 836 ran the rate axis against a comparator
 # built from a SINGLE prior row. Below this the rate comparator is UNAVAILABLE, which omits
 # the axis (conservative: no rate evidence => no baseline ratchet), never substitutes a guess.
-SEQ_BASELINE_RATE_MIN_TRIALS = int(
-    os.environ.get("AUTOPILOT_SEQ_BASELINE_RATE_MIN_TRIALS", "3")
-)
+SEQ_BASELINE_RATE_MIN_TRIALS = int(os.environ.get("AUTOPILOT_SEQ_BASELINE_RATE_MIN_TRIALS", "3"))
 SEQ_BASELINE_REFRESH_CADENCE = int(os.environ.get("AUTOPILOT_SEQ_BASELINE_REFRESH_CADENCE", "10"))
 SEQ_BASELINE_BLOCK_RETRY_CADENCE = int(
     os.environ.get("AUTOPILOT_SEQ_BASELINE_BLOCK_RETRY_CADENCE", "5")
@@ -351,6 +369,8 @@ SEQ_CANDIDATE_REPLAY_MIN_K = int(os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_
 # observed growth of 1.0631x/trial. A cap of 12 made confirmation unreachable by
 # construction for every candidate that needed sustained evidence.
 SEQ_CANDIDATE_REPLAY_MAX_K = int(os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MAX_K", "60"))
+
+
 def _required_gate_env() -> dict[str, str]:
     """The authority contract, DERIVED from the launcher that establishes it.
 
@@ -506,6 +526,7 @@ def _planner_deterministic_block_decision(
     count = max(0, prior) + 1
     state[PLANNER_DETERMINISTIC_BLOCK_STATE_KEY] = count
     return ("halt" if count >= max_blocks else "substitute", count)
+
 
 # 2026-06-04 — experiment-quota policy (separate memory maintenance from the
 # optimization budget). Once the memory store is already large, an unbounded run
@@ -2384,10 +2405,7 @@ def _maybe_defer_seq_unreachable_candidate_action(
         "new_fingerprint_dispatch_allowed",
         alpha_wealth.get("new_fingerprint_confirmations_allowed"),
     )
-    alpha_blocked = (
-        bool(alpha_wealth.get("candidate_is_new"))
-        and alpha_dispatch_allowed is False
-    )
+    alpha_blocked = bool(alpha_wealth.get("candidate_is_new")) and alpha_dispatch_allowed is False
     reachability = _seq_gate_reachability_report(journal, tier=tier)
     should_defer = alpha_blocked or not bool(reachability.get("ok_to_dispatch_candidates", True))
     if not should_defer:
@@ -2630,6 +2648,372 @@ def _seq_promotion_replay_blocker(action: Any) -> str:
         return f"candidate action type is not replayable: {action_type or 'unknown'}"
 
     return ""
+
+
+def _multitier_baseline_for(state: Mapping[str, Any], tier: int) -> Mapping[str, Any] | None:
+    bundle = state.get(MULTITIER_BASELINE_STATE_KEY)
+    if not isinstance(bundle, Mapping):
+        return None
+    if str(bundle.get("policy_version") or "") != MULTITIER_POLICY_VERSION:
+        return None
+    tiers = bundle.get("tiers")
+    if not isinstance(tiers, Mapping):
+        return None
+    baseline = tiers.get(str(int(tier)), tiers.get(int(tier)))
+    return baseline if isinstance(baseline, Mapping) else None
+
+
+def _strict_baseline_quality(baseline: Any, tier: int) -> float | None:
+    """Read a same-tier baseline without permitting legacy T1 fallback.
+
+    The small compatibility fallback keeps older test doubles working while
+    preserving strict behavior for every non-canonical tier.
+    """
+    if baseline is None:
+        return None
+    try:
+        return baseline.quality_for_tier(tier, strict=True)
+    except TypeError:
+        if int(tier) != DEFAULT_FRONTIER_TIER:
+            return None
+        return baseline.quality_for_tier(tier)
+
+
+def _multitier_required_baselines_ready(state: Mapping[str, Any]) -> tuple[bool, str]:
+    missing = [
+        tier for tier in REQUIRED_VALIDATION_TIERS if _multitier_baseline_for(state, tier) is None
+    ]
+    if missing:
+        return False, "missing matched incumbent baseline(s): " + ", ".join(
+            f"T{tier}" for tier in missing
+        )
+    return True, "ready"
+
+
+def _multitier_effective_action(
+    action: dict[str, Any], context: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    if isinstance(context, Mapping) and context.get("stage") == "rollback":
+        return action
+    candidate_action = context.get("candidate_action") if isinstance(context, Mapping) else None
+    return dict(candidate_action) if isinstance(candidate_action, Mapping) else action
+
+
+def _multitier_candidate_is_eligible(
+    *,
+    state: dict[str, Any],
+    gate: SafetyGate,
+    action: dict[str, Any],
+    eval_result: EvalResult,
+    verdict: Any,
+    pareto_status: str,
+) -> tuple[bool, str]:
+    if not MULTITIER_PROMOTION_ENABLED:
+        return False, "policy disabled"
+    if isinstance(state.get(MULTITIER_PENDING_STATE_KEY), dict):
+        return False, "another candidate is already pending"
+    if int(getattr(eval_result, "tier", 0) or 0) != DEFAULT_FRONTIER_TIER:
+        return False, "not a T1 screening result"
+    ready, reason = _multitier_required_baselines_ready(state)
+    if not ready:
+        return False, reason
+    blocker = _seq_promotion_replay_blocker(action)
+    if blocker:
+        return False, blocker
+    action_type = str(action.get("type") or "")
+    if action_type == "numeric_trial":
+        preimage = action.get("_multitier_restore_preimage")
+        if (
+            not isinstance(preimage, dict)
+            or preimage.get("status") != "ok"
+            or preimage.get("reversible") is not True
+        ):
+            return False, "candidate numeric_trial lacks an exact reversible runtime preimage"
+    elif action_type == "structural_experiment":
+        restore_flags = action.get("_multitier_restore_flags")
+        if not isinstance(restore_flags, dict) or not restore_flags:
+            prior_flags = (getattr(eval_result, "details", {}) or {}).get(
+                "flag_prior_values"
+            )
+            if isinstance(prior_flags, dict) and prior_flags:
+                action["_multitier_restore_flags"] = dict(prior_flags)
+                restore_flags = action["_multitier_restore_flags"]
+        if not isinstance(restore_flags, dict) or not restore_flags:
+            return False, "candidate structural_experiment lacks exact restore flags"
+    if not bool(verdict):
+        return False, "T1 SafetyGate failed"
+    if pareto_status != "frontier":
+        return False, "candidate is not on the T1 frontier"
+    baseline_quality = _strict_baseline_quality(gate.baseline, DEFAULT_FRONTIER_TIER)
+    if baseline_quality is None or eval_result.quality <= baseline_quality:
+        return False, "candidate does not improve the strict T1 incumbent"
+    if gate.use_sequential:
+        seq = getattr(verdict, "seq", None)
+        if not isinstance(seq, dict) or not bool(seq.get("confirmed")):
+            return False, "T1 sequential confirmation is still accumulating"
+    return True, "ready"
+
+
+def _start_multitier_validation(
+    state: dict[str, Any],
+    *,
+    action: dict[str, Any],
+    eval_result: EvalResult,
+    verdict: Any,
+    trial_counter: int,
+) -> dict[str, Any]:
+    seq = getattr(verdict, "seq", None)
+    candidate_action = dict(action)
+    if str(candidate_action.get("type") or "") == "structural_experiment":
+        prior_flags = (getattr(eval_result, "details", {}) or {}).get("flag_prior_values")
+        if isinstance(prior_flags, dict) and prior_flags:
+            candidate_action["_multitier_restore_flags"] = dict(prior_flags)
+    pending = {
+        "policy_version": MULTITIER_POLICY_VERSION,
+        "status": "pending",
+        "candidate": _config_fingerprint(action),
+        "candidate_action": candidate_action,
+        "source_trial_id": int(trial_counter),
+        "source_t1_quality": float(eval_result.quality),
+        "next_tier": int(REQUIRED_VALIDATION_TIERS[0]),
+        "required_tiers": list(REQUIRED_VALIDATION_TIERS),
+        "attempts_by_tier": {str(tier): [] for tier in REQUIRED_VALIDATION_TIERS},
+        "verdicts_by_tier": {},
+        "higher_tier_improvements": [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "seq_context": dict(seq) if isinstance(seq, dict) else None,
+        "final_t1_attempts": 0,
+    }
+    state[MULTITIER_PENDING_STATE_KEY] = pending
+    state["multitier_last_event"] = {
+        "event": "candidate_staged",
+        "trial_id": trial_counter,
+        "candidate": pending["candidate"],
+        "next_tier": pending["next_tier"],
+    }
+    return pending
+
+
+def _maybe_force_multitier_due_action(
+    *,
+    state: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    trial_counter: int,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
+    if not MULTITIER_PROMOTION_ENABLED:
+        return None, None, None
+    pending = state.get(MULTITIER_PENDING_STATE_KEY)
+    if state.get("multitier_rollback_pending") and isinstance(pending, dict):
+        return (
+            {"type": "rollback", "to_checkpoint": "production_best"},
+            {
+                "multitier_rollback": True,
+                "reason": pending.get("blocked_reason") or "candidate rejected",
+            },
+            {"stage": "rollback", **pending},
+        )
+    if not isinstance(pending, dict) or pending.get("status") != "pending":
+        return None, None, None
+    candidate_action = pending.get("candidate_action")
+    blocker = _seq_promotion_replay_blocker(candidate_action)
+    if blocker:
+        pending["status"] = "blocked"
+        pending["blocked_reason"] = blocker
+        state["multitier_last_rejected"] = dict(pending)
+        state["multitier_rollback_pending"] = True
+        return (
+            {"type": "rollback", "to_checkpoint": "production_best"},
+            {
+                "multitier_rollback": True,
+                "reason": blocker,
+            },
+            {"stage": "rollback", **pending},
+        )
+
+    next_tier = pending.get("next_tier")
+    if next_tier == "final_t1":
+        tier = DEFAULT_FRONTIER_TIER
+    else:
+        try:
+            tier = int(next_tier)
+        except (TypeError, ValueError):
+            pending["status"] = "blocked"
+            pending["blocked_reason"] = f"invalid next_tier={next_tier!r}"
+            state["multitier_last_rejected"] = dict(pending)
+            state["multitier_rollback_pending"] = True
+            return (
+                {"type": "rollback", "to_checkpoint": "production_best"},
+                {
+                    "multitier_rollback": True,
+                    "reason": pending["blocked_reason"],
+                },
+                {"stage": "rollback", **pending},
+            )
+
+    forced = {"type": "deep_eval", "tier": tier}
+    blocked_reason = check_blacklist(forced, blacklist)
+    if blocked_reason:
+        pending["status"] = "blocked"
+        pending["blocked_reason"] = f"multitier validation action blacklisted: {blocked_reason}"
+        state["multitier_last_rejected"] = dict(pending)
+        state["multitier_rollback_pending"] = True
+        return (
+            {"type": "rollback", "to_checkpoint": "production_best"},
+            {
+                "multitier_rollback": True,
+                "reason": pending["blocked_reason"],
+            },
+            {"stage": "rollback", **pending},
+        )
+
+    context = {
+        "policy_version": MULTITIER_POLICY_VERSION,
+        "stage": "final_t1" if next_tier == "final_t1" else f"tier_{tier}",
+        "tier": tier,
+        "candidate": pending.get("candidate"),
+        "candidate_action": dict(candidate_action),
+        "source_trial_id": pending.get("source_trial_id"),
+        "trial_id": trial_counter,
+        "seq_context": pending.get("seq_context"),
+    }
+    state["_multitier_candidate_validation"] = dict(context)
+    return (
+        forced,
+        {
+            "multitier_validation": True,
+            "multitier_stage": context["stage"],
+            "multitier_candidate": context["candidate"],
+        },
+        context,
+    )
+
+
+def _reject_multitier_candidate(
+    state: dict[str, Any], pending: dict[str, Any], *, reason: str, trial_counter: int
+) -> None:
+    pending["status"] = "rejected"
+    pending["blocked_reason"] = reason
+    pending["terminal_trial_id"] = trial_counter
+    state["multitier_last_rejected"] = dict(pending)
+    state["multitier_rollback_pending"] = True
+    state["multitier_last_event"] = {
+        "event": "candidate_rejected",
+        "trial_id": trial_counter,
+        "candidate": pending.get("candidate"),
+        "reason": reason,
+    }
+
+
+def _record_multitier_validation_result(
+    state: dict[str, Any],
+    *,
+    context: Mapping[str, Any] | None,
+    eval_result: EvalResult,
+    verdict: Any,
+    trial_counter: int,
+) -> dict[str, Any] | None:
+    if not isinstance(context, Mapping) or context.get("stage") in {None, "rollback"}:
+        return None
+    pending = state.get(MULTITIER_PENDING_STATE_KEY)
+    if not isinstance(pending, dict):
+        return None
+    if pending.get("candidate") != context.get("candidate"):
+        _reject_multitier_candidate(
+            state,
+            pending,
+            reason="multitier candidate identity changed during validation",
+            trial_counter=trial_counter,
+        )
+        return None
+    if context.get("stage") == "final_t1":
+        pending["final_t1_attempts"] = int(pending.get("final_t1_attempts") or 0) + 1
+        if not bool(verdict):
+            _reject_multitier_candidate(
+                state,
+                pending,
+                reason="final T1 promotion evaluation failed SafetyGate",
+                trial_counter=trial_counter,
+            )
+        return {"status": "final_t1", "attempts": pending["final_t1_attempts"]}
+
+    tier = int(context.get("tier") or 0)
+    attempts_by_tier = pending.setdefault("attempts_by_tier", {})
+    attempts = attempts_by_tier.setdefault(str(tier), [])
+    attempts.append(build_tier_candidate_evidence(eval_result))
+    baseline = _multitier_baseline_for(state, tier)
+    tier_verdict = evaluate_tier_validation(attempts, baseline, tier=tier)
+    verdict_payload = tier_verdict.to_dict()
+    if not bool(verdict):
+        verdict_payload["status"] = "regression"
+        verdict_payload["reason"] = "same-tier SafetyGate failed: " + "; ".join(
+            getattr(verdict, "violations", [])[:3]
+        )
+    pending.setdefault("verdicts_by_tier", {})[str(tier)] = verdict_payload
+    state["multitier_last_event"] = {
+        "event": "tier_validation",
+        "trial_id": trial_counter,
+        "candidate": pending.get("candidate"),
+        "tier": tier,
+        "status": verdict_payload["status"],
+    }
+
+    if verdict_payload["status"] == "pass":
+        if verdict_payload.get("improvement"):
+            pending.setdefault("higher_tier_improvements", []).append(tier)
+        remaining = [required for required in REQUIRED_VALIDATION_TIERS if required > tier]
+        pending["next_tier"] = remaining[0] if remaining else "final_t1"
+    elif verdict_payload["status"] == "inconclusive" and len(attempts) < max(
+        1, MULTITIER_MAX_ATTEMPTS_PER_TIER
+    ):
+        pending["next_tier"] = tier
+    else:
+        _reject_multitier_candidate(
+            state,
+            pending,
+            reason=verdict_payload["reason"],
+            trial_counter=trial_counter,
+        )
+    return verdict_payload
+
+
+def _finish_multitier_promotion(
+    state: dict[str, Any],
+    *,
+    baseline_update: Any | None,
+    trial_counter: int,
+) -> None:
+    pending = state.get(MULTITIER_PENDING_STATE_KEY)
+    if not isinstance(pending, dict) or pending.get("next_tier") != "final_t1":
+        return
+    if baseline_update is not None and bool(getattr(baseline_update, "updated", False)):
+        pending["status"] = "accepted"
+        pending["terminal_trial_id"] = trial_counter
+        state["multitier_last_accepted"] = dict(pending)
+        state["multitier_last_event"] = {
+            "event": "candidate_accepted",
+            "trial_id": trial_counter,
+            "candidate": pending.get("candidate"),
+            "higher_tier_improvements": list(pending.get("higher_tier_improvements") or []),
+        }
+        state["multitier_production_checkpoint_due"] = {
+            "trial_id": trial_counter,
+            "candidate": pending.get("candidate"),
+            "candidate_action": dict(pending.get("candidate_action") or {}),
+            "policy_version": MULTITIER_POLICY_VERSION,
+        }
+        state.pop(MULTITIER_PENDING_STATE_KEY, None)
+        return
+    attempts = int(pending.get("final_t1_attempts") or 0)
+    if attempts >= max(1, MULTITIER_MAX_ATTEMPTS_PER_TIER):
+        _reject_multitier_candidate(
+            state,
+            pending,
+            reason=(
+                "final T1 baseline promotion did not clear existing promotion gates: "
+                + str(getattr(baseline_update, "reason", "no baseline update"))
+            ),
+            trial_counter=trial_counter,
+        )
 
 
 def _seq_replay_terminal_keep_revert_decision(entry: Any) -> bool:
@@ -2969,6 +3353,10 @@ def _update_seq_promotion_fresh_eval_state(
             "alpha_wealth": dict(alpha_wealth),
         }
         return
+    if MULTITIER_PROMOTION_ENABLED and isinstance(state.get(MULTITIER_PENDING_STATE_KEY), dict):
+        # Binding T2/T3 validation owns the next due actions. The final T1
+        # fresh evaluation is queued only after both higher tiers pass.
+        return
     state["seq_pending_promotion_fresh_eval"] = {
         "candidate": seq.get("candidate"),
         "core_id": seq.get("core_id") or DEFAULT_EVIDENCE_CORE_ID,
@@ -3301,9 +3689,7 @@ def _format_blacklist_for_prompt(blacklist: list[dict[str, Any]]) -> str:
             if entry.get("source_trial") is not None:
                 suffix_parts.append(f"source_trial={entry['source_trial']}")
             suffix = "; ".join(part for part in suffix_parts if part)
-            lines.append(
-                f"    - {_format_blacklist_pattern(entry.get('pattern', {}))} ({suffix})"
-            )
+            lines.append(f"    - {_format_blacklist_pattern(entry.get('pattern', {}))} ({suffix})")
 
     if not shown and not older:
         lines.append("  Enforced entries: (none)")
@@ -4884,8 +5270,10 @@ def _enforce_episodic_integrity_gate() -> None:
         )
         return
     if not EPISODIC_INTEGRITY_CHECK.exists():
-        log.warning("episodic integrity checker missing at %s; store is UNVERIFIED",
-                    EPISODIC_INTEGRITY_CHECK)
+        log.warning(
+            "episodic integrity checker missing at %s; store is UNVERIFIED",
+            EPISODIC_INTEGRITY_CHECK,
+        )
         return
 
     report = _run_episodic_check(semantic=True)
@@ -4896,7 +5284,8 @@ def _enforce_episodic_integrity_gate() -> None:
     # Metadata failures are structural — retrying cannot help, so fail now
     # rather than burning the embedder boot window first.
     hard_failures = [
-        c for c in report.get("checks", [])
+        c
+        for c in report.get("checks", [])
         if c.get("pass") is False and c.get("check") != "semantic_self_match"
     ]
     if hard_failures:
@@ -4910,7 +5299,8 @@ def _enforce_episodic_integrity_gate() -> None:
         log.warning(
             "episodic gate: embedders unreachable, the DECISIVE check cannot run; "
             "retrying in %.0fs (%.0fs of the boot window left)",
-            min(EPISODIC_GATE_POLL_S, remaining), remaining,
+            min(EPISODIC_GATE_POLL_S, remaining),
+            remaining,
         )
         time.sleep(min(EPISODIC_GATE_POLL_S, max(remaining, 0)))
         retried = _run_episodic_check(semantic=True)
@@ -4940,8 +5330,10 @@ def _enforce_episodic_integrity_gate() -> None:
     if not report.get("ok"):
         _episodic_gate_fail([c for c in report.get("checks", []) if c.get("pass") is False])
 
-    log.info("episodic integrity gate: PASS (%d checks, semantic verified)",
-             len(report.get("checks", [])))
+    log.info(
+        "episodic integrity gate: PASS (%d checks, semantic verified)",
+        len(report.get("checks", [])),
+    )
 
 
 def _episodic_gate_fail(failed: list) -> None:
@@ -5534,6 +5926,7 @@ def _dispatch_allowed_action_types(
     seq_fresh_eval_context: dict[str, Any] | None,
     seq_baseline_draw_reference: dict[str, Any] | None,
     seq_candidate_replay_context: dict[str, Any] | None,
+    multitier_validation_context: dict[str, Any] | None = None,
     seq_gate_preflight: dict[str, Any] | None = None,
 ) -> list[str] | None:
     """Return the final dispatch allowlist for ordinary planner-selected actions.
@@ -5549,6 +5942,7 @@ def _dispatch_allowed_action_types(
         or seq_fresh_eval_context is not None
         or seq_baseline_draw_reference is not None
         or seq_candidate_replay_context is not None
+        or multitier_validation_context is not None
         or (
             isinstance(seq_gate_preflight, dict)
             and seq_gate_preflight.get("status") == "deferred"
@@ -6007,9 +6401,7 @@ def _reject_in_flight_manifest_drift(state: dict[str, Any]) -> None:
     state["paused"] = True
     state["_dispatch_deficiency"] = f"run_manifest_drift:{detail}"
     save_state(state)
-    raise RuntimeError(
-        "Refusing in-flight trial recovery after run-manifest drift: " + detail
-    )
+    raise RuntimeError("Refusing in-flight trial recovery after run-manifest drift: " + detail)
 
 
 def _default_state() -> dict[str, Any]:
@@ -6313,9 +6705,7 @@ def _journal_archive_payload_for_authority(
 
 
 def _live_objective_policy_from_state(state: Mapping[str, Any]) -> str:
-    return str(
-        state.get("pareto_objective_policy") or LEGACY_OBJECTIVE_POLICY
-    ).strip()
+    return str(state.get("pareto_objective_policy") or LEGACY_OBJECTIVE_POLICY).strip()
 
 
 def _assert_eval_execution_instrument_state(state: Mapping[str, Any]) -> None:
@@ -6325,8 +6715,7 @@ def _assert_eval_execution_instrument_state(state: Mapping[str, Any]) -> None:
     errors: list[str] = []
     if policy != RATE_4D_OBJECTIVE_POLICY:
         errors.append(
-            f"pareto_objective_policy={policy or '<missing>'} "
-            f"(required {RATE_4D_OBJECTIVE_POLICY})"
+            f"pareto_objective_policy={policy or '<missing>'} (required {RATE_4D_OBJECTIVE_POLICY})"
         )
     if execution_id != EVAL_EXECUTION_INSTRUMENT_ID:
         errors.append(
@@ -6957,6 +7346,19 @@ def _run_loop_inner(
 ) -> None:
     """Inner loop (separated to ensure TUI cleanup via run_loop's finally)."""
     state = load_state()
+    if MULTITIER_PROMOTION_ENABLED:
+        policy_state = state.get("multitier_promotion_policy")
+        ready, reason = _multitier_required_baselines_ready(state)
+        if (
+            not isinstance(policy_state, dict)
+            or policy_state.get("enabled") is not True
+            or policy_state.get("policy_version") != MULTITIER_POLICY_VERSION
+            or not ready
+        ):
+            raise RuntimeError(
+                "staged multi-tier promotion is enabled in the launcher but its "
+                f"ratified state/baseline bundle is not ready: {reason}"
+            )
     # Defect #1/#3/#4: seed the eval_quality instrument-era fence on first startup after the
     # boundary opened (code-path migration, never a hand-edit of the human-owned registry).
     # Persist immediately so a crash before the first save cannot lose the fence.
@@ -7210,7 +7612,9 @@ def _run_loop_inner(
     if trial_stop_at is not None:
         log.info(
             "Trial budget: %d more (trial %d -> %d)",
-            max_trials, trial_budget_start, trial_stop_at,
+            max_trials,
+            trial_budget_start,
+            trial_stop_at,
         )
 
     while not shutdown_requested:
@@ -7219,8 +7623,10 @@ def _run_loop_inner(
         if trial_stop_at is not None and trial_counter >= trial_stop_at:
             log.info(
                 "Trial budget spent: ran %d of %d requested (trial %d -> %d)",
-                trial_counter - trial_budget_start, max_trials,
-                trial_budget_start, trial_counter,
+                trial_counter - trial_budget_start,
+                max_trials,
+                trial_budget_start,
+                trial_counter,
             )
             phase.set(
                 "max_trials_reached",
@@ -7340,10 +7746,30 @@ def _run_loop_inner(
         seq_fresh_eval_context: dict[str, Any] | None = None
         seq_baseline_draw_reference: dict[str, Any] | None = None
         seq_candidate_replay_context: dict[str, Any] | None = None
+        multitier_validation_context: dict[str, Any] | None = None
         seq_due_bypassed_planner = False
         selectable_action_types: list[str] | None = None
         planner_evidence_text = ""
         outcome_progress_pressure_text = ""
+        if action is None:
+            (
+                action,
+                rationale,
+                multitier_validation_context,
+            ) = _maybe_force_multitier_due_action(
+                state=state,
+                blacklist=blacklist,
+                trial_counter=trial_counter,
+            )
+            if (
+                isinstance(multitier_validation_context, dict)
+                and multitier_validation_context.get("stage") == "final_t1"
+                and isinstance(multitier_validation_context.get("seq_context"), dict)
+            ):
+                seq_fresh_eval_context = {
+                    "candidate": multitier_validation_context.get("candidate"),
+                    "source_trial_id": multitier_validation_context.get("source_trial_id"),
+                }
         if action is None:
             (
                 action,
@@ -7946,6 +8372,7 @@ def _run_loop_inner(
                 seq_promotion_fresh_eval=seq_fresh_eval_context is not None,
                 seq_baseline_draw=seq_baseline_draw_reference is not None,
                 seq_candidate_replay=seq_candidate_replay_context is not None,
+                multitier_validation=multitier_validation_context is not None,
             )
 
         if not action:
@@ -8304,6 +8731,7 @@ def _run_loop_inner(
                     seq_fresh_eval_context=seq_fresh_eval_context,
                     seq_baseline_draw_reference=seq_baseline_draw_reference,
                     seq_candidate_replay_context=seq_candidate_replay_context,
+                    multitier_validation_context=multitier_validation_context,
                     seq_gate_preflight=seq_gate_preflight,
                 ),
             )
@@ -8628,7 +9056,11 @@ def _run_loop_inner(
         # ── 4b. Self-Criticism (AP-23/AP-24) ────────────────────
         phase.set("self_criticism", trial_id=trial_counter, species=species_name)
         # Get baseline and previous per-suite for comparison
-        baseline_q = gate.baseline.quality_for_tier(eval_result.tier) if gate.baseline else 0.0
+        # Tier scales are intentionally incomparable. A missing T2/T3 baseline
+        # means "no same-tier criticism reference", never "fall back to T1".
+        baseline_q = (
+            _strict_baseline_quality(gate.baseline, eval_result.tier) if gate.baseline else None
+        )
         prev_suite = {}
         recent = journal.by_species(species_name)
         if recent:
@@ -8642,7 +9074,7 @@ def _run_loop_inner(
             eval_result=eval_result,
             verdict=verdict,
             failure_analysis=failure_analysis,
-            baseline_quality=baseline_q,
+            baseline_quality=baseline_q or 0.0,
             prev_per_suite=prev_suite,
         )
         last_criticism_text = criticism.as_text()
@@ -8660,6 +9092,14 @@ def _run_loop_inner(
         learning_excluded_by, learning_excluded_reason, exclusion_def_cat = (
             classify_learning_exclusion(verdict, eval_result)
         )
+        multitier_tier_verdict = _record_multitier_validation_result(
+            state,
+            context=multitier_validation_context,
+            eval_result=eval_result,
+            verdict=verdict,
+            trial_counter=trial_counter,
+        )
+        effective_action = _multitier_effective_action(action, multitier_validation_context)
         # Policy correction (2026-06-04 — see autopilot-continuous-optimization handoff):
         # a TRUSTED within-quality-noise measurement (mad_noise / reproduction_confirmed)
         # stays excluded from AP-22 / strategy learning, but must NOT be auto-excluded from
@@ -8697,18 +9137,18 @@ def _run_loop_inner(
             learning_excluded_by in ("mad_noise", "reproduction_confirmed")
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
         ):
-            fingerprint = _config_fingerprint(action)
+            fingerprint = _config_fingerprint(effective_action)
             if rate_measured:
                 pareto_status, rep_objs = archive.upsert_representative(
                     fingerprint,
                     eval_result.tier,
                     objectives_from(eval_result),
                     trial_id=trial_counter,
-                    config_snapshot=action,
+                    config_snapshot=effective_action,
                     species=species_name,
                     timestamp=datetime.now(timezone.utc).isoformat(),
                     memory_count=memory_count,
-                    reasoning=json.dumps(action),
+                    reasoning=json.dumps(effective_action),
                 )
                 log.info(
                     "Trial %d: Pareto representative admission %s (T%d fp=%s n=%d) "
@@ -8753,17 +9193,79 @@ def _run_loop_inner(
                     ParetoEntry(
                         trial_id=trial_counter,
                         objectives=objectives_from(eval_result),
-                        config_snapshot=action,
+                        config_snapshot=effective_action,
                         species=species_name,
                         timestamp=datetime.now(timezone.utc).isoformat(),
                         eval_tier=eval_result.tier,
                         memory_count=memory_count,
-                        reasoning=json.dumps(action),
+                        reasoning=json.dumps(effective_action),
                     )
                 )
             else:
                 pareto_status = "dominated"  # placeholder for JournalEntry only
-            # Runs whether or not the RATE was measured: this promotes on QUALITY.
+            allow_multitier_final = (
+                MULTITIER_PROMOTION_ENABLED
+                and isinstance(multitier_validation_context, dict)
+                and multitier_validation_context.get("stage") == "final_t1"
+            )
+            if MULTITIER_PROMOTION_ENABLED and not allow_multitier_final:
+                eligible, eligibility_reason = _multitier_candidate_is_eligible(
+                    state=state,
+                    gate=gate,
+                    action=effective_action,
+                    eval_result=eval_result,
+                    verdict=verdict,
+                    pareto_status=pareto_status,
+                )
+                if eligible:
+                    pending = _start_multitier_validation(
+                        state,
+                        action=effective_action,
+                        eval_result=eval_result,
+                        verdict=verdict,
+                        trial_counter=trial_counter,
+                    )
+                    log.info(
+                        "Trial %d: T1 baseline promotion HELD for binding T2/T3 "
+                        "validation (candidate=%s, next=T%s)",
+                        trial_counter,
+                        pending["candidate"],
+                        pending["next_tier"],
+                    )
+                else:
+                    log.info(
+                        "Trial %d: baseline promotion HELD by %s (%s)",
+                        trial_counter,
+                        MULTITIER_POLICY_VERSION,
+                        eligibility_reason,
+                    )
+            else:
+                # Runs whether or not the RATE was measured: this promotes on QUALITY.
+                seq_confirmed = (
+                    bool(verdict.seq.get("baseline_promotion_finalized"))
+                    if verdict.seq is not None
+                    else None
+                )
+                baseline_update = gate.update_baseline(
+                    eval_result,
+                    source_trial_id=trial_counter,
+                    seq_confirmed=seq_confirmed,
+                )
+                # B4 / SEQ-2: surface the update/refusal outcome — including a distinct
+                # line for the gate's seq_inputs_unavailable refusal (seq_confirmed=None).
+                _log_baseline_update_result(trial_counter, baseline_update)
+
+        # A repeated final T1 draw commonly lands in the benign MAD/reproduction
+        # branch above. It still needs to exercise the existing baseline gate;
+        # otherwise the staged policy could validate T2/T3 correctly and then
+        # reject forever merely because the final confirmation reproduced.
+        if (
+            MULTITIER_PROMOTION_ENABLED
+            and isinstance(multitier_validation_context, dict)
+            and multitier_validation_context.get("stage") == "final_t1"
+            and baseline_update is None
+            and bool(verdict)
+        ):
             seq_confirmed = (
                 bool(verdict.seq.get("baseline_promotion_finalized"))
                 if verdict.seq is not None
@@ -8774,9 +9276,44 @@ def _run_loop_inner(
                 source_trial_id=trial_counter,
                 seq_confirmed=seq_confirmed,
             )
-            # B4 / SEQ-2: surface the update/refusal outcome — including a distinct
-            # line for the gate's seq_inputs_unavailable refusal (seq_confirmed=None).
             _log_baseline_update_result(trial_counter, baseline_update)
+
+        # The same benign branch can be the first robust representative of a
+        # T1 candidate. Stage it exactly as a clean frontier point; never let a
+        # within-noise label bypass binding higher-tier validation.
+        if (
+            MULTITIER_PROMOTION_ENABLED
+            and multitier_validation_context is None
+            and not isinstance(state.get(MULTITIER_PENDING_STATE_KEY), dict)
+            and bool(verdict)
+        ):
+            eligible, _eligibility_reason = _multitier_candidate_is_eligible(
+                state=state,
+                gate=gate,
+                action=effective_action,
+                eval_result=eval_result,
+                verdict=verdict,
+                pareto_status=pareto_status,
+            )
+            if eligible:
+                _start_multitier_validation(
+                    state,
+                    action=effective_action,
+                    eval_result=eval_result,
+                    verdict=verdict,
+                    trial_counter=trial_counter,
+                )
+
+        if (
+            MULTITIER_PROMOTION_ENABLED
+            and isinstance(multitier_validation_context, dict)
+            and multitier_validation_context.get("stage") == "final_t1"
+        ):
+            _finish_multitier_promotion(
+                state,
+                baseline_update=baseline_update,
+                trial_counter=trial_counter,
+            )
 
         _update_seq_promotion_fresh_eval_state(
             state,
@@ -8843,9 +9380,9 @@ def _run_loop_inner(
             parent_trial_id = parent.trial_id
             # Compute config diff: keys that changed between parent and current
             prev_cfg = parent.config_snapshot
-            for key in set(list(prev_cfg.keys()) + list(action.keys())):
+            for key in set(list(prev_cfg.keys()) + list(effective_action.keys())):
                 old_val = prev_cfg.get(key)
-                new_val = action.get(key)
+                new_val = effective_action.get(key)
                 if old_val != new_val:
                     config_diff[key] = {"old": old_val, "new": new_val}
 
@@ -8917,12 +9454,12 @@ def _run_loop_inner(
                                 "signature_confidence": bsv_payload.get("signature_confidence"),
                                 "severity_vs_previous_incumbent": bsv_payload.get("severity"),
                                 "reasons": list(bsv_payload.get("reasons") or [])[:8],
-                                "conflict_severity": (
-                                    bsv_payload.get("conflict_report") or {}
-                                ).get("severity"),
-                                "conflict_count": (
-                                    bsv_payload.get("conflict_report") or {}
-                                ).get("conflict_count"),
+                                "conflict_severity": (bsv_payload.get("conflict_report") or {}).get(
+                                    "severity"
+                                ),
+                                "conflict_count": (bsv_payload.get("conflict_report") or {}).get(
+                                    "conflict_count"
+                                ),
                                 "signature": signature,
                             }
                     else:
@@ -9114,6 +9651,15 @@ def _run_loop_inner(
                 "k": seq_candidate_replay_context.get("k"),
                 "combined_E": seq_candidate_replay_context.get("combined_E"),
             }
+        if multitier_validation_context is not None:
+            eval_details_dict["multitier_validation"] = {
+                "policy_version": MULTITIER_POLICY_VERSION,
+                "stage": multitier_validation_context.get("stage"),
+                "tier": multitier_validation_context.get("tier"),
+                "candidate": multitier_validation_context.get("candidate"),
+                "source_trial_id": multitier_validation_context.get("source_trial_id"),
+                "verdict": multitier_tier_verdict,
+            }
 
         journal_entry = JournalEntry(
             trial_id=trial_counter,
@@ -9127,7 +9673,7 @@ def _run_loop_inner(
             reliability=eval_result.reliability,
             pareto_status=pareto_status,
             git_tag=git_tag,
-            config_snapshot=action,
+            config_snapshot=effective_action,
             config_diff=config_diff,
             parent_trial=parent_trial_id,
             memory_count=memory_count,
@@ -9138,7 +9684,7 @@ def _run_loop_inner(
             harness_metrics=harness_metrics,
             oracle_adequacy=oracle_adequacy,
             seq=verdict.seq or {},
-            reasoning=json.dumps(action),
+            reasoning=json.dumps(effective_action),
             hypothesis=hypothesis,
             expected_mechanism=expected_mechanism,
             deficiency_category=deficiency_category,
@@ -9286,6 +9832,48 @@ def _run_loop_inner(
             context=f"trial {trial_counter} in-flight clear",
             merge_control=True,
         )
+
+        # A newly accepted staged candidate becomes the next rollback anchor.
+        # Checkpoint only after the WAL marker is cleared so restoring the
+        # production-best snapshot can never resurrect a completed in-flight
+        # trial.  Runtime numeric/flag values are carried separately by each
+        # candidate's exact preimage; this checkpoint owns routing intelligence.
+        checkpoint_due = state.get("multitier_production_checkpoint_due")
+        if isinstance(checkpoint_due, dict):
+            try:
+                checkpoint_path = lab.checkpoint_state(
+                    trial_id=int(checkpoint_due.get("trial_id") or trial_counter - 1),
+                    hypervolume=float(archive.hypervolume()),
+                    feature_flags=lab.current_flags(),
+                    config_snapshot=dict(checkpoint_due.get("candidate_action") or {}),
+                    notes=f"accepted by {MULTITIER_POLICY_VERSION}",
+                    mark_production_best=True,
+                )
+                state["multitier_last_event"] = {
+                    "event": "production_checkpoint_advanced",
+                    "trial_id": checkpoint_due.get("trial_id"),
+                    "candidate": checkpoint_due.get("candidate"),
+                    "checkpoint": str(checkpoint_path),
+                }
+                state.pop("multitier_production_checkpoint_due", None)
+            except Exception as exc:  # noqa: BLE001 - promotion must fail closed
+                state["paused"] = True
+                state["pause_reason"] = (
+                    "accepted multitier candidate could not advance production checkpoint: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                state["multitier_checkpoint_failure"] = {
+                    **checkpoint_due,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                log.exception("Multitier production checkpoint advancement failed")
+            _save_state_with_journal_archive_authority(
+                state,
+                journal,
+                archive,
+                context=f"trial {trial_counter} multitier checkpoint",
+                merge_control=True,
+            )
 
         log.info(
             "Trial %d complete: q=%.3f s=%.1f → %s (HV=%.4f)",
@@ -9811,7 +10399,9 @@ def _write_baseline_yaml_tiers(path: Path, baseline: Baseline) -> None:
         text = _drop_top_level_yaml_block(text, "baselines_by_tier")
         text = _drop_top_level_yaml_block(text, "per_suite_quality_by_tier")
         text = _drop_top_level_yaml_block(text, "per_suite_counts_by_tier")
-        _atomic_write_text(path, text.rstrip() + "\n\n" + _format_baseline_tier_yaml(baseline) + "\n")
+        _atomic_write_text(
+            path, text.rstrip() + "\n\n" + _format_baseline_tier_yaml(baseline) + "\n"
+        )
         return
 
     data = {
