@@ -56,6 +56,7 @@ import asyncio
 import argparse
 import fcntl
 import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -68,10 +69,9 @@ import numpy as np
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SESSIONS = _REPO_ROOT / "orchestration/repl_memory/sessions"
-# Six four-slot BGE servers complete 24-way balanced fan-out in ~1.3s on this
-# host; larger waves overload their request queues.  Use the certified fleet
-# width so the full rebuild does not hold its SQLite transaction for hours.
-BATCH = 24
+# Production defaults to six four-slot BGE servers. A temporary maintenance
+# fleet may safely advertise a wider exact slot count through the environment.
+DEFAULT_BATCH = 24
 
 
 class ReseedVerificationError(RuntimeError):
@@ -170,6 +170,14 @@ def _strict_embedder():
         ParallelEmbedderClient,
     )
 
+    raw_urls = os.environ.get("RESEED_EMBEDDER_URLS", "")
+    server_urls = [item.strip() for item in raw_urls.split(",") if item.strip()]
+    pool_config = EmbedderPoolConfig(
+        server_urls=server_urls or EmbedderPoolConfig().server_urls,
+        request_timeout=30.0,
+        connect_timeout=2.0,
+        use_fallback=False,
+    )
     embedder = TaskEmbedder(
         EmbeddingConfig(
             use_server=True, use_parallel=True, use_fallback=False, allow_subprocess=False
@@ -177,8 +185,19 @@ def _strict_embedder():
     )
     # TaskEmbedder's normal pool defaults to a hash fallback.  Override it
     # explicitly: a partial reseed must fail, never synthesize vectors.
-    embedder._parallel_client = ParallelEmbedderClient(EmbedderPoolConfig(use_fallback=False))
+    embedder._parallel_client = ParallelEmbedderClient(pool_config)
     return embedder
+
+
+def _batch_size() -> int:
+    raw = os.environ.get("RESEED_BATCH_SIZE", str(DEFAULT_BATCH))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"RESEED_BATCH_SIZE must be an integer, got {raw!r}") from exc
+    if value < 1:
+        raise ValueError(f"RESEED_BATCH_SIZE must be positive, got {value}")
+    return value
 
 
 def _checked_batch(embedder, texts: list[str]) -> np.ndarray:
@@ -343,6 +362,7 @@ def reseed(sessions: Path, apply: bool, limit: int | None) -> int:
         id_map: list[str] = []
         task_ids: set[str] = set()
 
+        batch_size = _batch_size()
         pending: list[tuple[str, str, dict]] = []
         embedded = skipped = 0
 
@@ -380,7 +400,7 @@ def reseed(sessions: Path, apply: bool, limit: int | None) -> int:
                 continue
             pending.append((mid, rec.embedding_text(), new_ctx))
             task_ids.add(str(mid))
-            if len(pending) >= BATCH:
+            if len(pending) >= batch_size:
                 flush()
                 log(f"  embedded {embedded} / {s['embeddings_required']}")
         flush()

@@ -98,6 +98,33 @@ def test_strict_embedder_disables_every_semantic_fallback() -> None:
         embedder.close()
 
 
+def test_strict_embedder_accepts_temporary_maintenance_fleet(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "RESEED_EMBEDDER_URLS",
+        "http://127.0.0.1:18090,http://127.0.0.1:18091",
+    )
+    monkeypatch.setenv("RESEED_BATCH_SIZE", "32")
+
+    embedder = reseed._strict_embedder()
+    try:
+        assert embedder._parallel_client.config.server_urls == [
+            "http://127.0.0.1:18090",
+            "http://127.0.0.1:18091",
+        ]
+        assert embedder._parallel_client.config.use_fallback is False
+        assert reseed._batch_size() == 32
+    finally:
+        embedder.close()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "not-an-integer"])
+def test_reseed_batch_size_rejects_invalid_values(monkeypatch, value: str) -> None:
+    monkeypatch.setenv("RESEED_BATCH_SIZE", value)
+
+    with pytest.raises(ValueError, match="RESEED_BATCH_SIZE"):
+        reseed._batch_size()
+
+
 def test_strict_embedder_fails_when_every_server_path_fails(monkeypatch) -> None:
     embedder = reseed._strict_embedder()
     monkeypatch.setattr(
