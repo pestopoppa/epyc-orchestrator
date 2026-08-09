@@ -3489,6 +3489,80 @@ def _task_rate_fields_from_row(row: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _decision_question_mix_from_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return the inner decision-question difficulty mix for one eval row.
+
+    ``row["tier"]`` is the OUTER EvalTower lane (T1/T2/T3). The T1 decision
+    core independently samples question difficulty tiers, currently under the
+    equal-thirds policy. Keeping these concepts separate prevents a ``T1``
+    lane glyph from falsely implying T1-only questions.
+    """
+    if not isinstance(row, dict):
+        return None
+    eval_details = row.get("eval_details")
+    if not isinstance(eval_details, dict):
+        return None
+    details = eval_details.get("details")
+    if not isinstance(details, dict):
+        return None
+    profile = details.get("test_profile")
+    if not isinstance(profile, dict):
+        profile = {}
+    provenance = details.get("tier_mix_provenance")
+    if not isinstance(provenance, dict):
+        provenance = profile.get("tier_mix_provenance")
+    if not isinstance(provenance, dict):
+        provenance = {}
+    raw_targets = provenance.get("tier_mix_targets")
+    if not isinstance(raw_targets, dict):
+        raw_targets = details.get("question_tier_mix")
+    if not isinstance(raw_targets, dict):
+        return None
+
+    targets: dict[str, int] = {}
+    for raw_tier, raw_count in raw_targets.items():
+        try:
+            tier = int(raw_tier)
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            continue
+        if tier >= 0 and count >= 0:
+            targets[str(tier)] = count
+    if not targets:
+        return None
+
+    def _int_or_none(value: Any) -> int | None:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    partition_counts = details.get("partition_counts")
+    if not isinstance(partition_counts, dict):
+        partition_counts = {}
+    decision_filter = details.get("decision_partition_filter")
+    if not isinstance(decision_filter, dict):
+        decision_filter = {}
+    target_n = _int_or_none(provenance.get("drawn_n"))
+    if target_n is None:
+        target_n = _int_or_none(profile.get("n_questions"))
+    if target_n is None:
+        target_n = _int_or_none(decision_filter.get("decision_n_questions"))
+    if target_n is None:
+        target_n = sum(targets.values())
+    scored_n = _int_or_none(details.get("n_scored"))
+    if scored_n is None:
+        scored_n = _int_or_none(partition_counts.get("core"))
+    return {
+        "policy": str(provenance.get("tier_mix_policy") or "") or None,
+        "targets": dict(sorted(targets.items(), key=lambda item: int(item[0]))),
+        "target_n": target_n,
+        "scored_n": scored_n,
+        "core_id": str(details.get("core_id") or profile.get("core_id") or "") or None,
+        "rotation_index": _int_or_none(provenance.get("core_rotation_index")),
+    }
+
+
 def _attach_task_rate_telemetry(
     entry_lists: Iterable[list[dict[str, Any]]],
     rows_by_tid: dict[int, dict[str, Any]],
@@ -3508,6 +3582,22 @@ def _attach_task_rate_telemetry(
                 tid = None
             entry.update(
                 _task_rate_fields_from_row(rows_by_tid.get(tid) if tid is not None else None)
+            )
+
+
+def _attach_decision_question_mix(
+    entry_lists: Iterable[list[dict[str, Any]]],
+    rows_by_tid: dict[int, dict[str, Any]],
+) -> None:
+    """Attach outer-lane-independent decision-question mix context."""
+    for entries in entry_lists:
+        for entry in entries:
+            try:
+                tid = int(entry.get("trial_id"))
+            except (TypeError, ValueError):
+                tid = None
+            entry["decision_question_mix"] = _decision_question_mix_from_row(
+                rows_by_tid.get(tid) if tid is not None else None
             )
 
 
@@ -5502,6 +5592,23 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
         ),
         rows_by_tid,
     )
+    _attach_decision_question_mix(
+        (
+            frontier,
+            dominated_shaped,
+            t0_audit_shaped,
+            *frontiers_by_tier.values(),
+        ),
+        rows_by_tid,
+    )
+    current_decision_question_mix = next(
+        (
+            mix
+            for _, row in sorted(rows_by_tid.items(), reverse=True)
+            if (mix := _decision_question_mix_from_row(row)) is not None
+        ),
+        None,
+    )
     objective_policy_comparison = _objective_policy_comparison_summary(
         journal_rows,
         data,
@@ -5588,6 +5695,9 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
                 # Historical comparator only. W3 already flipped; this never
                 # presents a pending decision or gates AutoPilot.
                 "objective_policy_comparison": objective_policy_comparison,
+                # `canonical_tier` / `eval_tier` are OUTER lanes. This is the
+                # latest INNER question-difficulty composition of the core.
+                "current_decision_question_mix": current_decision_question_mix,
                 "state_trial_counter": state_trial_counter,
                 "journal_max_trial_id": archive.get("journal_max_trial_id")
                 if isinstance(archive, dict)
@@ -7576,6 +7686,7 @@ async def gepa_status() -> JSONResponse:
                         # healthy T3 eval as a quality regression. Default to the
                         # canonical tier when absent (legacy rows predate the field).
                         "tier": j.get("tier", DEFAULT_FRONTIER_TIER),
+                        "decision_question_mix": _decision_question_mix_from_row(j),
                         "quality": j.get("quality"),
                         "speed": j.get("speed"),
                         "cost": j.get("cost"),
@@ -7646,6 +7757,14 @@ async def gepa_status() -> JSONResponse:
                 "lines": gepa_lines,
                 "state": trial_state,
                 "recent_trials": recent_trials,
+                "current_decision_question_mix": next(
+                    (
+                        trial["decision_question_mix"]
+                        for trial in reversed(recent_trials)
+                        if trial.get("decision_question_mix") is not None
+                    ),
+                    None,
+                ),
                 # Trials timestamped inside any window carry broken optimizer
                 # provenance (the reflective-mutation path was a no-op); the
                 # client hatches/greys those rows + shows a caveat badge.

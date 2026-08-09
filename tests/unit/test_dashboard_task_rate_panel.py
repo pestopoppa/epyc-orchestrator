@@ -125,6 +125,42 @@ def test_pareto_payload_null_safe_when_row_lacks_fields(tmp_path, monkeypatch):
     assert p4["offered_load"] is None
 
 
+def test_pareto_payload_separates_outer_lane_from_decision_question_mix(
+    tmp_path, monkeypatch
+):
+    mixed = _row(
+        5, 1.8, 40.0, n_questions=50, eval_wall_s=1800.0,
+        details={
+            "question_tier_mix": {"1": 17, "2": 17, "3": 16},
+            "tier_mix_provenance": {
+                "tier_mix_policy": "equal_thirds_v1",
+                "tier_mix_targets": {"1": 17, "2": 17, "3": 16},
+                "drawn_n": 50,
+                "core_rotation_index": 75,
+            },
+            "core_id": "tier_stratified_equal_thirds_v1_seed_42_n50_rot75",
+            "n_scored": 49,
+            "partition_counts": {"core": 49, "audit": 10, "tool_sentinel": 5},
+        },
+    )
+    _journal(tmp_path, monkeypatch, [mixed])
+    _state(tmp_path, monkeypatch, pareto_objective_policy=RATE_4D_OBJECTIVE_POLICY)
+
+    payload = _call()
+    point = _points(payload)[5]
+
+    assert point["eval_tier"] == 1
+    assert point["decision_question_mix"] == {
+        "policy": "equal_thirds_v1",
+        "targets": {"1": 17, "2": 17, "3": 16},
+        "target_n": 50,
+        "scored_n": 49,
+        "core_id": "tier_stratified_equal_thirds_v1_seed_42_n50_rot75",
+        "rotation_index": 75,
+    }
+    assert payload["current_decision_question_mix"] == point["decision_question_mix"]
+
+
 def test_toggle_data_integrity_matches_canonical_helpers(tmp_path, monkeypatch):
     """Every shipped point's task_rate/goodput equals the canonical helper output."""
     rows = [ROW_1, ROW_2, ROW_3, ROW_4]

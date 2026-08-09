@@ -3063,6 +3063,15 @@ def test_gepa_status_recent_trials_carry_tier(tmp_path: Path, monkeypatch) -> No
             "trial_id": 30, "tier": 1, "timestamp": "2026-07-04T00:00:00+00:00",
             "species": "prompt_forge", "quality": 1.8, "speed": 30.0,
             "cost": 0.5, "reliability": 1.0, "pareto_status": "frontier",
+            "eval_details": {"details": {
+                "question_tier_mix": {"1": 17, "2": 17, "3": 16},
+                "tier_mix_provenance": {
+                    "tier_mix_policy": "equal_thirds_v1",
+                    "tier_mix_targets": {"1": 17, "2": 17, "3": 16},
+                    "drawn_n": 50,
+                },
+                "n_scored": 49,
+            }},
         },
         {
             "trial_id": 31, "tier": 3, "timestamp": "2026-07-04T00:01:00+00:00",
@@ -3079,6 +3088,13 @@ def test_gepa_status_recent_trials_carry_tier(tmp_path: Path, monkeypatch) -> No
 
     tier_by_trial = {t["trial_id"]: t["tier"] for t in payload["recent_trials"]}
     assert tier_by_trial == {30: 1, 31: 3}
+    by_trial = {t["trial_id"]: t for t in payload["recent_trials"]}
+    assert by_trial[30]["decision_question_mix"]["targets"] == {
+        "1": 17, "2": 17, "3": 16,
+    }
+    assert by_trial[30]["decision_question_mix"]["scored_n"] == 49
+    assert by_trial[31]["decision_question_mix"] is None
+    assert payload["current_decision_question_mix"] == by_trial[30]["decision_question_mix"]
 
 
 def test_gepa_status_recent_trials_carry_real_suite_metric(

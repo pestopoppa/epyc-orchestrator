@@ -918,7 +918,7 @@ def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> No
     assert "const yLo = Math.max(0, yMin - yPad)" in body
     assert "d.canonical_tier" in body
     assert "d.frontiers_by_tier" in body
-    assert "tiers ${tierKeys.map" in body
+    assert "outer lanes ${tierKeys.map" in body
     assert "const legendY = VB.h - PAD.b - 4;" in body
     assert "paretoTierLegend(legendKeys, VB.w - 44, legendY, eraMode)" in body
     assert "paretoTierLegend(series.map(s => s[0]), VB.w - 38, legendY)" in body
@@ -948,6 +948,12 @@ def test_dashboard_gepa_and_pareto_surface_real_suite_metrics() -> None:
     assert "real_suite_v1 q=" in body
     assert "setPanelFreshness('gepa', d._freshness || {" in body
     assert "GEPA panel rendered successfully" in body
+    assert "function decisionQuestionMixLabel(mix, includeScored)" in body
+    assert "evaluation lane → decision mix → pareto outcome" in body
+    assert "<div>trial</div><div>lane</div><div>decision core</div>" in body
+    assert "decision mix ${mixText}" in body
+    assert "decision core ${label}" in body
+    assert "lane T${Number(t)} audit" in body
 
 
 def test_dashboard_autopilot_progress_includes_eval_label() -> None:

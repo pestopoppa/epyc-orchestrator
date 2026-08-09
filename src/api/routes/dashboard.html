@@ -4336,6 +4336,25 @@ function realSuiteBadge(metric) {
     return `<span style="color:#34d399;font-weight:600" title="${escapeHTML(title)}">rs ${Number.isFinite(q) ? q.toFixed(2) : '?'}</span>`;
 }
 
+// EvalTower uses "tier" for two independent dimensions. `eval_tier` is the
+// OUTER evaluation lane (T1/T2/T3); this payload is the INNER difficulty mix
+// sampled into the decision core. Never render a bare "T1" without saying
+// which dimension it represents.
+function decisionQuestionMixLabel(mix, includeScored) {
+    if (!mix || !mix.targets) return '';
+    const tiers = Object.keys(mix.targets).sort((a, b) => Number(a) - Number(b));
+    if (!tiers.length) return '';
+    const labels = tiers.map(t => `D${t}`).join('/');
+    const counts = tiers.map(t => Number(mix.targets[t])).join('/');
+    let out = `${labels} ${counts}`;
+    const scored = Number(mix.scored_n), target = Number(mix.target_n);
+    if (includeScored && mix.scored_n != null && mix.target_n != null
+            && Number.isFinite(scored) && Number.isFinite(target)) {
+        out += ` · scored ${scored}/${target}`;
+    }
+    return out;
+}
+
 async function updateGepa() {
     try {
         const d = await fetchJSON('/dashboard/api/gepa');
@@ -4384,15 +4403,14 @@ async function updateGepa() {
         }
         let trialsTable = '';
         if (d.recent_trials && d.recent_trials.length) {
-            trialsTable = '<div style="margin:8px 0 4px 0;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">last 10 trials (pareto trajectory)</div>';
+            trialsTable = '<div style="margin:8px 0 4px 0;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">last 10 trials (evaluation lane → decision mix → pareto outcome)</div>';
             trialsTable += '<div style="font-size:10px">';
-            // Tier column: quality is per-tier and NOT cross-tier comparable, so the
-            // trajectory table tags each row with its tier (color-matched to the
-            // Pareto/HV series) — otherwise a by-design-low T3 hard-only row reads
-            // as a quality regression next to T1 rows.
-            const gepaCols = '48px 32px 50px 70px 58px 66px 52px 56px 1fr';
+            // `lane` is the OUTER eval tier. `decision core` is the independently
+            // sampled INNER difficulty-tier target; both must be visible because a
+            // lane-T1 evaluation can intentionally contain D1/D2/D3 questions.
+            const gepaCols = '48px 48px 128px 50px 70px 58px 66px 52px 56px 1fr';
             trialsTable += `<div style="display:grid;grid-template-columns:${gepaCols};gap:6px;color:var(--muted);padding:2px 0;border-bottom:1px solid var(--border)">` +
-                '<div>trial</div><div>tier</div><div>real</div><div>species</div><div>quality</div><div>speed</div><div>cost</div><div>pareto</div><div>desc</div></div>';
+                '<div>trial</div><div>lane</div><div>decision core</div><div>real</div><div>species</div><div>quality</div><div>speed</div><div>cost</div><div>pareto</div><div>desc</div></div>';
             d.recent_trials.slice(-10).reverse().forEach(t => {
                 // Killed / bug-corrupted placeholders: muted row + a status tag in
                 // the pareto column so a mid-trial kill is visible instead of the
@@ -4421,9 +4439,14 @@ async function updateGepa() {
                 }
                 const statusTitle = killed ? String(t.bug_corrupted_by) :
                                     excluded ? String(t.learning_excluded_by || t.keep_revert_decision || '') : '';
+                const mixText = decisionQuestionMixLabel(t.decision_question_mix, true) || '-';
+                const mixTitle = t.decision_question_mix
+                    ? `${mixText} · policy ${t.decision_question_mix.policy || 'unknown'} · core ${t.decision_question_mix.core_id || 'unknown'}`
+                    : 'decision-question difficulty mix unavailable for this trial';
                 trialsTable += `<div title="${escapeHTML(rowTitle)}" style="display:grid;grid-template-columns:${gepaCols};gap:6px;padding:1px 0;${rowStyle}">
                     <div>${t.trial_id||'-'}</div>
-                    <div style="color:${tierColor};font-weight:600">${t.tier!=null?('T'+t.tier):'-'}</div>
+                    <div style="color:${tierColor};font-weight:600">${t.tier!=null?('lane T'+t.tier):'-'}</div>
+                    <div title="${escapeHTML(mixTitle)}">${escapeHTML(mixText)}</div>
                     <div>${realSuiteBadge(t.real_suite_v1)}</div>
                     <div>${(t.species||'').slice(0,12)}</div>
                     <div>${(!killed && t.quality!=null)?t.quality.toFixed(2):'-'}</div>
@@ -4518,9 +4541,12 @@ async function updatePareto() {
         if (bannerEl) {
             const shownPolicy = d.objective_policy || 'unknown';
             const activePolicy = d.active_objective_policy || shownPolicy;
+            const canonicalLane = Number.isFinite(Number(d.canonical_tier)) ? `lane T${Number(d.canonical_tier)}` : 'lane T1';
+            const activeMix = decisionQuestionMixLabel(d.current_decision_question_mix, false);
+            const instrument = `${canonicalLane}${activeMix ? ` · decision target ${activeMix}` : ''}`;
             bannerEl.textContent = d.objective_policy_context === 'historical_legacy_comparator'
-                ? `historical comparator · legacy request t/s · not decision-grade · live ${activePolicy}`
-                : `dominance = ${shownPolicy} · decision-grade current-era frontier`;
+                ? `historical comparator · legacy request t/s · not decision-grade · live ${activePolicy} · ${instrument}`
+                : `dominance = ${shownPolicy} · decision-grade current-era frontier · ${instrument}`;
         }
         const activeEras = d.active_instrument_eras || {};
         const activeSpeedEra = activeEras.autopilot_speed || '';
@@ -4557,10 +4583,12 @@ async function updatePareto() {
         if (sumEl) {
             if (d.available) {
                 const source = String(d.source || '').startsWith('journal_') ? 'journal' : 'state';
-                const canonicalTier = Number.isFinite(Number(d.canonical_tier)) ? `T${Number(d.canonical_tier)}` : 'T1';
+                const canonicalTier = Number.isFinite(Number(d.canonical_tier)) ? `lane T${Number(d.canonical_tier)}` : 'lane T1';
                 const tierKeys = Object.keys(d.frontiers_by_tier || {}).sort((a, b) => Number(a) - Number(b));
-                const tierText = tierKeys.length ? ` · tiers ${tierKeys.map(t => `T${t}`).join('/')}` : '';
-                let txt = `${canonicalTier} ${d.totals.frontier_size} frontier · ${d.totals.all_entries} trials · ${source}${tierText}`;
+                const tierText = tierKeys.length ? ` · outer lanes ${tierKeys.map(t => `T${t}`).join('/')}` : '';
+                const mixText = decisionQuestionMixLabel(d.current_decision_question_mix, false);
+                const mixSummary = mixText ? ` · decision mix ${mixText}` : '';
+                let txt = `${canonicalTier} ${d.totals.frontier_size} frontier${mixSummary} · ${d.totals.all_entries} trials · ${source}${tierText}`;
                 if (Array.isArray(d.eras) && d.eras.length) {
                     txt += ` · ${d.eras.filter(e => e.n_points > 0).length} eras`;
                 }
@@ -4671,7 +4699,7 @@ function paretoTierLegend(tierKeys, x, y, neutral) {
         const audit = paretoIsAuditTier(t);
         const fill = neutral && !audit ? '#94a3b8' : paretoTierFill(t);
         const glyph = paretoMarker(t, x + 4, cy - 2, 4, `fill="${fill}"${audit ? ' opacity="0.6"' : ''}`, '');
-        const label = audit ? `T${Number(t)} audit` : `T${t}`;
+        const label = audit ? `lane T${Number(t)} audit` : `lane T${t}`;
         return glyph + `<text class="axis-label" x="${x + 14}" y="${(cy + 1).toFixed(1)}" fill="#94a3b8">${label}</text>`;
     }).join('');
 }
@@ -4830,6 +4858,10 @@ function renderParetoScatter(d) {
         const count = Number(rs.count);
         return ` · real_suite_v1 q=${Number.isFinite(q) ? q.toFixed(2) : '?'}${Number.isFinite(count) ? '/' + count : ''}`;
     };
+    const decisionMixTip = p => {
+        const label = decisionQuestionMixLabel(p && p.decision_question_mix, true);
+        return label ? ` · decision core ${label}` : ' · decision core mix unavailable';
+    };
     const VB = { w: 400, h: 280 };
     // Left/bottom pads sized so tick numbers and the rotated axis TITLE get
     // their own lanes instead of fusing (title ~10px lane, ticks ~14px lane).
@@ -4944,7 +4976,7 @@ function renderParetoScatter(d) {
     t0pts.forEach(p => {
         const x = sx(p.objectives[0]), y = sy(speedOf(p));
         const onFront = t0frontSet.has(p);
-        const tip = `T${p.eval_tier ?? 0} audit${onFront ? ' · frontier' : ''} · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${taskRateTip(p)}${suiteTip(p)}${eraTip(p)}`;
+        const tip = `lane T${p.eval_tier ?? 0} audit${onFront ? ' · frontier' : ''} · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${decisionMixTip(p)}${taskRateTip(p)}${suiteTip(p)}${eraTip(p)}`;
         parts.push(paretoMarker(p.eval_tier ?? 0, x, y, onFront ? 3.5 : 3, `fill="${PARETO_AUDIT_FILL}" opacity="${onFront ? 0.85 : 0.4}"`, tip));
     });
     // Dominated points: colored by their own tier (dimmed via opacity), shaped
@@ -4953,7 +4985,7 @@ function renderParetoScatter(d) {
         if (axisTaskRate && !hasY(p)) return;
         const x = sx(p.objectives[0]), y = sy(speedOf(p));
         const tier = p.eval_tier ?? d.canonical_tier ?? 1;
-        const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${taskRateTip(p)}${suiteTip(p)}${eraTip(p)}`;
+        const tip = `lane T${tier} · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${decisionMixTip(p)}${taskRateTip(p)}${suiteTip(p)}${eraTip(p)}`;
         const fill = eraMode ? eraFillOf(p) : paretoTierFill(tier);
         const op = eraMode
             ? histFade(p, Math.max(0.22, 0.5 * eraAlphaOf(p))).toFixed(2)
@@ -4996,7 +5028,7 @@ function renderParetoScatter(d) {
             if (axisTaskRate && !hasY(p)) return;
             const x = sx(p.objectives[0]), y = sy(speedOf(p));
             const prod = p.is_production_best;
-            const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${taskRateTip(p)}${suiteTip(p)}${eraTip(p)}${prod ? ' · PRODUCTION' : ''}`;
+            const tip = `lane T${tier} · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${decisionMixTip(p)}${taskRateTip(p)}${suiteTip(p)}${eraTip(p)}${prod ? ' · PRODUCTION' : ''}`;
             const ring = prod ? ' stroke="var(--good)" stroke-width="1.5"' : '';
             const fill = eraMode ? eraFillOf(p) : color;
             const op = eraMode ? ` opacity="${histFade(p, eraAlphaOf(p)).toFixed(2)}"` : '';
@@ -5110,7 +5142,7 @@ function renderHypervolumeTimeline(d) {
         ).join(' ');
         parts.push(`<path class="frontier-line" style="stroke:${color};stroke-dasharray:none;opacity:0.9" d="${path}"/>`);
         const last = hist[hist.length - 1];
-        parts.push(`<circle cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="4" fill="${color}"><title>T${tier} trial ${last[0]} · hv=${last[1].toFixed(3)}</title></circle>`);
+        parts.push(`<circle cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="4" fill="${color}"><title>lane T${tier} · trial ${last[0]} · hv=${last[1].toFixed(3)}</title></circle>`);
     });
     const legendY = VB.h - PAD.b - 4;
     parts.push(paretoTierLegend(series.map(s => s[0]), VB.w - 38, legendY));
