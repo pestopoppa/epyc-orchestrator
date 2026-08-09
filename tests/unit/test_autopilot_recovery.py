@@ -1125,6 +1125,54 @@ def test_recovery_case_a_counter_never_decreases(
     assert state["trial_counter"] == 20
 
 
+def test_recovery_case_b_counter_never_decreases(
+    journal: ExperimentJournal, archive: ParetoArchive
+) -> None:
+    """A stale marker cannot move a previously advanced counter backward."""
+    journal.record(_make_entry(trial_id=3))
+    state = {
+        "in_flight_trial": {
+            "trial_id": 4,
+            "action": {"type": "deep_eval", "tier": 2},
+            "host_pid": 1,
+            "host_started_at": 0.0,
+        },
+        "trial_counter": 20,
+    }
+    new_counter = autopilot._recover_from_in_flight_trial(
+        state, journal, archive, trial_counter=20,
+    )
+    assert new_counter == 20
+    assert state["trial_counter"] == 20
+    assert state["in_flight_trial"] is None
+
+
+def test_recovery_placeholder_append_failure_keeps_marker(
+    journal: ExperimentJournal, archive: ParetoArchive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never erase the only recovery marker when the journal append fails."""
+    state = {
+        "in_flight_trial": {
+            "trial_id": 6,
+            "action": {"type": "deep_eval", "tier": 2},
+            "host_pid": 111,
+            "host_started_at": 2000.0,
+        },
+        "trial_counter": 6,
+    }
+
+    def fail_record(_entry: JournalEntry) -> None:
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(journal, "record", fail_record)
+    with pytest.raises(RuntimeError, match="trial 6"):
+        autopilot._recover_from_in_flight_trial(
+            state, journal, archive, trial_counter=6,
+        )
+    assert state["in_flight_trial"]["trial_id"] == 6
+    assert state["trial_counter"] == 6
+
+
 def test_recovery_idempotent_after_first_call(
     journal: ExperimentJournal, archive: ParetoArchive
 ) -> None:

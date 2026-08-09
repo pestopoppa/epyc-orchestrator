@@ -6354,7 +6354,7 @@ def _recover_from_in_flight_trial(
                 deficiency_category="autopilot_killed_mid_trial",
             )
             journal.record(placeholder)
-            trial_counter = prior_tid + 1
+            trial_counter = max(trial_counter, prior_tid + 1)
             state["trial_counter"] = trial_counter
         except Exception as exc:
             log.error(
@@ -6362,6 +6362,12 @@ def _recover_from_in_flight_trial(
                 prior_tid,
                 exc,
             )
+            # Fail closed: the in-flight marker is the only durable evidence
+            # that this trial still requires recovery.  Clearing it after a
+            # failed append would silently create an unaccounted journal gap.
+            raise RuntimeError(
+                f"Could not append interrupted-trial placeholder for trial {prior_tid}"
+            ) from exc
     state["in_flight_trial"] = None
     return trial_counter
 
