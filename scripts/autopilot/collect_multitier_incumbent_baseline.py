@@ -242,6 +242,18 @@ def _validate_result(result: Any, tier: int) -> None:
         raise RuntimeError("tier baseline is not clean: " + "; ".join(errors))
 
 
+def _state_collection_readiness(state: dict[str, Any]) -> dict[str, Any]:
+    """Return the state predicates required before incumbent measurement."""
+    in_flight = state.get("in_flight_trial")
+    return {
+        "autopilot_paused": state.get("paused") is True,
+        "in_flight_trial_clear": in_flight is None,
+        "in_flight_trial_id": (
+            int(in_flight.get("trial_id", -1)) if isinstance(in_flight, dict) else None
+        ),
+    }
+
+
 def _run_tier(tower: EvalTower, tier: int) -> Any:
     if tier == 1:
         return tower.eval_t1(n=EVAL_T1_SPEC_N, seed=EVAL_SPEC_SEED)
@@ -276,9 +288,10 @@ def main() -> int:
         dirty_sources = _source_dirty_paths()
         state_raw = STATE_PATH.read_bytes()
         state = json.loads(state_raw)
+        state_readiness = _state_collection_readiness(state)
         preflight = {
             "autopilot_lock_free": True,
-            "autopilot_paused": state.get("paused") is True,
+            **state_readiness,
             "git_head": _git_head(),
             "source_dirty_paths": dirty_sources,
             "source_sha256": _source_hashes(),
@@ -292,11 +305,22 @@ def main() -> int:
             preflight["episodic_integrity"] = _episodic_semantic_integrity()
             preflight["live_config_identity"] = _live_config_identity()
             print(json.dumps(preflight, indent=2, sort_keys=True))
-            return 0 if not dirty_sources and preflight["autopilot_paused"] else 2
+            return 0 if not dirty_sources and all(
+                (
+                    preflight["autopilot_paused"],
+                    preflight["in_flight_trial_clear"],
+                )
+            ) else 2
         if dirty_sources:
             raise SystemExit(f"measurement/policy sources are dirty: {dirty_sources}")
         if state.get("paused") is not True:
             raise SystemExit("AutoPilot state is not paused")
+        if state.get("in_flight_trial") is not None:
+            trial_id = state_readiness["in_flight_trial_id"]
+            raise SystemExit(
+                "AutoPilot state has unresolved in_flight_trial"
+                f" {trial_id}; recover it before baseline collection"
+            )
 
         started_at = _utc_now()
         integrity_before = _episodic_semantic_integrity()

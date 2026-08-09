@@ -43,3 +43,28 @@ def test_wrong_tier_size_fails_closed() -> None:
 
     with pytest.raises(RuntimeError, match="n_questions"):
         collector._validate_result(result, 3)
+
+
+def test_state_readiness_rejects_unresolved_in_flight_trial() -> None:
+    readiness = collector._state_collection_readiness(
+        {
+            "paused": True,
+            "in_flight_trial": {"trial_id": 1505, "action": {"type": "deep_eval"}},
+        }
+    )
+
+    assert readiness == {
+        "autopilot_paused": True,
+        "in_flight_trial_clear": False,
+        "in_flight_trial_id": 1505,
+    }
+
+
+def test_state_readiness_accepts_paused_quiescent_state() -> None:
+    assert collector._state_collection_readiness(
+        {"paused": True, "in_flight_trial": None}
+    ) == {
+        "autopilot_paused": True,
+        "in_flight_trial_clear": True,
+        "in_flight_trial_id": None,
+    }
