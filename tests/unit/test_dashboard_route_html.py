@@ -893,6 +893,19 @@ def test_dashboard_transport_self_heals_without_page_reload() -> None:
     assert "if (_plannerTapStream === es) startPlannerTapStream();" in body
 
 
+def test_optimization_brief_retries_across_api_reload_and_refreshes() -> None:
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+
+    assert "const _OPTIMIZATION_BRIEF_TIMEOUT_MS = 15000;" in body
+    assert "brief temporarily unavailable:" in body
+    assert "setTimeout(() => updateOptimizationBrief(attempt + 1), retryMs)" in body
+    assert "'optimization-brief-refresh'" in body
+    assert "if (_optimizationBriefLastGood)" in body
+
+
 def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> None:
     """Quality/speed axes should not render negative tick labels from padding."""
     html_path = (

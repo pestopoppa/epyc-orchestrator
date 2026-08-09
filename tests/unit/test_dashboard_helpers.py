@@ -24,6 +24,7 @@ from src.api.routes import (
     dashboard_tasks,
     dashboard_topology,
 )
+from scripts.autopilot import optimization_brief as optimization_brief_module
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +41,40 @@ def _neutralize_realized_numa_probe(monkeypatch):
     monkeypatch.setattr(dashboard_topology, "_probe_realized_numa_mode", lambda: None)
     yield
     dashboard_topology._REALIZED_NUMA_CACHE.update({"ts": 0.0, "value": None, "probed": False})
+
+
+@pytest.mark.asyncio
+async def test_optimization_brief_is_threaded_cached_and_fails_open(monkeypatch) -> None:
+    calls = 0
+
+    def build() -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return {"read_only": True, "checkpoint": {"trial_counter": 7}}
+
+    monkeypatch.setattr(optimization_brief_module, "build_optimization_brief", build)
+    monkeypatch.setitem(dashboard._OPTIMIZATION_BRIEF_CACHE, "payload", None)
+    monkeypatch.setitem(dashboard._OPTIMIZATION_BRIEF_CACHE, "created_monotonic", 0.0)
+    monkeypatch.setitem(dashboard._OPTIMIZATION_BRIEF_CACHE, "generated_at", None)
+
+    first = await dashboard._optimization_brief_payload()
+    second = await dashboard._optimization_brief_payload()
+
+    assert calls == 1
+    assert first["checkpoint"] == {"trial_counter": 7}
+    assert first["synthesis"]["stale"] is False
+    assert second["synthesis"]["age_s"] >= 0
+
+    def fail() -> dict[str, object]:
+        raise RuntimeError("cold rebuild failed")
+
+    monkeypatch.setattr(optimization_brief_module, "build_optimization_brief", fail)
+    dashboard._OPTIMIZATION_BRIEF_CACHE["created_monotonic"] = 0.0
+    stale = await dashboard._optimization_brief_payload()
+
+    assert stale["checkpoint"] == {"trial_counter": 7}
+    assert stale["synthesis"]["stale"] is True
+    assert stale["synthesis"]["warning"] == "cold rebuild failed"
 
 
 # ----- dashboard_topology -----

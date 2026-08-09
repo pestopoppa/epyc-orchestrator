@@ -5241,7 +5241,15 @@ function renderOptimizationBrief(b) {
     const grade = !!auth.decision_grade_possible;
     const holds = auth.holds || {};
     const anyHold = !!holds.any_hold_active;
-    if (statusEl) statusEl.textContent = grade ? 'decision-grade' : (anyHold ? 'holds active — observations only' : 'observations only');
+    const synthesis = b.synthesis || {};
+    const checkpoint = b.checkpoint || {};
+    if (statusEl) {
+        const bits = [grade ? 'decision-grade' : (anyHold ? 'holds active — observations only' : 'observations only')];
+        if (checkpoint.trial_counter != null) bits.push(`trial ${checkpoint.trial_counter}`);
+        if (synthesis.stale) bits.push('stale cache');
+        else if (synthesis.age_s != null) bits.push(`${Math.round(synthesis.age_s)}s old`);
+        statusEl.textContent = bits.join(' · ');
+    }
     const fmt = (v, d = 2) => (v == null ? '—' : (typeof v === 'number' ? v.toFixed(d) : v));
     const parts = [];
     parts.push(`<div class="ob-banner ${grade ? 'ob-grade' : 'ob-obs'}">${escapeHTML(auth.trust_note || '')}</div>`);
@@ -5340,12 +5348,41 @@ function renderOptimizationBrief(b) {
     el.innerHTML = parts.join('');
 }
 
-async function updateOptimizationBrief() {
+let _optimizationBriefLastGood = null;
+let _optimizationBriefRetryTimer = null;
+let _optimizationBriefRequestInFlight = false;
+const _OPTIMIZATION_BRIEF_TIMEOUT_MS = 15000;
+const _OPTIMIZATION_BRIEF_REFRESH_MS = 60000;
+
+async function updateOptimizationBrief(attempt = 0) {
+    if (_optimizationBriefRequestInFlight) return;
+    _optimizationBriefRequestInFlight = true;
     try {
-        renderOptimizationBrief(await fetchJSON('/dashboard/api/optimization_brief'));
+        const brief = await fetchJSON(
+            '/dashboard/api/optimization_brief',
+            { timeoutMs: _OPTIMIZATION_BRIEF_TIMEOUT_MS },
+        );
+        _optimizationBriefLastGood = brief;
+        if (_optimizationBriefRetryTimer) clearTimeout(_optimizationBriefRetryTimer);
+        _optimizationBriefRetryTimer = null;
+        renderOptimizationBrief(brief);
     } catch (err) {
         const el = document.getElementById('optimization-brief');
-        if (el) el.innerHTML = `<div style="color:var(--bad)">brief fetch failed: ${escapeHTML(err && err.message ? err.message : String(err))}</div>`;
+        const statusEl = document.getElementById('optimization-brief-status');
+        const detail = err && err.name === 'AbortError'
+            ? 'API reload or synthesis timeout'
+            : (err && err.message ? err.message : String(err));
+        if (_optimizationBriefLastGood) {
+            renderOptimizationBrief(_optimizationBriefLastGood);
+            if (statusEl) statusEl.textContent += ' · reconnecting';
+        } else if (el) {
+            el.innerHTML = `<div style="color:var(--warn)">brief temporarily unavailable: ${escapeHTML(detail)}; retrying…</div>`;
+        }
+        const retryMs = Math.min(15000, 1000 * (2 ** Math.min(attempt, 4)));
+        if (_optimizationBriefRetryTimer) clearTimeout(_optimizationBriefRetryTimer);
+        _optimizationBriefRetryTimer = setTimeout(() => updateOptimizationBrief(attempt + 1), retryMs);
+    } finally {
+        _optimizationBriefRequestInFlight = false;
     }
 }
 
@@ -7502,7 +7539,10 @@ function startDashboard() {
         setInterval(() => startPanelSafely('topology-refresh', loadTopology), 5000);  // rebuild strip when stack topology shifts (reboot/reload) — no-op when unchanged
         setInterval(updateAutopilotProgress, 3000);  // 3s poll — trial progress bar (state.json mtime polling)
         setInterval(updateRepoReadiness, 60000);  // advisory artifacts change only on scorer/checkpoint runs
-        setInterval(updateOptimizationBrief, 60000);
+        setInterval(
+            () => startPanelSafely('optimization-brief-refresh', updateOptimizationBrief),
+            _OPTIMIZATION_BRIEF_REFRESH_MS,
+        );
         setInterval(() => updateInsightGraph(_insightGraphFocus), 20000);
         setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS);  // local "Ns ago" tick between polls
         // Pareto poll: only fetch when the GEPA accordion is open. Cheap when

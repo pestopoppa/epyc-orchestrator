@@ -2853,6 +2853,73 @@ _INSIGHT_GRAPH_DEFAULT_LIMIT = 120
 _INSIGHT_GRAPH_MAX_LIMIT = 240
 _INSIGHT_GRAPH_DEFAULT_DEPTH = 1
 
+_OPTIMIZATION_BRIEF_CACHE_TTL_S = 30.0
+_OPTIMIZATION_BRIEF_CACHE: dict[str, Any] = {
+    "created_monotonic": 0.0,
+    "generated_at": None,
+    "payload": None,
+}
+_OPTIMIZATION_BRIEF_LOCK = asyncio.Lock()
+
+
+def _optimization_brief_cache_view(
+    payload: dict[str, Any],
+    *,
+    generated_at: float,
+    stale: bool = False,
+    warning: str = "",
+) -> dict[str, Any]:
+    """Attach freshness without mutating the cached synthesis payload."""
+    view = dict(payload)
+    view["synthesis"] = {
+        "generated_at": generated_at,
+        "age_s": max(0.0, time.time() - generated_at),
+        "stale": stale,
+        "warning": warning,
+    }
+    return view
+
+
+async def _optimization_brief_payload() -> dict[str, Any]:
+    """Build the synthesis off the API event loop and cache reconnects."""
+    now = time.monotonic()
+    cached = _OPTIMIZATION_BRIEF_CACHE.get("payload")
+    created = float(_OPTIMIZATION_BRIEF_CACHE.get("created_monotonic") or 0.0)
+    generated_at = float(_OPTIMIZATION_BRIEF_CACHE.get("generated_at") or 0.0)
+    if isinstance(cached, dict) and now - created < _OPTIMIZATION_BRIEF_CACHE_TTL_S:
+        return _optimization_brief_cache_view(cached, generated_at=generated_at)
+
+    async with _OPTIMIZATION_BRIEF_LOCK:
+        now = time.monotonic()
+        cached = _OPTIMIZATION_BRIEF_CACHE.get("payload")
+        created = float(_OPTIMIZATION_BRIEF_CACHE.get("created_monotonic") or 0.0)
+        generated_at = float(_OPTIMIZATION_BRIEF_CACHE.get("generated_at") or 0.0)
+        if isinstance(cached, dict) and now - created < _OPTIMIZATION_BRIEF_CACHE_TTL_S:
+            return _optimization_brief_cache_view(cached, generated_at=generated_at)
+
+        from scripts.autopilot.optimization_brief import build_optimization_brief
+
+        try:
+            payload = await asyncio.to_thread(build_optimization_brief)
+        except Exception as exc:
+            if isinstance(cached, dict) and generated_at > 0:
+                return _optimization_brief_cache_view(
+                    cached,
+                    generated_at=generated_at,
+                    stale=True,
+                    warning=str(exc),
+                )
+            raise
+        generated_at = time.time()
+        _OPTIMIZATION_BRIEF_CACHE.update(
+            {
+                "created_monotonic": time.monotonic(),
+                "generated_at": generated_at,
+                "payload": payload,
+            }
+        )
+        return _optimization_brief_cache_view(payload, generated_at=generated_at)
+
 
 @router.get("/dashboard/api/insight_graph")
 async def insight_graph(
@@ -2878,9 +2945,7 @@ async def optimization_brief() -> JSONResponse:
     Never promotes or mutates; fails soft so the dashboard cannot 500 on it.
     """
     try:
-        from scripts.autopilot.optimization_brief import build_optimization_brief
-
-        payload = build_optimization_brief()
+        payload = await _optimization_brief_payload()
     except Exception as exc:  # noqa: BLE001 — synthesis must not break the page
         payload = {"read_only": True, "error": str(exc)}
     return JSONResponse(_stamp(payload, "optimization_brief"), headers=_NO_STORE_HEADERS)
