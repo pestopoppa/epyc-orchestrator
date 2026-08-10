@@ -20,7 +20,7 @@ import subprocess
 import sys
 from typing import Any
 
-import httpx
+import psutil
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -83,8 +83,6 @@ SOURCE_PATHS = (
     REPO_ROOT / "src/api/services/memrl.py",
     REPO_ROOT / "src/registry/stack_priors.py",
     REPO_ROOT / "src/roles.py",
-    REPO_ROOT / "src/api/routes/dashboard.py",
-    REPO_ROOT / "src/api/routes/dashboard.html",
     REPO_ROOT / "src/api/models/requests.py",
     REPO_ROOT / "src/features.py",
     REPO_ROOT / "src/runtime/inference_tap.py",
@@ -182,11 +180,59 @@ def _episodic_semantic_integrity() -> dict[str, Any]:
 
 
 def _expected_api_worker_pids() -> list[int]:
-    with httpx.Client(headers={"Connection": "close"}) as client:
-        response = client.get(f"{API_URL}/dashboard/api/snapshot", timeout=30)
-    response.raise_for_status()
-    coverage = ((response.json().get("api_lifecycle") or {}).get("worker_coverage") or {})
-    return sorted({int(pid) for pid in coverage.get("expected_pids") or []})
+    """Discover the API worker roster from the live process tree.
+
+    The measurement certificate must not trust the dashboard's self-report for
+    the worker set it is trying to attest.  Reading the uvicorn parent and its
+    direct spawn children also keeps presentation-only dashboard edits outside
+    the decision-bearing source guard.
+    """
+
+    def option(cmdline: list[str], name: str) -> str | None:
+        for idx, value in enumerate(cmdline):
+            if value == name and idx + 1 < len(cmdline):
+                return cmdline[idx + 1]
+            if value.startswith(f"{name}="):
+                return value.split("=", 1)[1]
+        return None
+
+    processes: list[dict[str, Any]] = []
+    for process in psutil.process_iter(["pid", "ppid", "cmdline"]):
+        try:
+            info = process.info
+            cmdline = [str(value) for value in (info.get("cmdline") or [])]
+            processes.append(
+                {
+                    "pid": int(info["pid"]),
+                    "ppid": int(info.get("ppid") or 0),
+                    "cmdline": cmdline,
+                }
+            )
+        except (psutil.AccessDenied, psutil.NoSuchProcess, KeyError, TypeError, ValueError):
+            continue
+    parents = [
+        row
+        for row in processes
+        if "uvicorn" in row["cmdline"]
+        and "src.api:app" in row["cmdline"]
+        and option(row["cmdline"], "--port") == "8000"
+    ]
+    if len(parents) != 1:
+        raise RuntimeError(f"expected one uvicorn :8000 parent; found {len(parents)}")
+    parent = parents[0]
+    configured = int(option(parent["cmdline"], "--workers") or "1")
+    workers = sorted(
+        row["pid"]
+        for row in processes
+        if row["ppid"] == parent["pid"]
+        and any("multiprocessing.spawn" in token for token in row["cmdline"])
+    )
+    if len(workers) != configured:
+        raise RuntimeError(
+            "API process roster is incomplete: "
+            f"configured={configured} observed={len(workers)} pids={workers}"
+        )
+    return workers
 
 
 def _worker_env(pid: int, env_names: list[str]) -> dict[str, str | None]:

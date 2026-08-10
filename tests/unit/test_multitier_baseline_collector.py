@@ -93,6 +93,57 @@ def test_source_guard_covers_learned_routing_instrument() -> None:
         "src/runtime/config_attestation.py",
         "orchestration/derived/stack_priors.yaml",
     } <= guarded
+    assert "src/api/routes/dashboard.py" not in guarded
+    assert "src/api/routes/dashboard.html" not in guarded
+
+
+def test_api_worker_roster_comes_from_uvicorn_process_tree(monkeypatch) -> None:
+    class Process:
+        def __init__(self, pid: int, ppid: int, cmdline: list[str]) -> None:
+            self.info = {"pid": pid, "ppid": ppid, "cmdline": cmdline}
+
+    processes = [
+        Process(
+            100,
+            1,
+            [
+                "python",
+                "-m",
+                "uvicorn",
+                "src.api:app",
+                "--port",
+                "8000",
+                "--workers",
+                "2",
+            ],
+        ),
+        Process(101, 100, ["python", "-c", "from multiprocessing.spawn import spawn_main"]),
+        Process(102, 100, ["python", "-c", "from multiprocessing.spawn import spawn_main"]),
+        Process(103, 100, ["python", "-c", "from multiprocessing.resource_tracker import main"]),
+        Process(999, 1, ["bash", "uvicorn src.api:app --port 8000"]),
+    ]
+    monkeypatch.setattr(collector.psutil, "process_iter", lambda attrs: processes)
+
+    assert collector._expected_api_worker_pids() == [101, 102]
+
+
+def test_api_worker_roster_rejects_missing_spawn_worker(monkeypatch) -> None:
+    class Process:
+        def __init__(self, pid: int, ppid: int, cmdline: list[str]) -> None:
+            self.info = {"pid": pid, "ppid": ppid, "cmdline": cmdline}
+
+    processes = [
+        Process(
+            100,
+            1,
+            ["python", "-m", "uvicorn", "src.api:app", "--port=8000", "--workers=2"],
+        ),
+        Process(101, 100, ["python", "-c", "from multiprocessing.spawn import spawn_main"]),
+    ]
+    monkeypatch.setattr(collector.psutil, "process_iter", lambda attrs: processes)
+
+    with pytest.raises(RuntimeError, match="configured=2 observed=1"):
+        collector._expected_api_worker_pids()
 
 
 def test_live_config_identity_requires_and_covers_full_worker_roster(monkeypatch) -> None:
