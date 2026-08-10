@@ -1,9 +1,11 @@
 # Operator hypothesis channel — `autopilot.py` integration patch
 
-**Status:** NOT APPLIED. `scripts/autopilot/autopilot.py` is held by another session. This document
-is the exact patch for that session to apply.
+**Status:** APPLIED 2026-08-10. The former ownership note was stale: AutoPilot was stopped, the
+file had advanced beyond the pinned hash, and the integration was still absent. The five seams
+below are now wired. A separate read-only Vidya settled-ground block also grades recorded
+resolution evidence and surfaces post-hoc invalidation without constraining hypothesis generation.
 
-**Anchors verified against** `scripts/autopilot/autopilot.py` SHA-256
+**Original patch anchors were verified against** `scripts/autopilot/autopilot.py` SHA-256
 `fd2e2ce7d72e86b28bd27c0b6c11cf476dd9e00f0dc95e08b815a51b20ecaa1f` (9916 lines, 2026-08-03). Every
 anchor below was checked to occur **exactly once**. The file is under active edit by another
 session — if the hash no longer matches, re-locate by the quoted text rather than the line number;

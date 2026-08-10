@@ -112,6 +112,11 @@ from state_store import (
     save_state as _save_state_impl,
 )
 from blacklist_purge_plan import purge_scoped_target, retryable_reexploration_target
+from operator_hypotheses import (
+    build_planner_block as _build_operator_hypotheses_block,
+    record_resolution_from_rationale as _record_operator_hypothesis_resolution,
+)
+from vidya_planner_bridge import build_settled_ground_block as _build_vidya_settled_ground_block
 from state_lock import state_write_lock
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
 from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_result
@@ -5394,6 +5399,12 @@ briefly in reasoning and still emit the closest valid AutoPilot action block.
 ### Hypotheses Under Test (last 3 trustworthy trials)
 {hypotheses_under_test}
 
+### Operator Hypotheses (operator-stated priors, still open)
+{operator_hypotheses_block}
+
+### Settled Experimental Ground (Vidya read-only; advisory for proposal selection)
+{vidya_settled_ground_block}
+
 ### Experiment Journal (bounded recent entries)
 {journal_summary}
 
@@ -5516,12 +5527,18 @@ After the action block, ALSO emit a second fenced block tagged
 `autopilot_rationale` carrying the chosen action's falsifier and its self-scored
 rubric. This sidecar is observability-only — a missing or malformed block will
 not abort the trial, but populating it lets future planner passes grade new
-candidates against still-open hypotheses:
+candidates against still-open hypotheses. `operator_hypothesis` is OPTIONAL and
+omitted unless this trial's own outcome resolves an operator prior. Do not supply
+trial ids — the trial that just ran is attached as the evidence. A refuted
+operator hypothesis is a first-class result; record it:
 
 ```json:autopilot_rationale
 {{"falsifier": "<one-line predicted outcome whose absence invalidates this hypothesis>",
  "rubric_scores": {{"info_gain": <1-5>, "coherence": <1-5>, "usefulness": <1-5>,
-   "synthesis_note": "<optional one-line on fusion / cleaner model>"}}}}
+   "synthesis_note": "<optional one-line on fusion / cleaner model>"}},
+ "operator_hypothesis": {{"id": "<id from Operator Hypotheses, ONLY if resolved>",
+   "status": "confirmed|refuted|inconclusive",
+   "note": "<what the outcome showed>"}}}}
 ```
 """
 
@@ -6162,6 +6179,20 @@ def _build_exploration_block(
         )
     else:
         unfalsified_text = "  (no recent trials with explicit falsifiers yet)"
+    # Operator-stated priors participate in the creativity protocol's coherence
+    # comparison, but remain clearly labelled as priors with no measured evidence.
+    try:
+        from operator_hypotheses import still_open as _still_open_operator_hypotheses
+
+        operator_open = _still_open_operator_hypotheses()
+    except Exception:  # noqa: BLE001 - the always-rendered block carries the loud alarm
+        operator_open = []
+    if operator_open:
+        unfalsified_text += "\n" + "\n".join(
+            f"  [operator prior: {item.id} | evidence_trial_ids=[]]: "
+            f"{item.hypothesis[:160]}\n     falsifier: {item.falsifier[:160]}"
+            for item in operator_open[:5]
+        )
 
     block = _EXPLORATION_RICH_TEMPLATE.format(
         n=CREATIVITY_N,
@@ -8170,6 +8201,8 @@ def _run_loop_inner(
                     model_signatures=model_signatures_text,
                     blacklist_text=blacklist_text,
                     operator_outbox_feedback=_build_operator_outbox_feedback(),
+                    operator_hypotheses_block=_build_operator_hypotheses_block(blacklist),
+                    vidya_settled_ground_block=_build_vidya_settled_ground_block(),
                     feature_flags_block=_build_feature_flags_block(
                         lab,
                         denylisted_flags=_PLANNER_DENYLISTED_FEATURE_FLAGS,
@@ -9710,6 +9743,9 @@ def _run_loop_inner(
             bug_corrupted_reason=bug_corrupted_reason,
         )
         journal.record(journal_entry)
+        # Evidence is the already-durable trial, supplied here rather than by the
+        # planner, so a resolution can never cite a trial that did not run.
+        _record_operator_hypothesis_resolution(rationale, trial_counter)
         if strategy_store is not None:
             try:
                 strategy_store.store_frontier_journal_entry(journal_entry)

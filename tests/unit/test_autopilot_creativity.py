@@ -1437,6 +1437,8 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             model_signatures="models",
             blacklist_text="blacklist",
             operator_outbox_feedback="outbox",
+            operator_hypotheses_block="operator-hypotheses",
+            vidya_settled_ground_block="settled-ground",
             feature_flags_block="flags",
             last_invalid_feedback="invalid",
             plot_paths="plots",
