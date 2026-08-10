@@ -254,6 +254,87 @@ class JournalEntry:
     # Enables retrospective behavioral analysis: action-type diversity under
     # rich vs lean prompts without running a separate experiment.
     stagnation_signal: str = ""
+    # 2026-08-12: the measurement constitution's claim tuple, captured at WRITE time.
+    # MEASUREMENT_POLICY.md: a decision-gating number is (metric, protocol-id, n/reps, date,
+    # attestation ref); a number without a protocol citation is an OBSERVATION and may never gate
+    # a keep/revert/deploy decision. A trial already knows every element -- the schema versions,
+    # the scored denominator, its own timestamp, and the content it is about to append -- so the
+    # tuple is recorded rather than reconstructed later by parsing prose. Populated by
+    # `measurement_tuple()` in `record()`; empty on rows written before this date.
+    measurement: dict[str, Any] = field(default_factory=dict)
+
+
+def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, Any]:
+    """Extract the constitution's claim tuple from what a trial already knows.
+
+    Deliberately reports what is ABSENT instead of inventing it. A missing protocol id makes the
+    row an observation, and that is a true and useful thing to record -- filling it with a
+    plausible default would manufacture warrant, which is the failure this whole program exists to
+    catch. Nothing here computes a metric or re-derives a number; it only names provenance.
+
+    `reps` is the SCORED denominator, not the question count. A 50-question suite where 47 were
+    scored has n=47: quality was computed over 47, and claiming 50 overstates the sample by 6%.
+    """
+    ed = entry.eval_details if isinstance(entry.eval_details, dict) else {}
+    hm = entry.harness_metrics if isinstance(entry.harness_metrics, dict) else {}
+    details = ed.get("details") if isinstance(ed.get("details"), dict) else {}
+    cfg = entry.config_snapshot if isinstance(entry.config_snapshot, dict) else {}
+
+    parts = []
+    if entry.metric_schema_version:
+        parts.append(f"metric-v{entry.metric_schema_version}")
+    hv = hm.get("schema_version") or hm.get("metric_version")
+    if hv:
+        parts.append(f"harness-v{hv}")
+    policy = ed.get("objective_policy_live")
+    if isinstance(policy, dict) and policy.get("policy"):
+        parts.append(str(policy["policy"]))
+    elif isinstance(policy, str) and policy:
+        parts.append(policy)
+    protocol_id = "autopilot/" + "+".join(parts) if parts else ""
+
+    # Ordered best-to-worst denominator. `quality_denominator`/`n_scored` are what the metric was
+    # actually computed over; `n_questions`/`total` are what was ATTEMPTED, which overstates n
+    # whenever a question failed to score. Older rows carry only `total`, so it is kept as a last
+    # resort -- but which key supplied the number is recorded, because "n=55 attempted" and
+    # "n=55 scored" are different claims and a consumer must be able to tell them apart.
+    reps = None
+    reps_basis = ""
+    for source, key, basis in ((details, "quality_denominator", "scored"),
+                               (details, "n_scored", "scored"),
+                               (details, "n_questions", "attempted"),
+                               (details, "total", "attempted"),
+                               (cfg, "n_questions", "attempted")):
+        val = source.get(key) if isinstance(source, dict) else None
+        if isinstance(val, int) and val > 0:
+            reps, reps_basis = val, f"{basis}:{key}"
+            break
+
+    # Hash the entry's own content, excluding this block -- a digest that covered the block it
+    # lives in could never be recomputed, so it would attest to nothing.
+    payload = {k: v for k, v in asdict(entry).items() if k != "measurement"}
+    digest = hashlib.sha256(
+        json.dumps(json_sanitize(payload), sort_keys=True, default=str,
+                   allow_nan=False).encode("utf-8")
+    ).hexdigest()
+
+    out: dict[str, Any] = {
+        "protocol_id": protocol_id,
+        "reps": reps,
+        "reps_basis": reps_basis,
+        "date": (entry.timestamp or "")[:10],
+        "attestation": {"locator": locator, "sha256": digest,
+                        "git_tag": entry.git_tag or ""},
+        "captured_by": "experiment_journal.measurement_tuple/v1",
+    }
+    missing = [name for name, present in (("protocol_id", protocol_id), ("reps", reps),
+                                          ("date", out["date"]))
+               if not present]
+    if missing:
+        # Named here so a low grade is self-explaining downstream and nobody has to re-derive
+        # why a trial failed to reach Witnessed.
+        out["missing"] = missing
+    return out
 
 
 @dataclass
@@ -545,6 +626,10 @@ class ExperimentJournal:
                     rubric_scores=data.get("rubric_scores", {}),
                     stagnation_signal=data.get("stagnation_signal", ""),
                     outcome_status=data.get("outcome_status", "ok"),
+                    # Rows written before 2026-08-12 carry no tuple. They default to empty rather
+                    # than being back-filled: a tuple invented on load would claim provenance the
+                    # original run never recorded.
+                    measurement=data.get("measurement", {}) or {},
                 )
                 self._entries.append(entry)
 
@@ -623,6 +708,17 @@ class ExperimentJournal:
         # exclusive flock with fsync so a crash can only ever tear THIS trailing
         # line (never a mid-file record), and concurrent writers can't interleave.
         self._repair_torn_tail(jsonl)
+        # 2026-08-12: capture the measurement constitution's claim tuple before serializing, so a
+        # trial is born attested instead of being retrofitted later. Never overwrite a tuple a
+        # caller already supplied, and never let this fail a trial — a provenance annotation that
+        # can lose a result is worse than one that is occasionally absent, so a failure records
+        # itself in the row rather than propagating.
+        if not entry.measurement:
+            try:
+                entry.measurement = measurement_tuple(
+                    entry, locator=f"{jsonl.name}#trial-{entry.trial_id}")
+            except Exception as exc:  # noqa: BLE001 - see comment above
+                entry.measurement = {"capture_error": f"{type(exc).__name__}: {exc}"[:200]}
         # D2: sanitize non-finite floats → null and forbid bare NaN/Infinity tokens
         # so every written line is strict, jq-parseable JSON.
         line = json.dumps(json_sanitize(asdict(entry)), default=str, allow_nan=False) + "\n"
