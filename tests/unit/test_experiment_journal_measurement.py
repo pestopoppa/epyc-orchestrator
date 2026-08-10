@@ -177,3 +177,30 @@ def test_the_written_line_stays_strict_json(tmp_path):
 @pytest.mark.parametrize("bad", [{"details": None}, {"details": []}, {}])
 def test_malformed_eval_details_do_not_raise(bad):
     assert measurement_tuple(entry(eval_details=bad))["reps"] is None
+
+
+# --- alignment with AutoKernel's claim_grammar --------------------------------------------
+
+def test_vocabulary_matches_autokernels_claim_grammar():
+    """One grammar across both loops, not two dialects of it.
+
+    AutoKernel enforces MEASUREMENT.md:13 as a REQUIRED `claim_grammar` block. Its vocabulary is
+    the reference; this test fails if the two drift apart.
+    """
+    t = measurement_tuple(entry())
+    assert t["category"] in {"OPTIMUM", "BASELINE", "CANDIDATE"}
+    assert set(t["metric_directions"].values()) <= {"higher_better", "lower_better"}
+
+
+def test_a_trial_is_always_a_candidate():
+    """Never the standing baseline, never a ratified optimum."""
+    assert measurement_tuple(entry())["category"] == "CANDIDATE"
+
+
+def test_cost_is_lower_better_despite_the_optimizer_maximizing_all_four():
+    """The trap this pins: the study declares directions=["maximize"]*4, but over
+    (quality, speed, -COST, reliability). The raw `cost` on the row is lower_better, and reading
+    the maximize-list alone inverts it."""
+    d = measurement_tuple(entry())["metric_directions"]
+    assert d["cost"] == "lower_better"
+    assert d["quality"] == d["speed"] == d["reliability"] == "higher_better"

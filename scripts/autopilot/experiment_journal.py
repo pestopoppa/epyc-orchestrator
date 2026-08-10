@@ -322,6 +322,21 @@ def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, 
         "protocol_id": protocol_id,
         "reps": reps,
         "reps_basis": reps_basis,
+        # Vocabulary borrowed verbatim from AutoKernel's `claim_grammar`
+        # (epyc-inference-research scripts/kernel_rnd/autokernel/schemas.py: CLAIM_CATEGORIES,
+        # METRIC_DIRECTIONS), which enforces the same MEASUREMENT.md:13 claim rule as a REQUIRED
+        # schema block. Aligning the two loops means one grammar, not two dialects of it.
+        #
+        # A trial is a CANDIDATE by construction: a proposed change being measured, never the
+        # standing baseline and never a ratified optimum. MEASUREMENT.md:85-95 calls conflating
+        # these the costliest recurring measurement defect in this project.
+        "category": "CANDIDATE",
+        # Direction is recorded, not inferred. The optimizer declares
+        # `directions=["maximize"]*4` over (quality, speed, -cost, reliability) -- the third
+        # objective is NEGATED cost, so the raw `cost` field stored on this row is lower_better.
+        # Reading the maximize-list alone would invert it.
+        "metric_directions": {"quality": "higher_better", "speed": "higher_better",
+                              "cost": "lower_better", "reliability": "higher_better"},
         "date": (entry.timestamp or "")[:10],
         "attestation": {"locator": locator, "sha256": digest,
                         "git_tag": entry.git_tag or ""},
