@@ -300,8 +300,25 @@ def _validate_result(result: Any, tier: int) -> None:
         )
     if float(getattr(result, "reliability", 0.0)) != 1.0:
         errors.append(f"reliability={getattr(result, 'reliability', None)}, expected 1.0")
-    if not getattr(result, "question_results", None):
+    question_results = getattr(result, "question_results", None)
+    if not question_results:
         errors.append("question_results missing")
+    else:
+        seen_qids: set[str] = set()
+        duplicate_qids: set[str] = set()
+        missing_qid_rows: list[int] = []
+        for ordinal, row in enumerate(question_results):
+            qid = str((row or {}).get("qid") or "").strip()
+            if not qid:
+                missing_qid_rows.append(ordinal)
+            elif qid in seen_qids:
+                duplicate_qids.add(qid)
+            else:
+                seen_qids.add(qid)
+        if missing_qid_rows:
+            errors.append(f"question_results missing qid at ordinals={missing_qid_rows}")
+        if duplicate_qids:
+            errors.append(f"duplicate decision qids={sorted(duplicate_qids)}")
     for key in (
         "errors",
         "scoring_errors",

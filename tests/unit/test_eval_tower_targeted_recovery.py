@@ -53,3 +53,28 @@ def test_inband_http_400_has_typed_provenance() -> None:
     )
     assert provenance["class"] == "backend_request_rejected"
     assert provenance["code"] == "llama_http_400"
+
+
+def test_text_question_result_qid_retains_historical_identity() -> None:
+    question = {"suite": "math", "prompt": "What is 2+2?"}
+
+    assert eval_tower._question_result_qid(question) == eval_tower._stable_question_qid(
+        "math", "What is 2+2?"
+    )
+
+
+def test_vision_question_result_qid_binds_image_content(tmp_path: Path) -> None:
+    image_a = tmp_path / "a.png"
+    image_b = tmp_path / "b.png"
+    image_c = tmp_path / "c.png"
+    image_a.write_bytes(b"same-image")
+    image_b.write_bytes(b"same-image")
+    image_c.write_bytes(b"different-image")
+    base = {"suite": "vl", "prompt": "Read the formula."}
+
+    qid_a = eval_tower._question_result_qid({**base, "image_path": str(image_a)})
+    qid_b = eval_tower._question_result_qid({**base, "image_path": str(image_b)})
+    qid_c = eval_tower._question_result_qid({**base, "image_path": str(image_c)})
+
+    assert qid_a == qid_b
+    assert qid_a != qid_c

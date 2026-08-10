@@ -53,6 +53,7 @@ from eval_tower import (  # noqa: E402
     QuestionResult,
     _annotate_partition,
     _compact_question_result,
+    _question_result_qid,
     _sample_scoreable_eval_questions,
     _stamp_eval_instrument,
 )
@@ -62,7 +63,7 @@ from src.autopilot_core.multitier_decision import (  # noqa: E402
 )
 
 
-RECOVERY_SCHEMA = "epyc.multitier_t2_targeted_recovery.v1"
+RECOVERY_SCHEMA = "epyc.multitier_t2_targeted_recovery.v2"
 
 
 def _read_batch(path: Path, batch_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -191,7 +192,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-batch-id", required=True)
     parser.add_argument(
         "--resume-recovery-batch-id",
-        help="Completed prior recovery batch; reuse its clean rows and retry only its failures.",
+        action="append",
+        default=[],
+        help=(
+            "Completed prior recovery batch in chronological order; may be repeated. "
+            "Each batch must cover exactly the failures left by the previous batch."
+        ),
     )
     parser.add_argument("--output", type=Path, required=True)
     return parser
@@ -239,13 +245,18 @@ def main() -> int:
 
         resumed_rows: dict[int, dict[str, Any]] = {}
         resumed_retry_wall_s = 0.0
-        if args.resume_recovery_batch_id:
+        for resume_batch_id in args.resume_recovery_batch_id:
+            unresolved = [idx for idx in failed_ordinals if idx not in resumed_rows]
+            if not unresolved:
+                raise RuntimeError(
+                    f"resume batch {resume_batch_id} supplied after all failures were recovered"
+                )
             resume_rows, resume_marker = _read_recovery_batch(
                 source,
-                args.resume_recovery_batch_id,
-                failed_ordinals,
+                resume_batch_id,
+                unresolved,
             )
-            for ordinal, row in zip(failed_ordinals, resume_rows, strict=True):
+            for ordinal, row in zip(unresolved, resume_rows, strict=True):
                 observed = str((row.get("result") or {}).get("question_id") or "").strip()
                 expected = _question_id(questions[ordinal])
                 if observed != expected:
@@ -255,7 +266,7 @@ def main() -> int:
                     )
                 if not bool((row.get("result") or {}).get("error")):
                     resumed_rows[ordinal] = row
-            resumed_retry_wall_s = max(0.0, float(resume_marker.get("elapsed_s") or 0.0))
+            resumed_retry_wall_s += max(0.0, float(resume_marker.get("elapsed_s") or 0.0))
 
         preflight = {
             "autopilot_lock_free": True,
@@ -324,6 +335,16 @@ def main() -> int:
                 merged_results.append(result)
                 merged_compact.append(dict(row["result"]))
 
+        identity_recoded_ordinals: list[int] = []
+        for ordinal, (question, result, compact) in enumerate(
+            zip(questions, merged_results, merged_compact, strict=True)
+        ):
+            canonical_qid = _question_result_qid(question)
+            if str(compact.get("qid") or "") != canonical_qid:
+                identity_recoded_ordinals.append(ordinal)
+            result.qid = canonical_qid
+            compact["qid"] = canonical_qid
+
         original_wall_s = float(complete_marker.get("elapsed_s") or 0.0)
         total_retry_wall_s = resumed_retry_wall_s + retry_wall_s
         cumulative_wall_s = original_wall_s + total_retry_wall_s
@@ -343,7 +364,7 @@ def main() -> int:
                     "preserved_success_rows": EVAL_T2_SPEC_N - len(failed_ordinals),
                     "retried_ordinals": failed_ordinals,
                     "retry_count": len(failed_ordinals),
-                    "resume_recovery_batch_id": args.resume_recovery_batch_id,
+                    "resume_recovery_batch_ids": args.resume_recovery_batch_id,
                     "resumed_success_ordinals": sorted(resumed_rows),
                     "executed_in_this_attempt": retry_ordinals,
                     "original_wall_s": original_wall_s,
@@ -352,7 +373,15 @@ def main() -> int:
                     "retry_wall_s": total_retry_wall_s,
                     "cumulative_wall_s": cumulative_wall_s,
                     "merge_key": "ordinal+question_id",
-                    "successful_rows_preserved_verbatim": True,
+                    "answers_scores_preserved_verbatim": True,
+                    "successful_rows_preserved_verbatim": not identity_recoded_ordinals,
+                    "identity_recoding": {
+                        "schema_version": "epyc.question_identity.multimodal.v1",
+                        "field": "qid",
+                        "input_components": ["suite", "prompt", "image_sha256_if_present"],
+                        "recoded_ordinals": identity_recoded_ordinals,
+                        "answer_or_score_fields_changed": False,
+                    },
                 },
                 "t1_core_exclusion_policy": exclusion_policy,
             }

@@ -132,7 +132,7 @@ _INSTRUMENT_LEDGER_PATH = Path(
 # questions/hour objective.  Generation placement changes the denominator;
 # model-backed scoring placement can change both wall time and error exclusion.
 # Keep these human-readable and stamp them into every EvalResult/journal row.
-EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v8_long_context_retrieval"
+EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v9_multimodal_input_identity"
 EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v4_gpu_lifecycle_quiescence"
 DEFAULT_LLM_JUDGE_ROLE = "architect_general"
 
@@ -1008,6 +1008,37 @@ def _stable_question_qid(suite: str, prompt_text: str) -> str:
     return hashlib.sha1(payload).hexdigest()[:16]
 
 
+def _question_result_qid(q: dict[str, Any]) -> str:
+    """Return the decision-vector identity for the complete model input.
+
+    Text-only rows retain their historical explicit/stable identity.  A vision
+    row must also bind the image bytes: OCR/VQA suites intentionally reuse the
+    same textual instruction for many images, so suite+prompt alone aliases
+    distinct questions and silently overwrites one outcome in paired vectors.
+    """
+    explicit = str(q.get("qid") or q.get("stable_qid") or "").strip()
+    image_path = str(q.get("image_path") or "").strip()
+    if not image_path:
+        return explicit or _stable_question_qid(
+            str(q.get("suite", "unknown")),
+            str(q.get("prompt", "")),
+        )
+    path = Path(image_path)
+    try:
+        image_identity = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        # Missing input will fail generation separately.  Keep its identity
+        # deterministic and distinct without pretending the bytes were read.
+        image_identity = hashlib.sha256(
+            f"unavailable-image:{path}".encode("utf-8", errors="replace")
+        ).hexdigest()
+    payload = (
+        f"{q.get('suite', 'unknown')}\x00{q.get('prompt', '')}"
+        f"\x00image-sha256:{image_identity}"
+    ).encode("utf-8", errors="replace")
+    return hashlib.sha1(payload).hexdigest()[:16]
+
+
 def _question_qid(q: dict[str, Any]) -> str:
     explicit = str(q.get("qid") or q.get("stable_qid") or q.get("id") or "").strip()
     if explicit:
@@ -1030,6 +1061,8 @@ def _question_identity_set(q: dict[str, Any]) -> set[str]:
     prompt = str(q.get("prompt") or "")
     if prompt:
         identities.add(_stable_question_qid(str(q.get("suite", "unknown")), prompt))
+    if q.get("image_path"):
+        identities.add(_question_result_qid(q))
     return identities
 
 
@@ -3870,9 +3903,7 @@ class EvalTower:
         expected = q.get("expected", "")
         qid = q.get("id", q.get("question_id", "unknown"))
         suite = q.get("suite", "unknown")
-        stable_qid = str(q.get("qid") or q.get("stable_qid") or "").strip()
-        if not stable_qid:
-            stable_qid = _stable_question_qid(str(suite), str(prompt))
+        stable_qid = _question_result_qid(q)
         scoring_method = q.get("scoring_method", "exact_match")
         # SCORE-12 guard: a dataset row carrying `scoring_config: null` (or any
         # non-dict) previously raised AttributeError on the `.get()` reads below,
@@ -4158,9 +4189,7 @@ class EvalTower:
     ) -> QuestionResult:
         prompt = q.get("prompt", "")
         suite = q.get("suite", "unknown")
-        stable_qid = str(q.get("qid") or q.get("stable_qid") or "").strip()
-        if not stable_qid:
-            stable_qid = _stable_question_qid(str(suite), str(prompt))
+        stable_qid = _question_result_qid(q)
         host_covariates = _capture_host_timing_covariates(
             tokens_generated=0,
             elapsed_s=elapsed_s,

@@ -45,6 +45,14 @@ def test_wrong_tier_size_fails_closed() -> None:
         collector._validate_result(result, 3)
 
 
+def test_duplicate_decision_qid_fails_closed() -> None:
+    result = _result()
+    result.question_results[1]["qid"] = result.question_results[0]["qid"]
+
+    with pytest.raises(RuntimeError, match="duplicate decision qids"):
+        collector._validate_result(result, 2)
+
+
 def test_state_readiness_rejects_unresolved_in_flight_trial() -> None:
     readiness = collector._state_collection_readiness(
         {
