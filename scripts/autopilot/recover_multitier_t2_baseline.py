@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Recover only failed rows from a completed T2 sidecar and seal merged evidence."""
+"""Recover only failed rows from a completed T1/T2 sidecar and seal merged evidence."""
 
 from __future__ import annotations
 
@@ -47,15 +47,20 @@ from collect_multitier_incumbent_baseline import (  # noqa: E402
     _validate_result,
 )
 from eval_tower import (  # noqa: E402
+    EVAL_CORE_ROTATION_TRIALS,
     EVAL_SPEC_SEED,
+    EVAL_T1_SPEC_N,
     EVAL_T2_SPEC_N,
+    EVAL_TIER_MIX_POLICY,
     EvalTower,
     QuestionResult,
     _annotate_partition,
     _compact_question_result,
     _question_result_qid,
     _sample_scoreable_eval_questions,
+    _sample_tier_stratified_eval_questions,
     _stamp_eval_instrument,
+    rotated_core_seed,
 )
 from src.autopilot_core.multitier_decision import (  # noqa: E402
     MULTITIER_POLICY_VERSION,
@@ -63,10 +68,14 @@ from src.autopilot_core.multitier_decision import (  # noqa: E402
 )
 
 
-RECOVERY_SCHEMA = "epyc.multitier_t2_targeted_recovery.v2"
+RECOVERY_SCHEMA = "epyc.multitier_targeted_recovery.v3"
 
 
-def _read_batch(path: Path, batch_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _read_batch(
+    path: Path,
+    batch_id: str,
+    expected_n: int = EVAL_T2_SPEC_N,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     complete: list[dict[str, Any]] = []
     for line in path.read_text().splitlines():
@@ -88,13 +97,13 @@ def _read_batch(path: Path, batch_id: str) -> tuple[list[dict[str, Any]], dict[s
         if ordinal in by_ordinal:
             raise RuntimeError(f"duplicate source ordinal {ordinal}")
         by_ordinal[ordinal] = row
-    expected = list(range(EVAL_T2_SPEC_N))
+    expected = list(range(expected_n))
     if sorted(by_ordinal) != expected:
         missing = sorted(set(expected) - set(by_ordinal))
         extra = sorted(set(by_ordinal) - set(expected))
         raise RuntimeError(f"source ordinal mismatch: missing={missing} extra={extra}")
-    if int(complete[0].get("completed_n") or 0) != EVAL_T2_SPEC_N:
-        raise RuntimeError(f"source complete marker is not {EVAL_T2_SPEC_N} rows")
+    if int(complete[0].get("completed_n") or 0) != expected_n:
+        raise RuntimeError(f"source complete marker is not {expected_n} rows")
     return [by_ordinal[idx] for idx in expected], complete[0]
 
 
@@ -146,10 +155,35 @@ def _question_id(question: dict[str, Any]) -> str:
     return str(question.get("id") or question.get("question_id") or "").strip()
 
 
-def _reconstruct_questions(tower: EvalTower) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _reconstruct_questions(
+    tower: EvalTower,
+    tier: int = 2,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     pool = tower._load_pool()
     if not pool:
-        raise RuntimeError("T2 question pool unavailable")
+        raise RuntimeError(f"T{tier} question pool unavailable")
+    if tier == 1:
+        rotation = 0
+        effective_seed = rotated_core_seed(EVAL_SPEC_SEED, rotation)
+        questions, tier_mix_provenance = _sample_tier_stratified_eval_questions(
+            pool,
+            EVAL_T1_SPEC_N,
+            random.Random(effective_seed),
+        )
+        questions = _annotate_partition(questions, "core")
+        if len(questions) != EVAL_T1_SPEC_N:
+            raise RuntimeError(f"reconstructed T1 draw has {len(questions)} rows")
+        tier_mix_provenance.update(
+            {
+                "core_rotation_index": rotation,
+                "core_rotation_trials": EVAL_CORE_ROTATION_TRIALS,
+                "base_seed": EVAL_SPEC_SEED,
+                "effective_seed": effective_seed,
+            }
+        )
+        return questions, {"tier_mix_provenance": tier_mix_provenance}
+    if tier != 2:
+        raise ValueError(f"unsupported recovery tier: {tier}")
     excluded, exclusion_policy = tower._t1_core_exclusion_qids(pool, seed=EVAL_SPEC_SEED)
     questions = _sample_scoreable_eval_questions(
         pool,
@@ -161,7 +195,7 @@ def _reconstruct_questions(tower: EvalTower) -> tuple[list[dict[str, Any]], dict
     if len(questions) != EVAL_T2_SPEC_N:
         raise RuntimeError(f"reconstructed T2 draw has {len(questions)} rows")
     exclusion_policy["actual_t2_core_n"] = len(questions)
-    return questions, exclusion_policy
+    return questions, {"t1_core_exclusion_policy": exclusion_policy}
 
 
 def _prior_result(question: dict[str, Any], row: dict[str, Any]) -> QuestionResult:
@@ -188,6 +222,7 @@ def _prior_result(question: dict[str, Any], row: dict[str, Any]) -> QuestionResu
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tier", type=int, choices=(1, 2), default=2)
     parser.add_argument("--source-sidecar", type=Path, required=True)
     parser.add_argument("--source-batch-id", required=True)
     parser.add_argument(
@@ -205,6 +240,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _parser().parse_args()
+    tier = int(args.tier)
+    expected_n = EXPECTED_N[tier]
     source = args.source_sidecar.expanduser().resolve()
     output = args.output.expanduser().resolve()
     if output.exists():
@@ -226,9 +263,13 @@ def main() -> int:
         if state.get("paused") is not True or state.get("in_flight_trial") is not None:
             raise SystemExit(f"AutoPilot state is not collection-ready: {readiness}")
 
-        source_rows, complete_marker = _read_batch(source, args.source_batch_id)
+        source_rows, complete_marker = _read_batch(
+            source,
+            args.source_batch_id,
+            expected_n,
+        )
         tower = EvalTower(url=API_URL)
-        questions, exclusion_policy = _reconstruct_questions(tower)
+        questions, instrument_provenance = _reconstruct_questions(tower, tier)
         for ordinal, (question, row) in enumerate(zip(questions, source_rows, strict=True)):
             observed = str((row.get("result") or {}).get("question_id") or "").strip()
             expected = _question_id(question)
@@ -295,7 +336,7 @@ def main() -> int:
                         retry_questions,
                         client,
                         log_every=1,
-                        label="T2-targeted-recovery",
+                        label=f"T{tier}-targeted-recovery",
                     )
             else:
                 retry_results = []
@@ -315,7 +356,9 @@ def main() -> int:
             if result.error
         }
         if retry_errors:
-            raise RuntimeError(f"targeted T2 recovery still has failures: {retry_errors}")
+            raise RuntimeError(
+                f"targeted T{tier} recovery still has failures: {retry_errors}"
+            )
 
         retry_by_ordinal = dict(zip(retry_ordinals, retry_results, strict=True))
         merged_results: list[QuestionResult] = []
@@ -350,18 +393,18 @@ def main() -> int:
         cumulative_wall_s = original_wall_s + total_retry_wall_s
         for result in merged_results:
             result.eval_wall_s = cumulative_wall_s
-        aggregate = tower._aggregate(merged_results, tier=2)
+        aggregate = tower._aggregate(merged_results, tier=tier)
         aggregate.question_results = merged_compact
         aggregate.eval_wall_s = cumulative_wall_s
         aggregate.details.update(
             {
                 "eval_wall_s": cumulative_wall_s,
-                "task_rate_qph": EVAL_T2_SPEC_N / (cumulative_wall_s / 3600.0),
+                "task_rate_qph": expected_n / (cumulative_wall_s / 3600.0),
                 "targeted_recovery": {
                     "schema_version": RECOVERY_SCHEMA,
                     "source_batch_id": args.source_batch_id,
                     "source_sidecar_sha256": _sha_path(source),
-                    "preserved_success_rows": EVAL_T2_SPEC_N - len(failed_ordinals),
+                    "preserved_success_rows": expected_n - len(failed_ordinals),
                     "retried_ordinals": failed_ordinals,
                     "retry_count": len(failed_ordinals),
                     "resume_recovery_batch_ids": args.resume_recovery_batch_id,
@@ -383,30 +426,50 @@ def main() -> int:
                         "answer_or_score_fields_changed": False,
                     },
                 },
-                "t1_core_exclusion_policy": exclusion_policy,
+                **instrument_provenance,
             }
         )
-        core_id = f"legacy_pool_t2_seed_{EVAL_SPEC_SEED}_n{EVAL_T2_SPEC_N}"
+        if tier == 1:
+            core_id = (
+                f"tier_stratified_{EVAL_TIER_MIX_POLICY}_seed_"
+                f"{EVAL_SPEC_SEED}_n{EVAL_T1_SPEC_N}_rot0"
+            )
+        else:
+            core_id = f"legacy_pool_t2_seed_{EVAL_SPEC_SEED}_n{EVAL_T2_SPEC_N}"
+        test_profile = {
+            "version": "eval-tower-tier-profile-v1",
+            "tier": tier,
+            "core_id": core_id,
+            "seed": EVAL_SPEC_SEED,
+            "requested_n": expected_n,
+            "n_questions": len(questions),
+            "full_batch_n_questions": len(questions),
+            "decision_excluded_partitions": [],
+            "recovery_contract": RECOVERY_SCHEMA,
+            **instrument_provenance,
+        }
+        if tier == 1:
+            test_profile["core_selection"] = "tier_stratified"
+            test_profile["base_core_questions"] = len(questions)
+            test_profile["base_audit_questions"] = 0
+            test_profile["audit_policy"] = {
+                "enabled": False,
+                "requested_n": 10,
+                "every_n_trials": 1,
+                "shadow_only": True,
+                "active": False,
+                "actual_n": 0,
+            }
+        else:
+            test_profile["promotion_eval"] = False
+            test_profile["promotion_policy"] = None
         aggregate = _stamp_eval_instrument(
             aggregate,
             questions=questions,
             core_id=core_id,
-            test_profile={
-                "version": "eval-tower-tier-profile-v1",
-                "tier": 2,
-                "core_id": core_id,
-                "seed": EVAL_SPEC_SEED,
-                "requested_n": EVAL_T2_SPEC_N,
-                "n_questions": len(questions),
-                "full_batch_n_questions": len(questions),
-                "decision_excluded_partitions": [],
-                "promotion_eval": False,
-                "promotion_policy": None,
-                "t1_core_exclusion_policy": exclusion_policy,
-                "recovery_contract": RECOVERY_SCHEMA,
-            },
+            test_profile=test_profile,
         )
-        _validate_result(aggregate, 2)
+        _validate_result(aggregate, tier)
         completed_at = _utc_now()
 
         state_after_raw = STATE_PATH.read_bytes()
@@ -428,8 +491,8 @@ def main() -> int:
             "schema_version": SCHEMA,
             "status": "candidate_unratified",
             "human_consolidated_apply_required": True,
-            "tier": 2,
-            "expected_n": EXPECTED_N[2],
+            "tier": tier,
+            "expected_n": expected_n,
             "started_at": started_at,
             "completed_at": completed_at,
             "preflight": preflight,
