@@ -254,7 +254,7 @@ class JournalEntry:
     # Enables retrospective behavioral analysis: action-type diversity under
     # rich vs lean prompts without running a separate experiment.
     stagnation_signal: str = ""
-    # 2026-08-12: the measurement constitution's claim tuple, captured at WRITE time.
+    # 2026-08-10: the measurement constitution's claim tuple, captured at WRITE time.
     # MEASUREMENT_POLICY.md: a decision-gating number is (metric, protocol-id, n/reps, date,
     # attestation ref); a number without a protocol citation is an OBSERVATION and may never gate
     # a keep/revert/deploy decision. A trial already knows every element -- the schema versions,
@@ -641,7 +641,7 @@ class ExperimentJournal:
                     rubric_scores=data.get("rubric_scores", {}),
                     stagnation_signal=data.get("stagnation_signal", ""),
                     outcome_status=data.get("outcome_status", "ok"),
-                    # Rows written before 2026-08-12 carry no tuple. They default to empty rather
+                    # Rows written before 2026-08-10 carry no tuple. They default to empty rather
                     # than being back-filled: a tuple invented on load would claim provenance the
                     # original run never recorded.
                     measurement=data.get("measurement", {}) or {},
@@ -723,7 +723,7 @@ class ExperimentJournal:
         # exclusive flock with fsync so a crash can only ever tear THIS trailing
         # line (never a mid-file record), and concurrent writers can't interleave.
         self._repair_torn_tail(jsonl)
-        # 2026-08-12: capture the measurement constitution's claim tuple before serializing, so a
+        # 2026-08-10: capture the measurement constitution's claim tuple before serializing, so a
         # trial is born attested instead of being retrofitted later. Never overwrite a tuple a
         # caller already supplied, and never let this fail a trial — a provenance annotation that
         # can lose a result is worse than one that is occasionally absent, so a failure records
