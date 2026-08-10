@@ -615,11 +615,15 @@ def _structured_tap_requests_for_dashboard(
         max_requests=max_requests,
         now_epoch=now,
     )
-    return _enrich_structured_tap_requests(
+    enriched = _enrich_structured_tap_requests(
         structured_requests,
         port_roles=port_roles,
         region_locks=resolved_locks,
     )
+    # Live prefill/decode progress from the last /slots sample (RTG-47): the
+    # tap is silent through a long prefill, but the slot knows how many prompt
+    # tokens it has ingested. Attach-only-from-fresh-evidence; see the helper.
+    return _attach_slot_progress(enriched, now=now)
 
 
 # ---------------------------------------------------------------------------
@@ -2684,16 +2688,17 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                 # Build the payload — same shape as the snapshot endpoint
                 inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=256 * 1024)
                 sections = _parse_inference_sections(inference_tail, max_sections=10)
-                structured_tail = _read_tap_events_tail(
-                    _INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024
-                )
                 now_epoch = time.time()
-                structured_requests = _parse_structured_tap_requests(
-                    structured_tail,
+                # ONE assembly path with the poll endpoint (RTG-47): this
+                # stream used to run its own parse+enrich, which silently
+                # lacked everything the funnel adds — offwindow lock-holder
+                # recovery and live slot_progress. The page renders from THIS
+                # stream, so a 33k-token prefill showed no ↑ counter while the
+                # poll endpoint (which nobody watches) carried it.
+                enriched_requests = _structured_tap_requests_for_dashboard(
                     max_requests=10,
                     now_epoch=now_epoch,
                 )
-                enriched_requests = _enrich_structured_tap_requests(structured_requests)
                 payload = json.dumps(
                     {
                         "tap_active": _structured_tap_active(enriched_requests),
@@ -2703,6 +2708,10 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                         "inference_tap_mtime": inf_m,
                         "structured_tap_mtime": structured_m,
                         "repl_tap_mtime": rpl_m,
+                        # Server epoch, matching the poll payload: slot_progress
+                        # sampled_at is a server clock, and the page differences
+                        # it — give it the same clock instead of the browser's.
+                        "now": now_epoch,
                     }
                 )
                 yield f"data: {payload}\n\n"
@@ -6636,6 +6645,87 @@ async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any
 # slots_poll_meta rather than dropped silently.
 _SLOTS_FANOUT_DEADLINE_S = 10.0
 
+# Last successful /slots sample, shared with the (synchronous) tap funnel so it
+# can attach live prefill/decode progress WITHOUT triggering its own fan-out —
+# the 2 Hz snapshot stream keeps this warm whenever anyone is watching. RTG-47:
+# `slot_progress` is how the machine page shows "tokens ingested so far" during
+# a long prefill (the tap itself is silent until the first token).
+_LAST_SLOTS: dict[str, Any] = {"ts": 0.0, "by_port": {}}
+_SLOT_PROGRESS_FRESH_S = 15.0
+
+
+def _attach_slot_progress(
+    requests: list[dict[str, Any]],
+    *,
+    slots_by_port: dict[int, list[dict[str, Any]]] | None = None,
+    sampled_at: float | None = None,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    """Attach live ``slot_progress`` to tap requests from the last /slots sample.
+
+    Attach-only-from-evidence rules:
+    * the sample must be FRESH (≤ ``_SLOT_PROGRESS_FRESH_S``) — a stale sample
+      attaches nothing rather than asserting yesterday's prefill;
+    * only ``is_processing`` slots count — a finished slot retains its counters
+      and attributing it to a request would revive a dead task's numbers;
+    * a ``complete`` request never attaches — the busy slot on its port belongs
+      to whichever request is still running there, not to it;
+    * exactly one processing slot AND one live candidate request on the port ⇒
+      unambiguous; several of either ⇒ port-level AGGREGATE with
+      ``ambiguous: true`` (the tap does not know llama's internal task ids, so
+      per-slot attribution would be a guess); none ⇒ no field at all.
+    """
+    now = time.time() if now is None else now
+    if slots_by_port is None:
+        sampled_at = float(_LAST_SLOTS.get("ts") or 0.0)
+        slots_by_port = _LAST_SLOTS.get("by_port") or {}
+    else:
+        sampled_at = now if sampled_at is None else sampled_at
+    if not slots_by_port or (now - sampled_at) > _SLOT_PROGRESS_FRESH_S:
+        return requests
+
+    def _req_port(req: dict[str, Any]) -> int | None:
+        try:
+            return int(req.get("port")) if req.get("port") not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    live_on_port: dict[int, int] = {}
+    for req in requests:
+        port = _req_port(req)
+        if port is not None and str(req.get("status") or "") != "complete":
+            live_on_port[port] = live_on_port.get(port, 0) + 1
+
+    out_reqs: list[dict[str, Any]] = []
+    for req in requests:
+        out = req
+        port = _req_port(req)
+        terminal = str(req.get("status") or "") == "complete"
+        busy = [
+            s for s in (slots_by_port.get(port) or [])
+            if isinstance(s, dict) and s.get("is_processing")
+        ] if port is not None and not terminal else []
+        if busy:
+            def _decoded(slot: dict[str, Any]) -> int | None:
+                nxt = slot.get("next_token")
+                if isinstance(nxt, list) and nxt and isinstance(nxt[0], dict):
+                    val = nxt[0].get("n_decoded")
+                    return int(val) if isinstance(val, (int, float)) else None
+                return None
+            decoded = [d for d in (_decoded(s) for s in busy) if d is not None]
+            out = dict(req)
+            out["slot_progress"] = {
+                "is_processing": True,
+                "n_prompt_tokens": sum(int(s.get("n_prompt_tokens") or 0) for s in busy),
+                "n_prompt_tokens_processed": sum(
+                    int(s.get("n_prompt_tokens_processed") or 0) for s in busy),
+                "n_decoded": sum(decoded) if decoded else None,
+                "sampled_at": round(sampled_at, 3),
+                "ambiguous": len(busy) > 1 or live_on_port.get(port, 0) > 1,
+            }
+        out_reqs.append(out)
+    return out_reqs
+
 
 async def _poll_all_slots() -> tuple[dict[int, list[dict[str, Any]]], dict[str, Any]]:
     """Concurrently poll /slots on every discovered llama-server port.
@@ -6689,6 +6779,11 @@ async def _poll_all_slots() -> tuple[dict[int, list[dict[str, Any]]], dict[str, 
         "duration_s": round(time.time() - started, 3),
         "unanswered_ports": sorted(unanswered),
     }
+    # Keep the last sample warm for the synchronous tap funnel (slot_progress).
+    # Updated even on a poor fan-out: unanswered ports carry [], which attaches
+    # nothing — equivalent to stale, without pinning yesterday's numbers.
+    if answered:
+        _LAST_SLOTS.update({"ts": time.time(), "by_port": out})
     return out, meta
 
 
