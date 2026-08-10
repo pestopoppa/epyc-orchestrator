@@ -339,6 +339,29 @@ eras:
       full-instance giant placement. E14 and E15 task rates do not mix. The admitted
       baseline measured four-way client concurrency and 169.17287179198564 questions/hour.
 
+  - id: E16-eval-history-scoped-quiescence-v10-quality
+    from: "2026-08-10T16:23:03.880697Z"
+    scope: eval_quality
+    policy_version: "task_rate_4d_v7_physical_cohort_exclusion"
+    execution_instrument_id: "resource_lanes_v10_history_scoped_quiescence"
+    scoring_schedule_id: "model_judge_tail_v4_gpu_lifecycle_quiescence"
+    note: >
+      E16 consolidated multi-tier baseline boundary. T1 contains 90 preserved clean
+      rows plus 10 targeted retries; clean T2 and T3 evidence is deterministically
+      recoded from v9 because v10 changes only history-only lifecycle degradation
+      handling and does not change accepted answers, scores, routing, or timing.
+
+  - id: E16-autopilot-history-scoped-quiescence-v10-speed
+    from: "2026-08-10T16:23:03.880697Z"
+    scope: autopilot_speed
+    policy_version: "task_rate_4d_v7_physical_cohort_exclusion"
+    execution_instrument_id: "resource_lanes_v10_history_scoped_quiescence"
+    scoring_schedule_id: "model_judge_tail_v4_gpu_lifecycle_quiescence"
+    note: >
+      Questions/hour denominator boundary for history-scoped quiescence and staged
+      T1/T2/T3 promotion. Pre-E16 speed points do not mix with this execution
+      instrument; rebuild the frontier from post-boundary numeric trials only.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.

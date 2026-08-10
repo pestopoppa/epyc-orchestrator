@@ -448,7 +448,11 @@ def validate_recode(tier: int, evidence: Mapping[str, Any], errors: list[str]) -
         _require(source_result == target_result, f"T{tier} recode changed result content", errors)
 
 
-def validate_current_sources(evidence_by_tier: Mapping[int, Mapping[str, Any]]) -> str:
+def validate_current_sources(
+    evidence_by_tier: Mapping[int, Mapping[str, Any]],
+    *,
+    applied_eras_sha256: str | None = None,
+) -> str:
     recorded = dict(evidence_by_tier[1].get("source_sha256") or {})
     if not recorded:
         raise SystemExit("ERROR: T1 evidence lacks source hashes")
@@ -458,8 +462,17 @@ def validate_current_sources(evidence_by_tier: Mapping[int, Mapping[str, Any]]) 
         if rel.is_absolute() or ".." in rel.parts:
             raise SystemExit(f"ERROR: unsafe source path: {relative!r}")
         path = REPO_ROOT / rel
-        if not path.is_file() or _sha_path(path) != wanted:
+        observed_sha = _sha_path(path) if path.is_file() else None
+        allowed_hashes = {wanted}
+        if relative == "orchestration/instrument_eras.yaml" and applied_eras_sha256:
+            allowed_hashes.add(applied_eras_sha256)
+        if observed_sha not in allowed_hashes:
             raise SystemExit(f"ERROR: current source identity mismatch: {relative}")
+        applied_era_registry = (
+            relative == "orchestration/instrument_eras.yaml"
+            and applied_eras_sha256 is not None
+            and observed_sha == applied_eras_sha256
+        )
         for args in (("--quiet",), ("--cached", "--quiet")):
             dirty = subprocess.run(
                 ["git", "diff", *args, "--", str(rel)],
@@ -468,7 +481,7 @@ def validate_current_sources(evidence_by_tier: Mapping[int, Mapping[str, Any]]) 
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             ).returncode
-            if dirty:
+            if dirty and not applied_era_registry:
                 raise SystemExit(f"ERROR: measurement source is dirty: {relative}")
     return subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -691,7 +704,33 @@ def main() -> int:
         evidence = json.loads(raw)
         validate_tier_evidence(tier, evidence, raw)
         evidence_by_tier[tier] = evidence
-    ratification_commit = validate_current_sources(evidence_by_tier)
+    applied_receipt: dict[str, Any] | None = None
+    if RECEIPT_PATH.exists():
+        applied_receipt = json.loads(RECEIPT_PATH.read_text())
+        if (
+            applied_receipt.get("schema_version")
+            != "epyc.multitier_baseline_v10_ratification.v1"
+            or applied_receipt.get("status") != "ratified_and_applied"
+            or applied_receipt.get("writes_performed") is not True
+            or applied_receipt.get("autopilot_started") is not False
+            or applied_receipt.get("model_servers_changed") is not False
+        ):
+            raise SystemExit("ERROR: existing ratification receipt is invalid")
+        receipt_evidence = applied_receipt.get("evidence") or {}
+        for tier in (1, 2, 3):
+            if (receipt_evidence.get(str(tier)) or {}).get("sha256") != EVIDENCE[tier][
+                "sha256"
+            ]:
+                raise SystemExit(f"ERROR: receipt T{tier} evidence SHA mismatch")
+    applied_eras_sha256 = (
+        str((applied_receipt.get("sha256") or {}).get("eras_candidate") or "")
+        if applied_receipt
+        else None
+    )
+    ratification_commit = validate_current_sources(
+        evidence_by_tier,
+        applied_eras_sha256=applied_eras_sha256 or None,
+    )
 
     TRUST_LOCK.parent.mkdir(parents=True, exist_ok=True)
     AUTOPILOT_LOCK.parent.mkdir(parents=True, exist_ok=True)

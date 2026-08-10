@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -128,3 +129,37 @@ def test_production_checkpoint_publish_and_restore_is_atomic(
     ratifier._restore_production_best(previous)
     assert link.resolve() == old
     assert not final.exists()
+
+
+def test_applied_era_registry_is_the_only_allowed_dirty_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    eras = tmp_path / "orchestration/instrument_eras.yaml"
+    eras.parent.mkdir(parents=True)
+    eras.write_text("eras: [applied]\n")
+    applied_sha = ratifier._sha_path(eras)
+    evidence = {
+        1: {
+            "source_sha256": {
+                "orchestration/instrument_eras.yaml": "pre-apply-sha"
+            }
+        }
+    }
+
+    def fake_run(command, **_kwargs):
+        if command[1:3] == ["rev-parse", "HEAD"]:
+            return SimpleNamespace(returncode=0, stdout="head\n")
+        return SimpleNamespace(returncode=1, stdout="")
+
+    monkeypatch.setattr(ratifier, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(ratifier, "AUDITED_POST_COLLECTION_HASHES", {})
+    monkeypatch.setattr(ratifier.subprocess, "run", fake_run)
+
+    assert (
+        ratifier.validate_current_sources(
+            evidence, applied_eras_sha256=applied_sha
+        )
+        == "head"
+    )
+    with pytest.raises(SystemExit, match="source identity mismatch"):
+        ratifier.validate_current_sources(evidence)
