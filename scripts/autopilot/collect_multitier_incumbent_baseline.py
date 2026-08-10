@@ -57,6 +57,7 @@ from src.autopilot_core.multitier_decision import (  # noqa: E402
 SCHEMA = "epyc.multitier_incumbent_tier_baseline.v1"
 SOURCE_PATHS = (
     Path(__file__).resolve(),
+    REPO_ROOT / "scripts/autopilot/recover_multitier_t2_baseline.py",
     REPO_ROOT / "scripts/autopilot/eval_tower.py",
     REPO_ROOT / "scripts/autopilot/safety_gate.py",
     REPO_ROOT / "scripts/autopilot/autopilot.py",
