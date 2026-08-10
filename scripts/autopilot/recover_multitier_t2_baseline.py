@@ -97,6 +97,50 @@ def _read_batch(path: Path, batch_id: str) -> tuple[list[dict[str, Any]], dict[s
     return [by_ordinal[idx] for idx in expected], complete[0]
 
 
+def _read_recovery_batch(
+    path: Path,
+    batch_id: str,
+    expected_ordinals: list[int],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Read a completed prior recovery attempt without accepting partial evidence."""
+    rows: list[dict[str, Any]] = []
+    starts: list[dict[str, Any]] = []
+    complete: list[dict[str, Any]] = []
+    for line in path.read_text().splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("eval_batch_id") != batch_id:
+            continue
+        if row.get("row_type") == "batch_start":
+            starts.append(row)
+        elif row.get("row_type") == "question_result":
+            rows.append(row)
+        elif row.get("row_type") == "batch_complete" and row.get("complete") is True:
+            complete.append(row)
+    if len(starts) != 1:
+        raise RuntimeError(f"resume batch requires exactly one start marker; found {len(starts)}")
+    if len(complete) != 1:
+        raise RuntimeError(f"resume batch requires exactly one complete marker; found {len(complete)}")
+    expected_n = len(expected_ordinals)
+    if int(starts[0].get("requested_n") or 0) != expected_n:
+        raise RuntimeError("resume batch start marker has the wrong requested_n")
+    if int(complete[0].get("completed_n") or 0) != expected_n:
+        raise RuntimeError("resume batch complete marker has the wrong completed_n")
+    by_ordinal: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        ordinal = int(row.get("ordinal", -1))
+        if ordinal in by_ordinal:
+            raise RuntimeError(f"duplicate resume ordinal {ordinal}")
+        by_ordinal[ordinal] = row
+    if sorted(by_ordinal) != sorted(expected_ordinals):
+        missing = sorted(set(expected_ordinals) - set(by_ordinal))
+        extra = sorted(set(by_ordinal) - set(expected_ordinals))
+        raise RuntimeError(f"resume ordinal mismatch: missing={missing} extra={extra}")
+    return [by_ordinal[idx] for idx in expected_ordinals], complete[0]
+
+
 def _question_id(question: dict[str, Any]) -> str:
     return str(question.get("id") or question.get("question_id") or "").strip()
 
@@ -145,6 +189,10 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-sidecar", type=Path, required=True)
     parser.add_argument("--source-batch-id", required=True)
+    parser.add_argument(
+        "--resume-recovery-batch-id",
+        help="Completed prior recovery batch; reuse its clean rows and retry only its failures.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -189,6 +237,26 @@ def main() -> int:
         if not failed_ordinals:
             raise RuntimeError("source batch contains no failed rows to recover")
 
+        resumed_rows: dict[int, dict[str, Any]] = {}
+        resumed_retry_wall_s = 0.0
+        if args.resume_recovery_batch_id:
+            resume_rows, resume_marker = _read_recovery_batch(
+                source,
+                args.resume_recovery_batch_id,
+                failed_ordinals,
+            )
+            for ordinal, row in zip(failed_ordinals, resume_rows, strict=True):
+                observed = str((row.get("result") or {}).get("question_id") or "").strip()
+                expected = _question_id(questions[ordinal])
+                if observed != expected:
+                    raise RuntimeError(
+                        f"resume identity drift at ordinal {ordinal}: "
+                        f"observed={observed!r} expected={expected!r}"
+                    )
+                if not bool((row.get("result") or {}).get("error")):
+                    resumed_rows[ordinal] = row
+            resumed_retry_wall_s = max(0.0, float(resume_marker.get("elapsed_s") or 0.0))
+
         preflight = {
             "autopilot_lock_free": True,
             **readiness,
@@ -204,37 +272,41 @@ def main() -> int:
         config_before = _live_config_identity()
         generation_probe = _generation_probe()
 
-        retry_questions = [{**questions[idx], "_ordinal": idx} for idx in failed_ordinals]
+        retry_ordinals = [idx for idx in failed_ordinals if idx not in resumed_rows]
+        retry_questions = [{**questions[idx], "_ordinal": idx} for idx in retry_ordinals]
         previous_concurrency = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
         os.environ["AUTOPILOT_EVAL_CONCURRENCY"] = "1"
         retry_started = time.time()
         try:
-            with httpx.Client(timeout=tower.timeout) as client:
-                retry_results = tower._eval_batch(
-                    retry_questions,
-                    client,
-                    log_every=1,
-                    label="T2-targeted-recovery",
-                )
+            if retry_questions:
+                with httpx.Client(timeout=tower.timeout) as client:
+                    retry_results = tower._eval_batch(
+                        retry_questions,
+                        client,
+                        log_every=1,
+                        label="T2-targeted-recovery",
+                    )
+            else:
+                retry_results = []
         finally:
             if previous_concurrency is None:
                 os.environ.pop("AUTOPILOT_EVAL_CONCURRENCY", None)
             else:
                 os.environ["AUTOPILOT_EVAL_CONCURRENCY"] = previous_concurrency
         retry_wall_s = time.time() - retry_started
-        if len(retry_results) != len(failed_ordinals):
+        if len(retry_results) != len(retry_ordinals):
             raise RuntimeError(
-                f"retry result count mismatch: expected={len(failed_ordinals)} got={len(retry_results)}"
+                f"retry result count mismatch: expected={len(retry_ordinals)} got={len(retry_results)}"
             )
         retry_errors = {
             ordinal: result.error
-            for ordinal, result in zip(failed_ordinals, retry_results, strict=True)
+            for ordinal, result in zip(retry_ordinals, retry_results, strict=True)
             if result.error
         }
         if retry_errors:
             raise RuntimeError(f"targeted T2 recovery still has failures: {retry_errors}")
 
-        retry_by_ordinal = dict(zip(failed_ordinals, retry_results, strict=True))
+        retry_by_ordinal = dict(zip(retry_ordinals, retry_results, strict=True))
         merged_results: list[QuestionResult] = []
         merged_compact: list[dict[str, Any]] = []
         for ordinal, (question, row) in enumerate(zip(questions, source_rows, strict=True)):
@@ -242,13 +314,19 @@ def main() -> int:
                 result = retry_by_ordinal[ordinal]
                 merged_results.append(result)
                 merged_compact.append(_compact_question_result(result))
+            elif ordinal in resumed_rows:
+                resumed_row = resumed_rows[ordinal]
+                result = _prior_result(question, resumed_row)
+                merged_results.append(result)
+                merged_compact.append(dict(resumed_row["result"]))
             else:
                 result = _prior_result(question, row)
                 merged_results.append(result)
                 merged_compact.append(dict(row["result"]))
 
         original_wall_s = float(complete_marker.get("elapsed_s") or 0.0)
-        cumulative_wall_s = original_wall_s + retry_wall_s
+        total_retry_wall_s = resumed_retry_wall_s + retry_wall_s
+        cumulative_wall_s = original_wall_s + total_retry_wall_s
         for result in merged_results:
             result.eval_wall_s = cumulative_wall_s
         aggregate = tower._aggregate(merged_results, tier=2)
@@ -265,8 +343,13 @@ def main() -> int:
                     "preserved_success_rows": EVAL_T2_SPEC_N - len(failed_ordinals),
                     "retried_ordinals": failed_ordinals,
                     "retry_count": len(failed_ordinals),
+                    "resume_recovery_batch_id": args.resume_recovery_batch_id,
+                    "resumed_success_ordinals": sorted(resumed_rows),
+                    "executed_in_this_attempt": retry_ordinals,
                     "original_wall_s": original_wall_s,
-                    "retry_wall_s": retry_wall_s,
+                    "resumed_retry_wall_s": resumed_retry_wall_s,
+                    "current_retry_wall_s": retry_wall_s,
+                    "retry_wall_s": total_retry_wall_s,
                     "cumulative_wall_s": cumulative_wall_s,
                     "merge_key": "ordinal+question_id",
                     "successful_rows_preserved_verbatim": True,
