@@ -577,6 +577,48 @@ def _ps_llama_scan() -> str:
         return ""
 
 
+# Substrate from the BINARY path — never the model path, which is substrate-free.
+# On this host the GPU inference kernels live in HIP/ROCm build trees
+# (`.../llama.cpp/build-hip/bin/llama-server`), so the marker is in argv[0].
+# Derived per PROCESS because role names carry no substrate (architect_general
+# is a GPU role today and nothing in its name says so), and a hardcoded
+# role→substrate list is exactly the drift class RTG-47 removes.
+_SUBSTRATE_MARKER_RE = re.compile(r"hip|rocm|gfx", re.IGNORECASE)
+
+
+def _service_substrate(pid: Any, model_hint: str = "") -> str | None:
+    """Best-effort substrate for an aux service: read argv[0] from /proc.
+
+    A HIP/ROCm marker in the binary path (or, failing that, an explicit marker
+    in the state file's model label, e.g. ``whisper.cpp large-v3-turbo (HIP)``)
+    reads as GPU. Anything else returns ``None`` — an arbitrary service binary
+    without a marker proves nothing, and the dashboard renders unknown as
+    unmarked rather than guessing.
+    """
+    try:
+        with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
+            argv0 = f.read().split(b"\0", 1)[0].decode("utf-8", "replace")
+        if argv0 and _SUBSTRATE_MARKER_RE.search(argv0):
+            return "gpu"
+    except (OSError, ValueError, TypeError):
+        pass
+    # A GPU process must map the HIP/ROCm runtime, so /proc/<pid>/maps is
+    # conclusive FOR gpu (catches sd-server, whose binary path carries no
+    # marker). Its absence proves nothing about the SERVICE — python wrappers
+    # (document_formalizer) do the inference in a child — so no-marker never
+    # claims cpu here.
+    try:
+        with open(f"/proc/{int(pid)}/maps", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if "amdhip" in line or "rocblas" in line or "libhsa" in line:
+                    return "gpu"
+    except (OSError, ValueError, TypeError):
+        pass
+    if model_hint and _SUBSTRATE_MARKER_RE.search(model_hint):
+        return "gpu"
+    return None
+
+
 def _discover_llama_processes() -> dict[int, dict[str, Any]]:
     """Scan for llama-server listeners → {port: {role, attribution, ...}}.
 
@@ -613,6 +655,12 @@ def _discover_llama_processes() -> dict[int, dict[str, Any]]:
             "started_at": proc_started_at,
             "attribution": verdict["attribution"],
         }
+        # For llama-server the binary IS the inference kernel and this host's
+        # convention is established (CPU tree `build/`, GPU tree `build-hip/`),
+        # so no-marker legitimately reads as CPU here — unlike aux services.
+        binary = next((tok for tok in line.split() if "llama-server" in tok), "")
+        if binary:
+            info["substrate"] = "gpu" if _SUBSTRATE_MARKER_RE.search(binary) else "cpu"
         if verdict.get("marker_stale"):
             info["marker_stale"] = True
         role = _port_hint(port)
@@ -731,14 +779,18 @@ def _load_state_services(state_path: Path) -> list[dict[str, Any]]:
         for key, info in state.items():
             if not isinstance(info, dict):
                 continue
-            services.append({
+            entry = {
                 "name": key,
                 "role": info.get("role", key),
                 "port": info.get("port"),
                 "model": info.get("model_path", ""),
                 "pid": info.get("pid", -1),
                 "running": _pid_is_running(info.get("pid")),
-            })
+            }
+            substrate = _service_substrate(info.get("pid"), str(info.get("model_path", "")))
+            if substrate:
+                entry["substrate"] = substrate
+            services.append(entry)
     except FileNotFoundError:
         pass
     except Exception as exc:

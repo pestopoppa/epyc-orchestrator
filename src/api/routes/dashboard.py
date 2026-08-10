@@ -6406,6 +6406,13 @@ def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
             node["lane_hint"] = proc["lane_hint"]
         if proc.get("marker_stale"):
             node["marker_stale"] = True
+        # Substrate (gpu/cpu) from the process's binary path — role names carry
+        # no substrate (architect_general is a GPU role and nothing in its name
+        # says so), so the page must not be left to guess from role lists.
+        if proc.get("substrate"):
+            node["substrate"] = proc["substrate"]
+        elif node_kind == "gpu-llama-server":
+            node["substrate"] = "gpu"
         nodes.append(node)
 
     # Auxiliary services not already covered.
@@ -6415,20 +6422,21 @@ def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
             continue
         expected = expected_by_port.get(port, {})
         seen_ports.add(port)
-        nodes.append(
-            {
-                "id": svc["name"],
-                "label": svc["name"],
-                "role": svc["role"],
-                "port": port,
-                "color": _role_color(svc["role"]),
-                "kind": "service",
-                "model": _clean_model_name(svc.get("model", "")),
-                "expected": bool(expected),
-                "running": bool(svc.get("running")),
-                "manifest_roles": expected.get("roles", []),
-            }
-        )
+        svc_node = {
+            "id": svc["name"],
+            "label": svc["name"],
+            "role": svc["role"],
+            "port": port,
+            "color": _role_color(svc["role"]),
+            "kind": "service",
+            "model": _clean_model_name(svc.get("model", "")),
+            "expected": bool(expected),
+            "running": bool(svc.get("running")),
+            "manifest_roles": expected.get("roles", []),
+        }
+        if svc.get("substrate"):
+            svc_node["substrate"] = svc["substrate"]
+        nodes.append(svc_node)
 
     # Expected stack servers that are not currently visible via /proc or the
     # state file still get topology rows so the activity panel can show them as

@@ -938,9 +938,32 @@ body.insight-fullscreen-open { overflow: hidden; }
     <span style="font-weight:normal;color:var(--muted)" id="status">connecting…</span>
     <span style="font-weight:normal;color:var(--muted);margin-left:12px;font-size:11px" id="process-status"></span>
     <span style="font-weight:normal;font-size:10px;margin-left:12px" id="build-rev" title="git SHA + dashboard.html mtime; turns yellow when a hard-reload would pick up newer content"></span>
-    <a id="handoff-hub-link" href="/" style="font-weight:normal;font-size:11px;margin-left:12px;color:var(--accent,#60a5fa)" title="project-wide handoff progress board (epyc-root hub)">handoffs ↗</a>
+    <span id="epyc-nav" style="font-weight:normal;font-size:11px;margin-left:12px"></span>
 </h1>
-<script>try{document.getElementById('handoff-hub-link').href=location.protocol+'//'+location.hostname+':8100/';}catch(e){}</script>
+<script>
+// Shared dashboard nav (RTG-47): served by the epyc-root hub (:8100) with the
+// dashboard registry inlined, rendered into #epyc-nav above. If the hub is down
+// or unreachable, fall back to the plain handoffs link this replaced — this page
+// must never lose its one exit just because the hub died.
+(function () {
+    try {
+        var s = document.createElement('script');
+        s.defer = true;
+        s.src = location.protocol + '//' + location.hostname + ':8100/nav.js';
+        s.onerror = function () {
+            var nav = document.getElementById('epyc-nav');
+            if (!nav || nav.childElementCount) return;
+            var a = document.createElement('a');
+            a.href = location.protocol + '//' + location.hostname + ':8100/';
+            a.textContent = 'handoffs ↗';
+            a.title = 'project-wide handoff progress board (epyc-root hub; hub nav unavailable)';
+            a.style.color = 'var(--accent,#60a5fa)';
+            nav.appendChild(a);
+        };
+        document.head.appendChild(s);
+    } catch (e) { /* nav is an enhancement; the dashboard must not care */ }
+})();
+</script>
 
 <div class="counters" id="counters"></div>
 

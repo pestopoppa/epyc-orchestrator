@@ -330,6 +330,16 @@ def create_app() -> FastAPI:
         burst=_api_cfg.rate_limit_burst,
     )
 
+    # RTG-47 Phase 1a — scoped CORS for the dashboard data plane so epyc-root hub
+    # pages (:8100) can fetch /dashboard/api/* + /dashboard/events/* directly from
+    # the browser. Added LAST, i.e. outermost: the global CORSMiddleware above
+    # answers a preflight from a non-allowlisted origin with 400, so an inner
+    # placement would never see the hub's OPTIONS. Every non-dashboard path is
+    # passed through untouched — the /v1 and session surfaces stay same-origin.
+    from src.api.dashboard_cors import DashboardCORSMiddleware
+
+    app.add_middleware(DashboardCORSMiddleware)
+
     # Include all routes
     router = create_api_router()
     app.include_router(router)
