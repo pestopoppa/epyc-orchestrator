@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""Recover only failed rows from a completed T2 sidecar and seal merged evidence."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import asdict
+import fcntl
+import json
+import os
+from pathlib import Path
+import random
+import sys
+import time
+from typing import Any
+
+import httpx
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+AUTOPILOT_DIR = REPO_ROOT / "scripts" / "autopilot"
+for path in (REPO_ROOT, AUTOPILOT_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from collect_e9_operational_baseline import (  # noqa: E402
+    API_URL,
+    AUTOPILOT_LOCK,
+    STATE_PATH,
+    _generation_probe,
+    _health_status,
+    _utc_now,
+    _write_immutable,
+)
+from collect_multitier_incumbent_baseline import (  # noqa: E402
+    EXPECTED_N,
+    SCHEMA,
+    _episodic_semantic_integrity,
+    _git_head,
+    _json_safe,
+    _live_config_identity,
+    _sha_bytes,
+    _sha_path,
+    _source_dirty_paths,
+    _source_hashes,
+    _state_collection_readiness,
+    _validate_result,
+)
+from eval_tower import (  # noqa: E402
+    EVAL_SPEC_SEED,
+    EVAL_T2_SPEC_N,
+    EvalTower,
+    QuestionResult,
+    _annotate_partition,
+    _compact_question_result,
+    _sample_scoreable_eval_questions,
+    _stamp_eval_instrument,
+)
+from src.autopilot_core.multitier_decision import (  # noqa: E402
+    MULTITIER_POLICY_VERSION,
+    build_tier_baseline_evidence,
+)
+
+
+RECOVERY_SCHEMA = "epyc.multitier_t2_targeted_recovery.v1"
+
+
+def _read_batch(path: Path, batch_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    complete: list[dict[str, Any]] = []
+    for line in path.read_text().splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("eval_batch_id") != batch_id:
+            continue
+        if row.get("row_type") == "question_result":
+            rows.append(row)
+        elif row.get("row_type") == "batch_complete" and row.get("complete") is True:
+            complete.append(row)
+    if len(complete) != 1:
+        raise RuntimeError(f"source batch requires exactly one complete marker; found {len(complete)}")
+    by_ordinal: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        ordinal = int(row.get("ordinal", -1))
+        if ordinal in by_ordinal:
+            raise RuntimeError(f"duplicate source ordinal {ordinal}")
+        by_ordinal[ordinal] = row
+    expected = list(range(EVAL_T2_SPEC_N))
+    if sorted(by_ordinal) != expected:
+        missing = sorted(set(expected) - set(by_ordinal))
+        extra = sorted(set(by_ordinal) - set(expected))
+        raise RuntimeError(f"source ordinal mismatch: missing={missing} extra={extra}")
+    if int(complete[0].get("completed_n") or 0) != EVAL_T2_SPEC_N:
+        raise RuntimeError(f"source complete marker is not {EVAL_T2_SPEC_N} rows")
+    return [by_ordinal[idx] for idx in expected], complete[0]
+
+
+def _question_id(question: dict[str, Any]) -> str:
+    return str(question.get("id") or question.get("question_id") or "").strip()
+
+
+def _reconstruct_questions(tower: EvalTower) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    pool = tower._load_pool()
+    if not pool:
+        raise RuntimeError("T2 question pool unavailable")
+    excluded, exclusion_policy = tower._t1_core_exclusion_qids(pool, seed=EVAL_SPEC_SEED)
+    questions = _sample_scoreable_eval_questions(
+        pool,
+        EVAL_T2_SPEC_N,
+        random.Random(EVAL_SPEC_SEED),
+        exclude_qids=excluded,
+    )
+    questions = _annotate_partition(questions, "core")
+    if len(questions) != EVAL_T2_SPEC_N:
+        raise RuntimeError(f"reconstructed T2 draw has {len(questions)} rows")
+    exclusion_policy["actual_t2_core_n"] = len(questions)
+    return questions, exclusion_policy
+
+
+def _prior_result(question: dict[str, Any], row: dict[str, Any]) -> QuestionResult:
+    compact = dict(row.get("result") or {})
+    result = QuestionResult(
+        question_id=_question_id(question),
+        suite=str(question.get("suite") or "unknown"),
+        prompt=str(question.get("prompt") or ""),
+        expected=str(question.get("expected") or ""),
+        qid=str(compact.get("qid") or ""),
+        correct=bool(compact.get("correct")),
+        tokens_generated=int(compact.get("tokens_generated") or 0),
+        elapsed_s=max(0.0, float(row.get("elapsed_s") or 0.0)),
+        route_used=str(compact.get("route") or ""),
+        scoring_method=str(compact.get("scoring_method") or question.get("scoring_method") or "exact_match"),
+        tools_used=int(compact.get("tools_used") or 0),
+        tools_called=list(compact.get("tools_called") or []),
+        eval_partition=str(compact.get("partition") or "core"),
+        host_covariates=dict(compact.get("host_covariates") or {}),
+        eval_concurrency=4,
+    )
+    return result
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-sidecar", type=Path, required=True)
+    parser.add_argument("--source-batch-id", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    return parser
+
+
+def main() -> int:
+    args = _parser().parse_args()
+    source = args.source_sidecar.expanduser().resolve()
+    output = args.output.expanduser().resolve()
+    if output.exists():
+        raise SystemExit(f"refusing to overwrite immutable evidence: {output}")
+
+    AUTOPILOT_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with AUTOPILOT_LOCK.open("a+") as lock_handle:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise SystemExit("AutoPilot or another collector holds the baseline lock") from exc
+
+        dirty = _source_dirty_paths()
+        if dirty:
+            raise SystemExit(f"measurement/policy sources are dirty: {dirty}")
+        state_raw = STATE_PATH.read_bytes()
+        state = json.loads(state_raw)
+        readiness = _state_collection_readiness(state)
+        if state.get("paused") is not True or state.get("in_flight_trial") is not None:
+            raise SystemExit(f"AutoPilot state is not collection-ready: {readiness}")
+
+        source_rows, complete_marker = _read_batch(source, args.source_batch_id)
+        tower = EvalTower(url=API_URL)
+        questions, exclusion_policy = _reconstruct_questions(tower)
+        for ordinal, (question, row) in enumerate(zip(questions, source_rows, strict=True)):
+            observed = str((row.get("result") or {}).get("question_id") or "").strip()
+            expected = _question_id(question)
+            if observed != expected:
+                raise RuntimeError(
+                    f"dataset identity drift at ordinal {ordinal}: source={observed!r} reconstructed={expected!r}"
+                )
+
+        failed_ordinals = [
+            idx for idx, row in enumerate(source_rows) if bool((row.get("result") or {}).get("error"))
+        ]
+        if not failed_ordinals:
+            raise RuntimeError("source batch contains no failed rows to recover")
+
+        preflight = {
+            "autopilot_lock_free": True,
+            **readiness,
+            "git_head": _git_head(),
+            "source_dirty_paths": dirty,
+            "source_sha256": _source_hashes(),
+            "state_preimage_sha256": _sha_bytes(state_raw),
+            "policy_version": MULTITIER_POLICY_VERSION,
+            "health": _health_status(),
+        }
+        started_at = _utc_now()
+        integrity_before = _episodic_semantic_integrity()
+        config_before = _live_config_identity()
+        generation_probe = _generation_probe()
+
+        retry_questions = [{**questions[idx], "_ordinal": idx} for idx in failed_ordinals]
+        previous_concurrency = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
+        os.environ["AUTOPILOT_EVAL_CONCURRENCY"] = "1"
+        retry_started = time.time()
+        try:
+            with httpx.Client(timeout=tower.timeout) as client:
+                retry_results = tower._eval_batch(
+                    retry_questions,
+                    client,
+                    log_every=1,
+                    label="T2-targeted-recovery",
+                )
+        finally:
+            if previous_concurrency is None:
+                os.environ.pop("AUTOPILOT_EVAL_CONCURRENCY", None)
+            else:
+                os.environ["AUTOPILOT_EVAL_CONCURRENCY"] = previous_concurrency
+        retry_wall_s = time.time() - retry_started
+        if len(retry_results) != len(failed_ordinals):
+            raise RuntimeError(
+                f"retry result count mismatch: expected={len(failed_ordinals)} got={len(retry_results)}"
+            )
+        retry_errors = {
+            ordinal: result.error
+            for ordinal, result in zip(failed_ordinals, retry_results, strict=True)
+            if result.error
+        }
+        if retry_errors:
+            raise RuntimeError(f"targeted T2 recovery still has failures: {retry_errors}")
+
+        retry_by_ordinal = dict(zip(failed_ordinals, retry_results, strict=True))
+        merged_results: list[QuestionResult] = []
+        merged_compact: list[dict[str, Any]] = []
+        for ordinal, (question, row) in enumerate(zip(questions, source_rows, strict=True)):
+            if ordinal in retry_by_ordinal:
+                result = retry_by_ordinal[ordinal]
+                merged_results.append(result)
+                merged_compact.append(_compact_question_result(result))
+            else:
+                result = _prior_result(question, row)
+                merged_results.append(result)
+                merged_compact.append(dict(row["result"]))
+
+        original_wall_s = float(complete_marker.get("elapsed_s") or 0.0)
+        cumulative_wall_s = original_wall_s + retry_wall_s
+        for result in merged_results:
+            result.eval_wall_s = cumulative_wall_s
+        aggregate = tower._aggregate(merged_results, tier=2)
+        aggregate.question_results = merged_compact
+        aggregate.eval_wall_s = cumulative_wall_s
+        aggregate.details.update(
+            {
+                "eval_wall_s": cumulative_wall_s,
+                "task_rate_qph": EVAL_T2_SPEC_N / (cumulative_wall_s / 3600.0),
+                "targeted_recovery": {
+                    "schema_version": RECOVERY_SCHEMA,
+                    "source_batch_id": args.source_batch_id,
+                    "source_sidecar_sha256": _sha_path(source),
+                    "preserved_success_rows": EVAL_T2_SPEC_N - len(failed_ordinals),
+                    "retried_ordinals": failed_ordinals,
+                    "retry_count": len(failed_ordinals),
+                    "original_wall_s": original_wall_s,
+                    "retry_wall_s": retry_wall_s,
+                    "cumulative_wall_s": cumulative_wall_s,
+                    "merge_key": "ordinal+question_id",
+                    "successful_rows_preserved_verbatim": True,
+                },
+                "t1_core_exclusion_policy": exclusion_policy,
+            }
+        )
+        core_id = f"legacy_pool_t2_seed_{EVAL_SPEC_SEED}_n{EVAL_T2_SPEC_N}"
+        aggregate = _stamp_eval_instrument(
+            aggregate,
+            questions=questions,
+            core_id=core_id,
+            test_profile={
+                "version": "eval-tower-tier-profile-v1",
+                "tier": 2,
+                "core_id": core_id,
+                "seed": EVAL_SPEC_SEED,
+                "requested_n": EVAL_T2_SPEC_N,
+                "n_questions": len(questions),
+                "full_batch_n_questions": len(questions),
+                "decision_excluded_partitions": [],
+                "promotion_eval": False,
+                "promotion_policy": None,
+                "t1_core_exclusion_policy": exclusion_policy,
+                "recovery_contract": RECOVERY_SCHEMA,
+            },
+        )
+        _validate_result(aggregate, 2)
+        completed_at = _utc_now()
+
+        state_after_raw = STATE_PATH.read_bytes()
+        sources_after = _source_hashes()
+        dirty_after = _source_dirty_paths()
+        config_after = _live_config_identity()
+        integrity_after = _episodic_semantic_integrity()
+        errors: list[str] = []
+        if state_after_raw != state_raw:
+            errors.append("AutoPilot state changed during recovery")
+        if sources_after != preflight["source_sha256"] or dirty_after:
+            errors.append(f"measurement/policy sources changed: dirty={dirty_after}")
+        if config_after["identity_sha256"] != config_before["identity_sha256"]:
+            errors.append("live configuration changed during recovery")
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+        payload = {
+            "schema_version": SCHEMA,
+            "status": "candidate_unratified",
+            "human_consolidated_apply_required": True,
+            "tier": 2,
+            "expected_n": EXPECTED_N[2],
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "preflight": preflight,
+            "git_head_completed": _git_head(),
+            "repository_head_changed_during_collection": _git_head() != preflight["git_head"],
+            "source_sha256": sources_after,
+            "state_preimage_sha256": _sha_bytes(state_after_raw),
+            "live_config_identity": config_after,
+            "episodic_integrity_before": integrity_before,
+            "episodic_integrity_after": integrity_after,
+            "generation_probe": generation_probe,
+            "recovery": aggregate.details["targeted_recovery"],
+            "eval_result": _json_safe(asdict(aggregate)),
+            "tier_baseline_evidence": _json_safe(build_tier_baseline_evidence(aggregate)),
+            "canonical_state_mutated": False,
+        }
+        _write_immutable(output, payload)
+        print(
+            json.dumps(
+                {
+                    "status": "candidate_written",
+                    "path": str(output),
+                    "sha256": _sha_path(output),
+                    "quality": aggregate.quality,
+                    "reliability": aggregate.reliability,
+                    "n_questions": aggregate.n_questions,
+                    "recovered_ordinals": failed_ordinals,
+                    "cumulative_wall_s": cumulative_wall_s,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

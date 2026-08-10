@@ -41,6 +41,7 @@ import logging
 import math
 import os
 import random
+import re
 import sys
 import time
 import uuid
@@ -131,7 +132,7 @@ _INSTRUMENT_LEDGER_PATH = Path(
 # questions/hour objective.  Generation placement changes the denominator;
 # model-backed scoring placement can change both wall time and error exclusion.
 # Keep these human-readable and stamp them into every EvalResult/journal row.
-EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v7_physical_cohort_exclusion"
+EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v8_long_context_retrieval"
 EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v4_gpu_lifecycle_quiescence"
 DEFAULT_LLM_JUDGE_ROLE = "architect_general"
 
@@ -291,6 +292,120 @@ def _instrument_drift_log_message(drift: Mapping[str, Any]) -> tuple[int, str]:
 _EVAL_QUESTION_JSONL_SCHEMA_VERSION = 1
 _DEFAULT_EVAL_ARTIFACT_ROOT = Path("/mnt/raid0/llm/tmp/eval_tower_trials")
 _GIANT_EVAL_PROMPT_CHARS = 524_288
+_RETRIEVAL_TRIGGER_CHARS = 160_000
+_RETRIEVAL_CONTEXT_BUDGET_CHARS = 144_000
+_RETRIEVAL_CHUNK_CHARS = 4_096
+_RETRIEVAL_CHUNK_OVERLAP_CHARS = 256
+_RETRIEVAL_STOPWORDS = {
+    "about",
+    "after",
+    "answer",
+    "before",
+    "could",
+    "following",
+    "from",
+    "have",
+    "into",
+    "question",
+    "should",
+    "that",
+    "their",
+    "there",
+    "these",
+    "this",
+    "using",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "would",
+}
+
+
+def _eval_retrieval_terms(text: str) -> set[str]:
+    """Return stable lexical terms for deterministic oversized-prompt retrieval."""
+    return {
+        token
+        for token in re.findall(r"[^\W_][\w'’-]{2,}", str(text or "").casefold())
+        if token not in _RETRIEVAL_STOPWORDS
+    }
+
+
+def _compact_oversized_eval_prompt(prompt: str) -> tuple[str, dict[str, Any]]:
+    """Fit lookup-style eval prompts into the certified long-context envelope.
+
+    Some LongBench rows exceed the serving process' 262K-token context by more
+    than 5x. Sending them verbatim can only yield llama-server HTTP 400, which
+    incorrectly turns a deterministic capacity mismatch into a reliability
+    failure. Preserve the question verbatim and select relevant, ordered
+    context windows with an IDF-weighted lexical retriever. This is intentionally
+    eval-instrument code: every use is stamped by the v8 execution identity.
+    """
+    raw = str(prompt or "")
+    if len(raw) <= _RETRIEVAL_TRIGGER_CHARS:
+        return raw, {"applied": False, "original_chars": len(raw), "output_chars": len(raw)}
+
+    marker = raw.rfind("\nQuestion:")
+    if marker <= 0:
+        return raw, {
+            "applied": False,
+            "reason": "question_marker_missing",
+            "original_chars": len(raw),
+            "output_chars": len(raw),
+        }
+    context = raw[:marker]
+    question = raw[marker + 1 :]
+    step = _RETRIEVAL_CHUNK_CHARS - _RETRIEVAL_CHUNK_OVERLAP_CHARS
+    chunks = [context[start : start + _RETRIEVAL_CHUNK_CHARS] for start in range(0, len(context), step)]
+    terms = _eval_retrieval_terms(question)
+    doc_freq: dict[str, int] = {term: 0 for term in terms}
+    folded_chunks: list[str] = []
+    for chunk in chunks:
+        folded = chunk.casefold()
+        folded_chunks.append(folded)
+        for term in terms:
+            if term in folded:
+                doc_freq[term] += 1
+
+    n_chunks = max(1, len(chunks))
+    scored: list[tuple[float, int]] = []
+    for idx, folded in enumerate(folded_chunks):
+        score = 0.0
+        for term in terms:
+            count = folded.count(term)
+            if count:
+                idf = math.log((n_chunks + 1.0) / (doc_freq[term] + 0.5))
+                score += (1.0 + math.log(count)) * idf
+        # Preserve minimal document framing and the context nearest the question.
+        if idx in {0, n_chunks - 1}:
+            score += 0.001
+        scored.append((score, idx))
+
+    overhead = len(question) + 256
+    max_chunks = max(2, (_RETRIEVAL_CONTEXT_BUDGET_CHARS - overhead) // (_RETRIEVAL_CHUNK_CHARS + 64))
+    selected = {idx for _score, idx in sorted(scored, key=lambda item: (-item[0], item[1]))[:max_chunks]}
+    selected.update({0, n_chunks - 1})
+    ordered = sorted(selected)
+    segments = [
+        f"[Retrieved context segment {idx + 1}/{n_chunks}]\n{chunks[idx]}"
+        for idx in ordered
+    ]
+    compact = (
+        "Context (deterministically retrieved from an oversized source):\n"
+        + "\n\n".join(segments)
+        + "\n\n"
+        + question
+    )
+    return compact, {
+        "applied": True,
+        "version": "idf_ordered_segments_v1",
+        "original_chars": len(raw),
+        "output_chars": len(compact),
+        "context_chunks": n_chunks,
+        "selected_chunks": ordered,
+        "question_terms": len(terms),
+    }
 
 
 def _eval_no_progress_timeout_s(request_timeout_s: int) -> float:
@@ -964,6 +1079,36 @@ def _inband_error_text(answer: Any) -> str | None:
     return None
 
 
+def _inband_error_provenance(error: str, *, role: str = "") -> dict[str, Any]:
+    """Classify legacy in-band errors so retries and dashboards remain typed."""
+    lowered = str(error or "").casefold()
+    if "placement timeout" in lowered:
+        failure_class = "admission_timeout"
+        code = "placement_timeout"
+        match = re.search(r"reason=([^\s\]]+)", str(error))
+        if match:
+            code = match.group(1)
+    elif "http 400" in lowered:
+        failure_class = "backend_request_rejected"
+        code = "llama_http_400"
+    elif "timed out" in lowered or "timeout" in lowered:
+        failure_class = "backend_timeout"
+        code = "inband_timeout"
+    else:
+        failure_class = "backend_failure"
+        code = "inband_error"
+    return {
+        "schema": "epyc.failure_provenance.v1",
+        "class": failure_class,
+        "code": code,
+        "phase": "orchestrator_response",
+        "role": str(role or ""),
+        "exception_class": "InBandOrchestratorError",
+        "exception_reason": code,
+        "workload_class": "eval_batch",
+    }
+
+
 def _forced_role_serving_mismatch(force_role: Any, resp: Mapping[str, Any]) -> str | None:
     """Return the serving role when it differs from the forced role, else None.
 
@@ -1148,6 +1293,8 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         compact_covariates = _compact_host_covariates(r.host_covariates)
         if compact_covariates:
             item["host_covariates"] = compact_covariates
+    if r.retrieval_compaction.get("applied"):
+        item["retrieval_compaction"] = dict(r.retrieval_compaction)
     answer_hash = normalized_answer_hash(r.answer)
     if answer_hash and not r.error:
         item["answer_hash"] = answer_hash
@@ -1325,6 +1472,8 @@ def _eval_question_timeout_s(prompt: str, base_timeout_s: int | float) -> int:
         return max(giant, 3600)
     if prompt_chars > 131_072:
         return giant
+    if prompt_chars > 65_536:
+        return max(base, 1200)
     return base
 
 
@@ -2593,6 +2742,7 @@ class QuestionResult:
     # heuristic-scored questions are not indistinguishable downstream.
     rubric_source: str = ""
     host_covariates: dict[str, Any] = field(default_factory=dict)
+    retrieval_compaction: dict[str, Any] = field(default_factory=dict)
     # Batch-level backend lifecycle certificates. Populated only when nested
     # model scoring or a client transport timeout makes an explicit drain
     # necessary; aggregate telemetry deduplicates the shared reports.
@@ -2629,6 +2779,7 @@ class _GenOutcome:
     scoring_method: str = "exact_match"
     scoring_config: dict[str, Any] = field(default_factory=dict)
     eval_partition: str = "core"
+    retrieval_compaction: dict[str, Any] = field(default_factory=dict)
 
 
 # EV-6: Cross-family verification constraint.
@@ -3738,9 +3889,10 @@ class EvalTower:
 
         start = time.time()
         try:
+            dispatch_prompt, retrieval_compaction = _compact_oversized_eval_prompt(prompt)
             question_timeout_s = _eval_question_timeout_s(prompt, self.timeout)
             call_kwargs = {
-                "prompt": prompt,
+                "prompt": dispatch_prompt,
                 # Let routing decide unless the question pins a mode/role. The
                 # tool_use suite pins force_mode="repl" so the REPL CALL(...)
                 # path (what production actually uses) is exercised
@@ -3797,6 +3949,11 @@ class EvalTower:
                 _inband = _inband_error_text(answer)
                 if _inband is not None:
                     error = _inband
+                    if not isinstance(resp.get("failure_provenance"), dict):
+                        resp["failure_provenance"] = _inband_error_provenance(
+                            _inband,
+                            role=str(resp.get("routed_to") or resp.get("model") or ""),
+                        )
                     log.error(
                         "REL-1 in-band error surfaced as answer "
                         "(qid=%s suite=%s force_role=%s): %s",
@@ -3850,6 +4007,7 @@ class EvalTower:
                 scoring_method=scoring_method,
                 scoring_config=scoring_config,
                 eval_partition=eval_partition,
+                retrieval_compaction=retrieval_compaction,
             )
         except Exception as e:
             elapsed = time.time() - start
@@ -3988,6 +4146,7 @@ class EvalTower:
             rubric_scores=rubric_scores,
             rubric_source=rubric_source,
             host_covariates=outcome.host_covariates,
+            retrieval_compaction=dict(outcome.retrieval_compaction),
         )
 
     def _failed_question_result(
@@ -4964,6 +5123,15 @@ class EvalTower:
             and r.failure_provenance.get("class") == "client_transport_timeout"
         )
         eval_contaminated = bool(orphan_contamination_count or backend_drain_failure_count)
+        retrieval_compaction_rows = [
+            {
+                "qid": r.qid,
+                "question_id": r.question_id,
+                **dict(r.retrieval_compaction),
+            }
+            for r in results
+            if r.retrieval_compaction.get("applied")
+        ]
 
         return EvalResult(
             tier=tier,
@@ -4996,6 +5164,8 @@ class EvalTower:
                 "eval_backend_drain_reports": backend_drain_reports,
                 "eval_backend_drain_failure_count": backend_drain_failure_count,
                 "eval_client_transport_timeout_count": client_transport_timeout_count,
+                "eval_retrieval_compaction_count": len(retrieval_compaction_rows),
+                "eval_retrieval_compaction_rows": retrieval_compaction_rows,
                 "speed_semantics": "speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components",
                 "speed_metric_mode": speed_metric_mode,
                 "objective_speed_tps": speed,
