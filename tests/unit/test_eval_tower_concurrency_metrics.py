@@ -763,6 +763,72 @@ def test_api_lifecycle_drain_refuses_degraded_reducer(monkeypatch) -> None:
     assert report["overflow"]["critical"] == 1
 
 
+def test_api_lifecycle_drain_accepts_history_only_degradation(monkeypatch) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "certificate_valid": False,
+                "degraded": True,
+                "event_sequence": 99,
+                "overflow_total": 0,
+                "overflow_critical": 3,
+                "history_critical_evictions": 3,
+                "request_evictions": 0,
+                "worker_coverage": {"complete": True},
+                "batches": {"batch-1": {"active_unresolved": 0}},
+            }
+
+    monkeypatch.setattr(eval_tower.httpx, "get", lambda *_args, **_kwargs: Response())
+
+    report = eval_tower._wait_for_eval_api_lifecycle_drain(
+        api_url="http://localhost:8000",
+        batch_id="batch-1",
+        timeout_s=1.0,
+        stable_s=0.0,
+    )
+
+    assert report["success"] is True
+    assert report["reason"] == "stable_api_lifecycle_idle"
+    assert report["history_only_reducer_degraded"] is True
+    assert report["history_critical_evictions"] == 3
+
+
+def test_api_lifecycle_drain_refuses_history_loss_with_incomplete_coverage(
+    monkeypatch,
+) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "certificate_valid": False,
+                "degraded": True,
+                "event_sequence": 99,
+                "overflow_total": 0,
+                "overflow_critical": 3,
+                "history_critical_evictions": 3,
+                "request_evictions": 0,
+                "worker_coverage": {"complete": False},
+                "batches": {"batch-1": {"active_unresolved": 0}},
+            }
+
+    monkeypatch.setattr(eval_tower.httpx, "get", lambda *_args, **_kwargs: Response())
+
+    report = eval_tower._wait_for_eval_api_lifecycle_drain(
+        api_url="http://localhost:8000",
+        batch_id="batch-1",
+        timeout_s=1.0,
+        stable_s=0.0,
+    )
+
+    assert report["success"] is False
+    assert report["reason"] == "api_lifecycle_reducer_degraded"
+
+
 def test_combined_quiescence_requires_lifecycle_before_slots(monkeypatch) -> None:
     calls: list[str] = []
     monkeypatch.setattr(

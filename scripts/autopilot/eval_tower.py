@@ -132,7 +132,7 @@ _INSTRUMENT_LEDGER_PATH = Path(
 # questions/hour objective.  Generation placement changes the denominator;
 # model-backed scoring placement can change both wall time and error exclusion.
 # Keep these human-readable and stamp them into every EvalResult/journal row.
-EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v9_multimodal_input_identity"
+EVAL_EXECUTION_INSTRUMENT_ID = "resource_lanes_v10_history_scoped_quiescence"
 EVAL_SCORING_SCHEDULE_ID = "model_judge_tail_v4_gpu_lifecycle_quiescence"
 DEFAULT_LLM_JUDGE_ROLE = "architect_general"
 
@@ -2058,14 +2058,38 @@ def _wait_for_eval_api_lifecycle_drain(
                 "total": payload.get("overflow_total", 0),
                 "critical": payload.get("overflow_critical", 0),
                 "history_evictions": payload.get("history_evictions", 0),
+                "history_critical_evictions": payload.get(
+                    "history_critical_evictions", 0
+                ),
                 "request_evictions": payload.get("request_evictions", 0),
             }
-            degraded = (
+            reducer_degraded = (
                 payload.get("certificate_valid") is False
                 or bool(payload.get("degraded"))
                 or bool(isinstance(overflow, Mapping) and overflow.get("critical"))
             )
-            if degraded:
+            # The reducer keeps authoritative request/lease state separately from
+            # its bounded transition history.  A long eval can therefore age old
+            # protected transitions out of the dashboard history while retaining
+            # an exact zero-active batch bucket.  That is an observability-history
+            # gap, not loss of the live quiescence certificate.  Accept only the
+            # explicitly provable history-only case; pending-event overflow,
+            # request-state eviction, or incomplete worker coverage still fail
+            # closed.  The independent llama.cpp /slots drain remains mandatory.
+            overflow_map = dict(overflow) if isinstance(overflow, Mapping) else {}
+            history_critical = int(overflow_map.get("history_critical_evictions") or 0)
+            critical = int(overflow_map.get("critical") or 0)
+            worker_coverage = payload.get("worker_coverage")
+            history_only_degraded = bool(
+                reducer_degraded
+                and history_critical > 0
+                and int(overflow_map.get("total") or 0) == 0
+                and int(overflow_map.get("request_evictions") or 0) == 0
+                and critical == history_critical
+                and isinstance(worker_coverage, Mapping)
+                and worker_coverage.get("complete") is True
+            )
+            if reducer_degraded and not history_only_degraded:
                 return {
                     "success": False,
                     "reason": "api_lifecycle_reducer_degraded",
@@ -2074,7 +2098,7 @@ def _wait_for_eval_api_lifecycle_drain(
                     "polls": polls,
                     "batch_id": batch_id,
                     "event_sequence": sequence,
-                    "overflow": dict(overflow) if isinstance(overflow, Mapping) else {},
+                    "overflow": overflow_map,
                 }
             batches = payload.get("batches") or {}
             if not isinstance(batches, Mapping):
@@ -2098,6 +2122,8 @@ def _wait_for_eval_api_lifecycle_drain(
                             "event_sequence": sequence,
                             "source_sequences": source_sequences,
                             "last_batch": last_batch,
+                            "history_only_reducer_degraded": history_only_degraded,
+                            "history_critical_evictions": history_critical,
                         }
                 else:
                     idle_since = None
