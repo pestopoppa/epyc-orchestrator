@@ -1705,6 +1705,18 @@ def test_objective_for_task_returns_empty_when_no_started_event() -> None:
     assert dashboard_tasks._objective_for_task(events) == ""
 
 
+def test_terminal_answer_for_task_reads_completed_work_answer() -> None:
+    events = [
+        {"event_type": "task_started", "data": {"objective": "read image"}},
+        {
+            "event_type": "task_completed",
+            "data": {"producer_role": "worker_vision", "work": {"answer": "0.0g"}},
+        },
+    ]
+
+    assert dashboard_tasks._terminal_answer_for_task(events) == "0.0g"
+
+
 def test_task_text_snapshot_uses_slot_prompt_when_available() -> None:
     slot = {"prompt": "live prompt", "content": "streaming output"}
     events = [{"event_type": "task_started", "timestamp": "2026-05-22T10:00:00Z", "data": {"objective": "from event"}}]
@@ -1771,6 +1783,22 @@ def test_task_text_snapshot_falls_back_to_objective_when_no_slot() -> None:
     # Match the prefix so the test stays robust to minor copy tweaks.
     assert "(empty" in out  # no inference stream
     assert "INFERENCE STREAM:" in out
+
+
+def test_task_text_snapshot_falls_back_to_terminal_work_answer() -> None:
+    events = [
+        {"event_type": "task_started", "timestamp": "t", "data": {"objective": "read image"}},
+        {
+            "event_type": "task_completed",
+            "timestamp": "t",
+            "data": {"producer_role": "worker_vision", "work": {"answer": "0.0g"}},
+        },
+    ]
+
+    out = dashboard_tasks._task_text_snapshot("chat-vision", events, None)
+
+    assert "0.0g" in out
+    assert "source: terminal task event work.answer" in out
 
 
 def test_task_text_snapshot_uses_structured_tap_section() -> None:
@@ -4138,6 +4166,46 @@ def test_task_detail_exposes_renderable_image_url(tmp_path, monkeypatch) -> None
         "filename": "input.png",
         "reason": "",
     }
+
+
+def test_task_detail_exposes_terminal_answer_when_vision_has_no_tap(tmp_path, monkeypatch) -> None:
+    log_path = tmp_path / "progress.jsonl"
+    now = datetime.now(timezone.utc).isoformat()
+    log_path.write_text(
+        json.dumps(
+            {
+                "event_type": "task_started",
+                "timestamp": now,
+                "task_id": "chat-vision",
+                "data": {"objective": "read image"},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "event_type": "task_completed",
+                "timestamp": now,
+                "task_id": "chat-vision",
+                "data": {
+                    "producer_role": "worker_vision",
+                    "work": {"answer": "0.0g"},
+                },
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(dashboard, "_todays_progress_log", lambda: log_path)
+    monkeypatch.setattr(
+        dashboard, "_find_structured_request_by_task_id", lambda _task_id: None
+    )
+    monkeypatch.setattr(
+        dashboard, "_find_section_by_objective", lambda *_args, **_kwargs: None
+    )
+
+    payload = json.loads(asyncio.run(dashboard.task_detail("chat-vision")).body)
+
+    assert payload["tap_section"] is None
+    assert payload["terminal_answer"] == "0.0g"
 
 
 def test_task_image_serves_recorded_path_with_safe_headers(tmp_path, monkeypatch) -> None:

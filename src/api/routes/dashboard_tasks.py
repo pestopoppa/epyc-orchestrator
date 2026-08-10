@@ -111,6 +111,10 @@ def _task_text_snapshot(
                 else ""
             )
             source_note = f"(source: inference_tap.log section @ {ts} · role={role}{trust})"
+    terminal_answer = _terminal_answer_for_task(events)
+    if not stream_text and terminal_answer:
+        stream_text = terminal_answer
+        source_note = "(source: terminal task event work.answer; slot/tap output unavailable)"
     if not prompt_text:
         for ev in events:
             if ev.get("event_type") == "task_started":
@@ -143,6 +147,28 @@ def _task_text_snapshot(
             data_str = str(filtered)
         lines.append(f"[{ts}] {ev_type}: {data_str}")
     return "\n".join(lines)
+
+
+def _terminal_answer_for_task(events: list[dict[str, Any]]) -> str:
+    """Return the last answer durably recorded by a terminal task event.
+
+    Some backends, notably the vision adapter, return a complete answer to the
+    orchestrator without emitting token-level inference-tap events.  The
+    progress event's ``work.answer`` is authoritative in that case and must be
+    available to task-detail and text-snapshot consumers.
+    """
+    for event in reversed(events):
+        if event.get("event_type") not in {"task_completed", "task_failed"}:
+            continue
+        data = event.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        work = data.get("work") or {}
+        if not isinstance(work, dict) or work.get("answer") is None:
+            continue
+        answer = work.get("answer")
+        return answer if isinstance(answer, str) else str(answer)
+    return ""
 
 
 def _objective_for_task(events: list[dict[str, Any]]) -> str:
