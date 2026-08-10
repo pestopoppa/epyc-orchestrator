@@ -79,6 +79,7 @@ from src.api.routes.dashboard_tasks import (
     _objective_for_task,
     _task_events,
     _task_text_snapshot,
+    _terminal_answer_for_task,
 )
 from src.api.routes.dashboard_topology import (
     active_stack_numa_mode,
@@ -7446,6 +7447,7 @@ async def task_detail(task_id: str) -> JSONResponse:
                 "active_slot_id": None,
                 "slot": None,
                 "tap_section": structured_tap,
+                "terminal_answer": _terminal_answer_for_task(events),
                 "image": _task_image_metadata(task_id, events),
             }
         )
@@ -7484,6 +7486,7 @@ async def task_detail(task_id: str) -> JSONResponse:
             "active_slot_id": None,
             "slot": None,
             "tap_section": tap_section,
+            "terminal_answer": _terminal_answer_for_task(events),
             "image": _task_image_metadata(task_id, events),
         }
     )

@@ -159,6 +159,20 @@ def test_dashboard_task_detail_renders_available_input_image() -> None:
     assert "image.reason" in detail_body
 
 
+def test_dashboard_task_detail_uses_terminal_answer_when_tap_is_empty() -> None:
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+    detail_start = body.index("async function openDetail(taskId, port, slotId) {")
+    detail_end = body.index("function closeDetail()", detail_start)
+    detail_body = body[detail_start:detail_end]
+
+    assert "const terminalAnswer = (d.terminal_answer || '').toString();" in detail_body
+    assert "if (!initialContent && terminalAnswer)" in detail_body
+    assert "final answer (task event)" in detail_body
+
+
 def test_dashboard_html_separates_placement_leases_from_live_tap_requests() -> None:
     """The lock panel distinguishes canonical leases from tap inference."""
     html_path = (

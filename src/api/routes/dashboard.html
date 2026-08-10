@@ -5780,6 +5780,8 @@ async function openDetail(taskId, port, slotId) {
         let initialContent = '';
         let dataSource = '';
         let emptyOutputHint = '';
+        let terminalAnswerFallback = false;
+        const terminalAnswer = (d.terminal_answer || '').toString();
         if (d.slot) {
             promptText = (d.slot.prompt || '').toString();
             initialContent = (d.slot.content || '').toString();
@@ -5803,6 +5805,12 @@ async function openDetail(taskId, port, slotId) {
             emptyOutputHint = events.length
                 ? 'No model output captured yet. The task is likely queued, in pre-inference/local work, or its live tap section has not matched this task.'
                 : 'No task events or model output are available for this task id.';
+        }
+        if (!initialContent && terminalAnswer) {
+            initialContent = terminalAnswer;
+            terminalAnswerFallback = true;
+            emptyOutputHint = '';
+            dataSource = 'terminal task event work.answer (slot/tap output unavailable)';
         }
         _currentTaskRawText = {
             taskId,
@@ -5858,7 +5866,7 @@ async function openDetail(taskId, port, slotId) {
             ${imageBlock}
             <div class="detail-box-label">prompt</div>
             <div class="prompt-text" id="prompt-text"></div>
-            <div class="detail-box-label response-label">${d.slot ? 'live inference' : (d.tap_section ? 'inference (from tap)' : 'inference')}</div>
+            <div class="detail-box-label response-label">${terminalAnswerFallback ? 'final answer (task event)' : (d.slot ? 'live inference' : (d.tap_section ? 'inference (from tap)' : 'inference'))}</div>
             <div class="stream-text ${d.slot ? 'live' : ''}" id="stream-text"></div>
             <h3>task events (${events.length}) <span style="font-weight:normal;color:var(--muted);font-size:10px">orchestrator-side; not REPL turns</span></h3>
             <div id="repl-history"></div>
