@@ -54,6 +54,13 @@ async def lifespan(app: FastAPI):
     state = get_state()
     f = features()
 
+    from src.runtime.config_attestation import publish_config_attestation
+
+    try:
+        publish_config_attestation(f)
+    except Exception as exc:
+        logger.error("Could not publish API worker config attestation: %s", exc)
+
     # Validate feature dependencies at startup
     validation_errors = f.validate()
     if validation_errors:
@@ -241,6 +248,13 @@ async def lifespan(app: FastAPI):
         state._q_scorer_task = None
 
     yield
+
+    from src.runtime.config_attestation import remove_config_attestation
+
+    try:
+        remove_config_attestation()
+    except Exception as exc:
+        logger.warning("Could not remove API worker config attestation: %s", exc)
 
     # Shutdown - cancel background task first
     if state._q_scorer_task:

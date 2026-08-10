@@ -73,6 +73,8 @@ SOURCE_PATHS = (
     REPO_ROOT / "orchestration/repl_memory/parallel_embedder.py",
     REPO_ROOT / "orchestration/repl_memory/q_scorer.py",
     REPO_ROOT / "src/api/routes/chat.py",
+    REPO_ROOT / "src/api/__init__.py",
+    REPO_ROOT / "src/api/routes/config.py",
     REPO_ROOT / "src/api/routes/chat_review.py",
     REPO_ROOT / "src/api/routes/chat_utils.py",
     REPO_ROOT / "src/api/routes/chat_pipeline/routing.py",
@@ -83,7 +85,9 @@ SOURCE_PATHS = (
     REPO_ROOT / "src/api/routes/dashboard.py",
     REPO_ROOT / "src/api/routes/dashboard.html",
     REPO_ROOT / "src/api/models/requests.py",
+    REPO_ROOT / "src/features.py",
     REPO_ROOT / "src/runtime/inference_tap.py",
+    REPO_ROOT / "src/runtime/config_attestation.py",
     REPO_ROOT / "src/runtime/live_telemetry.py",
     REPO_ROOT / "orchestration/model_registry.yaml",
     REPO_ROOT / "orchestration/derived/stack_priors.yaml",
@@ -176,33 +180,49 @@ def _episodic_semantic_integrity() -> dict[str, Any]:
     return report
 
 
-def _live_config_identity(*, samples: int = 24) -> dict[str, Any]:
-    """Attest feature flags and all tunable env keys across API workers."""
+def _expected_api_worker_pids() -> list[int]:
+    with httpx.Client(headers={"Connection": "close"}) as client:
+        response = client.get(f"{API_URL}/dashboard/api/snapshot", timeout=30)
+    response.raise_for_status()
+    coverage = ((response.json().get("api_lifecycle") or {}).get("worker_coverage") or {})
+    return sorted({int(pid) for pid in coverage.get("expected_pids") or []})
+
+
+def _worker_env(pid: int, env_names: list[str]) -> dict[str, str | None]:
+    raw = Path(f"/proc/{pid}/environ").read_bytes()
+    env = dict(
+        pair.split("=", 1)
+        for pair in raw.decode("utf-8", errors="strict").split("\0")
+        if "=" in pair
+    )
+    return {name: env.get(name) for name in env_names}
+
+
+def _live_config_identity() -> dict[str, Any]:
+    """Attest feature flags and tunable env keys across every API worker."""
+    from src.runtime.config_attestation import read_config_attestations
+
     env_names = sorted({name for section in ENV_PARAMS.values() for name in section.values()})
+    expected_pids = _expected_api_worker_pids()
+    if not expected_pids:
+        raise RuntimeError("API lifecycle roster reported no expected workers")
+    attestations = read_config_attestations(expected_pids)
     workers: dict[str, dict[str, Any]] = {}
-    errors: list[str] = []
-    for _ in range(samples):
-        try:
-            with httpx.Client(headers={"Connection": "close"}) as client:
-                response = client.get(f"{API_URL}/config/attest", timeout=10)
-            response.raise_for_status()
-            payload = response.json()
-            pid = int(payload["pid"])
-            raw = Path(f"/proc/{pid}/environ").read_bytes()
-            env = dict(
-                pair.split("=", 1)
-                for pair in raw.decode("utf-8", errors="strict").split("\0")
-                if "=" in pair
-            )
-            workers[str(pid)] = {
-                "flags": payload.get("flags") or {},
-                "flag_sources": payload.get("sources") or {},
-                "tuning_env": {name: env.get(name) for name in env_names},
-            }
-        except Exception as exc:  # noqa: BLE001 - collector reports all failed samples
-            errors.append(f"{type(exc).__name__}: {exc}")
-    if not workers:
-        raise RuntimeError(f"no live API config attestation succeeded: {errors[-3:]}")
+    for pid, payload in attestations.items():
+        workers[str(pid)] = {
+            "flags": payload.get("flags") or {},
+            "flag_sources": payload.get("sources") or {},
+            "tuning_env": _worker_env(pid, env_names),
+        }
+    observed_pids = sorted(int(pid) for pid in workers)
+    unexpected_pids = sorted(set(observed_pids) - set(expected_pids))
+    missing_pids = sorted(set(expected_pids) - set(observed_pids))
+    if unexpected_pids or missing_pids:
+        raise RuntimeError(
+            "API config attestation roster mismatch: "
+            f"expected={expected_pids} observed={observed_pids} "
+            f"missing={missing_pids} unexpected={unexpected_pids}"
+        )
     identities = {
         _sha_bytes(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
         for value in workers.values()
@@ -212,9 +232,11 @@ def _live_config_identity(*, samples: int = 24) -> dict[str, Any]:
     canonical = next(iter(workers.values()))
     return {
         "schema_version": "epyc.live_config_identity.v1",
-        "worker_pids": sorted(int(pid) for pid in workers),
-        "successful_samples": samples - len(errors),
-        "failed_samples": len(errors),
+        "worker_pids": observed_pids,
+        "expected_worker_pids": expected_pids,
+        "worker_coverage_complete": True,
+        "successful_samples": len(observed_pids),
+        "failed_samples": 0,
         "identity_sha256": next(iter(identities)),
         **canonical,
     }

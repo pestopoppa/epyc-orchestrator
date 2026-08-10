@@ -32,7 +32,11 @@ from src.features import Features
 
 
 @pytest.fixture
-def app():
+def app(monkeypatch):
+    monkeypatch.setattr(
+        "src.api.routes.config.publish_config_attestation",
+        lambda current: None,
+    )
     application = create_app()
     yield application
     application.dependency_overrides.clear()

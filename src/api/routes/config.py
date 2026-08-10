@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 
 from fastapi import APIRouter, HTTPException, Request, Depends
 
@@ -14,6 +13,10 @@ from src.features import (
     write_runtime_flag_overrides,
 )
 from src.api.dependencies import dep_features
+from src.runtime.config_attestation import (
+    attestation_payload,
+    publish_config_attestation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ async def update_config(
         write_runtime_flag_overrides(overrides, set_by=f"api:{client_ip}")
     new = Features(**{**current_summary, **overrides})
     set_features(new)
+    publish_config_attestation(new)
     return {
         "status": "ok",
         "features": new.summary(),
@@ -57,8 +61,5 @@ async def update_config(
 @router.get("/config/attest")
 async def attest_config(current: Features = Depends(dep_features)):
     """Return this worker's feature-flag state and value sources."""
-    return {
-        "pid": os.getpid(),
-        "flags": current.summary(),
-        "sources": feature_sources(),
-    }
+    publish_config_attestation(current)
+    return attestation_payload(current)
