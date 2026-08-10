@@ -117,11 +117,11 @@ def fence_nonserving_route(
     except Exception:
         live_roles = set()
     if not live_roles:
-        live_roles = {
-            role.value
-            for role in Role
-            if role.value not in {"draft_coder", "draft_general", "thinking_reasoning"}
-        }
+        # The generated serving contract is the only authority for routability.
+        # If it is unavailable, fail closed to the always-present ingress lane
+        # instead of reconstructing a stale allow-list from the broader Role
+        # enum, which intentionally also contains historical and draft labels.
+        live_roles = {Role.FRONTDOOR.value}
 
     canonical: list[str] = []
     for raw_role in routing_decision:

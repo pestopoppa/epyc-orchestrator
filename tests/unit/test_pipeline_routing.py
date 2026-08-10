@@ -823,6 +823,18 @@ def test_serving_route_is_canonicalized(monkeypatch) -> None:
     assert strategy == "learned"
 
 
+def test_missing_live_serving_contract_fails_closed_to_frontdoor(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.registry.stack_priors.live_stack_role_ids",
+        lambda: [],
+    )
+
+    route, strategy = fence_nonserving_route(["worker_general"], "learned")
+
+    assert route == ["frontdoor"]
+    assert strategy == "learned:nonserving_fenced"
+
+
 def test_route_request_fences_nonserving_learned_action(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.registry.stack_priors.live_stack_role_ids",

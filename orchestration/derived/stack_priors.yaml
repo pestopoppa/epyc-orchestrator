@@ -48,47 +48,47 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-08-07T13:11:08Z'
+compiled_at: '2026-08-10T23:55:49Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 4bcba5d7fce3951c3e2c4da275d19397f5d35893ab6345a1f3f1ef619e738635
-    repo_commit: 718e130c
+    sha256: fdbef870c2c78eaca62087a9a05ee72a3334ae5d490b1a70df7abd5797cf15c9
+    repo_commit: 06af847e
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: c9d736a79e5d92c2c04522f7460123b3b167e78bc4a5d546533d9d911044c3a3
-    repo_commit: 718e130c
+    sha256: 746dc728def15b162c3a5d42433abc3f8133c32e2a87dc5cc9f68b5f6eb9660c
+    repo_commit: 06af847e
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: f2b18355829ff0ba81c1d82cc0bf28ff7b1cc3ba1de2858bea0b16cb5582fe07
-    repo_commit: 718e130c
+    repo_commit: 06af847e
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: ac99b872475404c259a64bf9ddae2f045620c928b7c19067f2d818eaddc8b07e
-    repo_commit: 718e130c
+    repo_commit: 06af847e
   launch_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/launch_manifest.yaml
     sha256: 332331ebd64124678dc7ba988647da50edcaf0873e84ebbe80c38806fbaebb5f
-    repo_commit: 718e130c
+    repo_commit: 06af847e
   stack_topology:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
     sha256: 59b997157643978a3eaf01c9245b9982423f7eb1a15ceae4db55b1c4a49fe069
-    repo_commit: 718e130c
+    repo_commit: 06af847e
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 0545bd5511651eda6723d1666254f48c9c61aa55ef04ed106fe1ad5ee57338e3
-    repo_commit: 718e130c
+    repo_commit: 06af847e
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: 718e130c
+    repo_commit: 06af847e
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: 718e130c
+    repo_commit: 06af847e
 roles:
   architect_critic:
     role: architect_critic
@@ -784,11 +784,10 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8070
+      endpoint: http://localhost:8080
       server_role: frontdoor
       binding: server_mode.direct
       ports:
-      - 8070
       - 8080
       - 8180
       slots: 4
@@ -800,13 +799,6 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8070
-          primary_role: frontdoor
-          mode: default
-          alias: false
-          numa_instance: 0
-          cpu_shape_class: full
-          slots: 4
         - port: 8080
           primary_role: frontdoor
           mode: default
@@ -975,11 +967,10 @@ roles:
     model_id: qwen3-next-80b-a3b-q4_k_m
     display_name: Qwen3-Next-80B-A3B-Instruct
     serving:
-      endpoint: http://localhost:8085
+      endpoint: http://localhost:8185
       server_role: ingest_long_context
       binding: server_mode.direct
       ports:
-      - 8085
       - 8185
       - 8285
       slots: 1
@@ -991,13 +982,6 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8085
-          primary_role: ingest_long_context
-          mode: default
-          alias: false
-          numa_instance: 0
-          cpu_shape_class: full
-          slots: 1
         - port: 8185
           primary_role: ingest_long_context
           mode: default
@@ -1616,11 +1600,10 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8072
+      endpoint: http://localhost:8082
       server_role: worker
       binding: server_mode.shared_with
       ports:
-      - 8072
       - 8082
       - 8182
       slots: 4
@@ -1632,14 +1615,6 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8072
-          primary_role: worker_general
-          mode: worker_pool
-          alias: true
-          numa_instance: 0
-          cpu_shape_class: full
-          worker_type: explore
-          slots: 4
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -2057,11 +2032,10 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8072
+      endpoint: http://localhost:8082
       server_role: worker
       binding: server_mode.shared_with
       ports:
-      - 8072
       - 8082
       - 8182
       slots: 4
@@ -2073,14 +2047,6 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8072
-          primary_role: worker_general
-          mode: worker_pool
-          alias: true
-          numa_instance: 0
-          cpu_shape_class: full
-          worker_type: explore
-          slots: 4
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -2301,11 +2267,10 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8072
+      endpoint: http://localhost:8082
       server_role: worker
       binding: server_mode.model_role
       ports:
-      - 8072
       - 8082
       - 8182
       slots: 4
@@ -2317,14 +2282,6 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8072
-          primary_role: worker_general
-          mode: worker_pool
-          alias: false
-          numa_instance: 0
-          cpu_shape_class: full
-          worker_type: explore
-          slots: 4
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -2553,11 +2510,10 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8072
+      endpoint: http://localhost:8082
       server_role: worker
       binding: server_mode.shared_with
       ports:
-      - 8072
       - 8082
       - 8182
       slots: 4
@@ -2569,14 +2525,6 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8072
-          primary_role: worker_general
-          mode: worker_pool
-          alias: true
-          numa_instance: 0
-          cpu_shape_class: full
-          worker_type: explore
-          slots: 4
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -2797,11 +2745,10 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8070
+      endpoint: http://localhost:8080
       server_role: frontdoor
       binding: server_mode.shared_with
       ports:
-      - 8070
       - 8080
       - 8180
       slots: 4
@@ -2813,13 +2760,13 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8070
+        - port: 8080
           primary_role: frontdoor
           mode: default
           alias: true
-          numa_instance: 0
-          cpu_shape_class: full
-          slots: 4
+          numa_instance: 1
+          cpu_shape_class: half
+          slots: 1
         primary_roles:
         - frontdoor
         modes:
