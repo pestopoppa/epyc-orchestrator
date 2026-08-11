@@ -54,6 +54,23 @@ class SequentialPolicy:
     first_lambda: float = 0.1
     lambda_cap: float = 0.5
     rate_noninferiority_margin: float = 0.05
+    # SEQ-A: is a stop decision final?
+    #
+    # `state_name()` is a pure function of CURRENT state, so a candidate whose
+    # wealth later climbs back above `futility_e`/`budget_min_e` reads
+    # `accumulating` again — the function does not remember having refuted. The
+    # persisted labels, however, are never recomputed, so they stay `refuted`.
+    # The two disagree for exactly 3 candidates in `core_v1` (70902e4b665474e7
+    # k=40, dd793a6ee43ce718 k=24, 85c3dcf25823c537 k=15), which are excluded
+    # from promotion and positive strategy distillation by a condition they no
+    # longer meet.
+    #
+    # Which side gives is SEQ-A1, an OPERATOR decision and human-amendment-only
+    # per MEASUREMENT.md: it changes which candidates are promotable. This flag
+    # exists so that choice is a one-line, reviewable switch rather than a
+    # rewrite under time pressure. It DEFAULTS TO THE CURRENT SEMANTICS
+    # (non-sticky) so declaring it changes nothing until an operator sets it.
+    sticky_refuted: bool = False
 
     def __post_init__(self) -> None:
         """SEQ-B: fail loudly if the policy can produce a negative wealth factor.
@@ -126,6 +143,12 @@ class EProcessState:
     sum_z: float = 0.0
     sum_z2: float = 0.0
     wealth_history: tuple[tuple[int | None, float], ...] = ()
+    # SEQ-A: k at which this e-process FIRST met a refutation condition, or None.
+    # Recorded unconditionally — observing that a stop happened is free and is
+    # not the same as deciding it is permanent. Only `sticky_refuted` acts on it.
+    # Defaults to None so a state reconstructed from an older persisted record
+    # (which cannot carry this field) behaves exactly as it does today.
+    first_refuted_k: int | None = None
 
     @property
     def mean_z(self) -> float:
@@ -147,12 +170,23 @@ class EProcessState:
             return 0.0
         return _clip(mu / denom, 0.0, policy.lambda_cap)
 
+    def _meets_refutation(self, policy: SequentialPolicy) -> bool:
+        """Refutation as a function of CURRENT state only (seq-v1 semantics)."""
+        if self.wealth <= policy.futility_e:
+            return True
+        return self.k >= policy.budget and self.wealth < policy.budget_min_e
+
     def state_name(self, policy: SequentialPolicy = DEFAULT_POLICY) -> str:
         if self.wealth >= policy.confirm_e:
             return STATE_CONFIRMED
-        if self.wealth <= policy.futility_e:
+        if self._meets_refutation(policy):
             return STATE_REFUTED
-        if self.k >= policy.budget and self.wealth < policy.budget_min_e:
+        # SEQ-A / SEQ-A1. Under `sticky_refuted`, a stop decision is final: an
+        # e-process that ever met the kill condition stays refuted even if later
+        # evidence lifts it back over the line. Default False preserves seq-v1's
+        # pure-function semantics exactly, so this branch is inert until an
+        # operator ratifies the change.
+        if policy.sticky_refuted and self.first_refuted_k is not None:
             return STATE_REFUTED
         return STATE_ACCUMULATING
 
@@ -172,14 +206,19 @@ class EProcessState:
                 f"e-process update must stay nonnegative; lambda={lambda_t}, z={z}"
             )
         wealth = self.wealth * factor
+        next_k = self.k + 1
         next_state = replace(
             self,
             wealth=wealth,
-            k=self.k + 1,
+            k=next_k,
             sum_z=self.sum_z + z,
             sum_z2=self.sum_z2 + z * z,
             wealth_history=self.wealth_history + ((trial_id, wealth),),
+            # First stop wins; a later recovery must not erase the record of it.
+            first_refuted_k=self.first_refuted_k,
         )
+        if next_state.first_refuted_k is None and next_state._meets_refutation(policy):
+            next_state = replace(next_state, first_refuted_k=next_k)
         update = EProcessUpdate(
             k=next_state.k,
             z=z,
