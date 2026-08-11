@@ -41,11 +41,52 @@ from src.registry.stack_priors import (
     stack_prior_serving,
 )
 from src.repl_environment import REPLEnvironment
+from src.scheduling.contention_gate import ContentionDenied
 from src.roles import Role
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _sse_error_event(
+    *,
+    chat_id: str,
+    created: int,
+    model: str,
+    message: str,
+    error_type: str,
+    status_code: int,
+) -> str:
+    """Terminal SSE event for a backend failure (HS-OD-2).
+
+    A stream cannot retract its 200 — headers are on the wire before the
+    generator runs — so the only honest signal left is the event body. Emitting
+    the failure as an ``error`` object rather than as assistant ``content`` is
+    what lets a client tell "the model said this" from "the backend broke":
+    previously both arrived as content and the stream still closed with
+    ``finish_reason: "stop"``, so every downstream harness scored an outage as a
+    low-quality generation.
+
+    Mirrors the app-level envelope in ``src/api/__init__.py`` (``error`` /
+    ``detail``) and the OpenAI streaming-error convention (``error.message`` /
+    ``error.type``), so both kinds of client can key off it.
+    """
+    return "data: " + json.dumps(
+        {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "error": {
+                "message": message,
+                "type": error_type,
+                "code": status_code,
+            },
+            "detail": message,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}],
+        }
+    ) + "\n\n"
 
 
 @dataclass(frozen=True)
@@ -531,22 +572,21 @@ async def openai_chat_completions(
                 # Real orchestration with streaming
                 repl_for_metadata: REPLEnvironment | None = None
                 if primitives is None:
-                    error_msg = "LLM primitives not initialized — check server_urls config"
-                    chunk = {
-                        "id": chat_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": request.model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"role": "assistant", "content": error_msg},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                    yield f"data: {json.dumps(chunk)}\n\n"
-                    response_text = error_msg
+                    # Mirrors the 503 the non-streaming path raises for the same
+                    # condition. This previously streamed the message as assistant
+                    # content and then closed with finish_reason "stop", so a
+                    # misconfigured server was indistinguishable from a model that
+                    # had answered "LLM primitives not initialized".
+                    yield _sse_error_event(
+                        chat_id=chat_id,
+                        created=created,
+                        model=request.model,
+                        message="LLM primitives not initialized — check server_urls config",
+                        error_type="primitives_unavailable",
+                        status_code=503,
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
 
                 if primitives:
                     # Build combined context
@@ -563,8 +603,26 @@ async def openai_chat_completions(
                                 state=state,
                                 task_id=chat_id,
                             )
+                        except ContentionDenied as e:
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=str(e), error_type="contention_denied",
+                                status_code=503,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
                         except Exception as e:
-                            response_text = f"[ERROR] Vision request failed: {e}"
+                            logger.exception(
+                                "Streaming vision request failed for role %s (chat %s)",
+                                role, chat_id,
+                            )
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=f"Vision request failed: {e}",
+                                error_type="backend_error", status_code=502,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
                         total_tokens = primitives.total_tokens_generated
                     elif disable_repl:
                         # Direct LLM call — no REPL, no code execution
@@ -574,8 +632,26 @@ async def openai_chat_completions(
                                 n_tokens=request.max_tokens,
                                 **sampling_kwargs,
                             )
+                        except ContentionDenied as e:
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=str(e), error_type="contention_denied",
+                                status_code=503,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
                         except Exception as e:
-                            response_text = f"[ERROR] Direct call failed: {e}"
+                            logger.exception(
+                                "Streaming direct call failed for role %s (chat %s)",
+                                role, chat_id,
+                            )
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=f"Direct call failed: {e}",
+                                error_type="backend_error", status_code=502,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
                         total_tokens = primitives.total_tokens_generated
                     else:
                         # Create REPL environment
@@ -611,8 +687,30 @@ async def openai_chat_completions(
                                 )
                                 code = extract_code_from_response(code)
                                 code = auto_wrap_final(code)
+                            except ContentionDenied as e:
+                                yield _sse_error_event(
+                                    chat_id=chat_id, created=created, model=request.model,
+                                    message=str(e), error_type="contention_denied",
+                                    status_code=503,
+                                )
+                                yield "data: [DONE]\n\n"
+                                return
                             except Exception as e:
-                                code = f'FINAL("Error during generation: {e}")'
+                                # Was: code = FINAL("Error during generation: ...").
+                                # That fed the backend failure back through the REPL
+                                # as though the model had ANSWERED with it, so it
+                                # left as ordinary assistant content.
+                                logger.exception(
+                                    "Streaming generation failed for role %s (chat %s)",
+                                    role, chat_id,
+                                )
+                                yield _sse_error_event(
+                                    chat_id=chat_id, created=created, model=request.model,
+                                    message=f"Error during generation: {e}",
+                                    error_type="backend_error", status_code=502,
+                                )
+                                yield "data: [DONE]\n\n"
+                                return
 
                             # Execute in REPL
                             result = repl.execute(code)
@@ -774,8 +872,25 @@ async def openai_chat_completions(
 
                 total_tokens = primitives.total_tokens_generated
 
+            except HTTPException:
+                # Already carries its own status — including the 503 raised a few
+                # lines above for uninitialised primitives, which the old blanket
+                # `except Exception` swallowed into a 200.
+                raise
+            except ContentionDenied:
+                # Has a dedicated app-level handler (503 + Retry-After +
+                # failure_provenance). Swallowing it here turned a documented
+                # back-pressure signal into a model answer, so callers retried
+                # nothing and the denial never showed up in error metrics.
+                raise
             except Exception as e:
-                response_text = f"[ERROR] Backend failed: {e}"
+                # HS-OD-2: a backend failure is an upstream failure, not a
+                # completion. 502 rather than 500 — this route is a gateway in
+                # front of the llama.cpp fleet, and the fault is the upstream's.
+                logger.exception("Backend failed for role %s (chat %s)", role, chat_id)
+                raise HTTPException(
+                    status_code=502, detail=f"Backend failed: {e}"
+                ) from e
 
         elapsed = time.perf_counter() - start_time
 
