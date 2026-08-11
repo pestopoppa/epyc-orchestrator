@@ -253,6 +253,17 @@ def _run_stack_change_launch_gate(args: argparse.Namespace) -> bool:
         return True
 
     print(f"[stack-change-gate] FATAL: gate exited {result.returncode}; refusing launch")
+    # THE CATCH-22, NAMED. Documented 2026-08-11 (autopilot-continuous-optimization.md).
+    # This gate refuses a launch while live != config, and the only cure for live !=
+    # config is a restart — which requires the launch it just refused. The obvious
+    # operator reaction, retrying `start`, therefore cannot work, and until now
+    # nothing said so: the message stated the refusal and not the way out. The escape
+    # is to stop first, so there is no live process left to drift against.
+    print("[stack-change-gate] If this is a live-vs-config drift, retrying `start` CANNOT")
+    print("[stack-change-gate]   work: the cure for drift is a restart, and the gate refuses")
+    print("[stack-change-gate]   the launch that would perform it. Stop first, then start:")
+    print("[stack-change-gate]     orchestrator_stack.py stop --all && orchestrator_stack.py start")
+    print("[stack-change-gate]   With nothing live there is no drift to detect, so the gate passes.")
     return False
 
 
