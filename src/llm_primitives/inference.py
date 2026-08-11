@@ -11,6 +11,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from src.scheduling import gate_observation
+
 from .types import LLMResult
 
 log = logging.getLogger(__name__)
@@ -403,6 +405,15 @@ class InferenceMixin:
         if not defer_to_dispatch:
             gate = get_gate()
             decision = gate.admit(role, traffic_class, max_wait_ms)
+            # BRIDGE RESIDUAL 1 — observational only, after the verdict.
+            gate_observation.record(
+                admitted=decision.admitted,
+                decision=getattr(decision.decision, "value", str(decision.decision)),
+                waited_s=decision.waited_s,
+                blocking_roles=list(decision.blocking_roles or []),
+                reason=decision.reason,
+                role=role,
+            )
             if not decision.admitted:
                 raise ContentionDenied(
                     f"contention gate denied role={role} class={traffic_class.value}: {decision.reason}",
