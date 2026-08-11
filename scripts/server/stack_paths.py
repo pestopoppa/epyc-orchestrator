@@ -8,47 +8,55 @@ so those modules can import paths without creating a cycle with
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
-
-from src.config import _registry_timeout
-
-
-# Health check timeouts from registry (single source of truth)
-_HEALTH_SERVER_STARTUP = int(_registry_timeout("health", "server_startup", 120))
-_HEALTH_VISION_SERVER = int(_registry_timeout("health", "vision_server", 120))
-_HEALTH_WORKER_SERVER = int(_registry_timeout("health", "worker_server", 90))
 
 
 def _get_paths() -> dict[str, Path]:
-    """Get paths from config with hardcoded fallbacks for robustness."""
-    try:
-        from src.config import get_config
+    """Resolve launcher paths without importing the full config object graph.
 
-        cfg = get_config()
-        return {
-            "llm_root": cfg.paths.llm_root,
-            "project_root": cfg.paths.project_root,
-            "models_dir": cfg.paths.models_dir,
-            "model_base": cfg.paths.model_base,
-            "llama_cpp_bin": cfg.paths.llama_cpp_bin,
-            "log_dir": cfg.paths.log_dir,
-            "cache_dir": cfg.paths.cache_dir,
-            "tmp_dir": cfg.paths.tmp_dir,
-        }
-    except Exception:
-        # Fallback to hardcoded defaults if config unavailable
-        llm_root = Path("/mnt/raid0/llm")
-        project_root = llm_root / "claude"
-        return {
-            "llm_root": llm_root,
-            "project_root": project_root,
-            "models_dir": llm_root / "models",
-            "model_base": llm_root / "lmstudio/models",
-            "llama_cpp_bin": llm_root / "llama.cpp/build/bin",
-            "log_dir": project_root / "logs",
-            "cache_dir": llm_root / "cache",
-            "tmp_dir": llm_root / "tmp",
-        }
+    ``stack_paths`` is below ``stack_manifest`` in the launcher dependency graph.
+    Calling ``src.config.get_config()`` here initializes ``ServerURLsConfig``,
+    whose runtime-facts fallback imports ``stack_manifest`` and re-enters this
+    partially initialized module.  Besides emitting a circular-import warning,
+    that recursion makes cold-start NUMA inference miss valid runtime facts.
+
+    Keep these defaults and environment keys byte-for-byte aligned with
+    ``src.config.models.PathsConfig`` while leaving the low-level path module
+    genuinely self-contained.
+    """
+    llm_root = Path(os.environ.get("ORCHESTRATOR_PATHS_LLM_ROOT", "/mnt/raid0/llm"))
+    project_root = Path(
+        os.environ.get(
+            "ORCHESTRATOR_PATHS_PROJECT_ROOT",
+            str(Path(__file__).resolve().parents[2]),
+        )
+    )
+    return {
+        "llm_root": llm_root,
+        "project_root": project_root,
+        "models_dir": Path(
+            os.environ.get("ORCHESTRATOR_PATHS_MODELS_DIR", str(llm_root / "models"))
+        ),
+        "model_base": Path(
+            os.environ.get("ORCHESTRATOR_PATHS_MODEL_BASE", str(llm_root / "models"))
+        ),
+        "llama_cpp_bin": Path(
+            os.environ.get(
+                "ORCHESTRATOR_PATHS_LLAMA_CPP_BIN",
+                str(llm_root / "llama.cpp/build/bin"),
+            )
+        ),
+        "log_dir": Path(
+            os.environ.get("ORCHESTRATOR_PATHS_LOG_DIR", str(project_root / "logs"))
+        ),
+        "cache_dir": Path(
+            os.environ.get("ORCHESTRATOR_PATHS_CACHE_DIR", str(llm_root / "cache"))
+        ),
+        "tmp_dir": Path(
+            os.environ.get("ORCHESTRATOR_PATHS_TMP_DIR", str(llm_root / "tmp"))
+        ),
+    }
 
 
 _PATHS = _get_paths()
@@ -80,3 +88,16 @@ _V2_ROLES: frozenset[str] = frozenset()  # was {"coder_escalation"}; empty since
 LOG_DIR = _PATHS["log_dir"]
 # DS-3: KV state save/restore directory for dynamic stack management
 SLOT_SAVE_DIR = _PATHS["cache_dir"] / "kv_slots"
+
+
+# Importing ``src.config`` initializes ServerURLsConfig. Keep this below every
+# path/binary attribute consumed by runtime_facts_manifest so a config bootstrap
+# that imports runtime facts sees a complete stack_paths module, not a partially
+# initialized one.
+from src.config import _registry_timeout  # noqa: E402
+
+
+# Health check timeouts from registry (single source of truth)
+_HEALTH_SERVER_STARTUP = int(_registry_timeout("health", "server_startup", 120))
+_HEALTH_VISION_SERVER = int(_registry_timeout("health", "vision_server", 120))
+_HEALTH_WORKER_SERVER = int(_registry_timeout("health", "worker_server", 90))

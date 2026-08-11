@@ -334,16 +334,18 @@ class TestServerURLsConfig:
         for v in d.values():
             assert isinstance(v, str)
 
-    def test_default_frontdoor_url(self) -> None:
+    def test_default_frontdoor_url_matches_compiled_stack_priors(self) -> None:
+        from src.registry.stack_priors import live_stack_serving_url_values
+
         cfg = ServerURLsConfig()
-        full_port, sibling_ports = _topology_fleet_ports("frontdoor")
-        # The fleet must fan out: a single-endpoint frontdoor is the EV-11c
-        # serialization failure, so assert the topology still has siblings.
-        assert sibling_ports
-        assert cfg.frontdoor == _expected_full_mode_fleet_url("frontdoor")
-        assert cfg.frontdoor.startswith(f"full:http://localhost:{full_port}")
-        for port in sibling_ports:
-            assert f"http://localhost:{port}" in cfg.frontdoor
+        expected = live_stack_serving_url_values(
+            Path(config_models._get_default_stack_priors_path())
+        )["frontdoor"]
+        # Default resolution follows the compiled live lineup. It must not
+        # manufacture the inactive aligned-full port merely because the static
+        # topology also declares one.
+        assert cfg.frontdoor == expected
+        assert len(cfg.frontdoor.split(",")) > 1
 
     def test_default_architect_urls(self) -> None:
         cfg = ServerURLsConfig()
