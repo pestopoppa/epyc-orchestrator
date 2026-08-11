@@ -362,6 +362,69 @@ eras:
       T1/T2/T3 promotion. Pre-E16 speed points do not mix with this execution
       instrument; rebuild the frontier from post-boundary numeric trials only.
 
+  - id: E9-routing-reward
+    from: "2026-07-21T15:27:04Z"
+    scope: routing_reward
+    note: >
+      Reward saturation repair boundary. epyc-orchestrator 6344fbdb58497edd5b92a1f2f2c81ee504e1383f
+      changed q_reward role resolution from the absent role field to
+      producer_role then final_answer_role; replay of 20,526 historical completions changed
+      reward entropy from 0.0000 to 2.4580 bits. RECONCILIATION: stored pre-boundary q_value and
+      reward values are demote-to-prior for policy training or pre/post reward comparison; use
+      deterministic replay under the repaired scorer or data collected at/after this boundary.
+
+  - id: E8-cpu-bench-throttle-scope
+    from: "2026-07-29T14:50:06Z"
+    scope: cpu_bench
+    note: >
+      P-BENCH-3 under-load throttle-gate SCOPE correction (epyc-inference-research
+      98cfff44, operator-ratified 2026-07-29). Before this boundary the gate counted
+      boosting cores across all 96 physical cores machine-wide and required >=80, so a
+      cell that deliberately pins only part of the machine could never pass: E5 C1 pins
+      48 physical cores and C2 pins 48, and the idle remainder parks near base clock.
+      W0 evidence, zero counterexamples: every 96-core cell passed (C1b 15/15, C3 11/12)
+      and every 48-core cell failed (C1-half 0/13, C2 0/10) at counts 53-78. From this
+      boundary the gate is scoped to the cell's PINNED physical cores at the UNCHANGED
+      2.5 GHz threshold and the UNCHANGED 80/96 ratio, so a full-machine cell still
+      requires exactly 80 of 96 and no previously-correct gate loosens. throttle_check
+      additionally persists the full per-core frequency vector, so from here a throttle
+      verdict is re-derivable offline.
+      RECONCILIATION: this boundary changes DECISION-GRADE ELIGIBILITY ONLY - no measured
+      throughput, latency or quality value is altered, rescaled or reinterpreted by it.
+      Pre-boundary partial-machine cells (C1, C2) carry an eligibility verdict produced by
+      the unscoped gate and are NOT strictly comparable to post-boundary cells of the same
+      shape; they are historical priors for decision-grade eligibility. Full-machine cells
+      (C1b, C3) are unaffected in both directions. Pre-boundary throttle verdicts are also
+      NOT re-derivable, because only the aggregate boosting count was persisted.
+
+  - id: E8-seeding-reward-b7-guard
+    from: "2026-07-29T18:20:36Z"
+    scope: seeding_reward
+    note: >
+      Seeding-scorer B7-guard boundary. epyc-orchestrator e108ec9f guarded the legacy
+      comparative reward path in the default seeding flow (seed_specialist_routing ->
+      run_batch -> evaluate_question), which previously scored with ZERO B7 guards
+      (auditor msg-20260729T160328Z-51; disposition GUARD, not delete, because the
+      path is the reachable default). RECONCILIATION: seeding rewards collected
+      pre-boundary are stamped pre-B7-scorer; where a decision depends on them,
+      re-score offline from the persisted raw answers (deterministic replay before
+      regeneration) rather than trusting stored values or re-running inference.
+
+  - id: E9-cpu-kernel
+    from: "2026-08-10T23:59:00Z"
+    scope: cpu_bench
+    note: >
+      v9 production cutover. Single kernel: production-consolidated-v9 at
+      llama.cpp commit 0db32c06e3e550065b78311a6031ef3dd2c4f27c
+      (binary version 10125 / 0db32c06e), promoted via cutover
+      20260810T235900Z-0db32c06e (promoted_at 2026-08-10T23:59:00Z) and frozen by
+      ratify_v9_final_freeze_20260811.json (ratified 2026-08-11T01:16:00Z);
+      v8 (67a433bf45a8a091d83b4ea0b32ff0735fd51800, binary 10107) is the rollback
+      anchor. RECONCILIATION: pre-boundary CPU throughput and eligibility rows
+      measured on v8 are historical priors for decisions about the
+      production-consolidated-v9 stack. Do not rescale across this boundary;
+      re-measure within era under P-BENCH protocols with host attestation.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.
