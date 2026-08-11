@@ -1093,23 +1093,19 @@ def _nonnegative_int(value: Any, default: int = 0) -> int:
 # unavailable (circuit open): http://localhost:8082]" with error=None. The
 # eval then scored that error text as a WRONG answer (REL-1 evasion). Anchor to
 # the REAL start-of-answer prefix, never a loose substring.
-_INBAND_ERROR_PREFIX = "[ERROR:"
-
-
-def _inband_error_text(answer: Any) -> str | None:
-    """Return the in-band orchestrator error string when `answer` IS one.
-
-    Anchored to the emitted ``[ERROR: ...]`` prefix at start-of-answer (after
-    stripping leading whitespace), matching the primitives/inference emitters
-    and the server-side ``_annotate_error`` convention. Returns None for a
-    normal answer.
-    """
-    if not isinstance(answer, str):
-        return None
-    stripped = answer.lstrip()
-    if stripped.startswith(_INBAND_ERROR_PREFIX):
-        return stripped
-    return None
+# REL-1 measurement guards — UNIFIED 2026-08-11 into
+# `src.autopilot_core.measurement_guards`, closing the residual filed by
+# scorer-fork-drift-audit-2026-07-22.md. The seeding path carried byte-equivalent
+# local copies (deliberate: this file was read-only to that session). Verified
+# identical by AST before the move, so no scoring outcome changes on either path.
+#
+# Re-exported under the original private names so every existing caller and test
+# keeps working unchanged.
+from src.autopilot_core.measurement_guards import (  # noqa: E402
+    INBAND_ERROR_PREFIX as _INBAND_ERROR_PREFIX,
+    forced_role_serving_mismatch as _forced_role_serving_mismatch,
+    inband_error_text as _inband_error_text,
+)
 
 
 def _inband_error_provenance(error: str, *, role: str = "") -> dict[str, Any]:
@@ -1140,32 +1136,6 @@ def _inband_error_provenance(error: str, *, role: str = "") -> dict[str, Any]:
         "exception_reason": code,
         "workload_class": "eval_batch",
     }
-
-
-def _forced_role_serving_mismatch(force_role: Any, resp: Mapping[str, Any]) -> str | None:
-    """Return the serving role when it differs from the forced role, else None.
-
-    Guard 2: when the eval pins ``force_role`` for a role-attributed
-    measurement and the orchestrator silently serves it from a DIFFERENT role
-    (the 2026-07-21 circuit_open fallback ``worker_math → worker_general``), the
-    number is not a measurement of the forced role. Compare ``force_role``
-    against the response's ``routed_to`` (the primary role that handled the
-    request), falling back to the terminal ``role_history`` entry when
-    ``routed_to`` is absent. Returns None when ``force_role`` is empty or the
-    serving role cannot be determined — avoiding false positives on
-    partial/legacy responses.
-    """
-    forced = str(force_role or "").strip()
-    if not forced:
-        return None
-    serving = str(resp.get("routed_to") or "").strip()
-    if not serving:
-        history = resp.get("role_history")
-        if isinstance(history, (list, tuple)) and history:
-            serving = str(history[-1] or "").strip()
-    if not serving or serving == forced:
-        return None
-    return serving
 
 
 def _finite_float(value: Any) -> float | None:

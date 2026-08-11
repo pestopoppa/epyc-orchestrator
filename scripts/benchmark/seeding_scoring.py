@@ -117,65 +117,21 @@ def score_answer_or_error(
 # REL-1 in-band error prefix (2026-07-21 EV-11c circuit-open incident).
 # The orchestrator's llm primitives emit failures AS the answer string of the
 # form ``[ERROR: <detail>]`` (src/llm_primitives/primitives.py::_call →
-# ``return f"[ERROR: {e}]"``; the circuit-open detail is
-# ``Backend unavailable (circuit open): <url>``). When the breaker opens and
-# the /chat body is NOT run through server-side ``_annotate_error``, the client
-# receives answer="[ERROR: Backend unavailable (circuit open): ...]" with
-# error=None. Anchor to this REAL start-of-answer prefix, never a loose
-# substring. Mirrors eval_tower.py::_inband_error_text (kept as a local copy;
-# eval_tower is owned by another session — see report note on unification).
-_INBAND_ERROR_PREFIX = "[ERROR:"
-
-
-def _inband_error_text(answer: Any) -> str | None:
-    """Return the in-band orchestrator error string when ``answer`` IS one.
-
-    Anchored to the emitted ``[ERROR: ...]`` prefix at start-of-answer (after
-    stripping leading whitespace), matching the primitives/inference emitters
-    and the server-side ``_annotate_error`` convention. Returns ``None`` for a
-    normal answer.
-    """
-    if not isinstance(answer, str):
-        return None
-    stripped = answer.lstrip()
-    if stripped.startswith(_INBAND_ERROR_PREFIX):
-        return stripped
-    return None
-
-
-def _forced_role_serving_mismatch(
-    force_role: Any, resp: Mapping[str, Any]
-) -> str | None:
-    """Return the serving role when it differs from the forced role, else None.
-
-    REL-1 Guard 2: when a seed config pins ``force_role`` for a role-attributed
-    measurement *with delegation disabled* and the orchestrator silently serves
-    it from a DIFFERENT role (the 2026-07-21 circuit_open fallback
-    ``worker_math → worker_general``), the number is not a measurement of the
-    forced role. Compare ``force_role`` against the response's ``routed_to``
-    (the primary role that handled the request), falling back to the terminal
-    ``role_history`` entry when ``routed_to`` is absent. Returns ``None`` when
-    ``force_role`` is empty or the serving role cannot be determined — avoiding
-    false positives on partial/legacy responses.
-
-    NOTE: callers MUST gate this on ``allow_delegation is False``. On the
-    seeding path the ARCHITECT config runs with delegation ENABLED, where
-    ``routed_to != force_role`` is the expected, correct behavior (the architect
-    delegates to workers); applying this guard there would wrongly exclude every
-    delegated result. Mirrors eval_tower.py::_forced_role_serving_mismatch
-    (local copy — see report note on unification).
-    """
-    forced = str(force_role or "").strip()
-    if not forced:
-        return None
-    serving = str(resp.get("routed_to") or "").strip()
-    if not serving:
-        history = resp.get("role_history")
-        if isinstance(history, (list, tuple)) and history:
-            serving = str(history[-1] or "").strip()
-    if not serving or serving == forced:
-        return None
-    return serving
+# REL-1 measurement guards — UNIFIED 2026-08-11 into
+# `src.autopilot_core.measurement_guards`, closing the residual filed by
+# scorer-fork-drift-audit-2026-07-22.md. These were local copies of the
+# eval_tower implementations, deliberate at the time because eval_tower was
+# read-only to the session that wrote them.
+#
+# They are re-exported under their original private names so every existing
+# caller and test keeps working unchanged; the names remain in __all__.
+# Two copies of an ADMISSIBILITY rule drift silently, and the drift only ever
+# surfaces as two paths disagreeing about the same measurement.
+from src.autopilot_core.measurement_guards import (
+    INBAND_ERROR_PREFIX as _INBAND_ERROR_PREFIX,
+    forced_role_serving_mismatch as _forced_role_serving_mismatch,
+    inband_error_text as _inband_error_text,
+)
 
 
 INFRA_PATTERNS = [
