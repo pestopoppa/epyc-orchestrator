@@ -195,7 +195,17 @@ def _runtime_state_lines(state: dict[str, Any]) -> list[str]:
     frontier_rerun = state.get("frontier_rerun_required")
     if isinstance(frontier_rerun, dict) and frontier_rerun.get("required"):
         reason = _clean(str(frontier_rerun.get("reason", "required")), 180)
-        lines.append(f"- frontier_rerun_required: true ({reason})")
+        # E8-PANELS-a: show the progress counters the gate now keeps current on
+        # the open marker. Previously this line carried the reason only, so the
+        # banner said "rerun required" while the operator brief said 0/16 and
+        # the live gate knew 15/16 — three surfaces, three answers.
+        try:
+            completed = int(frontier_rerun.get("completed_numeric_trials") or 0)
+            minimum = int(frontier_rerun.get("min_numeric_trials") or 0)
+        except (TypeError, ValueError):
+            completed = minimum = 0
+        progress = f" [{completed}/{minimum}]" if minimum else ""
+        lines.append(f"- frontier_rerun_required: true{progress} ({reason})")
     return lines
 
 

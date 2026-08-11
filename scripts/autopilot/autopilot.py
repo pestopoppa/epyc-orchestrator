@@ -4106,6 +4106,25 @@ def _maybe_force_frontier_rerun_action(
         return action, rationale
     min_trials = _frontier_rerun_min_trials(marker)
     completed_trials = _frontier_rerun_completed_numeric_trials(marker, journal)
+    # E8-PANELS-a: keep the marker's own counters CURRENT while it is open.
+    #
+    # `completed_numeric_trials` used to be written only by
+    # `_clear_frontier_rerun_marker`, i.e. once the gate had already been
+    # satisfied. Every reader of the OPEN marker therefore saw the value it was
+    # created with — 0 — while the live count was recomputed here each cycle and
+    # only ever reached the rationale. That is the 0/16-vs-15/16 split: the
+    # banner (`gen_system_card`) and the operator brief
+    # (`optimization_brief.py:188`, rendering "pending <era> numeric rerun
+    # (0/16)") were reading a field nothing updated mid-run.
+    #
+    # Reporting only — nothing gates on this number. The decision path uses the
+    # freshly computed `completed_trials` local, and `speed_hold` keys off
+    # `required`, not the count. Skipped when `journal is None`, because the
+    # counter returns 0 in that case and would overwrite a real value with a
+    # placeholder.
+    if journal is not None:
+        marker["completed_numeric_trials"] = completed_trials
+        marker["min_numeric_trials"] = min_trials
     pending = state.get("frontier_rerun_pending_clear")
     if isinstance(pending, dict) and pending.get("trial_id") is not None:
         if journal is not None and completed_trials < min_trials:
