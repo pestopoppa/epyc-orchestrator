@@ -9,7 +9,7 @@ code keeps working unchanged.
 2026-08-01 — TWO KINDS OF FACT, TWO HOMES. The per-role WIRING (which role runs
 on which shape, on which port, under which memory policy) is CONFIGURATION and
 now lives in `orchestration/stack_topology.yaml` under `numa_config:`; this
-module loads it. The SHAPES that wiring names — NUMA_Q*, NUMA_NODE*, NUMA_FULL,
+module loads it. The SHAPES that wiring names — NUMA_Q*, NUMA_FULL,
 NUMA_HALF_*, GPU_HOST_LANE, _NPS4_NODES — stay here, because they are HOST FACTS
 rather than configuration: they describe how this machine is physically wired,
 and a wrong one is a hardware MISDESCRIPTION, not a config choice. There is
@@ -28,8 +28,9 @@ Key findings (2026-03-18 benchmarks, refined through 2026-05-08):
   quarters at EVERY rung: T=4 79.7 vs 52.9, T=8 105.1 vs 81.0, T=16 131.0 vs
   108.4, T=32 145.9 vs 143.8 aggregate tok/s.
 - Models 130-250 GB: 1×96t pinning gives 1.2-1.5×. NB the historical
-  "NUMA-node" wording here is a misnomer — see the NUMA_NODE0/NUMA_NODE1 note
-  below; a node on this NPS4 host is 24 physical cores, i.e. one quarter.
+  "NUMA-node" wording here is a misnomer: a node on this NPS4 host is 24
+  physical cores, i.e. one quarter. (The NUMA_NODE0/NUMA_NODE1 constants that
+  carried the misnomer were deleted 2026-08-11; see the note by NUMA_HALF_*.)
 - Using all 192t is ANTI-OPTIMAL (46-60% penalty vs 96 physical cores)
 - ⚠ CORRECTED 2026-07-30 — "taskset alone is sufficient for the S4
   no-mmap/single-owner regime; shared mmap multi-instance roles need explicit
@@ -108,14 +109,15 @@ NUMA_Q0B = ("24-47,120-143", 48)
 NUMA_Q1A = ("48-71,144-167", 48)
 NUMA_Q1B = ("72-95,168-191", 48)
 
-# ── The block below is about NUMA_NODE0 / NUMA_NODE1 (defined at the end of it),
-#    NOT about the quarters above. ─────────────────────────────────────────────
-# ⚠ NAME IS AN NPS2-ERA ARTEFACT — THESE ARE NOT SINGLE NUMA NODES.
-# Verified against live topology 2026-07-30 (`numactl --hardware`, NPS4):
+# ── NPS2-ERA NAMING ARTEFACT — about the QUARTER constants above. ────────────
+# (Until 2026-08-11 this block also covered NUMA_NODE0/NUMA_NODE1, which were defined
+# below it and are now deleted — see the deletion note at the end of the block. That
+# split subject is why the artefact was once mis-filed against the quarters.)
+# Live topology 2026-07-30 (`numactl --hardware`, NPS4):
 #     node0 = 0-23,96-119   node1 = 24-47,120-143
 #     node2 = 48-71,144-167 node3 = 72-95,168-191   (distances: local 10, remote 12)
-# So NUMA_NODE0 spans node0+node1 and NUMA_NODE1 spans node2+node3. The names were
-# correct under NPS2, before the 2026-04-24 NPS4 reboot; they have been misleading since.
+# The now-deleted NUMA_NODE0 spanned node0+node1 and NUMA_NODE1 spanned node2+node3;
+# those names were correct under NPS2, before the 2026-04-24 NPS4 reboot.
 # The quarter constants above ARE exactly the four NPS4 nodes, but their NAMES carry the
 # same artefact: the digit is the old HALF, not the node. Q0A=node0 and Q0B=node1 (both
 # inside old half 0); Q1A=node2 and Q1B=node3 — so `NUMA_Q1A` is NOT node 1. Read the cpu
@@ -135,28 +137,26 @@ NUMA_Q1B = ("72-95,168-191", 48)
 # `cpu_shape_class` (quarter|half|full) — never the shape name. The conclusion survives on
 # the ground above; the evidence for it did not.)
 #
-# ⚠ NUMA_NODE0 / NUMA_NODE1 are the sharper trap, and they are NOT merely misnamed
-# (`mainA`, 2026-08-11). Both are declarable from the YAML via _CPU_SHAPES, are named by
-# zero instances, and pair a 48-PHYSICAL-core cpuset with 96 threads — which is exactly
-# what _assert_instance_invariants fatals on (`-t` must equal the cpuset's physical core
-# count). So the only reachable effect of a role ever declaring one is an import-time
-# AssertionError. They are offered by the shape table and cannot be used.
+# ⚠ NUMA_NODE0 / NUMA_NODE1 were DELETED 2026-08-11 (`mainB`, file owner), closing the
+# sharper half of the P2-5l naming residual. `mainA` established the case and left the
+# call to the session holding the file; the annotate-don't-rename reasoning above does
+# NOT extend to these two, because they were not merely misnamed:
+#   * declarable from the YAML via _CPU_SHAPES, and named by ZERO instances;
+#   * they paired a 48-PHYSICAL-core cpuset with 96 threads — precisely what
+#     _assert_instance_invariants fatals on (`-t` must equal physical core count).
+# So the only reachable effect of a role ever declaring one was an import-time
+# AssertionError: the shape table offered them and they could not be used. A name that
+# cannot be used correctly is deleted, not annotated — an annotation still leaves the
+# trap in the table for the next author who greps for a "node" shape.
+# Safe: nothing imported them (all surviving mentions were prose), and
+# tests/unit/test_stack_numa.py had already declared them "deletion candidates once the
+# remaining test fixtures stop naming them" — which was true, those fixtures name them
+# only in comments. Their cpusets live on VERBATIM as NUMA_HALF_A / NUMA_HALF_B below,
+# with the CORRECT thread count, so no shape was lost.
 #
-# CONSEQUENCE, measured: with no numactl policy, weights first-touch onto whichever node
-# loads them, so ~half a 96-thread team reads every weight cross-node. The E5 affinity
-# artifact for this shape recorded pages_by_node {N0: 9226101} / total 9226101 — i.e. all
-# 35.2 GiB on node0 while the threads spanned node0+node1.
-#
-# ⚠ The 2026-04-17 head-to-head quoted below to justify this wiring is NOT valid evidence
-# for it: that run predates the NPS4 reboot (so the cpuset genuinely WAS one node then),
-# and its source CSV records spec == "baseline", i.e. SPECULATIVE DECODING OFF.
-# Do not cite 26.60/27.06 t/s as a current figure for this shape.
-#
-# The correct cpuset is under measurement (E5 re-run, 2026-07-30). Wiring intentionally
-# left UNCHANGED until that reports — changing it now would break comparability with the
-# recorded AutoPilot operating point we are re-anchoring against.
-NUMA_NODE0 = ("0-47,96-143", 96)
-NUMA_NODE1 = ("48-95,144-191", 96)
+# The measurement history that hung on them is preserved and re-anchored to the half
+# fleet (same cpusets) in the HALF FLEET block below — deleting a constant must not
+# delete the evidence taken under its shape.
 # Full-machine physical-cores-only (no SMT) — for canonical-recipe wiring
 # (single-instance latency-optimal). 96 physical cores spanning all 4 NPS4 nodes.
 # Pair with numactl_policy="interleave=all" so memory distributes across all 4 nodes
@@ -185,11 +185,29 @@ NUMA_FULL = ("0-95", 96)
 GPU_HOST_LANE = ("184-191", 8)
 
 # ── 2026-07-30 HALF FLEET (operator-ratified) ────────────────────────────────
-# Same cpusets as NUMA_NODE0/NUMA_NODE1 but with the CORRECT thread count. Each
-# half holds 48 PHYSICAL cores (0-47 or 48-95) plus their 48 SMT siblings, so -t
-# is 48, not 96. NUMA_NODE0[1] / NUMA_NODE1[1] are both 96 and reusing them for a
-# half instance silently re-introduces 2x SMT oversubscription — measured cost
-# -13% per-stream and -8.5% aggregate at np=4. Do not reuse them here.
+# Each half holds 48 PHYSICAL cores (0-47 or 48-95) plus their 48 SMT siblings,
+# so -t is 48, NOT 96. Declaring 96 on these cpusets re-introduces 2x SMT
+# oversubscription — measured cost -13% per-stream and -8.5% aggregate at np=4.
+# (Until 2026-08-11 these same two cpusets were ALSO exported as NUMA_NODE0 /
+# NUMA_NODE1 carrying exactly that wrong 96, which is why the warning existed;
+# those constants are now deleted — see the deletion note above.)
+#
+# ── Measurement history for these cpusets, re-anchored here 2026-08-11 when the
+#    NUMA_NODE* constants it hung on were deleted. The evidence is about the
+#    SHAPE, which survives; only the name it was written under went away. ──
+# CONSEQUENCE, measured: with no numactl policy, weights first-touch onto whichever
+# node loads them, so ~half a 96-thread team reads every weight cross-node. The E5
+# affinity artifact for this shape recorded pages_by_node {N0: 9226101} / total
+# 9226101 — i.e. all 35.2 GiB on node0 while the threads spanned node0+node1.
+#
+# ⚠ The 2026-04-17 head-to-head once quoted to justify the old 0-47 full wiring is
+# NOT valid evidence for it: that run predates the NPS4 reboot (so the cpuset
+# genuinely WAS one node then), and its source CSV records spec == "baseline", i.e.
+# SPECULATIVE DECODING OFF. Do not cite 26.60/27.06 t/s as a current figure here.
+#
+# The correct cpuset was under measurement (E5 re-run, 2026-07-30) when that note
+# was written; it is carried forward verbatim rather than re-judged, since
+# certifying it closed would need the E5 result and that is not this session's to run.
 #
 #   HALF_A = NPS4 nodes 0+1. GPU-DISJOINT. The GPU shadow lane pins host threads
 #            to logical 184-191, which fold to physical 88-95 = region q3;
@@ -310,8 +328,6 @@ _CPU_SHAPES: dict[str, tuple[str, int]] = {
     "NUMA_Q0B": NUMA_Q0B,
     "NUMA_Q1A": NUMA_Q1A,
     "NUMA_Q1B": NUMA_Q1B,
-    "NUMA_NODE0": NUMA_NODE0,
-    "NUMA_NODE1": NUMA_NODE1,
     "NUMA_FULL": NUMA_FULL,
     "NUMA_HALF_A": NUMA_HALF_A,
     "NUMA_HALF_B": NUMA_HALF_B,
@@ -332,16 +348,11 @@ _CPU_SHAPES: dict[str, tuple[str, int]] = {
 # deliberately NO role -> class table anywhere: the class of an instance is
 # looked up from the `cpu_shape` its stack_topology.yaml entry already declares.
 #
-# NUMA_NODE0/NUMA_NODE1 are classed "half" because their CPUSETS are exactly
-# the halves' (see the NPS2-era naming warning above); only their thread counts
-# differ, and no current instance names them.
 _SHAPE_CLASSES: dict[str, str] = {
     "NUMA_Q0A": "quarter",
     "NUMA_Q0B": "quarter",
     "NUMA_Q1A": "quarter",
     "NUMA_Q1B": "quarter",
-    "NUMA_NODE0": "half",
-    "NUMA_NODE1": "half",
     "NUMA_FULL": "full",
     "NUMA_HALF_A": "half",
     "NUMA_HALF_B": "half",
