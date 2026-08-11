@@ -100,17 +100,47 @@ import yaml
 # leaving as harmless prose.
 
 # NUMA quarter definitions: (cpu_list, thread_count)
+# ⚠ The digit in these names is the old NPS2 HALF, not the node — `NUMA_Q1A` is NOT
+# node 1. Read the cpu list, never the name. Full statement, and why they are
+# deliberately NOT renamed, in the NPS2-ERA ARTEFACT block below.
 NUMA_Q0A = ("0-23,96-119", 48)
 NUMA_Q0B = ("24-47,120-143", 48)
 NUMA_Q1A = ("48-71,144-167", 48)
 NUMA_Q1B = ("72-95,168-191", 48)
+
+# ── The block below is about NUMA_NODE0 / NUMA_NODE1 (defined at the end of it),
+#    NOT about the quarters above. ─────────────────────────────────────────────
 # ⚠ NAME IS AN NPS2-ERA ARTEFACT — THESE ARE NOT SINGLE NUMA NODES.
 # Verified against live topology 2026-07-30 (`numactl --hardware`, NPS4):
 #     node0 = 0-23,96-119   node1 = 24-47,120-143
 #     node2 = 48-71,144-167 node3 = 72-95,168-191   (distances: local 10, remote 12)
 # So NUMA_NODE0 spans node0+node1 and NUMA_NODE1 spans node2+node3. The names were
 # correct under NPS2, before the 2026-04-24 NPS4 reboot; they have been misleading since.
-# The quarter constants above ARE exactly the four NPS4 nodes and are correctly named.
+# The quarter constants above ARE exactly the four NPS4 nodes, but their NAMES carry the
+# same artefact: the digit is the old HALF, not the node. Q0A=node0 and Q0B=node1 (both
+# inside old half 0); Q1A=node2 and Q1B=node3 — so `NUMA_Q1A` is NOT node 1. Read the cpu
+# list, never the digit.
+#
+# NOT renamed, deliberately — but note the rename is CHEAP, not blocked. Since the
+# 2026-08-01 W1 cutover no role in stack_topology.yaml declares a quarter (`cpu_shape` is
+# only ever NUMA_FULL / NUMA_HALF_A / NUMA_HALF_B / GPU_HOST_LANE), so NUMA_Q* survives
+# only in _CPU_SHAPES / _SHAPE_CLASSES here plus test prose. The reason to leave it is that
+# a rename fixes a name nothing live reads; it is not that a rename is expensive.
+# (2026-08-11 `mainC`, closing the P2-5l naming residual raised by `auditor`. TWO prior
+# statements at this spot were themselves wrong and are corrected rather than deleted:
+# (i) it once claimed the quarters "are correctly named" — the same defect one level down;
+# (ii) my own 2026-08-11 replacement justified the non-rename by claiming `cpu_shape` NAMES
+# are a persisted join key in stack_priors entries and stack manifests. FALSE, caught by
+# `mainA` and re-verified here: those persist `numa_instance` (an int) and
+# `cpu_shape_class` (quarter|half|full) — never the shape name. The conclusion survives on
+# the ground above; the evidence for it did not.)
+#
+# ⚠ NUMA_NODE0 / NUMA_NODE1 are the sharper trap, and they are NOT merely misnamed
+# (`mainA`, 2026-08-11). Both are declarable from the YAML via _CPU_SHAPES, are named by
+# zero instances, and pair a 48-PHYSICAL-core cpuset with 96 threads — which is exactly
+# what _assert_instance_invariants fatals on (`-t` must equal the cpuset's physical core
+# count). So the only reachable effect of a role ever declaring one is an import-time
+# AssertionError. They are offered by the shape table and cannot be used.
 #
 # CONSEQUENCE, measured: with no numactl policy, weights first-touch onto whichever node
 # loads them, so ~half a 96-thread team reads every weight cross-node. The E5 affinity
