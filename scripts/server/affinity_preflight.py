@@ -548,6 +548,22 @@ def _run_cell_mode(cells: list[dict], meta: dict, args: argparse.Namespace) -> i
         })
     smt_only_contention = [row for row in gpu_tenants if row["smt_only"]]
 
+    # T5, partial: "verified" must not be satisfiable by checking NOTHING.
+    #
+    # `memory_verified` is `mismatches == 0`, and the locality predicate is
+    # `no_mmap and len(expected_nodes) == 1` — which after the topology change is
+    # false for EVERY instance, because every instance is now multi-node. So the
+    # artifact asserted `live_memory_placement_verified: true` on a run where zero
+    # entries were examined, and `--require-memory-locality` — an explicit operator
+    # request for the guarantee — was satisfied vacuously.
+    #
+    # Absence read as a pass, the A11 shape again. Arming the predicate itself is
+    # NOT done here: T5 is blocked on ratifying INTERLEAVE_TOLERANCE, and mmap
+    # placement is shared across instances (a single-node mmap role can show a low
+    # local_fraction because another instance first-touched the pages), so arming it
+    # tonight could hard-fail correctly-configured roles. What needs no ratification
+    # is making "not checked" distinguishable from "checked and passed".
+    memory_checked = memory_required_entries > 0
     memory_verified = memory_mismatches == 0
     artifact = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -559,6 +575,8 @@ def _run_cell_mode(cells: list[dict], meta: dict, args: argparse.Namespace) -> i
         "live_memory_placement_verified": memory_verified,
         "memory_locality_required": args.require_memory_locality,
         "memory_locality_threshold": args.memory_locality_threshold,
+        "live_memory_placement_checked": memory_checked,
+        "memory_locality_vacuous": bool(args.require_memory_locality and not memory_checked),
         "memory_required_entries": memory_required_entries,
         "memory_mismatches": memory_mismatches,
         "foreign_llama_overlaps": foreign,
@@ -587,6 +605,17 @@ def _run_cell_mode(cells: list[dict], meta: dict, args: argparse.Namespace) -> i
     print(json.dumps(artifact, indent=2))
     print(f"live_affinity_verified = {all_match}  → {out}", file=sys.stderr)
     if not all_match:
+        return 1
+    if args.require_memory_locality and not memory_checked:
+        print(
+            "REFUSING: --require-memory-locality was requested but ZERO entries were "
+            "eligible for the locality check (predicate: no_mmap AND single-node; "
+            "every instance is multi-node after the topology change). A guarantee "
+            "satisfied by checking nothing is not a guarantee — see T5 in "
+            "handoffs/active/numa-placement-defect-20260730.md, blocked on ratifying "
+            "INTERLEAVE_TOLERANCE.",
+            file=sys.stderr,
+        )
         return 1
     if args.require_memory_locality and not memory_verified:
         return 1

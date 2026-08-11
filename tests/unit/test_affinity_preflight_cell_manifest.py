@@ -524,3 +524,29 @@ def test_gpu_discovery_uses_an_open_device_not_an_argv_pattern(monkeypatch, tmp_
     # And the llama pattern would never have found the trainer.
     assert not re.search(affinity_preflight.LLAMA_PROC_PATTERN, "python")
 
+
+def test_require_memory_locality_refuses_a_vacuous_pass() -> None:
+    """T5, partial: a guarantee satisfied by checking nothing is not a guarantee.
+
+    `memory_verified` is `mismatches == 0`, and the locality predicate is
+    `no_mmap AND single-node` — false for EVERY instance since the topology change
+    made them all multi-node. So the artifact asserted
+    `live_memory_placement_verified: true` on a run that examined zero entries, and
+    `--require-memory-locality` passed vacuously. Absence read as a pass.
+
+    This does NOT arm the predicate — T5 is blocked on ratifying
+    INTERLEAVE_TOLERANCE, and mmap placement is shared across instances so arming
+    it could hard-fail a correctly-configured role. It only makes "not checked"
+    distinguishable from "checked and passed".
+    """
+    src = Path(affinity_preflight.__file__).read_text(encoding="utf-8")
+    # The vacuous branch exists and fires before the mismatch branch.
+    assert "if args.require_memory_locality and not memory_checked:" in src
+    vac = src.index("if args.require_memory_locality and not memory_checked:")
+    mis = src.index("if args.require_memory_locality and not memory_verified:")
+    assert vac < mis, "the vacuity check must precede the mismatch check"
+    # And the artifact distinguishes the two states rather than collapsing them.
+    assert '"live_memory_placement_checked": memory_checked,' in src
+    assert '"memory_locality_vacuous"' in src
+    # memory_checked is derived from entries examined, never from mismatches.
+    assert "memory_checked = memory_required_entries > 0" in src
