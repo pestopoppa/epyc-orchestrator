@@ -56,6 +56,28 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 
 
+def axis_refuted(wealth: float | None, k: int, pol) -> bool:
+    """Apply the policy's refutation rule to ONE evidence axis.
+
+    Mirrors `EProcessState.state_name`: an axis refutes on futility, or on the
+    budget rule once `k >= budget`. `None` (axis not recorded) never refutes —
+    an absent measurement is not evidence against.
+
+    Exists at module level so the axis attribution in the report is testable
+    without running the whole re-adjudication over the journal.
+    """
+    if wealth is None:
+        return False
+    return wealth <= pol.futility_e or (k >= pol.budget and wealth < pol.budget_min_e)
+
+
+def _axis_refuted_factory(pol):
+    """Bind `axis_refuted` to a policy for use inside the report loop."""
+    def _bound(wealth: float | None, k: int) -> bool:
+        return axis_refuted(wealth, k, pol)
+    return _bound
+
+
 def log(msg: str = "") -> None:
     print(msg, flush=True)
 
@@ -195,21 +217,67 @@ def main() -> int:
     log(f"  groups with only 1 trial: {sum(1 for k in ks if k == 1)}/{len(ks)}")
     log()
 
-    # SEQ-A: the persisted label vs what the policy's own pure function returns.
-    stuck = []
+    # SEQ-A: WHY is a candidate's final label `refuted`? Attribute it to an axis.
+    #
+    # This block used to read:
+    #     if last["state"] == "refuted" and float(last["E_quality"]) >= pol.budget_min_e
+    # and report the result as "STICKY REFUTED LABELS". That comparison is invalid:
+    # `state` is the JOINT verdict — `safety_gate.py` stamps it `refuted` when
+    # EITHER axis refutes (`q_name == REFUTED or rate_name == REFUTED`) and
+    # recomputes it on every trial — while `E_quality` is a SINGLE axis. Comparing
+    # the two and calling the mismatch staleness mistakes a healthy quality axis
+    # sitting next to a refuted RATE axis for a label that failed to update.
+    #
+    # It is not a small mis-read: `E_rate_noninf` never exceeds 2.0 anywhere in the
+    # corpus (max 1.1100) against `budget_min_e = 2.0`, so essentially EVERY
+    # candidate's rate axis refutes once k >= budget — which manufactures the
+    # entire "stuck" population.
+    #
+    # So attribute instead of guess. `refuted_by` applies the policy's own rule to
+    # one axis at a time; the residual bucket (`joint refuted, NEITHER axis
+    # refutes`) is the only thing that would constitute a genuinely stale label.
+    refuted_by = _axis_refuted_factory(pol)
+
+    by_quality: list[tuple[str, int, float, float | None]] = []
+    by_rate_only: list[tuple[str, int, float, float | None]] = []
+    unexplained: list[tuple[str, int, float, float | None]] = []
     for (cand, core), rows_ in groups.items():
         rows_.sort(key=lambda r: (r.get("k") or 0))
         last = rows_[-1]
-        if last.get("state") == "refuted" and float(last["E_quality"]) >= pol.budget_min_e:
-            stuck.append((cand, last.get("k"), float(last["E_quality"])))
-    stuck.sort(key=lambda t: -t[2])
-    log("=== SEQ-A: STICKY REFUTED LABELS ===")
-    log(f"  candidates whose FINAL state is 'refuted' but whose E_quality >= budget_min_e"
-        f" ({pol.budget_min_e}): {len(stuck)}")
-    for c, k, e in stuck:
-        log(f"    {c}  k={k:>3}  E_quality={e:8.4f}")
-    log("  These are excluded from promotion AND positive strategy distillation")
-    log("  (learning_exclusions.py:111-119) by a condition they no longer meet.")
+        if last.get("state") != "refuted":
+            continue
+        k = int(last.get("k") or 0)
+        e_q = float(last["E_quality"])
+        raw_rate = last.get("E_rate_noninf")
+        e_r = float(raw_rate) if raw_rate is not None else None
+        row = (cand, k, e_q, e_r)
+        if refuted_by(e_q, k):
+            by_quality.append(row)
+        elif refuted_by(e_r, k):
+            by_rate_only.append(row)
+        else:
+            unexplained.append(row)
+
+    def _fmt(rows: list[tuple[str, int, float, float | None]]) -> None:
+        for c, k, e_q, e_r in sorted(rows, key=lambda t: -t[2]):
+            rate = f"{e_r:8.4f}" if e_r is not None else "    n/a"
+            log(f"    {c}  k={k:>3}  E_quality={e_q:8.4f}  E_rate={rate}")
+
+    log("=== SEQ-A: WHY EACH `refuted` LABEL IS refuted (axis attribution) ===")
+    log(f"  policy: futility_e={pol.futility_e}  budget={pol.budget}  "
+        f"budget_min_e={pol.budget_min_e}")
+    log(f"  refuted on the QUALITY axis: {len(by_quality)}")
+    _fmt(by_quality)
+    log(f"  refuted on the RATE axis ONLY (quality axis is healthy): {len(by_rate_only)}")
+    _fmt(by_rate_only)
+    log("    ^ These are CORRECTLY labelled by the joint rule, not stale. They are")
+    log("      excluded from promotion and positive strategy distillation")
+    log("      (learning_exclusions.py:111-119) because the JOINT gate refuses a")
+    log("      candidate that buys quality with throughput. Whether that is the")
+    log("      wanted policy is SEQ-B1 — an operator question, not a defect.")
+    log(f"  UNEXPLAINED — joint says refuted, NEITHER axis does: {len(unexplained)}")
+    _fmt(unexplained)
+    log("    ^ This bucket, and only this bucket, would be a genuinely stale label.")
     log()
 
     log("=== VERDICT ===")
