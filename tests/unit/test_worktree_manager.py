@@ -150,3 +150,40 @@ def test_multiple_files(temp_git_repo, monkeypatch):
 
     assert (temp_git_repo / "orchestration" / "prompts" / "frontdoor.md").read_text() == "original frontdoor content"
     assert "original escalation" in (temp_git_repo / "src" / "escalation.py").read_text()
+
+
+def test_reject_restores_exact_uncommitted_main_worktree_preimage(temp_git_repo, monkeypatch):
+    """Rollback preserves the bytes present at apply time, not the HEAD version."""
+    import scripts.autopilot.worktree_manager as wm
+    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
+
+    target = temp_git_repo / "orchestration" / "prompts" / "frontdoor.md"
+    dirty_preimage = b"operator edit not committed\nwith a second line\n"
+    target.write_bytes(dirty_preimage)
+
+    with WorktreeManager(temp_git_repo).experiment("test_dirty_preimage") as ctx:
+        ctx.apply_file("orchestration/prompts/frontdoor.md", "candidate mutation")
+        ctx.reject()
+
+    assert target.read_bytes() == dirty_preimage
+    assert "operator edit" in subprocess.run(
+        ["git", "diff", "--", "orchestration/prompts/frontdoor.md"],
+        cwd=temp_git_repo, capture_output=True, text=True, check=True,
+    ).stdout
+
+
+def test_reject_distinguishes_empty_file_from_absent_file(temp_git_repo, monkeypatch):
+    import scripts.autopilot.worktree_manager as wm
+    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
+
+    empty = temp_git_repo / "empty.txt"
+    empty.write_bytes(b"")
+    absent = temp_git_repo / "new.txt"
+
+    with WorktreeManager(temp_git_repo).experiment("test_empty_absent") as ctx:
+        ctx.apply_file("empty.txt", "candidate")
+        ctx.apply_file("new.txt", "candidate")
+        ctx.reject()
+
+    assert empty.exists() and empty.read_bytes() == b""
+    assert not absent.exists()

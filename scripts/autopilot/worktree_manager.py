@@ -51,7 +51,9 @@ class ExperimentContext:
     worktree_path: Path
     branch_name: str
     project_root: Path
-    _applied_files: dict[str, str] = field(default_factory=dict)  # rel_path -> original content
+    # Exact main-worktree preimage. ``None`` means the path did not exist; bytes
+    # distinguish an empty file from an absent one and preserve non-text input.
+    _applied_files: dict[str, bytes | None] = field(default_factory=dict)
     _accepted: bool = False
     _decided: bool = False
 
@@ -67,10 +69,9 @@ class ExperimentContext:
 
         # Save original content for rollback
         if rel_path not in self._applied_files:
-            if main_path.exists():
-                self._applied_files[rel_path] = main_path.read_text()
-            else:
-                self._applied_files[rel_path] = ""
+            self._applied_files[rel_path] = (
+                main_path.read_bytes() if main_path.exists() else None
+            )
 
         # Write to worktree (for version history)
         wt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,11 +111,15 @@ class ExperimentContext:
 
         for rel_path, original in self._applied_files.items():
             main_path = self.project_root / rel_path
-            if original:
-                main_path.write_text(original)
-            elif main_path.exists():
-                main_path.unlink()
-            _git(["checkout", "--", rel_path], cwd=self.project_root, check=False)
+            if original is None:
+                if main_path.exists():
+                    main_path.unlink()
+            else:
+                main_path.parent.mkdir(parents=True, exist_ok=True)
+                main_path.write_bytes(original)
+            # Do NOT run ``git checkout -- <path>`` here. The preimage may be an
+            # uncommitted operator/parallel-session edit; checkout would replace
+            # the exact bytes above with HEAD and silently destroy that work.
         log.info("Experiment rejected, files restored")
 
     @property
