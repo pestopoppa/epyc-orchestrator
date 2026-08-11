@@ -67,6 +67,8 @@ eras:
   - id: E6-cpu-kernel
     from: "2026-07-20T13:30:13Z"
     scope: cpu_bench
+    binary_version: 10098
+    kernel_commit: "6ad45fa3ff6718c07c000061dbc6e29c1771f6e3"
     note: >
       v7 production cutover. Single kernel: production-consolidated-v7 at
       llama.cpp commit 6ad45fa3ff6718c07c000061dbc6e29c1771f6e3
@@ -140,6 +142,8 @@ eras:
   - id: E8-cpu-kernel
     from: "2026-07-25T18:38:43Z"
     scope: cpu_bench
+    binary_version: 10107
+    kernel_commit: "67a433bf45a8a091d83b4ea0b32ff0735fd51800"
     note: >
       v8 production cutover. Single kernel: production-consolidated-v8 at
       llama.cpp commit 67a433bf45a8a091d83b4ea0b32ff0735fd51800
@@ -413,6 +417,8 @@ eras:
   - id: E9-cpu-kernel
     from: "2026-08-10T23:59:00Z"
     scope: cpu_bench
+    binary_version: 10125
+    kernel_commit: "0db32c06e3e550065b78311a6031ef3dd2c4f27c"
     note: >
       v9 production cutover. Single kernel: production-consolidated-v9 at
       llama.cpp commit 0db32c06e3e550065b78311a6031ef3dd2c4f27c
