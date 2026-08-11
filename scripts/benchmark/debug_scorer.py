@@ -293,6 +293,23 @@ def _normalize_choice_text(text: str) -> str:
 
 
 def _extract_multiple_choice_letter(answer: str) -> str | None:
+    # ⚠ NOT interchangeable with epyc-inference-research
+    # `scripts/benchmark/answer_scoring.py:extract_letter_answer`, despite the
+    # resemblance. Proven per-consumer 2026-08-11 (`mainC`, A10) rather than assumed:
+    # this function is on the authority/sealed-capture path, so a silent swap would
+    # RE-SCORE sealed evidence. Deltas, with this side named first:
+    #   1. RANGE: A-H here, A-J there. "I"/"J" return None here and parse there.
+    #   2. LAST-RESORT RULE, the big one: Strategy 5 below returns the LAST
+    #      standalone letter UNCONDITIONALLY, so a verbose reply mentioning several
+    #      letters always yields a guess. The canonical function accepts a bare
+    #      letter only when exactly ONE candidate exists, else returns "". This side
+    #      is systematically more PERMISSIVE — it scores answers the canonical one
+    #      declines to parse.
+    #   3. No `\boxed{...}` handling here; canonical honours it at second priority.
+    #   4. Canonical also accepts `ANSWER = X`; this accepts only `is`/`:`.
+    # Unifying them is a SCORING CHANGE, not a de-duplication. It needs a re-score of
+    # the affected sealed captures, not just a diff — out of scope for additive A10.
+    #
     # Strategy 1: Explicit "Answer: X" — take LAST match (verbose models repeat)
     # Negative lookahead prevents "option is correct" matching as letter "C"
     explicit_pat = r"(?:answer|choice|option)\s*(?:is|:)\s*\(?([A-H])\)?(?![a-zA-Z])"
