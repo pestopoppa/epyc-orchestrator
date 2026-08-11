@@ -175,6 +175,7 @@ from src.autopilot_core.baseline_ledger import (
 from src.autopilot_core.instrument_era_guard import (
     E7_EVAL_INSTRUMENT_BOUNDARY,
     E7_EVAL_INSTRUMENT_ERA_ID,
+    last_known_eval_quality_era,
     EVAL_QUALITY_SCOPE,
     active_eval_quality_era,
 )
@@ -6880,19 +6881,53 @@ def _migrate_eval_quality_era(state: dict[str, Any]) -> bool:
         # Correct to leave the quality axis unfenced.
         return False
     else:
-        # Registry unreadable/malformed — fail-safe FORWARD to the code constant, but never
-        # over-fence a clock that predates the constant boundary.
-        boundary_epoch = _parse_journal_timestamp(E7_EVAL_INSTRUMENT_BOUNDARY)
-        if boundary_epoch is None or time.time() < boundary_epoch:
+        # Registry unreadable/malformed. Fall back to the last era the LIVE SYSTEM
+        # recorded, not to a code constant.
+        #
+        # This branch used to fence at E7_EVAL_INSTRUMENT_BOUNDARY (2026-07-21) and stamp
+        # E7_EVAL_INSTRUMENT_ERA_ID. That constant stopped tracking the live era at the
+        # v8 eval boundary on 2026-07-25 and eval_quality is now at E16, so an unreadable
+        # registry silently UNDER-fenced by three weeks and several instrument changes —
+        # every cross-instrument observation in that span read as in-era and was admitted.
+        # Fail-open, in the guard whose job is to fail closed. Bumping the constant would
+        # only move the staleness to the next cutover.
+        last_known = last_known_eval_quality_era()
+        fallback_epoch = last_known.get("boundary_epoch")
+        if last_known.get("ok") and fallback_epoch is not None:
+            # Keep the original rule: never over-fence a clock that predates the
+            # boundary being fenced at. What changed is WHICH boundary — the last
+            # one the live system actually recorded, instead of a literal that
+            # stopped tracking reality three weeks ago.
+            if time.time() < float(fallback_epoch):
+                log.warning(
+                    "eval_quality era migration deferred — registry unresolved (%s) and "
+                    "clock is before the last recorded boundary for %s; quality axis "
+                    "remains unfenced.",
+                    guard.get("status"),
+                    last_known.get("era_id"),
+                )
+                return False
+            era_id = str(last_known["era_id"])
+            boundary_epoch = float(fallback_epoch)
+            source = f"last-known-era fallback (registry {guard.get('status')})"
             log.warning(
-                "eval_quality era migration deferred — registry unresolved (%s) and clock "
-                "is before the %s code-constant boundary; quality axis remains unfenced.",
+                "eval_quality era registry unresolved (%s); fencing on the last recorded "
+                "era %s from %s.",
                 guard.get("status"),
-                E7_EVAL_INSTRUMENT_ERA_ID,
+                era_id,
+                last_known.get("path"),
+            )
+        else:
+            # No registry AND no witness. Refuse rather than invent a boundary: an
+            # unfenced quality axis is visibly wrong, a wrongly-fenced one is not.
+            log.error(
+                "eval_quality era migration aborted — registry unresolved (%s) and no "
+                "last-known era available (%s); quality axis remains unfenced and NO "
+                "stale boundary was substituted.",
+                guard.get("status"),
+                last_known.get("status"),
             )
             return False
-        era_id = E7_EVAL_INSTRUMENT_ERA_ID
-        source = f"code-constant fallback (registry {guard.get('status')})"
 
     if boundary_epoch is None:
         boundary_epoch = _parse_journal_timestamp(E7_EVAL_INSTRUMENT_BOUNDARY)

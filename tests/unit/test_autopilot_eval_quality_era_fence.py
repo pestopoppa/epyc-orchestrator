@@ -6,6 +6,7 @@ timestamp fence on the sequential-promotion evidence fold (rows straddling the b
 """
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import autopilot  # type: ignore[import-not-found]  # noqa: E402
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
+import src.autopilot_core.instrument_era_guard as era_guard  # noqa: E402
 from src.autopilot_core.instrument_era_guard import (  # noqa: E402
     INSTRUMENT_ERAS_ENV,
     E7_EVAL_INSTRUMENT_ERA_ID,
@@ -113,15 +115,60 @@ def test_migration_noop_when_no_era_active_yet(tmp_path, monkeypatch) -> None:
     )
 
 
-def test_migration_falls_forward_to_code_constant_when_registry_missing(tmp_path, monkeypatch) -> None:
-    # Registry unreadable + clock past the code-constant boundary => fail-safe forward.
+def test_migration_falls_forward_to_the_last_recorded_era_when_registry_missing(
+    tmp_path, monkeypatch
+) -> None:
+    """REPLACES test_migration_falls_forward_to_code_constant_when_registry_missing.
+
+    That test asserted the fallback stamped E7_EVAL_INSTRUMENT_ERA_ID — i.e. its
+    passing condition WAS the defect. The constant stopped tracking the live era at
+    the v8 eval boundary on 2026-07-25 and eval_quality is now E16, so fencing there
+    under-fenced by three weeks: every cross-instrument observation in that span read
+    as in-era and was admitted to the quality decision plane. A guard whose green
+    state requires the fail-open cannot survive the fix.
+
+    The fallback now reads the last era the live system RECORDED, so it tracks every
+    future cutover instead of needing a human to bump a literal.
+    """
     monkeypatch.setenv(INSTRUMENT_ERAS_ENV, str(tmp_path / "absent.yaml"))
+    recorded_epoch = _E7_EPOCH + 30 * 86400.0
+    state_file = tmp_path / "autopilot_state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "active_instrument_eras": {"eval_quality": "E16-some-later-era"},
+                "quality_exclude_before_ts": recorded_epoch,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(era_guard, "AUTOPILOT_STATE_PATH", state_file)
+    monkeypatch.setattr(autopilot.time, "time", lambda: recorded_epoch + 86400.0)
+
+    state: dict = {}
+    assert autopilot._migrate_eval_quality_era(state) is True
+    assert state["active_instrument_eras"]["eval_quality"] == "E16-some-later-era"
+    assert state["quality_exclude_before_ts"] == recorded_epoch
+    # The stale constant must NOT be what it fenced on.
+    assert state["active_instrument_eras"]["eval_quality"] != E7_EVAL_INSTRUMENT_ERA_ID
+
+
+def test_migration_refuses_rather_than_substituting_a_stale_boundary(
+    tmp_path, monkeypatch
+) -> None:
+    """No registry AND no recorded era => leave the axis unfenced, loudly.
+
+    An unfenced quality axis is visibly wrong. A wrongly-fenced one looks correct,
+    which is worse — it is the shape that let three weeks of cross-instrument
+    evidence in without anyone noticing.
+    """
+    monkeypatch.setenv(INSTRUMENT_ERAS_ENV, str(tmp_path / "absent.yaml"))
+    monkeypatch.setattr(era_guard, "AUTOPILOT_STATE_PATH", tmp_path / "absent-state.json")
     monkeypatch.setattr(autopilot.time, "time", lambda: _E7_EPOCH + 86400.0)
     state: dict = {}
-    changed = autopilot._migrate_eval_quality_era(state)
-    assert changed is True
-    assert state["active_instrument_eras"]["eval_quality"] == E7_EVAL_INSTRUMENT_ERA_ID
-    assert state["quality_exclude_before_ts"] == _E7_EPOCH
+    assert autopilot._migrate_eval_quality_era(state) is False
+    assert "active_instrument_eras" not in state
+    assert "quality_exclude_before_ts" not in state
 
 
 def test_migration_defers_when_registry_missing_and_before_boundary(tmp_path, monkeypatch) -> None:

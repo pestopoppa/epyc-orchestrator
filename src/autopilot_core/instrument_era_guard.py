@@ -16,15 +16,69 @@ DEFAULT_INSTRUMENT_ERAS_PATH = (
 AUTOPILOT_QUALITY_SCOPE = "autopilot_quality"
 EVAL_QUALITY_SCOPE = "eval_quality"
 
-# E7-eval-instrument boundary (scope ``eval_quality``) — the live eval-instrument era as of
-# 2026-07-21T10:30Z (A3 79k/41-suite question-pool rebuild + the B7 deterministic scorer
-# package). Held here as a code constant that CITES THE ERA NAME so the quality decision
-# plane can still fence pre-boundary evidence (the analogue of the speed axis's
-# ``pareto_exclude_before_ts``) even if the registry read fails. The append-only row in
-# ``orchestration/instrument_eras.yaml`` remains the human-owned source of truth; this
-# constant is the fail-safe fallback and MUST match that row's id + ``from``.
+# E7-eval-instrument boundary (scope ``eval_quality``), 2026-07-21T10:30Z — the A3
+# 79k/41-suite question-pool rebuild + B7 deterministic scorer package.
+#
+# ⚠ THIS IS A HISTORICAL BOUNDARY, NOT "THE CURRENT ERA". Its comment used to say it
+# "MUST match that row's id + ``from``", i.e. it was meant to track the live era — and
+# it stopped doing so at the v8 eval boundary on 2026-07-25 and is now several eras
+# behind (``eval_quality`` reached E16 on 2026-08-10). Because the registry-unreadable
+# fallback fenced at THIS boundary, an unreadable registry silently UNDER-fenced: every
+# observation between E7 and today read as in-era and was admitted to the quality
+# decision plane. That is fail-open, in a guard whose whole job is to fail closed.
+#
+# The value is left untouched — E7 was a real boundary and pinning a specific PAST era
+# on purpose is legitimate (cf. dashboard's ``_PARETO_SPEED_DEINFLATE_ERA_ID = "E2"``,
+# a rescale boundary that must never move). What changed is that nothing treats it as
+# current any more: use :func:`last_known_eval_quality_era`, which reads a WITNESS the
+# live system maintains, so it cannot go stale the way a constant does.
 E7_EVAL_INSTRUMENT_ERA_ID = "E7-eval-instrument"
 E7_EVAL_INSTRUMENT_BOUNDARY = "2026-07-21T10:30:00Z"
+
+AUTOPILOT_STATE_PATH = (
+    Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_state.json"
+)
+
+
+def last_known_eval_quality_era() -> dict[str, Any]:
+    """The last eval_quality era the live system recorded, for use when the registry fails.
+
+    ``autopilot_state.json`` carries ``active_instrument_eras``, written by the era-advance
+    path itself, so it is a witness of what was actually in force rather than a constant
+    someone has to remember to bump. A fallback built on it tracks reality across every
+    future cutover; a fallback built on a literal is correct until the next one.
+
+    Returns ``{"ok": True, "era_id": ...}`` or ``{"ok": False, "status": ...}``. Never
+    raises and never guesses — an unreadable state file yields ``ok: False`` so the caller
+    can fence conservatively instead of inheriting a stale id.
+    """
+    try:
+        import json
+
+        state = json.loads(AUTOPILOT_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "status": f"state_unreadable: {exc}"}
+    if not isinstance(state, dict):
+        return {"ok": False, "status": "state_not_an_object"}
+    eras = state.get("active_instrument_eras")
+    if not isinstance(eras, dict):
+        return {"ok": False, "status": "no_active_instrument_eras"}
+    era_id = str(eras.get(EVAL_QUALITY_SCOPE) or "").strip()
+    if not era_id:
+        return {"ok": False, "status": "no_eval_quality_era_recorded"}
+    # The state file records the era's fence epoch beside its id, written by the
+    # same advance. Returning both keeps the caller able to honour the original
+    # rule this fallback had — never fence a clock that predates the boundary
+    # being fenced at — without needing the registry it just failed to read.
+    boundary = state.get("quality_exclude_before_ts")
+    if not isinstance(boundary, (int, float)) or isinstance(boundary, bool):
+        boundary = None
+    return {
+        "ok": True,
+        "era_id": era_id,
+        "boundary_epoch": boundary,
+        "path": str(AUTOPILOT_STATE_PATH),
+    }
 
 
 def instrument_eras_path() -> Path:
