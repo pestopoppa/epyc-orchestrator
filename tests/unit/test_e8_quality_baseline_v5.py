@@ -703,6 +703,12 @@ class FakeTower:
                 tokens_generated=0 if error else 1,
                 tools_used=0,
                 host_covariates={},
+                # Mirrors the real QuestionResult default
+                # (`eval_tower.py`: `retrieval_compaction: dict[str, Any] =
+                # field(default_factory=dict)`). `_compact_question_result`
+                # reads it unguarded, so a stand-in that omits it raises
+                # AttributeError rather than exercising the no-compaction path.
+                retrieval_compaction={},
                 scoring_method="exact_match",
                 tools_called=[],
                 confidence_source="binary_correctness_proxy",
