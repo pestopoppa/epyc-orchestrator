@@ -34,6 +34,7 @@ from src.api.models import ChatRequest, ChatResponse, RewardRequest
 from src.api.state import AppState
 from src.config import get_config
 from src.constants import TASK_IR_OBJECTIVE_LEN
+from src.scheduling import gate_observation
 from src.delegation_reports import load_report
 from src.task_ir import canonicalize_task_ir
 from src.prompt_builders import (
@@ -239,9 +240,14 @@ async def chat(
     )
     watcher = asyncio.create_task(_watch_disconnect()) if use_disconnect_watcher else None
     prompt_dir = _validated_prompt_dir_override(request.x_orchestrator_prompt_root)
+    # BRIDGE RESIDUAL 1 — collect the contention verdict for THIS request. Both
+    # exits below (the error JSONResponse and the plain return) are downstream of
+    # the single stamp, so neither can drop it.
+    gate_observation.begin()
     try:
         with prompt_dir_override(prompt_dir):
             response = await _handle_chat(request, state, cancel_event=cancel_event)
+        response.contention_gate = gate_observation.snapshot()
         # Return appropriate HTTP status instead of silent 200 OK on failure
         if response.error_code:
             handler_outcome = "failed"
@@ -262,6 +268,9 @@ async def chat(
         handler_outcome = "timeout"
         raise
     finally:
+        # A carrier must never outlive its request — a leaked one would attribute
+        # this request's gate verdict to the next caller on the same context.
+        gate_observation.clear()
         if cancel_event.is_set() and handler_outcome == "failed":
             handler_outcome = "disconnected"
         emit_lifecycle_transition(

@@ -94,6 +94,17 @@ class ChatResponse(BaseModel):
     routing_strategy: str = Field(
         default="", description="How routing was decided: learned|rules|default"
     )
+    contention_gate: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Contention GateDecision echo (BRIDGE RESIDUAL 1): admitted, decision, "
+            "waited_s, candidate_topology_idx, plus a gate_decisions list when the "
+            "request passed the gate more than once. None when no gate ran. Lets "
+            "ROUTE-A1 measure the verdict directly instead of inferring it from a "
+            "fail-closed timeout — in particular queued-then-admitted, which is "
+            "admitted=True with waited_s > 0 and is otherwise invisible."
+        ),
+    )
     xmas_meta: dict[str, Any] | None = Field(
         default=None,
         description="X-MAS routing metadata when shadow/enforce routing is enabled",

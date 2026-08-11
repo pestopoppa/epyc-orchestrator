@@ -38,6 +38,8 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
+from src.scheduling import gate_observation
+
 if TYPE_CHECKING:
     from src.scheduling.migration_transaction import MigrationTransaction
 
@@ -1427,6 +1429,23 @@ class ConcurrencyAwareBackend:
                                 self._topology_role,
                                 traffic_class,
                                 candidate_topology_idx=place.topology_idx,
+                            )
+                            # BRIDGE RESIDUAL 1 — this is the per-INSTANCE verdict
+                            # the role-granular proxy could never see. Recorded for
+                            # every candidate tried, admitted or not, so the probe
+                            # observes the walk down the priority order rather than
+                            # only its outcome. Observational; the branch below is
+                            # unchanged.
+                            gate_observation.record(
+                                admitted=decision.admitted,
+                                decision=getattr(
+                                    decision.decision, "value", str(decision.decision)
+                                ),
+                                waited_s=decision.waited_s,
+                                candidate_topology_idx=place.topology_idx,
+                                blocking_roles=list(decision.blocking_roles or []),
+                                reason=decision.reason,
+                                role=self._topology_role,
                             )
                             if not decision.admitted:
                                 if not queue_log_emitted:
