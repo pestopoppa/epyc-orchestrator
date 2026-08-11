@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import os
 import re
 import subprocess
 import sys
@@ -44,6 +45,18 @@ import time
 from pathlib import Path
 
 ORCH = Path(__file__).resolve().parents[2]
+
+# The single implementation of "do these two cpusets contend?" — imported, never
+# copied, per its own docstring in gpu_shadow_lane_lease.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from gpu_shadow_lane_lease import fold_cpus_to_physical as _fold_cpus_to_physical
+except Exception:  # pragma: no cover - keeps the preflight usable if the lane tool moves
+    def _fold_cpus_to_physical(cpus: set[int]) -> set[int]:
+        raise RuntimeError(
+            "gpu_shadow_lane_lease.fold_cpus_to_physical is unavailable; refusing to "
+            "answer an SMT-contention question with a second, possibly divergent fold"
+        )
 CELL_MANIFEST_SCHEMA_VERSION = "e5-cell-manifest/1"
 BENCH_PORT_RANGE = (19000, 19999)
 NODE_CPUSETS = {
@@ -121,6 +134,66 @@ def _llama_processes() -> list[tuple[str, str]]:
         if pattern.search(argv0.rsplit("/", 1)[-1]):
             out.append((pid, procargs.strip()))
     return out
+
+
+
+# ── GPU / training tenants, and SMT-aware contention (E5 protection defect) ────
+# Two blind spots, filed 2026-07-29, both of which let a real contender look absent.
+#
+# (1) DISCOVERY WAS LLAMA-ONLY. `_llama_processes` matches argv[0] against
+#     LLAMA_PROC_PATTERN, so a `python` ROCm/PyTorch/TRL trainer holding the MI210
+#     is simply not a process this tool can see. Pattern-matching argv is also the
+#     wrong instrument for the question — the definitive test for "is this process
+#     on the GPU" is whether it holds an AMD GPU device open, which is checked here
+#     against /dev/kfd and /dev/dri/render*.
+#
+# (2) OVERLAP WAS SMT-BLIND. The gate intersects raw LOGICAL cpu ids, so the GPU
+#     host lane on 184-191 and an E5 cell on 0-95 intersect to the EMPTY SET even
+#     though 184-191 are the siblings of physical 88-95, which the cell owns. The
+#     fold is imported from gpu_shadow_lane_lease rather than rewritten: its own
+#     docstring requires that "do these two cpusets contend?" have exactly one
+#     implementation and not answer differently in two places.
+#
+# This records the facts. It deliberately does NOT change what gates a cell — see
+# the note in the artifact and the decision package, because "which overlap is
+# RELEVANT" decides decision_grade and the GPU host lane is a permanent, declared
+# co-tenant of every 0-95 shape. A gate that fails every cell is the throttle-gate
+# incident again.
+_GPU_DEVICE_HINTS = ("/dev/kfd", "/dev/dri/render")
+
+
+def _holds_gpu_device(pid: str) -> bool:
+    """True when the process has an AMD GPU device node open.
+
+    Realized state, not a name guess: a trainer, a HIP bench and a rocm-smi all
+    show up, and a process merely CALLED something gpu-ish does not.
+    """
+    for link in glob.glob(f"/proc/{pid}/fd/*"):
+        try:
+            target = os.readlink(link)
+        except OSError:
+            continue
+        if any(target.startswith(hint) for hint in _GPU_DEVICE_HINTS):
+            return True
+    return False
+
+
+def _gpu_processes() -> list[tuple[str, str]]:
+    """Live processes holding an AMD GPU device, as (pid, args)."""
+    r = subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True)
+    out: list[tuple[str, str]] = []
+    for line in r.stdout.splitlines():
+        pid, _, procargs = line.strip().partition(" ")
+        if not pid.isdigit():
+            continue
+        if _holds_gpu_device(pid):
+            out.append((pid, procargs.strip()))
+    return out
+
+
+def _physical_overlap(cpus_a: set[int], cpus_b: set[int]) -> set[int]:
+    """Physical cores both sets occupy, siblings folded. Empty means genuinely disjoint."""
+    return _fold_cpus_to_physical(cpus_a) & _fold_cpus_to_physical(cpus_b)
 
 
 def _cmdline(pid: str) -> list[str]:
@@ -445,6 +518,36 @@ def _run_cell_mode(cells: list[dict], meta: dict, args: argparse.Namespace) -> i
     if foreign:
         all_match = False
 
+    # E5 protection defect, recorded half. Two facts the llama-only + logical-id
+    # gate above cannot see, now attested on every cell:
+    #   * GPU/training tenants, discovered by an open AMD device node rather than
+    #     by an argv pattern, so a `python` ROCm trainer is no longer invisible.
+    #   * SIBLING-FOLDED overlap, so a GPU host lane on 184-191 stops reading as
+    #     disjoint from a cell on 0-95 when it physically shares cores 88-95.
+    # Recorded, NOT gating: the GPU host lane is a permanent declared co-tenant of
+    # every full-machine shape, so gating on physical overlap alone would fail
+    # every 0-95 cell forever — the shape of the throttle-gate incident, where the
+    # gate could never pass. Which overlap is RELEVANT decides decision_grade and
+    # is therefore an operator ruling, filed separately.
+    gpu_tenants: list[dict] = []
+    for gpid, gargs in _gpu_processes():
+        if gpid in cell_pids:
+            continue
+        gcpus = _thread_union(gpid)
+        logical = gcpus & declared_union
+        physical = _physical_overlap(gcpus, declared_union)
+        if not (logical or physical):
+            continue
+        gpu_tenants.append({
+            "pid": gpid,
+            "args": gargs,
+            "logical_overlap_cpus": _fmt(logical),
+            "physical_overlap_cores": _fmt(physical),
+            "smt_only": bool(physical and not logical),
+            "allowed_by_pattern": bool(allow_re is not None and allow_re.search(gargs)),
+        })
+    smt_only_contention = [row for row in gpu_tenants if row["smt_only"]]
+
     memory_verified = memory_mismatches == 0
     artifact = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -459,6 +562,18 @@ def _run_cell_mode(cells: list[dict], meta: dict, args: argparse.Namespace) -> i
         "memory_required_entries": memory_required_entries,
         "memory_mismatches": memory_mismatches,
         "foreign_llama_overlaps": foreign,
+        # Recorded 2026-08-11 (E5 protection defect). `gpu_tenant_overlaps` closes the
+        # discovery blind spot; `smt_only_contention` is the subset that the previous
+        # logical-id intersection reported as ZERO overlap while the processes shared
+        # physical cores. A non-empty smt_only list on a cell that passed is the exact
+        # evidence the old gate could not produce.
+        "gpu_tenant_overlaps": gpu_tenants,
+        "smt_only_contention": smt_only_contention,
+        "contention_gate_semantics": (
+            "llama-family processes on a LOGICAL cpu intersection gate the cell; "
+            "GPU/training tenants and SMT-sibling-only overlap are RECORDED and do not "
+            "gate — see batched-decode-measurement.md, E5 protection defect"
+        ),
         "foreign_allowed_overlaps": foreign_allowed,
         "foreign_allow_pattern": getattr(args, "foreign_allow_pattern", None),
         "instances": entries,

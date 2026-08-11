@@ -468,3 +468,59 @@ def test_foreign_allow_pattern_records_but_does_not_gate(monkeypatch, tmp_path):
     art2 = _json.loads(out2.read_text())
     assert len(art2["foreign_llama_overlaps"]) == 1
     assert rc2 != 0 and art2["live_affinity_verified"] is False
+
+def test_smt_fold_makes_the_gpu_lane_visible_to_a_full_machine_cell() -> None:
+    """E5 protection defect: the logical-id intersection reported ZERO overlap.
+
+    GPU host threads sit on 184-191, which are the SMT siblings of physical 88-95.
+    An E5 cell on 0-95 owns those physical cores, so the two genuinely contend —
+    but their LOGICAL id sets are disjoint, so the old gate saw nothing at all.
+    """
+    lane = set(range(184, 192))
+    cell = set(range(0, 96))
+    assert not (lane & cell), "premise: the logical sets really are disjoint"
+    physical = affinity_preflight._physical_overlap(lane, cell)
+    assert physical == set(range(88, 96)), physical
+
+
+def test_physical_overlap_is_empty_for_a_genuinely_disjoint_half() -> None:
+    """The guard must not forbid its own compliant idiom.
+
+    HALF_A (0-47,96-143) is GPU-DISJOINT by construction — that is why the half
+    fleet exists. If folding reported contention here too, every shape would look
+    contended and the signal would be worthless.
+    """
+    lane = set(range(184, 192))
+    half_a = set(range(0, 48)) | set(range(96, 144))
+    assert affinity_preflight._physical_overlap(lane, half_a) == set()
+    # HALF_B genuinely IS a co-tenant, and must still say so.
+    half_b = set(range(48, 96)) | set(range(144, 192))
+    assert affinity_preflight._physical_overlap(lane, half_b) == set(range(88, 96))
+
+
+def test_gpu_discovery_uses_an_open_device_not_an_argv_pattern(monkeypatch, tmp_path) -> None:
+    """A `python` ROCm trainer was invisible because discovery matched argv[0].
+
+    The definitive test for "is this process on the GPU" is whether it holds an AMD
+    device node open, so a trainer named `python` is found and a process merely
+    NAMED something gpu-ish is not.
+    """
+    fake = {"4242": ["/dev/kfd", "/dev/urandom"], "4243": ["/dev/null"]}
+
+    def fake_glob(pattern):
+        for pid, targets in fake.items():
+            if pattern == f"/proc/{pid}/fd/*":
+                return [f"/proc/{pid}/fd/{i}" for i in range(len(targets))]
+        return []
+
+    def fake_readlink(path):
+        pid = path.split("/")[2]
+        return fake[pid][int(path.rsplit("/", 1)[1])]
+
+    monkeypatch.setattr(affinity_preflight.glob, "glob", fake_glob)
+    monkeypatch.setattr(affinity_preflight.os, "readlink", fake_readlink)
+    assert affinity_preflight._holds_gpu_device("4242") is True
+    assert affinity_preflight._holds_gpu_device("4243") is False
+    # And the llama pattern would never have found the trainer.
+    assert not re.search(affinity_preflight.LLAMA_PROC_PATTERN, "python")
+
