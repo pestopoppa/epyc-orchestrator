@@ -159,8 +159,12 @@ numa_config:
   # (c2 env block, see _ROLE_ENV_BLOCKS). Measured 12.19 t/s single-instance = +184%
   # per-request latency vs prior 2× wiring. Bundle:
   # epyc-inference-research/data/cpu_optimization/2026-05-04-qwen35-122b-arch-probe/
-  # Reopen 4× per-NUMA-node wiring (16.86 t/s aggregate) ONLY if architect_general workload
-  # shifts to 4+ concurrent batch eval — see findings_phase2.md.
+  # Reopen 4× per-NUMA-node wiring (16.86 t/s aggregate) ONLY if THIS role's workload
+  # shifts to 4+ concurrent batch eval — see findings_phase2.md. (The record above was
+  # written while the 122B was architect_general; post-2026-08-01 W1 cutover it is
+  # architect_critic, same model, same placement — see the cutover note below. The
+  # measured figures are unchanged and are NOT re-attributable to today's
+  # architect_general, which is the GPU-resident 27B.)
   #
   # ROLE DEFINITION (operator, 2026-07-30) — read this before "fixing" the
   # all-region hold below. This role is a **reasoning boost / critic**, invoked
