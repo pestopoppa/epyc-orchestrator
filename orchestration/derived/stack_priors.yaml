@@ -48,7 +48,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-08-10T23:55:49Z'
+compiled_at: '2026-08-11T01:36:33Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -56,39 +56,39 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: fdbef870c2c78eaca62087a9a05ee72a3334ae5d490b1a70df7abd5797cf15c9
-    repo_commit: 06af847e
+    repo_commit: 74c68a2a
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 746dc728def15b162c3a5d42433abc3f8133c32e2a87dc5cc9f68b5f6eb9660c
-    repo_commit: 06af847e
+    sha256: a94c5d7dae15c15c6e947f4c3f2fef0ee9d33aa1c1c9cee8e4550eaf8a9533b2
+    repo_commit: 74c68a2a
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: f2b18355829ff0ba81c1d82cc0bf28ff7b1cc3ba1de2858bea0b16cb5582fe07
-    repo_commit: 06af847e
+    repo_commit: 74c68a2a
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: ac99b872475404c259a64bf9ddae2f045620c928b7c19067f2d818eaddc8b07e
-    repo_commit: 06af847e
+    repo_commit: 74c68a2a
   launch_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/launch_manifest.yaml
     sha256: 332331ebd64124678dc7ba988647da50edcaf0873e84ebbe80c38806fbaebb5f
-    repo_commit: 06af847e
+    repo_commit: 74c68a2a
   stack_topology:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
     sha256: 59b997157643978a3eaf01c9245b9982423f7eb1a15ceae4db55b1c4a49fe069
-    repo_commit: 06af847e
+    repo_commit: 74c68a2a
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 0545bd5511651eda6723d1666254f48c9c61aa55ef04ed106fe1ad5ee57338e3
-    repo_commit: 06af847e
+    repo_commit: 74c68a2a
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
-    sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: 06af847e
+    sha256: 52b173eb69b0838394e7d48d6112827f686e06d848a107291754f791e64b1064
+    repo_commit: 74c68a2a
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: 06af847e
+    repo_commit: 74c68a2a
 roles:
   architect_critic:
     role: architect_critic
