@@ -258,9 +258,25 @@ def _matrix_roles(numa_config: dict, role_filter: set[str] | None = None) -> lis
     return roles
 
 
+def _shape_label(idx: int, regions: frozenset) -> str:
+    """Human-readable SHAPE name for an instance record's footprint.
+
+    Derived from the atomic CPU regions the instance occupies — the only sound
+    discriminator (see `canonical_shape_for_regions`). An unrecognised
+    footprint gets a visibly non-committal `inst<idx>` so the label can never
+    assert a shape the geometry does not support: the predecessor rule
+    (`"full" if idx == 0 else f"q{idx - 1}"`) named every secondary instance a
+    quarter, which since the 2026-07-30 quarter retirement mislabelled every
+    live HALF as a quarter.
+    """
+    from src.runtime import instance_topology
+
+    return instance_topology.canonical_shape_for_regions(regions) or f"inst{idx}"
+
+
 def _instance_record(role: str, idx: int, port: int, regions: frozenset, numa_config: dict) -> dict[str, Any]:
     inst = numa_config[role]["instances"][idx]
-    label = "full" if idx == 0 else f"q{idx - 1}"
+    label = _shape_label(idx, regions)
     return {
         "role": role,
         "label": label,
@@ -1358,7 +1374,7 @@ def cmd_bench_within_role(args: argparse.Namespace) -> int:
     certs: dict[str, dict[str, Any]] = {}
     for role in roles:
         fps = _role_footprints(NUMA_CONFIG, role, live_only=args.live_only)
-        labels = {idx: ("full" if idx == 0 else f"q{idx - 1}") for idx, _p, _r in fps}
+        labels = {idx: _shape_label(idx, regs) for idx, _p, regs in fps}
         pairs: list[dict[str, Any]] = []
         for (ia, pa, ra), (ib, pb, rb) in itertools.combinations(fps, 2):
             if ra & rb:

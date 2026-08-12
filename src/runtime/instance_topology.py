@@ -135,6 +135,52 @@ def instances_overlap(
     return bool(instance_regions.get(a, frozenset()) & instance_regions.get(b, frozenset()))
 
 
+# ── Canonical shape naming ─────────────────────────────────────────────
+
+# The seven footprints the machine can actually be partitioned into, keyed by
+# the CANONICAL REGION SET — never by instance index and never by a thread
+# count. Two prior derivations were wrong for reasons worth recording:
+#
+#   * instance index — `idx 0 -> "full", else f"q{idx-1}"` names every
+#     non-primary instance a QUARTER regardless of its real footprint. Since
+#     the 2026-07-30 quarter retirement the live lineup is full + two HALVES,
+#     so that rule labels a two-region half "q0"/"q1", and labels a role whose
+#     primary is itself a half (frontdoor, cpus 0-47) "full".
+#   * thread ratio — `threads / full_threads` cannot separate a half from a
+#     quarter, because `threads` counts LOGICAL cpus including SMT siblings:
+#     a 48-thread quarter (24 cores x 2 SMT) and a 48-thread half both read
+#     0.5 against a 96-thread full.
+#
+# Regions are the machine's own partitioning unit and are derived from the
+# instance's own cpu_list, so they are the sound discriminator.
+CANONICAL_SHAPES: dict[frozenset[str], str] = {
+    frozenset({"q0", "q1", "q2", "q3"}): "full",
+    frozenset({"q0", "q1"}): "half0",
+    frozenset({"q2", "q3"}): "half1",
+    frozenset({"q0"}): "q0",
+    frozenset({"q1"}): "q1",
+    frozenset({"q2"}): "q2",
+    frozenset({"q3"}): "q3",
+}
+
+
+def canonical_shape_for_regions(regions) -> str | None:
+    """Name the SHAPE of an instance from the atomic regions it occupies.
+
+    Returns one of "full", "half0", "half1", "q0".."q3" — or ``None`` when the
+    footprint is not a canonical shape (an exotic cross-node span such as
+    {q0,q2}, a three-region span, or an empty region set as produced by a GPU
+    role's HT-only host lane).
+
+    ``None`` is deliberate: a caller that must name the instance anyway is
+    obliged to pick a VISIBLY non-committal fallback (e.g. ``inst<idx>``)
+    rather than silently asserting a shape the footprint does not have.
+    Display-side code that needs a string for every input (the dashboard's
+    ``_shape_for_regions``) keeps its own joined-region fallback.
+    """
+    return CANONICAL_SHAPES.get(frozenset(regions or ()))
+
+
 # ── Derived module-level table (lazy import to avoid circulars) ─────────
 
 _INSTANCE_REGIONS_CACHE: dict[tuple[str, int], frozenset[str]] | None = None

@@ -13,7 +13,7 @@ default_floor: 0.85
 pairs:
   - roles: ['architect_critic', 'ingest_long_context']
     instance_a: {"cpu_list": "0-95", "instance_idx": 0, "label": "full", "port": 8074, "regions": ["q0", "q1", "q2", "q3"], "role": "architect_critic", "threads": 96}
-    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8185, "regions": ["q0", "q1"], "role": "ingest_long_context", "threads": 48}
+    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8185, "regions": ["q0", "q1"], "role": "ingest_long_context", "threads": 48}
     seq_aggregate_tps: 16.54
     parallel_aggregate_tps: 18.32
     ratio: 1.11
@@ -22,7 +22,7 @@ pairs:
     note: "overlap_measured"
   - roles: ['architect_critic', 'worker_general']
     instance_a: {"cpu_list": "0-95", "instance_idx": 0, "label": "full", "port": 8074, "regions": ["q0", "q1", "q2", "q3"], "role": "architect_critic", "threads": 96}
-    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8082, "regions": ["q0", "q1"], "role": "worker_general", "threads": 48}
+    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8082, "regions": ["q0", "q1"], "role": "worker_general", "threads": 48}
     seq_aggregate_tps: 19.01
     parallel_aggregate_tps: 21.33
     ratio: 1.12
@@ -31,7 +31,7 @@ pairs:
     note: "overlap_measured"
   - roles: ['architect_critic', 'worker_vision']
     instance_a: {"cpu_list": "0-95", "instance_idx": 0, "label": "full", "port": 8074, "regions": ["q0", "q1", "q2", "q3"], "role": "architect_critic", "threads": 96}
-    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "full", "port": 8086, "regions": [], "role": "worker_vision", "threads": 8}
+    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "inst0", "port": 8086, "regions": [], "role": "worker_vision", "threads": 8}
     seq_aggregate_tps: 25.58
     parallel_aggregate_tps: 28.71
     ratio: 1.12
@@ -39,7 +39,7 @@ pairs:
     verdict: "allow"
   - roles: ['architect_critic', 'frontdoor']
     instance_a: {"cpu_list": "0-95", "instance_idx": 0, "label": "full", "port": 8074, "regions": ["q0", "q1", "q2", "q3"], "role": "architect_critic", "threads": 96}
-    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8080, "regions": ["q0", "q1"], "role": "frontdoor", "threads": 48}
+    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8080, "regions": ["q0", "q1"], "role": "frontdoor", "threads": 48}
     seq_aggregate_tps: 17.12
     parallel_aggregate_tps: 19.28
     ratio: 1.13
@@ -47,24 +47,24 @@ pairs:
     verdict: "allow"
     note: "overlap_measured"
   - roles: ['ingest_long_context', 'worker_vision']
-    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8185, "regions": ["q0", "q1"], "role": "ingest_long_context", "threads": 48}
-    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "full", "port": 8086, "regions": [], "role": "worker_vision", "threads": 8}
+    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8185, "regions": ["q0", "q1"], "role": "ingest_long_context", "threads": 48}
+    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "inst0", "port": 8086, "regions": [], "role": "worker_vision", "threads": 8}
     seq_aggregate_tps: 33.05
     parallel_aggregate_tps: 38.83
     ratio: 1.17
     samples: 1
     verdict: "allow"
   - roles: ['frontdoor', 'worker_vision']
-    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8080, "regions": ["q0", "q1"], "role": "frontdoor", "threads": 48}
-    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "full", "port": 8086, "regions": [], "role": "worker_vision", "threads": 8}
+    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8080, "regions": ["q0", "q1"], "role": "frontdoor", "threads": 48}
+    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "inst0", "port": 8086, "regions": [], "role": "worker_vision", "threads": 8}
     seq_aggregate_tps: 35.8
     parallel_aggregate_tps: 42.23
     ratio: 1.18
     samples: 1
     verdict: "allow"
   - roles: ['worker_general', 'worker_vision']
-    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8082, "regions": ["q0", "q1"], "role": "worker_general", "threads": 48}
-    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "full", "port": 8086, "regions": [], "role": "worker_vision", "threads": 8}
+    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8082, "regions": ["q0", "q1"], "role": "worker_general", "threads": 48}
+    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "inst0", "port": 8086, "regions": [], "role": "worker_vision", "threads": 8}
     seq_aggregate_tps: 44.71
     parallel_aggregate_tps: 56.46
     ratio: 1.26
@@ -72,63 +72,63 @@ pairs:
     verdict: "allow"
   - roles: ['architect_critic', 'architect_general']
     instance_a: {"cpu_list": "0-95", "instance_idx": 0, "label": "full", "port": 8074, "regions": ["q0", "q1", "q2", "q3"], "role": "architect_critic", "threads": 96}
-    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "full", "port": 8083, "regions": [], "role": "architect_general", "threads": 8}
+    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "inst0", "port": 8083, "regions": [], "role": "architect_general", "threads": 8}
     seq_aggregate_tps: 21.37
     parallel_aggregate_tps: 27.78
     ratio: 1.3
     samples: 1
     verdict: "allow"
   - roles: ['architect_general', 'worker_vision']
-    instance_a: {"cpu_list": "184-191", "instance_idx": 0, "label": "full", "port": 8083, "regions": [], "role": "architect_general", "threads": 8}
-    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "full", "port": 8086, "regions": [], "role": "worker_vision", "threads": 8}
+    instance_a: {"cpu_list": "184-191", "instance_idx": 0, "label": "inst0", "port": 8083, "regions": [], "role": "architect_general", "threads": 8}
+    instance_b: {"cpu_list": "184-191", "instance_idx": 0, "label": "inst0", "port": 8086, "regions": [], "role": "worker_vision", "threads": 8}
     seq_aggregate_tps: 68.0
     parallel_aggregate_tps: 90.01
     ratio: 1.32
     samples: 1
     verdict: "allow"
   - roles: ['architect_general', 'ingest_long_context']
-    instance_a: {"cpu_list": "184-191", "instance_idx": 0, "label": "full", "port": 8083, "regions": [], "role": "architect_general", "threads": 8}
-    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8185, "regions": ["q0", "q1"], "role": "ingest_long_context", "threads": 48}
+    instance_a: {"cpu_list": "184-191", "instance_idx": 0, "label": "inst0", "port": 8083, "regions": [], "role": "architect_general", "threads": 8}
+    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8185, "regions": ["q0", "q1"], "role": "ingest_long_context", "threads": 48}
     seq_aggregate_tps: 27.74
     parallel_aggregate_tps: 38.92
     ratio: 1.4
     samples: 1
     verdict: "allow"
   - roles: ['architect_general', 'frontdoor']
-    instance_a: {"cpu_list": "184-191", "instance_idx": 0, "label": "full", "port": 8083, "regions": [], "role": "architect_general", "threads": 8}
-    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8080, "regions": ["q0", "q1"], "role": "frontdoor", "threads": 48}
+    instance_a: {"cpu_list": "184-191", "instance_idx": 0, "label": "inst0", "port": 8083, "regions": [], "role": "architect_general", "threads": 8}
+    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8080, "regions": ["q0", "q1"], "role": "frontdoor", "threads": 48}
     seq_aggregate_tps: 29.45
     parallel_aggregate_tps: 42.18
     ratio: 1.43
     samples: 1
     verdict: "allow"
   - roles: ['architect_general', 'worker_general']
-    instance_a: {"cpu_list": "184-191", "instance_idx": 0, "label": "full", "port": 8083, "regions": [], "role": "architect_general", "threads": 8}
-    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8082, "regions": ["q0", "q1"], "role": "worker_general", "threads": 48}
+    instance_a: {"cpu_list": "184-191", "instance_idx": 0, "label": "inst0", "port": 8083, "regions": [], "role": "architect_general", "threads": 8}
+    instance_b: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8082, "regions": ["q0", "q1"], "role": "worker_general", "threads": 48}
     seq_aggregate_tps: 35.61
     parallel_aggregate_tps: 56.07
     ratio: 1.57
     samples: 1
     verdict: "allow"
   - roles: ['ingest_long_context', 'worker_general']
-    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8185, "regions": ["q0", "q1"], "role": "ingest_long_context", "threads": 48}
-    instance_b: {"cpu_list": "48-95,144-191", "instance_idx": 2, "label": "q1", "port": 8182, "regions": ["q2", "q3"], "role": "worker_general", "threads": 48}
+    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8185, "regions": ["q0", "q1"], "role": "ingest_long_context", "threads": 48}
+    instance_b: {"cpu_list": "48-95,144-191", "instance_idx": 2, "label": "half1", "port": 8182, "regions": ["q2", "q3"], "role": "worker_general", "threads": 48}
     seq_aggregate_tps: 22.2
     parallel_aggregate_tps: 38.18
     ratio: 1.72
     samples: 1
     verdict: "allow"
   - roles: ['frontdoor', 'worker_general']
-    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8080, "regions": ["q0", "q1"], "role": "frontdoor", "threads": 48}
-    instance_b: {"cpu_list": "48-95,144-191", "instance_idx": 2, "label": "q1", "port": 8182, "regions": ["q2", "q3"], "role": "worker_general", "threads": 48}
+    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8080, "regions": ["q0", "q1"], "role": "frontdoor", "threads": 48}
+    instance_b: {"cpu_list": "48-95,144-191", "instance_idx": 2, "label": "half1", "port": 8182, "regions": ["q2", "q3"], "role": "worker_general", "threads": 48}
     seq_aggregate_tps: 23.13
     parallel_aggregate_tps: 42.04
     ratio: 1.82
     samples: 1
     verdict: "allow"
   - roles: ['frontdoor', 'ingest_long_context']
-    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "q0", "port": 8080, "regions": ["q0", "q1"], "role": "frontdoor", "threads": 48}
-    instance_b: {"cpu_list": "48-95,144-191", "instance_idx": 2, "label": "q1", "port": 8285, "regions": ["q2", "q3"], "role": "ingest_long_context", "threads": 48}
+    instance_a: {"cpu_list": "0-47,96-143", "instance_idx": 1, "label": "half0", "port": 8080, "regions": ["q0", "q1"], "role": "frontdoor", "threads": 48}
+    instance_b: {"cpu_list": "48-95,144-191", "instance_idx": 2, "label": "half1", "port": 8285, "regions": ["q2", "q3"], "role": "ingest_long_context", "threads": 48}
     seq_aggregate_tps: 20.2
     parallel_aggregate_tps: 38.26
     ratio: 1.89
