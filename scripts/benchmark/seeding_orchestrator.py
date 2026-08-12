@@ -83,6 +83,21 @@ _TRANSPORT_TIMEOUT_REASONS = frozenset(
 _FAILURE_PROVENANCE_SCHEMA = "epyc.failure_provenance.v1"
 
 
+def _error_text(exc: BaseException, detail: str) -> str:
+    """Return a NON-EMPTY error string for ``exc``.
+
+    ``str(httpx.ReadTimeout(""))`` is the empty string, and an empty ``error``
+    is FALSY: every downstream `if not error:` guard then treats a transport
+    timeout as a successful generation and scores its empty answer against the
+    gold answer, manufacturing a WRONG verdict from a measurement that was
+    never made. Preserve the exception's own message whenever it has one (so
+    existing error-text assertions are unchanged) and fall back to the
+    classifier's `Type: msg` detail — which is never empty — when it does not.
+    """
+    text = str(exc)
+    return text if text.strip() else detail
+
+
 def _classify_exc(exc: BaseException) -> tuple[str, str]:
     """Return ``(reason, detail)`` for ``exc`` via the shared observability
     classifier, with a self-contained fallback so this module never hard-depends
@@ -943,9 +958,15 @@ def call_orchestrator_forced(
         payload["x_orchestrator_prompt_root"] = str(prompt_root)
 
     def _timeout_result(exc: BaseException, reason: str) -> dict[str, Any]:
+        _, detail = _classify_exc(exc)
         return {
             "answer": "",
-            "error": str(exc),
+            "error": _error_text(exc, detail),
+            # Structural disposition signal. Without it the only evidence that
+            # this row is a transport failure is the exception's text, which a
+            # substring classifier must recognise to exclude — and silently
+            # scores as a WRONG answer when it does not.
+            "failure_reason": reason,
             "failure_provenance": _client_transport_timeout_provenance(
                 reason=reason,
                 exc=exc,
@@ -953,6 +974,18 @@ def call_orchestrator_forced(
                 workload_class=workload_class,
                 max_queue_wait_ms=int(payload["max_queue_wait_ms"]),
             ),
+        }
+
+    def _transport_error_result(exc: BaseException, reason: str) -> dict[str, Any]:
+        """Terminal non-timeout transport/protocol failure (HTTP 4xx/5xx raised
+        by raise_for_status, an unparseable body, a protocol error). Carries the
+        structural ``failure_reason`` so the row is classified as INFRA-FAILED
+        rather than scored as a wrong answer."""
+        _, detail = _classify_exc(exc)
+        return {
+            "answer": "",
+            "error": _error_text(exc, detail),
+            "failure_reason": reason,
         }
 
     def _execute_direct() -> dict[str, Any]:
@@ -981,6 +1014,13 @@ def call_orchestrator_forced(
                 error_code = data.get("error_code")
                 if error_code and not data.get("error"):
                     data["error"] = data.get("error_detail") or f"HTTP {error_code}"
+                # A non-2xx status means the SERVER REFUSED the request — a
+                # per-slot context overflow returns 400. That is a capacity
+                # fact about the fleet, never evidence about answer quality,
+                # so record it structurally instead of leaving the disposition
+                # to a substring match on the body text.
+                data.setdefault("http_status", int(response.status_code))
+                data.setdefault("failure_reason", "http_status")
                 _surface_inband_error(data)
                 _normalize_tool_telemetry(data)
                 return data
@@ -1024,6 +1064,10 @@ def call_orchestrator_forced(
             # disturbing existing data keys.
             data["_meta"] = meta
             reason = str(meta.get("reason") or "")
+            # Same structural stamp as the direct path: a watcher-path failure
+            # must be classifiable as INFRA-FAILED without reading its message.
+            if reason and not meta.get("clean") and "failure_reason" not in data:
+                data["failure_reason"] = reason
             if (
                 data.get("error")
                 and "failure_provenance" not in data
@@ -1051,7 +1095,7 @@ def call_orchestrator_forced(
                 reason, _detail = _classify_exc(exc)
                 if reason in _TRANSPORT_TIMEOUT_REASONS:
                     return _timeout_result(exc, reason)
-                return {"answer": "", "error": str(exc)}
+                return _transport_error_result(exc, reason)
         return _execute_watcher()
 
     # ── Eval traffic: reconnect backoff on CONNECTION-level failures ─────
@@ -1079,7 +1123,7 @@ def call_orchestrator_forced(
                     # that server-side generation did not start.
                     if reason in _TRANSPORT_TIMEOUT_REASONS:
                         return _timeout_result(exc, reason)
-                    return {"answer": "", "error": str(exc)}
+                    return _transport_error_result(exc, reason)
                 last_detail = str(exc)
         else:
             data = _execute_watcher()

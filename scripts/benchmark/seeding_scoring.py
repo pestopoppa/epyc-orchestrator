@@ -18,6 +18,8 @@ __all__ = [
     "_forced_role_serving_mismatch",
     "_inband_error_text",
     "_is_coding_task",
+    "infra_failure_reason",
+    "measurement_disposition",
     "score_answer_deterministic",
     "score_answer_or_error",
 ]
@@ -129,46 +131,51 @@ def score_answer_or_error(
 # surfaces as two paths disagreeing about the same measurement.
 from src.autopilot_core.measurement_guards import (
     INBAND_ERROR_PREFIX as _INBAND_ERROR_PREFIX,
+    INFRA_ERROR_PATTERNS as _INFRA_ERROR_PATTERNS,
     forced_role_serving_mismatch as _forced_role_serving_mismatch,
     inband_error_text as _inband_error_text,
+    infra_failure_reason,
+    legacy_error_type as _legacy_error_type,
+    measurement_disposition,
 )
 
 
-INFRA_PATTERNS = [
-    "timed out", "timeout", "connection", "refused",
-    "unreachable", "502", "503", "504", "connecterror",
-    "readtimeout", "backend down", "server error",
-    "server disconnected without sending a response",
-    "remoteprotocolerror", "connection reset", "broken pipe",
-    "temporarily unavailable", "name or service not known",
-    # REL-1 eval-honesty guards (2026-07-21 EV-11c circuit-open incident):
-    # the orchestrator circuit breaker surfaces "[ERROR: Backend unavailable
-    # (circuit open): <url>]" in-band; these must classify as INFRASTRUCTURE
-    # (excluded from the quality denominator), never as a model task_failure.
-    "circuit open", "backend unavailable",
-    # eval_tower client-side REL-1 rejections (deadline-starvation floor and
-    # forced-role integrity) are governance/infra exclusions, not model errors.
-    "deadline_starved", "forced_role_fallback",
-]
+# The substring list is now owned by `measurement_guards` (one copy of an
+# admissibility rule, per this module's own unification note). Re-exported
+# under its historical name for the callers and tests that import it.
+INFRA_PATTERNS = list(_INFRA_ERROR_PATTERNS)
 
 
-def _classify_error(error_str: str | None) -> str:
-    """Classify error as infrastructure or task failure."""
-    if error_str is None:
+def _classify_error(
+    error_str: str | None,
+    resp: Mapping[str, Any] | None = None,
+) -> str:
+    """Classify an error as ``infrastructure`` / ``task_failure`` / ``none``.
+
+    STRUCTURAL first, substring last. The historical implementation was a
+    substring match over ``error_str`` alone, which fails open by construction:
+    it must RECOGNISE a failure in order to exclude it, so every message it did
+    not recognise became a wrong answer. Measured against the real transport:
+
+    * ``HTTP 400`` → ``"Client error '400 Bad Request' for url ..."`` matches no
+      pattern (``server error`` does, ``client error`` does not) → ``task_failure``
+      → scored WRONG. A per-slot context overflow returns 400, so a *capacity*
+      problem was being reported as a permanent quality regression.
+    * ``httpx.ReadTimeout("")`` → ``error_str`` is ``""`` → callers' ``if not
+      error`` guard treats the call as a SUCCESS and scores its empty answer.
+    * an empty/garbage HTTP body → ``"Expecting value: line 1 column 1"`` →
+      ``task_failure`` → scored WRONG.
+
+    Passing ``resp`` lets the shared classifier read the transport facts the
+    caller already recorded (``failure_reason``, ``failure_provenance.class``,
+    ``_meta.reason``, the HTTP status, an empty non-error reply). The
+    single-argument form is preserved for legacy callers.
+    """
+    if error_str is None and resp is None:
         return "none"
-    # REL-1: an in-band "[ERROR: ...]" banner surfaced into the error field is
-    # a backend/serving failure — the model never produced a real attempt at
-    # the task. Classify it as INFRASTRUCTURE (excluded from scoring and from
-    # MemRL reward emission), never as a task_failure (which would inject a
-    # 0.0 reward and poison the learned router). This anchors the same way the
-    # eval tower's Guard 1 does, so a generic in-band error (not matching an
-    # INFRA_PATTERNS substring) is still excluded rather than scored WRONG.
-    if error_str.lstrip().startswith(_INBAND_ERROR_PREFIX):
-        return "infrastructure"
-    error_lower = error_str.lower()
-    if any(p in error_lower for p in INFRA_PATTERNS):
-        return "infrastructure"
-    return "task_failure"
+    return _legacy_error_type(
+        measurement_disposition(resp, error=error_str)
+    )
 
 
 # ── Coding-task heuristic ────────────────────────────────────────────

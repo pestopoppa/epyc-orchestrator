@@ -89,6 +89,16 @@ def result_to_row(
         "cost": result.cost,
         "reliability": result.reliability,
         "n_questions": result.n_questions,
+        # INFRA-FAILED visibility (2026-08-03 incident). `quality` alone cannot
+        # distinguish "the model scored 0%" from "the API was down for the whole
+        # pass"; core_v2_select — and any human reading this file — MUST be able
+        # to tell. quality_measured=False means the `quality` above is a
+        # placeholder, not a measurement.
+        "quality_measured": bool(result.quality_measured),
+        "quality_unmeasured_reason": result.quality_unmeasured_reason,
+        "infra_failed_count": int(result.infra_failed_count),
+        "scoring_failed_count": int(result.scoring_failed_count),
+        "infra_failed_reasons": dict(result.infra_failed_reasons),
         "core_id": result.core_id,
         "per_suite_quality": dict(result.per_suite_quality),
         "per_suite_counts": dict(result.per_suite_counts),

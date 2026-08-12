@@ -32,6 +32,7 @@ from seeding_scoring import (
     _forced_role_serving_mismatch,
     _inband_error_text,
     _is_coding_task,
+    infra_failure_reason,
     score_answer_or_error,
 )
 from seeding_orchestrator import (
@@ -364,10 +365,30 @@ def _build_role_result(
                 role, served_by,
             )
 
-    error_type = _classify_error(error)
+    # STRUCTURAL classification (2026-08-03 incident). `resp` is passed so the
+    # shared classifier can read the transport facts recorded at the call site
+    # — failure_reason / failure_provenance.class / _meta.reason / the HTTP
+    # status / an empty non-error reply — instead of substring-matching the
+    # error prose. Without `resp`, an HTTP 400 (per-slot context overflow), an
+    # empty-message ReadTimeout and an unparseable body all classified as
+    # `task_failure` and were scored as WRONG ANSWERS: absence reported as
+    # failure. See src/autopilot_core/measurement_guards.py.
+    error_type = _classify_error(error, resp)
 
     if error_type == "infrastructure":
         passed = None
+        # An empty-message transport failure leaves `error` falsy, which would
+        # otherwise sail through every `if error:` guard downstream. Give the
+        # row a non-empty, self-describing error so it can never be mistaken
+        # for a clean generation.
+        if not str(error or "").strip():
+            reason = infra_failure_reason(resp, error=error) or "infra_failed"
+            error = f"infra_failed: {reason} (role={role})"
+            logger.error(
+                "REL-1 infra failure with no error text (role=%s reason=%s) — "
+                "excluding row rather than scoring an absent answer",
+                role, reason,
+            )
     elif error:
         passed = False
     else:

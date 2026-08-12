@@ -155,6 +155,12 @@ def resilient_post(
             if isinstance(data, dict) and (
                 data.get("error_code") or data.get("error_detail")
             ):
+                # Structural disposition signal — a non-2xx means the server
+                # REFUSED the request (e.g. a per-slot context overflow returns
+                # 400). Downstream must classify that as INFRA-FAILED, and it
+                # cannot do so from the response body's prose alone.
+                data.setdefault("http_status", int(r.status_code))
+                data.setdefault("failure_reason", "http_status")
                 return data
         r.raise_for_status()
         try:
