@@ -522,3 +522,68 @@ def test_self_labelled_error_text_reports_its_exact_reason():
         "deadline_starved"
     )
     assert infra_failure_reason({}, error="infra_failed: read_timeout") == "read_timeout"
+
+
+def test_compact_row_and_aggregate_accept_duck_typed_rows():
+    """The recovery path does NOT pass QuestionResult instances.
+
+    `run_e8_quality_baseline_v5._merged_retry_sidecar` rebuilds a row from JSONL
+    as a `types.SimpleNamespace` and hands it to `_compact_question_result`. A
+    bare `r.disposition` raises AttributeError there — caught by the full suite
+    as a real regression, not by any targeted run. Rows without a disposition
+    must be treated as `scored`, so an old row keeps its previous accounting.
+    """
+    import types
+
+    from eval_tower import _compact_question_result
+
+    legacy = types.SimpleNamespace(
+        question_id="q",
+        qid="q",
+        suite="math",
+        prompt="What is 2+2?",
+        expected="4",
+        answer="4",
+        correct=True,
+        error=None,
+        elapsed_s=1.0,
+        tokens_generated=4,
+        tools_used=0,
+        tools_called=[],
+        eval_partition="core",
+        host_covariates={},
+        retrieval_compaction={},
+        scoring_method="exact_match",
+        route_used="",
+        confidence=1.0,
+        confidence_source="binary_correctness_proxy",
+        partial=False,
+        degraded=False,
+        exogenous_recovered=False,
+        exogenous_unrecovered=False,
+        external_restart=False,
+        retry_count=0,
+        rubric_scores={},
+        rubric_source="",
+        failure_provenance=None,
+    )
+
+    item = _compact_question_result(legacy)  # must not raise
+    assert item["correct"] is True
+    assert "disposition" not in item
+    assert "infra_reason" not in item
+
+
+def test_aggregate_treats_a_row_with_no_disposition_as_scored():
+    """Rows recovered from an older journal carry no disposition. They must fold
+    exactly as they did before the field existed — `error` alone still decides
+    exclusion, so the accounting of historical data is unchanged."""
+    legacy_scored = _scored_row(True, "a")
+    legacy_scored.disposition = ""  # pre-disposition row
+    legacy_scored.infra_reason = ""
+    result = _aggregate([legacy_scored, _scored_row(False, "b")])
+
+    assert result.quality_measured is True
+    assert result.infra_failed_count == 0
+    assert result.details["n_scored"] == 2
+    assert result.quality == pytest.approx(1.5)  # 1/2 on the 0-3 scale

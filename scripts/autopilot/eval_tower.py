@@ -1329,13 +1329,20 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
     if r.confidence_source and r.confidence_source != "binary_correctness_proxy":
         item["confidence"] = round(float(r.confidence), 6)
         item["confidence_source"] = r.confidence_source
-    if r.disposition and r.disposition != DISPOSITION_SCORED:
+    # getattr, not attribute access: this function is also called with
+    # DUCK-TYPED stand-ins that are not QuestionResult instances — e.g.
+    # run_e8_quality_baseline_v5._merged_retry_sidecar passes a
+    # types.SimpleNamespace built from a recovered row. A bare `r.disposition`
+    # raises AttributeError there and breaks the recovery path.
+    _disposition = str(getattr(r, "disposition", "") or "")
+    _infra_reason = str(getattr(r, "infra_reason", "") or "")
+    if _disposition and _disposition != DISPOSITION_SCORED:
         # Emitted for every non-scored row, including `task_failed`, so a
         # consumer never has to infer the kind of failure by substring-matching
         # `error_detail` — the exact inference that failed open before.
-        item["disposition"] = r.disposition
-    if r.infra_reason:
-        item["infra_reason"] = r.infra_reason
+        item["disposition"] = _disposition
+    if _infra_reason:
+        item["infra_reason"] = _infra_reason
     if r.error:
         item["error"] = True
         item["error_detail"] = str(r.error).replace("\n", " ")[:200]
@@ -5127,17 +5134,25 @@ class EvalTower:
         # dead endpoint?". Split the excluded rows by disposition and carry the
         # counts (and the structural reasons) into the aggregate, so a capacity
         # or infrastructure problem can never present itself as a quality one.
+        # getattr throughout: recovery/replay paths hand this aggregator
+        # duck-typed rows rebuilt from JSONL, not QuestionResult instances.
+        # A row with no disposition is treated as `scored` — the pre-existing
+        # `error` check below still excludes it if it errored, so an old row
+        # keeps exactly its previous accounting.
+        def _disposition_of(row: Any) -> str:
+            return str(getattr(row, "disposition", "") or DISPOSITION_SCORED)
+
         infra_failed_count = sum(
-            1 for r in results if r.disposition == DISPOSITION_INFRA_FAILED
+            1 for r in results if _disposition_of(r) == DISPOSITION_INFRA_FAILED
         )
         scoring_failed_count = sum(
-            1 for r in results if r.disposition == DISPOSITION_SCORING_FAILED
+            1 for r in results if _disposition_of(r) == DISPOSITION_SCORING_FAILED
         )
         infra_failed_reasons: dict[str, int] = {}
         for r in results:
-            if r.disposition != DISPOSITION_INFRA_FAILED:
+            if _disposition_of(r) != DISPOSITION_INFRA_FAILED:
                 continue
-            reason = r.infra_reason or "unclassified"
+            reason = str(getattr(r, "infra_reason", "") or "") or "unclassified"
             infra_failed_reasons[reason] = infra_failed_reasons.get(reason, 0) + 1
 
         # Quality: fraction correct over scored (non-error) rows, scaled to 0-3.
