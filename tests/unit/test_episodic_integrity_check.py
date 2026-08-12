@@ -216,6 +216,130 @@ class TestSemanticSkipIsLoudNotSilent:
         assert rc == 0
 
 
+class TestSemanticSelfMatchUsesThePublishConvention:
+    """The gate must reconstruct with the function that PUBLISHED the vector.
+
+    Origin 2026-08-12 (backlog B5 / EPD-3). The semantic block hand-built
+    ``type:{t} | objective:{o}`` while the live index was published by
+    ``reseed_episodic_store.py`` through
+    ``record_from_legacy_context(ctx).embedding_text()``, which also emits
+    ``priority:{p}``. Measured on the live store: 34,938 of 64,019 rows (54.6%)
+    carry ``priority: "interactive"``, so on more than half the store the
+    DECISIVE check compared each stored vector against a string that was never
+    embedded. A re-spelling of a convention is not the convention.
+
+    This asserts the request BODY, not the verdict — the verdict cannot see the
+    difference, which is precisely why the drift survived.
+    """
+
+    @staticmethod
+    def _serve(store: Path, ctx: dict) -> tuple[list[str], int, dict]:
+        con = sqlite3.connect(store / "episodic.db")
+        con.execute("UPDATE memories SET context = ?", (json.dumps(ctx),))
+        con.commit()
+        con.close()
+
+        vector = faiss.read_index(str(store / "embeddings.faiss")).reconstruct(0).tolist()
+        seen: list[str] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - required stdlib handler name
+                length = int(self.headers.get("Content-Length") or 0)
+                seen.append(json.loads(self.rfile.read(length))["content"])
+                body = json.dumps({"embedding": vector}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            rc, report = run_checker(
+                store,
+                "--semantic",
+                "--require-semantic",
+                "--embedder-url",
+                f"http://127.0.0.1:{server.server_port}/embedding",
+            )
+        finally:
+            server.shutdown()
+            thread.join()
+        return seen, rc, report
+
+    def test_priority_bearing_row_is_reconstructed_with_its_priority(self, tmp_path):
+        """The 54.6% majority shape: task_type + objective + priority."""
+        sys.path.insert(0, str(CHECKER.parents[2]))
+        from orchestration.repl_memory.memory_record import record_from_legacy_context
+
+        ctx = {
+            "record_version": 1,
+            "task_type": "chat",
+            "objective": "route this task",
+            "priority": "interactive",
+            "source": "legacy",
+        }
+        store = build_store(tmp_path / "semantic-priority", n=1)
+        seen, rc, report = self._serve(store, ctx)
+
+        expected = record_from_legacy_context(ctx).embedding_text()
+        assert "priority:interactive" in expected, (
+            "fixture is wrong: the publish convention must emit a priority segment for "
+            "this context, or this test proves nothing"
+        )
+        assert seen == [expected], (
+            "the gate did not send the text the publish path embeds. Sent: "
+            f"{seen!r}; publish convention: {expected!r}"
+        )
+        assert by_name(report)["semantic_self_match"]["pass"] is True
+        assert rc == 0
+
+    def test_priority_less_row_is_reconstructed_without_one(self, tmp_path):
+        """The other 45.4%: benchmark/external rows carry no priority at all.
+
+        The fix must not go the other way and staple a priority onto rows that
+        were embedded without one.
+        """
+        sys.path.insert(0, str(CHECKER.parents[2]))
+        from orchestration.repl_memory.memory_record import record_from_legacy_context
+
+        ctx = {
+            "record_version": 1,
+            "task_type": "chat",
+            "objective": "answer this benchmark question",
+            "source": "external",
+        }
+        store = build_store(tmp_path / "semantic-no-priority", n=1)
+        seen, _rc, _report = self._serve(store, ctx)
+
+        expected = record_from_legacy_context(ctx).embedding_text()
+        assert "priority:" not in expected
+        assert seen == [expected]
+
+    def test_task_description_only_row_is_not_skipped(self, tmp_path):
+        """The publish path falls back to `task_description`; the gate must too.
+
+        The old block read `objective` only, so a row carrying its task text under
+        the other historical key was silently dropped from the sample rather than
+        checked — the check reported on a subset it never named.
+        """
+        sys.path.insert(0, str(CHECKER.parents[2]))
+        from orchestration.repl_memory.memory_record import record_from_legacy_context
+
+        ctx = {"task_description": "legacy key carries the task text", "source": "external"}
+        store = build_store(tmp_path / "semantic-task-description", n=1)
+        seen, _rc, report = self._serve(store, ctx)
+
+        expected = record_from_legacy_context(ctx).embedding_text()
+        assert seen == [expected]
+        assert report is not None and by_name(report)["semantic_self_match"]["sampled"] == 1
+
+
 class TestAutopilotGateBlocks:
     """The gate must refuse to start AutoPilot on a broken store."""
 

@@ -209,19 +209,41 @@ def main() -> int:
     if args.semantic:
         import httpx
 
+        # RECONSTRUCT WITH THE FUNCTION THAT PUBLISHED, not a re-spelling of it.
+        #
+        # 2026-08-12 (backlog B5 / EPD-3). This block used to hand-build
+        # `type:{t} | objective:{o}` — with no `priority:` segment. The live index was
+        # published by `reseed_episodic_store.py` (run 20260809T160329Z, 63,786/63,786
+        # rows) through `record_from_legacy_context(ctx).embedding_text()`, which DOES
+        # emit `priority:{p}` whenever priority is truthy. Measured on the live store:
+        # 34,938 of 64,019 rows (54.6%) carry `priority: "interactive"`, so on more than
+        # half the store the DECISIVE check was cosine-ing each stored vector against a
+        # string that was never embedded — a systematic understatement of self-match
+        # that spends margin against the 0.90 floor before any real corruption is even
+        # considered. This is the "ASSERTION PINS A SPELLING" failure: the gate
+        # re-implemented the convention instead of importing it, and the two drifted.
+        #
+        # Calling `record_from_legacy_context` rather than re-spelling it here is the
+        # point: it is the publish path, including the `task_description` fallback and
+        # the 2000-char cap, so this check cannot silently drift from it again.
+        sys.path.insert(0, str(_REPO_ROOT))
+        from orchestration.repl_memory.memory_record import record_from_legacy_context
+
         sims = []
         try:
             with httpx.Client(timeout=30) as client:
                 for mid, idx, ctx in rows:
                     try:
-                        obj = (json.loads(ctx) or {}).get("objective") or ""
+                        ctx_obj = json.loads(ctx) or {}
                     except Exception:
-                        obj = ""
-                    if not obj.strip():
+                        ctx_obj = {}
+                    # NOT `record` — that name is the reporter closure this block
+                    # calls in its own except handler.
+                    mem_record = record_from_legacy_context(ctx_obj)
+                    if not mem_record.objective.strip():
                         continue
-                    task_type = (json.loads(ctx) or {}).get("task_type")
-                    text = (f"type:{task_type} | " if task_type else "") + f"objective:{obj.strip()}"
-                    r = client.post(args.embedder_url, json={"content": text[:2000]}).json()
+                    text = mem_record.embedding_text()
+                    r = client.post(args.embedder_url, json={"content": text}).json()
                     if isinstance(r, list):
                         r = r[0]
                     e = r["embedding"]
