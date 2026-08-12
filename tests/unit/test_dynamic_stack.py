@@ -249,6 +249,43 @@ class TestQuarterScheduler:
         second = qs.request_burst(_RETIRED_ARCHITECT_ROLE, quarters_needed=2)
         assert second is None
 
+    def test_quarter_topology_matches_live_numa_constants(self):
+        """DS-6 is PARKED, not dead — so its topology must not silently rot.
+
+        P1-9 (2026-07-30) proposed deleting `quarter_scheduler.py` partly on the
+        claim that it was "now factually wrong about the machine". That claim was
+        refuted on 2026-08-12: the table below is byte-identical to the live
+        production constants. This test pins that parity so the claim cannot
+        become true unnoticed — if `stack_numa.py` is re-derived and this table
+        is not, this fails loudly instead of rotting into a real defect.
+
+        Guard, not gold-plating: `stack_numa.NUMA_Q*` is the load-bearing copy
+        that production reads. This asserts the parked copy still agrees with it.
+        """
+        from scripts.server import stack_numa
+        from scripts.server.quarter_scheduler import QuarterScheduler
+
+        live = {
+            "Q0A": stack_numa.NUMA_Q0A,
+            "Q0B": stack_numa.NUMA_Q0B,
+            "Q1A": stack_numa.NUMA_Q1A,
+            "Q1B": stack_numa.NUMA_Q1B,
+        }
+        parked = QuarterScheduler.QUARTER_TOPOLOGY
+
+        assert set(parked) == set(live), (
+            "quarter slot names drifted from stack_numa NUMA_Q* constants"
+        )
+        for name, (cpu_list, threads) in live.items():
+            assert parked[name]["cpu_list"] == cpu_list, (
+                f"{name} cpu_list drifted: quarter_scheduler has "
+                f"{parked[name]['cpu_list']!r}, stack_numa has {cpu_list!r}"
+            )
+            assert parked[name]["threads"] == threads, (
+                f"{name} thread count drifted: quarter_scheduler has "
+                f"{parked[name]['threads']}, stack_numa has {threads}"
+            )
+
 
 # === DS-7: Stack Templates ===
 

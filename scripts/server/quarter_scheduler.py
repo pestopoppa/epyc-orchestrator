@@ -1,5 +1,51 @@
 """DS-6: Dynamic Quarter Scheduler for NUMA pre-warm deployments.
 
+⚠ STATUS: **PARKED — NOT DEAD CODE. DO NOT DELETE.** (banner added 2026-08-12)
+
+    This module has zero runtime importers *by design*. That is the expected
+    steady state of a parked feature, not evidence that it is scaffolding.
+
+    NIB2-18 (`handoffs/active/non-inference-backlog.md`, still an OPEN item)
+    states verbatim: "DS-6 QuarterScheduler revalidation gate — Do **not**
+    treat as code-only scaffolding." DS-6-live in
+    `handoffs/active/dynamic-stack-concurrency.md` is likewise an OPEN item
+    and says that if the gate trips, the implementer should "implement the
+    already-resolved design" — the design this file *is*. The design record
+    names this exact path:
+    `handoffs/completed/dynamic-stack-concurrency-completed-through-2026-05-28.md`
+    § "QuarterScheduler class (new, in `scripts/server/quarter_scheduler.py`)".
+
+    Parked by the DS-7 profile decision of 2026-07-04
+    (`orchestration/reports/ds7_profile_decision_20260704T194020Z.{json,md}`,
+    surfaced as `metadata.ds7_decision.ds6_quarter_scheduler:
+    parked_until_static_prewarm_gap` in `stack_templates/default.yaml`).
+    Recorded reopen condition, verbatim: "Reopen only if future
+    DS-E1-equivalent evidence shows static pre-warm leaves material
+    throughput or latency on the table."
+
+    The counterpart runtime API that this scheduler drives is already live and
+    is explicitly labelled for it — `RoundRobinBackend.add_instance/
+    remove_instance` (`src/backends/round_robin.py`) and
+    `ConcurrencyAwareBackend.add_quarter/remove_quarter/is_quarter_active`
+    (`src/backends/concurrency_aware.py`). Deleting this module orphans that
+    API. `src/config/stack_migration.py` also defers diff-based migration to
+    "the DS-6 QuarterScheduler (NIB2-18)".
+
+    On the "factually wrong about the machine" claim (P1-9, 2026-07-30):
+    REFUTED as of 2026-08-12. ``QUARTER_TOPOLOGY`` cpu_lists and thread counts
+    are byte-identical to the live production constants ``NUMA_Q0A``..
+    ``NUMA_Q1B`` in ``scripts/server/stack_numa.py`` and match ``lscpu`` NPS4
+    nodes 0-3 exactly. What *is* true is that no role has declared a quarter
+    since the 2026-08-01 W1 cutover — the quarters are UNUSED, not WRONG, and
+    ``stack_numa.py`` deliberately retains the same constants for the same
+    reason. ``test_quarter_topology_matches_live_numa_constants`` in
+    ``tests/unit/test_dynamic_stack.py`` now pins that parity so this file
+    fails loudly if it ever does go stale.
+
+    Known gap if DS-6 resumes: the state machine here lacks the ``LAUNCHING``
+    state named in the DS-6-live design, and ``is_burst_ready()`` does not yet
+    consult real backend active-counts (see the ``pass`` at its drain check).
+
 Manages the lifecycle of quarter instances across NUMA quarters:
 - Health monitoring with state machine (HEALTHY → SUSPECT → DEAD)
 - Idle tracking for eviction eligibility
