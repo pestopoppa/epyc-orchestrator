@@ -105,6 +105,24 @@ async def create_session(
     return _session_to_info(session)
 
 
+# NOTE: the literal `/sessions/search` MUST stay above the parametric
+# `/sessions/{session_id}`. Starlette matches routes in registration order, so
+# a parametric route declared first swallows every sibling literal: "search" is
+# accepted as a session_id, the lookup misses, and the endpoint 404s from a
+# path it never reached. It sat in the Search section at the bottom of this
+# file and was dead for exactly that reason. Session ids are uuid4
+# (src/session/models.py), so no real id can collide with this literal.
+@router.get("/sessions/search")
+async def search_sessions(
+    q: str = Query(..., description="Search query"),
+    limit: int = Query(10, description="Maximum results"),
+    store: SQLiteSessionStore = Depends(dep_session_store),
+) -> list[SessionInfo]:
+    """Search sessions by name, summary, or last topic."""
+    sessions = store.search_sessions(q, limit=limit)
+    return [_session_to_info(s) for s in sessions]
+
+
 @router.get("/sessions/{session_id}", response_model=SessionInfo)
 async def get_session(
     session_id: str,
@@ -297,15 +315,9 @@ async def delete_finding(
 # =========================================================================
 
 
-@router.get("/sessions/search")
-async def search_sessions(
-    q: str = Query(..., description="Search query"),
-    limit: int = Query(10, description="Maximum results"),
-    store: SQLiteSessionStore = Depends(dep_session_store),
-) -> list[SessionInfo]:
-    """Search sessions by name, summary, or last topic."""
-    sessions = store.search_sessions(q, limit=limit)
-    return [_session_to_info(s) for s in sessions]
+# `/sessions/search` is declared above `/sessions/{session_id}` — see the note
+# there. `/sessions/{session_id}/findings/search` needs no such hoist: its
+# three-segment shape has no parametric sibling registered ahead of it.
 
 
 @router.get("/sessions/{session_id}/findings/search")

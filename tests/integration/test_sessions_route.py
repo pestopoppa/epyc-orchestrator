@@ -163,14 +163,17 @@ class TestSessionEndpoints:
         client.delete(f"/sessions/{session_id}")
 
     def test_search_sessions(self):
-        """Test session search endpoint.
+        """The session search endpoint is reachable and returns its matches.
 
-        Note: This endpoint has a path ordering issue in FastAPI where
-        /sessions/search conflicts with /sessions/{session_id}.
-        The parametric route matches first, so this returns 404.
-        This is a known limitation of the current route structure.
+        This test previously asserted ``status_code == 404`` and labelled it
+        "Expected behavior: 404 due to route ordering issue", with a TODO to
+        fix the source. The 404 WAS the defect: ``/sessions/search`` was
+        declared below ``/sessions/{session_id}``, Starlette matched the
+        parametric route first, took "search" as a session id, missed, and
+        404'd from a handler the search endpoint never reached. Asserting it
+        made the suite defend the bug — repairing the route order would have
+        broken a green test.
         """
-        # Create a session with searchable name
         create_response = client.post(
             "/sessions",
             json={
@@ -181,17 +184,43 @@ class TestSessionEndpoints:
         )
         session_id = create_response.json()["id"]
 
-        # Attempt to search for it
-        # Due to route ordering, this will match /sessions/{session_id} first
-        # and return 404 since "search" is not a valid session ID
-        response = client.get("/sessions/search?q=Searchable")
+        try:
+            response = client.get("/sessions/search?q=Searchable Unique Name 12345")
 
-        # Expected behavior: 404 due to route ordering issue
-        # TODO: Fix route ordering in source to make search work
-        assert response.status_code == 404
+            assert response.status_code == 200, (
+                f"/sessions/search is shadowed again: {response.status_code} "
+                f"{response.text!r}. Check that the literal route is still "
+                "registered above /sessions/{session_id} in "
+                "src/api/routes/sessions.py."
+            )
+            results = response.json()
+            assert isinstance(results, list), results
+            # The search handler really ran: it returned the row just created,
+            # not merely some 200 emitted by a different handler.
+            assert any(r["id"] == session_id for r in results), (
+                f"created session {session_id} not returned by search: {results}"
+            )
+        finally:
+            client.delete(f"/sessions/{session_id}")
 
-        # Cleanup
-        client.delete(f"/sessions/{session_id}")
+    def test_search_route_is_registered_before_the_parametric_session_route(self):
+        """Structural guard on the ordering itself, independent of the store.
+
+        The behavioural test above can only fail AFTER a regression ships and a
+        search comes back empty. This one reads the route table, so moving the
+        declaration back below ``/sessions/{session_id}`` is caught even when
+        the store would have returned no matches anyway.
+        """
+        from src.api.routes.sessions import router
+
+        paths = [getattr(r, "path", None) for r in router.routes]
+        assert "/sessions/search" in paths, paths
+        assert "/sessions/{session_id}" in paths, paths
+        assert paths.index("/sessions/search") < paths.index("/sessions/{session_id}"), (
+            "/sessions/search must be registered before /sessions/{session_id}; "
+            "Starlette matches in registration order and the parametric route "
+            f"would swallow it. Order seen: {paths}"
+        )
 
 
 class TestFindingEndpoints:
