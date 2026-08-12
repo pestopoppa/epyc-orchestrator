@@ -39,6 +39,50 @@ DEFAULT_MODEL_DIR = Path("/mnt/raid0/llm/models/ms-marco-minilm-l6-v2-onnx")
 _MODEL_DIR = Path(os.environ.get("KB_RAG_CROSS_ENCODER_PATH") or DEFAULT_MODEL_DIR)
 _MAX_PAIR_TOKENS = 256
 
+# ONNX Runtime intra-op thread bound.
+#
+# `score_pairs()` feeds N rows in ONE run(), so unlike the single-row siblings this
+# is a genuinely batched pass with real parallel work — and it still oversubscribes
+# under ORT's default pool (one thread per visible core) on this 192-thread host.
+# Measured 2026-08-12 on EPYC 9655, model_int8.onnx, 10 calls x 3 interleaved
+# rounds, medians in ms:
+#
+#     batch=10:  2t=87.6   4t=38.9   8t=24.2   16t=19.9   32t=21.2   (192t=44.5)
+#     batch=50:  2t=417.9  4t=277.9  8t=214.8  16t=129.7  32t=152.2  (192t=200.0)
+#
+# 16 wins at BOTH batch sizes and 32 is worse at both, so it is a real optimum, not
+# an edge of the swept range. Unbounded costs 2.03x at batch=10 and 1.45x at
+# batch=50 — the penalty narrows as batch grows, because there is more parallel work
+# to amortise the coordination over, but it never disappears.
+#
+# NOTE this is 16, not the 8 used by the single-row colbert encoder/reranker.
+# Copying their value here costs ~40% at batch=50. The optimum is call-shape
+# dependent; measure before reusing.
+_DEFAULT_ONNX_THREADS = 16
+
+
+def _onnx_threads() -> int:
+    """Resolve the ONNX intra-op thread count (env-overridable, positive int)."""
+    raw = os.environ.get("CROSS_ENCODER_ONNX_THREADS")
+    if not raw:
+        return _DEFAULT_ONNX_THREADS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "CROSS_ENCODER_ONNX_THREADS=%r is not an integer; using %d",
+            raw, _DEFAULT_ONNX_THREADS,
+        )
+        return _DEFAULT_ONNX_THREADS
+    if value <= 0:
+        logger.warning(
+            "CROSS_ENCODER_ONNX_THREADS=%d must be positive; using %d",
+            value, _DEFAULT_ONNX_THREADS,
+        )
+        return _DEFAULT_ONNX_THREADS
+    return value
+
+
 # Module-level singletons (lazy-loaded).
 _session = None
 _tokenizer = None
@@ -93,8 +137,12 @@ def ensure_loaded() -> bool:
         from tokenizers import Tokenizer
 
         start = time.perf_counter()
+        sess_options = ort.SessionOptions()
+        sess_options.intra_op_num_threads = _onnx_threads()
+        sess_options.inter_op_num_threads = 1
         _session = ort.InferenceSession(
             str(onnx_path),
+            sess_options=sess_options,
             providers=["CPUExecutionProvider"],
         )
         _input_names = tuple(i.name for i in _session.get_inputs())

@@ -37,6 +37,47 @@ _MODEL_DIR = Path(os.environ.get("LATEON_MODEL_PATH") or DEFAULT_MODEL_DIR)
 _MODEL_PATH = _MODEL_DIR / "model_int8.onnx"
 _TOKENIZER_PATH = _MODEL_DIR / "tokenizer.json"
 
+# ONNX Runtime intra-op thread bound.
+#
+# `encode()` runs ONE single-row forward pass over <=max_tokens padded tokens, so
+# the parallel work per call is tiny and ORT's default pool (one thread per visible
+# core) oversubscribes badly on this 192-thread host. Measured 2026-08-12 on EPYC
+# 9655, model_int8.onnx, batch=1, 20 calls x 3 interleaved rounds, medians in ms:
+#
+#     2t=20.54  4t=17.34  8t=17.88  16t=18.58  32t=23.92  192t=33.94
+#
+# Unbounded costs 1.96x. 4 measured nominally best, but 8 is within 3% — inside
+# shared-host run-to-run variance — and matches the sibling reranker, which has the
+# same single-row shape. Chosen for shape-consistency over a third magic number.
+#
+# Do NOT copy this value to a BATCHED consumer: cross_encoder.score_pairs() feeds N
+# rows in one run() and measures best at 16 (40% faster than 8 at batch=50). The
+# optimum is call-shape dependent, so measure before reusing.
+_DEFAULT_ONNX_THREADS = 8
+
+
+def _onnx_threads() -> int:
+    """Resolve the ONNX intra-op thread count (env-overridable, positive int)."""
+    raw = os.environ.get("COLBERT_ENCODE_ONNX_THREADS")
+    if not raw:
+        return _DEFAULT_ONNX_THREADS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "COLBERT_ENCODE_ONNX_THREADS=%r is not an integer; using %d",
+            raw, _DEFAULT_ONNX_THREADS,
+        )
+        return _DEFAULT_ONNX_THREADS
+    if value <= 0:
+        logger.warning(
+            "COLBERT_ENCODE_ONNX_THREADS=%d must be positive; using %d",
+            value, _DEFAULT_ONNX_THREADS,
+        )
+        return _DEFAULT_ONNX_THREADS
+    return value
+
+
 # Module-level singletons (lazy-loaded).
 _session = None
 _tokenizer = None
@@ -67,8 +108,12 @@ def ensure_loaded() -> bool:
         from tokenizers import Tokenizer
 
         start = time.perf_counter()
+        sess_options = ort.SessionOptions()
+        sess_options.intra_op_num_threads = _onnx_threads()
+        sess_options.inter_op_num_threads = 1
         _session = ort.InferenceSession(
             str(_MODEL_PATH),
+            sess_options=sess_options,
             providers=["CPUExecutionProvider"],
         )
         _tokenizer = Tokenizer.from_file(str(_TOKENIZER_PATH))
