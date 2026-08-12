@@ -7,7 +7,10 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import os
 import re
+import subprocess
+import types
 from pathlib import Path
 
 import yaml
@@ -17,6 +20,7 @@ import pytest
 import scripts.validate.stack_change_guard as stack_change_guard
 from scripts.validate.stack_change_guard import (
     HARDCODED_SURFACE_RULES,
+    RECOMPILE_PRIORS_COMMAND,
     REQUIRED_CONSUMER_SURFACE_IDS,
     RETIRED_LIVE_ROLE_FLOOR,
     ROLE_FACT_SURFACE_RULES,
@@ -2751,3 +2755,407 @@ def test_healthy_artifacts_emit_no_could_not_check() -> None:
         stack_change_guard.validate_launch_manifest_serving_alignment(priors)
     ) == []
     assert _could_not_check(stack_change_guard.validate_procedure_role_enums(priors)) == []
+
+
+# ---------------------------------------------------------------------------
+# REQUIRED_SOURCE_ARTIFACTS staleness — commit-time gate (P1-10)
+#
+# Every one of these runs against a THROWAWAY git repo under tmp_path. The
+# checker reads a real git index, so a fake would only prove the fake works.
+# ---------------------------------------------------------------------------
+
+_STALENESS_LABELS = (
+    "registry",
+    "descriptors",
+    "stack_manifest",
+    "stack_numa",
+    "orchestrator_stack",
+    "stack_paths",
+    "stack_runtime",
+)
+
+
+def _git_available() -> bool:
+    try:
+        return (
+            subprocess.run(["git", "--version"], capture_output=True, timeout=10).returncode
+            == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+requires_git = pytest.mark.skipif(not _git_available(), reason="git not available")
+
+
+def _git(repo: Path, *args: str) -> str:
+    """Run git in an ISOLATED sandbox: no global config, no inherited hooks."""
+    env = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_AUTHOR_NAME": "staleness-test",
+        "GIT_AUTHOR_EMAIL": "staleness@test.invalid",
+        "GIT_COMMITTER_NAME": "staleness-test",
+        "GIT_COMMITTER_EMAIL": "staleness@test.invalid",
+    }
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "-c", "core.hooksPath=/dev/null", *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+    assert proc.returncode == 0, f"git {args} failed: {proc.stderr}"
+    return proc.stdout
+
+
+def _write_staleness_priors(priors_path: Path, artifacts: dict[str, Path]) -> None:
+    priors_path.write_text(
+        yaml.safe_dump(
+            {
+                "stack_priors_version": STACK_PRIORS_VERSION,
+                "source_artifacts": {
+                    label: {"path": str(path), "sha256": _sha(path)}
+                    for label, path in artifacts.items()
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.fixture
+def staleness_repo(tmp_path: Path):
+    """A committed sandbox whose priors pin every REQUIRED_SOURCE_ARTIFACTS file."""
+    repo = (tmp_path / "sandbox").resolve()
+    (repo / "orchestration" / "derived").mkdir(parents=True)
+    (repo / "scripts" / "server").mkdir(parents=True)
+    artifacts = {
+        "registry": repo / "orchestration" / "model_registry.yaml",
+        "descriptors": repo / "orchestration" / "model_descriptors.yaml",
+        "stack_manifest": repo / "scripts" / "server" / "stack_manifest.py",
+        "stack_numa": repo / "scripts" / "server" / "stack_numa.py",
+        "orchestrator_stack": repo / "scripts" / "server" / "orchestrator_stack.py",
+        "stack_paths": repo / "scripts" / "server" / "stack_paths.py",
+        "stack_runtime": repo / "scripts" / "server" / "stack_runtime.py",
+    }
+    for label, path in artifacts.items():
+        path.write_text(f"# {label} v1\n", encoding="utf-8")
+    (repo / "README.md").write_text("unrelated\n", encoding="utf-8")
+    priors_path = repo / "orchestration" / "derived" / "stack_priors.yaml"
+    _write_staleness_priors(priors_path, artifacts)
+
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "--no-verify", "-m", "sandbox baseline")
+
+    return types.SimpleNamespace(repo=repo, priors=priors_path, artifacts=artifacts)
+
+
+def _staleness(sandbox, **kwargs) -> GuardResult:
+    return stack_change_guard.check_source_artifact_staleness(
+        sandbox.priors, repo_root=sandbox.repo, **kwargs
+    )
+
+
+def _repin(sandbox) -> None:
+    """Stand-in for `compile_stack_priors.py`: re-pin from current bytes."""
+    _write_staleness_priors(sandbox.priors, sandbox.artifacts)
+
+
+@requires_git
+def test_staleness_passes_when_the_commit_ships_nothing_stale(staleness_repo) -> None:
+    (staleness_repo.repo / "README.md").write_text("edited\n", encoding="utf-8")
+    _git(staleness_repo.repo, "add", "README.md")
+
+    result = _staleness(staleness_repo)
+
+    assert result.ok, result.errors
+    assert result.warnings == []
+
+
+@requires_git
+def test_staleness_fails_then_passes_again_after_repinning(staleness_repo) -> None:
+    """MUTATION: stage a pinned artifact without regenerating priors."""
+    numa = staleness_repo.artifacts["stack_numa"]
+    original = numa.read_text(encoding="utf-8")
+
+    numa.write_text("# stack_numa v2 — NUMA_CONFIG changed\n", encoding="utf-8")
+    _git(staleness_repo.repo, "add", str(numa))
+    stale = _staleness(staleness_repo)
+
+    assert not stale.ok
+    assert any("source_artifacts.stack_numa is STALE" in e for e in stale.errors)
+    assert any("compile_stack_priors.py" in e for e in stale.errors)
+
+    # Remedy 1: regenerate the priors (what the guard tells you to do).
+    _repin(staleness_repo)
+    _git(staleness_repo.repo, "add", "-A")
+    assert _staleness(staleness_repo).ok
+
+    # Remedy 2: restore the artifact instead.
+    numa.write_text(original, encoding="utf-8")
+    _write_staleness_priors(staleness_repo.priors, staleness_repo.artifacts)
+    _git(staleness_repo.repo, "add", "-A")
+    restored = _staleness(staleness_repo)
+    assert restored.ok, restored.errors
+
+
+@requires_git
+def test_staleness_reads_the_index_not_the_working_tree(staleness_repo) -> None:
+    """The scope distinction is load-bearing: an UNSTAGED edit ships nothing."""
+    numa = staleness_repo.artifacts["stack_numa"]
+    numa.write_text("# stack_numa v2 — not staged\n", encoding="utf-8")
+
+    staged = _staleness(staleness_repo)
+    worktree = _staleness(staleness_repo, scope="worktree")
+
+    assert staged.ok, staged.errors
+    assert staged.warnings == []
+    assert not worktree.ok
+    assert any("source_artifacts.stack_numa is STALE" in e for e in worktree.errors)
+
+
+@requires_git
+def test_staleness_inherited_by_an_untouched_commit_warns_and_strict_promotes(
+    staleness_repo,
+) -> None:
+    numa = staleness_repo.artifacts["stack_numa"]
+    numa.write_text("# stack_numa v2 — landed earlier\n", encoding="utf-8")
+    _git(staleness_repo.repo, "add", str(numa))
+    _git(staleness_repo.repo, "commit", "-q", "--no-verify", "-m", "inherited drift")
+
+    (staleness_repo.repo / "README.md").write_text("unrelated change\n", encoding="utf-8")
+    _git(staleness_repo.repo, "add", "README.md")
+
+    lenient = _staleness(staleness_repo)
+    strict = _staleness(staleness_repo, strict=True)
+
+    assert lenient.ok, lenient.errors
+    assert any("pre-existing staleness" in w for w in lenient.warnings)
+    assert not strict.ok
+    assert any("source_artifacts.stack_numa is STALE" in e for e in strict.errors)
+
+
+@requires_git
+def test_rewriting_the_priors_blames_every_pin_in_it(staleness_repo) -> None:
+    """Hand-editing the derived artifact makes all of its pins this commit's claim."""
+    numa = staleness_repo.artifacts["stack_numa"]
+    numa.write_text("# stack_numa v2 — landed earlier\n", encoding="utf-8")
+    _git(staleness_repo.repo, "add", str(numa))
+    _git(staleness_repo.repo, "commit", "-q", "--no-verify", "-m", "inherited drift")
+
+    priors = yaml.safe_load(staleness_repo.priors.read_text(encoding="utf-8"))
+    priors["status"] = "hand edited"
+    staleness_repo.priors.write_text(yaml.safe_dump(priors, sort_keys=False), encoding="utf-8")
+    _git(staleness_repo.repo, "add", str(staleness_repo.priors))
+
+    result = _staleness(staleness_repo)
+
+    assert not result.ok
+    assert any("source_artifacts.stack_numa is STALE" in e for e in result.errors)
+
+
+# --- Killer question: can this check be PASSED by deleting what it inspects? ---
+
+
+@requires_git
+def test_deleting_a_pinned_artifact_is_a_loud_failure(staleness_repo) -> None:
+    numa = staleness_repo.artifacts["stack_numa"]
+    _git(staleness_repo.repo, "rm", "-q", "--cached", str(numa))
+    numa.unlink()
+
+    result = _staleness(staleness_repo)
+
+    assert not result.ok
+    assert any(
+        "source_artifacts.stack_numa" in e and "DELETION" in e for e in result.errors
+    )
+
+
+@requires_git
+def test_a_pin_pointing_at_a_nonexistent_file_is_a_loud_failure(staleness_repo) -> None:
+    priors = yaml.safe_load(staleness_repo.priors.read_text(encoding="utf-8"))
+    priors["source_artifacts"]["stack_numa"]["path"] = str(
+        staleness_repo.repo / "scripts" / "server" / "vanished.py"
+    )
+    staleness_repo.priors.write_text(yaml.safe_dump(priors, sort_keys=False), encoding="utf-8")
+    _git(staleness_repo.repo, "add", str(staleness_repo.priors))
+
+    result = _staleness(staleness_repo)
+
+    assert not result.ok
+    assert any(
+        "source_artifacts.stack_numa" in e and "unreadable on disk" in e
+        for e in result.errors
+    )
+
+
+@requires_git
+def test_deleting_the_priors_artifact_is_a_loud_failure(staleness_repo) -> None:
+    _git(staleness_repo.repo, "rm", "-q", "--cached", str(staleness_repo.priors))
+    staleness_repo.priors.unlink()
+
+    result = _staleness(staleness_repo)
+
+    assert not result.ok
+    assert any("stack priors artifact" in e and "DELETION" in e for e in result.errors)
+
+
+@requires_git
+def test_an_empty_source_artifacts_section_is_a_loud_failure(staleness_repo) -> None:
+    """Emptying the list must not turn 'nothing to compare' into a pass."""
+    staleness_repo.priors.write_text(
+        yaml.safe_dump({"source_artifacts": {}}, sort_keys=False), encoding="utf-8"
+    )
+    _git(staleness_repo.repo, "add", str(staleness_repo.priors))
+
+    result = _staleness(staleness_repo)
+
+    assert not result.ok
+    assert any("no non-empty source_artifacts section" in e for e in result.errors)
+    # ...and the FLOOR still names every artifact that vanished with it.
+    for label in _STALENESS_LABELS:
+        assert any(f"source_artifacts.{label} is absent" in e for e in result.errors), label
+
+
+@requires_git
+def test_an_empty_required_floor_is_itself_a_loud_failure(
+    staleness_repo, monkeypatch
+) -> None:
+    """The floor is the backstop; a floor of zero names would be vacuous."""
+    monkeypatch.setattr(stack_change_guard, "REQUIRED_SOURCE_ARTIFACTS", ())
+    staleness_repo.priors.write_text(
+        yaml.safe_dump({"source_artifacts": {}}, sort_keys=False), encoding="utf-8"
+    )
+    _git(staleness_repo.repo, "add", str(staleness_repo.priors))
+
+    result = _staleness(staleness_repo)
+
+    assert not result.ok
+    assert any("REQUIRED_SOURCE_ARTIFACTS is EMPTY" in e for e in result.errors)
+
+
+@requires_git
+def test_dropping_one_required_pin_is_a_loud_failure(staleness_repo) -> None:
+    priors = yaml.safe_load(staleness_repo.priors.read_text(encoding="utf-8"))
+    priors["source_artifacts"].pop("stack_runtime")
+    staleness_repo.priors.write_text(yaml.safe_dump(priors, sort_keys=False), encoding="utf-8")
+    _git(staleness_repo.repo, "add", str(staleness_repo.priors))
+
+    result = _staleness(staleness_repo)
+
+    assert not result.ok
+    assert any("source_artifacts.stack_runtime is absent" in e for e in result.errors)
+
+
+@requires_git
+@pytest.mark.parametrize("bad_path", ["", None, 42, []])
+def test_an_unresolvable_pin_path_is_a_loud_failure(staleness_repo, bad_path) -> None:
+    priors = yaml.safe_load(staleness_repo.priors.read_text(encoding="utf-8"))
+    priors["source_artifacts"]["stack_numa"]["path"] = bad_path
+    staleness_repo.priors.write_text(yaml.safe_dump(priors, sort_keys=False), encoding="utf-8")
+    _git(staleness_repo.repo, "add", str(staleness_repo.priors))
+
+    result = _staleness(staleness_repo)
+
+    assert not result.ok
+    assert any(
+        "source_artifacts.stack_numa.path does not resolve" in e for e in result.errors
+    )
+
+
+@requires_git
+@pytest.mark.parametrize("bad_sha", ["", None, "deadbeef", "Z" * 64])
+def test_a_malformed_pin_digest_is_a_loud_failure(staleness_repo, bad_sha) -> None:
+    priors = yaml.safe_load(staleness_repo.priors.read_text(encoding="utf-8"))
+    priors["source_artifacts"]["stack_numa"]["sha256"] = bad_sha
+    staleness_repo.priors.write_text(yaml.safe_dump(priors, sort_keys=False), encoding="utf-8")
+    _git(staleness_repo.repo, "add", str(staleness_repo.priors))
+
+    result = _staleness(staleness_repo)
+
+    assert not result.ok
+    assert any(
+        "source_artifacts.stack_numa.sha256 is not a sha256 digest" in e
+        for e in result.errors
+    )
+
+
+@requires_git
+def test_unparseable_priors_fail_closed(staleness_repo) -> None:
+    staleness_repo.priors.write_text("source_artifacts: [\n", encoding="utf-8")
+    _git(staleness_repo.repo, "add", str(staleness_repo.priors))
+
+    result = _staleness(staleness_repo)
+
+    assert not result.ok
+    assert any("did not parse" in e for e in result.errors)
+
+
+@requires_git
+def test_priors_that_parse_to_a_non_mapping_fail_closed(staleness_repo) -> None:
+    staleness_repo.priors.write_text("- not a mapping\n", encoding="utf-8")
+    _git(staleness_repo.repo, "add", str(staleness_repo.priors))
+
+    result = _staleness(staleness_repo)
+
+    assert not result.ok
+    assert any("did not parse to a mapping" in e for e in result.errors)
+
+
+def test_an_unreadable_git_index_fails_closed(tmp_path: Path) -> None:
+    """No index to read is a REFUSAL, never a quiet pass."""
+    not_a_repo = tmp_path / "plain"
+    not_a_repo.mkdir()
+    priors = not_a_repo / "stack_priors.yaml"
+    priors.write_text("source_artifacts: {}\n", encoding="utf-8")
+
+    result = stack_change_guard.check_source_artifact_staleness(
+        priors, repo_root=not_a_repo
+    )
+
+    assert not result.ok
+    assert any("cannot read the git index" in e for e in result.errors)
+
+
+def test_an_unknown_staleness_scope_fails_closed(tmp_path: Path) -> None:
+    result = stack_change_guard.check_source_artifact_staleness(
+        tmp_path / "stack_priors.yaml", scope="whatever", repo_root=tmp_path
+    )
+
+    assert not result.ok
+    assert any("unknown staleness scope" in e for e in result.errors)
+
+
+@requires_git
+def test_staleness_check_is_reachable_from_the_guard_cli(staleness_repo, capsys) -> None:
+    """The consumer: `python scripts/validate/stack_change_guard.py ...`."""
+    numa = staleness_repo.artifacts["stack_numa"]
+    numa.write_text("# stack_numa v2\n", encoding="utf-8")
+    _git(staleness_repo.repo, "add", str(numa))
+
+    argv = [
+        "--check-source-artifact-staleness",
+        "--priors",
+        str(staleness_repo.priors),
+        "--repo-root",
+        str(staleness_repo.repo),
+    ]
+    rc = stack_change_guard_main(argv)
+    stale_out = capsys.readouterr().out
+
+    assert rc == 1
+    assert "FAIL: 1 source-artifact staleness error(s)" in stale_out
+    assert "source_artifacts.stack_numa is STALE" in stale_out
+    assert RECOMPILE_PRIORS_COMMAND in stale_out
+
+    _repin(staleness_repo)
+    _git(staleness_repo.repo, "add", "-A")
+    rc_clean = stack_change_guard_main(argv)
+    clean_out = capsys.readouterr().out
+
+    assert rc_clean == 0
+    assert "OK: source artifacts match the pins" in clean_out

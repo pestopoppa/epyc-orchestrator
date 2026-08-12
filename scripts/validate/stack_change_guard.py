@@ -8,6 +8,7 @@ import fnmatch
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass, replace
@@ -70,6 +71,16 @@ REQUIRED_SOURCE_ARTIFACTS = (
     "stack_paths",
     "stack_runtime",
 )
+# Commit-time staleness gate (P1-10). The pins in `source_artifacts` are only
+# meaningful against the bytes a commit will CONTAIN, so `staged` reads the git
+# index; `worktree` reads the files on disk and blames every mismatch.
+STALENESS_SCOPES = ("staged", "worktree")
+RECOMPILE_PRIORS_COMMAND = "uv run python scripts/registry/compile_stack_priors.py"
+SOURCE_ARTIFACT_REMEDIATION = f"regenerate the priors: {RECOMPILE_PRIORS_COMMAND}"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+# `git diff --cached` against an empty repository has no HEAD to diff; git's
+# well-known empty-tree object stands in so the first commit is still scoped.
+_EMPTY_TREE_OID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 SURFACE_SCAN_ALLOW_MARKER = "stack-change-guard: allow"
 SURFACE_SCAN_MAX_FILE_BYTES = 512 * 1024
 SURFACE_EXCEPTION_CLASSIFICATIONS = frozenset(
@@ -2557,6 +2568,236 @@ def validate_procedure_role_enums(
     return errors
 
 
+# ---------------------------------------------------------------------------
+# REQUIRED_SOURCE_ARTIFACTS staleness — commit-time gate
+#
+# P1-10 (handoffs/active/numa-topology-cutover-resume-20260730.md): a commit that
+# touches a pinned source artifact without shipping regenerated priors leaves
+# `source_artifacts.<label>.sha256` pointing at bytes that no longer exist. The
+# EXISTING loop in `validate_stack_priors` already catches that — but only when
+# somebody runs the guard, which in practice is when `orchestrator_stack.py
+# start` refuses to launch. The failure therefore surfaces hours later, on a
+# different machine state, to whoever tried to start the stack; twice in one day
+# from two different sessions. The bytes were already wrong at `git commit`.
+#
+# Two things make this a different check rather than a re-run of that loop:
+#
+#   1. SCOPE OF CONTENT. `validate_stack_priors` hashes the WORKING TREE. At
+#      commit time the question is what the COMMIT will contain, which is the
+#      git index. A file edited-but-not-staged, or staged-then-further-edited,
+#      gives the two a different answer, and the index is the one that matters
+#      for "will this commit ship a stale pin".
+#   2. SCOPE OF BLAME. This repository is stale RIGHT NOW on pins nobody in this
+#      commit touched. An unconditional gate would block every unrelated commit
+#      on inherited debt, and the only escape is `--no-verify`, which also skips
+#      the PII and hermes-drift hooks (see .git/hooks/pre-commit.extras, where a
+#      previously unscoped gate had to be narrowed for exactly this reason). So:
+#      a mismatch on a path THIS commit touches is an ERROR; a mismatch the
+#      commit inherits is a visible WARNING. `strict=True` promotes the latter,
+#      for a CI job whose remit IS the inherited debt.
+#
+# Everything that is not a clean comparison is an ERROR, never a warning and
+# never a silent pass: a missing artifact, a path that does not resolve, an
+# absent or malformed pin, an empty `source_artifacts` section, an empty
+# `REQUIRED_SOURCE_ARTIFACTS` floor, an unreadable/unparseable priors file, or a
+# git index this process cannot read. A staleness check that passes because the
+# thing it inspects was deleted is worse than no check.
+# ---------------------------------------------------------------------------
+
+
+class GitIndexUnavailableError(RuntimeError):
+    """Raised when git plumbing cannot answer; never swallowed into a pass."""
+
+
+def _git_bytes(repo_root: Path, args: list[str]) -> bytes:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), *args],
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise GitIndexUnavailableError(f"git {' '.join(args)} could not run: {exc}") from exc
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", "replace").strip()
+        raise GitIndexUnavailableError(
+            f"git {' '.join(args)} exited {proc.returncode}: {detail}"
+        )
+    return proc.stdout
+
+
+def _git_repo_root(repo_root: Path) -> Path:
+    return Path(_git_bytes(repo_root, ["rev-parse", "--show-toplevel"]).decode().strip())
+
+
+def _staged_paths(repo_root: Path) -> set[str]:
+    """Repo-relative paths the pending commit adds, edits, renames or deletes."""
+    args = ["diff", "--cached", "--name-only", "--diff-filter=ACMRDT", "-z"]
+    try:
+        _git_bytes(repo_root, ["rev-parse", "--verify", "HEAD"])
+    except GitIndexUnavailableError:
+        args.append(_EMPTY_TREE_OID)
+    raw = _git_bytes(repo_root, args).decode("utf-8", "replace")
+    return {entry for entry in raw.split("\0") if entry}
+
+
+def _read_file_bytes(path: Path) -> tuple[bytes | None, str | None]:
+    try:
+        return path.read_bytes(), None
+    except OSError as exc:
+        return None, f"unreadable on disk ({exc.__class__.__name__}: {exc})"
+
+
+def _repo_relative(path: Path, repo_root: Path) -> str | None:
+    try:
+        return path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except (ValueError, OSError):
+        return None
+
+
+def _committed_content(
+    path: Path, *, scope: str, repo_root: Path
+) -> tuple[bytes | None, str | None]:
+    """Return the bytes this commit will carry for ``path`` (or why it cannot)."""
+    if scope == "worktree":
+        return _read_file_bytes(path)
+    rel = _repo_relative(path, repo_root)
+    if rel is None:
+        # Pinned artifact outside the repository can never be staged, so the
+        # bytes the commit is judged against are the bytes on disk.
+        return _read_file_bytes(path)
+    try:
+        return _git_bytes(repo_root, ["show", f":{rel}"]), None
+    except GitIndexUnavailableError:
+        pass
+    # Absent from the index: either the commit deletes it, or it was never
+    # tracked (in which case the worktree copy is what a consumer will read).
+    try:
+        _git_bytes(repo_root, ["cat-file", "-e", f"HEAD:{rel}"])
+    except GitIndexUnavailableError:
+        return _read_file_bytes(path)
+    return None, f"staged for DELETION by this commit (HEAD:{rel} exists, index entry gone)"
+
+
+def check_source_artifact_staleness(
+    priors_path: Path = DEFAULT_PRIORS,
+    *,
+    scope: str = "staged",
+    repo_root: Path = REPO_ROOT,
+    strict: bool = False,
+) -> GuardResult:
+    """Are the ``source_artifacts`` pins true of the bytes being committed?
+
+    ``scope='staged'`` hashes git index content (pre-commit gate).
+    ``scope='worktree'`` hashes files on disk and blames every mismatch.
+    ``strict=True`` promotes inherited mismatches from warnings to errors.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if scope not in STALENESS_SCOPES:
+        return GuardResult(
+            errors=[f"unknown staleness scope {scope!r}; expected one of {list(STALENESS_SCOPES)}"],
+            warnings=[],
+        )
+
+    # A floor of zero names would make the union below equal to whatever the
+    # priors happen to declare, so emptying `source_artifacts` AND the floor
+    # would check nothing and report success. Refuse.
+    if not REQUIRED_SOURCE_ARTIFACTS:
+        errors.append(
+            "REQUIRED_SOURCE_ARTIFACTS is EMPTY: the staleness floor names no artifact, "
+            "so this check would be vacuous. Refusing to pass."
+        )
+
+    resolved_root = repo_root
+    staged: set[str] = set()
+    if scope == "staged":
+        try:
+            resolved_root = _git_repo_root(repo_root)
+            staged = _staged_paths(resolved_root)
+        except GitIndexUnavailableError as exc:
+            errors.append(
+                f"cannot read the git index under {repo_root}: {exc}. "
+                "Refusing to pass; use --staleness-scope worktree outside a git checkout."
+            )
+            return GuardResult(errors=errors, warnings=warnings)
+
+    priors_bytes, priors_reason = _committed_content(
+        priors_path, scope=scope, repo_root=resolved_root
+    )
+    if priors_bytes is None:
+        errors.append(f"stack priors artifact {priors_path} is {priors_reason}")
+        return GuardResult(errors=errors, warnings=warnings)
+    try:
+        priors = yaml.safe_load(priors_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        errors.append(f"stack priors artifact {priors_path} did not parse: {exc}")
+        return GuardResult(errors=errors, warnings=warnings)
+    if not isinstance(priors, dict):
+        errors.append(f"stack priors artifact {priors_path} did not parse to a mapping")
+        return GuardResult(errors=errors, warnings=warnings)
+
+    sources = priors.get("source_artifacts")
+    if not isinstance(sources, dict) or not sources:
+        errors.append(
+            f"stack priors artifact {priors_path} has no non-empty source_artifacts "
+            "section: nothing to compare is a FAILURE, not a pass"
+        )
+        sources = {}
+
+    priors_rel = _repo_relative(priors_path, resolved_root)
+    # Rewriting the priors file makes every pin in it this commit's claim, so
+    # blame is no longer restricted to the artifacts the commit also touched.
+    blame_everything = (
+        strict or scope == "worktree" or (priors_rel is not None and priors_rel in staged)
+    )
+
+    for label in sorted(set(REQUIRED_SOURCE_ARTIFACTS) | set(sources)):
+        source = sources.get(label)
+        if not isinstance(source, dict):
+            errors.append(
+                f"source_artifacts.{label} is absent or not a mapping in {priors_path}: "
+                f"{source!r}"
+            )
+            continue
+        path = _source_path(priors_path, source)
+        if path is None:
+            errors.append(
+                f"source_artifacts.{label}.path does not resolve to a usable path: "
+                f"{source.get('path')!r}"
+            )
+            continue
+        expected = source.get("sha256")
+        if not isinstance(expected, str) or not _SHA256_RE.match(expected):
+            errors.append(
+                f"source_artifacts.{label}.sha256 is not a sha256 digest: {expected!r}"
+            )
+            continue
+        content, reason = _committed_content(path, scope=scope, repo_root=resolved_root)
+        if content is None:
+            errors.append(f"source_artifacts.{label} ({path}) is {reason}")
+            continue
+        actual = hashlib.sha256(content).hexdigest()
+        if actual == expected:
+            continue
+        artifact_rel = _repo_relative(path, resolved_root)
+        blamed = blame_everything or (artifact_rel is not None and artifact_rel in staged)
+        message = (
+            f"source_artifacts.{label} is STALE: {path} ({scope}) hashes to {actual}, "
+            f"priors pin {expected}"
+        )
+        if blamed:
+            errors.append(f"{message} — {SOURCE_ARTIFACT_REMEDIATION}")
+        else:
+            warnings.append(
+                f"pre-existing staleness not introduced by this commit: {message} "
+                f"— {SOURCE_ARTIFACT_REMEDIATION}"
+            )
+
+    return GuardResult(errors=errors, warnings=warnings)
+
+
 def validate_stack_priors(
     priors_path: Path = DEFAULT_PRIORS,
     *,
@@ -2845,7 +3086,54 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print warning counts instead of individual warning lines",
     )
+    parser.add_argument(
+        "--check-source-artifact-staleness",
+        action="store_true",
+        help=(
+            "Run ONLY the REQUIRED_SOURCE_ARTIFACTS staleness check and exit; "
+            "intended as a pre-commit gate"
+        ),
+    )
+    parser.add_argument(
+        "--staleness-scope",
+        choices=STALENESS_SCOPES,
+        default="staged",
+        help=(
+            "Content the pins are compared against: 'staged' hashes the git "
+            "index (what the commit will contain), 'worktree' hashes files on "
+            "disk and blames every mismatch"
+        ),
+    )
+    parser.add_argument(
+        "--staleness-strict",
+        action="store_true",
+        help=(
+            "Promote pre-existing staleness (pins this commit does not touch) "
+            "from warnings to errors"
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.check_source_artifact_staleness:
+        staleness = check_source_artifact_staleness(
+            args.priors,
+            scope=args.staleness_scope,
+            repo_root=args.repo_root,
+            strict=args.staleness_strict,
+        )
+        for warning in staleness.warnings:
+            print(f"WARN: {warning}")
+        if staleness.errors:
+            print(f"FAIL: {len(staleness.errors)} source-artifact staleness error(s)")
+            for error in staleness.errors:
+                print(f"  - {error}")
+            return 1
+        print(
+            f"OK: source artifacts match the pins in {args.priors} "
+            f"({args.staleness_scope} scope)"
+        )
+        return 0
+
     if args.list_hardcoded_surface_rules:
         manifest, manifest_errors = load_surface_manifest(args.surface_manifest)
         if manifest_errors:
