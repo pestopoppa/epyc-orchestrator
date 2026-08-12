@@ -175,6 +175,54 @@ def _port_healthy(port: int, timeout_s: float = 0.5) -> bool:
         return False
 
 
+class UnmeasuredLegError(RuntimeError):
+    """A bench leg produced no measurement, so no ratio can be derived from it.
+
+    `_http_bench` returns (0.0, 0.0) on timeout or HTTP error. That sentinel is
+    NOT a measurement of zero throughput, and the aggregate arithmetic cannot
+    tell the two apart — see `_unmeasured_legs` for why the failure is not
+    merely lossy but SIGN-BIASED.
+    """
+
+
+def _unmeasured_legs(legs: dict[str, tuple[float, float]]) -> list[str]:
+    """Names of legs whose (tps, elapsed_s) shows no measurement was obtained.
+
+    WHY THIS EXISTS, and why the old arithmetic was worse than lossy.
+
+    `par_time = max(par_a_el, par_b_el)` DISCARDS a failed leg: a timeout
+    contributes 0.0, so max() silently returns the surviving leg's time. But
+    `total_tokens` still counts BOTH legs, so tokens that were never generated
+    get divided by one leg's elapsed time.
+
+    THE ERROR IS ONE-DIRECTIONAL. Measured against the old arithmetic with
+    5 s solo legs and DEFAULT_FLOOR = 0.85:
+
+        both parallel legs 10 s (real 2x contention)   -> ratio 1.00, allow
+        leg B TIMED OUT, leg A 10 s                    -> ratio 1.00, allow
+        leg B TIMED OUT, leg A 5 s                     -> ratio 2.00, allow
+
+    Note the middle row: when the failed leg is the one that WOULD have
+    dominated max(), its timeout is not merely inflationary, it is INVISIBLE —
+    the output is byte-identical to a healthy run. No input of this shape can
+    produce a false `block`; every one of them reads as `allow`. So the
+    arithmetic reports contention as most benign exactly when a server is
+    collapsing under load, which is when it is least benign.
+
+    A 2x48-thread overlapping pair on 48 physical cores is precisely the regime
+    where the 180 s timeout bites, so the defect fires hardest on the
+    measurement someone most wants to trust.
+
+    The module already refuses to treat HTTP failures as throughput evidence
+    for the pre-flight health check ("HTTP failures are not throughput
+    evidence"); this applies the same rule to the bench legs themselves.
+    """
+    return sorted(
+        name for name, (tps, elapsed_s) in legs.items()
+        if elapsed_s <= 0.0 or tps <= 0.0
+    )
+
+
 def _bench_pair(
     role_a: str,
     port_a: int,
@@ -184,7 +232,11 @@ def _bench_pair(
     instance_a: dict[str, Any] | None = None,
     instance_b: dict[str, Any] | None = None,
 ) -> PairBench:
-    """Measure solo + parallel for one role pair. Returns a PairBench."""
+    """Measure solo + parallel for one role pair. Returns a PairBench.
+
+    Raises `UnmeasuredLegError` if any of the four legs failed to produce a
+    measurement, rather than deriving a ratio from a partial sample.
+    """
     log.info("bench pair: %s (port %d) + %s (port %d)", role_a, port_a, role_b, port_b)
 
     # Solo
@@ -200,6 +252,20 @@ def _bench_pair(
         fut_b = ex.submit(_http_bench, port_b)
         par_a_tps, par_a_el = fut_a.result()
         par_b_tps, par_b_el = fut_b.result()
+
+    failed = _unmeasured_legs({
+        f"solo_{role_a}:{port_a}": (solo_a_tps, solo_a_el),
+        f"solo_{role_b}:{port_b}": (solo_b_tps, solo_b_el),
+        f"parallel_{role_a}:{port_a}": (par_a_tps, par_a_el),
+        f"parallel_{role_b}:{port_b}": (par_b_tps, par_b_el),
+    })
+    if failed:
+        raise UnmeasuredLegError(
+            f"{role_a} + {role_b}: no ratio derivable, these legs produced no "
+            f"measurement: {', '.join(failed)}. A timed-out leg is not zero "
+            f"throughput — deriving a ratio here would report contention as "
+            f"MORE benign than it is (see _unmeasured_legs)."
+        )
 
     total_tokens = N_PREDICT * 2
     seq_time = (solo_a_el + solo_b_el) or 0.001
@@ -1214,6 +1280,21 @@ def _bench_nway(role_ports: list[tuple[str, int]], samples: int = 3, *, safe_sam
         with ThreadPoolExecutor(max_workers=len(role_ports)) as ex:
             futs = {role: ex.submit(bench, port) for role, port in role_ports}
             par = {role: futs[role].result() for role, _ in role_ports}
+        # Same sign-biased defect as _bench_pair, and this is the path the
+        # OP-21 overlapping re-bench is meant to use, so it must refuse too.
+        # An N-way set has MORE legs and therefore more chances for one to
+        # time out, and max() discards every one that does.
+        failed = _unmeasured_legs(
+            {f"solo_{r}": v for r, v in solo.items()}
+            | {f"parallel_{r}": v for r, v in par.items()}
+        )
+        if failed:
+            raise UnmeasuredLegError(
+                f"{'+'.join(r for r, _ in role_ports)} sample {s}: no ratio "
+                f"derivable, these legs produced no measurement: "
+                f"{', '.join(failed)}. A timed-out leg is not zero throughput."
+            )
+
         total_tokens = N_PREDICT * len(role_ports)
         seq_time = sum(el for _, el in solo.values()) or 0.001
         par_time = max(el for _, el in par.values()) or 0.001
@@ -1519,14 +1600,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     skipped: list[tuple[str, str, str]] = []
 
     for a, b, inst_a, inst_b, reason in selected:
-        pb = _bench_pair(
-            a,
-            int(inst_a["port"]),
-            b,
-            int(inst_b["port"]),
-            instance_a=inst_a,
-            instance_b=inst_b,
-        )
+        try:
+            pb = _bench_pair(
+                a,
+                int(inst_a["port"]),
+                b,
+                int(inst_b["port"]),
+                instance_a=inst_a,
+                instance_b=inst_b,
+            )
+        except UnmeasuredLegError as exc:
+            # Drop the pair rather than bank a sign-biased ratio. Skipping is
+            # visible in the emitted `skipped` section; a laundered `allow` is
+            # not visible anywhere.
+            log.error("  → SKIPPED, not measured: %s", exc)
+            skipped.append((a, b, f"unmeasured_leg: {exc}"))
+            continue
         if reason:
             pb.note = reason
         measured.append(pb)
