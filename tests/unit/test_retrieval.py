@@ -132,7 +132,7 @@ def test_kb_rag_build_with_mock_encoder(tmp_path: Path) -> None:
     index_dir = tmp_path / "idx"
 
     # Mock encoder to return deterministic embeddings keyed by text length.
-    def fake_encode(text: str, max_tokens: int):
+    def fake_encode(text: str, max_tokens: int, *, role: str):
         # 3 tokens of dim-4: deterministic hash-based vector.
         arr = np.zeros((3, 4), dtype=np.float32)
         arr[0, 0] = (len(text) % 7) * 0.1
@@ -164,7 +164,7 @@ def test_kb_rag_build_skips_unchanged_on_rebuild(tmp_path: Path) -> None:
     cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
     index_dir = tmp_path / "idx"
 
-    def fake_encode(text, max_tokens):
+    def fake_encode(text, max_tokens, *, role):
         arr = np.eye(3, 4, dtype=np.float32)
         return arr
 
@@ -191,7 +191,7 @@ def test_kb_rag_query_returns_ranked_results(tmp_path: Path) -> None:
     index_dir = tmp_path / "idx"
 
     # Encoder returns vectors that prefer the "cats" file when query mentions feline.
-    def fake_encode(text, max_tokens):
+    def fake_encode(text, max_tokens, *, role):
         text_l = text.lower()
         v = np.zeros((2, 4), dtype=np.float32)
         if "feline" in text_l or "cats" in text_l:
@@ -225,7 +225,7 @@ def test_kb_rag_query_opt_in_embedding_cache_reuses_np_load(tmp_path: Path) -> N
     cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
     index_dir = tmp_path / "idx"
 
-    def fake_encode(text, max_tokens):
+    def fake_encode(text, max_tokens, *, role):
         text_l = text.lower()
         v = np.zeros((2, 4), dtype=np.float32)
         v[0, 0 if ("feline" in text_l or "cats" in text_l) else 1] = 1.0
@@ -258,7 +258,7 @@ def test_kb_rag_update_files_replaces_specific_files(tmp_path: Path) -> None:
     cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
     index_dir = tmp_path / "idx"
 
-    def fake_encode(text, max_tokens):
+    def fake_encode(text, max_tokens, *, role):
         return np.eye(3, 4, dtype=np.float32)
 
     with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
@@ -286,7 +286,7 @@ def test_kb_rag_remove_files_prunes_catalog_rows(tmp_path: Path) -> None:
     cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
     index_dir = tmp_path / "idx"
 
-    def fake_encode(text, max_tokens):
+    def fake_encode(text, max_tokens, *, role):
         return np.eye(3, 4, dtype=np.float32)
 
     with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
@@ -370,7 +370,7 @@ def test_kb_rag_query_recency_reorders_on_tie(tmp_path: Path) -> None:
     index_dir = tmp_path / "idx"
 
     # Constant embedding → identical MaxSim for both files.
-    def fake_encode(text, max_tokens):
+    def fake_encode(text, max_tokens, *, role):
         return np.eye(2, 4, dtype=np.float32)
 
     with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
@@ -407,7 +407,7 @@ def test_kb_rag_query_lexical_signal_backfills_on_rebuild(tmp_path: Path) -> Non
     cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
     index_dir = tmp_path / "idx"
 
-    def fake_encode(text, max_tokens):
+    def fake_encode(text, max_tokens, *, role):
         return np.eye(2, 4, dtype=np.float32)
 
     with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
@@ -462,7 +462,7 @@ def test_kb_rag_rebuild_backfills_duplicate_content_chunks(tmp_path: Path) -> No
     cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
     index_dir = tmp_path / "idx"
 
-    def fake_encode(text, max_tokens):
+    def fake_encode(text, max_tokens, *, role):
         return np.eye(2, 4, dtype=np.float32)
 
     with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
@@ -562,7 +562,7 @@ def test_kb_rag_query_invokes_rerank_when_enabled(tmp_path: Path) -> None:
     cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
     index_dir = tmp_path / "idx"
 
-    def fake_encode(text, max_tokens):
+    def fake_encode(text, max_tokens, *, role):
         return np.eye(2, 4, dtype=np.float32)
 
     with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \

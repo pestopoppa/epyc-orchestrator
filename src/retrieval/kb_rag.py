@@ -6,8 +6,25 @@ Architecture:
 - Chunker: heading-aware (markdown_chunker.py).
 - Encoder: shared ColBERT primitives (colbert_encoder.py).
 - Storage: per-document .npz of token embeddings + SQLite catalog mapping
-  (chunk_id, file_path, heading_path, line_range, mtime, content_hash).
+  (chunk_id, file_path, heading_path, line_range, mtime, content_hash), plus an
+  `index_meta` table recording which encoder + prefix convention produced them.
 - Query: top-K MaxSim ranking, returns chunk dicts with breadcrumbs.
+
+Prefix convention (OP-24, 2026-08-12)
+-------------------------------------
+Stored vectors and query vectors must come from the SAME ColBERT role
+convention; mixing them is worse than using the wrong one consistently. So the
+INDEX is authoritative: `index_meta.prefix_convention` decides the role passed
+to `colbert_encoder.encode()` for both sides, and every writer honours it.
+
+Consequences, by design:
+- A pre-OP-24 index has no `index_meta` row. It is read as
+  `LEGACY_CONVENTION` ("none") and keeps serving prefix-free queries against
+  its prefix-free vectors — self-consistent, exactly as before.
+- A convention is adopted only by an EMPTY index directory. `--force` re-encodes
+  but never re-stamps, so a live index can never be half-migrated in place.
+- Migrating therefore means building a fresh index dir and pointing readers at
+  it; the previous directory is left untouched and is the rollback.
 
 Per handoffs/active/internal-kb-rag.md K3+K4.
 """
@@ -33,7 +50,17 @@ logger = logging.getLogger(__name__)
 
 # Default index location under data/kb_rag/ (gitignored).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_INDEX_DIR = _REPO_ROOT / "data" / "kb_rag" / "index"
+_KB_RAG_DATA = _REPO_ROOT / "data" / "kb_rag"
+
+# Pre-OP-24 store: prefix-free vectors. Retained on disk as the rollback for the
+# 2026-08-12 [Q]/[D] migration; still readable (see the module docstring).
+LEGACY_INDEX_DIR = _KB_RAG_DATA / "index"
+
+# Live store. `KB_RAG_INDEX_DIR` overrides it, which is the no-code-change
+# rollback lever: point it at LEGACY_INDEX_DIR to serve the old vectors.
+DEFAULT_INDEX_DIR = Path(
+    os.environ.get("KB_RAG_INDEX_DIR") or (_KB_RAG_DATA / "index-qd-v1")
+)
 
 # Encoding bounds.
 _QUERY_MAX_TOKENS = 48
@@ -121,7 +148,100 @@ CREATE TABLE IF NOT EXISTS chunk (
 
 CREATE INDEX IF NOT EXISTS chunk_file ON chunk(file_path);
 CREATE INDEX IF NOT EXISTS chunk_hash ON chunk(content_hash);
+
+-- Provenance of the stored vectors. A store that cannot name the encoder and
+-- prefix convention that produced it cannot be validated against a reader.
+CREATE TABLE IF NOT EXISTS index_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 """
+
+
+def _read_meta(conn: sqlite3.Connection) -> dict[str, str]:
+    """Return the index_meta key/value map (empty for a pre-OP-24 catalog)."""
+    try:
+        rows = conn.execute("SELECT key, value FROM index_meta").fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {str(r[0]): str(r[1]) for r in rows}
+
+
+def _index_convention(conn: sqlite3.Connection) -> str | None:
+    """Prefix convention this index was built under.
+
+    Returns None only for an EMPTY, unstamped catalog — the one state in which a
+    writer may adopt the encoder's current convention. A populated catalog with
+    no stamp predates OP-24 and is therefore prefix-free.
+    """
+    meta = _read_meta(conn)
+    stamped = meta.get("prefix_convention")
+    if stamped:
+        return stamped
+    n_chunks = conn.execute("SELECT COUNT(*) FROM chunk").fetchone()[0]
+    return colbert_encoder.LEGACY_CONVENTION if n_chunks else None
+
+
+def _stamp_meta(conn: sqlite3.Connection, convention: str) -> None:
+    """Record encoder identity + convention alongside the vectors."""
+    values = {
+        "prefix_convention": convention,
+        "query_prefix": colbert_encoder.prefix_for_role(colbert_encoder.ROLE_QUERY)
+        if convention == colbert_encoder.PREFIX_CONVENTION
+        else "",
+        "document_prefix": colbert_encoder.prefix_for_role(colbert_encoder.ROLE_DOCUMENT)
+        if convention == colbert_encoder.PREFIX_CONVENTION
+        else "",
+        "encoder_model_dir": str(colbert_encoder._MODEL_DIR),
+        "encoder_model_file": colbert_encoder._MODEL_PATH.name,
+        "doc_max_tokens": str(_DOC_MAX_TOKENS),
+        "query_max_tokens": str(_QUERY_MAX_TOKENS),
+        "stamped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    conn.executemany(
+        "INSERT INTO index_meta(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        list(values.items()),
+    )
+
+
+def _roles_for_convention(convention: str) -> tuple[str, str]:
+    """Map a stored convention to the (query_role, document_role) to encode with."""
+    if convention == colbert_encoder.PREFIX_CONVENTION:
+        return colbert_encoder.ROLE_QUERY, colbert_encoder.ROLE_DOCUMENT
+    if convention == colbert_encoder.LEGACY_CONVENTION:
+        return colbert_encoder.ROLE_NONE, colbert_encoder.ROLE_NONE
+    raise ValueError(
+        f"index was built under unknown prefix convention {convention!r}; "
+        f"this code understands {colbert_encoder.PREFIX_CONVENTION!r} and "
+        f"{colbert_encoder.LEGACY_CONVENTION!r}"
+    )
+
+
+def _writer_convention(conn: sqlite3.Connection) -> str:
+    """Convention a writer must use, adopting + stamping only on an empty index."""
+    convention = _index_convention(conn)
+    if convention is None:
+        convention = colbert_encoder.PREFIX_CONVENTION
+        _stamp_meta(conn, convention)
+        logger.info("kb_rag: new index stamped with prefix convention %s", convention)
+    elif convention == colbert_encoder.LEGACY_CONVENTION:
+        logger.warning(
+            "kb_rag: writing into a pre-OP-24 prefix-free index; new chunks stay "
+            "prefix-free for consistency. Build a fresh index dir to migrate."
+        )
+    return convention
+
+
+def _warn_on_encoder_drift(meta: dict[str, str]) -> None:
+    """Log if the live encoder is not the one that produced the stored vectors."""
+    stored_dir = meta.get("encoder_model_dir")
+    if stored_dir and stored_dir != str(colbert_encoder._MODEL_DIR):
+        logger.warning(
+            "kb_rag: index was built with encoder %s but %s is loaded — "
+            "MaxSim scores across different models are not comparable",
+            stored_dir, colbert_encoder._MODEL_DIR,
+        )
 
 
 @dataclass
@@ -269,6 +389,8 @@ def build_index(
     conn = _ensure_catalog(index_dir)
     conn.row_factory = sqlite3.Row
     fts_enabled = _ensure_fts(conn)
+    convention = _writer_convention(conn)
+    _, doc_role = _roles_for_convention(convention)
     cur = conn.cursor()
 
     files = _walk_corpus(config)
@@ -308,7 +430,7 @@ def build_index(
                 )
                 continue
 
-            emb = colbert_encoder.encode(ch.text, _DOC_MAX_TOKENS)
+            emb = colbert_encoder.encode(ch.text, _DOC_MAX_TOKENS, role=doc_role)
             if emb is None:
                 continue
 
@@ -390,6 +512,7 @@ def build_index(
         "stale_files_removed": len(stale),
         "elapsed_sec": round(elapsed, 2),
         "index_dir": str(index_dir),
+        "prefix_convention": convention,
     }
 
 
@@ -411,6 +534,8 @@ def update_files(
     conn = _ensure_catalog(index_dir)
     conn.row_factory = sqlite3.Row
     fts_enabled = _ensure_fts(conn)
+    convention = _writer_convention(conn)
+    _, doc_role = _roles_for_convention(convention)
     cur = conn.cursor()
 
     # Resolve which paths actually belong to corpus.
@@ -431,7 +556,7 @@ def update_files(
         chunks = chunk_file(p, max_chars=config.max_chunk_chars)
         mtime = p.stat().st_mtime
         for ch in chunks:
-            emb = colbert_encoder.encode(ch.text, _DOC_MAX_TOKENS)
+            emb = colbert_encoder.encode(ch.text, _DOC_MAX_TOKENS, role=doc_role)
             if emb is None:
                 continue
             emb_rel = _emb_relative_path(str(p), ch.content_hash)
@@ -467,7 +592,12 @@ def update_files(
     conn.commit()
     conn.close()
     _clear_embedding_cache()
-    return {"ok": True, "files_processed": len(paths), "chunks_encoded": encoded}
+    return {
+        "ok": True,
+        "files_processed": len(paths),
+        "chunks_encoded": encoded,
+        "prefix_convention": convention,
+    }
 
 
 def remove_files(
@@ -564,12 +694,27 @@ def query(
     if not colbert_encoder.ensure_loaded():
         return []
 
-    q_emb = colbert_encoder.encode(text, _QUERY_MAX_TOKENS)
-    if q_emb is None:
-        return []
-
     conn = sqlite3.connect(str(catalog_path))
     conn.row_factory = sqlite3.Row
+
+    # The index decides the convention for BOTH sides. Encoding the query under
+    # a convention the stored vectors were not built with is worse than using
+    # the legacy convention consistently, so this is never inferred locally.
+    meta = _read_meta(conn)
+    _warn_on_encoder_drift(meta)
+    convention = _index_convention(conn) or colbert_encoder.PREFIX_CONVENTION
+    try:
+        query_role, _ = _roles_for_convention(convention)
+    except ValueError as e:
+        logger.error("kb_rag: %s", e)
+        conn.close()
+        return []
+
+    q_emb = colbert_encoder.encode(text, _QUERY_MAX_TOKENS, role=query_role)
+    if q_emb is None:
+        conn.close()
+        return []
+
     rows = conn.execute(
         "SELECT chunk_id, file_path, heading_path, line_start, line_end, "
         "       content_hash, emb_path, text_preview, mtime FROM chunk"
@@ -644,6 +789,8 @@ def stats(index_dir: Path | str = DEFAULT_INDEX_DIR) -> dict[str, Any]:
     conn = sqlite3.connect(str(catalog_path))
     n_chunks = conn.execute("SELECT COUNT(*) FROM chunk").fetchone()[0]
     n_files = conn.execute("SELECT COUNT(DISTINCT file_path) FROM chunk").fetchone()[0]
+    meta = _read_meta(conn)
+    convention = _index_convention(conn)
     conn.close()
     emb_dir = index_dir / "emb"
     emb_bytes = sum(p.stat().st_size for p in emb_dir.glob("*.npz")) if emb_dir.exists() else 0
@@ -654,4 +801,6 @@ def stats(index_dir: Path | str = DEFAULT_INDEX_DIR) -> dict[str, Any]:
         "emb_bytes": emb_bytes,
         "emb_mib": round(emb_bytes / (1024 * 1024), 2),
         "index_dir": str(index_dir),
+        "prefix_convention": convention,
+        "meta": meta,
     }

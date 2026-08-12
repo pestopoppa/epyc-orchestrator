@@ -11,6 +11,11 @@ Per handoffs/active/internal-kb-rag.md K1.
 
 from src.retrieval.colbert_encoder import (
     DEFAULT_MODEL_DIR,
+    LEGACY_CONVENTION,
+    PREFIX_CONVENTION,
+    ROLE_DOCUMENT,
+    ROLE_NONE,
+    ROLE_QUERY,
     encode,
     ensure_loaded,
     is_available,
@@ -19,6 +24,11 @@ from src.retrieval.colbert_encoder import (
 
 __all__ = [
     "DEFAULT_MODEL_DIR",
+    "LEGACY_CONVENTION",
+    "PREFIX_CONVENTION",
+    "ROLE_DOCUMENT",
+    "ROLE_NONE",
+    "ROLE_QUERY",
     "encode",
     "ensure_loaded",
     "is_available",

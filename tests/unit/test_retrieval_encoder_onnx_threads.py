@@ -73,6 +73,10 @@ def _load_with_stubs(monkeypatch, module_name: str, model_dir):
             return types.SimpleNamespace(
                 enable_truncation=lambda **k: None,
                 enable_padding=lambda **k: None,
+                # colbert_encoder resolves the trained [Q]/[D] prefix token ids
+                # at load time; a stub lacking this reads as a model that has
+                # no prefix tokens, which is a different test.
+                token_to_id=lambda token: 50368,
             )
 
     fake_tok = types.ModuleType("tokenizers")

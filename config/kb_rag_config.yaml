@@ -4,7 +4,8 @@
 #
 # Roots are walked with the include_globs; matches that contain any
 # substring in exclude_patterns are dropped. Encoded chunks land in
-# data/kb_rag/index/ (gitignored).
+# data/kb_rag/index-qd-v1/ (gitignored). data/kb_rag/index/ is the retained
+# pre-OP-24 prefix-free store, kept as the migration rollback.
 
 roots:
   - /workspace/wiki
