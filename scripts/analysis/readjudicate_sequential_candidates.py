@@ -16,10 +16,21 @@ Measured over 393 sequential trials / 141 candidates on 2026-07-27:
 * the strongest candidate, ``70902e4b665474e7``, trips ``k>=8 and E<2.0`` at k=8 with
   E=1.68, then climbs to **E_quality 11.55 by k=40 while still labelled ``refuted``** —
   5.8x the kill bar and 58% of the confirm bar
-* **56 of 393** trials carry ``state="refuted"`` while ``E>=budget_min_e`` and ``k>=budget``,
-  i.e. the persisted label contradicts what ``state_name()`` returns for that very trial.
-  The label is STICKY: ``state_name`` is a pure function of current state, so a candidate
-  that outgrows the kill condition should read ``accumulating`` again, and does not.
+* **RETRACTED 2026-08-12** — this bullet used to read: *"56 of 393 trials carry
+  ``state="refuted"`` while ``E>=budget_min_e`` and ``k>=budget`` … the label is STICKY."*
+  **There is no stale label, and there never was.** That population was manufactured by this
+  script's own SEQ-A block, which compared the JOINT ``state`` against the SINGLE
+  ``E_quality`` axis (see the comment above ``refuted_by`` below for the mechanism, and
+  ``f2ad030e`` for the fix). ``safety_gate.py`` recomputes ``state`` on EVERY trial from
+  ``q_name == REFUTED or rate_name == REFUTED``, so a healthy quality axis beside a refuted
+  RATE axis read as a label that had failed to update. Since ``E_rate_noninf`` never exceeds
+  2.0 anywhere in the corpus (max 1.1100) against ``budget_min_e = 2.0``, essentially every
+  candidate's rate axis refutes once ``k >= budget``. Re-measured after the fix: 6 refuted on
+  the quality axis, 3 on the rate axis only, and **0 unexplained** — the empty third bucket is
+  the finding, because it is the only bucket a genuinely stale label could occupy. The live
+  question is joint-gate-vs-quality-primary (SEQ-B1), not staleness. This bullet is retracted
+  in place rather than deleted: the ``70902e4b665474e7`` bullet above is still true and reads
+  as evidence for staleness unless the retraction sits next to it.
 
 ``confirm_e=20.0`` is the Ville bound for alpha=0.05 and is NOT touched here. ``budget``
 and ``budget_min_e`` are a compute-allocation heuristic with no bearing on
