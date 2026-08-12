@@ -2900,6 +2900,28 @@ def main() -> int:
         cmd_status,
     )
 
+    # --validate-only was DECLARED and never READ (found by `mainA`, 2026-08-12).
+    # argparse accepted it, main() discarded it, and dispatch fell straight
+    # through to cmd_start — so anyone who trusted the help text "Validate stack
+    # template and exit" / "check without launching" LAUNCHED THE PRODUCTION
+    # STACK instead. A dry-run flag that is not wired is worse than no dry-run
+    # flag: it manufactures the confidence to run the command.
+    #
+    # Handled ABOVE `guard_against_running_bench` deliberately (hoisted 2026-08-12
+    # after `mainA` caught the first placement). The guard covers start/stop/reload
+    # because those MUTATE the host, and it exists because a lifecycle action
+    # destroyed 1h09m of decision-gating measurement on 2026-07-27. Validation
+    # mutates nothing — it loads a YAML, checks it, prints, returns. Leaving it
+    # below the guard meant `start --validate-only` returned 2 whenever a bench was
+    # detectable, i.e. pure config validation was unavailable exactly when the host
+    # is busy, which is when you most want to check config WITHOUT touching it.
+    # Fail-closed, so it was never dangerous — just useless at the moment of need.
+    #
+    # This branch must stay above the guard AND above dispatch: nothing between it
+    # and `cmd_start` may start a server.
+    if args.command == "start" and getattr(args, "validate_only", False):
+        return _cmd_validate_only(args)
+
     if args.command in ("start", "stop", "reload"):
         if not guard_against_running_bench(
             args.command, getattr(args, "allow_during_bench", False)
@@ -2907,18 +2929,6 @@ def main() -> int:
             return 2
 
     if args.command == "start":
-        # --validate-only was DECLARED and never READ (found by `mainA`,
-        # 2026-08-12). argparse accepted it, main() discarded it, and dispatch
-        # fell straight through to cmd_start — so anyone who trusted the help
-        # text "Validate stack template and exit" / "check without launching"
-        # LAUNCHED THE PRODUCTION STACK instead.
-        #
-        # A dry-run flag that is not wired is worse than no dry-run flag: it
-        # manufactures the confidence to run the command. Handled here, BEFORE
-        # dispatch, so no code path between the check and cmd_start can start a
-        # server.
-        if getattr(args, "validate_only", False):
-            return _cmd_validate_only(args)
         return cmd_start(args)
     elif args.command == "stop":
         return cmd_stop(args)

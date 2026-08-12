@@ -154,3 +154,58 @@ def test_unloadable_template_fails_closed_rather_than_launching(stack_mod, monke
     monkeypatch.setattr(st, "load_template", _raise, raising=True)
     rc = stack_mod._cmd_validate_only(SimpleNamespace(stack_profile="ghost"))
     assert rc == 1
+
+
+def test_validate_only_works_while_a_bench_is_running(stack_mod, monkeypatch):
+    """Validation must survive `guard_against_running_bench` REFUSING.
+
+    Residual found by `mainA` on my first placement: the branch sat BELOW the
+    bench guard, which covers start/stop/reload because those mutate the host.
+    Validation mutates nothing, so refusing it there made pure config validation
+    unavailable exactly when the host is busy — which is when you most want to
+    check config without touching it. Fail-closed, never dangerous; just useless
+    at the moment of need.
+
+    The guard is forced to REFUSE here. If the branch ever slips back below it,
+    this returns 2 and the test fails.
+    """
+    import scripts.server.stack_commands as sc
+
+    monkeypatch.setattr(
+        stack_mod, "guard_against_running_bench", lambda *_a, **_k: False, raising=True
+    )
+    monkeypatch.setattr(
+        sc, "cmd_start",
+        lambda _a: (_ for _ in ()).throw(AssertionError("cmd_start reached")),
+        raising=True,
+    )
+    monkeypatch.setattr(stack_mod, "_cmd_validate_only", lambda _a: 0, raising=True)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["orchestrator_stack.py", "start", "--stack-profile", "default", "--validate-only"],
+    )
+
+    assert stack_mod.main() == 0, "bench guard blocked a validation that launches nothing"
+
+
+def test_a_real_start_is_still_refused_while_a_bench_is_running(stack_mod, monkeypatch):
+    """Negative control for the hoist: the guard must still bite a REAL start.
+
+    Without this, the hoist could have been implemented by weakening the guard
+    for every start, which is the opposite of what is wanted.
+    """
+    import scripts.server.stack_commands as sc
+
+    monkeypatch.setattr(
+        stack_mod, "guard_against_running_bench", lambda *_a, **_k: False, raising=True
+    )
+    monkeypatch.setattr(
+        sc, "cmd_start",
+        lambda _a: (_ for _ in ()).throw(AssertionError("cmd_start reached during a bench")),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["orchestrator_stack.py", "start", "--stack-profile", "default"]
+    )
+
+    assert stack_mod.main() == 2, "a real start must still be refused while a bench runs"
