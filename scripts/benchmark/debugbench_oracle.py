@@ -79,6 +79,7 @@ import importlib.util
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -536,6 +537,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.pool:
         report["live_pool_as_shipped"] = live_pool_report(args.pool, rows)
+    # A JSON blob with no provenance is not evidence — it is a number someone
+    # remembers producing. Stamp what made it and from what.
+    report["provenance"] = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generator": str(Path(__file__).resolve()),
+        "argv": sys.argv[1:],
+        "upstream_snapshot": str(args.eval_json),
+        "remediates": "epyc-root artifacts/audit/debugbench-oracle-vacuity-20260812.md",
+    }
     text = json.dumps(report, indent=2, sort_keys=True)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
