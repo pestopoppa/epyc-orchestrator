@@ -15,13 +15,38 @@ Catches the failure modes that cost ~2 hours of debugging on 2026-05-09:
 3. **YAML duplicate keys at the same path**: PyYAML silently keeps the LAST
    declaration. Detect and reject.
 
+4. **`numa_ports` / `numa_instances` disagreeing with the declared NUMA
+   topology** (added 2026-08-12, handoff P1-5). `server_mode.<role>.numa_ports`
+   is the registry's copy of a fleet that `orchestration/stack_topology.yaml`
+   (loaded as `scripts.server.stack_numa.NUMA_CONFIG`) owns. Two copies of one
+   fleet is how months of NUMA drift went unnoticed: the registry-side copy is
+   what `src/registry/model_descriptors.py`, `src/registry/stack_priors.py` and
+   `scripts/autopilot/eval_tower.py` turn into backend URLs, so a stale copy
+   points eval fan-out and capacity planning at ports nothing is listening on
+   — silently, because every consumer just reads the list it was given.
+
+   `scripts/server/stack_manifest.py:validate_declaration_parity()` already
+   compares the two for roles the topology KNOWS (it iterates `NUMA_CONFIG`).
+   It structurally cannot see the other direction: a registry role that
+   declares a fleet the topology has never heard of is skipped by that loop
+   entirely. That is the exact shape of the `vision_escalation` phantom fleet
+   (ports 8187/8287/8387/8487, declared for a role with no `NUMA_CONFIG`
+   entry). This check covers both directions on the file the launcher actually
+   loads.
+
 Wire-in (intended): orchestrator_stack.py:cmd_start calls `validate_all` on
 the resolved registry path before any RegistryLoader instance, fails fast
 on errors.
+
+Wire-in (actual): `scripts/server/stack_commands.py:cmd_start` calls
+`validate_or_raise(orchestration/model_registry.yaml)` — the COMPILED LEAN
+registry, i.e. the artifact the orchestrator consumes — and returns 2 without
+starting anything if it raises.
 """
 
 from __future__ import annotations
 
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -167,6 +192,197 @@ def _check_gguf_port_consistency(registry: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _load_numa_config() -> dict[str, Any]:
+    """The declared NUMA topology, as the launcher sees it.
+
+    Deliberately NOT a second YAML reader over `stack_topology.yaml`: this
+    imports the same `NUMA_CONFIG` object every other consumer imports, so a
+    change to how the topology is loaded (cpu-shape expansion, field
+    validation, the `full_instance_idx` convention) cannot drift away from this
+    guard. A local re-parse would be a fourth copy of the topology, which is
+    the defect class this check exists to catch.
+
+    Raises on failure. There is no fallback table and no `except: return {}` —
+    a cross-check that silently degrades to "no topology, therefore no
+    disagreement" passes hardest exactly when the topology is broken.
+    """
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    from scripts.server.stack_numa import NUMA_CONFIG  # noqa: PLC0415
+
+    return NUMA_CONFIG
+
+
+def _topology_fleet_ports(cfg: dict[str, Any]) -> list[int]:
+    """The topology's `numa_ports` projection for ONE role.
+
+    The registry's `numa_ports` is the launcher's instance list MINUS the full
+    instance (a role with no `full_instance_idx` has no full instance to
+    remove). Kept identical to `stack_manifest._launcher_declarations`, which
+    computes the same projection for the parity guard — if the two ever compute
+    it differently, one of them is wrong about what the registry means.
+    """
+    instances = cfg.get("instances") or []
+    full_idx = cfg.get("full_instance_idx")
+    return [
+        instance[1]
+        for idx, instance in enumerate(instances)
+        if full_idx is None or idx != full_idx
+    ]
+
+
+def _bind_role_to_topology(
+    role: str, cfg: dict[str, Any], numa_config: dict[str, Any]
+) -> str | None:
+    """Resolve a registry `server_mode` row to the topology role it governs.
+
+    Mirrors `stack_manifest.master_server_row` / `stack_priors._server_for_role`
+    in reverse, with the same precedence: a row governs the topology role of the
+    same name, else the role named by its `model_role`, else a role listed in
+    its `shared_with` aliases. `None` = the topology has never heard of this
+    row (which is only a defect if the row declares a fleet).
+    """
+    if role in numa_config:
+        return role
+    model_role = cfg.get("model_role")
+    if isinstance(model_role, str) and model_role in numa_config:
+        return model_role
+    shared_with = cfg.get("shared_with")
+    if isinstance(shared_with, list):
+        for alias in shared_with:
+            if isinstance(alias, str) and alias in numa_config:
+                return alias
+    return None
+
+
+def _check_numa_ports_vs_topology(
+    registry: dict[str, Any], numa_config: dict[str, Any] | None = None
+) -> list[str]:
+    """Cross-check `server_mode.<role>.numa_ports` against the NUMA topology.
+
+    `numa_config` is injectable so a test can drive a synthetic topology; the
+    default is the live `NUMA_CONFIG` the launcher itself imports.
+    """
+    errors: list[str] = []
+
+    if numa_config is None:
+        try:
+            numa_config = _load_numa_config()
+        except Exception as exc:  # noqa: BLE001 — report, never skip
+            return [
+                f"numa_ports cross-check could not load the declared topology "
+                f"({type(exc).__name__}: {exc}). The check is NOT optional: "
+                f"treat an unloadable topology as a failed registry, not as a "
+                f"registry with nothing to disagree with."
+            ]
+
+    if not numa_config:
+        return [
+            "numa_ports cross-check: the declared NUMA topology is EMPTY. "
+            "An empty topology makes every registry fleet vacuously consistent; "
+            "refusing instead."
+        ]
+
+    server_mode = registry.get("server_mode") or {}
+    server_roles = {k: v for k, v in server_mode.items() if isinstance(v, dict)}
+
+    for role in sorted(server_roles):
+        cfg = server_roles[role]
+        declared_ports = cfg.get("numa_ports")
+        declared_count = cfg.get("numa_instances")
+        topo_role = _bind_role_to_topology(role, cfg, numa_config)
+
+        if topo_role is None:
+            if declared_ports is not None or declared_count is not None:
+                errors.append(
+                    f"role {role!r} declares numa_ports={declared_ports!r} / "
+                    f"numa_instances={declared_count!r} but the NUMA topology "
+                    f"(stack_topology.yaml numa_config) has NO entry for it, nor "
+                    f"for its model_role/shared_with bindings. A fleet nothing "
+                    f"launches is a phantom: either add the topology entry or "
+                    f"delete the declaration."
+                )
+            continue
+
+        topo_cfg = numa_config[topo_role]
+        expected_ports = _topology_fleet_ports(topo_cfg)
+        instance_ports = [instance[1] for instance in (topo_cfg.get("instances") or [])]
+        where = (
+            f"role {role!r}"
+            if topo_role == role
+            else f"role {role!r} (topology role {topo_role!r})"
+        )
+
+        if declared_ports is not None:
+            if not isinstance(declared_ports, list) or not all(
+                isinstance(p, int) and not isinstance(p, bool) for p in declared_ports
+            ):
+                errors.append(
+                    f"{where}: numa_ports must be a list of ints, got "
+                    f"{declared_ports!r}."
+                )
+            else:
+                if len(set(declared_ports)) != len(declared_ports):
+                    errors.append(
+                        f"{where}: numa_ports {declared_ports!r} contains duplicate "
+                        f"ports; one port is one llama-server instance."
+                    )
+                if sorted(declared_ports) != sorted(expected_ports):
+                    errors.append(
+                        f"{where}: numa_ports {sorted(declared_ports)!r} disagrees "
+                        f"with the NUMA topology, which declares "
+                        f"{sorted(expected_ports)!r} for {topo_role!r} "
+                        f"(instances {instance_ports!r}, full_instance_idx="
+                        f"{topo_cfg.get('full_instance_idx')!r}). "
+                        f"stack_topology.yaml owns the fleet; the registry copy "
+                        f"must be a projection of it, never an independent claim."
+                    )
+                if isinstance(declared_count, int) and not isinstance(declared_count, bool):
+                    if declared_count != len(declared_ports):
+                        errors.append(
+                            f"{where}: numa_instances={declared_count} but "
+                            f"numa_ports has {len(declared_ports)} entries "
+                            f"({declared_ports!r}). numa_instances is the length "
+                            f"of numa_ports, not a second opinion about it."
+                        )
+        elif declared_count is not None:
+            if declared_count != len(expected_ports):
+                errors.append(
+                    f"{where}: numa_instances={declared_count!r} but the NUMA "
+                    f"topology declares {len(expected_ports)} non-full "
+                    f"instance(s) {expected_ports!r} for {topo_role!r}."
+                )
+        elif len(instance_ports) > 1:
+            errors.append(
+                f"{where}: the NUMA topology declares {len(instance_ports)} "
+                f"instances {instance_ports!r} but the registry declares no "
+                f"numa_ports. Consumers that fan out over numa_ports "
+                f"(model_descriptors, stack_priors, eval_tower) then see ONE "
+                f"backend and collapse to it silently — declare "
+                f"numa_ports: {expected_ports!r}."
+            )
+
+        primary = cfg.get("port")
+        if isinstance(primary, int) and not isinstance(primary, bool) and instance_ports:
+            full_idx = topo_cfg.get("full_instance_idx")
+            if full_idx is not None and 0 <= full_idx < len(instance_ports):
+                if primary != instance_ports[full_idx]:
+                    errors.append(
+                        f"{where}: port {primary} is not the topology's full "
+                        f"instance port {instance_ports[full_idx]} "
+                        f"(full_instance_idx={full_idx}, instances "
+                        f"{instance_ports!r}). The primary port must address the "
+                        f"full-speed instance."
+                    )
+            elif primary not in instance_ports:
+                errors.append(
+                    f"{where}: port {primary} is not one of the topology's "
+                    f"instance ports {instance_ports!r} for {topo_role!r}."
+                )
+
+    return errors
+
+
 def validate_all(registry_path: str | Path) -> list[str]:
     """Run all checks. Returns list of error strings. Empty list = OK.
 
@@ -181,6 +397,7 @@ def validate_all(registry_path: str | Path) -> list[str]:
     errors: list[str] = []
     errors += _check_cross_section_conflicts(registry)
     errors += _check_gguf_port_consistency(registry)
+    errors += _check_numa_ports_vs_topology(registry)
     return errors
 
 
@@ -195,8 +412,8 @@ def validate_or_raise(registry_path: str | Path) -> None:
 
 
 if __name__ == "__main__":
-    import sys
-
+    # `sys` is imported at module scope (the topology cross-check needs it on
+    # sys.path); the former local `import sys` here would shadow it.
     target = sys.argv[1] if len(sys.argv) > 1 else (
         str(_REPO_ROOT / "orchestration/model_registry.yaml")
     )
