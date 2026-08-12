@@ -340,7 +340,11 @@ def evaluate_question(
                     inband[:200],
                 )
 
-        error_type = _classify_error(error)
+        # Pass `response` so the disposition comes from the STRUCTURAL transport
+        # facts (failure_reason / failure_provenance / HTTP status), not from a
+        # substring match on the error prose — which classified an HTTP 400 and
+        # an unparseable body as model `task_failure`s.
+        error_type = _classify_error(error, response)
         if error and target_port in HEAVY_PORTS and tokens_generated == 0:
             _erase_slots(target_port)
         if error_type == "infrastructure":

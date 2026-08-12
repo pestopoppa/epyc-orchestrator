@@ -1102,10 +1102,29 @@ def _nonnegative_int(value: Any, default: int = 0) -> int:
 # Re-exported under the original private names so every existing caller and test
 # keeps working unchanged.
 from src.autopilot_core.measurement_guards import (  # noqa: E402
+    DISPOSITION_INFRA_FAILED,
+    DISPOSITION_SCORED,
+    DISPOSITION_SCORING_FAILED,
     INBAND_ERROR_PREFIX as _INBAND_ERROR_PREFIX,
     forced_role_serving_mismatch as _forced_role_serving_mismatch,
     inband_error_text as _inband_error_text,
+    infra_failure_reason,
+    measurement_disposition,
 )
+
+
+def _exception_reason(exc: BaseException) -> str:
+    """Structural failure reason for an exception (never its message text).
+
+    Used to give a generation-phase exception the same machine-readable
+    disposition a transport failure returned through the response dict gets.
+    """
+    try:
+        from src.observability import classify_exception  # noqa: PLC0415
+
+        return classify_exception(exc)[0]  # type: ignore[arg-type]
+    except Exception:  # pragma: no cover - defensive
+        return "unexpected_error"
 
 
 def _inband_error_provenance(error: str, *, role: str = "") -> dict[str, Any]:
@@ -1310,6 +1329,20 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
     if r.confidence_source and r.confidence_source != "binary_correctness_proxy":
         item["confidence"] = round(float(r.confidence), 6)
         item["confidence_source"] = r.confidence_source
+    # getattr, not attribute access: this function is also called with
+    # DUCK-TYPED stand-ins that are not QuestionResult instances — e.g.
+    # run_e8_quality_baseline_v5._merged_retry_sidecar passes a
+    # types.SimpleNamespace built from a recovered row. A bare `r.disposition`
+    # raises AttributeError there and breaks the recovery path.
+    _disposition = str(getattr(r, "disposition", "") or "")
+    _infra_reason = str(getattr(r, "infra_reason", "") or "")
+    if _disposition and _disposition != DISPOSITION_SCORED:
+        # Emitted for every non-scored row, including `task_failed`, so a
+        # consumer never has to infer the kind of failure by substring-matching
+        # `error_detail` — the exact inference that failed open before.
+        item["disposition"] = _disposition
+    if _infra_reason:
+        item["infra_reason"] = _infra_reason
     if r.error:
         item["error"] = True
         item["error_detail"] = str(r.error).replace("\n", " ")[:200]
@@ -1650,12 +1683,104 @@ def _runtime_facts_stack_numa_mode() -> str | None:
     return None
 
 
+# Sentinel for "the stack NUMA mode governing eval fan-out could not be
+# determined". It is deliberately NOT a member of VALID_STACK_NUMA_MODES so it
+# can never be mistaken for a declared mode.
+_EVAL_FANOUT_UNKNOWN_MODE = "unknown"
+
+
+def _valid_stack_numa_modes() -> frozenset[str]:
+    """The launcher's stack NUMA-mode vocabulary, read from its owner.
+
+    ``scripts/server/stack_numa_mode.py`` is the single definition (and it is
+    what ``orchestrator_stack.py --numa-mode`` validates against). Imported
+    lazily so this module stays import-safe outside the orchestrator tree; the
+    literal is a last-resort mirror, not a second source of truth.
+
+    NOTE: ``half`` is NOT a mode. It is a cpu_shape_class (stack_numa.py
+    ``_SHAPE_CLASSES``). On the current 1-full + 2-halves fleet the halves are
+    the "quarter" (non-full sibling) instances in MODE terms.
+    """
+    try:
+        from scripts.server.stack_numa_mode import (  # type: ignore[import-not-found]
+            VALID_STACK_NUMA_MODES,
+        )
+
+        return frozenset(VALID_STACK_NUMA_MODES)
+    except Exception:
+        return frozenset({"full", "quarter", "both"})
+
+
+def _resolve_stack_numa_mode_for_fanout(raw: object) -> tuple[str, str]:
+    """Classify a raw stack NUMA mode into ``(mode, reason)`` for fan-out sizing.
+
+    ``mode`` is a member of ``VALID_STACK_NUMA_MODES`` when the value is
+    recognised, otherwise ``_EVAL_FANOUT_UNKNOWN_MODE``. ``reason`` is one of
+    ``declared`` / ``unset`` / ``unrecognised``.
+
+    This exists so "I could not tell what the fleet is" is a STRUCTURAL result
+    rather than an implicit fall-through. The predecessor was
+    ``str(mode or "").strip().lower() == "quarter"``: an equality test against
+    one mode whose else-branch silently absorbed ``full``, ``both``, unset AND
+    typos into the same conservative answer, so a fan-out of 1 could not be
+    distinguished from a fan-out of 1 that means "unknown fleet".
+    """
+    text = "" if raw is None else str(raw).strip().lower()
+    if not text:
+        return (_EVAL_FANOUT_UNKNOWN_MODE, "unset")
+    if text in _valid_stack_numa_modes():
+        return (text, "declared")
+    return (_EVAL_FANOUT_UNKNOWN_MODE, "unrecognised")
+
+
+def _full_first_live_concurrency(
+    live_regions: Sequence[frozenset[str]], topology_cap: int
+) -> int:
+    """Largest disjoint live set reachable under the dispatcher's full-first policy.
+
+    Instance 0 is the full instance by NUMA_CONFIG convention, so it is always
+    accepted first and everything overlapping it is excluded — which is why the
+    result is 1 whenever the full instance is live and covers every region.
+    Bounded by ``topology_cap`` (``compute_max_safe_concurrency``).
+    """
+    if topology_cap <= 1 or not live_regions:
+        return 1
+
+    accepted_union: set[str] = set(live_regions[0])
+    live_cap = 1
+    for regions in sorted(
+        live_regions[1:],
+        key=lambda r: (bool(accepted_union & r), sorted(r)),
+    ):
+        if not regions or accepted_union & regions:
+            continue
+        accepted_union |= regions
+        live_cap += 1
+        if live_cap >= topology_cap:
+            break
+    return max(1, min(topology_cap, live_cap))
+
+
 def _live_safe_concurrency(role: str, topology_cap: int) -> int:
     """Bound eval fan-out by the currently reachable role instances.
 
     Static topology can say a role is safe at N>1 while the live stack is
     intentionally launched in full-only mode. In that case, concurrent evals
     pile onto one llama-server and can corrupt evidence with 5xx/timeouts.
+
+    Per-mode semantics (modes: ``full`` / ``quarter`` / ``both``):
+      * ``quarter`` — the full instance is NOT launched, so the full-first
+        dispatcher policy has nothing to bind to and the ceiling is the largest
+        disjoint subset of the LIVE instances. Deliberately not bounded by
+        ``topology_cap``, which models full-first.
+      * ``full`` — only the full instance is live; one live instance, cap 1.
+      * ``both`` — full AND siblings live; full-first binds, so the cap is the
+        ``topology_cap``-bounded greedy from the full instance.
+      * unset / unrecognised — the conservative ``both`` bound is used, but it
+        is reported LOUDLY (see below), because a cap of 1 that means "could
+        not determine the fleet mode" is otherwise indistinguishable from a cap
+        of 1 that means "one usable slot". WP-14's fail-closed value is kept;
+        only its silence is removed.
     """
     if os.environ.get("AUTOPILOT_EVAL_REQUIRE_LIVE_FLEET", "1") == "0":
         return topology_cap
@@ -1685,34 +1810,54 @@ def _live_safe_concurrency(role: str, topology_cap: int) -> int:
 
     if not live_regions:
         return 1
+    if len(live_regions) == 1:
+        # Exactly one live instance: the cap is 1 by construction and no NUMA
+        # mode can raise it. Return before mode resolution so single-instance
+        # roles (architect_general, worker_vision, ...) never raise a spurious
+        # "unknown fleet mode" alarm.
+        return 1
 
-    stack_numa_mode = _runtime_facts_stack_numa_mode()
-    if stack_numa_mode is None:
-        stack_numa_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
+    raw_stack_numa_mode = _runtime_facts_stack_numa_mode()
+    if raw_stack_numa_mode is None:
+        raw_stack_numa_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
+    stack_numa_mode, mode_reason = _resolve_stack_numa_mode_for_fanout(raw_stack_numa_mode)
 
-    if str(stack_numa_mode or "").strip().lower() == "quarter":
+    if stack_numa_mode == "quarter":
         return compute_max_disjoint_live_concurrency(
             NUMA_CONFIG,
             role,
             live_ports=live_ports,
         )
 
-    if topology_cap <= 1:
-        return 1
+    bounded = _full_first_live_concurrency(live_regions, topology_cap)
 
-    accepted_union: set[str] = set(live_regions[0])
-    live_cap = 1
-    for regions in sorted(
-        live_regions[1:],
-        key=lambda r: (bool(accepted_union & r), sorted(r)),
-    ):
-        if not regions or accepted_union & regions:
-            continue
-        accepted_union |= regions
-        live_cap += 1
-        if live_cap >= topology_cap:
-            break
-    return max(1, min(topology_cap, live_cap))
+    if stack_numa_mode == _EVAL_FANOUT_UNKNOWN_MODE:
+        # FAIL LOUD. The value returned is still the conservative full-first
+        # bound (WP-14 fail-closed), but an undetermined mode is a
+        # misconfiguration, not a measurement, and it silently costs fan-out.
+        try:
+            disjoint = compute_max_disjoint_live_concurrency(
+                NUMA_CONFIG, role, live_ports=live_ports
+            )
+        except Exception:
+            disjoint = bounded
+        log.error(
+            "eval fan-out: stack NUMA mode %s (raw=%r); role=%r holding the "
+            "conservative full-first bound N=%d while the largest disjoint LIVE "
+            "subset is %d (live ports %s). This N means 'could not determine the "
+            "fleet mode', NOT a measured slot ceiling — set "
+            "ORCHESTRATOR_STACK_NUMA_MODE to one of %s or repair the "
+            "runtime-facts manifest.",
+            mode_reason,
+            raw_stack_numa_mode,
+            role,
+            bounded,
+            disjoint,
+            sorted(live_ports),
+            "/".join(sorted(_valid_stack_numa_modes())),
+        )
+
+    return bounded
 
 
 def _forced_roles_for_questions(questions: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -2721,6 +2866,20 @@ class QuestionResult:
     answer: str = ""
     correct: bool = False
     error: str | None = None
+    # Measurement disposition (2026-08-03 incident). `error` alone is a BINARY
+    # marker — it says a row is excluded but not WHY, so an unreachable
+    # endpoint and a broken scorer are indistinguishable in the aggregate, and
+    # a run whose rows ALL failed for transport reasons reports the same
+    # `quality` as a run in which the model answered everything wrong.
+    #   scored          — a real verdict was produced (`correct` is meaningful)
+    #   infra_failed    — the endpoint produced no answer to score
+    #   scoring_failed  — an answer exists but the scorer could not grade it
+    #   task_failed     — the model genuinely failed the task
+    # Only `scored` rows may enter a quality denominator.
+    disposition: str = DISPOSITION_SCORED
+    # Structural reason behind an `infra_failed` disposition (`http_status`,
+    # `read_timeout`, `connect_error`, `empty_response`, …). "" otherwise.
+    infra_reason: str = ""
     failure_provenance: dict[str, Any] | None = None
     tokens_generated: int = 0
     elapsed_s: float = 0.0
@@ -2975,6 +3134,10 @@ def _loader_error_eval_result(
         speed=0,
         cost=0,
         reliability=0,
+        # The question pool never loaded, so no question was ever asked. This
+        # `quality=0` is a placeholder for a harness failure, not a score.
+        quality_measured=False,
+        quality_unmeasured_reason=f"loader_error:{source}",
         details={
             "loader_error": {
                 "source": source,
@@ -4011,6 +4174,28 @@ class EvalTower:
                         _served_by,
                     )
 
+            # ── Guard 3 (REL-1): transport failure with no error TEXT ─────
+            # `httpx.ReadTimeout("")` stringifies to "", and `""` is FALSY:
+            # every `if not error` guard above and the `if not error` scoring
+            # gate below then treat a dead request as a clean generation and
+            # score its empty answer against the gold answer — a WRONG verdict
+            # manufactured out of a measurement that was never made. Recover the
+            # disposition from the STRUCTURAL transport facts the call site
+            # recorded (failure_reason / failure_provenance / _meta.reason /
+            # HTTP status / an empty zero-token reply) and give the row a
+            # non-empty error so it is excluded like any other infra failure.
+            _infra_reason = infra_failure_reason(resp, error=error)
+            if _infra_reason is not None and not str(error or "").strip():
+                error = f"infra_failed: {_infra_reason}"
+                log.error(
+                    "REL-1 infra failure with no error text "
+                    "(qid=%s suite=%s reason=%s) — excluding row rather than "
+                    "scoring an absent answer",
+                    stable_qid,
+                    suite,
+                    _infra_reason,
+                )
+
             tokens = _nonnegative_int(resp.get("tokens_generated", 0))
             host_covariates = _capture_host_timing_covariates(
                 tokens_generated=tokens,
@@ -4042,13 +4227,21 @@ class EvalTower:
                 tokens_generated=0,
                 elapsed_s=elapsed,
             )
+            # A generation-phase exception means no answer was ever produced.
+            # That is the definition of an infra failure — it carries zero
+            # information about answer quality and must never be counted as 0.0.
+            _exc_reason = infra_failure_reason({"failure_reason": _exception_reason(e)}) or (
+                "generation_exception"
+            )
             failed = QuestionResult(
                 question_id=qid,
                 suite=suite,
                 prompt=prompt,
                 expected=expected,
                 qid=stable_qid,
-                error=str(e),
+                error=str(e) or f"{type(e).__name__}: generation failed",
+                disposition=DISPOSITION_INFRA_FAILED,
+                infra_reason=_exc_reason,
                 elapsed_s=elapsed,
                 eval_partition=eval_partition,
                 host_covariates=host_covariates,
@@ -4081,6 +4274,7 @@ class EvalTower:
             scoring_config["_eval_batch_id"] = eval_batch_id
 
         correct = False
+        scoring_failed = False
         rubric_scores: dict[str, float] = {}
         rubric_source = ""
         if not error and _is_scoreable_question(q):
@@ -4112,6 +4306,10 @@ class EvalTower:
                     # only the verdict is unavailable.  This lets a caller
                     # replay the scorer tail without regenerating model output.
                     error = scoring_error
+                    # A broken INSTRUMENT, not a broken endpoint. Both are
+                    # excluded from quality, but conflating them hides which of
+                    # the two a run's exclusions actually came from.
+                    scoring_failed = True
                 else:
                     correct = bool(verdict)
 
@@ -4143,6 +4341,20 @@ class EvalTower:
         provenance_role = (
             str(failure_provenance.get("role") or "") if failure_provenance is not None else ""
         )
+        # ── Measurement disposition ───────────────────────────────────────
+        # Decides whether this row carries quality information AT ALL. An
+        # infra-failed row is the ABSENCE of a measurement; counting it as a
+        # 0.0 — or as an anonymous `error` indistinguishable from a broken
+        # scorer — is what let a dead API report itself as a model scoring 0%
+        # on 2026-08-03.
+        disposition = measurement_disposition(
+            resp, error=error, scoring_failed=scoring_failed
+        )
+        infra_reason = (
+            (infra_failure_reason(resp, error=error) or "unclassified")
+            if disposition == DISPOSITION_INFRA_FAILED
+            else ""
+        )
         return QuestionResult(
             question_id=outcome.question_id,
             suite=outcome.suite,
@@ -4152,6 +4364,8 @@ class EvalTower:
             answer=answer,
             correct=correct,
             error=error,
+            disposition=disposition,
+            infra_reason=infra_reason,
             failure_provenance=failure_provenance,
             tokens_generated=outcome.tokens,
             elapsed_s=outcome.elapsed,
@@ -4182,6 +4396,7 @@ class EvalTower:
         *,
         elapsed_s: float,
         error: str,
+        infra_reason: str = "eval_batch_failure",
     ) -> QuestionResult:
         prompt = q.get("prompt", "")
         suite = q.get("suite", "unknown")
@@ -4190,6 +4405,10 @@ class EvalTower:
             tokens_generated=0,
             elapsed_s=elapsed_s,
         )
+        # Every caller of this builder is a HARNESS failure — a no-progress
+        # timeout, a wall-budget cutoff, an abandoned/orphaned request, an
+        # unproven backend drain. None of them produced an answer, so none of
+        # them is evidence about quality.
         return QuestionResult(
             question_id=q.get("id", q.get("question_id", "unknown")),
             suite=suite,
@@ -4197,6 +4416,8 @@ class EvalTower:
             expected=q.get("expected", ""),
             qid=stable_qid,
             error=error,
+            disposition=DISPOSITION_INFRA_FAILED,
+            infra_reason=infra_reason,
             elapsed_s=elapsed_s,
             eval_partition=str(q.get("eval_partition") or "core"),
             host_covariates=host_covariates,
@@ -4320,6 +4541,10 @@ class EvalTower:
                 f"server-side after {drain_timeout_s:.1f}s drain"
             )
             result.error = f"{result.error}; {suffix}" if result.error else suffix
+            # An abandoned request is a harness failure, whatever the row was
+            # before: its answer (if any) is no longer trustworthy evidence.
+            result.disposition = DISPOSITION_INFRA_FAILED
+            result.infra_reason = result.infra_reason or "eval_orphan_contamination"
             results[idx] = result
 
         if workers <= 1:
@@ -4412,6 +4637,12 @@ class EvalTower:
                             results[i].degraded = True
                             results[i].error = (
                                 f"{results[i].error}; {suffix}" if results[i].error else suffix
+                            )
+                            # Uncertified backend lifecycle — the row is no
+                            # longer admissible quality evidence.
+                            results[i].disposition = DISPOSITION_INFRA_FAILED
+                            results[i].infra_reason = (
+                                results[i].infra_reason or "eval_backend_drain_unproven"
                             )
                     results[i].eval_concurrency = workers
                     append_question_result(i, results[i])
@@ -4882,11 +5113,47 @@ class EvalTower:
     def _aggregate(self, results: list[QuestionResult], tier: int) -> EvalResult:
         """Aggregate individual question results into an EvalResult."""
         if not results:
-            return EvalResult(tier=tier, quality=0, speed=0, cost=0, reliability=0)
+            # No rows at all: `quality=0` is a placeholder, not a measurement.
+            # Say so, rather than emitting a number that reads as "scored 0%".
+            return EvalResult(
+                tier=tier,
+                quality=0,
+                speed=0,
+                cost=0,
+                reliability=0,
+                quality_measured=False,
+                quality_unmeasured_reason="no_question_results",
+            )
 
         total_count = len(results)
         scored_results = [r for r in results if not r.error]
         n_scored = len(scored_results)
+
+        # ── Disposition rollup (2026-08-03 incident) ─────────────────────
+        # `errors` alone cannot answer "was this run's 0.0 a model result or a
+        # dead endpoint?". Split the excluded rows by disposition and carry the
+        # counts (and the structural reasons) into the aggregate, so a capacity
+        # or infrastructure problem can never present itself as a quality one.
+        # getattr throughout: recovery/replay paths hand this aggregator
+        # duck-typed rows rebuilt from JSONL, not QuestionResult instances.
+        # A row with no disposition is treated as `scored` — the pre-existing
+        # `error` check below still excludes it if it errored, so an old row
+        # keeps exactly its previous accounting.
+        def _disposition_of(row: Any) -> str:
+            return str(getattr(row, "disposition", "") or DISPOSITION_SCORED)
+
+        infra_failed_count = sum(
+            1 for r in results if _disposition_of(r) == DISPOSITION_INFRA_FAILED
+        )
+        scoring_failed_count = sum(
+            1 for r in results if _disposition_of(r) == DISPOSITION_SCORING_FAILED
+        )
+        infra_failed_reasons: dict[str, int] = {}
+        for r in results:
+            if _disposition_of(r) != DISPOSITION_INFRA_FAILED:
+                continue
+            reason = str(getattr(r, "infra_reason", "") or "") or "unclassified"
+            infra_failed_reasons[reason] = infra_failed_reasons.get(reason, 0) + 1
 
         # Quality: fraction correct over scored (non-error) rows, scaled to 0-3.
         # Infrastructure/scoring failures are reliability evidence, not wrong-answer
@@ -4894,6 +5161,42 @@ class EvalTower:
         # denominators explicit in details.
         correct_count = sum(1 for r in scored_results if r.correct)
         quality = (correct_count / n_scored) * 3.0 if n_scored else 0.0
+        # `quality` is a plain float on the Pareto/SafetyGate contract and cannot
+        # become None without breaking every consumer — so the honesty lives in
+        # an explicit companion flag instead. With n_scored == 0 the 0.0 above is
+        # NOT "the model got everything wrong", it is "nothing was measured".
+        # That distinction is the whole defect: on 2026-08-03 a T1 calibration
+        # emitted `0% correct` over 70 questions solely because the API was down.
+        quality_measured = n_scored > 0
+        if quality_measured:
+            quality_unmeasured_reason = ""
+        elif infra_failed_count >= total_count:
+            quality_unmeasured_reason = "all_rows_infra_failed"
+        elif infra_failed_count or scoring_failed_count:
+            quality_unmeasured_reason = "no_scoreable_rows_infra_or_scoring_failed"
+        else:
+            quality_unmeasured_reason = "no_scoreable_rows"
+        if not quality_measured:
+            log.error(
+                "EvalTower aggregate: NOTHING WAS SCORED (tier=%s n=%d "
+                "infra_failed=%d scoring_failed=%d reasons=%s) — quality=0.0 is a "
+                "placeholder, not a measurement; quality_measured=False",
+                tier,
+                total_count,
+                infra_failed_count,
+                scoring_failed_count,
+                infra_failed_reasons,
+            )
+        elif infra_failed_count:
+            log.warning(
+                "EvalTower aggregate: %d/%d rows INFRA-FAILED and are excluded "
+                "from the quality denominator (reasons=%s); quality is over %d "
+                "scored rows",
+                infra_failed_count,
+                total_count,
+                infra_failed_reasons,
+                n_scored,
+            )
 
         # Speed: median per-request tokens/sec for non-error results. This is
         # intentionally kept stable for Pareto/backward compatibility. Concurrent
@@ -5177,6 +5480,15 @@ class EvalTower:
                 "quality_denominator": n_scored,
                 "quality_denominator_semantics": "non_error_question_results",
                 "scoring_errors": total_count - n_scored,
+                # Disposition split of the excluded rows. `errors` is the total;
+                # these say WHAT KIND of failure produced it, so a run cannot
+                # report a capacity/infra problem as a quality regression.
+                "infra_failed": infra_failed_count,
+                "infra_failed_reasons": dict(sorted(infra_failed_reasons.items())),
+                "scoring_failed": scoring_failed_count,
+                # False ⇒ `quality` above is a PLACEHOLDER, not a measurement.
+                "quality_measured": quality_measured,
+                "quality_unmeasured_reason": quality_unmeasured_reason,
                 "per_suite_counts": per_suite_counts,
                 "per_suite_total_counts": suite_total_counts,
                 "partition_quality": partition_quality,
@@ -5241,6 +5553,15 @@ class EvalTower:
             instruction_token_ratio=instruction_ratio,
             partial_count=sum(1 for r in results if r.partial),
             degraded_count=sum(1 for r in results if r.degraded),
+            # First-class fields (not just `details`) so every consumer that
+            # reads an EvalResult — journal rows, calibration JSONL, METRIC
+            # lines — carries the infra/quality distinction without having to
+            # know a details key exists.
+            infra_failed_count=infra_failed_count,
+            scoring_failed_count=scoring_failed_count,
+            infra_failed_reasons=dict(sorted(infra_failed_reasons.items())),
+            quality_measured=quality_measured,
+            quality_unmeasured_reason=quality_unmeasured_reason,
             avg_prompt_tokens=avg_prompt_tokens,
             ece=ece,
             auroc=auroc,
@@ -5279,7 +5600,20 @@ class EvalTower:
         if decision_results:
             result = self._aggregate(decision_results, tier=tier)
         else:
-            result = EvalResult(tier=tier, quality=0, speed=0, cost=0, reliability=0)
+            # Partition filtering removed every row: the decision subset is
+            # empty, so this `quality=0` is a placeholder, not a score.
+            result = EvalResult(
+                tier=tier,
+                quality=0,
+                speed=0,
+                cost=0,
+                reliability=0,
+                quality_measured=False,
+                quality_unmeasured_reason="all_rows_excluded_by_partition_filter",
+                infra_failed_count=full_result.infra_failed_count,
+                scoring_failed_count=full_result.scoring_failed_count,
+                infra_failed_reasons=dict(full_result.infra_failed_reasons),
+            )
 
         result.question_results = full_result.question_results
         for key in (

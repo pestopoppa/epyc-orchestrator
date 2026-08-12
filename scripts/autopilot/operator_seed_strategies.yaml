@@ -632,3 +632,30 @@
   bind_status: future
   bind_identifiers:
   - web_research_rerank
+# SUPERSESSION, NOT AN EDIT. The entry below supersedes `dual-half-negative`
+# (this file, slug `dual-half-negative`, entry id
+# `opseed-guardrail-dual-half-negative`, seeded 2026-06-28). That entry is an
+# operator-seeded record of what was believed on its seed date and is therefore
+# left BYTE-FOR-BYTE UNMODIFIED. This file's seeder is append-only and
+# idempotent by entry id (`seed_operator_strategies.py:367` skips ids already in
+# the store), so supersession here is an added row, never a rewritten one.
+# The store has no `superseded_by` column and no TTL concept, so the pointer
+# lives in the `insight` text — the field both planner renderers emit
+# (`_planner_strategy_entry_line`, `scripts/autopilot/autopilot.py:757`, and
+# `_format_strategy_hint`, `scripts/autopilot/actions.py:283`). The directive is
+# front-loaded because the first of those truncates content at 260 characters
+# (`autopilot.py:786`).
+- slug: halves-supersede-dual-half-negative
+  tranche: guardrail
+  species: structural_lab
+  entry_type: convention
+  title: Halves are the granularity; dual-half-negative is superseded
+  description: dual-half concurrency and quarter granularity in structural_lab
+  insight: SUPERSEDES opseed-guardrail-dual-half-negative (2026-06-28, retained unmodified). Halves are the granularity, not quarters. Quarters are retired, so do not propose quarter shapes and do not treat dual-half concurrency as forbidden. The 2026-07-30 fleet grid measured 2 concurrent halves above 4 quarters at every matched stream count (aggregate tok/s T=4 72.83 vs 52.90, T=8 98.81 vs 81.00, T=16 127.94 vs 108.39), and orchestration/stack_topology.yaml now declares 1 full plus 2 halves per quarterable role. The original 0.5x dual-half reading is an artifact of halves wired numactl interleave=all across nodes their threads cannot reach locally, the same defect that cost frontdoor and ingest_long_context about 2x.
+  evidence_trial_ids: []
+  source_handoff: numa-topology-cutover-resume-20260730 / numa-placement-defect-20260730
+  seeded_reason: Supersede dual-half-negative after the 2026-07-30 half-fleet cutover; the superseded entry is retained unmodified as the record of what was believed on 2026-06-28
+  confidence: high
+  bind_status: context
+  bind_identifiers:
+  - dual_half_concurrency

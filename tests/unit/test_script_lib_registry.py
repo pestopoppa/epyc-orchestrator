@@ -166,11 +166,46 @@ def test_context_flash_ubatch_and_timeouts(sample_registry: ModelRegistry):
 
     assert sample_registry.get_baseline_tps("target_main") == 5.0
     assert sample_registry.get_baseline_tps("missing") is None
-    assert sample_registry.get_timeout_multiplier("target_main", reference_tps=20.0) == 4.0
+
+    measured = sample_registry.get_timeout_multiplier("target_main", reference_tps=20.0)
+    assert measured.multiplier == 4.0
+    assert measured.is_measured is True
+
     # Fast models never get below 1.0.
-    assert sample_registry.get_timeout_multiplier("legacy_abs", reference_tps=20.0) == 1.0
-    # No baseline data uses conservative fallback.
-    assert sample_registry.get_timeout_multiplier("missing") == 2.0
+    fast = sample_registry.get_timeout_multiplier("legacy_abs", reference_tps=20.0)
+    assert fast.multiplier == 1.0
+    assert fast.is_measured is True
+
+    # No baseline data uses conservative fallback, marked unmeasured.
+    unmeasured = sample_registry.get_timeout_multiplier("missing")
+    assert unmeasured.multiplier == 2.0
+    assert unmeasured.is_measured is False
+
+
+def test_timeout_multiplier_unmeasured_prior_is_distinguishable_from_measured(
+    sample_registry: ModelRegistry,
+):
+    """NIB2-57a: an unmeasured baseline_tps must not silently masquerade as a
+    measured one. NIB2-57's root cause was exactly this shape -- a fallback
+    value that a caller could not tell apart from a real measurement, so a
+    router scored four unmeasured roles as if they had been benchmarked.
+
+    This test proves the fix at the point that actually matters: a role with
+    NO measured baseline_tps ("missing") and a role WITH a measured
+    baseline_tps that happens to compute the identical numeric multiplier
+    (target_main: baseline_tps=5.0, reference_tps=10.0 -> 10.0/5.0 == 2.0)
+    must still be distinguishable via ``is_measured`` even though the
+    ``multiplier`` floats are equal.
+    """
+    unmeasured = sample_registry.get_timeout_multiplier("missing")
+    coincidentally_equal = sample_registry.get_timeout_multiplier(
+        "target_main", reference_tps=10.0
+    )
+
+    assert unmeasured.multiplier == coincidentally_equal.multiplier == 2.0
+    assert unmeasured.is_measured is False
+    assert coincidentally_equal.is_measured is True
+    assert unmeasured.is_measured != coincidentally_equal.is_measured
 
 
 def test_add_entry_and_path_exists(tmp_path: Path):

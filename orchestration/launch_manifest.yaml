@@ -696,7 +696,24 @@ docker_services:
 #   ld_library_path_mode  prepend | replace. Defaults to `replace` when `backend` is
 #                   set, `prepend` otherwise. See stack_env.compose_ld_library_path.
 #   verify_ggml_linkage  fail the launch unless every linked ggml/whisper/llama lib
-#                   resolves inside the backend tree
+#                   resolves inside the backend tree. Three properties, audited
+#                   2026-08-12, that are not obvious from the name:
+#                     * REQUIRES `backend:`. The tree to check against is derived
+#                       from it, so setting this on a service without one does not
+#                       weakly degrade — orchestrator_stack.py aborts that service's
+#                       launch ("requests a linkage check but declares no backend").
+#                       On a non-optional service that is a stack-start outage.
+#                     * NOT implied by `backend:`. The loader defaults it to False;
+#                       only tests/unit/test_aux_service_env.py asserts backend =>
+#                       flag, so deleting a line below is silent to the loader and
+#                       caught only by that test.
+#                     * Only meaningful when argv[0] IS the ggml binary. The check
+#                       reads `ldd argv[0]`; a wrapper (`bash`, `{python}`) or a
+#                       statically-linked ggml yields ZERO libraries and the verifier
+#                       still prints PASS and exits 0. Enabling it there buys a green
+#                       light over nothing, not coverage.
+#                   Hence: on for whisper + tts, which are the only aux services whose
+#                   argv[0] is a dynamically-linked ggml binary. See notes below.
 #   health_path / health_timeout   readiness probe
 #   model_label     what `status` reports in the MODEL column
 #   log             log file name under LOG_DIR
@@ -705,6 +722,12 @@ aux_services:
     port: 9001
     optional: false
     description: LightOnOCR-2 document formalizer (OCR sidecar, Python)
+    # No `backend`/`verify_ggml_linkage` DELIBERATELY: argv[0] is the interpreter,
+    # which links no ggml. Its ggml exposure is per-request `llama-mtmd-cli` CHILDREN,
+    # which the service env-guards itself (lightonocr_llama_server.py
+    # `_mtmd_subprocess_env` prepends the cli's own dir, and `_probe_mtmd_cli` proves
+    # the binary runs under that same env). A launch-time ldd of python3 would inspect
+    # zero ggml libs and PASS vacuously.
     argv: ["{python}", "{project_root}/src/services/lightonocr_llama_server.py", "--port", "9001"]
     cwd: "{project_root}"
     pythonpath: ["{project_root}"]
@@ -722,6 +745,14 @@ aux_services:
     port: 8190
     optional: false
     description: ERNIE-Image-Turbo diffusion via stable-diffusion.cpp native ggml
+    # "native ggml" in the description makes this look like the obvious next
+    # verify_ggml_linkage candidate. It is not, for a measured reason: sd-server
+    # links ggml STATICALLY. `ldd /mnt/raid0/llm/stable-diffusion.cpp/build/bin/
+    # sd-server` (2026-08-12) reports only libgomp/libstdc++/libm/libgcc_s/libc and
+    # carries no RUNPATH — there is no shared ggml for LD_LIBRARY_PATH to redirect,
+    # so this service has zero exposure to the wrong-tree failure and the check would
+    # be structurally vacuous. argv[0] is `bash` besides, and there is no `backend`
+    # for the checker to resolve a tree from.
     argv: ["bash", "{project_root}/scripts/diffusion/start_sd_server.sh"]
     cwd: "{project_root}"
     env:

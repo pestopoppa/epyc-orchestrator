@@ -14,9 +14,10 @@ keeping Q-value computation off the critical inference path.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -296,6 +297,27 @@ PRIOR_SOURCE_STACK_PRIORS = "stack_priors"
 PRIOR_SOURCE_MODEL_DESCRIPTORS = "model_descriptors"
 PRIOR_SOURCE_REGISTRY = "registry"
 PRIOR_SOURCE_DEGRADED_FALLBACK = "degraded_fallback"
+
+# 2026-08-12 (NIB2-57a): `roles.*.performance.optimized_tps` and
+# `roles.*.performance.baseline_tps` are DIFFERENT MEASUREMENTS — the same model
+# under the production-optimal recipe and under the unoptimized reference recipe.
+# This loader used to collapse them with `optimized or baseline`, so a caller
+# received a bare float and could not tell which measurement it held. Three
+# distinct registry states now get three distinct source labels, so the
+# unmeasured-prior case is loud instead of silent.
+#   ..._OPTIMIZED    -> an optimized_tps that is genuinely separate from baseline.
+#   ..._SUBSTITUTED  -> NO optimized_tps exists; the unoptimized baseline_tps is
+#                       standing in for it. The number understates achievable t/s,
+#                       so every cost penalty computed from it is under-applied.
+#   ..._UNSEPARATED  -> both fields are present and numerically EQUAL, i.e. one
+#                       measurement was written into both. The pair carries no
+#                       optimization evidence; it is indistinguishable from a
+#                       genuinely-optimized role unless the loader says so.
+PRIOR_SOURCE_REGISTRY_OPTIMIZED_TPS = "registry_performance_optimized_tps"
+PRIOR_SOURCE_REGISTRY_BASELINE_TPS_SUBSTITUTED = (
+    "registry_performance_baseline_tps_substituted"
+)
+PRIOR_SOURCE_REGISTRY_TPS_UNSEPARATED = "registry_performance_tps_unseparated"
 
 
 class QScorerPriorSourceError(RuntimeError):
@@ -666,10 +688,19 @@ def descriptor_q_scorer_priors_by_role(
     if stack_priors_path is not None:
         return stack_prior_q_scorer_priors_by_role(stack_priors_path)
 
-    tps_by_role = registry_baseline_tps_by_role(registry_path)
+    tps_priors = registry_baseline_tps_priors(registry_path)
+    tps_by_role = {
+        role: prior.value for role, prior in tps_priors.items() if prior.value is not None
+    }
     quality_by_role = _baseline_quality_by_role()
     memory_by_role = registry_memory_cost_by_role(registry_path)
-    tps_sources = {role: PRIOR_SOURCE_REGISTRY for role in tps_by_role}
+    # Carry the per-role registry provenance through instead of stamping every
+    # role with a flat "registry". A role whose number is an UNOPTIMIZED
+    # baseline_tps, or whose two performance fields hold one duplicated figure,
+    # now says so in baseline_tps_source_by_role — the caller-visible channel
+    # this dataclass already has. Roles the registry did not speak to keep the
+    # historical PRIOR_SOURCE_REGISTRY label (see registry_baseline_tps_priors).
+    tps_sources = {role: prior.source for role, prior in tps_priors.items()}
     quality_sources = {
         role: PRIOR_SOURCE_DEGRADED_FALLBACK for role in quality_by_role
     }
@@ -725,11 +756,131 @@ def _residency_memory_cost(residency: Any) -> float | None:
     return None
 
 
-def _performance_tps(role_record: dict[str, Any]) -> float | None:
+@dataclass(frozen=True)
+class RegistryTpsPrior:
+    """One role's t/s prior WITH the identity of the measurement it came from.
+
+    Modelled on ``src/registry/model_descriptors._speed()``: optimized and
+    baseline are kept as separate None-or-float fields and are never folded
+    into each other, so a caller can always recover which measurement (if
+    either) the scalar ``value`` actually is.
+
+    ``field_path`` is the exact registry location the scalar was read from.
+    ``None`` means the value survived from ``FALLBACK_BASELINE_TPS_BY_ROLE``
+    and the registry said nothing about this role.
+    """
+
+    role: str
+    value: float | None
+    source: str
+    field_path: str | None = None
+    optimized_tps: float | None = None
+    baseline_tps: float | None = None
+
+    @property
+    def substituted(self) -> bool:
+        """True when an unoptimized baseline_tps is standing in for optimized_tps."""
+        return self.source == PRIOR_SOURCE_REGISTRY_BASELINE_TPS_SUBSTITUTED
+
+    @property
+    def unseparated(self) -> bool:
+        """True when optimized_tps and baseline_tps are one number in two fields."""
+        return self.source == PRIOR_SOURCE_REGISTRY_TPS_UNSEPARATED
+
+    @property
+    def carries_optimization_evidence(self) -> bool:
+        """True only when the scalar is an optimized measurement distinct from baseline."""
+        return self.source == PRIOR_SOURCE_REGISTRY_OPTIMIZED_TPS
+
+
+_warned_tps_provenance_roles: set[str] = set()
+
+
+def _warn_tps_provenance(prior: RegistryTpsPrior) -> None:
+    """Warn once per role whose t/s prior is not a separate optimized measurement.
+
+    Every current consumer of ``registry_baseline_tps_by_role`` takes the bare
+    float and divides by it; none of them can act on a new struct field without
+    being changed. A log is therefore the only channel that reaches TODAY's
+    callers, and NIB2-57a asks for exactly that: loud, not silent.
+    """
+    if prior.role in _warned_tps_provenance_roles:
+        return
+    if prior.substituted:
+        _warned_tps_provenance_roles.add(prior.role)
+        logger.warning(
+            "q_scorer t/s prior for role %r is an UNOPTIMIZED baseline_tps (%.4g) "
+            "standing in for a missing optimized_tps. Cost penalties computed from "
+            "it are under-applied. Source: %s",
+            prior.role,
+            prior.value if prior.value is not None else float("nan"),
+            prior.field_path,
+        )
+    elif prior.unseparated:
+        _warned_tps_provenance_roles.add(prior.role)
+        logger.warning(
+            "q_scorer t/s prior for role %r has optimized_tps == baseline_tps "
+            "(%.4g): one measurement written into both registry fields, so this "
+            "prior carries NO evidence that the role was measured under "
+            "optimization. Source: %s",
+            prior.role,
+            prior.value if prior.value is not None else float("nan"),
+            prior.field_path,
+        )
+
+
+def _performance_tps(
+    role: str,
+    role_record: dict[str, Any],
+    *,
+    registry_role: str | None = None,
+) -> RegistryTpsPrior | None:
+    """Return the role's ``performance`` t/s prior, or None when it has none.
+
+    ``role`` is the q_scorer role the prior will be filed under; ``registry_role``
+    is the registry key the ``performance`` block was read from (they differ when
+    ``ROLE_PERFORMANCE_TPS_FALLBACKS`` maps one onto the other).
+
+    NEVER returns a bare float. ``optimized_tps or baseline_tps`` is the defect
+    this replaces: the two are different measurements and the ``or`` handed the
+    caller one of them with no way to tell which. The numeric preference is
+    unchanged (optimized wins when present) — only the provenance is new.
+    """
+    source_role = registry_role or role
     perf = role_record.get("performance", {})
     if not isinstance(perf, dict):
         return None
-    return _coerce_tps(perf.get("optimized_tps")) or _coerce_tps(perf.get("baseline_tps"))
+
+    optimized = _coerce_tps(perf.get("optimized_tps"))
+    baseline = _coerce_tps(perf.get("baseline_tps"))
+    if optimized is None and baseline is None:
+        return None
+
+    if optimized is not None and baseline is not None and math.isclose(
+        optimized, baseline, rel_tol=1e-9, abs_tol=0.0
+    ):
+        source = PRIOR_SOURCE_REGISTRY_TPS_UNSEPARATED
+        value = optimized
+        field_path = f"roles.{source_role}.performance.optimized_tps==baseline_tps"
+    elif optimized is not None:
+        source = PRIOR_SOURCE_REGISTRY_OPTIMIZED_TPS
+        value = optimized
+        field_path = f"roles.{source_role}.performance.optimized_tps"
+    else:
+        source = PRIOR_SOURCE_REGISTRY_BASELINE_TPS_SUBSTITUTED
+        value = baseline
+        field_path = f"roles.{source_role}.performance.baseline_tps"
+
+    prior = RegistryTpsPrior(
+        role=role,
+        value=value,
+        source=source,
+        field_path=field_path,
+        optimized_tps=optimized,
+        baseline_tps=baseline,
+    )
+    _warn_tps_provenance(prior)
+    return prior
 
 
 def _registry_role_records(registry: dict[str, Any]) -> dict[str, dict[str, Any]] | None:
@@ -743,25 +894,44 @@ def _registry_role_records(registry: dict[str, Any]) -> dict[str, dict[str, Any]
     }
 
 
-def registry_baseline_tps_by_role(
+def registry_baseline_tps_priors(
     registry_path: Path = DEFAULT_MODEL_REGISTRY_PATH,
-) -> Dict[str, float]:
-    """Load QScorer t/s baselines from the lean model registry.
+) -> Dict[str, RegistryTpsPrior]:
+    """Load QScorer t/s baselines from the lean registry WITH their provenance.
+
+    This is the single source of truth for the registry t/s branch;
+    ``registry_baseline_tps_by_role`` is a bare-float projection of it, so the
+    number and its provenance can never drift apart.
 
     The scorer keeps a fallback table so tests, replay tools, and degraded
     maintenance scripts can run without the registry. Live roles prefer the
-    deployment `server_mode.*.throughput` values; vision-only roles use
-    `roles.*.performance.optimized_tps` because they are not normal text
-    server-mode entries.
+    deployment `server_mode.*.throughput` values; vision-only roles read
+    `roles.*.performance` because they are not normal text server-mode entries —
+    and that block holds TWO different measurements (`optimized_tps` and
+    `baseline_tps`) which this loader keeps separate and labels per role. See
+    the PRIOR_SOURCE_REGISTRY_* block above.
     """
-    baselines = dict(FALLBACK_BASELINE_TPS_BY_ROLE)
+    priors: Dict[str, RegistryTpsPrior] = {
+        role: RegistryTpsPrior(role=role, value=value, source=PRIOR_SOURCE_REGISTRY)
+        for role, value in FALLBACK_BASELINE_TPS_BY_ROLE.items()
+    }
+
+    def _finish() -> Dict[str, RegistryTpsPrior]:
+        materialized = _materialize_q_scorer_role_aliases(priors)
+        # An alias shares the canonical role's measurement but must not claim to
+        # BE that role, or a provenance report would name the wrong role.
+        return {
+            role: (prior if prior.role == role else replace(prior, role=role))
+            for role, prior in materialized.items()
+        }
+
     try:
         from src.registry.model_descriptors import load_yaml_mapping
 
         data = load_yaml_mapping(registry_path)
     except Exception as exc:
         logger.warning("Using fallback q_scorer TPS baselines; registry load failed: %s", exc)
-        return _materialize_q_scorer_role_aliases(baselines)
+        return _finish()
 
     server_mode = data.get("server_mode", {})
     if isinstance(server_mode, dict):
@@ -773,7 +943,12 @@ def registry_baseline_tps_by_role(
             if tps is None:
                 continue
             for role in target_roles:
-                baselines[role] = tps
+                priors[role] = RegistryTpsPrior(
+                    role=role,
+                    value=tps,
+                    source=PRIOR_SOURCE_REGISTRY,
+                    field_path=f"server_mode.{server_key}.throughput",
+                )
 
     roles = _registry_role_records(data)
     if roles is not None:
@@ -781,11 +956,30 @@ def registry_baseline_tps_by_role(
             record = roles.get(registry_role)
             if record is None:
                 continue
-            tps = _performance_tps(record)
-            if tps is not None:
-                baselines[target_role] = tps
+            prior = _performance_tps(target_role, record, registry_role=registry_role)
+            if prior is not None:
+                priors[target_role] = prior
 
-    return _materialize_q_scorer_role_aliases(baselines)
+    return _finish()
+
+
+def registry_baseline_tps_by_role(
+    registry_path: Path = DEFAULT_MODEL_REGISTRY_PATH,
+) -> Dict[str, float]:
+    """Bare-float projection of :func:`registry_baseline_tps_priors`.
+
+    Numerically identical to the pre-2026-08-12 loader. Callers that need to
+    know WHICH measurement a number is — optimized, an unoptimized baseline
+    substituted for a missing optimized, or one figure duplicated into both
+    fields — must call ``registry_baseline_tps_priors`` instead; this projection
+    cannot express the difference, which is precisely why the substitution was
+    invisible here for so long.
+    """
+    return {
+        role: prior.value
+        for role, prior in registry_baseline_tps_priors(registry_path).items()
+        if prior.value is not None
+    }
 
 
 def registry_memory_cost_by_role(

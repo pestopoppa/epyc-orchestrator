@@ -7203,12 +7203,21 @@ async function updateContentionGate(refreshSeq = _regionLocksRefreshSeq) {
                 STALE: 'var(--warn, #fbbf24)', INVALID: 'var(--bad, #f87171)',
                 UNAVAILABLE: 'var(--muted, #9ca3af)',
             }[ms] || 'var(--muted)';
-            const chip = (label, val, color) =>
-                `<span style="margin-right:12px"><span style="color:var(--dim)">${label}</span> <span style="color:${color || 'var(--fg)'}">${val}</span></span>`;
+            const chip = (label, val, color, title) =>
+                `<span style="margin-right:12px"${title ? ` title="${escapeHTML(title)}"` : ''}><span style="color:var(--dim)">${label}</span> <span style="color:${color || 'var(--fg)'}">${val}</span></span>`;
 
             const timeout = d.contention_timeout_count || 0;
             const degraded = d.contention_degraded_allow_count || 0;
             const unknown = d.contention_unknown_pair_count || 0;
+            const admitted = d.contention_admitted_count || 0;
+            // J4c: pairwise-allow does not certify the full active set; the gate also
+            // consults the measured N-way matrix for the exact active-role union and
+            // counts every admission decision where THAT check alone returned a
+            // non-ALLOW verdict. Computed in contention_gate.py:evaluate() and reached
+            // metrics_snapshot() (and this JSON payload) long before it reached this
+            // panel — carry the denominator (admitted decisions this window) with the
+            // count so it isn't read as a bare, unscoped tally.
+            const nwayRestricted = d.contention_nway_restricted_count || 0;
             const warn = 'var(--warn,#fbbf24)';
 
             const lines = [];
@@ -7239,6 +7248,12 @@ async function updateContentionGate(refreshSeq = _regionLocksRefreshSeq) {
                 chip('degraded', degraded, degraded ? warn : null) +
                 chip('wait', (d.contention_wait_seconds || 0).toFixed(1) + 's') +
                 chip('unknown-pairs', unknown, unknown ? warn : null) +
+                chip(
+                    'nway-restricted', nwayRestricted, nwayRestricted ? warn : null,
+                    `${nwayRestricted} of ${admitted} admitted decision(s) this window were restricted ` +
+                    `by the measured N-way matrix beyond what the pairwise check alone allowed — an ` +
+                    `all-pairwise-ALLOW active set can still be aggregate-negative.`
+                ) +
                 `</div>`
             );
             // Blocked pairs — only when there are any.

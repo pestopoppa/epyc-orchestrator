@@ -546,6 +546,24 @@ class EvalResult:
     question_results: list[dict[str, Any]] = field(default_factory=list)
     core_id: str = ""  # Versioned paired-core identity for instrument-era tracking.
     details: dict[str, Any] = field(default_factory=dict)
+    # ── INFRA-FAILED disposition rollup (2026-08-03 incident) ────────────
+    # A question whose endpoint was unreachable, refused the request (HTTP
+    # 4xx), timed out, or returned nothing produced NO MEASUREMENT. Such rows
+    # are excluded from `quality`'s denominator, but the exclusion itself must
+    # be visible: a run where 70/100 rows infra-failed and a run where the
+    # model answered 70 questions wrong are different facts about the world and
+    # were previously reported with the same numbers.
+    #
+    # quality_measured is FALSE when nothing was scored at all. `quality` is a
+    # float on the Pareto/SafetyGate contract and cannot be None, so the 0.0 it
+    # carries in that case is a PLACEHOLDER — consumers that treat quality as a
+    # measurement MUST check this flag first. Defaults keep every existing
+    # construction site behaviour-identical.
+    infra_failed_count: int = 0
+    scoring_failed_count: int = 0
+    infra_failed_reasons: dict[str, int] = field(default_factory=dict)
+    quality_measured: bool = True
+    quality_unmeasured_reason: str = ""
     # HLE-4 observe-only metrics. The authoritative record schema lives in
     # src/trace/harness_schema.py; these fields only carry per-trial payloads
     # through EvalTower -> journal before any Pareto promotion is allowed.

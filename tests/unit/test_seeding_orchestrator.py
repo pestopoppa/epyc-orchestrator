@@ -474,8 +474,17 @@ def test_eval_reconnect_does_not_retry_timeouts():
 
 
 def test_non_eval_connection_error_preserves_legacy_terminal_semantics():
-    # The 14 non-eval callers keep the EXACT legacy path: a ConnectError is a
-    # terminal error dict with no backoff/retry (reconnect is eval-scoped).
+    # The 14 non-eval callers keep the EXACT legacy CONTROL FLOW: a ConnectError
+    # is a terminal error dict with no backoff/retry (reconnect is eval-scoped).
+    #
+    # This test previously also asserted `"failure_reason" not in data`. That
+    # assertion was retired on 2026-08-12: the non-eval branch is the branch the
+    # SEEDING path takes (it sets no workload_class), and seeding is where an
+    # unreachable/refusing endpoint was classified from the exception's MESSAGE
+    # TEXT and scored as a WRONG answer. `failure_reason` is the structural
+    # disposition signal that fixes it. It is purely ADDITIVE — the
+    # answer/error/retry shape asserted below is unchanged — so the test now
+    # pins what it actually protects instead of the absence of a key.
     client = Mock()
     client.post.side_effect = httpx.ConnectError("connection refused")
     with patch.object(_MOD.time, "sleep") as sleep_mock:
@@ -486,7 +495,11 @@ def test_non_eval_connection_error_preserves_legacy_terminal_semantics():
         )  # no workload_class → non-eval path
     assert data["answer"] == ""
     assert "error" in data
-    assert "failure_reason" not in data
+    # Terminal, not retried, and no timeout provenance invented for a connect
+    # failure (a ConnectError is not evidence the server started generating).
+    assert "failure_provenance" not in data
+    # Additive structural disposition signal (see comment above).
+    assert data["failure_reason"] == "connect_error"
     sleep_mock.assert_not_called()
     assert client.post.call_count == 1
 
