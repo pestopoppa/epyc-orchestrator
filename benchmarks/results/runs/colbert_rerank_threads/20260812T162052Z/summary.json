@@ -1,0 +1,249 @@
+{
+  "artifact": "colbert-rerank-cpu-latency-s4b",
+  "handoff": "handoffs/active/colbert-reranker-web-research.md",
+  "work_items": [
+    "S4b",
+    "S4c-recheck"
+  ],
+  "generated_utc": "2026-08-12T16:22:48.671683+00:00",
+  "host": "Beelzebub",
+  "cpu_count": 192,
+  "harness": "scripts/benchmark/bench_colbert_rerank.py",
+  "protocol": {
+    "snippets_per_call": 10,
+    "measured_calls": 25,
+    "warmup_calls": 3,
+    "rounds": 3,
+    "interleaved": true,
+    "top_k": 5,
+    "thread_control": "COLBERT_RERANK_ONNX_THREADS (ONNX intra_op_num_threads); 192 reproduces the pre-fix default (one thread per core)"
+  },
+  "onnxruntime_version": "1.26.0",
+  "summary": {
+    "gte_moderncolbert": {
+      "threads_8": {
+        "median_of_round_medians_ms": 202.67,
+        "round_medians_ms": [
+          202.666,
+          206.494,
+          197.972
+        ]
+      },
+      "threads_192": {
+        "median_of_round_medians_ms": 367.81,
+        "round_medians_ms": [
+          376.294,
+          333.447,
+          367.811
+        ]
+      },
+      "speedup_8_vs_192": 1.815
+    },
+    "lateon": {
+      "threads_8": {
+        "median_of_round_medians_ms": 200.17,
+        "round_medians_ms": [
+          200.172,
+          200.937,
+          193.674
+        ]
+      },
+      "threads_192": {
+        "median_of_round_medians_ms": 354.66,
+        "round_medians_ms": [
+          354.662,
+          331.177,
+          355.143
+        ]
+      },
+      "speedup_8_vs_192": 1.772
+    },
+    "reason_mxbai": {
+      "threads_8": {
+        "median_of_round_medians_ms": 49.12,
+        "round_medians_ms": [
+          49.116,
+          49.971,
+          48.245
+        ]
+      },
+      "threads_192": {
+        "median_of_round_medians_ms": 115.4,
+        "round_medians_ms": [
+          114.861,
+          115.404,
+          115.719
+        ]
+      },
+      "speedup_8_vs_192": 2.349
+    }
+  },
+  "raw": [
+    {
+      "round": 1,
+      "slot": "gte_moderncolbert",
+      "intra_op_threads": 8,
+      "median_ms": 202.666,
+      "p95_ms": 203.472,
+      "mean_ms": 202.682,
+      "model_dir": "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx"
+    },
+    {
+      "round": 1,
+      "slot": "gte_moderncolbert",
+      "intra_op_threads": 192,
+      "median_ms": 376.294,
+      "p95_ms": 380.692,
+      "mean_ms": 375.998,
+      "model_dir": "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx"
+    },
+    {
+      "round": 1,
+      "slot": "lateon",
+      "intra_op_threads": 8,
+      "median_ms": 200.172,
+      "p95_ms": 201.331,
+      "mean_ms": 200.091,
+      "model_dir": "/mnt/raid0/llm/models/lateon-onnx-int8"
+    },
+    {
+      "round": 1,
+      "slot": "lateon",
+      "intra_op_threads": 192,
+      "median_ms": 354.662,
+      "p95_ms": 366.951,
+      "mean_ms": 356.622,
+      "model_dir": "/mnt/raid0/llm/models/lateon-onnx-int8"
+    },
+    {
+      "round": 1,
+      "slot": "reason_mxbai",
+      "intra_op_threads": 8,
+      "median_ms": 49.116,
+      "p95_ms": 49.404,
+      "mean_ms": 49.115,
+      "model_dir": "/mnt/raid0/llm/models/reason-mxbai-colbert-v0-32m-onnx-int8"
+    },
+    {
+      "round": 1,
+      "slot": "reason_mxbai",
+      "intra_op_threads": 192,
+      "median_ms": 114.861,
+      "p95_ms": 115.77,
+      "mean_ms": 114.908,
+      "model_dir": "/mnt/raid0/llm/models/reason-mxbai-colbert-v0-32m-onnx-int8"
+    },
+    {
+      "round": 2,
+      "slot": "gte_moderncolbert",
+      "intra_op_threads": 8,
+      "median_ms": 206.494,
+      "p95_ms": 207.161,
+      "mean_ms": 206.508,
+      "model_dir": "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx"
+    },
+    {
+      "round": 2,
+      "slot": "gte_moderncolbert",
+      "intra_op_threads": 192,
+      "median_ms": 333.447,
+      "p95_ms": 338.252,
+      "mean_ms": 332.683,
+      "model_dir": "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx"
+    },
+    {
+      "round": 2,
+      "slot": "lateon",
+      "intra_op_threads": 8,
+      "median_ms": 200.937,
+      "p95_ms": 202.697,
+      "mean_ms": 201.026,
+      "model_dir": "/mnt/raid0/llm/models/lateon-onnx-int8"
+    },
+    {
+      "round": 2,
+      "slot": "lateon",
+      "intra_op_threads": 192,
+      "median_ms": 331.177,
+      "p95_ms": 333.717,
+      "mean_ms": 331.334,
+      "model_dir": "/mnt/raid0/llm/models/lateon-onnx-int8"
+    },
+    {
+      "round": 2,
+      "slot": "reason_mxbai",
+      "intra_op_threads": 8,
+      "median_ms": 49.971,
+      "p95_ms": 51.571,
+      "mean_ms": 50.305,
+      "model_dir": "/mnt/raid0/llm/models/reason-mxbai-colbert-v0-32m-onnx-int8"
+    },
+    {
+      "round": 2,
+      "slot": "reason_mxbai",
+      "intra_op_threads": 192,
+      "median_ms": 115.404,
+      "p95_ms": 116.979,
+      "mean_ms": 114.71,
+      "model_dir": "/mnt/raid0/llm/models/reason-mxbai-colbert-v0-32m-onnx-int8"
+    },
+    {
+      "round": 3,
+      "slot": "gte_moderncolbert",
+      "intra_op_threads": 8,
+      "median_ms": 197.972,
+      "p95_ms": 199.696,
+      "mean_ms": 197.873,
+      "model_dir": "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx"
+    },
+    {
+      "round": 3,
+      "slot": "gte_moderncolbert",
+      "intra_op_threads": 192,
+      "median_ms": 367.811,
+      "p95_ms": 370.428,
+      "mean_ms": 366.89,
+      "model_dir": "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx"
+    },
+    {
+      "round": 3,
+      "slot": "lateon",
+      "intra_op_threads": 8,
+      "median_ms": 193.674,
+      "p95_ms": 194.629,
+      "mean_ms": 193.358,
+      "model_dir": "/mnt/raid0/llm/models/lateon-onnx-int8"
+    },
+    {
+      "round": 3,
+      "slot": "lateon",
+      "intra_op_threads": 192,
+      "median_ms": 355.143,
+      "p95_ms": 390.086,
+      "mean_ms": 361.678,
+      "model_dir": "/mnt/raid0/llm/models/lateon-onnx-int8"
+    },
+    {
+      "round": 3,
+      "slot": "reason_mxbai",
+      "intra_op_threads": 8,
+      "median_ms": 48.245,
+      "p95_ms": 48.335,
+      "mean_ms": 48.242,
+      "model_dir": "/mnt/raid0/llm/models/reason-mxbai-colbert-v0-32m-onnx-int8"
+    },
+    {
+      "round": 3,
+      "slot": "reason_mxbai",
+      "intra_op_threads": 192,
+      "median_ms": 115.719,
+      "p95_ms": 116.761,
+      "mean_ms": 115.522,
+      "model_dir": "/mnt/raid0/llm/models/reason-mxbai-colbert-v0-32m-onnx-int8"
+    }
+  ],
+  "notes": [
+    "Ranking output is bit-identical at 8 vs 192 threads (max score delta 0.0, order match) \u2014 the thread bound is a pure latency/footprint change.",
+    "The handoff's historical 'GTE baseline 180 ms' (S4, 2026-04-14) predates scripts/benchmark/bench_colbert_rerank.py and is NOT comparable to harness numbers."
+  ]
+}

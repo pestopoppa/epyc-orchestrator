@@ -66,6 +66,41 @@ _tokenizer = None
 _MAX_QUERY_TOKENS = 48
 _MAX_DOC_TOKENS = 64
 
+# ONNX Runtime intra-op thread bound.
+#
+# One rerank call is 1 + N sequential single-row forward passes over <=64 padded
+# tokens, so the parallel work per pass is tiny and ORT's default pool (one thread
+# per visible core) oversubscribes hard on this 192-thread host. Measured
+# 2026-08-12 on EPYC 9655, GTE-ModernColBERT-v1 INT8, 10 snippets/call, 25 measured
+# calls x 3 interleaved rounds: unbounded median 245.4/249.9/320.1 ms versus
+# 226.7/204.3/210.8 ms at intra_op_num_threads=8 — faster AND far lower
+# round-to-round variance. The pool size also matters off the critical path: this
+# is a shared box, and a 192-thread pool spun up per rerank call contends with
+# co-resident CPU benchmarks. Override with COLBERT_RERANK_ONNX_THREADS.
+_DEFAULT_ONNX_THREADS = 8
+
+
+def _onnx_threads() -> int:
+    """Resolve the ONNX intra-op thread count (env-overridable, positive int)."""
+    raw = os.environ.get("COLBERT_RERANK_ONNX_THREADS")
+    if not raw:
+        return _DEFAULT_ONNX_THREADS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "COLBERT_RERANK_ONNX_THREADS=%r is not an integer; using %d",
+            raw, _DEFAULT_ONNX_THREADS,
+        )
+        return _DEFAULT_ONNX_THREADS
+    if value <= 0:
+        logger.warning(
+            "COLBERT_RERANK_ONNX_THREADS=%d must be positive; using %d",
+            value, _DEFAULT_ONNX_THREADS,
+        )
+        return _DEFAULT_ONNX_THREADS
+    return value
+
 
 def _ensure_loaded() -> bool:
     """Lazily load ONNX session and tokenizer on first call.
@@ -88,16 +123,22 @@ def _ensure_loaded() -> bool:
 
         start = time.perf_counter()
 
+        threads = _onnx_threads()
+        sess_options = ort.SessionOptions()
+        sess_options.intra_op_num_threads = threads
+        sess_options.inter_op_num_threads = 1
+
         _session = ort.InferenceSession(
             str(_MODEL_PATH),
+            sess_options=sess_options,
             providers=["CPUExecutionProvider"],
         )
         _tokenizer = Tokenizer.from_file(str(_TOKENIZER_PATH))
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info(
-            "ColBERT reranker loaded: %s (%.0fms)",
-            _MODEL_PATH.name, elapsed_ms,
+            "ColBERT reranker loaded: %s (%.0fms, intra_op_threads=%d)",
+            _MODEL_PATH.name, elapsed_ms, threads,
         )
         return True
 

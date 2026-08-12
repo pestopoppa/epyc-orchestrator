@@ -209,3 +209,86 @@ class TestModelPathOverride:
         monkeypatch.delenv("LATEON_MODEL_PATH", raising=False)
         monkeypatch.delenv("REASON_MXBAI_MODEL_PATH", raising=False)
         importlib.reload(cr)
+
+
+class TestOnnxThreadBound:
+    """The ONNX session must be created with a bounded intra-op thread pool.
+
+    Regression guard for the 2026-08-12 measurement: ORT's default pool (one
+    thread per visible core, 192 here) is both slower and far noisier than a
+    small bound for this 1+N single-row forward-pass workload, and it spins up
+    192 threads per rerank call on a shared host. Without an explicit
+    ``SessionOptions``, ``intra_op_num_threads`` silently reverts to that default
+    and nothing in the request path notices.
+    """
+
+    @staticmethod
+    def _load_with_stubs(monkeypatch, model_dir):
+        """Drive _ensure_loaded() with a stubbed ORT + tokenizer; return options."""
+        import onnxruntime as ort
+        import tokenizers
+
+        import src.tools.web.colbert_reranker as cr
+
+        captured = {}
+
+        def fake_session(path, sess_options=None, providers=None, **kwargs):
+            captured["path"] = path
+            captured["sess_options"] = sess_options
+            captured["providers"] = providers
+            return object()
+
+        monkeypatch.setattr(ort, "InferenceSession", fake_session)
+        monkeypatch.setattr(
+            tokenizers.Tokenizer, "from_file", staticmethod(lambda p: object())
+        )
+        monkeypatch.setattr(cr, "_MODEL_PATH", model_dir / "model_int8.onnx")
+        monkeypatch.setattr(cr, "_TOKENIZER_PATH", model_dir / "tokenizer.json")
+        monkeypatch.setattr(cr, "_session", None)
+        monkeypatch.setattr(cr, "_tokenizer", None)
+
+        assert cr._ensure_loaded() is True
+        # Leave no loaded singleton behind for other tests.
+        monkeypatch.setattr(cr, "_session", None)
+        monkeypatch.setattr(cr, "_tokenizer", None)
+        return captured
+
+    def test_session_options_bound_intra_op_threads(self, monkeypatch, tmp_path):
+        """Default load pins intra-op to the bounded default, not the core count."""
+        import os
+
+        import src.tools.web.colbert_reranker as cr
+
+        (tmp_path / "model_int8.onnx").write_bytes(b"")
+        (tmp_path / "tokenizer.json").write_text("{}")
+        monkeypatch.delenv("COLBERT_RERANK_ONNX_THREADS", raising=False)
+
+        captured = self._load_with_stubs(monkeypatch, tmp_path)
+        opts = captured["sess_options"]
+
+        assert opts is not None, "InferenceSession was built without SessionOptions"
+        assert opts.intra_op_num_threads == cr._DEFAULT_ONNX_THREADS
+        assert opts.intra_op_num_threads > 0
+        # 0 is ORT's "use every core" sentinel, and the bound must stay well under
+        # the host's core count or the oversubscription this guards is back.
+        assert opts.intra_op_num_threads < (os.cpu_count() or 2)
+        assert opts.inter_op_num_threads == 1
+        assert captured["providers"] == ["CPUExecutionProvider"]
+
+    def test_env_override_sets_thread_count(self, monkeypatch, tmp_path):
+        """COLBERT_RERANK_ONNX_THREADS reaches the SessionOptions."""
+        (tmp_path / "model_int8.onnx").write_bytes(b"")
+        (tmp_path / "tokenizer.json").write_text("{}")
+        monkeypatch.setenv("COLBERT_RERANK_ONNX_THREADS", "3")
+
+        captured = self._load_with_stubs(monkeypatch, tmp_path)
+
+        assert captured["sess_options"].intra_op_num_threads == 3
+
+    @pytest.mark.parametrize("bad", ["not-a-number", "0", "-4", ""])
+    def test_invalid_override_falls_back_to_default(self, monkeypatch, bad):
+        """Garbage, zero and negative overrides never reach ORT."""
+        import src.tools.web.colbert_reranker as cr
+
+        monkeypatch.setenv("COLBERT_RERANK_ONNX_THREADS", bad)
+        assert cr._onnx_threads() == cr._DEFAULT_ONNX_THREADS
