@@ -49,13 +49,22 @@ ORCH = Path(__file__).resolve().parents[2]
 # The single implementation of "do these two cpusets contend?" — imported, never
 # copied, per its own docstring in gpu_shadow_lane_lease.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# gpu_shadow_lane_lease itself does `from scripts.server.gpu_shadow_lane import ...`, an
+# absolute package import, so the module is FINDABLE from its own directory but not
+# IMPORTABLE without the repo root. Inserting only the directory made every cell-mode run
+# fail closed on a path bug that read as a missing tool (found 2026-08-12: it blocked the
+# entire E5 sweep, 18 of 18 cells, with `affinity preflight exited 1`).
+sys.path.insert(0, str(ORCH))
 try:
     from gpu_shadow_lane_lease import fold_cpus_to_physical as _fold_cpus_to_physical
-except Exception:  # pragma: no cover - keeps the preflight usable if the lane tool moves
-    def _fold_cpus_to_physical(cpus: set[int]) -> set[int]:
+except Exception as _fold_import_error:  # pragma: no cover - keeps the preflight usable if the lane tool moves
+    def _fold_cpus_to_physical(cpus: set[int], _err: Exception = _fold_import_error) -> set[int]:
+        # Still fail CLOSED — never answer an SMT question with a second fold — but name the
+        # real cause. The previous message described the symptom and hid a one-line path fix.
         raise RuntimeError(
             "gpu_shadow_lane_lease.fold_cpus_to_physical is unavailable; refusing to "
-            "answer an SMT-contention question with a second, possibly divergent fold"
+            "answer an SMT-contention question with a second, possibly divergent fold "
+            f"(underlying import error: {_err!r})"
         )
 CELL_MANIFEST_SCHEMA_VERSION = "e5-cell-manifest/1"
 BENCH_PORT_RANGE = (19000, 19999)
