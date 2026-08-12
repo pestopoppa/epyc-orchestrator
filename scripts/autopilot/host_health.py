@@ -41,9 +41,23 @@ from src.registry.stack_priors import (
 )
 
 try:  # H4: cross-process single-writer lock on autopilot_state.json
-    from scripts.autopilot.state_lock import state_write_lock
+    from scripts.autopilot.state_lock import (
+        PAUSE_OWNER_FIELD,
+        claim_pause_lease,
+        release_pause_lease,
+        state_write_lock,
+    )
 except ImportError:  # pragma: no cover - path-dependent import
-    from state_lock import state_write_lock
+    from state_lock import (
+        PAUSE_OWNER_FIELD,
+        claim_pause_lease,
+        release_pause_lease,
+        state_write_lock,
+    )
+
+#: Lease owner stamped on ``autopilot_state.json`` while the cache flush holds the
+#: pause across drop_caches + NUMA rewarm.
+CACHE_FLUSH_PAUSE_OWNER = "host_health_cache_flush"
 
 log = logging.getLogger("autopilot.host_health")
 
@@ -641,24 +655,33 @@ def flush_cache_with_pause(
         "flush_ok": False,
         "rewarm": {},
         "elapsed_s": 0.0,
+        "pause_token": None,
+        "pause_superseded": False,
     }
 
     # Step 1: set paused=True via a BRIEF locked read-modify-write. H4 single-
     # writer discipline: hold the cross-process state_write_lock ONLY for this rmw
     # and RELEASE it before the sleep below — never hold the lock across the sleep /
     # drop_caches / rewarm, which would stall the autopilot daemon's per-trial save.
+    # A pause LEASE is stamped when this call transitions paused False->True, so
+    # step 5 can prove the pause it is about to clear is still its own.
     paused_pre = None
+    pause_token: str | None = None
     try:
         if state_path.exists():
             with state_write_lock(state_path):
                 with open(state_path) as f:
                     state = json.load(f)
                 paused_pre = state.get("paused", False)
-                state["paused"] = True
+                if paused_pre:
+                    state["paused"] = True
+                else:
+                    pause_token = claim_pause_lease(state, CACHE_FLUSH_PAUSE_OWNER)
                 tmp = state_path.with_suffix(state_path.suffix + ".tmp")
                 with open(tmp, "w") as f:
                     json.dump(state, f, indent=2)
                 os.replace(tmp, state_path)
+            result["pause_token"] = pause_token
             log.info("autopilot paused via state.json (pre=%s)", paused_pre)
         else:
             log.warning(
@@ -683,19 +706,34 @@ def flush_cache_with_pause(
 
     # Step 5: restore previous paused state (if there was one) under a second
     # BRIEF locked read-modify-write — bracketing the UNLOCKED sleep/flush/rewarm.
+    #
+    # "Only restore if we set it ourselves AND nothing else changed it to a
+    # stricter value (operator may have run `autopilot.py pause` mid-flush)" was
+    # the stated intent from 2026-05-24, but `paused is True and paused_pre is
+    # False` could not implement it: an operator pause landing inside the
+    # sleep+flush+rewarm window leaves exactly the same bytes on disk as our own
+    # pause, so it was resumed away silently. The lease token is what makes the
+    # two distinguishable — and the refusal is reported, not swallowed.
     try:
         with state_write_lock(state_path):
             with open(state_path) as f:
                 state = json.load(f)
-            # Only restore if we set it ourselves AND nothing else changed it
-            # to a stricter value (operator may have run `autopilot.py pause` mid-flush).
             if state.get("paused") is True and paused_pre is False:
-                state["paused"] = False
-                tmp = state_path.with_suffix(state_path.suffix + ".tmp")
-                with open(tmp, "w") as f:
-                    json.dump(state, f, indent=2)
-                os.replace(tmp, state_path)
-                log.info("autopilot resume (paused=False)")
+                if release_pause_lease(state, pause_token):
+                    tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+                    with open(tmp, "w") as f:
+                        json.dump(state, f, indent=2)
+                    os.replace(tmp, state_path)
+                    log.info("autopilot resume (paused=False)")
+                else:
+                    result["pause_superseded"] = True
+                    result["pause_superseded_by"] = state.get(PAUSE_OWNER_FIELD)
+                    log.warning(
+                        "Refusing to resume AutoPilot after cache flush: the pause was "
+                        "superseded mid-flush (now held by %s). Leaving paused=True; an "
+                        "operator resume is required.",
+                        state.get(PAUSE_OWNER_FIELD) or "an unknown owner",
+                    )
     except Exception as exc:
         log.error("could not restore paused state: %s", exc)
 

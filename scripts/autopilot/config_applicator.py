@@ -22,9 +22,23 @@ from typing import Any
 import httpx
 
 try:  # H4: cross-process single-writer lock on autopilot_state.json
-    from scripts.autopilot.state_lock import state_write_lock
+    from scripts.autopilot.state_lock import (
+        PAUSE_OWNER_FIELD,
+        claim_pause_lease,
+        release_pause_lease,
+        state_write_lock,
+    )
 except ImportError:  # pragma: no cover - path-dependent import
-    from state_lock import state_write_lock
+    from state_lock import (
+        PAUSE_OWNER_FIELD,
+        claim_pause_lease,
+        release_pause_lease,
+        state_write_lock,
+    )
+
+#: Lease owner stamped on ``autopilot_state.json`` while this applicator holds the
+#: dispatch pause around a role/API restart.
+DISPATCH_PAUSE_OWNER = "config_applicator"
 
 log = logging.getLogger("autopilot.config")
 
@@ -1887,7 +1901,14 @@ def _pause_autopilot_dispatch(
     state_path: Path | None = None,
     grace_s: float = 11.0,
 ) -> dict[str, Any]:
-    """Set AutoPilot paused=True so the loop stops dispatching new trials."""
+    """Set AutoPilot paused=True so the loop stops dispatching new trials.
+
+    Stamps a pause LEASE (``pause_owner``/``pause_token``) whenever this call is
+    the one that transitions paused False->True, so the matching restore can tell
+    "still my pause" from "the operator paused during my apply window". Nothing is
+    stamped when AutoPilot was already paused — that pause belongs to someone else
+    and the restore leaves it alone (``already_paused``) exactly as before.
+    """
     import json
     import os
 
@@ -1898,15 +1919,22 @@ def _pause_autopilot_dispatch(
         "paused_pre": None,
         "paused_set": False,
         "grace_s": grace_s,
+        "pause_owner": None,
+        "pause_token": None,
     }
     try:
         # H4: set paused=True under a BRIEF locked read-modify-write, then RELEASE
         # the lock BEFORE the grace sleep — never hold the state lock across a sleep.
+        token: str | None = None
         with state_write_lock(resolved):
             with open(resolved, encoding="utf-8") as handle:
                 state = json.load(handle)
             paused_pre = bool(state.get("paused", False))
-            state["paused"] = True
+            if paused_pre:
+                # Someone else's pause. Do NOT take the lease off them.
+                state["paused"] = True
+            else:
+                token = claim_pause_lease(state, DISPATCH_PAUSE_OWNER)
             tmp = resolved.with_suffix(resolved.suffix + ".tmp")
             with open(tmp, "w", encoding="utf-8") as handle:
                 json.dump(state, handle, indent=2)
@@ -1914,6 +1942,9 @@ def _pause_autopilot_dispatch(
             os.replace(tmp, resolved)
         result["paused_pre"] = paused_pre
         result["paused_set"] = True
+        if token is not None:
+            result["pause_owner"] = DISPATCH_PAUSE_OWNER
+            result["pause_token"] = token
         if grace_s > 0:
             time.sleep(grace_s)
     except Exception as exc:
@@ -1922,7 +1953,19 @@ def _pause_autopilot_dispatch(
 
 
 def _restore_autopilot_dispatch_pause(pause_result: dict[str, Any]) -> dict[str, Any]:
-    """Restore paused=False only when this applicator set it from False."""
+    """Restore paused=False only while this applicator still holds the pause lease.
+
+    THE INTERLOCK. The apply window (stack reload + health + smoke + rollback) is
+    tens of seconds to minutes long; an operator ``autopilot.py pause`` can land
+    inside it. Before the lease existed, that operator pause was indistinguishable
+    from this applicator's own (both just ``"paused": true``) and this function
+    resumed AutoPilot anyway — honouring the pause, then silently undoing it.
+
+    Now the resume is refused unless our token is still on disk, and the refusal is
+    REPORTED (``status="superseded"``, plus the observed owner) rather than being a
+    quiet no-op: the result rides into the apply payload and the journalled restart
+    boundary event, so the collision is legible after the fact.
+    """
     import json
     import os
 
@@ -1938,13 +1981,15 @@ def _restore_autopilot_dispatch_pause(pause_result: dict[str, Any]) -> dict[str,
     if pause_result.get("paused_pre") is not False:
         result["reason"] = "already_paused"
         return result
+    token = pause_result.get("pause_token")
     try:
         # H4: restore paused=False under a BRIEF locked read-modify-write.
         with state_write_lock(state_path):
             with open(state_path, encoding="utf-8") as handle:
                 state = json.load(handle)
-            if state.get("paused") is True:
-                state["paused"] = False
+            if state.get("paused") is not True:
+                result.update({"status": "skipped", "reason": "pause_already_cleared"})
+            elif release_pause_lease(state, token):
                 tmp = state_path.with_suffix(state_path.suffix + ".tmp")
                 with open(tmp, "w", encoding="utf-8") as handle:
                     json.dump(state, handle, indent=2)
@@ -1952,7 +1997,22 @@ def _restore_autopilot_dispatch_pause(pause_result: dict[str, Any]) -> dict[str,
                 os.replace(tmp, state_path)
                 result.update({"status": "ok", "restored": True})
             else:
-                result.update({"status": "skipped", "reason": "pause_already_cleared"})
+                observed_owner = state.get(PAUSE_OWNER_FIELD)
+                result.update(
+                    {
+                        "status": "superseded",
+                        "reason": "pause_superseded",
+                        "expected_token": token,
+                        "observed_owner": observed_owner,
+                        "observed_token": state.get("pause_token"),
+                    }
+                )
+                log.warning(
+                    "Refusing to resume AutoPilot: the dispatch pause was superseded "
+                    "during the config apply (now held by %s). Leaving paused=True; "
+                    "an operator resume is required.",
+                    observed_owner or "an unknown owner",
+                )
     except Exception as exc:
         result.update({"status": "error", "error": str(exc)})
     return result

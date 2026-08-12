@@ -34,6 +34,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 import autopilot  # noqa: E402
 import config_applicator  # noqa: E402
 import host_health  # noqa: E402
+import state_lock  # noqa: E402
 
 
 # ───────── STEP 4: daemon merge-under-lock (the correctness heart) ──────────
@@ -309,12 +310,24 @@ def test_config_applicator_pause_releases_lock_before_grace_sleep(
 def test_config_applicator_restore_takes_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The restore now clears only a pause whose LEASE it still holds (see
+    # tests/unit/test_autopilot_pause_apply_interlock.py), so the fixture has to
+    # be a pause this applicator actually took. The H4 property this test was
+    # written for is unchanged: the restore is one locked read-modify-write.
     sp = tmp_path / "autopilot_state.json"
-    sp.write_text(json.dumps({"paused": True}))
+    leased: dict = {}
+    token = state_lock.claim_pause_lease(leased, config_applicator.DISPATCH_PAUSE_OWNER)
+    sp.write_text(json.dumps(leased))
 
     acquisitions, _ = _lock_depth_spy(config_applicator, monkeypatch)
     result = config_applicator._restore_autopilot_dispatch_pause(
-        {"status": "ok", "state_path": str(sp), "paused_set": True, "paused_pre": False}
+        {
+            "status": "ok",
+            "state_path": str(sp),
+            "paused_set": True,
+            "paused_pre": False,
+            "pause_token": token,
+        }
     )
 
     assert result["restored"] is True

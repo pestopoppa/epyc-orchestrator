@@ -117,7 +117,15 @@ from operator_hypotheses import (
     record_resolution_from_rationale as _record_operator_hypothesis_resolution,
 )
 from vidya_planner_bridge import build_settled_ground_block as _build_vidya_settled_ground_block
-from state_lock import state_write_lock
+from state_lock import (
+    OPERATOR_PAUSE_OWNER,
+    PAUSE_COLLISION_FIELD,
+    PAUSE_LEASE_FIELDS,
+    PAUSE_OWNER_FIELD,
+    clear_pause_lease,
+    state_write_lock,
+    supersede_pause_lease,
+)
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
 from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_result
 from src.autopilot_core.action_identity import (
@@ -6690,7 +6698,20 @@ def save_state(
 # counters / frontier / in-flight metadata (those stay daemon-owned). Note:
 # ``pause_reason`` is written solely by the dashboard (never by the daemon,
 # which only pops it), so it is safe to treat as out-of-band-owned.
-_EXTERNAL_CONTROL_FIELDS: tuple[str, ...] = ("paused", "pause_reason", "_in_cache_flush")
+#
+# ``paused`` alone cannot say WHOSE pause is on disk, so the pause-lease fields
+# (``pause_owner`` / ``pause_token`` / ``pause_collision``) travel with it. They
+# MUST be listed here: ``_save_state_impl`` writes the whole file from the
+# daemon's in-memory dict, so a lease key the daemon never learned about would be
+# dropped at the next trial-end save — and a dropped token reads as "superseded"
+# to the applicator that is holding it. They are always written as an explicit
+# ``None`` rather than popped, so a release is a VALUE change the merge below
+# (which only looks at keys present on disk) can actually see.
+_EXTERNAL_CONTROL_FIELDS: tuple[str, ...] = (
+    "paused",
+    "pause_reason",
+    "_in_cache_flush",
+) + PAUSE_LEASE_FIELDS
 
 
 def _merge_external_control_fields(
@@ -10271,6 +10292,17 @@ def cmd_status(args: argparse.Namespace) -> None:
     print("=" * 50)
     print(f"Trial counter: {state.get('trial_counter', 0)}")
     print(f"Paused: {state.get('paused', False)}")
+    if state.get("paused") and state.get(PAUSE_OWNER_FIELD):
+        print(f"Pause owner: {state.get(PAUSE_OWNER_FIELD)}")
+    collision = state.get(PAUSE_COLLISION_FIELD)
+    if isinstance(collision, dict):
+        # A collision that is detected but silent is still a defect — surface it
+        # on the operator's default read-out until the pause episode is resumed.
+        print(
+            f"Pause collision: {collision.get('new_owner')} superseded "
+            f"{collision.get('superseded_owner')} at {collision.get('at')} "
+            "(that operation will not resume AutoPilot)"
+        )
     print(f"Session ID: {state.get('session_id', 'none')}")
     if archive_source != ARCHIVE_SOURCE_STATE:
         print(f"Archive source: {archive_source}")
@@ -10289,11 +10321,28 @@ def cmd_pause(args: argparse.Namespace) -> None:
     # load->modify->save so a concurrent daemon save can neither lose this pause
     # nor have its counters clobbered by our stale whole-file write. We OWN
     # `paused` here (this IS the out-of-band writer) — do NOT merge_control.
+    #
+    # The operator SUPERSEDES any automated pause lease held by an in-flight
+    # config-apply or cache flush. Not a refusal and not a deferral: the pause
+    # lands now (the loop honours it at the next iteration top — quiesce and drain
+    # at a boundary), the in-flight apply is never aborted mid-operation, but it
+    # loses the right to resume AutoPilot when it finishes. Before the lease, that
+    # applicator's `finally:` silently resumed a stack the operator had just
+    # stopped (2026-08-03 outage).
     with state_write_lock(STATE_PATH):
         state = load_state()
-        state["paused"] = True
+        collision = supersede_pause_lease(state, OPERATOR_PAUSE_OWNER)
         save_state(state, _lock=False)
     print("AutoPilot paused")
+    if collision:
+        # A detected-but-silent collision is still a defect: say it out loud, and
+        # `pause_collision` keeps it visible in `autopilot status` afterwards.
+        print(
+            "WARNING: paused during an in-flight "
+            f"{collision.get('superseded_owner')} operation. Your pause takes "
+            "precedence and that operation will NOT resume AutoPilot; the stack "
+            "may be mid-apply, so verify it before resuming."
+        )
 
 
 def cmd_resume(args: argparse.Namespace) -> None:
@@ -10302,6 +10351,7 @@ def cmd_resume(args: argparse.Namespace) -> None:
     with state_write_lock(STATE_PATH):
         state = load_state()
         state["paused"] = False
+        clear_pause_lease(state)
         state.pop("pause_reason", None)
         if state.get("_dispatch_deficiency") == "skip_action_loop":
             state["consecutive_skip_actions"] = 0

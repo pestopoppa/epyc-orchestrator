@@ -142,7 +142,12 @@ from scripts.autopilot.phase_status import (
 from scripts.autopilot.autopilot_restart_advisor import (
     build_restart_advice as _build_autopilot_restart_advice,
 )
-from scripts.autopilot.state_lock import state_write_lock
+from scripts.autopilot.state_lock import (
+    OPERATOR_PAUSE_OWNER,
+    clear_pause_lease,
+    state_write_lock,
+    supersede_pause_lease,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -3218,6 +3223,10 @@ def _autopilot_state_summary(
         "exists": state_path.exists(),
         "paused": bool(state.get("paused", False)),
         "pause_reason": state.get("pause_reason"),
+        # Who holds the pause, and whether an automated pauser was superseded —
+        # a collision that is detected but not shown is still a silent collision.
+        "pause_owner": state.get("pause_owner"),
+        "pause_collision": state.get("pause_collision"),
         "dispatch_deficiency": state.get("_dispatch_deficiency"),
         "trial_counter": state.get("trial_counter"),
     }
@@ -3247,11 +3256,18 @@ def _apply_autopilot_control_action(
         paused_pre = bool(state.get("paused", False))
         reason_pre = state.get("pause_reason")
 
+        collision: dict[str, Any] | None = None
         if action == "pause":
-            state["paused"] = True
+            # Same operator authority as `autopilot.py pause`: SUPERSEDE any
+            # automated pause lease held by an in-flight config-apply or cache
+            # flush, so that operation cannot resume AutoPilot behind this click
+            # when it finishes. Without this the dashboard button is a bypass of
+            # the CLI's interlock.
+            collision = supersede_pause_lease(state, OPERATOR_PAUSE_OWNER)
             state["pause_reason"] = note or "dashboard operator pause"
         else:
             state["paused"] = False
+            clear_pause_lease(state)
             state.pop("pause_reason", None)
             if state.get("_dispatch_deficiency") == "skip_action_loop":
                 state["consecutive_skip_actions"] = 0
@@ -3273,6 +3289,7 @@ def _apply_autopilot_control_action(
         "paused_post": bool(state.get("paused", False)),
         "pause_reason_pre": reason_pre,
         "pause_reason_post": state.get("pause_reason"),
+        "pause_collision": collision,
         "trial_counter": state.get("trial_counter"),
     }
     _append_jsonl(audit_path, row)
@@ -3284,6 +3301,7 @@ def _apply_autopilot_control_action(
         "paused_pre": paused_pre,
         "paused": bool(state.get("paused", False)),
         "pause_reason": state.get("pause_reason"),
+        "pause_collision": collision,
         "trial_counter": state.get("trial_counter"),
     }
 
