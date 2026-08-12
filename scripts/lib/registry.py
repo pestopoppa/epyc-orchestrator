@@ -15,6 +15,7 @@ This module is shared with the orchestrator project.
 """
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -26,6 +27,25 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # Default paths
 DEFAULT_REGISTRY_PATH = str(_REPO_ROOT / "orchestration/model_registry.yaml")
 DEFAULT_MODEL_BASE_PATH = "/mnt/raid0/llm/models"
+
+
+@dataclass(frozen=True)
+class TimeoutMultiplier:
+    """Result of :meth:`ModelRegistry.get_timeout_multiplier`.
+
+    ``multiplier`` alone is not enough for a caller to tell whether the value
+    reflects a genuinely measured ``baseline_tps`` or the conservative
+    fallback substituted when the prior is unmeasured -- the two can be
+    numerically identical (see NIB2-57: a fallback that silently stands in
+    for a measured value let a router treat four unmeasured priors as real
+    ones for weeks). ``is_measured`` makes that distinction explicit so a
+    caller that needs to know (e.g. anything feeding a score or a rank) can
+    act on it, while a caller that only wants a usable timeout pad can still
+    just read ``multiplier``.
+    """
+
+    multiplier: float
+    is_measured: bool
 
 
 class ModelRegistry:
@@ -520,30 +540,45 @@ class ModelRegistry:
         performance = config.get("performance", {})
         return performance.get("baseline_tps")
 
-    def get_timeout_multiplier(self, role: str, reference_tps: float = 20.0) -> float:
+    def get_timeout_multiplier(self, role: str, reference_tps: float = 20.0) -> TimeoutMultiplier:
         """Calculate timeout multiplier based on model speed.
 
         Slower models need proportionally longer timeouts.
         A model at 2 t/s needs 10x the timeout of a 20 t/s model.
+
+        NIB2-57a: when ``baseline_tps`` is missing or non-positive, this falls
+        back to a conservative multiplier of 2.0 -- but that fallback number
+        can coincide exactly with a genuinely computed multiplier (e.g. a
+        role measured at 10 t/s against a 20 t/s reference also yields 2.0).
+        A bare float cannot distinguish the two, which is the same
+        indistinguishable-fallback shape that let NIB2-57 stand for weeks. So
+        this returns a :class:`TimeoutMultiplier` carrying ``is_measured``
+        alongside the number: True means ``multiplier`` was computed from a
+        real ``baseline_tps``; False means it's the unmeasured-prior
+        fallback. Callers that only pad a timeout can ignore the flag and
+        read ``.multiplier``; callers that would feed this into scoring or
+        ranking MUST check ``.is_measured`` first.
 
         Args:
             role: The role name.
             reference_tps: Reference speed for multiplier=1.0 (default: 20 t/s)
 
         Returns:
-            Timeout multiplier (minimum 1.0, no maximum).
+            TimeoutMultiplier(multiplier, is_measured). ``multiplier`` has a
+            minimum of 1.0, no maximum.
         """
         baseline_tps = self.get_baseline_tps(role)
 
-        # If no TPS data, use a conservative multiplier of 2.0
+        # If no TPS data, use a conservative multiplier of 2.0 -- loudly
+        # marked as unmeasured so it cannot be mistaken for a real prior.
         if baseline_tps is None or baseline_tps <= 0:
-            return 2.0
+            return TimeoutMultiplier(multiplier=2.0, is_measured=False)
 
         # Calculate multiplier: slower = higher multiplier
         multiplier = reference_tps / baseline_tps
 
         # Minimum 1.0 (fast models don't get shorter timeouts)
-        return max(1.0, multiplier)
+        return TimeoutMultiplier(multiplier=max(1.0, multiplier), is_measured=True)
 
     def add_model_entry(self, role: str, entry: dict[str, Any]) -> None:
         """Add a new model entry to the registry and save to disk.
