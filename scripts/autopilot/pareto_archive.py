@@ -239,6 +239,28 @@ class ParetoArchive:
                 entry.is_production_best = False
                 continue
             t = int(entry.eval_tier)
+            # Entry-path guard: `dominates()` raises on a dimensionality mismatch, but
+            # it is only reached inside `any(... for existing in rebuilt)` below. For
+            # the FIRST entry of a tier `rebuilt` is `[]`, so `any(...)` short-circuits
+            # to False WITHOUT ever calling `dominates()` — the guard the sibling
+            # `hypervolume()` fix relies on never runs, and an unchecked entry would
+            # flow straight onto the frontier and into `hypervolume()`. Check
+            # dimensionality explicitly, before dominance, so the first entry through
+            # the door is guarded exactly like every later one. This is bulk
+            # reconstruction over potentially years of historical `all_entries` — one
+            # malformed record must not abort loading the whole archive, so skip +
+            # log loudly rather than raise (contrast `update()` below, which raises
+            # because it is a single live-trial admission).
+            expected_dims = len(spec_for(t).reference_point)
+            if len(entry.objectives) != expected_dims:
+                log.error(
+                    "Pareto frontier rebuild: trial %s dropped from T%d frontier — "
+                    "%d-dim objectives vs the tier's %d-dim reference point (built "
+                    "under a different objective policy?)",
+                    entry.trial_id, t, len(entry.objectives), expected_dims,
+                )
+                entry.is_production_best = False
+                continue
             rebuilt = by_tier.setdefault(t, [])
             if any(existing.dominates(entry) for existing in rebuilt):
                 entry.is_production_best = False
@@ -269,6 +291,24 @@ class ParetoArchive:
             return PARETO_STATUS_TIER_EXCLUDED
 
         tier = int(entry.eval_tier)
+        # Same entry-path guard as `_rebuild_frontier`: for the first entry of a tier,
+        # `is_pareto_candidate` iterates an empty frontier and never calls `dominates()`,
+        # so a dimensionality mismatch would otherwise sail through untouched and reach
+        # `self.hypervolume(tier=tier)` below. Unlike `_rebuild_frontier` (bulk replay of
+        # historical entries, where one bad record must not abort loading the whole
+        # archive), this is a single live-trial admission — raise, matching what
+        # `dominates()` already does for entry N+1 against an existing frontier, and do
+        # it BEFORE any frontier mutation so a caller catching this (e.g. the broad
+        # `except Exception` around the exogenous-restart Pareto re-import) sees a clean
+        # failure rather than a frontier that was partially updated then abandoned.
+        expected_dims = len(spec_for(tier).reference_point)
+        if len(entry.objectives) != expected_dims:
+            raise ValueError(
+                f"trial {entry.trial_id}: objective dimensionality mismatch — "
+                f"{len(entry.objectives)} dims vs T{tier}'s {expected_dims}-dim "
+                "reference point — refusing to admit onto the frontier (built under "
+                "a different objective policy?)"
+            )
         front = self._front(tier)
         if not self.is_pareto_candidate(entry.objectives, tier):
             status = "dominated"

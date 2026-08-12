@@ -29,10 +29,23 @@ def dominates(a: Sequence[float], b: Sequence[float]) -> bool:
 
 
 def median_objectives(points: Iterable[Sequence[float]]) -> tuple[float, ...]:
-    """Axis-wise median objective tuple for a reproduction cluster."""
+    """Axis-wise median objective tuple for a reproduction cluster.
+
+    Raises on a dimensionality mismatch within the cluster. ``zip(*rows)`` truncates
+    to the shortest row, so a cluster accidentally mixing tuples built under different
+    objective policies would silently drop trailing axes (e.g. reliability) from the
+    median instead of surfacing the mix — the same hazard `dominates()` guards against.
+    """
     rows = [tuple(float(value) for value in point) for point in points]
     if not rows:
         return ()
+    dims = {len(row) for row in rows}
+    if len(dims) > 1:
+        raise ValueError(
+            f"objective dimensionality mismatch within reproduction cluster: "
+            f"lengths {sorted(dims)} — refusing to compute a median across tuples "
+            "built under different objective policies"
+        )
     return tuple(statistics.median(axis) for axis in zip(*rows))
 
 
@@ -47,11 +60,27 @@ def hypervolume(
 
     Uses exact inclusion-exclusion for small frontiers and deterministic Monte
     Carlo for large frontiers, matching the runtime archive policy.
+
+    Raises on a dimensionality mismatch between any point and ``ref`` — the same
+    guard ``dominates()`` applies, for the same reason (see its docstring). Without
+    it, the ``all(pi > ri for pi, ri in zip(...))`` filter below truncates a
+    shorter/longer point against ``ref`` and either silently drops trailing axes
+    (a confident, meaningless hypervolume) or lets a later ``point[dim]`` indexing
+    step raise an opaque ``IndexError`` with no indication of what went wrong.
     """
     point_list = [tuple(float(x) for x in point) for point in points]
     ref_tuple = tuple(float(x) for x in ref)
     if not point_list:
         return 0.0
+
+    dims = len(ref_tuple)
+    for point in point_list:
+        if len(point) != dims:
+            raise ValueError(
+                f"objective dimensionality mismatch: point has {len(point)} dims, "
+                f"reference point has {dims} — refusing to compute a hypervolume "
+                "across tuples built under different objective policies"
+            )
 
     valid = [
         point for point in point_list
@@ -63,7 +92,6 @@ def hypervolume(
     if len(point_list) > exact_limit:
         return hypervolume_monte_carlo(valid, ref_tuple, samples=samples)
 
-    dims = len(ref_tuple)
     total = 0.0
     for size in range(1, len(valid) + 1):
         sign = (-1) ** (size + 1)
@@ -82,10 +110,24 @@ def hypervolume_monte_carlo(
     *,
     samples: int = 10000,
 ) -> float:
-    """Deterministic Monte Carlo hypervolume approximation."""
+    """Deterministic Monte Carlo hypervolume approximation.
+
+    Raises on a dimensionality mismatch (see `hypervolume`) — without this,
+    ``point[dim]`` for ``dim in range(len(ref))`` either raises an opaque
+    ``IndexError`` (a point shorter than ``ref``) or silently ignores a point's
+    trailing axes (a point longer than ``ref``), the same defect class this module
+    already guards against in `dominates()`/`hypervolume()`.
+    """
     if not points:
         return 0.0
     dims = len(ref)
+    for point in points:
+        if len(point) != dims:
+            raise ValueError(
+                f"objective dimensionality mismatch: point has {len(point)} dims, "
+                f"reference point has {dims} — refusing to compute a hypervolume "
+                "across tuples built under different objective policies"
+            )
     ref_tuple = tuple(float(x) for x in ref)
     upper = tuple(max(float(point[dim]) for point in points) for dim in range(dims))
     box_volume = 1.0
