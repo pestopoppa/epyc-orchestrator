@@ -48,6 +48,7 @@ from src.prompt_builders.builder import build_corpus_context
 from src.prompt_builders.resolver import prompt_dir_override
 from src.api.services.memrl import (
     ensure_memrl_initialized,
+    failure_disposition_meta,
     score_completed_task,
     store_external_reward,
 )
@@ -1198,9 +1199,19 @@ async def chat_stream(
                 server_urls_source="request" if request.server_urls else "config",
             )
         except Exception as e:
-            # Log failure (MemRL)
+            # Log failure (MemRL). Backend construction failed, so NO role ever
+            # served this request: an infra exception here carries zero quality
+            # information and must not reach the reward writer (it scored -0.5 →
+            # initial_q 0.25, under the 0.3 retrieval floor, evicting the memory
+            # outright). An application bug still classifies as a task failure
+            # and is still scored.
             if state.progress_logger:
-                state.progress_logger.log_task_completed(task_id, success=False, details=str(e))
+                state.progress_logger.log_task_completed(
+                    task_id,
+                    success=False,
+                    details=str(e),
+                    completion_meta=failure_disposition_meta(error=e) or None,
+                )
                 score_completed_task(state, task_id)
             yield error_event(str(e))
             yield done_event()
@@ -1287,6 +1298,9 @@ async def chat_stream(
                             "delegation_lineage": [str(r) for r in role_history],
                             "final_answer_role": str(current_role),
                             **llm_completion_meta(primitives),
+                            # Transport failure → no answer to judge. An
+                            # application bug is a task failure and still scores.
+                            **failure_disposition_meta(error=e),
                         },
                     )
                     score_completed_task(state, task_id)

@@ -26,7 +26,7 @@ from src.api.routes.chat_pipeline.telemetry import (
     llm_completion_meta,
     work_completion_meta,
 )
-from src.api.services.memrl import score_completed_task
+from src.api.services.memrl import failure_disposition_meta, score_completed_task
 from src.graph import run_task, GraphConfig, TaskDeps, TaskState
 from src.llm_primitives import LLMPrimitives
 from src.constants import TOOL_OUTPUT_MATCH_LEN
@@ -727,6 +727,14 @@ async def _execute_repl(
                 # trajectory a distilled skill would have to be learned FROM —
                 # and none of it reached the episodic store before.
                 **_repl_work_meta(repl, answer),
+                # `success` here is False for an in-band `[ERROR: ...]` (infra)
+                # AND for `[Max turns ...]` (a genuine failure to solve the
+                # task). Only the first is stamped, so the router keeps learning
+                # from the second.
+                **failure_disposition_meta(
+                    answer=answer,
+                    tokens_generated=primitives.total_tokens_generated,
+                ),
             },
         )
         score_completed_task(

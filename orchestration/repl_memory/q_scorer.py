@@ -53,6 +53,10 @@ Q_TD_WRITE = os.environ.get("ORCHESTRATOR_Q_TD_WRITE", "0") == "1"
 # Candidate depth for the find-or-update similarity lookup on the append path.
 Q_TD_MATCH_K = int(os.environ.get("ORCHESTRATOR_Q_TD_MATCH_K", "10"))
 
+from src.autopilot_core.measurement_guards import (
+    FAILURE_DISPOSITION_KEY,
+    NON_QUALITY_DISPOSITIONS,
+)
 from src.classifiers.role_taxonomy import VALID_TRINITY_ROLES
 
 from .embedder import TaskEmbedder
@@ -1181,6 +1185,22 @@ class QScorer:
 
         return results
 
+    @staticmethod
+    def _non_quality_disposition(task_outcome: ProgressEntry) -> Optional[str]:
+        """Return the stamped disposition when this outcome carries no quality.
+
+        Reads the structural `failure_disposition` the serving pipeline puts on
+        a TASK_FAILED entry (`src.api.services.memrl.failure_disposition_meta`,
+        classified by `src.autopilot_core.measurement_guards`). Returns None for
+        a success, an unstamped legacy entry, or a GENUINE task failure — all of
+        which keep their existing reward behaviour.
+        """
+        data = task_outcome.data if task_outcome and task_outcome.data else None
+        if not isinstance(data, dict):
+            return None
+        disposition = str(data.get(FAILURE_DISPOSITION_KEY) or "").strip().lower()
+        return disposition if disposition in NON_QUALITY_DISPOSITIONS else None
+
     def _score_task(self, task_id: str) -> Dict[str, Any]:
         """
         Score a single task.
@@ -1221,6 +1241,33 @@ class QScorer:
 
         if not task_outcome:
             return {"error": "Task not completed yet"}
+
+        # An INFRA failure is the ABSENCE of a measurement, never a bad one, so
+        # it must not reach the reward writer at all. The serving pipeline
+        # stamps the structural disposition onto the TASK_FAILED entry
+        # (`src.api.services.memrl.failure_disposition_meta`, classified by
+        # `src.autopilot_core.measurement_guards` — the one classifier the
+        # seeding path already uses). Without this gate a backend blip scored
+        # `failure_reward = -0.5` → `initial_q = 0.25`, below the
+        # `min_q_value = 0.3` retrieval floor, evicting the memory from the
+        # learned router permanently.
+        #
+        # The gate is HERE, at the writer, and not only at the API call site,
+        # because `score_pending_tasks()` re-derives unscored tasks straight
+        # from the progress journal — a skip that lived only in the request
+        # handler would be undone by the next background sweep.
+        #
+        # A genuine task failure carries no such stamp and still writes its
+        # negative reward: learning that a role gets things wrong is the signal
+        # this subsystem exists to collect.
+        skipped = self._non_quality_disposition(task_outcome)
+        if skipped:
+            return {
+                "memories_updated": 0,
+                "memories_created": 0,
+                "skipped": skipped,
+                "reward": None,
+            }
 
         # Compute reward (pass completion data as optional cost/telemetry metrics)
         reward = self._compute_reward(

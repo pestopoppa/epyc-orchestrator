@@ -20,7 +20,7 @@ from src.api.routes.chat_pipeline.telemetry import (
 )
 from src.constants import TASK_IR_OBJECTIVE_LEN
 from src.api.routes.chat_utils import RoutingResult
-from src.api.services.memrl import score_completed_task
+from src.api.services.memrl import failure_disposition_meta, score_completed_task
 from src.api.structured_logging import task_extra
 from src.features import features
 from src.llm_primitives import LLMPrimitives
@@ -214,6 +214,12 @@ async def _execute_proactive(
                 **llm_completion_meta(primitives),
                 # M-11a2b
                 **work_completion_meta(answer=answer),
+                # `all_approved=False` on an in-band `[ERROR: ...]` / empty
+                # answer is a backend fact, not a quality one.
+                **failure_disposition_meta(
+                    answer=answer,
+                    tokens_generated=primitives.total_tokens_generated,
+                ),
             },
         )
         score_completed_task(

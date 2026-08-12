@@ -17,7 +17,7 @@ from src.api.routes.chat_pipeline.telemetry import (
     work_completion_meta,
 )
 from src.api.routes.chat_utils import RoutingResult, _truncate_looped_answer
-from src.api.services.memrl import score_completed_task
+from src.api.services.memrl import failure_disposition_meta, score_completed_task
 from src.api.structured_logging import task_extra
 from src.features import features
 from src.llm_primitives import LLMPrimitives
@@ -242,6 +242,14 @@ def _execute_delegated(
                 **llm_completion_meta(primitives),
                 # M-11a2b
                 **work_completion_meta(answer=answer),
+                # `success` here is `not answer.startswith("[ERROR")` — an
+                # in-band backend error, not a quality verdict. Stamp it so the
+                # reward writer skips it; a wrong answer stays unstamped and
+                # still emits its negative reward.
+                **failure_disposition_meta(
+                    answer=answer,
+                    tokens_generated=primitives.total_tokens_generated,
+                ),
             },
         )
         score_completed_task(

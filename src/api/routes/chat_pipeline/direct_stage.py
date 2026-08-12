@@ -28,7 +28,7 @@ from src.api.routes.chat_pipeline.telemetry import (
     llm_completion_probabilities,
     work_completion_meta,
 )
-from src.api.services.memrl import score_completed_task
+from src.api.services.memrl import failure_disposition_meta, score_completed_task
 from src.api.structured_logging import task_extra
 from src.llm_primitives import LLMPrimitives
 
@@ -259,6 +259,17 @@ def _execute_direct(
                 # alone is why every episodic row could say a route succeeded but
                 # never what it produced.
                 **work_completion_meta(answer=answer),
+                # `success` above is False for BOTH an in-band
+                # `[ERROR: Direct LLM call cancelled/timed out: ...]` banner and
+                # an empty reply — neither of which is a statement about answer
+                # quality. Stamping the structural disposition keeps the reward
+                # writer from turning a backend blip into `initial_q = 0.25`,
+                # below the 0.3 retrieval floor. A real wrong answer is
+                # unstamped and still earns its negative reward.
+                **failure_disposition_meta(
+                    answer=answer,
+                    tokens_generated=primitives.total_tokens_generated,
+                ),
             },
         )
         score_completed_task(

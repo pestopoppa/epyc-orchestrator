@@ -14,7 +14,7 @@ import time
 from typing import AsyncGenerator
 
 from src.api.models import ChatRequest
-from src.api.services.memrl import score_completed_task
+from src.api.services.memrl import failure_disposition_meta, score_completed_task
 from src.escalation import (
     EscalationAction,
     EscalationContext,
@@ -227,6 +227,11 @@ async def _stream_repl(
                         "delegation_lineage": [str(r) for r in role_history],
                         "final_answer_role": str(current_role),
                         **llm_completion_meta(primitives),
+                        # The backend raised — the role never produced an answer
+                        # to judge. A transport error is stamped and skipped; an
+                        # application bug classifies as a task failure and is
+                        # still scored.
+                        **failure_disposition_meta(error=e),
                     },
                 )
                 score_completed_task(
@@ -468,6 +473,9 @@ async def generate_stream(
                     "producer_role": "stream_init",
                     "delegation_lineage": ["stream_init"],
                     "final_answer_role": "stream_init",
+                    # Backend init failed: no role ever ran, so there is no
+                    # quality signal here at all.
+                    **failure_disposition_meta(error=e),
                 },
             )
             score_completed_task(

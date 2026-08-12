@@ -14,12 +14,108 @@ import os
 from typing import TYPE_CHECKING
 
 from src.api.services.routing_models import build_routing_model_bundle, project_root
+from src.autopilot_core.measurement_guards import (
+    DISPOSITION_INFRA_FAILED,
+    FAILURE_DISPOSITION_KEY,
+    FAILURE_REASON_KEY,
+    NON_QUALITY_DISPOSITIONS,
+    infra_failure_reason,
+    measurement_disposition,
+)
 from src.features import features
 
 if TYPE_CHECKING:
     from src.api.state import AppState
 
 logger = logging.getLogger(__name__)
+
+# ── Live-serving measurement disposition ──────────────────────────────
+#
+# 2026-08-12. The live-serving path logged EVERY failure — including a backend
+# that never answered — as `log_task_completed(success=False)`, and
+# `score_completed_task` turned that into `failure_reward = -0.5`, hence
+# `initial_q = 0.5 + (-0.5 * 0.5) = 0.25`. The retrieval floor is
+# `memrl_retrieval.min_q_value = 0.3` and `EpisodicStore.retrieve_by_similarity`
+# filters `q_value >= min_q_value`, so 0.25 < 0.3 dropped the memory from the
+# learned router entirely. A transient backend blip therefore evicted a memory.
+#
+# The seeding path was fixed for the same defect class on 2026-08-11 (commit
+# 2f41c3ad, guard at tests/unit/test_infra_reward_emission_guard.py). This is
+# the live-serving half, and it deliberately reuses the SAME classifier —
+# `src.autopilot_core.measurement_guards` — rather than growing a second
+# definition of "infra", which would be a second source of truth for the one
+# question that decides whether a number is admissible evidence.
+#
+# What is NOT done here: suppressing all failures. A genuine wrong answer must
+# still emit its negative signal, or the router could only ever learn from
+# successes and could never learn that a role is bad at something. The
+# infra-vs-task-failure split is the whole point.
+
+
+def task_failure_disposition(
+    *,
+    answer: object = None,
+    error: object = None,
+    tokens_generated: object = None,
+    scoring_failed: bool = False,
+    extra: dict | None = None,
+) -> str:
+    """Classify one live-serving task outcome via `measurement_guards`.
+
+    Projects what a serving call site already holds — the answer text, the
+    exception, the token count, and any structural failure fields it recorded —
+    onto the response shape `measurement_disposition` consumes. Returns one of
+    ``scored`` / ``infra_failed`` / ``scoring_failed`` / ``task_failed``.
+
+    Every serving site holds at least one of these: the pipeline stages have the
+    answer (an in-band ``[ERROR: ...]`` banner, or an empty zero-token reply, is
+    an infra failure wearing a task failure's clothes), and the ``except``
+    branches have the exception. Nothing here re-decides what "infra" means.
+    """
+    resp: dict = {}
+    if extra:
+        resp.update(extra)
+    if answer is not None:
+        resp["answer"] = answer
+    if tokens_generated is not None:
+        resp["tokens_generated"] = tokens_generated
+    return measurement_disposition(resp, error=error, scoring_failed=scoring_failed)
+
+
+def failure_disposition_meta(
+    *,
+    answer: object = None,
+    error: object = None,
+    tokens_generated: object = None,
+    scoring_failed: bool = False,
+    extra: dict | None = None,
+) -> dict:
+    """Return `completion_meta` fields stamping a non-quality disposition.
+
+    Returns ``{}`` when the outcome carries real quality information (a success,
+    or a genuine task failure), so call sites can splat it unconditionally and a
+    genuine wrong answer keeps emitting its negative reward exactly as before.
+    """
+    disposition = task_failure_disposition(
+        answer=answer,
+        error=error,
+        tokens_generated=tokens_generated,
+        scoring_failed=scoring_failed,
+        extra=extra,
+    )
+    if disposition not in NON_QUALITY_DISPOSITIONS:
+        return {}
+    meta = {FAILURE_DISPOSITION_KEY: disposition}
+    if disposition == DISPOSITION_INFRA_FAILED:
+        resp: dict = dict(extra or {})
+        if answer is not None:
+            resp["answer"] = answer
+        if tokens_generated is not None:
+            resp["tokens_generated"] = tokens_generated
+        reason = infra_failure_reason(resp, error=error)
+        if reason:
+            meta[FAILURE_REASON_KEY] = reason
+    return meta
 
 # Optional imports - populated by load_optional_imports()
 ProgressLogger: type | None = None

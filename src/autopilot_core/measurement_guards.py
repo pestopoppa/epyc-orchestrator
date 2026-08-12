@@ -32,10 +32,13 @@ __all__ = [
     "DISPOSITION_SCORED",
     "DISPOSITION_SCORING_FAILED",
     "DISPOSITION_TASK_FAILED",
+    "FAILURE_DISPOSITION_KEY",
+    "FAILURE_REASON_KEY",
     "INBAND_ERROR_PREFIX",
     "INFRA_ERROR_PATTERNS",
     "INFRA_FAILURE_REASONS",
     "INFRA_PROVENANCE_CLASSES",
+    "NON_QUALITY_DISPOSITIONS",
     "forced_role_serving_mismatch",
     "inband_error_text",
     "infra_failure_reason",
@@ -137,6 +140,24 @@ DISPOSITION_SCORED = "scored"
 DISPOSITION_INFRA_FAILED = "infra_failed"
 DISPOSITION_SCORING_FAILED = "scoring_failed"
 DISPOSITION_TASK_FAILED = "task_failed"
+
+# Dispositions that carry NO quality information about the role that served the
+# request. They must be excluded from every quality denominator AND must never
+# reach a reward writer: counting them as a failure is the fail-open this
+# taxonomy exists to prevent.
+NON_QUALITY_DISPOSITIONS = frozenset(
+    {DISPOSITION_INFRA_FAILED, DISPOSITION_SCORING_FAILED}
+)
+
+# The wire names under which the live-serving pipeline stamps a disposition onto
+# a TASK_FAILED progress entry's `completion_meta`, so the asynchronous reward
+# writer (`QScorer._score_task`, which sees only the progress trajectory) can
+# refuse it. Defined HERE so the producer (src.api.services.memrl) and the
+# consumer (orchestration.repl_memory.q_scorer) share one spelling — a literal
+# duplicated across a process boundary is a silent-drift defect waiting to
+# happen, and a guard that reads the wrong key passes vacuously.
+FAILURE_DISPOSITION_KEY = "failure_disposition"
+FAILURE_REASON_KEY = "failure_reason"
 
 # Structural failure reasons that mean "no measurement was produced". The
 # transport-level names are the vocabulary of `src.observability
