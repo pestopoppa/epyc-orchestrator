@@ -1621,7 +1621,14 @@ def _ap3_prewarm_role_targets(
         "targets": [],
     }
     try:
-        from scripts.lib.registry import load_registry
+        # RegistryLoader, NOT scripts.lib.registry.load_registry. `build_server_command`
+        # consumes role_config by nested ATTRIBUTE access (`role_config.model.full_path`,
+        # `.acceleration`, `.name` — orchestrator_stack.py:1353-1355), which is the
+        # RoleConfig dataclass RegistryLoader.get_role() returns. ModelRegistry, what
+        # load_registry() returns, has no `get_role` at all and its `get_role_config()`
+        # returns a plain dict — so the obvious swap trades an AttributeError on
+        # `registry.get_role` for an AttributeError on `dict.model`, one frame deeper.
+        from src.registry.registry_loader import RegistryLoader
         from scripts.server.orchestrator_stack import build_server_command
         from scripts.server import stack_prewarm
         from src.registry.stack_priors import live_stack_role_records, stack_prior_launch_entries
@@ -1637,7 +1644,7 @@ def _ap3_prewarm_role_targets(
         }
         if not scoped:
             raise RuntimeError(f"no live launch scope resolved for role {role!r}")
-        registry = load_registry(str(registry_path))
+        registry = RegistryLoader(registry_path)
         by_inode: dict[tuple[int, int], dict[str, Any]] = {}
         for scoped_role, record in sorted(scoped.items()):
             for entry in stack_prior_launch_entries(record):
