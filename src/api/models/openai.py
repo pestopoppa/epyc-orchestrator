@@ -36,6 +36,44 @@ class OpenAIMessage(BaseModel):
         return self
 
 
+# HS-OD-1: standard OpenAI body fields this API does not honour must be REFUSED
+# when honouring them would have changed the output — never silently dropped.
+# Pydantic's default extra='ignore' was discarding response_format without error,
+# so any JSON-mode client got prose with a 200 and no diagnostic. Value-sensitive
+# on purpose: an explicit no-op (n=1, penalty 0.0, response_format {"type":"text"},
+# empty stop list) is accepted so SDK clients that spell out defaults keep
+# working; only a request whose semantics we would silently change is refused.
+# Fields with no output effect (user, metadata, stream_options) stay ignored.
+_UNHONOURED_SEMANTIC_FIELDS: dict = {
+    "response_format": (
+        lambda v: v is not None and not (isinstance(v, dict) and v.get("type") == "text"),
+        "JSON mode is not implemented on this seam; remove response_format "
+        'or send {"type": "text"}',
+    ),
+    "n": (lambda v: v is not None and v != 1, "only n=1 is supported"),
+    "stop": (lambda v: bool(v), "stop sequences are not forwarded to the backend"),
+    "logprobs": (lambda v: bool(v), "logprobs are not returned"),
+    "top_logprobs": (lambda v: v is not None, "logprobs are not returned"),
+    "logit_bias": (lambda v: bool(v), "logit_bias is not forwarded to the backend"),
+    "presence_penalty": (
+        lambda v: v not in (None, 0, 0.0),
+        "sampling penalties are not forwarded to the backend",
+    ),
+    "frequency_penalty": (
+        lambda v: v not in (None, 0, 0.0),
+        "sampling penalties are not forwarded to the backend",
+    ),
+    "functions": (
+        lambda v: bool(v),
+        "legacy function calling is not supported; use tools",
+    ),
+    "function_call": (
+        lambda v: v is not None,
+        "legacy function calling is not supported; use tool_choice",
+    ),
+}
+
+
 class OpenAIChatRequest(BaseModel):
     """OpenAI-compatible chat completion request."""
 
@@ -80,6 +118,35 @@ class OpenAIChatRequest(BaseModel):
         description="Skip REPL code execution — force direct text response only.",
     )
     x_show_routing: bool = Field(default=False, description="Include routing metadata")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _alias_max_completion_tokens(cls, data):
+        # OpenAI deprecated max_tokens in favour of max_completion_tokens; SDK
+        # clients send either. Runs mode="before" because after validation the
+        # default max_tokens=1024 is indistinguishable from an explicit one.
+        if isinstance(data, dict) and data.get("max_completion_tokens") is not None:
+            if data.get("max_tokens") is not None:
+                raise ValueError(
+                    "max_tokens and max_completion_tokens were both supplied; "
+                    "send exactly one"
+                )
+            data = dict(data)
+            data["max_tokens"] = data.pop("max_completion_tokens")
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_unhonoured_semantic_fields(cls, data):
+        if isinstance(data, dict):
+            for field, (would_change_output, reason) in _UNHONOURED_SEMANTIC_FIELDS.items():
+                if field in data and would_change_output(data[field]):
+                    raise ValueError(
+                        f"'{field}' is not honoured by this API and is not a "
+                        f"no-op in this request: {reason}. Refusing rather than "
+                        "silently dropping it (HS-OD-1)."
+                    )
+        return data
 
 
 class OpenAIChoice(BaseModel):
