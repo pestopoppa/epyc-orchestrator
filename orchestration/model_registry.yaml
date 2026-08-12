@@ -2231,7 +2231,7 @@ roles:
       cutover_observation: '2026-07-31 MMMU validation, 250 multiple-choice single-image questions, MI210 (ROCm0), llama.cpp-experimental build-v8-hip, one arm at a time, `--image-min-tokens 1024` on EVERY
         arm, prompt cache disabled (`--cache-ram 0`). Qwen3-VL-30B-A3B Q4_K_M `159/250` (63.6%); Qwen2.5-VL-7B Q4_K_M incumbent `131/250` (52.4%); Qwen3-VL-8B Q8_0 `143/250` (57.2%); Qwen3-VL-4B Q8_0 `135/250`
         (54.0%). Paired exact McNemar over the 250 aligned items: 49 candidate-only-correct vs 21 incumbent-only-correct, two-sided p=0.0011. COSTS, recorded because this swap is not free: decode is ~1.9x
-        SLOWER (112.20 vs 214.54 t/s median, same host, same harness) and VRAM is 2.7x larger (21049 vs 7685 MB). Quality was the binding constraint; speed was not. PARSE-FAIL ASYMMETRY: the candidate produced
+        SLOWER (112.20 vs 214.54 t/s median, same host, same harness) and VRAM is 2.7x larger (21049 vs 7685 MB). THROUGHPUT/VRAM ARE OBSERVATION-GRADE (relabelled 2026-08-12): this run banks no verifier-produced linkage receipt, and it ran on llama.cpp-experimental, so under P-GPU-1 the speed and VRAM figures were never claim-eligible and must not gate a decision until re-measured on a production-named kernel. The ACCURACY half is unaffected and needs no re-run — accuracy is invariant to which device executed the tokens, harness.py:242 PREPENDS the HIP build dir so the stale-path precondition never held, and sampled VRAM scaled monotonically with model size. Audit: docs/reviews/gpu-linkage-retro-certification-20260812.md. Quality was the binding constraint; speed was not. PARSE-FAIL ASYMMETRY: the candidate produced
         17 unparseable answers, the incumbent 0. That asymmetry counts AGAINST the candidate in the score above, so +11.2 pp is a FLOOR. A further 23 candidate answers were truncated at the 2048-token rescue
         cap and scored wrong.
 
@@ -2476,6 +2476,15 @@ roles:
       contended_tps: 19.81
       vram_gib: 36.7
       attest: published stack measurement record §01, 2026-07-31; co-residency data/gpu_coresidency_20260731/gpu_coresidency_results.json
+      attest_grade: 'OBSERVATION-GRADE, relabelled 2026-08-12. `contended_tps` (and the -35.8%
+        contention delta derived from it) rests on data/gpu_coresidency_20260731, which is an
+        EXPERIMENTAL-KERNEL artifact (llama.cpp-experimental) with no LD_LIBRARY_PATH, no kernel
+        commit, and n=3 — its own title reads "GPU co-residency curiosity measurement (no gate)".
+        Under P-GPU-1 that artifact was never claim-eligible, so this attestation over-claimed
+        its warrant. The NUMBERS are unchanged and nothing here is asserted to be wrong: only the
+        grade is corrected. Consumers that gate a decision on contended_tps must treat it as an
+        observation until a governed re-measurement replaces it. Note it feeds repl_memory
+        bilinear_scorer/q_reward baselines. Audit: docs/reviews/gpu-linkage-retro-certification-20260812.md'
     model:
       name: Qwen3.6-27B-MTP-Q8_0
       path: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
