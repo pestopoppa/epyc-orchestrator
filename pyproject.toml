@@ -29,6 +29,20 @@ dependencies = [
     # Vector search (episodic memory)
     "faiss-cpu>=1.7.4",
 
+    # CPU retrieval encoders (ONNX). Direct runtime imports in
+    # src/retrieval/colbert_encoder.py (first-stage KB-RAG MaxSim),
+    # src/retrieval/cross_encoder.py (K9 rerank) and
+    # src/tools/web/colbert_reranker.py (web-research snippet rerank).
+    # Used-but-undeclared before 2026-08-12: `onnxruntime` appeared only inside the
+    # optional `colbert-export` extra, was absent from the orchestrator .venv, and every
+    # loader swallowed the ImportError as a logger.warning + `return False` — so the KB-RAG
+    # encoder and both rerank stages degraded to un-reranked order with nothing asserting
+    # otherwise. src/retrieval/federation.py grew a three-tier site-packages search
+    # (`ensure_encoder_importable`) purely to work around this absence. `tokenizers` is
+    # likewise imported directly but arrived only transitively via dspy -> litellm.
+    "onnxruntime>=1.20.0",
+    "tokenizers>=0.22.2",
+
     # Vision pipeline (src/vision/, image handling)
     "Pillow>=10.0.0",
 
