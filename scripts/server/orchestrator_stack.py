@@ -2712,6 +2712,36 @@ def guard_against_running_bench(command: str, force: bool) -> bool:
     return bool(force)
 
 
+
+def _cmd_validate_only(args) -> int:
+    """Validate a stack template and exit WITHOUT launching anything.
+
+    Implements the long-declared `start --validate-only`. Deliberately narrow:
+    it loads and validates, prints, and returns. It must never acquire a lock,
+    write runtime facts, or start a process — the whole point of the flag is
+    that a caller can run it on a busy host and be certain nothing happens.
+
+    Exit codes: 0 valid (warnings allowed), 1 invalid or unloadable.
+    """
+    from src.config.stack_templates import get_active_profile, load_template, validate_template
+
+    profile = getattr(args, "stack_profile", None) or get_active_profile()
+    try:
+        template = load_template(profile)
+    except Exception as exc:  # noqa: BLE001 — surface the reason, do not launch
+        print(f"validate-only: FAILED to load stack template {profile!r}: {exc}")
+        return 1
+
+    result = validate_template(template)
+    print(f"validate-only: stack template {profile!r} — {result.summary}")
+    for err in result.errors:
+        print(f"  ERROR   {err}")
+    for warn in result.warnings:
+        print(f"  warning {warn}")
+    print("validate-only: nothing was launched.")
+    return 0 if result.valid else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Orchestrator stack manager")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2877,6 +2907,18 @@ def main() -> int:
             return 2
 
     if args.command == "start":
+        # --validate-only was DECLARED and never READ (found by `mainA`,
+        # 2026-08-12). argparse accepted it, main() discarded it, and dispatch
+        # fell straight through to cmd_start — so anyone who trusted the help
+        # text "Validate stack template and exit" / "check without launching"
+        # LAUNCHED THE PRODUCTION STACK instead.
+        #
+        # A dry-run flag that is not wired is worse than no dry-run flag: it
+        # manufactures the confidence to run the command. Handled here, BEFORE
+        # dispatch, so no code path between the check and cmd_start can start a
+        # server.
+        if getattr(args, "validate_only", False):
+            return _cmd_validate_only(args)
         return cmd_start(args)
     elif args.command == "stop":
         return cmd_stop(args)
