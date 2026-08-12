@@ -2,9 +2,9 @@
 # This is the production steady-state/static-prewarm baseline retained by the
 # DS-E1 profile decision on 2026-07-04.
 #
-# System: 2×AMD EPYC 9004, 192 cores (384 threads), 1130 GB RAM
-# Host CPU shapes are declared in scripts/server/stack_numa.py (_CPU_SHAPES);
-# the `numa:` values below name those shapes without the NUMA_ prefix.
+# System: 1×AMD EPYC 9655, 96 physical cores (192 threads), NPS4, 1130 GB RAM.
+# Topology is DERIVED, not authored here — see the block above `roles:` below.
+# (Read "2×AMD EPYC 9004, 192 cores (384 threads)" until 2026-08-11: wrong.)
 #
 # 2026-07-30/31 quarter retirement + 2026-08-01 W1 cutover, restated here from
 # the compiled artifacts (see the `roles:` note below):
@@ -47,6 +47,33 @@ resource_budget:
   max_total_gb: 930    # HOT + WARM combined ceiling
   reserve_kv_gb: 100   # minimum headroom for KV caches + OS
 
+# ── TOPOLOGY IS DERIVED, NOT AUTHORED ────────────────────────────────────────
+# The `port` / `numa` / `threads` values in every `full:` and `quarters:` block
+# below are a RESTATEMENT of a fact this file does not own. The single source is
+#
+#     orchestration/stack_topology.yaml  `numa_config:`
+#     (loaded as scripts.server.stack_numa.NUMA_CONFIG + NUMA_INSTANCE_SHAPES)
+#
+# and `numa:` names a shape from that file's `cpu_shape` with the `NUMA_` prefix
+# dropped (`NUMA_HALF_A` -> `HALF_A`; `GPU_HOST_LANE` has no prefix).
+#
+# Do NOT hand-edit these blocks. Regenerate them from the source:
+#
+#     python3 scripts/validate/default_template_topology_parity.py --render
+#
+# and verify with the parity gate, which fails if this file and the source ever
+# disagree on a port, a shape name or a thread count — including the `threads:`
+# and `numa:` fields, which until 2026-08-11 no gate compared for any role but
+# frontdoor and architect_general:
+#
+#     python3 scripts/validate/default_template_topology_parity.py
+#     pytest tests/unit/test_default_template_topology_parity.py
+#
+# This template being a FOURTH copy of the topology is P1-4 of epyc-root
+# handoffs/active/numa-topology-cutover-resume-20260730.md. The gate is what
+# makes the copy safe until the derivation moves into `load_template` (that
+# module's docstring carries the standing proposal for removing the copy).
+# ─────────────────────────────────────────────────────────────────────────────
 roles:
   # Per-role model/quant/ram_gb rows below are compared against
   # orchestration/derived/stack_priors.yaml by the stack-change guard rule
