@@ -1,0 +1,151 @@
+{
+  "_meta": {
+    "purpose": "Shared golden-corpus drift test for the vendored canonical answer_scoring library (handoffs/active/scoring-infra-standardization.md, 1c-fix (a)).",
+    "derived_from": "epyc-inference-research scripts/benchmark/test_answer_scoring.py @9cc8db2df5ddcc761494176275aa1a60d9805543",
+    "consumer": "epyc-orchestrator tests/unit/test_answer_scoring_drift.py replays every row through scripts/benchmark/answer_scoring_vendored.py's score_response()/score_ordered_subsequence() and asserts the recorded verdict.",
+    "categories": ["bare-letter (verbose-arm no-penalty regression)", "truncated-boxed", "ordered-subsequence"],
+    "row_verdicts_independently_verified": "2026-08-12 by executing epyc-inference-research's live answer_scoring.py over every row (see commit message / task evidence); this file is NOT auto-generated from that run, it is the recorded expectation."
+  },
+  "rows": [
+    {
+      "id": "letter_explicit_final_answer_marker",
+      "source_test": "test_letter_explicit_and_terse",
+      "response": "I think the answer is C.",
+      "expected": "C",
+      "scoring_method": "multiple_choice",
+      "scoring_config": {},
+      "verdict": true
+    },
+    {
+      "id": "letter_terse_with_period",
+      "source_test": "test_letter_explicit_and_terse",
+      "response": "C.",
+      "expected": "C",
+      "scoring_method": "multiple_choice",
+      "scoring_config": {},
+      "verdict": true
+    },
+    {
+      "id": "letter_ambiguous_mention_declines",
+      "source_test": "test_letter_explicit_and_terse",
+      "response": "I think C is likely",
+      "expected": "C",
+      "scoring_method": "multiple_choice",
+      "scoring_config": {},
+      "verdict": false,
+      "note": "Not an explicit marker, not terse, not the sole final line, and not the sole standalone-letter candidate (the pronoun 'I' is itself a second standalone letter) -- canonical declines to parse, so it must score False even though C is mentioned."
+    },
+    {
+      "id": "letter_verbose_bare_final_line_reasoning_then_option_word",
+      "source_test": "test_letter_verbose_bare_final_line_no_penalty",
+      "response": "Let me work through it. This matches option D.\n\nD",
+      "expected": "D",
+      "scoring_method": "multiple_choice",
+      "scoring_config": {},
+      "verdict": true,
+      "note": "THE 2026-07 A4 gpqa regression: a verbose arm that reasons then puts a bare letter on its own final line HAS answered and must not be penalized for showing its work."
+    },
+    {
+      "id": "letter_verbose_bare_final_line_bold",
+      "source_test": "test_letter_verbose_bare_final_line_no_penalty",
+      "response": "...so the product is the ether.\n\n**B**",
+      "expected": "B",
+      "scoring_method": "multiple_choice",
+      "scoring_config": {},
+      "verdict": true
+    },
+    {
+      "id": "letter_verbose_bare_final_line_parenthesized",
+      "source_test": "test_letter_verbose_bare_final_line_no_penalty",
+      "response": "reasoning...\n(A)",
+      "expected": "A",
+      "scoring_method": "multiple_choice",
+      "scoring_config": {},
+      "verdict": true
+    },
+    {
+      "id": "letter_truncated_derivation_not_credited",
+      "source_test": "test_letter_verbose_bare_final_line_no_penalty",
+      "response": "Step 1: balance the redox couple. Step 2: the half reaction for",
+      "expected": "A",
+      "scoring_method": "multiple_choice",
+      "scoring_config": {},
+      "verdict": false,
+      "note": "A genuinely truncated derivation (cut mid-sentence, no bare letter anywhere) must still fail to parse -- the no-penalty rule above must not become a blanket credit."
+    },
+    {
+      "id": "boxed_takes_last_complete_truncated_trailing",
+      "source_test": "test_boxed_takes_last_complete",
+      "response": "first \\boxed{42} then cut \\boxed{9",
+      "expected": "42",
+      "scoring_method": "math_numeric",
+      "scoring_config": {},
+      "verdict": true,
+      "note": "The truncated-fragment bug: an incomplete trailing \\boxed{ must be skipped in favor of the last brace-balanced COMPLETE \\boxed{}."
+    },
+    {
+      "id": "boxed_simple",
+      "source_test": "test_boxed_takes_last_complete",
+      "response": "answer is \\boxed{7}",
+      "expected": "7",
+      "scoring_method": "math_numeric",
+      "scoring_config": {},
+      "verdict": true
+    },
+    {
+      "id": "dispatch_multiple_choice_correct",
+      "source_test": "test_score_response_dispatch",
+      "response": "The answer is D.",
+      "expected": "D",
+      "scoring_method": "multiple_choice",
+      "scoring_config": {},
+      "verdict": true
+    },
+    {
+      "id": "dispatch_multiple_choice_incorrect",
+      "source_test": "test_score_response_dispatch",
+      "response": "The answer is C.",
+      "expected": "D",
+      "scoring_method": "multiple_choice",
+      "scoring_config": {},
+      "verdict": false
+    },
+    {
+      "id": "dispatch_math_numeric",
+      "source_test": "test_score_response_dispatch",
+      "response": "so \\boxed{70}",
+      "expected": "70",
+      "scoring_method": "math_numeric",
+      "scoring_config": {},
+      "verdict": true
+    },
+    {
+      "id": "ordered_subsequence_in_order_binary_true",
+      "source_test": "test_ordered_subsequence_dispatch_binary_arm",
+      "response": "mix then heat",
+      "expected": "",
+      "scoring_method": "ordered_subsequence",
+      "scoring_config": {"concepts": ["mix", "heat"]},
+      "verdict": true
+    },
+    {
+      "id": "ordered_subsequence_out_of_order_binary_false",
+      "source_test": "test_ordered_subsequence_dispatch_binary_arm",
+      "response": "heat then mix",
+      "expected": "",
+      "scoring_method": "ordered_subsequence",
+      "scoring_config": {"concepts": ["mix", "heat"]},
+      "verdict": false
+    },
+    {
+      "id": "ordered_subsequence_empty_concepts_raises",
+      "source_test": "test_ordered_subsequence_empty_concepts_refused",
+      "response": "anything",
+      "expected": "",
+      "scoring_method": "ordered_subsequence",
+      "scoring_config": {},
+      "expect_error": "ValueError",
+      "note": "Vacuity guard: an empty concept list must raise, never silently score every response perfect."
+    }
+  ]
+}
