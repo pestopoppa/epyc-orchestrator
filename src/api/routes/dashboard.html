@@ -6490,8 +6490,17 @@ async function controlAutopilotDispatch(action) {
             throw new Error(data.error || `HTTP ${response.status}`);
         }
         if (status) {
-            status.textContent = `${action} ok`;
-            status.style.color = 'var(--good)';
+            // A resume that could not clear the skip/meta halt latch is NOT a
+            // plain "ok": the daemon owns those counters, so the latch comes off
+            // only when the daemon picks the resume up. Say which happened rather
+            // than painting green over a delegated clear.
+            const latch = data.halt_latch || null;
+            const delegated = latch && latch.outcome === 'delegated_to_daemon';
+            status.textContent = delegated
+                ? `${action} ok · ${latch.deficiency || 'halt'} latch pending daemon`
+                : `${action} ok`;
+            status.style.color = delegated ? 'var(--warn)' : 'var(--good)';
+            status.title = data.halt_latch_message || '';
         }
         await updateProcessStatus();
     } catch (err) {

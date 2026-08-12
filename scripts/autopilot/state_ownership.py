@@ -118,6 +118,26 @@ KNOWN_EXTERNAL_CONTROL_FIELDS: tuple[str, ...] = (
     "pause_collision",
 )
 
+#: ``_dispatch_deficiency`` value the skip-action circuit-breaker latches.
+SKIP_LOOP_DEFICIENCY = "skip_action_loop"
+
+#: Halt annotations written next to the latched counters. Not daemon-OWNED in the
+#: registry sense (the daemon pops rather than rewrites them), but they live in the
+#: same in-memory dict, so they are cleared together with the counters or not at all.
+HALT_LATCH_MARKER_FIELDS: tuple[str, ...] = ("_dispatch_deficiency", "_meta_halt_reason")
+
+#: What "clear the halt latch" means, per breaker. Both sets are daemon-owned:
+#: they are streak counters and planner-feedback the daemon derives from its own
+#: trial stream, so only a writer that owns the daemon's memory can clear them
+#: durably. See :func:`clear_halt_latch`.
+_SKIP_LATCH_CLEARED: dict[str, Any] = {
+    "consecutive_skip_actions": 0,
+    "last_invalid_action": None,
+    "last_invalid_reason": None,
+    "last_invalid_status": None,
+}
+_META_LATCH_CLEARED: dict[str, Any] = {"consecutive_meta_actions": 0}
+
 #: Name of the AutoPilot singleton lock, resolved next to the state file exactly as
 #: ``autopilot.LOCK_PATH`` sits next to ``autopilot.STATE_PATH``.
 DAEMON_LOCK_NAME = ".autopilot.lock"
@@ -449,3 +469,123 @@ def enforce_state_write(
     disk_state = read_state_file(state_path)
     assert_external_write_allowed(state_path, new_state, disk_state=disk_state)
     return quarantine_clobbered_fields(state_path, new_state, disk_state)
+
+
+# ── the halt latch: clearing it is DELEGATED, never faked ───────────────────
+#
+# A ``skip_action_loop`` / ``meta_action_loop`` circuit-breaker latches by setting
+# ``paused=True`` plus a streak counter and a deficiency marker. Resuming has to
+# clear the latch too, or the very next non-executing action re-trips the breaker
+# (``skip_streak >= MAX_CONSECUTIVE_SKIP``) and the halt "comes back".
+#
+# WHY THE COUNTERS ARE NOT CONTROL STATE. ``paused`` is safe for an external
+# process to write because the daemon's copy is not authoritative — the daemon
+# READS it as a command at every iteration top. ``consecutive_skip_actions`` is the
+# opposite: the daemon derives it from its own trial stream, holds the authoritative
+# copy in memory for the whole run, and rewrites it wholesale. Putting it in the
+# merge set would invert that authority — ``_merge_external_control_fields`` copies
+# disk→memory before every merged save, so the daemon's freshly incremented streak
+# would be reverted to the value it last persisted and the breaker would never fire
+# again. The circuit-breaker cannot be armed by a field any of 5+ writers may rewind.
+#
+# So the clearing is daemon work. An external resume may perform it only when the
+# daemon is ABSENT (nothing in memory to overwrite it) — exactly the rule layer 1
+# already enforces — and must otherwise say it delegated, never claim success.
+
+
+def halt_latch_updates(state: dict[str, Any]) -> dict[str, Any]:
+    """Field values a resume must install to clear whatever halt latch is set.
+
+    The skip-loop counters are cleared only under their own deficiency marker (the
+    streak is real evidence about the planner and a resume for an unrelated reason
+    must not silently rewind a 3-of-4 streak); the meta counter is cleared on any
+    resume, matching the daemon's behaviour since 2026-05-31.
+    """
+    updates: dict[str, Any] = {}
+    if state.get("_dispatch_deficiency") == SKIP_LOOP_DEFICIENCY:
+        updates.update(_SKIP_LATCH_CLEARED)
+    updates.update(_META_LATCH_CLEARED)
+    return updates
+
+
+def halt_latch_pending(state: dict[str, Any]) -> list[str]:
+    """Keys a resume would actually have to change. Empty means nothing is latched."""
+    pending = [
+        field
+        for field, cleared in halt_latch_updates(state).items()
+        if state.get(field, _MISSING) != cleared
+    ]
+    pending.extend(marker for marker in HALT_LATCH_MARKER_FIELDS if marker in state)
+    return pending
+
+
+def clear_halt_latch(
+    state_path: str | os.PathLike[str],
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Clear the halt latch in ``state`` — but only where that write would survive.
+
+    Mutates ``state`` in place and returns ``outcome="cleared"`` when this process
+    owns the write (it is the daemon, or the daemon is absent). When the daemon
+    holds the lock the latch fields are left ALONE and the outcome is
+    ``"delegated_to_daemon"``: the daemon clears them from its own memory on the
+    paused True→False edge, which is the only clearing that lasts. ``"noop"`` when
+    no latch was set.
+
+    The caller must report the outcome. Mutating nothing and reporting success is
+    the defect this function exists to remove.
+    """
+    deficiency = state.get("_dispatch_deficiency")
+    pending = halt_latch_pending(state)
+    if not pending:
+        return {
+            "outcome": "noop",
+            "deficiency": deficiency,
+            "fields": [],
+            "detail": "no halt latch was set",
+        }
+
+    updates = halt_latch_updates(state)
+    candidate = dict(state)
+    candidate.update(updates)
+    for marker in HALT_LATCH_MARKER_FIELDS:
+        candidate.pop(marker, None)
+
+    try:
+        assert_external_write_allowed(state_path, candidate)
+    except DaemonOwnedStateWriteError:
+        return {
+            "outcome": "delegated_to_daemon",
+            "deficiency": deficiency,
+            "fields": pending,
+            "detail": (
+                "the AutoPilot daemon holds these counters in memory, so clearing "
+                "them from here would be destroyed at its next save; the daemon "
+                "clears the latch itself when it observes the resume"
+            ),
+        }
+
+    state.update(updates)
+    for marker in HALT_LATCH_MARKER_FIELDS:
+        state.pop(marker, None)
+    return {
+        "outcome": "cleared",
+        "deficiency": deficiency,
+        "fields": pending,
+        "detail": "halt latch cleared by this writer",
+    }
+
+
+def halt_latch_message(latch: dict[str, Any] | None) -> str:
+    """One operator-facing sentence for a :func:`clear_halt_latch` outcome."""
+    if not latch or latch.get("outcome") == "noop":
+        return ""
+    deficiency = latch.get("deficiency") or "halt"
+    if latch.get("outcome") == "cleared":
+        return f"{deficiency} latch cleared"
+    return (
+        f"{deficiency} latch NOT cleared here — the AutoPilot daemon owns "
+        f"{', '.join(latch.get('fields') or [])} and clears them when it picks up "
+        "the resume. Re-check the dispatch deficiency; if it is still set after the "
+        "daemon's next poll, stop the daemon and resume again."
+    )

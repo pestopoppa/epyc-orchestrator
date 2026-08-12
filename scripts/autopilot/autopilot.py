@@ -126,6 +126,7 @@ from state_lock import (
     state_write_lock,
     supersede_pause_lease,
 )
+from state_ownership import clear_halt_latch, halt_latch_message
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
 from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_result
 from src.autopilot_core.action_identity import (
@@ -6744,6 +6745,37 @@ def _merge_external_control_fields(
     return changed
 
 
+def clear_halt_latch_on_resume_edge(state: dict[str, Any]) -> dict[str, Any]:
+    """Clear the skip/meta halt latch when the loop observes a resume. Daemon-only.
+
+    Called from the iteration top on the ``paused`` True→False edge. The latch is
+    ``consecutive_skip_actions`` / ``last_invalid_*`` (skip breaker),
+    ``consecutive_meta_actions`` (meta breaker) and the ``_dispatch_deficiency`` /
+    ``_meta_halt_reason`` markers. Leaving it set means the very next non-executing
+    action re-trips ``skip_streak >= MAX_CONSECUTIVE_SKIP`` and the operator's resume
+    looks like it never happened.
+
+    WHY IT MUST HAPPEN HERE. Every latched field is daemon-owned: this loop holds it
+    in one in-memory dict for the whole run and rewrites the file wholesale at every
+    save, merging back only ``_EXTERNAL_CONTROL_FIELDS``. The dashboard button and
+    ``cmd_resume`` used to clear the skip latch from their own processes and report
+    success; that write was destroyed at this loop's next save and the halt came back
+    (the meta latch got this treatment on 2026-05-31; the skip latch did not until
+    2026-08-12). Out-of-band writers may still clear it when the daemon is DOWN —
+    :func:`state_ownership.clear_halt_latch` decides which case it is and reports the
+    other honestly rather than faking a clear.
+    """
+    latch = clear_halt_latch(STATE_PATH, state)
+    if latch["outcome"] == "cleared":
+        log.info(
+            "Resume after pause: cleared the %s halt latch (fields: %s)",
+            latch.get("deficiency") or "unattributed",
+            ", ".join(latch["fields"]),
+        )
+        save_state(state)
+    return latch
+
+
 def _archive_entry_count(payload: object) -> int:
     if not isinstance(payload, dict):
         return 0
@@ -7768,22 +7800,10 @@ def _run_loop_inner(
         except Exception as _exc:
             log.warning("Failed to reload state at iteration top: %s", _exc)
 
-        # Operator resumed (paused True→False): clear the meta-action-loop latch
-        # so the planner starts fresh instead of re-tripping the guard on meta
-        # action #1. Pre-fix, consecutive_meta_actions persisted across the halt
-        # and a resume re-halted immediately (2026-05-31).
+        # Operator resumed (paused True→False): clear the halt latch here, in the
+        # daemon, because this is the only process whose write of it lasts.
         if was_paused and not state.get("paused"):
-            if state.get("consecutive_meta_actions") or state.get("_meta_halt_reason"):
-                log.info(
-                    "Resume after pause: clearing meta-loop latch "
-                    "(consecutive_meta_actions %s→0, reason=%s)",
-                    state.get("consecutive_meta_actions", 0),
-                    state.get("_meta_halt_reason", ""),
-                )
-            state["consecutive_meta_actions"] = 0
-            state.pop("_dispatch_deficiency", None)
-            state.pop("_meta_halt_reason", None)
-            save_state(state)
+            clear_halt_latch_on_resume_edge(state)
 
         if state.get("paused"):
             # Refresh plots once on ENTERING a pause episode. trial_counter is
@@ -10348,20 +10368,24 @@ def cmd_pause(args: argparse.Namespace) -> None:
 def cmd_resume(args: argparse.Namespace) -> None:
     # Operator control write — same single-writer discipline as cmd_pause: the
     # read-modify-write is one locked critical section; we own the control fields.
+    #
+    # The halt latch is a DIFFERENT question from `paused`. `consecutive_skip_actions`
+    # / `last_invalid_*` / `consecutive_meta_actions` are daemon-owned: this CLI runs
+    # in its own process, so clearing them here while the daemon lives is destroyed at
+    # the daemon's next save and the breaker re-trips on the next skipped action. The
+    # gated helper clears them only when that write survives, and says so otherwise —
+    # the running daemon clears them itself when it sees the resume.
     with state_write_lock(STATE_PATH):
         state = load_state()
         state["paused"] = False
         clear_pause_lease(state)
         state.pop("pause_reason", None)
-        if state.get("_dispatch_deficiency") == "skip_action_loop":
-            state["consecutive_skip_actions"] = 0
-            state["last_invalid_action"] = None
-            state["last_invalid_reason"] = None
-            state["last_invalid_status"] = None
-        state.pop("_dispatch_deficiency", None)
-        state.pop("_meta_halt_reason", None)
+        latch = clear_halt_latch(STATE_PATH, state)
         save_state(state, _lock=False)
     print("AutoPilot resumed")
+    message = halt_latch_message(latch)
+    if message:
+        print(message)
 
 
 def cmd_report(args: argparse.Namespace) -> None:

@@ -148,6 +148,7 @@ from scripts.autopilot.state_lock import (
     state_write_lock,
     supersede_pause_lease,
 )
+from scripts.autopilot.state_ownership import clear_halt_latch, halt_latch_message
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -3257,6 +3258,7 @@ def _apply_autopilot_control_action(
         reason_pre = state.get("pause_reason")
 
         collision: dict[str, Any] | None = None
+        halt_latch: dict[str, Any] | None = None
         if action == "pause":
             # Same operator authority as `autopilot.py pause`: SUPERSEDE any
             # automated pause lease held by an in-flight config-apply or cache
@@ -3269,14 +3271,17 @@ def _apply_autopilot_control_action(
             state["paused"] = False
             clear_pause_lease(state)
             state.pop("pause_reason", None)
-            if state.get("_dispatch_deficiency") == "skip_action_loop":
-                state["consecutive_skip_actions"] = 0
-                state["last_invalid_action"] = None
-                state["last_invalid_reason"] = None
-                state["last_invalid_status"] = None
-            state.pop("_dispatch_deficiency", None)
-            state.pop("_meta_halt_reason", None)
-            state["consecutive_meta_actions"] = 0
+            # Clearing the skip/meta halt latch is NOT ours to do unilaterally.
+            # `consecutive_skip_actions`, `last_invalid_*` and
+            # `consecutive_meta_actions` are daemon-owned: the AutoPilot daemon
+            # holds them in one in-memory dict for the whole run and rewrites them
+            # wholesale at its next save. This endpoint used to zero them anyway,
+            # report "resume ok", and have the halt reappear seconds later on the
+            # daemon's next save — silent success over a lost write. The gated
+            # helper writes them only when nothing will overwrite us (daemon
+            # absent) and otherwise reports that it delegated to the daemon, which
+            # clears the latch from its own memory on the resume edge.
+            halt_latch = clear_halt_latch(state_path, state)
 
         _atomic_write_json(state_path, state)
     row = {
@@ -3290,6 +3295,7 @@ def _apply_autopilot_control_action(
         "pause_reason_pre": reason_pre,
         "pause_reason_post": state.get("pause_reason"),
         "pause_collision": collision,
+        "halt_latch": halt_latch,
         "trial_counter": state.get("trial_counter"),
     }
     _append_jsonl(audit_path, row)
@@ -3302,6 +3308,12 @@ def _apply_autopilot_control_action(
         "paused": bool(state.get("paused", False)),
         "pause_reason": state.get("pause_reason"),
         "pause_collision": collision,
+        # Whether the halt latch actually came off, and if not, who will clear it.
+        # A resume that could not clear the latch must SAY SO here; the UI renders
+        # `halt_latch_message`.
+        "halt_latch": halt_latch,
+        "halt_latch_message": halt_latch_message(halt_latch),
+        "dispatch_deficiency": state.get("_dispatch_deficiency"),
         "trial_counter": state.get("trial_counter"),
     }
 
