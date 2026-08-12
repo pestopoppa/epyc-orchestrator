@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -396,6 +397,73 @@ def build_report(
     }
 
 
+#: Fields a question hands to the model. If `expected` already appears in ANY of them,
+#: the row cannot discriminate: emitting the input back verbatim scores a pass.
+_MODEL_INPUT_FIELDS = ("prompt", "context", "buggy_code", "input", "question")
+
+#: Containment of a LONG contiguous span is structural — the oracle was carved out of
+#: the input, so reproducing the input reproduces the oracle. Containment of a SHORT
+#: string is usually incidental (a 1-char answer like "4" appears in almost any prompt)
+#: or by design (needle-in-a-haystack PUTS the answer in the context; that is the task).
+#: Measured on the two live core pools: at this threshold the split is 4 structural —
+#: every debugbench row, all independently proven vacuous — and 12 incidental across
+#: coder/agentic/long_context. Reporting them as one number would have buried the four
+#: real ones in twelve arguable ones, which is how a guard gets ignored.
+_STRUCTURAL_MIN = 40
+
+
+def vacuous_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rows whose oracle is satisfied by echoing the input the model was given.
+
+    WHY THIS EXISTS (2026-08-12, `mainC`, from an audit of the debugbench suite —
+    epyc-root `artifacts/audit/debugbench-oracle-vacuity-20260812.md`).
+
+    Every debugbench row in both core pools carried an `expected` that was a byte-exact
+    100-character PREFIX of the upstream reference solution, scored with `substring`.
+    Those first 100 characters are class/constructor boilerplate, so the bug fix is
+    never inside them — and, decisively, the prefix was **already present in the buggy
+    code the model was handed**, on 4 of 4 rows. A model that changed nothing and echoed
+    its input scored a PASS. Corpus-wide the same construction is vacuous on 3,233 of
+    4,250 rows (76.1%), so it is a property of the design, not of the rows we sampled.
+
+    The test that matters is NOT "is the expected value short or uninformative" — a
+    longer prefix is just as vacuous. It is: **is the oracle already satisfied by the
+    input?** That question is cheap, mechanical, and generalises to every substring-
+    scored suite, which is why it belongs at pool-build time rather than in a
+    suite-specific fixup.
+
+    Deliberately limited to substring-family scoring: an `exact` or programmatic scorer
+    is not made vacuous by containment, and flagging those would train readers to
+    ignore this.
+
+    RETRIEVAL SUITES ARE NOT EXEMPTED, on purpose. Needle-in-a-haystack PUTS the answer
+    in the context — that is the task — so a NIAH row appears here legitimately. It is
+    still reported rather than allow-listed by suite name, for two reasons: an
+    enumeration is passed by not being enumerated (the exact false-permit this codebase
+    has already been bitten by), and the observation is TRUE — substring scoring over a
+    context containing the needle cannot distinguish "retrieved it" from "echoed the
+    context". That is mitigated in practice only because models do not echo 16K tokens,
+    which is a property of the model, not of the oracle. Read the severity, judge the row.
+    """
+    bad: list[dict[str, Any]] = []
+    for row in rows:
+        expected = row.get("expected")
+        method = str(row.get("scoring_method") or "").lower()
+        if not isinstance(expected, str) or not expected.strip():
+            continue
+        if "substring" not in method and "contains" not in method:
+            continue
+        haystack = " ".join(
+            str(row.get(f)) for f in _MODEL_INPUT_FIELDS if isinstance(row.get(f), str))
+        if expected in haystack:
+            bad.append({"id": row.get("id"), "suite": row.get("suite"),
+                        "scoring_method": row.get("scoring_method"),
+                        "expected_len": len(expected),
+                        "severity": ("structural" if len(expected) >= _STRUCTURAL_MIN
+                                     else "incidental")})
+    return bad
+
+
 def write_core_jsonl(
     *,
     path: Path,
@@ -406,6 +474,42 @@ def write_core_jsonl(
 ) -> list[ItemStats]:
     path.parent.mkdir(parents=True, exist_ok=True)
     unresolved: list[ItemStats] = []
+    emitted: list[dict[str, Any]] = []
+    for item in selected:
+        question = pool_lookup.get((item.suite, item.qid))
+        if question is None:
+            unresolved.append(item)
+            continue
+        row = dict(question)
+        row.setdefault("suite", item.suite)
+        row["core_selection"] = {
+            "qid": item.qid,
+            "attempts": item.attempts,
+            "correct": item.correct,
+            "p_correct": round(item.p_correct, 6),
+        }
+        emitted.append(row)
+
+    # Recorded IN the artifact, not merely printed. A warning on a 3am pipeline run is
+    # read by nobody; a field in the pool's own metadata is read by everyone who later
+    # asks what that pool measured — and it is what makes a vacuous suite arguable
+    # instead of invisible. Not fatal by default: this pipeline is shared and an
+    # unannounced hard failure mid-run is its own incident. Gate on it deliberately.
+    vacuous = vacuous_rows(emitted)
+    report["vacuous_rows"] = vacuous
+    structural = [v for v in vacuous if v["severity"] == "structural"]
+    if structural:
+        suites = sorted({str(v.get("suite")) for v in structural})
+        print(
+            f"WARNING: {len(structural)} of {len(emitted)} selected rows have a STRUCTURALLY "
+            f"VACUOUS ORACLE — `expected` is a long contiguous span already present in the "
+            f"input the model is given, so echoing the input scores a pass. Suites: "
+            f"{', '.join(suites)}. Retire these rows or rebuild their oracle before trusting "
+            f"this pool. ({len(vacuous) - len(structural)} further rows show short/incidental "
+            f"containment; see `vacuous_rows` in the selection report.)",
+            file=sys.stderr,
+        )
+
     with path.open("w", encoding="utf-8") as handle:
         metadata = {
             "__core_metadata__": True,
@@ -414,22 +518,11 @@ def write_core_jsonl(
             "generator": "scripts/autopilot/core_v2_select.py",
             "target_size": report["parameters"]["target_size"],
             "selected_count": report["selected_count"],
+            "vacuous_row_count": len(vacuous),
             "selection_report": report,
         }
         handle.write(json.dumps(metadata, sort_keys=True) + "\n")
-        for item in selected:
-            question = pool_lookup.get((item.suite, item.qid))
-            if question is None:
-                unresolved.append(item)
-                continue
-            row = dict(question)
-            row.setdefault("suite", item.suite)
-            row["core_selection"] = {
-                "qid": item.qid,
-                "attempts": item.attempts,
-                "correct": item.correct,
-                "p_correct": round(item.p_correct, 6),
-            }
+        for row in emitted:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
     return unresolved
 
