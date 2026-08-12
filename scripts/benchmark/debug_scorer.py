@@ -562,6 +562,85 @@ def _score_code_execution(answer: str, expected: str, config: dict[str, Any]) ->
         ) from exc
 
 
+#: Whitespace carries no meaning *inside* a line of code for the purpose of
+#: "is this the same statement" — ``for(int i=0;i<n;i++)`` and
+#: ``for (int i = 0; i < n; i++)`` are one statement written two ways, and a
+#: bug-fix oracle that rejects the second measures formatting, not fixing.
+#: Indentation is stripped along with the rest; we never compare across lines,
+#: so this stays safe for Python.
+_CODE_WS = re.compile(r"\s+")
+
+#: Fenced blocks in a model answer. Each block is scored as an independent
+#: candidate (see ``_score_code_patch``), so a model may narrate around its code.
+_CODE_FENCE = re.compile(r"```[A-Za-z0-9_+.#-]*[ \t]*\r?\n(.*?)```", re.DOTALL)
+
+
+def _code_key(text: str) -> str:
+    """Whitespace-free form of a code line/blob, for identity comparison."""
+    return _CODE_WS.sub("", text)
+
+
+def _code_patch_candidates(answer: str) -> list[str]:
+    """The code blobs an answer offers, best-effort.
+
+    Fenced blocks when present, otherwise the whole answer. Each is scored
+    independently and any one passing is a pass, so an answer that quotes the
+    ORIGINAL buggy code in one block and gives the fix in another is not punished
+    for quoting — while an answer that only ever reproduces the buggy code has no
+    passing candidate at all.
+    """
+    blocks = [b for b in _CODE_FENCE.findall(answer) if b.strip()]
+    return blocks or [answer]
+
+
+def _score_code_patch(answer: str, config: dict[str, Any]) -> bool:
+    """Did the answer make the changes the reference patch makes?
+
+    WHY THIS EXISTS (2026-08-12, debugbench oracle rebuild — epyc-root
+    ``artifacts/audit/debugbench-oracle-vacuity-20260812.md``). The suite's old
+    oracle was a 100-character PREFIX of the reference solution scored with
+    ``substring``. That prefix is class/constructor boilerplate already present in
+    the buggy code the model is handed, so echoing the input scored a PASS on 4 of
+    4 pool rows and on 76.1% of the upstream corpus. A longer prefix is not a fix:
+    the defect is containment in the input, not length.
+
+    This verifier asks the only question the shipped data can answer without
+    executable tests — **what did the answer CHANGE?**
+
+    * ``required_lines`` — lines the reference solution has and the buggy code
+      does not. Matched as a substring of the candidate's whitespace-free text, so
+      re-indenting or splitting a statement across lines still matches.
+    * ``forbidden_lines`` — lines the buggy code has and the reference solution
+      does not: the broken statements. Matched as a whole normalised LINE, never
+      as a substring, because a buggy ``return idx;`` is a substring of a corrected
+      ``return idx + 1;`` and substring matching there would fail correct answers.
+
+    Both sides must hold in one candidate block. Anti-echo is structural, not
+    incidental: reproducing the buggy code reproduces the forbidden lines and omits
+    the required ones. The builder (``scripts/benchmark/debugbench_oracle.py``)
+    additionally re-runs this function against the buggy code and against the
+    reference solution at build time and refuses to emit a row unless it fails the
+    first and passes the second, so neither a vacuous nor an unsatisfiable row can
+    reach the pool.
+
+    Fails closed on an empty oracle, exactly as ``_score_substring`` does with an
+    empty needle: no oracle is not a free pass.
+    """
+    required = [k for k in (_code_key(str(x)) for x in config.get("required_lines") or []) if k]
+    forbidden = [k for k in (_code_key(str(x)) for x in config.get("forbidden_lines") or []) if k]
+    if not required and not forbidden:
+        return False
+    for candidate in _code_patch_candidates(answer):
+        flat = _code_key(candidate)
+        if not all(need in flat for need in required):
+            continue
+        candidate_lines = {_code_key(line) for line in candidate.splitlines()}
+        if any(bad in candidate_lines for bad in forbidden):
+            continue
+        return True
+    return False
+
+
 def _score_programmatic(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """Run IFEval-style programmatic verifiers.
 
@@ -592,12 +671,17 @@ def _score_programmatic(answer: str, expected: str, config: dict[str, Any]) -> b
             - word_count: word count with relation (count, relation)
             - sentence_count: sentence count with relation (count, relation)
 
+            Bug-fix verifier (debugbench, built by scripts/benchmark/debugbench_oracle.py):
+            - code_patch: answer contains every `required_lines` entry and no
+              `forbidden_lines` line — see _score_code_patch.
+
         threshold: Numeric threshold for count-based verifiers.
         count: Alias for threshold (used by IFEval adapter).
         relation: "at_least" | "at_most" | "exactly" (IFEval word/sentence count).
         keyword: Keyword for contains/no_keyword verifiers.
         keywords: Keyword list for contains_keywords verifier.
         forbidden: Forbidden word list for no_forbidden_words verifier.
+        required_lines / forbidden_lines: Code lines for the code_patch verifier.
         text: Text for starts_with/ends_with verifiers.
         min_val / max_val: Range for range-based verifiers.
     """
@@ -699,6 +783,8 @@ def _score_programmatic(answer: str, expected: str, config: dict[str, Any]) -> b
         "title_case": lambda: (
             all(w[0].isupper() for w in words if w and w[0].isalpha()) if words else False
         ),
+        # Bug-fix (debugbench) verifier — scores the CHANGE, not the reproduction.
+        "code_patch": lambda: _score_code_patch(answer, config),
     }
 
     fn = verifiers.get(verifier)

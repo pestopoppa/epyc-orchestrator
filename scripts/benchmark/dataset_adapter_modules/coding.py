@@ -7,10 +7,42 @@ compatibility — existing imports keep working.
 
 from __future__ import annotations
 
+import importlib.util
 import random
 import re
+import sys
+from pathlib import Path
+from typing import Any
 
 from .base import BaseAdapter
+
+_DEBUGBENCH_ORACLE_KEY = "epyc_adapters_debugbench_oracle"
+
+
+def _debugbench_oracle() -> Any:
+    """Load ``scripts/benchmark/debugbench_oracle.py`` by path.
+
+    By path rather than by name for the same reason ``seeding_scoring`` loads the
+    scorer by path: the research repo ships same-named modules and a bare import
+    binds whichever won the sys.path race. The oracle builder and the scorer it
+    validates against must be the same pair every time.
+    """
+    cached = sys.modules.get(_DEBUGBENCH_ORACLE_KEY)
+    if cached is not None:
+        return cached
+    path = Path(__file__).resolve().parent.parent / "debugbench_oracle.py"
+    spec = importlib.util.spec_from_file_location(_DEBUGBENCH_ORACLE_KEY, path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise ImportError(f"cannot load debugbench_oracle from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_DEBUGBENCH_ORACLE_KEY] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def build_validated_oracle(**kwargs: Any) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Thin indirection so tests can monkeypatch the builder on this module."""
+    return _debugbench_oracle().build_validated_oracle(**kwargs)
 
 
 class CoderAdapter(BaseAdapter):
@@ -502,7 +534,25 @@ class DebugBenchAdapter(BaseAdapter):
     Contains buggy code with explanations, solutions, and bug categories.
     Perfect for REPL mode-advantage: iterative debugging >> direct inference.
 
-    Scoring: code_execution (run fixed code against test cases).
+    Scoring: ``programmatic`` / ``code_patch`` — the answer must make the changes
+    the reference patch makes (see scripts/benchmark/debugbench_oracle.py).
+
+    2026-08-12 ORACLE REBUILD. This adapter previously emitted
+    ``expected = solution[:100]`` scored by ``substring`` for cpp/java, and
+    ``code_execution`` with no ``test_code`` for python. Measured through the real
+    scorer over all 4,253 upstream rows, that pair of oracles was broken in BOTH
+    directions at once: echoing the buggy code scored a PASS on 57.0% of cpp and
+    49.0% of java rows, while the KNOWN-CORRECT reference solution scored a FAIL
+    on 29.8% of cpp, 34.2% of java and 100% of python rows (``code_execution``
+    without an executable oracle returns False unconditionally). Evidence:
+    epyc-root ``artifacts/audit/debugbench-oracle-vacuity-20260812.md``.
+
+    Rows whose oracle cannot be proven to discriminate are DROPPED, not emitted —
+    ``build_validated_oracle`` re-runs the candidate oracle against three echo
+    answers and four correct answers through the live scorer and returns None
+    unless all three fail and all four pass. Coverage is 3,676 of 4,253 rows
+    (86.4%); the rest have no small localised patch to test against.
+
     Tiers: easy=T1, medium=T2, hard=T3 (from LeetCode difficulty).
     """
 
@@ -567,40 +617,60 @@ class DebugBenchAdapter(BaseAdapter):
         prompt_lines.extend([
             "## Buggy Code",
             f"```{lang}",
-            buggy_code[:1000] if len(buggy_code) > 1000 else buggy_code,
+            # NEVER truncate the buggy code. It was cut at 1000 characters until
+            # 2026-08-12, which hid the broken statement entirely on 90 upstream
+            # rows (24.4% were truncated at all) — an unanswerable question that
+            # still counted as a miss. The artifact under test cannot be elided.
+            buggy_code,
             "```",
             "",
             "Find and fix the bug(s) in the code above. "
-            "Provide the corrected code. "
+            "Return the complete corrected code in a single fenced code block. "
             "Fix ONLY the bug — do NOT rewrite, rename variables, "
             "change data structures, or optimize. Keep the original code structure.",
         ])
 
-        tier = self._get_tier_for_index(idx)
+        # Read the tier off the row we were handed, not out of self._dataset by
+        # index: the row IS the dataset entry, and the second lookup made
+        # `_row_to_prompt` unusable (and untestable) without a loaded dataset.
+        tier = self.LEVEL_MAP.get(str(_level or "").lower()) or self._get_tier_for_index(idx)
+        prompt = "\n".join(prompt_lines)
 
-        # For Python, we can do code_execution scoring
-        scoring_method = "code_execution" if lang == "python" else "substring"
-        scoring_config = {"language": lang, "timeout": 30}
+        # Oracle = the buggy->solution DIFF, self-validated against echo answers
+        # and against the reference solution before it is allowed out of here.
+        # A row whose oracle cannot be proven to discriminate is dropped: an
+        # unscoreable row costs a question, a mis-scoring one costs the suite.
+        oracle, _diagnostics = build_validated_oracle(
+            prompt=prompt,
+            buggy_code=buggy_code,
+            solution=solution,
+            language=lang,
+        )
+        if oracle is None:
+            return {}
 
-        if lang != "python":
-            # For non-Python, check that key parts of solution appear
-            scoring_config = {"case_sensitive": True}
+        required = oracle.get("required_lines") or []
 
         return {
             "id": f"debugbench_{slug}_{lang}",
             "suite": "debugbench",
-            "prompt": "\n".join(prompt_lines),
+            "prompt": prompt,
             "context": "",
-            "expected": solution[:100] if solution else "def ",
+            # Informational, and safe: `expected` is a line the SOLUTION has and
+            # the buggy code does not, so even a consumer that falls back to
+            # substring scoring cannot be satisfied by echoing the input. The
+            # `programmatic` scorer ignores it (it is an expected-free method).
+            "expected": required[0] if required else "",
             "scoring": [],
             "image_path": "",
             "tier": tier,
-            "scoring_method": scoring_method,
-            "scoring_config": scoring_config,
+            "scoring_method": "programmatic",
+            "scoring_config": oracle,
             "metadata": {
                 "language": lang,
                 "category": category,
                 "bug_explanation": bug_explanation[:200],
+                "oracle": "code_patch_diff_v1",
             },
         }
 
@@ -645,7 +715,11 @@ class DebugBenchAdapter(BaseAdapter):
 
         rng = random.Random(seed)
         indices = rng.sample(filtered_indices, min(n, len(filtered_indices)))
-        return [self._row_to_prompt(i, self._dataset[i]) for i in indices]
+        # Drop the rows whose oracle could not be proven to discriminate —
+        # `_row_to_prompt` returns {} for those. `extract_all` already filters
+        # falsy prompts; this path did not, and would have passed a bare {} to
+        # the pool writer as if it were a question.
+        return [q for q in (self._row_to_prompt(i, self._dataset[i]) for i in indices) if q]
 
 
 # ── USACO (Olympiad Programming) ──────────────────────────────────────────
