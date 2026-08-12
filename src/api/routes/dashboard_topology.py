@@ -808,14 +808,37 @@ def expected_stack_services(numa_mode: str | None = None) -> list[dict[str, Any]
     try:
         from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS, _filter_by_numa_mode
     except Exception as exc:
-        logger.debug("Failed to load stack manifest services: %s", exc)
+        # Was logger.debug — i.e. invisible in normal operation. Returning [] means
+        # "no expected services", which renders as a healthy empty stack rather than
+        # as a read failure, so the quiet level made an absence indistinguishable
+        # from a fact.
+        logger.warning(
+            "stack manifest unavailable — reporting NO expected services (this is a "
+            "READ FAILURE, not an empty stack): %s", exc,
+        )
         return []
 
     mode = numa_mode or active_stack_numa_mode()
     try:
         servers = _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, mode)
     except Exception as exc:
-        logger.debug("Failed to filter stack manifest services by NUMA mode %s: %s", mode, exc)
+        # FAIL-OPEN, and deliberately kept: dropping the panel is worse than
+        # over-reporting it. But it was logged at DEBUG, which is what made it a
+        # MASK rather than a fallback — a filter bug produced a silently unfiltered
+        # list that looks exactly like a correct one.
+        #
+        # The original justification was the scripts.server circular-import flake
+        # (filed 2026-07-24). Re-derived 2026-08-12: that cycle NO LONGER
+        # REPRODUCES — 3 bare and 4 package-order imports of
+        # runtime_facts_manifest / stack_paths / stack_manifest / orchestrator_stack
+        # all import cleanly. So anything caught here now is a REAL filter defect,
+        # which is exactly the case that must not be quiet.
+        logger.warning(
+            "NUMA-mode filter FAILED for mode %r — falling back to the UNFILTERED "
+            "manifest (%d servers). Ports for other modes will be reported as "
+            "expected; this is a filter defect, not a topology change: %s",
+            mode, len(HOT_SERVERS) + len(WARM_SERVERS), exc,
+        )
         servers = HOT_SERVERS + WARM_SERVERS
     return _expected_services_from_manifest_servers(servers)
 
