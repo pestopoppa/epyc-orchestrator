@@ -782,3 +782,312 @@ def test_phase_health_report_handles_missing_file(tmp_path):
     assert report["ok"] is False
     assert report["status"] == "missing"
     assert "missing or unreadable" in report["blockers"][0]
+
+
+# ── Orchestrator health-check escalation ────────────────────────────────────
+# The retry branch in autopilot._run_loop_inner sleeps and continues forever on a
+# dead API (operator ruling 2026-08-12: keep retrying, do NOT latch off). These
+# pin the "loud" half of that bargain.
+
+
+class _FakeClock:
+    def __init__(self, start: float = 1000.0) -> None:
+        self.t = start
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, seconds: float) -> None:
+        self.t += seconds
+
+
+def _tracker(escalate_after: int = 30, clock=None):
+    from phase_status import HealthEscalationTracker
+
+    return HealthEscalationTracker(escalate_after=escalate_after, now=clock or _FakeClock())
+
+
+def test_health_escalation_does_not_fire_below_threshold():
+    tracker = _tracker(escalate_after=30)
+
+    updates = [tracker.record_failure() for _ in range(29)]
+
+    assert all(not u.escalated_now for u in updates)
+    assert all(not u.escalated for u in updates)
+    assert tracker.consecutive == 29
+    assert tracker.escalated is False
+    assert updates[-1].phase_fields["health_escalated"] is False
+    assert updates[-1].phase_fields["health_consecutive_failures"] == 29
+
+
+def test_health_escalation_fires_at_threshold():
+    clock = _FakeClock()
+    tracker = _tracker(escalate_after=30, clock=clock)
+
+    for _ in range(29):
+        tracker.record_failure()
+        clock.advance(12.0)
+    assert tracker.escalated is False
+
+    update = tracker.record_failure()
+
+    assert update.escalated_now is True
+    assert update.escalated is True
+    assert update.consecutive == 30
+    assert tracker.escalated is True
+    assert update.phase_fields["health_escalated"] is True
+    assert update.phase_fields["health_escalate_after"] == 30
+    # 29 failures * 12s of wall clock elapsed before the 30th.
+    assert update.unhealthy_for_s == 348.0
+    assert "30 consecutive health checks" in update.message
+
+
+def test_health_escalation_fires_once_not_every_iteration():
+    tracker = _tracker(escalate_after=5)
+
+    updates = [tracker.record_failure() for _ in range(40)]
+
+    fired = [i for i, u in enumerate(updates) if u.escalated_now]
+    assert fired == [4], "escalation must be edge-triggered, once per episode"
+    # It stays escalated for the rest of the episode even though it stops shouting.
+    assert all(u.escalated for u in updates[4:])
+    assert all(u.message == "" for u in updates[5:])
+
+
+def test_health_escalation_clears_on_recovery():
+    clock = _FakeClock()
+    tracker = _tracker(escalate_after=5, clock=clock)
+    for _ in range(7):
+        tracker.record_failure()
+        clock.advance(12.0)
+    assert tracker.escalated is True
+
+    recovery = tracker.record_success()
+
+    assert recovery is not None
+    assert recovery.recovered is True
+    assert tracker.escalated is False
+    assert tracker.consecutive == 0
+    assert tracker.first_failure_at is None
+    assert recovery.phase_fields["health_escalated"] is False
+    assert recovery.phase_fields["health_escalation_cleared"] is True
+    assert recovery.phase_fields["health_recovered_after_failures"] == 7
+    assert "RECOVERED" in recovery.message
+
+
+def test_health_escalation_recovery_is_silent_when_nothing_was_wrong():
+    tracker = _tracker(escalate_after=5)
+
+    # The healthy steady state must not publish a recovery event every iteration.
+    assert tracker.record_success() is None
+    assert tracker.record_success() is None
+
+
+def test_health_escalation_recovery_below_threshold_clears_without_alarm():
+    tracker = _tracker(escalate_after=30)
+    for _ in range(3):
+        tracker.record_failure()
+
+    recovery = tracker.record_success()
+
+    assert recovery is not None
+    assert recovery.recovered is False, "never escalated, so nothing to retract"
+    assert recovery.message == ""
+    assert "health_escalation_cleared" not in recovery.phase_fields
+    assert tracker.consecutive == 0
+
+
+def test_health_escalation_rearms_for_a_second_episode():
+    tracker = _tracker(escalate_after=3)
+    for _ in range(3):
+        tracker.record_failure()
+    tracker.record_success()
+
+    second = [tracker.record_failure() for _ in range(3)]
+
+    assert [u.escalated_now for u in second] == [False, False, True]
+
+
+def _escalated_heartbeat(**overrides):
+    payload = {
+        "phase": "health_backoff",
+        "pid": 123,
+        "trial_id": 894,
+        "idle_reason": "orchestrator unhealthy",
+        "failure_reason": "connection_refused",
+        "health_consecutive_failures": 30,
+        "health_escalate_after": 30,
+        "health_unhealthy_for_s": 361.4,
+        "health_escalated": True,
+        "updated_at": 100.0,
+        "updated_at_iso": "2026-08-12T12:13:13+00:00",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_phase_health_report_flags_an_escalated_spin(tmp_path, monkeypatch):
+    """A fresh heartbeat is not proof of progress when the loop is retrying."""
+    snapshot = tmp_path / "phase.json"
+    snapshot.write_text(json.dumps(_escalated_heartbeat()), encoding="utf-8")
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+    monkeypatch.setattr("phase_status._read_process_env_flags", lambda pid: {})
+
+    report = build_phase_health_report(path=snapshot, now=120.0, stale_after_s=60.0)
+
+    assert report["ok"] is False
+    assert report["status"] == "health_escalated"
+    assert report["health_escalated"] is True
+    assert report["health_consecutive_failures"] == 30
+    blocker = "\n".join(report["blockers"])
+    assert "orchestrator health-check escalated" in blocker
+    assert "30 consecutive failures" in blocker
+    assert "connection_refused" in blocker
+    formatted = "\n".join(format_phase_health_report(report))
+    assert "Status: health_escalated" in formatted
+    assert "Health escalation: True" in formatted
+
+
+def test_phase_health_report_stays_active_while_below_threshold(tmp_path, monkeypatch):
+    """Retrying is normal; only the escalation is an alarm."""
+    snapshot = tmp_path / "phase.json"
+    snapshot.write_text(
+        json.dumps(
+            _escalated_heartbeat(health_escalated=False, health_consecutive_failures=4)
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+    monkeypatch.setattr("phase_status._read_process_env_flags", lambda pid: {})
+
+    report = build_phase_health_report(path=snapshot, now=120.0, stale_after_s=60.0)
+
+    assert report["ok"] is True
+    assert report["status"] == "active"
+    assert report["health_escalated"] is False
+    assert not report["blockers"]
+
+
+def test_phase_health_report_clears_once_the_loop_publishes_recovery(tmp_path, monkeypatch):
+    """The alarm must visibly reset, or nobody trusts it."""
+    snapshot = tmp_path / "phase.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "health_recovered",
+                "pid": 123,
+                "trial_id": 894,
+                "health_consecutive_failures": 0,
+                "health_escalated": False,
+                "health_escalation_cleared": True,
+                "health_recovered_after_failures": 31,
+                "updated_at": 100.0,
+                "updated_at_iso": "2026-08-12T12:20:13+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+    monkeypatch.setattr("phase_status._read_process_env_flags", lambda pid: {})
+
+    report = build_phase_health_report(path=snapshot, now=120.0, stale_after_s=60.0)
+
+    assert report["ok"] is True
+    assert report["status"] == "active"
+    assert report["health_escalated"] is False
+    assert not report["blockers"]
+
+
+def test_phase_tracker_publishes_escalation_fields_the_report_reads(tmp_path):
+    """Producer/reader contract: the field names must actually line up."""
+    from phase_status import HealthEscalationTracker
+
+    snapshot = tmp_path / "phase.json"
+    events = tmp_path / "phase.jsonl"
+    tracker = PhaseTracker(path=snapshot, events_path=events)
+    escalation = HealthEscalationTracker(escalate_after=2, now=_FakeClock())
+    escalation.record_failure()
+    update = escalation.record_failure()
+    assert update.escalated_now is True
+
+    tracker.set(
+        "health_backoff",
+        trial_id=894,
+        failure_reason="connection_refused",
+        **update.phase_fields,
+    )
+    report = build_phase_health_report(
+        path=snapshot,
+        now=json.loads(snapshot.read_text())["updated_at"] + 1.0,
+        stale_after_s=60.0,
+    )
+
+    assert report["status"] == "health_escalated"
+    assert report["ok"] is False
+
+
+# ── Loop wiring ─────────────────────────────────────────────────────────────
+# The tracker above is only useful if autopilot._run_loop_inner actually drives
+# it. That function is a ~2000-line loop that cannot be invoked in a unit test,
+# so the call sites are pinned by source inspection. Without these, deleting the
+# record_failure() call restores the original silent spin with every other test
+# in this file still green.
+
+
+def _autopilot_module():
+    import autopilot
+
+    return autopilot
+
+
+def test_autopilot_loop_uses_the_shared_escalation_tracker():
+    import phase_status as ps
+
+    autopilot = _autopilot_module()
+
+    assert autopilot.HealthEscalationTracker is ps.HealthEscalationTracker
+    assert autopilot.HEALTH_ESCALATE_AFTER == ps.DEFAULT_HEALTH_ESCALATE_AFTER == 30
+
+
+def test_autopilot_health_escalate_after_is_env_overridable(monkeypatch):
+    autopilot = _autopilot_module()
+
+    monkeypatch.setenv("AUTOPILOT_HEALTH_ESCALATE_AFTER", "7")
+    assert autopilot._env_int("AUTOPILOT_HEALTH_ESCALATE_AFTER", 30) == 7
+    # A nonsense value must not disable the alarm by making it unreachable.
+    monkeypatch.setenv("AUTOPILOT_HEALTH_ESCALATE_AFTER", "nonsense")
+    assert autopilot._env_int("AUTOPILOT_HEALTH_ESCALATE_AFTER", 30) == 30
+    monkeypatch.setenv("AUTOPILOT_HEALTH_ESCALATE_AFTER", "0")
+    assert autopilot._env_int("AUTOPILOT_HEALTH_ESCALATE_AFTER", 30) == 1
+
+
+def test_autopilot_retry_branch_drives_the_escalation_tracker():
+    import inspect
+
+    autopilot = _autopilot_module()
+    source = inspect.getsource(autopilot._run_loop_inner)
+
+    assert "HealthEscalationTracker(escalate_after=HEALTH_ESCALATE_AFTER)" in source
+    assert "health_escalation.record_failure()" in source
+    assert "health_escalation.record_success()" in source
+    # The escalation must reach the heartbeat, which is the only thing the
+    # dashboard and the restart advisor can see.
+    assert "**_escalation.phase_fields" in source
+    assert "**_recovery.phase_fields" in source
+
+
+def test_autopilot_retry_branch_still_retries_forever():
+    """Operator ruling 2026-08-12: escalate loudly, do NOT latch off."""
+    import inspect
+
+    autopilot = _autopilot_module()
+    source = inspect.getsource(autopilot._run_loop_inner)
+    branch = source.split("Orchestrator unhealthy")[1].split("# Check preflight")[0]
+
+    assert "time.sleep(HEALTH_BACKOFF_S)" in branch
+    assert "continue" in branch
+    # No halt latch, no self-pause, no exit on the health path.
+    assert 'state["paused"] = True' not in branch
+    assert "_dispatch_deficiency" not in branch
+    assert "break" not in branch
+    assert "sys.exit" not in branch

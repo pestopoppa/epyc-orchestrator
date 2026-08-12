@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
@@ -33,6 +34,11 @@ DEFAULT_JOURNAL_DIR = ORCH_ROOT / "orchestration"
 DEFAULT_TMP_AUTOPILOT_LOG_DIR = Path("/mnt/raid0/llm/tmp")
 DEFAULT_TMP_AUTOPILOT_LOG_PATTERN = "autopilot*.log"
 DEFAULT_STALE_AFTER_S = 900.0
+
+#: Consecutive failed orchestrator health checks before the controller loop
+#: escalates. See :class:`HealthEscalationTracker` for the wall-clock rationale
+#: behind the default — the number is only meaningful next to the retry period.
+DEFAULT_HEALTH_ESCALATE_AFTER = 30
 DEFAULT_OUTCOME_STALL_FRONTIER_TRIALS = int(
     os.environ.get("AUTOPILOT_OUTCOME_STALL_FRONTIER_TRIALS", "150")
 )
@@ -175,6 +181,151 @@ class PhaseTracker:
 
     def clear(self, reason: str = "") -> None:
         self.set("stopped", reason=reason)
+
+
+@dataclass(frozen=True)
+class HealthEscalationUpdate:
+    """One transition of :class:`HealthEscalationTracker`.
+
+    ``phase_fields`` is spread into :meth:`PhaseTracker.set` by the caller.
+    ``escalated_now`` / ``recovered`` are edge flags — true on the single
+    iteration that crosses the threshold or clears it — so the caller logs once
+    per episode instead of once per retry.
+    """
+
+    escalated_now: bool = False
+    recovered: bool = False
+    escalated: bool = False
+    consecutive: int = 0
+    unhealthy_for_s: float = 0.0
+    message: str = ""
+    phase_fields: dict[str, Any] = field(default_factory=dict)
+
+
+class HealthEscalationTracker:
+    """Turn a streak of failed orchestrator health checks into a loud, one-shot alarm.
+
+    The AutoPilot loop retries a failed health check **forever**, by design: the
+    operator ruling (2026-08-12) is that a transient blip during a long reload
+    must not require an overnight operator resume, so the daemon keeps trying
+    rather than latching itself off. Retrying forever is only defensible if it is
+    impossible to miss, which is what this tracker provides.
+
+    The failure it closes: the retry branch republishes a fresh ``health_backoff``
+    heartbeat on every iteration, so :func:`build_phase_health_report` saw a
+    live, recently-updated heartbeat and reported ``status="active"``. A daemon
+    spinning on a dead API was, to every consumer of that report, indistinguishable
+    from a daemon doing useful work — which is how the 2026-08-03 outage stayed
+    silent. Once ``escalate_after`` consecutive failures accrue this publishes
+    ``health_escalated``, and the report folds that into a blocker and a non-ok
+    status.
+
+    Escalation is edge-triggered (``escalated_now`` is true exactly once per
+    episode): an alarm re-fired every backoff is noise, and noise trains people
+    to ignore the channel, which recreates the defect it was meant to fix.
+    Recovery is edge-triggered the same way and is published too — an alarm that
+    never visibly resets is an alarm nobody trusts.
+    """
+
+    def __init__(
+        self,
+        *,
+        escalate_after: int = DEFAULT_HEALTH_ESCALATE_AFTER,
+        retry_period_s: float | None = None,
+        now: Callable[[], float] = time.time,
+    ) -> None:
+        if escalate_after < 1:
+            raise ValueError("escalate_after must be >= 1")
+        self.escalate_after = escalate_after
+        self.retry_period_s = retry_period_s
+        self._now = now
+        self.consecutive = 0
+        self.escalated = False
+        self.first_failure_at: float | None = None
+
+    @property
+    def unhealthy_for_s(self) -> float:
+        if self.first_failure_at is None:
+            return 0.0
+        return max(0.0, self._now() - self.first_failure_at)
+
+    def record_failure(self) -> HealthEscalationUpdate:
+        """Register one failed health check and return what to publish."""
+        now = self._now()
+        if self.first_failure_at is None:
+            self.first_failure_at = now
+        self.consecutive += 1
+        escalated_now = not self.escalated and self.consecutive >= self.escalate_after
+        if escalated_now:
+            self.escalated = True
+
+        unhealthy_for_s = max(0.0, now - self.first_failure_at)
+        phase_fields: dict[str, Any] = {
+            "health_consecutive_failures": self.consecutive,
+            "health_escalate_after": self.escalate_after,
+            "health_unhealthy_for_s": round(unhealthy_for_s, 1),
+            "health_escalated": self.escalated,
+        }
+        message = ""
+        if escalated_now:
+            message = (
+                f"Orchestrator has failed {self.consecutive} consecutive health checks "
+                f"over {unhealthy_for_s:.0f}s. AutoPilot is NOT stopping — it keeps "
+                "retrying — but it has made zero progress for that entire window and "
+                "will continue to make none until the orchestrator API answers again. "
+                "Check that the API is up."
+            )
+        return HealthEscalationUpdate(
+            escalated_now=escalated_now,
+            recovered=False,
+            escalated=self.escalated,
+            consecutive=self.consecutive,
+            unhealthy_for_s=unhealthy_for_s,
+            message=message,
+            phase_fields=phase_fields,
+        )
+
+    def record_success(self) -> HealthEscalationUpdate | None:
+        """Clear the streak. Returns ``None`` when there was nothing to clear.
+
+        Returning ``None`` on the steady-state healthy path keeps the caller from
+        publishing a recovery event on every single healthy iteration.
+        """
+        if self.consecutive == 0 and not self.escalated:
+            return None
+
+        failures = self.consecutive
+        was_escalated = self.escalated
+        unhealthy_for_s = self.unhealthy_for_s
+        self.consecutive = 0
+        self.escalated = False
+        self.first_failure_at = None
+
+        phase_fields: dict[str, Any] = {
+            "health_consecutive_failures": 0,
+            "health_escalated": False,
+            "health_recovered_after_failures": failures,
+            "health_unhealthy_for_s": round(unhealthy_for_s, 1),
+        }
+        message = ""
+        if was_escalated:
+            # Only an escalated episode raised an alarm, so only an escalated
+            # episode has one to retract.
+            phase_fields["health_escalation_cleared"] = True
+            message = (
+                f"Orchestrator health RECOVERED after {failures} consecutive failures "
+                f"({unhealthy_for_s:.0f}s unhealthy). Escalation cleared; AutoPilot is "
+                "resuming normal trials."
+            )
+        return HealthEscalationUpdate(
+            escalated_now=False,
+            recovered=was_escalated,
+            escalated=False,
+            consecutive=0,
+            unhealthy_for_s=unhealthy_for_s,
+            message=message,
+            phase_fields=phase_fields,
+        )
 
 
 def _read_json_object(path: Path) -> dict[str, Any] | None:
@@ -695,9 +846,22 @@ def build_phase_health_report(
     phase_name = payload.get("phase")
     terminal_stopped = phase_name == "stopped"
     stale = heartbeat_age_s is None or heartbeat_age_s > stale_after_s
+    # A loop spinning on a dead orchestrator republishes this heartbeat every
+    # retry, so it is never stale and its pid is alive — none of the liveness
+    # checks below can see it. The escalation flag is the only evidence that a
+    # fresh heartbeat represents retrying rather than progress.
+    health_escalated = bool(payload.get("health_escalated")) and not terminal_stopped
     blockers: list[str] = []
     if pid_alive is False and not terminal_stopped:
         blockers.append(f"phase heartbeat pid is not alive: {pid}")
+    if health_escalated:
+        blockers.append(
+            "orchestrator health-check escalated: "
+            f"{payload.get('health_consecutive_failures')} consecutive failures "
+            f"over {payload.get('health_unhealthy_for_s')}s "
+            f"({payload.get('failure_reason') or 'unknown'}); AutoPilot is still "
+            "retrying and is making no progress"
+        )
     if heartbeat_age_s is None:
         blockers.append("phase heartbeat has no numeric updated_at")
     elif stale and not terminal_stopped:
@@ -718,6 +882,8 @@ def build_phase_health_report(
             status = "stale"
         elif pid_alive is False and not terminal_stopped:
             status = "pid_dead"
+        elif health_escalated:
+            status = "health_escalated"
         elif require_current_code and stale_sources and not terminal_stopped:
             status = "code_stale"
         elif require_outcome_progress and outcome_blockers and not terminal_stopped:
@@ -742,6 +908,10 @@ def build_phase_health_report(
         "phase": phase_name,
         "phase_started_at": payload.get("phase_started_at"),
         "phase_age_s_recorded": payload.get("phase_age_s"),
+        "health_escalated": health_escalated,
+        "health_consecutive_failures": payload.get("health_consecutive_failures"),
+        "health_unhealthy_for_s": payload.get("health_unhealthy_for_s"),
+        "health_escalate_after": payload.get("health_escalate_after"),
         "trial_id": payload.get("trial_id"),
         "action_type": payload.get("action_type"),
         "idle_reason": payload.get("idle_reason"),
@@ -834,6 +1004,12 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
         f"- Trial: {report.get('trial_id')}",
         f"- Action: {report.get('action_type')}",
         f"- Idle reason: {report.get('idle_reason')}",
+        (
+            "- Health escalation: "
+            f"{report.get('health_escalated')} "
+            f"(consecutive_failures={report.get('health_consecutive_failures')}, "
+            f"unhealthy_for_s={report.get('health_unhealthy_for_s')})"
+        ),
         f"- PID: {report.get('pid')} (alive={report.get('pid_alive')})",
         f"- Process started at: {report.get('process_started_at_s')}",
         f"- Runtime source stale: {report.get('code_stale')}",

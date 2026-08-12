@@ -84,7 +84,9 @@ from short_term_memory import ShortTermMemory
 from self_criticism import SelfCriticism, generate_self_criticism
 from phase_status import (
     AsyncTaskRunner,
+    HealthEscalationTracker,
     PhaseTracker,
+    DEFAULT_HEALTH_ESCALATE_AFTER,
     DEFAULT_JOURNAL_DIR as PHASE_DEFAULT_JOURNAL_DIR,
     DEFAULT_OUTCOME_RECENT_WINDOW_TRIALS,
     DEFAULT_OUTCOME_STALL_FRONTIER_TRIALS,
@@ -5111,8 +5113,27 @@ def _env_float(name: str, default: float, *, minimum: float = 0.1) -> float:
         return default
 
 
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
 PAUSE_POLL_S = _env_float("AUTOPILOT_PAUSE_POLL_S", 1.0)
 HEALTH_BACKOFF_S = _env_float("AUTOPILOT_HEALTH_BACKOFF_S", 10.0)
+# Escalate a health-check outage after this many CONSECUTIVE failures. The count
+# is only meaningful next to the period: one iteration costs HEALTH_BACKOFF_S
+# (10s) plus the health_check(retries=2) probe itself, which spends ~2s on a
+# refused connection (two attempts, each followed by its own 1s sleep) — so ~12s
+# per retry, and 30 retries is ~6 minutes of continuous failure. That clears the
+# longest restart wait this codebase sanctions (300s, scripts/server/
+# stack_commands.py) with margin, so an ordinary slow API restart rides through
+# without crying wolf, while a genuinely dead API is impossible to miss within
+# ~6 minutes instead of never.
+HEALTH_ESCALATE_AFTER = _env_int(
+    "AUTOPILOT_HEALTH_ESCALATE_AFTER", DEFAULT_HEALTH_ESCALATE_AFTER
+)
 
 
 def _stream_points_to_path(stream: Any, path: Path) -> bool:
@@ -7724,6 +7745,11 @@ def _run_loop_inner(
     # completed trial.
     plot_clock = {"last_ts": 0.0, "last_pause_trial": -1}
 
+    # Survives across loop iterations, which is the whole point: the pre-2026-08-12
+    # retry branch kept no counter at all, so an unbounded `sleep(); continue` on a
+    # dead API looked identical on iteration 1 and iteration 10,000.
+    health_escalation = HealthEscalationTracker(escalate_after=HEALTH_ESCALATE_AFTER)
+
     def _refresh_plots(*, sync: bool, reason: str) -> None:
         """Regenerate the dashboard PNGs from current on-disk state.
 
@@ -7828,11 +7854,27 @@ def _run_loop_inner(
         phase.set("health_check", trial_id=trial_counter, url=ORCHESTRATOR_URL)
         _health = health_check(ORCHESTRATOR_URL, retries=2)
         if not dry_run and not _health:
+            # We keep retrying forever, on purpose (operator ruling 2026-08-12):
+            # latching off here would trade a silent spin for a silent stop, and
+            # a blip during a long reload would need an overnight resume. What we
+            # do NOT do any more is retry silently — after HEALTH_ESCALATE_AFTER
+            # consecutive failures the phase heartbeat carries an escalation flag
+            # that build_phase_health_report turns into a blocker and a non-ok
+            # status, which is what the dashboard and the restart advisor read.
+            _escalation = health_escalation.record_failure()
+            if _escalation.escalated_now:
+                # Once per episode. Re-logging this every backoff would be noise,
+                # and noise is what taught everyone to ignore the last one.
+                log.critical("AUTOPILOT HEALTH ESCALATION: %s", _escalation.message)
             log.error(
-                "Orchestrator unhealthy [%s]: %s — waiting %.1fs...",
+                "Orchestrator unhealthy [%s]: %s — waiting %.1fs... "
+                "(consecutive failures: %d/%d%s)",
                 _health.failure_reason,
                 _health.failure_detail,
                 HEALTH_BACKOFF_S,
+                _escalation.consecutive,
+                HEALTH_ESCALATE_AFTER,
+                ", ESCALATED" if _escalation.escalated else "",
             )
             phase.set(
                 "health_backoff",
@@ -7841,9 +7883,28 @@ def _run_loop_inner(
                 failure_reason=_health.failure_reason,
                 failure_detail=_health.failure_detail,
                 backoff_s=HEALTH_BACKOFF_S,
+                **_escalation.phase_fields,
             )
             time.sleep(HEALTH_BACKOFF_S)
             continue
+
+        # Health is back (or dry-run ignores it). Clear any streak, and say so —
+        # an alarm that never visibly resets is an alarm nobody trusts. Returns
+        # None when there was no streak, so the healthy steady state is silent.
+        _recovery = health_escalation.record_success()
+        if _recovery is not None:
+            if _recovery.recovered:
+                log.warning("AUTOPILOT HEALTH RECOVERED: %s", _recovery.message)
+            else:
+                log.info(
+                    "Orchestrator health recovered after %d consecutive failure(s)",
+                    _recovery.phase_fields.get("health_recovered_after_failures", 0),
+                )
+            phase.set(
+                "health_recovered",
+                trial_id=trial_counter,
+                **_recovery.phase_fields,
+            )
 
         # Check preflight diagnostics for stack-level issues
         phase.set("preflight", trial_id=trial_counter)
