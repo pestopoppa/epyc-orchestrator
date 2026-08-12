@@ -436,6 +436,219 @@ def _host_metadata() -> dict[str, str]:
     }
 
 
+# ── Host-health provenance ───────────────────────────────────────────
+#
+# ORIGIN. 2026-08-12, dry-running the OP-21 re-bench. `_host_metadata()` already
+# collected `uptime` and `kernel`; `_emit_yaml` then wrote only `host:
+# <hostname>` and threw both away. A matrix measured at 14.1 d uptime therefore
+# landed INDISTINGUISHABLE from one measured on a freshly rebooted host, and no
+# later reader could tell which they were holding. That is what makes a reboot
+# window worthless: the number it buys cannot prove the host was clean.
+#
+# The rule set is NOT re-implemented here. `host_health_warnings()` (uptime /
+# kernel.numa_balancing / stray llama processes) and `cpu_freq_static_warnings()`
+# (cpufreq boost + scaling_max_freq caps) in epyc-inference-research are the
+# single authority for MEASUREMENT.md P-BENCH-1/P-BENCH-3 host state. A second
+# copy of those thresholds here would drift, and a drifted copy that renders
+# "clean" is strictly worse than no field at all.
+#
+# FAIL-SAFE is the whole point of the block below: every path that cannot
+# establish host state emits `host_health_status: "unknown"` plus an explicit
+# warning naming what failed, and `decision_grade: false`. An absent or
+# unreadable input must never render as a pass.
+
+_RESEARCH_ROOT = Path("/mnt/raid0/llm/epyc-inference-research")
+_RESEARCH_IMPORT_DIRS = (
+    _RESEARCH_ROOT / "scripts" / "benchmark",
+    _RESEARCH_ROOT / "scripts" / "lib",
+)
+_HOST_HEALTH_RULE_SOURCE = (
+    "epyc-inference-research/scripts/benchmark/server_np_sweep.py:host_health_warnings"
+    " + server_numa_np_sweep.py:cpu_freq_static_warnings"
+)
+
+HOST_HEALTH_CLEAN = "clean"
+HOST_HEALTH_WARN = "warn"
+HOST_HEALTH_UNKNOWN = "unknown"
+
+
+def _load_host_health_rules():
+    """Import the research repo's host-health rule set. Raises on failure.
+
+    Cross-repo import by absolute path is the established pattern in this repo
+    (see scripts/analysis/reviewer_policy_arm_ab.py, scripts/graph_router/…).
+    Both modules are stdlib-only at import time, so this pulls in no server,
+    no model and no inference.
+    """
+    for directory in _RESEARCH_IMPORT_DIRS:
+        entry = str(directory)
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
+    import server_np_sweep  # noqa: PLC0415
+    import server_numa_np_sweep  # noqa: PLC0415
+
+    return server_np_sweep, server_numa_np_sweep
+
+
+def _host_health_probe(
+    *,
+    host_meta: dict[str, str] | None = None,
+    extra_blockers: list[str] | None = None,
+    load_rules=_load_host_health_rules,
+) -> dict[str, Any]:
+    """Collect host-health provenance for the matrix artifact. Never raises.
+
+    Returns a dict that is always fully populated. `status` is one of
+    clean / warn / unknown; `decision_grade` is true ONLY when the gating
+    warning list is empty AND the attestation was actually collected.
+
+    `decision_grade` here attests HOST STATE ONLY. It says nothing about the
+    statistical adequacy of the ratios (the pairwise emitter records
+    `samples: 1` per cell) — see the comment written into the artifact.
+    """
+    meta = dict(host_meta if host_meta is not None else _host_metadata())
+    probe: dict[str, Any] = {
+        "hostname": meta.get("hostname", ""),
+        "kernel": meta.get("kernel", ""),
+        "uptime": meta.get("uptime", ""),
+        "uptime_seconds": None,
+        "numa_balancing": None,
+        "scaling_governors": [],
+        "loadavg": "",
+        "llama_processes_at_attestation": None,
+        "attestation_status": "unavailable",
+        "attestation_error": "",
+        "rule_source": _HOST_HEALTH_RULE_SOURCE,
+        "status": HOST_HEALTH_UNKNOWN,
+        "warnings": [],
+        "structural_for_harness": [],
+        "decision_grade": False,
+        "decision_grade_blockers": list(extra_blockers or []),
+    }
+
+    try:
+        np_sweep, numa_sweep = load_rules()
+        attestation = np_sweep.collect_attestation()
+        freq_warnings = list(numa_sweep.cpu_freq_static_warnings())
+
+        # The FULL list is what the artifact records — nothing is filtered out
+        # of the record.
+        full = list(np_sweep.host_health_warnings(attestation)) + freq_warnings
+
+        # The GATING list re-runs the SAME rule set against an attestation with
+        # this harness's own instrument elided. A contention matrix benches the
+        # LIVE stack, so llama-server presence is the instrument, not
+        # contamination; if it gated, `decision_grade` could never be true and
+        # the field would be vacuous. Deriving the structural subset by set
+        # difference (never by matching a warning's spelling) keeps the rule
+        # owner in charge: a reworded or newly added process-derived warning
+        # re-classifies itself automatically.
+        #
+        # NOTE the limit of this waiver, stated in the artifact: it does NOT
+        # distinguish lineup members from foreign llama processes.
+        instrument_elided = dict(attestation)
+        instrument_elided["existing_llama_processes"] = []
+        gating = list(np_sweep.host_health_warnings(instrument_elided)) + freq_warnings
+
+        structural = [w for w in full if w not in gating]
+
+        # An unreadable /proc/uptime makes the uptime rule silently not fire —
+        # a missing input that would otherwise render as a pass. Refuse it.
+        uptime_seconds = attestation.get("uptime_seconds")
+        if not isinstance(uptime_seconds, (int, float)):
+            unreadable = (
+                "host uptime could not be read (/proc/uptime); the uptime rule "
+                "did not evaluate, so host cleanliness is UNKNOWN, not clean"
+            )
+            full.append(unreadable)
+            gating.append(unreadable)
+            probe["attestation_status"] = "incomplete"
+        else:
+            probe["attestation_status"] = "collected"
+
+        probe.update(
+            {
+                "uptime_seconds": uptime_seconds if isinstance(uptime_seconds, (int, float)) else None,
+                "numa_balancing": attestation.get("numa_balancing"),
+                "scaling_governors": list(attestation.get("scaling_governors") or []),
+                "loadavg": str(attestation.get("loadavg") or ""),
+                "llama_processes_at_attestation": len(
+                    attestation.get("existing_llama_processes") or []
+                ),
+                "warnings": full,
+                "structural_for_harness": structural,
+            }
+        )
+        probe["decision_grade_blockers"] = list(extra_blockers or []) + gating
+        if probe["attestation_status"] == "collected":
+            probe["status"] = HOST_HEALTH_CLEAN if not gating else HOST_HEALTH_WARN
+        else:
+            probe["status"] = HOST_HEALTH_UNKNOWN
+    except Exception as exc:  # noqa: BLE001 — the probe must never break a run
+        reason = f"{type(exc).__name__}: {exc}"
+        blocker = (
+            "host health could not be determined "
+            f"({_HOST_HEALTH_RULE_SOURCE} unavailable: {reason}); "
+            "this artifact is NOT decision-grade"
+        )
+        probe["attestation_error"] = reason
+        probe["warnings"] = [blocker]
+        probe["decision_grade_blockers"] = list(extra_blockers or []) + [blocker]
+        probe["status"] = HOST_HEALTH_UNKNOWN
+
+    probe["decision_grade"] = (
+        probe["status"] == HOST_HEALTH_CLEAN and not probe["decision_grade_blockers"]
+    )
+    return probe
+
+
+def read_matrix_host_health(path: Path) -> dict[str, Any]:
+    """Read a matrix's host-health stamp. A matrix without one is UNKNOWN.
+
+    Read side of the same rule: a matrix written before this provenance block
+    existed carries no attestation, and the ONLY honest reading of that is
+    "unknown", never "clean". Non-gating by design — this reports, it does not
+    admit or refuse.
+    """
+    record = {
+        "status": HOST_HEALTH_UNKNOWN,
+        "decision_grade": False,
+        "warnings": [],
+        "reason": "",
+    }
+    try:
+        import yaml  # noqa: PLC0415
+
+        data = yaml.safe_load(path.read_text()) or {}
+    except Exception as exc:  # noqa: BLE001
+        record["reason"] = f"matrix could not be read: {type(exc).__name__}: {exc}"
+        return record
+    if not isinstance(data, dict) or "host_health_status" not in data:
+        record["reason"] = (
+            "matrix carries no host-health stamp (written before provenance was "
+            "emitted); host state at measurement time is UNKNOWN, not clean"
+        )
+        return record
+    record["status"] = str(data.get("host_health_status") or HOST_HEALTH_UNKNOWN)
+    record["decision_grade"] = bool(data.get("decision_grade"))
+    record["warnings"] = [str(w) for w in (data.get("host_health_warnings") or [])]
+    return record
+
+
+def describe_matrix_host_health(path: Path) -> list[str]:
+    """Human-readable lines for the host-health stamp of a matrix on disk."""
+    record = read_matrix_host_health(path)
+    lines = [
+        f"matrix host health: {record['status']} "
+        f"(decision_grade={str(record['decision_grade']).lower()})"
+    ]
+    if record["reason"]:
+        lines.append(f"  {record['reason']}")
+    for warning in record["warnings"]:
+        lines.append(f"  warning: {warning}")
+    return lines
+
+
 # ── YAML emission ────────────────────────────────────────────────────
 
 # Top-level sections this emitter regenerates from a fresh bench run.  EVERY
@@ -454,6 +667,17 @@ _EMITTER_OWNED_SECTIONS = frozenset(
         "version",
         "measured_at",
         "host",
+        # Host-health provenance is regenerated from THIS run's probe. Carrying
+        # a previous run's block forward would be the exact failure this block
+        # exists to prevent: a stale "clean" attesting a run that never made it.
+        "host_kernel",
+        "host_uptime",
+        "host_health_status",
+        "host_health_warnings",
+        "host_health_structural_for_harness",
+        "decision_grade",
+        "decision_grade_blockers",
+        "host_provenance",
         "binary",
         "topology_hash",
         "default_floor",
@@ -526,12 +750,33 @@ def _emit_yaml(
     topology_hash: str = "",
     binary: dict[str, str] | None = None,
     host: str = "",
+    host_health: dict[str, Any] | None = None,
     floor: float = DEFAULT_FLOOR,
     preserve_sections: list[tuple[str, list[str]]] | None = None,
 ) -> str:
     """Render the matrix as YAML (no PyYAML dump dependency — handle ourselves)."""
     def _inline(value: Any) -> str:
         return json.dumps(value, sort_keys=True)
+
+    # FAIL-SAFE. A caller that does not pass a probe gets an explicit UNKNOWN,
+    # never a silently absent block that a later reader would read as clean.
+    if host_health is None:
+        host_health = {
+            "status": HOST_HEALTH_UNKNOWN,
+            "warnings": [
+                "host health was not probed by the emitter's caller; "
+                "this artifact is NOT decision-grade"
+            ],
+            "structural_for_harness": [],
+            "decision_grade": False,
+            "decision_grade_blockers": [
+                "host health was not probed by the emitter's caller"
+            ],
+            "attestation_status": "not_probed",
+        }
+
+    def _str_list(key: str) -> list[str]:
+        return [str(v) for v in (host_health.get(key) or [])]
 
     lines: list[str] = []
     lines.append("# Auto-generated by scripts/server/contention_matrix.py")
@@ -540,6 +785,57 @@ def _emit_yaml(
     lines.append("version: 1")
     lines.append(f'measured_at: "{datetime.now(timezone.utc).isoformat()}"')
     lines.append(f'host: "{host}"')
+    lines.append(f'host_kernel: {_inline(str(host_health.get("kernel", "")))}')
+    lines.append(f'host_uptime: {_inline(str(host_health.get("uptime", "")))}')
+
+    lines.append("")
+    lines.append("# Host-health provenance (P-BENCH-1/P-BENCH-3). `decision_grade` attests HOST")
+    lines.append("# STATE ONLY: it does NOT assert statistical adequacy — every pair below is")
+    lines.append("# `samples: 1`. status is clean | warn | unknown; `unknown` means the probe")
+    lines.append("# could not establish host state and MUST NOT be read as clean.")
+    lines.append("# `host_health_warnings` is the complete unfiltered rule output.")
+    lines.append("# `host_health_structural_for_harness` is the subset waived from gating because")
+    lines.append("# a contention matrix benches the LIVE stack by design (llama-server presence is")
+    lines.append("# the instrument). That waiver does NOT distinguish lineup members from foreign")
+    lines.append("# llama processes — this harness cannot tell them apart.")
+    lines.append(f'host_health_status: "{host_health.get("status", HOST_HEALTH_UNKNOWN)}"')
+    warnings = _str_list("warnings")
+    if warnings:
+        lines.append("host_health_warnings:")
+        for w in warnings:
+            lines.append(f"  - {_inline(w)}")
+    else:
+        lines.append("host_health_warnings: []")
+    structural = _str_list("structural_for_harness")
+    if structural:
+        lines.append("host_health_structural_for_harness:")
+        for w in structural:
+            lines.append(f"  - {_inline(w)}")
+    else:
+        lines.append("host_health_structural_for_harness: []")
+    lines.append(f"decision_grade: {str(bool(host_health.get('decision_grade'))).lower()}")
+    blockers = _str_list("decision_grade_blockers")
+    if blockers:
+        lines.append("decision_grade_blockers:")
+        for w in blockers:
+            lines.append(f"  - {_inline(w)}")
+    else:
+        lines.append("decision_grade_blockers: []")
+    lines.append("host_provenance:")
+    for key in (
+        "hostname",
+        "uptime_seconds",
+        "numa_balancing",
+        "scaling_governors",
+        "loadavg",
+        "llama_processes_at_attestation",
+        "attestation_status",
+        "attestation_error",
+        "rule_source",
+    ):
+        lines.append(f"  {key}: {_inline(host_health.get(key))}")
+
+    lines.append("")
     lines.append("binary:")
     if binary:
         for k, v in binary.items():
@@ -1654,12 +1950,35 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return 2
 
+    # `--roles` produces a TRUNCATED matrix (`pairs` is emitter-owned and is not
+    # carried forward), so a role-restricted run is by construction not a
+    # decision-grade matrix. It demotes; it never rescues.
+    restriction_blockers = (
+        [
+            "run was role-restricted via --roles "
+            f"({', '.join(sorted(role_filter))}); the emitted `pairs` block is "
+            "truncated to those roles and is not a full matrix"
+        ]
+        if role_filter
+        else []
+    )
+    host_health = _host_health_probe(
+        host_meta=host_meta, extra_blockers=restriction_blockers
+    )
+    if host_health["status"] != HOST_HEALTH_CLEAN:
+        log.warning(
+            "host health %s — matrix will be stamped decision_grade=false: %s",
+            host_health["status"],
+            "; ".join(host_health["decision_grade_blockers"]) or "(no blockers listed)",
+        )
+
     yaml_str = _emit_yaml(
         measured,
         unknown_pairs=skipped,
         topology_hash=topo_hash,
         binary=bin_meta,
         host=host_meta["hostname"],
+        host_health=host_health,
         floor=DEFAULT_FLOOR,
         preserve_sections=preserved,
     )
@@ -1701,6 +2020,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
     status = matrix_status(path, current_topology_hash=current_hash)
     log.info("matrix status: %s (path=%s)", status.value, path)
     log.info("live topology hash: %s", current_hash)
+    for line in describe_matrix_host_health(path):
+        log.info("%s", line)
 
     if status == MatrixStatus.OK:
         m = load_contention_matrix(path)
