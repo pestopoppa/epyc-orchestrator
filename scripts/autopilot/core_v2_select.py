@@ -16,7 +16,7 @@ import sys
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from experiment_journal import DEFAULT_JOURNAL_DIR, ExperimentJournal
 
@@ -464,6 +464,79 @@ def vacuous_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return bad
 
 
+#: A suite needs at least this many rows before "every row shares one `expected`" means
+#: anything. On a 50-row core pool a suite contributes 1-3 rows and constancy is pure
+#: coincidence — which is why `constant_oracle_suites` must be handed the SOURCE pool,
+#: not the selected rows. Measured over the live 79,479-row pool, no suite between 2 and
+#: 19 rows exists, so the threshold is not tuned to dodge a specific suite.
+_CONSTANT_ORACLE_MIN_ROWS = 20
+
+
+def constant_oracle_suites(
+    pool_rows: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Suites whose substring oracle is IDENTICAL on every question in the suite.
+
+    WHY THIS EXISTS (2026-08-12, `mainD`, from an audit of the residual unscoreable rows —
+    epyc-root `artifacts/audit/unscoreable-rows-livecodebench-cruxeval-mah-20260812.md`).
+
+    `vacuous_rows` above asks "is the oracle satisfied by echoing the INPUT?". That caught
+    debugbench and misses its sibling. All 2,360 `livecodebench` rows carry
+    ``expected == "def "`` — 2,349 of them scored by `substring`, so the question asked of
+    the model is "does your answer contain the four characters ``def ``". Every plausible
+    Python answer passes and every wrong one does too. The needle appears in the prompt of
+    only 16 of 2,349 rows and is 4 characters long, so `vacuous_rows` reports nothing
+    actionable for it: a different property, needing a different test.
+
+    That test is informational, not stylistic. An oracle that does not vary across a suite
+    cannot distinguish question 1 from question 2,360, so whatever it measures is a
+    property of the RESPONSE FORMAT, not of the answer. One bit, repeated N times.
+
+    Restricted to the substring family on purpose, and that restriction is what makes the
+    signal readable. Measured over the live pool, five suites have a constant `expected`;
+    three of them are fine because their oracle lives somewhere else entirely —
+    `bigcodebench` (1,140 rows, ``"task_func"``, but 1,139 distinct `test_code`), `usaco`
+    (520 rows, 511 distinct `test_code`), `instruction_precision` (needle in
+    `scoring_config`). Flagging those would train readers to ignore this. The two that
+    remain are `livecodebench` (the real defect) and `needle_parameterized` (25 rows, one
+    fixed needle by design). NIAH is reported rather than allow-listed for the same reason
+    `vacuous_rows` reports it: an enumeration is passed by not being enumerated, and the
+    observation is true — one memorisable needle across every row is worth knowing.
+    """
+    by_suite: dict[str, list[dict[str, Any]]] = {}
+    for row in pool_rows:
+        suite = row.get("suite")
+        if isinstance(suite, str) and suite:
+            by_suite.setdefault(suite, []).append(row)
+
+    flagged: list[dict[str, Any]] = []
+    for suite, rows in sorted(by_suite.items()):
+        if len(rows) < _CONSTANT_ORACLE_MIN_ROWS:
+            continue
+        substring_rows = [
+            r for r in rows
+            if "substring" in str(r.get("scoring_method") or "").lower()
+            or "contains" in str(r.get("scoring_method") or "").lower()
+        ]
+        if not substring_rows:
+            continue
+        expected_values = {
+            r.get("expected") for r in rows
+            if isinstance(r.get("expected"), str) and r.get("expected", "").strip()
+        }
+        if len(expected_values) != 1:
+            continue
+        oracle = next(iter(expected_values))
+        flagged.append({
+            "suite": suite,
+            "rows": len(rows),
+            "substring_scored_rows": len(substring_rows),
+            "expected": oracle,
+            "expected_len": len(oracle),
+        })
+    return flagged
+
+
 def write_core_jsonl(
     *,
     path: Path,
@@ -507,6 +580,31 @@ def write_core_jsonl(
             f"{', '.join(suites)}. Retire these rows or rebuild their oracle before trusting "
             f"this pool. ({len(vacuous) - len(structural)} further rows show short/incidental "
             f"containment; see `vacuous_rows` in the selection report.)",
+            file=sys.stderr,
+        )
+
+    # Computed over the SOURCE pool, not `emitted`: per-suite constancy is meaningless on
+    # 1-3 selected rows, and computing it there would produce a guard that passes because
+    # its input was too small to disagree. Reported only for suites this core actually
+    # draws from — a warning about a suite the pool does not contain is noise that gets
+    # the whole field ignored.
+    emitted_suites = {str(r.get("suite")) for r in emitted}
+    constant_oracles = [
+        entry for entry in constant_oracle_suites(pool_lookup.values())
+        if entry["suite"] in emitted_suites
+    ]
+    report["constant_oracle_suites"] = constant_oracles
+    if constant_oracles:
+        print(
+            "WARNING: this core draws from "
+            f"{len(constant_oracles)} suite(s) whose substring oracle is IDENTICAL on every "
+            "question in the suite, so it grades response FORMAT, not the answer: "
+            + "; ".join(
+                f"{e['suite']} ({e['substring_scored_rows']}/{e['rows']} rows, "
+                f"expected={e['expected']!r})"
+                for e in constant_oracles
+            )
+            + ". See `constant_oracle_suites` in the selection report.",
             file=sys.stderr,
         )
 
