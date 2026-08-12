@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from unittest.mock import MagicMock
 from dataclasses import dataclass, field
@@ -38,19 +40,29 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 
+from orchestration.repl_memory import q_scorer as q_scorer_module
 from orchestration.repl_memory.q_scorer import (
+    DEFAULT_MODEL_REGISTRY_PATH,
     DEFAULT_STACK_PRIORS_PATH,
     FALLBACK_BASELINE_TPS_BY_ROLE,
     FALLBACK_MEMORY_COST_BY_ROLE,
     PRIOR_SOURCE_DEGRADED_FALLBACK,
+    PRIOR_SOURCE_REGISTRY,
+    PRIOR_SOURCE_REGISTRY_BASELINE_TPS_SUBSTITUTED,
+    PRIOR_SOURCE_REGISTRY_OPTIMIZED_TPS,
+    PRIOR_SOURCE_REGISTRY_TPS_UNSEPARATED,
     PRIOR_SOURCE_STACK_PRIORS,
+    ROLE_PERFORMANCE_TPS_FALLBACKS,
     STACK_PRIOR_SCORER_ROLE_ALIASES,
     QScorerPriorSourceError,
     ScoringConfig,
     QScorer,
+    _coerce_tps,
+    _performance_tps,
     descriptor_q_scorer_priors_by_role,
     require_live_q_scorer_stack_priors,
     registry_baseline_tps_by_role,
+    registry_baseline_tps_priors,
     registry_memory_cost_by_role,
     stack_prior_q_scorer_priors_by_role,
     validate_live_q_scorer_prior_sources,
@@ -496,6 +508,294 @@ roles: {}
     def test_config_override(self):
         cfg = ScoringConfig(cost_penalty_lambda=0.5)
         assert cfg.cost_penalty_lambda == 0.5
+
+
+# ===== registry performance t/s provenance (NIB2-57a) =====================
+#
+# `roles.*.performance.optimized_tps` and `roles.*.performance.baseline_tps`
+# are DIFFERENT MEASUREMENTS. The loader used to return
+# `optimized_tps or baseline_tps` as a bare float, so a caller could not tell
+# which one it held — and a role whose two fields happen to be EQUAL was
+# indistinguishable from one genuinely measured under optimization. These tests
+# pin the separation. The numeric result is asserted UNCHANGED on purpose: the
+# fix is provenance, not arithmetic.
+
+
+def _write_registry(path: Path, roles: dict[str, dict[str, Any]]) -> Path:
+    import yaml
+
+    path.write_text(yaml.safe_dump({"server_mode": {}, "roles": roles}, sort_keys=True))
+    return path
+
+
+def _assert_registry_fixture(path: Path, expected_perf: dict[str, dict[str, Any]]) -> None:
+    """Fail loudly if the fixture is not what the test below assumes.
+
+    Without this, every assertion downstream could pass over an EMPTY or
+    mistyped registry: the loader would silently return the fallback table and
+    the test would be vacuous.
+    """
+    import yaml
+
+    data = yaml.safe_load(path.read_text())
+    assert isinstance(data, dict), f"fixture {path} did not parse to a mapping"
+    roles = data.get("roles")
+    assert isinstance(roles, dict) and roles, f"fixture {path} has no roles block"
+    for role, perf in expected_perf.items():
+        assert role in roles, f"fixture {path} is missing role {role!r}"
+        got = roles[role].get("performance")
+        assert isinstance(got, dict), f"fixture {path} role {role!r} has no performance dict"
+        for key, value in perf.items():
+            assert got.get(key) == value, (
+                f"fixture {path} role {role!r} performance.{key} is {got.get(key)!r}, "
+                f"expected {value!r}"
+            )
+        # The roles under test must be ones the loader actually reads.
+        assert role in ROLE_PERFORMANCE_TPS_FALLBACKS, (
+            f"{role!r} is not in ROLE_PERFORMANCE_TPS_FALLBACKS, so the loader "
+            "never reads its performance block and this test would be vacuous"
+        )
+
+
+def _legacy_performance_tps(perf: dict[str, Any]) -> float | None:
+    """The exact pre-2026-08-12 expression, kept to prove the numbers are unchanged."""
+    return _coerce_tps(perf.get("optimized_tps")) or _coerce_tps(perf.get("baseline_tps"))
+
+
+class TestRegistryTpsProvenance:
+    @pytest.fixture(autouse=True)
+    def _reset_warn_once(self):
+        q_scorer_module._warned_tps_provenance_roles.clear()
+        yield
+        q_scorer_module._warned_tps_provenance_roles.clear()
+
+    def test_optimized_and_baseline_are_never_folded_into_each_other(self):
+        distinct = _performance_tps(
+            "worker_vision", {"performance": {"optimized_tps": 112.2, "baseline_tps": 60.0}}
+        )
+        assert distinct is not None
+        assert distinct.value == pytest.approx(112.2)
+        assert distinct.source == PRIOR_SOURCE_REGISTRY_OPTIMIZED_TPS
+        assert distinct.optimized_tps == pytest.approx(112.2)
+        assert distinct.baseline_tps == pytest.approx(60.0)
+        assert distinct.substituted is False
+        assert distinct.unseparated is False
+        assert distinct.carries_optimization_evidence is True
+
+        substituted = _performance_tps(
+            "worker_vision", {"performance": {"baseline_tps": 60.0}}
+        )
+        assert substituted is not None
+        # Numeric behaviour is deliberately UNCHANGED: baseline still stands in.
+        assert substituted.value == pytest.approx(60.0)
+        assert substituted.source == PRIOR_SOURCE_REGISTRY_BASELINE_TPS_SUBSTITUTED
+        assert substituted.optimized_tps is None
+        assert substituted.baseline_tps == pytest.approx(60.0)
+        assert substituted.substituted is True
+        assert substituted.carries_optimization_evidence is False
+        assert substituted.field_path == "roles.worker_vision.performance.baseline_tps"
+
+        assert _performance_tps("worker_vision", {"performance": {}}) is None
+        assert _performance_tps("worker_vision", {"performance": "not-a-dict"}) is None
+
+    def test_coincident_optimized_and_baseline_are_separable(self, tmp_path):
+        """THE coincidence case: two roles, ONE identical float, DIFFERENT meanings.
+
+        `worker_vision` has optimized == baseline == 112.2 (one measurement in
+        two fields, no optimization evidence). `vision_escalation` has a real
+        optimized_tps of 112.2 measured against a distinct 60.0 baseline. The
+        old loader returned 112.2 for both and nothing else, so the two states
+        were indistinguishable. They must not be indistinguishable now.
+        """
+        registry_path = _write_registry(
+            tmp_path / "model_registry.yaml",
+            {
+                "worker_vision": {
+                    "performance": {"optimized_tps": 112.2, "baseline_tps": 112.2}
+                },
+                "vision_escalation": {
+                    "performance": {"optimized_tps": 112.2, "baseline_tps": 60.0}
+                },
+            },
+        )
+        _assert_registry_fixture(
+            registry_path,
+            {
+                "worker_vision": {"optimized_tps": 112.2, "baseline_tps": 112.2},
+                "vision_escalation": {"optimized_tps": 112.2, "baseline_tps": 60.0},
+            },
+        )
+
+        floats = registry_baseline_tps_by_role(registry_path)
+        priors = registry_baseline_tps_priors(registry_path)
+
+        # Precondition: the bare floats really are identical, so nothing below
+        # can be passing merely because the numbers differ.
+        assert floats["worker_vision"] == pytest.approx(112.2)
+        assert floats["vision_escalation"] == pytest.approx(112.2)
+        assert floats["worker_vision"] == floats["vision_escalation"]
+
+        assert priors["worker_vision"].source == PRIOR_SOURCE_REGISTRY_TPS_UNSEPARATED
+        assert priors["vision_escalation"].source == PRIOR_SOURCE_REGISTRY_OPTIMIZED_TPS
+        assert priors["worker_vision"].source != priors["vision_escalation"].source
+        assert priors["worker_vision"].unseparated is True
+        assert priors["worker_vision"].carries_optimization_evidence is False
+        assert priors["vision_escalation"].carries_optimization_evidence is True
+        # Both raw measurements survive on both records.
+        assert priors["worker_vision"].baseline_tps == pytest.approx(112.2)
+        assert priors["vision_escalation"].baseline_tps == pytest.approx(60.0)
+
+    def test_substituted_baseline_is_logged_not_silent(self, tmp_path, caplog):
+        registry_path = _write_registry(
+            tmp_path / "model_registry.yaml",
+            {"worker_vision": {"performance": {"baseline_tps": 60.0}}},
+        )
+        _assert_registry_fixture(registry_path, {"worker_vision": {"baseline_tps": 60.0}})
+
+        with caplog.at_level(logging.WARNING, logger="orchestration.repl_memory.q_scorer"):
+            registry_baseline_tps_priors(registry_path)
+
+        messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any(
+            "worker_vision" in m and "UNOPTIMIZED baseline_tps" in m for m in messages
+        ), f"substitution was not logged; got {messages!r}"
+
+    def test_unseparated_pair_is_logged_not_silent(self, tmp_path, caplog):
+        registry_path = _write_registry(
+            tmp_path / "model_registry.yaml",
+            {"worker_vision": {"performance": {"optimized_tps": 112.2, "baseline_tps": 112.2}}},
+        )
+        _assert_registry_fixture(
+            registry_path, {"worker_vision": {"optimized_tps": 112.2, "baseline_tps": 112.2}}
+        )
+
+        with caplog.at_level(logging.WARNING, logger="orchestration.repl_memory.q_scorer"):
+            registry_baseline_tps_priors(registry_path)
+
+        messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any(
+            "worker_vision" in m and "optimized_tps == baseline_tps" in m for m in messages
+        ), f"unseparated pair was not logged; got {messages!r}"
+
+    def test_substituted_source_reaches_the_caller_visible_prior_channel(self, tmp_path):
+        """Provenance must survive into QScorerPriors.baseline_tps_source_by_role.
+
+        That map is the channel ScoringConfig already exposes, so this is the
+        assertion that the fix reaches a CONSUMER rather than stopping at the
+        loader.
+        """
+        registry_path = _write_registry(
+            tmp_path / "model_registry.yaml",
+            {
+                "worker_vision": {"performance": {"baseline_tps": 60.0}},
+                "vision_escalation": {
+                    "performance": {"optimized_tps": 112.2, "baseline_tps": 112.2}
+                },
+            },
+        )
+        _assert_registry_fixture(
+            registry_path,
+            {
+                "worker_vision": {"baseline_tps": 60.0},
+                "vision_escalation": {"optimized_tps": 112.2, "baseline_tps": 112.2},
+            },
+        )
+
+        priors = descriptor_q_scorer_priors_by_role(
+            descriptor_path=tmp_path / "missing_descriptors.yaml",
+            registry_path=registry_path,
+        )
+
+        assert priors.baseline_tps_by_role["worker_vision"] == pytest.approx(60.0)
+        assert (
+            priors.baseline_tps_source_by_role["worker_vision"]
+            == PRIOR_SOURCE_REGISTRY_BASELINE_TPS_SUBSTITUTED
+        )
+        assert (
+            priors.baseline_tps_source_by_role["vision_escalation"]
+            == PRIOR_SOURCE_REGISTRY_TPS_UNSEPARATED
+        )
+        # Roles the registry did not speak to keep the historical flat label,
+        # so this change does not relabel anything it did not measure.
+        assert priors.baseline_tps_source_by_role["frontdoor"] == PRIOR_SOURCE_REGISTRY
+
+    def test_float_projection_never_drifts_from_the_records(self, tmp_path):
+        registry_path = _write_registry(
+            tmp_path / "model_registry.yaml",
+            {
+                "worker_vision": {"performance": {"optimized_tps": 112.2, "baseline_tps": 112.2}},
+                "vision_escalation": {"performance": {"baseline_tps": 60.0}},
+            },
+        )
+        floats = registry_baseline_tps_by_role(registry_path)
+        priors = registry_baseline_tps_priors(registry_path)
+
+        assert floats, "projection is empty; every assertion below would be vacuous"
+        assert set(floats) == set(priors)
+        assert floats == {role: prior.value for role, prior in priors.items()}
+        # An alias record must not claim to be the canonical role it copied.
+        for role, prior in priors.items():
+            assert prior.role == role
+
+    def test_numeric_behaviour_is_unchanged_on_the_live_registry(self):
+        """The fix must not move any routing number. Proven against real data."""
+        import yaml
+
+        assert DEFAULT_MODEL_REGISTRY_PATH.exists()
+        data = yaml.safe_load(DEFAULT_MODEL_REGISTRY_PATH.read_text())
+        registry_roles = data.get("roles") or {}
+        assert registry_roles, "live registry has no roles block"
+
+        floats = registry_baseline_tps_by_role(DEFAULT_MODEL_REGISTRY_PATH)
+        checked = 0
+        for target_role, registry_role in ROLE_PERFORMANCE_TPS_FALLBACKS.items():
+            record = registry_roles.get(registry_role)
+            if not isinstance(record, dict):
+                continue
+            perf = record.get("performance")
+            if not isinstance(perf, dict):
+                continue
+            legacy = _legacy_performance_tps(perf)
+            if legacy is None:
+                continue
+            assert floats[target_role] == pytest.approx(legacy)
+            checked += 1
+        assert checked >= 2, (
+            f"only {checked} live roles exercised the performance path; "
+            "this test would be vacuous"
+        )
+
+    def test_live_registry_coincidences_are_classified_not_hidden(self):
+        """Today's real registry contains the coincidence case. It must be labelled.
+
+        The antecedent is asserted non-empty, so this cannot pass by finding
+        nothing to check.
+        """
+        import yaml
+
+        data = yaml.safe_load(DEFAULT_MODEL_REGISTRY_PATH.read_text())
+        registry_roles = data.get("roles") or {}
+        priors = registry_baseline_tps_priors(DEFAULT_MODEL_REGISTRY_PATH)
+
+        coincident = []
+        for target_role, registry_role in ROLE_PERFORMANCE_TPS_FALLBACKS.items():
+            perf = (registry_roles.get(registry_role) or {}).get("performance")
+            if not isinstance(perf, dict):
+                continue
+            optimized = _coerce_tps(perf.get("optimized_tps"))
+            baseline = _coerce_tps(perf.get("baseline_tps"))
+            if optimized is not None and baseline is not None and optimized == baseline:
+                coincident.append(target_role)
+
+        assert coincident, (
+            "no live role currently has optimized_tps == baseline_tps; if the "
+            "registry was corrected, keep the synthetic coincidence test above "
+            "and delete this one rather than letting it pass vacuously"
+        )
+        for role in coincident:
+            assert priors[role].source == PRIOR_SOURCE_REGISTRY_TPS_UNSEPARATED
+            assert priors[role].unseparated is True
+            assert priors[role].carries_optimization_evidence is False
 
 
 # ===== _compute_reward without cost metrics (backward compat) =====
