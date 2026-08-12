@@ -630,6 +630,247 @@ def test_restart_role_smoke_failure_rolls_back_without_success_boundary(
     ]
 
 
+# ---------------------------------------------------------------------------
+# W3 health-gate coverage (capability-registry-and-promotion.md).
+#
+# The W3 row's acceptance reads "a deliberately failed health gate rolls back",
+# and until 2026-08-12 nothing exercised it. Measured with
+# `coverage run --include='*config_applicator.py' -m pytest tests/unit/test_config_applicator.py`:
+# the whole `role == "orchestrator"` branch of `restart_role` (the ONLY place the
+# API health gate is consulted) was missing — lines 2221-2223, 2228-2230, 2232 and
+# 2246-2248 — because every existing restart_role test passes a MODEL role, which
+# evaluates `if role == "orchestrator"` False and skips the gate entirely. The
+# rollback tests that do exist induce a *reload* failure or a *smoke* failure, which
+# are different failure sources reaching the same rollback block, so a health-gate
+# regression would have been invisible.
+#
+# These tests induce the failure rather than assume it: `health_check` is replaced
+# with one that returns `HealthCheckResult(ok=False, ...)`. `subprocess.run` is
+# stubbed throughout, so no reload is ever executed against the live stack —
+# reload ownership belongs to the session that owns inference
+# (INC-20260728-reload-preemption), and these must stay pure unit tests.
+
+
+def test_restart_role_health_gate_failure_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dead API after reload must roll back env and journal an error boundary."""
+    events: list[dict[str, object]] = []
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI", "0.02")
+
+    class FakeJournal:
+        def append_role_restart_boundary_event(self, **kwargs):
+            events.append(kwargs)
+            return {"type": "role_restart_boundary", **kwargs}
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        calls.append({"cmd": cmd, "env": env})
+
+    smoke_calls: list[str] = []
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
+    monkeypatch.setattr(
+        applicator,
+        "health_check",
+        lambda _url: applicator.HealthCheckResult(
+            ok=False,
+            failure_reason="connection_refused",
+            failure_detail="All connection attempts failed",
+        ),
+    )
+
+    result = applicator.restart_role(
+        "orchestrator",
+        env_overrides={"ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI": "0.05"},
+        journal=FakeJournal(),
+        smoke_check=lambda role, _affected_roles: smoke_calls.append(role),
+        url="http://testserver",
+    )
+
+    assert result["status"] == "error"
+    # The diagnostics from HealthCheckResult must survive onto the result, or the
+    # caller cannot tell a dead API from a failed smoke completion.
+    assert result["error"] == "connection_refused"
+    assert result["detail"] == "All connection attempts failed"
+    # The gate is ordered BEFORE the canned smoke completion: an unreachable API
+    # must never be asked to serve one.
+    assert smoke_calls == []
+    assert "smoke_check" not in result
+    assert result["rollback"] == {
+        "attempted": True,
+        "status": "ok",
+        "env_keys": ["ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI"],
+    }
+    # Two reloads: the attempt, then the rollback carrying the PRIOR value.
+    assert len(calls) == 2
+    assert calls[0]["env"]["ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI"] == "0.05"
+    assert calls[1]["env"]["ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI"] == "0.02"
+    assert len(events) == 1
+    assert events[0]["status"] == "error"
+    assert events[0]["rollback_status"] == "ok"
+    assert events[0]["role"] == "orchestrator"
+
+
+def test_restart_role_health_ok_smoke_failure_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A healthy /health but a failing canned completion still rolls back."""
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI", "0.02")
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        calls.append({"cmd": cmd, "env": env})
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
+    monkeypatch.setattr(
+        applicator,
+        "health_check",
+        lambda _url: applicator.HealthCheckResult(ok=True),
+    )
+
+    result = applicator.restart_role(
+        "orchestrator",
+        env_overrides={"ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI": "0.05"},
+        smoke_check=lambda _role, _affected_roles: {
+            "status": "error",
+            "error": "canned completion returned no tokens",
+        },
+        url="http://testserver",
+    )
+
+    assert result["status"] == "error"
+    assert result["error"] == "canned completion returned no tokens"
+    # /health passing must NOT overwrite the smoke verdict — a transport-only probe
+    # is green over a server that cannot generate.
+    assert result["smoke_check"]["status"] == "error"
+    assert result["rollback"] == {
+        "attempted": True,
+        "status": "ok",
+        "env_keys": ["ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI"],
+    }
+    assert len(calls) == 2
+    assert calls[1]["env"]["ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI"] == "0.02"
+
+
+def test_restart_role_health_and_smoke_ok_journals_success_without_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both gates green: one reload, a success boundary, and no rollback."""
+    events: list[dict[str, object]] = []
+    calls: list[dict[str, object]] = []
+
+    class FakeJournal:
+        def append_role_restart_boundary_event(self, **kwargs):
+            events.append(kwargs)
+            return {"type": "role_restart_boundary", **kwargs}
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        calls.append({"cmd": cmd, "env": env})
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
+    monkeypatch.setattr(
+        applicator,
+        "health_check",
+        lambda _url: applicator.HealthCheckResult(ok=True),
+    )
+
+    result = applicator.restart_role(
+        "orchestrator",
+        env_overrides={"ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI": "0.05"},
+        journal=FakeJournal(),
+        smoke_check=lambda _role, _affected_roles: True,
+        url="http://testserver",
+    )
+
+    assert result["status"] == "ok"
+    assert result["smoke_check"]["status"] == "ok"
+    assert "rollback" not in result
+    assert len(calls) == 1
+    assert len(events) == 1
+    assert events[0]["status"] == "ok"
+    # `_attach_restart_boundary_event` stringifies, so "no rollback" is "" not None.
+    assert events[0]["rollback_status"] == ""
+
+
+def test_restart_role_rejects_empty_role_before_any_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty role must fail closed, not reload whatever `reload ''` resolves to."""
+    calls: list[object] = []
+    monkeypatch.setattr(
+        applicator.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = applicator.restart_role("   ")
+
+    assert result == {
+        "status": "error",
+        "error": "role is required",
+        "method": "stack_reload",
+    }
+    assert calls == []
+
+
+def test_restart_role_records_registry_restore_failure_and_still_rolls_back_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A failed registry restore is reported, and must not abort the env rollback."""
+    events: list[dict[str, object]] = []
+    calls: list[dict[str, object]] = []
+    registry_path = tmp_path / "model_registry.yaml"
+    registry_path.write_text(
+        yaml.safe_dump({"server_mode": {"worker_general": {"compaction_profile": "default"}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ORCHESTRATOR_WORKER_CALL_BUDGET_CAP", "8")
+
+    class FakeJournal:
+        def append_role_restart_boundary_event(self, **kwargs):
+            events.append(kwargs)
+            return {"type": "role_restart_boundary", **kwargs}
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        calls.append({"cmd": cmd, "env": env})
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(1, cmd)
+
+    def exploding_restore(**_kwargs):
+        raise OSError("registry file vanished under us")
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
+    monkeypatch.setattr(applicator, "_restore_registry_overrides", exploding_restore)
+
+    result = applicator.restart_role(
+        "worker_general",
+        env_overrides={"ORCHESTRATOR_WORKER_CALL_BUDGET_CAP": "12"},
+        registry_overrides={"server_mode.worker_general.compaction_profile": "S8"},
+        registry_path=registry_path,
+        journal=FakeJournal(),
+    )
+
+    assert result["status"] == "error"
+    assert result["rollback"]["registry"] == {
+        "status": "error",
+        "registry_path": str(registry_path),
+        "error": "registry file vanished under us",
+    }
+    # The env rollback is the point: a registry-restore exception must not swallow it.
+    assert result["rollback"]["attempted"] is True
+    assert result["rollback"]["status"] == "ok"
+    assert len(calls) == 2
+    assert calls[1]["env"]["ORCHESTRATOR_WORKER_CALL_BUDGET_CAP"] == "8"
+    assert len(events) == 1
+    assert events[0]["status"] == "error"
+
+
 def test_restart_role_applies_registry_overrides_and_journals_keys(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
