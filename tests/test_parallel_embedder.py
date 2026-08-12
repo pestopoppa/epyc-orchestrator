@@ -30,7 +30,9 @@ class TestEmbedderPoolConfig:
         assert config.embedding_dim == 1024
         assert config.request_timeout == 2.0
         assert config.connect_timeout == 1.0
-        assert config.use_fallback is True
+        # Deliberately False since 26c5220c: fail-open hash fallback poisons the
+        # episodic store during a BGE outage, so the default is now fail-closed.
+        assert config.use_fallback is False
 
     def test_custom_config(self):
         """Test custom configuration."""
@@ -311,13 +313,18 @@ class TestIntegrationWithFAISSStore:
     def test_parallel_embedder_with_faiss_store(self, temp_dir):
         """Test that parallel embedder embeddings work with FAISS store."""
         from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
-        from orchestration.repl_memory.parallel_embedder import ParallelEmbedderClient
+        from orchestration.repl_memory.parallel_embedder import (
+            EmbedderPoolConfig,
+            ParallelEmbedderClient,
+        )
 
         # Create FAISS store with 1024 dims (matching BGE-large)
         store = FAISSEmbeddingStore(path=temp_dir, dim=1024)
 
-        # Create embedder (will use fallback since no servers)
-        client = ParallelEmbedderClient()
+        # Create embedder; opt into the hash fallback explicitly (the default is
+        # fail-closed since 26c5220c) so the test exercises the FAISS integration
+        # without requiring live BGE servers.
+        client = ParallelEmbedderClient(config=EmbedderPoolConfig(use_fallback=True))
 
         # Generate embedding and add to store
         embedding = client.embed_sync("test text for FAISS")
@@ -335,9 +342,13 @@ class TestIntegrationWithFAISSStore:
     def test_dimension_consistency(self, temp_dir):
         """Test dimension consistency between embedder and store."""
         from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
-        from orchestration.repl_memory.parallel_embedder import ParallelEmbedderClient
+        from orchestration.repl_memory.parallel_embedder import (
+            EmbedderPoolConfig,
+            ParallelEmbedderClient,
+        )
 
-        client = ParallelEmbedderClient()
+        # Fallback opt-in for the same reason as above: default is fail-closed.
+        client = ParallelEmbedderClient(config=EmbedderPoolConfig(use_fallback=True))
         store = FAISSEmbeddingStore(path=temp_dir, dim=client.embedding_dim)
 
         # Add multiple embeddings
