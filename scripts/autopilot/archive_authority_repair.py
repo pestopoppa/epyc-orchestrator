@@ -111,9 +111,16 @@ def repair_state_file(
 
     H4: when actually writing, hold the cross-process ``state_write_lock`` across
     the WHOLE read (``_load_state``) -> build -> write so the repair's read and
-    its whole-file overwrite are one atomic critical section that cannot lose a
-    concurrent daemon/dashboard update. Read-only (``write=False``) inspection
-    takes no lock.
+    its whole-file overwrite are one atomic critical section. Read-only
+    (``write=False``) inspection takes no lock.
+
+    The lock is NOT sufficient on its own, and this docstring previously claimed
+    it was ("cannot lose a concurrent daemon update"): it orders writes, it does
+    not stop the AutoPilot daemon persisting its stale in-memory ``pareto_archive``
+    afterwards and silently undoing this repair. ``pareto_archive`` is
+    daemon-owned, so the repair is only durable with the daemon STOPPED —
+    ``state_store.save_state`` now refuses it outright while the daemon holds the
+    singleton lock (see ``state_ownership``).
     """
     lock_cm = state_write_lock(state_path) if write else nullcontext()
     with lock_cm:

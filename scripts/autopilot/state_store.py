@@ -21,6 +21,22 @@ from typing import Any
 
 import yaml
 
+# Ownership enforcement for the whole-file state write below. Re-exported so a
+# caller can `except state_store.DaemonOwnedStateWriteError` without reaching past
+# the writer it is already using.
+try:  # bare-module and package import both work, matching this module's callers
+    from state_ownership import (  # noqa: F401
+        DaemonOwnedStateWriteError,
+        enforce_state_write,
+        record_write as _record_state_ownership_write,
+    )
+except ImportError:  # pragma: no cover - package-relative fallback
+    from scripts.autopilot.state_ownership import (  # type: ignore[no-redef]  # noqa: F401
+        DaemonOwnedStateWriteError,
+        enforce_state_write,
+        record_write as _record_state_ownership_write,
+    )
+
 log = logging.getLogger("autopilot")
 
 LOW_RISK_TYPE_ONLY_BLACKLIST_DENYLIST = {"seed_batch", "deep_eval", "distill_knowledge"}
@@ -126,7 +142,21 @@ def save_state(state_path: Path, state: dict[str, Any]) -> None:
     D2 — strict JSON: non-finite floats are sanitized to null and
     ``allow_nan=False`` forbids bare ``NaN`` / ``Infinity`` tokens, so a saved
     state file is always parseable by strict readers (jq, load_state).
+
+    2026-08-12 — SINGLE-WRITER OWNERSHIP is enforced here rather than left as
+    prose. This function is the one funnel every in-repo whole-file state write
+    passes through (``autopilot.save_state`` reaches it as ``_save_state_impl``;
+    ``archive_authority_repair`` calls it directly), so it is where the ownership
+    question can be asked with both the target path and the payload in hand.
+    :func:`state_ownership.enforce_state_write` raises
+    ``DaemonOwnedStateWriteError`` when a process that does NOT hold the AutoPilot
+    singleton lock would change a daemon-owned field while somebody else does, and
+    quarantines any daemon-owned value this write is about to destroy. The daemon
+    writing its own state is the first thing it allows; see
+    ``state_ownership`` for why the check keys on the kernel-attested lock holder
+    instead of on anything the caller says about itself.
     """
+    enforce_state_write(state_path, state)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = state_path.with_suffix(state_path.suffix + f".tmp.{os.getpid()}")
     payload = json.dumps(_json_sanitize(state), indent=2, default=str, allow_nan=False)
@@ -135,6 +165,10 @@ def save_state(state_path: Path, state: dict[str, Any]) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, state_path)
+    # Baseline for the victim-side detector: what THIS process last committed.
+    # Without it "disk differs from memory" cannot separate the daemon's own
+    # pending change from a third party's committed one.
+    _record_state_ownership_write(state_path, state)
 
 
 def load_blacklist(blacklist_path: Path) -> list[dict[str, Any]]:
