@@ -57,12 +57,33 @@ def _grep(pattern: str) -> list[str]:
 
 
 def test_binding_router_is_still_never_constructed() -> None:
-    """Layer 1. The only `BindingRouter()` in the tree is a docstring example."""
-    hits = [h for h in _grep(r"BindingRouter(")
-            if not h.startswith("src/routing_bindings.py:19:")]
-    assert hits == [], (
-        "A BindingRouter is now constructed somewhere:\n  " + "\n  ".join(hits)
-        + _FINISH_THE_CHAIN)
+    """Layer 1. The only `BindingRouter()` in the tree is a docstring example.
+
+    CONTENT-ANCHORED, not line-anchored (`auditor` review, 2026-08-12). The first
+    version excluded the literal string `src/routing_bindings.py:19:`, which
+    false-FAILS the moment anyone adds a line above that docstring — never a false
+    PASS, so it was safe, but a tripwire that cries wolf on a cosmetic edit is a
+    tripwire someone eventually deletes. This parses instead: a construction inside a
+    STRING (the module's Usage example) is not a construction.
+    """
+    import ast
+
+    real = []
+    for hit in _grep(r"BindingRouter("):
+        path = hit.split(":", 1)[0]
+        src = (REPO / path).read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:                                   # pragma: no cover
+            real.append(hit + "  (unparseable — check by hand)")
+            continue
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "BindingRouter"):
+                real.append(f"{path}:{node.lineno}")
+    assert real == [], (
+        "A BindingRouter is now CONSTRUCTED in code (not merely named in a "
+        "docstring):\n  " + "\n  ".join(real) + _FINISH_THE_CHAIN)
 
 
 def test_binding_router_is_still_never_assigned() -> None:
@@ -81,7 +102,9 @@ def test_the_one_production_caller_still_omits_binding_router() -> None:
     rotted — the file moved to `src/api/routes/` and the function the row names was
     deleted. Line numbers are a hint; the call is the identity.
     """
-    src = (REPO / "src/api/routes/chat_routing.py").read_text(encoding="utf-8")
+    raw = (REPO / "src/api/routes/chat_routing.py").read_text(encoding="utf-8")
+    # Whitespace-normalised so a linter rewrapping the call does not false-FAIL.
+    src = " ".join(raw.split())
     assert "_classify_and_route(prompt, context, has_image=has_image)" in src, (
         "The production call site changed shape. Re-read it: if it now passes "
         "binding_router, the feature may finally be live — verify the whole chain."
