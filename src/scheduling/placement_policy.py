@@ -19,7 +19,7 @@ What does NOT ship here (deferred to full WP-5):
     existing full-first preference (that's WP-2 + WP-3).
 
 Conservative default justification: `SOLO_PREFER_FULL` mirrors the current
-dispatcher's behavior (try full first, then disjoint quarters). Every role
+dispatcher's behavior (try full first, then disjoint split regions). Every role
 keeps its observed-2026-05-25 placement until WP-5 ratifies a different
 value. No live behavior changes when this module is added.
 
@@ -29,7 +29,15 @@ Cross-ref: handoffs/active/within-role-placement-state-machine.md § Phase 5
 from __future__ import annotations
 
 import enum
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# One-shot guard: the live-config import is attempted on every dispatch, so an
+# unconditional warning would spam. We only need the first one — it is the
+# report that the fleet is running defaults it was never configured with.
+_live_config_warned = False
 
 
 class RolePlacementPolicy(str, enum.Enum):
@@ -41,15 +49,16 @@ class RolePlacementPolicy(str, enum.Enum):
     Semantics (consumed by WP-2 placement state machine + WP-3 migration
     trigger; not yet acted on as of WP-5 scaffold):
       * SOLO_PREFER_FULL — current behavior. Solo requests prefer the full
-        instance for peak per-request latency; concurrent requests spill
-        to NUMA-disjoint quarters. Migration may evict full→quarter under
-        load (WP-3). This is the conservative default.
+        instance for peak per-request latency; concurrent requests spill to
+        the topology's NUMA-disjoint split instances (halves as of the
+        2026-07-30 cutover; quarters historically). Migration may evict
+        full→split under load (WP-3). This is the conservative default.
       * BURST_PREFER_SPLIT — at N≥2, prefer the topology's sub-full instances
         even when full is free. Avoids paying the migration cost on every load
         transition. Single requests still go to full when load is 0.
       * FULL_DISABLED — never place on full; split instances only. Reclaims the
         full instance's mlock at the cost of solo per-request latency.
-        Useful for roles whose full overlaps all quarters (worker_general).
+        Useful for roles whose full overlaps every split region (worker_general).
       * QUEUE_ONLY — single-flight per role; no concurrent placement at
         all. Effectively N=1 with a queue. Diagnostic / fallback mode.
     """
@@ -153,8 +162,11 @@ def get_placement_policy(role: str, numa_config: Optional[dict] = None) -> RoleP
          if importable.
       3. `DEFAULT_PLACEMENT_POLICY` (= SOLO_PREFER_FULL).
 
-    Unknown role → default. Malformed value → default + (callers can log if
-    they care).
+    An ABSENT policy (unknown role, missing key, None, empty string) resolves
+    to `DEFAULT_PLACEMENT_POLICY`. A value that WAS configured but cannot be
+    mapped RAISES — see `_coerce`. Do not reintroduce a fallback here: the
+    default is not "no policy", it is a different one, and substituting it for
+    a typo is the fail-open shape this module exists to prevent.
     """
     if numa_config is not None:
         cfg = numa_config.get(role) if numa_config else None
@@ -162,7 +174,21 @@ def get_placement_policy(role: str, numa_config: Optional[dict] = None) -> RoleP
         try:
             from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
             cfg = NUMA_CONFIG.get(role)
-        except Exception:
+        except Exception as exc:
+            # Not fatal: an absent live config is legitimate (tests, tooling
+            # imported outside the server tree). But it is NOT silent — if this
+            # import breaks in production, EVERY role resolves to
+            # DEFAULT_PLACEMENT_POLICY, which is the same fail-open degradation
+            # `_coerce` refuses, just applied fleet-wide instead of per-role.
+            global _live_config_warned
+            if not _live_config_warned:
+                _live_config_warned = True
+                logger.warning(
+                    "placement_policy: live NUMA_CONFIG unavailable (%s: %s); "
+                    "every role now resolves to the default %r until this is "
+                    "fixed. Configured per-role policies are NOT in effect.",
+                    type(exc).__name__, exc, DEFAULT_PLACEMENT_POLICY.value,
+                )
             cfg = None
 
     if not cfg:
