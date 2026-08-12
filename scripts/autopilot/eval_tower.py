@@ -1650,12 +1650,104 @@ def _runtime_facts_stack_numa_mode() -> str | None:
     return None
 
 
+# Sentinel for "the stack NUMA mode governing eval fan-out could not be
+# determined". It is deliberately NOT a member of VALID_STACK_NUMA_MODES so it
+# can never be mistaken for a declared mode.
+_EVAL_FANOUT_UNKNOWN_MODE = "unknown"
+
+
+def _valid_stack_numa_modes() -> frozenset[str]:
+    """The launcher's stack NUMA-mode vocabulary, read from its owner.
+
+    ``scripts/server/stack_numa_mode.py`` is the single definition (and it is
+    what ``orchestrator_stack.py --numa-mode`` validates against). Imported
+    lazily so this module stays import-safe outside the orchestrator tree; the
+    literal is a last-resort mirror, not a second source of truth.
+
+    NOTE: ``half`` is NOT a mode. It is a cpu_shape_class (stack_numa.py
+    ``_SHAPE_CLASSES``). On the current 1-full + 2-halves fleet the halves are
+    the "quarter" (non-full sibling) instances in MODE terms.
+    """
+    try:
+        from scripts.server.stack_numa_mode import (  # type: ignore[import-not-found]
+            VALID_STACK_NUMA_MODES,
+        )
+
+        return frozenset(VALID_STACK_NUMA_MODES)
+    except Exception:
+        return frozenset({"full", "quarter", "both"})
+
+
+def _resolve_stack_numa_mode_for_fanout(raw: object) -> tuple[str, str]:
+    """Classify a raw stack NUMA mode into ``(mode, reason)`` for fan-out sizing.
+
+    ``mode`` is a member of ``VALID_STACK_NUMA_MODES`` when the value is
+    recognised, otherwise ``_EVAL_FANOUT_UNKNOWN_MODE``. ``reason`` is one of
+    ``declared`` / ``unset`` / ``unrecognised``.
+
+    This exists so "I could not tell what the fleet is" is a STRUCTURAL result
+    rather than an implicit fall-through. The predecessor was
+    ``str(mode or "").strip().lower() == "quarter"``: an equality test against
+    one mode whose else-branch silently absorbed ``full``, ``both``, unset AND
+    typos into the same conservative answer, so a fan-out of 1 could not be
+    distinguished from a fan-out of 1 that means "unknown fleet".
+    """
+    text = "" if raw is None else str(raw).strip().lower()
+    if not text:
+        return (_EVAL_FANOUT_UNKNOWN_MODE, "unset")
+    if text in _valid_stack_numa_modes():
+        return (text, "declared")
+    return (_EVAL_FANOUT_UNKNOWN_MODE, "unrecognised")
+
+
+def _full_first_live_concurrency(
+    live_regions: Sequence[frozenset[str]], topology_cap: int
+) -> int:
+    """Largest disjoint live set reachable under the dispatcher's full-first policy.
+
+    Instance 0 is the full instance by NUMA_CONFIG convention, so it is always
+    accepted first and everything overlapping it is excluded — which is why the
+    result is 1 whenever the full instance is live and covers every region.
+    Bounded by ``topology_cap`` (``compute_max_safe_concurrency``).
+    """
+    if topology_cap <= 1 or not live_regions:
+        return 1
+
+    accepted_union: set[str] = set(live_regions[0])
+    live_cap = 1
+    for regions in sorted(
+        live_regions[1:],
+        key=lambda r: (bool(accepted_union & r), sorted(r)),
+    ):
+        if not regions or accepted_union & regions:
+            continue
+        accepted_union |= regions
+        live_cap += 1
+        if live_cap >= topology_cap:
+            break
+    return max(1, min(topology_cap, live_cap))
+
+
 def _live_safe_concurrency(role: str, topology_cap: int) -> int:
     """Bound eval fan-out by the currently reachable role instances.
 
     Static topology can say a role is safe at N>1 while the live stack is
     intentionally launched in full-only mode. In that case, concurrent evals
     pile onto one llama-server and can corrupt evidence with 5xx/timeouts.
+
+    Per-mode semantics (modes: ``full`` / ``quarter`` / ``both``):
+      * ``quarter`` — the full instance is NOT launched, so the full-first
+        dispatcher policy has nothing to bind to and the ceiling is the largest
+        disjoint subset of the LIVE instances. Deliberately not bounded by
+        ``topology_cap``, which models full-first.
+      * ``full`` — only the full instance is live; one live instance, cap 1.
+      * ``both`` — full AND siblings live; full-first binds, so the cap is the
+        ``topology_cap``-bounded greedy from the full instance.
+      * unset / unrecognised — the conservative ``both`` bound is used, but it
+        is reported LOUDLY (see below), because a cap of 1 that means "could
+        not determine the fleet mode" is otherwise indistinguishable from a cap
+        of 1 that means "one usable slot". WP-14's fail-closed value is kept;
+        only its silence is removed.
     """
     if os.environ.get("AUTOPILOT_EVAL_REQUIRE_LIVE_FLEET", "1") == "0":
         return topology_cap
@@ -1685,34 +1777,54 @@ def _live_safe_concurrency(role: str, topology_cap: int) -> int:
 
     if not live_regions:
         return 1
+    if len(live_regions) == 1:
+        # Exactly one live instance: the cap is 1 by construction and no NUMA
+        # mode can raise it. Return before mode resolution so single-instance
+        # roles (architect_general, worker_vision, ...) never raise a spurious
+        # "unknown fleet mode" alarm.
+        return 1
 
-    stack_numa_mode = _runtime_facts_stack_numa_mode()
-    if stack_numa_mode is None:
-        stack_numa_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
+    raw_stack_numa_mode = _runtime_facts_stack_numa_mode()
+    if raw_stack_numa_mode is None:
+        raw_stack_numa_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
+    stack_numa_mode, mode_reason = _resolve_stack_numa_mode_for_fanout(raw_stack_numa_mode)
 
-    if str(stack_numa_mode or "").strip().lower() == "quarter":
+    if stack_numa_mode == "quarter":
         return compute_max_disjoint_live_concurrency(
             NUMA_CONFIG,
             role,
             live_ports=live_ports,
         )
 
-    if topology_cap <= 1:
-        return 1
+    bounded = _full_first_live_concurrency(live_regions, topology_cap)
 
-    accepted_union: set[str] = set(live_regions[0])
-    live_cap = 1
-    for regions in sorted(
-        live_regions[1:],
-        key=lambda r: (bool(accepted_union & r), sorted(r)),
-    ):
-        if not regions or accepted_union & regions:
-            continue
-        accepted_union |= regions
-        live_cap += 1
-        if live_cap >= topology_cap:
-            break
-    return max(1, min(topology_cap, live_cap))
+    if stack_numa_mode == _EVAL_FANOUT_UNKNOWN_MODE:
+        # FAIL LOUD. The value returned is still the conservative full-first
+        # bound (WP-14 fail-closed), but an undetermined mode is a
+        # misconfiguration, not a measurement, and it silently costs fan-out.
+        try:
+            disjoint = compute_max_disjoint_live_concurrency(
+                NUMA_CONFIG, role, live_ports=live_ports
+            )
+        except Exception:
+            disjoint = bounded
+        log.error(
+            "eval fan-out: stack NUMA mode %s (raw=%r); role=%r holding the "
+            "conservative full-first bound N=%d while the largest disjoint LIVE "
+            "subset is %d (live ports %s). This N means 'could not determine the "
+            "fleet mode', NOT a measured slot ceiling — set "
+            "ORCHESTRATOR_STACK_NUMA_MODE to one of %s or repair the "
+            "runtime-facts manifest.",
+            mode_reason,
+            raw_stack_numa_mode,
+            role,
+            bounded,
+            disjoint,
+            sorted(live_ports),
+            "/".join(sorted(_valid_stack_numa_modes())),
+        )
+
+    return bounded
 
 
 def _forced_roles_for_questions(questions: Sequence[Mapping[str, Any]]) -> list[str]:
