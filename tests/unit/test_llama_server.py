@@ -273,11 +273,14 @@ class TestLlamaServerBackend:
             "content": "Hello world",
             "tokens_predicted": 5,
             "tokens_evaluated": 10,
-            "tokens_cached": 3,
             "timings": {
                 "prompt_ms": 100.0,
                 "predicted_ms": 50.0,
                 "predicted_per_second": 33.0,
+                # v9: cache_n is the true KV-reuse hit count (tokens_cached is
+                # the total slot occupancy — counting it as hits inflated
+                # cache_hits on every request).
+                "cache_n": 3,
             },
         }
 
@@ -293,7 +296,7 @@ class TestLlamaServerBackend:
         assert result.prompt_eval_ms == 100.0
         assert result.generation_ms == 50.0
         assert result.predicted_per_second == 33.0
-        assert backend.cache_stats.cache_hits == 1  # cached_tokens > 0
+        assert backend.cache_stats.cache_hits == 1  # cache_n > 0
 
     def test_infer_returns_completion_probabilities_when_present(self, role_config):
         backend = LlamaServerBackend(base_url="http://test:8080")
@@ -306,12 +309,12 @@ class TestLlamaServerBackend:
             "content": "Hello world",
             "tokens_predicted": 5,
             "tokens_evaluated": 10,
-            "tokens_cached": 0,
             "completion_probabilities": rows,
             "timings": {
                 "prompt_ms": 100.0,
                 "predicted_ms": 50.0,
                 "predicted_per_second": 33.0,
+                "cache_n": 0,
             },
         }
 
@@ -340,7 +343,6 @@ class TestLlamaServerBackend:
             "content": "OK",
             "tokens_predicted": 1,
             "tokens_evaluated": 5,
-            "tokens_cached": 0,
             "completion_probabilities": [
                 {
                     "content": "O",
@@ -354,6 +356,7 @@ class TestLlamaServerBackend:
                 "prompt_ms": 100.0,
                 "predicted_ms": 50.0,
                 "predicted_per_second": 20.0,
+                "cache_n": 0,
             },
         }
 
@@ -694,8 +697,9 @@ class TestLlamaServerBackend:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = [
-            {"id": 0, "state": "idle", "n_past": 100, "n_cache": 50},
-            {"id": 1, "state": "processing", "n_past": 200, "n_cache": 0},
+            # llama.cpp v9 field names (n_prompt_tokens / n_prompt_tokens_cache)
+            {"id": 0, "state": "idle", "n_prompt_tokens": 100, "n_prompt_tokens_cache": 50},
+            {"id": 1, "state": "processing", "n_prompt_tokens": 200, "n_prompt_tokens_cache": 0},
         ]
 
         with patch.object(backend.client, "get", return_value=mock_response):
@@ -708,6 +712,25 @@ class TestLlamaServerBackend:
         assert slots[0].cache_tokens == 50
         assert slots[1].slot_id == 1
         assert slots[1].state == "processing"
+        assert slots[1].prompt_tokens == 200
+        assert slots[1].cache_tokens == 0
+
+    def test_get_slots_legacy_field_fallback(self):
+        """Legacy n_past/n_cache fields fall back to zero (no crash) on v9."""
+        backend = LlamaServerBackend(base_url="http://test:8080")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [
+            {"id": 0, "state": "idle", "n_past": 100, "n_cache": 50},
+        ]
+
+        with patch.object(backend.client, "get", return_value=mock_response):
+            slots = backend.get_slots()
+
+        assert len(slots) == 1
+        assert slots[0].prompt_tokens == 0
+        assert slots[0].cache_tokens == 0
 
     def test_save_slot_success(self):
         """Test saving slot state."""

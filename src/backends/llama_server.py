@@ -347,7 +347,6 @@ class LlamaServerBackend(ModelBackend):
             output = result_data.get("content", "")
             tokens_generated = result_data.get("tokens_predicted", 0)
             prompt_tokens = result_data.get("tokens_evaluated", 0)
-            cached_tokens = result_data.get("tokens_cached", 0)
             completion_reason = str(
                 result_data.get("stop_type")
                 or result_data.get("finish_reason")
@@ -359,6 +358,16 @@ class LlamaServerBackend(ModelBackend):
             prompt_eval_ms = timings.get("prompt_ms", 0.0)
             generation_ms = timings.get("predicted_ms", 0.0)
             predicted_per_second = timings.get("predicted_per_second", 0.0)
+
+            # Cache-hit count: llama.cpp's `timings.cache_n` is the true
+            # number of prompt tokens reused from the KV cache (server-task
+            # result_timings.cache_n = n_prompt_tokens_cache). The legacy
+            # `tokens_cached` response field is the TOTAL tokens held in the
+            # slot after the request (slot.prompt.n_tokens()), which is
+            # non-zero for essentially every non-empty prompt — counting it
+            # as a hit inflated cache_hits on nearly every request (RTE-Prefix
+            # measurement defect, fixed 2026-08-13).
+            cached_tokens = timings.get("cache_n", 0)
 
             # Compute server-side overhead (HTTP round-trip minus reported inference)
             inference_ms = prompt_eval_ms + generation_ms
@@ -909,7 +918,9 @@ class LlamaServerBackend(ModelBackend):
                         timings = data.get("timings", {})
                         tokens_generated = data.get("tokens_predicted", 0)
                         prompt_tokens = data.get("tokens_evaluated", 0)
-                        cached_tokens = data.get("tokens_cached", 0)
+                        # cache_n = true KV-reuse hit count (see non-streaming
+                        # path for the tokens_cached-vs-cache_n defect history).
+                        cached_tokens = timings.get("cache_n", 0)
                         completion_reason = str(
                             data.get("stop_type")
                             or data.get("finish_reason")
@@ -1179,11 +1190,18 @@ class LlamaServerBackend(ModelBackend):
 
             result = []
             for slot in slots_data:
+                # Field names are from llama.cpp production-consolidated-v9
+                # (server-context.cpp server_slot::to_json): n_prompt_tokens =
+                # total prompt tokens, n_prompt_tokens_cache = tokens reused
+                # from KV cache (the hit count), n_prompt_tokens_processed =
+                # tokens actually evaluated. The legacy n_past/n_cache names
+                # stopped existing upstream and always read 0 here (measurement
+                # defect, fixed 2026-08-13 under RTE-Prefix).
                 info = SlotInfo(
                     slot_id=slot.get("id", 0),
                     state=slot.get("state", "unknown"),
-                    prompt_tokens=slot.get("n_past", 0),
-                    cache_tokens=slot.get("n_cache", 0),
+                    prompt_tokens=slot.get("n_prompt_tokens", 0),
+                    cache_tokens=slot.get("n_prompt_tokens_cache", 0),
                     last_access=time.time(),
                 )
                 result.append(info)

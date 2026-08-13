@@ -449,9 +449,9 @@ class TestInferStreamTextSSE:
             'data: {"content": "Hello"}',
             'data: {"content": " world"}',
             'data: {"content": "!", "stop": true, "tokens_predicted": 3, '
-            '"tokens_evaluated": 5, "tokens_cached": 2, '
+            '"tokens_evaluated": 5, '
             '"timings": {"prompt_ms": 50.0, "predicted_ms": 100.0, '
-            '"predicted_per_second": 30.0}}',
+            '"predicted_per_second": 30.0, "cache_n": 2}}',
         ]
 
         # Create a mock streaming response
