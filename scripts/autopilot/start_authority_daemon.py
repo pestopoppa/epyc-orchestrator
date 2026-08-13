@@ -18,6 +18,10 @@ import subprocess
 import sys
 from typing import Any
 
+from planner_roster import (
+    DEFAULT_ROSTER, ROSTER_ENV_KEYS, apply_roster, validate_active_environment,
+)
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ORCH_ROOT = SCRIPT_DIR.parents[1]
@@ -100,6 +104,10 @@ AUTHORITY_ENV: dict[str, str] = {
     "AUTOPILOT_PLANNER_HINTS": "1",
     "AUTOPILOT_TOOL_SENTINELS": "1",
     "AUTOPILOT_STEPPING_STONES": "1",
+    # Temporary operator policy: Claude weekly tokens are exhausted. The
+    # content-hashed roster supplies exactly two Codex planner roles and no
+    # Claude fallback; the daemon validates the seal again at process boot.
+    "AUTOPILOT_PLANNER_ROSTER_POLICY_ACTIVE": "1",
     # staged-multitier-v1: T1 screens; matched T2/T3 evidence is binding
     # before the final fresh T1 baseline-promotion draw.
     "AUTOPILOT_MULTITIER_PROMOTION": "1",
@@ -118,12 +126,18 @@ LOCAL_PLANNER_DEFAULT_ENV: dict[str, str] = {
 }
 
 
-def authority_env(base: dict[str, str] | None = None) -> dict[str, str]:
+def authority_env(
+    base: dict[str, str] | None = None,
+    *,
+    planner_roster: str | Path = DEFAULT_ROSTER,
+) -> dict[str, str]:
     """Return an environment with required Fable authority keys enforced."""
     env = dict(os.environ if base is None else base)
     env.update(AUTHORITY_ENV)
     for key, value in LOCAL_PLANNER_DEFAULT_ENV.items():
         env.setdefault(key, value)
+    env = apply_roster(env, planner_roster)
+    validate_active_environment(env)
     if REPO_READINESS_PICKUP_ENV not in env:
         pickup = latest_repo_readiness_pickup(env)
         if pickup is not None:
@@ -211,6 +225,7 @@ def _env_subset(env: dict[str, str]) -> dict[str, str]:
     keys = set(AUTHORITY_ENV)
     keys.update(LOCAL_PLANNER_DEFAULT_ENV)
     keys.add(REPO_READINESS_PICKUP_ENV)
+    keys.update(ROSTER_ENV_KEYS)
     return {key: env[key] for key in sorted(keys) if key in env}
 
 
@@ -258,6 +273,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--supervisor-max-restarts", type=int, default=3)
     parser.add_argument("--supervisor-restart-delay-s", type=float, default=30.0)
     parser.add_argument(
+        "--planner-roster",
+        type=Path,
+        default=DEFAULT_ROSTER,
+        help="Sealed planner provider/model/effort roster for this full launch.",
+    )
+    parser.add_argument(
         "--preflight",
         action="store_true",
         help=(
@@ -288,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(advice, indent=2, sort_keys=True))
         return 0 if advice.get("pid_age_verified_landed") else 1
 
-    env = authority_env()
+    env = authority_env(planner_roster=args.planner_roster)
     extra_args = list(args.autopilot_args or [])
     if extra_args and extra_args[0] == "--":
         extra_args = extra_args[1:]

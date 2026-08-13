@@ -13,6 +13,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import autopilot  # type: ignore[import-not-found]  # noqa: E402
+import planner_roster  # type: ignore[import-not-found]  # noqa: E402
 from src.autopilot_core.authority_consent import SEQ_P0_2_BRIDGE_CONSENT  # noqa: E402
 
 
@@ -22,8 +23,8 @@ def test_startup_attestation_reports_gate_env_and_config_hash(monkeypatch, tmp_p
     monkeypatch.setenv("AUTOPILOT_AUTHORITY_CONSENT_PATH", str(grant))
     for key, value in autopilot.AUTOPILOT_REQUIRED_GATE_ENV.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setenv("AUTOPILOT_PLANNER_PRIMARY", "local_ingest")
-    monkeypatch.setenv("AUTOPILOT_PLANNER_CRITIC", "local_frontdoor")
+    for key, value in planner_roster.apply_roster({}, planner_roster.DEFAULT_ROSTER).items():
+        monkeypatch.setenv(key, value)
     monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "0")
 
     payload = autopilot._startup_attestation_payload()
@@ -31,7 +32,7 @@ def test_startup_attestation_reports_gate_env_and_config_hash(monkeypatch, tmp_p
     assert payload["missing_or_mismatch"] == {}
     assert len(payload["config_hash"]) == 64
     assert payload["gate_env"]["AUTOPILOT_TOOL_SENTINELS"] == "1"
-    assert payload["gate_env"]["AUTOPILOT_PLANNER_PRIMARY"] == "local_ingest"
+    assert payload["gate_env"]["AUTOPILOT_PLANNER_PRIMARY"] == "codex"
     assert payload["gate_env"]["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "0"
     assert payload["p0_2_bridge"]["enabled"] is True
 
@@ -47,6 +48,8 @@ def test_startup_attestation_marks_bare_start_gate_gaps(monkeypatch) -> None:
 
 def test_startup_attestation_marks_spend_breaker_on_as_mismatch(monkeypatch) -> None:
     for key, value in autopilot.AUTOPILOT_REQUIRED_GATE_ENV.items():
+        monkeypatch.setenv(key, value)
+    for key, value in planner_roster.apply_roster({}, planner_roster.DEFAULT_ROSTER).items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "1")
 

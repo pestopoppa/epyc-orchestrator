@@ -20,6 +20,8 @@ from typing import Any, Protocol
 
 import httpx
 
+from planner_roster import provider_allowed
+
 from controller_io import (
     _append_planner_archive,
     _open_planner_tap,
@@ -260,6 +262,7 @@ class CodexPlannerProvider:
     ) -> None:
         self._binary = binary_path or os.environ.get("AUTOPILOT_CODEX_BINARY", "codex")
         self._model = model or os.environ.get("AUTOPILOT_CODEX_MODEL")
+        self._effort = os.environ.get("AUTOPILOT_CODEX_EFFORT")
         self.name = name or self.name
 
     def invoke(
@@ -295,6 +298,8 @@ class CodexPlannerProvider:
             ]
             if self._model:
                 cmd[3:3] = ["-m", self._model]
+            if self._effort:
+                cmd[3:3] = ["--config", f'model_reasoning_effort="{self._effort}"']
             if tap is not None:
                 _tap_write(
                     tap,
@@ -1006,6 +1011,10 @@ Original controller prompt length: {original_prompt_chars} chars.
 
 def get_planner_provider(name: str) -> PlannerProvider:
     normalized = (name or "").strip().lower()
+    if not provider_allowed(normalized, os.environ):
+        raise RuntimeError(
+            f"planner provider {normalized!r} is forbidden by the active sealed roster"
+        )
     if normalized == "claude":
         return ClaudePlannerProvider()
     if normalized == "codex":

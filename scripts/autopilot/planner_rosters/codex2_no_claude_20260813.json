@@ -1,0 +1,15 @@
+{
+  "cells": [
+    {"effort": "high", "model": "gpt-5.6-sol", "provider": "codex", "role": "draft"},
+    {"effort": "high", "model": "gpt-5.6-sol", "provider": "codex_critic", "role": "critic"}
+  ],
+  "constraints": {
+    "claude_planner_count": 0,
+    "codex_planner_count": 2,
+    "fail_closed": true,
+    "planner_count": 2
+  },
+  "expires_when": "operator clears the 2026-08-13 Claude weekly-token exhaustion policy",
+  "policy_id": "autopilot-codex2-no-claude-20260813",
+  "schema": "epyc.autopilot.planner_roster.v1"
+}

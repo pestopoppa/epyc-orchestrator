@@ -8,6 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "autopilot" / "start_authority_daemon.py"
+sys.path.insert(0, str(SCRIPT.parent))
 spec = importlib.util.spec_from_file_location("start_authority_daemon", SCRIPT)
 assert spec is not None and spec.loader is not None
 launcher = importlib.util.module_from_spec(spec)
@@ -40,7 +41,7 @@ def test_authority_env_forces_required_flags() -> None:
     assert env["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "0"
 
 
-def test_authority_env_defaults_to_claude_codex_planner_without_overriding() -> None:
+def test_authority_env_enforces_sealed_two_codex_zero_claude_roster() -> None:
     env = launcher.authority_env(
         {
             "AUTOPILOT_PLANNER_PRIMARY": "claude",
@@ -48,9 +49,13 @@ def test_authority_env_defaults_to_claude_codex_planner_without_overriding() -> 
         }
     )
 
-    assert env["AUTOPILOT_PLANNER_PRIMARY"] == "claude"
+    assert env["AUTOPILOT_PLANNER_PRIMARY"] == "codex"
     assert env["AUTOPILOT_PLANNER_CRITIC"] == "codex_critic"
-    assert env["AUTOPILOT_PLANNER_CRITIC_FALLBACK"] == "claude"
+    assert env["AUTOPILOT_PLANNER_CRITIC_FALLBACK"] == "none"
+    assert env["AUTOPILOT_CODEX_MODEL"] == "gpt-5.6-sol"
+    assert env["AUTOPILOT_CODEX_EFFORT"] == "high"
+    assert env["AUTOPILOT_PLANNER_ROSTER_POLICY_ACTIVE"] == "1"
+    assert len(env["AUTOPILOT_PLANNER_ROSTER_SHA256"]) == 64
     assert env["AUTOPILOT_PLANNER_SPEND_BREAKER_PRIMARY"] == "local_frontdoor"
     assert env["AUTOPILOT_PLANNER_SPEND_BREAKER_CRITIC"] == "local_ingest"
     assert env["AUTOPILOT_LOCAL_PLANNER_ROLE"] == "ingest_long_context"
@@ -59,7 +64,7 @@ def test_authority_env_defaults_to_claude_codex_planner_without_overriding() -> 
     assert env["AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS"] == "4096"
 
     default_env = launcher.authority_env({})
-    assert default_env["AUTOPILOT_PLANNER_PRIMARY"] == "claude"
+    assert default_env["AUTOPILOT_PLANNER_PRIMARY"] == "codex"
     assert default_env["AUTOPILOT_PLANNER_CRITIC"] == "codex_critic"
 
 

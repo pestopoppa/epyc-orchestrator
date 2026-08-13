@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
@@ -881,6 +883,7 @@ def test_codex_provider_uses_current_read_only_cli(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
     monkeypatch.setattr(planner_providers, "_archive_codex_call", lambda *a, **k: None)
     monkeypatch.setattr(planner_providers.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("AUTOPILOT_CODEX_EFFORT", "high")
 
     provider = planner_providers.CodexPlannerProvider(
         binary_path="codex",
@@ -893,6 +896,8 @@ def test_codex_provider_uses_current_read_only_cli(monkeypatch, tmp_path) -> Non
         "codex",
         "exec",
         "--json",
+        "--config",
+        'model_reasoning_effort="high"',
         "-m",
         "test-model",
         "-s",
@@ -902,6 +907,12 @@ def test_codex_provider_uses_current_read_only_cli(monkeypatch, tmp_path) -> Non
     assert "--full-auto" not in captured["cmd"]
     assert captured["input"] == "prompt"
     assert captured["timeout"] == 7
+
+
+def test_active_roster_refuses_claude_before_provider_construction(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_PLANNER_ROSTER_POLICY_ACTIVE", "1")
+    with pytest.raises(RuntimeError, match="forbidden by the active sealed roster"):
+        planner_providers.get_planner_provider("claude")
 
 
 def test_codex_provider_uses_configured_default_model_when_unspecified(

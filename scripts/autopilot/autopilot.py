@@ -64,6 +64,7 @@ from src.autopilot_core.journal_reconstruction import (
 from src.autopilot_core.journal_snapshot_replay import archive_payload_from_verified_snapshot
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
+from planner_roster import PlannerRosterError, validate_active_environment
 from pareto_archive import (
     ParetoArchive,
     ParetoArchive as _ConcreteParetoArchive,
@@ -418,6 +419,7 @@ def _required_gate_env() -> dict[str, str]:
         "AUTOPILOT_TOOL_SENTINELS",
         "AUTOPILOT_STEPPING_STONES",
         "AUTOPILOT_PLANNER_SPEND_BREAKER",
+        "AUTOPILOT_PLANNER_ROSTER_POLICY_ACTIVE",
     )
     try:
         import importlib.util as _ilu
@@ -5217,6 +5219,11 @@ def _startup_attestation_payload() -> dict[str, Any]:
                 "AUTOPILOT_PLANNER_CRITIC",
                 "AUTOPILOT_PLANNER_SPEND_BREAKER",
                 "AUTOPILOT_STEPPING_STONES",
+                "AUTOPILOT_PLANNER_ROSTER_POLICY_ACTIVE",
+                "AUTOPILOT_PLANNER_ROSTER_PATH",
+                "AUTOPILOT_PLANNER_ROSTER_SHA256",
+                "AUTOPILOT_CODEX_MODEL",
+                "AUTOPILOT_CODEX_EFFORT",
             }
         )
     }
@@ -5225,6 +5232,13 @@ def _startup_attestation_payload() -> dict[str, Any]:
         for key, expected in AUTOPILOT_REQUIRED_GATE_ENV.items()
         if os.environ.get(key) != expected
     }
+    try:
+        validate_active_environment(os.environ)
+    except PlannerRosterError as exc:
+        missing_or_mismatch["AUTOPILOT_PLANNER_ROSTER"] = {
+            "expected": "valid sealed 2-Codex/0-Claude roster",
+            "actual": str(exc),
+        }
     return {
         "schema_version": 1,
         "pid": os.getpid(),
