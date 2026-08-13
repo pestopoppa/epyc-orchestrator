@@ -702,6 +702,178 @@ class ParetoArchive:
             "note": disagreement,
         }
 
+    # ── parent utility (AP-ME-2, 2026-08-13) ────────────────────
+
+    # SHIPPED weights from OpenMLE-Evo `airaevo.yaml` parent_selection.weights
+    # (present identically in two places: parent_selection and
+    # prompt_memory.sibling_ranking). intake-940's dive proved the paper's prose
+    # 1.0/0.6/0.3 was an UNRELEASED configuration — the shipped code uses these.
+    PARENT_UTILITY_WEIGHTS = {"score": 1.0, "delta": 0.4, "novelty": 0.25}
+
+    def parent_utility_ranking(
+        self,
+        tier: int | None = None,
+        *,
+        limit: int = 8,
+        method_family_fn: Any | None = None,
+    ) -> list[dict[str, Any]]:
+        """Rank candidate parent entries by a computed, always-on utility.
+
+        Port of aira-evo `compute_parent_utilities` (OpenRSI / intake-1024,
+        dive-verified 2026-08-09) adapted to the archive's 4D objective model.
+
+        P17's Bradley-Terry tiebreak fires ONLY under hypervolume stagnation —
+        reactive de-concentration. This utility is the complementary, PROACTIVE
+        form: a weighted sum over
+
+          * score   — normalized score (minmax across candidates on the primary
+                      quality objective)
+          * delta   — positive-only gain over the entry's strongest parent
+                      (the parent with the best quality among its parents),
+                      minmax-normalized across candidates
+          * novelty — 1/sqrt(1 + N_f), where N_f is the number of candidate
+                      parents in the SAME method family already seen (family
+                      key = method_family_fn(entry), default action label)
+
+        Always on (not gated on stagnation). Weights are the SHIPPED
+        `PARENT_UTILITY_WEIGHTS` above — NOT the paper's prose 1.0/0.6/0.3.
+        Islands are inactive in every shipped profile (num_islands 1,
+        migration_prob 0.0), so NO island machinery is ported.
+
+        Returns up to `limit` dicts, each:
+          trial_id, method_family, quality, parent_trial, parent_quality,
+          delta, score_component, delta_component, novelty_component,
+          utility, probability
+        Empty list when the tier has no frontier entries.
+        """
+        import math
+
+        front = self._front(tier)
+        if not front:
+            return []
+        if method_family_fn is None:
+            method_family_fn = self._entry_action_label
+
+        # Candidate parents: the frontier plus dominated-but-near entries
+        # (stepping stones), so the utility can prefer a novel near-frontier
+        # parent over a concentrated frontier repeat.
+        candidate_ids: list[int] = []
+        seen: set[int] = set()
+        for entry in front:
+            if entry.trial_id not in seen:
+                candidate_ids.append(entry.trial_id)
+                seen.add(entry.trial_id)
+        for row in self.stepping_stones(tier=tier, limit=limit):
+            tid = int(row["trial_id"])
+            if tid not in seen:
+                candidate_ids.append(tid)
+                seen.add(tid)
+
+        entries = [
+            next(e for e in self._all_entries if e.trial_id == tid)
+            for tid in candidate_ids
+        ]
+        by_id = {e.trial_id: e for e in self._all_entries}
+
+        def _quality(e: ParetoEntry) -> float:
+            return float(e.objectives[0])
+
+        # score component: minmax over candidates on quality (aira-evo
+        # `_normalize_minmax_values`: a degenerate single-value range maps to
+        # 0.5, so a lone candidate is never zeroed out).
+        qs = [_quality(e) for e in entries]
+        q_min, q_max = min(qs), max(qs)
+        if q_min == q_max:
+            score_components = [0.5 for _ in entries]
+        else:
+            q_range = q_max - q_min
+            score_components = [
+                (_quality(e) - q_min) / q_range for e in entries
+            ]
+
+        # delta component: positive-only gain over strongest parent,
+        # minmax over positive deltas (aira-evo `_normalize_positive_deltas`
+        # mode=minmax: delta / max_positive_delta, zeros stay 0).
+        deltas: list[float] = []
+        parent_map: dict[int, int | None] = {}
+        parent_q: dict[int, float | None] = {}
+        for e in entries:
+            pid = e.parent_trial
+            parent_map[e.trial_id] = pid
+            if pid is not None and pid in by_id:
+                parent_q[e.trial_id] = _quality(by_id[pid])
+                deltas.append(max(0.0, _quality(e) - _quality(by_id[pid])))
+            else:
+                parent_q[e.trial_id] = None
+                deltas.append(0.0)
+        max_positive_delta = max([d for d in deltas if d > 0.0] or [0.0])
+        delta_components = [
+            (d / max_positive_delta) if max_positive_delta > 0.0 and d > 0.0 else 0.0
+            for d in deltas
+        ]
+
+        # novelty component: 1/sqrt(1 + N_f) where N_f = count of candidate
+        # parents in the same method family seen EARLIER in the candidate list.
+        families = [str(method_family_fn(e) or "unknown") for e in entries]
+        family_seen: dict[str, int] = {}
+        novelty: list[float] = []
+        for family in families:
+            novelty.append(1.0 / math.sqrt(1.0 + family_seen.get(family, 0)))
+            family_seen[family] = family_seen.get(family, 0) + 1
+
+        w = self.PARENT_UTILITY_WEIGHTS
+        rows: list[dict[str, Any]] = []
+        for i, e in enumerate(entries):
+            score_component = score_components[i]
+            delta_component = delta_components[i]
+            utility = (
+                float(w["score"]) * score_component
+                + float(w["delta"]) * delta_component
+                + float(w["novelty"]) * novelty[i]
+            )
+            rows.append(
+                {
+                    "trial_id": e.trial_id,
+                    "method_family": families[i],
+                    "quality": _quality(e),
+                    "parent_trial": parent_map[e.trial_id],
+                    "parent_quality": parent_q[e.trial_id],
+                    "delta": deltas[i],
+                    "score_component": score_component,
+                    "delta_component": delta_component,
+                    "novelty_component": novelty[i],
+                    "utility": utility,
+                    "probability": 0.0,
+                }
+            )
+
+        # Softmax over utilities -> sampling probabilities (temperature 1.0).
+        max_u = max(r["utility"] for r in rows)
+        exps = [math.exp(r["utility"] - max_u) for r in rows]
+        total = sum(exps) or 1.0
+        for r, ex in zip(rows, exps):
+            r["probability"] = ex / total
+        rows.sort(key=lambda r: r["utility"], reverse=True)
+        return rows[:limit]
+
+    def parent_utility_text(self, tier: int | None = None, *, limit: int = 8) -> str:
+        """Render the parent-utility ranking for planner context (observe-only)."""
+        rows = self.parent_utility_ranking(tier=tier, limit=limit)
+        if not rows:
+            return "(no candidate parents for this tier)"
+        lines = [
+            "Computed parent utility (always-on; shipped weights "
+            "score 1.0 / delta 0.4 / novelty 0.25 — NOT the paper's 1.0/0.6/0.3):",
+        ]
+        for r in rows:
+            lines.append(
+                f"  #{r['trial_id']} [{r['method_family'] or 'unknown'}] "
+                f"q={r['quality']:.3f} delta={r['delta']:.3f} "
+                f"nov={r['novelty_component']:.3f} util={r['utility']:.3f} "
+                f"p={r['probability']:.2f}"
+            )
+        return "\n".join(lines)
+
     # ── summary ──────────────────────────────────────────────────
 
     def summary(self, tier: int | None = None) -> dict[str, Any]:

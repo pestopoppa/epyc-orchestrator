@@ -8260,6 +8260,26 @@ def _run_loop_inner(
                         f"{pareto_geometry_text}\n\n(stepping-stones unavailable: {_exc})"
                     )
 
+            # AP-ME-2 parent utility: a COMPUTED, always-on parent-selection
+            # signal (port of aira-evo `compute_parent_utilities`, shipped
+            # weights score 1.0 / delta 0.4 / novelty 0.25). Complementary to
+            # P17's stagnation-gated BT tiebreak — this one is proactive, so it
+            # is rendered unconditionally (not only under hypervolume
+            # stagnation). Observe-only + fully guarded — never breaks the
+            # prompt. Gate flag follows the stepping-stones convention.
+            if os.environ.get("AUTOPILOT_PARENT_UTILITY", "1") != "0":
+                try:
+                    _parent_util_text = archive.parent_utility_text(
+                        tier=DEFAULT_FRONTIER_TIER,
+                        limit=8,
+                    )
+                    if _parent_util_text:
+                        pareto_geometry_text = f"{pareto_geometry_text}\n\n{_parent_util_text}"
+                except Exception as _exc:
+                    pareto_geometry_text = (
+                        f"{pareto_geometry_text}\n\n(parent utility unavailable: {_exc})"
+                    )
+
             try:
                 planner_evidence_text = format_planner_evidence_section(
                     (asdict(entry) for entry in journal.entries_with_supersessions()),
