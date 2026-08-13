@@ -306,3 +306,35 @@ class TestPromptFilesExist:
         assert path.exists(), f"Missing role prompt file: {path}"
         content = path.read_text()
         assert len(content) > 10, f"Role prompt file too short: {path}"
+
+
+class TestS4OmegaInterventionArm:
+    """S4 Omega A/B intervention arm (repl-turn-efficiency L101).
+
+    The arm is a default-off prompt variant selected via
+    PROMPT_VARIANT__root_lm_system=s4_omega. The default root_lm_system.md must
+    be untouched when the variant is not requested — the A/B needs both arms.
+    """
+
+    VARIANT = "s4_omega"
+
+    def test_variant_file_exists(self):
+        path = PROMPT_DIR / f"root_lm_system.{self.VARIANT}.md"
+        assert path.exists(), f"Missing S4 Omega arm prompt file: {path}"
+        content = path.read_text()
+        assert len(content) > 10, f"S4 Omega arm too short: {path}"
+
+    def test_variant_resolves_when_requested(self, monkeypatch):
+        monkeypatch.setenv("PROMPT_VARIANT__root_lm_system", self.VARIANT)
+        result = resolve_prompt("root_lm_system", "fallback")
+        # The variant must actually be the arm, not the default or fallback.
+        assert "TURN BUDGET" in result or "MANDATED PROCEDURE" in result
+        assert "HARD LIMIT of 10 rounds" in result
+
+    def test_default_untouched_without_variant(self, monkeypatch):
+        monkeypatch.delenv("PROMPT_VARIANT__root_lm_system", raising=False)
+        monkeypatch.delenv("PROMPT_VARIANT", raising=False)
+        result = resolve_prompt("root_lm_system", "fallback")
+        # Default file, no turn-floor arm leaked in.
+        assert "HARD LIMIT of 10 rounds" not in result
+        assert result != "fallback"  # real default file exists
