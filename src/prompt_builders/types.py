@@ -79,8 +79,19 @@ class RootLMPrompt:
     instruction: str = ""
     """Final instruction."""
 
-    def to_string(self) -> str:
-        """Convert to a single prompt string."""
+    def to_string(self, prefix_stable: bool = False) -> str:
+        """Convert to a single prompt string.
+
+        Args:
+            prefix_stable: When True, render the FIXED sections (task,
+                instruction) before the per-turn-mutating sections (state,
+                context, reference_code) so that successive REPL turns share a
+                longer prompt prefix and llama-server KV-cache reuse is
+                maximized (RTE-Prefix). The mutating sections carry the turn
+                delta (Turn N state, last output/error, corpus), so they must
+                stay AFTER the fixed prefix for the cache to help at all.
+                Default False preserves the legacy order.
+        """
         parts = []
         if self.system:
             parts.append(self.system)
@@ -88,16 +99,30 @@ class RootLMPrompt:
             parts.extend(["", "## Available Tools", self.tools])
         if self.rules:
             parts.extend(["", "## Rules", self.rules])
-        if self.state:
-            parts.extend(["", "## Current State", self.state])
-        if self.context:
-            parts.extend(["", self.context])
-        if self.reference_code:
-            parts.extend(["", "## Reference Code", self.reference_code])
-        if self.task:
-            parts.extend(["", "## Task", self.task])
-        if self.instruction:
-            parts.extend(["", "## Your Code", self.instruction])
+        if prefix_stable:
+            # Fixed sections first — shared across every turn of a session.
+            if self.task:
+                parts.extend(["", "## Task", self.task])
+            if self.instruction:
+                parts.extend(["", "## Your Code", self.instruction])
+            # Per-turn-mutating sections last — the delta between turns.
+            if self.state:
+                parts.extend(["", "## Current State", self.state])
+            if self.context:
+                parts.extend(["", self.context])
+            if self.reference_code:
+                parts.extend(["", "## Reference Code", self.reference_code])
+        else:
+            if self.state:
+                parts.extend(["", "## Current State", self.state])
+            if self.context:
+                parts.extend(["", self.context])
+            if self.reference_code:
+                parts.extend(["", "## Reference Code", self.reference_code])
+            if self.task:
+                parts.extend(["", "## Task", self.task])
+            if self.instruction:
+                parts.extend(["", "## Your Code", self.instruction])
         return "\n".join(parts)
 
 

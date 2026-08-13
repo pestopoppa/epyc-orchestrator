@@ -346,6 +346,26 @@ class TestBuildRootLmPrompt:
         # Structural: Routing context should appear before task section
         assert result.index("frontdoor") < result.index("## Task")
 
+    def test_build_respects_prefix_stable_order_flag(self):
+        """RTE-Prefix: when prefix_stable_order is enabled, build_root_lm_prompt
+        renders task/instruction BEFORE the mutating sections."""
+        from src.features import Features, reset_features, set_features
+
+        set_features(Features(prefix_stable_order=True))
+        try:
+            result = build_root_lm_prompt(
+                state="ready",
+                original_prompt="test",
+                turn=0,
+                routing_context="Role: frontdoor | Tier: A",
+            )
+        finally:
+            reset_features()
+
+        assert "frontdoor" in result
+        # Fixed task section now precedes the mutating routing context
+        assert result.index("## Task") < result.index("frontdoor")
+
     def test_includes_error_context(self):
         result = build_root_lm_prompt(
             state="ready",
@@ -674,6 +694,55 @@ class TestRootLMPrompt:
         result = prompt.to_string()
         # Structural: Should have clear section separation
         assert "###" in result or "##" in result
+
+    def test_prefix_stable_order_renders_fixed_sections_before_mutating(self):
+        """RTE-Prefix: prefix_stable=True puts task/instruction BEFORE
+        state/context/reference_code so successive REPL turns share a longer
+        KV-cache prefix."""
+        from src.prompt_builders.types import RootLMPrompt
+
+        prompt = RootLMPrompt(
+            system="System prompt",
+            tools="Tool descriptions",
+            rules="Rules here",
+            state="State info",
+            context="Context info",
+            reference_code="Reference code here",
+            task="Task description",
+            instruction="Final instruction",
+        )
+        result = prompt.to_string(prefix_stable=True)
+        # Fixed sections must precede mutating sections
+        assert result.index("## Task") < result.index("## Current State")
+        assert result.index("## Task") < result.index("Context info")
+        assert result.index("## Your Code") < result.index("## Current State")
+        assert result.index("## Your Code") < result.index("## Reference Code")
+        # Order among mutating sections is preserved
+        assert result.index("## Current State") < result.index("## Reference Code")
+        # All sections still present
+        for section in (
+            "System prompt", "Tool descriptions", "Rules here", "State info",
+            "Context info", "Reference code here", "Task description",
+            "Final instruction",
+        ):
+            assert section in result
+
+    def test_prefix_stable_false_preserves_legacy_order(self):
+        """Default order keeps mutating sections (state/context/reference_code)
+        before task/instruction — unchanged behavior."""
+        from src.prompt_builders.types import RootLMPrompt
+
+        prompt = RootLMPrompt(
+            state="State info",
+            context="Context info",
+            reference_code="Reference code here",
+            task="Task description",
+            instruction="Final instruction",
+        )
+        result = prompt.to_string()  # prefix_stable defaults False
+        assert result.index("## Current State") < result.index("## Task")
+        assert result.index("Context info") < result.index("## Task")
+        assert result.index("## Reference Code") < result.index("## Task")
 
 
 # ── Constants Coverage ────────────────────────────────────────────────────

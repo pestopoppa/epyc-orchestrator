@@ -294,7 +294,9 @@ class PromptBuilder:
 
         if as_structured:
             return prompt
-        return prompt.to_string()
+        # RTE-Prefix: when enabled, fixed sections render before per-turn ones
+        # so REPL turns share a longer KV-cache prefix (see to_string docs).
+        return prompt.to_string(prefix_stable=_get_features().prefix_stable_order)
 
     def build_escalation_prompt(
         self,

@@ -201,6 +201,12 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("dcp_for_consult", False, False, "DCP_FOR_CONSULT", "Internal consults may reuse DCP pre-assembled context; requires dcp_pre_assembly", ("dcp_pre_assembly",)),
     FeatureSpec("review_before_commit_consult", False, False, "REVIEW_BEFORE_COMMIT_CONSULT", "P2 internal interaction: architect_general review_before_commit consult at the edit-transaction seam"),
     FeatureSpec("review_before_commit_targeted_gate", False, False, "REVIEW_BEFORE_COMMIT_TARGETED_GATE", "J17: restrict review_before_commit consults to high-risk edit shapes"),
+    # RTE-Prefix (repl-turn-efficiency): render the fixed sections (task,
+    # instruction) BEFORE the per-turn-mutating sections (state, context,
+    # reference_code) in RootLMPrompt.to_string(), so successive REPL turns
+    # share a longer prompt prefix and llama-server KV cache reuse pays off.
+    # Default-off: behavioral change to the prompt, needs A/B validation first.
+    FeatureSpec("prefix_stable_order", False, False, "PREFIX_STABLE_ORDER", "RTE-Prefix: put fixed prompt sections before per-turn-mutating ones so REPL turns share a longer cache prefix"),
     # intake-614/615 DAR-6 scaffolding (default-off in BOTH test and prod; no production routing until DAR-6.5 A/B clears)
     FeatureSpec("swarm_fanout", False, False, "SWARM_FANOUT", "DAR-6.1: fan high-injection-risk prompts to N>=2 concurrent serves + BT-aggregate (J14). Scaffolding only — default-off until the DAR-6.5 injection-suite A/B clears (handoffs/active/decision-aware-routing.md § DAR-6.5)."),
     # P21.A test-time compute: DeepConf offline confidence-filtered self-consistency (intake-603)
@@ -576,6 +582,13 @@ class Features:
     # Gates the np_ceiling policy loader + preflight scaffolding only; no
     # production routing or launch path reads this flag (D3 shadow-only).
     gpu_shadow_lane: bool = False
+
+    # RTE-Prefix (repl-turn-efficiency): render fixed prompt sections (task,
+    # instruction) BEFORE per-turn-mutating ones (state, context,
+    # reference_code) in RootLMPrompt.to_string(), so successive REPL turns
+    # share a longer llama-server KV-cache prefix. Default OFF — prompt
+    # behavioral change, pending A/B validation.
+    prefix_stable_order: bool = False
 
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety
