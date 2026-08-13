@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
 autopilot = importlib.import_module("autopilot")
+planner_roster = importlib.import_module("planner_roster")
 
 
 def test_cmd_start_self_protects_via_oom_score_adj(monkeypatch, tmp_path) -> None:
@@ -33,6 +34,10 @@ def test_cmd_start_self_protects_via_oom_score_adj(monkeypatch, tmp_path) -> Non
 
     # Don't touch the real lock or run the loop; just exercise cmd_start's wiring.
     for key, value in autopilot.AUTOPILOT_REQUIRED_GATE_ENV.items():
+        monkeypatch.setenv(key, value)
+    for key, value in planner_roster.apply_roster(
+        {}, planner_roster.DEFAULT_ROSTER
+    ).items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(autopilot, "LOCK_PATH", tmp_path / ".autopilot.lock")
     monkeypatch.setattr(autopilot.fcntl, "flock", lambda *_a, **_k: None)

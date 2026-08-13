@@ -1636,14 +1636,26 @@ _LOCAL_ROLE_NAMES = {
 def _model_of(name: str) -> str:
     """Canonical underlying model for a provider-role name.
 
-    Cross-model failover compares MODELS, not provider names: with PRIMARY=codex
-    and CRITIC=codex_critic both names differ but resolve to the SAME codex binary,
-    so a name-based fallback would re-hit codex when codex is offline. (2026-06-12)
+    Cross-model failover compares MODELS, not provider names. Historically the
+    Codex aliases resolved to one model identity; the active sealed roster binds
+    those aliases to distinct Sol and Terra model cells.
     """
     normalized = (name or "").strip().lower()
     if normalized == "claude":
         return "claude"
     if normalized in _CODEX_ROLE_NAMES:
+        # Outside the temporary sealed roster, aliases retain their historical
+        # same-model semantics. Under the active roster the aliases are two
+        # genuinely distinct Codex model cells, so failover may use the other
+        # staffed planner without touching Claude.
+        active = os.environ.get("AUTOPILOT_PLANNER_ROSTER_POLICY_ACTIVE", "").strip().lower()
+        if active in {"1", "true", "yes", "on"}:
+            if normalized == "codex":
+                model = os.environ.get("AUTOPILOT_CODEX_MODEL", "")
+            else:
+                model = os.environ.get("AUTOPILOT_CODEX_CRITIC_MODEL", "")
+            if model:
+                return f"codex:{model}"
         return "codex"
     if normalized in _LOCAL_ROLE_NAMES:
         return "local"

@@ -5217,6 +5217,8 @@ def _startup_attestation_payload() -> dict[str, Any]:
             | {
                 "AUTOPILOT_PLANNER_PRIMARY",
                 "AUTOPILOT_PLANNER_CRITIC",
+                "AUTOPILOT_PLANNER_MODE",
+                "AUTOPILOT_PLANNER_CRITIQUE_POLICY",
                 "AUTOPILOT_PLANNER_SPEND_BREAKER",
                 "AUTOPILOT_STEPPING_STONES",
                 "AUTOPILOT_PLANNER_ROSTER_POLICY_ACTIVE",
@@ -5224,6 +5226,8 @@ def _startup_attestation_payload() -> dict[str, Any]:
                 "AUTOPILOT_PLANNER_ROSTER_SHA256",
                 "AUTOPILOT_CODEX_MODEL",
                 "AUTOPILOT_CODEX_EFFORT",
+                "AUTOPILOT_CODEX_CRITIC_MODEL",
+                "AUTOPILOT_CODEX_CRITIC_EFFORT",
             }
         )
     }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 
@@ -23,10 +24,15 @@ ROSTER_ENV_KEYS = frozenset(
         "AUTOPILOT_PLANNER_PRIMARY",
         "AUTOPILOT_PLANNER_CRITIC",
         "AUTOPILOT_PLANNER_CRITIC_FALLBACK",
+        "AUTOPILOT_PLANNER_MODE",
+        "AUTOPILOT_PLANNER_CRITIQUE_POLICY",
         "AUTOPILOT_CODEX_MODEL",
         "AUTOPILOT_CODEX_EFFORT",
+        "AUTOPILOT_CODEX_CRITIC_MODEL",
+        "AUTOPILOT_CODEX_CRITIC_EFFORT",
     }
 )
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 class PlannerRosterError(RuntimeError):
@@ -35,6 +41,11 @@ class PlannerRosterError(RuntimeError):
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _canonical_sha256(payload: object) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def load_roster(path: str | Path) -> tuple[dict[str, Any], str, Path]:
@@ -54,10 +65,30 @@ def load_roster(path: str | Path) -> tuple[dict[str, Any], str, Path]:
 def validate_roster(payload: object) -> None:
     if not isinstance(payload, Mapping):
         raise PlannerRosterError("planner roster must be an object")
-    if set(payload) != {"schema", "policy_id", "expires_when", "cells", "constraints"}:
+    if set(payload) != {
+        "schema",
+        "policy_id",
+        "activation_reason",
+        "expires_when",
+        "cells",
+        "constraints",
+        "self_sha256",
+    }:
         raise PlannerRosterError("planner roster fields differ from the sealed v1 contract")
     if payload.get("schema") != SCHEMA:
         raise PlannerRosterError("planner roster schema differs")
+    claimed = payload.get("self_sha256")
+    unsigned = {key: value for key, value in payload.items() if key != "self_sha256"}
+    if (
+        not isinstance(claimed, str)
+        or not _SHA256_RE.fullmatch(claimed)
+        or _canonical_sha256(unsigned) != claimed
+    ):
+        raise PlannerRosterError("planner roster internal self-hash differs")
+    if payload.get("expires_when") != "manual_unset_or_reset":
+        raise PlannerRosterError("planner roster expiry must require manual unset/reset")
+    if payload.get("activation_reason") != "weekly_claude_budget_exhausted":
+        raise PlannerRosterError("planner roster activation reason differs")
     cells = payload.get("cells")
     if not isinstance(cells, list) or len(cells) != 2:
         raise PlannerRosterError("weekly-exhaustion roster requires exactly two planners")
@@ -85,8 +116,12 @@ def validate_roster(payload: object) -> None:
         "fail_closed": True,
     }:
         raise PlannerRosterError("planner roster constraints differ from 2 Codex / 0 Claude")
-    if cells[0]["model"] != cells[1]["model"] or cells[0]["effort"] != cells[1]["effort"]:
-        raise PlannerRosterError("current Codex provider requires one exact model/effort identity")
+    if cells[0]["model"] == cells[1]["model"]:
+        raise PlannerRosterError("the two Codex planners must use distinct reviewed models")
+    if [cell["model"] for cell in cells] != ["gpt-5.6-sol", "gpt-5.6-terra"]:
+        raise PlannerRosterError("planner models must be the reviewed Sol/Terra pair")
+    if any(cell["effort"] != "high" for cell in cells):
+        raise PlannerRosterError("both Codex planners must use high effort")
 
 
 def apply_roster(environment: Mapping[str, str], path: str | Path) -> dict[str, str]:
@@ -101,8 +136,12 @@ def apply_roster(environment: Mapping[str, str], path: str | Path) -> dict[str, 
             "AUTOPILOT_PLANNER_PRIMARY": cells[0]["provider"],
             "AUTOPILOT_PLANNER_CRITIC": cells[1]["provider"],
             "AUTOPILOT_PLANNER_CRITIC_FALLBACK": "none",
+            "AUTOPILOT_PLANNER_MODE": "draft_critique",
+            "AUTOPILOT_PLANNER_CRITIQUE_POLICY": "always",
             "AUTOPILOT_CODEX_MODEL": cells[0]["model"],
             "AUTOPILOT_CODEX_EFFORT": cells[0]["effort"],
+            "AUTOPILOT_CODEX_CRITIC_MODEL": cells[1]["model"],
+            "AUTOPILOT_CODEX_CRITIC_EFFORT": cells[1]["effort"],
         }
     )
     return env
@@ -119,8 +158,12 @@ def validate_active_environment(environment: Mapping[str, str]) -> None:
         "AUTOPILOT_PLANNER_PRIMARY": cells[0]["provider"],
         "AUTOPILOT_PLANNER_CRITIC": cells[1]["provider"],
         "AUTOPILOT_PLANNER_CRITIC_FALLBACK": "none",
+        "AUTOPILOT_PLANNER_MODE": "draft_critique",
+        "AUTOPILOT_PLANNER_CRITIQUE_POLICY": "always",
         "AUTOPILOT_CODEX_MODEL": cells[0]["model"],
         "AUTOPILOT_CODEX_EFFORT": cells[0]["effort"],
+        "AUTOPILOT_CODEX_CRITIC_MODEL": cells[1]["model"],
+        "AUTOPILOT_CODEX_CRITIC_EFFORT": cells[1]["effort"],
     }
     mismatches = {
         key: (value, environment.get(key))
@@ -136,10 +179,26 @@ def validate_active_environment(environment: Mapping[str, str]) -> None:
 def provider_allowed(provider: str, environment: Mapping[str, str]) -> bool:
     if environment.get(POLICY_ENV, "").strip().lower() not in {"1", "true", "yes", "on"}:
         return True
-    return provider.strip().lower() in {
-        "codex",
-        "codex_critic",
-        "codex-critic",
-        "codex_reviewer",
-        "codex-reviewer",
-    }
+    # Revalidate at provider construction, not only once at daemon boot. This
+    # closes environment/file drift between startup attestation and a later
+    # planner turn.
+    validate_active_environment(environment)
+    return provider.strip().lower() in {"codex", "codex_critic"}
+
+
+def provider_identity(
+    provider: str, environment: Mapping[str, str]
+) -> tuple[str | None, str | None]:
+    """Resolve one provider alias to its roster-bound model/effort identity."""
+    normalized = provider.strip().lower()
+    if environment.get(POLICY_ENV, "").strip().lower() in {"1", "true", "yes", "on"}:
+        validate_active_environment(environment)
+        if normalized == "codex":
+            return environment["AUTOPILOT_CODEX_MODEL"], environment["AUTOPILOT_CODEX_EFFORT"]
+        if normalized == "codex_critic":
+            return (
+                environment["AUTOPILOT_CODEX_CRITIC_MODEL"],
+                environment["AUTOPILOT_CODEX_CRITIC_EFFORT"],
+            )
+        raise PlannerRosterError(f"provider {normalized!r} is outside the active roster")
+    return environment.get("AUTOPILOT_CODEX_MODEL"), environment.get("AUTOPILOT_CODEX_EFFORT")

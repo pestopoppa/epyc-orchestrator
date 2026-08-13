@@ -45,6 +45,7 @@ def test_authority_env_enforces_sealed_two_codex_zero_claude_roster() -> None:
     env = launcher.authority_env(
         {
             "AUTOPILOT_PLANNER_PRIMARY": "claude",
+            "AUTOPILOT_PLANNER_MODE": "single",
             "AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS": "4096",
         }
     )
@@ -52,8 +53,12 @@ def test_authority_env_enforces_sealed_two_codex_zero_claude_roster() -> None:
     assert env["AUTOPILOT_PLANNER_PRIMARY"] == "codex"
     assert env["AUTOPILOT_PLANNER_CRITIC"] == "codex_critic"
     assert env["AUTOPILOT_PLANNER_CRITIC_FALLBACK"] == "none"
+    assert env["AUTOPILOT_PLANNER_MODE"] == "draft_critique"
+    assert env["AUTOPILOT_PLANNER_CRITIQUE_POLICY"] == "always"
     assert env["AUTOPILOT_CODEX_MODEL"] == "gpt-5.6-sol"
     assert env["AUTOPILOT_CODEX_EFFORT"] == "high"
+    assert env["AUTOPILOT_CODEX_CRITIC_MODEL"] == "gpt-5.6-terra"
+    assert env["AUTOPILOT_CODEX_CRITIC_EFFORT"] == "high"
     assert env["AUTOPILOT_PLANNER_ROSTER_POLICY_ACTIVE"] == "1"
     assert len(env["AUTOPILOT_PLANNER_ROSTER_SHA256"]) == 64
     assert env["AUTOPILOT_PLANNER_SPEND_BREAKER_PRIMARY"] == "local_frontdoor"
@@ -161,6 +166,16 @@ def test_dry_run_prints_authority_payload(monkeypatch, tmp_path, capsys) -> None
     assert payload["env"]["AUTOPILOT_TOOL_SENTINELS"] == "1"
     assert payload["env"]["AUTOPILOT_SEQ_VERDICT"] == launcher.AUTHORITY_ENV["AUTOPILOT_SEQ_VERDICT"]
     assert payload["env"]["AUTOPILOT_SEQ_P0_2_BRIDGE"] == launcher.AUTHORITY_ENV["AUTOPILOT_SEQ_P0_2_BRIDGE"]
+    assert payload["env"]["AUTOPILOT_PLANNER_PRIMARY"] == "codex"
+    assert payload["env"]["AUTOPILOT_PLANNER_CRITIC"] == "codex_critic"
+    assert payload["env"]["AUTOPILOT_PLANNER_MODE"] == "draft_critique"
+    assert payload["env"]["AUTOPILOT_PLANNER_CRITIQUE_POLICY"] == "always"
+    assert payload["env"]["AUTOPILOT_CODEX_MODEL"] == "gpt-5.6-sol"
+    assert payload["env"]["AUTOPILOT_CODEX_CRITIC_MODEL"] == "gpt-5.6-terra"
+    assert len(payload["env"]["AUTOPILOT_PLANNER_ROSTER_SHA256"]) == 64
+    assert payload["env"]["AUTOPILOT_PLANNER_ROSTER_PATH"].endswith(
+        "codex2_no_claude_20260813.json"
+    )
     assert payload["pid"] is None
 
 

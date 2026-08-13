@@ -1,7 +1,8 @@
 {
+  "activation_reason": "weekly_claude_budget_exhausted",
   "cells": [
     {"effort": "high", "model": "gpt-5.6-sol", "provider": "codex", "role": "draft"},
-    {"effort": "high", "model": "gpt-5.6-sol", "provider": "codex_critic", "role": "critic"}
+    {"effort": "high", "model": "gpt-5.6-terra", "provider": "codex_critic", "role": "critic"}
   ],
   "constraints": {
     "claude_planner_count": 0,
@@ -9,7 +10,8 @@
     "fail_closed": true,
     "planner_count": 2
   },
-  "expires_when": "operator clears the 2026-08-13 Claude weekly-token exhaustion policy",
+  "expires_when": "manual_unset_or_reset",
   "policy_id": "autopilot-codex2-no-claude-20260813",
-  "schema": "epyc.autopilot.planner_roster.v1"
+  "schema": "epyc.autopilot.planner_roster.v1",
+  "self_sha256": "38d3d82402f61bcd10af19ab54ec9bcf535ff1f06630e900be8789e7a32a946d"
 }

@@ -910,9 +910,35 @@ def test_codex_provider_uses_current_read_only_cli(monkeypatch, tmp_path) -> Non
 
 
 def test_active_roster_refuses_claude_before_provider_construction(monkeypatch) -> None:
-    monkeypatch.setenv("AUTOPILOT_PLANNER_ROSTER_POLICY_ACTIVE", "1")
+    from scripts.autopilot import planner_roster
+
+    for key, value in planner_roster.apply_roster({}, planner_roster.DEFAULT_ROSTER).items():
+        monkeypatch.setenv(key, value)
     with pytest.raises(RuntimeError, match="forbidden by the active sealed roster"):
         planner_providers.get_planner_provider("claude")
+
+
+def test_active_roster_constructs_distinct_codex_model_cells(monkeypatch) -> None:
+    from scripts.autopilot import planner_roster
+
+    for key, value in planner_roster.apply_roster({}, planner_roster.DEFAULT_ROSTER).items():
+        monkeypatch.setenv(key, value)
+    primary = planner_providers.get_planner_provider("codex")
+    critic = planner_providers.get_planner_provider("codex_critic")
+    assert primary._model == "gpt-5.6-sol"
+    assert critic._model == "gpt-5.6-terra"
+    assert primary._effort == critic._effort == "high"
+
+
+def test_active_roster_refuses_a_third_codex_alias(monkeypatch) -> None:
+    from scripts.autopilot import planner_roster
+
+    for key, value in planner_roster.apply_roster(
+        {}, planner_roster.DEFAULT_ROSTER
+    ).items():
+        monkeypatch.setenv(key, value)
+    with pytest.raises(RuntimeError, match="forbidden by the active sealed roster"):
+        planner_providers.get_planner_provider("codex_reviewer")
 
 
 def test_codex_provider_uses_configured_default_model_when_unspecified(

@@ -33,6 +33,10 @@ def test_startup_attestation_reports_gate_env_and_config_hash(monkeypatch, tmp_p
     assert len(payload["config_hash"]) == 64
     assert payload["gate_env"]["AUTOPILOT_TOOL_SENTINELS"] == "1"
     assert payload["gate_env"]["AUTOPILOT_PLANNER_PRIMARY"] == "codex"
+    assert payload["gate_env"]["AUTOPILOT_PLANNER_MODE"] == "draft_critique"
+    assert payload["gate_env"]["AUTOPILOT_PLANNER_CRITIQUE_POLICY"] == "always"
+    assert payload["gate_env"]["AUTOPILOT_CODEX_MODEL"] == "gpt-5.6-sol"
+    assert payload["gate_env"]["AUTOPILOT_CODEX_CRITIC_MODEL"] == "gpt-5.6-terra"
     assert payload["gate_env"]["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "0"
     assert payload["p0_2_bridge"]["enabled"] is True
 

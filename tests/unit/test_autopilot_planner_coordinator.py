@@ -204,6 +204,22 @@ def test_codex_primary_can_use_distinct_codex_critic_alias() -> None:
     assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == ""
 
 
+def test_active_roster_treats_sol_and_terra_as_distinct_codex_models(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOPILOT_PLANNER_ROSTER_POLICY_ACTIVE", "1")
+    monkeypatch.setenv("AUTOPILOT_CODEX_MODEL", "gpt-5.6-sol")
+    monkeypatch.setenv("AUTOPILOT_CODEX_CRITIC_MODEL", "gpt-5.6-terra")
+    assert planner_coordinator._model_of("codex") == "codex:gpt-5.6-sol"
+    assert planner_coordinator._model_of("codex_critic") == "codex:gpt-5.6-terra"
+    assert (
+        planner_coordinator._draft_fallback_provider_name(
+            "codex", "codex_critic", spend_breaker_active=False
+        )
+        == "codex_critic"
+    )
+
+
 def test_fallback_draft_gets_independent_primary_critique() -> None:
     claude = FakeProvider(
         "claude",
