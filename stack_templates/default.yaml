@@ -136,7 +136,7 @@ roles:
   architect_general:
     # 2026-07-31/08-01: repointed to the 27B on MI210; the 122B vacated to the
     # new architect_critic role (:8074). Was Qwen3.5-122B-A10B / Q4_K_M / 69 GB.
-    model: Qwen3.6-27B-MTP-Q8_0
+    model: Qwen3.8-27B-Q8_0
     quant: Q8_0
     tier: HOT
     ram_gb: 27.05
@@ -145,7 +145,12 @@ roles:
       numa: GPU_HOST_LANE
       threads: 8
       spec_overrides:
-        draft_max: 24
+        # 2026-08-20: was 24, which SILENTLY OVERRODE the registry's measured optimum (4 for
+        # Qwen3.6-27B) — a spec_override here wins at stack-assembly time, so the stack was
+        # drafting at 24 against a measured-4 artifact. Now 8 = the measured optimum for
+        # Qwen3.8-27B (sweep: n6 55.22 / n8 55.46 / n12 51.14 t/s; curve turns over past 8).
+        # Keep in step with speculative_decoding_policy.draft_max in the MASTER registry.
+        draft_max: 8
         p_split: 0
 
   architect_critic:
