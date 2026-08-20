@@ -1230,7 +1230,9 @@ class LlamaServerBackend(ModelBackend):
 
         Args:
             slot_id: Slot to save.
-            filename: Absolute path to save file.
+            filename: BARE filename, never a path. The server resolves it under its
+                own ``--slot-save-path``; it rejects any name containing a path
+                separator via ``fs_validate_filename(name, allow_subdirs=false)``.
 
         Returns:
             True if save succeeded.
@@ -1241,11 +1243,14 @@ class LlamaServerBackend(ModelBackend):
                 json={"filename": filename},
                 timeout=self.config.timeout,
             )
+            # Catch httpx.HTTPError, not RequestError: raise_for_status() raises
+            # HTTPStatusError, which is NOT a RequestError subclass, so a 4xx used to
+            # propagate out of this method instead of returning False as documented.
             response.raise_for_status()
             logger.info(f"Saved slot {slot_id} to {filename}")
             return True
-        except httpx.RequestError as e:
-            logger.error(f"Failed to save slot {slot_id}: {e}")
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to save slot {slot_id} as {filename!r}: {e}")
             return False
 
     def restore_slot(self, slot_id: int, filename: str) -> bool:
@@ -1253,7 +1258,7 @@ class LlamaServerBackend(ModelBackend):
 
         Args:
             slot_id: Slot to restore.
-            filename: Path to saved state file.
+            filename: BARE filename, never a path -- same contract as ``save_slot``.
 
         Returns:
             True if restore succeeded.
@@ -1264,11 +1269,13 @@ class LlamaServerBackend(ModelBackend):
                 json={"filename": filename},
                 timeout=self.config.timeout,
             )
+            # See save_slot: HTTPStatusError is not a RequestError, so a 4xx used to
+            # propagate rather than returning False.
             response.raise_for_status()
             logger.info(f"Restored slot {slot_id} from {filename}")
             return True
-        except httpx.RequestError as e:
-            logger.error(f"Failed to restore slot {slot_id}: {e}")
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to restore slot {slot_id} from {filename!r}: {e}")
             return False
 
     def _infer_stream_text_chat_completions(

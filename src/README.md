@@ -96,7 +96,6 @@ src/
 | Module | Purpose |
 |--------|---------|
 | `prefix_cache.py` | PrefixRouter, CachingBackend for KV cache reuse |
-| `radix_cache.py` | RadixCache for token-level prefix matching |
 | `generation_monitor.py` | Early failure detection via entropy/repetition |
 
 ### Tools & Scripts

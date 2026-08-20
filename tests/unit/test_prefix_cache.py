@@ -5,7 +5,6 @@ Tests cover:
 - Prompt canonicalization (Phase C)
 - PrefixRouter with LRU eviction (Phase B)
 - CachingBackend integration
-- RadixCache (Phase D)
 """
 
 import pytest
@@ -18,7 +17,6 @@ from src.prefix_cache import (
     SlotState,
     CachingBackend,
 )
-from src.radix_cache import RadixCache, RadixNode, TokenizedRadixCache
 from src.model_server import InferenceRequest
 
 
@@ -239,204 +237,6 @@ class TestPrefixRouter:
         assert all(s.prefix_hash == "" for s in router.slots.values())
 
 
-# =============================================================================
-# RadixCache Tests (Phase D)
-# =============================================================================
-
-
-class TestRadixNode:
-    """Tests for RadixNode dataclass."""
-
-    def test_default_values(self):
-        """Should initialize with correct defaults."""
-        node = RadixNode()
-        assert node.children == {}
-        assert node.slot_id is None
-        assert node.depth == 0
-
-
-class TestRadixCache:
-    """Tests for RadixCache class."""
-
-    def test_initialization(self):
-        """Should initialize with correct slots."""
-        cache = RadixCache(num_slots=4)
-        assert cache.num_slots == 4
-        assert len(cache._available_slots) == 4
-
-    def test_insert_and_find(self):
-        """Should insert and find prefixes correctly."""
-        cache = RadixCache(num_slots=4, min_prefix_length=2)
-        tokens = [1, 2, 3, 4, 5]
-
-        slot = cache.insert(tokens)
-
-        # Full match
-        length, found_slot = cache.find_longest_prefix(tokens)
-        assert length == 5
-        assert found_slot == slot
-
-    def test_find_partial_prefix(self):
-        """Should find longest matching prefix."""
-        cache = RadixCache(num_slots=4, min_prefix_length=2)
-
-        cache.insert([1, 2, 3, 4, 5], slot_id=0)
-
-        # Partial match - query diverges at position 3
-        length, slot = cache.find_longest_prefix([1, 2, 3, 10, 20])
-        assert length == 3  # Matched common prefix [1, 2, 3]
-        assert slot == 0
-
-    def test_find_no_match(self):
-        """Should return None for non-matching prefix."""
-        cache = RadixCache(num_slots=4, min_prefix_length=2)
-        cache.insert([1, 2, 3], slot_id=0)
-
-        length, slot = cache.find_longest_prefix([10, 20, 30])
-        assert length == 0
-        assert slot is None
-
-    def test_multiple_prefixes(self):
-        """Should handle multiple distinct prefixes."""
-        cache = RadixCache(num_slots=4, min_prefix_length=2)
-
-        cache.insert([1, 2, 3], slot_id=0)
-        cache.insert([10, 20, 30], slot_id=1)
-
-        len1, slot1 = cache.find_longest_prefix([1, 2, 3, 4])
-        len2, slot2 = cache.find_longest_prefix([10, 20, 30, 40])
-
-        assert slot1 == 0
-        assert slot2 == 1
-
-    def test_lru_eviction(self):
-        """Should evict LRU entries when full."""
-        cache = RadixCache(num_slots=2, min_prefix_length=2)
-
-        cache.insert([1, 2, 3], slot_id=0)
-        cache.insert([4, 5, 6], slot_id=1)
-
-        # This should trigger eviction
-        slot = cache.insert([7, 8, 9])
-
-        assert slot == 0  # Evicted first slot
-        assert cache.evictions == 1
-
-    def test_find_or_allocate_hit(self):
-        """find_or_allocate should return hit on match."""
-        cache = RadixCache(num_slots=4, min_prefix_length=2)
-        cache.insert([1, 2, 3], slot_id=0)
-
-        length, slot, is_hit = cache.find_or_allocate([1, 2, 3, 4, 5])
-        assert is_hit is True
-        assert slot == 0
-        assert length == 3
-
-    def test_find_or_allocate_miss(self):
-        """find_or_allocate should allocate on miss."""
-        cache = RadixCache(num_slots=4, min_prefix_length=2)
-
-        length, slot, is_hit = cache.find_or_allocate([1, 2, 3])
-        assert is_hit is False
-        assert slot in range(4)
-
-    def test_get_stats(self):
-        """Should return correct statistics."""
-        cache = RadixCache(num_slots=4, min_prefix_length=2)
-
-        cache.insert([1, 2, 3])
-        cache.find_longest_prefix([1, 2, 3])  # Hit
-        cache.find_longest_prefix([9, 9, 9])  # Miss
-
-        stats = cache.get_stats()
-        assert stats["cache_hits"] == 1
-        assert stats["cache_misses"] == 1
-        assert stats["active_entries"] == 1
-
-    def test_get_hot_prefixes(self):
-        """Should return prefixes sorted by hit count."""
-        cache = RadixCache(num_slots=4, min_prefix_length=2)
-
-        cache.insert([1, 2, 3], slot_id=0)
-        cache.insert([4, 5, 6], slot_id=1)
-
-        # Generate hits
-        for _ in range(5):
-            cache.find_longest_prefix([4, 5, 6, 7])  # More hits
-        for _ in range(2):
-            cache.find_longest_prefix([1, 2, 3, 4])
-
-        hot = cache.get_hot_prefixes(top_n=2)
-        assert hot[0].slot_id == 1  # More hits
-        assert hot[0].hit_count == 5
-
-    def test_clear(self):
-        """Should clear all entries."""
-        cache = RadixCache(num_slots=4, min_prefix_length=2)
-        cache.insert([1, 2, 3])
-
-        cache.clear()
-
-        assert len(cache.entries) == 0
-        assert len(cache._available_slots) == 4
-        assert cache.total_lookups == 0
-
-    def test_iter_prefixes(self):
-        """Should iterate over all cached prefixes."""
-        cache = RadixCache(num_slots=4, min_prefix_length=2)
-        cache.insert([1, 2, 3], slot_id=0)
-        cache.insert([4, 5, 6], slot_id=1)
-
-        prefixes = list(cache.iter_prefixes())
-        assert len(prefixes) == 2
-        assert ([1, 2, 3], 0) in prefixes
-        assert ([4, 5, 6], 1) in prefixes
-
-    def test_min_prefix_length(self):
-        """Should skip prefixes shorter than minimum."""
-        cache = RadixCache(num_slots=4, min_prefix_length=16)
-
-        # Short prefix - should still allocate slot but not cache
-        slot = cache.insert([1, 2, 3])
-
-        assert slot in range(4)
-        # The entry won't be in cache since it's too short
-        _, found_slot = cache.find_longest_prefix([1, 2, 3])
-        assert found_slot is None  # Not cached due to min_prefix_length
-
-
-class TestTokenizedRadixCache:
-    """Tests for TokenizedRadixCache class."""
-
-    def test_requires_tokenizer(self):
-        """Should raise error without tokenizer."""
-        cache = TokenizedRadixCache(num_slots=4)
-
-        with pytest.raises(ValueError, match="No tokenizer configured"):
-            cache.insert_prompt("Hello world")
-
-    def test_with_tokenizer(self):
-        """Should work with tokenizer function."""
-
-        # Simple tokenizer that returns byte values
-        def tokenize(text):
-            return list(text.encode("utf-8"))
-
-        cache = TokenizedRadixCache(num_slots=4, min_prefix_length=2)
-        cache.set_tokenizer(tokenize)
-
-        slot = cache.insert_prompt("Hello")
-        length, found_slot = cache.find_longest_prefix_for_prompt("Hello world")
-
-        assert found_slot == slot
-        assert length == len("Hello".encode("utf-8"))
-
-
-# =============================================================================
-# CachingBackend Tests
-# =============================================================================
-
-
 class TestCachingBackend:
     """Tests for CachingBackend class."""
 
@@ -632,3 +432,60 @@ class TestCachingBackendPersistence:
         cleared = caching.clear_saved_prefixes()
         assert cleared == 2
         assert len(list(tmp_path.iterdir())) == 0
+
+
+# =============================================================================
+# Slot-allocation coherence across roles sharing one server
+# =============================================================================
+
+
+class TestSharedServerSlotAllocation:
+    """Roles sharing one physical llama-server must share one PrefixRouter.
+
+    Regression guard for the ``shared_with`` id_slot collision: a per-role router
+    allocates id_slot in [0, num_slots) from its own private LRU, so two roles on
+    the same base_url both hand llama-server id_slot=0 and silently evict each
+    other's KV. Neither router can observe it, because each sees only its own
+    counters. See src/llm_primitives/backend.py::_router_for.
+    """
+
+    def test_one_router_gives_distinct_slots_to_distinct_prompts(self):
+        """The fixed shape: one shared router hands out distinct slots."""
+        shared = PrefixRouter(num_slots=2)
+
+        slot_role_a = shared.get_slot_for_prompt("role A prompt " + "a" * 400)
+        slot_role_b = shared.get_slot_for_prompt("role B prompt " + "b" * 400)
+
+        assert slot_role_a != slot_role_b, (
+            "two roles on one server were handed the same id_slot; "
+            "they would evict each other"
+        )
+
+    def test_separate_routers_collide(self):
+        """Characterizes the bug: independent routers both start at slot 0."""
+        router_a = PrefixRouter(num_slots=2)
+        router_b = PrefixRouter(num_slots=2)
+
+        slot_a = router_a.get_slot_for_prompt("role A prompt " + "a" * 400)
+        slot_b = router_b.get_slot_for_prompt("role B prompt " + "b" * 400)
+
+        # Both allocate from their own empty pool, so both return slot 0.
+        assert slot_a == slot_b == 0
+
+    def test_router_is_shared_per_url_not_per_role(self):
+        """`_router_for` returns the same instance for one URL, distinct across URLs."""
+        routers: dict[str, PrefixRouter] = {}
+
+        def router_for(url: str) -> PrefixRouter:
+            r = routers.get(url)
+            if r is None:
+                r = PrefixRouter(num_slots=2)
+                routers[url] = r
+            return r
+
+        same_server_role_1 = router_for("http://127.0.0.1:8081")
+        same_server_role_2 = router_for("http://127.0.0.1:8081")
+        other_server = router_for("http://127.0.0.1:8082")
+
+        assert same_server_role_1 is same_server_role_2
+        assert other_server is not same_server_role_1

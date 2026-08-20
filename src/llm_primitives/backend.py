@@ -193,6 +193,26 @@ class BackendMixin:
             except Exception:
                 topology_roles = set()
 
+            # ONE PrefixRouter per PHYSICAL server URL, never per role.
+            #
+            # Under the registry `shared_with` mechanism several logical roles
+            # resolve to the same base_url. A per-role router allocates id_slot in
+            # [0, num_slots) from its own private LRU, so two roles on one server
+            # both emit id_slot=0 and silently evict each other's KV -- and neither
+            # router can observe it, because each sees only its own hit counters.
+            #
+            # The fleet layer (_init_fleet_backends) already shares one CachingBackend
+            # per fleet; this gives the legacy path the same slot-allocation coherence
+            # without requiring ORCHESTRATOR_FLEET_LAYER=1.
+            _routers_by_url: dict[str, Any] = {}
+
+            def _router_for(endpoint_url: str) -> Any:
+                router = _routers_by_url.get(endpoint_url)
+                if router is None:
+                    router = PrefixRouter(num_slots=num_slots)
+                    _routers_by_url[endpoint_url] = router
+                return router
+
             for role, url_str in server_urls.items():
                 if role in fleet_handled:
                     continue
@@ -228,7 +248,7 @@ class BackendMixin:
                                 base_url=u, num_slots=num_slots,
                                 use_chat_completions=_use_cc,
                             )),
-                            PrefixRouter(num_slots=num_slots),
+                            _router_for(u),
                         )
 
                     full_port = _port_of(full_url)
@@ -312,8 +332,7 @@ class BackendMixin:
                             use_chat_completions=_use_cc,
                         )
                         backend = LlamaServerBackend(config)
-                        router = PrefixRouter(num_slots=num_slots)
-                        backends.append(CachingBackend(backend, router))
+                        backends.append(CachingBackend(backend, _router_for(url)))
                     self._backends[role] = RoundRobinBackend(backends, role=role)
                     _log.info("Round-robin backend for %s: %d instances", role, len(quarter_urls))
                 else:
@@ -324,8 +343,7 @@ class BackendMixin:
                         use_chat_completions=_use_cc,
                     )
                     backend = LlamaServerBackend(config)
-                    router = PrefixRouter(num_slots=num_slots)
-                    self._backends[role] = CachingBackend(backend, router)
+                    self._backends[role] = CachingBackend(backend, _router_for(url))
 
         except ImportError as e:
             _log.warning("CachingBackend not available: %s. Using legacy mode.", e)

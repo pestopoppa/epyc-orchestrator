@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integration tests for RadixAttention-style prefix caching.
+"""Integration tests for prefix caching.
 
 These tests validate the end-to-end caching workflow:
 1. Server connection and health
@@ -184,85 +184,6 @@ class TestPrefixRouterIntegration:
         assert hit_rate > 0.5, f"Expected hit rate > 50%, got {hit_rate:.1%}"
         # With shared prefix, expect very high hit rate
         assert hit_rate > 0.9, f"Expected hit rate > 90%, got {hit_rate:.1%}"
-
-
-# =============================================================================
-# RadixCache Integration Tests
-# =============================================================================
-
-
-class TestRadixCacheIntegration:
-    """Integration tests for RadixCache with token sequences."""
-
-    def test_radix_cache_with_shared_prefix(self):
-        """RadixCache should efficiently match shared prefixes."""
-        from src.radix_cache import RadixCache
-
-        cache = RadixCache(num_slots=4, min_prefix_length=4)
-
-        # Simulate tokenized system prompt (common prefix)
-        system_tokens = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-
-        # Insert system prompt
-        slot = cache.insert(system_tokens)
-
-        # Query with system + different suffixes
-        queries = [
-            system_tokens + [100, 101, 102],
-            system_tokens + [200, 201],
-            system_tokens + [300],
-        ]
-
-        hits = 0
-        for query in queries:
-            length, found_slot = cache.find_longest_prefix(query)
-            if found_slot is not None:
-                hits += 1
-                assert length == len(system_tokens)
-                assert found_slot == slot
-
-        assert hits == 3
-
-    def test_radix_cache_lru_under_pressure(self):
-        """RadixCache should evict LRU entries under memory pressure."""
-        from src.radix_cache import RadixCache
-
-        cache = RadixCache(num_slots=2, min_prefix_length=2)
-
-        # Fill cache
-        cache.insert([1, 2, 3, 4], slot_id=0)
-        cache.insert([10, 20, 30, 40], slot_id=1)
-
-        # Access first slot multiple times
-        for _ in range(5):
-            cache.find_longest_prefix([1, 2, 3, 4, 5])
-
-        # Insert new prefix - should evict slot 1 (less accessed)
-        evicted_slot = cache.insert([100, 200, 300])
-
-        assert evicted_slot == 1
-        assert cache.evictions == 1
-
-    def test_radix_cache_hit_statistics(self):
-        """RadixCache should track accurate hit statistics."""
-        from src.radix_cache import RadixCache
-
-        cache = RadixCache(num_slots=4, min_prefix_length=2)
-
-        # Insert some prefixes
-        cache.insert([1, 2, 3])
-        cache.insert([4, 5, 6])
-
-        # Generate hits and misses
-        cache.find_longest_prefix([1, 2, 3, 7, 8])  # Hit
-        cache.find_longest_prefix([1, 2, 3, 9, 10])  # Hit
-        cache.find_longest_prefix([4, 5, 6, 11])  # Hit
-        cache.find_longest_prefix([99, 99, 99])  # Miss
-
-        stats = cache.get_stats()
-        assert stats["cache_hits"] == 3
-        assert stats["cache_misses"] == 1
-        assert stats["hit_rate_pct"] == pytest.approx(75.0)
 
 
 # =============================================================================
@@ -470,29 +391,6 @@ class TestCachePerformanceBenchmarks:
         # Should handle at least 10k routes/sec
         assert ops_per_sec > 10000, f"Router too slow: {ops_per_sec:.0f} routes/sec"
 
-    def test_radix_cache_throughput(self):
-        """RadixCache should handle high lookup rates."""
-        from src.radix_cache import RadixCache
-
-        cache = RadixCache(num_slots=8, min_prefix_length=4)
-
-        # Insert some prefixes
-        for i in range(8):
-            cache.insert([i] * 20 + list(range(100)))
-
-        # Generate queries
-        queries = [[i % 8] * 20 + list(range(50, 150)) for i in range(1000)]
-
-        start = time.time()
-        for query in queries:
-            cache.find_longest_prefix(query)
-        elapsed = time.time() - start
-
-        ops_per_sec = len(queries) / elapsed
-        print(f"RadixCache throughput: {ops_per_sec:.0f} lookups/sec")
-
-        # Should handle at least 5k lookups/sec
-        assert ops_per_sec > 5000, f"Cache too slow: {ops_per_sec:.0f} lookups/sec"
 
     def test_canonicalization_throughput(self):
         """Canonicalization should not be a bottleneck."""

@@ -38,6 +38,23 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 
+def _slot_state_filename(slot_id: int, prefix_hash: str) -> str:
+    """Return a llama-server slot-save filename accepted under --slot-save-path.
+
+    BARE filename only -- never a path. llama-server rejects any name containing a
+    path separator via ``fs_validate_filename(name, allow_subdirs=false)`` before it
+    concatenates ``params.slot_save_path + filename``.
+
+    Mirrors ``src/backends/concurrency_aware.py::_slot_filename`` deliberately; the two
+    are siblings and must not drift. Sanitisation is defensive here (slot_id is an int
+    and prefix_hash is hex), but it is what makes the contract enforced rather than
+    assumed.
+    """
+    raw = f"slot_{slot_id}_{prefix_hash}"
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")
+    return f"{safe[:180] or 'slot'}.bin"
+
+
 # =============================================================================
 # Prompt Canonicalization (Phase C)
 # =============================================================================
@@ -528,14 +545,24 @@ class CachingBackend:
             if not prefix_hash or slot.hit_count == 0:
                 continue
 
-            # Save slot state via backend
-            filename = os.path.join(save_dir, f"slot_{slot_id}_{prefix_hash}.bin")
+            # Save slot state via backend.
+            #
+            # MUST be a BARE filename, never a path. llama-server validates with
+            # fs_validate_filename(allow_subdirs=false), which rejects '/' outright,
+            # and only then does `params.slot_save_path + filename` (a plain string
+            # concatenation). Passing an absolute path made every save 400 and return
+            # False -- silently, because nothing above inspects the return value.
+            # Sibling path that always did this correctly:
+            # src/backends/concurrency_aware.py::_slot_filename.
+            filename = _slot_state_filename(slot_id, prefix_hash)
             if self.backend.save_slot(slot_id, filename):
                 manifest.append(
                     {
                         "slot_id": slot_id,
                         "prefix_hash": prefix_hash,
                         "hit_count": slot.hit_count,
+                        # Bare name. Resolves under the SERVER's --slot-save-path,
+                        # which is not necessarily reachable from this process.
                         "filename": filename,
                     }
                 )
@@ -588,13 +615,16 @@ class CachingBackend:
         restored_count = 0
         for entry in manifest.get("slots", []):
             slot_id = entry["slot_id"]
-            filename = entry["filename"]
+            # Bare name by contract (see _slot_state_filename). Tolerate legacy
+            # manifests that recorded a full path by reducing to the basename --
+            # llama-server would reject anything with a separator.
+            filename = os.path.basename(entry["filename"])
             prefix_hash = entry["prefix_hash"]
 
-            if not os.path.exists(filename):
-                logger.warning(f"Cache file missing: {filename}")
-                continue
-
+            # NO client-side os.path.exists() check here. The file lives under the
+            # SERVER's --slot-save-path, which this process may not share; the old
+            # check tested the wrong filesystem and skipped every entry. Let the
+            # backend call be the arbiter and report its own failure.
             if self.backend.restore_slot(slot_id, filename):
                 # Update router state
                 self.router.prefix_to_slot[prefix_hash] = slot_id
