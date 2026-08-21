@@ -1395,11 +1395,16 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
         cmd.extend(["--flash-attn", "on"])
 
     # --jinja: model's native chat template (enables thinking on Qwen3/3.5).
-    # SKIP for architect_general — Qwen3.5 hybrids enter infinite <think> loops.
-    # --reasoning off is insufficient: the jinja template itself primes the model
-    # into think mode. Without --jinja, llama-server falls back to generic ChatML
-    # which has no thinking scaffolding.
-    if flags.get("jinja", role_name != "architect_general") is True:
+    # 2026-08-21: the architect_general exclusion that used to live here was
+    # REVERSED upstream on 2026-06-26 (commit f4a8a3ca; gated on the J12
+    # think-loop probe — 0 leaks/loops over n=15,
+    # orchestration/reports/j12_think_loop_probe_20260706T143621Z). The compiled
+    # priors (stack_priors.py -> derived jinja: true) are authoritative; this
+    # default only fires when a role has no compiled prior, and the old
+    # `role_name != "architect_general"` default silently dropped --jinja for
+    # exactly that role on the no-priors path — the reversed policy surviving
+    # as a live fallback. Audit: per-request-reasoning-budget.md PRB-T1.
+    if flags.get("jinja", True) is True:
         cmd.append("--jinja")
 
     if runtime:

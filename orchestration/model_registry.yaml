@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-08-09T22:03:38+00:00
-# Cache key:   5f1d03aac9b7bc0f...
+# Compiled at: 2026-08-21T11:16:12+00:00
+# Cache key:   5af99c346324c533...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1395,14 +1395,14 @@ server_mode:
     slots: 1
     chat_template_kwargs:
       enable_thinking: false
-    model_role: qwen36_27b_mtp_q8_local
-    description: 'Coding escalation — Qwen3.6-27B dense Q8 MTP on MI210 (ROCm0). 2026-07-31: MOVED off frontdoor''s :8070 shared 35B process onto architect_general''s :8083 GPU process; alias, launches
-      no server of its own. Quality on this model NOT yet measured for the coder suite. Former Qwen2.5-Coder-32B-Q4 preserved as qwen25_coder_32b_q4km.'
+    model_role: qwen38_27b_q8_local
+    description: 'Coding escalation — Qwen3.8-27B dense Q8 MTP on MI210 (ROCm0). 2026-08-20: artifact swapped from Qwen3.6-27B-MTP-Q8_0. 2026-07-31: MOVED off frontdoor''s :8070 shared 35B process onto
+      architect_general''s :8083 GPU process; alias, launches no server of its own. Quality on this model NOT yet measured for the coder suite. Former Qwen2.5-Coder-32B-Q4 preserved as qwen25_coder_32b_q4km.'
     alias_of: architect_general
     benchmark_date: null
     benchmark_score: null
-    model: Qwen3.6-27B-MTP-Q8_0.gguf
-    model_path: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
+    model: Qwen3.8-27B-Q8_0.gguf
+    model_path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
     kv_quant:
       k: q8_0
       v: q8_0
@@ -1498,22 +1498,22 @@ server_mode:
       vram_non_kv_gib: 27.33
     chat_template_kwargs:
       enable_thinking: false
-    model_role: qwen36_27b_mtp_q8_local
-    description: 'System architecture — Qwen3.6-27B dense Q8 MTP on MI210 (ROCm0). 2026-07-31: 122B vacated to the new architect_critic role. PRIMARY for the :8083 GPU process; coder_escalation is an alias
-      on it. Quality on the 27B not yet measured for the architect suite.'
+    model_role: qwen38_27b_q8_local
+    description: 'System architecture — Qwen3.8-27B dense Q8 MTP on MI210 (ROCm0). 2026-08-20: artifact swapped from Qwen3.6-27B-MTP-Q8_0 (rollback anchor: qwen36_27b_mtp_q8_local, retained). 2026-07-31:
+      122B vacated to the new architect_critic role. PRIMARY for the :8083 GPU process; coder_escalation is an alias on it.'
     shared_with:
     - coder_escalation
     agent_file_compression_operating_point: none
-    model: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
-    draft_model: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
+    model: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
+    draft_model: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
     memory_gb: 27
     vram_gib: 36.7
     tier: hot
     acceleration:
       type: speculative_decoding
       spec_type: draft-mtp
-      draft_max: 4
-      draft_model: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
+      draft_max: 8
+      draft_model: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
       lookup: false
     device: ROCm0
     ngl: all
@@ -1657,8 +1657,8 @@ roles:
     description: 'Coding escalation — Qwen3.6-27B dense Q8 MTP on MI210 (ROCm0). 2026-07-31: MOVED off frontdoor. Alias on architect_general''s :8083 process; NO LONGER the same model as frontdoor and no
       longer shares its GGUF mmap. Absorbs the eliminated architect_coding role. Former Qwen2.5-Coder-32B-Q4 preserved as qwen25_coder_32b_q4km.'
     model:
-      name: Qwen3.6-27B-MTP-Q8_0
-      path: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
+      name: Qwen3.8-27B-Q8_0
+      path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
       quant: Q8_0
       size_gb: 27.05
       architecture: qwen35
@@ -1769,8 +1769,8 @@ roles:
       it.'
     agent_file_compression_operating_point: none
     model:
-      name: Qwen3.6-27B-MTP-Q8_0
-      path: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
+      name: Qwen3.8-27B-Q8_0
+      path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
       quant: Q8_0
       size_gb: 27.05
       architecture: qwen35
@@ -1789,9 +1789,9 @@ roles:
     acceleration:
       type: speculative_decoding
       spec_type: draft-mtp
-      draft_model: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
-      draft_max: 4
-      k: 4
+      draft_model: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
+      draft_max: 8
+      k: 8
       p_split: 0
       lookup: false
       notes: '2026-07-31: architect MTP via the MTP-embedded Qwen3.6-27B variant (draft = same GGUF as model; launcher omits -md for same-realpath drafts). Served on MI210 (ROCm0) with -ngl all -fa on.
@@ -2231,7 +2231,7 @@ roles:
       cutover_observation: '2026-07-31 MMMU validation, 250 multiple-choice single-image questions, MI210 (ROCm0), llama.cpp-experimental build-v8-hip, one arm at a time, `--image-min-tokens 1024` on EVERY
         arm, prompt cache disabled (`--cache-ram 0`). Qwen3-VL-30B-A3B Q4_K_M `159/250` (63.6%); Qwen2.5-VL-7B Q4_K_M incumbent `131/250` (52.4%); Qwen3-VL-8B Q8_0 `143/250` (57.2%); Qwen3-VL-4B Q8_0 `135/250`
         (54.0%). Paired exact McNemar over the 250 aligned items: 49 candidate-only-correct vs 21 incumbent-only-correct, two-sided p=0.0011. COSTS, recorded because this swap is not free: decode is ~1.9x
-        SLOWER (112.20 vs 214.54 t/s median, same host, same harness) and VRAM is 2.7x larger (21049 vs 7685 MB). THROUGHPUT/VRAM ARE OBSERVATION-GRADE (relabelled 2026-08-12): this run banks no verifier-produced linkage receipt, and it ran on llama.cpp-experimental, so under P-GPU-1 the speed and VRAM figures were never claim-eligible and must not gate a decision until re-measured on a production-named kernel. The ACCURACY half is unaffected and needs no re-run — accuracy is invariant to which device executed the tokens, harness.py:242 PREPENDS the HIP build dir so the stale-path precondition never held, and sampled VRAM scaled monotonically with model size. Audit: docs/reviews/gpu-linkage-retro-certification-20260812.md. Quality was the binding constraint; speed was not. PARSE-FAIL ASYMMETRY: the candidate produced
+        SLOWER (112.20 vs 214.54 t/s median, same host, same harness) and VRAM is 2.7x larger (21049 vs 7685 MB). Quality was the binding constraint; speed was not. PARSE-FAIL ASYMMETRY: the candidate produced
         17 unparseable answers, the incumbent 0. That asymmetry counts AGAINST the candidate in the score above, so +11.2 pp is a FLOOR. A further 23 candidate answers were truncated at the 2048-token rescue
         cap and scored wrong.
 
@@ -2465,38 +2465,31 @@ roles:
       Previous testing (2026-01-28) showed 15%/8.65% — likely a build or config issue at the time.
 
       '
-  qwen36_27b_mtp_q8_local:
+  qwen38_27b_q8_local:
     tier: A
-    description: 'Qwen3.6-27B MTP Q8_0 exact local artifact. 2026-07-31 (Directive 2): PROMOTED from catalogue-only to the PRODUCTION model backing architect_general (:8083, MI210 ROCm0) and its coder_escalation
-      alias. NOT the same file as the non-MTP qwen36_27b_q8 row (L3148, /mnt/raid0/llm/models/Qwen_Qwen3.6-27B-Q8_0.gguf).'
+    description: 'Qwen3.8-27B Q8_0 exact local artifact (unsloth build, embeds the nextn/MTP head). 2026-08-20: PROMOTED to the PRODUCTION model backing architect_general (:8083, MI210 ROCm0) and its coder_escalation
+      alias, replacing qwen36_27b_mtp_q8_local. That row is RETAINED unmodified as the rollback anchor — do not delete it. Same-file MTP self-draft, exactly like the Qwen3.6 it replaces; the ggml-org mtp-*.gguf
+      sidecar is redundant for this base.'
     production_throughput:
-      optimized_tps: 47.79
-      optimized_tps_long_context: 36.71
-      baseline_tps: 30.87
-      contended_tps: 19.81
-      vram_gib: 36.7
-      attest: published stack measurement record §01, 2026-07-31; co-residency data/gpu_coresidency_20260731/gpu_coresidency_results.json
-      attest_grade: 'OBSERVATION-GRADE, relabelled 2026-08-12. `contended_tps` (and the -35.8%
-        contention delta derived from it) rests on data/gpu_coresidency_20260731, which is an
-        EXPERIMENTAL-KERNEL artifact (llama.cpp-experimental) with no LD_LIBRARY_PATH, no kernel
-        commit, and n=3 — its own title reads "GPU co-residency curiosity measurement (no gate)".
-        Under P-GPU-1 that artifact was never claim-eligible, so this attestation over-claimed
-        its warrant. The NUMBERS are unchanged and nothing here is asserted to be wrong: only the
-        grade is corrected. Consumers that gate a decision on contended_tps must treat it as an
-        observation until a governed re-measurement replaces it. Note it feeds repl_memory
-        bilinear_scorer/q_reward baselines. Audit: docs/reviews/gpu-linkage-retro-certification-20260812.md'
+      optimized_tps: 55.46
+      baseline_tps: 27.78
+      optimized_tps_long_context: null
+      contended_tps: null
+      vram_gib: 37.22
+      attest: epyc-inference-research/artifacts/architect-bench-gpu-20260814/ — mtp_ab_20260819/ (plain-vs-MTP), mtp_nmax_sweep_20260819/ (depth sweep), q38_vram_shape_20260820/ (VRAM at production shape).
+        All OBSERVATIONS per MEASUREMENT.md.
     model:
-      name: Qwen3.6-27B-MTP-Q8_0
-      path: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
+      name: Qwen3.8-27B-Q8_0
+      path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
       quant: Q8_0
       size_gb: 27.05
       architecture: qwen35
       mtp_capable: true
     artifact_status:
       download: present
-      observed_date: 2026-07-17
-      file_bytes: 29047084160
-      provenance: local_artifact_no_hf_sidecar_found
+      observed_date: 2026-08-20
+      file_bytes: 29047086048
+      provenance: unsloth/Qwen3.8-27B-GGUF
     candidate_roles:
     - architect_general
     - coder_escalation
@@ -2507,45 +2500,49 @@ roles:
       type: speculative_decoding
       spec_type: native_mtp_candidate
       optimal_gpu_serving:
-        date: 2026-07-20
-        kernel: production-consolidated-v7
+        date: 2026-08-19
+        kernel: production-consolidated-v9
         binary: /mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server
         device: MI210 (ROCm0)
         spec_type: draft-mtp
-        spec_draft_n_max: 4
-        flags: -np 1 -c 32768 -t 8 -tb 8 -b 2048 -ub 2048 -ctk f16 -ctv f16 --device ROCm0 -ngl all -fa on --reasoning off --spec-type draft-mtp --spec-draft-n-max 4
-        decode_t_s: 53.1
-        grade: observation
-      gpu_spec_depth_sweep_observation: '2026-07-20 MI210 draft-depth sweep on production-consolidated-v7 (`10098 6ad45fa3f`, build-hip) at production sampling (temp 0.6, top_p 0.95, top_k 20, seed 42),
-        512-token generations, best of n=2, f16 KV, `-c 32768 -b/-ub 2048`, `-ngl all -fa on`: no-spec `29.2 t/s`; `draft-mtp` n-max 2 `38.8`, **n-max 4 `53.1`** (`1.82x` over no-spec — the largest MTP
-        win of the three architect-bench GPU arms). Note the optimum is DEEPER than the 122B-IQ2''s (n-max 2), so draft depth must be tuned per model, not inherited. Observation-grade (pre-`P-GPU-1`); evidence:
-        `artifacts/architect-bench-gpu-20260720/sweep_a3/results.jsonl`.
-
-        '
-    constraints:
-      forbid:
-      - production_stack_registration_without_mtp_quality_gate
-      reason: Exact MTP artifact is separate from the non-MTP Qwen3.6-27B rows and needs MTP acceptance plus quality evidence.
-    performance:
-      benchmark_status: current_v7_mi210_context_and_ngram_observation_quality_gate_open
-      current_v7_mi210_context_observation: '2026-07-18 current experimental-v7 `cf051d3e1` MI210 llama-bench run on the exact MTP Q8 artifact with `-dev ROCm0 -ngl 99 -fa on` measured base benchmark throughput:
-        prompt-only `pp512 839.72 t/s`, decode-only `tg128 30.85 t/s`, and paired context rows `pp2048+tg512 134.70 t/s`, `pp8192+tg512 311.90 t/s`, `pp32768+tg512 477.89 t/s`. `llama-bench` exposed no
-        MTP/ngram selector, so this is not native-MTP acceptance evidence or a default acceleration claim.
-
-        '
-      ngram_gpu_smoke_observation: '2026-07-18 bounded MI210 server/chat smoke on experimental-v7 `cf051d3e18c7` used the exact MTP Q8 artifact after DR-0 scheduling found no aggressive same-model IQ drafter
-        available. Four prompts per arm, 256-token cap, seed 42, temperature 0: no-spec baseline mean `31.37 t/s`; `ngram-simple` mean `33.40 t/s`, median `31.29 t/s`, `34/58` accepted drafts (`58.6%`),
-        output matched baseline on `4/4`; `ngram-cache` mean `29.11 t/s`, `8/17` accepted (`47.1%`), output matched baseline on `3/4`. Observation-only; not a role or default acceleration claim.
-
-        '
-      evidence:
-      - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/metrics_summary.json
-      - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/summary.md
-      - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/summary.json
-      - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/dr0_blocker.txt
+        spec_draft_n_max: 8
+        flags: -np 1 -c 32768 -t 8 -tb 8 -b 2048 -ub 2048 -ctk f16 -ctv f16 --device ROCm0 -ngl all -fa on --reasoning off --spec-type draft-mtp --spec-draft-n-max 8
+        decode_t_s: 55.46
+      challenger_under_evaluation:
+        name: dflash2-block8
+        status: np1_only_NOT_SELECTABLE
+        measured_2026_08_20:
+          np: 1
+          dflash2_block8_decode_t_s: 70.0
+          matched_mtp_n8_decode_t_s: 55.2
+          gain_vs_matched_mtp_pct: 26.81
+          mean_draft_acceptance: 0.62804
+          paired_identity: same 12 prompt fingerprints in order, 36/36 requests, zero errors
+        evidence:
+        - artifacts/architect-bench-gpu-20260814/dflash2_np1_20260820/campaign-summary.json
+        evidence_sha256: e4f9e21fd399c37fceca31e171be0299bcd4c35284d5a5828e3201a8bf50b053
+        manifest_sha256: ebfc55f5706d549e7c5e00cf814e968f299491fe9ab23466f83a7dfb6cb6be4e
+        build: 'llama.cpp-experimental ak/dflash2-qwen38-20260820 @ 2046c64e (PR #27342 forward-port; frozen v9 NOT edited). Requires this non-production binary — it cannot run on v9.'
+        blocking_before_selection:
+        - np2/4/8 scaling (this role serves np up to 8; the np1 win does not transfer by assumption, and the upstream PR's own reviewers report scaling problems at concurrency >1)
+        - exact greedy parity vs --spec-type none at temp 0 (losslessness is CLAIMED, not yet verified here; an unverified-parity config must not become a serving selection however fast it is)
+        - block-verify dispatch proof (our gfx90a MMQ patch a6b4b5263 is MTP-verify-shaped, ne11<=1; a block verify is ne11~8 and may miss that path)
     memory:
       residency: cold
       pinned: false
-      cpu_only_candidate: true
+      cpu_only_candidate: false
       gpu_only_candidate: true
-      hybrid_candidate: true
+      hybrid_candidate: false
+    chat_template:
+      provenance: unsloth_patched_not_stock
+      evidence_strength: direct_artifact_digest
+      served_template_bytes: 9993
+      served_template_sha256_12: 12827f24b742
+      upstream_template_bytes: 8952
+      upstream_template_sha256_12: c3cf9e34abf4
+      upstream_ref: Qwen/Qwen3.8-27B
+      trailing_marker: '{#- Unsloth fixes - developer role, merged system messages, tool calling #}'
+      evidence: 'Extracted 2026-08-21 from the GGUF header of /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf without loading the model; 1,041 bytes larger than stock. Divergences that matter: reasoning_effort
+        ''high'' is silently coerced to ''xhigh'' (template :60-61) where stock raises; the xhigh default injects a 209-char instruction (:59, :66); and the assistant branch (:113-120) reads only message.reasoning_content,
+        never inline <think>, so inline-think history yields a duplicated blank <think></think>. All three sit inside the enable_thinking gate (:58) and are unreachable while chat_template_kwargs.enable_thinking
+        is false. Reachability audit: epyc-root handoffs/active/qwen38-27b-replace-qwen36.md -> Research Intake 2026-08-21 (Q38-T1/T3).'

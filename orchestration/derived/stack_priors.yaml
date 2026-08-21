@@ -48,47 +48,47 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-08-11T01:36:33Z'
+compiled_at: '2026-08-21T11:25:28Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: fdbef870c2c78eaca62087a9a05ee72a3334ae5d490b1a70df7abd5797cf15c9
-    repo_commit: 74c68a2a
+    sha256: 115f599b61e819334b0a6bb9e9501173326f28d50f36ac8ffbc606397ec2149e
+    repo_commit: 7e74eba8
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: a94c5d7dae15c15c6e947f4c3f2fef0ee9d33aa1c1c9cee8e4550eaf8a9533b2
-    repo_commit: 74c68a2a
+    sha256: 1cf6a45747f880e4ecbc16157141a2db7d9c552aaadcbf03ff9101706f5de2c4
+    repo_commit: 7e74eba8
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: f2b18355829ff0ba81c1d82cc0bf28ff7b1cc3ba1de2858bea0b16cb5582fe07
-    repo_commit: 74c68a2a
+    repo_commit: 7e74eba8
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
-    sha256: ac99b872475404c259a64bf9ddae2f045620c928b7c19067f2d818eaddc8b07e
-    repo_commit: 74c68a2a
+    sha256: 835038054cba747ea0934fbcf823c3a128f25fb4d6fe75b08d1c5b5f77c64d8b
+    repo_commit: 7e74eba8
   launch_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/launch_manifest.yaml
-    sha256: 332331ebd64124678dc7ba988647da50edcaf0873e84ebbe80c38806fbaebb5f
-    repo_commit: 74c68a2a
+    sha256: c915af33c5d4cf0fc436ccf58c3c5578aa03965d3203c74213cc0e8549992f8b
+    repo_commit: 7e74eba8
   stack_topology:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
-    sha256: 59b997157643978a3eaf01c9245b9982423f7eb1a15ceae4db55b1c4a49fe069
-    repo_commit: 74c68a2a
+    sha256: 00507f15ca7afdf4eb9adfde05fbb721917e9d58477075db58506de6b033983b
+    repo_commit: 7e74eba8
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 0545bd5511651eda6723d1666254f48c9c61aa55ef04ed106fe1ad5ee57338e3
-    repo_commit: 74c68a2a
+    sha256: a5f3c5a4e19e7f78cb88774663a95541465c0156440093798c0ea93a6d33937d
+    repo_commit: 7e74eba8
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 52b173eb69b0838394e7d48d6112827f686e06d848a107291754f791e64b1064
-    repo_commit: 74c68a2a
+    repo_commit: 7e74eba8
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: 74c68a2a
+    repo_commit: 7e74eba8
 roles:
   architect_critic:
     role: architect_critic
@@ -301,8 +301,8 @@ roles:
     role: architect_general
     deployment_status: live_stack
     status: compiled
-    model_id: qwen3.6-27b-mtp-q8_0
-    display_name: Qwen3.6-27B-MTP-Q8_0
+    model_id: qwen3.8-27b-q8_0
+    display_name: Qwen3.8-27B-Q8_0
     serving:
       endpoint: http://localhost:8083
       server_role: architect_general
@@ -329,8 +329,8 @@ roles:
         modes:
         - default
         requirements:
-          model_path: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
-          draft_model_path: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
+          model_path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
+          draft_model_path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server
@@ -366,8 +366,8 @@ roles:
               enabled: true
               type: draft-mtp
               disabled_by: null
-              draft_model_path: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
-              draft_max: 4
+              draft_model_path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
+              draft_max: 8
               draft_min: null
               draft_p_min: null
               draft_p_split: null
@@ -387,46 +387,18 @@ roles:
         high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 47.79
-      quality_overall: 0.8597
+      quality_overall: null
       quality_by_axis:
         local:
           swe_verified: 0.575
-        public:
-          mmlu_pro: 0.862
-          gpqa_diamond: 0.878
-          aime26: 0.941
-          hmmt25: 0.938
-          livecodebench_v6: 0.839
-          swe_bench_verified: 0.772
-          terminal_bench_2: 0.593
-          mmmu: 0.829
-          mmmu_pro: 0.758
-          tool_compliance_local: 0.741
-        public_conditions:
-          provenance: vendor_reported
-          reported_precision: bf16
-          reported_mode: thinking
-          served_precision: Q8_0
-          source_url: https://huggingface.co/Qwen/Qwen3.6-27B
-          retrieved: *id001
-        comparable_across_all_models:
-        - mmlu_pro
-        - gpqa_diamond
-        - livecodebench_v6
-      quality_for_role:
-        value: 0.862
-        axis: reasoning
-        benchmark: mmlu_pro
-        rankable: true
-        comparable_value: 0.8597
-        skipped_axes: []
-        basis: role-relevant axis reasoning via mmlu_pro
-      quality_advisories: []
+      quality_for_role: null
+      quality_advisories:
+      - No whole-suite quality prior; domain evidence only (swe_verified). quality_overall is null BY DESIGN — read the per-axis evidence instead of expecting a scalar.
       memory_cost: 1.0
     acceleration:
       spec_type: draft-mtp
       draft_compat:
-      - qwen3.6-27b-mtp-q8_0
+      - qwen3.8-27b-q8_0
       enable_thinking: false
       thinking_control:
         mode: toggle_off
@@ -434,12 +406,12 @@ roles:
       kv:
         k: null
         v: null
-      draft_max: 4
-      k: 4
+      draft_max: 8
+      k: 8
       p_split: 0
       lookup: false
     model:
-      family: qwen3.6
+      family: qwen3.8
       arch: qwen35
       params_b: 27.0
       active_b: null
@@ -512,26 +484,6 @@ roles:
           agentic_suite: null
           math_suite: null
           speedup: 1.55x
-      - date: null
-        protocol: registry performance block
-        value:
-          benchmark_status: current_v7_mi210_context_and_ngram_observation_quality_gate_open
-          current_v7_mi210_context_observation: '2026-07-18 current experimental-v7 `cf051d3e1` MI210 llama-bench run on the exact MTP Q8 artifact with `-dev ROCm0 -ngl 99 -fa on` measured base benchmark
-            throughput: prompt-only `pp512 839.72 t/s`, decode-only `tg128 30.85 t/s`, and paired context rows `pp2048+tg512 134.70 t/s`, `pp8192+tg512 311.90 t/s`, `pp32768+tg512 477.89 t/s`. `llama-bench`
-            exposed no MTP/ngram selector, so this is not native-MTP acceptance evidence or a default acceleration claim.
-
-            '
-          ngram_gpu_smoke_observation: '2026-07-18 bounded MI210 server/chat smoke on experimental-v7 `cf051d3e18c7` used the exact MTP Q8 artifact after DR-0 scheduling found no aggressive same-model IQ
-            drafter available. Four prompts per arm, 256-token cap, seed 42, temperature 0: no-spec baseline mean `31.37 t/s`; `ngram-simple` mean `33.40 t/s`, median `31.29 t/s`, `34/58` accepted drafts
-            (`58.6%`), output matched baseline on `4/4`; `ngram-cache` mean `29.11 t/s`, `8/17` accepted (`47.1%`), output matched baseline on `3/4`. Observation-only; not a role or default acceleration
-            claim.
-
-            '
-          evidence:
-          - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/metrics_summary.json
-          - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/summary.md
-          - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/summary.json
-          - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/dr0_blocker.txt
       speed:
       - date: '2026-07-31'
         protocol: server_mode throughput
@@ -541,8 +493,8 @@ roles:
     role: coder_escalation
     deployment_status: live_stack
     status: compiled
-    model_id: qwen3.6-27b-mtp-q8_0
-    display_name: Qwen3.6-27B-MTP-Q8_0
+    model_id: qwen3.8-27b-q8_0
+    display_name: Qwen3.8-27B-Q8_0
     serving:
       endpoint: http://localhost:8083
       server_role: architect_general
@@ -569,8 +521,8 @@ roles:
         modes:
         - default
         requirements:
-          model_path: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
-          draft_model_path: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
+          model_path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
+          draft_model_path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server
@@ -627,46 +579,18 @@ roles:
         high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 47.79
-      quality_overall: 0.8597
+      quality_overall: null
       quality_by_axis:
         local:
           swe_verified: 0.575
-        public:
-          mmlu_pro: 0.862
-          gpqa_diamond: 0.878
-          aime26: 0.941
-          hmmt25: 0.938
-          livecodebench_v6: 0.839
-          swe_bench_verified: 0.772
-          terminal_bench_2: 0.593
-          mmmu: 0.829
-          mmmu_pro: 0.758
-          tool_compliance_local: 0.741
-        public_conditions:
-          provenance: vendor_reported
-          reported_precision: bf16
-          reported_mode: thinking
-          served_precision: Q8_0
-          source_url: https://huggingface.co/Qwen/Qwen3.6-27B
-          retrieved: *id001
-        comparable_across_all_models:
-        - mmlu_pro
-        - gpqa_diamond
-        - livecodebench_v6
-      quality_for_role:
-        value: 0.839
-        axis: coding
-        benchmark: livecodebench_v6
-        rankable: true
-        comparable_value: 0.8597
-        skipped_axes: []
-        basis: role-relevant axis coding via livecodebench_v6
-      quality_advisories: []
+      quality_for_role: null
+      quality_advisories:
+      - No whole-suite quality prior; domain evidence only (swe_verified). quality_overall is null BY DESIGN — read the per-axis evidence instead of expecting a scalar.
       memory_cost: 1.0
     acceleration:
       spec_type: draft-mtp
       draft_compat:
-      - qwen3.6-27b-mtp-q8_0
+      - qwen3.8-27b-q8_0
       enable_thinking: false
       thinking_control:
         mode: toggle_off
@@ -674,12 +598,12 @@ roles:
       kv:
         k: null
         v: null
-      draft_max: 4
-      k: 4
+      draft_max: 8
+      k: 8
       p_split: 0
       lookup: false
     model:
-      family: qwen3.6
+      family: qwen3.8
       arch: qwen35
       params_b: 27.0
       active_b: null
@@ -752,26 +676,6 @@ roles:
           agentic_suite: null
           math_suite: null
           speedup: 1.55x
-      - date: null
-        protocol: registry performance block
-        value:
-          benchmark_status: current_v7_mi210_context_and_ngram_observation_quality_gate_open
-          current_v7_mi210_context_observation: '2026-07-18 current experimental-v7 `cf051d3e1` MI210 llama-bench run on the exact MTP Q8 artifact with `-dev ROCm0 -ngl 99 -fa on` measured base benchmark
-            throughput: prompt-only `pp512 839.72 t/s`, decode-only `tg128 30.85 t/s`, and paired context rows `pp2048+tg512 134.70 t/s`, `pp8192+tg512 311.90 t/s`, `pp32768+tg512 477.89 t/s`. `llama-bench`
-            exposed no MTP/ngram selector, so this is not native-MTP acceptance evidence or a default acceleration claim.
-
-            '
-          ngram_gpu_smoke_observation: '2026-07-18 bounded MI210 server/chat smoke on experimental-v7 `cf051d3e18c7` used the exact MTP Q8 artifact after DR-0 scheduling found no aggressive same-model IQ
-            drafter available. Four prompts per arm, 256-token cap, seed 42, temperature 0: no-spec baseline mean `31.37 t/s`; `ngram-simple` mean `33.40 t/s`, median `31.29 t/s`, `34/58` accepted drafts
-            (`58.6%`), output matched baseline on `4/4`; `ngram-cache` mean `29.11 t/s`, `8/17` accepted (`47.1%`), output matched baseline on `3/4`. Observation-only; not a role or default acceleration
-            claim.
-
-            '
-          evidence:
-          - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/metrics_summary.json
-          - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/summary.md
-          - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/summary.json
-          - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/dr0_blocker.txt
       speed:
       - date: '2026-07-31'
         protocol: server_mode throughput
@@ -784,10 +688,11 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8080
+      endpoint: http://localhost:8070
       server_role: frontdoor
       binding: server_mode.direct
       ports:
+      - 8070
       - 8080
       - 8180
       slots: 4
@@ -799,6 +704,13 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8070
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 0
+          cpu_shape_class: full
+          slots: 4
         - port: 8080
           primary_role: frontdoor
           mode: default
@@ -967,10 +879,11 @@ roles:
     model_id: qwen3-next-80b-a3b-q4_k_m
     display_name: Qwen3-Next-80B-A3B-Instruct
     serving:
-      endpoint: http://localhost:8185
+      endpoint: http://localhost:8085
       server_role: ingest_long_context
       binding: server_mode.direct
       ports:
+      - 8085
       - 8185
       - 8285
       slots: 1
@@ -982,6 +895,13 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8085
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 0
+          cpu_shape_class: full
+          slots: 1
         - port: 8185
           primary_role: ingest_long_context
           mode: default
@@ -1293,193 +1213,6 @@ roles:
         protocol: server_mode throughput
         value_tps: 24.0
     known_gaps: []
-  qwen36_27b_mtp_q8_local:
-    role: qwen36_27b_mtp_q8_local
-    deployment_status: benchmark_or_candidate
-    status: compiled
-    model_id: qwen3.6-27b-mtp-q8_0
-    display_name: Qwen3.6-27B-MTP-Q8_0
-    serving:
-      endpoint: http://localhost:8083
-      server_role: coder_escalation
-      binding: server_mode.model_role
-      ports:
-      - 8083
-      slots: 1
-      tier: hot
-      effective_context_tokens: null
-      binary: llama.cpp
-      binary_dir: null
-      numa_policy: single_96t
-      shared_mmap: true
-      launch:
-        entries: []
-        primary_roles: []
-        modes: []
-        requirements: {}
-        runtime: {}
-    policy:
-      lock_class: exclusive
-      contention_class: heavy
-      tap_safe_non_stream: false
-      high_cost: false
-      model_mem_gb: 27.05
-      source: stack_priors.compile
-      thresholds:
-        tap_safe_non_stream_min_mem_gb: 64.0
-        high_cost_min_mem_gb: 60.0
-    priors:
-      throughput_tps: 47.79
-      quality_overall: 0.8597
-      quality_by_axis:
-        local:
-          swe_verified: 0.575
-        public:
-          mmlu_pro: 0.862
-          gpqa_diamond: 0.878
-          aime26: 0.941
-          hmmt25: 0.938
-          livecodebench_v6: 0.839
-          swe_bench_verified: 0.772
-          terminal_bench_2: 0.593
-          mmmu: 0.829
-          mmmu_pro: 0.758
-          tool_compliance_local: 0.741
-        public_conditions:
-          provenance: vendor_reported
-          reported_precision: bf16
-          reported_mode: thinking
-          served_precision: Q8_0
-          source_url: https://huggingface.co/Qwen/Qwen3.6-27B
-          retrieved: *id001
-        comparable_across_all_models:
-        - mmlu_pro
-        - gpqa_diamond
-        - livecodebench_v6
-      quality_for_role:
-        value: 0.862
-        axis: reasoning
-        benchmark: mmlu_pro
-        rankable: true
-        comparable_value: 0.8597
-        skipped_axes: []
-        basis: role-relevant axis reasoning via mmlu_pro
-      quality_advisories: []
-      memory_cost: 1.0
-    acceleration:
-      spec_type: draft-mtp
-      draft_compat:
-      - qwen3.6-27b-mtp-q8_0
-      enable_thinking: false
-      thinking_control:
-        mode: toggle_off
-        source: model.disable_thinking
-      kv:
-        k: null
-        v: null
-      draft_max: 4
-      k: 4
-      p_split: 0
-      lookup: false
-    model:
-      family: qwen3.6
-      arch: qwen35
-      params_b: 27.0
-      active_b: null
-      quant: Q8_0
-      mem_gb: 27.05
-      ctx_max: 262144
-      ctx_model_max: null
-      modalities:
-      - text
-      attention_layers: 64
-    evidence:
-      precedence:
-        serving: server_mode/stack_manifest outrank roles metadata
-        memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
-      descriptor_server_roles:
-      - architect_general
-      - coder_escalation
-      alias_overrides: []
-      quality:
-      - date: '2026-07-31'
-        protocol: registry performance block
-        value:
-          superseded_model_history:
-            model: Qwen3-235B-A22B-Q4_K_M
-            note: category=BASELINE / historical. Never a headline, never a decision input.
-            baseline_tps: 5.3
-            moe4_baseline_tps: 3.87
-            moe4_spec_tps: 8.21
-            full_spec_tps: 6.08
-          superseded_model_history_122b:
-            model: Qwen3.5-122B-A10B UD-Q4_K_M
-            note: Relocated to roles.architect_critic. Retained here only as the swap breadcrumb.
-            qwen35_122b_probe_b_tps: 12.19
-            optimized_tps: 24.0
-            optimized_tps_long_context: 15.76
-            quality_score: 2.57/3
-            spec_acceptance_moe4: 54.8%
-            spec_acceptance_full: 52.7%
-          baseline_tps: 30.87
-          optimized_tps: 47.79
-          optimized_tps_long_context: 36.71
-          optimized_tps_attest: '[published stack measurement record §01, 2026-07-31, production-optimal rows]'
-          contended_tps: 19.81
-          speedup: 1.55x
-          vram_gib: 36.7
-          swe_verified_pct: 57.5
-          swe_verified_raw: 23/40
-          swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
-          swe_verified_comparators: A1 Qwen3.5-122B-A10B IQ2 37.5% (15/40) · A4 Qwen3.6-35B-A3B 32.5% (13/40). NOTE A1 is the IQ2 quant, NOT the UD-Q4_K_M that architect_critic serves — this is not a head-to-head
-            against the deployed 122B.
-          swe_verified_shape_caveat: Measured at -c 49152 / f16 KV / -np 1; production launches -c 16384 / q8_0 KV / slots 2. Quality transfer across context depth is assumed here, not measured.
-          swe_verified_transfer_basis: operator-certified v7-to-v8 kernel delta 0.0pp exact quality parity; quality_transfer_to_v8_eligible=true
-          quality_score: null
-          benchmark_date: '2026-07-31'
-      - date: null
-        protocol: registry performance block
-        value:
-          inherits_from: architect_general
-          baseline_tps: 30.87
-          optimized_tps: 47.79
-          optimized_tps_long_context: 36.71
-          optimized_tps_attest: '[published stack measurement record §01, 2026-07-31]'
-          contended_tps: 19.81
-          swe_verified_pct: 57.5
-          swe_verified_raw: 23/40
-          swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
-          quality_pct: null
-          coder_suite: null
-          agentic_suite: null
-          math_suite: null
-          speedup: 1.55x
-      - date: null
-        protocol: registry performance block
-        value:
-          benchmark_status: current_v7_mi210_context_and_ngram_observation_quality_gate_open
-          current_v7_mi210_context_observation: '2026-07-18 current experimental-v7 `cf051d3e1` MI210 llama-bench run on the exact MTP Q8 artifact with `-dev ROCm0 -ngl 99 -fa on` measured base benchmark
-            throughput: prompt-only `pp512 839.72 t/s`, decode-only `tg128 30.85 t/s`, and paired context rows `pp2048+tg512 134.70 t/s`, `pp8192+tg512 311.90 t/s`, `pp32768+tg512 477.89 t/s`. `llama-bench`
-            exposed no MTP/ngram selector, so this is not native-MTP acceptance evidence or a default acceleration claim.
-
-            '
-          ngram_gpu_smoke_observation: '2026-07-18 bounded MI210 server/chat smoke on experimental-v7 `cf051d3e18c7` used the exact MTP Q8 artifact after DR-0 scheduling found no aggressive same-model IQ
-            drafter available. Four prompts per arm, 256-token cap, seed 42, temperature 0: no-spec baseline mean `31.37 t/s`; `ngram-simple` mean `33.40 t/s`, median `31.29 t/s`, `34/58` accepted drafts
-            (`58.6%`), output matched baseline on `4/4`; `ngram-cache` mean `29.11 t/s`, `8/17` accepted (`47.1%`), output matched baseline on `3/4`. Observation-only; not a role or default acceleration
-            claim.
-
-            '
-          evidence:
-          - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/metrics_summary.json
-          - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/summary.md
-          - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/summary.json
-          - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/dr0_blocker.txt
-      speed:
-      - date: '2026-07-31'
-        protocol: server_mode throughput
-        value_tps: 47.79
-    known_gaps: []
   qwen36_q8_0:
     role: qwen36_q8_0
     deployment_status: benchmark_or_candidate
@@ -1593,6 +1326,145 @@ roles:
         protocol: server_mode throughput
         value_tps: 40.22
     known_gaps: []
+  qwen38_27b_q8_local:
+    role: qwen38_27b_q8_local
+    deployment_status: benchmark_or_candidate
+    status: compiled
+    model_id: qwen3.8-27b-q8_0
+    display_name: Qwen3.8-27B-Q8_0
+    serving:
+      endpoint: http://localhost:8083
+      server_role: coder_escalation
+      binding: server_mode.model_role
+      ports:
+      - 8083
+      slots: 1
+      tier: hot
+      effective_context_tokens: null
+      binary: llama.cpp
+      binary_dir: null
+      numa_policy: single_96t
+      shared_mmap: true
+      launch:
+        entries: []
+        primary_roles: []
+        modes: []
+        requirements: {}
+        runtime: {}
+    policy:
+      lock_class: exclusive
+      contention_class: heavy
+      tap_safe_non_stream: false
+      high_cost: false
+      model_mem_gb: 27.05
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
+    priors:
+      throughput_tps: 47.79
+      quality_overall: null
+      quality_by_axis:
+        local:
+          swe_verified: 0.575
+      quality_for_role: null
+      quality_advisories:
+      - No whole-suite quality prior; domain evidence only (swe_verified). quality_overall is null BY DESIGN — read the per-axis evidence instead of expecting a scalar.
+      memory_cost: 1.0
+    acceleration:
+      spec_type: draft-mtp
+      draft_compat:
+      - qwen3.8-27b-q8_0
+      enable_thinking: false
+      thinking_control:
+        mode: toggle_off
+        source: model.disable_thinking
+      kv:
+        k: null
+        v: null
+      draft_max: 8
+      k: 8
+      p_split: 0
+      lookup: false
+    model:
+      family: qwen3.8
+      arch: qwen35
+      params_b: 27.0
+      active_b: null
+      quant: Q8_0
+      mem_gb: 27.05
+      ctx_max: 262144
+      ctx_model_max: null
+      modalities:
+      - text
+      attention_layers: 64
+    evidence:
+      precedence:
+        serving: server_mode/stack_manifest outrank roles metadata
+        memory_cost: server_mode.tier
+        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+      descriptor_server_roles:
+      - architect_general
+      - coder_escalation
+      alias_overrides: []
+      quality:
+      - date: '2026-07-31'
+        protocol: registry performance block
+        value:
+          superseded_model_history:
+            model: Qwen3-235B-A22B-Q4_K_M
+            note: category=BASELINE / historical. Never a headline, never a decision input.
+            baseline_tps: 5.3
+            moe4_baseline_tps: 3.87
+            moe4_spec_tps: 8.21
+            full_spec_tps: 6.08
+          superseded_model_history_122b:
+            model: Qwen3.5-122B-A10B UD-Q4_K_M
+            note: Relocated to roles.architect_critic. Retained here only as the swap breadcrumb.
+            qwen35_122b_probe_b_tps: 12.19
+            optimized_tps: 24.0
+            optimized_tps_long_context: 15.76
+            quality_score: 2.57/3
+            spec_acceptance_moe4: 54.8%
+            spec_acceptance_full: 52.7%
+          baseline_tps: 30.87
+          optimized_tps: 47.79
+          optimized_tps_long_context: 36.71
+          optimized_tps_attest: '[published stack measurement record §01, 2026-07-31, production-optimal rows]'
+          contended_tps: 19.81
+          speedup: 1.55x
+          vram_gib: 36.7
+          swe_verified_pct: 57.5
+          swe_verified_raw: 23/40
+          swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
+          swe_verified_comparators: A1 Qwen3.5-122B-A10B IQ2 37.5% (15/40) · A4 Qwen3.6-35B-A3B 32.5% (13/40). NOTE A1 is the IQ2 quant, NOT the UD-Q4_K_M that architect_critic serves — this is not a head-to-head
+            against the deployed 122B.
+          swe_verified_shape_caveat: Measured at -c 49152 / f16 KV / -np 1; production launches -c 16384 / q8_0 KV / slots 2. Quality transfer across context depth is assumed here, not measured.
+          swe_verified_transfer_basis: operator-certified v7-to-v8 kernel delta 0.0pp exact quality parity; quality_transfer_to_v8_eligible=true
+          quality_score: null
+          benchmark_date: '2026-07-31'
+      - date: null
+        protocol: registry performance block
+        value:
+          inherits_from: architect_general
+          baseline_tps: 30.87
+          optimized_tps: 47.79
+          optimized_tps_long_context: 36.71
+          optimized_tps_attest: '[published stack measurement record §01, 2026-07-31]'
+          contended_tps: 19.81
+          swe_verified_pct: 57.5
+          swe_verified_raw: 23/40
+          swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
+          quality_pct: null
+          coder_suite: null
+          agentic_suite: null
+          math_suite: null
+          speedup: 1.55x
+      speed:
+      - date: '2026-07-31'
+        protocol: server_mode throughput
+        value_tps: 47.79
+    known_gaps: []
   toolrunner:
     role: toolrunner
     deployment_status: live_stack
@@ -1600,10 +1472,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.shared_with
       ports:
+      - 8072
       - 8082
       - 8182
       slots: 4
@@ -1615,6 +1488,14 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 0
+          cpu_shape_class: full
+          worker_type: explore
+          slots: 4
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -2032,10 +1913,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.shared_with
       ports:
+      - 8072
       - 8082
       - 8182
       slots: 4
@@ -2047,6 +1929,14 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 0
+          cpu_shape_class: full
+          worker_type: explore
+          slots: 4
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -2267,10 +2157,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.model_role
       ports:
+      - 8072
       - 8082
       - 8182
       slots: 4
@@ -2282,6 +2173,14 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 0
+          cpu_shape_class: full
+          worker_type: explore
+          slots: 4
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -2510,10 +2409,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.shared_with
       ports:
+      - 8072
       - 8082
       - 8182
       slots: 4
@@ -2525,6 +2425,14 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 0
+          cpu_shape_class: full
+          worker_type: explore
+          slots: 4
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -2745,10 +2653,11 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8080
+      endpoint: http://localhost:8070
       server_role: frontdoor
       binding: server_mode.shared_with
       ports:
+      - 8070
       - 8080
       - 8180
       slots: 4
@@ -2760,13 +2669,13 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8080
+        - port: 8070
           primary_role: frontdoor
           mode: default
           alias: true
-          numa_instance: 1
-          cpu_shape_class: half
-          slots: 1
+          numa_instance: 0
+          cpu_shape_class: full
+          slots: 4
         primary_roles:
         - frontdoor
         modes:

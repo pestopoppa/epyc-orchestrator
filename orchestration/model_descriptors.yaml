@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-08-11T01:36:32Z'
+compiled_at: '2026-08-21T11:25:28Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 74c68a2a
-    sha256: fdbef870c2c78eaca62087a9a05ee72a3334ae5d490b1a70df7abd5797cf15c9
+    repo_commit: 7e74eba8
+    sha256: 115f599b61e819334b0a6bb9e9501173326f28d50f36ac8ffbc606397ec2149e
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: 95c4307a
-    sha256: fa820098328b3f556c117746522ca2362c5ae5769632e205b0e746f1f9011b8e
+    repo_commit: 5b4cca88
+    sha256: ab063e14da293241456e7f3897031a10943ef35b0eba593e5963a88f5a106986
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -694,220 +694,6 @@ models:
   architecture:
     attention_layers: 64
     source: registry.model
-- model_id: qwen3.6-27b-mtp-q8_0
-  display_name: Qwen3.6-27B-MTP-Q8_0
-  family: qwen3.6
-  arch: qwen35
-  params_b: 27.0
-  active_b: null
-  quant: Q8_0
-  mem_gb: 27.05
-  ctx_max: 262144
-  ctx_model_max: null
-  modalities:
-  - text
-  role_bindings:
-    roles:
-    - architect_general
-    - coder_escalation
-    - qwen36_27b_mtp_q8_local
-    server_roles:
-    - architect_general
-    - coder_escalation
-    runtime_aliases: []
-    shared_mmap: true
-  quality:
-    suite_vector:
-      swe_verified: 0.575
-      overall: 0.8597
-    overall_basis: 'public benchmarks: mean(mmlu_pro, gpqa_diamond, livecodebench_v6) — vendor_reported, bf16, mode=thinking'
-    source: orchestration/model_registry.yaml
-    eval_protocol: MEASUREMENT.md#canonical-quality
-    measured:
-    - date: '2026-07-31'
-      protocol: registry performance block
-      value:
-        superseded_model_history:
-          model: Qwen3-235B-A22B-Q4_K_M
-          note: category=BASELINE / historical. Never a headline, never a decision input.
-          baseline_tps: 5.3
-          moe4_baseline_tps: 3.87
-          moe4_spec_tps: 8.21
-          full_spec_tps: 6.08
-        superseded_model_history_122b:
-          model: Qwen3.5-122B-A10B UD-Q4_K_M
-          note: Relocated to roles.architect_critic. Retained here only as the swap breadcrumb.
-          qwen35_122b_probe_b_tps: 12.19
-          optimized_tps: 24.0
-          optimized_tps_long_context: 15.76
-          quality_score: 2.57/3
-          spec_acceptance_moe4: 54.8%
-          spec_acceptance_full: 52.7%
-        baseline_tps: 30.87
-        optimized_tps: 47.79
-        optimized_tps_long_context: 36.71
-        optimized_tps_attest: '[published stack measurement record §01, 2026-07-31, production-optimal rows]'
-        contended_tps: 19.81
-        speedup: 1.55x
-        vram_gib: 36.7
-        swe_verified_pct: 57.5
-        swe_verified_raw: 23/40
-        swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
-        swe_verified_comparators: A1 Qwen3.5-122B-A10B IQ2 37.5% (15/40) · A4 Qwen3.6-35B-A3B 32.5% (13/40). NOTE A1 is the IQ2 quant, NOT the UD-Q4_K_M that architect_critic serves — this is not a head-to-head
-          against the deployed 122B.
-        swe_verified_shape_caveat: Measured at -c 49152 / f16 KV / -np 1; production launches -c 16384 / q8_0 KV / slots 2. Quality transfer across context depth is assumed here, not measured.
-        swe_verified_transfer_basis: operator-certified v7-to-v8 kernel delta 0.0pp exact quality parity; quality_transfer_to_v8_eligible=true
-        quality_score: null
-        benchmark_date: '2026-07-31'
-    - date: null
-      protocol: registry performance block
-      value:
-        inherits_from: architect_general
-        baseline_tps: 30.87
-        optimized_tps: 47.79
-        optimized_tps_long_context: 36.71
-        optimized_tps_attest: '[published stack measurement record §01, 2026-07-31]'
-        contended_tps: 19.81
-        swe_verified_pct: 57.5
-        swe_verified_raw: 23/40
-        swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
-        quality_pct: null
-        coder_suite: null
-        agentic_suite: null
-        math_suite: null
-        speedup: 1.55x
-    - date: null
-      protocol: registry performance block
-      value:
-        benchmark_status: current_v7_mi210_context_and_ngram_observation_quality_gate_open
-        current_v7_mi210_context_observation: '2026-07-18 current experimental-v7 `cf051d3e1` MI210 llama-bench run on the exact MTP Q8 artifact with `-dev ROCm0 -ngl 99 -fa on` measured base benchmark
-          throughput: prompt-only `pp512 839.72 t/s`, decode-only `tg128 30.85 t/s`, and paired context rows `pp2048+tg512 134.70 t/s`, `pp8192+tg512 311.90 t/s`, `pp32768+tg512 477.89 t/s`. `llama-bench`
-          exposed no MTP/ngram selector, so this is not native-MTP acceptance evidence or a default acceleration claim.
-
-          '
-        ngram_gpu_smoke_observation: '2026-07-18 bounded MI210 server/chat smoke on experimental-v7 `cf051d3e18c7` used the exact MTP Q8 artifact after DR-0 scheduling found no aggressive same-model IQ
-          drafter available. Four prompts per arm, 256-token cap, seed 42, temperature 0: no-spec baseline mean `31.37 t/s`; `ngram-simple` mean `33.40 t/s`, median `31.29 t/s`, `34/58` accepted drafts
-          (`58.6%`), output matched baseline on `4/4`; `ngram-cache` mean `29.11 t/s`, `8/17` accepted (`47.1%`), output matched baseline on `3/4`. Observation-only; not a role or default acceleration claim.
-
-          '
-        evidence:
-        - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/metrics_summary.json
-        - /mnt/raid0/llm/epyc-inference-research/data/gpu-mi210/qwen36-27b-mtp-q8-v7-context-20260718T222725Z/summary.md
-        - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/summary.json
-        - /mnt/raid0/llm/epyc-inference-research/data/ngram_gpu_smoke_20260718T221549Z/dr0_blocker.txt
-    public:
-      benchmarks:
-        mmlu_pro: 0.862
-        gpqa_diamond: 0.878
-        aime26: 0.941
-        hmmt25: 0.938
-        livecodebench_v6: 0.839
-        swe_bench_verified: 0.772
-        terminal_bench_2: 0.593
-        mmmu: 0.829
-        mmmu_pro: 0.758
-        tool_compliance_local: 0.741
-      benchmark_provenance:
-        mmlu_pro: vendor_reported
-        gpqa_diamond: vendor_reported
-        aime26: vendor_reported
-        hmmt25: vendor_reported
-        livecodebench_v6: vendor_reported
-        swe_bench_verified: vendor_reported
-        terminal_bench_2: vendor_reported
-        mmmu: vendor_reported
-        mmmu_pro: vendor_reported
-        tool_compliance_local: measured_local
-      provenance: vendor_reported
-      reported_precision: bf16
-      served_precision: Q8_0
-      reported_mode: thinking
-      source_url: https://huggingface.co/Qwen/Qwen3.6-27B
-      absent_from_card:
-      - ifeval
-      - bfcl_v3
-      - bfcl_v4
-      - ruler_1m
-      - longbench_v2
-      retrieved: *id001
-      axes:
-        mmlu_pro: reasoning
-        gpqa_diamond: science
-        aime26: math
-        aime25: math
-        hmmt25: math
-        livecodebench_v6: coding
-        aider_polyglot: coding
-        codeforces_elo: coding
-        swe_bench_verified: agentic_coding
-        terminal_bench_2: agentic_terminal
-        tool_compliance_local: tool_use
-        bfcl_v3: tool_use
-        bfcl_v4: tool_use
-        ifeval: instruction_following
-        mmmu: vision_language
-        mmmu_pro: vision_language
-        mathvision: vision_language
-        ruler_1m: long_context
-        longbench_v2: long_context
-        aa_lcr: long_context
-        mrcr_v2_128k: long_context
-      universal_keys:
-      - mmlu_pro
-      - gpqa_diamond
-      - livecodebench_v6
-      local_corroboration:
-        swe_bench_verified:
-          value: 0.575
-          instrument: swe-bench-verified-40q-local
-          ratio_to_reported: 0.745
-          note: ratified local run; Q8_0, enable_thinking=false, 40-question subset
-    for_role:
-      value: 0.862
-      axis: reasoning
-      benchmark: mmlu_pro
-      rankable: true
-      comparable_value: 0.8597
-      skipped_axes: []
-      basis: role-relevant axis reasoning via mmlu_pro
-  speed:
-    solo_96t_tps: 47.79
-    quarter_48t_tps: null
-    prefill_tps: null
-    optimized_tps: 47.79
-    source: orchestration/model_registry.yaml
-    measured:
-    - date: '2026-07-31'
-      protocol: server_mode throughput
-      value_tps: 47.79
-  acceleration:
-    spec_type: draft-mtp
-    draft_compat:
-    - qwen3.6-27b-mtp-q8_0
-    enable_thinking: false
-    thinking_control:
-      mode: toggle_off
-      source: model.disable_thinking
-    kv:
-      k: null
-      v: null
-    draft_max: 4
-    k: 4
-    p_split: 0
-    lookup: false
-  serving:
-    binary: llama.cpp
-    binary_dir: null
-    numa_policy: single_96t
-    mlock: false
-    ports:
-    - 8083
-    server_role: architect_general
-    requirements: {}
-  known_gaps: []
-  architecture:
-    attention_layers: 64
-    source: registry.model
 - model_id: qwen3.6-35b-a3b-mtp-q8_0
   display_name: Qwen3.6-35B-A3B-MTP-Q8_0
   family: qwen3.6
@@ -1183,3 +969,122 @@ models:
     server_role: frontdoor
     requirements: {}
   known_gaps: []
+- model_id: qwen3.8-27b-q8_0
+  display_name: Qwen3.8-27B-Q8_0
+  family: qwen3.8
+  arch: qwen35
+  params_b: 27.0
+  active_b: null
+  quant: Q8_0
+  mem_gb: 27.05
+  ctx_max: 262144
+  ctx_model_max: null
+  modalities:
+  - text
+  role_bindings:
+    roles:
+    - architect_general
+    - coder_escalation
+    - qwen38_27b_q8_local
+    server_roles:
+    - architect_general
+    - coder_escalation
+    runtime_aliases: []
+    shared_mmap: true
+  quality:
+    suite_vector:
+      swe_verified: 0.575
+    overall_basis: null
+    source: orchestration/model_registry.yaml
+    eval_protocol: MEASUREMENT.md#canonical-quality
+    measured:
+    - date: '2026-07-31'
+      protocol: registry performance block
+      value:
+        superseded_model_history:
+          model: Qwen3-235B-A22B-Q4_K_M
+          note: category=BASELINE / historical. Never a headline, never a decision input.
+          baseline_tps: 5.3
+          moe4_baseline_tps: 3.87
+          moe4_spec_tps: 8.21
+          full_spec_tps: 6.08
+        superseded_model_history_122b:
+          model: Qwen3.5-122B-A10B UD-Q4_K_M
+          note: Relocated to roles.architect_critic. Retained here only as the swap breadcrumb.
+          qwen35_122b_probe_b_tps: 12.19
+          optimized_tps: 24.0
+          optimized_tps_long_context: 15.76
+          quality_score: 2.57/3
+          spec_acceptance_moe4: 54.8%
+          spec_acceptance_full: 52.7%
+        baseline_tps: 30.87
+        optimized_tps: 47.79
+        optimized_tps_long_context: 36.71
+        optimized_tps_attest: '[published stack measurement record §01, 2026-07-31, production-optimal rows]'
+        contended_tps: 19.81
+        speedup: 1.55x
+        vram_gib: 36.7
+        swe_verified_pct: 57.5
+        swe_verified_raw: 23/40
+        swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
+        swe_verified_comparators: A1 Qwen3.5-122B-A10B IQ2 37.5% (15/40) · A4 Qwen3.6-35B-A3B 32.5% (13/40). NOTE A1 is the IQ2 quant, NOT the UD-Q4_K_M that architect_critic serves — this is not a head-to-head
+          against the deployed 122B.
+        swe_verified_shape_caveat: Measured at -c 49152 / f16 KV / -np 1; production launches -c 16384 / q8_0 KV / slots 2. Quality transfer across context depth is assumed here, not measured.
+        swe_verified_transfer_basis: operator-certified v7-to-v8 kernel delta 0.0pp exact quality parity; quality_transfer_to_v8_eligible=true
+        quality_score: null
+        benchmark_date: '2026-07-31'
+    - date: null
+      protocol: registry performance block
+      value:
+        inherits_from: architect_general
+        baseline_tps: 30.87
+        optimized_tps: 47.79
+        optimized_tps_long_context: 36.71
+        optimized_tps_attest: '[published stack measurement record §01, 2026-07-31]'
+        contended_tps: 19.81
+        swe_verified_pct: 57.5
+        swe_verified_raw: 23/40
+        swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
+        quality_pct: null
+        coder_suite: null
+        agentic_suite: null
+        math_suite: null
+        speedup: 1.55x
+  speed:
+    solo_96t_tps: 47.79
+    quarter_48t_tps: null
+    prefill_tps: null
+    optimized_tps: 47.79
+    source: orchestration/model_registry.yaml
+    measured:
+    - date: '2026-07-31'
+      protocol: server_mode throughput
+      value_tps: 47.79
+  acceleration:
+    spec_type: draft-mtp
+    draft_compat:
+    - qwen3.8-27b-q8_0
+    enable_thinking: false
+    thinking_control:
+      mode: toggle_off
+      source: model.disable_thinking
+    kv:
+      k: null
+      v: null
+    draft_max: 8
+    k: 8
+    p_split: 0
+    lookup: false
+  serving:
+    binary: llama.cpp
+    binary_dir: null
+    numa_policy: single_96t
+    mlock: false
+    ports:
+    - 8083
+    server_role: architect_general
+    requirements: {}
+  known_gaps: []
+  architecture:
+    attention_layers: 64
+    source: registry.model
