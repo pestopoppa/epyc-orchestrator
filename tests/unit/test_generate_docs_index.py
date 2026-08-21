@@ -5,7 +5,8 @@ import sys
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).resolve().parent / "generate_docs_index.py"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = REPO_ROOT / "scripts" / "docs" / "generate_docs_index.py"
 
 
 def run_generator(root: Path, output: Path, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -64,3 +65,10 @@ def test_generate_docs_index_check_reports_staleness(tmp_path: Path) -> None:
 
     assert check.returncode == 1
     assert "stale generated docs index" in check.stdout
+
+
+if __name__ == "__main__":
+    raise SystemExit(
+        "REFUSING: pytest-fixture suite; run: "
+        "python -m pytest tests/unit/test_generate_docs_index.py -q"
+    )

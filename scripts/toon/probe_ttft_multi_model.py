@@ -5,7 +5,7 @@ Tests TOON performance benefits across different model sizes to
 determine if improvements scale with model complexity.
 
 Usage:
-    python scripts/toon/multi_model_ttft_test.py
+    python scripts/toon/probe_ttft_multi_model.py
 """
 
 from __future__ import annotations

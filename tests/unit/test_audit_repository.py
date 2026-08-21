@@ -5,7 +5,8 @@ import sys
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).resolve().parent / "audit_repository.py"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = REPO_ROOT / "scripts" / "security" / "audit_repository.py"
 
 
 def _run_git(root: Path, *args: str) -> None:
@@ -85,3 +86,10 @@ def test_audit_repository_allows_known_credential_redaction_fixtures(tmp_path: P
     result = _audit(tmp_path)
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+if __name__ == "__main__":
+    raise SystemExit(
+        "REFUSING: pytest-fixture suite; run: "
+        "python -m pytest tests/unit/test_audit_repository.py -q"
+    )

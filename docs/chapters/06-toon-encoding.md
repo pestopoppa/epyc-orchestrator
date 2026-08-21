@@ -205,7 +205,7 @@ The encoder has 51 unit tests covering file listings, escalation context, proced
 | Orchestration scenarios | 4 | 57.9-70.2% reduction |
 | Round-trip validation | 4 | Lossless fidelity confirmed |
 
-**Comprehensive suite**: `scripts/toon/comprehensive_toon_test.py` — ~120 test cases covering edge cases, unicode, non-uniform detection, and live TTFT measurement.
+**Comprehensive suite**: `scripts/toon/comprehensive_toon_check.py` — ~120 test cases covering edge cases, unicode, non-uniform detection, and live TTFT measurement.
 
 </details>
 
@@ -219,7 +219,7 @@ The encoder has 51 unit tests covering file listings, escalation context, proced
 - Source: `src/services/toon_encoder.py`
 - Unit tests: `tests/unit/test_toon_encoder.py`
 - Benchmark results: `benchmarks/results/ttft_toon_results.json`
-- Comprehensive tests: `scripts/toon/comprehensive_toon_test.py`
+- Comprehensive tests: `scripts/toon/comprehensive_toon_check.py`
 - TTFT benchmark: `scripts/benchmark/ttft_toon_benchmark.py`
 - Handoff: `handoffs/active/toon_format_integration.md`
 

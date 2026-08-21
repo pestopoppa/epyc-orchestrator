@@ -5,7 +5,7 @@ Tests all TOON encoding paths across all large model invocation patterns
 to determine if TOON provides meaningful benefits for orchestrator performance.
 
 Usage:
-    python scripts/toon/comprehensive_toon_test.py [--live] [--port PORT]
+    python scripts/toon/comprehensive_toon_check.py [--live] [--port PORT]
 
 Options:
     --live      Run live inference tests (requires running servers)
@@ -163,7 +163,7 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
-def test_roundtrip(data: Any, name: str) -> TestResult:
+def _check_roundtrip(data: Any, name: str) -> TestResult:
     """Test TOON encode/decode roundtrip fidelity."""
     if not is_available():
         return TestResult(
@@ -207,7 +207,7 @@ def test_roundtrip(data: Any, name: str) -> TestResult:
         )
 
 
-def test_should_use_toon(data: Any, expected: bool, name: str) -> TestResult:
+def _check_should_use_toon(data: Any, expected: bool, name: str) -> TestResult:
     """Test should_use_toon heuristic accuracy."""
     result = should_use_toon(data)
     passed = result == expected
@@ -235,28 +235,28 @@ def suite_file_listings() -> list[TestResult]:
     results = []
 
     # Edge cases
-    results.append(test_roundtrip(generate_file_listing(0), "file_listing_empty"))
-    results.append(test_roundtrip(generate_file_listing(1), "file_listing_single"))
-    results.append(test_roundtrip(generate_file_listing(2), "file_listing_two"))
+    results.append(_check_roundtrip(generate_file_listing(0), "file_listing_empty"))
+    results.append(_check_roundtrip(generate_file_listing(1), "file_listing_single"))
+    results.append(_check_roundtrip(generate_file_listing(2), "file_listing_two"))
 
     # Should NOT use TOON
-    results.append(test_should_use_toon(generate_file_listing(2), False, "heuristic_small_listing"))
+    results.append(_check_should_use_toon(generate_file_listing(2), False, "heuristic_small_listing"))
 
     # Typical ranges
-    results.append(test_roundtrip(generate_file_listing(5), "file_listing_5"))
-    results.append(test_roundtrip(generate_file_listing(10), "file_listing_10"))
-    results.append(test_roundtrip(generate_file_listing(25), "file_listing_25"))
-    results.append(test_roundtrip(generate_file_listing(50), "file_listing_50"))
-    results.append(test_roundtrip(generate_file_listing(100), "file_listing_100"))
+    results.append(_check_roundtrip(generate_file_listing(5), "file_listing_5"))
+    results.append(_check_roundtrip(generate_file_listing(10), "file_listing_10"))
+    results.append(_check_roundtrip(generate_file_listing(25), "file_listing_25"))
+    results.append(_check_roundtrip(generate_file_listing(50), "file_listing_50"))
+    results.append(_check_roundtrip(generate_file_listing(100), "file_listing_100"))
 
     # Should use TOON
-    results.append(test_should_use_toon(generate_file_listing(10), True, "heuristic_medium_listing"))
+    results.append(_check_should_use_toon(generate_file_listing(10), True, "heuristic_medium_listing"))
 
     # Large (stress test)
-    results.append(test_roundtrip(generate_file_listing(500), "file_listing_500_stress"))
+    results.append(_check_roundtrip(generate_file_listing(500), "file_listing_500_stress"))
 
     # With nested metadata
-    results.append(test_roundtrip(generate_file_listing(20, include_nested=True), "file_listing_nested"))
+    results.append(_check_roundtrip(generate_file_listing(20, include_nested=True), "file_listing_nested"))
 
     # Test encode_list_dir helper
     listing = generate_file_listing(15)
@@ -291,22 +291,22 @@ def suite_escalation_context() -> list[TestResult]:
     results = []
 
     # No previous attempts
-    results.append(test_roundtrip(
+    results.append(_check_roundtrip(
         generate_escalation_context(1, include_attempts=False),
         "escalation_no_attempts"
     ))
 
     # Single attempt (should NOT use TOON)
     ctx_1 = generate_escalation_context(1, include_attempts=True, attempt_count=1)
-    results.append(test_roundtrip(ctx_1, "escalation_1_attempt"))
-    results.append(test_should_use_toon(ctx_1, False, "heuristic_1_attempt"))
+    results.append(_check_roundtrip(ctx_1, "escalation_1_attempt"))
+    results.append(_check_should_use_toon(ctx_1, False, "heuristic_1_attempt"))
 
     # Multiple attempts (should use TOON)
     ctx_3 = generate_escalation_context(3, include_attempts=True, attempt_count=3)
-    results.append(test_roundtrip(ctx_3, "escalation_3_attempts"))
+    results.append(_check_roundtrip(ctx_3, "escalation_3_attempts"))
 
     ctx_5 = generate_escalation_context(5, include_attempts=True, attempt_count=5)
-    results.append(test_roundtrip(ctx_5, "escalation_5_attempts"))
+    results.append(_check_roundtrip(ctx_5, "escalation_5_attempts"))
 
     # Test encode_escalation_context helper
     encoded = encode_escalation_context(
@@ -338,13 +338,13 @@ def suite_procedures() -> list[TestResult]:
     results = []
 
     # Edge cases
-    results.append(test_roundtrip({"procedures": generate_procedures(0)}, "procedures_empty"))
-    results.append(test_roundtrip({"procedures": generate_procedures(2)}, "procedures_2"))
+    results.append(_check_roundtrip({"procedures": generate_procedures(0)}, "procedures_empty"))
+    results.append(_check_roundtrip({"procedures": generate_procedures(2)}, "procedures_2"))
 
     # Typical ranges
-    results.append(test_roundtrip({"procedures": generate_procedures(5)}, "procedures_5"))
-    results.append(test_roundtrip({"procedures": generate_procedures(10)}, "procedures_10"))
-    results.append(test_roundtrip({"procedures": generate_procedures(25)}, "procedures_25"))
+    results.append(_check_roundtrip({"procedures": generate_procedures(5)}, "procedures_5"))
+    results.append(_check_roundtrip({"procedures": generate_procedures(10)}, "procedures_10"))
+    results.append(_check_roundtrip({"procedures": generate_procedures(25)}, "procedures_25"))
 
     # Test helper
     procs = generate_procedures(8)
@@ -367,16 +367,16 @@ def suite_memory_results() -> list[TestResult]:
     results = []
 
     # Edge cases
-    results.append(test_roundtrip({"results": generate_memory_results(0)}, "memory_empty"))
-    results.append(test_roundtrip({"results": generate_memory_results(2)}, "memory_2"))
+    results.append(_check_roundtrip({"results": generate_memory_results(0)}, "memory_empty"))
+    results.append(_check_roundtrip({"results": generate_memory_results(2)}, "memory_2"))
 
     # Typical ranges (MemRL retrieval usually returns 5-20 results)
-    results.append(test_roundtrip({"results": generate_memory_results(5)}, "memory_5"))
-    results.append(test_roundtrip({"results": generate_memory_results(10)}, "memory_10"))
-    results.append(test_roundtrip({"results": generate_memory_results(20)}, "memory_20"))
+    results.append(_check_roundtrip({"results": generate_memory_results(5)}, "memory_5"))
+    results.append(_check_roundtrip({"results": generate_memory_results(10)}, "memory_10"))
+    results.append(_check_roundtrip({"results": generate_memory_results(20)}, "memory_20"))
 
     # Complex with nested context
-    results.append(test_roundtrip(
+    results.append(_check_roundtrip(
         {"results": generate_memory_results(10, include_complex=True)},
         "memory_10_complex"
     ))
@@ -434,7 +434,7 @@ def suite_edge_cases() -> list[TestResult]:
             {"name": "中文文件.md", "type": "file", "size": 789},
         ]
     }
-    results.append(test_roundtrip(unicode_data, "unicode_filenames"))
+    results.append(_check_roundtrip(unicode_data, "unicode_filenames"))
 
     # Special characters in strings
     special_data = {
@@ -445,7 +445,7 @@ def suite_edge_cases() -> list[TestResult]:
             {"name": "file\twith\ttabs.json", "type": "file", "size": 101},
         ]
     }
-    results.append(test_roundtrip(special_data, "special_characters"))
+    results.append(_check_roundtrip(special_data, "special_characters"))
 
     # Null values
     null_data = {
@@ -454,7 +454,7 @@ def suite_edge_cases() -> list[TestResult]:
             {"name": "dir", "type": "dir", "size": None},
         ]
     }
-    results.append(test_roundtrip(null_data, "null_values"))
+    results.append(_check_roundtrip(null_data, "null_values"))
 
     # Deeply nested (TOON may not help)
     deep_nested = {
@@ -466,8 +466,8 @@ def suite_edge_cases() -> list[TestResult]:
             }
         }
     }
-    results.append(test_roundtrip(deep_nested, "deeply_nested"))
-    results.append(test_should_use_toon(deep_nested, True, "heuristic_deeply_nested"))
+    results.append(_check_roundtrip(deep_nested, "deeply_nested"))
+    results.append(_check_should_use_toon(deep_nested, True, "heuristic_deeply_nested"))
 
     # Non-uniform arrays (TOON should NOT help)
     non_uniform = {
@@ -477,13 +477,13 @@ def suite_edge_cases() -> list[TestResult]:
             {"name": "c", "value": 3},
         ]
     }
-    results.append(test_should_use_toon(non_uniform, False, "heuristic_non_uniform"))
+    results.append(_check_should_use_toon(non_uniform, False, "heuristic_non_uniform"))
 
     # Mixed types in array
     mixed_types = {
         "data": [1, "two", 3.0, None, True, {"nested": "dict"}]
     }
-    results.append(test_should_use_toon(mixed_types, False, "heuristic_mixed_types"))
+    results.append(_check_should_use_toon(mixed_types, False, "heuristic_mixed_types"))
 
     # Very long strings (potential truncation issues)
     long_strings = {
@@ -492,7 +492,7 @@ def suite_edge_cases() -> list[TestResult]:
             for i in range(5)
         ]
     }
-    results.append(test_roundtrip(long_strings, "very_long_strings"))
+    results.append(_check_roundtrip(long_strings, "very_long_strings"))
 
     # Empty strings
     empty_strings = {
@@ -501,7 +501,7 @@ def suite_edge_cases() -> list[TestResult]:
             {"name": "a", "type": "file", "size": 123},
         ]
     }
-    results.append(test_roundtrip(empty_strings, "empty_strings"))
+    results.append(_check_roundtrip(empty_strings, "empty_strings"))
 
     # Boolean values
     bool_data = {
@@ -510,7 +510,7 @@ def suite_edge_cases() -> list[TestResult]:
             for i in range(5)
         ]
     }
-    results.append(test_roundtrip(bool_data, "boolean_values"))
+    results.append(_check_roundtrip(bool_data, "boolean_values"))
 
     # Numeric edge cases
     numeric_data = {
@@ -522,7 +522,7 @@ def suite_edge_cases() -> list[TestResult]:
             {"name": "large", "value": 9999999999999},
         ]
     }
-    results.append(test_roundtrip(numeric_data, "numeric_edge_cases"))
+    results.append(_check_roundtrip(numeric_data, "numeric_edge_cases"))
 
     return results
 
@@ -552,7 +552,7 @@ def suite_orchestration_scenarios() -> list[TestResult]:
             ],
         },
     }
-    results.append(test_roundtrip(code_review, "scenario_code_review"))
+    results.append(_check_roundtrip(code_review, "scenario_code_review"))
 
     # Scenario 2: Long context ingestion summary
     ingestion = {
@@ -571,7 +571,7 @@ def suite_orchestration_scenarios() -> list[TestResult]:
             for i in range(15)
         ],
     }
-    results.append(test_roundtrip(ingestion, "scenario_long_context"))
+    results.append(_check_roundtrip(ingestion, "scenario_long_context"))
 
     # Scenario 3: Multi-turn REPL state
     repl_state = {
@@ -589,7 +589,7 @@ def suite_orchestration_scenarios() -> list[TestResult]:
             for i in range(5)
         ],
     }
-    results.append(test_roundtrip(repl_state, "scenario_repl_state"))
+    results.append(_check_roundtrip(repl_state, "scenario_repl_state"))
 
     # Scenario 4: Worker batch results
     worker_batch = {
@@ -606,7 +606,7 @@ def suite_orchestration_scenarios() -> list[TestResult]:
             for i in range(8)
         ],
     }
-    results.append(test_roundtrip(worker_batch, "scenario_worker_batch"))
+    results.append(_check_roundtrip(worker_batch, "scenario_worker_batch"))
 
     return results
 
