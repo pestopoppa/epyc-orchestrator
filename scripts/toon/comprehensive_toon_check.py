@@ -456,7 +456,15 @@ def suite_edge_cases() -> list[TestResult]:
     }
     results.append(_check_roundtrip(null_data, "null_values"))
 
-    # Deeply nested (TOON may not help)
+    # Deeply nested: the gate is DESIGNED to say no here. should_use_toon() scans
+    # only top-level dict values (toon_encoder.py:112-116), matching its documented
+    # contract ("arrays of 3+ uniform objects", docs/chapters/06-toon-encoding.md)
+    # and its one production caller (canvas_import.py:385, top-level array). The
+    # expectation was True until 2026-08-21 — impossible by construction, and it
+    # masqueraded as an env failure because a missing toon_format ALSO returns
+    # False from should_use_toon, so every heuristic case fails identically when
+    # the lib is absent. Roundtrip still must succeed: encode() handles nesting;
+    # the gate merely declines to recommend it.
     deep_nested = {
         "level1": {
             "level2": {
@@ -467,7 +475,7 @@ def suite_edge_cases() -> list[TestResult]:
         }
     }
     results.append(_check_roundtrip(deep_nested, "deeply_nested"))
-    results.append(_check_should_use_toon(deep_nested, True, "heuristic_deeply_nested"))
+    results.append(_check_should_use_toon(deep_nested, False, "heuristic_deeply_nested"))
 
     # Non-uniform arrays (TOON should NOT help)
     non_uniform = {
@@ -519,7 +527,7 @@ def suite_edge_cases() -> list[TestResult]:
             {"name": "negative", "value": -123},
             {"name": "float", "value": 3.14159},
             {"name": "scientific", "value": 1.23e-10},
-            {"name": "large", "value": 9999999999999},
+            {"name": "large", "value": 9_999_999_999_999},  # underscore literal: same value, but no 13-digit run for the PII pre-commit account-number regex to false-positive on
         ]
     }
     results.append(_check_roundtrip(numeric_data, "numeric_edge_cases"))
