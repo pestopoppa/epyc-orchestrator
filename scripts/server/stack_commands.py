@@ -577,7 +577,7 @@ _RUNTIME_FIELD_CHECKS: dict[str, tuple[str, tuple[str, ...], str]] = {
     "runtime.flags.device": ("dedicated", (), ""),
     "runtime.flags.device_draft": ("dedicated", (), ""),
     "runtime.flags.spec": ("container", (), ""),
-    # The three declared serving flags. orchestrator_stack.py keeps these as DATA
+    # The declared serving flags. orchestrator_stack.py keeps these as DATA
     # (`_RUNTIME_SERVING_FLAG_ARGS`) and emits them; nothing verified them until now.
     # -ngl is the sharpest of the three and sits on the same failure path as `device`:
     # without it a server takes `--device ROCm0`, offloads nothing, and is a GPU launch
@@ -585,6 +585,14 @@ _RUNTIME_FIELD_CHECKS: dict[str, tuple[str, tuple[str, ...], str]] = {
     "runtime.flags.n_gpu_layers": ("int_or_token_flag", ("-ngl", "--n-gpu-layers", "--gpu-layers"), ""),
     "runtime.flags.image_min_tokens": ("int_flag", ("--image-min-tokens",), ""),
     "runtime.flags.cache_ram": ("int_flag", ("--cache-ram",), ""),
+    # Per-role chat template file: a string token on the cmdline, same emission
+    # rule as `-ngl all` (the launcher additionally refuses at build time when the
+    # declared path is missing, so a live server always matches its declaration).
+    "runtime.flags.chat_template_file": (
+        "int_or_token_flag",
+        ("--chat-template-file",),
+        "",
+    ),
     # section: runtime.flags.spec
     "runtime.flags.spec.enabled": ("dedicated", (), ""),
     "runtime.flags.spec.type": ("dedicated", (), ""),
@@ -1956,6 +1964,31 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+def _reload_server_port(component: str) -> int | None:
+    """Resolve a reload component to a managed llama-server port.
+
+    Two spellings resolve: a role name from PORT_MAP, and the state-file key
+    form ``server_<port>`` for any port carried by a HOT_SERVERS/WARM_SERVERS
+    entry. The second form is the ONLY one that can address a sub-full
+    instance: PORT_MAP maps a role to its primary port (frontdoor -> 8070), so
+    ``reload server_8080`` used to fall through every branch to "[?] Unknown
+    component", restart nothing, and still exit 0 — while the stale half kept
+    answering /health on its old cmdline. A declared serving-flag change
+    (e.g. chat_template_file) was then undeployable to sub-full instances.
+    Returns None when the component is not a managed llama-server; the caller's
+    later branches (Docker services, unknown) then apply.
+    """
+    if component in PORT_MAP:
+        return PORT_MAP[component]
+    if component.startswith("server_"):
+        suffix = component[len("server_"):]
+        if suffix.isdigit():
+            port = int(suffix)
+            if any(server["port"] == port for server in HOT_SERVERS + WARM_SERVERS):
+                return port
+    return None
+
+
 def cmd_reload(args: argparse.Namespace) -> int:
     """Reload components."""
     state = load_state()
@@ -2074,8 +2107,8 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 print(f"  [!] Failed to restart {component}")
                 return 1
 
-        elif component in PORT_MAP:
-            port = PORT_MAP[component]
+        elif (server_port := _reload_server_port(component)) is not None:
+            port = server_port
             key = f"server_{port}"
 
             # Find roles and config for this port
@@ -2155,7 +2188,11 @@ def cmd_reload(args: argparse.Namespace) -> int:
                     print(f"  [!] Failed to restart {component}")
                     return 1
             else:
+                # Fail loudly: exiting 0 here is how a no-op reload passes for a
+                # deploy — the old process keeps answering /health while the
+                # caller believes it relaunched with the new configuration.
                 print(f"  [?] Unknown component: {component}")
+                return 1
 
     save_state(state)
     # ESC-8 Fix 2: record the realized mode so the next reload reads a manifest

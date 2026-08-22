@@ -681,6 +681,147 @@ def test_append_runtime_spec_args_keeps_md_for_separate_draft_model() -> None:
     assert _flag_value(cmd, "--spec-draft-n-max") == "2"
 
 
+def test_append_runtime_serving_flags_emits_chat_template_file(tmp_path: Path) -> None:
+    template = tmp_path / "role-template.jinja"
+    template.write_text("{{ messages }}", encoding="utf-8")
+    cmd: list[str] = []
+
+    oss._append_runtime_serving_flags(cmd, {"chat_template_file": str(template)})
+
+    assert _flag_value(cmd, "--chat-template-file") == str(template)
+
+
+def test_append_runtime_serving_flags_omits_chat_template_file_when_undeclared() -> None:
+    # Absent key and compiled-null key are both "undeclared": no flag, no default.
+    for flags in ({}, {"chat_template_file": None}):
+        cmd: list[str] = []
+        oss._append_runtime_serving_flags(cmd, flags)
+        assert "--chat-template-file" not in cmd
+
+
+def test_append_runtime_serving_flags_refuses_missing_chat_template_file(
+    tmp_path: Path,
+) -> None:
+    # A declared template that is not on disk must refuse at launch-build time
+    # (same fail-fast posture as validate_model_paths for a missing model), not
+    # launch a server that silently falls back to the GGUF-embedded template.
+    missing = tmp_path / "deleted-template.jinja"
+    cmd = ["llama-server"]
+
+    with pytest.raises(ValueError, match="chat_template_file"):
+        oss._append_runtime_serving_flags(cmd, {"chat_template_file": str(missing)})
+
+    assert "--chat-template-file" not in cmd
+
+
+def test_build_role_command_emits_declared_chat_template_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    # End-to-end over the DATA path: compiled prior flags -> _build_role_command
+    # -> --chat-template-file on the llama-server cmdline.
+    template = tmp_path / "frontdoor-template.jinja"
+    template.write_text("{{ messages }}", encoding="utf-8")
+    priors = _write_launch_prior(
+        tmp_path,
+        "frontdoor",
+        requirements={},
+        runtime={
+            "binary_path": "/prior/llama-server",
+            "cache": {
+                "context_tokens": 24576,
+                "slots": 1,
+                "ubatch": 2048,
+            },
+            "flags": {
+                "flash_attn": False,
+                "jinja": False,
+                "reasoning": None,
+                "override_kv": [],
+                "chat_template_file": str(template),
+                "spec": {"enabled": False},
+            },
+        },
+    )
+    monkeypatch.setattr(oss, "STACK_PRIORS_PATH", priors)
+    role = SimpleNamespace(
+        name="frontdoor",
+        model=SimpleNamespace(full_path="/fallback/frontdoor.gguf"),
+        acceleration=SimpleNamespace(type="none", experts=None, draft_role=None),
+    )
+
+    cmd = oss._build_role_command(role, port=9070)
+
+    assert _flag_value(cmd, "--chat-template-file") == str(template)
+
+
+def test_build_role_command_sub_full_instance_emits_declared_serving_flags(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A half/quarter must emit the SAME declared serving flags as the full.
+
+    The compiled prior is role-level: one runtime.flags record covers every
+    instance of the role. This pins that numa_instance>0 builds read it — a
+    per-instance path that fell back to empty/legacy flags (the 2026-08-21
+    --jinja fallback family) would strip chat_template_file, -ngl,
+    --cache-ram and --jinja from every sub-full launch.
+    """
+    template = tmp_path / "frontdoor-template.jinja"
+    template.write_text("{{ messages }}", encoding="utf-8")
+    priors = _write_launch_prior(
+        tmp_path,
+        "frontdoor",
+        requirements={},
+        runtime={
+            "binary_path": "/prior/llama-server",
+            "cache": {
+                "context_tokens": 24576,
+                "slots": 1,
+                "ubatch": 2048,
+            },
+            "flags": {
+                "flash_attn": False,
+                "jinja": True,
+                "reasoning": None,
+                "override_kv": [],
+                "n_gpu_layers": 999,
+                "cache_ram": 0,
+                "chat_template_file": str(template),
+                "spec": {"enabled": False},
+            },
+        },
+    )
+    monkeypatch.setattr(oss, "STACK_PRIORS_PATH", priors)
+    role = SimpleNamespace(
+        name="frontdoor",
+        model=SimpleNamespace(full_path="/fallback/frontdoor.gguf"),
+        acceleration=SimpleNamespace(type="none", experts=None, draft_role=None),
+    )
+
+    def declared_serving_flags(cmd: list[str]) -> dict[str, object]:
+        return {
+            "chat_template_file": _flag_value(cmd, "--chat-template-file"),
+            "n_gpu_layers": _flag_value(cmd, "-ngl"),
+            "cache_ram": _flag_value(cmd, "--cache-ram"),
+            "jinja": "--jinja" in cmd,
+        }
+
+    full = oss._build_role_command(role, port=8070, numa_instance=0)
+    half = oss._build_role_command(role, port=8080, numa_instance=1)
+
+    expected = {
+        "chat_template_file": str(template),
+        "n_gpu_layers": "999",
+        "cache_ram": "0",
+        "jinja": True,
+    }
+    assert declared_serving_flags(full) == expected
+    assert declared_serving_flags(half) == expected, (
+        "sub-full instance dropped declared serving flags the full emits"
+    )
+
+
 def test_resolve_thread_count_from_numa_config() -> None:
     # frontdoor[0] is NUMA_NODE0 = 96 threads
     assert oss._resolve_thread_count("frontdoor") == "96"

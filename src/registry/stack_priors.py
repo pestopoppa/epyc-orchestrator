@@ -2308,6 +2308,16 @@ def _launch_runtime_record(
                 server_cfg, role_cfg, key="image_min_tokens"
             ),
             "cache_ram": _runtime_flag_int_prior(server_cfg, role_cfg, key="cache_ram"),
+            # Per-role chat template FILE (llama-server --chat-template-file).
+            # Declared as `server_mode.<role>.chat_template_file` (absolute path
+            # string); role-local server/serving/launch sub-mappings work too via
+            # the shared string-prior search order. None when undeclared — the
+            # launcher then emits nothing and the GGUF-embedded template applies.
+            # No default here: a template file is model-specific, and a compiler
+            # default would silently re-template every role.
+            "chat_template_file": _runtime_flag_string_prior(
+                server_cfg, role_cfg, key="chat_template_file"
+            ),
             "reasoning": _runtime_reasoning_prior(
                 server_cfg,
                 role_cfg,

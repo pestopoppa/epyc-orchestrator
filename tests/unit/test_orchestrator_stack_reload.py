@@ -2002,3 +2002,102 @@ def test_cmd_status_prints_runtime_contract_warning(monkeypatch, capsys) -> None
     assert "runtime flash_attn expected True; live cmdline has False" in out
     # ESC-8 Fix 2: `status` is now read-only — it no longer persists state.
     assert saved == []
+
+
+def test_reload_server_port_resolves_sub_full_instances() -> None:
+    """server_<port> must resolve for ANY managed instance, not just primaries.
+
+    PORT_MAP maps a role to its primary port only, so before _reload_server_port
+    the sub-full instances (frontdoor's 8080/8180 halves) were unreachable by
+    reload: the request printed "Unknown component", restarted nothing, and the
+    stale half kept passing /health on its old cmdline — which is how a declared
+    serving flag (chat_template_file) deployed to the full but never to a half.
+    """
+    from scripts.server.stack_manifest import HOT_SERVERS, PORT_MAP, WARM_SERVERS
+
+    # Role-name spelling: unchanged PORT_MAP behavior.
+    assert stack_commands._reload_server_port("frontdoor") == PORT_MAP["frontdoor"]
+
+    # Every managed instance port is addressable via its state-file key.
+    for server in HOT_SERVERS + WARM_SERVERS:
+        port = server["port"]
+        assert stack_commands._reload_server_port(f"server_{port}") == port
+
+    # sd_server IS a PORT_MAP name, but cmd_reload's AUX_SERVICES branch
+    # precedes this resolution (W5 ordering fix) — the helper only reports the
+    # mapping, it never re-routes an auxiliary through start_server().
+    assert stack_commands._reload_server_port("sd_server") == PORT_MAP["sd_server"]
+
+    # Non-managed spellings stay unresolved (fall through to docker/unknown).
+    assert stack_commands._reload_server_port("server_9999") is None
+    assert stack_commands._reload_server_port("server_80a0") is None
+    assert stack_commands._reload_server_port("server_") is None
+    assert stack_commands._reload_server_port("bogus") is None
+
+
+def test_reload_sub_full_half_restarts_with_its_own_numa_instance(
+    monkeypatch,
+) -> None:
+    """reload server_8080 must kill the half's listener and relaunch it with the
+    manifest entry's roles + numa_instance — the path that redeploys declared
+    serving flags to a sub-full instance."""
+    entry = next(
+        server
+        for server in stack_commands.HOT_SERVERS + stack_commands.WARM_SERVERS
+        if server["port"] == 8080
+    )
+    killed: list[int] = []
+    saved: list[dict] = []
+    calls: list[tuple] = []
+    new_info = stack.ProcessInfo(
+        role=entry["roles"][0], pid=222, port=8080, started_at="after",
+        model_path="new", log_file="new.log",
+    )
+
+    monkeypatch.setattr(stack, "load_state", lambda: {})
+    monkeypatch.setattr(stack, "save_state", lambda value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        stack_commands, "_refresh_runtime_facts_manifest", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(stack, "kill_process", lambda pid: killed.append(pid))
+    monkeypatch.setattr(stack.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(stack, "_pids_on_port", lambda _port: [333])
+    monkeypatch.setattr(stack, "RegistryLoader", lambda: object())
+    monkeypatch.setattr(stack_commands, "RegistryLoader", lambda: object())
+
+    def fake_start_server(port, roles, registry, *args, **kwargs):
+        calls.append((port, list(roles), kwargs.get("numa_instance")))
+        return new_info
+
+    monkeypatch.setattr(stack, "start_server", fake_start_server)
+
+    rc = stack.cmd_reload(Namespace(components=["server_8080"]))
+
+    assert rc == 0
+    assert killed == [333], "the stale half's listener must be stopped"
+    assert calls == [(8080, entry["roles"], entry.get("numa_instance", 0))], (
+        "relaunch must carry the manifest entry's roles and numa_instance"
+    )
+    assert saved[-1]["server_8080"] == new_info
+
+
+def test_reload_unknown_component_fails_loudly(monkeypatch) -> None:
+    """An unresolvable component must exit non-zero, never report success.
+
+    Exiting 0 on "Unknown component" is exactly how the sub-full defect hid:
+    the reload restarted nothing, the old process kept answering /health, and
+    the caller read success.
+    """
+    monkeypatch.setattr(stack, "load_state", lambda: {})
+    monkeypatch.setattr(stack, "save_state", lambda _value: None)
+    monkeypatch.setattr(
+        stack_commands, "_refresh_runtime_facts_manifest", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        stack, "start_server",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("unknown component must not reach start_server()")
+        ),
+    )
+
+    assert stack.cmd_reload(Namespace(components=["server_9999"])) == 1

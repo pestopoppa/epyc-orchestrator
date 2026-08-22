@@ -48,47 +48,47 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-08-21T16:01:19Z'
+compiled_at: '2026-08-22T13:18:53Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 115f599b61e819334b0a6bb9e9501173326f28d50f36ac8ffbc606397ec2149e
-    repo_commit: 7483d7fb
+    sha256: 24291c173e75531124cb7accb00acbaa24fcea7fc8e11e113531785809ad0da4
+    repo_commit: 0d145f4f
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: ea67d1bd1f8ae89f970750419b2314dd1a11903ad7e12ad54ef99e2cf3c1b02b
-    repo_commit: 7483d7fb
+    sha256: f4471e40af75db19cd54620812f2a26e4f663b8571f63461cc32c14e18a95000
+    repo_commit: 0d145f4f
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: f2b18355829ff0ba81c1d82cc0bf28ff7b1cc3ba1de2858bea0b16cb5582fe07
-    repo_commit: 7483d7fb
+    repo_commit: 0d145f4f
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 835038054cba747ea0934fbcf823c3a128f25fb4d6fe75b08d1c5b5f77c64d8b
-    repo_commit: 7483d7fb
+    repo_commit: 0d145f4f
   launch_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/launch_manifest.yaml
     sha256: c915af33c5d4cf0fc436ccf58c3c5578aa03965d3203c74213cc0e8549992f8b
-    repo_commit: 7483d7fb
+    repo_commit: 0d145f4f
   stack_topology:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
     sha256: 00507f15ca7afdf4eb9adfde05fbb721917e9d58477075db58506de6b033983b
-    repo_commit: 7483d7fb
+    repo_commit: 0d145f4f
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 451df3fbb9629af2d3abe5dae331c825cc01d8fee7f4d3cf67ac91c319520fad
-    repo_commit: 7483d7fb
+    sha256: 244a2e9a1ed331fb54eb2cb1f6718d1860ea22f1cd16d81db1a0c3bbd79763e9
+    repo_commit: 0d145f4f
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 52b173eb69b0838394e7d48d6112827f686e06d848a107291754f791e64b1064
-    repo_commit: 7483d7fb
+    repo_commit: 0d145f4f
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: 7483d7fb
+    repo_commit: 0d145f4f
 roles:
   architect_critic:
     role: architect_critic
@@ -151,6 +151,7 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: null
+            chat_template_file: null
             reasoning: 'off'
             override_kv: []
             spec:
@@ -360,6 +361,7 @@ roles:
             n_gpu_layers: all
             image_min_tokens: null
             cache_ram: null
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
             reasoning: 'off'
             override_kv: []
             spec:
@@ -552,6 +554,7 @@ roles:
             n_gpu_layers: all
             image_min_tokens: null
             cache_ram: null
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
             reasoning: 'off'
             override_kv: []
             spec:
@@ -761,6 +764,7 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: null
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
             reasoning: 'off'
             override_kv: []
             spec:
@@ -951,6 +955,7 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: null
+            chat_template_file: null
             reasoning: null
             override_kv: []
             spec:
@@ -1540,6 +1545,7 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: null
+            chat_template_file: null
             reasoning: 'off'
             override_kv: []
             spec:
@@ -1773,6 +1779,7 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: null
+            chat_template_file: null
             reasoning: null
             override_kv: []
             spec:
@@ -1981,6 +1988,7 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: null
+            chat_template_file: null
             reasoning: 'off'
             override_kv: []
             spec:
@@ -2233,6 +2241,7 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: null
+            chat_template_file: null
             reasoning: 'off'
             override_kv: []
             spec:
@@ -2477,6 +2486,7 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: null
+            chat_template_file: null
             reasoning: 'off'
             override_kv: []
             spec:
@@ -2712,6 +2722,7 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: null
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
             reasoning: 'off'
             override_kv: []
             spec:
@@ -2887,6 +2898,7 @@ roles:
             n_gpu_layers: 999
             image_min_tokens: 1024
             cache_ram: 0
+            chat_template_file: null
             reasoning: null
             override_kv: []
             spec:

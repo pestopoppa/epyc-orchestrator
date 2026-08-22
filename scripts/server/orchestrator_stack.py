@@ -413,7 +413,8 @@ def _append_spec_decode_args(
         cmd.extend(["--spec-ngram-mod-n-match", ngram_mod_n_match])
 
 
-# Compiled flag name -> (llama-server argument, allow a non-numeric token).
+# Compiled flag name -> (llama-server argument, allow a non-numeric token,
+# token must exist as a filesystem path).
 # Declared in the registry's serving block, compiled into runtime.flags by
 # src/registry/stack_priors.py, emitted here. Kept as DATA so adding a declared
 # serving knob is a registry + compiler change, not a new branch in every builder.
@@ -421,10 +422,17 @@ def _append_spec_decode_args(
 # n_gpu_layers allows a string because the registry declares it both ways:
 # worker_vision as `n_gpu_layers: 999`, architect_general as `ngl: all`. Both are
 # valid llama-server values on this kernel.
-_RUNTIME_SERVING_FLAG_ARGS: tuple[tuple[str, str, bool], ...] = (
-    ("n_gpu_layers", "-ngl", True),
-    ("image_min_tokens", "--image-min-tokens", False),
-    ("cache_ram", "--cache-ram", False),
+#
+# chat_template_file is a filesystem PATH, so it is emitted only when the file
+# exists: a missing template must refuse at launch-build time (same posture as
+# validate_model_paths() for a missing model — fail fast, never launch a server
+# that would fall back to the GGUF-embedded template while the registry claims
+# otherwise).
+_RUNTIME_SERVING_FLAG_ARGS: tuple[tuple[str, str, bool, bool], ...] = (
+    ("n_gpu_layers", "-ngl", True, False),
+    ("image_min_tokens", "--image-min-tokens", False, False),
+    ("cache_ram", "--cache-ram", False, False),
+    ("chat_template_file", "--chat-template-file", True, True),
 )
 
 
@@ -439,14 +447,24 @@ def _append_runtime_serving_flags(cmd: list[str], flags: dict[str, Any]) -> None
     ``0`` is a DECLARED value (``cache_ram: 0`` disables the prompt cache), so the
     guard is ``is not None`` / ``>= 0``, never truthiness.
     """
-    for key, arg, allow_str in _RUNTIME_SERVING_FLAG_ARGS:
+    for key, arg, allow_str, must_exist in _RUNTIME_SERVING_FLAG_ARGS:
         value = flags.get(key)
         if isinstance(value, bool):
             continue
+        token: str | None = None
         if isinstance(value, int) and value >= 0:
-            cmd.extend([arg, str(value)])
+            token = str(value)
         elif allow_str and isinstance(value, str) and value.strip():
-            cmd.extend([arg, value.strip()])
+            token = value.strip()
+        if token is None:
+            continue
+        if must_exist and not Path(token).exists():
+            raise ValueError(
+                f"declared {key} path does not exist: {token} "
+                f"(refusing to emit {arg}; fix the registry declaration or "
+                f"restore the file)"
+            )
+        cmd.extend([arg, token])
 
 
 def _append_runtime_kv_args(cmd: list[str], cache: dict[str, Any]) -> None:

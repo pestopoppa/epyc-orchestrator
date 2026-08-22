@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-08-21T11:16:12+00:00
-# Cache key:   5af99c346324c533...
+# Compiled at: 2026-08-22T13:18:52+00:00
+# Cache key:   aec28c8ec3d204e2...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1365,6 +1365,13 @@ server_mode:
       kv_kib_per_token_f16: 82.0
     chat_template_kwargs:
       enable_thinking: false
+    chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
+    chat_template:
+      provenance: epyc_built_terse_v1
+      served_template_bytes: 25808
+      served_template_sha256_12: 1443ea9ab4bb
+      base: froggeric v22.3 minus inline-tag scan plus Sharp terseness
+      evidence: 'CT-1b A/B artifacts: epyc-root artifacts/chat-templates/epyc-qwen3x-v1/ab-cpu-20260821/ct1b-terse/. E-7: frontdoor''s calibration stamps are voided by the template axis and must re-measure.'
     model_role: qwen36_q8_0
     shared_with:
     - worker_summarize
@@ -1498,6 +1505,14 @@ server_mode:
       vram_non_kv_gib: 27.33
     chat_template_kwargs:
       enable_thinking: false
+    chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
+    chat_template:
+      provenance: epyc_built_terse_v1
+      served_template_bytes: 25808
+      served_template_sha256_12: 1443ea9ab4bb
+      base: froggeric v22.3 minus inline-tag scan plus Sharp terseness
+      evidence: 'CT-1b A/B artifacts: epyc-root artifacts/chat-templates/epyc-qwen3x-v1/ab-cpu-20260821/ct1b-terse/ (measured on Qwen3.6-35B-A3B; UNMEASURED on this role''s Qwen3.8-27B). E-7: this role''s
+        calibration stamps are voided by the template axis and must re-measure. NOTE this REPLACES the Unsloth-embedded template documented under the qwen38_27b_q8_local role row.'
     model_role: qwen38_27b_q8_local
     description: 'System architecture — Qwen3.8-27B dense Q8 MTP on MI210 (ROCm0). 2026-08-20: artifact swapped from Qwen3.6-27B-MTP-Q8_0 (rollback anchor: qwen36_27b_mtp_q8_local, retained). 2026-07-31:
       122B vacated to the new architect_critic role. PRIMARY for the :8083 GPU process; coder_escalation is an alias on it.'
