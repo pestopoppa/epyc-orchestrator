@@ -32,10 +32,19 @@ undetected, so every call site must state its intent. `ROLE_NONE` is the
 explicit legacy escape hatch for stores built before this change — it is a
 choice a caller makes visibly, not a fallback.
 
-Prepending the prefix STRING is equivalent to pylate's id insertion because
-"[Q] " / "[D] " (trailing space included) are single added tokens in the
-tokenizer vocabulary; `ensure_loaded()` verifies that and refuses the prefixed
-roles if the loaded model does not carry them.
+Prepending the prefix STRING is equivalent to pylate's id insertion only when
+the prefix ENCODES to exactly one token; `ensure_loaded()` verifies that by
+encoding it and refuses the prefixed roles otherwise.
+
+The distinction is load-bearing and was wrong here until 2026-08-22. The check
+used to be `token_to_id(prefix) is not None`, which reads the BASE vocabulary.
+For a prefix like "[unused0]" that always answers yes, including on a tokenizer
+that never promoted the string into `added_tokens` -- and only the added-token
+trie splits a literal before WordPiece runs, so `encode()` then produced
+['[', 'unused', '##0', ']'] with the guard satisfied. The upstream answerai
+repository ships that exact pairing, so "just copy the missing config across"
+built a silently wrong index. "[Q] " / "[D] " were never the dangerous case:
+`token_to_id` returns None for them and the loader correctly refused.
 
 ONNX session and tokenizer are module-level singletons, lazy-loaded on first
 call. ONNX inference is thread-safe for prediction.
@@ -126,6 +135,14 @@ _tokenizer = None
 _query_prefix = _FALLBACK_QUERY_PREFIX
 _document_prefix = _FALLBACK_DOCUMENT_PREFIX
 _prefix_tokens_ok = False
+# Input names the loaded graph declares, captured at load (K1). Empty until
+# ensure_loaded() runs; encode() feeds exactly the inputs named here.
+_input_names: tuple = ()
+# Whether this checkpoint declares that text is lower-cased BEFORE tokenizing
+# (K8). mxbai-edge-colbert does, and applies it OUTSIDE the tokenizer -- no
+# `Lowercase` normalizer appears in tokenizer.json -- so nothing in this module
+# would fold case and a cased query would be fed to a lower-case-trained model.
+_do_lower_case = False
 
 
 def _load_declared_prefixes(model_dir: Path) -> tuple[str, str]:
@@ -150,6 +167,79 @@ def _load_declared_prefixes(model_dir: Path) -> tuple[str, str]:
         )
         return _FALLBACK_QUERY_PREFIX, _FALLBACK_DOCUMENT_PREFIX
     return q, d
+
+
+def _load_declared_config(model_dir: Path) -> dict:
+    """Merged serving contract for this checkpoint, `onnx_config.json` winning.
+
+    Two filenames carry the same contract and neither is universal.
+    `config_sentence_transformers.json` is what this module has always read;
+    `onnx_config.json` is what the NextPlaid Rust reader REQUIRES and the only
+    one a current `pylate-onnx-export` writes, so a freshly exported checkpoint
+    has no file we would have read. Read both, prefer the format-mandated one,
+    and let either supply keys the other omits.
+
+    Returns {} when neither is readable — callers must treat every key as
+    optional, because most checkpoints on disk declare only a subset.
+    """
+    import json
+
+    merged: dict = {}
+    for name in ("config_sentence_transformers.json", "onnx_config.json"):
+        path = model_dir / name
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            merged.update(data)
+    return merged
+
+
+def _load_declared_prefix_ids(model_dir: Path) -> dict:
+    """Declared `{"query": id, "document": id}`; a key is absent when unstated.
+
+    Used to make the prefix probe assert IDENTITY, not just single-token-ness:
+    a tokenizer can encode the prefix to one token that is nevertheless not the
+    id the model was trained against.
+    """
+    cfg = _load_declared_config(model_dir)
+    out: dict = {}
+    for role, key in (("query", "query_prefix_id"), ("document", "document_prefix_id")):
+        value = cfg.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            out[role] = value
+    return out
+
+
+def _prefix_encodes_to_one_token(tokenizer, prefix: str, declared_id: "int | None") -> bool:
+    """True iff `prefix` ENCODES to exactly one token (optionally `declared_id`).
+
+    `token_to_id(prefix)` is NOT this test and must not be used for it. It
+    consults the base vocabulary, where a prefix like "[unused0]" is present by
+    construction in every BERT checkpoint, so it answers "yes" on a tokenizer
+    that never promoted the string into `added_tokens` -- and `encode()` then
+    shreds it into ['[', 'unused', '##0', ']']. Only the added-token trie splits
+    a literal before the WordPiece pre-tokenizer runs, and only ENCODING
+    observes the trie. The upstream answerai repository ships exactly that
+    combination (a PyLate-shaped config beside a tokenizer carrying 5 added
+    tokens, not 7), so the failure is reachable from real published artifacts
+    and it is SILENT: the guard passes, the index builds, the vectors are wrong.
+
+    Padding and truncation are cleared for the probe because `encode()` sets
+    them globally on this shared tokenizer; a padded probe would return
+    max_tokens ids and reject every prefix.
+    """
+    try:
+        tokenizer.no_padding()
+        tokenizer.no_truncation()
+        ids = tokenizer.encode(prefix, add_special_tokens=False).ids
+    except Exception as e:  # noqa: BLE001 — a guard that raises must not pass
+        logger.error("ColBERT: prefix probe for %r raised %s; treating as unusable", prefix, e)
+        return False
+    if len(ids) != 1:
+        return False
+    return declared_id is None or ids[0] == declared_id
 
 
 def prefix_for_role(role: str) -> str:
@@ -180,6 +270,7 @@ def ensure_loaded() -> bool:
     dependencies are missing or model files cannot be opened.
     """
     global _session, _tokenizer, _query_prefix, _document_prefix, _prefix_tokens_ok
+    global _input_names, _do_lower_case
 
     if _session is not None and _tokenizer is not None:
         return True
@@ -203,15 +294,34 @@ def ensure_loaded() -> bool:
         )
         _tokenizer = Tokenizer.from_file(str(_TOKENIZER_PATH))
 
+        # K1: which inputs this graph actually declares. BERT-family
+        # late-interaction exports (answerai-colbert-small-v1, ColBERTv2,
+        # Jina-ColBERT-v2) declare a third input `token_type_ids` with NO
+        # initializer default, so a hardcoded two-input feed raises
+        # InvalidArgument and the encoder returns None for every text. Pattern
+        # borrowed from cross_encoder.py:148, which already does this.
+        _input_names = tuple(i.name for i in _session.get_inputs())
+
         _query_prefix, _document_prefix = _load_declared_prefixes(_MODEL_DIR)
+        declared = _load_declared_prefix_ids(_MODEL_DIR)
+        _do_lower_case = bool(_load_declared_config(_MODEL_DIR).get("do_lower_case", False))
         q_id = _tokenizer.token_to_id(_query_prefix)
         d_id = _tokenizer.token_to_id(_document_prefix)
-        _prefix_tokens_ok = q_id is not None and d_id is not None
+        # K6: encode-round-trip, NOT base-vocab membership. See
+        # _prefix_encodes_to_one_token for why token_to_id cannot answer this.
+        _prefix_tokens_ok = (
+            _prefix_encodes_to_one_token(_tokenizer, _query_prefix, declared.get("query"))
+            and _prefix_encodes_to_one_token(_tokenizer, _document_prefix, declared.get("document"))
+        )
         if not _prefix_tokens_ok:
             logger.error(
-                "ColBERT: prefixes %r/%r are NOT single tokens in %s (ids %r/%r) — "
-                "prefixed roles will be refused; only ROLE_NONE can be encoded",
+                "ColBERT: prefixes %r/%r do not ENCODE to single tokens in %s "
+                "(base-vocab ids %r/%r, declared ids %r/%r) — prefixed roles will be "
+                "refused; only ROLE_NONE can be encoded. A non-None base-vocab id here "
+                "with a failing probe is the silent-corruption case: the config declares "
+                "a prefix the tokenizer never promoted into added_tokens.",
                 _query_prefix, _document_prefix, _TOKENIZER_PATH, q_id, d_id,
+                declared.get("query"), declared.get("document"),
             )
 
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -263,15 +373,31 @@ def encode(text: str, max_tokens: int, *, role: str) -> np.ndarray | None:
     try:
         _tokenizer.enable_truncation(max_length=max_tokens)
         _tokenizer.enable_padding(length=max_tokens)
-        encoded = _tokenizer.encode(prefix + text)
+        # K8: fold case only when the checkpoint declares it, and only on the
+        # TEXT -- never the prefix, which is a literal added token and would
+        # stop matching the trie if lower-cased.
+        body = text.lower() if _do_lower_case else text
+        encoded = _tokenizer.encode(prefix + body)
 
         input_ids = np.array([encoded.ids], dtype=np.int64)
         attention_mask = np.array([encoded.attention_mask], dtype=np.int64)
 
-        outputs = _session.run(
-            None,
-            {"input_ids": input_ids, "attention_mask": attention_mask},
-        )
+        # K1: feed exactly the inputs this graph declares. `token_type_ids` is
+        # all-zeros for single-segment input, which is all we ever encode.
+        feed = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if "token_type_ids" in _input_names:
+            feed["token_type_ids"] = np.zeros_like(input_ids)
+        unsatisfied = [n for n in _input_names if n not in feed]
+        if unsatisfied:
+            # Loud, not silent: an unknown required input means this graph is
+            # not one we can drive, and returning None here would present as an
+            # empty index rather than a load error.
+            raise RuntimeError(
+                f"ColBERT graph declares input(s) {unsatisfied} that this encoder "
+                f"does not supply (declared: {list(_input_names)})"
+            )
+
+        outputs = _session.run(None, feed)
 
         embeddings = outputs[0][0]  # (max_tokens, hidden_dim)
         mask = attention_mask[0]  # (max_tokens,)
@@ -283,7 +409,11 @@ def encode(text: str, max_tokens: int, *, role: str) -> np.ndarray | None:
         token_embeddings = token_embeddings / norms
         return token_embeddings
     except Exception as e:  # noqa: BLE001
-        logger.debug("ColBERT encode failed: %s", e)
+        # K7: warning, not debug. At debug level an ONNX InvalidArgument
+        # ("Missing Input: token_type_ids") is invisible and the caller sees an
+        # ordinary miss, so a model that CANNOT be encoded at all presents as an
+        # empty index rather than a failure.
+        logger.warning("ColBERT encode failed (%s): %s", type(e).__name__, e)
         return None
 
 

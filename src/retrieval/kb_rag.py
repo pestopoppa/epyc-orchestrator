@@ -182,6 +182,45 @@ def _index_convention(conn: sqlite3.Connection) -> str | None:
     return colbert_encoder.LEGACY_CONVENTION if n_chunks else None
 
 
+def _encoder_embedding_dim() -> int | None:
+    """Embedding width the loaded ONNX graph emits, or None if unknowable.
+
+    Taken from the graph's own output shape rather than a config file, because
+    the graph is what produces the vectors. Returns None on a symbolic or
+    missing dimension; callers must treat an unknown width as "cannot check",
+    never as "matches".
+    """
+    session = getattr(colbert_encoder, "_session", None)
+    if session is None:
+        return None
+    try:
+        dim = session.get_outputs()[0].shape[-1]
+    except Exception:  # noqa: BLE001
+        return None
+    return dim if isinstance(dim, int) and dim > 0 else None
+
+
+def _check_embedding_dim(meta: dict[str, str]) -> None:
+    """Refuse a live encoder whose width differs from the one that built the index.
+
+    Loud on purpose (K9). The alternative is a numpy broadcast error inside
+    maxsim(), caught by encode()'s broad `except`, logged at debug, and returned
+    as "no results" -- indistinguishable from an empty corpus.
+    """
+    stored = (meta.get("embedding_dim") or "").strip()
+    if not stored:
+        return  # index predates the stamp; nothing to compare against
+    live = _encoder_embedding_dim()
+    if live is None or str(live) == stored:
+        return
+    raise RuntimeError(
+        f"kb_rag: index was built with {stored}-dim embeddings but the loaded "
+        f"encoder emits {live}-dim ({colbert_encoder._MODEL_DIR}). MaxSim across "
+        f"different widths is not a comparison; rebuild the index or restore the "
+        f"original encoder."
+    )
+
+
 def _stamp_meta(conn: sqlite3.Connection, convention: str) -> None:
     """Record encoder identity + convention alongside the vectors."""
     values = {
@@ -196,6 +235,13 @@ def _stamp_meta(conn: sqlite3.Connection, convention: str) -> None:
         "encoder_model_file": colbert_encoder._MODEL_PATH.name,
         "doc_max_tokens": str(_DOC_MAX_TOKENS),
         "query_max_tokens": str(_QUERY_MAX_TOKENS),
+        # K9: the identity that actually breaks the arithmetic. A model swap
+        # changing embedding WIDTH (128 -> 64 across the mxbai family) leaves
+        # every key above looking plausible; the mismatch then surfaces as a
+        # numpy shape error inside maxsim(), swallowed by the broad `except` in
+        # encode() and reported as an ordinary miss. Stamping the width lets a
+        # reader refuse before scoring instead of scoring nonsense.
+        "embedding_dim": str(_encoder_embedding_dim() or ""),
         "stamped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     conn.executemany(
@@ -242,6 +288,9 @@ def _warn_on_encoder_drift(meta: dict[str, str]) -> None:
             "MaxSim scores across different models are not comparable",
             stored_dir, colbert_encoder._MODEL_DIR,
         )
+    # A different DIRECTORY is a warning because the scores may still be
+    # meaningful; a different WIDTH is not comparable at all, so it raises.
+    _check_embedding_dim(meta)
 
 
 @dataclass
