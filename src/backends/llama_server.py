@@ -34,6 +34,24 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 logger = logging.getLogger(__name__)
 
+
+def _slot_token_suffix(response: Any, key: str) -> str:
+    """`` (N tokens)`` from a /slots save|restore body, or '' if unreadable.
+
+    The count is the only thing in that response that distinguishes a real
+    save/restore from a zero-token one, and this method previously discarded the
+    body entirely. Deliberately total: a body that will not parse (or a test
+    double that is not real JSON) yields an empty suffix and NEVER changes the
+    caller's success verdict -- surfacing the number must not be able to fail a
+    request that actually succeeded.
+    """
+    try:
+        value = response.json().get(key)
+        return f" ({int(value)} tokens)" if isinstance(value, (int, float)) else ""
+    except Exception:
+        return ""
+
+
 # Logit probe output file (append-only JSONL)
 _LOGIT_PROBE_PATH = str(_REPO_ROOT / "data/logit_probe.jsonl")
 
@@ -1247,7 +1265,7 @@ class LlamaServerBackend(ModelBackend):
             # HTTPStatusError, which is NOT a RequestError subclass, so a 4xx used to
             # propagate out of this method instead of returning False as documented.
             response.raise_for_status()
-            logger.info(f"Saved slot {slot_id} to {filename}")
+            logger.info(f"Saved slot {slot_id} to {filename}{_slot_token_suffix(response, 'n_saved')}")
             return True
         except httpx.HTTPError as e:
             logger.error(f"Failed to save slot {slot_id} as {filename!r}: {e}")
@@ -1261,7 +1279,14 @@ class LlamaServerBackend(ModelBackend):
             filename: BARE filename, never a path -- same contract as ``save_slot``.
 
         Returns:
-            True if restore succeeded.
+            True if the request SUCCEEDED, which is not the same as "KV came
+            back". llama-server answers a zero-token restore with HTTP 200, so
+            the boolean proves transport only; ``n_restored`` in the body is the
+            token count and it is logged, not returned. Any caller about to do
+            something DESTRUCTIVE on the strength of this answer must read the
+            count instead -- that exact confusion let a zero-token restore erase
+            a source slot and record it as verified
+            (see ``concurrency_aware._migrate_kv``, fixed 2026-08-22).
         """
         try:
             response = self.client.post(
@@ -1272,7 +1297,10 @@ class LlamaServerBackend(ModelBackend):
             # See save_slot: HTTPStatusError is not a RequestError, so a 4xx used to
             # propagate rather than returning False.
             response.raise_for_status()
-            logger.info(f"Restored slot {slot_id} from {filename}")
+            logger.info(
+                f"Restored slot {slot_id} from {filename}"
+                f"{_slot_token_suffix(response, 'n_restored')}"
+            )
             return True
         except httpx.HTTPError as e:
             logger.error(f"Failed to restore slot {slot_id} from {filename!r}: {e}")

@@ -118,48 +118,78 @@ def _slot_filename(role: str, session_id: str, txn_id: str) -> str:
     return f"kv_migrate_{safe[:180] or 'session'}.bin"
 
 
-def _slot_save(base_url: str, slot_id: int = 0, filename: str | None = None) -> bool:
-    """Save KV state from a llama-server slot. Returns True on success."""
+def _reported_tokens(result: "bool | int | None") -> int | None:
+    """Token count a slot helper reported, or None when it did not report one.
+
+    None means "no usable count" — a transport failure, OR a caller (test double,
+    older shim) that still answers with a bare ``True``. Both must skip the
+    save/restore equality gate rather than fail it: an unknown count is not
+    evidence of a mismatch. ``False`` is a failure. ``0`` is a real count and is
+    NOT None — that is the whole point of this function.
+    """
+    if result is None or result is False:
+        return None
+    if result is True:          # legacy bool contract: success, count unknown
+        return None
+    return int(result)
+
+
+def _slot_save(base_url: str, slot_id: int = 0, filename: str | None = None) -> int | None:
+    """Save KV state from a llama-server slot.
+
+    Returns the number of tokens the server reports saving, or None on failure.
+    Returning the COUNT rather than a bool is load-bearing: a save that writes
+    zero tokens is an HTTP 200, and callers must be able to tell it apart from a
+    real one before they act on it destructively (see _migrate_kv).
+    """
     if not _HTTPX_AVAILABLE:
-        return False
+        return None
     try:
         url = f"{base_url}/slots/{slot_id}?action=save"
         kwargs = {"json": {"filename": filename}} if filename else {}
         resp = httpx.post(url, timeout=_SLOT_SAVE_TIMEOUT, **kwargs)
         if resp.status_code == 200:
             data = resp.json()
+            n_saved = int(data.get("n_saved", 0) or 0)
             logger.info(
                 "KV save: slot %d, %d tokens, %.1fms",
-                slot_id, data.get("n_saved", 0), data.get("timings", {}).get("save_ms", 0),
+                slot_id, n_saved, data.get("timings", {}).get("save_ms", 0),
             )
-            return True
+            return n_saved
         logger.warning("KV save failed: HTTP %d from %s", resp.status_code, url)
-        return False
+        return None
     except Exception as exc:
         logger.debug("KV save failed: %s", exc)
-        return False
+        return None
 
 
-def _slot_restore(base_url: str, slot_id: int = 0, filename: str | None = None) -> bool:
-    """Restore KV state to a llama-server slot. Returns True on success."""
+def _slot_restore(base_url: str, slot_id: int = 0, filename: str | None = None) -> int | None:
+    """Restore KV state to a llama-server slot.
+
+    Returns the number of tokens the server reports restoring, or None on
+    failure. The count is what makes a restore verifiable: HTTP 200 proves the
+    request was served, not that any KV came back, and _migrate_kv erases the
+    SOURCE slot on the strength of this answer.
+    """
     if not _HTTPX_AVAILABLE:
-        return False
+        return None
     try:
         url = f"{base_url}/slots/{slot_id}?action=restore"
         kwargs = {"json": {"filename": filename}} if filename else {}
         resp = httpx.post(url, timeout=_SLOT_RESTORE_TIMEOUT, **kwargs)
         if resp.status_code == 200:
             data = resp.json()
+            n_restored = int(data.get("n_restored", 0) or 0)
             logger.info(
                 "KV restore: slot %d, %d tokens, %.1fms",
-                slot_id, data.get("n_restored", 0), data.get("timings", {}).get("restore_ms", 0),
+                slot_id, n_restored, data.get("timings", {}).get("restore_ms", 0),
             )
-            return True
+            return n_restored
         logger.warning("KV restore failed: HTTP %d from %s", resp.status_code, url)
-        return False
+        return None
     except Exception as exc:
         logger.debug("KV restore failed: %s", exc)
-        return False
+        return None
 
 
 def _slot_erase(base_url: str, slot_id: int = 0) -> bool:
@@ -631,6 +661,11 @@ class ConcurrencyAwareBackend:
 
         transaction.advance(MigrationState.SAVING)
         saved = _slot_save(self._full_url, filename=slot_filename)
+        n_saved = _reported_tokens(saved)
+        # `not saved` now also catches a 0-token save, which is an HTTP 200 and
+        # was previously indistinguishable from a real one. Nine such 752-byte
+        # artifacts sit in the slot cache; four share a name class with 64 real
+        # saves, so this is a failure mode of the normal path, not of probes.
         if not saved:
             transaction.advance(MigrationState.ABORTED, detail="save_failed")
             # State-only update, NOT _finalize_quarter_assignment: an ABORTED
@@ -657,6 +692,7 @@ class ConcurrencyAwareBackend:
 
         transaction.advance(MigrationState.RESTORING)
         restored = _slot_restore(target_url, filename=slot_filename)
+        n_restored = _reported_tokens(restored)
         if not restored:
             transaction.advance(MigrationState.ABORTED, detail="restore_failed")
             # See the save_failed branch above: state-only, no hard affinity.
@@ -674,12 +710,37 @@ class ConcurrencyAwareBackend:
             )
             return transaction
 
+        # VERIFIED must mean "the KV came back", not "the request was served".
+        # HTTP 200 proves transport; n_restored proves reuse. Until 2026-08-22
+        # this advanced on the status code alone and the NEXT statement erased
+        # the source, so a zero-token restore destroyed the only good copy and
+        # recorded it as a success. The server already returns the number and
+        # _slot_restore already parsed it; nothing read it.
+        if n_saved is not None and n_restored is not None and n_restored != n_saved:
+            transaction.advance(MigrationState.ABORTED, detail="restore_token_mismatch")
+            with self._lock:
+                self._set_session_state(
+                    session_id,
+                    state=_STATE_MIGRATION_FAILED_COLD,
+                    quarter=target_quarter,
+                    detail="restore_token_mismatch",
+                )
+                self._migration_failures += 1
+            logger.error(
+                "KV migration restore returned %d tokens but %d were saved for %s "
+                "session=%s quarter %d; SOURCE SLOT PRESERVED and session runs cold (txn=%s)",
+                n_restored, n_saved, self._role, session_id, target_quarter,
+                transaction.txn_id,
+            )
+            return transaction
+
         # Restore confirmed — placement waiters may now proceed (audit refinement:
         # incoming request must wait for VERIFIED before placing on the freed slot).
         transaction.advance(MigrationState.VERIFIED, detail="restore_confirmed")
 
         # Source erase happens AFTER verification — destructive on failure, so
         # we want to be 100% sure the restore succeeded before clearing source.
+        # That certainty now comes from the token-count equality gate above.
         _slot_erase(self._full_url)
         transaction.advance(MigrationState.SOURCE_ERASED)
 
@@ -833,7 +894,9 @@ class ConcurrencyAwareBackend:
             slot_filename = _slot_filename(self._role, session_id, txn.txn_id)
 
             txn.advance(MigrationState.SAVING)
-            if not _slot_save(source_url, filename=slot_filename):
+            rev_saved = _slot_save(source_url, filename=slot_filename)
+            rev_n_saved = _reported_tokens(rev_saved)
+            if not rev_saved:
                 txn.advance(MigrationState.ABORTED, detail="save_failed")
                 logger.warning(
                     "WP-4 reverse migration save failed role=%s session=%s txn=%s",
@@ -842,11 +905,28 @@ class ConcurrencyAwareBackend:
                 return
 
             txn.advance(MigrationState.RESTORING)
-            if not _slot_restore(self._full_url, filename=slot_filename):
+            rev_restored = _slot_restore(self._full_url, filename=slot_filename)
+            rev_n_restored = _reported_tokens(rev_restored)
+            if not rev_restored:
                 txn.advance(MigrationState.ABORTED, detail="restore_failed")
                 logger.warning(
                     "WP-4 reverse migration restore failed role=%s session=%s txn=%s",
                     self._role, session_id, txn.txn_id,
+                )
+                return
+
+            # Same equality gate as the forward path: the erase below is
+            # destructive and HTTP 200 is not evidence the KV came back.
+            if (
+                rev_n_saved is not None
+                and rev_n_restored is not None
+                and rev_n_restored != rev_n_saved
+            ):
+                txn.advance(MigrationState.ABORTED, detail="restore_token_mismatch")
+                logger.error(
+                    "WP-4 reverse migration restored %d tokens but %d were saved "
+                    "role=%s session=%s txn=%s; SOURCE SLOT PRESERVED",
+                    rev_n_restored, rev_n_saved, self._role, session_id, txn.txn_id,
                 )
                 return
 
