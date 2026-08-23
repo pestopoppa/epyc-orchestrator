@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts.autopilot import shapekeyed_step2_smoke as sk
 
 # Synthetic (role, idx) -> region-set topology. anchor = ingest#0 {q0,q1}
@@ -31,6 +33,11 @@ SYNTH_REGIONS: dict[tuple[str, int], frozenset[str]] = {
 
 def _plan() -> sk.Step2SmokePlan:
     return sk.build_step2_smoke_plan(SYNTH_REGIONS, topology_hash="test-topo")
+
+
+def _anchor_held() -> dict[str, list[int]]:
+    """Injected anchor-hold scan: the SYNTH anchor (ingest_long_context#0) is held."""
+    return {"ingest_long_context": [0]}
 
 
 # ── admit/queue classifier ────────────────────────────────────────────────────
@@ -91,7 +98,9 @@ def test_drive_admit_overlap_probes_scores_against_plan() -> None:
         # call_orchestrator_forced): empty answer + httpx 503 error string.
         return {"answer": "", "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/chat'"}
 
-    observed = sk._drive_admit_overlap_probes(plan, seed=7, probe_fn=fake_probe)
+    observed = sk._drive_admit_overlap_probes(
+        plan, seed=7, probe_fn=fake_probe, anchor_hold_fn=_anchor_held
+    )
 
     assert seen_priority == {sk.PLACEMENT_REQUEST_PRIORITY}   # "background"
     assert seen_workload == {sk.PLACEMENT_WORKLOAD_CLASS}     # "eval_batch"
@@ -116,7 +125,9 @@ def test_drive_admit_overlap_probes_omits_unscored_outcomes() -> None:
             return {"answer": "OK"}
         return {"answer": "", "error": "503 Service Unavailable /chat"}
 
-    observed = sk._drive_admit_overlap_probes(plan, seed=1, probe_fn=fake_probe)
+    observed = sk._drive_admit_overlap_probes(
+        plan, seed=1, probe_fn=fake_probe, anchor_hold_fn=_anchor_held
+    )
     assert dropped not in observed
     assert len(observed) == 5
 
@@ -125,6 +136,120 @@ def test_drive_admit_overlap_probes_omits_unscored_outcomes() -> None:
     assert summary["n_pass"] == 5
     # all_pass is over the evaluated set; the omitted probe scores pass=None.
     assert any(row["pass"] is None and row["probe_id"] == dropped for row in summary["rows"])
+
+
+def test_drive_admit_overlap_probes_timeout_path_classifies_queue() -> None:
+    """The 90s/60s background-queue-budget timeout (fail-closed 503) is QUEUE.
+
+    PROBE_TIMEOUT_S=120 maps to a bounded max_queue_wait_ms; an overlapping
+    candidate exhausts it and surfaces as the contention handler's 503 through
+    call_orchestrator_forced (empty answer + httpx 503 error text). The driver
+    must classify that exact timeout shape as "queue", never as unscored.
+    """
+    plan = _plan()
+
+    def fake_probe(spec: sk.AdmitOverlapProbeSpec, *, seed: int):
+        if spec.expected_decision == sk.DECISION_ADMIT:
+            return {"answer": "OK", "tokens_generated": 4}
+        # The queue-budget-exhausted contention timeout, exactly as surfaced
+        # through call_orchestrator_forced's raise_for_status branch.
+        return {
+            "answer": "",
+            "error": (
+                "Server error '503 Service Unavailable' for url "
+                "'http://localhost:8000/chat'"
+            ),
+            "failure_reason": "http_status",
+        }
+
+    observed = sk._drive_admit_overlap_probes(
+        plan, seed=9, probe_fn=fake_probe, anchor_hold_fn=_anchor_held
+    )
+    assert observed == {p.probe_id: p.expected_decision for p in plan.probes}
+    queue_ids = [p.probe_id for p in plan.probes if p.expected_decision == sk.DECISION_QUEUE]
+    assert all(observed[qid] == sk.DECISION_QUEUE for qid in queue_ids)
+
+
+def test_drive_admit_overlap_probes_empty_queue_fails_closed() -> None:
+    """An empty probe queue cannot produce the bracket — refuse before probing."""
+    plan = _plan()
+    plan.probes = []  # simulate a placement queue with no candidates
+
+    def _boom(spec: sk.AdmitOverlapProbeSpec, *, seed: int):  # pragma: no cover
+        raise AssertionError("no probe may fire on an empty queue")
+
+    with pytest.raises(RuntimeError, match="signal structurally unobtainable"):
+        sk._drive_admit_overlap_probes(plan, seed=3, probe_fn=_boom, anchor_hold_fn=_anchor_held)
+
+
+def test_drive_admit_overlap_probes_anchor_not_held_fails_closed() -> None:
+    """Anchor precondition: the operator must hold the anchor; unverified ⇒ fail closed."""
+    plan = _plan()
+
+    def _boom(spec: sk.AdmitOverlapProbeSpec, *, seed: int):  # pragma: no cover
+        raise AssertionError("no probe may fire when the anchor is not verifiably held")
+
+    # (a) Empty holder scan (locks disabled / stack down) — cannot verify.
+    with pytest.raises(RuntimeError, match="anchor-hold precondition cannot be verified"):
+        sk._drive_admit_overlap_probes(
+            plan, seed=3, probe_fn=_boom, anchor_hold_fn=lambda: {}
+        )
+    # (b) Anchor role holds a DIFFERENT instance — not the anchor placement.
+    with pytest.raises(RuntimeError, match="anchor-hold precondition cannot be verified"):
+        sk._drive_admit_overlap_probes(
+            plan, seed=3, probe_fn=_boom,
+            anchor_hold_fn=lambda: {"ingest_long_context": [2]},
+        )
+    # (c) Anchor role absent from the scan entirely.
+    with pytest.raises(RuntimeError, match="anchor-hold precondition cannot be verified"):
+        sk._drive_admit_overlap_probes(
+            plan, seed=3, probe_fn=_boom, anchor_hold_fn=lambda: {"frontdoor": [0]}
+        )
+
+
+def test_drive_admit_overlap_probes_one_sided_signal_fails_closed() -> None:
+    """All-queue (or all-admit) expectations are structurally unobtainable.
+
+    Mirrors the handoff's stale-default hazard: with the FULL ingest instance as
+    anchor, every candidate overlaps → all probes expect QUEUE → the bracket has
+    no disjoint side. The driver must refuse rather than "still report".
+    """
+    full_anchor_regions = {
+        ("ingest_long_context", 0): frozenset({"q0", "q1", "q2", "q3"}),
+        ("frontdoor", 0): frozenset({"q0", "q1"}),
+        ("vision_escalation", 0): frozenset({"q2", "q3"}),
+    }
+    plan = sk.build_step2_smoke_plan(full_anchor_regions, topology_hash="test-topo")
+    assert len(plan.probes) > 0
+    assert all(p.expected_decision == sk.DECISION_QUEUE for p in plan.probes)
+
+    def _boom(spec: sk.AdmitOverlapProbeSpec, *, seed: int):  # pragma: no cover
+        raise AssertionError("no probe may fire on a structurally unobtainable plan")
+
+    with pytest.raises(RuntimeError, match="signal structurally unobtainable"):
+        sk._drive_admit_overlap_probes(
+            plan, seed=3, probe_fn=_boom,
+            anchor_hold_fn=lambda: {"ingest_long_context": [0]},
+        )
+
+
+def test_verify_anchor_held_pure_pass_and_fail_paths() -> None:
+    plan = _plan()
+    # Pure checker: no I/O, no injection seam needed — holder map is the input.
+    sk._verify_anchor_held(plan, {"ingest_long_context": [0]})
+    sk._verify_anchor_held(plan, {"ingest_long_context": [0, 2]})
+    with pytest.raises(RuntimeError, match="anchor-hold precondition cannot be verified"):
+        sk._verify_anchor_held(plan, {})
+    with pytest.raises(RuntimeError, match="anchor-hold precondition cannot be verified"):
+        sk._verify_anchor_held(plan, {"ingest_long_context": [1]})
+
+
+def test_verify_probe_signal_pure_refuses_one_sided_or_empty() -> None:
+    plan = _plan()
+    sk._verify_probe_signal(plan)  # 3 admit + 3 queue → valid bracket
+    plan.probes = []
+    with pytest.raises(RuntimeError, match="signal structurally unobtainable"):
+        sk._verify_probe_signal(plan)
 
 
 # ── re-bench driver (injected sample_fn) ──────────────────────────────────────
@@ -181,7 +306,12 @@ def test_execute_step2_smoke_writes_artifact_with_injected_fns(tmp_path: Path) -
         return [1.15 + 0.0005 * i for i in range(target_samples)]
 
     report = sk.execute_step2_smoke(
-        plan, output_path=out, seed=42, probe_fn=fake_probe, sample_fn=fake_sample
+        plan,
+        output_path=out,
+        seed=42,
+        probe_fn=fake_probe,
+        sample_fn=fake_sample,
+        anchor_hold_fn=_anchor_held,
     )
 
     assert report["kind"] == "shapekeyed_step2_smoke_report"

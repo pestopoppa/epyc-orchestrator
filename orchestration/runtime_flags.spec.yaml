@@ -84,6 +84,7 @@ flags:
   parallel_tools: baseline
   personas: baseline
   plan_review: baseline
+  prefix_stable_order: baseline
   process_reward_telemetry: baseline
   react_mode: baseline
   reasoning_length_alarm: baseline

@@ -27,11 +27,15 @@ behind injectable seams (proc_root / detect callable).
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 # Single source of truth for bench-driver identity. `guard_against_running_bench`
 # in orchestrator_stack.py imports `detect_running_cpu_bench` from here, and the
@@ -393,3 +397,56 @@ def enforce_placement(
         print(pin_message(label, effective, claim_used))
         return effective
     return None
+
+
+# The running API has no CLI flags, so the launcher's --allow-during-bench
+# (SS-BENCH-GATE-b) becomes an env knob for the API's own spawn layer
+# (SS-BENCH-GATE-c), evaluated at spawn time so it can be toggled without a
+# restart. Same semantics: 1 = the operator has accepted that the bench run
+# may be invalidated.
+API_BENCH_ALLOW_ENV = "ORCHESTRATOR_ALLOW_DURING_BENCH"
+
+
+def api_enforce_placement(
+    placement: str | None,
+    *,
+    label: str,
+    claim: BenchClaim | None = None,
+    host_cores: frozenset[int] | None = None,
+    proc_root: Path = Path("/proc"),
+    online_path: Path = Path("/sys/devices/system/cpu/online"),
+) -> str | None:
+    """SS-BENCH-GATE-c — placement guard for the running API's own spawns.
+
+    Same decision machinery as `enforce_placement` (reused unchanged), with
+    `--allow-during-bench` replaced by the ORCHESTRATOR_ALLOW_DURING_BENCH=1
+    environment variable. Refusals raise `BenchPlacementRefusal` exactly as
+    in the CLI path; the spawn site maps the exception to its own failure
+    handling, which must fail closed (nothing spawns). Every spawn that
+    happens while a bench claim is live and the knob is set is logged loudly —
+    a bypass an operator cannot see in the logs is a bypass that silently
+    invalidates a run.
+
+    Returns the cpu list to pin the spawn to, or None when the spawn keeps its
+    original prefix (no bench live, requested placement disjoint, or the knob
+    bypassed a refusal).
+    """
+    claim_used = claim if claim is not None else read_bench_claim(proc_root=proc_root)
+    force = os.environ.get(API_BENCH_ALLOW_ENV, "") == "1"
+    if force and not claim_used.empty:
+        logger.warning(
+            "%s=1: spawning %s while a CPU bench claims cores %s — the bench's "
+            "campaign-continuity gate may invalidate the run",
+            API_BENCH_ALLOW_ENV,
+            label,
+            format_cpu_list(claim_used.cores) if not claim_used.unobservable else "UNOBSERVABLE",
+        )
+    return enforce_placement(
+        placement,
+        force=force,
+        label=label,
+        claim=claim_used,
+        host_cores=host_cores,
+        proc_root=proc_root,
+        online_path=online_path,
+    )

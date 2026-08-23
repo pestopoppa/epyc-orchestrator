@@ -382,15 +382,25 @@ class WorkerPoolManager:
         log_file = log_dir / f"worker-{config.name}-{config.port}.log"
 
         logger.info(f"Starting worker {config.name} on port {config.port}")
-        logger.debug(f"Command: {' '.join(cmd[:8])}...")
+
+        from scripts.server.bench_core_claim import BenchPlacementRefusal
 
         try:
+            # SS-BENCH-GATE-c: the spawn prefix must not inherit the bench's
+            # cores. `numactl --interleave=all` is a DEFAULT-affinity shape —
+            # the kernel may schedule the worker's threads on any core, exactly
+            # the incident's sidecar shape. _bench_guarded_prefix pins
+            # default-affinity spawns to `host_cores - claim` while a bench is
+            # live and refuses (fail closed) when the claim cannot be read.
+            prefix = self._bench_guarded_prefix(config.name)
+            logger.debug(f"Command: {' '.join((prefix + cmd)[:8])}...")
+
             with open(log_file, "w") as log:
                 env = os.environ.copy()
                 env["OMP_NUM_THREADS"] = "1"
 
                 instance.process = subprocess.Popen(
-                    ([*["numactl", "--interleave=all"]] if shutil.which("numactl") else []) + cmd,
+                    prefix + cmd,
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     env=env,
@@ -408,8 +418,19 @@ class WorkerPoolManager:
                 await self._stop_worker(instance)
                 return False
 
+        except BenchPlacementRefusal:
+            # The incident context was already printed by the guard; nothing
+            # spawned, so there is nothing to stop.
+            logger.error(
+                "Refused to start worker %s: a live CPU bench claims the cores it "
+                "would run on (fail closed; see bench_core_claim.py)",
+                config.name,
+            )
+            return False
+
         except Exception as e:
             logger.error(f"Failed to start worker {config.name}: {e}")
+            await self._stop_worker(instance)
             return False
 
     def _build_launch_command(self, config: WorkerConfig) -> list[str]:
@@ -440,6 +461,26 @@ class WorkerPoolManager:
         cmd.extend(config.launch_flags)
 
         return cmd
+
+    def _bench_guarded_prefix(self, name: str) -> list[str]:
+        """SS-BENCH-GATE-c — Popen prefix for a worker spawn, bench-aware.
+
+        The pool's `numactl --interleave=all` prefix is a DEFAULT-affinity
+        shape: the kernel may schedule the worker's threads on any core,
+        including cores a live CPU bench pinned (the 2026-07-27 sidecar shape
+        that destroyed 1h09m of decision-gating measurement). While a bench
+        claims cores, the spawn is pinned to `host_cores - claim` instead;
+        a claim that cannot be read refuses the spawn (BenchPlacementRefusal,
+        fail closed: unknown must mean busy). No bench live -> the
+        byte-identical legacy prefix.
+        """
+        base = ["numactl", "--interleave=all"] if shutil.which("numactl") else []
+        from scripts.server.bench_core_claim import api_enforce_placement
+
+        pinned = api_enforce_placement(None, label=f"worker {name}")
+        if pinned is None:
+            return base
+        return ["taskset", "-c", pinned]
 
     async def _wait_for_health(
         self, port: int, timeout: int = int(_registry_timeout("health", "server_startup", 120))

@@ -49,7 +49,6 @@ feed the operator's Step-2 flag-on decision, they never gate it on their own.
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
 import os
 import statistics
@@ -705,10 +704,10 @@ def load_instance_regions(
 
 # Orchestrator API + probe knobs (execute path only; never used in tests/dry-run).
 DEFAULT_ORCH_URL = "http://localhost:8000"
-# Probe timeout drives call_orchestrator_forced's max_queue_wait_ms
-# (=min(timeout*1000, 90_000)); 120 s ⇒ the full 90 s background queue budget, so
-# an OVERLAPPING candidate genuinely times out (→ 503 → QUEUE) rather than
-# slow-admitting. The operator must hold the anchor for at least this long.
+# Probe timeout drives call_orchestrator_forced's eval_batch max_queue_wait_ms
+# (=min(timeout*500, 300_000)); 120 s ⇒ a 60 s queue window, so an OVERLAPPING
+# candidate genuinely exhausts it (→ 503 → QUEUE) rather than slow-admitting.
+# The operator must hold the anchor for at least this long.
 PROBE_TIMEOUT_S = 120
 PROBE_MAX_TOKENS = 4  # a minimal generation — we score routing, not the answer
 
@@ -816,11 +815,94 @@ def _default_admit_overlap_probe(
     )
 
 
+def _default_anchor_holder_fn() -> dict[str, list[int]]:  # pragma: no cover - inference path
+    """Live seam: currently-held (role, instance_idx) CPU-region locks.
+
+    Read-only filesystem scan of the region-lock layer
+    (``src.runtime.cpu_region_lock.active_region_holders``) — no API call, no
+    network, no inference. Returns {} when region locks are disabled or nothing
+    is dispatching; the driver fails closed on an unverifiable scan. Never
+    exercised under test (tests inject ``anchor_hold_fn``).
+    """
+    try:
+        from src.runtime.cpu_region_lock import active_region_holders
+    except Exception:  # noqa: BLE001
+        from runtime.cpu_region_lock import active_region_holders  # type: ignore
+    return active_region_holders() or {}
+
+
+def _verify_anchor_held(
+    plan: Step2SmokePlan,
+    holders: dict[str, list[int]],
+) -> None:
+    """Fail closed unless the anchor placement is verifiably held live.
+
+    The admit-vs-queue signal is only meaningful while the operator holds the
+    anchor placement: an overlapping candidate queues (503) only because the
+    anchor occupies its region locks. An unreadable/empty holder scan, or the
+    anchor instance absent from it, is NOT verification — fail closed with an
+    actionable message instead of firing probes that would measure nothing.
+    Pure (no I/O): the caller supplies the holder map.
+    """
+    if not holders:
+        raise RuntimeError(
+            "anchor-hold precondition cannot be verified: no CPU-region "
+            "holders reported (empty region-lock scan — is "
+            "PER_REGION_LOCKS enabled and is the stack live?). The operator "
+            f"MUST hold the anchor placement {plan.anchor.role}"
+            f"#{plan.anchor.instance_idx} (regions "
+            f"{region_label(plan.anchor.regions)}) for ~{PROBE_TIMEOUT_S}s "
+            "before driving the smoke."
+        )
+    held_idx = {int(i) for i in holders.get(plan.anchor.role, [])}
+    if plan.anchor.instance_idx not in held_idx:
+        raise RuntimeError(
+            "anchor-hold precondition cannot be verified: "
+            f"{plan.anchor.role} currently holds instances "
+            f"{sorted(held_idx)!r}, not the anchor instance "
+            f"#{plan.anchor.instance_idx} (regions "
+            f"{region_label(plan.anchor.regions)}). The operator MUST hold "
+            f"{plan.anchor.role}#{plan.anchor.instance_idx} for ~"
+            f"{PROBE_TIMEOUT_S}s so overlapping candidates genuinely queue "
+            "(503) rather than slow-admitting."
+        )
+
+
+def _verify_probe_signal(plan: Step2SmokePlan) -> None:
+    """Fail closed when the plan cannot produce the admit-vs-queue contrast.
+
+    The smoke exists to observe BOTH sides of the bracket — a disjoint
+    candidate admitting while an overlapping one queues. A plan with zero
+    probes, or every probe expecting the same decision (e.g. a FULL anchor
+    against which every candidate overlaps), cannot measure the contrast and
+    would merely re-report its own expectation. Refuse with an actionable
+    message rather than "still reporting" (handoff 2026-08-12). Pure.
+    """
+    n_admit = sum(
+        1 for p in plan.probes if p.expected_decision == DECISION_ADMIT
+    )
+    n_queue = sum(
+        1 for p in plan.probes if p.expected_decision == DECISION_QUEUE
+    )
+    if n_admit == 0 or n_queue == 0:
+        raise RuntimeError(
+            "admit-vs-queue signal structurally unobtainable from this plan: "
+            f"{len(plan.probes)} probes ({n_admit} admit-expected, {n_queue} "
+            "queue-expected) — the smoke must contain BOTH a disjoint "
+            "(admit-expected) and an overlapping (queue-expected) candidate. "
+            "With the default anchor this usually means the anchor is the "
+            "FULL instance (ingest_long_context idx 0 is NUMA_FULL 0-95, not "
+            "the {q0,q1} half); pass --anchor-idx for a half/quarter anchor "
+            "so disjoint candidates exist."
+        )
+
+
 def _drive_admit_overlap_probes(
     plan: Step2SmokePlan,
     *,
     seed: int,
     probe_fn: Callable[..., Any] | None = None,
+    anchor_hold_fn: Callable[[], dict[str, list[int]]] | None = None,
 ) -> dict[str, str]:
     """Drive every admit-overlap probe and collect its observed gate decision.
 
@@ -831,8 +913,16 @@ def _drive_admit_overlap_probes(
     them ``pass=None`` and excludes them). Returns ``{probe_id: decision}`` in the
     exact shape ``aggregate_admit_overlap`` consumes.
 
-    ``probe_fn`` is injected in tests (like ``run_paired_ab``'s ``arm_probe``); the
-    default hits the live placement queue and is never exercised under test.
+    **Fail-closed preconditions, checked BEFORE any probe fires**: the anchor
+    placement must be verifiably held (``_verify_anchor_held`` — the operator
+    must hold the anchor for ~``PROBE_TIMEOUT_S``) and the plan must contain
+    both an admit-expected and a queue-expected probe
+    (``_verify_probe_signal``). Either unmet ⇒ the drive raises with an
+    actionable message and NO inference happens.
+
+    ``probe_fn``/``anchor_hold_fn`` are injected in tests (like
+    ``run_paired_ab``'s ``arm_probe``); the defaults hit the live placement
+    queue + region-lock scan and are never exercised under test.
 
     Two measurement-validity limitations (flagged, not faked):
 
@@ -849,6 +939,8 @@ def _drive_admit_overlap_probes(
          QUEUED then admitted within budget is indistinguishable from an immediate
          admit. Only a fail-closed **timeout** (503) is observably a QUEUE.
     """
+    _verify_probe_signal(plan)
+    _verify_anchor_held(plan, (anchor_hold_fn or _default_anchor_holder_fn)())
     probe = probe_fn or _default_admit_overlap_probe
     observed: dict[str, str] = {}
     for spec in plan.probes:
@@ -916,22 +1008,27 @@ def execute_step2_smoke(
     seed: int = 42,
     probe_fn: Callable[..., Any] | None = None,
     sample_fn: Callable[..., Iterable[float]] | None = None,
+    anchor_hold_fn: Callable[[], dict[str, list[int]]] | None = None,
 ) -> dict[str, Any]:
     """Drive the plan over the PLACEMENT QUEUE, collect outcomes, aggregate.
 
-    Reached (with ``probe_fn``/``sample_fn`` defaulted to the live seams) ONLY when
-    both ``--execute`` and ``AUTOPILOT_SHAPEKEYED_STEP2_SMOKE=1`` are set —
+    Reached (with ``probe_fn``/``sample_fn``/``anchor_hold_fn`` defaulted to the
+    live seams) ONLY when both ``--execute`` and
+    ``AUTOPILOT_SHAPEKEYED_STEP2_SMOKE=1`` are set —
     ``run_shapekeyed_step2_smoke`` enforces the double gate. Autopilot-stopped
     assumption: the caller owns the no-concurrent-inference window; this function
     never touches autopilot lifecycle/state and never modifies the routing/serving
     path (the dispatcher + gate are consulted only through the normal eval_batch
-    placement lane).
+    placement lane). The admit-overlap driver first fails closed unless the
+    anchor placement is verifiably held (operator anchor-hold procedure).
 
-    Tests exercise this function DIRECTLY with injected ``probe_fn``/``sample_fn``
-    (never the env gate, never a network) to cover aggregation + artifact write; the
-    live-seam defaults stay unread under test.
+    Tests exercise this function DIRECTLY with injected ``probe_fn``/``sample_fn``/
+    ``anchor_hold_fn`` (never the env gate, never a network) to cover aggregation
+    + artifact write; the live-seam defaults stay unread under test.
     """
-    observed_decisions = _drive_admit_overlap_probes(plan, seed=seed, probe_fn=probe_fn)
+    observed_decisions = _drive_admit_overlap_probes(
+        plan, seed=seed, probe_fn=probe_fn, anchor_hold_fn=anchor_hold_fn
+    )
     rebench_samples = _drive_rebench_pairs(plan, seed=seed, sample_fn=sample_fn)
     report = aggregate_smoke(
         plan,
