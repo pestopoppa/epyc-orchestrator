@@ -1250,6 +1250,9 @@ def _only_mode_transition_allowed(numa_mode: str, realized_mode: str) -> bool:
 
 def cmd_start(args: argparse.Namespace) -> int:
     """Start the orchestrator stack."""
+    # SS-BENCH-GATE-b: --allow-during-bench flows into the per-spawn placement
+    # guard (the CLI-level guard already exited 2 without it when a bench runs).
+    bench_force = bool(getattr(args, "allow_during_bench", False))
     _registry_yaml = Path(__file__).parent.parent.parent / "orchestration" / "model_registry.yaml"
     _descriptor_yaml = (
         Path(__file__).parent.parent.parent / "orchestration" / "model_descriptors.yaml"
@@ -1726,6 +1729,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             eval_batch_frontdoor_mode=eval_batch_frontdoor_mode,
             gpu_shadow_lane_mode=gpu_shadow_lane_mode,
             numa_instance=numa_instance,
+            bench_force=bench_force,
         )
         if info:
             state[f"server_{port}"] = info
@@ -1783,7 +1787,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         if preserved:
             state["orchestrator"] = preserved
     else:
-        info = start_orchestrator(getattr(args, "profile", None), stack_numa_mode=numa_mode)
+        info = start_orchestrator(
+            getattr(args, "profile", None),
+            stack_numa_mode=numa_mode,
+            bench_force=bench_force,
+        )
         if info:
             state["orchestrator"] = info
         else:
@@ -1819,7 +1827,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                     state[service.name] = preserved
             else:
                 starter = globals().get(f"start_{service.name}")
-                info = starter() if callable(starter) else start_aux_service(service.name)
+                info = (
+                    starter(bench_force=bench_force)
+                    if callable(starter)
+                    else start_aux_service(service.name, bench_force=bench_force)
+                )
                 if info:
                     state[service.name] = info
                 else:
@@ -1995,6 +2007,9 @@ def _reload_server_port(component: str) -> int | None:
 
 def cmd_reload(args: argparse.Namespace) -> int:
     """Reload components."""
+    # SS-BENCH-GATE-b: same force plumbing as cmd_start — the reload that
+    # spawned the incident's sidecar must honor --allow-during-bench per-spawn.
+    bench_force = bool(getattr(args, "allow_during_bench", False))
     state = load_state()
     registry: RegistryLoader | None = None
 
@@ -2043,6 +2058,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                     get_registry(),
                     dev_mode=False,
                     embedding_mode=True,
+                    bench_force=bench_force,
                 )
                 if info:
                     state[f"server_{port}"] = info
@@ -2065,6 +2081,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
             info = start_orchestrator(
                 getattr(args, "profile", None),
                 stack_numa_mode=read_runtime_stack_numa_mode(),
+                bench_force=bench_force,
             )
             if info:
                 state["orchestrator"] = info
@@ -2104,7 +2121,11 @@ def cmd_reload(args: argparse.Namespace) -> int:
             # existing public `start_<name>()` entry points (and every caller and
             # test bound to them) keep their exact meaning.
             starter = globals().get(f"start_{component}")
-            info = starter() if callable(starter) else start_aux_service(component)
+            info = (
+                starter(bench_force=bench_force)
+                if callable(starter)
+                else start_aux_service(component, bench_force=bench_force)
+            )
             if info:
                 state[component] = info
             else:
@@ -2164,6 +2185,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 eval_batch_frontdoor_mode=eval_batch_frontdoor_mode,
                 gpu_shadow_lane_mode=gpu_shadow_lane_mode,
                 numa_instance=numa_instance,
+                bench_force=bench_force,
             )
             if info:
                 state[key] = info

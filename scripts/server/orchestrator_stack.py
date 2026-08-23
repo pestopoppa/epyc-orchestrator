@@ -119,6 +119,11 @@ from scripts.server.stack_numa import (
     NUMA_CONFIG,
     _numa_prefix,
 )
+from scripts.server.bench_core_claim import (
+    BenchPlacementRefusal,
+    detect_running_cpu_bench,
+    enforce_placement,
+)
 from scripts.server.runtime_facts_manifest import read_runtime_stack_numa_mode
 from scripts.server.stack_numa_mode import normalize_stack_numa_mode
 from scripts.server.stack_state import (
@@ -1600,6 +1605,7 @@ def start_server(
     eval_batch_frontdoor_mode: bool = False,
     gpu_shadow_lane_mode: bool = False,
     numa_instance: int = 0,
+    bench_force: bool = False,
 ) -> ProcessInfo | None:
     """Start a llama-server for the given roles."""
     detached_stdio = {
@@ -1607,6 +1613,19 @@ def start_server(
         "start_new_session": True,
         "close_fds": True,
     }
+
+    # SS-BENCH-GATE-b: ONE guarded placement decision per spawn, before any
+    # branch. Every branch below pins with `_numa_prefix(roles[0], numa_instance)`
+    # (primary_role is assigned roles[0] in each), so one prefix serves them
+    # all; a live bench's real core claim refuses overlapping placements or
+    # pins default-affinity spawns off the claim. `bench_force` mirrors
+    # --allow-during-bench.
+    spawn_prefix = _bench_guarded_numa_prefix(
+        roles[0] if roles else None,
+        numa_instance,
+        bench_force=bench_force,
+        label=f"llama-server for {'/'.join(roles) or '?'}",
+    )
 
     # P-BENCH-3/A7 warm eval-batch lane: dedicated frontdoor-model server
     # used only when explicitly started and when EVAL_BATCH_SERVING routes
@@ -1639,7 +1658,7 @@ def start_server(
         with open(log_file, "a") as log:
             env = build_launch_env(source_role, os.environ.copy())
             proc = subprocess.Popen(
-                _numa_prefix(primary_role, numa_instance) + cmd,
+                spawn_prefix + cmd,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=env,
@@ -1706,7 +1725,7 @@ def start_server(
                 ld_paths=ld_paths,
             )
             proc = subprocess.Popen(
-                _numa_prefix(primary_role, numa_instance) + cmd,
+                spawn_prefix + cmd,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=env,
@@ -1774,7 +1793,7 @@ def start_server(
                 ld_paths=ld_paths,
             )
             proc = subprocess.Popen(
-                _numa_prefix(roles[0], numa_instance) + cmd,
+                spawn_prefix + cmd,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=env,
@@ -1827,7 +1846,7 @@ def start_server(
             env = build_launch_env(roles[0], os.environ.copy())
             # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
             proc = subprocess.Popen(
-                _numa_prefix(roles[0], numa_instance) + cmd,
+                spawn_prefix + cmd,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=env,
@@ -1900,7 +1919,7 @@ def start_server(
             except Exception as exc:
                 print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
             proc = subprocess.Popen(
-                _numa_prefix(roles[0], numa_instance) + cmd,
+                spawn_prefix + cmd,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=env,
@@ -1987,7 +2006,7 @@ def start_server(
         except Exception as exc:
             print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
         proc = subprocess.Popen(
-            _numa_prefix(primary_role, numa_instance) + cmd,
+            spawn_prefix + cmd,
             stdout=log,
             stderr=subprocess.STDOUT,
             env=env,
@@ -2075,6 +2094,7 @@ def _apply_production_feature_env(env: MutableMapping[str, str]) -> None:
 def start_orchestrator(
     profile: str | None = None,
     stack_numa_mode: str | None = None,
+    bench_force: bool = False,
 ) -> ProcessInfo | None:
     """Start the orchestrator API."""
     # A unit test that misses one lifecycle monkeypatch must fail inside pytest,
@@ -2091,6 +2111,13 @@ def start_orchestrator(
             "refusing to start the orchestrator API from pytest; mock the lifecycle "
             "boundary with a fake Popen"
         )
+    # SS-BENCH-GATE-b: the API is the incident's sidecar shape — no explicit
+    # placement, so default affinity covers every core. Under a live bench,
+    # pin it to a non-overlapping subset of host cores instead of spawning
+    # onto the bench's claim (refuse only when no such subset exists).
+    spawn_prefix = _bench_guarded_numa_prefix(
+        None, 0, bench_force=bench_force, label="orchestrator API (uvicorn)"
+    )
     log_file = LOG_DIR / "orchestrator.log"
 
     print("  Starting orchestrator API on port 8000")
@@ -2261,7 +2288,8 @@ def start_orchestrator(
         # limit; inference-lock/contention gates still provide serialization.
         concurrency = int(env.get("ORCHESTRATOR_UVICORN_LIMIT_CONCURRENCY", "64"))
         proc = subprocess.Popen(
-            [
+            spawn_prefix
+            + [
                 sys.executable,
                 "-m",
                 "uvicorn",
@@ -2467,7 +2495,7 @@ def _run_aux_smoke(service) -> str | None:
     return None
 
 
-def start_aux_service(name: str) -> ProcessInfo | None:
+def start_aux_service(name: str, bench_force: bool = False) -> ProcessInfo | None:
     """Start one declared auxiliary service. Returns None on any failure."""
     service = AUX_SERVICES.get(name)
     if service is None:
@@ -2477,6 +2505,13 @@ def start_aux_service(name: str) -> ProcessInfo | None:
     log_file = LOG_DIR / service.log
     label = service.description or service.name
     print(f"  Starting {service.name} ({label}) on port {service.port}")
+
+    # SS-BENCH-GATE-b: aux services spawn without an explicit placement
+    # (default affinity = every core). Under a live bench, pin to a
+    # non-overlapping subset of host cores (refuse only when none exists).
+    spawn_prefix = _bench_guarded_numa_prefix(
+        None, 0, bench_force=bench_force, label=f"aux service {service.name}"
+    )
 
     try:
         argv, ld_paths, tree = _resolve_aux_launch(service)
@@ -2508,7 +2543,7 @@ def start_aux_service(name: str) -> ProcessInfo | None:
 
     with open(log_file, "a") as log:
         proc = subprocess.Popen(
-            argv,
+            spawn_prefix + argv,
             cwd=service.cwd,
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -2561,12 +2596,12 @@ def start_aux_service(name: str) -> ProcessInfo | None:
 # Named wrappers kept so existing call sites and their tests keep working
 # unchanged. They carry no logic — the declaration in launch_manifest.yaml is
 # the whole definition of each service.
-def start_document_formalizer() -> ProcessInfo | None:
+def start_document_formalizer(bench_force: bool = False) -> ProcessInfo | None:
     """Start the document formalizer (LightOnOCR-2) server."""
-    return start_aux_service("document_formalizer")
+    return start_aux_service("document_formalizer", bench_force=bench_force)
 
 
-def start_sd_server() -> ProcessInfo | None:
+def start_sd_server(bench_force: bool = False) -> ProcessInfo | None:
     """Start the sd-server diffusion inference service (stable-diffusion.cpp native).
 
     Replaced the ComfyUI-GGUF + PyTorch path 2026-05-07 — sd.cpp's native ggml
@@ -2574,10 +2609,10 @@ def start_sd_server() -> ProcessInfo | None:
     skipping ComfyUI-GGUF's per-layer dequant-to-BF16 step. Measured ~1.74x
     wall-clock and ~3.43x sampler s/iter speedup at 512 sq / 4 steps.
     """
-    return start_aux_service("sd_server")
+    return start_aux_service("sd_server", bench_force=bench_force)
 
 
-def start_whisper() -> ProcessInfo | None:
+def start_whisper(bench_force: bool = False) -> ProcessInfo | None:
     """Start the STT server on :9000.
 
     2026-08-02 (W4): this is whisper.cpp @ production-speech-v1 on the MI210, NOT
@@ -2586,22 +2621,22 @@ def start_whisper() -> ProcessInfo | None:
     ROCm backend. See the `whisper` entry in launch_manifest.yaml for the API
     delta this swap carries.
     """
-    return start_aux_service("whisper")
+    return start_aux_service("whisper", bench_force=bench_force)
 
 
-def start_tts() -> ProcessInfo | None:
+def start_tts(bench_force: bool = False) -> ProcessInfo | None:
     """Start the qwentts.cpp TTS server on :9002 (first registered 2026-08-02)."""
-    return start_aux_service("tts")
+    return start_aux_service("tts", bench_force=bench_force)
 
 
-def start_handoff_dashboard() -> ProcessInfo | None:
+def start_handoff_dashboard(bench_force: bool = False) -> ProcessInfo | None:
     """Start the epyc-root handoff progress dashboard hub (port 8100).
 
     Project-wide, file/artifact-backed progress board owned by the governance
     repo. Deliberately dependency-free (stdlib only), so it runs under any
     interpreter — the orchestrator venv is not required.
     """
-    return start_aux_service("handoff_dashboard")
+    return start_aux_service("handoff_dashboard", bench_force=bench_force)
 
 
 # =============================================================================
@@ -2679,42 +2714,11 @@ def __getattr__(name: str):
 # The precondition that WAS checked ("autopilot is down") is not the relevant
 # one — the gate keys on CORE OVERLAP with a pinned bench, an entirely separate
 # condition. This guard makes that check impossible to forget.
-
-_BENCH_PROCESS_MARKERS = (
-    "_bench_runner.py",
-    "bench_runner.py",
-    "v7_quality_gate_runner.py",
-    "llama-bench",
-    "run_e8_quality_baseline_reseed.py",
-)
-
-
-def detect_running_cpu_bench() -> list[tuple[int, str]]:
-    """Return [(pid, cmdline)] for any bench driver currently running."""
-    found: list[tuple[int, str]] = []
-    try:
-        out = subprocess.run(
-            ["ps", "-eo", "pid,args"], capture_output=True, text=True, timeout=10
-        ).stdout
-    except Exception:
-        return found
-    for line in out.splitlines()[1:]:
-        line = line.strip()
-        if not line:
-            continue
-        pid_str, _, cmd = line.partition(" ")
-        # Skip self, the probe, and supervisors that merely NAME bench binaries
-        # in their arguments (earlyoom carries `--prefer ^llama-bench$`).
-        if "orchestrator_stack.py" in cmd or "ps -eo" in cmd:
-            continue
-        if "earlyoom" in cmd or cmd.startswith("/usr/local/bin/earlyoom"):
-            continue
-        if any(marker in cmd for marker in _BENCH_PROCESS_MARKERS):
-            try:
-                found.append((int(pid_str), cmd[:160]))
-            except ValueError:
-                continue
-    return found
+#
+# The bench-driver identity list and `detect_running_cpu_bench` live in
+# scripts/server/bench_core_claim.py (single source of truth): the placement
+# guard (SS-BENCH-GATE-b) must detect the exact same drivers this guard does,
+# and a second copy of the name list would drift.
 
 
 def guard_against_running_bench(command: str, force: bool) -> bool:
@@ -2733,6 +2737,52 @@ def guard_against_running_bench(command: str, force: bool) -> bool:
         "  operator has accepted that the run may be invalidated."
     )
     return bool(force)
+
+
+def _placement_from_prefix(prefix: list[str]) -> str | None:
+    """The cpu list a spawn prefix pins to, or None when it does not pin.
+
+    `_numa_prefix` emits `["taskset", "-c", <cpu_list>]` (optionally preceded
+    by a `numactl --<policy> --` pair); a prefix without `taskset` leaves the
+    spawn on its default affinity, which is the incident's sidecar shape.
+    """
+    if "taskset" not in prefix:
+        return None
+    idx = prefix.index("taskset")
+    if len(prefix) > idx + 2 and prefix[idx + 1] == "-c":
+        return prefix[idx + 2]
+    raise BenchPlacementRefusal(
+        f"taskset prefix without a `-c <cpu_list>` argument: {prefix!r}"
+    )
+
+
+def _bench_guarded_numa_prefix(
+    role: str | None,
+    numa_instance: int,
+    *,
+    bench_force: bool,
+    label: str | None = None,
+) -> list[str]:
+    """`_numa_prefix` plus SS-BENCH-GATE-b placement guarding.
+
+    Reads the bench's REAL core claim from the live processes and:
+      * refuses the spawn when the requested placement overlaps it
+        (BenchPlacementRefusal -> exit 2; `bench_force` mirrors
+        --allow-during-bench and bypasses the refusal), and
+      * pins default-affinity spawns to a non-overlapping subset of host cores
+        instead of refusing — the stack stays functional during a bench.
+    No bench live -> the plain `_numa_prefix` result, unchanged.
+    """
+    prefix = _numa_prefix(role, numa_instance)
+    placement = _placement_from_prefix(prefix)
+    pinned = enforce_placement(
+        placement,
+        force=bench_force,
+        label=label or (f"server for {role}" if role else "stack process"),
+    )
+    if pinned is None:
+        return prefix
+    return ["taskset", "-c", pinned]
 
 
 
@@ -2952,14 +3002,23 @@ def main() -> int:
         ):
             return 2
 
-    if args.command == "start":
-        return cmd_start(args)
-    elif args.command == "stop":
-        return cmd_stop(args)
-    elif args.command == "reload":
-        return cmd_reload(args)
-    elif args.command == "status":
-        return cmd_status(args)
+    # SS-BENCH-GATE-b: the per-spawn placement guard refuses overlapping
+    # placements with the same exit code as the CLI-level guard above. The
+    # incident context was already printed where the refusal was raised; a
+    # refusal raised without one (e.g. a malformed taskset prefix) prints here.
+    try:
+        if args.command == "start":
+            return cmd_start(args)
+        elif args.command == "stop":
+            return cmd_stop(args)
+        elif args.command == "reload":
+            return cmd_reload(args)
+        elif args.command == "status":
+            return cmd_status(args)
+    except BenchPlacementRefusal as exc:
+        if str(exc):
+            print(str(exc))
+        return 2
 
     return 1
 

@@ -1,0 +1,14 @@
+{
+  "task_id": "OP-21 overlap re-bench, samples=6 CV tightening",
+  "topology_hash": "171f86f9188211e9",
+  "candidate_sets": [
+    {
+      "roles": ["frontdoor", "ingest_long_context"],
+      "note": "OVERLAP only (true production geometry); CV was 0.1018 at samples=3",
+      "assignment": {
+        "frontdoor": {"port": 8080},
+        "ingest_long_context": {"port": 8185}
+      }
+    }
+  ]
+}

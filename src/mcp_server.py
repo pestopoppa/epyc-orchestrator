@@ -66,12 +66,12 @@ def lookup_model(role: str) -> str:
         Formatted string with role configuration details.
     """
     try:
-        from src.registry_loader import RegistryLoader
+        from src.registry_loader import RegistryLoader, format_tps
 
         registry = RegistryLoader(validate_paths=False)
         role_config = registry.get_role(role)
 
-        speed = role_config.performance.optimized_tps or role_config.performance.baseline_tps or "?"
+        speed = format_tps(role_config.performance)
         speedup = role_config.performance.speedup or "N/A"
 
         lines = [
@@ -82,7 +82,7 @@ def lookup_model(role: str) -> str:
             f"Quant: {role_config.model.quant}",
             f"Size: {role_config.model.size_gb} GB",
             f"Acceleration: {role_config.acceleration.type}",
-            f"Speed: {speed} t/s",
+            f"Speed: {speed}",
             f"Speedup: {speedup}",
         ]
 
@@ -109,7 +109,7 @@ def list_roles() -> str:
         Formatted string with all roles grouped by tier.
     """
     try:
-        from src.registry_loader import RegistryLoader
+        from src.registry_loader import RegistryLoader, format_tps
 
         registry = RegistryLoader(validate_paths=False)
         lines = []
@@ -119,9 +119,9 @@ def list_roles() -> str:
             if roles:
                 lines.append(f"\n--- Tier {tier} ---")
                 for r in roles:
-                    speed = r.performance.optimized_tps or r.performance.baseline_tps or "?"
+                    speed = format_tps(r.performance)
                     accel = r.acceleration.type
-                    lines.append(f"  {r.name}: {r.model.name} ({accel}, {speed} t/s)")
+                    lines.append(f"  {r.name}: {r.model.name} ({accel}, {speed})")
 
         return "\n".join(lines) if lines else "No roles configured."
 
@@ -333,11 +333,13 @@ def reload_plugins() -> str:
     try:
         loader = _get_plugin_loader()
         count = loader.reload_changed()
-        return json.dumps({
-            "status": "success",
-            "reloaded": count,
-            "message": f"Reloaded {count} plugin(s)",
-        })
+        return json.dumps(
+            {
+                "status": "success",
+                "reloaded": count,
+                "message": f"Reloaded {count} plugin(s)",
+            }
+        )
     except Exception as e:
         logger.exception("Reload plugins failed: %s", e)
         return json.dumps({"status": "error", "message": f"{type(e).__name__}: {e}"})
@@ -355,15 +357,15 @@ def _get_api_url() -> str:
     global _ORCHESTRATOR_API_URL
     if _ORCHESTRATOR_API_URL is None:
         import os
-        _ORCHESTRATOR_API_URL = os.environ.get(
-            "ORCHESTRATOR_API_URL", "http://localhost:8000"
-        )
+
+        _ORCHESTRATOR_API_URL = os.environ.get("ORCHESTRATOR_API_URL", "http://localhost:8000")
     return _ORCHESTRATOR_API_URL
 
 
 def _is_mcp_chat_enabled() -> bool:
     """Check if the claude_code_mcp_chat feature flag is enabled."""
     import os
+
     val = os.environ.get("ORCHESTRATOR_CLAUDE_CODE_MCP_CHAT", "0").lower()
     return val in ("1", "true", "yes", "on")
 

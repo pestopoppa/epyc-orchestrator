@@ -5,7 +5,7 @@ Replaces per-action Q-values with a feature-conditioned scorer:
     Q(prompt, model) = sigmoid(v_model^T W v_prompt + b)
 
 where v_model is a fixed feature vector derived from model registry specs
-(baseline_tps, baseline_quality, quality_known, memory_cost,
+(baseline_tps, tps_known, baseline_quality, quality_known, memory_cost,
 param_count_log, is_moe, quant_bits), and v_prompt is derived from the prompt embedding or task
 features. W is a learned interaction matrix.
 
@@ -30,6 +30,7 @@ import numpy as np
 from src.roles import Role
 from src.registry.stack_priors import live_stack_role_records
 from src.registry.model_descriptors import compile_model_descriptors
+from orchestration.repl_memory.q_scorer import PRIOR_SOURCE_DEGRADED_FALLBACK
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -37,11 +38,12 @@ logger = logging.getLogger(__name__)
 
 BILINEAR_SCORER_ENABLED = os.environ.get("BILINEAR_SCORER_ENABLED", "0") == "1"
 
-# Model feature dimension (7 features per model).
-# 7, not 6: baseline_quality gained a companion quality_known mask on
-# 2026-08-02. Any persisted W from before that is dimensionally stale and
-# must be retrained rather than loaded.
-MODEL_FEATURE_DIM = 7
+# Model feature dimension (8 features per model).
+# 8, not 7: baseline_quality gained a companion quality_known mask on
+# 2026-08-02, and baseline_tps gained a companion tps_known mask on
+# 2026-08-23 (NIB2-57a). Any persisted W from before a bump is dimensionally
+# stale and must be retrained rather than loaded.
+MODEL_FEATURE_DIM = 8
 
 # Prompt feature dimension (extracted from task IR)
 PROMPT_FEATURE_DIM = 8
@@ -51,6 +53,24 @@ DEFAULT_REGISTRY_PATH = _REPO_ROOT / "orchestration/model_registry.yaml"
 
 UNKNOWN_MODEL_FEATURES = {"params_b": 30.0, "is_moe": False, "quant_bits": 4.0}
 
+# NIB2-57a: a role whose t/s prior comes from the degraded fallback table was
+# indistinguishable from a measured role — the fallback float trained the
+# scorer exactly like evidence. Warn once per role when that happens.
+_warned_fabricated_tps_roles: set[str] = set()
+
+
+def _warn_fabricated_tps(role: str) -> None:
+    """Warn (once per role) that a degraded-fallback tps is training the scorer."""
+    if role in _warned_fabricated_tps_roles:
+        return
+    _warned_fabricated_tps_roles.add(role)
+    logger.warning(
+        "BilinearScorer t/s feature for role %r comes from the DEGRADED "
+        "fallback table, not a measurement; tps_known=0 so the learner can "
+        "ignore it. Measure the role or accept the degraded feature.",
+        role,
+    )
+
 
 @dataclass
 class ModelFeatures:
@@ -58,6 +78,11 @@ class ModelFeatures:
 
     role: str
     baseline_tps: float = 0.0
+    # Missing-data mask for baseline_tps (NIB2-57a). Without it, "no
+    # measurement" and "measured this value" are the same float and the model
+    # cannot tell them apart — the exact shape that let an unmeasured prior
+    # train the router as if it were evidence. Mirrors quality_known.
+    tps_known: float = 0.0
     baseline_quality: float = 0.0
     # Missing-data mask for baseline_quality. Without it, "no measurement" and
     # "measured this value" are the same float and the model cannot tell them
@@ -71,15 +96,19 @@ class ModelFeatures:
 
     def to_vector(self) -> np.ndarray:
         """Convert to normalized feature vector."""
-        raw = np.array([
-            self.baseline_tps / 40.0,  # normalize to ~[0,1]
-            self.baseline_quality,
-            self.quality_known,
-            self.memory_cost / 5.0,  # normalize
-            self.param_count_log / 10.0,  # log2(1024B) ≈ 10
-            self.is_moe,
-            self.quant_bits / 16.0,
-        ], dtype=np.float32)
+        raw = np.array(
+            [
+                self.baseline_tps / 40.0,  # normalize to ~[0,1]
+                self.tps_known,
+                self.baseline_quality,
+                self.quality_known,
+                self.memory_cost / 5.0,  # normalize
+                self.param_count_log / 10.0,  # log2(1024B) ≈ 10
+                self.is_moe,
+                self.quant_bits / 16.0,
+            ],
+            dtype=np.float32,
+        )
         return raw
 
 
@@ -199,6 +228,14 @@ def extract_model_features(
         if stack_features
         else _descriptor_model_features(registry_path, active_roles=canonical_roles)
     )
+    # NIB2-57a: the t/s mask is provenance-driven, not membership-driven. The
+    # loop below iterates over roles ALREADY in `tps`, so "role in tps" would
+    # be trivially true everywhere; what actually matters is whether the
+    # number is a measurement or a fabricated fallback. ScoringConfig carries
+    # per-role provenance since 2026-08-12 (q_scorer PRIOR_SOURCE_* labels);
+    # a DEGRADED_FALLBACK number trains the scorer exactly like evidence
+    # unless the mask says otherwise.
+    tps_sources = getattr(scoring_config, "baseline_tps_source_by_role", {})
 
     for role in tps:
         canonical_role = _canonical_role_name(role)
@@ -206,9 +243,21 @@ def extract_model_features(
             canonical_role,
             degraded_features.get(canonical_role, UNKNOWN_MODEL_FEATURES),
         )
+        # NIB2-57a: the previous `tps.get(role, 10.0)` default fabricated a
+        # speed for any role absent from the map — numerically identical to a
+        # measured 10 t/s, and therefore learned as evidence. A missing role
+        # now yields 0.0 with tps_known=0 so the learner can ignore the
+        # feature; the old 10.0 default is gone.
+        raw_tps = tps.get(role)
+        tps_known = 0.0
+        if tps_sources.get(role) == PRIOR_SOURCE_DEGRADED_FALLBACK:
+            _warn_fabricated_tps(canonical_role)
+        elif raw_tps is not None:
+            tps_known = 1.0
         features[canonical_role] = ModelFeatures(
             role=canonical_role,
-            baseline_tps=tps.get(role, 10.0),
+            baseline_tps=float(raw_tps) if raw_tps is not None else 0.0,
+            tps_known=tps_known,
             # 0.0 with an explicit known-flag, NOT a 0.75 default. 0.75 is the
             # worker baseline the reward's quality_gap is measured against, so
             # defaulting an UNMEASURED role to it asserted "this model is exactly
@@ -252,18 +301,35 @@ def extract_prompt_features(task_ir: Dict[str, Any]) -> np.ndarray:
 
     # Feature extraction (mirrors difficulty_signal.py heuristics)
     prompt_len = math.log(max(len(combined), 1)) / 10.0  # log-scaled, ~[0,1]
-    code_present = float(any(kw in combined for kw in ["```", "def ", "class ", "import ", "function"]))
-    math_present = float(any(kw in combined for kw in ["solve", "equation", "∑", "integral", "derivative", "proof"]))
-    multi_step = float(any(kw in combined for kw in ["step by step", "first", "then", "finally", "analyze and"]))
-    constraints = min(combined.count("must") + combined.count("should") + combined.count("ensure"), 5) / 5.0
+    code_present = float(
+        any(kw in combined for kw in ["```", "def ", "class ", "import ", "function"])
+    )
+    math_present = float(
+        any(kw in combined for kw in ["solve", "equation", "∑", "integral", "derivative", "proof"])
+    )
+    multi_step = float(
+        any(kw in combined for kw in ["step by step", "first", "then", "finally", "analyze and"])
+    )
+    constraints = (
+        min(combined.count("must") + combined.count("should") + combined.count("ensure"), 5) / 5.0
+    )
     questions = min(combined.count("?"), 3) / 3.0
     nesting = min(combined.count("(") + combined.count("[") + combined.count("{"), 5) / 5.0
     ambiguity = float(any(kw in combined for kw in ["might", "perhaps", "could be", "unclear"]))
 
-    return np.array([
-        prompt_len, code_present, math_present, multi_step,
-        constraints, questions, nesting, ambiguity,
-    ], dtype=np.float32)
+    return np.array(
+        [
+            prompt_len,
+            code_present,
+            math_present,
+            multi_step,
+            constraints,
+            questions,
+            nesting,
+            ambiguity,
+        ],
+        dtype=np.float32,
+    )
 
 
 class BilinearScorer:
@@ -286,8 +352,7 @@ class BilinearScorer:
         weight_decay: float = 0.001,
     ):
         self.model_features = {
-            _canonical_role_name(role): feature
-            for role, feature in model_features.items()
+            _canonical_role_name(role): feature for role, feature in model_features.items()
         }
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay

@@ -155,6 +155,56 @@ def test_load_model_fleet_returns_empty_when_priors_and_registry_missing(tmp_pat
     )
 
 
+def test_load_model_fleet_warns_when_live_role_has_no_measured_tps(tmp_path: Path, caplog) -> None:
+    """NIB2-57a: a role whose generated prior has NO throughput_tps must not
+    enter the router fleet as tps=0.0 silently — the GAT learner would read
+    0.0 as 'slowest role'. The fleet still degrades, but it warns loudly."""
+    record = _stack_prior_record("worker_summarize", port=8070, tps=24.3)
+    record["priors"] = {"quality_overall": 0.8, "memory_cost": 1.0}  # no throughput_tps
+    priors_path = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {"worker_summarize": record},
+    )
+
+    with caplog.at_level("WARNING", logger="train_graph_router"):
+        fleet = load_model_fleet(priors_path)
+
+    assert fleet[0]["tps"] == 0.0
+    assert any("NO measured t/s prior" in message for message in caplog.messages)
+
+
+def test_descriptor_fleet_warns_when_role_has_no_measured_tps(tmp_path: Path, caplog) -> None:
+    """NIB2-57a: the degraded descriptor path warns per role when neither
+    descriptor speed field holds a measurement (the NIB2-57 shape: null
+    baseline and no optimized -> nothing to show, and that must be loud)."""
+    registry_path = tmp_path / "model_registry.yaml"
+    registry_path.write_text(
+        """
+roles:
+  patch_reviewer:
+    model:
+      name: Reviewer-8B
+      quant: Q4_K_M
+      size_gb: 8
+      architecture: dense
+    performance:
+      baseline_tps: null
+      optimized_tps: null
+server_mode: {}
+""",
+        encoding="utf-8",
+    )
+
+    with caplog.at_level("WARNING", logger="train_graph_router"):
+        fleet = load_model_fleet(
+            tmp_path / "missing_stack_priors.yaml",
+            registry_path=registry_path,
+        )
+
+    assert fleet[0]["tps"] == 0.0
+    assert any("patch_reviewer" in message for message in caplog.messages)
+
+
 def test_populate_llm_roles_accepts_explicit_fleet() -> None:
     class _Embedder:
         def embed_text(self, text: str) -> np.ndarray:

@@ -17,7 +17,9 @@ Usage:
     # Re-bench the live stack (assumes stack is up + roles healthy)
     python scripts/server/contention_matrix.py
 
-    # Subset
+    # Subset — updates the measured rows and carries every unmeasured pair /
+    # unknown-pair entry forward verbatim (never truncates the matrix), and is
+    # stamped decision_grade=false because it is not a full re-measurement.
     python scripts/server/contention_matrix.py --roles frontdoor worker_general
 
     # Dry-run (show what would be measured, don't bench)
@@ -34,6 +36,7 @@ topology hash to detect when NUMA_CONFIG has drifted from the measured state.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import itertools
 import json
@@ -371,6 +374,15 @@ def _select_live_pair_instances(
     This is the v7/quarter-mode recert path: instance-0/full ports may be
     intentionally offline while quarter ports are live. A role with no healthy
     live instance is an infra blocker, not a zero-throughput measurement.
+
+    The third element is the geometry marker: None for a DISJOINT placement
+    (the geometry the gate's role-keyed lookup is read as), and
+    "overlap_measured" for the overlapping fallback. A caller MUST NOT record
+    the fallback as a plain `pairs:` row: an overlapping-geometry number
+    substituted into the matrix is exactly what put the frontdoor+ingest 1.89
+    "disjoint" row in front of the role-keyed gate (shape-keyed handoff APPEND
+    2026-08-12, inverted marker polarity — the gate cannot tell the two
+    geometries apart). `cmd_run` refuses the fallback into `unknown_pairs`.
     """
     a_live = _live_role_instances(numa_config, role_a)
     b_live = _live_role_instances(numa_config, role_b)
@@ -391,7 +403,9 @@ def _select_live_pair_instances(
                 return a, b, None
     # No disjoint placement exists (e.g. architect_full against a quarter role).
     # Measure the least-broad live pair so the matrix records the live contention
-    # rather than silently using a dead primary port.
+    # rather than silently using a dead primary port. The marker names the
+    # substituted geometry; `cmd_run` refuses this fallback into `unknown_pairs`
+    # rather than recording it as a measured pair row.
     return sorted(a_live, key=_sort_key)[0], sorted(b_live, key=_sort_key)[0], "overlap_measured"
 
 
@@ -688,6 +702,10 @@ _EMITTER_OWNED_SECTIONS = frozenset(
 
 _TOP_LEVEL_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):")
 
+# One `pairs:` / `unknown_pairs:` entry line as emitted by `_emit_yaml`:
+# `  - roles: ['a', 'b']` — the capture is the roles-list literal.
+_PAIR_ENTRY_RE = re.compile(r"^  - roles: \[(.*)\]\s*$")
+
 
 def _split_top_level_sections(text: str) -> list[tuple[str, list[str]]]:
     """Split a matrix YAML document into ordered (top_level_key, lines) blocks.
@@ -742,6 +760,81 @@ def _carry_forward_sections(existing_path: Path | None) -> list[tuple[str, list[
     return [(k, lines) for k, lines in sections if k not in _EMITTER_OWNED_SECTIONS]
 
 
+def _split_pair_entries(block_lines: list[str]) -> list[tuple[tuple[str, str], list[str]]]:
+    """Split a `pairs:` / `unknown_pairs:` block into (sorted-role-key, lines) units.
+
+    Entries have the emitter's own shape: a `  - roles: [...]` line followed by
+    indented field lines. The role key is parsed from the roles line; the
+    entry's lines are preserved VERBATIM so a carried-forward row keeps its
+    original numbers and notes. Content that is neither the section header nor
+    an entry raises — refusing beats silently dropping a row.
+    """
+    entries: list[tuple[tuple[str, str], list[str]]] = []
+    current_key: tuple[str, str] | None = None
+    current_lines: list[str] = []
+    pending: list[str] = []
+
+    def _flush() -> None:
+        if current_key is not None:
+            entries.append((current_key, list(current_lines)))
+
+    for line in block_lines:
+        stripped = line.strip()
+        if stripped == "" or stripped.startswith("#"):
+            pending.append(line)
+            continue
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*:$", line):
+            continue  # the section header (`pairs:` / `unknown_pairs:`)
+        m = _PAIR_ENTRY_RE.match(line)
+        if m:
+            _flush()
+            roles = ast.literal_eval(f"[{m.group(1)}]")
+            if not isinstance(roles, list) or len(roles) != 2:
+                raise ValueError(f"pair entry roles not a 2-list: {line!r}")
+            current_key = tuple(sorted(roles))  # type: ignore[arg-type]
+            current_lines = [*pending, line]
+            pending = []
+            continue
+        if current_key is None:
+            raise ValueError(f"unparseable line before first pair entry: {line!r}")
+        current_lines.extend(pending)
+        current_lines.append(line)
+        pending = []
+    _flush()
+    return entries
+
+
+def _preserve_unmeasured_entries(
+    existing_path: Path | None,
+    measured_pair_keys: set[tuple[str, str]],
+    fresh_unknown_keys: set[tuple[str, str]],
+) -> tuple[list[tuple[tuple[str, str], list[str]]], list[tuple[tuple[str, str], list[str]]]]:
+    """The existing matrix's `pairs:` / `unknown_pairs:` entries, verbatim, minus
+    any role pair THIS run measured.
+
+    Scoped (`--roles`) runs otherwise TRUNCATE the matrix: both sections are
+    emitter-owned, so `_carry_forward_sections` drops them and the emitted
+    file keeps only the measured subset (handoff APPEND 2026-08-12: 3 pairs
+    in, 1 out — against the default output that destroyed 14 of 15 rows and
+    degraded the admission gate to fail-closed for every other pair).
+    Filtering is by the exact role-pair key, so a partially-scoped run
+    preserves every pair that does not name a measured key.
+    """
+    if existing_path is None or not existing_path.exists():
+        return [], []
+    sections = _split_top_level_sections(existing_path.read_text())
+    by_key = {key: lines for key, lines in sections}
+    pair_entries = _split_pair_entries(by_key.get("pairs", [])) if "pairs" in by_key else []
+    unknown_entries = (
+        _split_pair_entries(by_key.get("unknown_pairs", []))
+        if "unknown_pairs" in by_key
+        else []
+    )
+    kept_pairs = [e for e in pair_entries if e[0] not in measured_pair_keys]
+    kept_unknown = [e for e in unknown_entries if e[0] not in fresh_unknown_keys]
+    return kept_pairs, kept_unknown
+
+
 def _emit_yaml(
     pairs: list[PairBench],
     *,
@@ -753,6 +846,8 @@ def _emit_yaml(
     host_health: dict[str, Any] | None = None,
     floor: float = DEFAULT_FLOOR,
     preserve_sections: list[tuple[str, list[str]]] | None = None,
+    preserved_pair_entries: list[tuple[tuple[str, str], list[str]]] | None = None,
+    preserved_unknown_entries: list[tuple[tuple[str, str], list[str]]] | None = None,
 ) -> str:
     """Render the matrix as YAML (no PyYAML dump dependency — handle ourselves)."""
     def _inline(value: Any) -> str:
@@ -858,6 +953,18 @@ def _emit_yaml(
         if d.get("note"):
             lines.append(f'    note: "{d["note"]}"')
 
+    # A scoped run must UPDATE the measured rows, not truncate the matrix: the
+    # previous run's entries for role pairs this run did NOT measure are
+    # carried forward verbatim (handoff APPEND 2026-08-12, `--roles` TRUNCATES).
+    fresh_pair_keys = {tuple(sorted(p.roles)) for p in pairs}
+    kept_pair_entries = [
+        entry for entry in (preserved_pair_entries or []) if entry[0] not in fresh_pair_keys
+    ]
+    if kept_pair_entries:
+        lines.append("  # carried forward verbatim — role pair not measured by this run")
+        for _key, entry_lines in kept_pair_entries:
+            lines.extend(entry_lines)
+
     if same_role_verdicts:
         lines.append("")
         lines.append("same_role:")
@@ -865,12 +972,20 @@ def _emit_yaml(
             lines.append(f'  - role: "{role}"')
             lines.append(f'    verdict: "{same_role_verdicts[role]}"')
 
-    if unknown_pairs:
+    fresh_unknown_keys = {tuple(sorted([a, b])) for a, b, _reason in unknown_pairs or []}
+    kept_unknown_entries = [
+        entry for entry in (preserved_unknown_entries or []) if entry[0] not in fresh_unknown_keys
+    ]
+    if unknown_pairs or kept_unknown_entries:
         lines.append("")
         lines.append("unknown_pairs:")
-        for a, b, reason in sorted(unknown_pairs):
+        for a, b, reason in sorted(unknown_pairs or []):
             lines.append(f"  - roles: [{repr(a)}, {repr(b)}]")
             lines.append(f'    reason: "{reason}"')
+        if kept_unknown_entries:
+            lines.append("  # carried forward verbatim — role pair not measured by this run")
+            for _key, entry_lines in kept_unknown_entries:
+                lines.extend(entry_lines)
 
     # Carry every hand-authored runtime-policy section through verbatim.  A
     # freshly measured `same_role:` block (from same_role_verdicts) supersedes
@@ -1854,10 +1969,34 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     selected: list[tuple[str, str, dict[str, Any], dict[str, Any], str | None]] = []
     missing_live: list[tuple[str, str, str]] = []
+    overlap_refused: list[tuple[str, str, str]] = []
     for a, b in pairs_to_bench:
         inst_a, inst_b, reason = _select_live_pair_instances(NUMA_CONFIG, a, b)
         if inst_a is None or inst_b is None:
             missing_live.append((a, b, reason or "missing_live_instance"))
+            continue
+        if reason:
+            # The overlap fallback SUBSTITUTES an overlapping placement for a
+            # role pair that has no disjoint live arrangement. Recording it as
+            # a measured pair row would let the role-keyed gate read an
+            # overlapping-geometry number as the pair's verdict — the exact
+            # class of the shipped frontdoor+ingest 1.89 "disjoint" row (APPEND
+            # 2026-08-12, inverted marker polarity: the marker fired on the
+            # honest fallback while the substituted rows entered unmarked).
+            # REFUSE: the pair lands in `unknown_pairs` and the gate's
+            # unknown-pair policy applies. To measure a specific geometry,
+            # use `bench-nway` with a hand-authored manifest that pins ports.
+            overlap_refused.append(
+                (
+                    a,
+                    b,
+                    "overlap_substituted"
+                    f" ({reason}): no disjoint live placement exists for this "
+                    "role pair; an overlapping-geometry number must not enter "
+                    "the role-keyed gate as the pair's verdict — re-bench the "
+                    "geometry you want with `bench-nway` from a manifest",
+                )
+            )
             continue
         selected.append((a, b, inst_a, inst_b, reason))
 
@@ -1877,6 +2016,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             )
         for a, b, reason in missing_live:
             log.error("  %s + %s cannot be measured: %s", a, b, reason)
+        for a, b, reason in overlap_refused:
+            log.error("  %s + %s REFUSED (overlap substitution): %s", a, b, reason)
         return 0
 
     if missing_live:
@@ -1893,7 +2034,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     measured: list[PairBench] = []
     blocked_pairs: list[tuple[str, str]] = []  # known catastrophic pairs
-    skipped: list[tuple[str, str, str]] = []
+    # Overlap-substituted selections are refused, so `selected` can only carry
+    # disjoint placements and no geometry marker survives into a pair row.
+    skipped: list[tuple[str, str, str]] = list(overlap_refused)
 
     for a, b, inst_a, inst_b, reason in selected:
         try:
@@ -1912,8 +2055,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             log.error("  → SKIPPED, not measured: %s", exc)
             skipped.append((a, b, f"unmeasured_leg: {exc}"))
             continue
-        if reason:
-            pb.note = reason
         measured.append(pb)
         if pb.ratio < CATASTROPHIC_FLOOR:
             blocked_pairs.append(pb.roles)
@@ -1950,8 +2091,25 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return 2
 
-    # `--roles` produces a TRUNCATED matrix (`pairs` is emitter-owned and is not
-    # carried forward), so a role-restricted run is by construction not a
+    # Role-scoped runs measure only a subset of the role pairs. `pairs` /
+    # `unknown_pairs` are emitter-owned, so without this a scoped run would
+    # TRUNCATE the matrix to the measured subset (handoff APPEND 2026-08-12:
+    # 3 pairs in, 1 out; against the default output that destroyed 14 of 15
+    # measured rows). Carry the unmeasured entries forward verbatim so a
+    # scoped re-bench UPDATES the measured rows instead of deleting the rest.
+    # Full runs regenerate both sections wholesale.
+    preserved_pair_entries: list[tuple[tuple[str, str], list[str]]] | None = None
+    preserved_unknown_entries: list[tuple[tuple[str, str], list[str]]] | None = None
+    if role_filter:
+        measured_pair_keys = {tuple(sorted(pb.roles)) for pb in measured}
+        fresh_unknown_keys = {tuple(sorted([a, b])) for a, b, _reason in skipped}
+        preserved_pair_entries, preserved_unknown_entries = _preserve_unmeasured_entries(
+            out_path, measured_pair_keys, fresh_unknown_keys
+        )
+
+    # A `--roles` run re-measures only a subset of the role pairs (unmeasured
+    # rows are carried forward verbatim, but their freshness is whatever the
+    # previous run stamped), so a role-restricted run is by construction not a
     # decision-grade matrix. It demotes; it never rescues.
     restriction_blockers = (
         [
@@ -1981,6 +2139,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         host_health=host_health,
         floor=DEFAULT_FLOOR,
         preserve_sections=preserved,
+        preserved_pair_entries=preserved_pair_entries,
+        preserved_unknown_entries=preserved_unknown_entries,
     )
 
     out_path.write_text(yaml_str)

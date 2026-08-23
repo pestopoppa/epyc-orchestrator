@@ -38,6 +38,27 @@ DEFAULT_WEIGHTS_PATH = PROJECT_ROOT / "orchestration/repl_memory/graph_router_we
 DEFAULT_STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration/derived/stack_priors.yaml"
 DEFAULT_REGISTRY_PATH = PROJECT_ROOT / "orchestration/model_registry.yaml"
 
+# NIB2-57a: a role with no measured t/s prior must not enter the router fleet
+# as tps=0.0 silently — the GAT learner would read it as "slowest role", the
+# same fabricated-implies-measured shape that let four unmeasured priors drive
+# the router for weeks. Warn once per role; the fleet still degrades to 0.0
+# (callers reach these paths only when generated priors are unavailable).
+_warned_unmeasured_fleet_tps: set[str] = set()
+
+
+def _warn_unmeasured_fleet_tps(role_id: str) -> None:
+    """Warn (once per role) that the fleet tps for ``role_id`` is unmeasured."""
+    if role_id in _warned_unmeasured_fleet_tps:
+        return
+    _warned_unmeasured_fleet_tps.add(role_id)
+    logger.warning(
+        "GraphRouter fleet role %r has NO measured t/s prior (stack priors and "
+        "descriptors both lack one); fleet tps = 0.0, which the learner will "
+        "read as the slowest role. Placement features for this role are "
+        "UNMEASURED — measure it or accept the degraded feature.",
+        role_id,
+    )
+
 
 def _coerce_float(value, default: float) -> float:
     if isinstance(value, (int, float)):
@@ -147,6 +168,8 @@ def _descriptor_model_fleet(registry_path: Path = DEFAULT_REGISTRY_PATH) -> list
             if role_id in seen:
                 continue
             seen.add(role_id)
+            if tps <= 0.0:
+                _warn_unmeasured_fleet_tps(role_id)
             fleet.append(
                 {
                     "role_id": role_id,
@@ -176,24 +199,34 @@ def load_model_fleet(
         artifact = load_stack_priors_artifact(stack_priors_path)
         live_roles = live_stack_role_records(stack_priors_path)
     except Exception as exc:
-        logger.warning("Using descriptor-derived GraphRouter model fleet; stack priors unavailable: %s", exc)
+        logger.warning(
+            "Using descriptor-derived GraphRouter model fleet; stack priors unavailable: %s", exc
+        )
         return _descriptor_model_fleet(registry_path)
 
     if not isinstance(artifact, dict):
-        logger.warning("Using descriptor-derived GraphRouter model fleet; stack priors unavailable: cannot load contract")
+        logger.warning(
+            "Using descriptor-derived GraphRouter model fleet; stack priors unavailable: cannot load contract"
+        )
         return _descriptor_model_fleet(registry_path)
 
     roles = artifact.get("roles")
     if roles is not None and not isinstance(roles, dict):
-        logger.warning("Using descriptor-derived GraphRouter model fleet; stack priors roles field is invalid")
+        logger.warning(
+            "Using descriptor-derived GraphRouter model fleet; stack priors roles field is invalid"
+        )
         return _descriptor_model_fleet(registry_path)
 
     if not isinstance(roles, dict):
-        logger.warning("Using descriptor-derived GraphRouter model fleet; stack priors roles field is invalid")
+        logger.warning(
+            "Using descriptor-derived GraphRouter model fleet; stack priors roles field is invalid"
+        )
         return _descriptor_model_fleet(registry_path)
 
     if not isinstance(live_roles, dict):
-        logger.warning("Using descriptor-derived GraphRouter model fleet; stack priors roles field is invalid")
+        logger.warning(
+            "Using descriptor-derived GraphRouter model fleet; stack priors roles field is invalid"
+        )
         return _descriptor_model_fleet(registry_path)
 
     fleet: list[dict] = []
@@ -205,19 +238,24 @@ def load_model_fleet(
         priors = record.get("priors") if isinstance(record.get("priors"), dict) else {}
         model = record.get("model") if isinstance(record.get("model"), dict) else {}
         endpoint_port = stack_prior_primary_port(serving) or 0
+        fleet_tps = _coerce_float(priors.get("throughput_tps"), 0.0)
+        if fleet_tps <= 0.0:
+            _warn_unmeasured_fleet_tps(role)
         fleet.append(
             {
                 "role_id": role,
                 "description": _role_description(role, record),
                 "port": endpoint_port,
-                "tps": _coerce_float(priors.get("throughput_tps"), 0.0),
+                "tps": fleet_tps,
                 "tier": str(serving.get("tier") or "unknown").upper(),
                 "gb": _coerce_float(model.get("mem_gb"), 0.0),
             }
         )
 
     if not fleet:
-        logger.warning("Using descriptor-derived GraphRouter model fleet; no live stack roles found")
+        logger.warning(
+            "Using descriptor-derived GraphRouter model fleet; no live stack roles found"
+        )
         return _descriptor_model_fleet(registry_path)
     return fleet
 
@@ -295,7 +333,8 @@ def train(
     if mem_count < min_memories:
         logger.warning(
             "Insufficient memories (%d < %d). Skipping training.",
-            mem_count, min_memories,
+            mem_count,
+            min_memories,
         )
         return False
 
@@ -317,7 +356,9 @@ def train(
     node_feats, edge_idx, targets, qc_indices, llm_indices = result
     logger.info(
         "Training data: %d query clusters, %d LLM roles, target shape %s",
-        len(qc_indices), len(llm_indices), targets.shape,
+        len(qc_indices),
+        len(llm_indices),
+        targets.shape,
     )
 
     # 6. Create validation mask (stratified by role)
@@ -333,7 +374,8 @@ def train(
     train_mask = ~val_mask
     logger.info(
         "Train edges: %d, Val edges: %d",
-        int(train_mask.sum()), int(val_mask.sum()),
+        int(train_mask.sum()),
+        int(val_mask.sum()),
     )
 
     # 7. Train GAT
@@ -363,8 +405,11 @@ def train(
 
         # Compute gradients and update
         gradients = gat.get_gradients(
-            node_feats, gat_edge_index, targets,
-            qc_indices, llm_indices,
+            node_feats,
+            gat_edge_index,
+            targets,
+            qc_indices,
+            llm_indices,
         )
         gat.update_weights(gradients, current_lr)
 
@@ -379,7 +424,13 @@ def train(
         if epoch % 10 == 0 or epoch == epochs - 1:
             logger.info(
                 "Epoch %3d/%d  train_loss=%.4f  val_loss=%.4f  lr=%.6f  patience=%d/%d",
-                epoch, epochs, train_loss, val_loss, current_lr, no_improve, patience,
+                epoch,
+                epochs,
+                train_loss,
+                val_loss,
+                current_lr,
+                no_improve,
+                patience,
             )
 
         if no_improve >= patience:
@@ -409,7 +460,11 @@ def train(
         "  Edge accuracy: %.2f%%\n"
         "  Weights: %s\n"
         "  Graph: %s",
-        elapsed, final_loss, accuracy * 100, output_path, graph.get_stats(),
+        elapsed,
+        final_loss,
+        accuracy * 100,
+        output_path,
+        graph.get_stats(),
     )
     return True
 
@@ -419,9 +474,13 @@ def main():
     parser.add_argument("--epochs", type=int, default=100, help="Training epochs")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
     parser.add_argument("--patience", type=int, default=20, help="Early stop patience")
-    parser.add_argument("--min-memories", type=int, default=500, help="Min episodic memories required")
     parser.add_argument(
-        "--output", type=str, default=str(DEFAULT_WEIGHTS_PATH),
+        "--min-memories", type=int, default=500, help="Min episodic memories required"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=str(DEFAULT_WEIGHTS_PATH),
         help="Output path for weights",
     )
     args = parser.parse_args()

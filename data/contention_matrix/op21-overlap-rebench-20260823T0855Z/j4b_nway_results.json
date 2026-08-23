@@ -1,0 +1,134 @@
+{
+  "task_id": "J4b",
+  "topology_hash": "171f86f9188211e9",
+  "generated_at": "2026-08-23T08:54:55.841933+00:00",
+  "manifest": "data/contention_matrix/op21-overlap-rebench-20260823T0855Z/manifest.json",
+  "n_way": [
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context"
+      ],
+      "size": 2,
+      "topology_hash": "171f86f9188211e9",
+      "ports": {
+        "frontdoor": 8080,
+        "ingest_long_context": 8185
+      },
+      "measured_at": "2026-08-23T08:53:34.729176+00:00",
+      "ratio": 0.977,
+      "cv": 0.1018,
+      "samples": 3,
+      "seq_aggregate_tps": 14.06,
+      "parallel_aggregate_tps": 13.73,
+      "verdict": "borderline",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "frontdoor": 15.65,
+            "ingest_long_context": 12.54
+          },
+          "par_tps": {
+            "frontdoor": 9.83,
+            "ingest_long_context": 7.73
+          },
+          "seq_aggregate_tps": 13.92,
+          "parallel_aggregate_tps": 15.46,
+          "ratio": 1.11
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "frontdoor": 15.52,
+            "ingest_long_context": 12.51
+          },
+          "par_tps": {
+            "frontdoor": 6.03,
+            "ingest_long_context": 6.21
+          },
+          "seq_aggregate_tps": 13.85,
+          "parallel_aggregate_tps": 12.07,
+          "ratio": 0.871
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "frontdoor": 17.15,
+            "ingest_long_context": 12.42
+          },
+          "par_tps": {
+            "frontdoor": 7.41,
+            "ingest_long_context": 6.84
+          },
+          "seq_aggregate_tps": 14.4,
+          "parallel_aggregate_tps": 13.67,
+          "ratio": 0.949
+        }
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context"
+      ],
+      "size": 2,
+      "topology_hash": "171f86f9188211e9",
+      "ports": {
+        "frontdoor": 8080,
+        "ingest_long_context": 8285
+      },
+      "measured_at": "2026-08-23T08:54:55.841815+00:00",
+      "ratio": 1.36,
+      "cv": 0.0179,
+      "samples": 3,
+      "seq_aggregate_tps": 13.62,
+      "parallel_aggregate_tps": 18.51,
+      "verdict": "allow",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "frontdoor": 12.64,
+            "ingest_long_context": 13.54
+          },
+          "par_tps": {
+            "frontdoor": 11.61,
+            "ingest_long_context": 9.07
+          },
+          "seq_aggregate_tps": 13.08,
+          "parallel_aggregate_tps": 18.13,
+          "ratio": 1.386
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "frontdoor": 14.38,
+            "ingest_long_context": 13.63
+          },
+          "par_tps": {
+            "frontdoor": 12.09,
+            "ingest_long_context": 9.29
+          },
+          "seq_aggregate_tps": 14.0,
+          "parallel_aggregate_tps": 18.58,
+          "ratio": 1.328
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "frontdoor": 13.79,
+            "ingest_long_context": 13.75
+          },
+          "par_tps": {
+            "frontdoor": 12.69,
+            "ingest_long_context": 9.41
+          },
+          "seq_aggregate_tps": 13.77,
+          "parallel_aggregate_tps": 18.82,
+          "ratio": 1.366
+        }
+      ]
+    }
+  ]
+}

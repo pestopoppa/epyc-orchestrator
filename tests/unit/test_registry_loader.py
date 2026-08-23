@@ -7,11 +7,15 @@ import yaml
 
 from src.registry_loader import (
     DEFAULT_LEAN_REGISTRY_PATH,
+    PerformanceMetrics,
     RegistryError,
     RegistryLoader,
+    ResolvedTps,
+    format_tps,
+    resolve_tps_prior,
 )
 
-_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+_RETIRED_ARCHITECT_ROLE = "architect_coding"
 
 
 # Test fixtures
@@ -178,10 +182,7 @@ class TestRegistryLoaderBasic:
             "frontdoor",
             "coder_escalation",
         ]
-        assert all(
-            _RETIRED_ARCHITECT_ROLE not in hint.use
-            for hint in loader.routing_hints
-        )
+        assert all(_RETIRED_ARCHITECT_ROLE not in hint.use for hint in loader.routing_hints)
 
 
 class TestRoleAccess:
@@ -303,6 +304,42 @@ class TestRouting:
 
         roles = loader.route_task(task_ir)
         assert roles == ["frontdoor"]
+
+
+class TestResolvedTps:
+    """NIB2-57a: the t/s prior must resolve with its provenance, never as a
+    bare float that could be an optimized measurement, an unoptimized
+    baseline standing in for a missing optimized, or nothing at all."""
+
+    def test_optimized_wins_when_present(self):
+        prior = resolve_tps_prior(PerformanceMetrics(optimized_tps=40.22, baseline_tps=24.3))
+        assert prior == ResolvedTps(value=40.22, source="optimized")
+        assert prior.measured is True
+
+    def test_baseline_only_is_named_baseline_not_optimized(self):
+        # NIB2-57 shape: a role with ONLY an unoptimized baseline must not
+        # read as a measured optimized speed at the decision/display site.
+        prior = resolve_tps_prior(PerformanceMetrics(baseline_tps=24.3))
+        assert prior == ResolvedTps(value=24.3, source="baseline")
+        assert prior.measured is True
+
+    def test_neither_field_is_unmeasured_not_a_fabricated_number(self):
+        prior = resolve_tps_prior(PerformanceMetrics())
+        assert prior == ResolvedTps(value=None, source="unmeasured")
+        assert prior.measured is False
+
+    def test_format_tps_measured_optimized_is_unchanged(self):
+        # Report-only rendering must stay byte-identical for the measured case.
+        assert format_tps(PerformanceMetrics(optimized_tps=33.0, baseline_tps=3.0)) == "33.0 t/s"
+
+    def test_format_tps_baseline_substitution_is_loud(self):
+        assert (
+            format_tps(PerformanceMetrics(baseline_tps=10.12))
+            == "10.12 t/s (baseline, not optimized)"
+        )
+
+    def test_format_tps_unmeasured_says_unmeasured(self):
+        assert format_tps(PerformanceMetrics()) == "unmeasured"
 
 
 class TestValidation:

@@ -96,6 +96,45 @@ class TestLookupModel:
         assert "speculative_decoding" in result
 
     @patch("src.registry_loader.RegistryLoader", autospec=False)
+    def test_baseline_only_role_is_labeled_not_silent(self, mock_loader_class):
+        """NIB2-57a: a role whose only t/s figure is an unoptimized baseline
+        must not render as its achievable speed."""
+        mock_role = MockRoleConfig(
+            name="frontdoor",
+            tier="A",
+            model=MockModel(name="Qwen3.6-35B-A3B", quant="Q8_0", size_gb=37.0),
+            acceleration=MockAcceleration(type="none"),
+            performance=MockPerformance(optimized_tps=None, baseline_tps=24.3),
+        )
+
+        mock_registry = MagicMock()
+        mock_registry.get_role.return_value = mock_role
+        mock_loader_class.return_value = mock_registry
+
+        result = lookup_model("frontdoor")
+        assert "24.3 t/s (baseline, not optimized)" in result
+        assert "Speed:" in result
+
+    @patch("src.registry_loader.RegistryLoader", autospec=False)
+    def test_unmeasured_role_is_named_unmeasured(self, mock_loader_class):
+        """NIB2-57a: a role with no t/s prior renders 'unmeasured', never a
+        fabricated figure or a bare '?'."""
+        mock_role = MockRoleConfig(
+            name="patch_reviewer",
+            tier="C",
+            model=MockModel(name="Reviewer-8B", quant="Q4_K_M", size_gb=8.0),
+            acceleration=MockAcceleration(type="none"),
+            performance=MockPerformance(optimized_tps=None, baseline_tps=None),
+        )
+
+        mock_registry = MagicMock()
+        mock_registry.get_role.return_value = mock_role
+        mock_loader_class.return_value = mock_registry
+
+        result = lookup_model("patch_reviewer")
+        assert "Speed: unmeasured" in result
+
+    @patch("src.registry_loader.RegistryLoader", autospec=False)
     def test_role_not_found(self, mock_loader_class):
         """Returns error for unknown role."""
         mock_registry = MagicMock()
@@ -146,6 +185,53 @@ class TestListRoles:
         assert "frontdoor" in result
         assert "Tier B" in result
         assert "coder_escalation" in result
+
+    @patch("src.registry_loader.RegistryLoader", autospec=False)
+    def test_list_roles_labels_baseline_substitution(self, mock_loader_class):
+        """NIB2-57a: list_roles marks a baseline-only role instead of
+        printing the unoptimized number as if it were the measured speed."""
+        mock_role = MockRoleConfig(
+            name="frontdoor",
+            tier="A",
+            model=MockModel(name="Qwen3.6-35B-A3B"),
+            acceleration=MockAcceleration(type="none"),
+            performance=MockPerformance(optimized_tps=None, baseline_tps=24.3),
+        )
+
+        mock_registry = MagicMock()
+
+        def get_roles(tier):
+            return [mock_role] if tier == "A" else []
+
+        mock_registry.get_roles_by_tier.side_effect = get_roles
+        mock_loader_class.return_value = mock_registry
+
+        result = list_roles()
+        assert "frontdoor" in result
+        assert "24.3 t/s (baseline, not optimized)" in result
+
+    @patch("src.registry_loader.RegistryLoader", autospec=False)
+    def test_list_roles_unmeasured_role_shows_unmeasured(self, mock_loader_class):
+        """NIB2-57a: an unmeasured role renders 'unmeasured' in the tier list."""
+        mock_role = MockRoleConfig(
+            name="patch_reviewer",
+            tier="C",
+            model=MockModel(name="Reviewer-8B"),
+            acceleration=MockAcceleration(type="none"),
+            performance=MockPerformance(optimized_tps=None, baseline_tps=None),
+        )
+
+        mock_registry = MagicMock()
+
+        def get_roles(tier):
+            return [mock_role] if tier == "C" else []
+
+        mock_registry.get_roles_by_tier.side_effect = get_roles
+        mock_loader_class.return_value = mock_registry
+
+        result = list_roles()
+        assert "patch_reviewer" in result
+        assert "unmeasured" in result
 
     @patch("src.registry_loader.RegistryLoader", autospec=False)
     def test_empty_registry(self, mock_loader_class):

@@ -89,6 +89,65 @@ class PerformanceMetrics:
     raw_tps: float | None = None
 
 
+@dataclass(frozen=True)
+class ResolvedTps:
+    """A role's t/s prior with its provenance stated, not implied.
+
+    NIB2-57a: the old read idiom ``performance.optimized_tps or
+    performance.baseline_tps`` handed callers a bare float that could be the
+    optimized measurement, an UNOPTIMIZED baseline standing in for a missing
+    optimized_tps, or nothing at all — indistinguishable at the read site.
+    That indistinguishability is what let four unmeasured priors drive the
+    router for weeks (NIB2-57). This resolves the same numeric preference
+    (optimized wins when present) but says which case held.
+    """
+
+    value: float | None
+    source: str  # "optimized" | "baseline" | "unmeasured"
+
+    @property
+    def measured(self) -> bool:
+        """True when a number exists at all (either measurement)."""
+        return self.value is not None
+
+
+def resolve_tps_prior(performance: PerformanceMetrics) -> ResolvedTps:
+    """Resolve ``performance`` to its t/s prior with provenance.
+
+    Numeric preference is identical to the historical ``optimized_tps or
+    baseline_tps`` idiom; only the provenance is new. A role that has ONLY a
+    baseline_tps now says so explicitly instead of being indistinguishable
+    from one whose optimized_tps was measured, and a role with neither field
+    resolves to ``source="unmeasured"`` — never to a fabricated number.
+
+    Decision sites (routing, placement, prior selection) MUST check
+    ``source`` before using the value; report-only consumers may read
+    ``value`` directly.
+    """
+    if performance.optimized_tps is not None:
+        return ResolvedTps(value=float(performance.optimized_tps), source="optimized")
+    if performance.baseline_tps is not None:
+        return ResolvedTps(value=float(performance.baseline_tps), source="baseline")
+    return ResolvedTps(value=None, source="unmeasured")
+
+
+def format_tps(performance: PerformanceMetrics) -> str:
+    """Human-readable t/s for display sites (report-only consumers).
+
+    A measured-optimized role renders exactly as before (``33.0 t/s``). A
+    role whose only number is an unoptimized baseline_tps says so — that
+    figure is NOT its achievable speed, and printing it bare is how the
+    unmeasured-prior case stayed quiet. A role with no t/s prior renders
+    ``unmeasured``, never a fabricated figure.
+    """
+    prior = resolve_tps_prior(performance)
+    if prior.value is None:
+        return "unmeasured"
+    if prior.source == "baseline":
+        return f"{prior.value} t/s (baseline, not optimized)"
+    return f"{prior.value} t/s"
+
+
 @dataclass
 class MemoryConfig:
     """Memory residency configuration."""
@@ -227,6 +286,7 @@ class RegistryLoader:
             self.registry_path = Path(registry_path)
         else:
             import os
+
             registry_mode = os.environ.get("ORCHESTRATOR_REGISTRY_MODE", "full")
             if registry_mode == "lean":
                 self.registry_path = DEFAULT_LEAN_REGISTRY_PATH
@@ -563,10 +623,7 @@ class RegistryLoader:
         Returns:
             List of roles configured for that backend.
         """
-        return [
-            r for r in self._roles.values()
-            if r.backend_config.backend_type == backend_type
-        ]
+        return [r for r in self._roles.values() if r.backend_config.backend_type == backend_type]
 
     def get_local_roles(self) -> list[RoleConfig]:
         """Get all roles using local llama.cpp inference."""
@@ -575,7 +632,8 @@ class RegistryLoader:
     def get_external_roles(self) -> list[RoleConfig]:
         """Get all roles using external API backends (anthropic, openai)."""
         return [
-            r for r in self._roles.values()
+            r
+            for r in self._roles.values()
             if r.backend_config.backend_type in ("anthropic", "openai")
         ]
 
@@ -766,7 +824,8 @@ class RegistryLoader:
         # Filter by backend preference if specified
         if backend_preference:
             filtered = [
-                role_name for role_name in matched_roles
+                role_name
+                for role_name in matched_roles
                 if role_name in self._roles
                 and self._roles[role_name].backend_config.backend_type == backend_preference
             ]

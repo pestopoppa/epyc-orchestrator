@@ -30,6 +30,7 @@ from src.api.models import (
 )
 from src.api.routes.chat_pipeline.routing_decision import normalize_ingress_role
 from src.api.state import AppState
+from src.autopilot_core.measurement_guards import inband_error_text
 from src.prompt_builders import (
     build_root_lm_prompt,
     extract_code_from_response,
@@ -652,6 +653,22 @@ async def openai_chat_completions(
                             )
                             yield "data: [DONE]\n\n"
                             return
+                        # In-band guard: llm_call returns "[ERROR: ...]" rather
+                        # than raising on backend failure. Emit the terminal
+                        # error event instead of streaming it as content.
+                        inband_error = inband_error_text(response_text)
+                        if inband_error is not None:
+                            logger.warning(
+                                "Streaming backend in-band failure for role %s (chat %s): %s",
+                                role, chat_id, inband_error,
+                            )
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=f"Backend failed: {inband_error}",
+                                error_type="backend_error", status_code=502,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
                         total_tokens = primitives.total_tokens_generated
                     else:
                         # Create REPL environment
@@ -685,6 +702,22 @@ async def openai_chat_completions(
                                     n_tokens=1024,
                                     **sampling_kwargs,
                                 )
+                                # In-band guard: "[ERROR: ...]" at start-of-answer
+                                # is a backend failure, not a generation — do not
+                                # extract/auto-wrap/execute it as the answer.
+                                inband_error = inband_error_text(code)
+                                if inband_error is not None:
+                                    logger.warning(
+                                        "Streaming backend in-band failure for role %s (chat %s): %s",
+                                        role, chat_id, inband_error,
+                                    )
+                                    yield _sse_error_event(
+                                        chat_id=chat_id, created=created, model=request.model,
+                                        message=f"Backend failed: {inband_error}",
+                                        error_type="backend_error", status_code=502,
+                                    )
+                                    yield "data: [DONE]\n\n"
+                                    return
                                 code = extract_code_from_response(code)
                                 code = auto_wrap_final(code)
                             except ContentionDenied as e:
@@ -829,6 +862,16 @@ async def openai_chat_completions(
                         n_tokens=request.max_tokens,
                         **sampling_kwargs,
                     )
+                    # llm_call does not raise on backend failure — it returns an
+                    # in-band "[ERROR: ...]" at start-of-answer (LLMPrimitives
+                    # fail-open contract). Without this, that string reached the
+                    # client as assistant content with HTTP 200 (HS-OD-2).
+                    inband_error = inband_error_text(response_text)
+                    if inband_error is not None:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"Backend failed: {inband_error}",
+                        )
                 else:
                     repl = REPLEnvironment(
                         context=combined_context,
@@ -859,6 +902,15 @@ async def openai_chat_completions(
                             n_tokens=1024,
                             **sampling_kwargs,
                         )
+                        # Same in-band guard as the direct path: an "[ERROR: ...]"
+                        # generation is a backend failure, not code to auto-wrap
+                        # and execute as the model's final answer.
+                        inband_error = inband_error_text(code)
+                        if inband_error is not None:
+                            raise HTTPException(
+                                status_code=502,
+                                detail=f"Backend failed: {inband_error}",
+                            )
                         code = extract_code_from_response(code)
                         code = auto_wrap_final(code)
 

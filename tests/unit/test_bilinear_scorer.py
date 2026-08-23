@@ -13,7 +13,7 @@ from orchestration.repl_memory.bilinear_scorer import (
     PROMPT_FEATURE_DIM,
     MODEL_FEATURE_DIM,
 )
-from orchestration.repl_memory.q_scorer import ScoringConfig
+from orchestration.repl_memory.q_scorer import ScoringConfig, PRIOR_SOURCE_DEGRADED_FALLBACK
 
 
 class TestModelFeatures:
@@ -53,6 +53,36 @@ class TestModelFeatures:
         assert features["frontdoor"].baseline_quality == cfg.baseline_quality_by_role["frontdoor"]
         assert features["frontdoor"].is_moe == 1.0
         assert features["frontdoor"].quant_bits == 8.0
+        # Live stack-prior values are measurements, so the tps mask is set.
+        assert features["frontdoor"].tps_known == 1.0
+
+    def test_tps_known_masks_fabricated_degraded_fallback(self, tmp_path: Path, caplog):
+        """NIB2-57a: a DEGRADED_FALLBACK t/s prior (fabricated table, not a
+        measurement) must not train the scorer as if it were evidence — the
+        mask goes to 0 and the provenance is logged loudly."""
+        cfg = ScoringConfig(
+            baseline_tps_by_role={"worker_general": 60.7},
+            baseline_quality_by_role={"worker_general": 0.745},
+            memory_cost_by_role={"worker_general": 1.0},
+            baseline_tps_source_by_role={"worker_general": PRIOR_SOURCE_DEGRADED_FALLBACK},
+        )
+
+        with caplog.at_level("WARNING", logger="orchestration.repl_memory.bilinear_scorer"):
+            features = extract_model_features(cfg, stack_priors_path=tmp_path / "missing.yaml")
+
+        assert features["worker_general"].baseline_tps == 60.7
+        assert features["worker_general"].tps_known == 0.0
+        assert any("DEGRADED" in record.message for record in caplog.records)
+
+    def test_tps_known_vector_mask_is_separate_from_the_number(self):
+        """The mask is a distinct feature dimension so the learner can ignore
+        an unmeasured tps instead of learning the fabricated value as speed."""
+        measured = ModelFeatures(role="a", baseline_tps=40.0, tps_known=1.0)
+        masked = ModelFeatures(role="a", baseline_tps=40.0, tps_known=0.0)
+        v_measured = measured.to_vector()
+        v_masked = masked.to_vector()
+        assert v_measured[0] == v_masked[0]  # same normalized number...
+        assert v_measured[1] == 1.0 and v_masked[1] == 0.0  # ...but different mask
 
     def test_extract_from_stack_priors(self, tmp_path: Path):
         stack_priors = tmp_path / "stack_priors.yaml"
@@ -88,7 +118,9 @@ roles:
         assert features["worker_general"].param_count_log == pytest.approx(np.log2(26))
         assert features["worker_general"].quant_bits == 4.0
 
-    def test_extract_model_features_uses_degraded_fallback_when_priors_missing(self, tmp_path: Path):
+    def test_extract_model_features_uses_degraded_fallback_when_priors_missing(
+        self, tmp_path: Path
+    ):
         cfg = ScoringConfig(
             baseline_tps_by_role={"worker_general": 60.7},
             baseline_quality_by_role={"worker_general": 0.745},
@@ -171,16 +203,31 @@ class TestBilinearScorer:
     def _make_scorer(self):
         features = {
             "frontdoor": ModelFeatures(
-                role="frontdoor", baseline_tps=12.7, baseline_quality=0.895,
-                memory_cost=1.0, param_count_log=5.13, is_moe=1.0, quant_bits=4.0,
+                role="frontdoor",
+                baseline_tps=12.7,
+                baseline_quality=0.895,
+                memory_cost=1.0,
+                param_count_log=5.13,
+                is_moe=1.0,
+                quant_bits=4.0,
             ),
             "architect_general": ModelFeatures(
-                role="architect_general", baseline_tps=4.3, baseline_quality=0.94,
-                memory_cost=3.0, param_count_log=6.93, is_moe=1.0, quant_bits=4.0,
+                role="architect_general",
+                baseline_tps=4.3,
+                baseline_quality=0.94,
+                memory_cost=3.0,
+                param_count_log=6.93,
+                is_moe=1.0,
+                quant_bits=4.0,
             ),
             "worker_general": ModelFeatures(
-                role="worker_general", baseline_tps=39.1, baseline_quality=0.745,
-                memory_cost=0.5, param_count_log=4.91, is_moe=1.0, quant_bits=4.0,
+                role="worker_general",
+                baseline_tps=39.1,
+                baseline_quality=0.745,
+                memory_cost=0.5,
+                param_count_log=4.91,
+                is_moe=1.0,
+                quant_bits=4.0,
             ),
         }
         return BilinearScorer(features)
@@ -216,7 +263,11 @@ class TestBilinearScorer:
         assert scorer.predict(prompt, "worker_explore") == pytest.approx(
             scorer.predict(prompt, "worker_general")
         )
-        assert scorer.predict_all(prompt).keys() == {"frontdoor", "architect_general", "worker_general"}
+        assert scorer.predict_all(prompt).keys() == {
+            "frontdoor",
+            "architect_general",
+            "worker_general",
+        }
 
     def test_update_changes_prediction(self):
         scorer = self._make_scorer()
@@ -265,8 +316,13 @@ class TestBilinearScorer:
         scorer = self._make_scorer()
         # Add a new model at runtime
         scorer.model_features["new_model"] = ModelFeatures(
-            role="new_model", baseline_tps=25.0, baseline_quality=0.88,
-            memory_cost=1.5, param_count_log=5.0, is_moe=False, quant_bits=8.0,
+            role="new_model",
+            baseline_tps=25.0,
+            baseline_quality=0.88,
+            memory_cost=1.5,
+            param_count_log=5.0,
+            is_moe=False,
+            quant_bits=8.0,
         )
         prompt = extract_prompt_features({"objective": "Translate text"})
         q = scorer.predict(prompt, "new_model")

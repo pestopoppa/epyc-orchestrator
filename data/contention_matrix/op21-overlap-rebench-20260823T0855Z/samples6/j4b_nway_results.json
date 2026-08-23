@@ -1,0 +1,113 @@
+{
+  "task_id": "J4b",
+  "topology_hash": "171f86f9188211e9",
+  "generated_at": "2026-08-23T08:58:25.099435+00:00",
+  "manifest": "data/contention_matrix/op21-overlap-rebench-20260823T0855Z/samples6/manifest.json",
+  "n_way": [
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context"
+      ],
+      "size": 2,
+      "topology_hash": "171f86f9188211e9",
+      "ports": {
+        "frontdoor": 8080,
+        "ingest_long_context": 8185
+      },
+      "measured_at": "2026-08-23T08:58:25.099330+00:00",
+      "ratio": 1.194,
+      "cv": 0.0789,
+      "samples": 6,
+      "seq_aggregate_tps": 13.19,
+      "parallel_aggregate_tps": 15.71,
+      "verdict": "allow",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "frontdoor": 13.6,
+            "ingest_long_context": 12.54
+          },
+          "par_tps": {
+            "frontdoor": 10.18,
+            "ingest_long_context": 7.78
+          },
+          "seq_aggregate_tps": 13.05,
+          "parallel_aggregate_tps": 15.57,
+          "ratio": 1.193
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "frontdoor": 13.47,
+            "ingest_long_context": 12.53
+          },
+          "par_tps": {
+            "frontdoor": 10.0,
+            "ingest_long_context": 7.8
+          },
+          "seq_aggregate_tps": 12.99,
+          "parallel_aggregate_tps": 15.6,
+          "ratio": 1.201
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "frontdoor": 15.56,
+            "ingest_long_context": 12.55
+          },
+          "par_tps": {
+            "frontdoor": 7.95,
+            "ingest_long_context": 7.02
+          },
+          "seq_aggregate_tps": 13.89,
+          "parallel_aggregate_tps": 14.04,
+          "ratio": 1.01
+        },
+        {
+          "sample": 3,
+          "solo_tps": {
+            "frontdoor": 13.37,
+            "ingest_long_context": 12.43
+          },
+          "par_tps": {
+            "frontdoor": 11.05,
+            "ingest_long_context": 8.44
+          },
+          "seq_aggregate_tps": 12.88,
+          "parallel_aggregate_tps": 16.89,
+          "ratio": 1.311
+        },
+        {
+          "sample": 4,
+          "solo_tps": {
+            "frontdoor": 13.12,
+            "ingest_long_context": 12.44
+          },
+          "par_tps": {
+            "frontdoor": 10.91,
+            "ingest_long_context": 8.1
+          },
+          "seq_aggregate_tps": 12.77,
+          "parallel_aggregate_tps": 16.2,
+          "ratio": 1.268
+        },
+        {
+          "sample": 5,
+          "solo_tps": {
+            "frontdoor": 14.92,
+            "ingest_long_context": 12.41
+          },
+          "par_tps": {
+            "frontdoor": 10.89,
+            "ingest_long_context": 7.99
+          },
+          "seq_aggregate_tps": 13.55,
+          "parallel_aggregate_tps": 15.97,
+          "ratio": 1.179
+        }
+      ]
+    }
+  ]
+}

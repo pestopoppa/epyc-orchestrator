@@ -42,6 +42,7 @@ _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 
 from orchestration.repl_memory import q_scorer as q_scorer_module
 from orchestration.repl_memory.q_scorer import (
+    BASELINE_QUALITY_BY_MODEL,
     DEFAULT_MODEL_REGISTRY_PATH,
     DEFAULT_STACK_PRIORS_PATH,
     FALLBACK_BASELINE_TPS_BY_ROLE,
@@ -962,12 +963,128 @@ class TestComputeRewardWithCost:
 # ===== Multi-dimensional cost model tests =====
 
 
+def _compiled_quality_prior(record: dict[str, Any]) -> tuple[float | None, str | None]:
+    """Re-derive q_scorer's quality projection for ONE compiled priors record.
+
+    Mirrors the loader's two layers in orchestration/repl_memory/q_scorer.py:
+
+    * `_baseline_quality_by_role()` (~line 205) projects every record: a
+      numeric `quality_for_role.value` (0..1) wins, else the model-keyed
+      table keyed by model_path basename, else the role is OMITTED. Its
+      docstring states the contract this test enforces: "A role whose model
+      has no measured entry is OMITTED rather than defaulted. Falling back to
+      a number would reinstate exactly the defect this replaced."
+    * `stack_prior_q_scorer_priors_by_role()` then overrides live_stack
+      records with a numeric `quality_for_role.value` or `quality_overall`,
+      stamping PRIOR_SOURCE_STACK_PRIORS. Anything else that survives does so
+      through the degraded-fallback base layer (PRIOR_SOURCE_DEGRADED_FALLBACK).
+
+    Returns (expected_value, expected_source); expected_source is None when
+    the role must be ABSENT — never defaulted to a number.
+    """
+    if not isinstance(record, dict):
+        return None, None
+    priors = record.get("priors") or {}
+    if not isinstance(priors, dict):
+        priors = {}
+
+    for_role = priors.get("quality_for_role")
+    qfr = None
+    if isinstance(for_role, dict):
+        value = for_role.get("value")
+        if isinstance(value, (int, float)) and 0 <= float(value) <= 1:
+            qfr = float(value)
+
+    is_live = record.get("deployment_status") == "live_stack"
+    if is_live and qfr is None:
+        overall = priors.get("quality_overall")
+        if isinstance(overall, (int, float)) and 0 <= float(overall) <= 1:
+            return float(overall), PRIOR_SOURCE_STACK_PRIORS
+    if qfr is not None:
+        return qfr, PRIOR_SOURCE_STACK_PRIORS if is_live else PRIOR_SOURCE_DEGRADED_FALLBACK
+
+    model_path = (
+        ((record.get("serving") or {}).get("launch") or {}).get("requirements") or {}
+    ).get("model_path")
+    if isinstance(model_path, str) and model_path:
+        quality = BASELINE_QUALITY_BY_MODEL.get(model_path.rsplit("/", 1)[-1])
+        if quality is not None:
+            return float(quality), PRIOR_SOURCE_DEGRADED_FALLBACK
+    return None, None
+
+
 class TestMultiDimensionalCost:
     """Test quality-gap and memory-tier cost dimensions."""
 
     def test_config_has_quality_baselines(self):
+        """Quality baselines are a projection of the compiled stack priors.
+
+        Contract enforced here — the one the loader actually implements in
+        orchestration/repl_memory/q_scorer.py `_baseline_quality_by_role()`
+        (~line 205): "A role whose model has no measured entry is OMITTED
+        rather than defaulted. Falling back to a number would reinstate
+        exactly the defect this replaced."
+
+        * A role whose record carries a numeric quality_for_role.value (0..1)
+          — or whose model path hits the model-keyed fallback — IS projected;
+          live roles carry the PRIOR_SOURCE_STACK_PRIORS source.
+        * A role whose quality is null/absent with no model-path fallback is
+          OMITTED, never defaulted.
+
+        The expectation is DERIVED from the same compiled priors file the
+        loader reads (orchestration/derived/stack_priors.yaml), never from a
+        hardcoded role name: after the 2026-08-23 Qwen3.8-27B swap,
+        architect_general's quality_overall and quality_for_role are both
+        null (only E-7 chat-template stamps under quality_by_axis exist,
+        which are NOT a quality_overall baseline), so it is correctly absent.
+        A future model swap therefore cannot rot this test the way the old
+        hardcoded "architect_general in baseline_quality_by_role" did.
+        """
+        import yaml
+
+        priors_path = (
+            Path(__file__).resolve().parents[2] / "orchestration" / "derived" / "stack_priors.yaml"
+        )
+        assert priors_path.exists(), "compiled stack priors missing; cannot derive expectations"
+        compiled = yaml.safe_load(priors_path.read_text()) or {}
+        records = compiled.get("roles") or {}
+        assert records, (
+            "compiled stack priors have no roles block; every assertion would be vacuous"
+        )
+
         cfg = ScoringConfig()
-        assert "architect_general" in cfg.baseline_quality_by_role
+
+        expected: dict[str, tuple[float, str]] = {}
+        for role, record in records.items():
+            quality, source = _compiled_quality_prior(record)
+            if quality is None:
+                assert role not in cfg.baseline_quality_by_role, (
+                    f"compiled role {role!r} has no measured quality "
+                    "(quality_for_role null/absent and no model-path fallback) "
+                    "but appears in baseline_quality_by_role; the loader omits "
+                    "it by contract — never default it"
+                )
+                continue
+            expected[role] = (quality, source)
+
+        # Every derived expectation is projected, with the loader's source.
+        for role, (quality, source) in expected.items():
+            assert role in cfg.baseline_quality_by_role, (
+                f"compiled role {role!r} has measured quality {quality} but was dropped"
+            )
+            assert cfg.baseline_quality_by_role[role] == pytest.approx(quality)
+            assert cfg.baseline_quality_source_by_role.get(role) == source, (
+                f"role {role!r} quality source is "
+                f"{cfg.baseline_quality_source_by_role.get(role)!r}, expected {source!r}"
+            )
+        # ...and nothing beyond the compiled data leaked in.
+        assert set(cfg.baseline_quality_by_role) == set(expected), (
+            f"unexpected roles in baseline_quality_by_role: "
+            f"{sorted(set(cfg.baseline_quality_by_role) ^ set(expected))}"
+        )
+
+        # Existing teeth, kept against the same data: worker_explore is the
+        # q_scorer action label aliased onto worker_general's live priors.
         assert "worker_explore" in cfg.baseline_quality_by_role
         assert cfg.baseline_quality_by_role["worker_explore"] == pytest.approx(
             cfg.baseline_quality_by_role["worker_general"]

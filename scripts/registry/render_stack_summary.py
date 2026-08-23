@@ -23,8 +23,7 @@ DEFAULT_DESCRIPTORS = DEFAULT_ROOT / "orchestration" / "model_descriptors.yaml"
 DEFAULT_OUTPUT = DEFAULT_ROOT / "docs" / "generated" / "current_stack_summary.md"
 STACK_PRIORS_SOURCE = "orchestration/derived/stack_priors.yaml"
 COMPILED_REGISTRY_FALLBACK_SOURCE = (
-    "orchestration/model_registry.yaml + orchestration/model_descriptors.yaml "
-    "(compiled fallback)"
+    "orchestration/model_registry.yaml + orchestration/model_descriptors.yaml (compiled fallback)"
 )
 DEGRADED_REGISTRY_FALLBACK_SOURCE = "orchestration/model_registry.yaml (degraded fallback)"
 
@@ -131,7 +130,11 @@ def format_launch_requirements(requirements: Any) -> str:
     model_path = requirements.get("model_path")
     if isinstance(draft_path, str) and draft_path:
         draft_name = Path(draft_path).name
-        if isinstance(model_path, str) and model_path and _same_real_model_path(model_path, draft_path):
+        if (
+            isinstance(model_path, str)
+            and model_path
+            and _same_real_model_path(model_path, draft_path)
+        ):
             parts.append(f"embedded_nextn={draft_name}")
         else:
             parts.append(f"draft={draft_name}")
@@ -152,7 +155,11 @@ def stack_prior_role_rows(stack_priors: dict[str, Any]) -> list[str]:
         serving = record.get("serving") if isinstance(record.get("serving"), dict) else {}
         priors = record.get("priors") if isinstance(record.get("priors"), dict) else {}
         ports = serving.get("ports")
-        port_values = [str(port) for port in ports if isinstance(port, int)] if isinstance(ports, list) else []
+        port_values = (
+            [str(port) for port in ports if isinstance(port, int)]
+            if isinstance(ports, list)
+            else []
+        )
         if not port_values:
             try:
                 endpoint_port = stack_prior_endpoint_port(serving)
@@ -174,7 +181,9 @@ def stack_prior_role_rows(stack_priors: dict[str, Any]) -> list[str]:
                 [
                     clean_cell(name, 28),
                     clean_cell(", ".join(port_values), 28),
-                    clean_cell(record.get("display_name") or record.get("model_id") or "unknown", 44),
+                    clean_cell(
+                        record.get("display_name") or record.get("model_id") or "unknown", 44
+                    ),
                     clean_cell(serving.get("tier") or "n/a", 12),
                     clean_cell(format_acceleration(record.get("acceleration")), 48),
                     clean_cell(format_launch_requirements(launch.get("requirements")), 48),
@@ -252,12 +261,21 @@ def registry_role_rows(registry: dict[str, Any]) -> list[str]:
         )
         tier = server_cfg.get("tier") or nested(role_cfg, "memory", "residency") or "n/a"
         accel = format_acceleration(server_cfg.get("acceleration") or role_cfg.get("acceleration"))
-        throughput = (
-            server_cfg.get("throughput")
-            or nested(role_cfg, "performance", "optimized_tps")
-            or nested(role_cfg, "performance", "baseline_tps")
-            or "n/a"
-        )
+        # NIB2-57a: the previous `or` chain read `optimized_tps` then
+        # `baseline_tps` into one bare cell, so an unoptimized reference
+        # measurement rendered indistinguishably from the role's optimized
+        # speed. Same numeric preference, but a baseline-derived cell now
+        # says so — a `baseline_tps` standing in for a missing
+        # `optimized_tps` is NOT the role's achievable speed.
+        server_tps = server_cfg.get("throughput")
+        opt_tps = nested(role_cfg, "performance", "optimized_tps")
+        base_tps = nested(role_cfg, "performance", "baseline_tps")
+        if server_tps or opt_tps:
+            throughput = server_tps or opt_tps
+        elif base_tps:
+            throughput = f"{base_tps} (baseline, not optimized)"
+        else:
+            throughput = "n/a"
         description = server_cfg.get("description") or role_cfg.get("description") or ""
         rows.append(
             "| "

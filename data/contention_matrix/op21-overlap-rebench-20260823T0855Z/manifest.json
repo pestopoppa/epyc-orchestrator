@@ -1,0 +1,22 @@
+{
+  "task_id": "OP-21 overlap re-bench (RTG-35)",
+  "topology_hash": "171f86f9188211e9",
+  "candidate_sets": [
+    {
+      "roles": ["frontdoor", "ingest_long_context"],
+      "note": "OVERLAP: true production geometry (node0-half primaries)",
+      "assignment": {
+        "frontdoor": {"port": 8080},
+        "ingest_long_context": {"port": 8185}
+      }
+    },
+    {
+      "roles": ["frontdoor", "ingest_long_context"],
+      "note": "CONTROL: disjoint geometry (as shipped in matrix, ratio 1.89)",
+      "assignment": {
+        "frontdoor": {"port": 8080},
+        "ingest_long_context": {"port": 8285}
+      }
+    }
+  ]
+}

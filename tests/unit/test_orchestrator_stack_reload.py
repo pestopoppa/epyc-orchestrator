@@ -509,7 +509,7 @@ def test_reload_document_formalizer_uses_auxiliary_starter(monkeypatch) -> None:
         return [333]
 
     monkeypatch.setattr(stack, "_pids_on_port", fake_pids_on_port)
-    monkeypatch.setattr(stack, "start_document_formalizer", lambda: new_info)
+    monkeypatch.setattr(stack, "start_document_formalizer", lambda **_kw: new_info)
 
     rc = stack.cmd_reload(Namespace(components=["document_formalizer"]))
 
@@ -593,7 +593,7 @@ def test_reload_aux_service_restarts_it(
 
     monkeypatch.setattr(stack, "_pids_on_port", fake_pids_on_port)
 
-    def fake_start():
+    def fake_start(**_kw):
         started.append(component)
         return new_info
 
@@ -631,7 +631,7 @@ def test_reload_aux_service_reports_failure_without_leaving_a_stale_state_row(
     monkeypatch.setattr(stack, "kill_process", lambda _pid: None)
     monkeypatch.setattr(stack.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(stack, "_pids_on_port", lambda _port: [333])
-    monkeypatch.setattr(stack, "start_whisper", lambda: None)
+    monkeypatch.setattr(stack, "start_whisper", lambda **_kw: None)
 
     assert stack.cmd_reload(Namespace(components=["whisper"])) == 1
     assert "whisper" not in state
@@ -670,13 +670,13 @@ def test_every_declared_aux_service_is_reloadable(monkeypatch) -> None:
         )
         calls: list[str] = []
 
-        def fake_start(_name: str = name, _info=info) -> stack.ProcessInfo:
+        def fake_start(_name: str = name, _info=info, **_kw) -> stack.ProcessInfo:
             calls.append(_name)
             return _info
 
         monkeypatch.setattr(stack, "load_state", lambda: {})
         monkeypatch.setattr(stack, f"start_{name}", fake_start, raising=False)
-        monkeypatch.setattr(stack, "start_aux_service", lambda n: fake_start(n))
+        monkeypatch.setattr(stack, "start_aux_service", lambda n, **_kw: fake_start(n))
 
         assert stack.cmd_reload(Namespace(components=[name])) == 0, f"reload {name} failed"
         assert calls == [name], f"reload {name} did not start {name}"

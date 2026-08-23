@@ -25,7 +25,7 @@ from src.config import _registry_timeout
 from src.dispatcher import Dispatcher
 from src.executor import ExecutionResult, Executor, ExecutorConfig, StepStatus
 from src.model_server import ModelServer
-from src.registry_loader import RegistryLoader
+from src.registry_loader import RegistryLoader, format_tps
 
 logger = logging.getLogger(__name__)
 
@@ -461,8 +461,8 @@ Examples:
         for name, role in registry.roles.items():
             status = "✓" if Path(role.model.full_path).exists() else "✗"
             accel = role.acceleration.type
-            tps = role.performance.optimized_tps or role.performance.baseline_tps or "N/A"
-            print(f"  {status} {name:20} {role.model.name[:30]:30} {tps} t/s ({accel})")
+            tps = format_tps(role.performance)
+            print(f"  {status} {name:20} {role.model.name[:30]:30} {tps} ({accel})")
         return 0
 
     # Require prompt for other modes

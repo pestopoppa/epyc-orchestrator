@@ -1,0 +1,21 @@
+n_way:
+  - roles: ['frontdoor', 'ingest_long_context']
+    size: 2
+    topology_hash: "171f86f9188211e9"
+    seq_aggregate_tps: 14.06
+    parallel_aggregate_tps: 13.73
+    ratio: 0.977
+    samples: 3
+    cv: 0.1018
+    verdict: "borderline"
+    measured_at: "2026-08-23T08:53:34.729176+00:00"
+  - roles: ['frontdoor', 'ingest_long_context']
+    size: 2
+    topology_hash: "171f86f9188211e9"
+    seq_aggregate_tps: 13.62
+    parallel_aggregate_tps: 18.51
+    ratio: 1.36
+    samples: 3
+    cv: 0.0179
+    verdict: "allow"
+    measured_at: "2026-08-23T08:54:55.841815+00:00"

@@ -169,3 +169,121 @@ def test_streaming_success_path_still_streams_content(client, monkeypatch):
     assert any(
         c.get("finish_reason") == "stop" for e in events for c in e.get("choices", [])
     )
+
+
+def test_inband_connection_failure_is_502_not_a_200_completion(client, monkeypatch):
+    """The raise-side is only half of HS-OD-2. LLMPrimitives.llm_call does NOT
+    raise on backend failure: its fail-open contract (primitives.py) returns
+    an in-band ``[ERROR: ...]`` string at start-of-answer for transport
+    failures, timeouts and upstream non-200s. Without a guard on the RESULT,
+    a connection failure would still reach the client as assistant content
+    with HTTP 200 — a success wearing an outage's clothes.
+    """
+    _install_primitives(
+        monkeypatch,
+        llm_call=lambda *a, **k: (
+            "[ERROR: ConnectError: connection refused for http://localhost:9999]"
+        ),
+    )
+
+    r = client.post("/v1/chat/completions", json=_body())
+
+    assert r.status_code == 502, (
+        f"in-band connection failure returned {r.status_code}; a non-error status "
+        "here is the fail-open shape HS-OD-2 exists to close"
+    )
+    payload = r.json()
+    text = json.dumps(payload)
+    assert "connection refused" in text
+    assert "choices" not in payload or not payload.get("choices")
+
+
+def test_inband_http_5xx_from_upstream_is_502(client, monkeypatch):
+    """An upstream non-200 is the same failure class: llm_call returns it as
+    an in-band ``[ERROR: ...]`` string, which must map to 502 like the raised
+    transport failures."""
+    _install_primitives(
+        monkeypatch,
+        llm_call=lambda *a, **k: (
+            "[ERROR: Server returned 503 Service Unavailable from http://localhost:9999]"
+        ),
+    )
+
+    r = client.post("/v1/chat/completions", json=_body())
+
+    assert r.status_code == 502
+    text = json.dumps(r.json())
+    assert "503" in text
+    assert "Backend failed" in text
+
+
+def test_inband_backend_failure_in_repl_mode_is_502(client, monkeypatch):
+    """REPL path: the raw llm_call result IS the failure sentinel, not a
+    generation. auto_wrap_final would otherwise coerce it into
+    ``FINAL("[ERROR: ...]")`` and the REPL would return it as the model's
+    final answer."""
+    _install_primitives(
+        monkeypatch,
+        llm_call=lambda *a, **k: (
+            "[ERROR: Backend unavailable (circuit open): http://localhost:9999]"
+        ),
+    )
+
+    r = client.post("/v1/chat/completions", json=_body(x_disable_repl=False))
+
+    assert r.status_code == 502, (
+        f"REPL-mode in-band failure returned {r.status_code}; the error string "
+        "must not execute as a FINAL(...) answer"
+    )
+    text = json.dumps(r.json())
+    assert "circuit open" in text
+    assert "choices" not in r.json() or not r.json().get("choices")
+
+
+def test_streaming_inband_backend_failure_emits_terminal_error_event(client, monkeypatch):
+    """Streaming: an in-band failure must emit the terminal SSE error event
+    and stop — never stream the error text as assistant content and close
+    with finish_reason "stop"."""
+    _install_primitives(
+        monkeypatch,
+        llm_call=lambda *a, **k: (
+            "[ERROR: Backend unavailable (circuit open): http://localhost:9999]"
+        ),
+    )
+
+    r = client.post("/v1/chat/completions", json=_body(stream=True))
+    events = [
+        json.loads(line[6:])
+        for line in r.text.splitlines()
+        if line.startswith("data: ") and line[6:].strip() not in ("", "[DONE]")
+    ]
+
+    assert events, "stream produced no events"
+    errors = [e for e in events if "error" in e]
+    assert errors, f"streamed in-band failure carried no error object: {events}"
+    assert errors[0]["error"]["code"] == 502
+    assert errors[0]["choices"][0]["finish_reason"] == "error"
+
+    for event in events:
+        for choice in event.get("choices", []):
+            assert "circuit open" not in str(choice.get("delta", {}))
+            assert choice.get("finish_reason") != "stop"
+
+
+def test_mid_answer_error_quote_is_not_a_failure(client, monkeypatch):
+    """The in-band anchor is the START-of-answer prefix, never a loose
+    substring: a model legitimately discussing "[ERROR:" mid-answer must
+    still be a clean 200 (measurement_guards convention)."""
+    _install_primitives(
+        monkeypatch,
+        llm_call=lambda *a, **k: (
+            "Backend failures are emitted as '[ERROR: ...]' at start-of-answer, "
+            "but this sentence is a real model answer."
+        ),
+    )
+
+    r = client.post("/v1/chat/completions", json=_body())
+
+    assert r.status_code == 200
+    content = r.json()["choices"][0]["message"]["content"]
+    assert content.startswith("Backend failures are emitted")
