@@ -1,5 +1,11 @@
 # Prompt-effort certificates.  Add a role only after E-2 records that model's
 # paired curve; this ledger deliberately contains no unmeasured defaults.
+#
+# Deployment stamp: this MUST track the frozen production kernel set. It was
+# created 2026-08-03 (v8 era) and missed the 2026-08-11 v9 freeze because the
+# ledger was empty (nothing to invalidate) — corrected 2026-08-23 to
+# production-consolidated-v9 (0db32c06e/10125). Roll it forward at every
+# kernel promotion, empty or not.
 schema_version: 1
-active_kernel_era: production-consolidated-v8
+active_kernel_era: production-consolidated-v9
 role_certifications: {}
