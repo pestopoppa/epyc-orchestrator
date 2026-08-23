@@ -68,6 +68,12 @@ dependencies = [
 
     # DSPy (AP-18: routing prompt optimization via GEPA)
     "dspy>=2.5.0",
+    # GEPA — imported directly by scripts/autopilot/species/gepa_optimizer.py:247
+    # (`import gepa`) but was used-but-undeclared before 2026-08-23, arriving only
+    # transitively via dspy. Pinned, not floated: the VERSION choice (0.0.26 vs 0.1.4
+    # vs main) is gated behind AP-19b/AP-29c, and 0.1.4 lacks the optimize_anything
+    # engine layer. Declaring the already-resolved version changes no resolution.
+    "gepa==0.0.26",
 
     # Plotting (autopilot progress/Pareto dashboard panels — scripts/autopilot/progress_plots.py).
     # Used-but-undeclared before 2026-06-04: a venv rebuild silently dropped it and the
