@@ -17,11 +17,13 @@ import pytest
 
 from scripts.autopilot import shapekeyed_step2_smoke as sk
 
-# Synthetic (role, idx) -> region-set topology. anchor = ingest#0 {q0,q1}
-# (node0-half). Chosen so the default probe roles yield a known admit/queue mix
-# and vision_escalation exposes several disjoint within-role pairs for re-bench.
+# Synthetic (role, idx) -> region-set topology. anchor = ingest#1 {q0,q1}
+# (node0-half — the corrected default: quarters do not exist in production;
+# idx 0 is the FULL 96t shape, idx 1/2 the 48t halves). Chosen so the default
+# probe roles yield a known admit/queue mix and vision_escalation exposes
+# several disjoint within-role pairs for re-bench.
 SYNTH_REGIONS: dict[tuple[str, int], frozenset[str]] = {
-    ("ingest_long_context", 0): frozenset({"q0", "q1"}),          # anchor
+    ("ingest_long_context", 1): frozenset({"q0", "q1"}),          # anchor
     ("frontdoor", 0): frozenset({"q0", "q1"}),                    # overlap -> QUEUE
     ("vision_escalation", 0): frozenset({"q2", "q3"}),            # disjoint -> ADMIT
     ("vision_escalation", 1): frozenset({"q2"}),                  # disjoint -> ADMIT
@@ -32,12 +34,20 @@ SYNTH_REGIONS: dict[tuple[str, int], frozenset[str]] = {
 
 
 def _plan() -> sk.Step2SmokePlan:
-    return sk.build_step2_smoke_plan(SYNTH_REGIONS, topology_hash="test-topo")
+    # Explicit probe roles including vision_escalation: the SYNTH fixture exists
+    # to exercise the classifier machinery with a balanced admit/queue mix. The
+    # production DEFAULT_PROBE_ROLES intentionally excludes vision_escalation
+    # (GPU-served, no CPU-region instance — 2026-08-23).
+    return sk.build_step2_smoke_plan(
+        SYNTH_REGIONS,
+        topology_hash="test-topo",
+        probe_roles=("frontdoor", "ingest_long_context", "vision_escalation", "worker_general"),
+    )
 
 
 def _anchor_held() -> dict[str, list[int]]:
-    """Injected anchor-hold scan: the SYNTH anchor (ingest_long_context#0) is held."""
-    return {"ingest_long_context": [0]}
+    """Injected anchor-hold scan: the SYNTH anchor (ingest_long_context#1) is held."""
+    return {"ingest_long_context": [1]}
 
 
 # ── admit/queue classifier ────────────────────────────────────────────────────
@@ -215,7 +225,7 @@ def test_drive_admit_overlap_probes_one_sided_signal_fails_closed() -> None:
     no disjoint side. The driver must refuse rather than "still report".
     """
     full_anchor_regions = {
-        ("ingest_long_context", 0): frozenset({"q0", "q1", "q2", "q3"}),
+        ("ingest_long_context", 1): frozenset({"q0", "q1", "q2", "q3"}),
         ("frontdoor", 0): frozenset({"q0", "q1"}),
         ("vision_escalation", 0): frozenset({"q2", "q3"}),
     }
@@ -236,12 +246,13 @@ def test_drive_admit_overlap_probes_one_sided_signal_fails_closed() -> None:
 def test_verify_anchor_held_pure_pass_and_fail_paths() -> None:
     plan = _plan()
     # Pure checker: no I/O, no injection seam needed — holder map is the input.
-    sk._verify_anchor_held(plan, {"ingest_long_context": [0]})
-    sk._verify_anchor_held(plan, {"ingest_long_context": [0, 2]})
+    # The SYNTH anchor is ingest#1 (node0 half — corrected default).
+    sk._verify_anchor_held(plan, {"ingest_long_context": [1]})
+    sk._verify_anchor_held(plan, {"ingest_long_context": [1, 2]})
     with pytest.raises(RuntimeError, match="anchor-hold precondition cannot be verified"):
         sk._verify_anchor_held(plan, {})
     with pytest.raises(RuntimeError, match="anchor-hold precondition cannot be verified"):
-        sk._verify_anchor_held(plan, {"ingest_long_context": [1]})
+        sk._verify_anchor_held(plan, {"ingest_long_context": [0]})
 
 
 def test_verify_probe_signal_pure_refuses_one_sided_or_empty() -> None:

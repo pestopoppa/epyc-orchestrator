@@ -285,11 +285,33 @@ class LlamaCppBackend(ModelBackend):
         binary_name = self.BINARY_MAP.get(accel_type, "llama-completion")
         binary_path = get_config().paths.llama_cpp_bin / binary_name
 
+        # SS-BENCH-GATE-c: a live CPU bench must not be tripped by this spawn.
+        # Default affinity (`numactl --interleave=all`) is the incident shape, so
+        # when a bench claims cores the spawn is pinned off the claim instead
+        # (or refused — the bench's continuity gate invalidates runs on any
+        # overlap). Quiet path keeps the legacy prefix byte-identical.
+        bench_pin: str | None = None
+        try:
+            from scripts.server.bench_core_claim import api_enforce_placement
+
+            bench_pin = api_enforce_placement(
+                None, label=f"llama-completion ({self.__class__.__name__})"
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "refusing to spawn llama-completion: a CPU bench claims cores and "
+                f"the placement guard could not satisfy it ({exc})"
+            ) from exc
+
         # Start with timeout and NUMA wrapper
         parts = [
             f"timeout {request.timeout}",
             "env OMP_NUM_THREADS=1",
-            *(["numactl --interleave=all"] if shutil.which("numactl") else []),
+            *(
+                [f"taskset -c {bench_pin}"]
+                if bench_pin is not None
+                else (["numactl --interleave=all"] if shutil.which("numactl") else [])
+            ),
             str(binary_path),
             f"-m {role_config.model.full_path}",
         ]

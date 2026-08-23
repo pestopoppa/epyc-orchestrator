@@ -215,6 +215,23 @@ class LlamaOCRWorker:
             "--no-warmup",
         ]
 
+        # SS-BENCH-GATE-c: this per-request spawn has default affinity, the same
+        # shape that tripped the bench's campaign-continuity gate in the 2026-07-27
+        # incident. When a CPU bench claims cores, pin the spawn off the claim
+        # (or fail closed — overlapping the bench invalidates its run).
+        try:
+            from scripts.server.bench_core_claim import api_enforce_placement
+
+            bench_pin = api_enforce_placement(None, label="llama-mtmd-cli (lightonocr)")
+        except Exception as exc:
+            raise HTTPException(
+                503,
+                f"OCR unavailable: a CPU bench claims cores and the placement guard "
+                f"could not satisfy the spawn ({exc})",
+            ) from exc
+        if bench_pin is not None:
+            cmd = ["taskset", "-c", bench_pin, *cmd]
+
         start = time.time()
 
         try:

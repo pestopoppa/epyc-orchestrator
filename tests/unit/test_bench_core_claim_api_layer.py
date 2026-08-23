@@ -19,6 +19,7 @@ process is ever started.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -261,3 +262,114 @@ async def test_allow_knob_set_without_bench_stays_silent(
 
     assert _spawn_argv(popen) == ["numactl", "--interleave=all", *expected_cmd]
     assert "ORCHESTRATOR_ALLOW_DURING_BENCH" not in caplog.text
+
+
+# ── the two named -c residuals: LlamaCppBackend + lightonocr ────────────────
+
+
+def test_llamacppbackend_cmd_pinned_off_bench_claim(monkeypatch) -> None:
+    """Legacy per-inference llama-completion (numactl default-affinity) is pinned
+    off a live bench claim instead of tripping its continuity gate."""
+    from src.inference.model_server import LlamaCppBackend
+
+    monkeypatch.setattr(
+        bcc, "read_bench_claim", lambda proc_root=Path("/proc"): BenchClaim(cores=frozenset(range(96)))
+    )
+    backend = LlamaCppBackend(_FakeRegistry())
+    cmd = backend._build_command(
+        _FakeRoleConfig(), _FakeRequest(timeout=60)
+    )
+    assert "taskset -c" in cmd
+    assert "numactl" not in cmd
+
+
+def test_llamacppbackend_cmd_quiet_path_byte_identical(monkeypatch) -> None:
+    """No bench live -> the legacy numactl-prefixed command is unchanged."""
+    from src.inference.model_server import LlamaCppBackend
+
+    monkeypatch.setattr(bcc, "read_bench_claim", lambda proc_root=Path("/proc"): EMPTY_BENCH_CLAIM)
+    backend = LlamaCppBackend(_FakeRegistry())
+    cmd = backend._build_command(
+        _FakeRoleConfig(), _FakeRequest(timeout=60)
+    )
+    assert cmd.startswith("timeout 60 env OMP_NUM_THREADS=1 numactl --interleave=all")
+
+
+def test_llamacppbackend_cmd_refuses_unobservable_claim(monkeypatch) -> None:
+    """Unknown must mean busy: an unobservable claim refuses the spawn."""
+    from src.inference.model_server import LlamaCppBackend
+
+    monkeypatch.setattr(
+        bcc, "read_bench_claim", lambda proc_root=Path("/proc"): BenchClaim(unobservable=True)
+    )
+    with pytest.raises(RuntimeError, match="refusing to spawn llama-completion"):
+        LlamaCppBackend(_FakeRegistry())._build_command(_FakeRoleConfig(), _FakeRequest(timeout=60))
+
+
+@pytest.mark.asyncio
+async def test_lightonocr_spawn_pinned_off_bench_claim(monkeypatch) -> None:
+    """Per-request llama-mtmd-cli spawns get taskset-pinned off a live bench."""
+    import src.services.lightonocr_llama_server as ocr_mod
+
+    monkeypatch.setattr(
+        bcc, "read_bench_claim", lambda proc_root=Path("/proc"): BenchClaim(cores=frozenset(range(96)))
+    )
+    captured: list[list[str]] = []
+
+    async def fake_exec(*cmd, **kw):
+        captured.append(list(cmd))
+        proc = asyncio.subprocess.Process  # type: ignore[attr-defined]
+        return MagicMock(spec=proc, communicate=AsyncMock(return_value=(b"text", b"stats")))
+
+    monkeypatch.setattr(ocr_mod.asyncio, "create_subprocess_exec", fake_exec)
+    worker = ocr_mod.LlamaOCRWorker(worker_id=1, threads=8)
+    await worker._run_inference("/tmp/fake.png")
+    assert captured and captured[0][:3] == ["taskset", "-c", "96-191"]
+
+
+@pytest.mark.asyncio
+async def test_lightonocr_spawn_quiet_path_unchanged(monkeypatch) -> None:
+    """No bench -> the spawn argv is the CLI + flags, no taskset prefix."""
+    import src.services.lightonocr_llama_server as ocr_mod
+
+    monkeypatch.setattr(bcc, "read_bench_claim", lambda proc_root=Path("/proc"): EMPTY_BENCH_CLAIM)
+    captured: list[list[str]] = []
+
+    async def fake_exec(*cmd, **kw):
+        captured.append(list(cmd))
+        return MagicMock(
+            spec=asyncio.subprocess.Process,
+            communicate=AsyncMock(return_value=(b"text", b"stats")),
+        )
+
+    monkeypatch.setattr(ocr_mod.asyncio, "create_subprocess_exec", fake_exec)
+    worker = ocr_mod.LlamaOCRWorker(worker_id=1, threads=8)
+    await worker._run_inference("/tmp/fake.png")
+    assert captured and captured[0][0].endswith("llama-mtmd-cli")
+
+
+class _FakeRoleConfig:
+    acceleration = type("A", (), {"type": "cpu"})()
+    model = type("M", (), {"full_path": "/mnt/raid0/llm/models/fake.gguf"})()
+
+
+class _FakeRequest:
+    def __init__(self, timeout: int):
+        self.timeout = timeout
+        self.n_tokens = 8
+        self.temperature = 0.0
+        self.top_p = 1.0
+        self.top_k = 40
+        self.seed = None
+        self.prompt_file = ""
+        self.prompt = "hello"
+        self.negative_prompt = None
+        self.n_predict = None
+
+
+class _FakeRegistry:
+    _runtime_defaults: dict = {}
+
+
+    def get_draft_for_role(self, name: str):
+        return None

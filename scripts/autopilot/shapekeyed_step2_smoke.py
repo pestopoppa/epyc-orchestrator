@@ -99,16 +99,21 @@ VISION_DEFAULT_MODEL = "Qwen3-VL-30B-A3B-Instruct"
 VISION_DEFAULT_QUANT = "Q4_K_M"
 VISION_DEFAULT_ROLE = "vision_escalation"
 
-# Default probe anchor (the classic handoff example): ingest_long_context's full
-# node0-half instance holds {q0,q1}; disjoint {q2,q3} candidates must admit while
-# {q0,q1}/full candidates must queue.
+# Default probe anchor (the classic handoff example): ingest_long_context's node0
+# HALF instance (48t, cores 0-47,96-143 — region set {q0,q1}). Quarters do not
+# exist in production (retired 2026-07-30); the topology is the FULL 96t shape
+# plus two 48t HALVES per role. Disjoint (node1-half) candidates must admit while
+# overlapping (node0-half/full) candidates must queue.
 DEFAULT_ANCHOR_ROLE = "ingest_long_context"
-DEFAULT_ANCHOR_IDX = 0
+DEFAULT_ANCHOR_IDX = 1  # ingest node0 HALF (0-47,96-143); idx 0 = full 0-95
 DEFAULT_PROBE_ROLES = (
     "frontdoor",
     "ingest_long_context",
-    "vision_escalation",
     "worker_general",
+    # NOTE: vision_escalation deliberately absent — it serves on GPU (ROCm0) and
+    # has no CPU-region instance in build_instance_regions (2026-08-23 ground
+    # truth); its within-role re-bench section below is keyed by (model, quant),
+    # not by a CPU instance.
 )
 
 # J5 within-role vision priors (within-role-placement-state-machine.md, J5 -t48
@@ -891,9 +896,9 @@ def _verify_probe_signal(plan: Step2SmokePlan) -> None:
             "queue-expected) — the smoke must contain BOTH a disjoint "
             "(admit-expected) and an overlapping (queue-expected) candidate. "
             "With the default anchor this usually means the anchor is the "
-            "FULL instance (ingest_long_context idx 0 is NUMA_FULL 0-95, not "
-            "the {q0,q1} half); pass --anchor-idx for a half/quarter anchor "
-            "so disjoint candidates exist."
+            "FULL instance (ingest_long_context idx 0 is NUMA_FULL 0-95); pass "
+            "--anchor-idx 1 or 2 for a 48t HALF anchor so disjoint candidates "
+            "exist. Quarters do not exist in production (retired 2026-07-30)."
         )
 
 
