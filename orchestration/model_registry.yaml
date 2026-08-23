@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-08-22T13:18:52+00:00
-# Cache key:   aec28c8ec3d204e2...
+# Compiled at: 2026-08-23T07:58:33+00:00
+# Cache key:   efea0f56042706a8...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1614,7 +1614,7 @@ server_mode:
 roles:
   frontdoor:
     tier: A
-    description: Root LM — Qwen3.6-35B-A3B Q8 (quality 93%, May-4 Claude-as-Judge 170/183)
+    description: 'Root LM — Qwen3.6-35B-A3B Q8 (E-7 2026-08-22 at terse template 1443ea9ab4bb: math 82.5%, mmlu_pro 37.5%, gpqa_diamond 55.0%, cruxeval 32.5%; May-4 judge 93% VOIDED by the template swap)'
     agent_file_compression_operating_point: aggressive
     backend:
       type: local
@@ -1646,8 +1646,12 @@ roles:
       baseline_tps: null
       optimized_tps: 40.22
       optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
-      quality_pct: 93
-      benchmark_date: 2026-05-04
+      quality_pct: null
+      benchmark_date: null
+      math_suite: 33/40 (82.5%)
+      mmlu_pro_suite: 15/40 (37.5%)
+      gpqa_diamond_suite: 22/40 (55.0%)
+      cruxeval_suite: 13/40 (32.5%)
     memory:
       residency: hot
       pinned: true
@@ -1669,8 +1673,9 @@ roles:
       '
   coder_escalation:
     tier: B
-    description: 'Coding escalation — Qwen3.6-27B dense Q8 MTP on MI210 (ROCm0). 2026-07-31: MOVED off frontdoor. Alias on architect_general''s :8083 process; NO LONGER the same model as frontdoor and no
-      longer shares its GGUF mmap. Absorbs the eliminated architect_coding role. Former Qwen2.5-Coder-32B-Q4 preserved as qwen25_coder_32b_q4km.'
+    description: 'Coding escalation — Qwen3.8-27B dense Q8 MTP on MI210 (ROCm0). E-7 2026-08-22 at terse template 1443ea9ab4bb: math 85.0%, mmlu_pro 27.5%, gpqa_diamond 47.5%, cruxeval 22.5% (alias on architect_general''s
+      :8083; same stamps). 2026-07-31: MOVED off frontdoor. Alias on architect_general''s :8083 process; NO LONGER the same model as frontdoor and no longer shares its GGUF mmap. Absorbs the eliminated
+      architect_coding role. Former Qwen2.5-Coder-32B-Q4 preserved as qwen25_coder_32b_q4km.'
     model:
       name: Qwen3.8-27B-Q8_0
       path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
@@ -1701,13 +1706,18 @@ roles:
       optimized_tps_long_context: 36.71
       optimized_tps_attest: '[published stack measurement record §01, 2026-07-31]'
       contended_tps: 19.81
-      swe_verified_pct: 57.5
-      swe_verified_raw: 23/40
-      swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
+      swe_verified_pct: null
+      swe_verified_raw: null
+      swe_verified_instrument: 'VOIDED 2026-08-22: was ''SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27'' measured on Qwen3.6-27B-MTP (arm A3). Alias now serves Qwen3.8-27B + terse template
+        on :8083.'
       quality_pct: null
+      math_suite: 34/40 (85.0%)
+      mmlu_pro_suite: 11/40 (27.5%)
+      gpqa_diamond_suite: 19/40 (47.5%)
+      cruxeval_suite: 9/40 (22.5%)
+      gpqa_diamond_cot_suite: 45/60 (75.0%)
       coder_suite: null
       agentic_suite: null
-      math_suite: null
       speedup: 1.55x
     memory:
       residency: hot
@@ -1780,8 +1790,8 @@ roles:
       '
   architect_general:
     tier: A
-    description: 'System architecture, invariants, acceptance tests - emits IR only. 2026-07-31: Qwen3.6-27B dense Q8 MTP on MI210 (ROCm0); PRIMARY for the :8083 process, with coder_escalation aliased onto
-      it.'
+    description: 'System architecture, invariants, acceptance tests - emits IR only. 2026-08-22: E-7 stamps at terse template 1443ea9ab4bb — math 85.0%, mmlu_pro 27.5%, gpqa_diamond 47.5%, cruxeval 22.5%,
+      gpqa_diamond_cot 75.0% (45/60 @4096). 2026-07-31: Qwen3.6-27B dense Q8 MTP on MI210 (ROCm0); PRIMARY for the :8083 process, with coder_escalation aliased onto it.'
     agent_file_compression_operating_point: none
     model:
       name: Qwen3.8-27B-Q8_0
@@ -1838,15 +1848,20 @@ roles:
       contended_tps: 19.81
       speedup: 1.55x
       vram_gib: 36.7
-      swe_verified_pct: 57.5
-      swe_verified_raw: 23/40
-      swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
-      swe_verified_comparators: A1 Qwen3.5-122B-A10B IQ2 37.5% (15/40) · A4 Qwen3.6-35B-A3B 32.5% (13/40). NOTE A1 is the IQ2 quant, NOT the UD-Q4_K_M that architect_critic serves — this is not a head-to-head
-        against the deployed 122B.
-      swe_verified_shape_caveat: Measured at -c 49152 / f16 KV / -np 1; production launches -c 16384 / q8_0 KV / slots 2. Quality transfer across context depth is assumed here, not measured.
-      swe_verified_transfer_basis: operator-certified v7-to-v8 kernel delta 0.0pp exact quality parity; quality_transfer_to_v8_eligible=true
+      swe_verified_pct: null
+      swe_verified_raw: null
+      swe_verified_instrument: 'VOIDED 2026-08-22: was ''SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27'' measured on Qwen3.6-27B-MTP (arm A3). The role now serves Qwen3.8-27B + terse
+        template; SWE not re-measured.'
+      swe_verified_comparators: 'VOIDED with the row above. Historical: A1 37.5% (15/40) · A4 32.5% (13/40).'
+      swe_verified_shape_caveat: VOIDED with the row above.
+      swe_verified_transfer_basis: VOIDED with the row above.
+      math_suite: 34/40 (85.0%)
+      mmlu_pro_suite: 11/40 (27.5%)
+      gpqa_diamond_suite: 19/40 (47.5%)
+      cruxeval_suite: 9/40 (22.5%)
+      gpqa_diamond_cot_suite: 45/60 (75.0%)
       quality_score: null
-      benchmark_date: 2026-07-31
+      benchmark_date: 2026-08-22
     memory:
       residency: hot
       pinned: false

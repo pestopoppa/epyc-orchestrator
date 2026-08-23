@@ -48,47 +48,47 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-08-22T13:18:53Z'
+compiled_at: '2026-08-23T07:58:34Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 24291c173e75531124cb7accb00acbaa24fcea7fc8e11e113531785809ad0da4
-    repo_commit: 0d145f4f
+    sha256: b7abe0dc24d7742896f10e06f25d1dd50b96e335212f65a4167334c20d44ba2c
+    repo_commit: 4e5e84c0
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: f4471e40af75db19cd54620812f2a26e4f663b8571f63461cc32c14e18a95000
-    repo_commit: 0d145f4f
+    sha256: 800e3af895019c3a0b3a15524049c2ddfc7d0030add0129772c8148e3d6deca4
+    repo_commit: 4e5e84c0
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: f2b18355829ff0ba81c1d82cc0bf28ff7b1cc3ba1de2858bea0b16cb5582fe07
-    repo_commit: 0d145f4f
+    repo_commit: 4e5e84c0
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 835038054cba747ea0934fbcf823c3a128f25fb4d6fe75b08d1c5b5f77c64d8b
-    repo_commit: 0d145f4f
+    repo_commit: 4e5e84c0
   launch_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/launch_manifest.yaml
     sha256: c915af33c5d4cf0fc436ccf58c3c5578aa03965d3203c74213cc0e8549992f8b
-    repo_commit: 0d145f4f
+    repo_commit: 4e5e84c0
   stack_topology:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
     sha256: 00507f15ca7afdf4eb9adfde05fbb721917e9d58477075db58506de6b033983b
-    repo_commit: 0d145f4f
+    repo_commit: 4e5e84c0
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 244a2e9a1ed331fb54eb2cb1f6718d1860ea22f1cd16d81db1a0c3bbd79763e9
-    repo_commit: 0d145f4f
+    repo_commit: 4e5e84c0
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 52b173eb69b0838394e7d48d6112827f686e06d848a107291754f791e64b1064
-    repo_commit: 0d145f4f
+    repo_commit: 4e5e84c0
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: 0d145f4f
+    repo_commit: 4e5e84c0
 roles:
   architect_critic:
     role: architect_critic
@@ -392,10 +392,15 @@ roles:
       quality_overall: null
       quality_by_axis:
         local:
-          swe_verified: 0.575
+          math: 0.85
+          mmlu_pro: 0.275
+          gpqa_diamond: 0.475
+          cruxeval: 0.225
+          gpqa_diamond_cot: 0.75
       quality_for_role: null
       quality_advisories:
-      - No whole-suite quality prior; domain evidence only (swe_verified). quality_overall is null BY DESIGN — read the per-axis evidence instead of expecting a scalar.
+      - No whole-suite quality prior; domain evidence only (cruxeval, gpqa_diamond, gpqa_diamond_cot, math, mmlu_pro). quality_overall is null BY DESIGN — read the per-axis evidence instead of expecting
+        a scalar.
       memory_cost: 1.0
     acceleration:
       spec_type: draft-mtp
@@ -434,7 +439,7 @@ roles:
       - coder_escalation
       alias_overrides: []
       quality:
-      - date: '2026-07-31'
+      - date: '2026-08-22'
         protocol: registry performance block
         value:
           superseded_model_history:
@@ -460,15 +465,20 @@ roles:
           contended_tps: 19.81
           speedup: 1.55x
           vram_gib: 36.7
-          swe_verified_pct: 57.5
-          swe_verified_raw: 23/40
-          swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
-          swe_verified_comparators: A1 Qwen3.5-122B-A10B IQ2 37.5% (15/40) · A4 Qwen3.6-35B-A3B 32.5% (13/40). NOTE A1 is the IQ2 quant, NOT the UD-Q4_K_M that architect_critic serves — this is not a head-to-head
-            against the deployed 122B.
-          swe_verified_shape_caveat: Measured at -c 49152 / f16 KV / -np 1; production launches -c 16384 / q8_0 KV / slots 2. Quality transfer across context depth is assumed here, not measured.
-          swe_verified_transfer_basis: operator-certified v7-to-v8 kernel delta 0.0pp exact quality parity; quality_transfer_to_v8_eligible=true
+          swe_verified_pct: null
+          swe_verified_raw: null
+          swe_verified_instrument: 'VOIDED 2026-08-22: was ''SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27'' measured on Qwen3.6-27B-MTP (arm A3). The role now serves Qwen3.8-27B + terse
+            template; SWE not re-measured.'
+          swe_verified_comparators: 'VOIDED with the row above. Historical: A1 37.5% (15/40) · A4 32.5% (13/40).'
+          swe_verified_shape_caveat: VOIDED with the row above.
+          swe_verified_transfer_basis: VOIDED with the row above.
+          math_suite: 34/40 (85.0%)
+          mmlu_pro_suite: 11/40 (27.5%)
+          gpqa_diamond_suite: 19/40 (47.5%)
+          cruxeval_suite: 9/40 (22.5%)
+          gpqa_diamond_cot_suite: 45/60 (75.0%)
           quality_score: null
-          benchmark_date: '2026-07-31'
+          benchmark_date: '2026-08-22'
       - date: null
         protocol: registry performance block
         value:
@@ -478,16 +488,21 @@ roles:
           optimized_tps_long_context: 36.71
           optimized_tps_attest: '[published stack measurement record §01, 2026-07-31]'
           contended_tps: 19.81
-          swe_verified_pct: 57.5
-          swe_verified_raw: 23/40
-          swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
+          swe_verified_pct: null
+          swe_verified_raw: null
+          swe_verified_instrument: 'VOIDED 2026-08-22: was ''SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27'' measured on Qwen3.6-27B-MTP (arm A3). Alias now serves Qwen3.8-27B + terse
+            template on :8083.'
           quality_pct: null
+          math_suite: 34/40 (85.0%)
+          mmlu_pro_suite: 11/40 (27.5%)
+          gpqa_diamond_suite: 19/40 (47.5%)
+          cruxeval_suite: 9/40 (22.5%)
+          gpqa_diamond_cot_suite: 45/60 (75.0%)
           coder_suite: null
           agentic_suite: null
-          math_suite: null
           speedup: 1.55x
       speed:
-      - date: '2026-07-31'
+      - date: '2026-08-22'
         protocol: server_mode throughput
         value_tps: 47.79
     known_gaps: []
@@ -585,10 +600,15 @@ roles:
       quality_overall: null
       quality_by_axis:
         local:
-          swe_verified: 0.575
+          math: 0.85
+          mmlu_pro: 0.275
+          gpqa_diamond: 0.475
+          cruxeval: 0.225
+          gpqa_diamond_cot: 0.75
       quality_for_role: null
       quality_advisories:
-      - No whole-suite quality prior; domain evidence only (swe_verified). quality_overall is null BY DESIGN — read the per-axis evidence instead of expecting a scalar.
+      - No whole-suite quality prior; domain evidence only (cruxeval, gpqa_diamond, gpqa_diamond_cot, math, mmlu_pro). quality_overall is null BY DESIGN — read the per-axis evidence instead of expecting
+        a scalar.
       memory_cost: 1.0
     acceleration:
       spec_type: draft-mtp
@@ -627,7 +647,7 @@ roles:
       - coder_escalation
       alias_overrides: []
       quality:
-      - date: '2026-07-31'
+      - date: '2026-08-22'
         protocol: registry performance block
         value:
           superseded_model_history:
@@ -653,15 +673,20 @@ roles:
           contended_tps: 19.81
           speedup: 1.55x
           vram_gib: 36.7
-          swe_verified_pct: 57.5
-          swe_verified_raw: 23/40
-          swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
-          swe_verified_comparators: A1 Qwen3.5-122B-A10B IQ2 37.5% (15/40) · A4 Qwen3.6-35B-A3B 32.5% (13/40). NOTE A1 is the IQ2 quant, NOT the UD-Q4_K_M that architect_critic serves — this is not a head-to-head
-            against the deployed 122B.
-          swe_verified_shape_caveat: Measured at -c 49152 / f16 KV / -np 1; production launches -c 16384 / q8_0 KV / slots 2. Quality transfer across context depth is assumed here, not measured.
-          swe_verified_transfer_basis: operator-certified v7-to-v8 kernel delta 0.0pp exact quality parity; quality_transfer_to_v8_eligible=true
+          swe_verified_pct: null
+          swe_verified_raw: null
+          swe_verified_instrument: 'VOIDED 2026-08-22: was ''SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27'' measured on Qwen3.6-27B-MTP (arm A3). The role now serves Qwen3.8-27B + terse
+            template; SWE not re-measured.'
+          swe_verified_comparators: 'VOIDED with the row above. Historical: A1 37.5% (15/40) · A4 32.5% (13/40).'
+          swe_verified_shape_caveat: VOIDED with the row above.
+          swe_verified_transfer_basis: VOIDED with the row above.
+          math_suite: 34/40 (85.0%)
+          mmlu_pro_suite: 11/40 (27.5%)
+          gpqa_diamond_suite: 19/40 (47.5%)
+          cruxeval_suite: 9/40 (22.5%)
+          gpqa_diamond_cot_suite: 45/60 (75.0%)
           quality_score: null
-          benchmark_date: '2026-07-31'
+          benchmark_date: '2026-08-22'
       - date: null
         protocol: registry performance block
         value:
@@ -671,16 +696,21 @@ roles:
           optimized_tps_long_context: 36.71
           optimized_tps_attest: '[published stack measurement record §01, 2026-07-31]'
           contended_tps: 19.81
-          swe_verified_pct: 57.5
-          swe_verified_raw: 23/40
-          swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
+          swe_verified_pct: null
+          swe_verified_raw: null
+          swe_verified_instrument: 'VOIDED 2026-08-22: was ''SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27'' measured on Qwen3.6-27B-MTP (arm A3). Alias now serves Qwen3.8-27B + terse
+            template on :8083.'
           quality_pct: null
+          math_suite: 34/40 (85.0%)
+          mmlu_pro_suite: 11/40 (27.5%)
+          gpqa_diamond_suite: 19/40 (47.5%)
+          cruxeval_suite: 9/40 (22.5%)
+          gpqa_diamond_cot_suite: 45/60 (75.0%)
           coder_suite: null
           agentic_suite: null
-          math_suite: null
           speedup: 1.55x
       speed:
-      - date: '2026-07-31'
+      - date: '2026-08-22'
         protocol: server_mode throughput
         value_tps: 47.79
     known_gaps: []
@@ -795,6 +825,10 @@ roles:
       quality_overall: 0.8387
       quality_by_axis:
         local:
+          math: 0.825
+          mmlu_pro: 0.375
+          gpqa_diamond: 0.55
+          cruxeval: 0.325
           general: 1.0
           coder: 0.9667
           thinking: 0.9333
@@ -1371,10 +1405,15 @@ roles:
       quality_overall: null
       quality_by_axis:
         local:
-          swe_verified: 0.575
+          math: 0.85
+          mmlu_pro: 0.275
+          gpqa_diamond: 0.475
+          cruxeval: 0.225
+          gpqa_diamond_cot: 0.75
       quality_for_role: null
       quality_advisories:
-      - No whole-suite quality prior; domain evidence only (swe_verified). quality_overall is null BY DESIGN — read the per-axis evidence instead of expecting a scalar.
+      - No whole-suite quality prior; domain evidence only (cruxeval, gpqa_diamond, gpqa_diamond_cot, math, mmlu_pro). quality_overall is null BY DESIGN — read the per-axis evidence instead of expecting
+        a scalar.
       memory_cost: 1.0
     acceleration:
       spec_type: draft-mtp
@@ -1413,7 +1452,7 @@ roles:
       - coder_escalation
       alias_overrides: []
       quality:
-      - date: '2026-07-31'
+      - date: '2026-08-22'
         protocol: registry performance block
         value:
           superseded_model_history:
@@ -1439,15 +1478,20 @@ roles:
           contended_tps: 19.81
           speedup: 1.55x
           vram_gib: 36.7
-          swe_verified_pct: 57.5
-          swe_verified_raw: 23/40
-          swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
-          swe_verified_comparators: A1 Qwen3.5-122B-A10B IQ2 37.5% (15/40) · A4 Qwen3.6-35B-A3B 32.5% (13/40). NOTE A1 is the IQ2 quant, NOT the UD-Q4_K_M that architect_critic serves — this is not a head-to-head
-            against the deployed 122B.
-          swe_verified_shape_caveat: Measured at -c 49152 / f16 KV / -np 1; production launches -c 16384 / q8_0 KV / slots 2. Quality transfer across context depth is assumed here, not measured.
-          swe_verified_transfer_basis: operator-certified v7-to-v8 kernel delta 0.0pp exact quality parity; quality_transfer_to_v8_eligible=true
+          swe_verified_pct: null
+          swe_verified_raw: null
+          swe_verified_instrument: 'VOIDED 2026-08-22: was ''SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27'' measured on Qwen3.6-27B-MTP (arm A3). The role now serves Qwen3.8-27B + terse
+            template; SWE not re-measured.'
+          swe_verified_comparators: 'VOIDED with the row above. Historical: A1 37.5% (15/40) · A4 32.5% (13/40).'
+          swe_verified_shape_caveat: VOIDED with the row above.
+          swe_verified_transfer_basis: VOIDED with the row above.
+          math_suite: 34/40 (85.0%)
+          mmlu_pro_suite: 11/40 (27.5%)
+          gpqa_diamond_suite: 19/40 (47.5%)
+          cruxeval_suite: 9/40 (22.5%)
+          gpqa_diamond_cot_suite: 45/60 (75.0%)
           quality_score: null
-          benchmark_date: '2026-07-31'
+          benchmark_date: '2026-08-22'
       - date: null
         protocol: registry performance block
         value:
@@ -1457,16 +1501,21 @@ roles:
           optimized_tps_long_context: 36.71
           optimized_tps_attest: '[published stack measurement record §01, 2026-07-31]'
           contended_tps: 19.81
-          swe_verified_pct: 57.5
-          swe_verified_raw: 23/40
-          swe_verified_instrument: SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27
+          swe_verified_pct: null
+          swe_verified_raw: null
+          swe_verified_instrument: 'VOIDED 2026-08-22: was ''SWE-bench Verified, oracle-file, v4 tail replay, n=40, 2026-07-27'' measured on Qwen3.6-27B-MTP (arm A3). Alias now serves Qwen3.8-27B + terse
+            template on :8083.'
           quality_pct: null
+          math_suite: 34/40 (85.0%)
+          mmlu_pro_suite: 11/40 (27.5%)
+          gpqa_diamond_suite: 19/40 (47.5%)
+          cruxeval_suite: 9/40 (22.5%)
+          gpqa_diamond_cot_suite: 45/60 (75.0%)
           coder_suite: null
           agentic_suite: null
-          math_suite: null
           speedup: 1.55x
       speed:
-      - date: '2026-07-31'
+      - date: '2026-08-22'
         protocol: server_mode throughput
         value_tps: 47.79
     known_gaps: []
@@ -2753,6 +2802,10 @@ roles:
       quality_overall: 0.8387
       quality_by_axis:
         local:
+          math: 0.825
+          mmlu_pro: 0.375
+          gpqa_diamond: 0.55
+          cruxeval: 0.325
           general: 1.0
           coder: 0.9667
           thinking: 0.9333
