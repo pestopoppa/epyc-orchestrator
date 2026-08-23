@@ -4,7 +4,10 @@
 The prompt-effort ladder is independent of native ``reasoning_budget`` / ``<think>``
 settings.  A role becomes subject to this validator only when it declares
 ``reasoning_effort.level`` in the model registry.  Its certificate must then name
-the same model, quant, and active kernel era as the currently bound role.
+the same model, quant, active kernel era, and chat-template sha256 as the
+currently bound role (E-7 amendment 2026-08-21: the chat template is a
+calibration-voiding axis the original ``(model, quant, kernel_era)`` stamp did
+not cover).
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRY = REPO_ROOT / "orchestration" / "model_registry.yaml"
 DEFAULT_CERTIFICATIONS = REPO_ROOT / "orchestration" / "reasoning_effort_certifications.yaml"
-REQUIRED_CERTIFICATION_FIELDS = ("model", "quant", "kernel_era")
+REQUIRED_CERTIFICATION_FIELDS = ("model", "quant", "kernel_era", "template_sha")
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,43 @@ def _load_mapping(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{path} did not parse to a mapping")
     return value
+
+
+def _normalize_template_sha(value: Any) -> str | None:
+    """Normalize a template sha for comparison.
+
+    Certificates may record the full 64-hex sha256 of the served template, while
+    the registry's ``served_template_sha256_12`` stores the 12-char short form.
+    Either side is truncated to its first 12 hex chars when longer than 12, so a
+    full sha (``1443ea9ab4bb0a2663b1...``) compares equal to its short form
+    (``1443ea9ab4bb``).  Non-string and blank values normalize to ``None``.
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped[:12] if len(stripped) > 12 else stripped
+
+
+def _bound_template_sha(
+    role: dict[str, Any], role_name: str, server_mode: dict[str, Any]
+) -> str | None:
+    """Resolve the chat-template sha the role is bound to, if any.
+
+    The role-level ``chat_template`` block (``served_template_sha256_12``) is
+    preferred when it yields a usable value; otherwise the
+    ``server_mode.<role_name>.chat_template`` block is consulted.  A role with
+    no ``chat_template`` block binds no template axis, and the template check
+    is vacuously satisfied (the certificate must still carry ``template_sha``).
+    """
+    for block in (role.get("chat_template"), server_mode.get(role_name, {}).get("chat_template")):
+        if not isinstance(block, dict):
+            continue
+        bound = _normalize_template_sha(block.get("served_template_sha256_12"))
+        if bound is not None:
+            return bound
+    return None
 
 
 def _configured_effort_level(role: dict[str, Any]) -> str | None:
@@ -69,6 +109,14 @@ def validate_reasoning_effort_certifications(
     The ledger's ``active_kernel_era`` is intentionally a distinct deployment
     stamp.  Updating it during a kernel promotion immediately invalidates every
     old certificate until its curve is remeasured and restamped.
+
+    The chat template is a calibration-voiding axis too: a certificate must also
+    name ``template_sha``, compared against the template the role is bound to.
+    The bound sha is read from the role's own ``chat_template`` block when it
+    yields a usable ``served_template_sha256_12``, falling back to
+    ``server_mode.<role>.chat_template`` (the location the pilot roles carry
+    today).  A role that binds no template has a vacuous template check.  Shas
+    are compared in normalized 12-char form via ``_normalize_template_sha``.
     """
     try:
         registry = _load_mapping(registry_path)
@@ -90,6 +138,9 @@ def validate_reasoning_effort_certifications(
     roles = registry.get("roles", {})
     if not isinstance(roles, dict):
         return EffortCertificationResult(errors=[*errors, "registry roles must be a mapping"])
+    server_mode = registry.get("server_mode", {})
+    if not isinstance(server_mode, dict):
+        server_mode = {}
 
     for role_name, role in sorted(roles.items()):
         if not isinstance(role_name, str) or not isinstance(role, dict):
@@ -114,15 +165,15 @@ def validate_reasoning_effort_certifications(
 
         curve_artifact = certificate.get("curve_artifact")
         if not isinstance(curve_artifact, str) or not curve_artifact.strip():
-            errors.append(
-                f"role {role_name!r} certificate missing non-empty curve_artifact"
-            )
+            errors.append(f"role {role_name!r} certificate missing non-empty curve_artifact")
 
         certified_against = certificate.get("certified_against")
         if not isinstance(certified_against, dict):
             errors.append(f"role {role_name!r} certificate missing certified_against mapping")
             continue
-        missing = [field for field in REQUIRED_CERTIFICATION_FIELDS if not certified_against.get(field)]
+        missing = [
+            field for field in REQUIRED_CERTIFICATION_FIELDS if not certified_against.get(field)
+        ]
         if missing:
             errors.append(
                 f"role {role_name!r} certificate missing certified_against field(s): "
@@ -132,7 +183,9 @@ def validate_reasoning_effort_certifications(
 
         bound_name, bound_quant = _bound_model(role)
         if bound_name is None or bound_quant is None:
-            errors.append(f"role {role_name!r} declares effort but has no bound model name and quant")
+            errors.append(
+                f"role {role_name!r} declares effort but has no bound model name and quant"
+            )
             continue
         if certified_against["model"] != bound_name:
             errors.append(
@@ -149,6 +202,14 @@ def validate_reasoning_effort_certifications(
                 f"role {role_name!r} certified kernel era {certified_against['kernel_era']!r} "
                 f"differs from active kernel era {active_kernel_era!r}"
             )
+        bound_template_sha = _bound_template_sha(role, role_name, server_mode)
+        if bound_template_sha is not None:
+            if _normalize_template_sha(certified_against["template_sha"]) != bound_template_sha:
+                errors.append(
+                    f"role {role_name!r} certified template sha "
+                    f"{certified_against['template_sha']!r} differs from bound "
+                    f"template sha {bound_template_sha!r}"
+                )
 
     return EffortCertificationResult(errors=errors)
 
