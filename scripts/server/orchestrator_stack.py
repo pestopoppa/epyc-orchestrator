@@ -2788,19 +2788,20 @@ def main() -> int:
         choices=["full", "quarter", "both"],
         default=None,
         help=(
-            "For roles with both a full-NUMA-node instance and quarter-instance siblings "
+            "For roles with both a full-NUMA-node instance and sub-full siblings "
             "(currently frontdoor + worker_general + ingest_long_context — see "
             "NUMA_CONFIG[role]['full_instance_idx']), pick one mode. "
-            "When OMITTED the launcher INFERS the mode from the running fleet (ESC-8). "
-            "Production is QUARTERS-ONLY: the worker_general full (0-95) instance is "
-            "FULL_DISABLED (see scripts/server/stack_numa.py:173-184) and frontdoor/ingest "
-            "serve their quarters, so a cold start with no live fleet defaults to 'quarter'. "
-            "'quarter' = 4 concurrent quarters (current production mode; max aggregate under "
-            "load). 'full' = single full instance (max single-stream tps; only when a full "
-            "fleet is deliberately brought up). 'both' = compatibility mode with all 5 — "
-            "CPU-oversubscribes gemma4-MTP at -t 96 (load 420 → ~9 t/s), avoid for "
-            "worker_general. Single-instance roles (architect_general, embedders) are "
-            "unaffected by this flag."
+            "When OMITTED the launcher INFERS the mode from the running fleet (ESC-8); "
+            "with no live fleet it falls back to ORCHESTRATOR_STACK_NUMA_MODE, then to "
+            "the ratified production mode 'both'. Production is 'both' — full + half "
+            "instances (quarters were retired 2026-07-30), so an unflagged cold start "
+            "defaults to 'both'. "
+            "'both' = full + 2x48t half siblings (ratified production mode). "
+            "'quarter' = the sub-full shape only; since the 2026-07-30 half-fleet "
+            "cutover this token means HALVES (2x48t), not quarters (4x24t). "
+            "'full' = single full instance (max single-stream tps; only when a full "
+            "fleet is deliberately brought up). Single-instance roles "
+            "(architect_general, embedders) are unaffected by this flag."
         ),
     )
     start_parser.add_argument(

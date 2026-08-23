@@ -375,10 +375,15 @@ def _localhost_url_from_port(port: Any) -> str | None:
 # A producer-derived server lineup (env-filter branch OR runtime-facts branch)
 # must be VALIDATED against the live fleet before it is trusted. The failure this
 # guards: env=full (or a structurally-valid full-mode manifest) resolves every
-# hot role to the dead full ports 8070/8072/8085 on a quarters-only fleet. The
-# probe is a bare TCP connect (localhost, short timeout, cached per-process),
+# hot role to the dead full ports 8070/8072/8085 on a sub-full-only fleet (the
+# 'quarter' token = half instances since the 2026-07-30 quarter retirement).
+# The probe is a bare TCP connect (localhost, short timeout, cached per-process),
 # never an HTTP request to a llama-server. It is injectable/mockable so config
 # init stays fast and deterministic in tests.
+#
+# A total cold start is NOT this failure: with no live fleet anywhere, every
+# lineup names not-yet-listening ports, so the veto only fires when at least one
+# probed port IS listening (i.e. a live fleet exists that the lineup contradicts).
 # ============================================================================
 
 _PORT_LISTENING_CACHE: dict[int, bool] = {}
@@ -447,9 +452,12 @@ def _selected_servers_are_live(
     Rejects a lineup in which a quarterable host role (frontdoor /
     worker_general / ingest_long_context) names ONLY dead ports — the exact
     poison signature of an env=full or valid-full-manifest lineup on a
-    quarters-only fleet. When the host-role discriminator is unavailable, falls
-    back to requiring at least one live port anywhere, so a lineup that names
-    only dead ports is never trusted.
+    sub-full-only fleet. A total cold start (nothing listening ANYWHERE — the
+    fleet is still booting) is NOT a poison signature: every lineup names
+    not-yet-listening ports then, so the lineup is accepted rather than
+    vetoed. When the host-role discriminator is unavailable, falls back to
+    requiring at least one live port anywhere, so a lineup that names only
+    dead ports is never trusted once any port at all is listening.
     """
     if not selected_servers:
         return False
@@ -470,6 +478,12 @@ def _selected_servers_are_live(
                     ports_by_role.setdefault(role, set()).add(port)
     if not all_ports:
         return False
+    # Total cold start: nothing is listening anywhere (the fleet is booting).
+    # A lineup naming only not-yet-listening ports is then EXPECTED, not a
+    # poison signature — vetoing it would reject the launcher's own lineup and
+    # fall through to stale stack priors.
+    if not any(is_live(port) for port in sorted(all_ports)):
+        return True
     checked_host = False
     for role in _quarterable_host_roles():
         role_ports = ports_by_role.get(role)
@@ -668,8 +682,8 @@ def _runtime_or_env_selected_servers() -> list[dict[str, Any]] | None:
                 return candidate
             _LOGGER.warning(
                 "ORCHESTRATOR_STACK_NUMA_MODE=%s lineup rejected: host-role ports "
-                "not listening (dead full ports on a quarters-only fleet?); "
-                "falling through to stack priors",
+                "not listening (dead full ports while only sub-full ports are "
+                "live?); falling through to stack priors",
                 mode,
             )
     return None

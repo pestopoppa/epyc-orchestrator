@@ -834,19 +834,18 @@ def _filter_by_numa_mode(servers: list[dict], mode: str) -> list[dict]:
     """Filter server list by --numa-mode {full,quarter,both}.
 
     For roles whose NUMA_CONFIG has both `full_instance_idx` AND multiple
-    instances (i.e., a full-NUMA-node instance + per-NUMA-quarter siblings on
-    overlapping CPU sets), pick one mode:
+    instances (i.e., a full-NUMA-node instance + per-half-NUMA-node siblings
+    on overlapping CPU sets), pick one mode:
       - "full":    keep only the full instance (max single-stream tps)
-      - "quarter": skip the full, keep the quarters (max aggregate under load)
-      - "both":    return input unchanged (CPU oversubscription — only useful
-                   when the role's per-instance -t is light enough not to
-                   over-subscribe; pre-2026-05-08 Qwen3-Coder -t 24 fit this,
-                   gemma4 -t 96 does NOT — see launcher-numa-mode-gating
-                   handoff)
+      - "quarter": skip the full, keep the sub-full siblings. The token is
+                   legacy: since the 2026-07-30 quarter retirement those
+                   siblings are HALF instances (2x48t), not quarters (4x24t).
+      - "both":    return input unchanged — full + half siblings, the ratified
+                   production mode (stack_topology.yaml `numa_mode: both`)
 
-    Roles without a full+quarter mix (single-instance roles like
-    architect_general / frontdoor, or single-quarter roles like
-    vision_escalation) pass through untouched.
+    Roles without a full+sub-full mix (single-instance roles like
+    architect_general, or sub-full-only roles like vision_escalation) pass
+    through untouched.
     """
     if mode == "both":
         return servers

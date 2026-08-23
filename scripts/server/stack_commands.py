@@ -1572,16 +1572,17 @@ def cmd_start(args: argparse.Namespace) -> int:
                         print(f"  Including WARM server: port {warm_server['port']} ({role})")
                         break
 
-    # Apply --numa-mode filter. Picks full XOR quarters for any role with
-    # full_instance_idx + multiple instances (currently frontdoor +
-    # coder_escalation + worker_general); single-instance roles pass through.
+    # Apply --numa-mode filter. Picks full XOR sub-full siblings for any role
+    # with full_instance_idx + multiple instances (currently frontdoor +
+    # worker_general + ingest_long_context); single-instance roles pass through.
     # See launcher-numa-mode-gating handoff.
     #
     # ESC-8 Fix 4: default is None (no hardcoded 'full'). When unset, INFER the
-    # mode from the running fleet (production is quarters-only; FULL_DISABLED,
-    # see stack_numa.py). A `start --only <role>` that conflicts with the live
-    # fleet is refused so it cannot stamp overlapping full instances next to
-    # live quarters (kill chain A2).
+    # mode from the running fleet; with no live fleet (cold start), fall back to
+    # ORCHESTRATOR_STACK_NUMA_MODE, then to the ratified production mode 'both'
+    # (full + half instances; quarters were retired 2026-07-30). A
+    # `start --only <role>` that conflicts with the live fleet is refused so it
+    # cannot stamp overlapping full instances next to live halves (kill chain A2).
     numa_mode = getattr(args, "numa_mode", None)
     only = getattr(args, "only", None)
     realized_mode: str | None = None
@@ -1593,10 +1594,13 @@ def cmd_start(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"  [--numa-mode] WARN: realized-fleet probe failed ({exc})")
     if numa_mode is None:
-        numa_mode = realized_mode or "quarter"
         if realized_mode:
+            numa_mode = realized_mode
             print(f"  [--numa-mode] not specified; inferred '{numa_mode}' from the running fleet")
         else:
+            from scripts.server.stack_numa_mode import env_stack_numa_mode
+
+            numa_mode = env_stack_numa_mode(default="both")
             print(
                 f"  [--numa-mode] not specified and no live fleet detected; "
                 f"defaulting to production mode '{numa_mode}'"

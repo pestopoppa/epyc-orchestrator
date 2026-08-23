@@ -201,7 +201,7 @@ def test_cmd_start_infers_missing_numa_mode_from_realized_fleet(
     monkeypatch, isolated_runtime_facts_tmp: Path
 ) -> None:
     # ESC-8 Fix 4: with no --numa-mode, cmd_start infers the mode from the
-    # running fleet (quarters-only production) instead of defaulting to "full".
+    # running fleet instead of defaulting to "full".
     from scripts.server import realized_fleet
 
     modes: list[str] = []
@@ -264,6 +264,83 @@ def test_cmd_start_infers_missing_numa_mode_from_realized_fleet(
     assert modes == ["quarter"]
     assert saved
     assert (isolated_runtime_facts_tmp / "orchestrator_runtime_facts.json").is_file()
+
+
+def test_cmd_start_cold_start_falls_back_to_env_then_both(
+    monkeypatch, isolated_runtime_facts_tmp: Path
+) -> None:
+    # Q38-T6: with no --numa-mode AND no live fleet, cmd_start must read
+    # ORCHESTRATOR_STACK_NUMA_MODE before falling back to the ratified
+    # production mode 'both' — never the retired 'quarter'. This is what makes
+    # an unflagged cold start produce the production full+half lineup.
+    from scripts.server import realized_fleet
+
+    modes: list[str] = []
+
+    class FakeRegistryLoader:
+        pass
+
+    def fake_filter(servers, mode):
+        modes.append(mode)
+        return servers
+
+    monkeypatch.setattr(realized_fleet, "derive_realized_numa_mode", lambda **_k: None)
+    monkeypatch.setattr(stack_commands, "RegistryLoader", FakeRegistryLoader)
+    monkeypatch.setattr(stack_commands, "apply_host_prerequisites", lambda **_kwargs: True)
+    monkeypatch.setattr(stack_commands, "check_free_memory", lambda: 999)
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {})
+    monkeypatch.setattr(stack_commands, "_filter_by_numa_mode", fake_filter)
+    monkeypatch.setattr(stack_commands, "_prewarm_all", lambda *a, **k: None)
+    monkeypatch.setattr(stack_commands, "is_port_in_use", lambda _port: False)
+    monkeypatch.setattr(
+        stack_commands,
+        "start_server",
+        lambda port, roles, *a, **k: stack_commands.ProcessInfo(
+            role=roles[0],
+            pid=123,
+            port=port,
+            started_at="now",
+            model_path="dev",
+            log_file="dev.log",
+        ),
+    )
+    monkeypatch.setattr(
+        stack_commands,
+        "start_orchestrator",
+        lambda *_args, **_kwargs: stack_commands.ProcessInfo(
+            role="orchestrator",
+            pid=456,
+            port=8000,
+            started_at="now",
+            model_path="dev",
+            log_file="dev.log",
+        ),
+    )
+    saved: list[dict[str, stack_commands.ProcessInfo]] = []
+    monkeypatch.setattr(stack_commands, "save_state", lambda state: saved.append(dict(state)))
+
+    args = _stack_gate_args(
+        dev=True,
+        only=None,
+        include_warm=None,
+        skip_host_prereqs=True,
+        compile_registry=False,
+        compile_descriptors=False,
+        skip_stack_change_gate=True,
+        repair_embeddings=False,
+    )
+    assert not hasattr(args, "numa_mode")
+
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    assert stack_commands.cmd_start(args) == 0
+    assert modes == ["both"], "cold start must default to the ratified production mode 'both'"
+
+    modes.clear()
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    assert stack_commands.cmd_start(args) == 0
+    assert modes == ["full"], (
+        "cold start must honor ORCHESTRATOR_STACK_NUMA_MODE before the default"
+    )
 
 
 def test_cmd_start_repair_embeddings_uses_configured_embedder_pool(

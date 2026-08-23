@@ -4,8 +4,10 @@ A producer-derived server lineup (env-filter branch OR runtime-facts branch)
 must be validated against the live fleet before it is trusted. A lineup whose
 quarterable host-role ports (frontdoor 8070 / worker_general 8072 /
 ingest_long_context 8085) are all dead — the env=full / valid-full-manifest
-poison signature on a quarters-only fleet — is rejected and resolution falls
-through to the next producer (ultimately stack priors).
+poison signature on a sub-full-only fleet — is rejected and resolution falls
+through to the next producer (ultimately stack priors). A TOTAL cold start
+(nothing listening anywhere) is NOT the poison class: the lineup is accepted
+so the launcher's own cold-start intent survives.
 
 All liveness is injected/mocked: these tests never open a real socket.
 """
@@ -61,11 +63,17 @@ def _runtime_facts(mode: str, servers: list[dict]) -> dict:
 
 
 def test_are_live_rejects_dead_full_host_ports() -> None:
-    """env=full-style lineup naming only the dead full host ports is rejected."""
+    """env=full-style lineup naming only the dead full host ports is rejected.
+
+    A realistic full lineup also names the live single-instance roles
+    (architect_general :8083), so the fleet IS listening and the dead-host-ports
+    poison signature is vetoed.
+    """
     lineup = [
         _server(8070, "frontdoor"),
         _server(8072, "worker_general"),
         _server(8085, "ingest_long_context"),
+        _server(8083, "architect_general"),
     ]
     assert models._selected_servers_are_live(lineup, probe=_quarters_live) is False
     assert models._selected_servers_are_live(lineup, probe=_fulls_live) is True
@@ -85,11 +93,26 @@ def test_are_live_empty_lineup_is_never_trusted() -> None:
     assert models._selected_servers_are_live([], probe=_fulls_live) is False
 
 
-def test_are_live_no_host_discriminator_requires_one_live_port() -> None:
-    """Without any quarterable host role, require at least one live port anywhere
-    so a lineup of only dead ports is still rejected."""
+def test_are_live_accepts_total_cold_start() -> None:
+    """A lineup of only dead ports is ACCEPTED when NOTHING is listening anywhere.
+
+    Total cold start (fleet booting): every producer lineup names
+    not-yet-listening ports, so the lineup cannot be a poison signature — it is
+    accepted rather than vetoed. The veto requires a live fleet to contradict.
+    """
+    lineup = [
+        _server(8070, "frontdoor"),
+        _server(8072, "worker_general"),
+        _server(8085, "ingest_long_context"),
+    ]
+    assert models._selected_servers_are_live(lineup, probe=_all_dead) is True
+
+
+def test_are_live_no_host_discriminator_cold_start_is_accepted() -> None:
+    """Without any quarterable host role, nothing live anywhere = cold start, and
+    the lineup is accepted (there is no fleet to poison against)."""
     only_dead = [_server(9999, "worker_fast")]
-    assert models._selected_servers_are_live(only_dead, probe=_all_dead) is False
+    assert models._selected_servers_are_live(only_dead, probe=_all_dead) is True
     one_live = [_server(8102, "worker_fast")]
     assert models._selected_servers_are_live(one_live, probe=lambda p: p == 8102) is True
 
@@ -142,7 +165,12 @@ def test_env_full_with_full_ports_live_resolves_full(monkeypatch) -> None:
 
 
 def test_env_unset_manifest_dead_ports_rejected(tmp_path, monkeypatch, caplog) -> None:
-    """env unset + runtime-facts naming dead host ports → rejected → None."""
+    """env unset + runtime-facts naming dead host ports → rejected → None.
+
+    A realistic full-mode manifest also carries live single-instance roles
+    (architect_general :8083), so at least one lineup port IS listening — the
+    fleet is up — and the dead-host-ports poison signature is still vetoed.
+    """
     monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
     # Keep the generic bootstrap reader from consuming this host's facts; this
     # test exercises the legacy runtime-manifest producer below.
@@ -154,6 +182,7 @@ def test_env_unset_manifest_dead_ports_rejected(tmp_path, monkeypatch, caplog) -
             _server(8070, "frontdoor"),
             _server(8072, "worker_general"),
             _server(8085, "ingest_long_context"),
+            _server(8083, "architect_general"),
         ],
     )
 
@@ -162,6 +191,39 @@ def test_env_unset_manifest_dead_ports_rejected(tmp_path, monkeypatch, caplog) -
 
     assert result is None
     assert any("runtime-facts lineup rejected" in rec.message for rec in caplog.records)
+
+
+def test_env_unset_manifest_all_dead_is_cold_start_accepted(tmp_path, monkeypatch) -> None:
+    """env unset + runtime-facts naming dead host ports, NOTHING listening
+    anywhere → the manifest lineup is the launcher's own cold-start intent and
+    is accepted (not vetoed), instead of falling through to stale priors."""
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(models, "_port_listening", _all_dead)
+    manifest = [
+        _server(8070, "frontdoor"),
+        _server(8072, "worker_general"),
+        _server(8085, "ingest_long_context"),
+    ]
+    _patch_runtime_facts(monkeypatch, manifest)
+
+    result = models._runtime_or_env_selected_servers()
+
+    assert result == manifest
+
+
+def test_env_full_cold_start_accepts_env_lineup(monkeypatch) -> None:
+    """env=full + NOTHING listening anywhere (total cold start) → the env lineup
+    is accepted, not vetoed: no live fleet exists to contradict it."""
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    monkeypatch.setattr(models, "_port_listening", _all_dead)
+    _patch_runtime_facts(monkeypatch, None)
+
+    result = models._runtime_or_env_selected_servers()
+
+    assert result is not None
+    ports = {s.get("port") for s in result}
+    assert 8070 in ports
 
 
 def test_env_unset_manifest_live_ports_returned(tmp_path, monkeypatch) -> None:
