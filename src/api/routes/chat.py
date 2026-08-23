@@ -34,7 +34,7 @@ from src.api.models import ChatRequest, ChatResponse, RewardRequest
 from src.api.state import AppState
 from src.config import get_config
 from src.constants import TASK_IR_OBJECTIVE_LEN
-from src.scheduling import gate_observation
+from src.scheduling import contention_gate_capture, gate_observation
 from src.delegation_reports import load_report
 from src.task_ir import canonicalize_task_ir
 from src.prompt_builders import (
@@ -248,6 +248,11 @@ async def chat(
         with prompt_dir_override(prompt_dir):
             response = await _handle_chat(request, state, cancel_event=cancel_event)
         response.contention_gate = gate_observation.snapshot()
+        # SC19 — persist the echoed verdict for the vidya belief kernel. Opt-in via
+        # ORCHESTRATOR_CONTENTION_GATE_CAPTURE, never raises; the JSONL capture is the
+        # durable bytes the adapter projects from. Both exits below (error JSONResponse
+        # and the plain return) are downstream of this single stamp.
+        contention_gate_capture.capture(response.contention_gate, request_id=request.request_id)
         # Return appropriate HTTP status instead of silent 200 OK on failure
         if response.error_code:
             handler_outcome = "failed"
