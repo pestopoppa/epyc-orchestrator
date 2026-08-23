@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRY = REPO_ROOT / "orchestration" / "model_registry.yaml"
 DEFAULT_CERTIFICATIONS = REPO_ROOT / "orchestration" / "reasoning_effort_certifications.yaml"
+DEFAULT_ERAS = REPO_ROOT / "orchestration" / "instrument_eras.yaml"
 REQUIRED_CERTIFICATION_FIELDS = ("model", "quant", "kernel_era", "template_sha")
 
 
@@ -100,15 +102,111 @@ def _bound_model(role: dict[str, Any]) -> tuple[str | None, str | None]:
     )
 
 
+def _parse_epoch(value: Any) -> float | None:
+    """Parse an era-boundary timestamp (ISO string or epoch number) to epoch seconds."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _current_cpu_kernel_era(
+    eras_path: Path, now: datetime | None = None
+) -> tuple[str, str]:
+    """Resolve the CURRENT production cpu-kernel era from the eras registry.
+
+    ``orchestration/instrument_eras.yaml`` is the promotion record: every kernel
+    cutover adds a new ``*-cpu-kernel`` row (scope ``cpu_bench``) with a machine-
+    readable ``kernel_name`` (e.g. ``production-consolidated-v9``) beside the
+    existing ``binary_version`` / ``kernel_commit``.  The current era is the
+    newest such row whose window includes ``now``.
+
+    This is the enforcement link that closes the 2026-08-23 gap (ledger
+    ``active_kernel_era`` drifted stale because nothing compared it to the era
+    authority): the prompt-effort ledger MUST agree with this value, so a kernel
+    promotion that updates the eras file but forgets the ledger now FAILS the
+    stack-change pipeline instead of silently diverging.
+
+    Returns ``(era_id, kernel_name)``.  Raises ``ValueError`` when the eras file
+    is unreadable, no cpu-kernel era is active, or the current era lacks a
+    ``kernel_name`` — every one of those is a promotion-side defect that must
+    fail closed, never pass silently.
+    """
+    try:
+        doc = _load_mapping(eras_path)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise ValueError(f"instrument eras registry invalid: {exc}") from exc
+    rows = doc.get("eras")
+    if not isinstance(rows, list):
+        raise ValueError("instrument eras registry missing 'eras' list")
+
+    now_epoch = _parse_epoch(now) if now is not None else None
+    if now_epoch is None:
+        now_epoch = datetime.now(timezone.utc).timestamp()
+
+    current: dict[str, Any] | None = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        era_id = row.get("id")
+        if not isinstance(era_id, str) or not era_id.endswith("-cpu-kernel"):
+            continue
+        if row.get("scope") != "cpu_bench":
+            continue
+        start = _parse_epoch(row.get("from"))
+        end = _parse_epoch(row.get("until"))
+        if start is not None and now_epoch < start:
+            continue
+        if end is not None and now_epoch >= end:
+            continue
+        if current is None or start > _parse_epoch(current.get("from")):
+            current = row
+    if current is None:
+        raise ValueError("no active cpu-kernel era found in instrument_eras.yaml")
+
+    era_id = str(current.get("id") or "")
+    kernel_name = current.get("kernel_name")
+    if not isinstance(kernel_name, str) or not kernel_name.strip():
+        raise ValueError(
+            f"current cpu-kernel era {era_id!r} lacks machine-readable kernel_name — "
+            "add it at the same boundary as the kernel promotion"
+        )
+    return era_id, kernel_name.strip()
+
+
 def validate_reasoning_effort_certifications(
     registry_path: Path = DEFAULT_REGISTRY,
     certifications_path: Path = DEFAULT_CERTIFICATIONS,
+    eras_path: Path = DEFAULT_ERAS,
 ) -> EffortCertificationResult:
     """Validate declared prompt-effort defaults against their certified identity.
 
     The ledger's ``active_kernel_era`` is intentionally a distinct deployment
     stamp.  Updating it during a kernel promotion immediately invalidates every
     old certificate until its curve is remeasured and restamped.
+
+    The ledger's era must ALSO agree with the current cpu-kernel era in
+    ``orchestration/instrument_eras.yaml`` (``_current_cpu_kernel_era``) — the
+    promotion record, updated at every kernel cutover.  This cross-check is what
+    makes the era roll-forward enforceable rather than a comment: a promotion
+    that forgets to roll the ledger now fails the stack-change pipeline with a
+    named error.  The eras file being unreadable, having no active cpu-kernel
+    era, or carrying no ``kernel_name`` on the current one are all fail-closed
+    errors too.
 
     The chat template is a calibration-voiding axis too: a certificate must also
     name ``template_sha``, compared against the template the role is bound to.
@@ -123,12 +221,33 @@ def validate_reasoning_effort_certifications(
         ledger = _load_mapping(certifications_path)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         return EffortCertificationResult(errors=[f"effort certification input invalid: {exc}"])
+    except Exception as exc:  # noqa: BLE001
+        return EffortCertificationResult(errors=[f"effort certification input invalid: {exc}"])
 
     errors: list[str] = []
     active_kernel_era = ledger.get("active_kernel_era")
     if not isinstance(active_kernel_era, str) or not active_kernel_era.strip():
         errors.append("effort certification ledger missing non-empty active_kernel_era")
         active_kernel_era = None
+
+    try:
+        current_era_id, current_kernel_name = _current_cpu_kernel_era(eras_path)
+    except ValueError as exc:
+        errors.append(str(exc))
+        current_kernel_name = None
+    else:
+        if active_kernel_era is not None and active_kernel_era != current_kernel_name:
+            errors.append(
+                f"effort certification ledger active_kernel_era {active_kernel_era!r} does not "
+                f"match the current production cpu-kernel era {current_era_id!r} "
+                f"(kernel_name {current_kernel_name!r}) — roll the ledger at the same boundary "
+                "as the kernel promotion"
+            )
+        elif active_kernel_era is None:
+            errors.append(
+                f"effort certification ledger must name the current production cpu-kernel era "
+                f"{current_kernel_name!r} ({current_era_id})"
+            )
 
     certificates = ledger.get("role_certifications", {})
     if not isinstance(certificates, dict):
@@ -218,8 +337,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
     parser.add_argument("--certifications", type=Path, default=DEFAULT_CERTIFICATIONS)
+    parser.add_argument("--eras", type=Path, default=DEFAULT_ERAS)
     args = parser.parse_args(argv)
-    result = validate_reasoning_effort_certifications(args.registry, args.certifications)
+    result = validate_reasoning_effort_certifications(
+        args.registry, args.certifications, args.eras
+    )
     for error in result.errors:
         print(f"error: {error}")
     if result.ok:
