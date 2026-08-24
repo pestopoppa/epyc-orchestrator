@@ -1,0 +1,14 @@
+{
+  "task_id": "OP-21 overlap decision-grade re-measure (cv <= 0.05)",
+  "topology_hash": "171f86f9188211e9",
+  "candidate_sets": [
+    {
+      "roles": ["frontdoor", "ingest_long_context"],
+      "note": "OVERLAP (true production geometry); prior pooled n=9 cv 0.125 — targeting decision grade",
+      "assignment": {
+        "frontdoor": {"port": 8080},
+        "ingest_long_context": {"port": 8185}
+      }
+    }
+  ]
+}

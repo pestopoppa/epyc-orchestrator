@@ -97,13 +97,14 @@ def test_admit_overlap_probe_classification():
         regions,
         anchor=("ingest_long_context", 0),
         probe_roles=["frontdoor", "vision_escalation"],
+        expectation=smoke.EXPECTATION_SEAM,
     )
     assert anchor.regions == ("q0", "q1")
     # 4 probe-role instances, none is the anchor itself -> 4 probes.
     assert len(probes) == 4
 
     by_key = {(p.candidate.role, p.candidate.instance_idx): p for p in probes}
-    # OVERLAP -> queue
+    # OVERLAP -> queue (seam mode)
     assert by_key[("frontdoor", 0)].disjoint is False
     assert by_key[("frontdoor", 0)].expected_decision == smoke.DECISION_QUEUE
     assert by_key[("vision_escalation", 1)].expected_decision == "queue"
@@ -115,6 +116,24 @@ def test_admit_overlap_probe_classification():
     # exactly 2 admit + 2 queue expectations
     assert sum(1 for p in probes if p.expected_decision == "admit") == 2
     assert sum(1 for p in probes if p.expected_decision == "queue") == 2
+
+
+def test_admit_overlap_probe_replacement_default_expects_admit_everywhere():
+    """The standing default restates the expectation: the fleet RE-PLACES a
+    forced eval_batch request onto a disjoint instance, so even overlapping
+    candidates expect "admit" (the safety invariant is judged on the echoed
+    candidate_topology_idx at aggregation, not on the requested candidate)."""
+    regions = _synthetic_regions()
+    _, probes = smoke.build_admit_overlap_probes(
+        regions,
+        anchor=("ingest_long_context", 0),
+        probe_roles=["frontdoor", "vision_escalation"],
+    )
+    assert len(probes) == 4
+    assert all(p.expected_decision == smoke.DECISION_ADMIT for p in probes)
+    # the requested-candidate overlap remains a recorded fact, not the verdict
+    assert {p.disjoint for p in probes} == {True, False}
+    assert sum(1 for p in probes if p.disjoint) == 2
 
 
 def test_admit_overlap_probe_excludes_anchor_and_is_ordered():
@@ -229,6 +248,7 @@ def _probes_for_agg():
         _synthetic_regions(),
         anchor=("ingest_long_context", 0),
         probe_roles=["frontdoor", "vision_escalation"],
+        expectation=smoke.EXPECTATION_SEAM,
     )[1]
 
 
@@ -236,7 +256,7 @@ def test_aggregate_admit_overlap_all_pass():
     probes = _probes_for_agg()
     # feed each probe its EXPECTED decision -> all pass
     observed = {p.probe_id: p.expected_decision for p in probes}
-    summary = smoke.aggregate_admit_overlap(probes, observed)
+    summary = smoke.aggregate_admit_overlap(probes, observed, expectation="seam")
     assert summary["n_probes"] == 4
     assert summary["n_admit_expected"] == 2
     assert summary["n_queue_expected"] == 2
@@ -253,7 +273,7 @@ def test_aggregate_admit_overlap_detects_mismatch():
     # flip ONE disjoint probe to a wrong "queue" (a real Step-2 failure)
     disjoint_probe = next(p for p in probes if p.disjoint)
     observed[disjoint_probe.probe_id] = "queue"
-    summary = smoke.aggregate_admit_overlap(probes, observed)
+    summary = smoke.aggregate_admit_overlap(probes, observed, expectation="seam")
     assert summary["n_evaluated"] == 4
     assert summary["n_pass"] == 3
     assert summary["n_fail"] == 1
@@ -269,7 +289,7 @@ def test_aggregate_admit_overlap_missing_observation_excluded():
     # observe only two probes; the other two have no outcome
     partial = {probes[0].probe_id: probes[0].expected_decision,
                probes[1].probe_id: probes[1].expected_decision}
-    summary = smoke.aggregate_admit_overlap(probes, partial)
+    summary = smoke.aggregate_admit_overlap(probes, partial, expectation="seam")
     assert summary["n_evaluated"] == 2
     assert summary["n_pass"] == 2
     # a probe with no observation is pass=None and not counted
@@ -284,7 +304,7 @@ def test_aggregate_admit_overlap_accepts_list_form():
     observed_list = [
         {"probe_id": p.probe_id, "decision": p.expected_decision} for p in probes
     ]
-    summary = smoke.aggregate_admit_overlap(probes, observed_list)
+    summary = smoke.aggregate_admit_overlap(probes, observed_list, expectation="seam")
     assert summary["n_pass"] == 4
     assert summary["all_pass"] is True
 
@@ -497,9 +517,11 @@ def test_main_dry_run_with_json_numa_config(tmp_path, capsys):
     code = smoke.main([
         "--numa-config", str(cfg_path),
         "--probe-roles", "frontdoor,vision_escalation",
+        "--expectation", "seam",
     ])
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
+    assert payload["expectation"] == "seam"
     assert payload["n_rebench_pairs"] == 8
     # frontdoor#0 {q0,q1} overlaps anchor; frontdoor#1 {q2} disjoint; etc.
     assert payload["n_admit_expected"] >= 1

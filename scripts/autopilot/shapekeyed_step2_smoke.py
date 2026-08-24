@@ -12,11 +12,17 @@ READ-ONLY or not at all; the shape-keyed admission core stays FROZEN):
      Over the canonical CPU-region model (`src/runtime/instance_topology.py`,
      READ-ONLY), enumerate candidate placements against a held "anchor" placement
      and classify each by *region-set overlap* (never by a shape's ``full`` label —
-     see invariant #1 in the handoff): a **disjoint** candidate is EXPECTED to
-     ADMIT, an **overlapping** candidate is EXPECTED to QUEUE (fail closed). Live
-     Step-2 routing would report the gate's actual decision; the pure aggregator
-     scores observed-vs-expected. This is the "disjoint quarters admit while
-     q-overlaps queue" bracket the handoff owes before flag-on.
+     see invariant #1 in the handoff). The expectation model is selectable
+     (``--expectation``): **"seam"** keeps the ORIGINAL flag-on expectation
+     (disjoint -> ADMIT, overlapping -> QUEUE/fail-closed), while the standing
+     **"replacement"** default restates the expectation against the fleet layer's
+     ACTUAL overlap handling — the placement machine re-places forced eval_batch
+     requests onto a disjoint instance, so an overlapping candidate is EXPECTED
+     to be admitted via re-placement and the safety invariant is *never co-place*
+     (an admit whose echoed ``contention_gate.candidate_topology_idx`` still
+     overlaps the held anchor is a failure; an unexpected queue means the flag-on
+     seam armed). Live Step-2 routing reports the gate's actual decision; the
+     pure aggregator scores observed-vs-expected.
 
   2. **vision_escalation re-bench** — the higher-sample (>=8) within-role re-bench
      that the within-role-placement handoff still owes ("ratify clean allow;
@@ -79,9 +85,39 @@ PLACEMENT_REQUEST_PRIORITY = "background"
 PLACEMENT_WORKLOAD_CLASS = "eval_batch"
 
 # Shape-keyed Step-2 gate contract: a placement whose region set is DISJOINT from
-# the held set is EXPECTED to admit; an OVERLAPPING one is EXPECTED to queue.
+# the held set is EXPECTED to admit; an OVERLAPPING one is EXPECTED to queue
+# (only in "seam" mode — see EXPECTATION_* below).
 DECISION_ADMIT = "admit"
 DECISION_QUEUE = "queue"
+
+# Expectation modes for the admit-overlap bracket (operator decision 2026-08-24,
+# ROUTE-A1 step-2 smoke: the overlap-queue premise was falsified for the live
+# fleet layer — the placement machine RE-PLACES forced eval_batch requests onto a
+# disjoint instance and the pair matrix allows (borderline -> allow), so all 5
+# overlapping probes admitted instead of queuing):
+#   * "replacement" (STANDING default) — restates the smoke's expectation against
+#     the fleet layer's actual overlap handling: an overlapping candidate is
+#     EXPECTED to be admitted via re-placement. The safety invariant is "never
+#     co-place": an admit whose echoed contention_gate.candidate_topology_idx
+#     still OVERLAPS the held anchor is a co-placement (always a failure); an
+#     unexpected queue (the flag-on seam engaging) is a distinct failure outcome
+#     ("queued_unexpected") that still goes red.
+#   * "seam" — the ORIGINAL flag-on expectation: overlap -> QUEUE (fail closed),
+#     disjoint -> admit. Report output stays byte-compatible with the 2026-08-24
+#     route-a1 artifact so the flag-on exercise compares directly.
+EXPECTATION_REPLACEMENT = "replacement"
+EXPECTATION_SEAM = "seam"
+DEFAULT_EXPECTATION = EXPECTATION_REPLACEMENT
+
+# Re-placement-aware verdicts (aggregation, "replacement" mode only). The plain
+# "admit"/"queue" outcomes stay as the fallback classification (responses without
+# contention_gate topology evidence, queue/503 paths, pre-classified strings).
+DECISION_ADMIT_DISJOINT = "admit_disjoint"
+DECISION_ADMIT_OVERLAP = "admit_overlap"
+DECISION_QUEUED_UNEXPECTED = "queued_unexpected"
+# Marker on a co-placement row: the admitted candidate_topology_idx overlaps the
+# held anchor — the safety invariant violation. ALWAYS a failure.
+CO_PLACEMENT_MARKER = "CO-PLACEMENT"
 
 # Contention-matrix default floor (orchestration/contention_matrix.yaml
 # default_floor: 0.85). ratio >= 1.0 => allow; floor <= ratio < 1.0 => borderline
@@ -185,9 +221,14 @@ class Placement:
 class AdmitOverlapProbeSpec:
     """One admit-overlap probe: does ``candidate`` co-admit with the held ``active``?
 
-    ``expected_decision`` is derived purely from region-set overlap — disjoint =>
-    admit, overlapping => queue. Live Step-2 routing reports the gate's real
-    decision, which the aggregator compares against this expectation.
+    ``expected_decision`` is derived from region-set overlap AND the plan's
+    expectation mode: in "seam" mode disjoint => admit and overlapping => queue
+    (the original flag-on model); in "replacement" mode (standing default) every
+    candidate is expected to admit, because the placement machine re-places a
+    forced eval_batch request onto a disjoint instance — the safety invariant is
+    then "never co-place", judged by the echoed ``candidate_topology_idx`` at
+    aggregation, not by the requested candidate. Live Step-2 routing reports the
+    gate's real decision, which the aggregator compares against this expectation.
     """
 
     probe_id: str
@@ -277,6 +318,14 @@ class Step2SmokePlan:
     provenance: dict[str, Any]
     notes: list[str] = field(default_factory=list)
     inference_required: bool = True
+    # expectation mode ("replacement" standing default / "seam" flag-on model)
+    expectation: str = DEFAULT_EXPECTATION
+    # (role, idx) -> region-set map the re-placement evidence is resolved against
+    # (the probe response's contention_gate.candidate_topology_idx names an
+    # instance of the probe role in THIS map). Pure data, never mutated.
+    instance_regions: dict[tuple[str, int], frozenset[str]] = field(
+        default_factory=dict
+    )
 
     def transport_summary(self) -> dict[str, Any]:
         return {
@@ -290,6 +339,7 @@ class Step2SmokePlan:
         return {
             "kind": "shapekeyed_step2_smoke_plan",
             "runner_version": RUNNER_VERSION,
+            "expectation": self.expectation,
             "anchor": self.anchor.to_dict(),
             "floor": self.floor,
             "cv_threshold": self.cv_threshold,
@@ -308,6 +358,15 @@ class Step2SmokePlan:
             "provenance": dict(self.provenance),
             "notes": list(self.notes),
             "inference_required": self.inference_required,
+            "instance_regions": [
+                {
+                    "role": role,
+                    "instance_idx": idx,
+                    "regions": sorted(regions),
+                    "region_label": region_label(regions),
+                }
+                for (role, idx), regions in sorted(self.instance_regions.items())
+            ],
         }
 
 
@@ -328,13 +387,26 @@ def build_admit_overlap_probes(
     *,
     anchor: tuple[str, int] = (DEFAULT_ANCHOR_ROLE, DEFAULT_ANCHOR_IDX),
     probe_roles: Iterable[str] = DEFAULT_PROBE_ROLES,
+    expectation: str = DEFAULT_EXPECTATION,
 ) -> tuple[Placement, list[AdmitOverlapProbeSpec]]:
     """Enumerate admit-overlap probes for every probe-role instance vs the anchor.
 
     For each ``(role, idx)`` of a ``probe_roles`` role (excluding the anchor
     placement itself), classify it against the anchor's held region set and emit a
-    probe whose ``expected_decision`` is ADMIT (disjoint) or QUEUE (overlap).
-    Deterministic: probes are ordered by (role, instance_idx).
+    probe. ``expected_decision`` depends on ``expectation``:
+
+      * "seam" — disjoint => ADMIT, overlapping => QUEUE (the original flag-on
+        overlap-queue model).
+      * "replacement" (standing default) — EVERY candidate is expected to ADMIT:
+        the fleet layer re-places a forced eval_batch request onto a disjoint
+        instance, so admission is the expectation for overlapping candidates too;
+        the safety invariant ("never co-place") is then judged at aggregation on
+        the OBSERVED ``contention_gate.candidate_topology_idx``, not on the
+        requested candidate.
+
+    Deterministic: probes are ordered by (role, instance_idx). ``disjoint`` (the
+    requested candidate vs the anchor) is always recorded as a fact regardless of
+    mode — it describes the REQUEST, not the expectation.
     """
     probe_role_set = set(probe_roles)
     anchor_regions = _regions_of(instance_regions, anchor)
@@ -347,7 +419,10 @@ def build_admit_overlap_probes(
     for role, idx in keys:
         cand_regions = _regions_of(instance_regions, (role, idx))
         disjoint = regions_disjoint(anchor_regions, cand_regions)
-        expected = DECISION_ADMIT if disjoint else DECISION_QUEUE
+        if expectation == EXPECTATION_SEAM:
+            expected = DECISION_ADMIT if disjoint else DECISION_QUEUE
+        else:
+            expected = DECISION_ADMIT  # replacement: re-placed onto a disjoint instance
         candidate = Placement(role, idx, cand_regions)
         probe_id = (
             f"{anchor[0]}#{anchor[1]}[{region_label(anchor_regions)}]"
@@ -422,10 +497,14 @@ def build_step2_smoke_plan(
     cv_threshold: float = DEFAULT_CV_THRESHOLD,
     topology_hash: str | None = None,
     priors: dict[str, dict[str, float]] | None = None,
+    expectation: str = DEFAULT_EXPECTATION,
 ) -> Step2SmokePlan:
     """Build the full shape-keyed Step-2 smoke plan (pure — no inference/I/O)."""
     anchor_placement, probes = build_admit_overlap_probes(
-        instance_regions, anchor=anchor, probe_roles=probe_roles
+        instance_regions,
+        anchor=anchor,
+        probe_roles=probe_roles,
+        expectation=expectation,
     )
     rebench_pairs = build_rebench_pairs(
         instance_regions,
@@ -447,11 +526,24 @@ def build_step2_smoke_plan(
             "model_quant_key": f"{rebench_model}::{rebench_quant}",
         },
         "step2_flag": "ORCHESTRATOR_SHAPE_AWARE_CONTENTION",
+        "expectation": expectation,
     }
+    if expectation == EXPECTATION_SEAM:
+        bracket_note = (
+            "seam-mode bracket: disjoint region sets EXPECT admit, overlapping "
+            "EXPECT queue (region-set overlap is the only authority; never the "
+            "'full' label)."
+        )
+    else:
+        bracket_note = (
+            "replacement-mode bracket (standing default): the placement machine "
+            "re-places forced eval_batch requests onto a disjoint instance, so "
+            "EVERY candidate EXPECTS admit; the safety invariant is never "
+            "co-place — judged on the echoed contention_gate.candidate_topology_"
+            "idx, and an unexpected queue (seam armed) is a failure."
+        )
     notes = [
-        "shape-keyed Step-2 smoke: disjoint region sets EXPECT admit, overlapping "
-        "EXPECT queue (region-set overlap is the only authority; never the 'full' "
-        "label).",
+        bracket_note,
         "re-bench results are indexed by (model, quant), NEVER by role.",
         "all specs ride the placement queue (background/eval_batch); NEVER /chat.",
         "all produced numbers are pre-promotion OBSERVATIONS (MEASUREMENT.md); they "
@@ -466,6 +558,8 @@ def build_step2_smoke_plan(
         target_samples=target_samples,
         provenance=provenance,
         notes=notes,
+        expectation=expectation,
+        instance_regions=instance_regions,
     )
 
 
@@ -474,49 +568,128 @@ def build_step2_smoke_plan(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _normalize_observed(observed: Any) -> dict[str, str]:
-    """Accept either {probe_id: decision} or [{probe_id, decision}, ...]."""
+def _normalize_observed(observed: Any) -> dict[str, Any]:
+    """Accept either {probe_id: decision} or [{probe_id, decision}, ...].
+
+    Values stay as the driver produced them: a plain "admit"/"queue" string, or —
+    for a response whose contention_gate echoed topology evidence — a dict
+    {"decision": "admit", "candidate_topology_idx": int, "role": str,
+    "regions": [...]}. Dict values are preserved, never coerced.
+    """
     if isinstance(observed, dict):
-        return {str(k): str(v) for k, v in observed.items()}
-    out: dict[str, str] = {}
+        return {str(k): v for k, v in observed.items()}
+    out: dict[str, Any] = {}
     for row in observed or []:
         if isinstance(row, dict) and row.get("probe_id") is not None:
-            out[str(row["probe_id"])] = str(row.get("decision"))
+            out[str(row["probe_id"])] = row.get("decision")
     return out
 
 
 def aggregate_admit_overlap(
     probes: list[AdmitOverlapProbeSpec],
     observed: Any,
+    *,
+    expectation: str = DEFAULT_EXPECTATION,
 ) -> dict[str, Any]:
-    """Score observed admit/queue decisions against the region-derived expectation.
+    """Score observed decisions against the expectation model.
 
-    ``observed`` maps probe_id -> "admit"|"queue" (a probe with no observation is
-    scored ``pass=None`` and excluded from the pass/fail tally). Pure.
+    ``observed`` maps probe_id -> "admit"|"queue" (plain) or -> a dict carrying
+    the echoed contention-gate evidence (see ``_classify_probe_outcome``); a probe
+    with no observation is scored ``pass=None`` and excluded from the pass/fail
+    tally. Pure.
+
+    ``expectation`` semantics:
+
+      * "seam" — the original flag-on model: observed "admit"/"queue" is compared
+        directly to the region-derived ``expected_decision`` (disjoint=>admit,
+        overlap=>queue). Rows and summary are byte-compatible with the 2026-08-24
+        route-a1 artifact: exactly ``probe_id/disjoint/expected/observed/pass``
+        per row, no verdict keys.
+      * "replacement" (standing default) — every probe expects "admit". The
+        verdict is computed from the observed placement against the anchor's
+        region set (``probe.active.regions``):
+          - "admit_disjoint" — admit whose echoed candidate_topology_idx is
+            DISJOINT from the anchor  => PASS (re-placement, the fleet behavior).
+          - "admit_overlap" — admit whose echoed candidate_topology_idx OVERLAPS
+            the anchor => FAIL, row marked "CO-PLACEMENT" (the safety invariant:
+            never co-place). ALWAYS a failure.
+          - "admit" — plain admit without topology evidence (fallback
+            classification, e.g. non-instrumented path) => PASS; the row's
+            verdict makes the missing evidence visible.
+          - "queued_unexpected" — observed "queue" while the standing expectation
+            is replacement (the flag-on seam engaged) => FAIL (distinct outcome).
     """
     obs = _normalize_observed(observed)
+    replacement = expectation == EXPECTATION_REPLACEMENT
     rows: list[dict[str, Any]] = []
     n_pass = 0
     n_eval = 0
+    n_co_placement = 0
+    n_queued_unexpected = 0
     for p in probes:
         got = obs.get(p.probe_id)
         if got is None:
             ok: bool | None = None
+            verdict: str | None = None
+            observed_display: str | None = None
         else:
-            ok = got == p.expected_decision
             n_eval += 1
-            if ok:
-                n_pass += 1
-        rows.append(
-            {
-                "probe_id": p.probe_id,
-                "disjoint": p.disjoint,
-                "expected": p.expected_decision,
-                "observed": got,
-                "pass": ok,
-            }
-        )
-    return {
+            if isinstance(got, dict):
+                # topology-evidenced admit (driver's re-placement extraction)
+                decision = str(got.get("decision") or "")
+                observed_display = decision
+                if replacement:
+                    cand_regions = frozenset(got.get("regions") or ())
+                    disjoint_observed = regions_disjoint(p.active.regions, cand_regions)
+                    if decision == DECISION_ADMIT:
+                        verdict = (
+                            DECISION_ADMIT_DISJOINT
+                            if disjoint_observed
+                            else DECISION_ADMIT_OVERLAP
+                        )
+                    else:
+                        verdict = DECISION_QUEUED_UNEXPECTED
+                    ok = verdict == DECISION_ADMIT_DISJOINT
+                    if verdict == DECISION_ADMIT_OVERLAP:
+                        n_co_placement += 1
+                    elif verdict == DECISION_QUEUED_UNEXPECTED:
+                        n_queued_unexpected += 1
+                    if ok:
+                        n_pass += 1
+                else:
+                    # seam mode: evidence is collapsed to its decision string so
+                    # the 2026-08-24 report shape is preserved byte-for-byte.
+                    ok = decision == p.expected_decision
+                    if ok:
+                        n_pass += 1
+            else:
+                observed_display = str(got)
+                if replacement:
+                    if observed_display == DECISION_ADMIT:
+                        verdict = DECISION_ADMIT
+                        ok = True
+                        n_pass += 1
+                    else:
+                        verdict = DECISION_QUEUED_UNEXPECTED
+                        ok = False
+                        n_queued_unexpected += 1
+                else:
+                    ok = observed_display == p.expected_decision
+                    if ok:
+                        n_pass += 1
+        row: dict[str, Any] = {
+            "probe_id": p.probe_id,
+            "disjoint": p.disjoint,
+            "expected": p.expected_decision,
+            "observed": observed_display,
+            "pass": ok,
+        }
+        if replacement:
+            row["verdict"] = verdict
+            if verdict == DECISION_ADMIT_OVERLAP:
+                row["marker"] = CO_PLACEMENT_MARKER
+        rows.append(row)
+    summary: dict[str, Any] = {
         "kind": "admit_overlap_probe_summary",
         "runner_version": RUNNER_VERSION,
         "n_probes": len(probes),
@@ -533,6 +706,12 @@ def aggregate_admit_overlap(
         "rows": rows,
         "observation_only": True,
     }
+    if replacement:
+        # replacement-only counts (seam mode stays byte-compatible with 2026-08-24)
+        summary["expectation"] = EXPECTATION_REPLACEMENT
+        summary["n_co_placement"] = n_co_placement
+        summary["n_queued_unexpected"] = n_queued_unexpected
+    return summary
 
 
 def rebench_verdict(mean_ratio: float | None, floor: float) -> str:
@@ -626,7 +805,9 @@ def aggregate_smoke(
     rebench_samples: dict[str, list[float]],
 ) -> dict[str, Any]:
     """Combine both aggregations into one smoke report (pure)."""
-    probe_summary = aggregate_admit_overlap(plan.probes, observed_decisions)
+    probe_summary = aggregate_admit_overlap(
+        plan.probes, observed_decisions, expectation=plan.expectation
+    )
     rebench_rows = aggregate_rebench(
         plan.rebench_pairs,
         rebench_samples,
@@ -634,7 +815,7 @@ def aggregate_smoke(
         cv_threshold=plan.cv_threshold,
     )
     n_ratified = sum(1 for r in rebench_rows if r.get("ratified_allow"))
-    return {
+    report: dict[str, Any] = {
         "kind": "shapekeyed_step2_smoke_report",
         "runner_version": RUNNER_VERSION,
         "admit_overlap": probe_summary,
@@ -643,6 +824,11 @@ def aggregate_smoke(
         "smoke_pass": bool(probe_summary["all_pass"]),
         "observation_only": True,
     }
+    if plan.expectation == EXPECTATION_REPLACEMENT:
+        # replacement mode announces itself at the report level; "seam" mode stays
+        # byte-compatible with the 2026-08-24 route-a1 artifact (no added keys).
+        report["expectation"] = EXPECTATION_REPLACEMENT
+    return report
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -774,6 +960,65 @@ def _classify_admit_queue(outcome: Any) -> str | None:
     return None
 
 
+def _classify_probe_outcome(
+    outcome: Any,
+    spec: AdmitOverlapProbeSpec,
+    instance_regions: dict[tuple[str, int], frozenset[str]],
+) -> str | dict[str, Any] | None:
+    """Classify one probe outcome, enriching an admit with re-placement evidence.
+
+    Starts from the existing ``_classify_admit_queue`` ("admit"/"queue"/None) and,
+    ONLY when the outcome is a clean admit AND the response carries the echoed
+    contention-gate verdict (BRIDGE RESIDUAL 1 — landed 2026-08-13 as
+    ``c61b8184``), enriches it into a dict:
+
+        {"decision": "admit", "candidate_topology_idx": <int>, "role": <str>,
+         "regions": [...]}
+
+    The echoed ``contention_gate`` block has the shape
+    (``src/scheduling/gate_observation.py::record``, stamped by
+    ``src/api/routes/chat.py`` into ``response.contention_gate``):
+
+        {"admitted": bool, "decision": str, "waited_s": float,
+         "candidate_topology_idx": int|None, "queued_then_admitted": bool,
+         "reason": str?, "role": str?}
+
+    ``candidate_topology_idx`` is the topology index of the instance the
+    placement machine actually dispatched to (e.g. 2 for frontdoor — the node1
+    half, disjoint from a held node0-half anchor, in the 2026-08-24 run); its
+    region set is resolved against ``instance_regions`` from the PLAN. The
+    aggregator then judges that placement against the anchor's region set
+    (admit_disjoint vs admit_overlap). When any evidence is missing — no
+    contention_gate (queue/503 paths, non-instrumented admits), a non-int idx, an
+    unknown (role, idx) — the classification FALLS BACK to the plain
+    ``_classify_admit_queue`` result, so a missing echo never fabricates or drops
+    a verdict. Pure.
+    """
+    base = _classify_admit_queue(outcome)
+    if base != DECISION_ADMIT or not isinstance(outcome, dict):
+        return base
+    gate = outcome.get("contention_gate")
+    if not isinstance(gate, dict):
+        return base
+    if gate.get("admitted") is not True:
+        return base
+    idx = gate.get("candidate_topology_idx")
+    if not isinstance(idx, int) or isinstance(idx, bool):
+        return base
+    role = gate.get("role") or spec.candidate.role
+    if not isinstance(role, str) or not role:
+        return base
+    regions = instance_regions.get((role, idx))
+    if regions is None:
+        return base
+    return {
+        "decision": DECISION_ADMIT,
+        "candidate_topology_idx": idx,
+        "role": role,
+        "regions": tuple(sorted(regions)),
+    }
+
+
 def _load_call_orchestrator_forced() -> Callable[..., dict[str, Any]]:  # pragma: no cover - inference path
     """Import ``call_orchestrator_forced`` (the SAME seam ``run_paired_ab`` uses).
 
@@ -868,37 +1113,41 @@ def _verify_anchor_held(
             f"#{plan.anchor.instance_idx} (regions "
             f"{region_label(plan.anchor.regions)}). The operator MUST hold "
             f"{plan.anchor.role}#{plan.anchor.instance_idx} for ~"
-            f"{PROBE_TIMEOUT_S}s so overlapping candidates genuinely queue "
-            "(503) rather than slow-admitting."
+            f"{PROBE_TIMEOUT_S}s so probe outcomes are measured against a "
+            "verifiably-held anchor (seam mode: overlapping candidates genuinely "
+            "queue (503); replacement mode: the echoed candidate_topology_idx is "
+            "judged against regions that are truly held)."
         )
 
 
 def _verify_probe_signal(plan: Step2SmokePlan) -> None:
-    """Fail closed when the plan cannot produce the admit-vs-queue contrast.
+    """Fail closed when the plan cannot produce the signal contrast.
 
-    The smoke exists to observe BOTH sides of the bracket — a disjoint
-    candidate admitting while an overlapping one queues. A plan with zero
-    probes, or every probe expecting the same decision (e.g. a FULL anchor
+    The smoke exists to observe BOTH sides of the bracket — a disjoint-requested
+    candidate against an overlapping-requested one (seam mode: disjoint admits
+    while overlapping queues; replacement mode: both admit, but only the disjoint
+    placement is the safe outcome — the overlapping REQUEST is the one whose
+    re-placement evidence is measured). The contrast is a property of the
+    REQUESTED candidates (region-set overlap vs the anchor), NOT of the
+    expectation mode: in replacement mode every probe expects "admit", so an
+    expected-decision-based check would refuse every valid plan. A plan with zero
+    probes, or every candidate on the same side of the anchor (e.g. a FULL anchor
     against which every candidate overlaps), cannot measure the contrast and
-    would merely re-report its own expectation. Refuse with an actionable
-    message rather than "still reporting" (handoff 2026-08-12). Pure.
+    would merely re-report its own expectation. Refuse with an actionable message
+    rather than "still reporting" (handoff 2026-08-12). Pure.
     """
-    n_admit = sum(
-        1 for p in plan.probes if p.expected_decision == DECISION_ADMIT
-    )
-    n_queue = sum(
-        1 for p in plan.probes if p.expected_decision == DECISION_QUEUE
-    )
-    if n_admit == 0 or n_queue == 0:
+    n_disjoint = sum(1 for p in plan.probes if p.disjoint)
+    n_overlap = len(plan.probes) - n_disjoint
+    if n_disjoint == 0 or n_overlap == 0:
         raise RuntimeError(
             "admit-vs-queue signal structurally unobtainable from this plan: "
-            f"{len(plan.probes)} probes ({n_admit} admit-expected, {n_queue} "
-            "queue-expected) — the smoke must contain BOTH a disjoint "
-            "(admit-expected) and an overlapping (queue-expected) candidate. "
-            "With the default anchor this usually means the anchor is the "
-            "FULL instance (ingest_long_context idx 0 is NUMA_FULL 0-95); pass "
-            "--anchor-idx 1 or 2 for a 48t HALF anchor so disjoint candidates "
-            "exist. Quarters do not exist in production (retired 2026-07-30)."
+            f"{len(plan.probes)} probes ({n_disjoint} disjoint-requested, "
+            f"{n_overlap} overlapping-requested) — the smoke must contain BOTH a "
+            "disjoint and an overlapping candidate vs the anchor. With the "
+            "default anchor this usually means the anchor is the FULL instance "
+            "(ingest_long_context idx 0 is NUMA_FULL 0-95); pass --anchor-idx 1 "
+            "or 2 for a 48t HALF anchor so disjoint candidates exist. Quarters "
+            "do not exist in production (retired 2026-07-30)."
         )
 
 
@@ -908,37 +1157,42 @@ def _drive_admit_overlap_probes(
     seed: int,
     probe_fn: Callable[..., Any] | None = None,
     anchor_hold_fn: Callable[[], dict[str, list[int]]] | None = None,
-) -> dict[str, str]:
+) -> dict[str, str | dict[str, Any]]:
     """Drive every admit-overlap probe and collect its observed gate decision.
 
     For each probe spec, ``probe_fn(spec, seed=seed)`` returns a
     ``call_orchestrator_forced`` response dict (or a pre-classified decision
-    string); ``_classify_admit_queue`` maps it to ``"admit"``/``"queue"``. Probes
-    whose outcome is not clean gate evidence are OMITTED (the aggregator then scores
-    them ``pass=None`` and excludes them). Returns ``{probe_id: decision}`` in the
-    exact shape ``aggregate_admit_overlap`` consumes.
+    string); ``_classify_probe_outcome`` maps it to ``"admit"``/``"queue"`` — or,
+    for a clean admit whose response echoes the gate verdict, to a dict carrying
+    the re-placement evidence (``candidate_topology_idx`` + resolved regions).
+    Probes whose outcome is not clean gate evidence are OMITTED (the aggregator
+    then scores them ``pass=None`` and excludes them). Returns
+    ``{probe_id: decision_or_evidence}`` in the exact shape
+    ``aggregate_admit_overlap`` consumes (mode-aware: it applies the standing
+    "replacement" semantics when the plan's expectation is replacement, and the
+    byte-compatible seam semantics otherwise).
 
     **Fail-closed preconditions, checked BEFORE any probe fires**: the anchor
     placement must be verifiably held (``_verify_anchor_held`` — the operator
     must hold the anchor for ~``PROBE_TIMEOUT_S``) and the plan must contain
-    both an admit-expected and a queue-expected probe
-    (``_verify_probe_signal``). Either unmet ⇒ the drive raises with an
-    actionable message and NO inference happens.
+    both a disjoint- and an overlapping-requested probe
+    (``_verify_probe_signal`` — the contrast is on the REQUESTED candidates, not
+    the expectation mode). Either unmet ⇒ the drive raises with an actionable
+    message and NO inference happens.
 
     ``probe_fn``/``anchor_hold_fn`` are injected in tests (like
     ``run_paired_ab``'s ``arm_probe``); the defaults hit the live placement
     queue + region-lock scan and are never exercised under test.
 
-    Two measurement-validity limitations (flagged, not faked):
+    Measurement-validity notes (flagged, not faked):
 
-      1. **Role- not instance-granular.** ``call_orchestrator_forced`` pins
-         ``force_role`` only (no ``candidate_topology_idx``), so a probe observes
-         "did the gate find ANY admissible placement for this role vs the held
-         anchor", not the specific ``spec.candidate.instance_idx``. Probes whose
-         role has no disjoint option (e.g. ``worker_general`` full vs a held
-         quarter) are the cleanest QUEUE evidence; a per-instance expectation can
-         disagree with the role-level observation when the role has a disjoint
-         alternative the dispatcher picks instead.
+      1. **Instance-granular evidence via the echo.** ``call_orchestrator_forced``
+         pins ``force_role`` only (no ``candidate_topology_idx``), so the REQUEST
+         is role-granular; since 2026-08-13 (bridge residual 1) the response's
+         ``contention_gate.candidate_topology_idx`` echoes the instance the
+         placement machine actually dispatched to, which is what the
+         re-placement verdict is computed from. A response without the echo falls
+         back to the role-granular admit/queue classification.
       2. **Admit hides queue-then-admit.** The /chat body carries no ``waited_s``
          (that lands only in ``ContentionGate._metrics``), so a candidate that
          QUEUED then admitted within budget is indistinguishable from an immediate
@@ -947,9 +1201,11 @@ def _drive_admit_overlap_probes(
     _verify_probe_signal(plan)
     _verify_anchor_held(plan, (anchor_hold_fn or _default_anchor_holder_fn)())
     probe = probe_fn or _default_admit_overlap_probe
-    observed: dict[str, str] = {}
+    observed: dict[str, str | dict[str, Any]] = {}
     for spec in plan.probes:
-        decision = _classify_admit_queue(probe(spec, seed=seed))
+        decision = _classify_probe_outcome(
+            probe(spec, seed=seed), spec, plan.instance_regions
+        )
         if decision is not None:
             observed[spec.probe_id] = decision
     return observed
@@ -1128,6 +1384,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=",".join(DEFAULT_PROBE_ROLES),
         help="comma-separated roles to probe against the anchor",
     )
+    p.add_argument(
+        "--expectation",
+        choices=(EXPECTATION_REPLACEMENT, EXPECTATION_SEAM),
+        default=DEFAULT_EXPECTATION,
+        help="admit-overlap expectation model: 'replacement' (default) restates "
+        "the expectation against the fleet layer's actual overlap handling "
+        "(overlapping candidates are re-placed onto a disjoint instance and "
+        "admitted; the invariant is never co-place); 'seam' keeps the original "
+        "flag-on overlap->queue model with 2026-08-24-compatible report output",
+    )
     p.add_argument("--rebench-role", default=VISION_DEFAULT_ROLE)
     p.add_argument("--rebench-model", default=VISION_DEFAULT_MODEL)
     p.add_argument("--rebench-quant", default=VISION_DEFAULT_QUANT)
@@ -1182,6 +1448,7 @@ def main(argv: list[str] | None = None) -> int:
         target_samples=args.target_samples,
         floor=args.floor,
         cv_threshold=args.cv_threshold,
+        expectation=args.expectation,
     )
 
     if not args.execute:

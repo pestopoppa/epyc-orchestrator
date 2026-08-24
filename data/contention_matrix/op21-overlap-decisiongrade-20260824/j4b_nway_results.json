@@ -1,0 +1,197 @@
+{
+  "task_id": "J4b",
+  "topology_hash": "171f86f9188211e9",
+  "generated_at": "2026-08-24T10:28:44.023621+00:00",
+  "manifest": "data/contention_matrix/op21-overlap-decisiongrade-20260824/manifest.json",
+  "n_way": [
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context"
+      ],
+      "size": 2,
+      "topology_hash": "171f86f9188211e9",
+      "ports": {
+        "frontdoor": 8080,
+        "ingest_long_context": 8185
+      },
+      "measured_at": "2026-08-24T10:28:44.023523+00:00",
+      "ratio": 1.198,
+      "cv": 0.1044,
+      "samples": 12,
+      "seq_aggregate_tps": 12.51,
+      "parallel_aggregate_tps": 14.87,
+      "verdict": "allow",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "frontdoor": 13.89,
+            "ingest_long_context": 11.45
+          },
+          "par_tps": {
+            "frontdoor": 9.25,
+            "ingest_long_context": 7.33
+          },
+          "seq_aggregate_tps": 12.55,
+          "parallel_aggregate_tps": 14.66,
+          "ratio": 1.168
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "frontdoor": 14.21,
+            "ingest_long_context": 11.52
+          },
+          "par_tps": {
+            "frontdoor": 10.3,
+            "ingest_long_context": 7.64
+          },
+          "seq_aggregate_tps": 12.73,
+          "parallel_aggregate_tps": 15.28,
+          "ratio": 1.201
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "frontdoor": 9.22,
+            "ingest_long_context": 11.04
+          },
+          "par_tps": {
+            "frontdoor": 9.55,
+            "ingest_long_context": 7.41
+          },
+          "seq_aggregate_tps": 10.05,
+          "parallel_aggregate_tps": 14.82,
+          "ratio": 1.475
+        },
+        {
+          "sample": 3,
+          "solo_tps": {
+            "frontdoor": 14.37,
+            "ingest_long_context": 11.55
+          },
+          "par_tps": {
+            "frontdoor": 10.24,
+            "ingest_long_context": 7.53
+          },
+          "seq_aggregate_tps": 12.81,
+          "parallel_aggregate_tps": 15.05,
+          "ratio": 1.175
+        },
+        {
+          "sample": 4,
+          "solo_tps": {
+            "frontdoor": 15.69,
+            "ingest_long_context": 11.6
+          },
+          "par_tps": {
+            "frontdoor": 9.96,
+            "ingest_long_context": 7.5
+          },
+          "seq_aggregate_tps": 13.34,
+          "parallel_aggregate_tps": 15.01,
+          "ratio": 1.125
+        },
+        {
+          "sample": 5,
+          "solo_tps": {
+            "frontdoor": 9.93,
+            "ingest_long_context": 11.46
+          },
+          "par_tps": {
+            "frontdoor": 10.93,
+            "ingest_long_context": 7.75
+          },
+          "seq_aggregate_tps": 10.64,
+          "parallel_aggregate_tps": 15.49,
+          "ratio": 1.456
+        },
+        {
+          "sample": 6,
+          "solo_tps": {
+            "frontdoor": 14.97,
+            "ingest_long_context": 11.58
+          },
+          "par_tps": {
+            "frontdoor": 10.23,
+            "ingest_long_context": 7.62
+          },
+          "seq_aggregate_tps": 13.06,
+          "parallel_aggregate_tps": 15.24,
+          "ratio": 1.167
+        },
+        {
+          "sample": 7,
+          "solo_tps": {
+            "frontdoor": 15.08,
+            "ingest_long_context": 11.67
+          },
+          "par_tps": {
+            "frontdoor": 9.56,
+            "ingest_long_context": 7.45
+          },
+          "seq_aggregate_tps": 13.16,
+          "parallel_aggregate_tps": 14.9,
+          "ratio": 1.132
+        },
+        {
+          "sample": 8,
+          "solo_tps": {
+            "frontdoor": 16.36,
+            "ingest_long_context": 11.71
+          },
+          "par_tps": {
+            "frontdoor": 9.81,
+            "ingest_long_context": 7.32
+          },
+          "seq_aggregate_tps": 13.65,
+          "parallel_aggregate_tps": 14.64,
+          "ratio": 1.073
+        },
+        {
+          "sample": 9,
+          "solo_tps": {
+            "frontdoor": 15.15,
+            "ingest_long_context": 11.69
+          },
+          "par_tps": {
+            "frontdoor": 9.19,
+            "ingest_long_context": 7.1
+          },
+          "seq_aggregate_tps": 13.2,
+          "parallel_aggregate_tps": 14.21,
+          "ratio": 1.077
+        },
+        {
+          "sample": 10,
+          "solo_tps": {
+            "frontdoor": 13.61,
+            "ingest_long_context": 11.69
+          },
+          "par_tps": {
+            "frontdoor": 10.0,
+            "ingest_long_context": 7.38
+          },
+          "seq_aggregate_tps": 12.57,
+          "parallel_aggregate_tps": 14.77,
+          "ratio": 1.174
+        },
+        {
+          "sample": 11,
+          "solo_tps": {
+            "frontdoor": 13.12,
+            "ingest_long_context": 11.74
+          },
+          "par_tps": {
+            "frontdoor": 9.38,
+            "ingest_long_context": 7.15
+          },
+          "seq_aggregate_tps": 12.39,
+          "parallel_aggregate_tps": 14.31,
+          "ratio": 1.155
+        }
+      ]
+    }
+  ]
+}

@@ -33,7 +33,7 @@ SYNTH_REGIONS: dict[tuple[str, int], frozenset[str]] = {
 }
 
 
-def _plan() -> sk.Step2SmokePlan:
+def _plan(expectation: str = sk.DEFAULT_EXPECTATION) -> sk.Step2SmokePlan:
     # Explicit probe roles including vision_escalation: the SYNTH fixture exists
     # to exercise the classifier machinery with a balanced admit/queue mix. The
     # production DEFAULT_PROBE_ROLES intentionally excludes vision_escalation
@@ -42,6 +42,7 @@ def _plan() -> sk.Step2SmokePlan:
         SYNTH_REGIONS,
         topology_hash="test-topo",
         probe_roles=("frontdoor", "ingest_long_context", "vision_escalation", "worker_general"),
+        expectation=expectation,
     )
 
 
@@ -84,11 +85,78 @@ def test_classify_admit_queue_signal_matrix() -> None:
     assert c({}) is None
 
 
+# ── topology-aware probe classification (re-placement evidence) ────────────────
+
+
+def _gate_response(idx: int, role: str = "vision_escalation") -> dict:
+    """A clean admit response echoing the contention-gate verdict (bridge residual 1)."""
+    return {
+        "answer": "OK",
+        "tokens_generated": 4,
+        "contention_gate": {
+            "admitted": True,
+            "decision": "allow",
+            "waited_s": 0.0,
+            "candidate_topology_idx": idx,
+            "queued_then_admitted": False,
+            "reason": "all pairs + n-way allow",
+            "role": role,
+        },
+    }
+
+
+def test_classify_probe_outcome_extracts_topology_evidence() -> None:
+    plan = _plan()
+    # vision#3 {q0} is an overlapping candidate; echo idx=0 (vision#0 {q2,q3}).
+    spec = next(p for p in plan.probes if p.candidate.instance_idx == 3)
+    ev = sk._classify_probe_outcome(_gate_response(0), spec, SYNTH_REGIONS)
+    assert isinstance(ev, dict)
+    assert ev["decision"] == sk.DECISION_ADMIT
+    assert ev["candidate_topology_idx"] == 0
+    assert ev["role"] == "vision_escalation"
+    assert tuple(ev["regions"]) == ("q2", "q3")  # resolved from plan's instance_regions
+
+
+def test_classify_probe_outcome_falls_back_without_gate_evidence() -> None:
+    plan = _plan()
+    spec = next(p for p in plan.probes if p.candidate.instance_idx == 3)
+    # (a) Clean admit with NO contention_gate -> plain "admit" (old classification).
+    assert sk._classify_probe_outcome({"answer": "OK"}, spec, SYNTH_REGIONS) == sk.DECISION_ADMIT
+    # (b) Queue/503 path (no gate echo) -> plain "queue".
+    assert (
+        sk._classify_probe_outcome(
+            {"answer": "", "error": "Server error '503 Service Unavailable'"},
+            spec, SYNTH_REGIONS,
+        )
+        == sk.DECISION_QUEUE
+    )
+    # (c) Gate present but admitted=False -> not evidence -> falls back.
+    no_admit = _gate_response(0)
+    no_admit["contention_gate"]["admitted"] = False
+    assert sk._classify_probe_outcome(no_admit, spec, SYNTH_REGIONS) == sk.DECISION_ADMIT
+    # (d) Non-int candidate_topology_idx -> falls back.
+    bad_idx = _gate_response(0)
+    bad_idx["contention_gate"]["candidate_topology_idx"] = None
+    assert sk._classify_probe_outcome(bad_idx, spec, SYNTH_REGIONS) == sk.DECISION_ADMIT
+    # (e) Unknown (role, idx) not in instance_regions -> falls back.
+    unknown = _gate_response(99)
+    assert sk._classify_probe_outcome(unknown, spec, SYNTH_REGIONS) == sk.DECISION_ADMIT
+    # (f) Backend error with an echo -> NOT clean gate evidence -> unscored.
+    err = _gate_response(0)
+    err["answer"] = "[ERROR: backend unavailable circuit open]"
+    err["error"] = "[ERROR: backend unavailable circuit open]"
+    assert sk._classify_probe_outcome(err, spec, SYNTH_REGIONS) is None
+    # (g) Pre-classified strings pass through unchanged.
+    assert sk._classify_probe_outcome("queue", spec, SYNTH_REGIONS) == sk.DECISION_QUEUE
+
+
 # ── admit-overlap driver (injected probe_fn) ──────────────────────────────────
 
 
 def test_drive_admit_overlap_probes_scores_against_plan() -> None:
-    plan = _plan()
+    # seam mode: the overlap->queue bracket this driver was built for. The
+    # standing default is "replacement" (see the replacement-mode tests below).
+    plan = _plan(sk.EXPECTATION_SEAM)
     # 6 probes: 3 disjoint (ADMIT) + 3 overlapping (QUEUE).
     assert len(plan.probes) == 6
     assert sum(1 for p in plan.probes if p.expected_decision == sk.DECISION_ADMIT) == 3
@@ -117,14 +185,14 @@ def test_drive_admit_overlap_probes_scores_against_plan() -> None:
     # Every probe classified back to its region-derived expectation.
     assert observed == {p.probe_id: p.expected_decision for p in plan.probes}
 
-    summary = sk.aggregate_admit_overlap(plan.probes, observed)
+    summary = sk.aggregate_admit_overlap(plan.probes, observed, expectation=sk.EXPECTATION_SEAM)
     assert summary["n_evaluated"] == 6
     assert summary["n_pass"] == 6
     assert summary["all_pass"] is True
 
 
 def test_drive_admit_overlap_probes_omits_unscored_outcomes() -> None:
-    plan = _plan()
+    plan = _plan(sk.EXPECTATION_SEAM)
     # First probe returns a non-gate backend error -> must be OMITTED (unscored).
     dropped = plan.probes[0].probe_id
 
@@ -141,7 +209,7 @@ def test_drive_admit_overlap_probes_omits_unscored_outcomes() -> None:
     assert dropped not in observed
     assert len(observed) == 5
 
-    summary = sk.aggregate_admit_overlap(plan.probes, observed)
+    summary = sk.aggregate_admit_overlap(plan.probes, observed, expectation=sk.EXPECTATION_SEAM)
     assert summary["n_evaluated"] == 5  # the dropped probe is not counted
     assert summary["n_pass"] == 5
     # all_pass is over the evaluated set; the omitted probe scores pass=None.
@@ -156,7 +224,7 @@ def test_drive_admit_overlap_probes_timeout_path_classifies_queue() -> None:
     call_orchestrator_forced (empty answer + httpx 503 error text). The driver
     must classify that exact timeout shape as "queue", never as unscored.
     """
-    plan = _plan()
+    plan = _plan(sk.EXPECTATION_SEAM)
 
     def fake_probe(spec: sk.AdmitOverlapProbeSpec, *, seed: int):
         if spec.expected_decision == sk.DECISION_ADMIT:
@@ -229,7 +297,9 @@ def test_drive_admit_overlap_probes_one_sided_signal_fails_closed() -> None:
         ("frontdoor", 0): frozenset({"q0", "q1"}),
         ("vision_escalation", 0): frozenset({"q2", "q3"}),
     }
-    plan = sk.build_step2_smoke_plan(full_anchor_regions, topology_hash="test-topo")
+    plan = sk.build_step2_smoke_plan(
+        full_anchor_regions, topology_hash="test-topo", expectation=sk.EXPECTATION_SEAM
+    )
     assert len(plan.probes) > 0
     assert all(p.expected_decision == sk.DECISION_QUEUE for p in plan.probes)
 
@@ -261,6 +331,267 @@ def test_verify_probe_signal_pure_refuses_one_sided_or_empty() -> None:
     plan.probes = []
     with pytest.raises(RuntimeError, match="signal structurally unobtainable"):
         sk._verify_probe_signal(plan)
+
+
+# ── expectation modes: "replacement" (standing default) ────────────────────────
+
+
+def test_replacement_plan_expects_admit_for_every_candidate() -> None:
+    plan = _plan()  # default expectation
+    assert plan.expectation == sk.EXPECTATION_REPLACEMENT
+    assert len(plan.probes) == 6
+    # The standing restatement: even overlapping candidates are expected to be
+    # re-placed onto a disjoint instance and admitted — so every probe expects
+    # "admit" and the requested-candidate overlap stays a recorded fact.
+    assert all(p.expected_decision == sk.DECISION_ADMIT for p in plan.probes)
+    assert sum(1 for p in plan.probes if p.disjoint) == 3
+    assert sum(1 for p in plan.probes if not p.disjoint) == 3
+    assert plan.to_dict()["expectation"] == sk.EXPECTATION_REPLACEMENT
+
+
+def test_replacement_overlapping_candidate_admit_disjoint_passes() -> None:
+    """The 2026-08-24 fleet behavior: overlap-requested, re-placed, admitted."""
+    plan = _plan()
+    spec = next(p for p in plan.probes if not p.disjoint)
+    # vision#3 {q0} requested; the placement machine re-places onto vision#0 {q2,q3}.
+    observed = sk._drive_admit_overlap_probes(
+        plan, seed=1, anchor_hold_fn=_anchor_held,
+        probe_fn=lambda s, *, seed: (
+            _gate_response(0) if s.probe_id == spec.probe_id else {"answer": "OK"}
+        ),
+    )
+    assert observed[spec.probe_id]["candidate_topology_idx"] == 0
+
+    summary = sk.aggregate_admit_overlap(plan.probes, observed)
+    row = next(r for r in summary["rows"] if r["probe_id"] == spec.probe_id)
+    assert row["verdict"] == sk.DECISION_ADMIT_DISJOINT
+    assert row["pass"] is True
+    assert "marker" not in row
+    assert summary["n_co_placement"] == 0
+    assert summary["n_pass"] == len(plan.probes)
+
+
+def test_replacement_overlapping_candidate_admit_overlap_fails_co_placement() -> None:
+    """An admit whose echoed candidate_topology_idx OVERLAPS the anchor is the
+    co-placement safety-invariant violation — ALWAYS a failure, marked."""
+    plan = _plan()
+    spec = next(p for p in plan.probes if not p.disjoint)
+    # Echo idx=3: vision#3 {q0} — the requested instance itself, overlapping the
+    # held anchor {q0,q1}. The gate co-placed: that is the invariant breach.
+    observed = sk._drive_admit_overlap_probes(
+        plan, seed=2, anchor_hold_fn=_anchor_held,
+        probe_fn=lambda s, *, seed: (
+            _gate_response(3) if s.probe_id == spec.probe_id else {"answer": "OK"}
+        ),
+    )
+    summary = sk.aggregate_admit_overlap(plan.probes, observed)
+    row = next(r for r in summary["rows"] if r["probe_id"] == spec.probe_id)
+    assert row["verdict"] == sk.DECISION_ADMIT_OVERLAP
+    assert row["marker"] == sk.CO_PLACEMENT_MARKER
+    assert row["pass"] is False
+    assert summary["n_co_placement"] == 1
+    assert summary["all_pass"] is False
+    assert summary["expectation"] == sk.EXPECTATION_REPLACEMENT
+
+
+def test_replacement_overlapping_candidate_queue_fails_queued_unexpected() -> None:
+    """A queue while the standing expectation is replacement means the flag-on
+    seam armed — a distinct failure outcome that still goes red."""
+    plan = _plan()
+    spec = next(p for p in plan.probes if not p.disjoint)
+    observed = sk._drive_admit_overlap_probes(
+        plan, seed=3, anchor_hold_fn=_anchor_held,
+        probe_fn=lambda s, *, seed: (
+            {"answer": "", "error": "Server error '503 Service Unavailable'"}
+            if s.probe_id == spec.probe_id
+            else {"answer": "OK"}
+        ),
+    )
+    assert observed[spec.probe_id] == sk.DECISION_QUEUE
+
+    summary = sk.aggregate_admit_overlap(plan.probes, observed)
+    row = next(r for r in summary["rows"] if r["probe_id"] == spec.probe_id)
+    assert row["observed"] == sk.DECISION_QUEUE
+    assert row["verdict"] == sk.DECISION_QUEUED_UNEXPECTED
+    assert row["pass"] is False
+    assert summary["n_queued_unexpected"] == 1
+    assert summary["all_pass"] is False
+
+
+def test_replacement_disjoint_candidate_admit_passes_unchanged() -> None:
+    """Disjoint candidates keep expected=admit (same as before the restatement)."""
+    plan = _plan()
+    spec = next(p for p in plan.probes if p.disjoint)
+    # Plain admit without gate echo — old classification path.
+    observed = sk._drive_admit_overlap_probes(
+        plan, seed=4, anchor_hold_fn=_anchor_held,
+        probe_fn=lambda s, *, seed: (
+            {"answer": "OK"} if s.probe_id == spec.probe_id else {"answer": "OK"}
+        ),
+    )
+    summary = sk.aggregate_admit_overlap(plan.probes, observed)
+    row = next(r for r in summary["rows"] if r["probe_id"] == spec.probe_id)
+    assert row["observed"] == sk.DECISION_ADMIT
+    assert row["verdict"] == sk.DECISION_ADMIT
+    assert row["pass"] is True
+    assert summary["all_pass"] is True
+
+
+def test_replacement_missing_contention_gate_falls_back_to_old_classification() -> None:
+    """A response without contention_gate falls back to _classify_admit_queue:
+    a clean admit scores as a plain "admit" pass (verdict visible), a 503 as
+    "queue" -> queued_unexpected failure."""
+    plan = _plan()
+    overlap_spec = next(p for p in plan.probes if not p.disjoint)
+
+    # (a) Clean admit, no echo.
+    summary = sk.aggregate_admit_overlap(
+        plan.probes,
+        {overlap_spec.probe_id: sk._classify_probe_outcome(
+            {"answer": "OK"}, overlap_spec, SYNTH_REGIONS
+        )},
+    )
+    row = next(r for r in summary["rows"] if r["probe_id"] == overlap_spec.probe_id)
+    assert row["observed"] == sk.DECISION_ADMIT
+    assert row["verdict"] == sk.DECISION_ADMIT
+    assert row["pass"] is True
+
+    # (b) Queue/503 path, no echo.
+    summary = sk.aggregate_admit_overlap(
+        plan.probes,
+        {overlap_spec.probe_id: sk._classify_probe_outcome(
+            {"answer": "", "error": "contention_denied 503"}, overlap_spec, SYNTH_REGIONS
+        )},
+    )
+    row = next(r for r in summary["rows"] if r["probe_id"] == overlap_spec.probe_id)
+    assert row["verdict"] == sk.DECISION_QUEUED_UNEXPECTED
+    assert row["pass"] is False
+
+
+def test_replacement_drive_with_gate_echo_end_to_end() -> None:
+    """Full replacement bracket: every candidate admits, gate echo present,
+    disjoint placements -> all pass; one co-placement -> red."""
+    plan = _plan()
+
+    def fake_probe(spec: sk.AdmitOverlapProbeSpec, *, seed: int):
+        # Every role instance admits with an echo of ITS OWN idx (for disjoint
+        # candidates that is disjoint from the anchor; for overlapping ones it
+        # co-places — unless re-placed, which the next test simulates).
+        return _gate_response(spec.candidate.instance_idx, spec.candidate.role)
+
+    observed = sk._drive_admit_overlap_probes(
+        plan, seed=5, probe_fn=fake_probe, anchor_hold_fn=_anchor_held
+    )
+    assert all(isinstance(v, dict) for v in observed.values())
+    summary = sk.aggregate_admit_overlap(plan.probes, observed)
+    # The 3 overlapping-requested probes echoed an overlapping idx -> co-placement.
+    assert summary["n_co_placement"] == 3
+    assert summary["n_pass"] == 3
+    assert summary["all_pass"] is False
+    assert all(
+        r["marker"] == sk.CO_PLACEMENT_MARKER
+        for r in summary["rows"] if not r["disjoint"]
+    )
+    assert all(r["pass"] for r in summary["rows"] if r["disjoint"])
+
+
+def test_replacement_replaced_overlap_all_pass() -> None:
+    """The 2026-08-24 measured outcome as a PASSING standing smoke: overlapping
+    requests are re-placed onto the disjoint instance and admitted."""
+    plan = _plan()
+
+    def fake_probe(spec: sk.AdmitOverlapProbeSpec, *, seed: int):
+        if spec.disjoint:
+            return _gate_response(spec.candidate.instance_idx, spec.candidate.role)
+        # Overlapping-requested: the placement machine re-places onto a disjoint
+        # instance of the same role. vision#3 -> vision#0 {q2,q3}; frontdoor#0
+        # and worker_general#0 have no disjoint sibling in the SYNTH topology, so
+        # fall back to a plain admit (no echo).
+        if spec.candidate.role == "vision_escalation":
+            return _gate_response(0, spec.candidate.role)
+        return {"answer": "OK"}
+
+    observed = sk._drive_admit_overlap_probes(
+        plan, seed=6, probe_fn=fake_probe, anchor_hold_fn=_anchor_held
+    )
+    summary = sk.aggregate_admit_overlap(plan.probes, observed)
+    assert summary["n_evaluated"] == 6
+    assert summary["n_pass"] == 6
+    assert summary["n_co_placement"] == 0
+    assert summary["n_queued_unexpected"] == 0
+    assert summary["all_pass"] is True
+    # Replacement rows carry verdicts; a clean admit w/o echo is verdict "admit".
+    assert {r["verdict"] for r in summary["rows"]} <= {
+        sk.DECISION_ADMIT_DISJOINT, sk.DECISION_ADMIT,
+    }
+
+
+# ── expectation modes: "seam" (2026-08-24-compatible flag-on model) ────────────
+
+
+def test_seam_overlapping_queue_passes_admit_fails_byte_compatible() -> None:
+    """The original bracket (overlap -> queue): queue passes, admit fails — the
+    2026-08-24 behavior — and the report stays byte-compatible with that
+    artifact's shape: no verdict/marker/expectation keys anywhere."""
+    plan = _plan(sk.EXPECTATION_SEAM)
+    overlap_spec = next(p for p in plan.probes if not p.disjoint)
+
+    def fake_probe(spec: sk.AdmitOverlapProbeSpec, *, seed: int):
+        if spec.expected_decision == sk.DECISION_ADMIT:
+            return {"answer": "OK"}
+        if spec.probe_id == overlap_spec.probe_id:
+            # This overlapping candidate ADMITS (the 2026-08-24 live behavior) —
+            # in seam mode that is a FAILURE, exactly as the artifact recorded.
+            return _gate_response(0)
+        return {"answer": "", "error": "Server error '503 Service Unavailable'"}
+
+    observed = sk._drive_admit_overlap_probes(
+        plan, seed=7, probe_fn=fake_probe, anchor_hold_fn=_anchor_held
+    )
+    summary = sk.aggregate_admit_overlap(
+        plan.probes, observed, expectation=sk.EXPECTATION_SEAM
+    )
+    row = next(r for r in summary["rows"] if r["probe_id"] == overlap_spec.probe_id)
+    # The gate echo collapses to its plain decision string in seam mode.
+    assert row["observed"] == sk.DECISION_ADMIT
+    assert row["expected"] == sk.DECISION_QUEUE
+    assert row["pass"] is False
+    assert summary["n_pass"] == 5  # 3 disjoint admits + 2 genuinely queued overlaps
+    assert summary["n_fail"] == 1
+    assert summary["all_pass"] is False
+
+    # Byte-compatibility with the 2026-08-24 route-a1 artifact:
+    # rows carry exactly {probe_id, disjoint, expected, observed, pass} ...
+    assert set(row.keys()) == {"probe_id", "disjoint", "expected", "observed", "pass"}
+    # ... and the summary carries exactly the artifact's top-level keys.
+    assert set(summary.keys()) == {
+        "all_pass", "kind", "n_admit_expected", "n_evaluated", "n_fail",
+        "n_pass", "n_probes", "n_queue_expected", "observation_only", "rows",
+        "runner_version",
+    }
+    assert all(set(r.keys()) == set(row.keys()) for r in summary["rows"])
+    assert "verdict" not in summary and "marker" not in summary
+    assert summary["kind"] == "admit_overlap_probe_summary"
+    assert summary["runner_version"] == sk.RUNNER_VERSION
+
+
+def test_seam_replaced_admit_is_still_a_failure() -> None:
+    """Even with re-placement evidence present, seam mode counts the observed
+    decision (admit) against the overlap->queue expectation: FAIL."""
+    plan = _plan(sk.EXPECTATION_SEAM)
+    overlap_spec = next(p for p in plan.probes if not p.disjoint)
+    summary = sk.aggregate_admit_overlap(
+        plan.probes,
+        {overlap_spec.probe_id: {
+            "decision": sk.DECISION_ADMIT, "candidate_topology_idx": 0,
+            "role": "vision_escalation", "regions": ("q2", "q3"),
+        }},
+        expectation=sk.EXPECTATION_SEAM,
+    )
+    row = next(r for r in summary["rows"] if r["probe_id"] == overlap_spec.probe_id)
+    assert row["observed"] == sk.DECISION_ADMIT
+    assert row["pass"] is False
+    assert set(row.keys()) == {"probe_id", "disjoint", "expected", "observed", "pass"}
 
 
 # ── re-bench driver (injected sample_fn) ──────────────────────────────────────
@@ -305,7 +636,7 @@ def test_drive_rebench_pairs_collects_samples() -> None:
 
 
 def test_execute_step2_smoke_writes_artifact_with_injected_fns(tmp_path: Path) -> None:
-    plan = _plan()
+    plan = _plan(sk.EXPECTATION_SEAM)
     out = tmp_path / "nested" / "smoke_report.json"
 
     def fake_probe(spec: sk.AdmitOverlapProbeSpec, *, seed: int):
@@ -363,3 +694,38 @@ def test_env_gate_closed_returns_dry_run_and_never_calls_bridge(monkeypatch) -> 
     assert res2["mode"] == "dry_run"
     assert res2["inference_ran"] is False
     assert sk.SHAPEKEYED_STEP2_INFERENCE_ENV in res2["reason"]
+
+
+# ── CLI/defaults: expectation mode ─────────────────────────────────────────────
+
+
+def test_expectation_defaults_to_replacement() -> None:
+    # CLI default ...
+    args = sk.build_arg_parser().parse_args([])
+    assert args.expectation == sk.EXPECTATION_REPLACEMENT
+    # ... and plan-build default agree (replacement is the STANDING expectation).
+    assert sk.DEFAULT_EXPECTATION == sk.EXPECTATION_REPLACEMENT
+    plan = sk.build_step2_smoke_plan(SYNTH_REGIONS, topology_hash="test-topo")
+    assert plan.expectation == sk.EXPECTATION_REPLACEMENT
+    assert all(p.expected_decision == sk.DECISION_ADMIT for p in plan.probes)
+
+
+def test_cli_expectation_choice_is_validated() -> None:
+    p = sk.build_arg_parser()
+    with pytest.raises(SystemExit):
+        p.parse_args(["--expectation", "bogus"])
+
+
+def test_main_dry_run_prints_the_expectation_mode(monkeypatch, capsys) -> None:
+    monkeypatch.delenv(sk.SHAPEKEYED_STEP2_INFERENCE_ENV, raising=False)
+    # Default dry-run announces the standing replacement mode.
+    assert sk.main([]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["expectation"] == sk.EXPECTATION_REPLACEMENT
+    assert payload["n_queue_expected"] == 0
+
+    # --expectation seam is threaded through the plan and printed.
+    assert sk.main(["--expectation", sk.EXPECTATION_SEAM]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["expectation"] == sk.EXPECTATION_SEAM
+    assert payload["n_queue_expected"] >= 1
