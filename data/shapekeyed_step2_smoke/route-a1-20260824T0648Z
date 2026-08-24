@@ -1,0 +1,78 @@
+{
+  "admit_overlap": {
+    "all_pass": false,
+    "kind": "admit_overlap_probe_summary",
+    "n_admit_expected": 3,
+    "n_evaluated": 8,
+    "n_fail": 5,
+    "n_pass": 3,
+    "n_probes": 8,
+    "n_queue_expected": 5,
+    "observation_only": true,
+    "rows": [
+      {
+        "disjoint": false,
+        "expected": "queue",
+        "observed": "admit",
+        "pass": false,
+        "probe_id": "ingest_long_context#1[q0q1]__vs__frontdoor#0[q0q1q2q3]"
+      },
+      {
+        "disjoint": false,
+        "expected": "queue",
+        "observed": "admit",
+        "pass": false,
+        "probe_id": "ingest_long_context#1[q0q1]__vs__frontdoor#1[q0q1]"
+      },
+      {
+        "disjoint": true,
+        "expected": "admit",
+        "observed": "admit",
+        "pass": true,
+        "probe_id": "ingest_long_context#1[q0q1]__vs__frontdoor#2[q2q3]"
+      },
+      {
+        "disjoint": false,
+        "expected": "queue",
+        "observed": "admit",
+        "pass": false,
+        "probe_id": "ingest_long_context#1[q0q1]__vs__ingest_long_context#0[q0q1q2q3]"
+      },
+      {
+        "disjoint": true,
+        "expected": "admit",
+        "observed": "admit",
+        "pass": true,
+        "probe_id": "ingest_long_context#1[q0q1]__vs__ingest_long_context#2[q2q3]"
+      },
+      {
+        "disjoint": false,
+        "expected": "queue",
+        "observed": "admit",
+        "pass": false,
+        "probe_id": "ingest_long_context#1[q0q1]__vs__worker_general#0[q0q1q2q3]"
+      },
+      {
+        "disjoint": false,
+        "expected": "queue",
+        "observed": "admit",
+        "pass": false,
+        "probe_id": "ingest_long_context#1[q0q1]__vs__worker_general#1[q0q1]"
+      },
+      {
+        "disjoint": true,
+        "expected": "admit",
+        "observed": "admit",
+        "pass": true,
+        "probe_id": "ingest_long_context#1[q0q1]__vs__worker_general#2[q2q3]"
+      }
+    ],
+    "runner_version": "shapekeyed-step2-smoke-v1"
+  },
+  "kind": "shapekeyed_step2_smoke_report",
+  "n_rebench_ratified_allow": 0,
+  "observation_only": true,
+  "rebench": [],
+  "runner_version": "shapekeyed-step2-smoke-v1",
+  "smoke_pass": false
+}
