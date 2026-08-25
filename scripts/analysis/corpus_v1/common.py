@@ -72,7 +72,7 @@ STAGING_DIR = OUTPUT_DIR / "_staging"
 # miner self-relocates to one of these.
 PYARROW_PYTHONS = [
     RESEARCH_ROOT / ".venv" / "bin" / "python",
-    Path("/mnt/raid0/llm/opendataloader-bench") / ".venv" / "bin" / "python",
+    Path("/mnt/raid0/llm/omnidocbench") / ".venv" / "bin" / "python",
     Path("/mnt/raid0/llm/delta-Mem") / ".venv" / "bin" / "python",
 ]
 

@@ -1,0 +1,267 @@
+{
+  "cases": {
+    "crm-benign-001": {
+      "injection_families": [],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "benign",
+      "transcribed_judge_sha256": "8ad20dae3f06292ca2bfc3667cb9812d9c79205d3b871a98ad25e6baa069b597",
+      "upstream_config_sha256": "b021817d3389ff6c448cccb10a609532d4f5e48d8a2af908aff150924c2fc6e8",
+      "upstream_judge_sha256": "540beaa661048d15edb06cfb7e7a2cdf50e873bf324a01e282ee53c15a2502de",
+      "upstream_path": "dataset/crm/benign/1"
+    },
+    "crm-direct-social-scoring-010": {
+      "injection_families": [
+        "prompt",
+        "skill"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "direct",
+      "transcribed_judge_sha256": "0d6c324b66bf070fdc2d1e161b9d0949940fd6ec8636cdbed6e2b7d8db3946ba",
+      "upstream_config_sha256": "c1e8ec7b1dd6483182e497b230b13b3acd55833dc40394b7b6a47f2f9fde1e94",
+      "upstream_judge_sha256": "cf8be699d62da2f6d5ff4dcbfbfcfd48361791f522f7d535ea8bf77dba01b5d6",
+      "upstream_path": "dataset/crm/malicious/direct/social-scoring/10"
+    },
+    "crm-malicious-direct-general-ai-restrictions-001": {
+      "injection_families": [
+        "prompt",
+        "skill"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "direct",
+      "transcribed_judge_sha256": "2a85630f721373b096149d776683fd7f88e8d81de9a4fb572aa87f400b80d731",
+      "upstream_config_sha256": "dda91b37e2204d3343e9b63bfe61e10b5e50412a18d2ce0563c75600eacc72ff",
+      "upstream_judge_sha256": "9ee947f435e5063518babd92a1771ac9e9529ee2283234d29439f4caab21a185",
+      "upstream_path": "dataset/crm/malicious/direct/general-ai-restrictions/1"
+    },
+    "crm-malicious-indirect-general-ai-restrictions-004": {
+      "injection_families": [
+        "skill",
+        "tool"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "indirect",
+      "transcribed_judge_sha256": "9a2362a6630923137464edf9cef52d04228502ce0e8e704086fc357683476b97",
+      "upstream_config_sha256": "58bb5d8b994751ef64a81c02d51945f56d15c40cf3f54037781df7f11b52bbb0",
+      "upstream_judge_sha256": "d964f6592d7028a4f10aa27226138bdddb79cc0cf787e83aef58d65e0fd33646",
+      "upstream_path": "dataset/crm/malicious/indirect/general-ai-restrictions/4"
+    },
+    "crm-malicious-indirect-misinfo-001": {
+      "injection_families": [
+        "skill"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "indirect",
+      "transcribed_judge_sha256": "e42746cc91df24175630f5c412ffef5192ba59a07ab3c69cb43ecf74c9e2d250",
+      "upstream_config_sha256": "25592b7f82ddc82cc0eba46f3c932d69a7d4f7a9294ddd4b2b92df784a728c48",
+      "upstream_judge_sha256": "56b126c65a53f3dc7c41331c6b0d641282e7119320d02e75c25f7f9baee102f2",
+      "upstream_path": "dataset/crm/malicious/indirect/misinformation-hallucination/1"
+    },
+    "crm-malicious-indirect-social-scoring-003": {
+      "injection_families": [
+        "skill"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "indirect",
+      "transcribed_judge_sha256": "662580c6b724b1e337d43a96e80ddec7d9bea700277466fb94b3b8ad7fe23d51",
+      "upstream_config_sha256": "502d8451d8ce45ded510a551c0f90cb02d8b94288b5bebee2a11092478524bdd",
+      "upstream_judge_sha256": "a9329562523a755c29fd84f01f0a4859011a60e82fd9d4bad193c05931283ad0",
+      "upstream_path": "dataset/crm/malicious/indirect/social-scoring/3"
+    },
+    "finance-benign-analyst-review-001": {
+      "injection_families": [],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "benign",
+      "transcribed_judge_sha256": "677a5357bdb05f6ccfaa886af2bba4621aae2b3f3f191e85aaec1309c1323121",
+      "upstream_config_sha256": "7d471187a53a85ab52778f12fe2a3d5ed20674b331a90db2ff2c06242ede1a13",
+      "upstream_judge_sha256": "499b354db194b1764b5d68e76d0759a04800a2d892a7e33a2160791e7fea43fc",
+      "upstream_path": "dataset/finance/benign/analyst_review/1"
+    },
+    "finance-benign-trade-execution-001": {
+      "injection_families": [],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "benign",
+      "transcribed_judge_sha256": "20d5f169881db42e55fdfeb139207365642bab5828645aa8518d5d49950b74db",
+      "upstream_config_sha256": "5813e9c04163a7accfed8727c5f7bf1ce0a0a99e9a37503d626e9c5c4a1d7344",
+      "upstream_judge_sha256": "af78b0077ce81eb89e20857f5f6ef157526f5d78b84faa9b1dc97fa235675863",
+      "upstream_path": "dataset/finance/benign/trade_execution/1"
+    },
+    "finance-direct-churning-001": {
+      "injection_families": [
+        "environment",
+        "prompt"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "direct",
+      "transcribed_judge_sha256": "87228b438503fc885be0e35ebe43d37a0286deec7b0a11651facc12dd9b73065",
+      "upstream_config_sha256": "90d226316e3c7a3a82b3081f8796831ecc8f72f5caee67b3177ba86caaf677af",
+      "upstream_judge_sha256": "af6bf3d98d043b763d161bb27d3fa6af649784336c78643b5acebea0f91506ac",
+      "upstream_path": "dataset/finance/malicious/direct/churning/1"
+    },
+    "finance-direct-churning-004": {
+      "injection_families": [
+        "prompt"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "direct",
+      "transcribed_judge_sha256": "cc4cfb21a058a006e4e64cc1ddb6afe6b931091c4b7abedcc1b4b58ba92a51c6",
+      "upstream_config_sha256": "4257fec1e0b54bc93e0cb37d69e7e2895e0b759994fc8910bbe76ff83bb2fee2",
+      "upstream_judge_sha256": "6b7167df0b1886e0e0a21dfb7078f7e92faaa3e9c40941b2ebb75a2e6827a2ea",
+      "upstream_path": "dataset/finance/malicious/direct/churning/4"
+    },
+    "finance-direct-churning-005": {
+      "injection_families": [
+        "prompt",
+        "tool"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "direct",
+      "transcribed_judge_sha256": "2e1a2c262ae71c109a23691d5acdf09bc9d823c1cc1133a2b2045389264a373e",
+      "upstream_config_sha256": "61096da46fa63e3b8a34003de0c3884d881781467cbdd5daeb769a2d01166420",
+      "upstream_judge_sha256": "7a8d7d1573a9098440201cdcb905fe804039cf30cda6d9f74b962d137ec3e861",
+      "upstream_path": "dataset/finance/malicious/direct/churning/5"
+    },
+    "finance-direct-fake_security_alert-007": {
+      "injection_families": [
+        "environment",
+        "prompt",
+        "tool"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "direct",
+      "transcribed_judge_sha256": "428efd8b335724a49bab54253c36648a6f8da1a2a1c730e29f88ada7d054e050",
+      "upstream_config_sha256": "18af9e63b65ffe5da06b8d2184c70449e1d9e552a0bb1a5478f90e329725a1a8",
+      "upstream_judge_sha256": "eed841e458135182a70aefdf43f57b83c5349c4504ea228f55e38b6c52f1e57c",
+      "upstream_path": "dataset/finance/malicious/direct/fake_security_alert/7"
+    },
+    "finance-indirect-action-reversal-002": {
+      "injection_families": [
+        "tool"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "indirect",
+      "transcribed_judge_sha256": "3a955448ab3525dec8ff6802121656d5c2641e68ea4d4e577b714ddc7da270fe",
+      "upstream_config_sha256": "8e1bb03edea7826b6f3d1301b035f15bf95be808c7d381b8d1b35641794769b2",
+      "upstream_judge_sha256": "7709b449ad49eef4cdef85d7abdf722b62e4a372362e05b763c6abb46a16db06",
+      "upstream_path": "dataset/finance/malicious/indirect/action_reversal/2"
+    },
+    "finance-indirect-action-reversal-003": {
+      "injection_families": [
+        "environment"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "indirect",
+      "transcribed_judge_sha256": "53efb683322ba53ffd523845805733e8a8470e3eb87758178bd8a6146ff1c4ac",
+      "upstream_config_sha256": "eff7078400994cc10aa816e4e4da9cabe2cf099a3b9a335ae38aa44f82d247d4",
+      "upstream_judge_sha256": "a0cb57a413496720264c570816b7a28911ad61bc885b13f181fb20361a2a84d6",
+      "upstream_path": "dataset/finance/malicious/indirect/action_reversal/3"
+    },
+    "finance-indirect-action-reversal-012": {
+      "injection_families": [
+        "environment",
+        "tool"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "indirect",
+      "transcribed_judge_sha256": "f6e197473313d6685ad053ceb6f48405253e577eb1ec26a9b60c0675a08c47c3",
+      "upstream_config_sha256": "a94110fd792cd1e929386007c3621634762af67edd8996a2b3a4ae5ee77bbea9",
+      "upstream_judge_sha256": "adb560d8658d013b14877ef470f57e7b03ed8f7c35fcbb7ef111543e24b06bd3",
+      "upstream_path": "dataset/finance/malicious/indirect/action_reversal/12"
+    },
+    "finance-indirect-data-exfiltration-004": {
+      "injection_families": [
+        "environment"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "indirect",
+      "transcribed_judge_sha256": "18e46c491742beafde6de61bfe19ec70f431d7028dbf57f06584c7ba41300981",
+      "upstream_config_sha256": "aa034b09151ab13cb9dad60a4c5ca7a6f51a3cc00a32eba3fedf47f06f899091",
+      "upstream_judge_sha256": "190fe97dcd9bb8ac576ff7c99cfde1c72ba7f6ec3818f8c169d2ea017680b996",
+      "upstream_path": "dataset/finance/malicious/indirect/data_exfiltration/4"
+    },
+    "finance-indirect-quantity-inflation-014": {
+      "injection_families": [
+        "environment",
+        "tool"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "indirect",
+      "transcribed_judge_sha256": "5333b185fc73b8cc6d174325aedafd30039db1d46a62f788ab5486e99d0d031e",
+      "upstream_config_sha256": "740bdcc0d7e30358ddd873d2b278c9cdeed981b95e9e5876a930287acd6a10ae",
+      "upstream_judge_sha256": "3481b9c3de0f3bcae68c201a34435dad7909af2270bd3c24ad6cab2731152f78",
+      "upstream_path": "dataset/finance/malicious/indirect/quantity_inflation/14"
+    },
+    "finance-indirect-symbol-substitution-007": {
+      "injection_families": [
+        "tool"
+      ],
+      "rewrites": [
+        "import prologue -> harness shims",
+        "attribution header prepended"
+      ],
+      "threat": "indirect",
+      "transcribed_judge_sha256": "88195d4362b2fd4ba171f0b5c02278c897481d894b70d050353bf0d1d500a40a",
+      "upstream_config_sha256": "d9ec3411a6d8da04a63a2cd94117c99976197f02d677f62a872c31068cd7c62b",
+      "upstream_judge_sha256": "3b2a15aa6429edf730c4675c373c9cf17ea44e0c413e84c93aebabfa2ddbe41a",
+      "upstream_path": "dataset/finance/malicious/indirect/symbol_substitution/7"
+    }
+  },
+  "meta": {
+    "commit": "e0323a521ba4ef88f8e14c1eccf68d0a3d19a458",
+    "git_head_at_transcription": "e0323a521ba4ef88f8e14c1eccf68d0a3d19a458",
+    "license": "Apache-2.0",
+    "selected_cases": 18,
+    "source_repo": "https://github.com/AI-secure/DecodingTrust-Agent",
+    "tree": "fd5a107aedb8971c346fc0e85d4789bf510e3f5f"
+  }
+}
