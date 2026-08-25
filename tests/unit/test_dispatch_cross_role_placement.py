@@ -173,6 +173,8 @@ def test_shape_aware_gate_runs_per_real_candidate_and_skips_denied_idx(
                     if admitted
                     else contention.PairDecision.QUEUE
                 ),
+                waited_s=0.0,
+                blocking_roles=[],
                 reason="fake candidate verdict",
             )
 

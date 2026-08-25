@@ -24,6 +24,7 @@ from src.registry_loader import (
     PerformanceMetrics,
     RoleConfig,
 )
+from src.scheduling.contention import PairDecision
 
 
 def test_certified_native_batch_width_resolves_worker_registry_alias(monkeypatch):
@@ -131,7 +132,11 @@ class TestInferenceMixinRealCall:
         prims = LLMPrimitives(mock_mode=False)
         gate = SimpleNamespace(
             admit=lambda *_args, **_kwargs: SimpleNamespace(
-                admitted=False, reason="matrix queue timeout"
+                admitted=False,
+                decision=PairDecision.QUEUE,
+                waited_s=0.0,
+                blocking_roles=[],
+                reason="matrix queue timeout",
             )
         )
         monkeypatch.setattr("src.scheduling.contention_gate.get_gate", lambda: gate)

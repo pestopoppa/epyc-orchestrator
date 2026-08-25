@@ -16,6 +16,7 @@ import os
 import time
 import uuid
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Any, Callable, TYPE_CHECKING
 
 from src.config import get_config
@@ -81,12 +82,84 @@ REVIEW_WARN_ONLY_ENV = "REVIEW_DECISION_WARN_ONLY"
 # routing_decision.routing_meta()'s ``assigned_role`` field. Value == TrinityRole.VERIFIER.value.
 REVIEW_ASSIGNED_ROLE = "verifier"
 
+# RA-10 artifact schema_version stamp, kept as a literal so this module does not
+# hard-depend on the trace package at import time (same pattern as CAT_* above).
+# Must track ``src.trace.review_ledger.REVIEW_DECISION_SCHEMA_VERSION``.
+REVIEW_DECISION_SCHEMA_VERSION = "1.0.0"
+
+# RD-12 parse-failure fallback marker. ``_parse_review_response`` returns THIS
+# sentinel object when no JSON object could be extracted from the reviewer's
+# emission; ``_parse_review_response_checked`` turns that into a distinct
+# ``parse_failed`` flag so a fallback is COUNTED (never dropped, never
+# double-counted) instead of masquerading as a real verdict.
+_PARSE_FALLBACK = {
+    "_parse_fallback": True,
+    "decision": "request_changes",
+    "feedback": "Parse error",
+}
+
 
 def _estimate_tokens(text: str | None) -> int:
     """Cheap local token estimate (~4 chars/token) for decisions with no usage data."""
     if not text:
         return 0
     return max(1, round(len(text) / 4))
+
+
+def _plan_executors(plan_steps: list[dict[str, Any]] | None) -> str | None:
+    """Deduped, sorted actor/executor set of a plan, ``"|"``-joined.
+
+    TM-8 executor-model-id: plan-review trace rows carry the set of actors the plan
+    assigns so plan-compliance metrics (intake-835) can attribute per executor.
+    """
+    actors = sorted(
+        {
+            str(s.get("actor", s.get("role", ""))).strip()
+            for s in (plan_steps or [])
+            if str(s.get("actor", s.get("role", ""))).strip()
+        }
+    )
+    return "|".join(actors) if actors else None
+
+
+def build_review_decision_artifact(
+    review: "ArchitectReview",
+    *,
+    latency_ms: float | None = None,
+    tokens: dict[str, int] | None = None,
+    decision_id: str | None = None,
+    reviewed_at: str | None = None,
+    role: str | None = None,
+    executor_model_id: str | None = None,
+) -> dict[str, Any]:
+    """Compose a schema-valid ReviewDecision artifact (review_decision.schema.json).
+
+    RD-12: per-decision latency + token accounting lands in the artifact's
+    ``telemetry`` block (``wall_ms`` / ``tokens_in`` / ``tokens_out``) — exactly the
+    channels ``review_decision_to_ledger_row`` reads, so the artifact feeds the H4
+    calibration ledger and H-LB. Pure function (no emission, no I/O); the reviewer's
+    ``blocking``/``advisory``/``evidence``/``verifier_requests`` channels map
+    structurally (hard-stop stays separate from advisory, per schema).
+    """
+    tokens = tokens or {}
+    return {
+        "schema_version": REVIEW_DECISION_SCHEMA_VERSION,
+        "decision_id": decision_id or f"revdec-{uuid.uuid4().hex[:12]}",
+        "subtask_id": review.subtask_id,
+        "reviewed_at": reviewed_at or datetime.now(timezone.utc).isoformat(),
+        "decision": review.decision.value,
+        "confidence": review.confidence,
+        "blocking": {"tripwire": review.tripwire},
+        "advisory": {"score": review.score, "feedback": review.feedback},
+        "evidence": list(review.evidence or []),
+        "verifier_requests": list(review.verifier_requests or []),
+        "telemetry": {
+            "wall_ms": latency_ms,
+            "tokens_in": tokens.get("tokens_in", 0),
+            "tokens_out": tokens.get("tokens_out", 0),
+        },
+        "provenance": {"role": role or "reviewer", "executor_model_id": executor_model_id},
+    }
 
 
 class AggregationService:
@@ -121,7 +194,7 @@ class AggregationService:
         """Simple concatenation with section headers."""
         sections = []
         for result in results:
-            if (result.success or getattr(result, 'partial', False)) and result.output:
+            if (result.success or getattr(result, "partial", False)) and result.output:
                 header = f"## {result.subtask_id} ({result.role})"
                 sections.append(f"{header}\n\n{result.output}")
         return "\n\n---\n\n".join(sections)
@@ -132,7 +205,7 @@ class AggregationService:
         code_blocks = []
 
         for result in results:
-            if (not result.success and not getattr(result, 'partial', False)) or not result.output:
+            if (not result.success and not getattr(result, "partial", False)) or not result.output:
                 continue
 
             lines = result.output.split("\n")
@@ -322,6 +395,24 @@ Rules:
         # TM-3: trace emission sink (injectable for tests; default → src/trace/emit.py).
         self._trace_sink = trace_sink
         self._trace_db_path = trace_db_path
+        # RD-12: distinct fallback counters. ``parse_failure_count`` counts reviewer
+        # emissions that could not be parsed into a decision (incremented EXACTLY once
+        # per failed parse); ``model_call_failures`` counts llm_call raising before any
+        # response. One event lands in exactly one counter — never dropped, never
+        # double-counted. These are per-service-instance accumulators the RD-12 replay
+        # harness reads off the live service.
+        self._parse_failure_count = 0
+        self._model_call_failures = 0
+
+    @property
+    def parse_failure_count(self) -> int:
+        """Distinct count of reviewer emissions that failed to parse (RD-12)."""
+        return self._parse_failure_count
+
+    @property
+    def model_call_failures(self) -> int:
+        """Distinct count of model calls that raised before producing a response."""
+        return self._model_call_failures
 
     # ── TM-3 / RD-* trace emission (best-effort, never observable) ────────────
 
@@ -376,18 +467,30 @@ Rules:
             logger.debug("Review trace emission skipped: %s", exc)
 
     @staticmethod
-    def _response_tokens(response: Any) -> dict[str, int]:
+    def _response_tokens(response: Any, prompt: str | None = None) -> dict[str, int]:
         """Per-decision token accounting (TM-3 / RD-12).
 
         Prefers real counts off a response object (``tokens_generated`` on
-        ``LLMResult``, a ``usage`` mapping) and falls back to a length-based estimate
-        for plain-string completions (the ``llm_call`` seam returns ``str``).
+        ``LLMResult``, a ``usage`` mapping with prompt/completion counts) and falls
+        back to a length-based estimate for plain-string completions (the
+        ``llm_call`` seam returns ``str``).
+
+        RD-12 adds the PROMPT side: ``tokens_in`` is read from ``usage.prompt_tokens``
+        when present, else estimated from the prompt text (``prompt`` argument). The
+        returned dict feeds BOTH the trace-row detail and the decision artifact's
+        ``telemetry`` block (``tokens_in`` / ``tokens_out`` — the channels
+        ``review_decision_to_ledger_row`` reads), which is what H-LB consumes.
         """
-        text = response if isinstance(response, str) else str(getattr(response, "text", response) or "")
+        text = (
+            response
+            if isinstance(response, str)
+            else str(getattr(response, "text", response) or "")
+        )
         tokens_out = _estimate_tokens(text)
         tg = getattr(response, "tokens_generated", None)
         if isinstance(tg, int) and tg > 0:
             tokens_out = tg
+        tokens_in = _estimate_tokens(prompt) if prompt else 0
         usage = getattr(response, "usage", None)
         if isinstance(usage, dict):
             for key in ("completion_tokens", "output_tokens", "tokens_out"):
@@ -395,7 +498,12 @@ Rules:
                 if isinstance(val, int) and val > 0:
                     tokens_out = val
                     break
-        return {"tokens_out": int(tokens_out), "chars_out": len(text)}
+            for key in ("prompt_tokens", "input_tokens", "tokens_in"):
+                val = usage.get(key)
+                if isinstance(val, int) and val > 0:
+                    tokens_in = val
+                    break
+        return {"tokens_in": int(tokens_in), "tokens_out": int(tokens_out), "chars_out": len(text)}
 
     def review(
         self,
@@ -406,12 +514,18 @@ Rules:
         *,
         session_id: Any | None = None,
         trial_id: int | None = None,
+        executor_model_id: str | None = None,
     ) -> ArchitectReview:
         """Have architect review a specialist's output.
 
         TM-3: every invocation emits a REVIEW_DECISION trace event (with per-decision
         latency_ms + token counts) regardless of downstream acting. The RETURNED
         ``ArchitectReview`` is byte-identical to the pre-decision-plane behavior.
+
+        RD-12: the emitted detail carries prompt+completion tokens (``tokens``),
+        ``phase="review"``, and (when known) ``executor_model_id``; a reviewer
+        emission that fails to parse is counted distinctly (``parse_failure_count``)
+        and flagged ``parse_ok=False`` — never dropped, never double-counted.
         """
         subtask_id = subtask.get("id", "unknown")
         action = subtask.get("action", "")
@@ -436,7 +550,9 @@ Rules:
 
         start = time.perf_counter()
         parse_ok = True
-        tokens: dict[str, int] = {"tokens_out": 0}
+        model_call_failed = False
+        parse_failure: str | None = None
+        tokens: dict[str, int] = {"tokens_in": 0, "tokens_out": 0, "chars_out": 0}
         try:
             # Call architect with strict token limit
             response = self.primitives.llm_call(
@@ -444,30 +560,11 @@ Rules:
                 role=self.architect_role,
                 n_tokens=self.max_review_tokens,
             )
-
-            # Parse abbreviated JSON response
-            review_data = self._parse_review_response(response)
-
-            # Map abbreviated keys to full names
-            decision_str = review_data.get("d", review_data.get("decision", "changes"))
-            # Normalize decision string
-            if decision_str == "changes":
-                decision_str = "request_changes"
-            decision = ReviewDecision(decision_str)
-
-            review = ArchitectReview(
-                subtask_id=subtask_id,
-                decision=decision,
-                feedback=review_data.get("f", review_data.get("feedback", "")),
-                score=float(review_data.get("s", review_data.get("score", 0.5))),
-                suggested_changes=review_data.get("c", review_data.get("suggested_changes", [])),
-                approved_output=output if decision == ReviewDecision.APPROVE else None,
-            )
-            tokens = self._response_tokens(response)
-
         except Exception as e:
-            logger.warning(f"Architect review failed: {e}", exc_info=True)
+            logger.warning(f"Architect review call failed: {e}", exc_info=True)
+            model_call_failed = True
             parse_ok = False
+            self._model_call_failures += 1
             # Default to request_changes on failure
             review = ArchitectReview(
                 subtask_id=subtask_id,
@@ -475,6 +572,45 @@ Rules:
                 feedback=f"Review failed: {e}",
                 score=0.3,
             )
+        else:
+            try:
+                # Parse abbreviated JSON response (RD-12: fallback is counted, not silent)
+                review_data, parse_failed = self._parse_review_response_checked(response)
+
+                # Map abbreviated keys to full names
+                decision_str = review_data.get("d", review_data.get("decision", "changes"))
+                # Normalize decision string
+                if decision_str == "changes":
+                    decision_str = "request_changes"
+                decision = ReviewDecision(decision_str)
+
+                review = ArchitectReview(
+                    subtask_id=subtask_id,
+                    decision=decision,
+                    feedback=review_data.get("f", review_data.get("feedback", "")),
+                    score=float(review_data.get("s", review_data.get("score", 0.5))),
+                    suggested_changes=review_data.get(
+                        "c", review_data.get("suggested_changes", [])
+                    ),
+                    approved_output=output if decision == ReviewDecision.APPROVE else None,
+                )
+                tokens = self._response_tokens(response, prompt)
+                if parse_failed:
+                    parse_ok = False
+                    parse_failure = "unparseable_response"
+                    self._parse_failure_count += 1
+            except Exception as e:
+                logger.warning(f"Architect review failed: {e}", exc_info=True)
+                parse_ok = False
+                parse_failure = str(e)[:200]
+                self._parse_failure_count += 1
+                # Default to request_changes on failure
+                review = ArchitectReview(
+                    subtask_id=subtask_id,
+                    decision=ReviewDecision.REQUEST_CHANGES,
+                    feedback=f"Review failed: {e}",
+                    score=0.3,
+                )
 
         # TM-3: always-on shadow emission (side effect only; return is unchanged).
         latency_ms = (time.perf_counter() - start) * 1000.0
@@ -484,6 +620,7 @@ Rules:
             status=review.decision.value,
             detail={
                 "mode": "review",
+                "phase": "review",
                 "subtask_id": subtask_id,
                 "decision": review.decision.value,
                 "score": review.score,
@@ -491,6 +628,9 @@ Rules:
                 "tripwire": review.tripwire,
                 "quick_mode": quick_mode,
                 "parse_ok": parse_ok,
+                "parse_failure": parse_failure,
+                "model_call_failed": model_call_failed,
+                "executor_model_id": executor_model_id or subtask.get("role"),
                 "latency_ms": latency_ms,
                 "tokens": tokens,
             },
@@ -508,6 +648,7 @@ Rules:
         *,
         session_id: Any | None = None,
         trial_id: int | None = None,
+        executor_model_id: str | None = None,
     ) -> PlanReviewResult | None:
         """Have architect review a plan before specialist execution.
 
@@ -519,72 +660,89 @@ Rules:
         DECOUPLED shadow-emission path (RD-5): the trace flows even when the
         ``plan_review`` feature (which requires ``memrl``) is off. The RETURNED value
         is byte-identical to the pre-decision-plane behavior.
+
+        RD-12: an unparseable reviewer emission is counted distinctly
+        (``parse_failure_count``) and flagged ``parse_ok=False`` in the trace row;
+        the returned ``PlanReviewResult`` is unchanged.
         """
         from src.prompt_builders import build_plan_review_prompt
 
         prompt = build_plan_review_prompt(objective, task_type, plan_steps)
 
         start = time.perf_counter()
+        parse_ok = True
+        parse_failure: str | None = None
         try:
             response = self.primitives.llm_call(
                 prompt,
                 role=self.architect_role,
                 n_tokens=self.max_plan_review_tokens,
             )
-
-            # Parse abbreviated JSON response
-            review_data = self._parse_review_response(response)
-
-            decision = review_data.get("d", review_data.get("decision", "ok"))
-            # Normalize valid decisions
-            valid_decisions = {"ok", "reorder", "drop", "add", "reroute"}
-            if decision not in valid_decisions:
-                decision = "ok"
-
-            result = PlanReviewResult(
-                decision=decision,
-                score=float(review_data.get("s", review_data.get("score", 0.5))),
-                feedback=review_data.get("f", review_data.get("feedback", "")),
-                patches=review_data.get("p", review_data.get("patches", [])),
-                raw_response=response[:200],
-            )
-            latency_ms = (time.perf_counter() - start) * 1000.0
-            self._emit_review_event(
-                category=CAT_REVIEW_DECISION,
-                summary=f"plan_review: {result.decision}",
-                status=result.decision,
-                detail={
-                    "mode": "plan_review",
-                    "decision": result.decision,
-                    "score": result.score,
-                    "patches": len(result.patches),
-                    "parse_ok": True,
-                    "latency_ms": latency_ms,
-                    "tokens": self._response_tokens(response),
-                },
-                session_id=session_id,
-                trial_id=trial_id,
-            )
-            return result
-
         except Exception as e:
             logger.warning(f"Plan review failed: {e}", exc_info=True)
             latency_ms = (time.perf_counter() - start) * 1000.0
+            self._model_call_failures += 1
             self._emit_review_event(
                 category=CAT_REVIEW_DECISION,
                 summary="plan_review: error",
                 status="error",
                 detail={
                     "mode": "plan_review",
+                    "phase": "plan",
                     "error": str(e),
                     "parse_ok": False,
+                    "model_call_failed": True,
+                    "executor_model_id": executor_model_id or _plan_executors(plan_steps),
                     "latency_ms": latency_ms,
-                    "tokens": {"tokens_out": 0},
+                    "tokens": {"tokens_in": 0, "tokens_out": 0, "chars_out": 0},
                 },
                 session_id=session_id,
                 trial_id=trial_id,
             )
             return None  # Non-blocking -- proceed without review
+
+        # Parse abbreviated JSON response (RD-12: fallback is counted, not silent)
+        review_data, parse_failed = self._parse_review_response_checked(response)
+
+        decision = review_data.get("d", review_data.get("decision", "ok"))
+        # Normalize valid decisions
+        valid_decisions = {"ok", "reorder", "drop", "add", "reroute"}
+        if decision not in valid_decisions:
+            decision = "ok"
+        if parse_failed:
+            parse_ok = False
+            parse_failure = "unparseable_response"
+            self._parse_failure_count += 1
+
+        result = PlanReviewResult(
+            decision=decision,
+            score=float(review_data.get("s", review_data.get("score", 0.5))),
+            feedback=review_data.get("f", review_data.get("feedback", "")),
+            patches=review_data.get("p", review_data.get("patches", [])),
+            raw_response=response[:200],
+        )
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        self._emit_review_event(
+            category=CAT_REVIEW_DECISION,
+            summary=f"plan_review: {result.decision}",
+            status=result.decision,
+            detail={
+                "mode": "plan_review",
+                "phase": "plan",
+                "decision": result.decision,
+                "score": result.score,
+                "patches": len(result.patches),
+                "parse_ok": parse_ok,
+                "parse_failure": parse_failure,
+                "model_call_failed": False,
+                "executor_model_id": executor_model_id or _plan_executors(plan_steps),
+                "latency_ms": latency_ms,
+                "tokens": self._response_tokens(response, prompt),
+            },
+            session_id=session_id,
+            trial_id=trial_id,
+        )
+        return result
 
     def generate_taskir(self, objective: str) -> dict[str, Any]:
         """Have architect generate minimal TaskIR for an objective."""
@@ -669,7 +827,20 @@ Rules:
                     pass
 
             logger.warning(f"Could not parse review response: {response[:200]}")
-            return {"decision": "request_changes", "feedback": "Parse error"}
+            # RD-12: return the MARKED fallback so callers can distinguish a parse
+            # failure from a real verdict (see _parse_review_response_checked).
+            return dict(_PARSE_FALLBACK)
+
+    def _parse_review_response_checked(self, response: str) -> tuple[dict[str, Any], bool]:
+        """Parse a reviewer emission, returning ``(data, parse_failed)``.
+
+        ``parse_failed=True`` exactly when the fallback verdict was substituted
+        because no JSON object could be extracted. RD-12 callers use this form so a
+        fallback is counted distinctly (``parse_failure_count``) and flagged in the
+        trace row (``parse_ok=False``) instead of masquerading as a real verdict.
+        """
+        data = self._parse_review_response(response)
+        return data, bool(data.get("_parse_fallback"))
 
     # ══════════════════════════════════════════════════════════════════════════
     # Decision plane (SHADOW-ONLY): RD-3 / RD-5 / RD-6 / RD-8 / RD-9.
@@ -718,6 +889,7 @@ Rules:
         subtask_id: str = "candidate",
         session_id: Any | None = None,
         trial_id: int | None = None,
+        executor_model_id: str | None = None,
     ) -> ArchitectReview:
         """Pointwise review of a PRE-SANITIZED CandidatePackage view (RD-6).
 
@@ -729,6 +901,8 @@ Rules:
 
         Emits a REVIEW_DECISION trace event with latency + tokens. A parse failure is
         recorded and withheld as REQUEST_EVIDENCE — never a reject (admissibility).
+        RD-12: a failed parse is counted distinctly (``parse_failure_count``) and the
+        trace detail carries ``phase="review"`` + ``executor_model_id``.
         """
         for banned in ("author_self_assessment", "author_confidence_assertion", "quality_labels"):
             if isinstance(sanitized_view, dict) and banned in sanitized_view:
@@ -747,6 +921,7 @@ Rules:
 
         start = time.perf_counter()
         response: Any = ""
+        model_call_failed = False
         try:
             response = self.primitives.llm_call(
                 prompt, role=self.architect_role, n_tokens=self.max_review_tokens
@@ -754,6 +929,8 @@ Rules:
         except Exception as exc:
             logger.warning("review_candidate model call failed: %s", exc)
             response = ""
+            model_call_failed = True
+            self._model_call_failures += 1
 
         text = response if isinstance(response, str) else str(getattr(response, "text", "") or "")
         obj, failure = parse_review_decision(text)
@@ -767,6 +944,11 @@ Rules:
                 confidence=0.0,
             )
             parse_ok = False
+            if not model_call_failed:
+                # A model-call failure is counted on its own counter; a genuine
+                # unparseable emission lands on the parse-failure counter. Exactly
+                # one increment, never both.
+                self._parse_failure_count += 1
         else:
             review = self._architect_review_from_decision(obj, subtask_id)
             parse_ok = True
@@ -778,6 +960,7 @@ Rules:
             status=review.decision.value,
             detail={
                 "mode": "review_candidate",
+                "phase": "review",
                 "framing_neutral": True,
                 "pointwise": True,
                 "candidate_ref": (sanitized_view or {}).get("task_ref"),
@@ -787,8 +970,10 @@ Rules:
                 "tripwire": review.tripwire,
                 "parse_ok": parse_ok,
                 "parse_failure": failure.to_dict() if failure else None,
+                "model_call_failed": model_call_failed,
+                "executor_model_id": executor_model_id,
                 "latency_ms": latency_ms,
-                "tokens": self._response_tokens(response),
+                "tokens": self._response_tokens(response, prompt),
             },
             session_id=session_id,
             trial_id=trial_id,
@@ -796,9 +981,7 @@ Rules:
         return review
 
     @staticmethod
-    def _architect_review_from_decision(
-        obj: dict[str, Any], subtask_id: str
-    ) -> ArchitectReview:
+    def _architect_review_from_decision(obj: dict[str, Any], subtask_id: str) -> ArchitectReview:
         """Map a validated review_decision object → ArchitectReview (RD-6)."""
         blocking = obj.get("blocking") or {}
         advisory = obj.get("advisory") or {}
@@ -849,6 +1032,7 @@ Rules:
         *,
         session_id: Any | None = None,
         trial_id: int | None = None,
+        executor_model_id: str | None = None,
     ) -> ArchitectReview:
         """Mechanical verifier-precedence over a reviewer decision (RD-3).
 
@@ -881,7 +1065,11 @@ Rules:
 
         if trace_cat == FA_CANDIDATE:  # rule 1: reviewer-approve + conclusive-fail
             evidence = list(review.evidence or []) + [
-                {"kind": "gate_result", "ref": fc.get("check_id"), "summary": "conclusive FAIL certificate"}
+                {
+                    "kind": "gate_result",
+                    "ref": fc.get("check_id"),
+                    "summary": "conclusive FAIL certificate",
+                }
                 for fc in fail_certs
             ]
             adjusted = replace(
@@ -891,9 +1079,7 @@ Rules:
                 evidence=evidence,
             )
         else:  # FR_CANDIDATE — rules 2 + 3: reviewer-reject + conclusive-pass
-            adjusted = replace(
-                review, decision=ReviewDecision(adjusted_decision), tripwire=False
-            )
+            adjusted = replace(review, decision=ReviewDecision(adjusted_decision), tripwire=False)
 
         self._emit_review_event(
             category=trace_cat,
@@ -902,11 +1088,13 @@ Rules:
             status=verdict,
             detail={
                 "kind": trace_cat,
+                "phase": "verification",
                 "conclusive_verdict": verdict,
                 "original_decision": review.decision.value,
                 "adjusted_decision": adjusted.decision.value,
                 "report_id": (report or {}).get("report_id"),
                 "certificates": fail_certs,
+                "executor_model_id": executor_model_id,
             },
             session_id=session_id,
             trial_id=trial_id,
@@ -921,6 +1109,7 @@ Rules:
         *,
         session_id: Any | None = None,
         trial_id: int | None = None,
+        executor_model_id: str | None = None,
     ) -> ArchitectReview:
         """Env-gated shadow downgrade of a would-be BLOCKING decision (RD-5).
 
@@ -945,10 +1134,12 @@ Rules:
             status="warn_only",
             detail={
                 "mode": "warn_only_downgrade",
+                "phase": "decision",
                 "warn_only_active": True,
                 "original_decision": review.decision.value,
                 "downgraded_decision": downgraded.decision.value,
                 "original_tripwire": review.tripwire,
+                "executor_model_id": executor_model_id,
             },
             session_id=session_id,
             trial_id=trial_id,
@@ -976,6 +1167,7 @@ Rules:
         *,
         session_id: Any | None = None,
         trial_id: int | None = None,
+        executor_model_id: str | None = None,
     ) -> dict[str, Any]:
         """Return a decision artifact flagging ``unverified_rejection`` (RD-8).
 
@@ -998,12 +1190,12 @@ Rules:
                 status="unverified_rejection",
                 detail={
                     "mode": "reject_admissibility",
+                    "phase": "decision",
                     "decision": review.decision.value,
                     "unverified_rejection": True,
                     "reason": "reject without objective evidence (gate/test/scorer)",
-                    "evidence_kinds": [
-                        (e or {}).get("kind") for e in (review.evidence or [])
-                    ],
+                    "evidence_kinds": [(e or {}).get("kind") for e in (review.evidence or [])],
+                    "executor_model_id": executor_model_id,
                 },
                 session_id=session_id,
                 trial_id=trial_id,
@@ -1017,6 +1209,7 @@ Rules:
         reason: str = "",
         session_id: Any | None = None,
         trial_id: int | None = None,
+        executor_model_id: str | None = None,
     ) -> ArchitectReview:
         """RD-8 escalate stub: route to the escalation pipeline surface.
 
@@ -1029,10 +1222,12 @@ Rules:
             summary=f"escalate {review.subtask_id}",
             status="escalate",
             detail={
+                "phase": "escalation",
                 "subtask_id": review.subtask_id,
                 "decision": review.decision.value,
                 "confidence": review.confidence,
                 "reason": reason or review.feedback,
+                "executor_model_id": executor_model_id,
             },
             session_id=session_id,
             trial_id=trial_id,
@@ -1048,6 +1243,9 @@ Rules:
         verification_report: dict[str, Any] | None = None,
         session_id: Any | None = None,
         trial_id: int | None = None,
+        latency_ms: float | None = None,
+        tokens: dict[str, int] | None = None,
+        executor_model_id: str | None = None,
     ) -> dict[str, Any]:
         """Run the full SHADOW decision pipeline over a review (RD-3/5/8).
 
@@ -1056,17 +1254,61 @@ Rules:
         external state. Returns a decision artifact dict (superset of
         ``ArchitectReview.to_dict()``). This is the single entry point a caller in
         shadow mode (gated by ``review_decision_shadow``) invokes.
+
+        RD-12: when ``latency_ms`` / ``tokens`` are supplied, the returned artifact
+        carries a schema-aligned ``telemetry`` block (``wall_ms`` / ``tokens_in`` /
+        ``tokens_out`` — the channels ``review_decision_to_ledger_row`` reads, so the
+        artifact feeds the H4 ledger + H-LB).
+
+        TM-8: EVERY invocation emits one REVIEW_DECISION trace row (``phase=
+        "decision"``), so a review invocation that exercises no sub-step still
+        produces a trace row — this is what makes the coverage gate measurable.
         """
         r = review
         if verification_report is not None:
             r = self.apply_verifier_precedence(
-                r, verification_report, session_id=session_id, trial_id=trial_id
+                r, verification_report, session_id=session_id, trial_id=trial_id,
+                executor_model_id=executor_model_id,
             )
-        r = self.apply_warn_only(r, session_id=session_id, trial_id=trial_id)
+        r = self.apply_warn_only(
+            r, session_id=session_id, trial_id=trial_id, executor_model_id=executor_model_id,
+        )
         if r.decision == ReviewDecision.ESCALATE:
-            self.escalate(r, session_id=session_id, trial_id=trial_id)
-        artifact = self.mark_reject_admissibility(r, session_id=session_id, trial_id=trial_id)
+            self.escalate(
+                r, session_id=session_id, trial_id=trial_id, executor_model_id=executor_model_id,
+            )
+        artifact = self.mark_reject_admissibility(
+            r, session_id=session_id, trial_id=trial_id, executor_model_id=executor_model_id,
+        )
         artifact["shadow"] = True
+        # RD-12: schema-aligned telemetry block (telemetry.wall_ms / tokens_in / tokens_out).
+        if latency_ms is not None or tokens:
+            artifact["telemetry"] = {
+                "wall_ms": latency_ms,
+                "tokens_in": (tokens or {}).get("tokens_in", 0),
+                "tokens_out": (tokens or {}).get("tokens_out", 0),
+            }
+        # TM-8: always-on emission so every shadow invocation yields a trace row
+        # (the sub-steps above only emit on disagreement/downgrade/admissibility).
+        self._emit_review_event(
+            category=CAT_REVIEW_DECISION,
+            summary=f"shadow_decide {r.subtask_id}: {r.decision.value}",
+            status=r.decision.value,
+            detail={
+                "mode": "shadow_decide",
+                "phase": "decision",
+                "shadow": True,
+                "decision": r.decision.value,
+                "confidence": r.confidence,
+                "tripwire": r.tripwire,
+                "unverified_rejection": artifact.get("unverified_rejection"),
+                "executor_model_id": executor_model_id,
+                "latency_ms": latency_ms,
+                "tokens": tokens or {"tokens_in": 0, "tokens_out": 0, "chars_out": 0},
+            },
+            session_id=session_id,
+            trial_id=trial_id,
+        )
         return artifact
 
     # ── RD-9: plan-review specifics ───────────────────────────────────────────
@@ -1079,12 +1321,15 @@ Rules:
         *,
         session_id: Any | None = None,
         trial_id: int | None = None,
+        executor_model_id: str | None = None,
     ) -> dict[str, Any]:
         """Structured plan review keyed to phase-coverage/order/executor-alignment (RD-9).
 
         Returns a structured dict (NOT ``PlanReviewResult``) so it is additive to the
         legacy ``review_plan()`` path. Prose quality is deliberately ignored;
         over-specification is penalized like gaps. Shadow-only; emits a trace event.
+        RD-12: an unparseable emission is counted distinctly + flagged
+        ``parse_ok=False``; the returned dict is unchanged.
         """
         steps = self._render_plan_steps(plan_steps)
         prompt = self.PLAN_REVIEW_RUBRIC_PROMPT.format(
@@ -1093,6 +1338,7 @@ Rules:
 
         start = time.perf_counter()
         response: Any = ""
+        model_call_failed = False
         try:
             response = self.primitives.llm_call(
                 prompt, role=self.architect_role, n_tokens=self.max_plan_review_tokens
@@ -1100,8 +1346,15 @@ Rules:
         except Exception as exc:
             logger.warning("review_plan_rubric model call failed: %s", exc)
             response = ""
+            model_call_failed = True
+            self._model_call_failures += 1
 
-        data = self._parse_review_response(response) if response else {}
+        if response:
+            data, parse_failed = self._parse_review_response_checked(response)
+        else:
+            data, parse_failed = {}, True
+        if parse_failed and not model_call_failed:
+            self._parse_failure_count += 1
         decision = data.get("decision", data.get("d", "approve"))
         valid = {"approve", "request_changes", "reject_to_empty", "escalate"}
         if decision not in valid:
@@ -1123,9 +1376,16 @@ Rules:
             status=result["decision"],
             detail={
                 "mode": "plan_rubric",
+                "phase": "plan",
                 **result,
+                "parse_ok": not parse_failed and not model_call_failed,
+                "parse_failure": "unparseable_response"
+                if (parse_failed and not model_call_failed)
+                else None,
+                "model_call_failed": model_call_failed,
+                "executor_model_id": executor_model_id or _plan_executors(plan_steps),
                 "latency_ms": latency_ms,
-                "tokens": self._response_tokens(response),
+                "tokens": self._response_tokens(response, prompt),
             },
             session_id=session_id,
             trial_id=trial_id,
@@ -1166,26 +1426,21 @@ Rules:
         the reminder to the next specialist prompt. Set ``emit=True`` to also record a
         PLAN_REMINDER trace event (needed for plan-compliance metrics, intake-835).
         """
-        if (
-            not approved_plan
-            or cadence_n <= 0
-            or step_index <= 0
-            or step_index % cadence_n != 0
-        ):
+        if not approved_plan or cadence_n <= 0 or step_index <= 0 or step_index % cadence_n != 0:
             return None
         steps = self._render_plan_steps(approved_plan)
-        message = (
-            "Reminder — you are executing this approved plan; stay on it:\n" + steps
-        )
+        message = "Reminder — you are executing this approved plan; stay on it:\n" + steps
         if emit:
             self._emit_review_event(
                 category=CAT_PLAN_REMINDER,
                 summary=f"plan reminder @step {step_index}",
                 status="reminder",
                 detail={
+                    "phase": "reminder",
                     "step_index": step_index,
                     "cadence_n": cadence_n,
                     "n_steps": len(approved_plan),
+                    "executor_model_id": _plan_executors(approved_plan),
                 },
                 session_id=session_id,
                 trial_id=trial_id,

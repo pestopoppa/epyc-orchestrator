@@ -90,7 +90,14 @@ class TestLlamaCppBackendInfer:
         assert result.tokens_generated == 64
         assert result.generation_speed == 32.0
         assert "Hello world" in result.output
-        mock_run.assert_called_once()
+        # SS-BENCH-GATE-c: the placement guard (api_enforce_placement) also runs
+        # subprocess (ps check) before the launch, so assert the launch itself.
+        launch_calls = [
+            c
+            for c in mock_run.call_args_list
+            if "llama-completion" in " ".join(c.args[0])
+        ]
+        assert len(launch_calls) == 1
 
     def test_infer_subprocess_error(self, minimal_registry):
         """Test inference with subprocess returning error."""
