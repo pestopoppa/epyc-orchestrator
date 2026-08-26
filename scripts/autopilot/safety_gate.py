@@ -468,6 +468,41 @@ def _normalize_counts_by_tier(raw: Any, path: Path) -> dict[int, dict[str, int]]
     return normalized
 
 
+def _normalize_tier_revisions(raw: Any, path: Path) -> dict[int, int]:
+    """Normalize persisted per-tier baseline revisions (monotonic ints >= 0).
+
+    EV-14c: the revision is the moved-reference detector — a measurement window pins
+    the tier revision before it starts and compares after, so a re-score that moves
+    the baseline mid-window is detected instead of silently collapsed over. A corrupt
+    revision (negative / non-numeric) is dropped loudly: restoring one would pin a
+    reference identity that cannot be compared.
+    """
+    normalized: dict[int, int] = {}
+    for tier, revision in (raw or {}).items():
+        try:
+            t = int(tier)
+        except (TypeError, ValueError):
+            log.error(
+                "Ignoring baseline revision tier key %r in %s; expected integer tier",
+                tier,
+                path,
+            )
+            continue
+        try:
+            r = int(revision)
+        except (TypeError, ValueError):
+            log.error(
+                "Ignoring corrupt baseline revision %r for T%s in %s; expected integer",
+                revision,
+                t,
+                path,
+            )
+            continue
+        if r >= 0:
+            normalized[t] = r
+    return normalized
+
+
 def _fmt_metric(value: Any, spec: str) -> str:
     """D4 / FIELD-1 (MET-1): format a numeric METRIC value for ``to_grep_lines``.
 
@@ -778,6 +813,25 @@ class EvalResult:
         return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class BaselinePin:
+    """Durable identity of a baseline reference a measurement window pins against.
+
+    EV-14c: captured BEFORE a window starts (an EV-14a band run pins the reference
+    before its first repeat; ``update_baseline`` pins it at promotion entry) via
+    ``Baseline.pin_tier()``. ``Baseline.pin_moved(pin)`` reports whether the tier
+    reference changed since the pin — so a band measured against a reference that
+    was re-scored mid-window is DETECTED as moved, never silently read as stable.
+    """
+
+    tier: int
+    quality: float | None
+    per_suite_quality: dict[str, float | None]
+    per_suite_counts: dict[str, int]
+    revision: int
+    eval_quality_era: str = ""
+
+
 @dataclass
 class Baseline:
     quality: float = DEFAULT_BASELINE_QUALITY
@@ -815,6 +869,18 @@ class Baseline:
     # (2026-05-31: a test fixture's update_baseline() wrote quality=2.9 to the real
     #  baseline via the DEFAULT_BASELINE_PATH fallback, gate-locking the live loop.)
     source_path: Path | None = field(default=None, compare=False, repr=False)
+    # EV-14c: per-tier monotonic revision of the tier baseline reference. Bumped by
+    # update_tier() on every write that actually changes the reference identity (tier
+    # quality, a per-suite entry, or a per-suite count). A measurement window
+    # (e.g. an EV-14a band run) pins the reference before it starts via pin_tier()
+    # and detects a moved reference afterwards via pin_moved() — a re-score can no
+    # longer move the baseline silently under a running window. Persisted through
+    # load/save/apply_state/to_state_dict so a restart cannot hide a move.
+    tier_revisions: dict[int, int] = field(default_factory=dict)
+    # Live measurement-window pins registered by pin_tier(), so update_tier can NAME
+    # the windows its write invalidates. Never persisted: a pin is a per-process
+    # window, and a persisted pin would outlive the process that measured against it.
+    _pins: dict[str, BaselinePin] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def load(cls, path: Path | None = None, state: dict[str, Any] | None = None) -> Baseline:
@@ -877,6 +943,7 @@ class Baseline:
         per_suite_counts_by_tier = _normalize_counts_by_tier(
             data.get("per_suite_counts_by_tier", {}), path
         )
+        tier_revisions = _normalize_tier_revisions(data.get("tier_revisions", {}), path)
         reliability = data.get("reliability", defaults.reliability)
         if reliability is not None and (
             isinstance(reliability, bool)
@@ -919,6 +986,7 @@ class Baseline:
             baselines_by_tier=baselines_by_tier,
             per_suite_quality_by_tier=per_suite_by_tier,
             per_suite_counts_by_tier=per_suite_counts_by_tier,
+            tier_revisions=tier_revisions,
             frontdoor_speed=frontdoor_speed,
             source_path=path,
         )
@@ -1023,6 +1091,7 @@ class Baseline:
             "baselines_by_tier": self.baselines_by_tier,
             "per_suite_quality_by_tier": self.per_suite_quality_by_tier,
             "per_suite_counts_by_tier": self.per_suite_counts_by_tier,
+            "tier_revisions": self.tier_revisions,
             "frontdoor_speed": self.frontdoor_speed,
         }
         _atomic_write_text(
@@ -1115,6 +1184,9 @@ class Baseline:
         self.per_suite_counts_by_tier.update(
             _normalize_counts_by_tier(state.get("per_suite_counts_by_tier", {}), state_path)
         )
+        self.tier_revisions.update(
+            _normalize_tier_revisions(state.get("tier_revisions", {}), state_path)
+        )
         era = state.get("eval_quality_era")
         if isinstance(era, str) and era.strip():
             self.eval_quality_era = era.strip()
@@ -1143,13 +1215,100 @@ class Baseline:
         callers then fall back to the result's own resolution / the fixed floor."""
         return self.per_suite_counts_by_tier.get(int(tier), {})
 
+    def tier_revision(self, tier: int) -> int:
+        """Current revision of the T<tier> baseline reference (0 before any write)."""
+        return self.tier_revisions.get(int(tier), 0)
+
+    def pin_tier(self, tier: int, pin_id: str | None = None, *, register: bool = True) -> BaselinePin:
+        """Capture the current T<tier> reference identity for a measurement window.
+
+        EV-14c: call BEFORE the window starts (an EV-14a band run pins the reference
+        before its first repeat). The returned pin records the tier revision, so any
+        baseline write during the window is DETECTABLE via ``pin_moved()`` instead of
+        being silently collapsed over. With ``register=True`` (the default) the pin is
+        kept so ``update_tier()`` can NAME the windows its write invalidates; a
+        window that IS the writer itself (``update_baseline``'s read-to-write span)
+        passes ``register=False`` so its own write is not reported against it.
+        """
+        tier = int(tier)
+        pin = BaselinePin(
+            tier=tier,
+            quality=self.quality_for_tier(tier, strict=True),
+            per_suite_quality=dict(self.per_suite_quality_by_tier.get(tier, {})),
+            per_suite_counts=dict(self.per_suite_counts_by_tier.get(tier, {})),
+            revision=self.tier_revision(tier),
+            eval_quality_era=self.eval_quality_era,
+        )
+        if register:
+            key = pin_id or f"t{tier}-r{pin.revision}"
+            self._pins.setdefault(key, pin)
+        return pin
+
+    def pin_moved(self, pin: BaselinePin) -> bool:
+        """True when the T<tier> reference changed since ``pin`` was captured.
+
+        A band measured against a moved reference is INVALID — never "no change".
+        This is the detector that makes a silently-moved baseline impossible
+        (EV-14c): callers that cannot tolerate the move refuse or re-measure.
+        """
+        return self.tier_revision(pin.tier) != pin.revision
+
+    def pins_for_tier(self, tier: int) -> tuple[BaselinePin, ...]:
+        """Registered measurement-window pins on one tier, oldest first."""
+        tier = int(tier)
+        return tuple(pin for pin in self._pins.values() if pin.tier == tier)
+
+    @staticmethod
+    def _fmt_quality(value: Any) -> str:
+        """Render a quality reference for the moved-reference log line (None as absent)."""
+        if value is None:
+            return "absent"
+        try:
+            return f"{float(value):.3f}"
+        except (TypeError, ValueError):
+            return str(value)
+
     def update_tier(self, result: EvalResult) -> None:
+        """Rewrite the T<tier> baseline reference — with an explicit moved-reference record.
+
+        EV-14c (defect, not enhancement): the pre-fix write was ``dict.update``
+        semantics — a re-score of the same suite silently overwrote the prior baseline
+        with no record that one existed, so a measurement window (e.g. an EV-14a band
+        run) pinned against the old reference could not detect that its reference had
+        been moved mid-window. This is the collapse point that gates decisions. Now:
+
+        * every write that actually changes the reference identity (tier quality, a
+          per-suite entry, or a per-suite count) bumps the tier revision — the
+          reference is never "same" after a move;
+        * the move is logged explicitly (BASELINE MOVED: prior -> new) — never silent;
+        * every REGISTERED measurement pin the write invalidates is named in that log,
+          so the windows affected are visible at write time, and
+          ``pin_moved(pin)`` renders the same verdict at read time.
+        """
         tier = int(result.tier)
-        self.baselines_by_tier[tier] = result.quality
-        self.per_suite_quality_by_tier.setdefault(tier, {}).update(result.per_suite_quality)
+        moved: list[str] = []
+        prior_quality = self.baselines_by_tier.get(tier)
+        if result.quality != prior_quality:
+            moved.append(
+                f"tier quality {self._fmt_quality(prior_quality)} -> "
+                f"{self._fmt_quality(result.quality)}"
+            )
+            self.baselines_by_tier[tier] = result.quality
+        suite_map = self.per_suite_quality_by_tier.setdefault(tier, {})
+        for suite, quality in (result.per_suite_quality or {}).items():
+            if quality != suite_map.get(suite):
+                moved.append(
+                    f"suite {suite!r} {self._fmt_quality(suite_map.get(suite))} -> "
+                    f"{self._fmt_quality(quality)}"
+                )
+                suite_map[suite] = quality
         result_counts = getattr(result, "per_suite_counts", None) or {}
         if result_counts:
-            self.per_suite_counts_by_tier.setdefault(tier, {}).update(result_counts)
+            count_map = self.per_suite_counts_by_tier.setdefault(tier, {})
+            for suite, count in result_counts.items():
+                if count != count_map.get(suite):
+                    moved.append(f"suite {suite!r} counts {count_map.get(suite)} -> {count}")
+                    count_map[suite] = count
         if tier == DEFAULT_FRONTIER_TIER:
             self.quality = result.quality
             self.per_suite_quality.update(result.per_suite_quality)
@@ -1163,6 +1322,21 @@ class Baseline:
             self.speed = result.speed
             self.cost = result.cost
             self.reliability = result.reliability
+        if not moved:
+            return
+        revision = self.tier_revisions.get(tier, 0) + 1
+        self.tier_revisions[tier] = revision
+        invalidated = self.pins_for_tier(tier)
+        log.warning(
+            "BASELINE MOVED T%d (%s); tier revision %d -> %d%s",
+            tier,
+            "; ".join(moved),
+            revision - 1,
+            revision,
+            f"; invalidated measurement pins: {[key for key in self._pins if self._pins[key].tier == tier]}"
+            if invalidated
+            else "",
+        )
 
     def to_state_dict(self) -> dict[str, Any]:
         """State payload for in-memory baseline promotions; YAML remains the seed config."""
@@ -1183,6 +1357,14 @@ class Baseline:
             },
             "frontdoor_speed": self.frontdoor_speed,
         }
+        # Only emit the revision map when non-empty — keeps a legacy (pre-EV-14c)
+        # baseline's state payload byte-identical, and a missing key decodes back to
+        # the no-writes-yet default (revision 0 per tier).
+        if self.tier_revisions:
+            payload["tier_revisions"] = {
+                str(tier): revision
+                for tier, revision in sorted(self.tier_revisions.items())
+            }
         # Only emit the era stamp when known — keeps a legacy (unstamped) baseline's state
         # payload byte-identical, and lets a missing key decode back to the pre-E7 default.
         if self.eval_quality_era:
@@ -2240,6 +2422,11 @@ class SafetyGate:
         # no cross-tier legacy fallback. When it is None (no prior same-tier baseline) the
         # monotonic check below is skipped and update_tier SEEDS the tier baseline.
         previous_quality = self.baseline.quality_for_tier(tier, strict=True)
+        # EV-14c: pin the reference this promotion's gates compare against, so the
+        # monotonic/quantum verdicts are provably rendered against the reference that
+        # still exists at write time. Unregistered: this window IS the writer, and its
+        # own write must not be reported against itself.
+        entry_pin = self.baseline.pin_tier(tier, register=False)
         eligible, reason, proof = self._baseline_eligible(result)
         if not eligible:
             # B8 / SG-0: a frozen baseline ratchet is a loud failure, not a quiet skip —
@@ -2429,6 +2616,25 @@ class SafetyGate:
                 "Seeding T%d baseline from q=%.3f (no prior strict same-tier baseline).",
                 tier,
                 promotion_result.quality,
+            )
+        # EV-14c: refuse when the reference moved after promotion start. Every gate
+        # above compared against ``previous_quality`` / ``entry_pin``; if the tier
+        # revision changed since, that reference no longer exists and the verdict is a
+        # compare-to-ghost. In-process this cannot fire between the pin and the write
+        # (single-threaded), but it makes the read-to-write race structurally
+        # impossible rather than merely unobserved — the same fail-closed shape as
+        # the archive-max guard, one layer down.
+        if self.baseline.pin_moved(entry_pin):
+            reason = (
+                "baseline reference moved during promotion (tier revision "
+                f"{entry_pin.revision} -> {self.baseline.tier_revision(tier)}): the "
+                "monotonic/quantum gates compared against a reference that no longer "
+                "exists. REFUSED — re-run the promotion against the current baseline "
+                "(EV-14c: a silently-moved reference is impossible)."
+            )
+            log.warning("Baseline update REFUSED — %s", reason)
+            return BaselineUpdateResult(
+                False, reason, tier, previous_quality, promotion_result.quality, proof
             )
         self.baseline.update_tier(promotion_result)
         # Defect #4: stamp the era this baseline was promoted under so a future boundary can

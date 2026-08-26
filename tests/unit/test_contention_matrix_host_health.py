@@ -26,6 +26,7 @@ probe directly.
 """
 from __future__ import annotations
 
+import json
 import types
 
 import pytest
@@ -367,3 +368,200 @@ def test_a_stamped_matrix_round_trips_through_the_reader(tmp_path) -> None:
     assert record["status"] == cm.HOST_HEALTH_WARN
     assert record["decision_grade"] is False
     assert any("uptime" in w for w in record["warnings"])
+
+
+# ── 8. SC21: the J4b N-way fragment carries the same stamp ────────────
+
+
+def test_nway_fragment_stamp_matches_the_full_matrix_emitter() -> None:
+    """One rendering for both artifacts: the fragment can never drift from the matrix."""
+    probe = cm._host_health_probe(load_rules=_rules_loader(_attestation()))
+    fragment = yaml.safe_load("\n".join(cm._host_health_stamp_lines(probe)))
+    matrix = yaml.safe_load(_emit(probe))
+    for key in (
+        "host_health_status",
+        "host_health_warnings",
+        "host_health_structural_for_harness",
+        "decision_grade",
+        "decision_grade_blockers",
+        "host_provenance",
+    ):
+        assert fragment[key] == matrix[key], f"{key} drifted between fragment and matrix"
+    if fragment["decision_grade"] is True:
+        assert fragment["host_health_status"] == "clean"
+        assert not fragment["decision_grade_blockers"]
+
+
+def test_nway_fragment_without_a_probe_renders_unknown_not_clean() -> None:
+    """The fragment writer inherits the emitter's fail-safe: no probe, no clean block."""
+    doc = yaml.safe_load("\n".join(cm._host_health_stamp_lines(None)))
+    assert doc["host_health_status"] == "unknown"
+    assert doc["decision_grade"] is False
+    assert doc["host_health_warnings"], "the omission must be stated in the artifact"
+    assert doc["decision_grade_blockers"]
+
+
+def test_cmd_bench_nway_fragment_carries_the_host_health_stamp(tmp_path, monkeypatch) -> None:
+    """SC21: the J4b fragment writer stamps BOTH artifacts at emit time with the
+    same host-health probe the full-matrix emitter uses (orchestrator 77e5a214)."""
+    from src.scheduling import contention as contention_mod
+
+    cfg = {
+        "frontdoor": {"instances": [("0-95", 8070, 96)]},
+        "ingest_long_context": {"instances": [("0-47,96-143", 8080, 48)]},
+    }
+    monkeypatch.setattr("stack_numa.NUMA_CONFIG", cfg)
+    monkeypatch.setattr(contention_mod, "load_contention_matrix", lambda _path: None)
+    monkeypatch.setattr(
+        contention_mod, "topology_fingerprint_for_matrix", lambda _cfg, _m: "live-hash"
+    )
+    monkeypatch.setattr(
+        contention_mod,
+        "matrix_status",
+        lambda _p, current_topology_hash="": contention_mod.MatrixStatus.OK,
+    )
+    monkeypatch.setattr(
+        cm,
+        "_bench_nway",
+        lambda role_ports, samples=1, safe_sampling=False: {
+            "ratio": 1.25,
+            "cv": 0.02,
+            "samples": samples,
+            "seq_aggregate_tps": 10.0,
+            "parallel_aggregate_tps": 12.5,
+            "verdict": "allow",
+        },
+    )
+    clean_probe = {
+        "hostname": "TestHost",
+        "kernel": "k",
+        "uptime": "u",
+        "uptime_seconds": 1,
+        "numa_balancing": None,
+        "scaling_governors": ["performance"],
+        "loadavg": "0.00",
+        "llama_processes_at_attestation": 0,
+        "attestation_status": "collected",
+        "attestation_error": "",
+        "rule_source": "test",
+        "status": cm.HOST_HEALTH_CLEAN,
+        "warnings": [],
+        "structural_for_harness": [],
+        "decision_grade": True,
+        "decision_grade_blockers": [],
+    }
+    monkeypatch.setattr(cm, "_host_health_probe", lambda **kwargs: clean_probe)
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "topology_hash": "live-hash",
+                "candidate_sets": [{"roles": ["frontdoor", "ingest_long_context"]}],
+            }
+        )
+    )
+    rc = cm.cmd_bench_nway(
+        types.SimpleNamespace(
+            manifest=str(manifest),
+            min_size=2,
+            max_size=None,
+            include_flagged=False,
+            samples=1,
+            safe_sampling=False,
+            output=str(tmp_path),
+        )
+    )
+    assert rc == 0
+
+    results = json.loads((tmp_path / "j4b_nway_results.json").read_text())
+    assert results["host_health"]["decision_grade"] is True
+    assert results["host_health"]["status"] == cm.HOST_HEALTH_CLEAN
+    assert results["host_health"]["hostname"] == "TestHost"
+
+    block = yaml.safe_load((tmp_path / "j4b_n_way_block.yaml").read_text())
+    assert block["host_health_status"] == "clean"
+    assert block["decision_grade"] is True
+    assert block["decision_grade_blockers"] == []
+    assert block["host_health_warnings"] == []
+    assert block["host_provenance"]["hostname"] == "TestHost"
+    assert len(block["n_way"]) == 1
+    assert block["n_way"][0]["ratio"] == 1.25
+
+
+def test_cmd_bench_nway_blocked_host_stamps_decision_grade_false(tmp_path, monkeypatch) -> None:
+    """A blocked host must stamp the fragment decision_grade=false — the fail-safe
+    contract the strict reader (vidya adapters/contention_matrix.py) refuses on."""
+    from src.scheduling import contention as contention_mod
+
+    cfg = {
+        "frontdoor": {"instances": [("0-95", 8070, 96)]},
+        "ingest_long_context": {"instances": [("0-47,96-143", 8080, 48)]},
+    }
+    monkeypatch.setattr("stack_numa.NUMA_CONFIG", cfg)
+    monkeypatch.setattr(contention_mod, "load_contention_matrix", lambda _path: None)
+    monkeypatch.setattr(
+        contention_mod, "topology_fingerprint_for_matrix", lambda _cfg, _m: "live-hash"
+    )
+    monkeypatch.setattr(
+        contention_mod,
+        "matrix_status",
+        lambda _p, current_topology_hash="": contention_mod.MatrixStatus.OK,
+    )
+    monkeypatch.setattr(
+        cm,
+        "_bench_nway",
+        lambda role_ports, samples=1, safe_sampling=False: {
+            "ratio": 1.25,
+            "cv": 0.02,
+            "samples": samples,
+            "seq_aggregate_tps": 10.0,
+            "parallel_aggregate_tps": 12.5,
+            "verdict": "allow",
+        },
+    )
+    blocked_probe = {
+        "hostname": "TestHost",
+        "kernel": "k",
+        "uptime": "u",
+        "uptime_seconds": 1,
+        "numa_balancing": None,
+        "scaling_governors": ["performance"],
+        "loadavg": "0.00",
+        "llama_processes_at_attestation": 0,
+        "attestation_status": "collected",
+        "attestation_error": "",
+        "rule_source": "test",
+        "status": cm.HOST_HEALTH_WARN,
+        "warnings": ["stale uptime"],
+        "structural_for_harness": [],
+        "decision_grade": False,
+        "decision_grade_blockers": ["stale uptime"],
+    }
+    monkeypatch.setattr(cm, "_host_health_probe", lambda **kwargs: blocked_probe)
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "topology_hash": "live-hash",
+                "candidate_sets": [{"roles": ["frontdoor", "ingest_long_context"]}],
+            }
+        )
+    )
+    rc = cm.cmd_bench_nway(
+        types.SimpleNamespace(
+            manifest=str(manifest),
+            min_size=2,
+            max_size=None,
+            include_flagged=False,
+            samples=1,
+            safe_sampling=False,
+            output=str(tmp_path),
+        )
+    )
+    assert rc == 0
+    block = yaml.safe_load((tmp_path / "j4b_n_way_block.yaml").read_text())
+    assert block["decision_grade"] is False
+    assert block["host_health_status"] == "warn"
+    assert block["decision_grade_blockers"] == ["stale uptime"]
