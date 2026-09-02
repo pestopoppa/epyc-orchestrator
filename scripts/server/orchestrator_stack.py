@@ -114,6 +114,11 @@ from scripts.server.stack_paths import (
     SLOT_SAVE_DIR,
     STATE_FILE,
 )
+from scripts.server.stack_numa_evict import (
+    placement_summary,
+    pre_evict_gib_for_role,
+    pre_evict_nodes,
+)
 from scripts.server.stack_numa import (
     MLOCK_ROLES,
     NUMA_CONFIG,
@@ -1989,6 +1994,19 @@ def start_server(
     print(f"    Roles: {', '.join(roles)}")
     print(f"    Command: {' '.join(cmd[:5])}...")
 
+    # INF-70/C7 (PREPARED, default OFF): force free pages onto every NUMA node
+    # before the load. `--interleave=all` in spawn_prefix is a per-allocation
+    # HINT the kernel silently abandons for any node that has none, so a large
+    # model on a long-lived box can land 61%-on-one-node with an identical
+    # argv (measured 2026-09-02: decode -25%). Opt in per role with
+    # `numa_pre_evict_gib: <N>` in orchestration/stack_topology.yaml; absent
+    # (the default everywhere today) means this block does nothing.
+    _pre_evict_gib = pre_evict_gib_for_role(NUMA_CONFIG.get(primary_role))
+    if _pre_evict_gib > 0:
+        print(f"    [numa-pre-evict] forcing {_pre_evict_gib} GiB free per node...")
+        _ok, _msg = pre_evict_nodes(_pre_evict_gib)
+        print(f"    [numa-pre-evict] {'[OK]' if _ok else '[WARN]'} {_msg}")
+
     # Start process — taskset CPU-pinned per NUMA config + canonical OMP env + per-role GGML
     with open(log_file, "a") as log:
         env = build_launch_env(primary_role, os.environ.copy())
@@ -2019,6 +2037,12 @@ def start_server(
     print("    Waiting for health...")
     if wait_for_health(port, timeout=180):
         print("    [OK] Server ready")
+        # INF-70/C7: placement observation, not a gate. The weights are faulted
+        # in by the time health passes, so this is the one moment the operator
+        # can see whether --interleave=all was actually honoured. A share far
+        # above 100/nodes % means the model is skewed and decode is paying for
+        # it; the remedy is `numa_pre_evict_gib` above.
+        print(f"    [numa-placement] pid={proc.pid} {placement_summary(proc.pid)}")
         return ProcessInfo(
             role=primary_role,
             pid=proc.pid,
