@@ -1994,13 +1994,15 @@ def start_server(
     print(f"    Roles: {', '.join(roles)}")
     print(f"    Command: {' '.join(cmd[:5])}...")
 
-    # INF-70/C7 (PREPARED, default OFF): force free pages onto every NUMA node
-    # before the load. `--interleave=all` in spawn_prefix is a per-allocation
-    # HINT the kernel silently abandons for any node that has none, so a large
-    # model on a long-lived box can land 61%-on-one-node with an identical
-    # argv (measured 2026-09-02: decode -25%). Opt in per role with
-    # `numa_pre_evict_gib: <N>` in orchestration/stack_topology.yaml; absent
-    # (the default everywhere today) means this block does nothing.
+    # INF-70/C7 (ENABLED 2026-09-03 for every CPU llama-server role): force
+    # free pages onto every NUMA node before the load. `--interleave=all` in
+    # spawn_prefix is a per-allocation HINT the kernel silently abandons for
+    # any node that has none, so a large model on a long-lived box can land
+    # 61%-on-one-node with an identical argv (measured 2026-09-02: decode
+    # -25%). Sized the FORCING way (TARGET+2 on any node below TARGET, verify,
+    # 2 passes) — see stack_numa_evict.py. Per role via `numa_pre_evict_gib`
+    # in orchestration/stack_topology.yaml; a gpu_host_lane role resolves to 0
+    # here whatever the YAML says, so no GPU launch ever evicts against node 3.
     _pre_evict_gib = pre_evict_gib_for_role(NUMA_CONFIG.get(primary_role))
     if _pre_evict_gib > 0:
         print(f"    [numa-pre-evict] forcing {_pre_evict_gib} GiB free per node...")
