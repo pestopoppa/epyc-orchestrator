@@ -15,6 +15,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+from .measurement_guards import is_quality_admissible
+
 
 log = logging.getLogger(__name__)
 
@@ -445,15 +447,55 @@ def empirical_ville_false_positive_rate(
 def _coerce_question_results(
     question_results: Mapping[str, bool | int | float] | Sequence[Mapping[str, Any]],
 ) -> dict[str, bool]:
+    """Read qid -> correctness, EXCLUDING rows that carry no quality signal.
+
+    CJ-8. The compact journal rows already carry ``disposition`` (eval_tower
+    stamps it at ``_compact_question_result``), and this coercer read only
+    ``correct``. So an ``infra_failed`` row — a backend blip, a dropped
+    response — arrived as ``correct=False`` and became ``x = 0.0`` in
+    ``quality_trial_statistic``: a FABRICATED negative observation in an
+    anytime-valid e-process, which then accumulates toward a refutation the
+    candidate never earned.
+
+    Excluded rows shrink ``r_eff`` rather than dragging ``z`` down, which is the
+    same treatment ``rebuild_candidate_view`` already gives an out-of-domain
+    observation: skip and count, never clamp.
+
+    A row with NO disposition is admissible — the pre-taxonomy default is
+    ``scored``, and flipping it would empty every historical denominator.
+    """
     if isinstance(question_results, Mapping):
+        # A bare {qid: correct} map carries no dispositions to filter on. Its
+        # producer must filter before calling (autopilot._question_outcome_map).
         return {str(qid): bool(correct) for qid, correct in question_results.items()}
     outcomes: dict[str, bool] = {}
     for item in question_results:
         qid = str(item.get("qid") or item.get("question_id") or "").strip()
         if not qid:
             continue
+        if not is_quality_admissible(item.get("disposition")):
+            continue
         outcomes[qid] = bool(item.get("correct"))
     return outcomes
+
+
+def excluded_question_results(
+    question_results: Mapping[str, bool | int | float] | Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    """Count, by disposition, the rows :func:`_coerce_question_results` dropped.
+
+    Exported so a caller can REPORT the exclusion. A row that vanishes silently
+    from a denominator is indistinguishable from one that was never asserted.
+    """
+    counts: dict[str, int] = {}
+    if isinstance(question_results, Mapping):
+        return counts
+    for item in question_results:
+        disposition = item.get("disposition")
+        if not is_quality_admissible(disposition):
+            key = str(disposition)
+            counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 # SEQ-B: which journal field carries each axis's per-trial statistic. `journal_seq_block`

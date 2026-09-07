@@ -47,6 +47,11 @@ class Trajectory:
     cost_metrics: Dict[str, Any] = field(default_factory=dict)
     escalations: List[str] = field(default_factory=list)
     gate_results: List[Dict[str, Any]] = field(default_factory=list)
+    #: CJ-9. Gates that never DECIDED (timeout / checker error / unknown gate
+    #: name). Excluded from `gate_results` on purpose — the bool re-derivation
+    #: below would record them as `passed: False` — but COUNTED here, because a
+    #: count you cannot name is a count you cannot know is zero.
+    gates_inconclusive: int = 0
     embedding: Optional[np.ndarray] = None  # Pre-computed 1024-dim
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -67,6 +72,7 @@ class Trajectory:
             "outcome": self.outcome,
             "cost_metrics": self.cost_metrics,
             "escalations": self.escalations,
+            "gates_inconclusive": self.gates_inconclusive,
             "gate_results": self.gate_results,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
@@ -228,6 +234,7 @@ class TrajectoryExtractor:
         routing_decision = None
         escalations = []
         gate_results = []
+        gates_inconclusive = 0
         plan_reviews = []
         cost_metrics: Dict[str, Any] = {}
 
@@ -246,6 +253,13 @@ class TrajectoryExtractor:
                 escalations.append(entry)
             elif entry.event_type in (EventType.GATE_PASSED, EventType.GATE_FAILED):
                 gate_results.append(entry)
+            elif entry.event_type == EventType.GATE_INCONCLUSIVE:
+                # CJ-8, DELIBERATE OMISSION — not an oversight. A gate that never
+                # decided is counted, never scored: it enters neither the reward
+                # penalty (`q_reward` charges -0.1 per GATE_FAILED) nor the
+                # boolean `passed` re-derivation, both of which would record a
+                # harness defect as evidence about the model.
+                gates_inconclusive += 1
             elif entry.event_type == EventType.PLAN_REVIEWED:
                 plan_reviews.append(entry)
 
@@ -308,6 +322,7 @@ class TrajectoryExtractor:
             cost_metrics=cost_metrics,
             escalations=escalation_list,
             gate_results=gate_dicts,
+            gates_inconclusive=gates_inconclusive,
             started_at=task_started.timestamp,
             completed_at=task_completed.timestamp,
             outcome_entry=task_completed,

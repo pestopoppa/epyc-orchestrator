@@ -126,14 +126,24 @@ def outcome_from_gate_result(gate_result: Mapping[str, Any]) -> OracleOutcome:
     """
     name = str(gate_result.get("gate_name") or "gate")
     passed = gate_result.get("passed")
-    verdict = _PASS if passed else _FAIL if passed is not None else None
+    # CJ-8. `passed` is False on an undecided gate too (out-of-coverage stays
+    # BLOCKING), so `passed` alone cannot tell a failed check from one that never
+    # ran — and a gate that never ran is not gold-label evidence about the
+    # subject. Read the carried verdict first; fall back to `passed` for a
+    # result dict that predates the three-valued gate.
+    detail: dict[str, Any] = {"exit_code": gate_result.get("exit_code")}
+    if gate_result.get("verdict") == "out-of-coverage":
+        verdict = _INCONCLUSIVE
+        detail["cause"] = gate_result.get("cause")
+    else:
+        verdict = _PASS if passed else _FAIL if passed is not None else None
     return OracleOutcome(
         source=f"gate_runner:{name}",
         verdict=verdict,
         instrument_name=name,
         instrument_version=str(gate_result.get("instrument_version") or "gate_runner"),
         required=bool(gate_result.get("required", True)),
-        detail={"exit_code": gate_result.get("exit_code")},
+        detail=detail,
     )
 
 

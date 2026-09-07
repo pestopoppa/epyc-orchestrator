@@ -19,7 +19,9 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import logging
+import sys
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -29,6 +31,16 @@ from typing import Any, TYPE_CHECKING
 import yaml
 
 from src.config import _registry_timeout
+
+# The CJ-8 gate vocabulary. `scripts/` is not an installed package, so it is
+# loaded by path — the same idiom epyc-root's granite preflight uses.
+_GVV_PATH = Path(__file__).resolve().parent.parent / "scripts" / "benchmark" / "gate_verdict_vocab.py"
+_GVV_SPEC = importlib.util.spec_from_file_location("gate_verdict_vocab", _GVV_PATH)
+if _GVV_SPEC is None or _GVV_SPEC.loader is None:  # pragma: no cover
+    raise ImportError(f"cannot load the CJ-8 gate vocabulary from {_GVV_PATH}")
+gate_verdict_vocab = importlib.util.module_from_spec(_GVV_SPEC)
+sys.modules.setdefault("gate_verdict_vocab", gate_verdict_vocab)
+_GVV_SPEC.loader.exec_module(gate_verdict_vocab)
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +88,28 @@ class GateConfig:
 
 @dataclass
 class GateResult:
-    """Result of running a single gate."""
+    """Result of running a single gate.
+
+    CJ-8 (2026-09-07): THE VERDICT IS THREE-VALUED, and ``passed`` is no longer
+    the whole of it.
+
+    Before this, a gate that TIMED OUT, a gate whose subprocess RAISED, and a
+    gate NAME THAT DOES NOT EXIST all produced ``passed=False`` — the same value
+    a genuine lint failure produces. Downstream that boolean became an
+    ``EventType.GATE_FAILED`` event, and ``q_reward.compute_reward`` charges
+    -0.1 per ``GATE_FAILED``. So a harness timeout was converted into negative
+    learning signal ABOUT THE MODEL, which never did anything wrong: the check
+    never ran. Infra failure is the ABSENCE of a measurement, never a bad one.
+
+    ``passed`` KEEPS ITS MEANING AND ITS VALUE. An undecidable gate still
+    reports ``passed=False``, so every existing consumer — the retry loop, the
+    stop-on-required-failure rule, ``all_passed`` at the API boundary, the
+    ``get_summary`` tally — blocks exactly as it did before. Out-of-coverage is
+    RENAMED, never downgraded to a pass. What is new is ``verdict``/``cause``
+    riding alongside, so a consumer that needs the distinction (the reward
+    writer, the verification-report bridge) can read it instead of inferring it
+    from ``exit_code == -1`` and a substring of ``errors[0]``.
+    """
 
     gate_name: str
     passed: bool
@@ -87,10 +120,50 @@ class GateResult:
     warnings: list[str] = field(default_factory=list)
     attempt: int = 1
     required: bool = True
+    #: CJ-8 verdict. Defaults from ``passed`` so every existing construction
+    #: site (and every pickled/reconstructed result) keeps its old meaning; only
+    #: the sites that KNOW the check did not run pass ``out-of-coverage``.
+    verdict: str | None = None
+    #: Mandatory on ``out-of-coverage``, forbidden otherwise.
+    cause: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.verdict is None:
+            self.verdict = (
+                gate_verdict_vocab.VERDICT_PASS if self.passed
+                else gate_verdict_vocab.VERDICT_FAIL
+            )
+        if self.verdict == gate_verdict_vocab.VERDICT_OUT_OF_COVERAGE:
+            if self.cause is None:
+                raise GateRunnerError(
+                    f"gate {self.gate_name!r}: 'out-of-coverage' without a cause "
+                    f"code. An undecided gate with no cause names no remedy — "
+                    f"one of {gate_verdict_vocab.CAUSES!r}."
+                )
+            if self.cause not in gate_verdict_vocab.CAUSES:
+                raise GateRunnerError(
+                    f"gate {self.gate_name!r}: cause {self.cause!r} is outside "
+                    f"the closed registry {gate_verdict_vocab.CAUSES!r}."
+                )
+            if self.passed:
+                raise GateRunnerError(
+                    f"gate {self.gate_name!r}: an undecided gate can never be "
+                    f"passed=True. Out-of-coverage stays BLOCKING."
+                )
+        elif self.cause is not None:
+            raise GateRunnerError(
+                f"gate {self.gate_name!r}: verdict {self.verdict!r} is a DECISION "
+                f"and must not carry a cause code (got {self.cause!r})."
+            )
+
+    @property
+    def decided(self) -> bool:
+        """True iff this gate actually reached a verdict on its subject."""
+        return gate_verdict_vocab.is_decided(self.verdict or "")
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return {
+        d = {
             "gate_name": self.gate_name,
             "passed": self.passed,
             "exit_code": self.exit_code,
@@ -99,12 +172,20 @@ class GateResult:
             "warnings": self.warnings,
             "attempt": self.attempt,
             "required": self.required,
+            "verdict": self.verdict,
         }
+        if self.cause is not None:
+            d["cause"] = self.cause
+            d["cause_means"] = gate_verdict_vocab.CAUSE_MEANINGS[self.cause]
+        return d
 
     @property
     def summary(self) -> str:
         """Get a one-line summary of the result."""
-        status = "PASSED" if self.passed else "FAILED"
+        if not self.decided:
+            status = f"NOT-DECIDED:{self.cause}"
+        else:
+            status = "PASSED" if self.passed else "FAILED"
         return f"[{status}] {self.gate_name} ({self.elapsed_seconds:.1f}s)"
 
 
@@ -257,6 +338,9 @@ class GateRunner:
             )
 
         except subprocess.TimeoutExpired:
+            # CJ-8. The gate exceeded its budget BEFORE deciding. It did not rule
+            # against the subject; it failed to rule. `passed` stays False so the
+            # retry/stop-on-failure/`all_passed` logic still BLOCKS.
             elapsed = time.perf_counter() - start_time
             gate_result = GateResult(
                 gate_name=gate.name,
@@ -267,9 +351,13 @@ class GateRunner:
                 errors=[f"Gate timed out after {gate.timeout}s"],
                 attempt=attempt,
                 required=gate.required,
+                verdict=gate_verdict_vocab.VERDICT_OUT_OF_COVERAGE,
+                cause=gate_verdict_vocab.CAUSE_TIMEOUT,
             )
 
         except Exception as e:
+            # CJ-8. The INSTRUMENT raised — a defect in the checker, not evidence
+            # about the subject. Still blocking (`passed=False`), now named.
             elapsed = time.perf_counter() - start_time
             gate_result = GateResult(
                 gate_name=gate.name,
@@ -280,11 +368,18 @@ class GateRunner:
                 errors=[f"Gate execution error: {e}"],
                 attempt=attempt,
                 required=gate.required,
+                verdict=gate_verdict_vocab.VERDICT_OUT_OF_COVERAGE,
+                cause=gate_verdict_vocab.CAUSE_CHECKER_ERROR,
             )
 
         # Log gate result for MemRL if configured
         if self.progress_logger and task_id:
             error_msg = gate_result.errors[0] if gate_result.errors else None
+            # CJ-8. The verdict rides the call. Without it the logger collapses
+            # to GATE_PASSED/GATE_FAILED and `q_reward` charges -0.1 for a
+            # timeout — negative learning signal about a model that never got
+            # checked. `log_gate_result` accepts `verdict`/`cause` optionally, so
+            # a logger that predates this change is unaffected.
             self.progress_logger.log_gate_result(
                 task_id=task_id,
                 gate_name=gate.name,
@@ -292,6 +387,8 @@ class GateRunner:
                 agent_tier=agent_tier,
                 agent_role=agent_role,
                 error_message=error_msg,
+                verdict=gate_result.verdict,
+                cause=gate_result.cause,
             )
 
         return gate_result
@@ -490,6 +587,9 @@ class GateRunner:
         for name in gate_names:
             gate = next((g for g in self.gates if g.name == name), None)
             if gate is None:
+                # CJ-8. A gate name that does not exist says NOTHING about the
+                # subject: no check ran. Reporting it as a failed check pointed
+                # every remedy at the model instead of at the caller's gate list.
                 results.append(
                     GateResult(
                         gate_name=name,
@@ -498,6 +598,8 @@ class GateRunner:
                         output="",
                         elapsed_seconds=0,
                         errors=[f"Unknown gate: {name}"],
+                        verdict=gate_verdict_vocab.VERDICT_OUT_OF_COVERAGE,
+                        cause=gate_verdict_vocab.CAUSE_UNSUPPORTED,
                     )
                 )
             else:
@@ -529,9 +631,16 @@ class GateRunner:
 
         total = len(results)
         passed = sum(1 for r in results if r.passed)
-        failed = total - passed
+        # CJ-8. `failed` used to be `total - passed`, which folded every gate
+        # that never ran into the failed count. Undecided gates are now named
+        # separately; they still block, they are simply no longer mislabelled.
+        undecided = sum(1 for r in results if not r.decided)
+        failed = total - passed - undecided
 
         lines.append("-" * 40)
-        lines.append(f"Total: {passed}/{total} passed, {failed} failed")
+        line = f"Total: {passed}/{total} passed, {failed} failed"
+        if undecided:
+            line += f", {undecided} not decided (out-of-coverage)"
+        lines.append(line)
 
         return "\n".join(lines)

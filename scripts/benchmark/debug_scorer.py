@@ -245,7 +245,25 @@ def _score_multiple_choice(answer: str, expected: str, config: dict[str, Any]) -
     expected_letter = _expected_choice_letter(expected, choices)
     expected_index = _expected_choice_index(expected, choices)
     if expected_letter is None and expected_index is None:
-        return False
+        # CJ-8. The GOLD is neither an A-H letter nor a member of `choices`, so
+        # there is nothing to decide against. This is a corpus/gold defect, and
+        # returning False recorded it as the MODEL being wrong — a systematic 0
+        # on every row of a malformed slice, indistinguishable from a quality
+        # gap.
+        #
+        # Every other unscoreable-gold class in this module already raises:
+        # `math_verify` gold that will not parse (:1237/:1243), `f1_list` gold
+        # that is not a JSON list (:1512), an unknown programmatic verifier. This
+        # was the one left behind. `seeding_scoring.score_answer_or_error`
+        # catches it and returns `(None, reason)`, and `eval_tower` EXCLUDES the
+        # row from the quality denominator — it is not converted into a pass.
+        raise ScoringUnavailableError(
+            f"multiple_choice gold is unusable: expected={expected!r} is neither "
+            f"a choice letter nor one of the {len(choices)} configured choices, "
+            f"so no verdict can be reached. Fix the corpus join or supply "
+            f"scoring_config['choices']; refusing to score the model wrong "
+            f"against a gold that cannot be resolved."
+        )
 
     parsed_letter = _extract_multiple_choice_letter(answer)
     if parsed_letter is not None and expected_letter is not None:

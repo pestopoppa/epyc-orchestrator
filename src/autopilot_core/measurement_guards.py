@@ -42,6 +42,7 @@ __all__ = [
     "forced_role_serving_mismatch",
     "inband_error_text",
     "infra_failure_reason",
+    "is_quality_admissible",
     "legacy_error_type",
     "measurement_disposition",
 ]
@@ -148,6 +149,22 @@ DISPOSITION_TASK_FAILED = "task_failed"
 NON_QUALITY_DISPOSITIONS = frozenset(
     {DISPOSITION_INFRA_FAILED, DISPOSITION_SCORING_FAILED}
 )
+
+
+def is_quality_admissible(disposition: Any) -> bool:
+    """True iff a row carrying this disposition may enter a quality statistic.
+
+    ONE predicate, because there were four coercers reading `correct` and none
+    reading `disposition` — every one of them a place where an `infra_failed`
+    row entered a paired test or an e-process as a WRONG ANSWER. Four literal
+    membership tests would be four places to forget.
+
+    An ABSENT / empty disposition is admissible: rows written before the
+    taxonomy existed are `scored` by default, and flipping that default would
+    silently empty every historical denominator.
+    """
+    text = "" if disposition is None else str(disposition).strip()
+    return text not in NON_QUALITY_DISPOSITIONS
 
 # The wire names under which the live-serving pipeline stamps a disposition onto
 # a TASK_FAILED progress entry's `completion_meta`, so the asynchronous reward

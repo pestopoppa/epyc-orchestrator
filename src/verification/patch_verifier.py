@@ -77,6 +77,15 @@ PASS = "pass"
 FAIL = "fail"
 INCONCLUSIVE = "inconclusive"
 
+# CJ-8 cause codes — the CLOSED `inconclusive_reason` vocabulary of
+# `orchestration/verification_report.schema.json` (ratified 8b740065). Registry
+# of record: epyc-root scripts/benchmark/gate_verdict.py CAUSE_MEANINGS.
+CAUSE_EMPTY = "empty"
+CAUSE_NO_REFERENCE = "no_reference"
+CAUSE_UNSUPPORTED = "unsupported"
+CAUSE_ABSTAINED = "abstained"
+CAUSE_SKIPPED = "skipped"
+
 # certificate.type enum from verification_report.schema.json
 CERT_FAILING_ASSERTION = "failing_assertion"
 CERT_DIFF = "diff"
@@ -113,6 +122,13 @@ class Check:
     outcome: str
     required: bool = True
     certificate: Optional[Certificate] = None
+    #: CJ-8 CLOSED cause code. `verification_report.schema.json` closed
+    #: `inconclusive_reason` to the nine-code registry at 8b740065; free text
+    #: there is rejected by the validator and, worse, is not foldable — every
+    #: producer invents its own reason and nobody can count them.
+    cause: Optional[str] = None
+    #: Free prose about THIS occurrence. Emitted as an `errors` entry, never as
+    #: the schema's `inconclusive_reason`.
     inconclusive_reason: Optional[str] = None
     instrument: Optional[dict] = None
     output: Optional[str] = None
@@ -130,12 +146,17 @@ class Check:
             out["instrument"] = self.instrument
         if self.certificate is not None:
             out["certificate"] = self.certificate.to_dict()
-        if self.inconclusive_reason:
-            out["inconclusive_reason"] = self.inconclusive_reason
+        errors = list(self.errors)
+        if self.outcome == INCONCLUSIVE:
+            # The code, not the sentence. The sentence still survives — it moves
+            # to `errors`, which the schema admits as free text.
+            out["inconclusive_reason"] = self.cause or CAUSE_ABSTAINED
+            if self.inconclusive_reason:
+                errors.append(self.inconclusive_reason)
         if self.output:
             out["output"] = self.output
-        if self.errors:
-            out["errors"] = list(self.errors)
+        if errors:
+            out["errors"] = errors
         if self.warnings:
             out["warnings"] = list(self.warnings)
         return out
@@ -213,15 +234,18 @@ class VerdictResult:
                 else Certificate(CERT_DIFF, "patch verification failed")
             )
         elif self.verdict == INCONCLUSIVE:
-            reason = next(
+            first = next(
                 (
-                    c.inconclusive_reason
+                    c
                     for c in self.checks
                     if c.required and c.outcome == INCONCLUSIVE and c.inconclusive_reason
                 ),
-                "patch verification inconclusive",
+                None,
             )
-            check.inconclusive_reason = reason
+            check.cause = (first.cause if first else None) or CAUSE_ABSTAINED
+            check.inconclusive_reason = (
+                first.inconclusive_reason if first else "patch verification inconclusive"
+            )
         check.output = "; ".join(
             f"{c.check_id}={c.outcome}" for c in self.checks
         )
@@ -590,6 +614,7 @@ def _import_resolution_check(
             kind="lint",
             outcome=INCONCLUSIVE,
             required=False,
+            cause=CAUSE_UNSUPPORTED,
             inconclusive_reason=(
                 "unresolved top-level imports (advisory; not verifiable "
                 f"execution-free): {sorted(unresolved)}"
@@ -629,6 +654,7 @@ def _ruff_lint_check(patched: dict[str, str]) -> Check:
             kind="lint",
             outcome=INCONCLUSIVE,
             required=False,
+            cause=CAUSE_UNSUPPORTED,
             inconclusive_reason=f"ruff unavailable: {type(exc).__name__}: {exc}",
         )
     if proc.returncode == 0:
@@ -716,6 +742,7 @@ def verify_patch(
                 check_id="patch_parse",
                 kind="gate",
                 outcome=INCONCLUSIVE,
+                cause=CAUSE_EMPTY,
                 inconclusive_reason="empty patch: nothing to verify",
             )
         )
@@ -731,6 +758,7 @@ def verify_patch(
                 check_id="base_resolution",
                 kind="gate",
                 outcome=INCONCLUSIVE,
+                cause=CAUSE_NO_REFERENCE,
                 inconclusive_reason=(
                     f"base tree not resolvable: {base_ref_or_tree!r} is not a "
                     "directory or mapping"
@@ -800,6 +828,7 @@ def verify_patch(
                 kind="build",
                 outcome=INCONCLUSIVE,
                 required=False,
+                cause=CAUSE_SKIPPED,
                 inconclusive_reason="not evaluated: patch did not apply cleanly",
             )
         )

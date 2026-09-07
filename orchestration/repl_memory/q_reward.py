@@ -78,7 +78,16 @@ def compute_reward(
     else:
         base_reward = config.failure_reward
 
-    # Gate failure penalties
+    # Gate failure penalties.
+    #
+    # CJ-8: ONLY `GATE_FAILED` is charged. `EventType.GATE_INCONCLUSIVE` — a gate
+    # that timed out, whose checker raised, or whose name does not exist — is
+    # deliberately absent from this sum and from the `gate_results` bin that
+    # feeds it. A gate that never ran produced no evidence about the model, and
+    # charging -0.1 for it converts a harness defect into negative learning
+    # signal about a subject that was never checked. Infra failure is the
+    # ABSENCE of a measurement, never a bad one; the same rule the TASK_FAILED
+    # disposition gate applies one layer up.
     gate_failures = sum(1 for g in gate_results if g.event_type == EventType.GATE_FAILED)
     gate_penalty = gate_failures * 0.1
 

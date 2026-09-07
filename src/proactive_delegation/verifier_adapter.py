@@ -52,6 +52,23 @@ REPORT_SCHEMA_VERSION = "1.0.0"
 _GATE_KINDS = {"gate", "test", "lint", "typecheck", "format", "build"}
 
 
+# CJ-8 cause codes. `verification_report.schema.json` closed
+# `inconclusive_reason` to this exact registry at 8b740065; the registry of
+# record is epyc-root scripts/benchmark/gate_verdict.py CAUSE_MEANINGS, mirrored
+# in scripts/benchmark/gate_verdict_vocab.py. Spelled as literals here (rather
+# than imported) because src/ must not depend on the scripts/ tree; the schema
+# enum is the enforcement, and the vocab conformance test is the lock.
+_CAUSE_ABSENT = "absent"
+_CAUSE_EMPTY = "empty"
+_CAUSE_UNPARSED = "unparsed"
+_CAUSE_NO_REFERENCE = "no_reference"
+_CAUSE_UNSUPPORTED = "unsupported"
+_CAUSE_ABSTAINED = "abstained"
+_CAUSE_CHECKER_ERROR = "checker_error"
+_CAUSE_TIMEOUT = "timeout"
+_CAUSE_SKIPPED = "skipped"
+
+
 def _now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -64,14 +81,25 @@ class CheckResult:
     """One formalizer's normalized output (maps 1:1 onto a report ``check``).
 
     ``outcome`` is three-valued. On ``fail`` a ``certificate`` is required (the
-    request_evidence payload); on ``inconclusive`` an ``inconclusive_reason`` is
-    required. ``instrument`` is the {name, version} attestation.
+    request_evidence payload); on ``inconclusive`` a ``cause`` is required.
+    ``instrument`` is the {name, version} attestation.
+
+    CJ-8 (2026-09-07): ``verification_report.schema.json`` closed
+    ``inconclusive_reason`` to the nine-code cause registry at ``8b740065``, but
+    every producer here still wrote free text — so every inconclusive check this
+    module emitted FAILED SCHEMA VALIDATION and the whole report was rejected,
+    which is a much noisier way of losing the third value than mislabelling it.
+    ``cause`` now carries the closed code; the human sentence moves to
+    ``errors``, where it is preserved rather than dropped.
     """
 
     outcome: str  # "pass" | "fail" | "inconclusive"
     instrument: dict[str, str]
     kind: str = "constraint_check"
     certificate: dict[str, Any] | None = None
+    #: A closed CJ-8 cause code. Mandatory on ``inconclusive``.
+    cause: str | None = None
+    #: Free prose explaining THIS occurrence. Never the cause code itself.
     inconclusive_reason: str | None = None
     output: str = ""
     errors: list[str] = field(default_factory=list)
@@ -130,6 +158,7 @@ class JsonSchemaFormalizer:
                 outcome="inconclusive",
                 instrument=_instr(self),
                 kind=self.kind,
+                cause=_CAUSE_NO_REFERENCE,
                 inconclusive_reason="no schema supplied in request['schema']",
             )
         try:
@@ -139,6 +168,7 @@ class JsonSchemaFormalizer:
                 outcome="inconclusive",
                 instrument=_instr(self),
                 kind=self.kind,
+                cause=_CAUSE_UNSUPPORTED,
                 inconclusive_reason="not_installed: jsonschema",
             )
         target = request.get("target_value", candidate)
@@ -189,6 +219,7 @@ class InvariantAssertionFormalizer:
                 outcome="inconclusive",
                 instrument=_instr(self),
                 kind=self.kind,
+                cause=_CAUSE_UNSUPPORTED,
                 inconclusive_reason=f"no invariant predicate registered for {key!r}",
             )
         try:
@@ -198,6 +229,7 @@ class InvariantAssertionFormalizer:
                 outcome="inconclusive",
                 instrument=_instr(self),
                 kind=self.kind,
+                cause=_CAUSE_CHECKER_ERROR,
                 inconclusive_reason=f"predicate raised: {type(exc).__name__}: {exc}",
             )
         if ok:
@@ -236,6 +268,7 @@ class RegexConstraintFormalizer:
                 outcome="inconclusive",
                 instrument=_instr(self),
                 kind=self.kind,
+                cause=_CAUSE_NO_REFERENCE,
                 inconclusive_reason="no constraint keys present in request",
             )
         violations: list[str] = []
@@ -305,6 +338,7 @@ class NumericAnswerFormalizer:
                 outcome="inconclusive",
                 instrument=_instr(self),
                 kind=self.kind,
+                cause=_CAUSE_NO_REFERENCE,
                 inconclusive_reason="no request['expected']",
             )
         try:
@@ -314,6 +348,7 @@ class NumericAnswerFormalizer:
                 outcome="inconclusive",
                 instrument=_instr(self),
                 kind=self.kind,
+                cause=_CAUSE_UNPARSED,
                 inconclusive_reason="request['expected'] is not numeric",
             )
         got = self._extract_number(candidate)
@@ -322,6 +357,7 @@ class NumericAnswerFormalizer:
                 outcome="inconclusive",
                 instrument=_instr(self),
                 kind=self.kind,
+                cause=_CAUSE_UNPARSED,
                 inconclusive_reason="no numeric answer extractable from candidate",
             )
         tol = float(request.get("tol", 1e-6))
@@ -369,6 +405,7 @@ class RetrievalGroundingFormalizer:
                 outcome="inconclusive",
                 instrument=_instr(self),
                 kind=self.kind,
+                cause=_CAUSE_NO_REFERENCE,
                 inconclusive_reason="no request['sources'] to ground against",
             )
         haystack = "\n".join(str(s) for s in sources)
@@ -380,6 +417,7 @@ class RetrievalGroundingFormalizer:
                 outcome="inconclusive",
                 instrument=_instr(self),
                 kind=self.kind,
+                cause=_CAUSE_EMPTY,
                 inconclusive_reason="no cited spans to check (none supplied/extractable)",
             )
         ungrounded = [s for s in spans if str(s).strip() and str(s) not in haystack]
@@ -426,7 +464,8 @@ class _Tier2Stub:
             outcome="inconclusive",
             instrument=_instr(self),
             kind=self.kind,
-            inconclusive_reason=f"{reason}: {self.name}",
+            cause=_CAUSE_UNSUPPORTED,
+                inconclusive_reason=f"{reason}: {self.name}",
         )
 
 
@@ -539,16 +578,34 @@ def _gate_result_to_check(gate_name: str, result: Any) -> dict[str, Any]:
         "warnings": list(getattr(result, "warnings", []) or [])[:20],
     }
 
+    # CJ-8. GateResult now CARRIES its verdict, so read it rather than inferring
+    # it. The inference below (exit_code == -1 plus a substring of errors[0]) is
+    # kept as the fallback for a result object that predates the three-valued
+    # gate — but a cause code that rides the object cannot be lost to a reworded
+    # error string, which is exactly how the sniff would silently start
+    # reporting an undecidable gate as a `fail`.
+    verdict = getattr(result, "verdict", None)
+    cause = getattr(result, "cause", None)
+    if verdict == "out-of-coverage":
+        check["outcome"] = "inconclusive"
+        check["inconclusive_reason"] = cause
+        check["errors"] = (errors + [
+            f"gate {gate_name!r} did not decide (cause={cause})"])[:20]
+        return check
+
     # Unknown gate / execution error / timeout can't conclude -> inconclusive.
     unknown = any(str(e).lower().startswith("unknown gate") for e in errors)
     ran = exit_code not in (-1,) and not unknown
     if unknown:
         check["outcome"] = "inconclusive"
-        check["inconclusive_reason"] = f"unknown gate: {gate_name}"
+        check["inconclusive_reason"] = _CAUSE_UNSUPPORTED
+        check["errors"] = (errors + [f"unknown gate: {gate_name}"])[:20]
         return check
     if not ran:
         check["outcome"] = "inconclusive"
-        check["inconclusive_reason"] = output[:200] or "gate could not execute (exit -1)"
+        check["inconclusive_reason"] = _CAUSE_CHECKER_ERROR
+        check["errors"] = (errors + [
+            output[:200] or "gate could not execute (exit -1)"])[:20]
         return check
 
     if getattr(result, "passed", False):
@@ -582,7 +639,12 @@ def _check_result_to_check(check_id: str, kind: str, cr: CheckResult) -> dict[st
             "payload": cr.errors or "check failed without detail",
         }
     elif cr.outcome == "inconclusive":
-        check["inconclusive_reason"] = cr.inconclusive_reason or "unspecified"
+        # The schema's `inconclusive_reason` is a CLOSED cause code, not prose.
+        # A free-text reason here is not foldable — every producer invents its
+        # own and nobody can count them — and is rejected by the validator.
+        check["inconclusive_reason"] = cr.cause or _CAUSE_ABSTAINED
+        if cr.inconclusive_reason:
+            check["errors"] = (check.get("errors") or []) + [cr.inconclusive_reason]
     return check
 
 
@@ -633,7 +695,8 @@ def run_verifier_requests(
                 # required so the rollup reflects "no objective signal" as
                 # inconclusive (never a fabricated pass on an empty request set).
                 "required": True,
-                "inconclusive_reason": "no verifier_requests supplied",
+                "inconclusive_reason": _CAUSE_ABSENT,
+                "errors": ["no verifier_requests supplied"],
             }
         )
 
@@ -664,7 +727,8 @@ def _run_gate_request(req: dict[str, Any], gate_runner: Any | None) -> dict[str,
             "outcome": "inconclusive",
             "instrument": {"name": "gate_runner", "version": "1.0.0"},
             "required": True,
-            "inconclusive_reason": "gate_runner unavailable",
+            "inconclusive_reason": _CAUSE_UNSUPPORTED,
+            "errors": ["gate_runner unavailable"],
         }
     results = runner.run_gates_by_name([verifier])
     result = results[0] if results else None
@@ -675,7 +739,8 @@ def _run_gate_request(req: dict[str, Any], gate_runner: Any | None) -> dict[str,
             "outcome": "inconclusive",
             "instrument": {"name": "gate_runner", "version": "1.0.0"},
             "required": True,
-            "inconclusive_reason": "gate produced no result",
+            "inconclusive_reason": _CAUSE_ABSENT,
+            "errors": ["gate produced no result"],
         }
     return _gate_result_to_check(verifier, result)
 
@@ -693,7 +758,8 @@ def _run_formalizer_request(
             "outcome": "inconclusive",
             "instrument": {"name": "verifier_adapter", "version": "1.0.0"},
             "required": True,
-            "inconclusive_reason": f"no formalizer for verifier={verifier!r} kind={kind!r}",
+            "inconclusive_reason": _CAUSE_UNSUPPORTED,
+            "errors": [f"no formalizer for verifier={verifier!r} kind={kind!r}"],
         }
     cr = formalizer.check(req, candidate, domain)
     return _check_result_to_check(verifier or formalizer.name, kind, cr)

@@ -1109,6 +1109,7 @@ from src.autopilot_core.measurement_guards import (  # noqa: E402
     forced_role_serving_mismatch as _forced_role_serving_mismatch,
     inband_error_text as _inband_error_text,
     infra_failure_reason,
+    is_quality_admissible,
     measurement_disposition,
 )
 
@@ -3178,11 +3179,39 @@ def _loader_error_eval_result(
 # statistically grounded instead of raw-delta.
 
 
+def _arm_outcome_excluded(outcomes: "Mapping[str, Any]") -> dict[str, int]:
+    """Count, by disposition, the rows :func:`_arm_outcome_vector` dropped.
+
+    Reported alongside the screen so a shrinking ``n`` is readable as an
+    exclusion rather than as a smaller run. A row that vanishes silently from a
+    denominator is indistinguishable from one that was never asserted.
+    """
+    counts: dict[str, int] = {}
+    for value in outcomes.values():
+        if isinstance(value, QuestionOutcome):
+            continue
+        if isinstance(value, Mapping):
+            disposition = value.get("disposition")
+        else:
+            disposition = getattr(value, "disposition", None)
+        if not is_quality_admissible(disposition):
+            key = str(disposition)
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _arm_outcome_vector(outcomes: "Mapping[str, Any]") -> dict[str, QuestionOutcome]:
     """Coerce a ``{qid: correct}`` mapping into paired_stats QuestionOutcome form.
 
     Accepts bare booleans or objects exposing ``.correct``/``["correct"]`` so an
     arm can be fed either raw per-question correctness or richer result records.
+
+    CJ-8: when the value CARRIES a ``disposition``, a non-quality one
+    (``infra_failed`` / ``scoring_failed``) is EXCLUDED from the vector rather
+    than coerced to ``correct=False``. ``QuestionOutcome`` has no disposition
+    field, so this boundary was where the stamp died and an infra row became
+    indistinguishable from a real wrong answer inside McNemar. A bare bool
+    carries no disposition and is admitted unchanged — absent means ``scored``.
     """
     vector: dict[str, QuestionOutcome] = {}
     for qid, value in outcomes.items():
@@ -3190,14 +3219,19 @@ def _arm_outcome_vector(outcomes: "Mapping[str, Any]") -> dict[str, QuestionOutc
             vector[str(qid)] = value
             continue
         if isinstance(value, Mapping):
+            disposition = value.get("disposition")
             correct = bool(value.get("correct"))
             suite = str(value.get("suite", ""))
         elif hasattr(value, "correct"):
+            disposition = getattr(value, "disposition", None)
             correct = bool(getattr(value, "correct"))
             suite = str(getattr(value, "suite", ""))
         else:
+            disposition = None
             correct = bool(value)
             suite = ""
+        if not is_quality_admissible(disposition):
+            continue
         vector[str(qid)] = QuestionOutcome(qid=str(qid), suite=suite, correct=correct, trial_id=-1)
     return vector
 
@@ -3240,8 +3274,15 @@ def screen_paired_arms(
     prepared: list[dict[str, Any]] = []
     for arm in arms:
         label = str(arm.get("label", f"arm{len(prepared)}"))
-        vector = _arm_outcome_vector(arm.get("outcomes") or {})
-        prepared.append({"label": label, "vector": vector, "profile": arm.get("profile")})
+        raw = arm.get("outcomes") or {}
+        vector = _arm_outcome_vector(raw)
+        prepared.append({
+            "label": label,
+            "vector": vector,
+            "profile": arm.get("profile"),
+            # CJ-9. Rows excluded for a non-quality disposition, by disposition.
+            "excluded": _arm_outcome_excluded(raw),
+        })
 
     per_arm: dict[str, Any] = {}
     for arm in prepared:
@@ -3252,6 +3293,10 @@ def screen_paired_arms(
         per_arm[arm["label"]] = {
             "n": total,
             "correct": correct,
+            # CJ-9. `n` is the DECIDED count; these rows were excluded because
+            # they carry no quality signal, and were never scored as wrong.
+            "excluded_non_quality": arm["excluded"],
+            "asserted_n": total + sum(arm["excluded"].values()),
             "accuracy": (correct / total) if total else None,
             "wilson_lower": round(lo, 6),
             "wilson_upper": round(hi, 6),
@@ -6659,7 +6704,24 @@ class EvalTower:
                     {
                         "label": arm_label,
                         "profile": profile_stamp,
-                        "outcomes": {r.qid: r.correct for r in scored if r.qid},
+                        # CJ-8. Keyed by qid -> the compact row (not a bare
+                        # bool) so `_arm_outcome_vector` can read the
+                        # disposition and exclude a non-quality row instead of
+                        # scoring it wrong. The surrounding `not r.error` filter
+                        # is left as-is on purpose: it is a PROXY that happens to
+                        # exclude infra rows here, but it ALSO drops
+                        # `task_failed` rows, which are legitimate quality
+                        # evidence. Replacing it changes which rows enter a
+                        # published statistic, so it is a separate, measured
+                        # change and not a side effect of this one.
+                        "outcomes": {
+                            r.qid: {
+                                "correct": r.correct,
+                                "suite": getattr(r, "suite", "") or "",
+                                "disposition": getattr(r, "disposition", "") or "",
+                            }
+                            for r in scored if r.qid
+                        },
                     }
                 )
         # Paired-significance screen over the arms: exact/normal McNemar p on the

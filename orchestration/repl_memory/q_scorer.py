@@ -1222,6 +1222,7 @@ class QScorer:
         routing_decision = None
         task_outcome = None
         gate_results = []
+        gates_inconclusive = 0
         escalations = []
         plan_reviews = []
 
@@ -1234,6 +1235,13 @@ class QScorer:
                 task_outcome = entry
             elif entry.event_type in (EventType.GATE_PASSED, EventType.GATE_FAILED):
                 gate_results.append(entry)
+            elif entry.event_type == EventType.GATE_INCONCLUSIVE:
+                # CJ-8, DELIBERATE OMISSION — not an oversight. A gate that never
+                # decided is counted, never scored: it enters neither the reward
+                # penalty (`q_reward` charges -0.1 per GATE_FAILED) nor the
+                # boolean `passed` re-derivation, both of which would record a
+                # harness defect as evidence about the model.
+                gates_inconclusive += 1
             elif entry.event_type == EventType.ESCALATION_TRIGGERED:
                 escalations.append(entry)
             elif entry.event_type == EventType.PLAN_REVIEWED:
@@ -1325,6 +1333,10 @@ class QScorer:
             "reward": reward,
             "contrastive_adj": ranking_adj,
             "ranking_source": ranking_source,
+            # CJ-9. Undecided gates are EXCLUDED from the reward but never
+            # dropped from the record: a count you cannot name is a count you
+            # cannot know is zero.
+            "gates_inconclusive": gates_inconclusive,
         }
 
         # Update or create routing memory (uses contrastive-adjusted reward).

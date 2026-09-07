@@ -268,3 +268,65 @@ def test_git_apply_check_fail_on_real_repo(tmp_path):
     assert gac.outcome == FAIL
     assert gac.certificate is not None
     assert r.is_fail
+
+
+# --------------------------------------------------------------------------- #
+# CJ-8 — `inconclusive_reason` is a CLOSED cause code, not prose
+# --------------------------------------------------------------------------- #
+_CJ8_CAUSES = {
+    "absent", "empty", "unparsed", "no_reference", "unsupported",
+    "abstained", "checker_error", "timeout", "skipped", "insufficient_coverage",
+}
+
+
+def test_every_inconclusive_check_emits_a_closed_cause_code():
+    """`verification_report.schema.json` closed this enum at 8b740065 and this
+    module still wrote free text, so EVERY report containing an inconclusive
+    check failed schema validation outright. The prose is preserved in
+    `errors`; the code is what the schema reads."""
+    from src.verification.patch_verifier import verify_patch
+
+    scenarios = {
+        "empty patch": ("", {"mod.py": "def f():\n    return 1\n"}),
+        "unresolvable base": (
+            "--- a/mod.py\n+++ b/mod.py\n@@ -1,2 +1,2 @@\n def f():\n-    return 1\n+    return 2\n",
+            "/no/such/tree",
+        ),
+        "non-applying patch": (
+            "--- a/mod.py\n+++ b/mod.py\n@@ -1,2 +1,2 @@\n def f():\n-    return 99\n+    return 2\n",
+            {"mod.py": "def f():\n    return 1\n"},
+        ),
+    }
+    seen_inconclusive = 0
+    for label, (patch, base) in scenarios.items():
+        result = verify_patch(patch, base)
+        for check in (c.to_dict() for c in result.checks):
+            if check["outcome"] != "inconclusive":
+                continue
+            seen_inconclusive += 1
+            assert check["inconclusive_reason"] in _CJ8_CAUSES, (
+                f"{label}/{check['check_id']}: "
+                f"{check['inconclusive_reason']!r} is prose, not a cause code"
+            )
+            # The sentence is preserved, not discarded.
+            assert check.get("errors"), f"{label}: the human reason was dropped"
+    # Anti-vacuity: if no scenario produced an inconclusive check the loop above
+    # would assert nothing at all.
+    assert seen_inconclusive >= 3
+
+
+def test_rolled_up_check_carries_a_cause_code_too():
+    from src.verification.patch_verifier import verify_patch
+
+    rolled = verify_patch("", {"mod.py": "def f():\n    return 1\n"}).to_check("gate")
+    assert rolled["outcome"] == "inconclusive"
+    assert rolled["inconclusive_reason"] == "empty"
+    assert any("empty patch" in e for e in rolled["errors"])
+
+    # Mutation guard: a DECIDED rollup carries no inconclusive_reason at all.
+    clean = verify_patch(
+        "--- a/mod.py\n+++ b/mod.py\n@@ -1,2 +1,2 @@\n def f():\n-    return 1\n+    return 2\n",
+        {"mod.py": "def f():\n    return 1\n"},
+    ).to_check("gate")
+    assert clean["outcome"] == "pass"
+    assert "inconclusive_reason" not in clean

@@ -108,7 +108,10 @@ class TestGateBridge:
         _valid_report(report)
         check = report["checks"][0]
         assert check["outcome"] == "inconclusive"
-        assert "unknown gate" in check["inconclusive_reason"].lower()
+        # `inconclusive_reason` is a CLOSED cause code (schema ratified
+        # 8b740065), not prose; the sentence lives in `errors`.
+        assert check["inconclusive_reason"] == "unsupported"
+        assert any("unknown gate" in e.lower() for e in check["errors"])
 
     def test_fail_dominates_aggregate(self, noop_gates):
         report = run_verifier_requests(

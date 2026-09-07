@@ -7,10 +7,24 @@ compatibility — existing imports keep working.
 
 from __future__ import annotations
 
+import importlib.util
 import random
 import re
+import sys
+from pathlib import Path
 
 from .base import BaseAdapter
+
+# scripts/benchmark/ is a namespace dir, not a package (no __init__.py), and this
+# module is imported under two different package names depending on the entry
+# point. The shared CJ-8 vocabulary is therefore loaded BY PATH — the same idiom
+# epyc-root's granite_embedder_conversion_preflight.py uses.
+_GVV_PATH = Path(__file__).resolve().parent.parent / "gate_verdict_vocab.py"
+_GVV_SPEC = importlib.util.spec_from_file_location("gate_verdict_vocab", _GVV_PATH)
+assert _GVV_SPEC is not None and _GVV_SPEC.loader is not None
+gate_verdict_vocab = importlib.util.module_from_spec(_GVV_SPEC)
+sys.modules.setdefault("gate_verdict_vocab", gate_verdict_vocab)
+_GVV_SPEC.loader.exec_module(gate_verdict_vocab)
 
 
 class MMLUAdapter(BaseAdapter):
@@ -151,9 +165,35 @@ class GPQAAdapter(BaseAdapter):
         rng = random.Random(seed)
         rng.shuffle(choices)
 
-        # Find correct answer index after shuffle
-        correct_idx = choices.index(correct_answer) if correct_answer in choices else 0
-        expected_letter = self.CHOICE_LABELS[correct_idx]
+        # CJ-8. `choices` is BUILT from `correct_answer` (filtered for
+        # truthiness), so `correct_answer not in choices` happens for exactly one
+        # reason: the row carries no gold answer at all. The previous code fell
+        # back to `correct_idx = 0`, i.e. it MANUFACTURED `expected="A"` — a
+        # reference the corpus never supplied. Every model that answered B/C/D on
+        # such a row was then recorded as wrong against an invented oracle, and a
+        # model that happened to say "A" was recorded as right for no reason.
+        #
+        # Fabricating a reference is worse than mislabelling a verdict: a
+        # mislabelled verdict can be re-read, an invented gold cannot be told
+        # apart from a real one after the fact. So the row now carries NO
+        # `expected` and an explicit out-of-coverage verdict with cause
+        # `no_reference`. It stays in the corpus (dropping it would manufacture
+        # coverage by shrinking the denominator) and is excised from scoring by
+        # `eval_tower._is_scoreable_question`, which already refuses a row with an
+        # empty `expected` under a `multiple_choice` scoring method.
+        if correct_answer and correct_answer in choices:
+            expected_letter = self.CHOICE_LABELS[choices.index(correct_answer)]
+            coverage = None
+        else:
+            expected_letter = None
+            coverage = gate_verdict_vocab.out_of_coverage(
+                item_id=f"gpqa_{row.get('Subdomain', 'general')}_{idx:04d}",
+                cause=gate_verdict_vocab.CAUSE_NO_REFERENCE,
+                detail=("GPQA row carries no usable 'Correct Answer'; no oracle "
+                        "exists for this item, so nothing can be decided against "
+                        "it. NOT scored, and NOT dropped from the asserted "
+                        "surface."),
+            )
 
         # Build prompt
         prompt_lines = [question, ""]
@@ -165,7 +205,7 @@ class GPQAAdapter(BaseAdapter):
         subdomain = row.get("Subdomain", "general")
         tier = self._get_tier_for_index(idx)
 
-        return {
+        item = {
             "id": f"gpqa_{subdomain}_{idx:04d}",
             "suite": "gpqa",
             "prompt": "\n".join(prompt_lines),
@@ -177,6 +217,12 @@ class GPQAAdapter(BaseAdapter):
             "scoring_method": "multiple_choice",
             "scoring_config": {},
         }
+        if coverage is not None:
+            # Carried ON the row rather than logged beside it: a third value that
+            # rides a channel a wrapper can drop is a third value that gets
+            # dropped.
+            item["gate_verdict"] = coverage
+        return item
 
 
 # ── MMLU-Pro (Extended Multiple-Choice) ─────────────────────────────────────

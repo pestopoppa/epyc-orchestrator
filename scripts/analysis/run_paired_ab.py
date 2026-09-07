@@ -116,10 +116,14 @@ def _load_wilson():
 
 
 def _load_verify_patch():
-    """Import verify_patch + PASS from the EV-12 verifier (src/verification)."""
-    from src.verification import PASS, verify_patch
+    """Import verify_patch + the verdict constants from EV-12 (src/verification).
 
-    return verify_patch, PASS
+    INCONCLUSIVE is imported too: the verifier is three-valued by design and this
+    module used to discard the third value with ``verdict == PASS``.
+    """
+    from src.verification import INCONCLUSIVE, PASS, verify_patch
+
+    return verify_patch, PASS, INCONCLUSIVE
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -420,38 +424,83 @@ def resolve_corpus(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+#: CJ-8 grader vocabulary. A grader returns one of these three, never a bool.
+GRADE_PASS = "pass"
+GRADE_FAIL = "fail"
+GRADE_OUT_OF_COVERAGE = "out-of-coverage"
+
+
 @dataclass
 class Grader:
+    """A grader's verdict is THREE-VALUED (CJ-8, 2026-09-07).
+
+    ``fn`` returns ``"pass"`` / ``"fail"`` / ``"out-of-coverage"``. The third
+    value existed upstream all along — ``verify_patch`` returns ``INCONCLUSIVE``
+    on an empty patch or an unresolvable base tree, and the sibling
+    ``patch_pre_gate.ESCALATE_ON_VERDICT`` maps that to *escalate*, the opposite
+    of "wrong". This module collapsed it with ``result.verdict == PASS``, so a
+    timed-out or refused generation (``_default_arm_probe`` returns ``""`` →
+    empty patch → INCONCLUSIVE) entered McNemar as a substantive wrong answer
+    against that arm, biasing the discordant-pair counts with transport
+    failures.
+
+    Undecided items are EXCLUDED from the paired universe rather than scored,
+    and counted in the result so the exclusion is visible. They are never
+    converted into a correct answer.
+    """
+
     name: str
-    fn: Callable[[str, dict[str, Any]], bool]
+    fn: Callable[[str, dict[str, Any]], str]
     needs_base_tree: bool = False
     description: str = ""
+    #: Per-item cause codes from the last grading pass, qid -> cause. Populated
+    #: by graders that can distinguish WHY they could not decide.
+    causes: dict[str, str] = field(default_factory=dict)
 
 
 def _norm(text: Any) -> str:
     return " ".join(str(text).split()).casefold()
 
 
-def _exact_grade(prediction: str, item: dict[str, Any]) -> bool:
-    return _norm(prediction) == _norm(item.get("expected"))
+def _exact_grade(prediction: str, item: dict[str, Any]) -> str:
+    # No `expected` at all means there is no oracle to decide against. Scoring
+    # that as a wrong answer blames the model for a corpus-join defect.
+    expected = item.get("expected")
+    if expected is None or not _norm(expected):
+        return GRADE_OUT_OF_COVERAGE
+    return GRADE_PASS if _norm(prediction) == _norm(expected) else GRADE_FAIL
 
 
-def _substring_grade(prediction: str, item: dict[str, Any]) -> bool:
-    expected = _norm(item.get("expected"))
+def _substring_grade(prediction: str, item: dict[str, Any]) -> str:
+    raw = item.get("expected")
+    # `_norm(None)` is the string "none" — truthy — so the None case must be
+    # tested BEFORE normalisation or a missing oracle silently becomes a needle.
+    expected = "" if raw is None else _norm(raw)
     if not expected:
-        return False
-    return expected in _norm(prediction)
+        # Previously `return False`: an empty needle matched nothing, so every
+        # oracle-less row scored the model wrong.
+        return GRADE_OUT_OF_COVERAGE
+    return GRADE_PASS if expected in _norm(prediction) else GRADE_FAIL
 
 
 def make_patch_verifier_grader(
-    *, run_lint: bool = False, use_git: bool = False
-) -> Callable[[str, dict[str, Any]], bool]:
-    """Build a patch_verifier grader: PASS iff the candidate diff statically applies
-    to the item's base tree and the resulting files compile (advisory ruff/git are
-    non-gating). Execution-free."""
-    verify_patch, PASS = _load_verify_patch()
+    *, run_lint: bool = False, use_git: bool = False, causes: dict[str, str] | None = None
+) -> Callable[[str, dict[str, Any]], str]:
+    """Build a patch_verifier grader.
 
-    def _grade(prediction: str, item: dict[str, Any]) -> bool:
+    ``pass`` iff the candidate diff statically applies to the item's base tree
+    and the resulting files compile (advisory ruff/git are non-gating).
+    ``fail`` iff a required check RAN and rejected the diff.
+    ``out-of-coverage`` iff ``verify_patch`` returned INCONCLUSIVE — an empty
+    patch (the shape a timeout, a refusal, or a dropped placement-queue response
+    takes, since ``_default_arm_probe`` returns ``""``) or a base tree that could
+    not be resolved (a HARNESS defect, which used to score as a CANDIDATE loss).
+
+    Execution-free.
+    """
+    verify_patch, PASS, INCONCLUSIVE = _load_verify_patch()
+
+    def _grade(prediction: str, item: dict[str, Any]) -> str:
         base_tree = item.get("base_tree")
         if base_tree is None:
             raise ValueError(
@@ -460,7 +509,17 @@ def make_patch_verifier_grader(
         result = verify_patch(
             prediction, base_tree, run_lint=run_lint, use_git=use_git
         )
-        return result.verdict == PASS
+        if result.verdict == PASS:
+            return GRADE_PASS
+        if result.verdict == INCONCLUSIVE:
+            if causes is not None:
+                # Distinguish the two INCONCLUSIVE routes: an empty/unparseable
+                # patch is about the ANSWER, an unresolvable base tree is about
+                # the CORPUS, and they point at different subsystems.
+                qid = str(item.get("qid", ""))
+                causes[qid] = "empty" if not str(prediction).strip() else "unparsed"
+            return GRADE_OUT_OF_COVERAGE
+        return GRADE_FAIL
 
     return _grade
 
@@ -476,11 +535,14 @@ def get_grader(
             GRADER_SUBSTRING, _substring_grade, description="normalized substring-contains"
         )
     if name == GRADER_PATCH_VERIFIER:
+        causes: dict[str, str] = {}
         return Grader(
             GRADER_PATCH_VERIFIER,
-            make_patch_verifier_grader(run_lint=patch_run_lint, use_git=patch_use_git),
+            make_patch_verifier_grader(
+                run_lint=patch_run_lint, use_git=patch_use_git, causes=causes),
             needs_base_tree=True,
             description="EV-12 execution-free patch verdict (apply+AST/compile)",
+            causes=causes,
         )
     raise ValueError(f"unknown grader {name!r}; choose from {GRADERS}")
 
@@ -503,36 +565,59 @@ def build_arm_rows(
 
     ``predictions`` maps qid -> the arm's model output. Items with no prediction are
     skipped (they cannot be paired). Rows are model/quant-stamped, never role-keyed.
+
+    CJ-8: an item the grader could not DECIDE is written to the JSONL with
+    ``verdict: "out-of-coverage"`` and a cause, and is left OUT of the returned
+    outcome vector. Keeping it in with ``correct: False`` is what put transport
+    failures into McNemar's discordant cells; keeping it in with ``correct: True``
+    would be worse. The row survives so the exclusion is re-gradeable later —
+    previously the JSONL recorded only ``correct``, so a run could not be re-read
+    to find which "wrong" answers were actually unverifiable.
     """
     ps = _load_paired_stats()
     rows: list[dict[str, Any]] = []
     vector: dict[str, Any] = {}
+    grader.causes.clear()
     for item in items:
         qid = item["qid"]
         if qid not in predictions:
             continue
         prediction = predictions[qid]
-        correct = bool(grader.fn(prediction, item))
+        verdict = grader.fn(prediction, item)
+        if verdict not in (GRADE_PASS, GRADE_FAIL, GRADE_OUT_OF_COVERAGE):
+            raise ValueError(
+                f"grader {grader.name!r} returned {verdict!r} for qid={qid!r}; "
+                f"a grader verdict is three-valued and a bool is not one of them"
+            )
+        decided = verdict != GRADE_OUT_OF_COVERAGE
+        correct = verdict == GRADE_PASS
         suite = item.get("suite", "")
-        vector[qid] = ps.QuestionOutcome(
-            qid=qid, suite=suite, correct=correct, trial_id=0
-        )
-        rows.append(
-            {
-                "qid": qid,
-                "suite": suite,
-                "arm": arm.name,
-                "arm_kind": arm.kind,
-                "is_baseline": arm.is_baseline,
-                "model": model,
-                "quant": quant,
-                "grader": grader.name,
-                "correct": correct,
-                "prediction": prediction,
-                "transport": PLACEMENT_QUEUE_TRANSPORT,
-                "observation_only": True,
-            }
-        )
+        if decided:
+            vector[qid] = ps.QuestionOutcome(
+                qid=qid, suite=suite, correct=correct, trial_id=0
+            )
+        row = {
+            "qid": qid,
+            "suite": suite,
+            "arm": arm.name,
+            "arm_kind": arm.kind,
+            "is_baseline": arm.is_baseline,
+            "model": model,
+            "quant": quant,
+            "grader": grader.name,
+            "verdict": verdict,
+            "prediction": prediction,
+            "transport": PLACEMENT_QUEUE_TRANSPORT,
+            "observation_only": True,
+        }
+        if decided:
+            row["correct"] = correct
+        else:
+            # `correct` is ABSENT, not null-and-flagged: a null still reads as
+            # False through `.get(k, False)`, which is the exact collapse this
+            # change exists to end.
+            row["cause"] = grader.causes.get(qid, "no_reference")
+        rows.append(row)
     return rows, vector
 
 
@@ -546,8 +631,15 @@ def compute_paired_result(
     test_profile: str,
     model: str,
     quant: str,
+    asserted_n: int | None = None,
 ) -> dict[str, Any]:
     """Pair two graded arms -> McNemar p + per-arm Wilson-CI accuracy.
+
+    CJ-9: ``asserted_n`` is the size of the surface the comparison CLAIMS to
+    cover. Pass it explicitly; inferring the denominator from the pairs that
+    happened to arrive is how a run reports 100% coverage of the subset it
+    reached. The emitted ``resolved_coverage`` is what tells a reader a low
+    accuracy from a thin one.
 
     Guards with ``require_matched_comparison``: refuses to pair arms whose
     dataset_sha256 / test_profile disagree (or are missing). Both arms share the same
@@ -587,6 +679,20 @@ def compute_paired_result(
         "dataset_sha256": dataset_sha256,
         "test_profile": test_profile,
         "shared_qids": n,
+        # CJ-9. Undecided items were EXCLUDED from the pairing (they are not
+        # wrong answers), so the denominator must say so out loud.
+        "asserted_qids": (n if asserted_n is None else int(asserted_n)),
+        "resolved_coverage": (
+            None if not asserted_n else n / float(asserted_n)
+        ),
+        "baseline_decided_qids": len(baseline_vector),
+        "candidate_decided_qids": len(candidate_vector),
+        "baseline_out_of_coverage": (
+            None if asserted_n is None else int(asserted_n) - len(baseline_vector)
+        ),
+        "candidate_out_of_coverage": (
+            None if asserted_n is None else int(asserted_n) - len(candidate_vector)
+        ),
         "baseline_correct": correct_baseline,
         "candidate_correct": correct_candidate,
         "baseline_accuracy": mcn.accuracy_a,
@@ -757,6 +863,7 @@ def execute_paired_ab(
         test_profile=profile,
         model=model,
         quant=quant,
+        asserted_n=len(corpus.items),
     )
     (output_dir / "paired_ab_report.json").write_text(
         json.dumps(result, indent=2, sort_keys=True, default=str) + "\n"

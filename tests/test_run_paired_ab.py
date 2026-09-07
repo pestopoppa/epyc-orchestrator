@@ -170,12 +170,25 @@ def test_resolve_corpus_suite_only_is_unresolved():
 # Grader dispatch — generic (incl. a FAKE grader) + real patch_verifier
 # --------------------------------------------------------------------------- #
 def test_generic_graders_exact_and_substring():
+    # CJ-8: a grader verdict is three-valued, never a bool.
     exact = runner.get_grader("exact")
-    assert exact.fn("2", {"expected": "2"}) is True
-    assert exact.fn("the answer is 2", {"expected": "2"}) is False
+    assert exact.fn("2", {"expected": "2"}) == runner.GRADE_PASS
+    assert exact.fn("the answer is 2", {"expected": "2"}) == runner.GRADE_FAIL
     sub = runner.get_grader("substring")
-    assert sub.fn("the answer is 2", {"expected": "2"}) is True
-    assert sub.fn("nope", {"expected": "2"}) is False
+    assert sub.fn("the answer is 2", {"expected": "2"}) == runner.GRADE_PASS
+    assert sub.fn("nope", {"expected": "2"}) == runner.GRADE_FAIL
+
+
+def test_generic_graders_without_an_oracle_are_out_of_coverage():
+    """A row with no `expected` has nothing to be graded AGAINST. Scoring it
+    `False` blamed the model for a corpus-join defect."""
+    for name in ("exact", "substring"):
+        g = runner.get_grader(name)
+        assert g.fn("anything", {"expected": ""}) == runner.GRADE_OUT_OF_COVERAGE
+        assert g.fn("anything", {}) == runner.GRADE_OUT_OF_COVERAGE
+        # Mutation guard: WITH an oracle the same grader still decides, so the
+        # assertions above are about the missing oracle, not about refusing all.
+        assert g.fn("anything", {"expected": "anything"}) == runner.GRADE_PASS
 
 
 def test_get_grader_unknown_raises():
@@ -186,15 +199,21 @@ def test_get_grader_unknown_raises():
 def test_patch_verifier_grader_on_real_diff():
     grader = runner.get_grader("patch_verifier")
     assert grader.needs_base_tree is True
-    assert grader.fn(CLEAN_DIFF, {"qid": "p1", "base_tree": BASE_TREE}) is True
-    assert grader.fn(NON_APPLYING_DIFF, {"qid": "p2", "base_tree": BASE_TREE}) is False
+    assert grader.fn(CLEAN_DIFF, {"qid": "p1", "base_tree": BASE_TREE}) == runner.GRADE_PASS
+    assert (grader.fn(NON_APPLYING_DIFF, {"qid": "p2", "base_tree": BASE_TREE})
+            == runner.GRADE_FAIL)
     with pytest.raises(ValueError):
         grader.fn(CLEAN_DIFF, {"qid": "p3"})  # missing base_tree
 
 
 def test_build_arm_rows_with_fake_grader():
     """A FAKE generic grader drives build_arm_rows -> rows + outcome vector."""
-    fake = runner.Grader(name="fake", fn=lambda pred, item: pred == item["expected"])
+    fake = runner.Grader(
+        name="fake",
+        fn=lambda pred, item: (
+            runner.GRADE_PASS if pred == item["expected"] else runner.GRADE_FAIL
+        ),
+    )
     items = [
         {"qid": "q1", "prompt": "p", "expected": "yes", "suite": "s"},
         {"qid": "q2", "prompt": "p", "expected": "no", "suite": "s"},
@@ -368,3 +387,82 @@ def test_execute_without_env_flag_falls_back_to_dry_run(monkeypatch):
     plan = runner.run_paired_ab(args)
     assert plan["mode"] == "dry_run"
     assert any("falling back to dry-run" in n for n in plan["notes"])
+
+
+# --------------------------------------------------------------------------- #
+# CJ-8 — the INCONCLUSIVE patch verdict is no longer a wrong answer
+# --------------------------------------------------------------------------- #
+def test_empty_prediction_is_out_of_coverage_not_wrong():
+    """`_default_arm_probe` returns "" for a timeout, a refusal, or a dropped
+    placement-queue response. verify_patch calls that INCONCLUSIVE (empty patch),
+    and `result.verdict == PASS` used to turn it into a substantive wrong answer
+    against that arm, biasing McNemar's discordant cells with transport failures."""
+    grader = runner.get_grader("patch_verifier")
+    verdict = grader.fn("", {"qid": "e1", "base_tree": BASE_TREE})
+    assert verdict == runner.GRADE_OUT_OF_COVERAGE
+    assert verdict != runner.GRADE_FAIL
+    assert grader.causes["e1"] == "empty"
+    # Mutation guard: a REFUSAL that is not an empty patch is still a decided
+    # FAIL — the grader has not simply stopped deciding.
+    assert (grader.fn("I cannot produce a patch.", {"qid": "e2", "base_tree": BASE_TREE})
+            == runner.GRADE_FAIL)
+
+
+def test_unresolvable_base_tree_is_out_of_coverage_not_a_candidate_loss():
+    """A base tree that cannot be resolved is a HARNESS/corpus defect. It used to
+    score as a candidate loss — note the asymmetry it replaces: a MISSING
+    base_tree raises loudly, while an UNUSABLE one degraded silently to wrong."""
+    grader = runner.get_grader("patch_verifier")
+    assert (grader.fn(CLEAN_DIFF, {"qid": "u1", "base_tree": "/no/such/tree"})
+            == runner.GRADE_OUT_OF_COVERAGE)
+
+
+def test_undecided_items_are_excluded_from_the_paired_universe():
+    grader = runner.get_grader("patch_verifier")
+    items = [
+        {"qid": "d1", "prompt": "e", "suite": "s", "base_tree": BASE_TREE},
+        {"qid": "d2", "prompt": "e", "suite": "s", "base_tree": BASE_TREE},
+        {"qid": "d3", "prompt": "e", "suite": "s", "base_tree": BASE_TREE},
+    ]
+    predictions = {"d1": CLEAN_DIFF, "d2": NON_APPLYING_DIFF, "d3": ""}
+    rows, vector = runner.build_arm_rows(
+        runner.ArmConfig(name="a"), items, predictions, grader, model="M", quant="Q")
+
+    assert set(vector) == {"d1", "d2"}, "an undecided item must not be paired"
+    by_qid = {r["qid"]: r for r in rows}
+    assert len(rows) == 3, "the undecided row is still WRITTEN, never dropped"
+    assert by_qid["d3"]["verdict"] == runner.GRADE_OUT_OF_COVERAGE
+    assert by_qid["d3"]["cause"] == "empty"
+    # `correct` is ABSENT, not False and not null: a null still reads as False
+    # through `.get(k, False)`, which is the collapse being removed.
+    assert "correct" not in by_qid["d3"]
+    assert by_qid["d1"]["correct"] is True
+    assert by_qid["d2"]["correct"] is False
+
+
+def test_paired_result_reports_resolved_coverage():
+    a = {"q1": _outcome("q1", True), "q2": _outcome("q2", False)}
+    b = {"q1": _outcome("q1", True), "q2": _outcome("q2", True)}
+    res = runner.compute_paired_result(
+        a, b, baseline_label="base", candidate_label="cand",
+        dataset_sha256="sha", test_profile="prof", model="M", quant="Q",
+        asserted_n=4,
+    )
+    assert res["asserted_qids"] == 4
+    assert res["shared_qids"] == 2
+    assert res["resolved_coverage"] == 0.5
+    assert res["baseline_out_of_coverage"] == 2
+    # Mutation guard: a fully-decided run reports full coverage, so the numbers
+    # above are not simply whatever the function always emits.
+    full = runner.compute_paired_result(
+        a, b, baseline_label="base", candidate_label="cand",
+        dataset_sha256="sha", test_profile="prof", model="M", quant="Q",
+        asserted_n=2,
+    )
+    assert full["resolved_coverage"] == 1.0
+    assert full["baseline_out_of_coverage"] == 0
+
+
+def _outcome(qid, correct):
+    ps = runner._load_paired_stats()
+    return ps.QuestionOutcome(qid=qid, suite="s", correct=correct, trial_id=0)

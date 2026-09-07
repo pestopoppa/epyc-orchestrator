@@ -63,6 +63,9 @@ from src.autopilot_core.journal_reconstruction import (
 )
 from src.autopilot_core.journal_snapshot_replay import archive_payload_from_verified_snapshot
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
+from src.autopilot_core.measurement_guards import (
+    is_quality_admissible as _is_quality_admissible,
+)
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
 from planner_roster import PlannerRosterError, validate_active_environment
 from pareto_archive import (
@@ -1451,7 +1454,14 @@ def _blacklisted_action_skip(action: dict[str, Any], blocked_reason: str) -> Ski
 
 
 def _question_outcome_map(question_results: Any) -> dict[str, bool]:
-    """Normalize compact question result rows into a sequential verdict map."""
+    """Normalize compact question result rows into a sequential verdict map.
+
+    CJ-8: rows whose ``disposition`` carries no quality signal (``infra_failed``,
+    ``scoring_failed``) are EXCLUDED. They used to arrive as ``correct=False``
+    and poison ``baseline_profile_from_trials``, which is the reference every
+    later e-process observation is centred against — so one backend blip moved
+    the baseline itself, not just one trial.
+    """
     if not isinstance(question_results, list):
         return {}
     outcomes: dict[str, bool] = {}
@@ -1461,8 +1471,23 @@ def _question_outcome_map(question_results: Any) -> dict[str, bool]:
         qid = str(item.get("qid") or item.get("question_id") or "").strip()
         if not qid:
             continue
+        if not _is_quality_admissible(item.get("disposition")):
+            continue
         outcomes[qid] = bool(item.get("correct"))
     return outcomes
+
+
+def _question_outcome_excluded(question_results: Any) -> int:
+    """How many rows :func:`_question_outcome_map` dropped. Reported, never
+    silently absorbed: a row that vanishes from a denominator is otherwise
+    indistinguishable from one that was never asserted."""
+    if not isinstance(question_results, list):
+        return 0
+    return sum(
+        1 for item in question_results
+        if isinstance(item, dict)
+        and not _is_quality_admissible(item.get("disposition"))
+    )
 
 
 # D6 / FIELD-1: the documented EvalResult metric families that feed the journal's
@@ -1587,7 +1612,16 @@ def _question_outcome_vector(
     *,
     trial_id: int | None,
 ) -> dict[str, QuestionOutcome]:
-    """Normalize compact question result rows for paired diagnostics."""
+    """Normalize compact question result rows for paired diagnostics.
+
+    CJ-8. THIS is the live McNemar leak: the vector built here feeds
+    ``mcnemar_from_vectors`` in ``_seq_paired_baseline_diagnostics`` with no
+    disposition filtering on either side, so an ``infra_failed`` row landed in a
+    discordant cell as a substantive wrong answer. Excluded rows leave the
+    paired universe entirely — an unmatched pair is what
+    ``require_matched_comparison`` exists to surface, and it is strictly better
+    than a fabricated one.
+    """
     if not isinstance(question_results, list):
         return {}
     vector: dict[str, QuestionOutcome] = {}
@@ -1600,6 +1634,8 @@ def _question_outcome_vector(
             continue
         qid = str(item.get("qid") or item.get("question_id") or "").strip()
         if not qid:
+            continue
+        if not _is_quality_admissible(item.get("disposition")):
             continue
         vector[qid] = QuestionOutcome(
             qid=qid,
@@ -1688,6 +1724,11 @@ def _seq_paired_baseline_diagnostics(
             "candidate": candidate,
             "candidate_trial_id": candidate_trial_id,
             "candidate_vector_qids": len(candidate_vector),
+            # CJ-9. Rows excluded for a non-quality disposition never entered the
+            # pairing. They are reported here so a shrinking `shared_qids` is
+            # readable as an exclusion rather than as a smaller run.
+            "candidate_excluded_non_quality": _question_outcome_excluded(
+                question_results),
             "baseline_reference_trial_id": baseline.get("trial_id"),
             "baseline_reference_timestamp": baseline.get("timestamp", ""),
             "baseline_reference_reason": baseline.get("reason", ""),

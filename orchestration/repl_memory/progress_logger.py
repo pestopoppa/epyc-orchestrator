@@ -86,6 +86,12 @@ class EventType(str, Enum):
     # Gate events
     GATE_PASSED = "gate_passed"
     GATE_FAILED = "gate_failed"
+    #: CJ-8. The gate never DECIDED — it timed out, it raised, or the gate name
+    #: does not exist. Emphatically NOT a `GATE_FAILED`: `q_reward` charges -0.1
+    #: per GATE_FAILED, so folding an infra failure in there converts a harness
+    #: defect into negative learning signal about a model that was never checked.
+    #: An infra failure is the ABSENCE of a measurement, never a bad one.
+    GATE_INCONCLUSIVE = "gate_inconclusive"
 
     # REPL exploration events
     EXPLORATION_STARTED = "exploration_started"
@@ -580,19 +586,41 @@ class ProgressLogger:
         agent_tier: str,
         agent_role: str,
         error_message: Optional[str] = None,
+        verdict: Optional[str] = None,
+        cause: Optional[str] = None,
     ) -> None:
-        """Log gate pass/fail."""
+        """Log a gate result — pass, fail, or NEVER DECIDED.
+
+        ``verdict``/``cause`` are the CJ-8 pair from ``GateResult``. They are
+        optional so a caller that predates the three-valued gate keeps its exact
+        previous behaviour: absent ``verdict`` falls back to ``passed``.
+
+        ``passed`` is NOT reinterpreted. An undecided gate still arrives with
+        ``passed=False`` and still blocks everywhere ``passed`` is consulted; the
+        only thing that changes is which EVENT is written, and therefore whether
+        the reward writer charges a penalty for it.
+        """
+        undecided = verdict == "out-of-coverage"
+        if undecided:
+            event_type = EventType.GATE_INCONCLUSIVE
+            outcome = "inconclusive"
+        else:
+            event_type = EventType.GATE_PASSED if passed else EventType.GATE_FAILED
+            outcome = "success" if passed else "failure"
+        data = {
+            "gate_name": gate_name,
+            "error_message": error_message[:500] if error_message else None,
+        }
+        if undecided:
+            data["cause"] = cause
         self.log(
             ProgressEntry(
-                event_type=EventType.GATE_PASSED if passed else EventType.GATE_FAILED,
+                event_type=event_type,
                 task_id=task_id,
                 agent_tier=agent_tier,
                 agent_role=agent_role,
-                data={
-                    "gate_name": gate_name,
-                    "error_message": error_message[:500] if error_message else None,
-                },
-                outcome="success" if passed else "failure",
+                data=data,
+                outcome=outcome,
             )
         )
 
