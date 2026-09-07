@@ -43,8 +43,13 @@ import answer_scoring_vendored as vendored  # noqa: E402
 # `python3 -c "import hashlib;print(hashlib.sha256(open('scripts/benchmark/answer_scoring_vendored.py','rb').read()).hexdigest())"`.
 # Update procedure on a legitimate re-vendor: see the header comment in
 # answer_scoring_vendored.py.
+# Re-pinned 2026-09-07 (CJ-11): the upstream library gained
+# `score_response_or_error`, a three-valued SIBLING of `score_response`. The
+# upstream diff is 158 insertions and 0 DELETIONS -- `score_response` is
+# byte-identical -- so every golden-corpus verdict below is expected to be
+# unchanged, and the replay below is what proves it rather than asserts it.
 EXPECTED_VENDORED_SHA256 = (
-    "d331f98ec0a3962828b4dd3d8c2895ccc9b7e71bd5f7348e9f1899191c1daca8"
+    "3b59d04efd12755c015b2dd483edaf58617639926c74071f2f4d7fdee032e5e2"
 )
 
 
