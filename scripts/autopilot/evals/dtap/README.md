@@ -16,6 +16,8 @@ Agents", arXiv 2605.04808), imported under Apache-2.0 for `tool-use-eval-contrac
 | Subset | 18 cases: finance (12) + crm (6); benign 3 / direct 6 / indirect 9 |
 | Injection families | prompt, tool, skill, environment, compositional (all five) |
 | Per-case provenance | `manifest.json` (upstream path + config/judge SHA-256) |
+| Transcription contract | `verbatim-judgment-plus-external-guard-v1` (CJ-12, ruled 2026-09-07) |
+| Attestation check | `python3 -m harness attest` (exit 0/1) |
 
 `cases.json` transcribes each selected task's `config.yaml` verbatim (YAML→JSON,
 no runtime YAML dependency). `judges/<case_id>/judge.py` transcribes each judge
@@ -81,13 +83,59 @@ python3 -m harness run --case finance-benign-trade-execution-001 --arm done \
 python3 -m harness replay --trace /tmp/dtap-results/traces/<case>.<arm>.seed0.trace.jsonl
 ```
 
-Tests: `pytest tests/test_dtap_harness.py` (66 tests, zero inference).
+```bash
+# Verify the judge attestation (upstream bytes + wrapper identity), exit 0/1
+python3 -m harness attest
+```
+
+Tests: `pytest tests/` (88 tests, zero inference) — `test_dtap_harness.py` (66)
+plus `test_judge_guard.py` (22, CJ-12).
+
+## Judge exception reporting (CJ-12) — the transcription contract, amended
+
+A transcribed judge's `except` handlers are upstream's. At 33 of the subset's 46
+handlers upstream catches broadly and turns the failure into a verdict
+(`return False, {...}`, `m["message"] = f"Error: {e}"`, `sell_count = 0`), so a
+judge that **crashed** was indistinguishable from one that judged **"no"** — a
+defective instrument reading as evidence.
+
+**Ruled by the operator 2026-09-07 (CJ-12, option 1):** the transcription
+contract now permits an exception-reporting **wrapper**, while the judgment logic
+stays byte-identical *and separately attestable*. Concretely:
+
+| Layer | Bytes | Attested as |
+|---|---|---|
+| `judges/<case>/judge.py` | upstream's, **unmodified** | `upstream_judge_sha256` + `transcribed_judge_sha256` (per case) |
+| `harness/judge_guard.py` | **ours** | `meta.judge_guard.sha256` + per-case `guard.handler_map_sha256` |
+
+Nothing is inlined and re-hashed as a mixture: a reader of `manifest.json` can
+always tell which bytes are upstream's and which are ours.
+
+`harness/judge_guard.py` reads each judge's AST (read-only) and classifies every
+handler as **narrow** (`except (ValueError, TypeError)` — typed control flow,
+upstream's judgment), **suppressing** (`except Exception: pass` — upstream chose
+to ignore it and record nothing), or **escalating** (any other broad handler,
+whose body feeds the verdict). It then watches judge frames through
+`sys.settrace`; when an exception is swallowed by an *escalating* handler the
+guard raises the harness's existing `JudgeFailure` (`OutcomeType.JUDGE`, CJ-8
+cause `checker_error`) at the call boundary — **never** a "no" verdict, never a
+pass. Escalation is deferred to the boundary so the judge's own control flow is
+observed, never altered. Judge load/instantiate/eval failures are likewise typed
+`judge`, not `harness`, per the taxonomy in `harness/outcomes.py`.
+
+`python3 -m harness attest` is the validator (there was none before CJ-12:
+`tools/transcribe.py` only ever *wrote* the digests). It fails if a judgment byte
+changes, if a file's attribution header disagrees with the manifest, if the
+wrapper's own bytes change, or if a judge's recorded handler map no longer
+matches a fresh scan. `--update` re-attests the wrapper-side facts only and can
+never rewrite an upstream digest.
 
 ## Contract features (TU-DTAP-1)
 
 - **Config + deterministic final-state judges preserved** — transcribed from the
   pinned commit; judge logic byte-identical (import prologue only rewritten);
-  upstream SHA-256 per file in `manifest.json`.
+  upstream SHA-256 per file in `manifest.json`. Exception reporting is added by
+  an external wrapper attested separately (CJ-12), never by editing a judge.
 - **Setup scripts inspected, never run on this host.** All selected setup.sh
   files only curl localhost simulated services; nothing here executes them.
 - **Per-arm fixed configuration** — `ArmConfig` (model, temperature, max_tokens,
@@ -98,6 +146,8 @@ Tests: `pytest tests/test_dtap_harness.py` (66 tests, zero inference).
   deterministic judge on the recorded state snapshot and compares verdicts.
 - **Typed failure outcomes** — exactly `model|parser|tool|endpoint|harness|judge|
   infrastructure|overflow` (`harness/outcomes.py`; `check-outcomes` asserts the set).
+  A judge that crashes reaches this boundary as `judge`, not as a verdict — see
+  *Judge exception reporting (CJ-12)* above.
 - **Repeated seeds / confidence intervals** — `matrix` runs N seeds per case/arm
   and reports rates + Wilson 95% CIs.
 - **Attack generation target-disjoint** — the imported attack payloads are fixed

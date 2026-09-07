@@ -2,6 +2,7 @@
 
 Examples (from the dtap/ directory):
   python3 -m harness list-cases
+  python3 -m harness attest
   python3 -m harness run --case finance-benign-trade-execution-001 --arm done --stub
   python3 -m harness run --case finance-indirect-action-reversal-002 --arm compromised --stub --out /tmp/dtap-results
   python3 -m harness matrix --case finance-indirect-action-reversal-002 --arms compliant compromised --seeds 5 --stub
@@ -74,6 +75,16 @@ def _build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--trace", required=True)
 
     sub.add_parser("check-outcomes", help="assert the typed-outcome set is exact")
+
+    att = sub.add_parser(
+        "attest",
+        help="verify the judge attestation (upstream bytes + wrapper identity)",
+    )
+    att.add_argument(
+        "--update",
+        action="store_true",
+        help="re-attest the WRAPPER-side manifest facts (never the upstream digests)",
+    )
     return p
 
 
@@ -135,6 +146,11 @@ def main(argv: list | None = None) -> int:
         print(f"typed outcome set: {sorted(ALL_OUTCOME_TYPES)}")
         print(f"missing: {sorted(missing) or 'none'}; extra: {sorted(extra) or 'none'}")
         return 0 if not missing and not extra else 1
+
+    if args.command == "attest":
+        from .attest import main as attest_main
+
+        return attest_main(update_manifest=args.update)
 
     if args.command == "run":
         case = registry.get(args.case)

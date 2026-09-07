@@ -1,6 +1,16 @@
 {
   "cases": {
     "crm-benign-001": {
+      "guard": {
+        "escalating_handler_lines": [
+          114
+        ],
+        "handler_map_sha256": "e616e18e9ad56867f8e1b7553404f5c54cfc6c7c086ecc246c60f608a6902179",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [],
       "rewrites": [
         "import prologue -> harness shims",
@@ -13,6 +23,19 @@
       "upstream_path": "dataset/crm/benign/1"
     },
     "crm-direct-social-scoring-010": {
+      "guard": {
+        "escalating_handler_lines": [
+          133
+        ],
+        "handler_map_sha256": "dae69133b7013937f50553b6611d89801b1948feef79b813751eb1cad3fa8d4a",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [
+          98,
+          115
+        ],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "prompt",
         "skill"
@@ -28,6 +51,16 @@
       "upstream_path": "dataset/crm/malicious/direct/social-scoring/10"
     },
     "crm-malicious-direct-general-ai-restrictions-001": {
+      "guard": {
+        "escalating_handler_lines": [
+          125
+        ],
+        "handler_map_sha256": "6d305519afdd56b3352737362982bd53f78ff4f9b86b3e61ececa67a4b30e0e1",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "prompt",
         "skill"
@@ -43,6 +76,19 @@
       "upstream_path": "dataset/crm/malicious/direct/general-ai-restrictions/1"
     },
     "crm-malicious-indirect-general-ai-restrictions-004": {
+      "guard": {
+        "escalating_handler_lines": [
+          155,
+          255
+        ],
+        "handler_map_sha256": "294f07947dbec94d0dcc3a22327b4a51ff9140ac2499f5e83d8a9dd137cf2c92",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [
+          142
+        ],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "skill",
         "tool"
@@ -58,6 +104,21 @@
       "upstream_path": "dataset/crm/malicious/indirect/general-ai-restrictions/4"
     },
     "crm-malicious-indirect-misinfo-001": {
+      "guard": {
+        "escalating_handler_lines": [
+          187,
+          304
+        ],
+        "handler_map_sha256": "f1f7168a1546cc2f28193d35432f53fa98beb6775f3f3c1408eaa23de4da72a8",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [
+          84,
+          100,
+          252
+        ],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "skill"
       ],
@@ -72,6 +133,19 @@
       "upstream_path": "dataset/crm/malicious/indirect/misinformation-hallucination/1"
     },
     "crm-malicious-indirect-social-scoring-003": {
+      "guard": {
+        "escalating_handler_lines": [
+          125,
+          235
+        ],
+        "handler_map_sha256": "d409f2089d3e633e648b814b5d87a4fb32dc0ee2904e549e735be1ae4ceea569",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [
+          219
+        ],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "skill"
       ],
@@ -86,6 +160,16 @@
       "upstream_path": "dataset/crm/malicious/indirect/social-scoring/3"
     },
     "finance-benign-analyst-review-001": {
+      "guard": {
+        "escalating_handler_lines": [
+          45
+        ],
+        "handler_map_sha256": "a8fd13d79348dc541b14f43a3e23e4cba79d076ee08a1ee539b78efae2a43eba",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [],
       "rewrites": [
         "import prologue -> harness shims",
@@ -98,6 +182,16 @@
       "upstream_path": "dataset/finance/benign/analyst_review/1"
     },
     "finance-benign-trade-execution-001": {
+      "guard": {
+        "escalating_handler_lines": [
+          51
+        ],
+        "handler_map_sha256": "1b22692c7e5f65fb1b5b2f15d812063ffeb4f04abf7cc26e90e8869d2cfc821e",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [],
       "rewrites": [
         "import prologue -> harness shims",
@@ -110,6 +204,21 @@
       "upstream_path": "dataset/finance/benign/trade_execution/1"
     },
     "finance-direct-churning-001": {
+      "guard": {
+        "escalating_handler_lines": [
+          74,
+          117,
+          133
+        ],
+        "handler_map_sha256": "846316fd3e0efc524e402c56c3427dad59978ce9c34001a3718e8e7d73ace639",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [
+          88,
+          101
+        ],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "environment",
         "prompt"
@@ -125,6 +234,21 @@
       "upstream_path": "dataset/finance/malicious/direct/churning/1"
     },
     "finance-direct-churning-004": {
+      "guard": {
+        "escalating_handler_lines": [
+          74,
+          117,
+          133
+        ],
+        "handler_map_sha256": "846316fd3e0efc524e402c56c3427dad59978ce9c34001a3718e8e7d73ace639",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [
+          88,
+          101
+        ],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "prompt"
       ],
@@ -139,6 +263,21 @@
       "upstream_path": "dataset/finance/malicious/direct/churning/4"
     },
     "finance-direct-churning-005": {
+      "guard": {
+        "escalating_handler_lines": [
+          74,
+          117,
+          133
+        ],
+        "handler_map_sha256": "846316fd3e0efc524e402c56c3427dad59978ce9c34001a3718e8e7d73ace639",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [
+          88,
+          101
+        ],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "prompt",
         "tool"
@@ -154,6 +293,17 @@
       "upstream_path": "dataset/finance/malicious/direct/churning/5"
     },
     "finance-direct-fake_security_alert-007": {
+      "guard": {
+        "escalating_handler_lines": [
+          97,
+          102
+        ],
+        "handler_map_sha256": "ece6d2ab077ef524f3ac056b8277794f196590265d8612d8907f4a47e55bab2a",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "environment",
         "prompt",
@@ -170,6 +320,17 @@
       "upstream_path": "dataset/finance/malicious/direct/fake_security_alert/7"
     },
     "finance-indirect-action-reversal-002": {
+      "guard": {
+        "escalating_handler_lines": [
+          40,
+          59
+        ],
+        "handler_map_sha256": "669c6b2f015c8bf091ad996fafef23bd7a0fe81b3a67fca6632e8e6e2b195b8c",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "tool"
       ],
@@ -184,6 +345,17 @@
       "upstream_path": "dataset/finance/malicious/indirect/action_reversal/2"
     },
     "finance-indirect-action-reversal-003": {
+      "guard": {
+        "escalating_handler_lines": [
+          54,
+          72
+        ],
+        "handler_map_sha256": "3395547bed4c39ec5105e69fffc73b8f665683920a2a1b9c100a19c2e51e512e",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "environment"
       ],
@@ -198,6 +370,17 @@
       "upstream_path": "dataset/finance/malicious/indirect/action_reversal/3"
     },
     "finance-indirect-action-reversal-012": {
+      "guard": {
+        "escalating_handler_lines": [
+          53,
+          71
+        ],
+        "handler_map_sha256": "119e6216db148c80be692d0dce6cebd2d7bc490802dbb361211cc06c047c4ff8",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "environment",
         "tool"
@@ -213,6 +396,16 @@
       "upstream_path": "dataset/finance/malicious/indirect/action_reversal/12"
     },
     "finance-indirect-data-exfiltration-004": {
+      "guard": {
+        "escalating_handler_lines": [
+          79
+        ],
+        "handler_map_sha256": "88af599cd56cc88eeb857da2d2944b52db1344fce00275ad4b11ee0ae43d0a8a",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "environment"
       ],
@@ -227,6 +420,17 @@
       "upstream_path": "dataset/finance/malicious/indirect/data_exfiltration/4"
     },
     "finance-indirect-quantity-inflation-014": {
+      "guard": {
+        "escalating_handler_lines": [
+          54,
+          73
+        ],
+        "handler_map_sha256": "055e5986e5fcfee757c70362c695a369aa7e5af9ac59c1f33faf467fbb67a532",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "environment",
         "tool"
@@ -242,6 +446,17 @@
       "upstream_path": "dataset/finance/malicious/indirect/quantity_inflation/14"
     },
     "finance-indirect-symbol-substitution-007": {
+      "guard": {
+        "escalating_handler_lines": [
+          53,
+          70
+        ],
+        "handler_map_sha256": "6b2add4acee744bcd91fb5b54c864f629a98f5aa5b41cf8b2d0027611deaea77",
+        "judge_bytes_modified": false,
+        "narrow_handler_lines": [],
+        "suppressing_handler_lines": [],
+        "wrapper": "harness/judge_guard.py"
+      },
       "injection_families": [
         "tool"
       ],
@@ -259,9 +474,16 @@
   "meta": {
     "commit": "e0323a521ba4ef88f8e14c1eccf68d0a3d19a458",
     "git_head_at_transcription": "e0323a521ba4ef88f8e14c1eccf68d0a3d19a458",
+    "judge_guard": {
+      "cause_code": "checker_error",
+      "contract": "verbatim-judgment-plus-external-guard-v1",
+      "module": "harness/judge_guard.py",
+      "sha256": "b911cc4f978778e1f8b10d5a1c938faaacc312438cda1bacf4633b712d065216"
+    },
     "license": "Apache-2.0",
     "selected_cases": 18,
     "source_repo": "https://github.com/AI-secure/DecodingTrust-Agent",
+    "transcription_contract": "verbatim-judgment-plus-external-guard-v1",
     "tree": "fd5a107aedb8971c346fc0e85d4789bf510e3f5f"
   }
 }

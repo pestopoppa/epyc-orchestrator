@@ -23,6 +23,11 @@ Judge transcription policy (logic-preserving, reviewable):
   * An attribution header (upstream path, commit, file SHA-256) is prepended.
   * The rewritten file's SHA-256 is recorded in manifest.json; the *upstream*
     SHA-256 is also recorded so the transcription can be re-verified at any time.
+  * CJ-12 (ruled 2026-09-07): judgment logic is STILL never edited. Exception
+    reporting is added by an external wrapper, `harness/judge_guard.py`, whose
+    own digest and per-case handler map this tool records in manifest.json as
+    facts DISTINCT from the upstream digests (via harness.attest.update). A
+    reader can always tell which bytes are upstream's and which are ours.
 
 Usage:
   python3 tools/transcribe.py --upstream-root /tmp/dtap-import-20260825 \
@@ -236,6 +241,18 @@ def main() -> int:
 
     (out / "cases.json").write_text(json.dumps({"meta": manifest["meta"], "cases": cases}, indent=2, sort_keys=True) + "\n")
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+    # CJ-12: record the exception-reporting wrapper's OWN identity and its
+    # per-case handler map. Additive only — upstream digests above are final.
+    sys.path.insert(0, str(out))
+    from harness.attest import update as attest_update, verify as attest_verify
+
+    attest_update(manifest_path=out / "manifest.json", judges_dir=out / "judges")
+    ok, problems = attest_verify(manifest_path=out / "manifest.json", judges_dir=out / "judges")
+    if not ok:
+        for prob in problems:
+            print(f"attestation: {prob}", file=sys.stderr)
+        return 1
     print(f"transcribed {len(cases)} cases -> {out}")
     return 0
 

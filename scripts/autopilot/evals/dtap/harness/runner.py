@@ -15,7 +15,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import REGISTRY_PATH
 from .endpoint import ChatResult, DryRunStub
 from .env_state import StateStore
-from .outcomes import HarnessFailure, ModelFailure, RunFailure
+from .judge_guard import scan_judge
+from .outcomes import HarnessFailure, JudgeFailure, ModelFailure, RunFailure
 from .trace import TraceRecorder, extract_run_snapshot, verify_trace
 
 JUDGES_DIR = Path(__file__).resolve().parent.parent / "judges"
@@ -143,27 +144,34 @@ def trajectory_from_events(events: List[Dict[str, Any]]) -> List[Tuple[Dict[str,
 
 class JudgeApplication:
     """Mirrors upstream utils/judge_helpers.run_judge semantics on the harness's
-    transcribed judge modules (signature-aware trajectory passing)."""
+    transcribed judge modules (signature-aware trajectory passing).
+
+    Every call into the transcribed judge goes through `judge_guard.JudgeGuard`
+    (CJ-12): the upstream bytes are untouched, but an exception the judge
+    swallows into a verdict surfaces here as a typed JudgeFailure
+    (OutcomeType.JUDGE) instead of a "no"."""
 
     def __init__(self, case_id: str):
         self.case_id = case_id
         self.module = None
         self.judge_class = None
+        self.guard = None
 
     def load(self) -> "JudgeApplication":
         judge_path = JUDGES_DIR / self.case_id / "judge.py"
         if not judge_path.exists():
-            raise HarnessFailure(f"transcribed judge not found: {judge_path}")
+            raise JudgeFailure(f"transcribed judge not found: {judge_path}")
+        self.guard = scan_judge(judge_path)
         spec = importlib.util.spec_from_file_location(f"dtap_judge_{self.case_id}", judge_path)
         if spec is None or spec.loader is None:
-            raise HarnessFailure(f"cannot load judge module for {self.case_id}")
+            raise JudgeFailure(f"cannot load judge module for {self.case_id}")
         module = importlib.util.module_from_spec(spec)
         try:
             spec.loader.exec_module(module)
         except RunFailure:
             raise
         except Exception as exc:
-            raise HarnessFailure(f"judge module {self.case_id} failed to import: {exc!r}") from exc
+            raise JudgeFailure(f"judge module {self.case_id} failed to import: {exc!r}") from exc
         judge_class = None
         for name in dir(module):
             obj = getattr(module, name)
@@ -176,7 +184,7 @@ class JudgeApplication:
                 judge_class = obj
                 break
         if judge_class is None:
-            raise HarnessFailure(f"Judge class with eval_task/eval_attack not found in {self.case_id}/judge.py")
+            raise JudgeFailure(f"Judge class with eval_task/eval_attack not found in {self.case_id}/judge.py")
         self.module = module
         self.judge_class = judge_class
         return self
@@ -192,13 +200,13 @@ class JudgeApplication:
             "error": None,
         }
         try:
-            judge = self.judge_class()
+            judge = self.guard.call(self.judge_class, label=self.case_id)
             if hasattr(judge, "trajectory"):
                 judge.trajectory = trajectory
         except RunFailure:
             raise
         except Exception as exc:
-            raise HarnessFailure(f"judge {self.case_id} failed to instantiate: {exc!r}") from exc
+            raise JudgeFailure(f"judge {self.case_id} failed to instantiate: {exc!r}") from exc
 
         def _call(method: Callable) -> Any:
             try:
@@ -211,7 +219,7 @@ class JudgeApplication:
             return method(responses)
 
         try:
-            task_res = _call(judge.eval_task)
+            task_res = self.guard.call(_call, judge.eval_task, label=f"{self.case_id}.eval_task")
             if task_res is not None:
                 ok, meta = task_res
                 result["task_success"] = bool(ok)
@@ -220,10 +228,10 @@ class JudgeApplication:
         except RunFailure:
             raise
         except Exception as exc:
-            raise HarnessFailure(f"eval_task raised in {self.case_id}: {exc!r}") from exc
+            raise JudgeFailure(f"eval_task raised in {self.case_id}: {exc!r}") from exc
 
         try:
-            attack_res = _call(judge.eval_attack)
+            attack_res = self.guard.call(_call, judge.eval_attack, label=f"{self.case_id}.eval_attack")
             if attack_res is not None:
                 ok, meta = attack_res
                 result["attack_success"] = bool(ok)
@@ -232,7 +240,7 @@ class JudgeApplication:
         except RunFailure:
             raise
         except Exception as exc:
-            raise HarnessFailure(f"eval_attack raised in {self.case_id}: {exc!r}") from exc
+            raise JudgeFailure(f"eval_attack raised in {self.case_id}: {exc!r}") from exc
         return result
 
 
