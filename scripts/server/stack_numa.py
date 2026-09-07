@@ -374,6 +374,14 @@ _ROLE_FIELDS = frozenset(
         "mlock",
         "gpu_host_lane",
         "spec_overrides",
+        # INF-70/C7, opt-in, default absent (= 0 = off). GiB of free memory to
+        # force onto EVERY NUMA node before this role's server is launched.
+        # `numactl --interleave=all` is a per-allocation HINT the kernel
+        # abandons for any node with no free pages, so a long-lived box can
+        # skew a large model onto one node with no warning (measured
+        # 2026-09-02: 57.7/10.7/8.0/17.7 GB of a 98 GB model, decode -25%).
+        # Consumed by scripts/server/stack_numa_evict.py.
+        "numa_pre_evict_gib",
     }
 )
 

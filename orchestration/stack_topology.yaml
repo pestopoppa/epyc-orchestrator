@@ -82,6 +82,18 @@ realized_shape:
 #                               role, NOT a CPU decode instance; the import-time
 #                               SMT invariant treats it differently
 #   spec_overrides            - per-role speculative-decode parameter overrides
+#   numa_pre_evict_gib        - INF-70/C7 (enabled 2026-09-03): before this
+#                               role's server is launched, force >= N GiB
+#                               free on EVERY NUMA node (forcing form:
+#                               allocate-and-touch N+2 under membind on any
+#                               node below N, verify, 2 passes). Required
+#                               for every CPU llama-server role because
+#                               `numactl --interleave=all` is a HINT the
+#                               kernel abandons for a node with no free
+#                               pages (measured: 61% of a 98 GB model on one
+#                               node, decode -25%). NEVER on a gpu_host_lane
+#                               role — weights are in VRAM and the lane is
+#                               pinned to node 3; the loader refuses it there.
 #
 # TWO INVARIANTS ARE ASSERTED AT IMPORT (_assert_instance_invariants in
 # stack_numa.py), because both are derivable from the cpuset and a mismatch is
@@ -122,6 +134,7 @@ numa_config:
       1: interleave=0,1
       2: interleave=2,3
     mlock: true
+    numa_pre_evict_gib: 40   # INF-70/C7 CPU role: force even interleave (see header)
     # TUNING SURFACE: the speculation recipe is NOT here. It lives in the
     # master registry's `acceleration` block for this role, and that single
     # field is the only thing an ngram change needs to touch.
@@ -144,6 +157,7 @@ numa_config:
     instances:
       - {cpu_shape: NUMA_HALF_A, port: 18070}
     mlock: true
+    numa_pre_evict_gib: 40   # INF-70/C7 CPU role: force even interleave (see header)
     numactl_policy: interleave=0,1
 
   # coder_escalation numa_config entry REMOVED 2026-05-09 — consolidated onto
@@ -200,6 +214,7 @@ numa_config:
     instances:
       - {cpu_shape: NUMA_FULL, port: 8074}   # 1×96t physical cores, all 4 NUMA nodes
     mlock: true
+    numa_pre_evict_gib: 40   # INF-70/C7 CPU role: force even interleave (see header)
     numactl_policy: interleave=all   # wraps launch with `numactl --interleave=all --`
     # 2026-06-26 v6 cutover: draft_max 24->4. The 24 was sweep-verified for the OLD Qwen3.5-0.8B
     # EXTERNAL draft; the critic uses NEXTN self-draft (draft-mtp), whose bench-optimal
@@ -262,6 +277,7 @@ numa_config:
     # ~46 GB per instance — latency-critical for ingest pipeline
     # (Stage 1 of three_stage_summarization since 2026-05-06)
     mlock: true
+    numa_pre_evict_gib: 40   # INF-70/C7 CPU role: force even interleave (see header)
 
   # Worker: gemma4-26B-A4B Q4_K_M MTP (16 GB) — pre-warm: 1×96t + sub-full halves.
   # Swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4_K_M (was 39 t/s at 48t).
@@ -313,6 +329,7 @@ numa_config:
     # 0-95 overlapping every quarter keeps it region-vetoed under burst.
     placement_policy: burst_prefer_split
     mlock: true
+    numa_pre_evict_gib: 40   # INF-70/C7 CPU role: force even interleave (see header)
     spec_overrides: {draft_max: 2, p_split: 0}   # gemma4 MTP recipe (was dm=8 for Qwen3-Coder)
     # Every instance now declares a policy. Previously only idx0 did, which
     # left the sub-full instances on default first-touch — the defect class
