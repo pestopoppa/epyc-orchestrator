@@ -1838,6 +1838,85 @@ def test_eval_question_populates_deterministic_rubric_scores(monkeypatch) -> Non
     assert result.rubric_scores["tool_calls"] > 0
 
 
+def test_rubric_threshold_source_marks_undeclared_default(monkeypatch) -> None:
+    """RC-12: an undeclared rubric threshold must be visible, not silent."""
+    monkeypatch.delenv("AUTOPILOT_RUBRIC_JUDGE_ROLES", raising=False)
+    tower = EvalTower()
+
+    def _fake_call(**_kwargs):  # noqa: ANN001
+        return {
+            "answer": (
+                "# Summary\n"
+                "- alpha beta evidence\n"
+                "- gamma delta caveat\n"
+                "Source: https://example.test/report\n"
+                "Therefore the comparison is grounded in the evidence."
+            ),
+            "tokens_generated": 20,
+            "model": "fake",
+            "tools_called": ["web_search", "read_file"],
+        }
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+
+    def _ask(scoring_config):
+        with eval_tower.httpx.Client(timeout=1) as client:
+            return tower._eval_question(
+                {
+                    "id": "dr-2",
+                    "suite": "deep_research_threshold_marker",
+                    "prompt": "Research alpha beta.",
+                    "expected_contains": ["alpha beta", "gamma delta"],
+                    "scoring_config": scoring_config,
+                },
+                client,
+            )
+
+    undeclared = _ask({})
+    assert undeclared.rubric_threshold_source == "undeclared-default-0.60"
+    assert undeclared.correct is True  # the 0.60 nobody chose still decides
+
+    impossible = _ask(
+        {"rubric_pass_threshold": 1.01, "rubric_threshold_rationale": "test-pin"}
+    )
+    assert impossible.rubric_threshold_source == "declared"
+    assert impossible.correct is False  # the declared threshold is honored
+
+    no_rationale = _ask({"rubric_pass_threshold": 0.5})
+    assert no_rationale.rubric_threshold_source == "declared-no-rationale"
+    assert no_rationale.correct is True
+
+
+def test_rubric_threshold_source_serializes_into_detail_row(monkeypatch) -> None:
+    """The threshold source rides on the stored detail row, never only the log."""
+    monkeypatch.delenv("AUTOPILOT_RUBRIC_JUDGE_ROLES", raising=False)
+    tower = EvalTower()
+
+    def _fake_call(**_kwargs):  # noqa: ANN001
+        return {
+            "answer": "# S\n- alpha beta\n- gamma delta\nSource: https://x.test/r\nok",
+            "tokens_generated": 5,
+            "model": "fake",
+            "tools_called": [],
+        }
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "dr-3",
+                "suite": "deep_research_threshold_serialize",
+                "prompt": "p",
+                "expected_contains": ["alpha beta", "gamma delta"],
+                "scoring_config": {},
+            },
+            client,
+        )
+    item = eval_tower._compact_question_result(result)
+    assert item.get("rubric_threshold_source") == "undeclared-default-0.60"
+    assert item.get("rubric_source")  # judge/fallback provenance still present
+
+
 def test_eval_question_uses_completion_probabilities_for_confidence(monkeypatch) -> None:
     tower = EvalTower()
     seen: dict[str, object] = {}

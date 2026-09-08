@@ -43,8 +43,7 @@ DEFAULT_BASELINE_PATH = (
 # Remediation shown whenever the baseline file is unreadable/unparseable. Kept as a
 # single constant so the raised message and the docs stay in lockstep.
 _BASELINE_REMEDIATION = (
-    "Restore the file from git or recompute via "
-    "`autopilot.py checkpoint --production-best`."
+    "Restore the file from git or recompute via `autopilot.py checkpoint --production-best`."
 )
 
 
@@ -73,6 +72,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
+
 
 # Hard-coded safety thresholds
 # Quality is scored on a 0-3 scale (eval_tower: fraction_correct * 3.0); reliability
@@ -354,6 +354,8 @@ def _coerce_quality_obs(entry: Any, *, default_era: str = "") -> "_QualityObs | 
     if not math.isfinite(q):
         return None
     return _QualityObs(q=q, ts="", era=default_era, core_id="")
+
+
 # A production-best baseline must never claim a quality the system has never actually
 # achieved. Every trustworthy trial that clears the safety gate is recorded on the Pareto
 # frontier, so a promotion whose quality exceeds the frontier max is a phantom/contaminated
@@ -782,9 +784,7 @@ class EvalResult:
                 except (TypeError, ValueError):
                     continue
                 if math.isfinite(_fv):
-                    lines.append(
-                        f"METRIC tool_helpfulness[{_san_metric_name(_suite)}]: {_fv:.4f}"
-                    )
+                    lines.append(f"METRIC tool_helpfulness[{_san_metric_name(_suite)}]: {_fv:.4f}")
         # EV-8: Diversity metrics — unconditional; NaN → ``null``.
         for _div_key, _div_val in (
             ("diversity_entropy", self.diversity_entropy),
@@ -895,8 +895,7 @@ class Baseline:
             data = yaml.safe_load(path.read_text())
         except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
             raise BaselineCorruptError(
-                f"Baseline file {path} is unreadable/unparseable ({exc}). "
-                f"{_BASELINE_REMEDIATION}"
+                f"Baseline file {path} is unreadable/unparseable ({exc}). {_BASELINE_REMEDIATION}"
             ) from exc
         if data is None or not isinstance(data, dict):
             raise BaselineCorruptError(
@@ -904,9 +903,23 @@ class Baseline:
                 f"{_BASELINE_REMEDIATION}"
             )
         defaults = cls()
-        quality = cls._validate_quality(
-            data.get("quality", defaults.quality), defaults.quality, "quality", path
-        )
+        if "quality" not in data:
+            # RC-12 (audit 2026-09-08): a persisted baseline that never named a
+            # quality must not silently inherit the legacy calibration number.
+            # Loud: strict same-tier gating is unaffected (SG-3 already forces
+            # strict and skips when no same-tier baseline exists), but anything
+            # reading the legacy top-level value sees a number nobody re-derived.
+            log.warning(
+                "Baseline file %s names no quality source (no `quality` key); "
+                "applying the documented 2026-04-04 T2 calibration fallback %.3f "
+                "for legacy reads. Re-seed from a real eval before anything "
+                "decision-grade reads this baseline.",
+                path,
+                defaults.quality,
+            )
+            quality = defaults.quality
+        else:
+            quality = cls._validate_quality(data.get("quality"), defaults.quality, "quality", path)
         # Above-archive-max guard for the LOAD path (defense-in-depth). The scale guard
         # above only catches values outside [0, QUALITY_MAX] — it passes a 2.900 baseline,
         # which is within scale yet still unachievable when the Pareto frontier max is 2.400.
@@ -1094,9 +1107,7 @@ class Baseline:
             "tier_revisions": self.tier_revisions,
             "frontdoor_speed": self.frontdoor_speed,
         }
-        _atomic_write_text(
-            path, yaml.dump(data, default_flow_style=False, allow_unicode=True)
-        )
+        _atomic_write_text(path, yaml.dump(data, default_flow_style=False, allow_unicode=True))
 
     def apply_state(self, state: dict[str, Any], path: Path | None = None) -> None:
         state_path = path or self.source_path or DEFAULT_BASELINE_PATH
@@ -1219,7 +1230,9 @@ class Baseline:
         """Current revision of the T<tier> baseline reference (0 before any write)."""
         return self.tier_revisions.get(int(tier), 0)
 
-    def pin_tier(self, tier: int, pin_id: str | None = None, *, register: bool = True) -> BaselinePin:
+    def pin_tier(
+        self, tier: int, pin_id: str | None = None, *, register: bool = True
+    ) -> BaselinePin:
         """Capture the current T<tier> reference identity for a measurement window.
 
         EV-14c: call BEFORE the window starts (an EV-14a band run pins the reference
@@ -1362,8 +1375,7 @@ class Baseline:
         # the no-writes-yet default (revision 0 per tier).
         if self.tier_revisions:
             payload["tier_revisions"] = {
-                str(tier): revision
-                for tier, revision in sorted(self.tier_revisions.items())
+                str(tier): revision for tier, revision in sorted(self.tier_revisions.items())
             }
         # Only emit the era stamp when known — keeps a legacy (unstamped) baseline's state
         # payload byte-identical, and lets a missing key decode back to the pre-E7 default.
@@ -1454,17 +1466,13 @@ class SafetyGate:
                 self._quality_history_by_tier[int(tier)] = self._obs_deque(history or [])
         if quality_history_by_tier:
             for tier, history in quality_history_by_tier.items():
-                self._quality_history_by_tier.setdefault(
-                    int(tier), self._obs_deque(history or [])
-                )
+                self._quality_history_by_tier.setdefault(int(tier), self._obs_deque(history or []))
         if quality_history:
             # Legacy flat state had no tier label. Seed all current tiers so resumes and
             # older unit fixtures preserve their pre-migration behavior until enough
             # same-tier samples replace the migrated window.
             for tier in (0, DEFAULT_FRONTIER_TIER, 2):
-                self._quality_history_by_tier.setdefault(
-                    tier, self._obs_deque(quality_history)
-                )
+                self._quality_history_by_tier.setdefault(tier, self._obs_deque(quality_history))
         self._last_history_tier = DEFAULT_FRONTIER_TIER
 
     @staticmethod
@@ -2441,7 +2449,12 @@ class SafetyGate:
                 proof,
             )
             return BaselineUpdateResult(
-                False, reason, tier, previous_quality, result.quality, proof,
+                False,
+                reason,
+                tier,
+                previous_quality,
+                result.quality,
+                proof,
                 ineligible_reason=reason,
             )
         # Defect #3: eval-instrument re-baseline hold. A promotion computed against (or that
@@ -2459,7 +2472,12 @@ class SafetyGate:
             )
             log.error("Baseline update REFUSED — %s", reason)
             return BaselineUpdateResult(
-                False, reason, tier, previous_quality, result.quality, proof,
+                False,
+                reason,
+                tier,
+                previous_quality,
+                result.quality,
+                proof,
                 ineligible_reason="quality_rebaseline_required",
             )
         # LEDGER-W4 (01c §3): when the sequential path is active, a promotion requires
@@ -2486,7 +2504,12 @@ class SafetyGate:
             )
             log.warning("Baseline update REFUSED — %s", reason)
             return BaselineUpdateResult(
-                False, reason, tier, previous_quality, result.quality, proof,
+                False,
+                reason,
+                tier,
+                previous_quality,
+                result.quality,
+                proof,
                 seq_refused_reason="seq_inputs_unavailable",
             )
         if self.use_sequential and seq_confirmed is not None and not seq_confirmed:
@@ -2496,7 +2519,12 @@ class SafetyGate:
             )
             log.info("Baseline update skipped — %s", reason)
             return BaselineUpdateResult(
-                False, reason, tier, previous_quality, result.quality, proof,
+                False,
+                reason,
+                tier,
+                previous_quality,
+                result.quality,
+                proof,
                 seq_refused_reason="seq_not_confirmed",
             )
         if tier < MIN_FRONTIER_EVAL_TIER:
@@ -2728,11 +2756,7 @@ class SafetyGate:
                 continue
             if float(q) < quality_floor:
                 raw_n = suite_counts.get(suite)
-                n = (
-                    int(raw_n)
-                    if isinstance(raw_n, int) and not isinstance(raw_n, bool)
-                    else None
-                )
+                n = int(raw_n) if isinstance(raw_n, int) and not isinstance(raw_n, bool) else None
                 degraded.append((suite, float(q), n))
         # Suites that drew questions but produced no scoreable answer at all: present in the
         # eval's per-suite TOTALS, absent from its per-suite scores. Absent, never zero.

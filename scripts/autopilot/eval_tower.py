@@ -65,6 +65,11 @@ from safety_gate import EvalResult
 
 log = logging.getLogger("autopilot.eval")
 
+# RC-12 (audit 2026-09-08): suites that scored rubric questions without ever
+# declaring a pass threshold. Warned once per suite; the defaulted 0.60 is a
+# threshold nobody chose and must not be silent.
+_RUBRIC_THRESHOLD_WARNED_SUITES: set[str] = set()
+
 SENTINEL_PATH = Path(__file__).resolve().parent / "sentinel_questions.yaml"
 # Tool-use sentinels (suite: tool_use) — impossible to pass without a real
 # read_file tool call. INERT unless AUTOPILOT_TOOL_SENTINELS=1 is set, so the
@@ -709,6 +714,35 @@ def _is_rubric_scored_question(q: dict) -> bool:
     suite = str(q.get("suite", ""))
     expected_contains = q.get("expected_contains")
     return suite.startswith("deep_research") and isinstance(expected_contains, list)
+
+
+def _warn_rubric_threshold_suite(q: dict, undeclared: bool) -> None:
+    """Warn once per suite that rubric rows rest on an undeclared threshold.
+
+    RC-12 (audit 2026-09-08): a defaulted threshold is a choice nobody made.
+    The warning names the suite and the remediation; a per-question repeat is
+    noise, so the first occurrence per suite (per process) is enough.
+    """
+    suite = str(q.get("suite") or "unknown")
+    if suite in _RUBRIC_THRESHOLD_WARNED_SUITES:
+        return
+    _RUBRIC_THRESHOLD_WARNED_SUITES.add(suite)
+    if undeclared:
+        log.warning(
+            "rubric suite %r is scored with the UNDECLARED default pass threshold "
+            "0.60 — declare scoring_config['rubric_pass_threshold'] AND "
+            "scoring_config['rubric_threshold_rationale'] per suite (RC-12); until "
+            "then these rows carry rubric_threshold_source=undeclared-default-0.60 "
+            "and certify nothing decision-grade",
+            suite,
+        )
+    else:
+        log.warning(
+            "rubric suite %r declares rubric_pass_threshold but no "
+            "rubric_threshold_rationale (RC-12) — name the derivation in "
+            "scoring_config['rubric_threshold_rationale']",
+            suite,
+        )
 
 
 def _is_scoreable_question(q: dict) -> bool:
@@ -1376,6 +1410,8 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         item["rubric_scores"] = rubric_scores
     if r.rubric_source:
         item["rubric_source"] = r.rubric_source
+    if r.rubric_threshold_source:
+        item["rubric_threshold_source"] = r.rubric_threshold_source
     return item
 
 
@@ -2930,6 +2966,12 @@ class QuestionResult:
     # aggregate details as rubric_source_counts so judge-scored and
     # heuristic-scored questions are not indistinguishable downstream.
     rubric_source: str = ""
+    # RC-12 (audit 2026-09-08): where the rubric pass threshold came from —
+    # "declared" (scoring_config named rubric_pass_threshold AND
+    # rubric_threshold_rationale), "declared-no-rationale", or
+    # "undeclared-default-0.60" (a defaulted threshold is one nobody chose;
+    # surfaced so rows resting on it are never silent). "" for non-rubric.
+    rubric_threshold_source: str = ""
     host_covariates: dict[str, Any] = field(default_factory=dict)
     retrieval_compaction: dict[str, Any] = field(default_factory=dict)
     # Batch-level backend lifecycle certificates. Populated only when nested
@@ -4322,6 +4364,7 @@ class EvalTower:
         scoring_failed = False
         rubric_scores: dict[str, float] = {}
         rubric_source = ""
+        rubric_threshold_source = ""
         if not error and _is_scoreable_question(q):
             if _is_rubric_scored_question(q):
                 rubric_scores, rubric_source = self._rubric_scores_for_answer(
@@ -4331,7 +4374,25 @@ class EvalTower:
                     tool_events=list(resp.get("tools_called") or []),
                     client=client,
                 )
-                threshold = float((scoring_config or {}).get("rubric_pass_threshold", 0.60))
+                threshold_cfg = (scoring_config or {}).get("rubric_pass_threshold")
+                rationale = str(
+                    (scoring_config or {}).get("rubric_threshold_rationale") or ""
+                ).strip()
+                if threshold_cfg is None:
+                    # RC-12 (audit 2026-09-08): 0.60 is a defaulted threshold —
+                    # a choice nobody made. Visible in the row and warned once
+                    # per suite; refusal at decision-grade seams lands with the
+                    # RC-6a/P-REV-1 window.
+                    threshold = 0.60
+                    rubric_threshold_source = "undeclared-default-0.60"
+                    _warn_rubric_threshold_suite(q, undeclared=True)
+                else:
+                    threshold = float(threshold_cfg)
+                    rubric_threshold_source = (
+                        "declared" if rationale else "declared-no-rationale"
+                    )
+                    if not rationale:
+                        _warn_rubric_threshold_suite(q, undeclared=False)
                 correct = aggregate_rubric_score(rubric_scores).score >= threshold
                 scoring_method = "rubric"
             else:
@@ -4431,6 +4492,7 @@ class EvalTower:
             eval_partition=outcome.eval_partition,
             rubric_scores=rubric_scores,
             rubric_source=rubric_source,
+            rubric_threshold_source=rubric_threshold_source,
             host_covariates=outcome.host_covariates,
             retrieval_compaction=dict(outcome.retrieval_compaction),
         )

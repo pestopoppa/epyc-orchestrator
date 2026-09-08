@@ -120,6 +120,21 @@ def test_string_quality_falls_back(tmp_path):
     assert b.quality == Baseline().quality
 
 
+def test_missing_quality_key_warns_loudly_but_loads(caplog, tmp_path):
+    """RC-12: a baseline file that never names a quality must not silently
+    inherit the legacy calibration number — loud, with the same value."""
+    path = _write(
+        tmp_path,
+        "reliability: 0.9\nper_suite_quality: {}\nbaselines_by_tier:\n  1: 1.82\n",
+    )
+    with caplog.at_level("WARNING"):
+        b = Baseline.load(path)
+    assert b.quality == Baseline().quality  # legacy fallback value, unchanged
+    assert b.baselines_by_tier == {1: 1.82}
+    assert any("no quality source" in rec.message for rec in caplog.records)
+    assert str(path) in "\n".join(rec.message for rec in caplog.records)
+
+
 def test_string_reliability_falls_back(tmp_path):
     path = _write(
         tmp_path,
