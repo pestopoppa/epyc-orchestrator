@@ -383,15 +383,24 @@ def test_ap3_role_restart_builds_registry_overrides_and_groups_by_role(monkeypat
     def fake_restart_role(**kwargs):
         ordering.append("restart")
         calls.append(kwargs)
-        return {"status": "ok", "role": kwargs["role"], "registry_overrides": kwargs["registry_overrides"]}
+        return {
+            "status": "ok",
+            "role": kwargs["role"],
+            "registry_overrides": kwargs["registry_overrides"],
+        }
 
     monkeypatch.setattr(ca, "restart_role", fake_restart_role)
     monkeypatch.setattr(
         ca,
         "_ap3_prewarm_role_targets",
-        lambda *args, **kwargs: ordering.append("prewarm") or {
-            "status": "ok", "targets": [], "policy": "test",
-        },
+        lambda *args, **kwargs: (
+            ordering.append("prewarm")
+            or {
+                "status": "ok",
+                "targets": [],
+                "policy": "test",
+            }
+        ),
     )
 
     res = ca.apply_role_restart_params(
@@ -433,7 +442,9 @@ def test_ap3_prewarm_failure_prevents_registry_restart(monkeypatch) -> None:
         lambda *args, **kwargs: {"status": "error", "error": "unreadable model", "targets": []},
     )
     calls: list[dict[str, object]] = []
-    monkeypatch.setattr(ca, "restart_role", lambda **kwargs: calls.append(kwargs) or {"status": "ok"})
+    monkeypatch.setattr(
+        ca, "restart_role", lambda **kwargs: calls.append(kwargs) or {"status": "ok"}
+    )
 
     result = ca.apply_role_restart_params({"role_restart.worker_draft_max": 4})
 
@@ -455,12 +466,16 @@ def test_ap3_readiness_probe_is_one_token_and_failure_is_strict(monkeypatch) -> 
         return Response()
 
     monkeypatch.setattr(ca.httpx, "post", fake_post)
-    check = ca._ap3_strict_smoke_with_readiness(smoke_check=lambda *_: {"status": "ok"}, prewarm=prewarm)
+    check = ca._ap3_strict_smoke_with_readiness(
+        smoke_check=lambda *_: {"status": "ok"}, prewarm=prewarm
+    )
 
     result = check("worker_general", ["worker_general"])
 
     assert result["status"] == "error"
-    assert calls == [("http://127.0.0.1:8072/completion", {"prompt": "ready", "n_predict": 1, "temperature": 0})]
+    assert calls == [
+        ("http://127.0.0.1:8072/completion", {"prompt": "ready", "n_predict": 1, "temperature": 0})
+    ]
     assert result["readiness"][0]["timing_excluded"] is True
     assert result["readiness"][0]["error_type"] == "RuntimeError"
     assert result["base_smoke"]["status"] == "ok"
@@ -468,7 +483,9 @@ def test_ap3_readiness_probe_is_one_token_and_failure_is_strict(monkeypatch) -> 
 
 def test_ap3_readiness_skips_probe_when_smoke_fails(monkeypatch) -> None:
     prewarm = {"status": "ok", "targets": [{"ports": [8072]}]}
-    monkeypatch.setattr(ca.httpx, "post", lambda *args, **kwargs: pytest.fail("must not probe after smoke failure"))
+    monkeypatch.setattr(
+        ca.httpx, "post", lambda *args, **kwargs: pytest.fail("must not probe after smoke failure")
+    )
     check = ca._ap3_strict_smoke_with_readiness(smoke_check=lambda *_: False, prewarm=prewarm)
 
     result = check("worker_general", ["worker_general"])
@@ -514,8 +531,13 @@ def test_ap3_readiness_dedupes_ports_and_returns_evidence_reference(monkeypatch)
     assert all(probe["timing_excluded"] for probe in result["readiness"])
     assert all(probe["token_count"] == 1 for probe in result["readiness"])
     assert all(probe["http_status"] == 200 for probe in result["readiness"])
-    assert all(probe["prompt_sha256"] == sha256(b"ready").hexdigest() for probe in result["readiness"])
-    assert all(probe["response_sha256"] == sha256(Response.content).hexdigest() for probe in result["readiness"])
+    assert all(
+        probe["prompt_sha256"] == sha256(b"ready").hexdigest() for probe in result["readiness"]
+    )
+    assert all(
+        probe["response_sha256"] == sha256(Response.content).hexdigest()
+        for probe in result["readiness"]
+    )
     assert all(probe["elapsed_s"] >= 0 for probe in result["readiness"])
     assert result["base_smoke"]["status"] == "ok"
 
@@ -605,9 +627,7 @@ def test_ap3_prewarm_failure_writes_pre_reload_boundary_evidence(monkeypatch) ->
             events.append(kwargs)
             return kwargs
 
-    result = ca.apply_role_restart_params(
-        {"role_restart.worker_draft_max": 4}, journal=Journal()
-    )
+    result = ca.apply_role_restart_params({"role_restart.worker_draft_max": 4}, journal=Journal())
 
     assert result["status"] == "error"
     assert events[0]["command"] == "ap3-numa-prewarm"
@@ -660,8 +680,14 @@ def test_ap4_absent_axes_leave_objectives_and_grep_identical() -> None:
 
 def test_ap4_present_axes_surface_in_extractor_and_grep() -> None:
     r = EvalResult(
-        tier=1, quality=2.0, speed=10.0, cost=0.5, reliability=0.9,
-        reviewer_fa_rate=0.1, reviewer_fr_rate=0.2, review_decision_latency_ms=250.0,
+        tier=1,
+        quality=2.0,
+        speed=10.0,
+        cost=0.5,
+        reliability=0.9,
+        reviewer_fa_rate=0.1,
+        reviewer_fr_rate=0.2,
+        review_decision_latency_ms=250.0,
     )
     axes = rpt.reviewer_quality_axes(r)
     assert axes == {
@@ -681,15 +707,47 @@ def test_ap4_calibration_from_decisions() -> None:
     cal = rpt.reviewer_calibration_from_decisions(
         [
             {"decision": "approve", "gate": "fail", "latency_ms": 100},  # FA
-            {"decision": "reject", "gate": "pass", "latency_ms": 200},   # FR
-            {"decision": "approve", "gate": "pass"},                      # correct
-            {"decision": "reject", "gate": None},                         # inconclusive
+            {"decision": "reject", "gate": "pass", "latency_ms": 200},  # FR
+            {"decision": "approve", "gate": "pass"},  # correct
+            {"decision": "reject", "gate": None},  # inconclusive
         ]
     )
     assert cal["reviewer_fa_rate"] == 1.0  # 1 FA / 1 gate-fail
     assert cal["reviewer_fr_rate"] == 0.5  # 1 FR / 2 gate-pass
     assert cal["reviewer_fa_fr_ratio"] == 2.0
     assert cal["review_decision_latency_ms"] == 150.0
+
+
+def test_ap4_calibration_rc11_always_keys_every_side() -> None:
+    # RC-11: an unmeasured side is None, never absent, never 0.0 — and the
+    # denominator counts ride along so undercounted rates are visible.
+    one_sided = rpt.reviewer_calibration_from_decisions(
+        [
+            {"decision": "approve", "gate": "fail", "latency_ms": 100},  # FA
+            {"decision": "approve", "gate": "fail", "latency_ms": 200},  # FA
+        ]
+    )
+    assert one_sided["reviewer_fa_rate"] == 1.0
+    assert one_sided["reviewer_fr_rate"] is None
+    assert one_sided["reviewer_fa_fr_ratio"] is None
+    assert one_sided["n_gate_fail"] == 2
+    assert one_sided["n_gate_pass"] == 0
+    assert one_sided["excluded_no_conclusive_gate"] == 0
+
+    no_latency = rpt.reviewer_calibration_from_decisions([{"decision": "approve", "gate": "pass"}])
+    assert no_latency["review_decision_latency_ms"] is None
+    assert no_latency["n_gate_pass"] == 1
+
+    with_causes = rpt.reviewer_calibration_from_decisions(
+        [{"decision": "approve", "gate": None}],
+        excluded_causes={"observation_gold_confidence": 7},
+    )
+    assert with_causes["excluded_no_conclusive_gate"] == 1
+    assert with_causes["excluded_causes"] == {"observation_gold_confidence": 7}
+    # caller's dict is never mutated
+    caller = {"observation_gold_confidence": 7}
+    rpt.reviewer_calibration_from_decisions([], excluded_causes=caller)
+    assert caller == {"observation_gold_confidence": 7}
 
 
 def test_ap4_instrument_era_row_is_observation_only() -> None:
@@ -706,14 +764,23 @@ def test_ap4_instrument_era_row_is_observation_only() -> None:
 
 def _ctx(state: dict | None = None):
     return actions._ActionContext(
-        seeder=None, swarm=None, forge=None, lab=None, tower=None,
-        gate=None, archive=None, journal=None, state=state if state is not None else {},
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state=state if state is not None else {},
     )
 
 
 def test_ap5_actions_registered_in_dispatch_table() -> None:
     assert actions._ACTION_HANDLERS["review_policy_trial"] is actions._action_review_policy_trial
-    assert actions._ACTION_HANDLERS["screening_tier_driver"] is actions._action_screening_tier_driver
+    assert (
+        actions._ACTION_HANDLERS["screening_tier_driver"] is actions._action_screening_tier_driver
+    )
 
 
 def test_ap5_review_policy_trial_dry_run_enumerates_plan() -> None:
@@ -767,9 +834,7 @@ def test_ap5_review_policy_trial_handler_live_with_flag_raises(monkeypatch) -> N
     monkeypatch.setenv("AUTOPILOT_REVIEW_POLICY_TRIAL_INFERENCE", "1")
     ctx = _ctx()
     with pytest.raises(NotImplementedError):
-        actions._action_review_policy_trial(
-            {"knobs": ["review_majority_k"], "dry_run": False}, ctx
-        )
+        actions._action_review_policy_trial({"knobs": ["review_majority_k"], "dry_run": False}, ctx)
 
 
 def test_ap5_review_policy_trial_handler_invalid_knob() -> None:
@@ -783,8 +848,12 @@ def test_ap5_screening_tier_plan_from_synthetic_pool() -> None:
         "pairings": [
             {
                 "pairing_id": "arch__rev__grad",
-                "architect": "arch", "reviewer": "rev", "grader": "grad",
-                "cross_family_preferred": True, "self_review": False, "anchor_arm": None,
+                "architect": "arch",
+                "reviewer": "rev",
+                "grader": "grad",
+                "cross_family_preferred": True,
+                "self_review": False,
+                "anchor_arm": None,
             }
         ],
         "provenance": {"schema_version": "1", "registry_sha256": "abc"},
@@ -812,15 +881,15 @@ def test_ap5_screening_tier_rejects_empty_corpus() -> None:
 
 def test_ap5_screening_handler_dry_run_stashes_plan(tmp_path: Path) -> None:
     pool = {
-        "pairings": [
-            {"pairing_id": "a__b__c", "architect": "a", "reviewer": "b", "grader": "c"}
-        ],
+        "pairings": [{"pairing_id": "a__b__c", "architect": "a", "reviewer": "b", "grader": "c"}],
         "provenance": {"schema_version": "1"},
     }
     pool_file = tmp_path / "pool.json"
     pool_file.write_text(json.dumps(pool), encoding="utf-8")
     corpus = tmp_path / "manifest.json"
-    corpus.write_text(json.dumps({"corpus_id": "c1", "total_rows": 50, "counts": {}}), encoding="utf-8")
+    corpus.write_text(
+        json.dumps({"corpus_id": "c1", "total_rows": 50, "counts": {}}), encoding="utf-8"
+    )
 
     ctx = _ctx()
     res, species = actions._action_screening_tier_driver(
@@ -840,15 +909,15 @@ def test_ap5_screening_handler_requires_pool_path() -> None:
 def test_ap5_screening_handler_live_with_flag_calls_runner(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_SCREENING_TIER_INFERENCE", "1")
     pool = {
-        "pairings": [
-            {"pairing_id": "a__b__c", "architect": "a", "reviewer": "b", "grader": "c"}
-        ],
+        "pairings": [{"pairing_id": "a__b__c", "architect": "a", "reviewer": "b", "grader": "c"}],
         "provenance": {"schema_version": "1"},
     }
     pool_file = tmp_path / "pool.json"
     pool_file.write_text(json.dumps(pool), encoding="utf-8")
     corpus = tmp_path / "manifest.json"
-    corpus.write_text(json.dumps({"corpus_id": "c1", "total_rows": 50, "counts": {}}), encoding="utf-8")
+    corpus.write_text(
+        json.dumps({"corpus_id": "c1", "total_rows": 50, "counts": {}}), encoding="utf-8"
+    )
     row_ids = tmp_path / "rows.txt"
     row_ids.write_text("row-a\nrow-b\n", encoding="utf-8")
     output = tmp_path / "results.jsonl"
@@ -864,7 +933,11 @@ def test_ap5_screening_handler_live_with_flag_calls_runner(tmp_path: Path, monke
     monkeypatch.setitem(
         sys.modules,
         "screening_tier_runner",
-        type("FakeScreeningTierRunner", (), {"run_screening_tier": staticmethod(_fake_run_screening_tier)}),
+        type(
+            "FakeScreeningTierRunner",
+            (),
+            {"run_screening_tier": staticmethod(_fake_run_screening_tier)},
+        ),
     )
 
     ctx = _ctx()
@@ -933,7 +1006,9 @@ def test_ap6_emit_attaches_and_counts_success() -> None:
     stats = rpt.CritiqueEmissionStats()
     planner_providers.CODEX_REVIEW_DECISION_STATS = stats
     result = planner_providers.PlannerProviderResult(
-        provider="codex_critic", role="critique", ok=True,
+        provider="codex_critic",
+        role="critique",
+        ok=True,
         text=json.dumps({"decision": "approve", "confidence": 0.8, "issues": []}),
     )
     planner_providers._emit_codex_review_decision(result)
@@ -945,7 +1020,10 @@ def test_ap6_emit_counts_parse_failure_and_preserves_behavior() -> None:
     stats = rpt.CritiqueEmissionStats()
     planner_providers.CODEX_REVIEW_DECISION_STATS = stats
     result = planner_providers.PlannerProviderResult(
-        provider="codex", role="critique", ok=True, text="totally not json",
+        provider="codex",
+        role="critique",
+        ok=True,
+        text="totally not json",
     )
     planner_providers._emit_codex_review_decision(result)
     assert result.review_decision is None  # fell back, unchanged
@@ -957,7 +1035,9 @@ def test_ap6_emit_disabled_by_flag(monkeypatch) -> None:
     stats = rpt.CritiqueEmissionStats()
     planner_providers.CODEX_REVIEW_DECISION_STATS = stats
     result = planner_providers.PlannerProviderResult(
-        provider="codex", role="critique", ok=True,
+        provider="codex",
+        role="critique",
+        ok=True,
         text=json.dumps({"decision": "approve", "confidence": 0.8, "issues": []}),
     )
     planner_providers._emit_codex_review_decision(result)
@@ -973,14 +1053,15 @@ def test_ap6_emit_disabled_by_flag(monkeypatch) -> None:
 def test_ap7_event_type_constants() -> None:
     assert rpt.REVIEW_DECISION_EVENT_TYPE == "review_decision"
     assert rpt.REVIEW_POLICY_TRIAL_EVENT_TYPE == "review_policy_trial"
-    assert set(rpt.REVIEW_JOURNAL_EVENT_TYPES) == {
-        "review_decision", "review_policy_trial"
-    }
+    assert set(rpt.REVIEW_JOURNAL_EVENT_TYPES) == {"review_decision", "review_policy_trial"}
 
 
 def test_ap7_review_decision_event_to_event_shape() -> None:
     ev = rpt.ReviewDecisionEvent(
-        decision="approve", confidence=0.8, tripwire=False, source="codex_critic",
+        decision="approve",
+        confidence=0.8,
+        tripwire=False,
+        source="codex_critic",
         latency_ms=120.0,
     ).to_event()
     assert ev["type"] == "review_decision"
@@ -1037,7 +1118,9 @@ def test_ap8_renders_ledger_summary() -> None:
             return {"n_decisions": 12, "reviewer_fa_rate": 0.05, "reviewer_fr_rate": 0.11}
 
     section = digest._reviewer_calibration_section(
-        datetime.now(timezone.utc), ledger_module=FakeLedger, emission_stats=rpt.CritiqueEmissionStats()
+        datetime.now(timezone.utc),
+        ledger_module=FakeLedger,
+        emission_stats=rpt.CritiqueEmissionStats(),
     )
     text = "\n".join(section)
     assert "n decisions" in text and "reviewer fa rate" in text
@@ -1064,16 +1147,27 @@ def _seed_review_event(db_path, subtask_id, decision, gold, ts):
     from src.trace.emit import emit
 
     detail = {
-        "mode": "review", "subtask_id": subtask_id, "decision": decision,
-        "confidence": 0.8, "tripwire": False, "latency_ms": 100.0,
+        "mode": "review",
+        "subtask_id": subtask_id,
+        "decision": decision,
+        "confidence": 0.8,
+        "tripwire": False,
+        "latency_ms": 100.0,
         "tokens": {"tokens_out": 20, "chars_out": 80},
     }
     emit(
         Event(
-            ts_utc=ts, source=EventSource.REVIEW_PLANE, source_path="", source_line=None,
-            session_id="sess-b2", trial_id=1, role="architect_general",
-            category=EventCategory.REVIEW_DECISION, status=decision,
-            summary=f"review {subtask_id}", detail_json=detail_to_json(detail),
+            ts_utc=ts,
+            source=EventSource.REVIEW_PLANE,
+            source_path="",
+            source_line=None,
+            session_id="sess-b2",
+            trial_id=1,
+            role="architect_general",
+            category=EventCategory.REVIEW_DECISION,
+            status=decision,
+            summary=f"review {subtask_id}",
+            detail_json=detail_to_json(detail),
         ),
         db_path=db_path,
     )
@@ -1091,16 +1185,23 @@ def test_b2_refresh_swallows_raising_materializer(tmp_path):
             raise RuntimeError("materializer exploded")
 
     # Best-effort: the raising materializer is swallowed, digest hook returns False.
-    assert digest._refresh_review_ledger(
-        events_db=events_db, ledger_path=tmp_path / "review_ledger.sqlite",
-        materializer=RaisingMaterializer,
-    ) is False
+    assert (
+        digest._refresh_review_ledger(
+            events_db=events_db,
+            ledger_path=tmp_path / "review_ledger.sqlite",
+            materializer=RaisingMaterializer,
+        )
+        is False
+    )
 
 
 def test_b2_refresh_missing_events_db_is_noop(tmp_path):
-    assert digest._refresh_review_ledger(
-        events_db=tmp_path / "nope.sqlite", ledger_path=tmp_path / "review_ledger.sqlite"
-    ) is False
+    assert (
+        digest._refresh_review_ledger(
+            events_db=tmp_path / "nope.sqlite", ledger_path=tmp_path / "review_ledger.sqlite"
+        )
+        is False
+    )
 
 
 def test_b2_refresh_materializes_events(tmp_path):

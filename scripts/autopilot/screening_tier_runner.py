@@ -92,9 +92,7 @@ PLACEMENT_WORKLOAD_CLASS = "eval_batch"
 FORCED_DIRECT_CHAT_TRANSPORT = "forced_direct_chat"
 FORCED_DIRECT_FORCE_MODE = "direct"
 
-DEFAULT_CORPUS_MANIFEST = Path(
-    "/mnt/raid0/llm/datasets/nearmiss-corpus-v1/manifest.json"
-)
+DEFAULT_CORPUS_MANIFEST = Path("/mnt/raid0/llm/datasets/nearmiss-corpus-v1/manifest.json")
 
 # Gold labels that can score a reviewer decision (conclusive ground truth). An
 # "observation" gold_confidence is NOT gate-worthy, so those rows are excluded
@@ -323,7 +321,9 @@ def _priority_rank(entry: dict[str, Any]) -> tuple[int, int, int, int, str]:
     return (anchor, staged, cross, selfrev, str(entry.get("pairing_id") or ""))
 
 
-def _enrich_entry(plan_entry: dict[str, Any], pool_pairing: dict[str, Any] | None) -> dict[str, Any]:
+def _enrich_entry(
+    plan_entry: dict[str, Any], pool_pairing: dict[str, Any] | None
+) -> dict[str, Any]:
     """Merge a plan queue entry with its full pool-gen pairing (pool-gen wins for
     coresidency/staged/family facts the stripped plan entry lacks)."""
     out = dict(plan_entry)
@@ -332,9 +332,7 @@ def _enrich_entry(plan_entry: dict[str, Any], pool_pairing: dict[str, Any] | Non
         out.setdefault("reviewer", pool_pairing.get("reviewer"))
         out.setdefault("grader", pool_pairing.get("grader"))
         out["anchor_arm"] = plan_entry.get("anchor_arm") or pool_pairing.get("anchor_arm")
-        out["self_review"] = bool(
-            plan_entry.get("self_review") or pool_pairing.get("self_review")
-        )
+        out["self_review"] = bool(plan_entry.get("self_review") or pool_pairing.get("self_review"))
         out["cross_family"] = bool(
             plan_entry.get("cross_family") or pool_pairing.get("cross_family_preferred")
         )
@@ -467,9 +465,7 @@ def resolve_screening_queue(
     )
 
     notes = list(plan.get("notes") or [])
-    notes.append(
-        "resolved into concrete placement-queue job specs; NEVER /chat (RM-3)."
-    )
+    notes.append("resolved into concrete placement-queue job specs; NEVER /chat (RM-3).")
     notes.append(
         "all FA/FR/CR produced by execution are pre-P-REV-1 observations, not "
         "decision-gating numbers (MEASUREMENT.md)."
@@ -541,16 +537,27 @@ def is_judgeable_row(row: dict[str, Any]) -> bool:
     Excludes the ``candidate_recovery_needed`` / observation-only rows the manifest
     flags as not-yet-judgeable (they need a later non-inference join or a re-run).
     """
+    return judgeable_row_cause(row) is None
+
+
+def judgeable_row_cause(row: dict[str, Any]) -> str | None:
+    """Why a corpus row is not judgeable, or ``None`` if it is judgeable.
+
+    RC-11 census: the caller counts non-judgeable rows by cause so exclusions
+    are visible instead of silent. Check order mirrors :func:`is_judgeable_row`.
+    """
     if not isinstance(row, dict):
-        return False
+        return "not_a_record"
     candidate = row.get("candidate")
     if candidate in (None, "", "None"):
-        return False
+        return "no_candidate_answer"
     gold = str(row.get("gold_label", "")).strip().lower()
     if gold not in _CONCLUSIVE_GOLD_LABELS:
-        return False
+        return "non_conclusive_gold_label"
     conf = str(row.get("gold_confidence", "")).strip().lower()
-    return conf in _GATE_WORTHY_CONFIDENCE
+    if conf not in _GATE_WORTHY_CONFIDENCE:
+        return "observation_gold_confidence"
+    return None
 
 
 def gate_from_gold_label(gold_label: Any) -> str | None:
@@ -588,10 +595,15 @@ def consistency_rate(decisions: Iterable[dict[str, Any]]) -> float | None:
     return (agree / total) if total else None
 
 
-def summarize_pairing(job: TrialJobSpec, decisions: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_pairing(
+    job: TrialJobSpec,
+    decisions: list[dict[str, Any]],
+    *,
+    pool_excluded_causes: dict[str, int] | None = None,
+) -> dict[str, Any]:
     """Roll decision rows for one pairing into an FA/FR/CR result row (pure)."""
     rpt = _load_review_policy_trials()
-    axes = rpt.reviewer_calibration_from_decisions(decisions)
+    axes = rpt.reviewer_calibration_from_decisions(decisions, excluded_causes=pool_excluded_causes)
     n_conclusive = sum(1 for d in decisions if d.get("gate") is not None)
     return {
         "kind": "screening_tier_result",
@@ -611,6 +623,10 @@ def summarize_pairing(job: TrialJobSpec, decisions: list[dict[str, Any]]) -> dic
         "n_requested": job.n,
         "n_scored": len(decisions),
         "n_conclusive": n_conclusive,
+        "n_gate_fail": axes.get("n_gate_fail"),
+        "n_gate_pass": axes.get("n_gate_pass"),
+        "n_inconclusive_gate": axes.get("excluded_no_conclusive_gate"),
+        "pool_excluded_causes": axes.get("excluded_causes"),
         "reviewer_fa_rate": axes.get("reviewer_fa_rate"),
         "reviewer_fr_rate": axes.get("reviewer_fr_rate"),
         "reviewer_fa_fr_ratio": axes.get("reviewer_fa_fr_ratio"),
@@ -630,8 +646,14 @@ def iter_judgeable_rows(
     *,
     domain: str | None = None,
     row_ids: set[str] | None = None,
+    excluded_counts: dict[str, int] | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Lazily yield judgeable corpus rows (optionally filtered to one domain)."""
+    """Lazily yield judgeable corpus rows (optionally filtered to one domain).
+
+    When ``excluded_counts`` is supplied, each non-judgeable row increments
+    its cause bucket (RC-11 census — exclusions must be countable, never
+    silent). The caller owns the dict; this generator never clears it.
+    """
     with rows_path.open("r", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
@@ -647,8 +669,11 @@ def iter_judgeable_rows(
                     continue
             if domain and domain != "all" and str(row.get("domain")) != domain:
                 continue
-            if is_judgeable_row(row):
+            cause = judgeable_row_cause(row)
+            if cause is None:
                 yield row
+            elif excluded_counts is not None:
+                excluded_counts[cause] = excluded_counts.get(cause, 0) + 1
 
 
 def select_rows_for_job(
@@ -779,9 +804,7 @@ def execute_screening_queue(
 
     rows_path = corpus_rows_path
     if rows_path is None:
-        rp = resolved.corpus_slice.get("rows_path") or (
-            resolved.provenance.get("rows_path")
-        )
+        rp = resolved.corpus_slice.get("rows_path") or (resolved.provenance.get("rows_path"))
         rows_path = Path(rp) if rp else None
     if rows_path is None or not Path(rows_path).exists():
         # Fall back to the manifest's canonical rows path if the slice omitted it.
@@ -790,13 +813,18 @@ def execute_screening_queue(
 
     domain = str(resolved.corpus_slice.get("domain", "all"))
     row_ids = set(load_row_ids(row_ids_path)) if row_ids_path is not None else None
-    pool = list(iter_judgeable_rows(Path(rows_path), domain=domain, row_ids=row_ids))
+    pool_excluded: dict[str, int] = {}
+    pool = list(
+        iter_judgeable_rows(
+            Path(rows_path), domain=domain, row_ids=row_ids, excluded_counts=pool_excluded
+        )
+    )
 
     results: list[dict[str, Any]] = []
     for job in resolved.jobs:
         sample = select_rows_for_job(pool, n=job.n, seed_key=f"{seed}:{job.pairing_id}")
         decisions = [probe(job, row, tower) for row in sample]
-        result = summarize_pairing(job, decisions)
+        result = summarize_pairing(job, decisions, pool_excluded_causes=pool_excluded)
         result["planned_transport"] = result["transport"]
         result["transport"] = FORCED_DIRECT_CHAT_TRANSPORT
         result["execution_transport"] = live_execution_transport_summary()
@@ -927,9 +955,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--tier", default="T0", help="eval tier tag (T0 or T1)")
     p.add_argument("--domain", default=None, help="restrict to one corpus domain slice")
     p.add_argument("--max-pairings", type=int, default=0, help="cap number of pairings (0=all)")
-    p.add_argument("--cap-per-pairing", type=int, default=0, help="cap N trials per pairing (0=plan n)")
+    p.add_argument(
+        "--cap-per-pairing", type=int, default=0, help="cap N trials per pairing (0=plan n)"
+    )
     p.add_argument("--no-prune", action="store_true", help="keep coresidency-unfit pairings")
-    p.add_argument("--no-priority", action="store_true", help="preserve plan order (no priority sort)")
+    p.add_argument(
+        "--no-priority", action="store_true", help="preserve plan order (no priority sort)"
+    )
     p.add_argument("--seed", type=int, default=42)
     p.add_argument(
         "--output",

@@ -21,8 +21,7 @@ import pytest
 
 # ── load the runner module by path (robust; no scripts.* package needed) ──────
 _MODULE_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "scripts" / "autopilot" / "screening_tier_runner.py"
+    Path(__file__).resolve().parent.parent / "scripts" / "autopilot" / "screening_tier_runner.py"
 )
 _SPEC = importlib.util.spec_from_file_location("screening_tier_runner", _MODULE_PATH)
 runner = importlib.util.module_from_spec(_SPEC)
@@ -206,28 +205,34 @@ def test_dedup_by_pairing_id():
 
 
 def test_cap_per_pairing_bounds_n():
-    resolved = runner.resolve_screening_queue(
-        _plan(), _pool_gen_output(), cap_per_pairing=3
-    )
+    resolved = runner.resolve_screening_queue(_plan(), _pool_gen_output(), cap_per_pairing=3)
     assert all(job.n == 3 for job in resolved.jobs)
     assert resolved.per_pairing_n == 3
 
 
 def test_cap_per_pairing_never_raises_n():
     # cap larger than plan n must not inflate n.
-    resolved = runner.resolve_screening_queue(
-        _plan(), _pool_gen_output(), cap_per_pairing=999
-    )
+    resolved = runner.resolve_screening_queue(_plan(), _pool_gen_output(), cap_per_pairing=999)
     assert all(job.n == 12 for job in resolved.jobs)
 
 
 def test_prune_unfit_coresidency_toggle():
     pool = _pool_gen_output()
     queue = [
-        {"pairing_id": "archA__revB__grd", "reviewer": "revB", "grader": "grd", "n": 5,
-         "eval_tier": "T0"},
-        {"pairing_id": "archA__revC__grd", "reviewer": "revC", "grader": "grd", "n": 5,
-         "eval_tier": "T0"},  # unfit in pool fixture
+        {
+            "pairing_id": "archA__revB__grd",
+            "reviewer": "revB",
+            "grader": "grd",
+            "n": 5,
+            "eval_tier": "T0",
+        },
+        {
+            "pairing_id": "archA__revC__grd",
+            "reviewer": "revC",
+            "grader": "grd",
+            "n": 5,
+            "eval_tier": "T0",
+        },  # unfit in pool fixture
     ]
     pruned = runner.resolve_screening_queue(_plan(queue=queue), pool, prune_unfit=True)
     assert {j.pairing_id for j in pruned.jobs} == {"archA__revB__grd"}
@@ -240,8 +245,9 @@ def test_prune_unfit_coresidency_toggle():
 
 def test_unknown_coresidency_is_never_pruned():
     # A plan pairing absent from pool-gen has unknown fit -> must be KEPT.
-    queue = [{"pairing_id": "ghost__x__grd", "reviewer": "x", "grader": "grd", "n": 4,
-              "eval_tier": "T0"}]
+    queue = [
+        {"pairing_id": "ghost__x__grd", "reviewer": "x", "grader": "grd", "n": 4, "eval_tier": "T0"}
+    ]
     resolved = runner.resolve_screening_queue(_plan(queue=queue), _pool_gen_output())
     assert len(resolved.jobs) == 1
     assert resolved.jobs[0].coresidency_fits is None
@@ -253,15 +259,15 @@ def test_priority_orders_anchor_and_staged_first():
     for p in pool["pairings"]:
         p["coresidency"] = {"fits": True}
     queue = [
-        {"pairing_id": "archA__revC__grd"},   # plain cross-family
+        {"pairing_id": "archA__revC__grd"},  # plain cross-family
         {"pairing_id": "archA__archA__grd"},  # anchor A1 + self-review
-        {"pairing_id": "archA__revB__grd"},   # staged, cross-family
+        {"pairing_id": "archA__revB__grd"},  # staged, cross-family
     ]
     resolved = runner.resolve_screening_queue(_plan(queue=queue), pool, priority=True)
     order = [j.pairing_id for j in resolved.jobs]
     # anchor first, then staged, then the plain cross-family pairing.
-    assert order[0] == "archA__archA__grd"   # anchor_arm A1 wins
-    assert order[1] == "archA__revB__grd"    # staged_involved
+    assert order[0] == "archA__archA__grd"  # anchor_arm A1 wins
+    assert order[1] == "archA__revB__grd"  # staged_involved
     assert order[2] == "archA__revC__grd"
 
 
@@ -280,9 +286,7 @@ def test_max_pairings_truncates_after_priority():
     assert len(resolved.jobs) == 2
     assert resolved.n_truncated == 1
     # highest-priority survive: anchor + staged.
-    assert {j.pairing_id for j in resolved.jobs} == {
-        "archA__archA__grd", "archA__revB__grd"
-    }
+    assert {j.pairing_id for j in resolved.jobs} == {"archA__archA__grd", "archA__revB__grd"}
 
 
 # --------------------------------------------------------------------------- #
@@ -290,15 +294,7 @@ def test_max_pairings_truncates_after_priority():
 # --------------------------------------------------------------------------- #
 def test_load_row_ids_dedupes_and_ignores_comments(tmp_path):
     path = tmp_path / "row_ids.txt"
-    path.write_text(
-        "\n"
-        "# comment\n"
-        "r1\n"
-        "r2  # trailing comment\n"
-        "r1\n"
-        "\n"
-        "r3\n"
-    )
+    path.write_text("\n# comment\nr1\nr2  # trailing comment\nr1\n\nr3\n")
     assert runner.load_row_ids(path) == ["r1", "r2", "r3"]
     summary = runner.row_id_filter_summary(path)
     assert summary["row_id_filter_n"] == 3
@@ -326,6 +322,86 @@ def test_is_judgeable_row():
     assert runner.is_judgeable_row({**good, "gold_confidence": "single_oracle"})
 
 
+def test_judgeable_row_cause_names_the_exclusion():
+    good = {"candidate": "42", "gold_label": "accept", "gold_confidence": "multi_oracle"}
+    assert runner.judgeable_row_cause(good) is None
+    assert runner.judgeable_row_cause({**good, "candidate": None}) == "no_candidate_answer"
+    assert runner.judgeable_row_cause({**good, "gold_label": "None"}) == (
+        "non_conclusive_gold_label"
+    )
+    assert runner.judgeable_row_cause({**good, "gold_confidence": "observation"}) == (
+        "observation_gold_confidence"
+    )
+    assert runner.judgeable_row_cause("not-a-record") == "not_a_record"
+
+
+def test_iter_judgeable_rows_counts_exclusions_by_cause(tmp_path):
+    rows_path = tmp_path / "rows.jsonl"
+    good = {
+        "row_id": "r1",
+        "candidate": "ok",
+        "gold_label": "accept",
+        "gold_confidence": "multi_oracle",
+    }
+    rows_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                good,
+                {**good, "row_id": "r2", "candidate": None},
+                {**good, "row_id": "r3", "gold_confidence": "observation"},
+                {**good, "row_id": "r4", "gold_label": "None"},
+                "not an object",
+            ]
+        )
+        + "\n"
+    )
+    counts: dict[str, int] = {}
+    seen = [r["row_id"] for r in runner.iter_judgeable_rows(rows_path, excluded_counts=counts)]
+    assert seen == ["r1"]
+    assert counts == {
+        "no_candidate_answer": 1,
+        "non_conclusive_gold_label": 1,
+        "observation_gold_confidence": 1,
+        "not_a_record": 1,
+    }
+
+
+def test_summarize_pairing_carries_rc11_counts_and_causes():
+    job = runner.TrialJobSpec(
+        pairing_id="archA__revB__grd",
+        architect="archA",
+        reviewer="revB",
+        grader="grd",
+        anchor_arm=None,
+        self_review=False,
+        cross_family=True,
+        staged_involved=True,
+        n=3,
+        eval_tier="T0",
+        corpus_id="nearmiss-v1",
+        domain="all",
+        corpus_content_sha256="abc",
+        corpus_n_rows=10,
+        coresidency_fits=True,
+        priority_rank=0,
+    )
+    decisions = [
+        {"decision": "approve", "gate": "fail", "latency_ms": 20.0},  # FA
+        {"decision": "reject", "gate": None},  # inconclusive
+    ]
+    result = runner.summarize_pairing(
+        job, decisions, pool_excluded_causes={"observation_gold_confidence": 7}
+    )
+    assert result["reviewer_fa_rate"] == pytest.approx(1.0)  # 1 FA / 1 gate-fail
+    assert result["reviewer_fr_rate"] is None  # 0 gate-pass rows: None, not 0.0
+    assert result["reviewer_fa_fr_ratio"] is None
+    assert result["n_gate_fail"] == 1
+    assert result["n_gate_pass"] == 0
+    assert result["n_inconclusive_gate"] == 1
+    assert result["pool_excluded_causes"] == {"observation_gold_confidence": 7}
+
+
 def test_gate_from_gold_label():
     assert runner.gate_from_gold_label("accept") == "pass"
     assert runner.gate_from_gold_label("reject") == "fail"
@@ -335,11 +411,11 @@ def test_gate_from_gold_label():
 
 def test_consistency_rate():
     decisions = [
-        {"decision": "approve", "gate": "pass"},   # agree
-        {"decision": "reject", "gate": "fail"},    # agree
-        {"decision": "approve", "gate": "fail"},   # FA (disagree)
-        {"decision": "reject", "gate": "pass"},    # FR (disagree)
-        {"decision": "approve", "gate": None},     # inconclusive -> excluded
+        {"decision": "approve", "gate": "pass"},  # agree
+        {"decision": "reject", "gate": "fail"},  # agree
+        {"decision": "approve", "gate": "fail"},  # FA (disagree)
+        {"decision": "reject", "gate": "pass"},  # FR (disagree)
+        {"decision": "approve", "gate": None},  # inconclusive -> excluded
     ]
     assert runner.consistency_rate(decisions) == pytest.approx(0.5)
     assert runner.consistency_rate([]) is None
@@ -348,21 +424,32 @@ def test_consistency_rate():
 
 def test_summarize_pairing_computes_fa_fr_cr():
     job = runner.TrialJobSpec(
-        pairing_id="archA__revB__grd", architect="archA", reviewer="revB",
-        grader="grd", anchor_arm=None, self_review=False, cross_family=True,
-        staged_involved=True, n=4, eval_tier="T0", corpus_id="nearmiss-v1",
-        domain="all", corpus_content_sha256="abc", corpus_n_rows=10,
-        coresidency_fits=True, priority_rank=0,
+        pairing_id="archA__revB__grd",
+        architect="archA",
+        reviewer="revB",
+        grader="grd",
+        anchor_arm=None,
+        self_review=False,
+        cross_family=True,
+        staged_involved=True,
+        n=4,
+        eval_tier="T0",
+        corpus_id="nearmiss-v1",
+        domain="all",
+        corpus_content_sha256="abc",
+        corpus_n_rows=10,
+        coresidency_fits=True,
+        priority_rank=0,
     )
     decisions = [
         {"decision": "approve", "gate": "pass", "latency_ms": 10.0},
         {"decision": "reject", "gate": "fail", "latency_ms": 20.0},
         {"decision": "approve", "gate": "fail", "latency_ms": 30.0},  # FA
-        {"decision": "reject", "gate": "pass", "latency_ms": 40.0},   # FR
+        {"decision": "reject", "gate": "pass", "latency_ms": 40.0},  # FR
     ]
     result = runner.summarize_pairing(job, decisions)
-    assert result["reviewer_fa_rate"] == pytest.approx(0.5)   # 1 FA / 2 gate-fail
-    assert result["reviewer_fr_rate"] == pytest.approx(0.5)   # 1 FR / 2 gate-pass
+    assert result["reviewer_fa_rate"] == pytest.approx(0.5)  # 1 FA / 2 gate-fail
+    assert result["reviewer_fr_rate"] == pytest.approx(0.5)  # 1 FR / 2 gate-pass
     assert result["consistency_rate"] == pytest.approx(0.5)
     assert result["review_decision_latency_ms"] == pytest.approx(25.0)
     assert result["n_scored"] == 4
@@ -463,9 +550,7 @@ def test_default_reviewer_probe_uses_p_rev_schema_and_forced_direct(monkeypatch)
             )
         }
 
-    fake_seeding = types.SimpleNamespace(
-        call_orchestrator_forced=_fake_call_orchestrator_forced
-    )
+    fake_seeding = types.SimpleNamespace(call_orchestrator_forced=_fake_call_orchestrator_forced)
     fake_p_rev = types.SimpleNamespace(
         DEFAULT_MAX_FIELD_CHARS=24000,
         build_review_prompt=lambda row, *, max_field_chars: (
@@ -479,11 +564,22 @@ def test_default_reviewer_probe_uses_p_rev_schema_and_forced_direct(monkeypatch)
     monkeypatch.setitem(sys.modules, "glm52_reviewer_corpus_direct_runner", fake_p_rev)
 
     job = runner.TrialJobSpec(
-        pairing_id="archA__revB__grd", architect="archA", reviewer="revB",
-        grader="grd", anchor_arm=None, self_review=False, cross_family=True,
-        staged_involved=True, n=1, eval_tier="T0", corpus_id="nearmiss-v1",
-        domain="code", corpus_content_sha256="abc", corpus_n_rows=10,
-        coresidency_fits=True, priority_rank=0,
+        pairing_id="archA__revB__grd",
+        architect="archA",
+        reviewer="revB",
+        grader="grd",
+        anchor_arm=None,
+        self_review=False,
+        cross_family=True,
+        staged_involved=True,
+        n=1,
+        eval_tier="T0",
+        corpus_id="nearmiss-v1",
+        domain="code",
+        corpus_content_sha256="abc",
+        corpus_n_rows=10,
+        coresidency_fits=True,
+        priority_rank=0,
     )
     row = {"row_id": "ccrab-1", "task": "Fix bug", "candidate": "diff", "gold_label": "accept"}
     tower = types.SimpleNamespace(url="http://orch", timeout=123)
@@ -548,10 +644,18 @@ def test_env_flag_on_routes_to_execute_bridge(monkeypatch):
     assert isinstance(captured["resolved"], runner.ResolvedScreeningQueue)
 
 
-@pytest.mark.parametrize("val,expected", [
-    ("1", True), ("true", True), ("YES", True), ("on", True),
-    ("0", False), ("", False), ("no", False),
-])
+@pytest.mark.parametrize(
+    "val,expected",
+    [
+        ("1", True),
+        ("true", True),
+        ("YES", True),
+        ("on", True),
+        ("0", False),
+        ("", False),
+        ("no", False),
+    ],
+)
 def test_env_flag_semantics(monkeypatch, val, expected):
     monkeypatch.setenv(runner.SCREENING_TIER_INFERENCE_ENV, val)
     assert runner._env_flag_enabled(runner.SCREENING_TIER_INFERENCE_ENV) is expected
@@ -565,20 +669,29 @@ def test_main_dry_run_prints_resolved_queue(tmp_path, capsys, monkeypatch):
     pool_path = tmp_path / "pool.json"
     pool_path.write_text(json.dumps(_pool_gen_output()))
     manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps({
-        "corpus_id": "nearmiss-v1",
-        "total_rows": 500,
-        "content_sha256": "cafe",
-        "schema_version": "nearmiss_corpus_row.v1",
-        "counts": {"per_domain": {"code": 200}},
-        "gate_worthy_multi_oracle": 300,
-    }))
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "corpus_id": "nearmiss-v1",
+                "total_rows": 500,
+                "content_sha256": "cafe",
+                "schema_version": "nearmiss_corpus_row.v1",
+                "counts": {"per_domain": {"code": 200}},
+                "gate_worthy_multi_oracle": 300,
+            }
+        )
+    )
 
-    code = runner.main([
-        "--pool-gen", str(pool_path),
-        "--corpus-manifest", str(manifest_path),
-        "--per-pairing-n", "6",
-    ])
+    code = runner.main(
+        [
+            "--pool-gen",
+            str(pool_path),
+            "--corpus-manifest",
+            str(manifest_path),
+            "--per-pairing-n",
+            "6",
+        ]
+    )
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["kind"] == "resolved_screening_queue"
@@ -595,22 +708,31 @@ def test_main_dry_run_accepts_row_id_filter(tmp_path, capsys, monkeypatch):
     pool_path = tmp_path / "pool.json"
     pool_path.write_text(json.dumps(_pool_gen_output()))
     manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps({
-        "corpus_id": "nearmiss-v1",
-        "total_rows": 500,
-        "content_sha256": "cafe",
-        "schema_version": "nearmiss_corpus_row.v1",
-        "counts": {"per_domain": {"code": 200}},
-        "gate_worthy_multi_oracle": 300,
-    }))
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "corpus_id": "nearmiss-v1",
+                "total_rows": 500,
+                "content_sha256": "cafe",
+                "schema_version": "nearmiss_corpus_row.v1",
+                "counts": {"per_domain": {"code": 200}},
+                "gate_worthy_multi_oracle": 300,
+            }
+        )
+    )
     row_ids_path = tmp_path / "row_ids.txt"
     row_ids_path.write_text("r1\nr2\n")
 
-    code = runner.main([
-        "--pool-gen", str(pool_path),
-        "--corpus-manifest", str(manifest_path),
-        "--row-ids", str(row_ids_path),
-    ])
+    code = runner.main(
+        [
+            "--pool-gen",
+            str(pool_path),
+            "--corpus-manifest",
+            str(manifest_path),
+            "--row-ids",
+            str(row_ids_path),
+        ]
+    )
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     corpus_slice = payload["corpus_slice"]
@@ -633,20 +755,29 @@ def test_main_max_pairings_caps_after_priority(tmp_path, capsys, monkeypatch):
     pool_path = tmp_path / "pool.json"
     pool_path.write_text(json.dumps(pool))
     manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps({
-        "corpus_id": "nearmiss-v1",
-        "total_rows": 500,
-        "content_sha256": "cafe",
-        "schema_version": "nearmiss_corpus_row.v1",
-        "counts": {"per_domain": {"code": 200}},
-        "gate_worthy_multi_oracle": 300,
-    }))
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "corpus_id": "nearmiss-v1",
+                "total_rows": 500,
+                "content_sha256": "cafe",
+                "schema_version": "nearmiss_corpus_row.v1",
+                "counts": {"per_domain": {"code": 200}},
+                "gate_worthy_multi_oracle": 300,
+            }
+        )
+    )
 
-    code = runner.main([
-        "--pool-gen", str(pool_path),
-        "--corpus-manifest", str(manifest_path),
-        "--max-pairings", "2",
-    ])
+    code = runner.main(
+        [
+            "--pool-gen",
+            str(pool_path),
+            "--corpus-manifest",
+            str(manifest_path),
+            "--max-pairings",
+            "2",
+        ]
+    )
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["n_jobs"] == 2
@@ -659,10 +790,14 @@ def test_main_max_pairings_caps_after_priority(tmp_path, capsys, monkeypatch):
 def test_main_errors_on_missing_row_id_filter(tmp_path, capsys):
     pool_path = tmp_path / "pool.json"
     pool_path.write_text(json.dumps(_pool_gen_output()))
-    code = runner.main([
-        "--pool-gen", str(pool_path),
-        "--row-ids", str(tmp_path / "missing.txt"),
-    ])
+    code = runner.main(
+        [
+            "--pool-gen",
+            str(pool_path),
+            "--row-ids",
+            str(tmp_path / "missing.txt"),
+        ]
+    )
     assert code == 2
     assert "row-id file not found" in capsys.readouterr().out
 

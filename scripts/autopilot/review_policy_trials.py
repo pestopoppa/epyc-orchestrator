@@ -106,21 +106,32 @@ def reviewer_quality_axes(result: Any) -> dict[str, float]:
 
 def reviewer_calibration_from_decisions(
     decisions: list[dict[str, Any]],
-) -> dict[str, float]:
+    *,
+    excluded_causes: dict[str, int] | None = None,
+) -> dict[str, float | int | None]:
     """Compute FA/FR rates + ratio + mean latency from decision/outcome rows.
 
     Each row is ``{"decision": <approve|reject|...>, "gate": <pass|fail|None>,
     "latency_ms": <float?>}`` — the reviewer verdict paired with the conclusive
     objective-gate outcome (verifier-precedence, RD-3). Rows with no conclusive
     gate ("None"/inconclusive) are excluded from FA/FR (they cannot be scored)
-    but still count toward latency. Returns only the axes it can compute.
+    but still count toward latency.
+
+    RC-11 contract: every axis key is ALWAYS present. A side with no rows in
+    its denominator is ``None`` — never absent, never ``0.0`` (a zero rate and
+    an unmeasured rate are different facts), and the denominator counts ride
+    along (``n_gate_fail`` / ``n_gate_pass``) so an undercounted rate is
+    visible rather than silent. ``excluded_no_conclusive_gate`` counts the
+    rows this function itself drops; ``excluded_causes`` folds in upstream
+    exclusions the caller made before calling (e.g. observation-gold rows
+    filtered at corpus-read time), each cause counted by name.
 
       * false-accept (FA): reviewer approved but the objective gate FAILED.
       * false-reject (FR): reviewer rejected but the objective gate PASSED.
     """
     approve = {"approve"}
     reject = {"reject", "reject_to_empty"}
-    fa = fr = n_gate_fail = n_gate_pass = 0
+    fa = fr = n_gate_fail = n_gate_pass = n_no_gate = 0
     latencies: list[float] = []
     for row in decisions:
         decision = str(row.get("decision", "")).lower()
@@ -137,18 +148,27 @@ def reviewer_calibration_from_decisions(
             n_gate_pass += 1
             if decision in reject:
                 fr += 1
-    out: dict[str, float] = {}
-    if n_gate_fail:
-        out["reviewer_fa_rate"] = fa / n_gate_fail
-    if n_gate_pass:
-        out["reviewer_fr_rate"] = fr / n_gate_pass
-    if "reviewer_fa_rate" in out and "reviewer_fr_rate" in out:
-        fr_rate = out["reviewer_fr_rate"]
-        out["reviewer_fa_fr_ratio"] = (
-            out["reviewer_fa_rate"] / fr_rate if fr_rate > 0 else float("inf")
-        )
-    if latencies:
-        out["review_decision_latency_ms"] = sum(latencies) / len(latencies)
+        else:
+            n_no_gate += 1
+    fa_rate: float | None = fa / n_gate_fail if n_gate_fail else None
+    fr_rate: float | None = fr / n_gate_pass if n_gate_pass else None
+    ratio: float | None
+    if fa_rate is None or fr_rate is None:
+        ratio = None
+    elif fr_rate > 0:
+        ratio = fa_rate / fr_rate
+    else:
+        ratio = float("inf")
+    out: dict[str, float | int | None] = {
+        "reviewer_fa_rate": fa_rate,
+        "reviewer_fr_rate": fr_rate,
+        "reviewer_fa_fr_ratio": ratio,
+        "review_decision_latency_ms": (sum(latencies) / len(latencies) if latencies else None),
+        "n_gate_fail": n_gate_fail,
+        "n_gate_pass": n_gate_pass,
+        "excluded_no_conclusive_gate": n_no_gate,
+        "excluded_causes": dict(excluded_causes or {}),
+    }
     return out
 
 
@@ -225,7 +245,7 @@ def _extract_critique_block(text: str) -> dict[str, Any] | None:
     """
     marker = "```json:autopilot_critique"
     idx = text.find(marker)
-    body = text[idx + len(marker):] if idx != -1 else text
+    body = text[idx + len(marker) :] if idx != -1 else text
     rg = _load_review_grammar()
     if rg is not None:
         candidate = rg._extract_json_object(body)
@@ -264,7 +284,7 @@ def _fallback_extract_json_object(text: str) -> str | None:
         elif ch == "}":
             depth -= 1
             if depth == 0:
-                return text[start:i + 1]
+                return text[start : i + 1]
     return None
 
 
@@ -377,9 +397,7 @@ def derive_review_decision_from_critique(
 # AP-5 — trial-plan generators (inference-free; execution is gated in actions.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
-DEFAULT_CORPUS_MANIFEST = Path(
-    "/mnt/raid0/llm/datasets/nearmiss-corpus-v1/manifest.json"
-)
+DEFAULT_CORPUS_MANIFEST = Path("/mnt/raid0/llm/datasets/nearmiss-corpus-v1/manifest.json")
 
 
 def load_corpus_manifest(path: Path | None = None) -> dict[str, Any]:
@@ -436,9 +454,9 @@ def _knob_grid(knob_names: list[str], points: int) -> list[dict[str, Any]]:
             k = max(2, points)
             step = (hi - lo) / (k - 1)
             raw = [lo + step * i for i in range(k)]
-            values = [int(round(v)) for v in raw] if spec.kind == "int" else [
-                round(v, 6) for v in raw
-            ]
+            values = (
+                [int(round(v)) for v in raw] if spec.kind == "int" else [round(v, 6) for v in raw]
+            )
             # de-dup int collapses (small ranges quantize to the same value)
             seen: list[Any] = []
             for v in values:
@@ -633,9 +651,7 @@ def plan_screening_tier(
         "pool_gen_schema_version": (pool_gen_output.get("provenance", {}) or {}).get(
             "schema_version"
         ),
-        "registry_sha256": (pool_gen_output.get("provenance", {}) or {}).get(
-            "registry_sha256"
-        ),
+        "registry_sha256": (pool_gen_output.get("provenance", {}) or {}).get("registry_sha256"),
         "prune_config_sha256": (pool_gen_output.get("provenance", {}) or {}).get(
             "prune_config_sha256"
         ),
@@ -741,10 +757,10 @@ class ReviewPolicyTrialEvent:
 # state-loader edit calls ensure_review_state_defaults() after json.load; here we
 # only define the additive keys + a pure merge helper (no live-state write).
 REVIEW_STATE_DEFAULTS: dict[str, Any] = {
-    "review_plane_knobs": {},          # last-applied class-1 knob values
+    "review_plane_knobs": {},  # last-applied class-1 knob values
     "review_decision_shadow_count": 0,  # cumulative shadow/dogfooded decisions
-    "review_policy_trial_count": 0,     # cumulative review_policy_trial dispatches
-    "last_screening_plan": None,        # most recent screening queue summary
+    "review_policy_trial_count": 0,  # cumulative review_policy_trial dispatches
+    "last_screening_plan": None,  # most recent screening queue summary
 }
 
 
