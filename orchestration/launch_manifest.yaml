@@ -838,6 +838,8 @@ aux_services:
     argv: ["{python}", "-m", "dashboard.server", "--host", "0.0.0.0", "--port", "8100"]
     cwd: "{llm_root}/epyc-root"
     pythonpath: ["{llm_root}/epyc-root"]
+    env:
+      AUTOKERNEL_LOOP_STORE_ROOT: /mnt/raid0/llm/tmp/aku12a-glm53-five-loop-store
     health_path: /health
     health_timeout: 30
     model_label: epyc-root handoff progress hub (stdlib)
