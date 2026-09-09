@@ -836,8 +836,8 @@ aux_services:
     optional: false
     description: epyc-root handoff progress hub (stdlib only, runs under any interpreter)
     argv: ["{python}", "-m", "dashboard.server", "--host", "0.0.0.0", "--port", "8100"]
-    cwd: "{llm_root}/epyc-root"
-    pythonpath: ["{llm_root}/epyc-root"]
+    cwd: "{llm_root}/worktrees/mains/autokernel-unified-20260908"
+    pythonpath: ["{llm_root}/worktrees/mains/autokernel-unified-20260908"]
     env:
       AUTOKERNEL_LOOP_STORE_ROOT: /mnt/raid0/llm/tmp/aku12a-glm53-five-loop-store
     health_path: /health
