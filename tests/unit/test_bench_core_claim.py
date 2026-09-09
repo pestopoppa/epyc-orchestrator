@@ -144,6 +144,34 @@ def test_is_bench_process_excludes_supervisors_naming_a_bench() -> None:
     assert not is_bench_process("python orchestrator_stack.py status")
 
 
+def test_detection_uses_executable_or_script_not_author_prompt(monkeypatch) -> None:
+    prompt = "Implement CPU source. Do not run llama-bench or laguna_q4_cpu_bench_runner.py."
+    commands = [
+        ("node /usr/local/share/npm-global/bin/codex exec -C /lane " + prompt, False),
+        ("/opt/codex/bin/codex exec -C /lane " + prompt, False),
+        ("python3 ordinary_actor.py " + prompt, False),
+        ("/usr/local/bin/earlyoom --prefer ^llama-bench$", False),
+        ("/build/bin/llama-bench -m /models/q4.gguf --note earlyoom", True),
+        ("/venv/bin/python3 -u -X dev -W ignore /r/laguna_q4_cpu_bench_runner.py --run", True),
+        ("python3 -- /r/x_bench_runner.py --run", True),
+        ("python /r/v7_quality_gate_runner.py", True),
+        ("python /r/run_e8_quality_baseline_reseed.py", True),
+        ("bash -c 'python laguna_q4_cpu_bench_runner.py'", True),
+        ("taskset -c 0-95 /build/bin/llama-bench -m /model", True),
+        ("python -c 'import runpy; runpy.run_path(\"bench_runner.py\")'", True),
+    ]
+    for command, expected in commands:
+        assert is_bench_process(command) is expected, command
+    output = "PID COMMAND\n" + "\n".join(
+        f"{200 + index} {command}" for index, (command, _) in enumerate(commands)
+    )
+    monkeypatch.setattr(bcc.subprocess, "run", lambda *_a, **_k:
+                        subprocess.CompletedProcess([], 0, stdout=output, stderr=""))
+    assert [pid for pid, _ in detect_running_cpu_bench()] == [
+        200 + index for index, (_, expected) in enumerate(commands) if expected
+    ]
+
+
 def test_detect_running_cpu_bench_skips_probe_and_supervisors(monkeypatch) -> None:
     out = subprocess.CompletedProcess(
         [],
