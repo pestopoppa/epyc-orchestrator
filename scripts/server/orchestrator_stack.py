@@ -1370,7 +1370,12 @@ def _apply_numa_spec_overrides(cmd: list[str], numa_cfg: dict | None) -> None:
     # see git history for re-enable conditions if/when a future binary restores them.
 
 
-def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> list[str]:
+def _build_role_command(
+    role_config: Any,
+    port: int,
+    numa_instance: int = 0,
+    prepare_runtime_dirs: bool = True,
+) -> list[str]:
     """Build llama-server command for a registry-backed role (default path).
 
     `numa_instance` selects which entry in NUMA_CONFIG[role]["instances"] this
@@ -1378,6 +1383,8 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
     instances. The thread count comes from that specific instance's tuple so
     quarters get `-t 48` and the full instance gets its declared `-t 96`.
     """
+    if not isinstance(prepare_runtime_dirs, bool):
+        raise TypeError("prepare_runtime_dirs must be bool")
     model_path = role_config.model.full_path
     accel = role_config.acceleration
     role_name = role_config.name
@@ -1486,7 +1493,8 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
         if isinstance(slot_save_path, str) and slot_save_path
         else SLOT_SAVE_DIR / role_name
     )
-    slot_dir.mkdir(parents=True, exist_ok=True)
+    if prepare_runtime_dirs:
+        slot_dir.mkdir(parents=True, exist_ok=True)
     cmd.extend(["--slot-save-path", str(slot_dir)])
 
     return cmd
@@ -1543,6 +1551,7 @@ def build_server_command(
     gpu_shadow_lane_mode: bool = False,
     binary_override: str | None = None,
     numa_instance: int = 0,
+    prepare_runtime_dirs: bool = True,
 ) -> list[str]:
     """Dispatch to the per-mode command builder.
 
@@ -1555,6 +1564,8 @@ def build_server_command(
     to pick per-instance thread count. Defaults to 0 so callers that don't
     care about quarters (vision, embedding, dev, worker_pool) are unaffected.
     """
+    if not isinstance(prepare_runtime_dirs, bool):
+        raise TypeError("prepare_runtime_dirs must be bool")
     prior_role = _dispatch_prior_role(
         role_config,
         dev_mode=dev_mode,
@@ -1588,7 +1599,11 @@ def build_server_command(
     elif dev_mode:
         cmd = _build_dev_command(port)
     else:
-        cmd = _build_role_command(role_config, port, numa_instance)
+        if prepare_runtime_dirs:
+            cmd = _build_role_command(role_config, port, numa_instance)
+        else:
+            cmd = _build_role_command(
+                role_config, port, numa_instance, prepare_runtime_dirs=False)
     # Pass the role's DECLARED device down. Every builder above is covered, not just
     # the two that emit `--device` themselves — a declaration must not depend on
     # which launch shape a role happens to use.
