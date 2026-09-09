@@ -67,15 +67,43 @@ class BenchPlacementRefusal(RuntimeError):
 
 
 def is_bench_process(cmd: str) -> bool:
-    """True when a cmdline names a bench driver.
+    """Identify the executable or Python script, not text in its arguments.
 
-    Supervisors that merely NAME a bench binary in their own arguments are not
-    bench drivers — earlyoom carries `--prefer ^llama-bench$` and must never
-    be counted.
+    `ps args` flattens argv: do not shell-parse an actor's free-text prompt.
+    Shell/launch wrappers remain conservative because their command may run a
+    bench. The actual benchmark child is independently present in the ps scan.
     """
-    if "earlyoom" in cmd:
+    words = cmd.split()
+    if not words:
         return False
-    return any(marker in cmd for marker in _BENCH_PROCESS_MARKERS)
+    executable = Path(words[0]).name
+    if any(marker in executable for marker in _BENCH_PROCESS_MARKERS):
+        return True
+    if re.fullmatch(r"(?:python|pypy)(?:\d+(?:\.\d+)*)?", executable):
+        index = 1
+        while index < len(words):
+            operand = words[index]
+            if operand in {"-c", "-m"}:
+                # Inline/module launch is ambiguous, not an exemption.
+                return any(marker in cmd for marker in _BENCH_PROCESS_MARKERS)
+            if operand == "--":
+                index += 1
+                break
+            if operand in {"-W", "-X", "--check-hash-based-pycs"}:
+                index += 2
+            elif operand.startswith("-"):
+                index += 1
+            else:
+                break
+        return index < len(words) and any(
+            marker in Path(words[index]).name for marker in _BENCH_PROCESS_MARKERS
+        )
+    if executable in {
+        "sh", "bash", "dash", "zsh", "ksh", "env", "taskset", "numactl",
+        "timeout", "setsid", "nice", "ionice", "nohup", "sudo",
+    }:
+        return any(marker in cmd for marker in _BENCH_PROCESS_MARKERS)
+    return False
 
 
 def detect_running_cpu_bench() -> list[tuple[int, str]]:
