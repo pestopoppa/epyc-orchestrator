@@ -29,6 +29,26 @@ from src.registry_loader import RegistryLoader
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize("use,flag", [("model", "-m"), ("drafter", "-md")])
+def test_split_gguf_requires_every_declared_shard(use, flag):
+    shards = [f"/models/example-{n:05d}-of-00003.gguf" for n in range(1, 4)]
+    argv = ["/bin/server", "-m", "/models/plain.gguf"]
+    if flag == "-m":
+        argv[2] = shards[0]
+    else:
+        argv.extend([flag, shards[0]])
+    pins = [ArtifactPin("executable", "/bin/server", "1" * 64),
+            ArtifactPin("dso", "/bin/libggml.so", "2" * 64),
+            ArtifactPin("model", "/models/plain.gguf", "3" * 64),
+            *(ArtifactPin(use, path, "4" * 64) for path in shards)]
+    rows, missing = enrollment._artifact_rows(argv, {}, tuple(pins))
+    assert not missing
+    assert {row["path"] for row in rows if row["use"] == use} == set(shards)
+    rows, missing = enrollment._artifact_rows(argv, {}, tuple(pins[:-1]))
+    assert missing == [f"{use}:{shards[-1]}"]
+    assert shards[-1] not in {row["path"] for row in rows}
+
+
 def _context(tmp_path: Path, monkeypatch=None, *, roles=("frontdoor",), mode="full", artifacts=()):
     # A lean registry is itself a fixed point of the compiler.  Keeping two pinned
     # byte copies exercises the master->lean drift guard without reaching another repo.

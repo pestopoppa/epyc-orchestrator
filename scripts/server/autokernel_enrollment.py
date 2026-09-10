@@ -15,6 +15,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 from typing import Any, Mapping, Sequence
@@ -347,6 +348,20 @@ def _artifact_rows(argv: Sequence[str], env: Mapping[str, str],
     draft = _flag(argv, "-md")
     if draft:
         paths.append(("drafter", draft))
+    # llama.cpp loads every sibling of a split GGUF, not only the argv shard.
+    # Expand the declared filenames without scanning directories or hashing here.
+    expanded = []
+    for use, path in paths:
+        match = re.fullmatch(r"(.+)-(\d{5})-of-(\d{5})\.gguf", str(path)) if path else None
+        if use in {"model", "drafter"} and match:
+            index, total = int(match[2]), int(match[3])
+            if not 1 <= index <= total:
+                raise EnrollmentExportError(f"invalid split GGUF filename: {path}")
+            expanded.extend((use, f"{match[1]}-{part:05d}-of-{total:05d}.gguf")
+                            for part in range(1, total + 1))
+        else:
+            expanded.append((use, path))
+    paths = expanded
     ld_dirs = {part for part in env.get("LD_LIBRARY_PATH", "").split(":") if part}
     if argv:
         ld_dirs.add(str(Path(argv[0]).parent))  # binary RUNPATH/adjacent ggml DSOs
