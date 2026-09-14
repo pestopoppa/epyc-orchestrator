@@ -174,7 +174,10 @@ def _classify_error(
     if error_str is None and resp is None:
         return "none"
     return _legacy_error_type(
-        measurement_disposition(resp, error=error_str)
+        # ETR-3: the seeding/calibration path is a MEASUREMENT path — a non-blank
+        # answer with a zero token counter did not come from a generation, so it
+        # must leave the quality denominator instead of scoring as a wrong answer.
+        measurement_disposition(resp, error=error_str, require_generation_evidence=True)
     )
 
 

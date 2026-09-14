@@ -198,6 +198,9 @@ INFRA_FAILURE_REASONS = frozenset(
         "forced_role_fallback",
         "inband_error",
         "empty_response",
+        # ETR-3: text present, decode counter at zero — the answer did not come
+        # from a generation, so there is nothing about the model to score.
+        "answer_without_generation",
     }
 )
 
@@ -284,6 +287,7 @@ def infra_failure_reason(
     resp: Mapping[str, Any] | None = None,
     *,
     error: Any = None,
+    require_generation_evidence: bool = False,
 ) -> str | None:
     """Return a structural reason this response is an INFRA FAILURE, else None.
 
@@ -300,10 +304,20 @@ def infra_failure_reason(
     5. An in-band ``[ERROR: ...]`` banner in the error text or the answer.
     6. ``empty_response``: a non-error reply with a blank answer AND zero
        generated tokens. Nothing was produced, so there is nothing to score.
+    6b. ``answer_without_generation`` — ETR-3, only when
+       ``require_generation_evidence`` is set: a NON-BLANK answer whose response
+       reports a token counter of zero. The text did not come out of a decode, so
+       it is the absence of a measurement (see the leg's comment below).
     7. Last resort only: the legacy substring heuristic over the error text.
 
     ``resp`` may be omitted to classify a bare error string (the legacy
     seeding call shape).
+
+    ``require_generation_evidence`` is opt-in and OFF by default: MEASUREMENT
+    callers (eval tower, seeding calibration) set it, because a row that cannot be
+    attributed to a generation must leave the quality denominator. The live-serving
+    reward path deliberately does NOT, so a genuine wrong answer keeps earning its
+    negative reward even on a path that reports no fresh decode.
     """
     resp = resp if isinstance(resp, Mapping) else {}
 
@@ -336,16 +350,37 @@ def infra_failure_reason(
     if not error_text.strip():
         answer = resp.get("answer")
         answer_text = answer if isinstance(answer, str) else ""
-        if "answer" in resp and not answer_text.strip():
+        if "answer" in resp:
             try:
                 tokens = int(resp.get("tokens_generated") or 0)
             except (TypeError, ValueError):
                 tokens = 0
-            if tokens <= 0:
-                # A blank answer with zero generated tokens is a non-event: the
-                # endpoint returned nothing at all. Scoring it against `expected`
-                # manufactures a WRONG verdict out of an absent measurement.
-                return "empty_response"
+            if not answer_text.strip():
+                if tokens <= 0:
+                    # A blank answer with zero generated tokens is a non-event: the
+                    # endpoint returned nothing at all. Scoring it against `expected`
+                    # manufactures a WRONG verdict out of an absent measurement.
+                    return "empty_response"
+            elif (
+                require_generation_evidence
+                and "tokens_generated" in resp
+                and tokens <= 0
+                and not resp.get("mock_mode")
+            ):
+                # ETR-3 (2026-07-20 audit): the narrow silent-scoring hole. A
+                # NON-BLANK answer with no error field and no other structural signal
+                # used to return None and be scored as an ordinary wrong answer. The
+                # structural fact available here is decisive: the response reports ZERO
+                # generated tokens, so whatever text it carries did not come out of a
+                # decode (a templated/echoed/stub body). That is the absence of a
+                # measurement, not a wrong answer — the same class as `empty_response`,
+                # whose blank-answer requirement is exactly why this shape slipped past.
+                #
+                # Deliberately narrow, and the residue is named: a non-blank answer WITH
+                # a real token count is a genuine generation, so garbage there is the
+                # model's own failure and stays scored WRONG. Mock-mode replies are
+                # excluded because they legitimately report no decode.
+                return "answer_without_generation"
         return None
 
     lowered = error_text.lower()
@@ -371,6 +406,7 @@ def measurement_disposition(
     *,
     error: Any = None,
     scoring_failed: bool = False,
+    require_generation_evidence: bool = False,
 ) -> str:
     """Classify one response into a measurement disposition.
 
@@ -378,6 +414,10 @@ def measurement_disposition(
     ``task_failed``. ``infra_failed`` and ``scoring_failed`` rows carry NO
     quality information and must be excluded from every quality denominator —
     counting them as 0.0 is the fail-open this taxonomy exists to prevent.
+
+    ``require_generation_evidence`` (ETR-3) is forwarded to
+    ``infra_failure_reason``: set it on MEASUREMENT paths so a non-blank answer
+    with a zero token counter is excluded instead of scored as a wrong answer.
     """
     # `scoring_failed` is a STRUCTURAL fact the caller already established (the
     # scorer raised ScoringUnavailableError / ValueError), so it is tested
@@ -387,7 +427,12 @@ def measurement_disposition(
     # endpoint.
     if scoring_failed:
         return DISPOSITION_SCORING_FAILED
-    if infra_failure_reason(resp, error=error) is not None:
+    if (
+        infra_failure_reason(
+            resp, error=error, require_generation_evidence=require_generation_evidence
+        )
+        is not None
+    ):
         return DISPOSITION_INFRA_FAILED
     if error is not None and str(error).strip():
         return DISPOSITION_TASK_FAILED

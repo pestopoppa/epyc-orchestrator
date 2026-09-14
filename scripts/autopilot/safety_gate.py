@@ -1875,6 +1875,31 @@ class SafetyGate:
             violations.append("quality is not finite — degenerate eval")
             categories.append("quality_not_finite")
 
+        # ETR-2 (eval-tower robustness audit, 2026-07-20): READ quality_measured. `quality`
+        # is a plain float on the Pareto/SafetyGate contract, so a trial where NOTHING was
+        # scored (pool never loaded, every row infra-failed, partition filter emptied the
+        # decision subset) arrives carrying 0.0 as a PLACEHOLDER — the eval tower says so in
+        # its own log line. Before this leg existed the flag was computed, documented and
+        # never consulted: the placeholder entered the gate as a literal 0.0 candidate score
+        # and only the INDEPENDENT REL-1 reliability floor happened to stop it. Fail CLOSED
+        # on the quality axis with a distinguishable reason, and SUPPRESS the quality-floor /
+        # regression / per-suite legs exactly as REL-1 does — charging a non-measurement as a
+        # quality-floor violation writes a fabricated regression into planner-visible
+        # failure_analysis. A MEASURED 0.0 (the model really answered everything wrong) keeps
+        # quality_measured=True and is gated as a measurement, unchanged.
+        quality_unmeasured = not bool(getattr(result, "quality_measured", True))
+        if quality_unmeasured:
+            unmeasured_reason = (
+                str(getattr(result, "quality_unmeasured_reason", "") or "") or "unspecified"
+            )
+            violations.append(
+                f"Quality NOT MEASURED ({unmeasured_reason}): the reported quality "
+                f"{result.quality:.3f} is a placeholder, not a measurement — candidate is "
+                "not promotable on the quality axis (ETR-2, fail-closed); quality floor / "
+                "regression / per-suite checks suppressed"
+            )
+            categories.append("quality_not_measured")
+
         # REL-1 (B1): reliability conditioning. When the eval's non-error fraction is below
         # the floor the per-question outcomes are untrustworthy (infra errors), so the
         # quality-floor / regression / per-suite checks are computed over garbage — running
@@ -1901,7 +1926,11 @@ class SafetyGate:
         # the boundary; log loudly. The absolute quality floor still runs (era-neutral safety),
         # and update_baseline() separately refuses quality promotion until an operator reseeds a
         # same-era baseline. Inert when no active era is set.
-        quality_rebaseline_hold = not reliability_blocked and self.quality_rebaseline_required
+        quality_rebaseline_hold = (
+            not reliability_blocked
+            and not quality_unmeasured
+            and self.quality_rebaseline_required
+        )
         if quality_rebaseline_hold:
             categories.append("quality_rebaseline_required")
             warnings.append(
@@ -1913,7 +1942,7 @@ class SafetyGate:
             )
             self._log_rebaseline_hold_once(result)
 
-        if not reliability_blocked:
+        if not reliability_blocked and not quality_unmeasured:
             # 1. Quality floor (tier-aware)
             quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1
             if result.quality < quality_floor:
@@ -2224,11 +2253,14 @@ class SafetyGate:
         # per-question evidence after an action handler already cached a legacy
         # verdict; that seq-aware upgrade must not double-count failures.
         if record_side_effects:
-            if reliability_blocked:
+            if reliability_blocked or quality_unmeasured:
                 # REL-1 (B1): an untrustworthy-evidence failure signals RETRY, not a
                 # revert — it must NOT advance the auto-rollback counter (nor reset it).
                 # Otherwise a run of infra-error trials would trip should_rollback() and
                 # revert a config that was never actually shown to regress.
+                # ETR-2: the same reasoning covers an UNMEASURED quality — the absence of
+                # a measurement is not evidence of a regression, so it blocks promotion
+                # (violation above) without arming the auto-rollback.
                 pass
             elif not passed:
                 self._consecutive_failures += 1
@@ -2456,6 +2488,31 @@ class SafetyGate:
                 result.quality,
                 proof,
                 ineligible_reason=reason,
+            )
+        # ETR-2 (2026-07-20 audit): refuse to write a baseline from an UNMEASURED quality.
+        # A placeholder 0.0 can only ever fail the monotonic check, but a placeholder is not
+        # always 0.0-shaped: the flag is the only thing that separates "nothing was scored"
+        # from "scored 0.0", and a baseline is the most load-bearing number in the loop.
+        # Fail closed, loud, with its own ineligible_reason so the refusal is attributable.
+        if not bool(getattr(result, "quality_measured", True)):
+            unmeasured_reason = (
+                str(getattr(result, "quality_unmeasured_reason", "") or "") or "unspecified"
+            )
+            reason = (
+                f"quality was NOT MEASURED ({unmeasured_reason}): T{tier} q="
+                f"{result.quality:.3f} is a placeholder, not a measurement; baseline "
+                "promotion REFUSED (ETR-2, fail-closed). Remediation: re-run the eval so a "
+                "real quality is scored (quality_measured=True) before it can ratchet."
+            )
+            log.error("Baseline update REFUSED — %s", reason)
+            return BaselineUpdateResult(
+                False,
+                reason,
+                tier,
+                previous_quality,
+                result.quality,
+                proof,
+                ineligible_reason="quality_not_measured",
             )
         # Defect #3: eval-instrument re-baseline hold. A promotion computed against (or that
         # would overwrite) a pre-boundary baseline crosses the eval-instrument boundary — a
