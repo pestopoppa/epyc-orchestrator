@@ -218,10 +218,9 @@ class REPLEnvironment(
         # Request-local invocation records (SimpleNamespace with tool_name,
         # elapsed_ms, success, chain_id, caller_type, result) captured at the
         # single _invoke_tool chokepoint (context.py), in call order. This is the
-        # ONLY source repl_executor uses for per-request tool telemetry — the
-        # shared ToolRegistry invocation log is process-global and never cleared
-        # per request, so reading it leaks a prior request's tools into a no-tool
-        # request. Per-REPL (per request), so it is inherently request-scoped.
+        # ONLY source the API uses for per-request tool telemetry — the shared
+        # ToolRegistry invocation log is a process-global bounded diagnostic ring,
+        # so reading it leaks other concurrent requests' tools into this one. Per-REPL (per request), so it is inherently request-scoped.
         self._invoked_tools: list = []
         self._active_tool_chain_id: str | None = None
         self._active_tool_chain_index: int = 0

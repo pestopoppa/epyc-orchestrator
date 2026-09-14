@@ -61,7 +61,12 @@ from src.classifiers.role_taxonomy import VALID_TRINITY_ROLES
 
 from .embedder import TaskEmbedder
 from .episodic_store import EpisodicStore
-from .memory_record import WORK_KEYS, build_memory_record, extract_work
+from .memory_record import (
+    WORK_KEYS,
+    build_memory_record,
+    build_work_payload,
+    extract_work,
+)
 from .progress_logger import EventType, ProgressEntry, ProgressLogger, ProgressReader
 from .staged_scorer import StagedQScorer
 
@@ -1618,6 +1623,7 @@ class QScorer:
                     memory_id, reward, self.config.learning_rate,
                     temporal_decay_rate=self.config.temporal_decay_rate,
                 )
+                self._merge_update_metadata(memory_id, routing_decision, task_outcome)
                 self.logger.log_memory_update(memory_id, old_q, new_q, reward, task_id)
                 result["memories_updated"] = 1
         else:
@@ -1650,6 +1656,9 @@ class QScorer:
                             new_q = self.store.update_q_value(
                                 existing_id, reward, self.config.learning_rate,
                                 temporal_decay_rate=self.config.temporal_decay_rate,
+                            )
+                            self._merge_update_metadata(
+                                existing_id, routing_decision, task_outcome,
                             )
                             self.logger.log_memory_update(
                                 existing_id, old_q, new_q, reward, task_id,
@@ -1709,6 +1718,49 @@ class QScorer:
                 result["memories_created"] = 1
 
         return result
+
+    def _merge_update_metadata(
+        self,
+        memory_id: str,
+        routing_decision: Optional[ProgressEntry],
+        task_outcome: Optional[ProgressEntry],
+    ) -> bool:
+        """Carry `assigned_role` and `work` onto a row taken by the UPDATE path.
+
+        `store()` is the only site that ever wrote these two fields, and every
+        update branch (pre-linked `memory_id`, and the ORCHESTRATOR_Q_TD_WRITE
+        find-or-update branch) returns before reaching it. Since the update
+        branch fires ~11x more often than create, both fields were effectively
+        never populated: 0 / 59,337 rows carried `assigned_role`, 0 carried a
+        top-level `work` key. The values were available on the very entries
+        already passed in — they were computed and then dropped.
+
+        The payload is built ONCE here via `build_work_payload` (the single
+        producer) and merged by the store without re-sanitizing, so the policy
+        runs exactly once and the row's size/elision provenance stays truthful.
+
+        Observational: a telemetry backfill must never be the reason a completed
+        task fails to be scored, so every failure is swallowed and reported as
+        False.
+        """
+        try:
+            role = _assigned_role_from_entry(routing_decision)
+            work_in = extract_work(task_outcome.data if task_outcome else None)
+            work = build_work_payload(
+                answer=work_in.get("answer"),
+                tool_calls=work_in.get("tool_calls"),
+                repl_steps=work_in.get("repl_steps"),
+                reasoning=work_in.get("reasoning"),
+            )
+            merge = getattr(self.store, "merge_row_metadata", None)
+            if merge is None:
+                return False
+            return bool(merge(memory_id, assigned_role=role, work=work))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "assigned_role/work merge skipped for memory %s: %s", memory_id, exc,
+            )
+            return False
 
     def _find_existing_memory(
         self,
@@ -1776,6 +1828,9 @@ class QScorer:
                     memory_id, reward, self.config.learning_rate,
                     temporal_decay_rate=self.config.temporal_decay_rate,
                 )
+                # Escalation rows carry no `work` payload; the tri-role is the
+                # only field store() wrote that the update path dropped.
+                self._merge_update_metadata(memory_id, routing_decision, None)
                 self.logger.log_memory_update(memory_id, old_q, new_q, reward, task_id)
                 result["memories_updated"] = 1
         else:
@@ -1809,6 +1864,7 @@ class QScorer:
                             existing_id, reward, self.config.learning_rate,
                             temporal_decay_rate=self.config.temporal_decay_rate,
                         )
+                        self._merge_update_metadata(existing_id, routing_decision, None)
                         self.logger.log_memory_update(
                             existing_id, old_q, new_q, reward, task_id,
                         )

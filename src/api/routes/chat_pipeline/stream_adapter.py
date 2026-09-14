@@ -251,13 +251,18 @@ async def _stream_repl(
 
         result = repl.execute(code)
 
-        # Emit tool events for any tool invocations in this turn
-        if repl.tool_registry:
-            inv_log = repl.tool_registry.get_invocation_log()
-            for inv in inv_log[prev_tool_count:]:
-                yield tool_start_event(inv.tool_name)
-                yield tool_end_event(inv.tool_name, int(inv.elapsed_ms), inv.success)
-            prev_tool_count = len(inv_log)
+        # Emit tool events for any tool invocations in this turn.
+        # REQUEST-LOCAL: repl._invoked_tools, not
+        # repl.tool_registry.get_invocation_log() — the registry is process-global,
+        # so the cursor-slice idiom below streamed OTHER concurrent requests' tool
+        # events to this client (and, now that the registry ring is bounded,
+        # eviction would make the cursor slice wrong). _invoked_tools is
+        # append-only for the life of this one REPL, so the cursor is exact.
+        inv_log = list(getattr(repl, "_invoked_tools", None) or [])
+        for inv in inv_log[prev_tool_count:]:
+            yield tool_start_event(inv.tool_name)
+            yield tool_end_event(inv.tool_name, int(inv.elapsed_ms), inv.success)
+        prev_tool_count = len(inv_log)
 
         # Model-initiated routing
         if repl.artifacts.get("_escalation_requested"):

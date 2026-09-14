@@ -224,9 +224,18 @@ def _execute_react(
         else:
             answer = react_repl.get_state()
         react_tools_used = react_repl._tool_invocations
-        if react_repl.tool_registry and hasattr(react_repl.tool_registry, "get_invocation_log"):
+        # REQUEST-LOCAL invocation records captured at the _invoke_tool chokepoint
+        # (src/repl_environment/context.py). Deliberately NOT
+        # react_repl.tool_registry.get_invocation_log(): that registry is
+        # process-global (one instance per API process, src/api/__init__.py) and its
+        # ring is shared by every concurrently served request, so reading it here
+        # wrote OTHER requests' tool calls into THIS request's durable record.
+        # The records expose the same attribute interface as ToolInvocation
+        # (tool_name/elapsed_ms/success/result), so the body below is unchanged.
+        react_invocation_log = list(getattr(react_repl, "_invoked_tools", None) or [])
+        if react_invocation_log:
             react_tool_timings = []
-            for inv in react_repl.tool_registry.get_invocation_log():
+            for inv in react_invocation_log:
                 _output_tokens = 0
                 if inv.success and inv.result is not None:
                     if isinstance(inv.result, str):
@@ -237,7 +246,7 @@ def _execute_react(
                     {"tool_name": inv.tool_name, "elapsed_ms": inv.elapsed_ms,
                      "success": inv.success, "output_tokens": _output_tokens}
                 )
-            react_tools_called = [inv.tool_name for inv in react_repl.tool_registry.get_invocation_log()]
+            react_tools_called = [inv.tool_name for inv in react_invocation_log]
         react_tools_used = max(
             react_tools_used,
             len(react_tools_called),

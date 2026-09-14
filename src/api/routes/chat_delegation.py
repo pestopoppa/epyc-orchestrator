@@ -607,48 +607,54 @@ def _run_specialist_loop(
                 delegate_to, delegate_mode, max_delegate_turns,
             )
             report = deleg_repl.get_state()
-        if deleg_repl.tool_registry:
-            for inv in deleg_repl.tool_registry.get_invocation_log():
-                tools_called.append(inv.tool_name)
-                # Estimate tool output tokens (~4 chars per token)
-                _output_tokens = 0
-                if inv.success and inv.result is not None:
-                    if isinstance(inv.result, str):
-                        _output_tokens = len(inv.result) // 4
-                    elif isinstance(inv.result, dict):
-                        _output_tokens = len(str(inv.result)) // 4
-                phase_tool_timings.append(
-                    {"tool_name": inv.tool_name, "elapsed_ms": inv.elapsed_ms, "success": inv.success,
-                     "output_tokens": _output_tokens}
-                )
-                # Capture web_research results for Search-R1 reward pipeline
-                if inv.tool_name == "web_research" and inv.success and isinstance(getattr(inv, "result", None), dict):
-                    wr = inv.result
-                    phase_tool_timings.append({
-                        "tool_name": "_web_research_result",
-                        "web_research_data": {
-                            "success": wr.get("success", True),
-                            "error": wr.get("error", ""),
-                            "no_results_reason": wr.get("no_results_reason", ""),
-                            "query": wr.get("query", ""),
-                            "search_backend": wr.get("search_backend", ""),
-                            "search_result_count": wr.get("search_result_count", 0),
-                            "pages_fetched": wr.get("pages_fetched", 0),
-                            "pages_synthesized": wr.get("pages_synthesized", 0),
-                            "pages_irrelevant": wr.get("pages_irrelevant", 0),
-                            "irrelevant_rate": wr.get("irrelevant_rate", 0.0),
-                            "total_elapsed_ms": wr.get("total_elapsed_ms", 0.0),
-                            "sources": [
-                                {
-                                    "url": s.get("url", ""),
-                                    "title": s.get("title", ""),
-                                    **({"relevant": s["relevant"]} if "relevant" in s else {}),
-                                }
-                                for s in wr.get("sources", [])
-                                if isinstance(s, dict)
-                            ],
-                        },
-                    })
+        # REQUEST-LOCAL invocation records captured at the _invoke_tool chokepoint
+        # (src/repl_environment/context.py). Deliberately NOT
+        # deleg_repl.tool_registry.get_invocation_log(): the registry is
+        # process-global (one instance per API process), so its ring interleaves
+        # every concurrently served request's calls and this specialist phase was
+        # attributing other requests' tools — including their web_research results,
+        # which feed the Search-R1 reward pipeline below.
+        for inv in list(getattr(deleg_repl, "_invoked_tools", None) or []):
+            tools_called.append(inv.tool_name)
+            # Estimate tool output tokens (~4 chars per token)
+            _output_tokens = 0
+            if inv.success and inv.result is not None:
+                if isinstance(inv.result, str):
+                    _output_tokens = len(inv.result) // 4
+                elif isinstance(inv.result, dict):
+                    _output_tokens = len(str(inv.result)) // 4
+            phase_tool_timings.append(
+                {"tool_name": inv.tool_name, "elapsed_ms": inv.elapsed_ms, "success": inv.success,
+                 "output_tokens": _output_tokens}
+            )
+            # Capture web_research results for Search-R1 reward pipeline
+            if inv.tool_name == "web_research" and inv.success and isinstance(getattr(inv, "result", None), dict):
+                wr = inv.result
+                phase_tool_timings.append({
+                    "tool_name": "_web_research_result",
+                    "web_research_data": {
+                        "success": wr.get("success", True),
+                        "error": wr.get("error", ""),
+                        "no_results_reason": wr.get("no_results_reason", ""),
+                        "query": wr.get("query", ""),
+                        "search_backend": wr.get("search_backend", ""),
+                        "search_result_count": wr.get("search_result_count", 0),
+                        "pages_fetched": wr.get("pages_fetched", 0),
+                        "pages_synthesized": wr.get("pages_synthesized", 0),
+                        "pages_irrelevant": wr.get("pages_irrelevant", 0),
+                        "irrelevant_rate": wr.get("irrelevant_rate", 0.0),
+                        "total_elapsed_ms": wr.get("total_elapsed_ms", 0.0),
+                        "sources": [
+                            {
+                                "url": s.get("url", ""),
+                                "title": s.get("title", ""),
+                                **({"relevant": s["relevant"]} if "relevant" in s else {}),
+                            }
+                            for s in wr.get("sources", [])
+                            if isinstance(s, dict)
+                        ],
+                    },
+                })
     except (InferenceError, ConnectionError, TimeoutError, OSError) as e:
         report = f"[Delegation failed: {e}]"
         err_text = str(e).lower()

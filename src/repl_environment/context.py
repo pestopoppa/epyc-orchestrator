@@ -441,8 +441,8 @@ class _ContextMixin:
         invocation (name, elapsed_ms, success, chain_id, caller_type, result)
         into self._invoked_tools. repl_executor reads ONLY this list for
         per-request tool telemetry — NEVER ToolRegistry.get_invocation_log(),
-        which is process-global and never cleared per request: reading it leaks a
-        prior request's tools into a no-tool request (tools_called/tools_used).
+        which is a process-global, bounded diagnostic ring: reading it leaks other
+        concurrent requests' tools into this one (tools_called/tools_used).
         The records expose the same attribute interface as ToolInvocation so the
         downstream consumers are unchanged. Covers every dispatch path below.
         """

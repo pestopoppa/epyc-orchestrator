@@ -178,3 +178,80 @@ class TestContractMarker:
         small = build_memory_record(objective="x").to_context()
         big = build_memory_record(objective="x", answer="y" * 10000).to_context()
         assert context_size_bytes(big) > context_size_bytes(small) + 9000
+
+
+class TestSanitizeIsIdempotent:
+    """RTG-02: the work-sanitize policy runs TWICE on the live create path —
+    `chat_pipeline.telemetry.work_completion_meta` on the way into the progress
+    JSONL, then `build_memory_record` on the way into `memories.context` — and it
+    was not idempotent despite its docstring, so the row's own size/elision
+    provenance actively lied about how much was elided.
+    """
+
+    def test_text_truncation_marker_reports_the_true_original_length(self):
+        from orchestration.repl_memory.memory_record import (
+            WORK_TEXT_MAX_CHARS,
+            sanitize_work_text,
+        )
+
+        raw = "x" * (WORK_TEXT_MAX_CHARS + 500)
+        once = sanitize_work_text(raw)
+        assert f"total was {WORK_TEXT_MAX_CHARS + 500}" in once
+
+        # Second and third passes must be no-ops. Pre-fix, pass two re-truncated
+        # and reported `total was 32049` for a 32,500-char original.
+        twice = sanitize_work_text(once)
+        assert twice == once, "second pass rewrote an already-bounded value"
+        assert sanitize_work_text(twice) == once
+        assert once.count("truncated at") == 1, "second marker appended"
+
+    def test_untruncated_text_is_unchanged_by_either_pass(self):
+        from orchestration.repl_memory.memory_record import sanitize_work_text
+
+        assert sanitize_work_text("short answer") == "short answer"
+        assert sanitize_work_text(sanitize_work_text("short answer")) == "short answer"
+
+    def test_item_elision_count_and_retained_entries_survive_a_second_pass(self):
+        from orchestration.repl_memory.memory_record import (
+            WORK_MAX_ITEMS,
+            sanitize_work_items,
+        )
+
+        raw = [{"i": i} for i in range(WORK_MAX_ITEMS + 50)]
+        once = sanitize_work_items(raw)
+        assert once[0] == {"_elided_entries": 50}
+        assert once[1] == {"i": 50}
+
+        # Pre-fix, pass two saw max_items+1 entries, dropped the FRONT one (the
+        # sentinel itself), and claimed `_elided_entries: 1` — losing the real
+        # first retained entry and understating the elision 50-fold.
+        twice = sanitize_work_items(once)
+        assert twice == once, "second pass mutated an already-bounded list"
+        assert sanitize_work_items(twice) == once
+
+    def test_a_sentinel_lookalike_entry_is_not_treated_as_provenance(self):
+        """Only this policy's own sentinel shape is lifted; real payload that
+        merely mentions the key must still be retained as an entry."""
+        from orchestration.repl_memory.memory_record import sanitize_work_items
+
+        out = sanitize_work_items([{"_elided_entries": "not-an-int"}, {"i": 1}])
+        assert len(out) == 2
+        out = sanitize_work_items([{"_elided_entries": 3, "tool_name": "x"}])
+        assert len(out) == 1
+
+    def test_build_work_payload_is_idempotent_end_to_end(self):
+        from orchestration.repl_memory.memory_record import (
+            WORK_MAX_ITEMS,
+            WORK_TEXT_MAX_CHARS,
+            build_work_payload,
+        )
+
+        once = build_work_payload(
+            answer="a" * (WORK_TEXT_MAX_CHARS + 77),
+            tool_calls=[{"tool_name": f"t{i}"} for i in range(WORK_MAX_ITEMS + 9)],
+            reasoning="r" * (WORK_TEXT_MAX_CHARS + 3),
+        )
+        twice = build_work_payload(**once)
+        assert twice == once, "double-applied policy changed the payload"
+        assert f"total was {WORK_TEXT_MAX_CHARS + 77}" in twice["answer"]
+        assert twice["tool_calls"][0] == {"_elided_entries": 9}

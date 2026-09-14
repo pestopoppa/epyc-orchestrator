@@ -858,6 +858,97 @@ class EpisodicStore:
 
         return new_q
 
+    def merge_row_metadata(
+        self,
+        memory_id: str,
+        assigned_role: Optional[str] = None,
+        work: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Fill in `assigned_role` / `context["work"]` on an EXISTING row.
+
+        The find-or-update write path (``ORCHESTRATOR_Q_TD_WRITE=1``,
+        ``q_scorer._update_routing_memory``) updates a row's Q-value and returns
+        without ever reaching ``store()``, which is the ONLY site that wrote
+        ``assigned_role`` and the ``work`` payload. Because the update branch
+        fires ~11x more often than create, both fields were effectively never
+        populated (0 / 59,337 rows at the 2026-08-03 audit) — the values were
+        computed and then dropped on the floor.
+
+        MERGE, never overwrite:
+
+        * ``assigned_role`` is written only when the stored value is NULL/empty.
+          An existing classification is a historical record of what the
+          classifier said at first observation and is not re-litigated here.
+        * ``work`` sub-keys are written only where the stored row has no
+          non-empty value for that key. Every other ``context`` key is preserved
+          byte-for-byte. A later, richer observation can therefore fill a gap a
+          first observation left, but can never blank out captured work.
+
+        `work` must already be sanitized/bounded — pass the output of
+        ``memory_record.build_work_payload`` (the single producer). This method
+        applies NO sanitization, precisely so the policy is not run twice
+        (it is not idempotent, so a double pass would misreport its own
+        size/elision provenance).
+
+        Returns True if the row was modified.
+        """
+        role = (assigned_role or "").strip() or None
+        work_in = {
+            k: v for k, v in (work or {}).items() if v not in (None, "", [], {})
+        }
+        if role is None and not work_in:
+            return False
+
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
+            row = conn.execute(
+                "SELECT context, assigned_role FROM memories WHERE id = ?",
+                (memory_id,),
+            ).fetchone()
+            if not row:
+                return False
+            context_raw, stored_role = row
+
+            sets: List[str] = []
+            params: List[Any] = []
+
+            if role is not None and not (stored_role or "").strip():
+                sets.append("assigned_role = ?")
+                params.append(role)
+
+            if work_in:
+                try:
+                    context = json.loads(context_raw) if context_raw else {}
+                except (TypeError, ValueError):
+                    context = {}
+                if not isinstance(context, dict):
+                    context = {}
+                stored_work = context.get("work")
+                if not isinstance(stored_work, dict):
+                    stored_work = {}
+                merged = dict(stored_work)
+                changed = False
+                for key, value in work_in.items():
+                    if merged.get(key) in (None, "", [], {}):
+                        merged[key] = value
+                        changed = True
+                if changed:
+                    context["work"] = merged
+                    sets.append("context = ?")
+                    params.append(json.dumps(context))
+
+            if not sets:
+                return False
+
+            sets.append("updated_at = ?")
+            params.append(datetime.now(timezone.utc).isoformat())
+            params.append(memory_id)
+            conn.execute(
+                f"UPDATE memories SET {', '.join(sets)} WHERE id = ?",  # noqa: S608
+                params,
+            )
+            conn.commit()
+        return True
+
     def get_by_id(self, memory_id: str) -> Optional[MemoryEntry]:
         """Retrieve a specific memory by ID."""
         with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
@@ -1379,6 +1470,9 @@ class GraphEnhancedStore:
 
     def update_q_value(self, *args, **kwargs):
         return self.store.update_q_value(*args, **kwargs)
+
+    def merge_row_metadata(self, *args, **kwargs):
+        return self.store.merge_row_metadata(*args, **kwargs)
 
     def get_by_id(self, memory_id: str):
         return self.store.get_by_id(memory_id)
