@@ -46,6 +46,38 @@ MEMORY_SCHEMA_MUTATION_ROOT = (
     PROJECT_ROOT / "orchestration" / "repl_memory" / "schema_evolution"
 )
 
+# RTG-55: the shape the MH-9 schema-evolution prompt asks for. It is shipped in
+# the prompt verbatim and MUST itself pass ``screen_static_safety(strict=True)``
+# — a test asserts that, so prompt/denylist drift cannot recur silently.
+MEMORY_SCHEMA_SHAPE_EXAMPLE = '''"""Proposed plan-channel memory schema (inert)."""
+
+SCHEMA_VERSION = 1
+ACTIONS = ("APPEND", "CREATE", "UPSERT")
+CHANNELS = ("status", "inventory", "strategy", "plan", "log")
+SCHEMA = {
+    "fields": (
+        {"name": "channel", "required": True, "kind": "str"},
+        {"name": "content", "required": True, "kind": "str"},
+    ),
+    "blockers": ("no calibration evidence for plan-channel upserts",),
+}
+
+
+def required_fields():
+    return tuple(spec["name"] for spec in SCHEMA["fields"] if spec["required"])
+
+
+def validate_action(action):
+    if not isinstance(action, dict):
+        return (False, "action must be a dict")
+    for name in required_fields():
+        if not action.get(name):
+            return (False, f"missing field: {name}")
+    if action.get("channel") not in CHANNELS:
+        return (False, "channel must be one of CHANNELS")
+    return (True, "ok")
+'''
+
 MUTATION_TYPES = [
     "targeted_fix",  # Fix specific failure patterns
     "compress",  # Reduce token count while maintaining behavior
@@ -1703,10 +1735,10 @@ class PromptForge:
         if mutation_type == "new_file" and _is_memory_schema_evolution_target(target_abs):
             lines.append(
                 "## AutoMem memory schema-evolution contract (MH-9/P2):\n"
-                "- Create a default-inert schema/scaffold module for "
-                "`MemoryAction` / `MemoryActionStore`; importing it must not "
-                "write files, start subprocesses, call inference, or touch the "
-                "trace store.\n"
+                "- Create a default-inert schema/scaffold module describing a "
+                "`MemoryAction` / `MemoryActionStore` schema proposal; importing "
+                "it must not write files, start subprocesses, call inference, or "
+                "touch the trace store. Importing it must DO NOTHING at all.\n"
                 "- Express schema-evolution moves as prompt-free helpers, "
                 "contracts, constants, or pure validators over "
                 "APPEND/CREATE/UPSERT and the status/inventory/strategy/plan/log "
@@ -1715,7 +1747,35 @@ class PromptForge:
                 "blacklists, thresholds, planner spend-breaker flags, or live "
                 "runtime behavior.\n"
                 "- Keep exports narrow and include explicit blockers when "
-                "calibration, process, or validation evidence is missing."
+                "calibration, process, or validation evidence is missing.\n"
+                "\n"
+                "### Required SHAPE — a static validator rejects anything else\n"
+                "Inertness is enforced by an AST denylist, not by trust. A "
+                "proposal that breaks any rule below is DISCARDED WITHOUT "
+                "REVIEW, so write to this shape exactly:\n"
+                "- NO import statements of any kind — not even `dataclasses`, "
+                "`enum`, `typing`, or `__future__`. Use only builtins.\n"
+                "- NO `class` statements. Express the schema as plain module "
+                "data: a `SCHEMA` dict, or a tuple of field-spec tuples/dicts, "
+                "plus constants such as `SCHEMA_VERSION`, `ACTIONS`, "
+                "`CHANNELS`.\n"
+                "- NO underscore-prefixed names anywhere (no `_helper`, no "
+                "`_CACHE`, no `obj._attr`). Every name must be public.\n"
+                "- NO `raise`, `try`, `with`, `while`, `lambda`, `global`, "
+                "`del`, `yield`, or `await`. A validator returns a "
+                "`(ok, reason)` tuple instead of raising: "
+                "`return (False, 'channel must be one of CHANNELS')`.\n"
+                "- Module level may contain ONLY the docstring, constant "
+                "assignments, and `def` statements. No calls, prints, or "
+                "registration at module level.\n"
+                "- Inside functions: `if`/`for`/`return`, comparisons, f-strings, "
+                "and builtin calls (`len`, `isinstance`, `sorted`, `tuple`, "
+                "`dict`, `str`) are all fine.\n"
+                "\n"
+                "Shape example (structure to copy, not content to reuse):\n"
+                "```python\n"
+                f"{MEMORY_SCHEMA_SHAPE_EXAMPLE}"
+                "```"
             )
             lines.append("")
 

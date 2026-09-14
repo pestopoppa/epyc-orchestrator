@@ -17,8 +17,10 @@ ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
+import species.prompt_forge as prompt_forge_mod  # noqa: E402
 from species.prompt_forge import (  # noqa: E402
     CODE_MUTATION_ALLOWLIST,
+    MEMORY_SCHEMA_SHAPE_EXAMPLE,
     SAFETY_BANNED_CALLS,
     SAFETY_BANNED_MODULES,
     SAFETY_IMPORT_ALLOWLIST,
@@ -212,6 +214,76 @@ def test_strict_profile_accepts_inert_def_only_module() -> None:
 )
 def test_strict_profile_rejects_denylisted_nodes(code: str) -> None:
     assert screen_static_safety(code, strict=True).safe is False
+
+
+# ---------------------------------------------------------------------------
+# MH-9 schema-evolution lane: the prompt's shape must match the denylist
+# ---------------------------------------------------------------------------
+
+# Exactly what the OLD (pre-RTG-55) prompt invited: a class-based contract with
+# imports and a raise. Kept as a fixture so prompt/denylist drift cannot recur.
+_OLD_SHAPE_CLASS_PROPOSAL = '''"""Proposed memory schema."""
+
+from dataclasses import dataclass
+
+
+@dataclass
+class MemoryActionSchema:
+    channel: str
+    content: str
+
+    def validate(self):
+        if not self.channel:
+            raise ValueError("channel required")
+        return True
+'''
+
+
+def test_prompt_shape_example_passes_the_strict_screen() -> None:
+    """The shape the MH-9 prompt ships must survive its own validator."""
+    report = screen_static_safety(MEMORY_SCHEMA_SHAPE_EXAMPLE, strict=True)
+    assert report.safe is True, report.violations
+    assert report.effect is MutationEffect.INERT
+
+
+def test_old_class_shaped_proposal_is_rejected_by_the_strict_screen() -> None:
+    report = screen_static_safety(_OLD_SHAPE_CLASS_PROPOSAL, strict=True)
+    assert report.safe is False
+    assert report.effect is MutationEffect.UNSAFE
+    assert any("ClassDef" in v for v in report.violations)
+    assert any("ImportFrom" in v for v in report.violations)
+    assert any("Raise" in v for v in report.violations)
+
+
+def test_memory_schema_prompt_states_the_denylisted_shape(tmp_path: Path) -> None:
+    schema_dir = tmp_path / "orchestration" / "repl_memory" / "schema_evolution"
+    schema_dir.mkdir(parents=True)
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(prompt_forge_mod, "PROJECT_ROOT", tmp_path)
+        monkey.setattr(prompt_forge_mod, "NEW_FILE_MUTATION_ROOT", tmp_path / "src")
+        monkey.setattr(prompt_forge_mod, "MEMORY_SCHEMA_MUTATION_ROOT", schema_dir)
+        forge = PromptForge(prompts_dir=tmp_path / "prompts", auto_commit=False)
+        prompt = forge._build_code_mutation_prompt(
+            target_file="orchestration/repl_memory/schema_evolution/plan_schema.py",
+            mutation_type="new_file",
+            original_content="",
+            failure_context="",
+            per_suite_quality=None,
+            description="Add memory schema scaffold",
+        )
+    finally:
+        monkey.undo()
+
+    # The MH-9 intent survives the rewrite.
+    assert "default-inert schema/scaffold module" in prompt
+    assert "APPEND/CREATE/UPSERT" in prompt
+    # The shape rules the validator actually enforces are now stated.
+    assert "NO import statements of any kind" in prompt
+    assert "NO `class` statements" in prompt
+    assert "NO underscore-prefixed names" in prompt
+    assert "`(ok, reason)` tuple instead of raising" in prompt
+    assert MEMORY_SCHEMA_SHAPE_EXAMPLE in prompt
 
 
 def test_strict_denylist_names_are_explicit() -> None:
