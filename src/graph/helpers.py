@@ -657,6 +657,10 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     gathered_context = _auto_gather_context(ctx, _extract_candidate_files_from_task_ir(state))
     state.anti_pattern_warning = _check_anti_pattern(ctx) or ""
 
+    # MF-FIN-1: set when THIS turn's prompt instructs the file-editing finish FINAL('done')
+    # (interleaved-edit rider or loop-guard HALT) so the status-message guard accepts it.
+    _edit_finish_sanctioned = False
+
     # Build prompt
     if state.escalation_prompt:
         prompt = state.escalation_prompt
@@ -761,6 +765,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             from src.batch_edit_parse import build_interleaved_edit_instructions
 
             prompt += "\n\n" + build_interleaved_edit_instructions()
+            _edit_finish_sanctioned = True
 
     # Inject session log summary (processing history across turns)
     await _maybe_refresh_session_summary(state, deps)
@@ -791,6 +796,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         if _read:
             _halt += "\n\nContent you already read (use it; do not re-read):\n```\n" + _read + "\n```"
         prompt += _halt
+        _edit_finish_sanctioned = True
 
     # Graduated FINAL() nudge: midpoint soft reminder, then hard deadline.
     remaining = state.max_turns - state.turns
@@ -1248,7 +1254,11 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         _CODE_MARKERS = {"def ", "class ", "import ", "return ", "print(", "for ", "while ", "if ", "= "}
         _has_status_kw = any(kw in _fa for kw in _STATUS_KEYWORDS)
         _has_code = any(m in result.final_answer for m in _CODE_MARKERS)
-        if _fa in _STATUS_PHRASES or (_has_status_kw and not _has_code and len(_fa.split()) < 12):
+        # MF-FIN-1: "done" is the sanctioned finish when this turn's prompt asked for it.
+        _sanctioned_done = _edit_finish_sanctioned and _fa == "done"
+        if not _sanctioned_done and (
+            _fa in _STATUS_PHRASES or (_has_status_kw and not _has_code and len(_fa.split()) < 12)
+        ):
             log.info("Status-message FINAL rejected (turn %d): %r", state.turns, result.final_answer)
             nudge = (
                 f'FINAL("{result.final_answer}") is a status message, not an answer. '
