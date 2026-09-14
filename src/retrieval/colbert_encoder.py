@@ -4,15 +4,33 @@ Exposes corpus-agnostic encode/maxsim/ensure_loaded primitives so multiple
 consumers (web_research reranker, internal KB-RAG) reuse one model load
 and one tokenizer.
 
-Default model: GTE-ModernColBERT-v1 ONNX INT8 (128-dim per-token, ~144 MB).
-Override via `LATEON_MODEL_PATH` env var to point at LightOn LateOn (same
-ModernBERT backbone, +2.55 pp BEIR per intake-430).
+Model path resolution is a THREE-SLOT selector, owned here because both
+consumers must agree on which checkpoint is live (this module holds the single
+ONNX session):
+
+1. `LATEON_MODEL_PATH`  — LightOn LateOn primary slot (intake-430, +2.55 pp
+   BEIR vs GTE-ModernColBERT-v1; same ModernBERT backbone/output width).
+2. `REASON_MXBAI_MODEL_PATH` — Reason-mxbai 32M natural-language
+   edge-reasoning fallback (intake-453; A/B gated on AR-3 Package D).
+3. Default GTE-ModernColBERT-v1 ONNX INT8 (128-dim per-token, ~144 MB).
 
 Public API (corpus-agnostic, max-token configurable per call):
     is_available() -> bool
     ensure_loaded() -> bool
     encode(text: str, max_tokens: int, *, role: str) -> np.ndarray | None
     maxsim(query_emb, doc_emb) -> float
+    max_query_tokens() / max_document_tokens() -> int   (model-DECLARED caps)
+    resolve_model_dir() / refresh_model_dir() -> (Path, slot)
+
+Token caps are model-declared, never hardcoded by a caller
+-----------------------------------------------------------
+`query_length` / `document_length` in the checkpoint's own config are the caps
+the model was configured for, and they DIFFER per slot: GTE declares 48/300,
+LateOn 32/300, Reason-mxbai 256/2048. A caller that hardcodes one model's
+number silently feeds another model longer queries than it was set up for, so
+ask `max_query_tokens()` / `max_document_tokens()` instead. A caller may spend
+FEWER tokens than declared (a latency budget is a legitimate caller choice);
+exceeding the declared cap is not.
 
 ColBERT role prefixes (OP-24, 2026-08-12)
 -----------------------------------------
@@ -63,9 +81,27 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Model path resolution: LATEON_MODEL_PATH overrides to the LateOn drop-in.
+# ── Model path resolution: the three-slot selector (see module docstring) ────
 DEFAULT_MODEL_DIR = Path("/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx")
-_MODEL_DIR = Path(os.environ.get("LATEON_MODEL_PATH") or DEFAULT_MODEL_DIR)
+
+SLOT_LATEON = "lateon"
+SLOT_REASON_MXBAI = "reason_mxbai"
+SLOT_DEFAULT = "gte_moderncolbert"
+
+LATEON_ENV = "LATEON_MODEL_PATH"
+REASON_MXBAI_ENV = "REASON_MXBAI_MODEL_PATH"
+
+
+def resolve_model_dir() -> "tuple[Path, str]":
+    """Resolve (model_dir, slot_name) from the environment. Pure; reads env only."""
+    if lateon_path := os.environ.get(LATEON_ENV):
+        return Path(lateon_path), SLOT_LATEON
+    if reason_path := os.environ.get(REASON_MXBAI_ENV):
+        return Path(reason_path), SLOT_REASON_MXBAI
+    return DEFAULT_MODEL_DIR, SLOT_DEFAULT
+
+
+_MODEL_DIR, _MODEL_SLOT = resolve_model_dir()
 _MODEL_PATH = _MODEL_DIR / "model_int8.onnx"
 _TOKENIZER_PATH = _MODEL_DIR / "tokenizer.json"
 
@@ -88,9 +124,21 @@ _TOKENIZER_PATH = _MODEL_DIR / "tokenizer.json"
 _DEFAULT_ONNX_THREADS = 8
 
 
+# `COLBERT_RERANK_ONNX_THREADS` is the web reranker's historical knob. That module
+# used to own its own ONNX session; it now shares this one, so the knob is honoured
+# here as a deprecated alias rather than silently dropped. Both were measured at 8.
+_ONNX_THREADS_ENV = "COLBERT_ENCODE_ONNX_THREADS"
+_ONNX_THREADS_ENV_ALIASES = ("COLBERT_RERANK_ONNX_THREADS",)
+
+
 def _onnx_threads() -> int:
     """Resolve the ONNX intra-op thread count (env-overridable, positive int)."""
-    raw = os.environ.get("COLBERT_ENCODE_ONNX_THREADS")
+    raw = os.environ.get(_ONNX_THREADS_ENV)
+    if not raw:
+        for alias in _ONNX_THREADS_ENV_ALIASES:
+            if alias_raw := os.environ.get(alias):
+                raw = alias_raw
+                break
     if not raw:
         return _DEFAULT_ONNX_THREADS
     try:
@@ -240,6 +288,99 @@ def _prefix_encodes_to_one_token(tokenizer, prefix: str, declared_id: "int | Non
     if len(ids) != 1:
         return False
     return declared_id is None or ids[0] == declared_id
+
+
+def refresh_model_dir() -> "tuple[Path, str]":
+    """Re-read the slot env vars and re-point the module at the resolved model.
+
+    Needed because the slot selector is read at IMPORT time but consumers
+    (`scripts/benchmark/bench_colbert_rerank.py`) switch slots by setting an env
+    var and reloading a module. A loaded session for a DIFFERENT directory is
+    dropped and logged — keeping it would serve the old checkpoint while every
+    reported path said otherwise, which is the failure mode this exists to stop.
+    """
+    global _MODEL_DIR, _MODEL_SLOT, _MODEL_PATH, _TOKENIZER_PATH
+    global _session, _tokenizer, _prefix_tokens_ok, _input_names, _do_lower_case
+
+    model_dir, slot = resolve_model_dir()
+    if model_dir == _MODEL_DIR:
+        return _MODEL_DIR, _MODEL_SLOT
+
+    if _session is not None or _tokenizer is not None:
+        logger.warning(
+            "ColBERT encoder re-pointed from %s to %s (slot %s); dropping the "
+            "loaded session so the next encode uses the model now configured.",
+            _MODEL_DIR, model_dir, slot,
+        )
+        _session = None
+        _tokenizer = None
+        _prefix_tokens_ok = False
+        _input_names = ()
+        _do_lower_case = False
+
+    _MODEL_DIR, _MODEL_SLOT = model_dir, slot
+    _MODEL_PATH = _MODEL_DIR / "model_int8.onnx"
+    _TOKENIZER_PATH = _MODEL_DIR / "tokenizer.json"
+    return _MODEL_DIR, _MODEL_SLOT
+
+
+# ── Model-declared token caps ────────────────────────────────────────────────
+#
+# Used only when the checkpoint declares neither `query_length` nor
+# `document_length` (i.e. no readable config at all). These are the values the
+# code hardcoded before this became model-derived, so an unreadable config
+# preserves historical behaviour rather than inventing a new number.
+_FALLBACK_QUERY_TOKENS = 48
+_FALLBACK_DOCUMENT_TOKENS = 256
+# A declared cap below this cannot hold a prefix token plus useful text, so it is
+# treated as unstated rather than obeyed.
+_MIN_DECLARED_TOKENS = 8
+
+_declared_lengths_cache: dict = {}
+
+
+def _declared_lengths(model_dir: Path) -> "tuple[int | None, int | None]":
+    """(query_length, document_length) as DECLARED by the checkpoint, or None."""
+    key = str(model_dir)
+    if key in _declared_lengths_cache:
+        return _declared_lengths_cache[key]
+    cfg = _load_declared_config(model_dir)
+    values = []
+    for cfg_key in ("query_length", "document_length"):
+        value = cfg.get(cfg_key)
+        ok = (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= _MIN_DECLARED_TOKENS
+        )
+        values.append(value if ok else None)
+    out = (values[0], values[1])
+    _declared_lengths_cache[key] = out
+    return out
+
+
+def max_query_tokens() -> int:
+    """Query truncation cap declared by the LIVE checkpoint (`query_length`)."""
+    declared, _ = _declared_lengths(_MODEL_DIR)
+    if declared is None:
+        logger.warning(
+            "ColBERT: %s declares no usable query_length; using fallback %d",
+            _MODEL_DIR, _FALLBACK_QUERY_TOKENS,
+        )
+        return _FALLBACK_QUERY_TOKENS
+    return declared
+
+
+def max_document_tokens() -> int:
+    """Document truncation cap declared by the LIVE checkpoint (`document_length`)."""
+    _, declared = _declared_lengths(_MODEL_DIR)
+    if declared is None:
+        logger.warning(
+            "ColBERT: %s declares no usable document_length; using fallback %d",
+            _MODEL_DIR, _FALLBACK_DOCUMENT_TOKENS,
+        )
+        return _FALLBACK_DOCUMENT_TOKENS
+    return declared
 
 
 def prefix_for_role(role: str) -> str:
