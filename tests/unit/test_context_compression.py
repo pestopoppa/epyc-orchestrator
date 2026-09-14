@@ -110,7 +110,26 @@ class TestClassifyToolOutput:
         assert classify_tool_output("Contents of /foo/bar.py:\nimport os") == "file_read"
 
     def test_repl_detected(self):
-        assert classify_tool_output("<<<TOOL_OUTPUT>>>42<<</TOOL_OUTPUT>>>") == "repl"
+        from src.repl_environment.types import wrap_tool_output
+
+        assert classify_tool_output(wrap_tool_output("42")) == "repl"
+
+    def test_repl_regex_matches_real_delimiters(self):
+        """CF-RX-1: the regex itself matches real output; the ``>>>`` substring
+        fallback (which the delimiters also contain) must not be what classifies it."""
+        from src.context_compression import _REPL_OUTPUT_RE
+        from src.repl_environment.types import (
+            TOOL_OUTPUT_END,
+            TOOL_OUTPUT_START,
+            wrap_tool_output,
+        )
+
+        content = wrap_tool_output("line one\nline two: 42")
+        match = _REPL_OUTPUT_RE.search(content)
+        assert match is not None and match.group(0) == content
+        assert content.startswith(TOOL_OUTPUT_START) and content.endswith(TOOL_OUTPUT_END)
+        # The pre-fix hand-written end marker is not a real delimiter.
+        assert _REPL_OUTPUT_RE.search("<<<TOOL_OUTPUT>>>42<<</TOOL_OUTPUT>>>") is None
 
     def test_empty_is_other(self):
         assert classify_tool_output("") == "other"
