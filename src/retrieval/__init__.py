@@ -19,7 +19,12 @@ from src.retrieval.colbert_encoder import (
     encode,
     ensure_loaded,
     is_available,
+    max_document_tokens,
+    max_query_tokens,
     maxsim,
+    prefix_tokens_available,
+    refresh_model_dir,
+    resolve_model_dir,
 )
 
 __all__ = [
@@ -32,5 +37,10 @@ __all__ = [
     "encode",
     "ensure_loaded",
     "is_available",
+    "max_document_tokens",
+    "max_query_tokens",
     "maxsim",
+    "prefix_tokens_available",
+    "refresh_model_dir",
+    "resolve_model_dir",
 ]

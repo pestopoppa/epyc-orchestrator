@@ -1,13 +1,37 @@
-"""ColBERT snippet reranker using ONNX Runtime.
+"""ColBERT snippet reranker (thin consumer of the shared ColBERT encoder).
 
-Provides semantic reranking of search snippets via late-interaction
-MaxSim scoring. Default: GTE-ModernColBERT-v1 ONNX (128-dim per-token
-embeddings, INT8 quantized, 144MB). Set ``LATEON_MODEL_PATH`` for the
-LightOn LateOn primary slot or ``REASON_MXBAI_MODEL_PATH`` for the
-Reason-mxbai 32M edge-reasoning fallback slot.
+Provides semantic reranking of search snippets via late-interaction MaxSim
+scoring. All model loading, tokenization, role prefixing and MaxSim live in
+`src.retrieval.colbert_encoder`; this module only decides WHAT to encode, with
+WHICH role, and how to order the result.
 
-Model loaded lazily on first call, cached as module-level singleton.
-ONNX inference session is thread-safe for prediction.
+Model slot selection (`LATEON_MODEL_PATH` / `REASON_MXBAI_MODEL_PATH` /
+GTE-ModernColBERT-v1 default) is the shared encoder's, re-exported here as
+`_MODEL_DIR` / `_MODEL_SLOT` / `_MODEL_PATH` / `_TOKENIZER_PATH` for the
+benchmark harness and tests.
+
+Why this module has no `_encode` of its own (PREFIX-1, 2026-09-14)
+-----------------------------------------------------------------
+It used to. That private copy predated the shared encoder and never received
+the OP-24 / K1 / K6 / K8 fixes the KB side got in `fe55b228` and `4e5e84c0`:
+
+- no `[Q]`/`[D]` role prefix — measured 25x more perturbing than the INT8
+  quantization we accept (max |ΔMaxSim| 1.63e-01, top-1 flipped on 37.5% of
+  queries) and enough to make any A/B a measurement of a broken encoder;
+- a hardcoded two-input feed, so a BERT-family graph declaring
+  `token_type_ids` returned None for every text (an empty rerank, logged at
+  debug, presenting as an ordinary miss);
+- no `do_lower_case` handling;
+- `_MAX_QUERY_TOKENS = 48`, the GTE number, while the LateOn slot this file's
+  own docstring points at declares `query_length: 32`.
+
+Every one of those is fixed once, in the shared encoder, or not at all. The
+prefix change is safe to make here with no re-embedding: unlike the KB there is
+no stored web index, so query and document are always encoded together by the
+same live code and move as one.
+
+Model loaded lazily on first call, cached as a module-level singleton inside the
+shared encoder. ONNX inference session is thread-safe for prediction.
 
 Usage:
     from src.tools.web.colbert_reranker import rerank_snippets
@@ -30,191 +54,112 @@ from __future__ import annotations
 import logging
 import os
 import time
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from src.retrieval import colbert_encoder
+
 logger = logging.getLogger(__name__)
 
-# Model path resolution is a three-slot selector:
-# 1. LATEON_MODEL_PATH: primary general-retrieval upgrade (intake-430,
-#    +2.55pp BEIR vs GTE-ModernColBERT-v1; same ModernBERT backbone/output).
-# 2. REASON_MXBAI_MODEL_PATH: 32M natural-language edge-reasoning fallback
-#    (intake-453; lower CPU latency target, A/B still gated on AR-3 Package D).
-# 3. Default GTE-ModernColBERT-v1: legacy pinned baseline.
-_DEFAULT_MODEL_DIR = Path("/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx")
+# The slot selector lives in the shared encoder (it owns the single ONNX
+# session, so it must be the one authority on which checkpoint is live).
+# Re-read here at import so `importlib.reload(colbert_reranker)` after an env
+# change re-points the encoder too — the pattern
+# scripts/benchmark/bench_colbert_rerank.py uses to switch slots.
+_MODEL_DIR, _MODEL_SLOT = colbert_encoder.refresh_model_dir()
+_MODEL_PATH = colbert_encoder._MODEL_PATH
+_TOKENIZER_PATH = colbert_encoder._TOKENIZER_PATH
 
-
-def _resolve_model_dir() -> tuple[Path, str]:
-    if lateon_path := os.environ.get("LATEON_MODEL_PATH"):
-        return Path(lateon_path), "lateon"
-    if reason_mxbai_path := os.environ.get("REASON_MXBAI_MODEL_PATH"):
-        return Path(reason_mxbai_path), "reason_mxbai"
-    return _DEFAULT_MODEL_DIR, "gte_moderncolbert"
-
-
-_MODEL_DIR, _MODEL_SLOT = _resolve_model_dir()
-_MODEL_PATH = _MODEL_DIR / "model_int8.onnx"
-_TOKENIZER_PATH = _MODEL_DIR / "tokenizer.json"
-
-# Module-level singleton (lazy-loaded)
-_session = None
-_tokenizer = None
-
-# Encoding parameters
-_MAX_QUERY_TOKENS = 48
-_MAX_DOC_TOKENS = 64
-
-# ONNX Runtime intra-op thread bound.
+# Snippet-side token budget.
 #
-# One rerank call is 1 + N sequential single-row forward passes over <=64 padded
-# tokens, so the parallel work per pass is tiny and ORT's default pool (one thread
-# per visible core) oversubscribes hard on this 192-thread host. Measured
-# 2026-08-12 on EPYC 9655, GTE-ModernColBERT-v1 INT8, 10 snippets/call, 25 measured
-# calls x 3 interleaved rounds: unbounded median 245.4/249.9/320.1 ms versus
-# 226.7/204.3/210.8 ms at intra_op_num_threads=8 — faster AND far lower
-# round-to-round variance. The pool size also matters off the critical path: this
-# is a shared box, and a 192-thread pool spun up per rerank call contends with
-# co-resident CPU benchmarks. Override with COLBERT_RERANK_ONNX_THREADS.
-_DEFAULT_ONNX_THREADS = 8
+# Token CAPS are the model's (`colbert_encoder.max_query_tokens()` /
+# `max_document_tokens()`): the query cap is taken verbatim, because feeding a
+# model a longer query than it declares is off-distribution and differs per slot
+# (GTE 48, LateOn 32, Reason-mxbai 256).
+#
+# Documents are different: search snippets are two or three sentences, and the
+# shared encoder pads every input to `max_tokens`, so obeying GTE's declared
+# `document_length: 300` would pad each of N snippets to 300 tokens for no
+# content gain. Spending FEWER tokens than declared is a caller's latency
+# choice; the budget is therefore min(declared, this). 64 is the value the
+# 2026-08-12 latency measurements on this path were taken at. Raise it with
+# COLBERT_RERANK_MAX_DOC_TOKENS, which is still clamped by the declared cap.
+_SNIPPET_DOC_TOKEN_BUDGET = 64
+_DOC_TOKEN_BUDGET_ENV = "COLBERT_RERANK_MAX_DOC_TOKENS"
+
+# One-shot warning latch for the prefix-less fallback.
+_warned_no_prefix = False
 
 
-def _onnx_threads() -> int:
-    """Resolve the ONNX intra-op thread count (env-overridable, positive int)."""
-    raw = os.environ.get("COLBERT_RERANK_ONNX_THREADS")
+def _doc_token_budget() -> int:
+    """Snippet document budget (env-overridable, positive int)."""
+    raw = os.environ.get(_DOC_TOKEN_BUDGET_ENV)
     if not raw:
-        return _DEFAULT_ONNX_THREADS
+        return _SNIPPET_DOC_TOKEN_BUDGET
     try:
         value = int(raw)
     except ValueError:
         logger.warning(
-            "COLBERT_RERANK_ONNX_THREADS=%r is not an integer; using %d",
-            raw, _DEFAULT_ONNX_THREADS,
+            "%s=%r is not an integer; using %d",
+            _DOC_TOKEN_BUDGET_ENV, raw, _SNIPPET_DOC_TOKEN_BUDGET,
         )
-        return _DEFAULT_ONNX_THREADS
+        return _SNIPPET_DOC_TOKEN_BUDGET
     if value <= 0:
         logger.warning(
-            "COLBERT_RERANK_ONNX_THREADS=%d must be positive; using %d",
-            value, _DEFAULT_ONNX_THREADS,
+            "%s=%d must be positive; using %d",
+            _DOC_TOKEN_BUDGET_ENV, value, _SNIPPET_DOC_TOKEN_BUDGET,
         )
-        return _DEFAULT_ONNX_THREADS
+        return _SNIPPET_DOC_TOKEN_BUDGET
     return value
 
 
-def _ensure_loaded() -> bool:
-    """Lazily load ONNX session and tokenizer on first call.
+def _token_caps() -> tuple[int, int]:
+    """(query_cap, doc_cap): model-declared, doc side clamped to the budget."""
+    query_cap = colbert_encoder.max_query_tokens()
+    doc_cap = min(colbert_encoder.max_document_tokens(), _doc_token_budget())
+    return query_cap, doc_cap
 
-    Returns:
-        True if model is ready for inference.
+
+def _roles() -> tuple[str, str]:
+    """(query_role, document_role) for this checkpoint.
+
+    Prefixed roles when the tokenizer maps `[Q] `/`[D] ` to the trained single
+    tokens, `ROLE_NONE` otherwise. Unlike the KB there is no stored web index to
+    stay consistent with, so this is a free choice per call and both sides always
+    move together — but a prefixed role against a tokenizer that lacks the token
+    RAISES in the encoder, so a checkpoint without them must degrade, loudly and
+    once, to the legacy prefix-free convention rather than fail every rerank.
     """
-    global _session, _tokenizer
-
-    if _session is not None and _tokenizer is not None:
-        return True
-
-    if not _MODEL_PATH.exists():
-        logger.warning("ColBERT ONNX model not found at %s", _MODEL_PATH)
-        return False
-
-    try:
-        import onnxruntime as ort
-        from tokenizers import Tokenizer
-
-        start = time.perf_counter()
-
-        threads = _onnx_threads()
-        sess_options = ort.SessionOptions()
-        sess_options.intra_op_num_threads = threads
-        sess_options.inter_op_num_threads = 1
-
-        _session = ort.InferenceSession(
-            str(_MODEL_PATH),
-            sess_options=sess_options,
-            providers=["CPUExecutionProvider"],
+    global _warned_no_prefix
+    if colbert_encoder.prefix_tokens_available():
+        return colbert_encoder.ROLE_QUERY, colbert_encoder.ROLE_DOCUMENT
+    if not _warned_no_prefix:
+        _warned_no_prefix = True
+        logger.warning(
+            "ColBERT rerank: %s has no trained [Q]/[D] prefix tokens; scoring "
+            "prefix-free (off-distribution, ~25x the perturbation of INT8). "
+            "Any A/B run in this state measures the encoder, not the model.",
+            colbert_encoder._MODEL_DIR,
         )
-        _tokenizer = Tokenizer.from_file(str(_TOKENIZER_PATH))
-
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        logger.info(
-            "ColBERT reranker loaded: %s (%.0fms, intra_op_threads=%d)",
-            _MODEL_PATH.name, elapsed_ms, threads,
-        )
-        return True
-
-    except ImportError as e:
-        logger.warning("ColBERT reranker dependencies missing: %s", e)
-        return False
-    except Exception as e:
-        logger.error("ColBERT reranker load failed: %s", e)
-        return False
-
-
-def _encode(text: str, max_tokens: int) -> np.ndarray | None:
-    """Encode text into per-token ColBERT embeddings.
-
-    Args:
-        text: Input text to encode.
-        max_tokens: Maximum token length.
-
-    Returns:
-        Array of shape (n_tokens, 128) or None on failure.
-    """
-    if _session is None or _tokenizer is None:
-        return None
-
-    try:
-        _tokenizer.enable_truncation(max_length=max_tokens)
-        _tokenizer.enable_padding(length=max_tokens)
-        encoded = _tokenizer.encode(text)
-
-        input_ids = np.array([encoded.ids], dtype=np.int64)
-        attention_mask = np.array([encoded.attention_mask], dtype=np.int64)
-
-        outputs = _session.run(
-            None,
-            {"input_ids": input_ids, "attention_mask": attention_mask},
-        )
-
-        # Output shape: (1, max_tokens, hidden_dim)
-        # We need per-token embeddings masked by attention
-        embeddings = outputs[0][0]  # (max_tokens, hidden_dim)
-        mask = attention_mask[0]  # (max_tokens,)
-
-        # Only keep real token embeddings (where attention_mask == 1)
-        token_embeddings = embeddings[mask == 1]
-
-        # L2 normalize per-token embeddings
-        norms = np.linalg.norm(token_embeddings, axis=1, keepdims=True)
-        norms = np.maximum(norms, 1e-8)
-        token_embeddings = token_embeddings / norms
-
-        return token_embeddings
-
-    except Exception as e:
-        logger.debug("ColBERT encode failed: %s", e)
-        return None
+    return colbert_encoder.ROLE_NONE, colbert_encoder.ROLE_NONE
 
 
 def _maxsim(query_emb: np.ndarray, doc_emb: np.ndarray) -> float:
-    """Compute MaxSim score between query and document embeddings.
+    """MaxSim score — thin alias for the shared implementation."""
+    return colbert_encoder.maxsim(query_emb, doc_emb)
 
-    MaxSim: for each query token, find the maximum cosine similarity
-    to any document token, then average across query tokens.
 
-    Args:
-        query_emb: Query token embeddings (n_q, dim).
-        doc_emb: Document token embeddings (n_d, dim).
-
-    Returns:
-        MaxSim score in [0, 1].
-    """
-    # Similarity matrix: (n_q, n_d)
-    sim_matrix = query_emb @ doc_emb.T
-
-    # Max similarity per query token, then average
-    max_per_query = sim_matrix.max(axis=1)
-    return float(max_per_query.mean())
+def _snippet_text(snippet_dict: dict[str, Any]) -> str:
+    """Flatten a snippet dict into the text that gets encoded."""
+    text = ""
+    if "title" in snippet_dict:
+        text += snippet_dict["title"] + ". "
+    if "snippet" in snippet_dict:
+        text += snippet_dict["snippet"]
+    elif "body" in snippet_dict:
+        text += snippet_dict["body"]
+    return text
 
 
 def rerank_snippets(
@@ -241,28 +186,23 @@ def rerank_snippets(
     if not snippets:
         return []
 
-    if not _ensure_loaded():
+    if not colbert_encoder.ensure_loaded():
         logger.debug("ColBERT reranker not available, returning original order")
         return snippets[:top_k]
 
     start = time.perf_counter()
 
-    # Encode query
-    query_emb = _encode(query, _MAX_QUERY_TOKENS)
+    query_role, doc_role = _roles()
+    query_cap, doc_cap = _token_caps()
+
+    query_emb = colbert_encoder.encode(query, query_cap, role=query_role)
     if query_emb is None:
         return snippets[:top_k]
 
     # Score each snippet
     scored = []
     for snippet_dict in snippets:
-        # Combine title + snippet text for encoding
-        text = ""
-        if "title" in snippet_dict:
-            text += snippet_dict["title"] + ". "
-        if "snippet" in snippet_dict:
-            text += snippet_dict["snippet"]
-        elif "body" in snippet_dict:
-            text += snippet_dict["body"]
+        text = _snippet_text(snippet_dict)
 
         # Skip snippets with no meaningful text (only punctuation/whitespace)
         cleaned = text.strip().strip(".")
@@ -270,7 +210,7 @@ def rerank_snippets(
             scored.append((snippet_dict, 0.0))
             continue
 
-        doc_emb = _encode(text, _MAX_DOC_TOKENS)
+        doc_emb = colbert_encoder.encode(text, doc_cap, role=doc_role)
         if doc_emb is None:
             scored.append((snippet_dict, 0.0))
             continue
@@ -283,8 +223,8 @@ def rerank_snippets(
 
     elapsed_ms = (time.perf_counter() - start) * 1000
     logger.info(
-        "ColBERT rerank: %d snippets in %.0fms, scores=[%s]",
-        len(snippets), elapsed_ms,
+        "ColBERT rerank: %d snippets in %.0fms, roles=%s/%s, caps=%d/%d, scores=[%s]",
+        len(snippets), elapsed_ms, query_role, doc_role, query_cap, doc_cap,
         ", ".join(f"{s:.3f}" for _, s in scored[:5]),
     )
 
@@ -300,4 +240,4 @@ def rerank_snippets(
 
 def is_available() -> bool:
     """Check if the reranker model is loadable, not merely present on disk."""
-    return _ensure_loaded()
+    return colbert_encoder.ensure_loaded()
