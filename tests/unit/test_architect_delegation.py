@@ -816,6 +816,106 @@ class RateLimiter:
         assert cache_args[1] == full_report
         assert "[REPORT_HANDLE id=" not in answer
 
+    def test_approved_non_rescued_long_report_returns_full_report(self, monkeypatch, tmp_path):
+        """C5/DCP-13: D|Approved hands the user the full report, not handle+summary text."""
+        from src.api.routes.chat_delegation import _architect_delegated_answer
+
+        monkeypatch.setenv("ORCHESTRATOR_DELEGATION_REPORT_DIR", str(tmp_path))
+        primitives = MagicMock()
+        primitives._backends = {"test": True}
+        primitives.total_tokens_generated = 0
+        primitives.llm_call = MagicMock(return_value="compact summary")
+        state = MagicMock()
+        state.tool_registry = None
+
+        full_report = "FULL SPECIALIST DOCUMENT\n" + ("design detail line\n" * 400)
+        mock_cache = MagicMock()
+        mock_cache.make_key.return_value = "approved-key"
+        mock_cache.get.return_value = None
+        arch_prompts: list[str] = []
+        decisions = iter([
+            ("I|brief:draft the document|to:coder_escalation", 1, 0),
+            ("D|Approved", 1, 0),
+        ])
+
+        def _decision(prompt_text, *_a, **_kw):
+            arch_prompts.append(prompt_text)
+            return next(decisions)
+
+        with patch(
+            "src.api.routes.chat_delegation._run_architect_decision",
+            side_effect=_decision,
+        ), patch(
+            "src.api.routes.chat_delegation._run_specialist_loop",
+            return_value=(full_report, 0, [], [], False, False, {}, []),
+        ), patch(
+            "src.delegation_cache.get_delegation_cache",
+            return_value=mock_cache,
+        ):
+            answer, stats = _architect_delegated_answer(
+                question="q",
+                context="",
+                primitives=primitives,
+                state=state,
+                max_loops=3,
+                force_response_on_cap=True,
+            )
+
+        assert answer == full_report
+        assert "[REPORT_HANDLE" not in answer
+        assert stats["specialist_output"] == full_report
+        assert stats["report_handles"]
+        # The architect loop prompt still carries the compact handle+summary text.
+        assert "[REPORT_HANDLE id=" in arch_prompts[1]
+        assert "compact summary" in arch_prompts[1]
+
+    def test_timeout_skip_synthesis_non_rescued_long_report_returns_full_report(
+        self, monkeypatch, tmp_path
+    ):
+        """C5/DCP-13: skip_synthesis_on_timeout returns the full report, not handle text."""
+        from src.api.routes.chat_delegation import _architect_delegated_answer
+
+        monkeypatch.setenv("ORCHESTRATOR_DELEGATION_REPORT_DIR", str(tmp_path))
+        monkeypatch.setenv("ORCHESTRATOR_DELEGATION_SKIP_SYNTHESIS_ON_TIMEOUT", "1")
+        primitives = MagicMock()
+        primitives._backends = {"test": True}
+        primitives.total_tokens_generated = 0
+        primitives.llm_call = MagicMock(return_value="compact summary")
+        state = MagicMock()
+        state.tool_registry = None
+
+        full_report = "PARTIAL SPECIALIST FINDINGS\n" + ("evidence line\n" * 400)
+        mock_cache = MagicMock()
+        mock_cache.make_key.return_value = "timeout-key"
+        mock_cache.get.return_value = None
+
+        with patch(
+            "src.api.routes.chat_delegation._run_architect_decision",
+            return_value=("I|brief:investigate|to:coder_escalation", 1, 0),
+        ), patch(
+            "src.api.routes.chat_delegation._run_specialist_loop",
+            return_value=(full_report, 0, [], [], True, False, {}, []),
+        ), patch(
+            "src.delegation_cache.get_delegation_cache",
+            return_value=mock_cache,
+        ):
+            answer, stats = _architect_delegated_answer(
+                question="q",
+                context="",
+                primitives=primitives,
+                state=state,
+                max_loops=2,
+                force_response_on_cap=True,
+            )
+
+        assert stats.get("break_reason") == "specialist_timeout"
+        assert answer == full_report
+        assert "[REPORT_HANDLE" not in answer
+        assert stats["report_handles"]
+        # Only the worker_summarize compression call ran; no forced architect synthesis.
+        roles = [c.kwargs.get("role") for c in primitives.llm_call.call_args_list]
+        assert roles == ["worker_summarize"]
+
 
 # ── Prompt Builder Tests ─────────────────────────────────────────────────
 
@@ -878,6 +978,20 @@ class TestArchitectPromptBuilders:
         )
         assert "I|brief" in prompt
         assert "1" in prompt and "3" in prompt
+
+    def test_synthesis_prompt_does_not_advertise_fetch_report(self):
+        """C4/DCP-13: the synthesis decision breaks on turn 0, so fetch_report is unreachable."""
+        from src.prompt_builders import build_architect_synthesis_prompt
+        from src.prompt_builders.review import _ARCHITECT_SYNTHESIS_FALLBACK
+
+        prompt = build_architect_synthesis_prompt(
+            "Q",
+            "[REPORT_HANDLE id=coder_escalation-1-abc chars=9000 sha16=abc]\nSummary:\n- x",
+            loop_num=1,
+            max_loops=3,
+        )
+        assert "fetch_report" not in prompt
+        assert "fetch_report" not in _ARCHITECT_SYNTHESIS_FALLBACK
 
 
 # ── Whitelist Tests ──────────────────────────────────────────────────────

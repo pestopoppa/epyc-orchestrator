@@ -98,7 +98,6 @@ If the report contains a complete correct answer, respond with:
 D|Approved
 
 If the report contains a clear answer (e.g. a single letter or short value), use it — respond D| followed by that answer. For code solutions, programs, or computed values, trust the specialist's result.
-If report includes `[REPORT_HANDLE ...]`, you may call `fetch_report(id)` to read full text before deciding.
 
 For factual/science/MCQ questions: if the specialist's answer contradicts your own strong knowledge, use YOUR answer instead. The specialist may lack domain expertise.
 
