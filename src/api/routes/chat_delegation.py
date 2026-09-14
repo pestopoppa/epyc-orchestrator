@@ -822,6 +822,10 @@ def _architect_delegated_answer_inner(
     _is_coding_task = any(s in _q_lower for s in _coding_budget_signals)
     total_budget_s = cfg.total_max_seconds * 2.0 if _is_coding_task else cfg.total_max_seconds
     stats.setdefault("report_handles", [])
+    # User-facing counterpart of `reports`: `reports` may hold compact
+    # handle+summary text for the architect loop prompt, but every return that
+    # hands a specialist report to the user must use the full report (DCP-13).
+    full_reports: list[str] = []
 
     for loop in range(max_loops + 1):  # +1 for initial decision
         total_elapsed_s = time.perf_counter() - orchestration_started
@@ -869,8 +873,8 @@ def _architect_delegated_answer_inner(
                     "computation_turns": computation_turns,
                 }
             )
-            if reports:
-                return reports[-1], stats
+            if full_reports:
+                return full_reports[-1], stats
             return "[ERROR: Architect delegation failed]", stats
 
         phase_a_ms = (time.perf_counter() - phase_start) * 1000
@@ -887,8 +891,8 @@ def _architect_delegated_answer_inner(
                     "computation_turns": computation_turns,
                 }
             )
-            if reports:
-                return reports[-1], stats
+            if full_reports:
+                return full_reports[-1], stats
             return "[ERROR: Architect delegation failed]", stats
         stats["phases"].append(
             {
@@ -992,6 +996,7 @@ def _architect_delegated_answer_inner(
             report = _cached.report
             report_for_loop = report
             final_report = report
+            full_report = report
             report_handle = _cached.report_handle
             specialist_timed_out = False
             report_rescued = False
@@ -1059,7 +1064,8 @@ def _architect_delegated_answer_inner(
         delegate_tokens = primitives.total_tokens_generated - tokens_before
         cumulative_delegate_tokens += delegate_tokens
         reports.append(report_for_loop)
-        stats["specialist_output"] = final_report
+        full_reports.append(full_report)
+        stats["specialist_output"] = full_report
         stats["phases"].append(
             {
                 "loop": loop,
@@ -1139,7 +1145,7 @@ def _architect_delegated_answer_inner(
         if (
             cfg.skip_synthesis_on_timeout
             and stats.get("break_reason") in {"specialist_timeout", "wall_clock_budget"}
-            and reports
+            and full_reports
         ):
             # Timeout-triggered synthesis can itself stall on a saturated specialist/
             # architect path. Returning the latest report prevents request timeouts.
@@ -1147,7 +1153,7 @@ def _architect_delegated_answer_inner(
                 "Skipping forced synthesis due to timeout break_reason=%s, returning latest report",
                 stats.get("break_reason"),
             )
-            return reports[-1], stats
+            return full_reports[-1], stats
         # Force architect to synthesize with whatever we have
         log.warning(f"Architect delegation capped at {max_loops} loops, forcing synthesis")
         forced_prompt = (
@@ -1166,9 +1172,9 @@ def _architect_delegated_answer_inner(
         except Exception as exc:
             log.debug("Forced synthesis failed, returning last report: %s", exc)
             # Last resort: return the latest specialist report
-            return reports[-1] if reports else "[ERROR: Delegation exhausted]", stats
+            return full_reports[-1] if full_reports else "[ERROR: Delegation exhausted]", stats
     else:
         # Production mode: signal that user input needed
         stats["needs_input"] = True
-        partial = reports[-1] if reports else ""
+        partial = full_reports[-1] if full_reports else ""
         return partial, stats
