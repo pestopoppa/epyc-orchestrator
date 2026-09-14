@@ -148,6 +148,22 @@ def test_code_search_pads_large_scratch_file_match(monkeypatch, tmp_path):
     assert hit["end_line"] == 70
 
 
+def test_code_search_discovers_cpp_and_systems_language_files(monkeypatch, tmp_path):
+    # DCP-10a: the task-root whitelist must cover C/C++/Go/Rust/Java, not only Python/web files.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "ring_buffer.cpp").write_text("void ring_buffer_push(int v) {}\n")
+    (tmp_path / "src" / "ring_buffer.h").write_text("void ring_buffer_push(int v);\n")
+    for name in ("ring.c", "ring.cc", "ring.cxx", "ring.hpp", "ring.go", "ring.rs", "Ring.java"):
+        (tmp_path / "src" / name).write_text("ring_buffer_push\n")
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
+    env = _env()
+    paths = {h["path"] for h in json.loads(env._code_search("ring_buffer_push", limit=20))}
+    assert "src/ring_buffer.cpp" in paths
+    assert "src/ring_buffer.h" in paths
+    for name in ("ring.c", "ring.cc", "ring.cxx", "ring.hpp", "ring.go", "ring.rs", "Ring.java"):
+        assert f"src/{name}" in paths
+
+
 def test_code_search_default_off_uses_indexed_engine(monkeypatch):
     # env unset → must NOT take the scratch path; falls through to ColGREP/NextPLAID.
     # Patch the indexed engine to confirm it's the one invoked (parity).
