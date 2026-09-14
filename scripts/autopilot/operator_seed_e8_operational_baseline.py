@@ -12,8 +12,18 @@ stamped with the active era.
 
 `autopilot.py calibrate-baseline` produces the values (`baselines_by_tier`,
 `per_suite_quality_by_tier`, `per_suite_counts_by_tier`) but
-`_apply_calibrated_baseline_result()` never touches `eval_quality_era`, so on its
-own it leaves the hold exactly where it was. This script closes that one gap.
+`_apply_calibrated_baseline_result()` never touched `eval_quality_era`, so on its
+own it left the hold exactly where it was. This script closes that one gap.
+
+UPDATE 2026-09-14 (RTG-02): `_apply_calibrated_baseline_result()` now DOES stamp
+`eval_quality_era`, from the era carried on the result by
+`eval_tower._stamp_eval_instrument` (the era of the instrument that produced the
+number), and refuses an unstamped result. So `calibrate-baseline` can now close the
+hold on its own values. This script is still the OPERATOR path and is unchanged:
+its value is the pre-write safety battery below (API actually generating, no
+mid-trial race, sanity floor, backup + atomic write) and the explicit human
+decision that this measurement IS the baseline. Nothing here is superseded —
+prefer it over a bare `calibrate-baseline` for a deliberate reseed.
 
 WHAT THIS IS, AND IS NOT
 ------------------------

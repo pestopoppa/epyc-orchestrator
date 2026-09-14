@@ -2919,6 +2919,7 @@ from rubric_scoring import (  # noqa: E402
     deterministic_rubric_fallback,
 )
 from src.autopilot_core.instrument_era_guard import (  # noqa: E402
+    active_eval_quality_era,
     designed_core_activation_guard,
 )
 from src.behavior_signature import normalized_answer_hash  # noqa: E402
@@ -3212,6 +3213,30 @@ def _stamp_eval_instrument(
             ).hexdigest(),
         }
     )
+    # RTG-02 (2026-09-14): carry the EVAL-QUALITY INSTRUMENT ERA this result was produced
+    # under, resolved from the human-owned era registry at measurement time. Anything that
+    # writes an era-stamped baseline from a result (autopilot._apply_calibrated_baseline_result)
+    # must stamp the era of the instrument that PRODUCED the number — never the era current at
+    # write time, which differs from it across exactly the boundary the fence exists to detect.
+    # Before this the result carried no era at all, so the only in-tree baseline producer had
+    # nothing to stamp and every calibrated baseline landed unstamped (= held). Three outcomes,
+    # all EXPLICIT, so absence is never mistaken for a value:
+    #   active     -> the era id
+    #   unfenced   -> registry read fine, no eval_quality era open (single-era world)
+    #   unresolved -> registry missing/malformed/empty id; NO era is invented here and the
+    #                 baseline writer refuses (fail-closed), rather than guessing one.
+    era_guard = active_eval_quality_era()
+    era_id = str(era_guard.get("era_id") or "").strip() if era_guard.get("ok") else ""
+    if era_id:
+        result.details["eval_quality_era"] = era_id
+        result.details["eval_quality_era_status"] = "active"
+    elif era_guard.get("status") == "no_active_era":
+        result.details["eval_quality_era_status"] = "unfenced"
+    else:
+        result.details["eval_quality_era_status"] = "unresolved"
+        result.details["eval_quality_era_unresolved_reason"] = str(
+            era_guard.get("status") or "empty_era_id"
+        )
     if core_id:
         previous = _DATASET_SHA_BY_CORE_ID.get(core_id)
         if previous and previous != dataset_sha:
