@@ -125,6 +125,7 @@ from src.autopilot_core.tier_specs import (
     RATE_4D_OBJECTIVE_POLICY,
     RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
+    quality_from_row,
     seq_task_rate_qph_from_row,
 )
 
@@ -3515,10 +3516,19 @@ def _task_rate_fields_from_row(row: dict[str, Any] | None) -> dict[str, Any]:
             "task_rate_status": "invalid_measurement",
             "task_rate_policy": policy,
         }
-    try:
-        quality = float(row.get("quality") or 0.0)
-    except (TypeError, ValueError):
-        quality = 0.0
+    # RTG-23: `float(row.get("quality") or 0.0)` could not distinguish a MEASURED
+    # zero from a row whose eval never ran, so an unmeasured trial rendered as a
+    # real 0.00 goodput. Absence is now reported as absence.
+    quality = quality_from_row(row)
+    if quality is None:
+        return {
+            **_TASK_RATE_NULL_FIELDS,
+            "task_rate_qph": round(task_rate, 2),
+            "tokens_per_solved": _task_rate_tokens_per_solved(row),
+            "offered_load": _offered_load_from_row(row),
+            "task_rate_status": "quality_unmeasured",
+            "task_rate_policy": policy,
+        }
     return {
         "task_rate_qph": round(task_rate, 2),
         "goodput_qph": round((quality / 3.0) * task_rate, 2),
