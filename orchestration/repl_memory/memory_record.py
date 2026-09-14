@@ -49,6 +49,7 @@ construction, so performance fields can never influence similarity search.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -111,6 +112,13 @@ def _redact(text: str) -> str:
         return text
 
 
+#: Recognises this module's own truncation marker, so a second pass over an
+#: already-bounded string can tell "I did this" from "this needs doing".
+_TRUNCATION_MARKER_RE = re.compile(
+    r"\n\n\[\.\.\. truncated at (\d+) chars, total was (\d+)\]\Z"
+)
+
+
 def sanitize_work_text(text: Any, max_chars: int = WORK_TEXT_MAX_CHARS) -> str | None:
     """Redact credentials from, then bound, one work text field.
 
@@ -118,12 +126,28 @@ def sanitize_work_text(text: Any, max_chars: int = WORK_TEXT_MAX_CHARS) -> str |
     string, and again AFTER when truncation actually fired — the second pass is
     what covers inputs above redact_credentials()' 1 MB scan ceiling, where the
     first pass is a no-op by design.
+
+    IDEMPOTENT (fixed 2026-09-14, RTG-02). The policy is applied twice on the
+    live create path — once by `chat_pipeline.telemetry.work_completion_meta` on
+    its way into the progress JSONL, then again by `build_memory_record` on the
+    way into `memories.context` — and the docstring claimed idempotence the code
+    did not have. A string already truncated to `max_chars` is `max_chars` PLUS
+    the marker long, so the second pass re-truncated it and appended a SECOND
+    marker reporting `total was <max_chars + len(marker)>`: the row's own
+    provenance actively lied about how much was elided (measured: 32,500 real
+    chars reported as 32,049). An already-marked value at this same cap is now
+    returned unchanged.
     """
     if text is None:
         return None
     value = text if isinstance(text, str) else str(text)
     value = _redact(value)
     if len(value) > max_chars:
+        marker = _TRUNCATION_MARKER_RE.search(value)
+        if marker and int(marker.group(1)) == max_chars:
+            # Already bounded by THIS policy at THIS cap. Re-truncating would
+            # overwrite a truthful original-length report with a smaller lie.
+            return value
         original_len = len(value)
         value = _redact(value[:max_chars])
         value += f"\n\n[... truncated at {max_chars} chars, total was {original_len}]"
@@ -136,15 +160,37 @@ def sanitize_work_items(items: Any, max_items: int = WORK_MAX_ITEMS) -> list[Any
     Keeps the LAST `max_items` entries (a truncated trajectory's tail is the part
     that produced the answer) and records the drop in a sentinel entry so a
     reader can never mistake a bounded list for a complete one.
+
+    IDEMPOTENT (fixed 2026-09-14, RTG-02) — see sanitize_work_text for why the
+    policy runs twice on the live create path. A previously bounded list is
+    `max_items` entries PLUS the `_elided_entries` sentinel, so the second pass
+    saw max_items+1, dropped one entry — which, being at the FRONT, was the
+    sentinel itself — and inserted a fresh `_elided_entries: 1`. The row then
+    claimed 1 entry was elided when 50 were, AND silently lost the real first
+    retained entry. The leading sentinel is now recognised, lifted out before
+    counting, and its count carried into the total.
     """
     if not items:
         return []
     if not isinstance(items, (list, tuple)):
         items = [items]
     entries = list(items)
-    dropped = 0
+
+    # Lift a sentinel this policy wrote on an earlier pass, so it is neither
+    # counted as payload nor mistaken for the entry that should be dropped.
+    already_dropped = 0
+    if (
+        entries
+        and isinstance(entries[0], dict)
+        and set(entries[0]) == {"_elided_entries"}
+        and isinstance(entries[0]["_elided_entries"], int)
+    ):
+        already_dropped = entries[0]["_elided_entries"]
+        entries = entries[1:]
+
+    dropped = already_dropped
     if len(entries) > max_items:
-        dropped = len(entries) - max_items
+        dropped += len(entries) - max_items
         entries = entries[-max_items:]
 
     out: list[Any] = []
