@@ -81,12 +81,15 @@ _CREDENTIAL_PATTERNS: list[tuple[str, re.Pattern, str]] = [
         "[REDACTED:github_fine_grained_pat]",
     ),
     # === SSH private keys (multiline) ===
+    # A truncated log (head/tail/compressor cut) can drop the END line; with no END
+    # following the BEGIN header, redact from the header to end-of-text instead.
     (
         "ssh_private_key",
         re.compile(
             r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ED25519 )?PRIVATE KEY-----"
-            r"[\s\S]*?"
+            r"(?:[\s\S]*?"
             r"-----END (?:RSA |EC |DSA |OPENSSH |ED25519 )?PRIVATE KEY-----"
+            r"|[\s\S]*\Z)"
         ),
         "[REDACTED:ssh_private_key]",
     ),

@@ -647,7 +647,12 @@ class REPLEnvironment(
         lines = output.splitlines()
         n_lines = len(lines)
         header = f"[Output: {len(output)} chars, {n_lines} lines → {spill_path}]"
-        footer = f'Use peek("{spill_path}") or grep("{spill_path}", pattern) to inspect.'
+        # Signatures are peek(n, file_path=None) / grep(pattern, file_path=None): pass the
+        # path by keyword, or peek/grep treat it as n / the regex and never read the file.
+        footer = (
+            f'Use peek(2000, file_path="{spill_path}") or '
+            f'grep("<pattern>", file_path="{spill_path}") to inspect.'
+        )
 
         # 2. Try worker summary (Qwen2.5-7B, ~44 t/s, <1s for short summaries)
         if self.llm_primitives is not None:

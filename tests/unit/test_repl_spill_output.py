@@ -188,3 +188,30 @@ class TestSpillOutputStructuredMode:
         assert result.error is None
 
         shutil.rmtree(spill_dir, ignore_errors=True)
+
+
+class TestSpillFooterCallsReadSpillFile:
+    """TOC-SP-1: the footer's suggested peek/grep calls must actually read the spill file."""
+
+    def test_footer_calls_are_valid_and_read_spill_file(self):
+        import re
+
+        repl = _make_repl(output_cap=100)
+        result = repl.execute('print("\\n".join(f"line {i}: data" for i in range(50)))')
+
+        peek_call = re.search(r'peek\(2000, file_path="[^"]+"\)', result.output)
+        grep_call = re.search(r'grep\("<pattern>", file_path="[^"]+"\)', result.output)
+        assert peek_call is not None, result.output
+        assert grep_call is not None, result.output
+
+        # Run the suggested calls verbatim through the REPL globals.
+        out = repl.execute(f'r = {peek_call.group(0)}\nprint("line 49: data" in r)')
+        assert out.error is None
+        assert out.output.strip() == "True"
+
+        grep_code = grep_call.group(0).replace("<pattern>", "line 49")
+        out = repl.execute(f"m = {grep_code}\nprint(m == ['line 49: data'])")
+        assert out.error is None
+        assert out.output.strip() == "True"
+
+        shutil.rmtree(repl.config.spill_dir, ignore_errors=True)

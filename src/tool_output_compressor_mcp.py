@@ -280,6 +280,19 @@ def _compress_output(output: str, command: str):
     return compress_tool_output_with_metadata(output, command)
 
 
+def _redact(text: str) -> str:
+    """Apply the shared credential redaction (src/repl_environment/redaction.py).
+
+    Imported lazily so server startup stays light; an import failure propagates
+    (the tool call errors) rather than returning unredacted output.
+    """
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.append(str(PROJECT_ROOT))
+    from src.repl_environment.redaction import redact_if_enabled
+
+    return redact_if_enabled(text)
+
+
 def _truncate(text: str, max_chars: int, label: str) -> str:
     if len(text) <= max_chars:
         return text
@@ -354,16 +367,20 @@ class CompressorMiddleware(Middleware):
         journal_path = _session_journal_path()
         session_history = _session_records(journal_path, session_id)
         followup = _infer_top_up_followup(command, session_history)
+        pre_bytes = len(raw_text.encode("utf-8"))
 
-        compressed = _compress_output(raw_text, command)
+        # TOC-RD-1: redact before compressing (a compressor cut can drop a PEM END line or
+        # shorten a token below its pattern) and again on the text actually returned.
+        redacted_raw = _redact(raw_text)
+        compressed = _compress_output(redacted_raw, command)
         if compressed is None:
-            post_text = _truncate(raw_text, MAX_RETURN_CHARS, "after compression")
+            post_text = _truncate(redacted_raw, MAX_RETURN_CHARS, "after compression")
             strategy = "compressor_unavailable"
         else:
             post_text = _truncate(compressed.text, MAX_RETURN_CHARS, "after compression")
             strategy = compressed.strategy
+        post_text = _redact(post_text)
         post_bytes = len(post_text.encode("utf-8"))
-        pre_bytes = len(raw_text.encode("utf-8"))
         ratio = round(post_bytes / max(pre_bytes, 1), 4)
         metadata = {
             "command": command[:200],
@@ -419,7 +436,9 @@ def run_bash_compressed(command: str, timeout_s: int = 60, working_dir: str = ""
         output = f"[exit code {result.returncode}]\n{output}"
 
     output = _truncate(output, MAX_RAW_OUTPUT_CHARS, "before compression")
-    return output
+    # Redact after the raw cap (redaction skips >1 MB inputs) so direct, non-MCP calls
+    # that bypass CompressorMiddleware never return credentials either.
+    return _redact(output)
 
 
 mcp.add_middleware(CompressorMiddleware())

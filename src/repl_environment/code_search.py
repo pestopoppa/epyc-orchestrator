@@ -161,7 +161,11 @@ class _CodeSearchMixin:
 
         root = get_task_root()
         terms = [t for t in re.split(r"\W+", query.lower()) if len(t) > 2]
-        code_exts = {".py", ".txt", ".md", ".cfg", ".toml", ".json", ".yaml", ".yml", ".js", ".ts"}
+        code_exts = {
+            ".py", ".txt", ".md", ".cfg", ".toml", ".json", ".yaml", ".yml", ".js", ".ts",
+            # DCP-10a: C/C++/Go/Rust/Java task roots (ContextBench C/C++ arm).
+            ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".go", ".rs", ".java",
+        }
         full_file_line_limit = 80
         context_padding = 20
         hits: list[dict] = []
