@@ -238,6 +238,12 @@ def test_calibration_applies_per_suite_counts():
         tier=1, quality=1.7, speed=50.0, cost=0.5, reliability=0.98, n_questions=43,
         per_suite_quality={"hotpotqa": 1.5, "coder": 3.0},
         per_suite_counts={"hotpotqa": 2, "coder": 2},
+        # RTG-02 (2026-09-14): every real EvalTower result now carries its eval-quality
+        # instrument era (eval_tower._stamp_eval_instrument) and the calibration REFUSES an
+        # unstamped result. Declare the unfenced single-era world so this test keeps
+        # exercising the per-suite-count path it was written for, not the era refusal —
+        # the refusal has its own coverage in test_era_stamp_reachability.py.
+        details={"eval_quality_era_status": "unfenced"},
     )
     _apply_calibrated_baseline_result(b, r)
     assert b.per_suite_counts_for_tier(1) == {"hotpotqa": 2, "coder": 2}

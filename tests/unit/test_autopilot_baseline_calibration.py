@@ -37,6 +37,9 @@ def _baseline_yaml(path: Path) -> None:
     )
 
 
+_T1_ERA = "E16-eval-instrument"
+
+
 def _t1_result() -> EvalResult:
     return EvalResult(
         tier=1,
@@ -46,6 +49,11 @@ def _t1_result() -> EvalResult:
         reliability=0.94,
         per_suite_quality={"coder": 1.7, "math": 1.9},
         n_questions=100,
+        # RTG-02 (2026-09-14): a real EvalTower result carries the eval-quality instrument era
+        # it was measured under (eval_tower._stamp_eval_instrument), and the calibration stamps
+        # THAT era onto the baseline — an unstamped result is refused. The fake tower must carry
+        # it too, or this fixture would stop exercising the calibration path at all.
+        details={"eval_quality_era": _T1_ERA, "eval_quality_era_status": "active"},
     )
 
 
@@ -128,6 +136,9 @@ def test_calibrate_baseline_migrates_t2_and_persists_t1(tmp_path, monkeypatch):
         "1": 1.82,
         "2": 1.16,
     }
+    # RTG-02: the persisted baseline must carry the era of the instrument that produced it,
+    # or the eval-instrument re-baseline hold stays open and quality can never promote.
+    assert saved_states[-1]["baseline_state"]["eval_quality_era"] == _T1_ERA
 
     written = yaml.safe_load(path.read_text())
     assert "# keep this operator note" in path.read_text()

@@ -1600,6 +1600,18 @@ def _log_baseline_update_result(trial_counter: int, baseline_update: Any) -> Non
             reason,
         )
         return
+    # RTG-02 (2026-09-14): a refusal that nonetheless re-anchored the independent SPEED axis
+    # is a state WRITE, not a no-op, and must not read as "skipped". The throughput fence just
+    # closed on its own instrument while quality stayed refused.
+    if getattr(baseline_update, "speed_reseeded", False):
+        log.warning(
+            "Trial %d: quality promotion refused BUT the speed axis was re-anchored "
+            "(frontdoor_speed + autopilot_speed_era stamped from this in-era measurement; "
+            "RTG-02): %s",
+            trial_counter,
+            reason,
+        )
+        return
     log.info(
         "Trial %d: baseline update skipped (%s)",
         trial_counter,
@@ -10750,8 +10762,49 @@ def _migrate_flat_baseline_to_tier(
     return True
 
 
+def _calibration_eval_quality_era(result: EvalResult) -> str | None:
+    """Era of the INSTRUMENT THAT PRODUCED ``result`` — fail-closed, never guessed.
+
+    RTG-02 (2026-09-14). A baseline is only comparable to a later eval when both were
+    measured on the same eval instrument, which is what ``baseline_state.eval_quality_era``
+    records and what ``SafetyGate.quality_rebaseline_required`` enforces. The era to stamp is
+    therefore the one the RESULT was measured under — stamped onto the result by
+    ``eval_tower._stamp_eval_instrument`` at measurement time — and explicitly NOT
+    ``active_instrument_eras.eval_quality`` read at write time: those two differ across
+    exactly the boundary the fence exists to detect, and reading the second would stamp a
+    provenance claim the measurement does not support.
+
+    Returns the era id, or None for the unfenced single-era world (registry read fine, no
+    ``eval_quality`` era open — the hold is inert, so there is nothing to stamp). RAISES when
+    the result carries no era at all: an unstamped result is a measurement of unknown
+    provenance, and inventing an era for it is the one failure mode worse than the hold.
+    """
+    details = getattr(result, "details", None) or {}
+    era = str(details.get("eval_quality_era") or "").strip()
+    if era:
+        return era
+    status = str(details.get("eval_quality_era_status") or "").strip()
+    if status == "unfenced":
+        return None
+    raise ValueError(
+        "calibration result carries no eval_quality era "
+        f"(eval_quality_era_status={status or '<absent>'}): refusing to write a baseline whose "
+        "instrument era is unknown. An unstamped baseline trips the eval-instrument re-baseline "
+        "hold forever, and guessing the era current at write time would stamp a provenance "
+        "claim the measurement does not support. Remediation: run the calibration through "
+        "EvalTower (which stamps the era from orchestration/instrument_eras.yaml) and make sure "
+        "that registry is readable — status 'unresolved' means it was not."
+    )
+
+
 def _apply_calibrated_baseline_result(baseline: Baseline, result: EvalResult) -> None:
     tier = int(result.tier)
+    # RTG-02: resolve the era BEFORE any field is written, so a refusal leaves the baseline
+    # untouched. This function used to write every baseline VALUE and never the era stamp, so
+    # the one in-tree tool that produces a fresh baseline left the quality hold exactly where
+    # it was (documented verbatim in operator_seed_e8_operational_baseline.py's header) —
+    # AutoPilot could never promote quality again after an era boundary.
+    era = _calibration_eval_quality_era(result)
     quality = Baseline._validate_quality(
         result.quality,
         None,
@@ -10773,6 +10826,11 @@ def _apply_calibrated_baseline_result(baseline: Baseline, result: EvalResult) ->
     # resolution (3/n quantum); without this a calibration refresh leaves the
     # baseline-side count term inactive (2026-06-07).
     baseline.per_suite_counts_by_tier[tier] = dict(getattr(result, "per_suite_counts", {}) or {})
+    # RTG-02: stamp the producing instrument's era onto the baseline it just produced, so the
+    # eval-instrument fence closes on this evidence. Never CLEARS an existing stamp (the
+    # unfenced case has nothing to say about provenance), matching update_baseline()'s rule.
+    if era:
+        baseline.eval_quality_era = era
 
 
 def calibrate_baseline(

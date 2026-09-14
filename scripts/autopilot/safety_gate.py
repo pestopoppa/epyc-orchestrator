@@ -1411,6 +1411,12 @@ class BaselineUpdateResult:
     # simply not confirmed yet" from an ordinary monotonic skip. Kept distinct from
     # ineligible_reason (which is reserved for the SG-0 matrix-freeze case).
     seq_refused_reason: str = ""
+    # RTG-02 (2026-09-14): True when this call re-anchored the SPEED axis only —
+    # ``frontdoor_speed`` refreshed and ``autopilot_speed_era`` stamped — while the quality
+    # promotion itself was refused. Never True on a completed promotion (that path stamps
+    # both eras as part of the write), so a caller can tell "the throughput fence just closed
+    # on its own instrument" from "the baseline ratcheted".
+    speed_reseeded: bool = False
 
 
 class SafetyGate:
@@ -1556,6 +1562,56 @@ class SafetyGate:
             float(getattr(result, "speed", float("nan"))),
             self._autopilot_speed_era,
         )
+
+    def _reseed_speed_axis_if_held(self, result: EvalResult) -> bool:
+        """Re-anchor ``frontdoor_speed`` + ``autopilot_speed_era`` from an in-era measurement.
+
+        RTG-02 (2026-09-14). The SPEED fence is a different instrument from the QUALITY fence
+        and must be able to close on its own evidence. This is the one write that does that:
+        called from the quality-hold refusal path in :meth:`update_baseline`, where the
+        end-of-method speed stamp is unreachable by construction.
+
+        Deliberately NARROW — it writes the throughput provenance pair and nothing else:
+
+        * only while ``speed_rebaseline_required`` is True. It closes a held fence, it is not
+          a speed ratchet: once the era matches, ``frontdoor_speed`` moves only through a real
+          promotion, exactly as before.
+        * only at ``DEFAULT_FRONTIER_TIER`` with ``speed > 0`` — the exact condition under
+          which :meth:`Baseline.update_tier` would itself have rewritten ``frontdoor_speed``.
+          Stamping an era onto a speed nobody re-measured is the provenance lie this field
+          exists to prevent.
+        * only AFTER ``_baseline_eligible`` passed (its caller's ordering), so the speed
+          semantics (``speed_metric_mode``) and the contention-matrix/topology freshness are
+          already certified for this measurement.
+        * never touches quality, per-suite, tier revisions or ``eval_quality_era`` — the
+          quality refusal that surrounds it stays fail-closed.
+
+        Returns True when it wrote.
+        """
+        if not self.speed_rebaseline_required:
+            return False
+        speed = float(getattr(result, "speed", 0.0) or 0.0)
+        if int(result.tier) != DEFAULT_FRONTIER_TIER or speed <= 0:
+            self._log_speed_rebaseline_hold_once(result)
+            return False
+        previous_speed = self.baseline.frontdoor_speed
+        previous_era = self.baseline.autopilot_speed_era or "<pre-boundary>"
+        self.baseline.frontdoor_speed = speed
+        self.baseline.autopilot_speed_era = self._autopilot_speed_era or ""
+        log.warning(
+            "SPEED-AXIS RESEED (RTG-02) — the eval-quality re-baseline hold refused the "
+            "QUALITY promotion, but the throughput fence is a different instrument and this "
+            "measurement is in its era: frontdoor_speed %.1f -> %.1f t/s, autopilot_speed_era "
+            "%s -> %s (T%d, %.1f t/s). The throughput floor now binds again; no quality value "
+            "was written.",
+            previous_speed,
+            speed,
+            previous_era,
+            self._autopilot_speed_era,
+            int(result.tier),
+            speed,
+        )
+        return True
 
     @property
     def quality_history(self) -> list[float]:
@@ -2463,6 +2519,16 @@ class SafetyGate:
         # reseeds a same-era baseline (the documented remediation; the era stamp then matches
         # and this clears). Fail-closed, loud. Inert when no active eval_quality era is set.
         if self.quality_rebaseline_required:
+            # RTG-02 (2026-09-14): re-anchor the SPEED axis before returning. The speed-era
+            # stamp used to live only at the END of this method, so this early return made it
+            # UNREACHABLE: while the quality hold is open no promotion completes, so
+            # autopilot_speed_era is never stamped, so speed_rebaseline_required stays True
+            # forever — and the quality hold's own remediation is an era-stamped baseline the
+            # loop cannot produce. The stamp waited on a rebaseline that waited on the stamp.
+            # The two fences are DIFFERENT INSTRUMENTS with DIFFERENT eras (eval scorer/pool
+            # vs kernel/binary/topology); neither may be held hostage by the other. The
+            # quality refusal below is unchanged and still fail-closed.
+            speed_reseeded = self._reseed_speed_axis_if_held(result)
             reason = (
                 "eval-instrument RE-BASELINE required: resident baseline era="
                 f"{self.baseline.eval_quality_era or '<pre-boundary>'} != active eval_quality "
@@ -2470,6 +2536,12 @@ class SafetyGate:
                 "fail-closed). Remediation: reseed baseline_state from a post-boundary eval "
                 "(eval_quality_era must equal the active era) before quality can ratchet."
             )
+            if speed_reseeded:
+                reason += (
+                    " NOTE: the independent SPEED axis was re-anchored by this same "
+                    f"measurement (autopilot_speed_era={self._autopilot_speed_era}, "
+                    f"frontdoor_speed={self.baseline.frontdoor_speed:.1f} t/s)."
+                )
             log.error("Baseline update REFUSED — %s", reason)
             return BaselineUpdateResult(
                 False,
@@ -2479,6 +2551,7 @@ class SafetyGate:
                 result.quality,
                 proof,
                 ineligible_reason="quality_rebaseline_required",
+                speed_reseeded=speed_reseeded,
             )
         # LEDGER-W4 (01c §3): when the sequential path is active, a promotion requires
         # a CONFIRMED joint e-process verdict (E_quality >= confirm_e AND
