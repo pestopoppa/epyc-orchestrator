@@ -35,8 +35,12 @@ from src.autopilot_core.rlvr_tiers import (
     spec_for_rlvr_tier,
 )
 from src.autopilot_core.sequential_verdict import (
+    AXIS_QUALITY,
+    AXIS_RATE,
+    AxisRefutation,
     CandidateSequentialView,
     DEFAULT_POLICY,
+    SEQ_REFUTATION_SCHEMA,
     STATE_ACCUMULATING,
     STATE_CONFIRMED,
     STATE_REFUTED,
@@ -44,12 +48,14 @@ from src.autopilot_core.sequential_verdict import (
     EProcessUpdate,
     SequentialPolicy,
     TrialStatistic,
+    axis_refutation,
     baseline_profile_from_trials,
     empirical_ville_false_positive_rate,
     journal_seq_block,
     quality_trial_statistic,
     rate_noninferiority_z,
     rebuild_candidate_view,
+    refutation_record,
 )
 from src.autopilot_core.tier_specs import (
     LEGACY_OBJECTIVE_POLICY,
@@ -67,6 +73,9 @@ from src.autopilot_core.tier_specs import (
 )
 
 __all__ = [
+    "AXIS_QUALITY",
+    "AXIS_RATE",
+    "AxisRefutation",
     "BENIGN_LEARNING_EXCLUSIONS",
     "CandidateSequentialView",
     "DEFAULT_POLICY",
@@ -80,6 +89,7 @@ __all__ = [
     "RLVR_REWARD_POLICY",
     "RLVRReward",
     "RLVRTierSpec",
+    "SEQ_REFUTATION_SCHEMA",
     "STATE_ACCUMULATING",
     "STATE_CONFIRMED",
     "STATE_REFUTED",
@@ -89,6 +99,7 @@ __all__ = [
     "TrialStatistic",
     "WITHIN_NOISE_EXCLUSIONS",
     "action_signature",
+    "axis_refutation",
     "baseline_profile_from_trials",
     "build_tier_baseline_evidence",
     "build_tier_candidate_evidence",
@@ -109,6 +120,7 @@ __all__ = [
     "rate_noninferiority_z",
     "rebuild_candidate_view",
     "reconstruct_archive_from_journal_rows",
+    "refutation_record",
     "rlvr_reward_from_result",
     "spec_for_rlvr_tier",
     "task_rate_objectives_from",

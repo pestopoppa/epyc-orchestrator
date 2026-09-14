@@ -1666,6 +1666,7 @@ class SafetyGate:
             quality_trial_statistic,
             rate_noninferiority_z,
             rebuild_candidate_view,
+            refutation_record,
         )
 
         policy = DEFAULT_POLICY
@@ -1776,6 +1777,24 @@ class SafetyGate:
         # verdict so consumers (categories, update_baseline gate) read one decision.
         block["state"] = state
         block["confirmed"] = state == "confirmed"
+        # SEQ-B2: capture the refutation COUNTERFACTUAL at stop time. A refuted
+        # candidate stops accumulating trials, and trials never run can never be
+        # recovered — so *which* axis refuted and the surviving margin on the OTHER
+        # axis are recorded here or nowhere. Until now the journal carried only the
+        # joint `state`, and the attribution existed exclusively post hoc in
+        # `scripts/analysis/readjudicate_sequential_candidates.py`, reconstructable
+        # only where both wealths happen to be present AND only under today's policy
+        # constants (which the record therefore also pins). Additive and written only
+        # on the refuted branch: legacy rows and non-stop rows are unchanged, and
+        # every reader must treat the field as optional.
+        if state == "refuted":
+            block["refutation"] = refutation_record(
+                e_quality=float(e_quality),
+                e_rate=None if e_rate is None else float(e_rate),
+                k=int(q_state.k),
+                policy=policy,
+                source="live",
+            )
         return block
 
     def check(

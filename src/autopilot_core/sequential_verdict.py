@@ -13,6 +13,7 @@ import random
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import Any
 
 from .measurement_guards import is_quality_admissible
@@ -95,6 +96,165 @@ class SequentialPolicy:
 
 
 DEFAULT_POLICY = SequentialPolicy()
+
+# SEQ-B2: axis names used by every refutation-attribution consumer. One spelling,
+# shared by the live write side (`safety_gate._sequential_verdict`) and the post-hoc
+# reader (`scripts/analysis/readjudicate_sequential_candidates.py`), so a live record
+# and a reconstructed one are comparable without a translation table.
+AXIS_QUALITY = "quality"
+AXIS_RATE = "rate"
+# Rule tokens naming WHICH clause of the refutation condition was the binding bar.
+REFUTATION_RULE_FUTILITY = "futility_e"
+REFUTATION_RULE_BUDGET = "budget_min_e"
+
+
+@dataclass(frozen=True)
+class AxisRefutation:
+    """SEQ-B2: one evidence axis measured against the policy's refutation bar.
+
+    Canonical definition, shared by the live stop-time writer and the post-hoc
+    re-adjudicator so the two can never drift.
+
+    ``refuted`` reproduces ``EProcessState._meets_refutation`` exactly: an axis
+    refutes when ``wealth <= futility_e``, or when ``k >= budget`` and
+    ``wealth < budget_min_e``.
+
+    ``threshold`` is the BINDING bar for this ``k``. Because ``futility_e``
+    (0.05) sits far below ``budget_min_e`` (2.0), once ``k >= budget`` the budget
+    clause dominates the futility clause — anything at or below ``futility_e`` is
+    also below ``budget_min_e`` — so the binding bar is ``budget_min_e`` for
+    ``k >= budget`` and ``futility_e`` before it. ``rule`` names which one.
+
+    ``margin = wealth - threshold``. SIGN CONVENTION: **negative means refuted**
+    (the axis is below its bar), positive means surviving headroom, and the
+    magnitude is the wealth distance to the bar. The one boundary asymmetry is
+    inherited from the policy, not invented here: the futility clause is
+    inclusive (``<=``) so ``margin == 0.0`` refutes under
+    ``rule == "futility_e"``, while the budget clause is strict (``<``) so
+    ``margin == 0.0`` does NOT refute under ``rule == "budget_min_e"``. Read
+    ``refuted`` for the decision; ``margin`` is the distance, not the predicate.
+
+    An axis that was never measured (``wealth is None`` — e.g. the rate axis was
+    skipped) yields ``refuted=False`` with ``margin=None``: an absent measurement
+    is not evidence against, the same skip-don't-fabricate doctrine
+    ``rebuild_candidate_view`` applies to out-of-domain z.
+    """
+
+    axis: str
+    wealth: float | None
+    k: int
+    refuted: bool
+    margin: float | None
+    threshold: float
+    rule: str
+
+    def as_journal_dict(self) -> dict[str, Any]:
+        """Journal-shaped mapping (rounded margin, JSON-safe)."""
+        return {
+            "axis": self.axis,
+            "wealth": None if self.wealth is None else round(float(self.wealth), 6),
+            "k": self.k,
+            "refuted": self.refuted,
+            "margin": None if self.margin is None else round(float(self.margin), 6),
+            "threshold": self.threshold,
+            "rule": self.rule,
+        }
+
+
+def axis_refutation(
+    axis: str,
+    wealth: float | None,
+    k: int,
+    policy: SequentialPolicy = DEFAULT_POLICY,
+) -> AxisRefutation:
+    """Measure ONE evidence axis against the policy's refutation bar (SEQ-B2)."""
+    k = int(k)
+    if k >= policy.budget:
+        threshold = float(policy.budget_min_e)
+        rule = REFUTATION_RULE_BUDGET
+    else:
+        threshold = float(policy.futility_e)
+        rule = REFUTATION_RULE_FUTILITY
+    if wealth is None:
+        return AxisRefutation(axis, None, k, False, None, threshold, rule)
+    w = float(wealth)
+    refuted = w <= policy.futility_e or (k >= policy.budget and w < policy.budget_min_e)
+    return AxisRefutation(axis, w, k, refuted, w - threshold, threshold, rule)
+
+
+SEQ_REFUTATION_SCHEMA = "seq-refutation-v1"
+
+
+def refutation_record(
+    *,
+    e_quality: float | None,
+    e_rate: float | None,
+    k: int,
+    policy: SequentialPolicy = DEFAULT_POLICY,
+    captured_at: str | None = None,
+    source: str = "live",
+) -> dict[str, Any]:
+    """SEQ-B2: the stop-time refutation counterfactual, as a journal record.
+
+    WHY THIS EXISTS AT STOP TIME. The joint rule stamps ``state="refuted"`` when
+    EITHER axis refutes, and a refuted candidate STOPS accumulating trials. A
+    future objective can rescore every trial that exists; it cannot recover trials
+    never run. So *which* axis refuted, and the surviving margin on the OTHER axis
+    at the moment of the stop, must be captured live or not at all — post hoc
+    reconstruction can only work where the journal happens to still carry both
+    wealths, and only under today's policy constants.
+
+    ATTRIBUTION PRECEDENCE (deterministic, and the both-axes answer). Axes are
+    tested QUALITY FIRST, then RATE, mirroring the ``if/elif`` chain in
+    ``scripts/analysis/readjudicate_sequential_candidates.py`` so a live record and
+    a reconstructed one name the same axis for the same evidence. When BOTH axes
+    refute, ``refuting_axis`` is therefore ``"quality"`` — and ``both_axes_refuted``
+    is True, so the case is distinguishable rather than collapsed. Every axis's own
+    verdict and margin is in ``axes`` regardless, so no attribution choice loses
+    information.
+
+    ``refuting_axis`` is None exactly when the joint verdict is refuted but NEITHER
+    axis meets the current-state bar — the residual bucket the re-adjudicator
+    reports as UNEXPLAINED (reachable today only via ``policy.sticky_refuted``).
+
+    Margins follow ``AxisRefutation``: negative = below the bar. ``source`` records
+    whether the record was written live at stop time or reconstructed after the
+    fact by a reader.
+    """
+    q = axis_refutation(AXIS_QUALITY, e_quality, k, policy)
+    r = axis_refutation(AXIS_RATE, e_rate, k, policy)
+    if q.refuted:
+        refuting, other = q, r
+    elif r.refuted:
+        refuting, other = r, q
+    else:
+        refuting, other = None, None
+    def _margin(a: AxisRefutation | None) -> float | None:
+        if a is None or a.margin is None:
+            return None
+        return round(float(a.margin), 6)
+
+    return {
+        "schema": SEQ_REFUTATION_SCHEMA,
+        "source": source,
+        "refuting_axis": refuting.axis if refuting is not None else None,
+        "refuting_margin": _margin(refuting),
+        "other_axis": other.axis if other is not None else None,
+        "other_axis_margin": _margin(other),
+        "both_axes_refuted": bool(q.refuted and r.refuted),
+        "n_trials_at_stop": int(k),
+        "axes": {AXIS_QUALITY: q.as_journal_dict(), AXIS_RATE: r.as_journal_dict()},
+        "thresholds": {
+            "policy_version": policy.version,
+            "confirm_e": policy.confirm_e,
+            "futility_e": policy.futility_e,
+            "budget": policy.budget,
+            "budget_min_e": policy.budget_min_e,
+            "sticky_refuted": policy.sticky_refuted,
+        },
+        "captured_at": captured_at
+        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
 
 
 @dataclass(frozen=True)

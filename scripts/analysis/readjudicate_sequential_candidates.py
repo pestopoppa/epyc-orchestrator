@@ -67,8 +67,25 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 
 
+def _seq_module():
+    """Import the project's sequential-verdict module (path-inserting, idempotent)."""
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from src.autopilot_core import sequential_verdict  # noqa: E402
+
+    return sequential_verdict
+
+
 def axis_refuted(wealth: float | None, k: int, pol) -> bool:
     """Apply the policy's refutation rule to ONE evidence axis.
+
+    SEQ-B2: this is now a THIN DELEGATION to
+    `src.autopilot_core.sequential_verdict.axis_refutation`, which is the single
+    canonical definition shared with the LIVE stop-time writer in
+    `safety_gate._sequential_verdict`. Previously this predicate was a second,
+    independent copy of the rule; a policy edit could have moved one and not the
+    other, and the live record and the reconstruction would then have disagreed
+    about which axis refuted a candidate that can never be re-run.
 
     Mirrors `EProcessState.state_name`: an axis refutes on futility, or on the
     budget rule once `k >= budget`. `None` (axis not recorded) never refutes —
@@ -77,9 +94,7 @@ def axis_refuted(wealth: float | None, k: int, pol) -> bool:
     Exists at module level so the axis attribution in the report is testable
     without running the whole re-adjudication over the journal.
     """
-    if wealth is None:
-        return False
-    return wealth <= pol.futility_e or (k >= pol.budget and wealth < pol.budget_min_e)
+    return _seq_module().axis_refutation("quality", wealth, k, pol).refuted
 
 
 def _axis_refuted_factory(pol):
@@ -87,6 +102,38 @@ def _axis_refuted_factory(pol):
     def _bound(wealth: float | None, k: int) -> bool:
         return axis_refuted(wealth, k, pol)
     return _bound
+
+
+def refutation_of(row: dict, pol) -> tuple[dict, str]:
+    """SEQ-B2: the refutation record for a stopped candidate's final journal row.
+
+    Returns ``(record, provenance)`` where provenance is ``"live"`` when the row
+    carries the stop-time `seq.refutation` block written by
+    `safety_gate._sequential_verdict`, and ``"reconstructed"`` when it does not
+    and the record had to be rebuilt from the row's recorded wealths.
+
+    PREFER LIVE, ALWAYS. The live record was written against the policy constants
+    in force at the stop, and it is the only witness for a stop whose wealths the
+    journal does not (or no longer) carries. Reconstruction is the backward
+    compatibility path for every row written before the field existed: it produces
+    the same fields under today's constants, which is exactly why the agreement
+    test between the two exists.
+    """
+    seq = _seq_module()
+    live = row.get("refutation")
+    if isinstance(live, dict) and "refuting_axis" in live:
+        return live, "live"
+    raw_rate = row.get("E_rate_noninf")
+    return (
+        seq.refutation_record(
+            e_quality=float(row["E_quality"]),
+            e_rate=float(raw_rate) if raw_rate is not None else None,
+            k=int(row.get("k") or 0),
+            policy=pol,
+            source="reconstructed",
+        ),
+        "reconstructed",
+    )
 
 
 def log(msg: str = "") -> None:
@@ -247,11 +294,18 @@ def main() -> int:
     # So attribute instead of guess. `refuted_by` applies the policy's own rule to
     # one axis at a time; the residual bucket (`joint refuted, NEITHER axis
     # refutes`) is the only thing that would constitute a genuinely stale label.
-    refuted_by = _axis_refuted_factory(pol)
-
-    by_quality: list[tuple[str, int, float, float | None]] = []
-    by_rate_only: list[tuple[str, int, float, float | None]] = []
-    unexplained: list[tuple[str, int, float, float | None]] = []
+    # SEQ-B2: attribution is no longer computed here at all when the row carries the
+    # LIVE stop-time `refutation` record — `refutation_of` prefers it and falls back
+    # to reconstruction only for rows written before the field existed. Each reported
+    # row carries the provenance so a reader can never mistake a reconstruction for a
+    # witness: a reconstruction is only valid under today's policy constants, while
+    # the live record pins the constants that actually made the stop.
+    by_quality: list[tuple[str, int, float, float | None, str]] = []
+    by_rate_only: list[tuple[str, int, float, float | None, str]] = []
+    unexplained: list[tuple[str, int, float, float | None, str]] = []
+    attribution_records: list[dict] = []
+    n_live = 0
+    n_reconstructed = 0
     for (cand, core), rows_ in groups.items():
         rows_.sort(key=lambda r: (r.get("k") or 0))
         last = rows_[-1]
@@ -261,22 +315,33 @@ def main() -> int:
         e_q = float(last["E_quality"])
         raw_rate = last.get("E_rate_noninf")
         e_r = float(raw_rate) if raw_rate is not None else None
-        row = (cand, k, e_q, e_r)
-        if refuted_by(e_q, k):
+        rec, provenance = refutation_of(last, pol)
+        if provenance == "live":
+            n_live += 1
+        else:
+            n_reconstructed += 1
+        attribution_records.append(
+            {"candidate": cand, "core_id": core, "provenance": provenance, **rec}
+        )
+        row = (cand, k, e_q, e_r, provenance)
+        axis = rec.get("refuting_axis")
+        if axis == "quality":
             by_quality.append(row)
-        elif refuted_by(e_r, k):
+        elif axis == "rate":
             by_rate_only.append(row)
         else:
             unexplained.append(row)
 
-    def _fmt(rows: list[tuple[str, int, float, float | None]]) -> None:
-        for c, k, e_q, e_r in sorted(rows, key=lambda t: -t[2]):
+    def _fmt(rows: list[tuple[str, int, float, float | None, str]]) -> None:
+        for c, k, e_q, e_r, prov in sorted(rows, key=lambda t: -t[2]):
             rate = f"{e_r:8.4f}" if e_r is not None else "    n/a"
-            log(f"    {c}  k={k:>3}  E_quality={e_q:8.4f}  E_rate={rate}")
+            log(f"    {c}  k={k:>3}  E_quality={e_q:8.4f}  E_rate={rate}  [{prov}]")
 
     log("=== SEQ-A: WHY EACH `refuted` LABEL IS refuted (axis attribution) ===")
     log(f"  policy: futility_e={pol.futility_e}  budget={pol.budget}  "
         f"budget_min_e={pol.budget_min_e}")
+    log(f"  attribution source: {n_live} LIVE stop-time records, "
+        f"{n_reconstructed} reconstructed (pre-SEQ-B2 rows)")
     log(f"  refuted on the QUALITY axis: {len(by_quality)}")
     _fmt(by_quality)
     log(f"  refuted on the RATE axis ONLY (quality axis is healthy): {len(by_rate_only)}")
@@ -323,6 +388,13 @@ def main() -> int:
                     "n_groups": len(groups),
                     "confirmed": confirmed,
                     "flipped_off_refuted": flipped,
+                    # SEQ-B2: per-stop axis attribution, each row tagged with whether
+                    # it came from the live stop-time record or a reconstruction.
+                    "refutation_attribution": {
+                        "n_live": n_live,
+                        "n_reconstructed": n_reconstructed,
+                        "records": attribution_records,
+                    },
                     "results": sorted(results, key=lambda r: -r["E_relaxed"]),
                 },
                 indent=2,
