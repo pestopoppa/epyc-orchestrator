@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -32,6 +34,39 @@ from typing import Any, Callable
 import yaml
 
 logger = logging.getLogger(__name__)
+
+#: Hard cap on the registry's diagnostic invocation ring.
+#:
+#: The registry is ONE process-global object (``src/api/__init__.py`` builds a
+#: single ``state.tool_registry``), so this log is shared by every concurrently
+#: served request. Before 2026-09-14 it was an unbounded ``list`` that nothing
+#: ever cleared: it grew for the lifetime of the uvicorn process, and per-request
+#: readers picked up other requests' calls (INV-LOG defect, RTG-02).
+#:
+#: Per-request telemetry now comes from ``REPLEnvironment._invoked_tools``, which
+#: is request-scoped by construction. What remains here is a *diagnostic* ring
+#: for tests and interactive inspection, so it is bounded: oldest entries are
+#: evicted once the cap is reached, which makes the memory footprint O(cap)
+#: regardless of process uptime. Override with
+#: ``ORCHESTRATOR_TOOL_INVOCATION_LOG_MAX`` (<= 0 disables logging entirely).
+INVOCATION_LOG_MAX_DEFAULT = 1000
+
+
+def _invocation_log_max() -> int:
+    """Resolve the invocation-ring cap, tolerating a malformed override."""
+    raw = os.environ.get("ORCHESTRATOR_TOOL_INVOCATION_LOG_MAX")
+    if raw is None or raw.strip() == "":
+        return INVOCATION_LOG_MAX_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Ignoring malformed ORCHESTRATOR_TOOL_INVOCATION_LOG_MAX=%r; using %d",
+            raw,
+            INVOCATION_LOG_MAX_DEFAULT,
+        )
+        return INVOCATION_LOG_MAX_DEFAULT
+    return max(0, value)
 
 
 class ToolCategory(str, Enum):
@@ -230,7 +265,14 @@ class ToolRegistry:
         """Initialize an empty tool registry."""
         self._tools: dict[str, Tool] = {}
         self._permissions: dict[str, ToolPermissions] = {}
-        self._invocation_log: list[ToolInvocation] = []
+        # Bounded diagnostic ring, NOT a per-request telemetry source. See
+        # INVOCATION_LOG_MAX_DEFAULT: this registry is process-global, so anything
+        # read out of here is a mix of every in-flight request's calls. Request
+        # telemetry lives on REPLEnvironment._invoked_tools.
+        self._invocation_log: deque[ToolInvocation] = deque(
+            maxlen=_invocation_log_max() or 1,
+        )
+        self._invocation_log_enabled: bool = _invocation_log_max() > 0
         self._mcp_configs: dict[str, Any] | None = None
         # Cascading tool policy (used when features().cascading_tool_policy is True)
         self._global_policies: list = []
@@ -519,7 +561,7 @@ class ToolRegistry:
             elapsed = (time.perf_counter() - start) * 1000
 
             # Log invocation
-            self._invocation_log.append(
+            self._record_invocation(
                 ToolInvocation(
                     tool_name=tool_name,
                     args=kwargs,
@@ -546,7 +588,7 @@ class ToolRegistry:
         except Exception as e:
             elapsed = (time.perf_counter() - start) * 1000
 
-            self._invocation_log.append(
+            self._record_invocation(
                 ToolInvocation(
                     tool_name=tool_name,
                     args=kwargs,
@@ -696,12 +738,40 @@ ws ::= " "*
             if "chain" in tool.allowed_callers
         }
 
+    def _record_invocation(self, invocation: ToolInvocation) -> None:
+        """Append one record to the bounded diagnostic ring.
+
+        A no-op when the ring is disabled (``ORCHESTRATOR_TOOL_INVOCATION_LOG_MAX``
+        <= 0). Never raises: telemetry must not be the reason a tool call fails.
+        """
+        if not self._invocation_log_enabled:
+            return
+        self._invocation_log.append(invocation)
+
     def get_invocation_log(self) -> list[ToolInvocation]:
-        """Get the invocation log."""
-        return self._invocation_log.copy()
+        """Get a snapshot of the bounded diagnostic invocation ring.
+
+        NOT a per-request telemetry source. This registry is process-global (one
+        ``state.tool_registry`` per API process), so under concurrency the ring
+        interleaves every in-flight request's calls and retains at most
+        ``ORCHESTRATOR_TOOL_INVOCATION_LOG_MAX`` of them. Durable records and
+        per-request tool telemetry MUST read ``REPLEnvironment._invoked_tools``,
+        which is request-scoped by construction (see
+        ``src/repl_environment/context.py::_invoke_tool``).
+
+        Legitimate uses: tests, interactive debugging, and process-level
+        diagnostics that deliberately want the whole-process view.
+        """
+        return list(self._invocation_log)
 
     def clear_invocation_log(self) -> None:
-        """Clear the invocation log."""
+        """Clear the diagnostic invocation ring.
+
+        A process-wide reset intended for tests and interactive diagnostics. It is
+        deliberately NOT a per-request mechanism: clearing a shared log to scope
+        one request's telemetry is racy under concurrency (another request's calls
+        land between the clear and the read). Use ``_invoked_tools`` for that.
+        """
         self._invocation_log.clear()
 
 

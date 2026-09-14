@@ -64,9 +64,10 @@ def _repl_work_meta(repl, answer: str) -> dict:
 
       * ``repl._invoked_tools`` — the request-local invocation records captured
         at the ``_invoke_tool`` chokepoint. Deliberately NOT
-        ``repl.tool_registry.get_invocation_log()``, which is process-global and
-        never cleared, so a later no-tool request would report a prior request's
-        tools (see the note at the tools_called site below).
+        ``repl.tool_registry.get_invocation_log()``, which is a process-global
+        diagnostic ring shared by every concurrent request (and bounded, so it both
+        leaks other requests' tools and silently evicts), see the note at the
+        tools_called site below.
       * ``repl.get_code_log()`` — the bounded per-step code log
         (``REPLState.CODE_LOG_MAX_STEPS`` / ``CODE_LOG_MAX_CHARS``).
 
@@ -747,8 +748,8 @@ async def _execute_repl(
     # REQUEST-LOCAL invocation records captured at the _invoke_tool chokepoint
     # (context.py). We must NOT use repl.tool_registry.get_invocation_log() here:
     # that registry is process-global (one instance, src/api/__init__.py) and its
-    # log is never cleared per request, so a later no-tool request would report a
-    # prior request's tools. These records expose the same attribute interface as
+    # ring is shared by every concurrently served request, so this request would
+    # report other requests' tools (and the ring is bounded, so it also evicts). These records expose the same attribute interface as
     # ToolInvocation (tool_name/elapsed_ms/success/chain_id/caller_type/result),
     # so every consumer below is unchanged.
     invocation_log = list(getattr(repl, "_invoked_tools", None) or [])
