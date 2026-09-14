@@ -2635,6 +2635,91 @@ def _eval_scoring_concurrency(generation_workers: int) -> int:
     return max(gen, default)
 
 
+# ── EV-14d: a short draw must never score as a complete result ────────────────
+# `_eval_batch` returns `[r for r in results if r is not None]`: the pipelined
+# (workers > 1) path can leave holes when a lane is abandoned or a future is
+# cancelled, and the serial path BREAKS out of its loop on a wall-budget timeout.
+# Defining `n_questions = len(results)` therefore renamed the shortfall as the
+# denominator — 40 of 50 questions scored was indistinguishable from a complete
+# draw of 40, so every rate, accuracy and reliability computed off it read as a
+# whole-suite number. `n_questions` is now what the run REQUESTED (the count an
+# expected-n guard must compare against); the delivered count, the gap, the ratio
+# and an explicit verdict are recorded beside it.
+QUESTION_COUNT_FIELDS = (
+    "n_questions",
+    "n_questions_requested",
+    "n_questions_completed",
+    "n_questions_missing",
+    "completeness_ratio",
+    "draw_complete",
+)
+
+
+def question_count_fields(requested: int, completed: int) -> dict[str, Any]:
+    """Requested-vs-completed question counts for a per-role report block."""
+    requested = max(0, int(requested or 0))
+    completed = max(0, int(completed or 0))
+    return {
+        "n_questions": requested,
+        "n_questions_requested": requested,
+        "n_questions_completed": completed,
+        "n_questions_missing": max(0, requested - completed),
+        "completeness_ratio": (completed / requested) if requested > 0 else 0.0,
+        "draw_complete": requested > 0 and completed >= requested,
+    }
+
+
+def draw_is_complete(payload: Mapping[str, Any] | None) -> bool:
+    """True only when a report RECORDS a draw that met its own request.
+
+    Fail-closed by design, and that is the whole point of EV-14d: a payload with
+    no requested/completed pair (a legacy artifact, or a writer that never counted)
+    is NOT evidence of completeness, so it answers False. Callers that must merely
+    detect a *known* shortfall on a possibly-legacy payload use
+    ``draw_shortfall()`` instead, which stays silent when the fields are absent.
+    """
+    if not isinstance(payload, Mapping):
+        return False
+    requested = payload.get("n_questions_requested")
+    completed = payload.get("n_questions_completed")
+    if requested is None or completed is None:
+        return False
+    try:
+        return int(requested) > 0 and int(completed) >= int(requested)
+    except (TypeError, ValueError):
+        return False
+
+
+def draw_shortfall(payload: Mapping[str, Any] | None) -> tuple[int, int] | None:
+    """``(requested, completed)`` when a payload records a SHORT draw, else None.
+
+    Returns None both for a complete draw and for a payload that carries no
+    counts at all — so it can be applied to pre-EV-14d artifacts without
+    retroactively failing them.
+    """
+    if not isinstance(payload, Mapping):
+        return None
+    requested = payload.get("n_questions_requested")
+    completed = payload.get("n_questions_completed")
+    if requested is None or completed is None:
+        return None
+    try:
+        requested_i, completed_i = int(requested), int(completed)
+    except (TypeError, ValueError):
+        return None
+    return (requested_i, completed_i) if completed_i < requested_i else None
+
+
+def fold_role_completeness(per_role: Mapping[str, Any]) -> dict[str, Any]:
+    """Top-level completeness fold over a mode report's ``per_role`` blocks."""
+    incomplete = sorted(
+        role
+        for role, payload in (per_role or {}).items()
+        if not draw_is_complete(payload if isinstance(payload, Mapping) else None)
+    )
+    return {"draw_complete": not incomplete, "incomplete_roles": incomplete}
+
+
 def _eval_batch_id(*, label: str, n_questions: int, started_at_s: float) -> str:
     safe_label = "".join(
         ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(label or "eval").strip()
@@ -6634,7 +6719,9 @@ class EvalTower:
                 reliability = (len(scored) / len(results)) if results else 0.0
                 per_role[role] = {
                     "role": role,
-                    "n_questions": len(results),
+                    # EV-14d: requested = the draw this role asked for; completed =
+                    # what `_eval_batch` actually returned. See question_count_fields().
+                    **question_count_fields(len(role_qs), len(results)),
                     "n_scored": len(scored),
                     "reliability": reliability,
                     "accuracy": (correct / len(scored)) if scored else None,
@@ -6655,6 +6742,9 @@ class EvalTower:
             "dataset_sha256": dataset_sha256,
             "metric_keys": list(CALIBRATION_METRIC_KEYS),
             "per_role": per_role,
+            # EV-14d: top-level fold — a consumer must not have to walk per_role to
+            # learn that one role drew short.
+            **fold_role_completeness(per_role),
         }
 
     def eval_math_rebaseline(
@@ -6744,7 +6834,8 @@ class EvalTower:
                 per_role[role] = {
                     "role": role,
                     "arm": arm_label,
-                    "n_questions": len(results),
+                    # EV-14d: requested vs completed, never len(results) alone.
+                    **question_count_fields(len(role_qs), len(results)),
                     "n_scored": len(scored),
                     "correct": correct,
                     "accuracy": (correct / len(scored)) if scored else None,
@@ -6806,6 +6897,7 @@ class EvalTower:
             "test_profile": test_profile,
             "per_role": per_role,
             "paired_significance": paired_significance,
+            **fold_role_completeness(per_role),  # EV-14d
         }
 
     def eval_question_subset(
@@ -6869,7 +6961,8 @@ class EvalTower:
                 cal_real = bool(agg.details.get("confidence_is_real"))
                 per_role[role] = {
                     "role": role,
-                    "n_questions": len(results),
+                    # EV-14d: requested vs completed, never len(results) alone.
+                    **question_count_fields(len(role_qs), len(results)),
                     "n_scored": len(scored),
                     "correct": correct,
                     "accuracy": (correct / len(scored)) if scored else None,
@@ -6893,6 +6986,7 @@ class EvalTower:
             "requested_ids": sorted(want),
             "dataset_sha256": dataset_sha256,
             "per_role": per_role,
+            **fold_role_completeness(per_role),  # EV-14d
         }
 
     def eval_resume_incomplete(
@@ -6968,7 +7062,11 @@ class EvalTower:
                 cal_real = bool(agg.details.get("confidence_is_real")) if agg else False
                 per_role[role] = {
                     "role": role,
-                    "n_questions": len(results),
+                    # EV-14d: requested vs completed, never len(results) alone. The
+                    # request here is the REMAINDER this resume run drew, not the
+                    # whole dataset — a resume is complete when it finishes its own
+                    # remainder; `prior_completed`/`n_total` below carry the dataset view.
+                    **question_count_fields(len(role_qs), len(results)),
                     "n_scored": len(scored),
                     "correct": correct,
                     "accuracy": (correct / len(scored)) if scored else None,
@@ -6995,6 +7093,7 @@ class EvalTower:
             "resumed_ordinals": [i for i, _q in remainder],
             "dataset_sha256": dataset_sha256,
             "per_role": per_role,
+            **fold_role_completeness(per_role),  # EV-14d
         }
 
     def evaluate(
