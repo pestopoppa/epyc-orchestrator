@@ -29,21 +29,21 @@ TOOL_COOCCURRENCE: dict[str, list[tuple[str, float, str]]] = {
         ("web_search", 0.60, "web_search(<refinement>)"),
     ],
     "peek": [
-        ("grep", 0.40, "grep(<pattern>, <file>)"),
-        ("peek", 0.30, "peek(<next file>)"),
+        ("grep", 0.40, "grep(<pattern>, file_path=<file>)"),
+        ("peek", 0.30, "peek(2000, file_path=<next file>)"),
         ("code_search", 0.20, "code_search(<query>)"),
     ],
     "grep": [
-        ("peek", 0.50, "peek(<matched file>)"),
+        ("peek", 0.50, "peek(2000, file_path=<matched file>)"),
         ("grep", 0.30, "grep(<refined pattern>)"),
     ],
     "list_dir": [
-        ("peek", 0.60, "peek(<file>)"),
+        ("peek", 0.60, "peek(2000, file_path=<file>)"),
         ("list_dir", 0.20, "list_dir(<subdir>)"),
     ],
     "web_fetch": [
         ("web_search", 0.40, "web_search(<follow-up>)"),
-        ("peek", 0.30, "peek(<downloaded file>)"),
+        ("peek", 0.30, "peek(2000, file_path=<downloaded file>)"),
     ],
 }
 
