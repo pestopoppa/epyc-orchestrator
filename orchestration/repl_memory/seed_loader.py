@@ -466,9 +466,6 @@ def seed_memory(force: bool = False, init: bool = False) -> dict:
             continue
 
         try:
-            # Generate embedding for the task description
-            embedding = embedder.embed_text(task)
-
             # Store in episodic memory
             # Seeds go through the same record contract as live writes, so a
             # reseeded store is shaped identically to an organically grown one.
@@ -476,6 +473,13 @@ def seed_memory(force: bool = False, init: bool = False) -> dict:
             record.source = "seed"
             if not record.objective:
                 record.objective = task
+
+            # Embed the record's canonical text, NOT the raw task string. This
+            # site used to embed `task` with no prefix at all, which is why the
+            # post-reseed `seed` rows carried a convention no other writer and
+            # no query path produces (EPD-3-R3) — they were unreachable by
+            # similarity search from the live path by construction.
+            embedding = embedder.embed_text(record.embedding_text())
             store.store(
                 embedding=embedding,
                 action=action,
