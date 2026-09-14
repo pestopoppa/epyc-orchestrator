@@ -277,3 +277,62 @@ def test_run_bash_compressed_filters_history_to_current_session(monkeypatch, tmp
     *_, record = [json.loads(line) for line in telemetry.read_text().splitlines()]
     assert record["top_up_candidate"] is False
     assert record["followup_source_command"] is None
+
+
+_FAKE_PAT = "github_pat_11ABCDEFG0AbCdEfGhIjKl_xyzABCDEF"
+
+
+def test_run_bash_compressed_redacts_credentials_in_compressed_output(monkeypatch, tmp_path) -> None:
+    # TOC-RD-1: tokens in command output never reach the compressor or the returned text.
+    seen_by_compressor = []
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=f"GH token: {_FAKE_PAT}\nok", stderr="")
+
+    def fake_compress(output, command):
+        seen_by_compressor.append(output)
+        text = f"compressed: {output}"
+        return _CompressionResult(text, "unit", len(output), len(text))
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setenv("TOOL_COMPRESSION_MONITOR_PATH", str(tmp_path / "telemetry.jsonl"))
+    monkeypatch.setattr(mod, "_compress_output", fake_compress)
+
+    result = _call_tool("git log")
+
+    text = _result_text(result)
+    assert _FAKE_PAT not in text
+    assert "[REDACTED:github_fine_grained_pat]" in text
+    assert seen_by_compressor and all(_FAKE_PAT not in s for s in seen_by_compressor)
+    assert result.structured_content is None or _FAKE_PAT not in json.dumps(result.structured_content)
+
+
+def test_compressor_middleware_redacts_final_text(monkeypatch, tmp_path) -> None:
+    # Even if compression (or an unredacted upstream result) yields a credential, the
+    # returned text is redacted; truncated PEM blocks are covered too.
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="plain output", stderr="")
+
+    def fake_compress(output, command):
+        text = f"{output}\n-----BEGIN ED25519 PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA\n{_FAKE_PAT}"
+        return _CompressionResult(text, "unit", len(output), len(text))
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setenv("TOOL_COMPRESSION_MONITOR_PATH", str(tmp_path / "telemetry.jsonl"))
+    monkeypatch.setattr(mod, "_compress_output", fake_compress)
+
+    text = _result_text(_call_tool("git status"))
+
+    assert text == "plain output\n[REDACTED:ssh_private_key]"
+
+
+def test_run_bash_compressed_direct_call_redacts_without_middleware(monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=f"auth failed for {_FAKE_PAT}")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    result = mod.run_bash_compressed("git status")
+
+    assert _FAKE_PAT not in result
+    assert result == "[exit code 1]\n\n[STDERR]\nauth failed for [REDACTED:github_fine_grained_pat]"
