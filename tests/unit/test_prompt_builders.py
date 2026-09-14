@@ -163,6 +163,135 @@ class TestExtractCodeFromResponse:
         assert result == 'result = CALL("grep", pattern="TODO", path="src")\nprint(result)'
 
 
+# ── tool-call JSON repair (TU-TC-1) ───────────────────────────────────────
+
+
+class TestToolCallJsonRepair:
+    """Gated JSON repair: valid JSON untouched, malformed repaired or refused, never ``{}``."""
+
+    @staticmethod
+    def _counts():
+        from src.prompt_builders.code_utils import TOOL_CALL_JSON_REPAIR_COUNTS
+
+        return dict(TOOL_CALL_JSON_REPAIR_COUNTS)
+
+    def test_valid_json_returned_byte_for_byte(self):
+        from src.prompt_builders.code_utils import _repair_json_text
+
+        raw = '{ "query" :  "a </parameter> b",\n "n": [1, 2] }'
+        assert _repair_json_text(raw) is raw
+
+    def test_valid_args_untouched_and_not_counted(self):
+        from src.prompt_builders.code_utils import translate_openai_tool_calls
+
+        before = self._counts()
+        text = (
+            '[{"id":"call_1","function":{"name":"web_search",'
+            '"arguments":"{\\"query\\": \\"x ]} y\\"}"},"type":"function"}]'
+        )
+        assert translate_openai_tool_calls(text) == (
+            'result = CALL("web_search", query="x ]} y")\nprint(result)'
+        )
+        assert self._counts() == before
+
+    def test_trailing_tag_repaired(self):
+        from src.prompt_builders.code_utils import _repair_json_text
+
+        assert _repair_json_text('{"query": "x"}</parameter>\n</function>') == '{"query": "x"}'
+
+    def test_bracket_imbalance_repaired(self):
+        from src.prompt_builders.code_utils import _repair_json_text
+
+        assert _repair_json_text('{"a": 1]') == '{"a": 1}'
+        assert _repair_json_text('{"a": [1, 2}') == '{"a": [1, 2]}'
+        assert _repair_json_text('{"a": 1}}') == '{"a": 1}'
+
+    def test_unterminated_string_repaired(self):
+        from src.prompt_builders.code_utils import _repair_json_text
+
+        assert _repair_json_text('{"query": "EPYC parser') == '{"query": "EPYC parser"}'
+
+    def test_openai_arguments_repaired_and_counted(self):
+        from src.prompt_builders.code_utils import translate_openai_tool_calls
+
+        before = self._counts()
+        text = (
+            '[{"id":"call_1","function":{"name":"web_search",'
+            '"arguments":"{\\"query\\": \\"EPYC\\"]"},"type":"function"}]'
+        )
+        assert translate_openai_tool_calls(text) == (
+            'result = CALL("web_search", query="EPYC")\nprint(result)'
+        )
+        after = self._counts()
+        assert after["repaired"] == before["repaired"] + 1
+        assert after["unrecoverable"] == before["unrecoverable"]
+
+    def test_tagged_payload_with_leaked_tag_repaired(self):
+        response = (
+            '<tool_call>{"name":"web_search",'
+            '"arguments":{"query":"EPYC parser</parameter></tool_call>'
+        )
+        result = extract_code_from_response(response)
+        assert result == 'result = CALL("web_search", query="EPYC parser")\nprint(result)'
+
+    def test_unrecoverable_openai_arguments_refused_never_empty_call(self):
+        import ast
+
+        from src.prompt_builders.code_utils import translate_openai_tool_calls
+
+        before = self._counts()
+        text = (
+            '[{"id":"call_1","function":{"name":"web_search",'
+            '"arguments":"{query: EPYC"},"type":"function"}]'
+        )
+        result = translate_openai_tool_calls(text)
+        assert result is not None
+        assert "CALL(" not in result
+        assert "[ERROR:" in result and "web_search" in result and "{query: EPYC" in result
+        assert result.endswith("print(result)")
+        ast.parse(result)
+        after = self._counts()
+        assert after["unrecoverable"] == before["unrecoverable"] + 1
+
+    def test_unrecoverable_tagged_payload_refused_not_skipped(self):
+        response = '<tool_call>{"name":"grep","arguments":{"pattern": TODO @@ }}</tool_call>'
+        result = extract_code_from_response(response)
+        assert "CALL(" not in result
+        assert "[ERROR:" in result and "'grep'" in result
+        # Two lines, so auto_wrap_final leaves it alone (no FINAL of an error).
+        assert auto_wrap_final(result) == result
+
+    def test_refusal_echo_truncated(self):
+        from src.prompt_builders.code_utils import translate_openai_tool_calls
+
+        junk = "{q: " + "z" * 1000
+        text = (
+            '[{"id":"call_1","function":{"name":"web_search",'
+            f'"arguments":"{junk}"}},"type":"function"}}]'
+        )
+        result = translate_openai_tool_calls(text)
+        assert "...[truncated]" in result
+        assert "z" * 1000 not in result
+
+    def test_valid_call_kept_alongside_refusal(self):
+        from src.prompt_builders.code_utils import translate_openai_tool_calls
+
+        text = (
+            '[{"id":"call_1","function":{"name":"grep","arguments":"{\\"pattern\\": \\"a\\"}"}},'
+            '{"id":"call_2","function":{"name":"web_search","arguments":"{q: x"}}]'
+        )
+        result = translate_openai_tool_calls(text)
+        assert 'result_0 = CALL("grep", pattern="a")' in result
+        assert result.count("CALL(") == 1
+        assert 'result_1 = "[ERROR:' in result
+
+    def test_non_json_tagged_body_still_falls_through(self):
+        from src.prompt_builders.code_utils import translate_openai_tool_calls
+
+        text = "<tool_call>\n<function=web_search>\n<parameter=query>x</parameter>\n</function>\n</tool_call>"
+        assert translate_openai_tool_calls(text) is None
+
+
 # ── auto_wrap_final ───────────────────────────────────────────────────────
 
 

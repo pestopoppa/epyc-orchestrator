@@ -257,6 +257,64 @@ async def test_status_message_final_rejected(graph_ctx):
     assert "status message" in artifacts["_nudge"]
 
 
+@pytest.mark.asyncio
+async def test_final_done_accepted_after_loop_guard_halt(graph_ctx, monkeypatch):
+    """MF-FIN-1: the HALT prompt instructs FINAL('done'); the guard must not reject it."""
+    monkeypatch.setenv("ORCHESTRATOR_REPL_LOOP_GUARD", "1")
+    state, deps = graph_ctx(responses=["FINAL('done')"])
+    state.repl_noprogress_count = 2  # HALT fires at this turn's prompt build
+    ctx = _make_ctx(state, deps)
+
+    output, error, is_final, artifacts = await _execute_turn(ctx, Role.FRONTDOOR)
+
+    assert "LOOP HALTED" in deps.primitives.llm_call.call_args_list[0].args[0]
+    assert is_final is True
+    assert output == "done"
+    assert "_nudge" not in artifacts
+
+
+@pytest.mark.asyncio
+async def test_final_done_accepted_in_interleaved_edit_mode(graph_ctx):
+    """MF-FIN-1: INTERLEAVED_EDIT_INSTRUCTIONS' FINISH turn is FINAL("done")."""
+    from src.features import Features, reset_features, set_features
+
+    set_features(Features(interleaved_edit_rider=True))
+    try:
+        state, deps = graph_ctx(responses=['FINAL("done")'], role=Role.CODER_ESCALATION)
+        ctx = _make_ctx(state, deps)
+
+        output, error, is_final, artifacts = await _execute_turn(ctx, Role.CODER_ESCALATION)
+
+        assert "INTERLEAVED EDIT MODE" in deps.primitives.llm_call.call_args_list[0].args[0]
+        assert is_final is True
+        assert output == "done"
+    finally:
+        reset_features()
+
+
+@pytest.mark.asyncio
+async def test_status_final_still_rejected_when_edit_rider_not_injected(graph_ctx):
+    """The exemption is scoped to turns whose prompt sanctioned "done" -- a non-editing
+    role under the same flag, and other status phrases in edit mode, stay rejected."""
+    from src.features import Features, reset_features, set_features
+
+    set_features(Features(interleaved_edit_rider=True))
+    try:
+        state, deps = graph_ctx(responses=['FINAL("done")'])
+        output, error, is_final, artifacts = await _execute_turn(_make_ctx(state, deps), Role.FRONTDOOR)
+        assert is_final is False
+        assert "status message" in artifacts["_nudge"]
+
+        state, deps = graph_ctx(responses=['FINAL("completed")'], role=Role.CODER_ESCALATION)
+        output, error, is_final, artifacts = await _execute_turn(
+            _make_ctx(state, deps), Role.CODER_ESCALATION
+        )
+        assert is_final is False
+        assert "status message" in artifacts["_nudge"]
+    finally:
+        reset_features()
+
+
 # ── Prose answer rescue ──────────────────────────────────────────────
 
 

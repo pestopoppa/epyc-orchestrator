@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING
+import threading
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from src.escalation import ErrorCategory
@@ -26,9 +27,113 @@ _TAGGED_JSON_TOOL_CALL_RE = re.compile(
     r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL
 )
 
+# TU-TC-1: tool-call JSON that fails ``json.loads`` is repaired deterministically
+# or refused visibly -- never executed with ``{}`` arguments.  No telemetry sink
+# exists for the parser (no prometheus_client in src/), so outcomes land on this
+# in-process counter plus a structured ``tool_call_json_repair outcome=...`` log.
+_TRAILING_TAGS_RE = re.compile(r"(?:\s*</?[A-Za-z_][\w:.=-]*>)+\s*$")
+_CALL_NAME_RE = re.compile(r'"name"\s*:\s*"([^"\\]+)"')
+_RAW_ECHO_LIMIT = 200
+_CLOSERS = {"{": "}", "[": "]"}
+_repair_lock = threading.Lock()
+TOOL_CALL_JSON_REPAIR_COUNTS: dict[str, int] = {"repaired": 0, "unrecoverable": 0}
 
-def _extract_json_arrays(text: str) -> list[list[dict]]:
-    """Extract JSON arrays from text by scanning for balanced brackets."""
+
+class _RejectedToolCall(NamedTuple):
+    """A tool call whose JSON could not be repaired; rendered as a visible refusal."""
+
+    name: str
+    raw: str
+
+
+def _record_repair_outcome(outcome: str, raw: str) -> None:
+    with _repair_lock:
+        TOOL_CALL_JSON_REPAIR_COUNTS[outcome] += 1
+    _log.info(
+        "tool_call_json_repair outcome=%s bytes=%d raw=%r",
+        outcome, len(raw), raw[:_RAW_ECHO_LIMIT],
+    )
+
+
+def _repair_json_text(raw: str) -> str | None:
+    """Return JSON text that ``json.loads`` accepts, or ``None``.
+
+    Valid JSON is returned unchanged (the same string).  Only when parsing
+    fails: strip leaked trailing XML-ish tags (``</parameter>``,
+    ``</tool_call>``...), close an unterminated string, and balance
+    unclosed/over-closed/mismatched brackets with a structural scan.
+    """
+    try:
+        json.loads(raw)
+        return raw
+    except (json.JSONDecodeError, ValueError):
+        pass
+    text = _TRAILING_TAGS_RE.sub("", raw).strip()
+    out: list[str] = []
+    stack: list[str] = []
+    in_str = False
+    escape = False
+    for c in text:
+        if in_str:
+            out.append(c)
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+            out.append(c)
+        elif c in _CLOSERS:
+            stack.append(c)
+            out.append(c)
+        elif c in ("}", "]"):
+            if not stack:
+                continue  # over-closed: drop the stray closer
+            # A mismatched closer is taken as the closer of the open container.
+            out.append(_CLOSERS[stack.pop()])
+        else:
+            out.append(c)
+    if in_str:
+        if escape:
+            out.pop()  # a dangling backslash would escape the closing quote
+        out.append('"')
+    repaired = "".join(out).rstrip()
+    if stack:
+        repaired = repaired.rstrip(",").rstrip()
+        repaired += "".join(_CLOSERS[o] for o in reversed(stack))
+    try:
+        json.loads(repaired)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return repaired
+
+
+def _loads_with_repair(raw: str) -> tuple[bool, object]:
+    """``json.loads`` gated repair; returns ``(ok, value)`` and records telemetry."""
+    fixed = _repair_json_text(raw)
+    if fixed is None:
+        _record_repair_outcome("unrecoverable", raw)
+        return False, None
+    if fixed is not raw:
+        _record_repair_outcome("repaired", raw)
+    return True, json.loads(fixed)
+
+
+def _rejection_from_raw(raw: str) -> _RejectedToolCall:
+    m = _CALL_NAME_RE.search(raw)
+    return _RejectedToolCall(m.group(1) if m else "<unknown>", raw)
+
+
+def _extract_json_arrays(
+    text: str, rejected: list[_RejectedToolCall] | None = None
+) -> list[list[dict]]:
+    """Extract JSON arrays from text by scanning for balanced brackets.
+
+    Tool-call-shaped arrays that fail ``json.loads`` go through the gated
+    repair; unrecoverable ones are appended to *rejected* when given.
+    """
     arrays: list[list[dict]] = []
     i = 0
     while i < len(text):
@@ -52,12 +157,17 @@ def _extract_json_arrays(text: str) -> list[list[dict]]:
                     elif c == ']':
                         depth -= 1
                         if depth == 0:
+                            chunk = text[i:j + 1]
                             try:
-                                arr = json.loads(text[i:j + 1])
-                                if isinstance(arr, list):
-                                    arrays.append(arr)
+                                arr = json.loads(chunk)
                             except (json.JSONDecodeError, ValueError):
-                                pass
+                                arr = None
+                                if _TOOL_CALL_RE.search(chunk):
+                                    ok, arr = _loads_with_repair(chunk)
+                                    if not ok and rejected is not None:
+                                        rejected.append(_rejection_from_raw(chunk))
+                            if isinstance(arr, list):
+                                arrays.append(arr)
                             i = j + 1
                             break
                 j += 1
@@ -68,12 +178,28 @@ def _extract_json_arrays(text: str) -> list[list[dict]]:
     return arrays
 
 
-def _render_call_code(calls: list[tuple[str, dict]]) -> str:
-    """Render parsed tool calls as executable REPL ``CALL()`` statements."""
+def _render_call_code(calls: list[tuple[str, dict] | _RejectedToolCall]) -> str:
+    """Render parsed tool calls as executable REPL ``CALL()`` statements.
+
+    A ``_RejectedToolCall`` is rendered as an ``[ERROR: ...]`` result string
+    (the REPL tools' error convention) so the model sees the refusal next turn.
+    """
     lines: list[str] = []
-    for i, (name, kwargs) in enumerate(calls):
-        kw_parts = ", ".join(f'{k}={json.dumps(v)}' for k, v in kwargs.items())
+    for i, call in enumerate(calls):
         var = f"result_{i}" if len(calls) > 1 else "result"
+        if isinstance(call, _RejectedToolCall):
+            raw = call.raw
+            if len(raw) > _RAW_ECHO_LIMIT:
+                raw = raw[:_RAW_ECHO_LIMIT] + "...[truncated]"
+            msg = (
+                f"[ERROR: tool call {call.name!r} NOT executed: its JSON arguments "
+                f"are malformed and could not be repaired. Raw: {raw} -- re-emit "
+                f"the call with valid JSON arguments.]"
+            )
+            lines.append(f"{var} = {json.dumps(msg)}")
+            continue
+        name, kwargs = call
+        kw_parts = ", ".join(f'{k}={json.dumps(v)}' for k, v in kwargs.items())
         lines.append(f'{var} = CALL("{name}", {kw_parts})')
 
     # Print results so the REPL captures output for the next turn.
@@ -85,10 +211,16 @@ def _render_call_code(calls: list[tuple[str, dict]]) -> str:
     return "\n".join(lines)
 
 
-def _deduplicate_tool_calls(items: list[dict]) -> list[tuple[str, dict]]:
-    """Normalize direct and OpenAI-style JSON tool-call objects."""
-    calls_seen: list[tuple[str, dict]] = []
-    seen_keys: set[tuple[str, str]] = set()
+def _deduplicate_tool_calls(
+    items: list[dict],
+) -> list[tuple[str, dict] | _RejectedToolCall]:
+    """Normalize direct and OpenAI-style JSON tool-call objects.
+
+    An unparseable ``arguments`` string is repaired or becomes a
+    ``_RejectedToolCall`` -- it never degrades to ``{}`` (TU-TC-1).
+    """
+    calls_seen: list[tuple[str, dict] | _RejectedToolCall] = []
+    seen_keys: set[tuple[str, ...]] = set()
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -102,10 +234,16 @@ def _deduplicate_tool_calls(items: list[dict]) -> list[tuple[str, dict]]:
             continue
         raw_args = func.get("arguments", {})
         if isinstance(raw_args, str):
-            try:
-                args = json.loads(raw_args)
-            except (json.JSONDecodeError, ValueError):
-                args = {}
+            if not raw_args.strip():
+                args = {}  # an empty arguments string is a no-argument call
+            else:
+                ok, args = _loads_with_repair(raw_args)
+                if not ok:
+                    rejected = _RejectedToolCall(name, raw_args)
+                    if ("rejected", name, raw_args) not in seen_keys:
+                        seen_keys.add(("rejected", name, raw_args))
+                        calls_seen.append(rejected)
+                    continue
         else:
             args = raw_args
         if not isinstance(args, dict):
@@ -136,16 +274,25 @@ def translate_openai_tool_calls(text: str) -> str | None:
     # Parse each tag independently: templates differ per model, but the wire
     # contract is pinned by these fixtures rather than inferred from Qwen XML.
     tagged_items: list[dict] = []
+    tagged_rejected: list[_RejectedToolCall] = []
     for match in _TAGGED_JSON_TOOL_CALL_RE.finditer(text):
+        body = match.group(1)
         try:
-            payload = json.loads(match.group(1))
+            payload = json.loads(body)
         except (json.JSONDecodeError, ValueError):
-            continue
+            # Only JSON-shaped bodies are ours to repair; other tagged wire
+            # formats (e.g. Qwen XML) keep falling through as before.
+            if not body.lstrip().startswith(("{", "[")):
+                continue
+            ok, payload = _loads_with_repair(body)
+            if not ok:
+                tagged_rejected.append(_rejection_from_raw(body))
+                continue
         if isinstance(payload, dict):
             tagged_items.append(payload)
         elif isinstance(payload, list):
             tagged_items.extend(item for item in payload if isinstance(item, dict))
-    tagged_calls = _deduplicate_tool_calls(tagged_items)
+    tagged_calls = _deduplicate_tool_calls(tagged_items) + tagged_rejected
     if tagged_calls:
         _log.info(
             "Translated %d tagged JSON tool_call(s) to CALL() syntax: %s",
@@ -159,17 +306,18 @@ def translate_openai_tool_calls(text: str) -> str | None:
 
     # Extract all JSON arrays that look like tool_call lists.
     items: list[dict] = []
+    array_rejected: list[_RejectedToolCall] = []
 
     # Find JSON array boundaries robustly.  The model emits space-separated
     # ``[{...}] [{...}]`` blocks; simple regex can't handle nested braces
     # in the "arguments" field, so we scan for ``[`` and find the matching
     # ``]`` by tracking brace/bracket depth.
-    for arr in _extract_json_arrays(text):
+    for arr in _extract_json_arrays(text, array_rejected):
         for item in arr:
             if isinstance(item, dict):
                 items.append(item)
 
-    calls_seen = _deduplicate_tool_calls(items)
+    calls_seen = _deduplicate_tool_calls(items) + array_rejected
 
     if not calls_seen:
         return None

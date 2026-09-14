@@ -24,6 +24,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from src.repl_environment.types import TOOL_OUTPUT_END, TOOL_OUTPUT_START
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -184,8 +186,11 @@ def align_boundary_forward(messages: list[dict[str, Any]], idx: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-# Pattern for REPL output markers
-_REPL_OUTPUT_RE = re.compile(r"<<<TOOL_OUTPUT>>>.*?<<<\/TOOL_OUTPUT>>>", re.S)
+# Pattern for REPL output markers -- built from the real delimiters (CF-RX-1: a
+# hand-written ``<<</TOOL_OUTPUT>>>`` end marker never matched ``<<<END_TOOL_OUTPUT>>>``).
+_REPL_OUTPUT_RE = re.compile(
+    re.escape(TOOL_OUTPUT_START) + r".*?" + re.escape(TOOL_OUTPUT_END), re.S
+)
 _FILE_READ_RE = re.compile(r"^(Contents of |File: |Reading ).+", re.M)
 
 
