@@ -879,6 +879,20 @@ class TestArchitectPromptBuilders:
         assert "I|brief" in prompt
         assert "1" in prompt and "3" in prompt
 
+    def test_synthesis_prompt_does_not_advertise_fetch_report(self):
+        """C4/DCP-13: the synthesis decision breaks on turn 0, so fetch_report is unreachable."""
+        from src.prompt_builders import build_architect_synthesis_prompt
+        from src.prompt_builders.review import _ARCHITECT_SYNTHESIS_FALLBACK
+
+        prompt = build_architect_synthesis_prompt(
+            "Q",
+            "[REPORT_HANDLE id=coder_escalation-1-abc chars=9000 sha16=abc]\nSummary:\n- x",
+            loop_num=1,
+            max_loops=3,
+        )
+        assert "fetch_report" not in prompt
+        assert "fetch_report" not in _ARCHITECT_SYNTHESIS_FALLBACK
+
 
 # ── Whitelist Tests ──────────────────────────────────────────────────────
 
