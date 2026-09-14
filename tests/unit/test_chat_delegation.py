@@ -7,6 +7,7 @@ _ARCHITECT_DECISION_BUDGET.
 """
 
 import hashlib
+from unittest.mock import MagicMock, patch
 
 import yaml
 
@@ -25,12 +26,16 @@ from src.api.routes.chat_delegation_decision import (
     _architect_decision_token_budget,
 )
 from src.api.routes.chat_delegation_config import _valid_delegate_roles
-from src.api.routes.chat_delegation_reports import _build_compact_specialist_prompt
+from src.api.routes.chat_delegation_reports import (
+    _build_compact_specialist_prompt,
+    _compress_report_for_loop,
+)
 from src.constants import (
     DELEGATION_BRIEF_KEY_LEN,
     DELEGATION_MAX_SAME_TARGET,
     DELEGATION_MAX_TOTAL_TOKENS,
 )
+from src.delegation_reports import load_report
 
 
 # ── _strip_think ────────────────────────────────────────────────────────
@@ -452,3 +457,96 @@ class TestTokenBudgetGuard:
     def test_budget_not_exceeded_passes(self):
         cumulative = DELEGATION_MAX_TOTAL_TOKENS - 1
         assert cumulative <= DELEGATION_MAX_TOTAL_TOKENS
+
+
+# ── _compress_report_for_loop (C6 / DCP-13) ─────────────────────────────
+
+
+class TestCompressReportForLoop:
+    """Rescued reports skip worker_summarize but keep handle persistence."""
+
+    _LONG = "FULL REPORT\n" + ("detail line\n" * 400)
+
+    def _primitives(self):
+        primitives = MagicMock()
+        primitives.llm_call = MagicMock(return_value="compact summary")
+        return primitives
+
+    def test_skip_summary_long_report_persists_handle_without_llm_call(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ORCHESTRATOR_DELEGATION_REPORT_DIR", str(tmp_path))
+        primitives = self._primitives()
+
+        text, handle = _compress_report_for_loop(
+            self._LONG, "q", primitives, "coder_escalation", skip_summary=True,
+        )
+
+        primitives.llm_call.assert_not_called()
+        assert text == self._LONG
+        assert handle is not None
+        assert handle["chars"] == str(len(self._LONG.strip()))
+        assert load_report(handle["id"], max_chars=12000)["content"] == self._LONG.strip()
+
+    def test_skip_summary_short_report_has_no_handle_or_llm_call(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ORCHESTRATOR_DELEGATION_REPORT_DIR", str(tmp_path))
+        primitives = self._primitives()
+
+        text, handle = _compress_report_for_loop(
+            "short report", "q", primitives, "coder_escalation", skip_summary=True,
+        )
+
+        primitives.llm_call.assert_not_called()
+        assert text == "short report"
+        assert handle is None
+
+    def test_default_long_report_still_summarizes_into_handle_text(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ORCHESTRATOR_DELEGATION_REPORT_DIR", str(tmp_path))
+        primitives = self._primitives()
+
+        text, handle = _compress_report_for_loop(
+            self._LONG, "q", primitives, "coder_escalation",
+        )
+
+        assert primitives.llm_call.call_count == 1
+        assert primitives.llm_call.call_args.kwargs.get("role") == "worker_summarize"
+        assert handle is not None
+        assert text.startswith(f"[REPORT_HANDLE id={handle['id']}")
+        assert "compact summary" in text
+
+    def test_rescued_delegation_makes_no_summarize_call(self, monkeypatch, tmp_path):
+        from src.api.routes.chat_delegation import _architect_delegated_answer
+
+        monkeypatch.setenv("ORCHESTRATOR_DELEGATION_REPORT_DIR", str(tmp_path))
+        primitives = MagicMock()
+        primitives._backends = {"test": True}
+        primitives.total_tokens_generated = 0
+        primitives.llm_call = MagicMock(return_value="compact summary")
+        state = MagicMock()
+        state.tool_registry = None
+        mock_cache = MagicMock()
+        mock_cache.make_key.return_value = "rescue-key"
+        mock_cache.get.return_value = None
+
+        with patch(
+            "src.api.routes.chat_delegation._run_architect_decision",
+            return_value=("I|brief:investigate|to:coder_escalation", 1, 0),
+        ), patch(
+            "src.api.routes.chat_delegation._run_specialist_loop",
+            return_value=(self._LONG, 0, [], [], False, True, {}, []),
+        ), patch(
+            "src.delegation_cache.get_delegation_cache",
+            return_value=mock_cache,
+        ):
+            answer, stats = _architect_delegated_answer(
+                question="q",
+                context="",
+                primitives=primitives,
+                state=state,
+                max_loops=3,
+                force_response_on_cap=True,
+            )
+
+        primitives.llm_call.assert_not_called()
+        assert answer == self._LONG
+        assert stats.get("break_reason") == "specialist_report"
+        assert len(stats["report_handles"]) == 1
+        assert mock_cache.put.call_args.kwargs.get("report_handle") == stats["report_handles"][0]

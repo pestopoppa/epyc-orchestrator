@@ -1043,8 +1043,11 @@ def _architect_delegated_answer_inner(
             total_tools += deleg_tools
             all_tools_called.extend(deleg_tools_called)
             full_report = report
+            # Rescued reports are returned in full, so skip the (discarded)
+            # summarization call; the report handle is still persisted.
             report_for_loop, report_handle = _compress_report_for_loop(
                 report, question, primitives, delegate_to,
+                skip_summary=report_rescued,
             )
             final_report = full_report if report_rescued else report_for_loop
             if report_handle:

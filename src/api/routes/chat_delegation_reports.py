@@ -177,12 +177,24 @@ def _compress_report_for_loop(
     question: str,
     primitives: "LLMPrimitives",
     delegate_to: str,
+    *,
+    skip_summary: bool = False,
 ) -> tuple[str, dict[str, str] | None]:
-    """Persist long reports and return compact handle+summary text."""
+    """Persist long reports and return compact handle+summary text.
+
+    skip_summary: the caller uses the full report (rescued), so any summary
+    would be discarded — persist the handle as usual but skip the
+    worker_summarize LLM call and return the report unchanged.
+    """
     cfg = _delegation_config()
     text = (report or "").strip()
     if not text:
         return report, None
+    if skip_summary:
+        handle = None
+        if cfg.report_handles and len(text) >= cfg.report_handle_chars:
+            handle = _store_report_handle(text, delegate_to, cfg=cfg)
+        return report, handle
     if not cfg.report_handles:
         return _maybe_summarize_specialist_report(text, question, primitives), None
     if len(text) < cfg.report_handle_chars:
