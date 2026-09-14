@@ -66,7 +66,12 @@ from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from src.autopilot_core.measurement_guards import (
     is_quality_admissible as _is_quality_admissible,
 )
-from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
+from experiment_journal import (
+    ExperimentJournal,
+    JournalEntry,
+    build_baseline_pin,
+    scrub_legacy_scale_text,
+)
 from planner_roster import PlannerRosterError, validate_active_environment
 from pareto_archive import (
     ParetoArchive,
@@ -4957,6 +4962,48 @@ def _build_model_gate_advisory(
     return "\n".join(lines)
 
 
+def _baseline_pin_for_trial(gate: Any, eval_result: Any) -> dict[str, Any]:
+    """EV-14e: capture the structured baseline pin a trial is about to be judged against.
+
+    Read-only against the gate: it uses ``Baseline.pin_tier(register=False)`` (the
+    EV-14c pin accessor), so it can neither register a measurement window nor move
+    the reference. The rebaseline hold is mirrored rather than re-derived — when the
+    gate is holding, the gate itself forces ``baseline_q = None``, so the pin records
+    ``baseline_quality=None`` with ``suppressed_by="quality_rebaseline_hold"`` instead
+    of a cross-era number the comparison never used.
+
+    Never raises: a trial must not be lost because its provenance annotation failed.
+    """
+    try:
+        baseline = getattr(gate, "baseline", None)
+        if baseline is None or not hasattr(baseline, "pin_tier"):
+            return {}
+        tier = int(getattr(eval_result, "tier", 0) or 0)
+        pin = baseline.pin_tier(tier, register=False)
+        hold = bool(getattr(gate, "quality_rebaseline_required", False))
+        if hold:
+            suppressed = "quality_rebaseline_hold"
+        elif pin.quality is None:
+            suppressed = "no_same_tier_baseline"
+        else:
+            suppressed = ""
+        return build_baseline_pin(
+            tier=tier,
+            baseline_quality=None if hold else pin.quality,
+            candidate_quality=getattr(eval_result, "quality", None),
+            baseline_revision=pin.revision,
+            eval_quality_era=pin.eval_quality_era,
+            autopilot_speed_era=getattr(baseline, "autopilot_speed_era", ""),
+            per_suite_quality=dict(pin.per_suite_quality or {}),
+            per_suite_counts=dict(pin.per_suite_counts or {}),
+            baseline_path=str(getattr(baseline, "source_path", "") or ""),
+            suppressed_by=suppressed,
+        )
+    except Exception as exc:  # noqa: BLE001 - provenance must never fail a trial
+        log.warning("EV-14e baseline pin capture failed: %s: %s", type(exc).__name__, exc)
+        return {"schema_version": 1, "source": "capture_error", "error": str(exc)[:200]}
+
+
 def _record_skip_trial(
     journal: Any,
     trial_id: int,
@@ -9229,6 +9276,14 @@ def _run_loop_inner(
         seq_finalized = False
         seq_inputs: dict[str, Any] | None = None
 
+        # EV-14e: pin the baseline identity HERE — before the gate runs and, critically,
+        # before `gate.update_baseline()` (below) can move the reference. Captured at this
+        # point the pin is exactly the reference the comparison is about to use; captured at
+        # journal-write time it would be the POST-promotion reference, i.e. the candidate's
+        # own number masquerading as its own incumbent. Recorded on the JournalEntry so the
+        # delta is self-contained instead of being regex-recovered from failure prose.
+        baseline_pin_record = _baseline_pin_for_trial(gate, eval_result)
+
         if has_exo_unrecovered:
             # Bypass safety gate + archive update. Trial is journaled below
             # as a bug-corrupted placeholder for audit; the planner's
@@ -9987,6 +10042,7 @@ def _run_loop_inner(
             stagnation_signal=stagnation_signal,
             bug_corrupted_by=bug_corrupted_by,
             bug_corrupted_reason=bug_corrupted_reason,
+            baseline_pin=baseline_pin_record,  # EV-14e
         )
         journal.record(journal_entry)
         # Evidence is the already-durable trial, supplied here rather than by the

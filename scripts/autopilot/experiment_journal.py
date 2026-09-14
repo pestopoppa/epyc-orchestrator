@@ -107,6 +107,29 @@ _LEGACY_SCALE_FAILURE_SUMMARY = (
 )
 _HIGHER_TIER_BUDGET_CREDIT_WEIGHT = 0.15
 
+# ── EV-14e: the baseline pin lives IN the trial record ────────────────────────
+# Before this, the incumbent value a trial was judged against reached the journal
+# only as PROSE inside `failure_analysis` ("Quality regression: 1.744 vs baseline
+# 1.884 …"), and `_BASELINE_QUALITY_RE` above parsed it back out. A regex over a
+# human sentence is not a record of a dependency: it cannot say WHICH tier
+# reference, which revision (EV-14c), or which eval_quality era was compared, it
+# silently reads 0.0 out of an unrelated sentence, and it disappears entirely when
+# the gate PASSES (no regression line is written on a pass, so a clean trial
+# recorded no baseline at all). `baseline_pin` records the reference identity
+# beside the delta so the comparison is self-contained.
+#
+# Written by the trial writer via `build_baseline_pin()`; read by
+# `baseline_pin_for()`, which prefers the structured field and falls back to the
+# regex ONLY for rows written before this field existed — marking the fallback
+# (`source="legacy_failure_analysis_regex"`) and logging it once per trial, so a
+# legacy read is never mistaken for a recorded pin. Legacy shards stay loadable:
+# the field defaults to `{}` and nothing on disk is rewritten.
+BASELINE_PIN_SCHEMA_VERSION = 1
+BASELINE_PIN_SOURCE_STRUCTURED = "structured"
+BASELINE_PIN_SOURCE_LEGACY_REGEX = "legacy_failure_analysis_regex"
+BASELINE_PIN_SOURCE_ABSENT = "absent"
+_LEGACY_BASELINE_PIN_WARNED: set[int] = set()
+
 TSV_COLUMNS = [
     "trial_id",
     "timestamp",
@@ -188,6 +211,139 @@ def scrub_legacy_scale_text(text: str) -> str:
     return text
 
 
+def build_baseline_pin(
+    *,
+    tier: int,
+    baseline_quality: float | None,
+    candidate_quality: float | None,
+    baseline_revision: int = 0,
+    eval_quality_era: str = "",
+    autopilot_speed_era: str = "",
+    per_suite_quality: dict[str, Any] | None = None,
+    per_suite_counts: dict[str, Any] | None = None,
+    baseline_path: str = "",
+    suppressed_by: str = "",
+    captured_at: str = "",
+) -> dict[str, Any]:
+    """EV-14e: render the structured baseline pin recorded beside a trial's delta.
+
+    The pin answers "what exactly was this trial compared against" without
+    re-deriving anything at read time: the tier whose reference was used, that
+    reference's value and its EV-14c monotonic ``revision`` (so a reference that
+    MOVED after the compare is detectable from the row alone), the eval/speed
+    instrument eras the reference was captured under, and the per-suite reference
+    map with the counts it was measured at. ``delta`` / ``relative_delta`` are
+    stored rather than recomputed so the row carries the comparison it actually
+    made.
+
+    ``suppressed_by`` names the reason the gate had NO usable reference (e.g.
+    ``quality_rebaseline_hold``, ``no_same_tier_baseline``) — an absent baseline
+    is recorded as absent, never as 0.0.
+    """
+
+    def _f(value: Any) -> float | None:
+        try:
+            out = float(value)
+        except (TypeError, ValueError):
+            return None
+        return out if math.isfinite(out) else None
+
+    base = _f(baseline_quality)
+    cand = _f(candidate_quality)
+    delta = (cand - base) if (base is not None and cand is not None) else None
+    relative = (delta / base) if (delta is not None and base not in (None, 0.0)) else None
+    return {
+        "schema_version": BASELINE_PIN_SCHEMA_VERSION,
+        "source": BASELINE_PIN_SOURCE_STRUCTURED,
+        "tier": int(tier),
+        "baseline_quality": base,
+        "baseline_revision": int(baseline_revision or 0),
+        "eval_quality_era": str(eval_quality_era or ""),
+        "autopilot_speed_era": str(autopilot_speed_era or ""),
+        "per_suite_baseline_quality": dict(per_suite_quality or {}),
+        "per_suite_baseline_counts": dict(per_suite_counts or {}),
+        "baseline_path": str(baseline_path or ""),
+        "candidate_quality": cand,
+        "delta": delta,
+        "relative_delta": relative,
+        "suppressed_by": str(suppressed_by or ""),
+        "captured_at": captured_at or datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _legacy_baseline_pin_from_text(text: str) -> dict[str, Any] | None:
+    """Parse the pre-EV-14e prose baseline out of ``failure_analysis``.
+
+    Legacy rows ONLY. Returns ``None`` when the prose carries no baseline at all.
+    A value above the 0-3 quality scale is an already-known corrupt-era artifact
+    (see ``has_legacy_scale_failure_analysis``): it is reported as suspect with
+    ``baseline_quality=None`` rather than handed back as a number, so a scrubbed
+    corrupt baseline cannot re-enter a comparison through the fallback.
+    """
+    matches = [float(m.group(1)) for m in _BASELINE_QUALITY_RE.finditer(text or "")]
+    if not matches:
+        return None
+    first = matches[0]
+    suspect = any(v > _MAX_QUALITY_SCALE for v in matches)
+    return {
+        "schema_version": BASELINE_PIN_SCHEMA_VERSION,
+        "source": BASELINE_PIN_SOURCE_LEGACY_REGEX,
+        "tier": None,
+        "baseline_quality": None if suspect else first,
+        "baseline_revision": None,
+        "eval_quality_era": "",
+        "autopilot_speed_era": "",
+        "per_suite_baseline_quality": {},
+        "per_suite_baseline_counts": {},
+        "baseline_path": "",
+        "candidate_quality": None,
+        "delta": None,
+        "relative_delta": None,
+        "suppressed_by": "",
+        "captured_at": "",
+        "legacy_parsed_values": matches,
+        "legacy_scale_suspect": suspect,
+    }
+
+
+def baseline_pin_for(entry: "JournalEntry", *, warn: bool = True) -> dict[str, Any]:
+    """EV-14e reader: the structured pin when present, the legacy regex otherwise.
+
+    Resolution order is deliberate and one-way — a row that carries
+    ``baseline_pin`` is NEVER re-parsed from prose, and a row that does not is
+    marked as a fallback read (``source="legacy_failure_analysis_regex"``) and
+    logged once per trial. A row with neither returns
+    ``source="absent"``: no baseline was recorded, which is a different fact from
+    "the baseline was 0.0".
+    """
+    pin = getattr(entry, "baseline_pin", None)
+    if isinstance(pin, dict) and pin:
+        out = dict(pin)
+        out.setdefault("source", BASELINE_PIN_SOURCE_STRUCTURED)
+        out.setdefault("schema_version", BASELINE_PIN_SCHEMA_VERSION)
+        return out
+    legacy = _legacy_baseline_pin_from_text(getattr(entry, "failure_analysis", "") or "")
+    if legacy is None:
+        return {
+            "schema_version": BASELINE_PIN_SCHEMA_VERSION,
+            "source": BASELINE_PIN_SOURCE_ABSENT,
+            "baseline_quality": None,
+        }
+    trial_id = int(getattr(entry, "trial_id", -1) or -1)
+    if warn and trial_id not in _LEGACY_BASELINE_PIN_WARNED:
+        _LEGACY_BASELINE_PIN_WARNED.add(trial_id)
+        log.warning(
+            "EV-14e legacy baseline read: trial %s carries no structured baseline_pin; "
+            "recovered baseline=%s from failure_analysis prose via regex "
+            "(scale_suspect=%s). This row's comparison identity (tier reference, "
+            "revision, era) was never recorded and cannot be recovered.",
+            trial_id,
+            legacy.get("baseline_quality"),
+            legacy.get("legacy_scale_suspect"),
+        )
+    return legacy
+
+
 @dataclass
 class JournalEntry:
     trial_id: int
@@ -262,6 +418,13 @@ class JournalEntry:
     # tuple is recorded rather than reconstructed later by parsing prose. Populated by
     # `measurement_tuple()` in `record()`; empty on rows written before this date.
     measurement: dict[str, Any] = field(default_factory=dict)
+    # 2026-09-14 (EV-14e): the structured identity of the baseline this trial's delta
+    # was measured against — see build_baseline_pin()/baseline_pin_for() above and the
+    # BASELINE_PIN_* block near the top of this module. Empty on rows written before
+    # this date; `baseline_pin_for()` falls back to the prose regex for those and SAYS
+    # SO. Never back-filled on load: a pin invented at read time would claim a
+    # comparison identity the original trial never captured.
+    baseline_pin: dict[str, Any] = field(default_factory=dict)
 
 
 def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, Any]:
@@ -645,6 +808,11 @@ class ExperimentJournal:
                     # than being back-filled: a tuple invented on load would claim provenance the
                     # original run never recorded.
                     measurement=data.get("measurement", {}) or {},
+                    # EV-14e: absent on every row written before 2026-09-14. Defaults to
+                    # empty (never reconstructed from prose here) so a legacy shard loads
+                    # unchanged and `baseline_pin_for()` is the one place that decides to
+                    # fall back — and marks it.
+                    baseline_pin=data.get("baseline_pin", {}) or {},
                 )
                 self._entries.append(entry)
 

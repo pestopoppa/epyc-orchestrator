@@ -45,6 +45,7 @@ from eval_tower import (  # noqa: E402
     _default_eval_timeout,
     _eval_concurrency,
     compute_calibration_metrics as _compute_calibration_metrics,
+    draw_shortfall,
 )
 
 
@@ -160,6 +161,15 @@ def _arm_decision_blocker(name: str, arm: dict[str, Any] | None, *, expected_n: 
     if not isinstance(arm, dict) or not arm.get("ok"):
         return None
     metrics = arm.get("metrics") or {}
+    # EV-14d: `n_questions` is the REQUESTED draw, so the expected-n compare below can
+    # no longer detect a short draw on its own. A recorded requested/completed gap is a
+    # decision blocker in its own right: the arm scored a subset without saying so.
+    shortfall = draw_shortfall(metrics)
+    if shortfall is not None:
+        return (
+            f"{name} EvalTower arm draw incomplete: completed {shortfall[1]}/"
+            f"{shortfall[0]} requested questions"
+        )
     n_questions = _int_metric(metrics, "n_questions")
     n_scored = _int_metric(metrics, "n_scored")
     if not _has_metric(metrics, "n_scored"):
@@ -222,6 +232,25 @@ def _verifier_result_counts(result: dict[str, Any] | None) -> dict[str, int]:
 
 def _verifier_result_blocker(result: dict[str, Any] | None, *, expected_n: int | None) -> str | None:
     counts = _verifier_result_counts(result)
+    # EV-14d: block on a RECORDED requested/completed gap — at the top level or in any
+    # per-role block — before the expected-n compare. `n_questions` now reports what was
+    # requested, so without this a mode report whose role drew 40 of 50 would clear an
+    # expected_n=50 check on the requested count alone. Silent on pre-EV-14d payloads,
+    # which carry no counts to disagree.
+    shortfall = draw_shortfall(result if isinstance(result, dict) else None)
+    if shortfall is None and isinstance(result, dict):
+        for role, payload in sorted((result.get("per_role") or {}).items()):
+            role_shortfall = draw_shortfall(payload if isinstance(payload, dict) else None)
+            if role_shortfall is not None:
+                return (
+                    f"verifier-mode eval role {role} draw incomplete: completed "
+                    f"{role_shortfall[1]}/{role_shortfall[0]} requested questions"
+                )
+    if shortfall is not None:
+        return (
+            f"verifier-mode eval draw incomplete: completed {shortfall[1]}/"
+            f"{shortfall[0]} requested questions"
+        )
     if expected_n is not None and counts["n_questions"] < expected_n:
         return (
             f"verifier-mode eval scored {counts['n_questions']}/{expected_n} questions"
