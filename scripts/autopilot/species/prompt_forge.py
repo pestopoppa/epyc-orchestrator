@@ -20,8 +20,8 @@ if TYPE_CHECKING:
     from scripts.autopilot.worktree_manager import ExperimentContext
 
 import ast
-import importlib
 import math
+from enum import Enum
 
 ORCH_ROOT = Path(__file__).resolve().parents[3]
 PROMPTS_DIR = ORCH_ROOT / "orchestration" / "prompts"
@@ -271,6 +271,434 @@ class PromptMutation:
     safety_warnings: list[str] = field(default_factory=list)
 
 
+class MutationEffect(str, Enum):
+    """RTG-55 MHS-1 — the closed, host-normalized effect vocabulary.
+
+    A code mutation's EFFECT is what it may DO, independent of which file it
+    touches. The vocabulary is closed on purpose: an unrecognised effect
+    normalizes to ``UNKNOWN`` and is never silently treated as benign.
+    """
+
+    INERT = "inert"  # New module; import executes nothing beyond defs/constants
+    CONSTRAIN = "constrain"  # Add-only: no original line removed (guards, checks)
+    EXPAND = "expand"  # Adds new top-level defs/classes, keeps every old one
+    REPLACE = "replace"  # Rewrites or removes existing behaviour
+    UNSAFE = "unsafe"  # Tripped the static safety screen; never applicable
+    UNKNOWN = "unknown"  # Could not be classified (fail-closed sentinel)
+
+    @classmethod
+    def normalize(cls, raw: Any) -> MutationEffect:
+        """Host-normalize an arbitrary value into the closed enum.
+
+        Normalization is total: anything unrecognised becomes ``UNKNOWN``.
+        """
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, str):
+            return cls.UNKNOWN
+        token = raw.strip().lower().replace("-", "_").replace(" ", "_")
+        token = token.split(".")[-1][:_EFFECT_TOKEN_LIMIT]
+        alias = _EFFECT_ALIASES.get(token)
+        if alias is not None:
+            return alias
+        for member in cls:
+            if member.value == token:
+                return member
+        return cls.UNKNOWN
+
+
+# Host normalization limits (MHS-1: "host-normalized and truncated").
+_EFFECT_TOKEN_LIMIT = 32
+_EFFECT_REASON_LIMIT = 240
+
+_EFFECT_ALIASES: dict[str, MutationEffect] = {
+    "noop": MutationEffect.INERT,
+    "no_op": MutationEffect.INERT,
+    "inert": MutationEffect.INERT,
+    "default_inert": MutationEffect.INERT,
+    "new_file": MutationEffect.INERT,
+    "guard": MutationEffect.CONSTRAIN,
+    "check": MutationEffect.CONSTRAIN,
+    "constrain": MutationEffect.CONSTRAIN,
+    "add_only": MutationEffect.CONSTRAIN,
+    "reprompt": MutationEffect.CONSTRAIN,
+    "add": MutationEffect.EXPAND,
+    "extend": MutationEffect.EXPAND,
+    "expand": MutationEffect.EXPAND,
+    "override": MutationEffect.REPLACE,
+    "rewrite": MutationEffect.REPLACE,
+    "replace": MutationEffect.REPLACE,
+    "force": MutationEffect.REPLACE,
+    "unsafe": MutationEffect.UNSAFE,
+    "rejected": MutationEffect.UNSAFE,
+}
+
+
+def _truncate_reason(reason: str) -> str:
+    """Truncate a screen reason to the host limit (never unbounded model text)."""
+    text = " ".join(str(reason).split())
+    if len(text) <= _EFFECT_REASON_LIMIT:
+        return text
+    return text[: _EFFECT_REASON_LIMIT - 1] + "…"
+
+
+# ---------------------------------------------------------------------------
+# RTG-55 MHS-2 — static safety screen (AST denylist).
+#
+# Validation is STATIC ONLY. It never writes into the live source tree and
+# never imports/execs the candidate in this process.
+# ---------------------------------------------------------------------------
+
+# Callables a mutation may never invoke, at any nesting depth. Never grandfathered:
+# an allowlisted file that somehow already contained these would not excuse a new one.
+SAFETY_BANNED_CALLS: frozenset[str] = frozenset(
+    {
+        "exec",
+        "eval",
+        "compile",
+        "__import__",
+        "input",
+        "breakpoint",
+        "globals",
+        "locals",
+        "vars",
+        "memoryview",
+    }
+)
+
+# Callables a mutation may not ADD. Grandfathered when the original file already
+# called them, so a targeted fix is judged on what it introduces.
+SAFETY_RESTRICTED_CALLS: frozenset[str] = frozenset(
+    {
+        "open",
+        "getattr",
+        "setattr",
+        "delattr",
+    }
+)
+
+# Modules a mutation may never newly import, and whose attribute calls are
+# rejected unless the ORIGINAL file already made the identical dotted call.
+SAFETY_BANNED_MODULES: frozenset[str] = frozenset(
+    {
+        "builtins",
+        "ctypes",
+        "http",
+        "importlib",
+        "marshal",
+        "multiprocessing",
+        "os",
+        "pathlib",
+        "pickle",
+        "pty",
+        "requests",
+        "shutil",
+        "signal",
+        "socket",
+        "subprocess",
+        "sys",
+        "tempfile",
+        "threading",
+        "urllib",
+        "webbrowser",
+    }
+)
+
+# Stdlib modules any mutation may import.
+SAFETY_IMPORT_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "__future__",
+        "abc",
+        "ast",
+        "collections",
+        "contextlib",
+        "copy",
+        "dataclasses",
+        "datetime",
+        "decimal",
+        "enum",
+        "fractions",
+        "functools",
+        "hashlib",
+        "itertools",
+        "json",
+        "logging",
+        "math",
+        "numbers",
+        "operator",
+        "random",
+        "re",
+        "statistics",
+        "string",
+        "textwrap",
+        "time",
+        "types",
+        "typing",
+        "uuid",
+        "warnings",
+    }
+)
+
+# First-party package roots a mutation may import (the orchestrator's own code).
+SAFETY_FIRST_PARTY_ROOTS: frozenset[str] = frozenset({"orchestration", "scripts", "src"})
+
+# Dunder attributes tolerated; every other dunder attribute access is rejected
+# (it is the standard sandbox-escape surface: __globals__, __class__, __subclasses__).
+SAFETY_DUNDER_ATTR_ALLOWLIST: frozenset[str] = frozenset({"__name__", "__doc__", "__all__"})
+
+# Module-level statement types any mutation may contain. Anything else at module
+# level executes work at import time and is rejected.
+SAFETY_TOPLEVEL_ALLOWED: tuple[type[ast.AST], ...] = (
+    ast.Import,
+    ast.ImportFrom,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.Assign,
+    ast.AnnAssign,
+    ast.AugAssign,
+    ast.If,  # `if TYPE_CHECKING:` / `if __name__ == "__main__":`
+    ast.Try,  # import fallbacks
+    ast.Pass,
+)
+
+# MHS-2 strict profile: the handoff's node denylist for `new_file` proposals, so
+# "default-inert" is a compile-time property rather than prompt text.
+SAFETY_STRICT_NODE_DENYLIST: tuple[type[ast.AST], ...] = (
+    ast.Import,
+    ast.ImportFrom,
+    ast.With,
+    ast.AsyncWith,
+    ast.While,
+    ast.Lambda,
+    ast.ClassDef,
+    ast.Raise,
+    ast.Global,
+    ast.Nonlocal,
+    ast.Delete,
+    ast.Yield,
+    ast.YieldFrom,
+    ast.Await,
+)
+
+
+@dataclass(frozen=True)
+class StaticSafetyReport:
+    """Outcome of the static screen: a verdict, its violations, and an effect."""
+
+    safe: bool
+    effect: MutationEffect
+    violations: tuple[str, ...] = ()
+
+    @property
+    def reason(self) -> str:
+        if self.safe:
+            return "ok"
+        return _truncate_reason("; ".join(self.violations) or "static safety screen failed")
+
+
+def _dotted_name(node: ast.AST) -> str | None:
+    """Render ``a.b.c`` attribute/name chains as a dotted string."""
+    parts: list[str] = []
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if not isinstance(cur, ast.Name):
+        return None
+    parts.append(cur.id)
+    return ".".join(reversed(parts))
+
+
+def _collect_dotted_calls(tree: ast.AST) -> set[str]:
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            dotted = _dotted_name(node.func)
+            if dotted:
+                out.add(dotted)
+    return out
+
+
+def _collect_imported_roots(tree: ast.AST) -> set[str]:
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                roots.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                roots.add(node.module.split(".")[0])
+    return roots
+
+
+def _top_level_definition_names(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+    return names
+
+
+def screen_static_safety(
+    mutated: str,
+    *,
+    original: str = "",
+    strict: bool = False,
+) -> StaticSafetyReport:
+    """Screen a candidate mutation statically (MHS-2). Nothing is written or executed.
+
+    ``strict=True`` additionally applies the ``new_file`` inertness denylist.
+    Capabilities the ORIGINAL file already used are grandfathered: an
+    existing-file mutation is judged on what it ADDS, not on what the file has
+    always done.
+    """
+    violations: list[str] = []
+    try:
+        tree = ast.parse(mutated)
+    except SyntaxError as exc:
+        return StaticSafetyReport(False, MutationEffect.UNSAFE, (f"syntax error: {exc}",))
+
+    grandfathered_roots: set[str] = set()
+    grandfathered_calls: set[str] = set()
+    if original.strip():
+        try:
+            original_tree = ast.parse(original)
+        except SyntaxError:
+            original_tree = None
+        if original_tree is not None:
+            grandfathered_roots = _collect_imported_roots(original_tree)
+            grandfathered_calls = _collect_dotted_calls(original_tree)
+
+    # 1. Module-level statements must not do work at import time.
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Expr):
+            if isinstance(node.value, ast.Constant):
+                continue  # docstring
+            violations.append(
+                f"top-level side effect: bare expression at line {getattr(node, 'lineno', 0)}"
+            )
+            continue
+        if not isinstance(node, SAFETY_TOPLEVEL_ALLOWED):
+            violations.append(
+                f"top-level {type(node).__name__} at line {getattr(node, 'lineno', 0)} "
+                "is not a def/class/import/assignment"
+            )
+
+    # 2. Imports: allowlist + first-party + grandfathered roots only.
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            if isinstance(node, ast.Import):
+                roots = [alias.name.split(".")[0] for alias in node.names]
+            else:
+                roots = [node.module.split(".")[0]] if node.module else []
+            for root in roots:
+                if root in grandfathered_roots:
+                    continue
+                if root in SAFETY_BANNED_MODULES:
+                    violations.append(f"banned import: {root}")
+                elif root not in SAFETY_IMPORT_ALLOWLIST and root not in SAFETY_FIRST_PARTY_ROOTS:
+                    violations.append(f"import outside allowlist: {root}")
+
+    # 3. Calls: banned builtins, and attribute calls on banned modules.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name):
+            if func.id in SAFETY_BANNED_CALLS:
+                violations.append(f"banned call: {func.id}()")
+                continue
+            if func.id in SAFETY_RESTRICTED_CALLS and func.id not in grandfathered_calls:
+                violations.append(f"banned call: {func.id}()")
+                continue
+        dotted = _dotted_name(func)
+        if dotted and dotted not in grandfathered_calls:
+            root, _, attr = dotted.partition(".")
+            if root in SAFETY_BANNED_MODULES and attr:
+                violations.append(f"banned call: {dotted}()")
+            elif attr and attr.split(".")[-1] in {"system", "popen", "spawn"}:
+                violations.append(f"banned call: {dotted}()")
+
+    # 4. Dunder attribute access (sandbox-escape surface).
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            attr = node.attr
+            if (
+                attr.startswith("__")
+                and attr.endswith("__")
+                and attr not in SAFETY_DUNDER_ATTR_ALLOWLIST
+            ):
+                violations.append(f"dunder attribute access: .{attr}")
+
+    # 5. Strict (new_file) inertness denylist.
+    if strict:
+        for node in ast.walk(tree):
+            if isinstance(node, SAFETY_STRICT_NODE_DENYLIST):
+                violations.append(f"new_file denylist node: {type(node).__name__}")
+            elif isinstance(node, ast.Name) and node.id.startswith("_"):
+                violations.append(f"new_file underscore name: {node.id}")
+            elif isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+                violations.append(f"new_file underscore attribute: .{node.attr}")
+
+    # Deduplicate while preserving order, and cap the list.
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in violations:
+        if item not in seen:
+            seen.add(item)
+            ordered.append(item)
+    ordered = ordered[:10]
+
+    if ordered:
+        return StaticSafetyReport(False, MutationEffect.UNSAFE, tuple(ordered))
+    return StaticSafetyReport(
+        True,
+        classify_mutation_effect(original, mutated, is_new_file=strict or not original.strip()),
+    )
+
+
+def classify_mutation_effect(
+    original: str,
+    mutated: str,
+    *,
+    is_new_file: bool = False,
+) -> MutationEffect:
+    """Mechanically classify a screened mutation into the MHS-1 effect enum.
+
+    Answers the handoff's Open Question 3: the CONSTRAIN/REPLACE split is
+    derivable from the candidate itself, so it needs no separate label.
+    """
+    if is_new_file or not original.strip():
+        return MutationEffect.INERT
+    try:
+        original_tree = ast.parse(original)
+        mutated_tree = ast.parse(mutated)
+    except SyntaxError:
+        return MutationEffect.UNKNOWN
+
+    original_names = _top_level_definition_names(original_tree)
+    mutated_names = _top_level_definition_names(mutated_tree)
+    if original_names - mutated_names:
+        return MutationEffect.REPLACE
+
+    original_lines = [line.strip() for line in original.splitlines() if line.strip()]
+    mutated_lines = [line.strip() for line in mutated.splitlines() if line.strip()]
+    remaining = list(mutated_lines)
+    add_only = True
+    for line in original_lines:
+        if line in remaining:
+            remaining.remove(line)
+        else:
+            add_only = False
+            break
+    if not add_only:
+        return MutationEffect.REPLACE
+    if mutated_names - original_names:
+        return MutationEffect.EXPAND
+    return MutationEffect.CONSTRAIN
+
+
 @dataclass
 class CodeMutation:
     file: str  # Relative path, e.g. "src/escalation.py"
@@ -284,6 +712,9 @@ class CodeMutation:
     safety_valid: bool = True
     safety_reason: str = "ok"
     safety_warnings: list[str] = field(default_factory=list)
+    # RTG-55 MHS-1: the typed return-effect the static screen assigned.
+    effect: MutationEffect = MutationEffect.UNKNOWN
+    effect_reason: str = ""
 
 
 def _resolve_code_mutation_target(target_file: str) -> Path:
@@ -867,12 +1298,15 @@ class PromptForge:
         """Apply a code mutation within an experiment context."""
         if not mutation.syntax_valid:
             return {"status": "rejected", "reason": "syntax_invalid"}
+        if MutationEffect.normalize(mutation.effect) is MutationEffect.UNSAFE:
+            return {"status": "rejected", "reason": "effect_unsafe"}
         ctx.apply_file(mutation.file, mutation.mutated_content)
         mutation.accepted = True
         return {
             "status": "applied_isolated",
             "file": mutation.file,
             "mutation_type": mutation.mutation_type,
+            "effect": MutationEffect.normalize(mutation.effect).value,
             "worktree": str(ctx.worktree_path),
         }
 
@@ -954,16 +1388,19 @@ class PromptForge:
             description=description,
         )
 
-        # Deep validation: syntax + shrinkage + public names + import test
-        valid, reason = self._validate_code_mutation(
+        # Deep validation: syntax + shrinkage + public names + static safety screen.
+        # STATIC ONLY — nothing is written to the repo and nothing is imported.
+        report = self._screen_code_mutation(
             original,
             mutated_content,
             target_file,
             is_new_file=(mutation_type == "new_file"),
         )
-        mutation.syntax_valid = valid
-        if not valid:
-            log.warning("Code mutation rejected (%s): %s", target_file, reason)
+        mutation.syntax_valid = report.safe
+        mutation.effect = report.effect
+        mutation.effect_reason = report.reason
+        if not report.safe:
+            log.warning("Code mutation rejected (%s): %s", target_file, report.reason)
             mutation.mutated_content = original
         if not mutation.safety_valid:
             log.warning(
@@ -972,6 +1409,8 @@ class PromptForge:
                 mutation.safety_reason,
             )
             mutation.mutated_content = original
+            mutation.effect = MutationEffect.UNSAFE
+            mutation.effect_reason = _truncate_reason(mutation.safety_reason)
 
         return mutation
 
@@ -979,6 +1418,8 @@ class PromptForge:
         """Apply a code mutation with syntax validation + git safety."""
         if not mutation.syntax_valid:
             return {"status": "rejected", "reason": "syntax_invalid"}
+        if MutationEffect.normalize(mutation.effect) is MutationEffect.UNSAFE:
+            return {"status": "rejected", "reason": "effect_unsafe"}
 
         abs_path = PROJECT_ROOT / mutation.file
 
@@ -1040,6 +1481,7 @@ class PromptForge:
             "status": "applied",
             "file": mutation.file,
             "mutation_type": mutation.mutation_type,
+            "effect": MutationEffect.normalize(mutation.effect).value,
             "diff_lines": len(mutation.git_diff.splitlines()),
         }
 
@@ -1100,77 +1542,77 @@ class PromptForge:
         *,
         is_new_file: bool = False,
     ) -> tuple[bool, str]:
-        """Deep validation of a code mutation beyond syntax.
+        """Backwards-compatible ``(valid, reason)`` wrapper over the static screen."""
+        report = self._screen_code_mutation(
+            original, mutated, target_file, is_new_file=is_new_file
+        )
+        return report.safe, report.reason
+
+    def _screen_code_mutation(
+        self,
+        original: str,
+        mutated: str,
+        target_file: str,
+        *,
+        is_new_file: bool = False,
+    ) -> StaticSafetyReport:
+        """Deep validation of a code mutation beyond syntax. STATIC ONLY.
 
         Returns (valid, reason). Checks:
         1. Syntax (ast.parse)
         2. No catastrophic size reduction (>60% shrinkage)
         3. Public names preserved (classes, functions defined at module level)
-        4. Import test (actually importable, no circular imports)
+        4. RTG-55 MHS-2 static safety screen (AST denylist + effect classification)
+
+        This function NEVER writes into the source tree and NEVER imports or
+        execs the candidate in this process. The pre-RTG-55 step 4 wrote the
+        model's code over the live repo file and then ``importlib`` -imported
+        it, so the mutation's module top level ran unsandboxed and any
+        concurrent reader saw the candidate on disk.
         """
         # 1. Syntax
         try:
             mutated_tree = ast.parse(mutated)
         except SyntaxError as e:
-            return False, f"syntax error: {e}"
+            return StaticSafetyReport(
+                False, MutationEffect.UNSAFE, (_truncate_reason(f"syntax error: {e}"),)
+            )
 
         # 2. Catastrophic shrinkage — reject if >60% of lines removed
         orig_lines = len(original.splitlines())
         new_lines = len(mutated.splitlines())
         if not is_new_file and orig_lines > 10 and new_lines < orig_lines * 0.4:
-            return False, (
-                f"catastrophic shrinkage: {orig_lines}→{new_lines} lines "
-                f"({100 * (1 - new_lines / orig_lines):.0f}% removed)"
+            return StaticSafetyReport(
+                False,
+                MutationEffect.REPLACE,
+                (
+                    f"catastrophic shrinkage: {orig_lines}→{new_lines} lines "
+                    f"({100 * (1 - new_lines / orig_lines):.0f}% removed)",
+                ),
             )
 
         # 3. Public names preserved — every class/function at module level
         #    in the original must still exist in the mutated version
-        def _top_level_names(tree: ast.AST) -> set[str]:
-            names = set()
-            for node in ast.iter_child_nodes(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                    names.add(node.name)
-            return names
-
         if not is_new_file:
-            orig_tree = ast.parse(original)
-            orig_names = _top_level_names(orig_tree)
-            new_names = _top_level_names(mutated_tree)
-            missing = orig_names - new_names
+            orig_names = _top_level_definition_names(ast.parse(original))
+            missing = orig_names - _top_level_definition_names(mutated_tree)
             if missing:
-                return False, f"missing public names: {missing}"
+                return StaticSafetyReport(
+                    False,
+                    MutationEffect.REPLACE,
+                    (f"missing public names: {sorted(missing)}",),
+                )
 
-        # 4. Import test — write to temp, try importing
-        abs_path = PROJECT_ROOT / target_file
-        try:
-            # Temporarily write mutated code
-            backup_exists = abs_path.exists()
-            backup = abs_path.read_text() if backup_exists else ""
-            abs_path.write_text(mutated)
-            try:
-                module_name = target_file.replace("/", ".").removesuffix(".py")
-                # Clear any cached version
-                import sys
-
-                if module_name in sys.modules:
-                    del sys.modules[module_name]
-                importlib.import_module(module_name)
-            except Exception as e:
-                if backup_exists:
-                    abs_path.write_text(backup)
-                else:
-                    abs_path.unlink(missing_ok=True)
-                return False, f"import failed: {e}"
-            finally:
-                # Always restore original before returning
-                if backup_exists:
-                    abs_path.write_text(backup)
-                else:
-                    abs_path.unlink(missing_ok=True)
-        except Exception as e:
-            return False, f"validation IO error: {e}"
-
-        return True, "ok"
+        # 4. Static safety screen (RTG-55 MHS-2). Replaces the pre-RTG-55
+        #    "write the candidate over the live file and importlib-import it"
+        #    step: no repo write, no in-process execution, no sys.path games.
+        #    `new_file` proposals get the strict inertness denylist.
+        report = screen_static_safety(mutated, original=original, strict=is_new_file)
+        if not report.safe:
+            log.warning(
+                "Static safety screen rejected mutation on %s: %s", target_file, report.reason
+            )
+        return report
 
     def _build_code_mutation_prompt(
         self,
