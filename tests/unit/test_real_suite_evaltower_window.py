@@ -209,3 +209,50 @@ def test_full_clean_50_question_run_is_decision_grade(tmp_path: Path, monkeypatc
     assert rc == 0
     assert report["status"] == "clean_full_suite_packaged"
     assert report["decision_grade"] is True
+
+
+def test_absent_goodput_is_carried_as_unmeasured_not_zero() -> None:
+    """RTG-23: the producer journals `null` goodput when quality was not measured.
+
+    `details.get("goodput_qph", 0.0)` turned that absence into a real 0.00 solved
+    questions/hour — a measurement this row never made. It must stay None.
+    """
+    absent = FakeResult()
+    absent.details = dict(FakeResult.details)  # no goodput_qph / task_rate_qph keys
+    args = window.parse_args(["--n", "2"])
+
+    row = window.eval_result_raw_row(
+        result=absent,
+        selected_questions=[],
+        args=args,
+        started_at="2026-09-14T00:00:00+00:00",
+        finished_at="2026-09-14T00:01:00+00:00",
+        calibration_id="cal-test",
+    )
+    assert row["eval_details"]["details"]["goodput_qph"] is None
+
+    explicit_null = FakeResult()
+    explicit_null.details = {**FakeResult.details, "goodput_qph": None}
+    row_null = window.eval_result_raw_row(
+        result=explicit_null,
+        selected_questions=[],
+        args=args,
+        started_at="2026-09-14T00:00:00+00:00",
+        finished_at="2026-09-14T00:01:00+00:00",
+        calibration_id="cal-test",
+    )
+    assert row_null["eval_details"]["details"]["goodput_qph"] is None
+
+    # A MEASURED value — including a measured zero — is carried through unchanged.
+    for measured in (0.0, 123.5):
+        result = FakeResult()
+        result.details = {**FakeResult.details, "goodput_qph": measured}
+        row_measured = window.eval_result_raw_row(
+            result=result,
+            selected_questions=[],
+            args=args,
+            started_at="2026-09-14T00:00:00+00:00",
+            finished_at="2026-09-14T00:01:00+00:00",
+            calibration_id="cal-test",
+        )
+        assert row_measured["eval_details"]["details"]["goodput_qph"] == measured

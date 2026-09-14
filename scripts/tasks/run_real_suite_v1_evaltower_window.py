@@ -109,6 +109,23 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _measured_or_none(value: Any) -> float | None:
+    """Carry an UNMEASURED metric through as None, never as a measured 0.0.
+
+    RTG-23: `goodput_qph` is quality-scaled, and quality is `None` (not 0.0) on a
+    trial whose eval never ran, so the EvalTower/AutoPilot producers journal `null`.
+    This row is journal-shaped and is read back by the same replay helpers, so a
+    `0.0` default here would reinstate the absent-read-as-zero defect one layer out.
+    """
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if number != number else number  # NaN is absence, not a value
+
+
 def load_suite_questions(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
@@ -243,7 +260,7 @@ def eval_result_raw_row(
                 "errors": _safe_int(details.get("errors")),
                 "per_suite_counts": details.get("per_suite_counts", {}),
                 "task_rate_qph": details.get("task_rate_qph", 0.0),
-                "goodput_qph": details.get("goodput_qph", 0.0),
+                "goodput_qph": _measured_or_none(details.get("goodput_qph")),
             },
         },
     }

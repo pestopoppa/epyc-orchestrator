@@ -369,6 +369,25 @@ def _details_float(details: dict[str, Any], key: str, fallback: float = 0.0) -> 
         return fallback
 
 
+def _details_float_or_none(details: dict[str, Any], key: str) -> float | None:
+    """A detail that may legitimately be UNMEASURED — carried as None, never 0.0.
+
+    RTG-23: `goodput_qph` is quality-scaled, and quality is `None` (not 0.0) on a
+    trial whose eval never ran, so the producer now journals `null` there. Coercing
+    that null to 0.0 here would re-assert the very measurement the producer refused
+    to make — the same gap-handling doctrine `_arm_decision_blocker` applies to
+    n_scored / reliability.
+    """
+    value = details.get(key)
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if number != number else number  # NaN is absence, not a value
+
+
 def eval_result_metrics(result: Any, *, wall_s: float) -> dict[str, Any]:
     details = getattr(result, "details", {}) or {}
     eval_wall_s = float(getattr(result, "eval_wall_s", 0.0) or 0.0)
@@ -415,7 +434,7 @@ def eval_result_metrics(result: Any, *, wall_s: float) -> dict[str, Any]:
         "wall_s": wall_s,
         "wall_minutes_per_eval": wall_s / 60.0,
         "task_rate_qph": _details_float(details, "task_rate_qph"),
-        "goodput_qph": _details_float(details, "goodput_qph"),
+        "goodput_qph": _details_float_or_none(details, "goodput_qph"),
         "per_suite_quality": dict(getattr(result, "per_suite_quality", {}) or {}),
         "per_suite_counts": dict(
             getattr(result, "per_suite_counts", {}) or details.get("per_suite_counts", {}) or {}
