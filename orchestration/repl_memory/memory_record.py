@@ -300,6 +300,32 @@ class MemoryRecord:
         return bool((self.objective or "").strip())
 
 
+def embedding_text_for(
+    objective: str | None,
+    task_type: str | None = None,
+    priority: str | None = None,
+) -> str:
+    """The canonical embedding text for a loose (objective, task_type, priority).
+
+    THE ONE ENTRY POINT for write sites that hold the task fields but not a
+    ``MemoryRecord`` — a TaskIR dict, a seed row, a reward-injection payload.
+    It exists so those sites cannot re-spell the convention: every one of them
+    was measured drifting from ``MemoryRecord.embedding_text()`` in different
+    ways (EPD-3-R2/R3, 2026-08-12) — key PRESENCE instead of truthiness (so
+    ``priority:None`` could be emitted), no ``.strip()``, no length cap, extra
+    ``constraints:``/``input_types:`` segments, a hard-coded ``type:chat``, and
+    one site that embedded raw text with no prefix at all.
+
+    This is deliberately a thin delegation: the convention itself lives in
+    ``MemoryRecord.embedding_text()`` and nowhere else.
+    """
+    return MemoryRecord(
+        objective=objective or "",
+        task_type=task_type,
+        priority=priority,
+    ).embedding_text()
+
+
 def build_memory_record(
     *,
     objective: str | None,

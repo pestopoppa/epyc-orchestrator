@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 from src.inference_lock import inference_lock
 
+from .memory_record import embedding_text_for
+
 # Default model path (BGE-large-en-v1.5 for embeddings)
 # BGE-large produces 1024-dim embeddings, purpose-built for similarity search
 DEFAULT_MODEL_PATH = Path("/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf")
@@ -241,40 +243,26 @@ class TaskEmbedder:
         return embedding
 
     def _serialize_task_ir(self, task_ir: Dict[str, Any]) -> str:
+        """Serialize a TaskIR into the ONE canonical embedding convention.
+
+        Delegates to ``memory_record.embedding_text_for`` — this is the live
+        query/write path for every ``embed_task_ir`` caller, and it must produce
+        byte-identical text to what the store was published with, or similarity
+        search matches queries against a different convention.
+
+        It used to re-spell the convention here and had drifted three ways
+        (EPD-3-R2): key PRESENCE instead of truthiness (so a TaskIR carrying
+        ``priority: None`` emitted the literal ``priority:None``), no
+        ``.strip()`` and no length cap, plus ``constraints:``/``input_types:``
+        segments no other write site emits. Any field beyond the task triple is
+        telemetry as far as the embedding is concerned and is stored, never
+        embedded (see memory_record's THE ONE INVARIANT).
         """
-        Serialize TaskIR to embedding-friendly text.
-
-        Focus on semantically meaningful fields:
-        - task_type
-        - objective
-        - constraints
-        - inputs (types only, not content)
-        """
-        parts = []
-
-        # Task type
-        if "task_type" in task_ir:
-            parts.append(f"type:{task_ir['task_type']}")
-
-        # Objective (most important)
-        if "objective" in task_ir:
-            parts.append(f"objective:{task_ir['objective']}")
-
-        # Priority
-        if "priority" in task_ir:
-            parts.append(f"priority:{task_ir['priority']}")
-
-        # Constraints
-        if "constraints" in task_ir and task_ir["constraints"]:
-            constraints_str = ",".join(task_ir["constraints"][:5])  # Limit
-            parts.append(f"constraints:{constraints_str}")
-
-        # Input types (not content)
-        if "inputs" in task_ir:
-            input_types = [inp.get("type", "unknown") for inp in task_ir["inputs"]]
-            parts.append(f"input_types:{','.join(input_types)}")
-
-        return " | ".join(parts)
+        return embedding_text_for(
+            objective=task_ir.get("objective"),
+            task_type=task_ir.get("task_type"),
+            priority=task_ir.get("priority"),
+        )
 
     def _serialize_failure_context(self, failure_context: Dict[str, Any]) -> str:
         """Serialize failure context for escalation memory."""

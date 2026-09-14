@@ -13,6 +13,8 @@ from typing import Any
 
 import httpx
 
+from orchestration.repl_memory.memory_record import embedding_text_for
+
 __all__ = [
     "EMBEDDER_PORTS",
     "RewardDeliverySummary",
@@ -60,9 +62,26 @@ def _get_reward_executor() -> concurrent.futures.ThreadPoolExecutor:
 def _precompute_embedding(
     task_description: str,
     client: "httpx.Client",
+    task_type: str | None = None,
 ) -> list[float] | None:
-    """Precompute embedding for task_description using embedder servers."""
-    text = f"type:chat | objective:{task_description[:200]}"
+    """Precompute embedding for task_description using embedder servers.
+
+    ``task_type`` MUST be the same value the injected row carries in its
+    context, because that is what the API side derives the row's embedding text
+    from (``q_scorer.score_external_result``: ``context["task_type"] or
+    "chat"``). This used to hard-code ``type:chat`` for every suite, so a
+    ``math``/``coder``/``hotpotqa`` row got a vector describing a convention
+    its own stored context contradicted (EPD-3-R3). The text itself is built by
+    the one canonical builder, never re-spelled here.
+
+    ``task_description`` is expected pre-truncated by the caller to whatever it
+    puts in the payload's ``task_description`` field, so the precomputed vector
+    describes the text that is actually stored.
+    """
+    text = embedding_text_for(
+        objective=task_description,
+        task_type=task_type or "chat",
+    )
 
     for port in EMBEDDER_PORTS:
         try:
@@ -167,7 +186,7 @@ def _inject_3way_rewards_http(
     if not rewards:
         return summary.to_dict()
 
-    embedding = _precompute_embedding(prompt[:200], client)
+    embedding = _precompute_embedding(prompt[:200], client, task_type=suite)
 
     executor = _get_reward_executor()
     futures: dict[concurrent.futures.Future[tuple[bool, str]], str] = {}
@@ -265,7 +284,7 @@ def _inject_per_role_rewards_http(
     if not rewards:
         return summary.to_dict()
 
-    embedding = _precompute_embedding(prompt[:200], client)
+    embedding = _precompute_embedding(prompt[:200], client, task_type=suite)
 
     executor = _get_reward_executor()
     futures: dict[concurrent.futures.Future[tuple[bool, str]], str] = {}
