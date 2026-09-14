@@ -1559,6 +1559,15 @@ def _eval_details_from_result(result: Any) -> dict[str, Any]:
             payload[name] = int(raw)
         except (TypeError, ValueError):
             payload[name] = None
+    # ETR-2 (2026-07-20 audit): carry the measured/placeholder distinction on EVERY
+    # journaled trial, not only on the aggregate path that happens to stash it in
+    # `details`. A plain bool, never null-gated: False means the row's `quality` is a
+    # placeholder (nothing was scored), so a later reader can never mistake it for a
+    # measured 0.0.
+    payload["quality_measured"] = bool(getattr(result, "quality_measured", True))
+    payload["quality_unmeasured_reason"] = str(
+        getattr(result, "quality_unmeasured_reason", "") or ""
+    )
     return payload
 
 

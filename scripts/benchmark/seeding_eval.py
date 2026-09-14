@@ -382,7 +382,11 @@ def _build_role_result(
         # row a non-empty, self-describing error so it can never be mistaken
         # for a clean generation.
         if not str(error or "").strip():
-            reason = infra_failure_reason(resp, error=error) or "infra_failed"
+            # ETR-3: measurement path — see seeding_scoring._classify_error.
+            reason = (
+                infra_failure_reason(resp, error=error, require_generation_evidence=True)
+                or "infra_failed"
+            )
             error = f"infra_failed: {reason} (role={role})"
             logger.error(
                 "REL-1 infra failure with no error text (role=%s reason=%s) — "

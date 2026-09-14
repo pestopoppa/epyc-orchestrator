@@ -4271,7 +4271,12 @@ class EvalTower:
             # recorded (failure_reason / failure_provenance / _meta.reason /
             # HTTP status / an empty zero-token reply) and give the row a
             # non-empty error so it is excluded like any other infra failure.
-            _infra_reason = infra_failure_reason(resp, error=error)
+            # ETR-3: this is a MEASUREMENT path, so it also demands evidence that the
+            # answer came from a generation (non-blank text with a zero token counter
+            # is not a wrong answer, it is no answer).
+            _infra_reason = infra_failure_reason(
+                resp, error=error, require_generation_evidence=True
+            )
             if _infra_reason is not None and not str(error or "").strip():
                 error = f"infra_failed: {_infra_reason}"
                 log.error(
@@ -4454,10 +4459,16 @@ class EvalTower:
         # scorer — is what let a dead API report itself as a model scoring 0%
         # on 2026-08-03.
         disposition = measurement_disposition(
-            resp, error=error, scoring_failed=scoring_failed
+            resp,
+            error=error,
+            scoring_failed=scoring_failed,
+            require_generation_evidence=True,  # ETR-3 (measurement path)
         )
         infra_reason = (
-            (infra_failure_reason(resp, error=error) or "unclassified")
+            (
+                infra_failure_reason(resp, error=error, require_generation_evidence=True)
+                or "unclassified"
+            )
             if disposition == DISPOSITION_INFRA_FAILED
             else ""
         )
@@ -5927,6 +5938,10 @@ class EvalTower:
                 speed=0,
                 cost=0,
                 reliability=0,
+                # ETR-2: no question was ever asked, so `quality=0` is a PLACEHOLDER,
+                # not a score. Say so, or the gate reads it as a measured 0.0.
+                quality_measured=False,
+                quality_unmeasured_reason="t1_designed_core_misconfigured",
                 details={
                     "core_selection": "designed_core",
                     "core_path": configured_core_path,
@@ -5947,6 +5962,9 @@ class EvalTower:
                     cost=0,
                     reliability=0,
                     core_id=configured_core_id,
+                    # ETR-2: activation blocked before any question ran — placeholder.
+                    quality_measured=False,
+                    quality_unmeasured_reason="t1_designed_core_activation_blocked",
                     details={
                         "core_id": configured_core_id,
                         "core_selection": "designed_core",
@@ -5968,6 +5986,9 @@ class EvalTower:
                     cost=0,
                     reliability=0,
                     core_id=configured_core_id,
+                    # ETR-2: the core never loaded, so nothing was scored — placeholder.
+                    quality_measured=False,
+                    quality_unmeasured_reason="t1_designed_core_load_failed",
                     details={
                         "core_id": configured_core_id,
                         "core_selection": "designed_core",
@@ -6038,6 +6059,9 @@ class EvalTower:
                     cost=0,
                     reliability=0,
                     core_id=core_id,
+                    # ETR-2: aborted before the eval batch ran — placeholder, not a score.
+                    quality_measured=False,
+                    quality_unmeasured_reason="t1_audit_block_misconfigured",
                     details={
                         "core_id": core_id,
                         "audit_policy": audit_policy,
@@ -6069,6 +6093,9 @@ class EvalTower:
                         cost=0,
                         reliability=0,
                         core_id=core_id,
+                        # ETR-2: aborted before the eval batch ran — placeholder.
+                        quality_measured=False,
+                        quality_unmeasured_reason="t1_audit_block_load_failed",
                         details={
                             "core_id": core_id,
                             "audit_policy": audit_policy,
@@ -6232,6 +6259,9 @@ class EvalTower:
                     speed=0,
                     cost=0,
                     reliability=0,
+                    # ETR-2: no question was asked — placeholder, not a score.
+                    quality_measured=False,
+                    quality_unmeasured_reason="t2_promotion_eval_misconfigured",
                     details={
                         "promotion_eval_policy": {
                             **promotion_policy,
@@ -6273,6 +6303,9 @@ class EvalTower:
                     speed=0,
                     cost=0,
                     reliability=0,
+                    # ETR-2: aborted before sampling — placeholder, not a score.
+                    quality_measured=False,
+                    quality_unmeasured_reason="t2_t1_core_exclusion_unavailable",
                     details={
                         "t1_core_exclusion_policy": {
                             **t1_core_exclusion_policy,
@@ -6300,6 +6333,9 @@ class EvalTower:
                 speed=0,
                 cost=0,
                 reliability=0,
+                # ETR-2: zero questions drawn ⇒ nothing scored — placeholder.
+                quality_measured=False,
+                quality_unmeasured_reason="t2_no_scoreable_questions",
                 details={
                     "t1_core_exclusion_policy": {
                         **t1_core_exclusion_policy,
@@ -6320,6 +6356,9 @@ class EvalTower:
                 speed=0,
                 cost=0,
                 reliability=0,
+                # ETR-2: too few fresh questions to run ⇒ nothing scored — placeholder.
+                quality_measured=False,
+                quality_unmeasured_reason="t2_promotion_eval_insufficient_questions",
                 details={
                     "promotion_eval_policy": {
                         **promotion_policy,
@@ -6406,7 +6445,16 @@ class EvalTower:
         pool = self._load_pool()
         if not pool:
             log.error("No question pool available for T3")
-            return EvalResult(tier=3, quality=0, speed=0, cost=0, reliability=0)
+            # ETR-2: the pool never loaded, so `quality=0` is a placeholder, not a score.
+            return EvalResult(
+                tier=3,
+                quality=0,
+                speed=0,
+                cost=0,
+                reliability=0,
+                quality_measured=False,
+                quality_unmeasured_reason="t3_no_question_pool",
+            )
 
         requested_n = int(n)
         draw_seed = int(seed)
@@ -6426,6 +6474,9 @@ class EvalTower:
                 speed=0,
                 cost=0,
                 reliability=0,
+                # ETR-2: zero tier-3 questions drawn ⇒ nothing scored — placeholder.
+                quality_measured=False,
+                quality_unmeasured_reason="t3_no_scoreable_questions",
                 details={
                     "t3_policy": {
                         "version": "t3-hard-only-v1",

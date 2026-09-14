@@ -1726,6 +1726,11 @@ def _consult_gate_result_from_summary(
         per_suite_counts={"consult_gate_targeted": turns},
         n_questions=turns,
         core_id="internal_interaction_j17_targeted_gate_v1",
+        # ETR-2: with zero gated turns in the summary, `quality_0_3` above is 0.0 only
+        # because nothing ran — a placeholder, not a measured score. Say so explicitly so
+        # SafetyGate refuses it on the quality axis instead of gating a fabricated 0.0.
+        quality_measured=turns > 0,
+        quality_unmeasured_reason="" if turns > 0 else "consult_gate_no_turns",
         details={
             "kind": "consult_gate_probe",
             "tier": tier,
