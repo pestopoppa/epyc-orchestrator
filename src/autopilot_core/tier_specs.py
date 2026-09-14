@@ -18,6 +18,7 @@ ORCH_ROOT on sys.path) and `src/api`, so `TIER_SPECS` is one shared registry obj
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -36,34 +37,137 @@ MIN_FRONTIER_EVAL_TIER = 1
 DEFAULT_FRONTIER_TIER = 1
 
 
-def _default_objectives_from(result: Any) -> tuple[float, ...]:
-    """4D objective tuple from an EvalResult-like object: (quality, speed, -cost, reliability)."""
-    return (
-        float(getattr(result, "quality", 0.0) or 0.0),
-        float(getattr(result, "speed", 0.0) or 0.0),
-        -float(getattr(result, "cost", 0.0) or 0.0),
-        float(getattr(result, "reliability", 0.0) or 0.0),
-    )
-
-
-def _default_objectives_from_row(row: dict) -> tuple[float, ...] | None:
-    """4D objective tuple from a journal-row dict (dashboard reconstruction), or None if unusable."""
-    try:
-        return (
-            float(row.get("quality") or 0.0),
-            float(row.get("speed") or 0.0),
-            -float(row.get("cost") or 0.0),
-            float(row.get("reliability") or 0.0),
-        )
-    except (TypeError, ValueError):
-        return None
-
-
 def _as_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+# ── RTG-23: absence is not zero, on EVERY axis (2026-09-14) ─────────────────────
+#
+# `float(x or 0.0)` cannot tell a MEASURED zero from a value that was never
+# measured. That is the same defect `seq_task_rate_qph` already fixed for the rate
+# axis (returns None, never 0.0) — but quality, cost and reliability were still
+# read with `or 0.0`, so an unmeasured trial entered the archive as a real
+# zero-quality point. 0.0 quality is maximally bad but NOT dominated by anything
+# that holds the max rate, so such a point is unremovable from the frontier.
+#
+# Measured over both journal shards (1,372 trial rows, 2026-09-14): 231 rows carry
+# falsy quality, of which 225 have `eval_details == {}` and no question count and no
+# wall clock — no eval ran at all, so their 0.0 on every axis is a placeholder the
+# journal writer substituted, not a measurement. The remaining 6 have a real eval
+# behind them and are genuine measured zeros, which MUST keep scoring 0.0.
+#
+# This module therefore distinguishes three things per axis: a number (measured),
+# `None` (not measured), and — for the live vector — `UnmeasuredObjectiveError`
+# (do not archive). It does NOT change what any objective MEANS; the goodput vs raw
+# rate question on axis 1 is an operator decision and is untouched here.
+
+
+def _measured_float(value: Any) -> float | None:
+    """A number that was actually recorded, or None when the axis was not measured.
+
+    Absence has several shapes in journal rows and result objects: a missing key
+    (``None``), an empty string, a non-numeric value, and NaN (the codebase's
+    "signal unavailable this trial" marker — see `src/diversity_gate.py`). All are
+    absence. A real ``0.0`` is a measurement and is returned as ``0.0``.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            number = float(text)
+        except ValueError:
+            return None
+        return None if math.isnan(number) else number
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return None if math.isnan(number) else number
+    return None
+
+
+def row_carries_eval_measurement(row: dict) -> bool:
+    """True when this journal row has an eval behind it at all.
+
+    A row with an empty `eval_details`, no `n_questions` and no `eval_wall_s` never
+    ran an eval — every scalar on it is a writer-substituted placeholder, not a
+    measurement, and none of its axes are measured. 225 of 1,372 journaled trial
+    rows are in exactly this state (autopilot killed mid-trial, skipped, invalid).
+    """
+    eval_details = row.get("eval_details")
+    if isinstance(eval_details, dict) and eval_details:
+        return True
+    return bool(row.get("n_questions") or row.get("eval_wall_s"))
+
+
+def _row_axis(row: dict, key: str) -> float | None:
+    """Measured value of one journal-row axis, or None when it was not measured.
+
+    Two shapes of absence, and the second is the one that produced the 225 rows:
+    the key is missing/None/non-numeric, or the value is a bare ``0.0`` on a row
+    that ran no eval at all. The placeholder the writer substitutes IS ``0.0``, so
+    a zero with no eval behind it never measured anything — while a NON-zero value
+    could not have come from that path and is always taken as measured.
+    """
+    value = _measured_float(row.get(key))
+    if value is None:
+        return None
+    if value == 0.0 and not row_carries_eval_measurement(row):
+        return None
+    return value
+
+
+def quality_from(result: Any) -> float | None:
+    """Measured quality of a result, or None when quality was not measured."""
+    return _measured_float(getattr(result, "quality", None))
+
+
+def quality_from_row(row: dict) -> float | None:
+    """Measured quality of a journal row, or None when quality was not measured."""
+    return _row_axis(row, "quality")
+
+
+def _default_objectives_from(result: Any) -> tuple[float, ...]:
+    """4D objective tuple from an EvalResult-like object: (quality, speed, -cost, reliability).
+
+    Raises `UnmeasuredObjectiveError` when any of the four axes was not measured —
+    the same contract the live rate vector applies to its rate axis.
+    """
+    axes = {
+        name: _measured_float(getattr(result, name, None))
+        for name in ("quality", "speed", "cost", "reliability")
+    }
+    missing = sorted(name for name, value in axes.items() if value is None)
+    if missing:
+        raise UnmeasuredObjectiveError(
+            f"legacy objective axes unmeasured: {', '.join(missing)} — absence is not "
+            "zero; skip archiving rather than substituting 0.0"
+        )
+    return (
+        float(axes["quality"]),
+        float(axes["speed"]),
+        -float(axes["cost"]),
+        float(axes["reliability"]),
+    )
+
+
+def _default_objectives_from_row(row: dict) -> tuple[float, ...] | None:
+    """4D objective tuple from a journal-row dict (dashboard reconstruction), or None if unusable.
+
+    None also means "this row did not measure every axis the vector needs", so the
+    reconstruction skips it instead of placing an unmeasured trial on the frontier.
+    """
+    quality = quality_from_row(row)
+    speed = _row_axis(row, "speed")
+    cost = _row_axis(row, "cost")
+    reliability = _row_axis(row, "reliability")
+    if quality is None or speed is None or cost is None or reliability is None:
+        return None
+    return (quality, speed, -cost, reliability)
 
 
 def _nested(row: dict, *path: str) -> Any:
@@ -230,36 +334,46 @@ def seq_task_rate_qph_from_row(row: dict) -> float | None:
     )
 
 
-def goodput_qph_from(result: Any) -> float:
-    """Solved-question rate: quality-scaled task_rate on the 0-3 quality scale."""
-    return (_as_float(getattr(result, "quality", 0.0)) / 3.0) * task_rate_qph_from(result)
+def goodput_qph_from(result: Any) -> float | None:
+    """Solved-question rate: quality-scaled task_rate on the 0-3 quality scale.
+
+    ``None`` when quality was not measured — an unmeasured quality is not "zero
+    solved questions per hour", and scoring it as 0.0 is exactly how the absent
+    rows would re-enter a goodput-shaped axis (RTG-23).
+    """
+    quality = quality_from(result)
+    if quality is None:
+        return None
+    return (quality / 3.0) * task_rate_qph_from(result)
 
 
-def goodput_qph_from_row(row: dict) -> float:
-    """Solved-question rate from a journal row."""
-    return (_as_float(row.get("quality")) / 3.0) * task_rate_qph_from_row(row)
+def goodput_qph_from_row(row: dict) -> float | None:
+    """Solved-question rate from a journal row; None when quality was not measured."""
+    quality = quality_from_row(row)
+    if quality is None:
+        return None
+    return (quality / 3.0) * task_rate_qph_from_row(row)
 
 
-def task_rate_objectives_from(result: Any, tier: int | None = None) -> tuple[float, ...]:
-    """Shadow 3D vector: (quality, task_rate_qph, reliability)."""
+def task_rate_objectives_from(
+    result: Any, tier: int | None = None
+) -> tuple[float, ...] | None:
+    """Shadow 3D vector: (quality, task_rate_qph, reliability); None if unmeasured."""
     _ = tier  # Reserved for future tier-specific rate semantics.
-    return (
-        _as_float(getattr(result, "quality", 0.0)),
-        task_rate_qph_from(result),
-        _as_float(getattr(result, "reliability", 0.0)),
-    )
+    quality = quality_from(result)
+    reliability = _measured_float(getattr(result, "reliability", None))
+    if quality is None or reliability is None:
+        return None
+    return (quality, task_rate_qph_from(result), reliability)
 
 
 def task_rate_objectives_from_row(row: dict) -> tuple[float, ...] | None:
     """Shadow 3D vector from a journal row: (quality, task_rate_qph, reliability)."""
-    try:
-        return (
-            float(row.get("quality") or 0.0),
-            task_rate_qph_from_row(row),
-            float(row.get("reliability") or 0.0),
-        )
-    except (TypeError, ValueError):
+    quality = quality_from_row(row)
+    reliability = _row_axis(row, "reliability")
+    if quality is None or reliability is None:
         return None
+    return (quality, task_rate_qph_from_row(row), reliability)
 
 
 # ── W3 live-vector flip (2026-08-04, operator): dominance ranks TASKS/HOUR ──────
@@ -310,35 +424,49 @@ class UnmeasuredObjectiveError(ValueError):
 
 
 def _rate_objectives_from(result: Any) -> tuple[float, ...]:
-    """Live 4D vector: (quality, seq_task_rate_qph, -cost, reliability)."""
+    """Live 4D vector: (quality, seq_task_rate_qph, -cost, reliability).
+
+    Every declared axis must be MEASURED, not merely defaulted. Axis 1 has always
+    raised on an unmeasured rate; RTG-23 extends the same contract to quality, cost
+    and reliability, because a zero on any of them is a real, maximally-bad value
+    that dominance cannot undo (a point holding the max rate is unbeatable on rate,
+    so nothing dominates it however bad its quality is).
+    """
     rate = seq_task_rate_qph_from(result)
-    if rate is None:
+    axes: dict[str, float | None] = {
+        "quality": quality_from(result),
+        "task_rate": None if rate is None else float(rate),
+        "cost": _measured_float(getattr(result, "cost", None)),
+        "reliability": _measured_float(getattr(result, "reliability", None)),
+    }
+    missing = [name for name, value in axes.items() if value is None]
+    if missing:
+        detail = (
+            " (task rate: missing question ledger / eval_wall_s, or the batch aborted "
+            "below the s/question validity floor)"
+            if "task_rate" in missing
+            else ""
+        )
         raise UnmeasuredObjectiveError(
-            "task rate unmeasured (missing question ledger / eval_wall_s, or the batch "
-            "aborted below the s/question validity floor)"
+            f"dominance axes unmeasured: {', '.join(sorted(missing))}{detail}"
         )
     return (
-        _as_float(getattr(result, "quality", 0.0)),
-        float(rate),
-        -_as_float(getattr(result, "cost", 0.0)),
-        _as_float(getattr(result, "reliability", 0.0)),
+        float(axes["quality"]),
+        float(axes["task_rate"]),
+        -float(axes["cost"]),
+        float(axes["reliability"]),
     )
 
 
 def _rate_objectives_from_row(row: dict) -> tuple[float, ...] | None:
-    """Live 4D vector from a journal row; None when the row did not measure a rate."""
+    """Live 4D vector from a journal row; None when any declared axis is unmeasured."""
     rate = seq_task_rate_qph_from_row(row)
-    if rate is None:
+    quality = quality_from_row(row)
+    cost = _row_axis(row, "cost")
+    reliability = _row_axis(row, "reliability")
+    if rate is None or quality is None or cost is None or reliability is None:
         return None
-    try:
-        return (
-            float(row.get("quality") or 0.0),
-            float(rate),
-            -float(row.get("cost") or 0.0),
-            float(row.get("reliability") or 0.0),
-        )
-    except (TypeError, ValueError):
-        return None
+    return (quality, float(rate), -cost, reliability)
 
 
 def _policy_aware_objectives_from_row(row: dict) -> tuple[float, ...] | None:
@@ -369,9 +497,21 @@ def _policy_aware_objectives_from_row(row: dict) -> tuple[float, ...] | None:
     return _default_objectives_from_row(row)
 
 
-def objectives_measurable(result: Any) -> bool:
-    """True when this result carries every axis the live dominance vector needs."""
-    return seq_task_rate_qph_from(result) is not None
+def objectives_measurable(result: Any, tier: int | None = None) -> bool:
+    """True when this result carries every axis the live dominance vector needs.
+
+    It now CHECKS what it promises. The body was `seq_task_rate_qph_from(result)
+    is not None` — it validated the rate and nothing else, so a result with no
+    quality, cost or reliability passed a gate whose name and docstring both claimed
+    it had checked them (RTG-23). Delegating to the tier's own builder keeps the gate
+    and the construction it gates in lockstep by construction: anything the builder
+    refuses to build, this refuses to call measurable.
+    """
+    try:
+        objectives_from(result, tier)
+    except UnmeasuredObjectiveError:
+        return False
+    return True
 
 
 # Public names for the PRE-FLIP tokens/second vector. Journalling and replay of the

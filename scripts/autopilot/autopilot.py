@@ -9897,8 +9897,18 @@ def _run_loop_inner(
         # tokens/second one — calling it here would have relabelled the rate vector as
         # "legacy" with nothing to catch it, and would additionally RAISE on a trial with
         # no measured rate (this line runs for every trial, including archive-skipped ones).
-        legacy_objectives = list(legacy_objectives_from(eval_result))
-        task_rate_objectives = list(task_rate_objectives_from(eval_result))
+        # RTG-23: the legacy and shadow builders also refuse to substitute 0.0 for an
+        # axis they never measured, so they can raise / return None here too. This runs
+        # for EVERY trial, including archive-skipped ones, so record the shadow series
+        # as null rather than failing the journal write.
+        try:
+            legacy_objectives: list[float] | None = list(legacy_objectives_from(eval_result))
+        except UnmeasuredObjectiveError:
+            legacy_objectives = None
+        _shadow_rate_objectives = task_rate_objectives_from(eval_result)
+        task_rate_objectives = (
+            list(_shadow_rate_objectives) if _shadow_rate_objectives is not None else None
+        )
         try:
             live_objectives: list[float] | None = list(objectives_from(eval_result))
         except UnmeasuredObjectiveError:

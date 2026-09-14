@@ -18,7 +18,30 @@ from src.autopilot_core.sequential_verdict import (
     DEFAULT_POLICY,
     rebuild_candidate_view,
 )
-from src.autopilot_core.tier_specs import goodput_qph_from_row, task_rate_qph_from_row
+from src.autopilot_core.tier_specs import (
+    goodput_qph_from_row,
+    quality_from_row,
+    row_carries_eval_measurement,
+    task_rate_qph_from_row,
+)
+
+
+def _measured_axis_from_row(row: Mapping[str, Any], key: str) -> float | None:
+    """One journal-row axis, or None when the row measured nothing (RTG-23)."""
+    if not row_carries_eval_measurement(dict(row)):
+        return None
+    value = row.get(key)
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if number != number else number  # NaN is absence, not a value
+
+
+def _fmt_measured(value: float | None, digits: int) -> str:
+    return "n/a" if value is None else f"{value:.{digits}f}"
 
 
 DEFAULT_EVIDENCE_CORE_ID = "core_v1"
@@ -235,16 +258,20 @@ def _candidate_evidence_blocks(
         vector_note = _vector_note(rows)
         seq_note = _seq_note(fingerprint, seq_observations, core_id=core_id)
         task_rate = task_rate_qph_from_row(latest)
+        # RTG-23: quality-derived metrics are None when quality was NOT MEASURED
+        # (an eval that never ran journals a placeholder 0.0). Render the absence as
+        # such — "goodput=0.0" would state a measured result the trial never produced.
         goodput = goodput_qph_from_row(latest)
+        quality = quality_from_row(latest)
         blocks.append(
-            "- fp={fp} trials={trials} q={q:.3f} r={r:.2f} "
-            "task_rate={task_rate:.1f} goodput={goodput:.1f}; {vector}; {seq}".format(
+            "- fp={fp} trials={trials} q={q} r={r} "
+            "task_rate={task_rate:.1f} goodput={goodput}; {vector}; {seq}".format(
                 fp=fingerprint,
                 trials=_compact_trials(trial_ids),
-                q=_float(latest.get("quality")),
-                r=_float(latest.get("reliability")),
+                q="n/a" if quality is None else f"{quality:.3f}",
+                r=_fmt_measured(_measured_axis_from_row(latest, "reliability"), 2),
                 task_rate=task_rate,
-                goodput=goodput,
+                goodput=_fmt_measured(goodput, 1),
                 vector=vector_note,
                 seq=seq_note,
             )

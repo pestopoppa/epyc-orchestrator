@@ -789,3 +789,26 @@ def test_skip_both_arms_is_a_parse_error(tmp_path: Path) -> None:
         window.parse_args(
             ["--skip-current-arm", "--skip-batch-arm", "--output-dir", str(tmp_path)]
         )
+
+
+def test_absent_goodput_stays_unmeasured_in_arm_metrics() -> None:
+    """RTG-23: an unmeasured goodput must not be reported as a measured 0.0 qph.
+
+    `_details_float(details, "goodput_qph")` defaulted to 0.0, so a trial whose
+    quality was never measured (the producer journals `null`) surfaced in the arm
+    metrics as a real zero solved-task rate — the gap-handling doctrine
+    `_arm_decision_blocker` applies to n_scored/reliability, inverted.
+    """
+    absent = FakeResult(tier=1, quality=2.0, speed=30.0, reliability=1.0, wall_s=5.0)
+    assert "goodput_qph" not in absent.details
+    assert window.eval_result_metrics(absent, wall_s=6.0)["goodput_qph"] is None
+
+    explicit_null = FakeResult(tier=1, quality=2.0, speed=30.0, reliability=1.0, wall_s=5.0)
+    explicit_null.details["goodput_qph"] = None
+    assert window.eval_result_metrics(explicit_null, wall_s=6.0)["goodput_qph"] is None
+
+    # A MEASURED value — including a measured zero — is reported unchanged.
+    for measured in (0.0, 88.25):
+        result = FakeResult(tier=1, quality=2.0, speed=30.0, reliability=1.0, wall_s=5.0)
+        result.details["goodput_qph"] = measured
+        assert window.eval_result_metrics(result, wall_s=6.0)["goodput_qph"] == measured
