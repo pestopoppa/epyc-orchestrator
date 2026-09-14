@@ -5690,7 +5690,9 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
             f"  (Existing-file mutations: ONLY files in allowlist: {code_targets}. "
             'For scaffold/schema evolution, use mutation "new_file" only under '
             f"these roots: {new_file_roots}; memory schema-evolution files must "
-            "be default-inert.)"
+            "be default-inert — a static AST screen rejects imports, classes, "
+            "underscore-prefixed names and raise/with/while/lambda in that lane, "
+            "so propose plain constants and pure functions only.)"
         ),
         "structural_experiment": (
             '- Structural: {{"type": "structural_experiment", '

@@ -73,12 +73,18 @@ Per the arXiv:2603.28052 ablation (Table 3), full execution traces provide +15 a
 
 ### The 4-layer validation
 
-`_validate_code_mutation()` (prompt_forge.py, line 575) runs all four checks before a mutation is accepted:
+`_screen_code_mutation()` (prompt_forge.py; `_validate_code_mutation()` is the `(valid, reason)` wrapper kept for callers) runs all four checks before a mutation is accepted. Since RTG-55 it is **static only** — it never writes into the source tree and never imports or execs the candidate:
 
 1. **Syntax** (line 587): `ast.parse(mutated)` -- rejects anything that is not valid Python.
 2. **Catastrophic shrinkage** (line 594): If the original has >10 lines and the mutation removes >60% of lines, it is rejected. The threshold is `new_lines < orig_lines * 0.4`.
 3. **Public name preservation** (line 603): Extracts all module-level `FunctionDef`, `AsyncFunctionDef`, and `ClassDef` names from both original and mutated ASTs. Any name present in the original but missing from the mutation triggers rejection.
-4. **Import test** (line 617): Temporarily writes the mutated code to disk, attempts `importlib.import_module()`, then unconditionally restores the original. Catches circular imports and runtime import errors.
+4. **Static safety screen** (RTG-55 MHS-2, `screen_static_safety()`): an AST denylist over the candidate — module-level statements that do work at import time, imports outside `SAFETY_IMPORT_ALLOWLIST` (first-party roots and capabilities the original file already used are grandfathered), banned calls (`exec`/`eval`/`compile`/`__import__`/`os.system`/`subprocess.*`/…), and dunder attribute access. `new_file` proposals additionally get the strict inertness profile (`SAFETY_STRICT_NODE_DENYLIST`), so MH-9's "default-inert" requirement is compile-time rather than prompt text. The screen also assigns the candidate's `MutationEffect` (MHS-1).
+
+   The AutoMem `schema_evolution` lane prompt asks for exactly the shape that strict profile admits — module constants (a `SCHEMA` dict, `SCHEMA_VERSION`, `ACTIONS`, `CHANNELS`) plus pure public `def`s returning `(ok, reason)`, with no imports, no classes, no underscore-prefixed names and no `raise`/`with`/`while`/`lambda`. `MEMORY_SCHEMA_SHAPE_EXAMPLE` is shipped verbatim inside that prompt and is itself screened by a test, so the prompt and the denylist cannot drift apart silently.
+
+   Until RTG-55 this layer was an **import test** that wrote the model's code over the live repo file and then `importlib.import_module()`-ed it: the candidate's module top level executed unsandboxed in-process, and any concurrent reader of that path saw the candidate on disk.
+
+`MutationEffect` (MHS-1) is a closed, host-normalized enum — `inert`, `constrain`, `expand`, `replace`, `unsafe`, `unknown` — carried on `CodeMutation.effect` and reported in the `apply_code_mutation*()` result. Both apply paths refuse an `unsafe` effect.
 
 If any layer fails, `mutation.syntax_valid` is set to `False` and the mutation content is replaced with the original (line 497). The dispatcher in autopilot.py checks `syntax_valid` (line 553) and skips the trial entirely if validation failed.
 
