@@ -170,6 +170,10 @@ def _config(tmp_path: Path, *, mode: str) -> StackChangePipelineConfig:
         surface_exceptions=tmp_path / "missing_exceptions.yaml",
         roles={"frontdoor"},
         allow_known_gaps=True,
+        # NIB2-69: check refuses to run without a resolvable NUMA mode. These
+        # fixtures carry no stack_topology.yaml, so they declare the lineup
+        # explicitly — the same "full" the realized-compile pin above supplies.
+        numa_mode="full",
     )
 
 
@@ -379,6 +383,9 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         # priors from a lean registry nothing kept fresh, reporting green over a
         # stale input. This set is the step inventory of record — an addition here
         # must be deliberate.
+        # 2026-09-15 NIB2-69: numa_mode leads — the ONE lineup the compile and the
+        # guard's launch view both evaluate, printed with its provenance.
+        "numa_mode",
         "lean_registry",
         "descriptors",
         "stack_priors",
@@ -803,3 +810,174 @@ def test_check_fails_on_stale_procedure_enums(tmp_path: Path) -> None:
 
     assert not report.ok
     assert any("procedure role enums are stale" in error for error in report.errors)
+
+
+# ---------------------------------------------------------------------------
+# NIB2-69 (2026-09-15): `check` evaluates ONE explicit NUMA lineup and any
+# launch-manifest/port error fails it.
+#
+# Root cause of the 39 errors on origin/main: the compile resolved the declared
+# topology mode (`both`) while the guard's launch view fell through realized
+# fleet -> ambient env -> "full" in a clean shell, filtering the half instances
+# out of the view. 13 half-port mismatches x 3 guard steps = 39.
+# ---------------------------------------------------------------------------
+
+
+def _topology(path: Path, mode: str) -> Path:
+    return _write_yaml(path, {"schema_version": "stack_topology.v1", "numa_mode": mode})
+
+
+def test_resolution_uses_declared_topology_and_ignores_ambient_env(tmp_path: Path) -> None:
+    config = StackChangePipelineConfig(
+        mode="check",
+        repo_root=tmp_path,
+        stack_topology=_topology(tmp_path / "stack_topology.yaml", "both"),
+    )
+
+    resolution = pipeline.resolve_pipeline_numa_mode(
+        config, environ={"ORCHESTRATOR_STACK_NUMA_MODE": "full"}
+    )
+
+    assert resolution.mode == "both"
+    assert resolution.source == "declared:stack_topology.yaml"
+    assert resolution.errors == ()
+    assert any("IGNORED" in warning and "'full'" in warning for warning in resolution.warnings)
+
+
+def test_resolution_explicit_mode_wins_and_says_it_is_not_production(tmp_path: Path) -> None:
+    config = StackChangePipelineConfig(
+        mode="check",
+        repo_root=tmp_path,
+        stack_topology=_topology(tmp_path / "stack_topology.yaml", "both"),
+        numa_mode="quarter",
+    )
+
+    resolution = pipeline.resolve_pipeline_numa_mode(config, environ={})
+
+    assert resolution.mode == "quarter"
+    assert resolution.source == "explicit:--numa-mode"
+    assert any("does NOT evaluate production" in warning for warning in resolution.warnings)
+
+
+def test_resolution_rejects_invalid_explicit_mode(tmp_path: Path) -> None:
+    config = StackChangePipelineConfig(mode="check", repo_root=tmp_path, numa_mode="halves")
+
+    resolution = pipeline.resolve_pipeline_numa_mode(config, environ={})
+
+    assert resolution.mode is None
+    assert resolution.errors and "invalid --numa-mode" in resolution.errors[0]
+
+
+def test_resolution_without_declaration_fails_check_but_not_update(tmp_path: Path) -> None:
+    check = pipeline.resolve_pipeline_numa_mode(
+        StackChangePipelineConfig(mode="check", repo_root=tmp_path), environ={}
+    )
+    update = pipeline.resolve_pipeline_numa_mode(
+        StackChangePipelineConfig(mode="update", repo_root=tmp_path), environ={}
+    )
+
+    assert check.mode is None and check.errors
+    assert "refuses to inherit a lineup" in check.errors[0]
+    assert update.mode is None and update.errors == ()
+    assert any("realized-fleet probe" in warning for warning in update.warnings)
+
+
+def test_check_without_resolvable_numa_mode_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    update_config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(update_config).ok
+    check_config = StackChangePipelineConfig(
+        **{**update_config.__dict__, "mode": "check", "numa_mode": None}
+    )
+
+    report = run_stack_change_pipeline(check_config)
+
+    numa_step = report.steps[0]
+    assert numa_step.name == "numa_mode"
+    assert numa_step.status == "failed"
+    assert not report.ok
+
+
+def test_check_records_evaluated_numa_mode_and_threads_it_into_every_guard_step(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from scripts.validate import stack_change_guard
+
+    update_config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(update_config).ok
+    seen_modes: list[object] = []
+    real_view = stack_change_guard._launch_manifest_targets_or_error
+
+    def recording_view(**kwargs):
+        seen_modes.append(kwargs.get("launch_numa_mode"))
+        return real_view(**kwargs)
+
+    monkeypatch.setattr(stack_change_guard, "_launch_manifest_targets_or_error", recording_view)
+    # An ambient export that disagrees must not leak into the guard's view.
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "both")
+    check_config = StackChangePipelineConfig(**{**update_config.__dict__, "mode": "check"})
+
+    report = run_stack_change_pipeline(check_config)
+
+    numa_step = report.steps[0]
+    assert numa_step.name == "numa_mode"
+    assert numa_step.details == ["evaluated numa_mode: full (source: explicit:--numa-mode)"]
+    assert any("IGNORED" in warning for warning in numa_step.warnings)
+    assert seen_modes == ["full", "full", "full"]
+    assert report.ok
+
+
+def test_check_fails_on_synthetic_launch_manifest_port_error_even_with_known_gaps(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """One manifest/port mismatch must fail `check`, and --allow-known-gaps must
+    neither pass it nor relabel it as a known gap."""
+    from scripts.validate import stack_change_guard
+
+    update_config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(update_config).ok
+    assert update_config.allow_known_gaps is True
+    real_view = stack_change_guard._launch_manifest_targets_or_error
+
+    def drifted_view(**kwargs):
+        targets, errors = real_view(**kwargs)
+        frontdoor = targets["frontdoor"]
+        frontdoor["ports"] = [*frontdoor["ports"], 8999]
+        return targets, errors
+
+    monkeypatch.setattr(stack_change_guard, "_launch_manifest_targets_or_error", drifted_view)
+    check_config = StackChangePipelineConfig(**{**update_config.__dict__, "mode": "check"})
+
+    report = run_stack_change_pipeline(check_config)
+
+    assert not report.ok
+    for name in ("guard", "guard_all_surfaces", "guard_strict"):
+        step = next(step for step in report.steps if step.name == name)
+        assert step.status == "failed", name
+        assert any("missing launch manifest port(s) [8999]" in e for e in step.errors), name
+    strict_step = next(step for step in report.steps if step.name == "guard_strict")
+    assert not any("8999" in warning for warning in strict_step.warnings)
+    assert report.acceptance_lines()[0] == "acceptance: blocked"
+
+
+def test_production_topology_declares_both_and_launch_alignment_is_clean_in_it() -> None:
+    """The committed priors align with the launch manifest in the DECLARED mode.
+
+    The `full` half of this test pins the root cause: evaluating the launch view
+    for a lineup the priors were not compiled for manufactures half-port errors.
+    """
+    from scripts.validate import stack_change_guard
+
+    mode, source = pipeline.resolve_declared_numa_mode(pipeline.DEFAULT_STACK_TOPOLOGY)
+    assert (mode, source) == ("both", "declared:stack_topology.yaml")
+    priors = yaml.safe_load(stack_change_guard.DEFAULT_PRIORS.read_text(encoding="utf-8"))
+
+    production = stack_change_guard.validate_launch_manifest_serving_alignment(
+        priors, launch_numa_mode=mode
+    )
+    wrong_lineup = stack_change_guard.validate_launch_manifest_serving_alignment(
+        priors, launch_numa_mode="full"
+    )
+
+    assert production == []
+    assert any("include non-launch port(s)" in error for error in wrong_lineup)

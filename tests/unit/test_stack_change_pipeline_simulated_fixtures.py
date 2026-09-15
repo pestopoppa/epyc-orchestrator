@@ -615,6 +615,7 @@ def _config(tmp_path: Path, *, mode: str, roles: set[str]) -> StackChangePipelin
             surface_exceptions=tmp_path / "missing_exceptions.yaml",
             roles=roles,
             allow_known_gaps=True,
+            numa_mode="full",
         ),
         roles,
     )
@@ -631,6 +632,9 @@ def _config(tmp_path: Path, *, mode: str, roles: set[str]) -> StackChangePipelin
         surface_exceptions=tmp_path / "missing_exceptions.yaml",
         roles=roles,
         allow_known_gaps=True,
+        # NIB2-69: no stack_topology.yaml in the fixture repo, so the evaluated
+        # lineup is explicit (matches the realized-compile "full" pin above).
+        numa_mode="full",
     )
 
 

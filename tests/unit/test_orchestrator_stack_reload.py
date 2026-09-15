@@ -2178,3 +2178,25 @@ def test_reload_unknown_component_fails_loudly(monkeypatch) -> None:
     )
 
     assert stack.cmd_reload(Namespace(components=["server_9999"])) == 1
+
+
+def test_stack_change_launch_gate_threads_numa_mode_as_flag_not_env(monkeypatch, capsys) -> None:
+    """NIB2-69: the pipeline ignores ambient ORCHESTRATOR_STACK_NUMA_MODE, so an
+    explicit start mode must reach the gate as --numa-mode or it is lost."""
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(cmd, 0, stdout="summary: ok\n", stderr="")
+
+    monkeypatch.setattr(stack_commands.subprocess, "run", fake_run)
+
+    assert stack_commands._run_stack_change_launch_gate(_stack_gate_args(numa_mode="quarter"))
+
+    assert captured["cmd"] == [
+        *stack_commands.STACK_CHANGE_LAUNCH_GATE_COMMAND,
+        "--numa-mode",
+        "quarter",
+    ]
+    assert captured["env"] is None
