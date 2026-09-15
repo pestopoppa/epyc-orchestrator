@@ -2969,6 +2969,76 @@ async def optimization_brief() -> JSONResponse:
     return JSONResponse(_stamp(payload, "optimization_brief"), headers=_NO_STORE_HEADERS)
 
 
+# AP-50 decision cockpit. Computed per request from every journal shard + the
+# Optuna study + state (cached briefly per era/status view), never from the
+# generated digest. Read-only; the page lives on the hub (:8100/cockpit).
+_DECISION_COCKPIT_CACHE_TTL_S = 30.0
+_DECISION_COCKPIT_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_DECISION_COCKPIT_LOCK = asyncio.Lock()
+_DECISION_COCKPIT_CACHE_MAX = 16
+
+
+async def _decision_cockpit_payload(era: str | None, status: str | None) -> dict[str, Any]:
+    key = (str(era or "current"), str(status or ""))
+    now = time.monotonic()
+    hit = _DECISION_COCKPIT_CACHE.get(key)
+    if hit is not None and now - hit[0] < _DECISION_COCKPIT_CACHE_TTL_S:
+        return hit[1]
+    async with _DECISION_COCKPIT_LOCK:
+        hit = _DECISION_COCKPIT_CACHE.get(key)
+        if hit is not None and time.monotonic() - hit[0] < _DECISION_COCKPIT_CACHE_TTL_S:
+            return hit[1]
+        from scripts.autopilot.decision_cockpit import build_decision_cockpit
+
+        orch = _AUTOPILOT_STATE_PATH.parent
+        payload = await asyncio.to_thread(
+            build_decision_cockpit,
+            journal_dir=_AUTOPILOT_JOURNAL_PATH.parent,
+            state_path=_AUTOPILOT_STATE_PATH,
+            eras_path=orch / "instrument_eras.yaml",
+            study_db=orch / "optuna_study.db",
+            checkpoints_dir=orch / "autopilot_checkpoints",
+            era=era,
+            status_filter=status,
+        )
+        if len(_DECISION_COCKPIT_CACHE) >= _DECISION_COCKPIT_CACHE_MAX:
+            _DECISION_COCKPIT_CACHE.clear()
+        _DECISION_COCKPIT_CACHE[key] = (time.monotonic(), payload)
+        return payload
+
+
+@router.get("/dashboard/api/decision_cockpit")
+async def decision_cockpit(era: str | None = None, status: str | None = None) -> JSONResponse:
+    """AP-50: proposed/executed/valid/kept/promoted/live funnel, deltas, levers, provenance.
+
+    Fails closed: a builder exception is reported as ``health.status=degraded`` with
+    every section absent, never as an empty (clean-looking) cockpit.
+    """
+    try:
+        payload = dict(await _decision_cockpit_payload(era, status))
+    except Exception as exc:  # noqa: BLE001 — the page must render the failure, not 500
+        payload = {
+            "schema": "epyc.autopilot.decision_cockpit.v1",
+            "read_only": True,
+            "error": str(exc)[:300],
+            "health": {"status": "degraded", "reasons": [f"builder failed: {exc}"[:300]]},
+        }
+    return JSONResponse(_stamp(payload, "decision_cockpit"), headers=_NO_STORE_HEADERS)
+
+
+@router.get("/dashboard/api/decision_cockpit/health")
+async def decision_cockpit_health() -> JSONResponse:
+    """Data probe for the cockpit: HTTP 200 only for ``ok``; 503 for absent/degraded."""
+    try:
+        payload = await _decision_cockpit_payload(None, None)
+        health = dict(payload.get("health") or {"status": "degraded", "reasons": ["no health fold"]})
+        health["evidence_freshness"] = payload.get("evidence_freshness")
+    except Exception as exc:  # noqa: BLE001
+        health = {"status": "degraded", "reasons": [f"builder failed: {exc}"[:300]]}
+    code = 200 if health.get("status") == "ok" else 503
+    return JSONResponse(health, status_code=code, headers=_NO_STORE_HEADERS)
+
+
 # ---------------------------------------------------------------------------
 # Per-node detail (for topology click)
 # ---------------------------------------------------------------------------
