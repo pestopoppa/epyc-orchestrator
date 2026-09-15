@@ -16,9 +16,22 @@ from baseline_authority_report import (  # noqa: E402
     main,
     render_markdown,
 )
+from src.autopilot_core.authority_consent import CONSENT_PATH_ENV  # noqa: E402
 from src.autopilot_core.baseline_ledger import (  # noqa: E402
     BASELINE_LEDGER_AUTHORITY_STATE_FLAG,
 )
+
+
+def _grant_baseline_ledger_consent(monkeypatch, tmp_path: Path) -> None:
+    """Grant operator consent hermetically.
+
+    Baseline-ledger authority is fail-closed behind the operator-owned,
+    gitignored ``orchestration/authority_consent.json``; without pinning the
+    consent path, results depend on whether that file exists in the checkout.
+    """
+    consent = tmp_path / "authority_consent.json"
+    consent.write_text(json.dumps({"baseline_ledger": "allow"}), encoding="utf-8")
+    monkeypatch.setenv(CONSENT_PATH_ENV, str(consent))
 
 
 def _promotion(
@@ -44,7 +57,8 @@ def _promotion(
     }
 
 
-def test_report_marks_matching_baseline_fold_ok() -> None:
+def test_report_marks_matching_baseline_fold_ok(monkeypatch, tmp_path: Path) -> None:
+    _grant_baseline_ledger_consent(monkeypatch, tmp_path)
     rows = [_promotion(7, new_quality=1.9)]
     report = build_baseline_authority_report(
         {
@@ -105,7 +119,8 @@ def test_report_marks_drift_not_ok_with_recommendation() -> None:
     )
 
 
-def test_render_markdown_uses_baseline_ledger_summary() -> None:
+def test_render_markdown_uses_baseline_ledger_summary(monkeypatch, tmp_path: Path) -> None:
+    _grant_baseline_ledger_consent(monkeypatch, tmp_path)
     report = build_baseline_authority_report(
         {
             BASELINE_LEDGER_AUTHORITY_STATE_FLAG: True,

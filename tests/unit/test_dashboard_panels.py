@@ -188,6 +188,16 @@ def test_stamped_endpoint_emits_wellformed_freshness(coro_factory, key):
         assert "gating" in s and "class" in s and "label" in s
 
 
+def test_gepa_missing_autopilot_log_still_stamps_freshness(tmp_path, monkeypatch):
+    """The no-log early exit is the dead-producer case; it must carry the envelope
+    too (it used to return a bare body, so the parametrized check above failed
+    on any checkout without logs/autopilot.log)."""
+    monkeypatch.setattr(d, "AUTOPILOT_LOG", tmp_path / "missing_autopilot.log")
+    body = _call(d.gepa_status())
+    assert body["active"] is False
+    assert _ENVELOPE_KEYS <= set(body["_freshness"])
+
+
 # --- tap events rotation window (same bug class, dot-suffix naming) -----------
 
 def test_latest_tap_events_mtime_follows_rotation(tmp_path, monkeypatch):

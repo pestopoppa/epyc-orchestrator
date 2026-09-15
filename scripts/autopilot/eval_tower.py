@@ -1410,8 +1410,10 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         item["rubric_scores"] = rubric_scores
     if r.rubric_source:
         item["rubric_source"] = r.rubric_source
-    if r.rubric_threshold_source:
-        item["rubric_threshold_source"] = r.rubric_threshold_source
+    # Added after the duck-typed recovery path existed; recovered rows predate it.
+    _rubric_threshold_source = getattr(r, "rubric_threshold_source", "")
+    if _rubric_threshold_source:
+        item["rubric_threshold_source"] = _rubric_threshold_source
     return item
 
 

@@ -655,21 +655,39 @@ def _lean_registry_step(
         current_key = cache_path.read_text().strip() if cache_path.exists() else ""
 
         if check:
-            # Compare without writing. A key mismatch means the committed lean
-            # registry no longer corresponds to master + the active role set.
-            if current_key == expected_key:
+            # Compare CONTENT without writing. The cache key lives in a
+            # GITIGNORED per-clone file, so it cannot speak for the COMMITTED
+            # lean registry in either direction: every fresh worktree has no key
+            # (false "stale"), the shared clone's key ages whenever master bytes
+            # change outside the active projection (false "stale" — origin/main
+            # 34e27fdf failed here while the committed lean equalled the current
+            # projection exactly), and a matching key over a hand-edited lean
+            # would be a false "fresh". NIB2-69: the projection is the fact; the
+            # key is reported only as cache state.
+            compiled = compile_lean(config.research_registry, active)
+            committed = (
+                _load_yaml(config.lean_registry) if config.lean_registry.exists() else None
+            )
+            key_state = (
+                "matches"
+                if current_key == expected_key
+                else f"{current_key[:12] or '<none>'} != {expected_key[:12]}"
+            )
+            if committed == compiled:
                 return PipelineStep(
                     name="lean_registry",
                     status="ok",
-                    details=[f"fresh vs master: {config.research_registry}"],
+                    details=[
+                        f"content fresh vs master: {config.research_registry}",
+                        f"local cache key (gitignored): {key_state}",
+                    ],
                 )
-            compile_lean(config.research_registry, active)  # parse-check master
             return PipelineStep(
                 name="lean_registry",
                 status="stale",
                 errors=[
-                    "lean registry is stale against the master registry "
-                    f"(key {current_key[:12] or '<none>'} != {expected_key[:12]})",
+                    "lean registry content is stale against the master registry "
+                    f"projection (local cache key: {key_state})",
                     "everything below is compiled FROM lean, so a stale lean makes "
                     "descriptors/stack_priors green over the wrong input",
                     "run: uv run python scripts/registry/stack_change_pipeline.py update",

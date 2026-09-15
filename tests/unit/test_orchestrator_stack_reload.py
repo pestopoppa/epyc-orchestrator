@@ -46,7 +46,9 @@ def test_stack_change_launch_gate_runs_canonical_command(monkeypatch, capsys) ->
     assert stack_commands._run_stack_change_launch_gate(_stack_gate_args())
 
     assert captured["cmd"] == list(stack_commands.STACK_CHANGE_LAUNCH_GATE_COMMAND)
-    assert str(captured["cwd"]).endswith("epyc-orchestrator")
+    # The gate runs from the resolved project root; a worktree path is valid,
+    # so equality with the canonical path resolver is what is load-bearing.
+    assert Path(str(captured["cwd"])) == Path(stack_commands._PATHS["project_root"])
     out = capsys.readouterr().out
     assert "stack-change-gate" in out
     assert "summary: ok" in out

@@ -174,8 +174,16 @@ class TestCases(unittest.TestCase):
     )
 
 
-def test_bcb190_sqlite_answer_still_scores_true() -> None:
+def test_bcb190_sqlite_answer_still_scores_true(monkeypatch) -> None:
     """BCB190 writes ``test.db`` relative to the scorer CWD."""
+    # The scorer spawns bare ``python3`` resolved via PATH. Without an activated
+    # venv that is the system interpreter, which lacks pandas, so the harness
+    # fails on import rather than on the CWD behaviour under test. Pin PATH to
+    # the interpreter running this suite (which must itself provide pandas).
+    pytest.importorskip("pandas")
+    monkeypatch.setenv(
+        "PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}"
+    )
     assert score_answer(
         answer=_BCB190_ANSWER,
         expected="task_func",

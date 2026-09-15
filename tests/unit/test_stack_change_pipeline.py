@@ -981,3 +981,28 @@ def test_production_topology_declares_both_and_launch_alignment_is_clean_in_it()
 
     assert production == []
     assert any("include non-launch port(s)" in error for error in wrong_lineup)
+
+
+def test_lean_check_judges_committed_content_not_the_gitignored_cache_key(tmp_path: Path) -> None:
+    """NIB2-69: `.lean_cache_key` is gitignored and per-clone. A fresh worktree
+    (no key) whose committed lean equals the master projection is fresh; a lean
+    that differs from the projection is stale even when the key matches."""
+    from src.registry.registry_compiler import cache_key, compile_lean
+
+    master = _registry(tmp_path / "master" / "model_registry.yaml")
+    lean = tmp_path / "orchestration" / "model_registry.yaml"
+    roles = {"frontdoor"}
+    _write_yaml(lean, compile_lean(master, roles))
+    config = StackChangePipelineConfig(
+        mode="check", repo_root=tmp_path, lean_registry=lean, research_registry=master, roles=roles
+    )
+
+    no_key = pipeline._lean_registry_step(config, check=True)
+    assert no_key.status == "ok", no_key.errors
+    assert any("local cache key (gitignored): <none> !=" in d for d in no_key.details)
+
+    (lean.parent / ".lean_cache_key").write_text(cache_key(master, roles))
+    _registry(lean, throughput=99.0)  # hand-edited lean, key still matches master
+    edited = pipeline._lean_registry_step(config, check=True)
+    assert edited.status == "stale"
+    assert "local cache key: matches" in edited.errors[0]

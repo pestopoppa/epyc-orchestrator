@@ -1184,7 +1184,11 @@ def test_retry_mode_apply_merges_and_grades(tmp_path, monkeypatch) -> None:
     assert json_path.exists() and md_path.exists()
 
 
-def test_retry_mode_missing_source_dir_is_blocked(tmp_path) -> None:
+def test_retry_mode_missing_source_dir_is_blocked(tmp_path, monkeypatch) -> None:
+    # Hermetic: build_preflight otherwise probes the live orchestrator API and
+    # the process table (pgrep for autopilot) — a unit test must touch neither.
+    monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
     args = window.parse_args(
         [
             "--retry-errors-from",

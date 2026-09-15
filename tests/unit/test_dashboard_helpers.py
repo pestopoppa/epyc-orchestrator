@@ -883,7 +883,25 @@ def test_load_state_services_parses_known_fields(tmp_path) -> None:
     assert embedder["running"] is False
 
 
-def test_discover_llama_ports_parses_ps_output(monkeypatch) -> None:
+def _isolate_llama_attribution_plane(monkeypatch, tmp_path: Path) -> None:
+    """Pin the M3 attribution plane to "no signal" so label resolution is hermetic.
+
+    ``_discover_llama_processes`` demotes lane labels to ``extern_<port>`` when
+    the host carries fleet markers or a runtime launch contract that do not vouch
+    for the listener. These tests assert port->label resolution, not M3 demotion
+    (covered in test_dashboard_extern_attribution.py), so the host's live markers
+    and runtime-facts manifest must not leak in: with neither plane present the
+    classifier fails open (``unverified``) and keeps the configured labels.
+    """
+    from scripts.server import stack_paths
+
+    monkeypatch.setitem(stack_paths._PATHS, "tmp_dir", tmp_path)
+    monkeypatch.setattr(dashboard_topology, "_llama_fleet_markers", lambda: {})
+    monkeypatch.setattr(dashboard_topology, "_launch_contract_ports", lambda: set())
+
+
+def test_discover_llama_ports_parses_ps_output(monkeypatch, tmp_path) -> None:
+    _isolate_llama_attribution_plane(monkeypatch, tmp_path)
     fake_ps = (
         "1234 /opt/llama-server --port 8070 -m /m/frontdoor.gguf\n"
         "5678 /opt/llama-server --port 9999 -m /m/mystery.gguf\n"
@@ -904,7 +922,10 @@ def test_discover_llama_ports_parses_ps_output(monkeypatch) -> None:
     assert 1234 not in ports  # filtered out (no llama-server in cmd)
 
 
-def test_discover_llama_ports_labels_live_quarters_as_configured_instances(monkeypatch) -> None:
+def test_discover_llama_ports_labels_live_quarters_as_configured_instances(
+    monkeypatch, tmp_path
+) -> None:
+    _isolate_llama_attribution_plane(monkeypatch, tmp_path)
     fake_ps = (
         "1234 /opt/llama-server --port 8080 -m /m/frontdoor-quarter.gguf\n"
         "5678 /opt/llama-server --port 8182 -m /m/worker-quarter.gguf\n"

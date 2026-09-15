@@ -7769,8 +7769,11 @@ async def task_stream(task_id: str, request: Request) -> StreamingResponse:
 @router.get("/dashboard/api/gepa")
 async def gepa_status() -> JSONResponse:
     """Recent GEPA progress lines + parsed trial state + sentinel completion count."""
+    # Early exits still carry the freshness envelope: a missing/unreadable
+    # autopilot log is exactly the dead-producer case the envelope must report
+    # (an unstamped body hides it from /api/health consumers).
     if not AUTOPILOT_LOG.exists():
-        return JSONResponse({"active": False, "lines": [], "state": {}})
+        return JSONResponse(_stamp({"active": False, "lines": [], "state": {}}, "gepa"))
     try:
         size = AUTOPILOT_LOG.stat().st_size
         with open(AUTOPILOT_LOG, "rb") as f:
@@ -7778,7 +7781,7 @@ async def gepa_status() -> JSONResponse:
                 f.seek(-256 * 1024, 2)
             tail = f.read().decode("utf-8", errors="ignore")
     except Exception:
-        return JSONResponse({"active": False, "lines": [], "state": {}})
+        return JSONResponse(_stamp({"active": False, "lines": [], "state": {}}, "gepa"))
 
     lines = tail.splitlines()
     gepa_lines = [
