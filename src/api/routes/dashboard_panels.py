@@ -318,6 +318,24 @@ PANELS: tuple[PanelSpec, ...] = (
         ),
     ),
     PanelSpec(
+        key="decision_cockpit",
+        title="decision cockpit (AP-50)",
+        endpoint="/dashboard/api/decision_cockpit",
+        mechanism="api",
+        sources=(
+            # Recomputed per request from every journal shard. Journal recency is
+            # context, not a gate: AutoPilot is legitimately paused for long
+            # stretches and DECLARES it (state.paused), which the payload's own
+            # evidence_freshness + health fold carry. Input readability — not age —
+            # is what degrades /dashboard/api/decision_cockpit/health.
+            SourceSpec("autopilot_journal", AUTOPILOT_JOURNAL_PATH, 600, 3600,
+                       optional=True, gating=False,
+                       mtime_fn=_latest_journal_mtime),
+            SourceSpec("autopilot_state", AUTOPILOT_STATE_PATH, 3600, 86400,
+                       optional=True, gating=False),
+        ),
+    ),
+    PanelSpec(
         key="insight_graph",
         title="insight graph",
         endpoint="/dashboard/api/insight_graph",
