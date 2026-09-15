@@ -27,6 +27,20 @@ finalizer = importlib.util.module_from_spec(finalizer_spec)
 sys.modules[finalizer_spec.name] = finalizer
 finalizer_spec.loader.exec_module(finalizer)
 
+# These tests replay the real preserved composite staging source byte-for-byte
+# (its tree hash is pinned in the validator), so a synthetic copy cannot stand in.
+# That staging bundle is historical E8 campaign evidence on the host and is no
+# longer present, so the dependency is declared explicitly.
+REAL_COMPOSITE_SOURCE = validator.COMPOSITE_SOURCE_DIR
+requires_real_composite_source = pytest.mark.skipif(
+    not REAL_COMPOSITE_SOURCE.is_dir(),
+    reason=(
+        "env-dependent historical evidence: preserved composite staging source "
+        f"{REAL_COMPOSITE_SOURCE} absent from host; owner: E8 quality-baseline "
+        "campaign owner (NIB2-69 triage 2026-09-15)"
+    ),
+)
+
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -1230,6 +1244,7 @@ def test_recovery_r2_context_rejects_source_watcher_and_claim_drift(tmp_path: Pa
         _validate(root, context)
 
 
+@requires_real_composite_source
 def test_finalizer_plan_rejects_the_unsealed_preserved_staging_source() -> None:
     source = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/"
@@ -1242,6 +1257,7 @@ def test_finalizer_plan_rejects_the_unsealed_preserved_staging_source() -> None:
     assert plan["fresh_collection"] == [{"tier": 2, "repetition": 3}]
 
 
+@requires_real_composite_source
 def test_real_source_tail_is_rebound_to_the_new_bundle_without_regeneration(tmp_path: Path) -> None:
     source = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/"
@@ -1276,6 +1292,7 @@ def test_real_source_tail_is_rebound_to_the_new_bundle_without_regeneration(tmp_
         ).read_bytes()
 
 
+@requires_real_composite_source
 def test_real_source_tail_rejects_broadened_ordinals(tmp_path: Path) -> None:
     source = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/"
@@ -1297,6 +1314,7 @@ def test_real_source_tail_rejects_broadened_ordinals(tmp_path: Path) -> None:
         finalizer._canonical_t2r1_tail(staging, tmp_path / "published")
 
 
+@requires_real_composite_source
 def test_layered_context_is_limited_to_the_exact_composite_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1360,6 +1378,7 @@ def test_composite_context_requires_both_recovery_layers() -> None:
         validator.composite_context_state(None, incomplete)
 
 
+@requires_real_composite_source
 def test_four_monitor_segments_pin_the_source_resume_gap_and_order(tmp_path: Path) -> None:
     source = Path(
         "/mnt/raid0/llm/epyc-root/artifacts/operator/"

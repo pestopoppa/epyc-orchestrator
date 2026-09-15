@@ -27,11 +27,14 @@ def _load_module(name: str):
     return module
 
 
-def test_signal_handlers_update_shutdown_and_close_paths_v2():
+def test_signal_handlers_update_shutdown_and_close_paths_v2(monkeypatch):
     mod = _load_module("seed_specialist_routing_v2_helpers_sig")
-    mod.state.shutdown = False
+    # NIB2-69: `state` is the shared seeding_types singleton. Leaving
+    # shutdown=True made later evaluate_question_per_role tests in the same
+    # xdist worker return [] (order-dependent failures in test_seeding_eval).
+    monkeypatch.setattr(mod.state, "shutdown", False)
     close_mock = Mock()
-    mod.state.close_poll_client = close_mock
+    monkeypatch.setattr(mod.state, "close_poll_client", close_mock)
 
     mod._handle_sigint(None, None)
     assert mod.state.shutdown is True

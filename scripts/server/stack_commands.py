@@ -216,19 +216,17 @@ def _run_stack_change_launch_gate(args: argparse.Namespace) -> bool:
         return True
 
     command = list(STACK_CHANGE_LAUNCH_GATE_COMMAND)
-    # Thread an EXPLICIT --numa-mode through to the gate subprocess. The guard's
-    # launch view resolves realized-fleet mode first (WP-13), then falls back to
-    # ORCHESTRATOR_STACK_NUMA_MODE, then "full". On a fully-cold host there is no
-    # realized mode, so without this an explicit `--numa-mode both` cold start was
-    # gated against a full-mode launch view and failed wholesale (the 37-error
-    # class, 2026-07-25 — same family as the 105-error class WP-13 fixed for live
-    # fleets). Precedence stays: realized > CLI > env > default. Omitted flag
-    # (None) changes nothing.
+    # Thread an EXPLICIT --numa-mode through to the gate subprocess as a FLAG.
+    # Since NIB2-69 (2026-09-15) the pipeline evaluates the declared production
+    # mode (orchestration/stack_topology.yaml) for both the priors compile and
+    # the guard's launch view, and never reads ORCHESTRATOR_STACK_NUMA_MODE — so
+    # the old env-threading (the 37-error cold-start class, 2026-07-25) would now
+    # be silently ignored. Omitted flag (None) => the gate checks production.
     gate_env = None
     requested_mode = getattr(args, "numa_mode", None)
     if requested_mode:
-        gate_env = {**os.environ, "ORCHESTRATOR_STACK_NUMA_MODE": requested_mode}
-        print(f"[stack-change-gate] threading --numa-mode {requested_mode} into gate env")
+        command.extend(["--numa-mode", str(requested_mode)])
+        print(f"[stack-change-gate] threading --numa-mode {requested_mode} into the gate")
     print("[stack-change-gate] Running canonical launch gate...")
     print("  " + " ".join(command))
     try:

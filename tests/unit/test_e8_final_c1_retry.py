@@ -57,6 +57,13 @@ def _clean_pinned_runtime(
             "clean": True,
         },
     )
+    _install_historical_receipts(tmp_path, monkeypatch)
+
+
+def _install_historical_receipts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Write the original and superseding receipts against the current SOURCE."""
     original_path = tmp_path / "original-receipt.json"
     original_path.write_text(
         json.dumps(_original_receipt(), sort_keys=True) + "\n", encoding="utf-8"
@@ -300,8 +307,21 @@ def test_historical_receipts_cannot_authorize_execution(receipt_name: str) -> No
 
 @pytest.mark.parametrize("receipt_name", ["ORIGINAL_RECEIPT", "SUPERSEDING_RECEIPT"])
 def test_historical_receipts_build_planning_only_plans(
-    receipt_name: str, monkeypatch: pytest.MonkeyPatch
+    receipt_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # build_plan hashes the predecessor watcher and failed-attempt sidecars
+    # straight from SOURCE. The real sealed race namespace under
+    # /mnt/raid0/llm/epyc-root/artifacts/operator/ is historical host evidence
+    # that is no longer present, so bind SOURCE to a hermetic stand-in and
+    # re-issue the historical receipts against it (NIB2-69 triage 2026-09-15).
+    source = tmp_path / "failed-race-source"
+    source.mkdir()
+    (source / "runtime_watch.r2.race_retry.jsonl").write_text("{}\n", encoding="utf-8")
+    (source / "generation_failed_attempts.T2.r2.jsonl").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(RUNNER, "SOURCE", source)
+    _install_historical_receipts(tmp_path, monkeypatch)
     monkeypatch.setattr(
         RUNNER,
         "validate_failed_source",

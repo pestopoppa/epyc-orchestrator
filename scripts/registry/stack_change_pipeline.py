@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -90,27 +91,30 @@ DEFAULT_STACK_TOPOLOGY = REPO_ROOT / "orchestration" / "stack_topology.yaml"
 VALID_NUMA_MODES = frozenset({"full", "quarter", "both"})
 
 
+AMBIENT_NUMA_MODE_ENV = "ORCHESTRATOR_STACK_NUMA_MODE"
+
+
 def resolve_declared_numa_mode(
     topology_path: Path = DEFAULT_STACK_TOPOLOGY,
 ) -> tuple[str | None, str]:
-    """Resolve the compile-time NUMA mode and REPORT WHERE IT CAME FROM.
+    """Resolve the DECLARED NUMA mode and REPORT WHERE IT CAME FROM.
 
     Compilation must be a pure function of its declared inputs. Probing the live
     fleet to decide the lineup made the output depend on machine state, so a
     clean-shell compile and a fleet-up compile produced different artifacts from
     identical sources.
 
-    Precedence: explicit env override > declared topology file > (caller falls
-    back to the realized-fleet probe only when neither is present).
+    Reads ONLY the topology declaration. The ambient
+    ``ORCHESTRATOR_STACK_NUMA_MODE`` is deliberately NOT consulted here any more
+    (NIB2-69, 2026-09-15): a value inherited from whatever shell ran the check made
+    the verdict a function of that shell. A deliberate non-production lineup is
+    requested with ``--numa-mode`` (``StackChangePipelineConfig.numa_mode``) — see
+    ``resolve_pipeline_numa_mode``.
 
-    Returns ``(mode, source)``. ``mode`` is None when nothing is declared, which
-    tells the caller to use its realized-mode backstop. ``source`` is always a
-    human-readable label — a value without a provenance label is how a wrong
-    lineup goes unattributed.
+    Returns ``(mode, source)``. ``mode`` is None when nothing is declared.
+    ``source`` is always a human-readable label — a value without a provenance
+    label is how a wrong lineup goes unattributed.
     """
-    env_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
-    if env_mode in VALID_NUMA_MODES:
-        return env_mode, "env:ORCHESTRATOR_STACK_NUMA_MODE"
     try:
         declared = yaml.safe_load(topology_path.read_text()) or {}
         mode = declared.get("numa_mode")
@@ -125,6 +129,82 @@ def resolve_declared_numa_mode(
     return None, "no numa_mode declared"
 
 
+@dataclass(frozen=True)
+class NumaModeResolution:
+    """The ONE NUMA mode a pipeline run evaluates, with provenance.
+
+    Resolved once per run and threaded into BOTH the stack-prior compile and the
+    guard's launch-manifest view, so the artifact under test and the view it is
+    checked against always describe the same lineup.
+    """
+
+    mode: str | None
+    source: str
+    errors: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+def resolve_pipeline_numa_mode(
+    config: "StackChangePipelineConfig",
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> NumaModeResolution:
+    """Explicit ``--numa-mode`` > declared topology. Ambient env is never used.
+
+    A disagreeing ambient ``ORCHESTRATOR_STACK_NUMA_MODE`` is reported as a
+    warning (so nobody believes their export took effect) but does not change
+    the evaluated lineup. With nothing explicit and nothing declared, ``check``
+    fails: it cannot say which lineup it evaluated, so it cannot pass. ``update``
+    keeps the ESC-8 realized-fleet backstop (which refuses rather than defaulting
+    to ``full``) and says so.
+    """
+    env = os.environ if environ is None else environ
+    errors: list[str] = []
+    warnings: list[str] = []
+    if config.numa_mode is not None:
+        explicit = str(config.numa_mode).strip().lower()
+        if explicit not in VALID_NUMA_MODES:
+            return NumaModeResolution(
+                mode=None,
+                source="explicit:--numa-mode",
+                errors=(
+                    f"invalid --numa-mode {config.numa_mode!r}; expected one of "
+                    f"{sorted(VALID_NUMA_MODES)}",
+                ),
+            )
+        mode: str | None = explicit
+        source = "explicit:--numa-mode"
+        declared, declared_source = resolve_declared_numa_mode(_topology_path(config))
+        if declared is not None and declared != explicit:
+            warnings.append(
+                f"--numa-mode {explicit} overrides the declared production mode "
+                f"{declared} ({declared_source}); this run does NOT evaluate production"
+            )
+    else:
+        mode, source = resolve_declared_numa_mode(_topology_path(config))
+        if mode is None:
+            if config.mode == "check":
+                errors.append(
+                    f"no NUMA mode to evaluate ({source}): declare numa_mode in "
+                    "orchestration/stack_topology.yaml or pass --numa-mode; check "
+                    "refuses to inherit a lineup from the shell or the live fleet"
+                )
+            else:
+                warnings.append(
+                    f"no declared NUMA mode ({source}); update falls back to the "
+                    "realized-fleet probe (refuses when nothing is listening)"
+                )
+    ambient = env.get(AMBIENT_NUMA_MODE_ENV)
+    if ambient is not None and ambient.strip().lower() != (mode or ""):
+        warnings.append(
+            f"ambient {AMBIENT_NUMA_MODE_ENV}={ambient!r} IGNORED; this run evaluates "
+            f"{mode or '<unresolved>'} ({source}). Pass --numa-mode to evaluate another lineup"
+        )
+    return NumaModeResolution(
+        mode=mode, source=source, errors=tuple(errors), warnings=tuple(warnings)
+    )
+
+
 def _topology_path(config: "StackChangePipelineConfig") -> Path:
     """Topology declaration belonging to THIS config's repo_root."""
     if config.stack_topology is not None:
@@ -132,14 +212,26 @@ def _topology_path(config: "StackChangePipelineConfig") -> Path:
     return config.repo_root / "orchestration" / "stack_topology.yaml"
 
 
-def _numa_mode_kwargs(topology_path: Path = DEFAULT_STACK_TOPOLOGY) -> tuple[dict, str]:
+def _numa_mode_kwargs(resolution: NumaModeResolution) -> tuple[dict, str]:
     """Build the compile kwargs for the NUMA mode, plus the provenance label."""
-    mode, source = resolve_declared_numa_mode(topology_path)
-    if mode is None:
+    if resolution.mode is None:
         # Backstop only. Refusing beats defaulting to "full": ESC-8 kill chain A4
         # rewrote stack_priors.yaml to the dead full lineup that way.
-        return {"require_realized_mode": True}, f"{source} -> realized-fleet probe"
-    return {"numa_mode": mode}, source
+        return {"require_realized_mode": True}, f"{resolution.source} -> realized-fleet probe"
+    return {"numa_mode": resolution.mode}, resolution.source
+
+
+def _numa_mode_step(resolution: NumaModeResolution) -> PipelineStep:
+    return PipelineStep(
+        name="numa_mode",
+        status="failed" if resolution.errors else "ok",
+        errors=list(resolution.errors),
+        warnings=list(resolution.warnings),
+        details=[
+            f"evaluated numa_mode: {resolution.mode or '<unresolved>'} "
+            f"(source: {resolution.source})"
+        ],
+    )
 
 
 @dataclass(frozen=True)
@@ -166,6 +258,9 @@ class StackChangePipelineConfig:
     compile_incomplete: bool = True
     allow_descriptor_model_removal: bool = False
     run_promotion_gate: bool = False
+    # Explicit NUMA lineup to evaluate. None => the declared topology mode
+    # (production). Never inherited from the ambient environment.
+    numa_mode: str | None = None
 
 
 @dataclass
@@ -560,21 +655,39 @@ def _lean_registry_step(
         current_key = cache_path.read_text().strip() if cache_path.exists() else ""
 
         if check:
-            # Compare without writing. A key mismatch means the committed lean
-            # registry no longer corresponds to master + the active role set.
-            if current_key == expected_key:
+            # Compare CONTENT without writing. The cache key lives in a
+            # GITIGNORED per-clone file, so it cannot speak for the COMMITTED
+            # lean registry in either direction: every fresh worktree has no key
+            # (false "stale"), the shared clone's key ages whenever master bytes
+            # change outside the active projection (false "stale" — origin/main
+            # 34e27fdf failed here while the committed lean equalled the current
+            # projection exactly), and a matching key over a hand-edited lean
+            # would be a false "fresh". NIB2-69: the projection is the fact; the
+            # key is reported only as cache state.
+            compiled = compile_lean(config.research_registry, active)
+            committed = (
+                _load_yaml(config.lean_registry) if config.lean_registry.exists() else None
+            )
+            key_state = (
+                "matches"
+                if current_key == expected_key
+                else f"{current_key[:12] or '<none>'} != {expected_key[:12]}"
+            )
+            if committed == compiled:
                 return PipelineStep(
                     name="lean_registry",
                     status="ok",
-                    details=[f"fresh vs master: {config.research_registry}"],
+                    details=[
+                        f"content fresh vs master: {config.research_registry}",
+                        f"local cache key (gitignored): {key_state}",
+                    ],
                 )
-            compile_lean(config.research_registry, active)  # parse-check master
             return PipelineStep(
                 name="lean_registry",
                 status="stale",
                 errors=[
-                    "lean registry is stale against the master registry "
-                    f"(key {current_key[:12] or '<none>'} != {expected_key[:12]})",
+                    "lean registry content is stale against the master registry "
+                    f"projection (local cache key: {key_state})",
                     "everything below is compiled FROM lean, so a stale lean makes "
                     "descriptors/stack_priors green over the wrong input",
                     "run: uv run python scripts/registry/stack_change_pipeline.py update",
@@ -702,13 +815,15 @@ def _update_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
     )
 
 
-def _check_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
+def _check_stack_priors(
+    config: StackChangePipelineConfig, resolution: NumaModeResolution
+) -> PipelineStep:
     try:
         # The mode comes from the DECLARED topology so that check and update
         # compute the same lineup from the same inputs, whatever the fleet is
         # doing. The realized-fleet probe remains only as a backstop when nothing
         # is declared (ESC-8 Fix 6: refuse rather than default to "full").
-        mode_kwargs, _mode_source = _numa_mode_kwargs(_topology_path(config))
+        mode_kwargs, _mode_source = _numa_mode_kwargs(resolution)
         expected = compile_stack_priors(
             registry_path=config.lean_registry,
             descriptor_path=config.descriptors,
@@ -739,13 +854,15 @@ def _check_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
     )
 
 
-def _update_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
+def _update_stack_priors(
+    config: StackChangePipelineConfig, resolution: NumaModeResolution
+) -> PipelineStep:
     try:
         # Same declared-topology resolution as _check_stack_priors, so an update
         # can never write a lineup a check would call stale. ESC-8 Fix 6 survives
         # as the backstop: with nothing declared this still refuses rather than
         # defaulting to "full" and rewriting priors to the dead full lineup.
-        mode_kwargs, mode_source = _numa_mode_kwargs(_topology_path(config))
+        mode_kwargs, mode_source = _numa_mode_kwargs(resolution)
         priors = write_stack_priors(
             config.stack_priors,
             registry_path=config.lean_registry,
@@ -856,6 +973,7 @@ def _guard_step(
     strict: bool,
     all_surfaces: bool,
     allow_known_gaps: bool = False,
+    launch_numa_mode: str | None = None,
 ) -> PipelineStep:
     result = validate_stack_priors(
         config.stack_priors,
@@ -871,14 +989,22 @@ def _guard_step(
         descriptor_path=config.descriptors,
         allow_production_blocker_waivers=config.allow_production_blocker_waivers,
         accepted_gaps_path=config.accepted_gaps,
+        launch_numa_mode=launch_numa_mode,
     )
     errors = list(result.errors)
     warnings = list(result.warnings)
     status = "ok"
     if errors and strict and allow_known_gaps:
-        warnings.extend(f"known-gap: {error}" for error in errors)
-        errors = []
-        status = "known_gaps"
+        # --allow-known-gaps downgrades ONLY strict-promoted warnings. Everything
+        # the non-strict guard also reports as an error (launch-manifest/port
+        # alignment, source-artifact hash pins, contract violations) stays an
+        # error here too, so the flag can never take a structural defect green
+        # (NIB2-69). The downgraded ones are listed one by one, never counted.
+        known_gap_errors = [error for error in errors if error.startswith("strict: ")]
+        hard_errors = [error for error in errors if not error.startswith("strict: ")]
+        warnings.extend(f"known-gap: {error}" for error in known_gap_errors)
+        errors = hard_errors
+        status = "failed" if hard_errors else "known_gaps"
     elif errors:
         status = "failed"
     elif warnings:
@@ -1054,10 +1180,14 @@ def _promotion_gate_step(config: StackChangePipelineConfig, *, prior_ok: bool) -
 
 def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineReport:
     report = PipelineReport()
+    # Resolved ONCE and recorded as the first step, so the output always says
+    # which lineup was evaluated and the compile and the guard cannot disagree.
+    numa_resolution = resolve_pipeline_numa_mode(config)
+    report.steps.append(_numa_mode_step(numa_resolution))
     if config.mode == "check":
         report.steps.append(_lean_registry_step(config, check=True))
         report.steps.append(_check_descriptors(config))
-        report.steps.append(_check_stack_priors(config))
+        report.steps.append(_check_stack_priors(config, numa_resolution))
         report.steps.append(_procedure_enums(config, check=True))
         report.steps.append(_check_operator_summary(config))
     else:
@@ -1077,7 +1207,7 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
         descriptor_step = _update_descriptors(config)
         report.steps.append(descriptor_step)
         if descriptor_step.ok:
-            report.steps.append(_update_stack_priors(config))
+            report.steps.append(_update_stack_priors(config, numa_resolution))
             report.steps.append(_procedure_enums(config, check=False))
             report.steps.append(_update_operator_summary(config))
         else:
@@ -1103,11 +1233,24 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
                 )
             )
 
+    # Every guard step builds its launch-manifest view for the SAME resolved mode
+    # the priors were compiled for. Any launch/serving alignment error is a hard
+    # error in all three steps (strict or not, known gaps allowed or not), so a
+    # single manifest/port mismatch fails `check`.
+    launch_mode = numa_resolution.mode
     report.steps.append(
-        _guard_step("guard", config, strict=False, all_surfaces=False)
+        _guard_step(
+            "guard", config, strict=False, all_surfaces=False, launch_numa_mode=launch_mode
+        )
     )
     report.steps.append(
-        _guard_step("guard_all_surfaces", config, strict=False, all_surfaces=True)
+        _guard_step(
+            "guard_all_surfaces",
+            config,
+            strict=False,
+            all_surfaces=True,
+            launch_numa_mode=launch_mode,
+        )
     )
     report.steps.append(
         _guard_step(
@@ -1116,6 +1259,7 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
             strict=True,
             all_surfaces=False,
             allow_known_gaps=config.allow_known_gaps,
+            launch_numa_mode=launch_mode,
         )
     )
     report.steps.append(_reasoning_effort_certifications_step(config))
@@ -1206,6 +1350,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run the no-inference pytest promotion gate after checks pass",
     )
+    parser.add_argument(
+        "--numa-mode",
+        choices=sorted(VALID_NUMA_MODES),
+        default=None,
+        help=(
+            "NUMA lineup to compile and guard. Default: the declared production "
+            "mode in orchestration/stack_topology.yaml. The ambient "
+            "ORCHESTRATOR_STACK_NUMA_MODE is never consulted; the evaluated mode "
+            "and its source are printed as the numa_mode step"
+        ),
+    )
     args = parser.parse_args(argv)
 
     config = StackChangePipelineConfig(
@@ -1228,6 +1383,7 @@ def main(argv: list[str] | None = None) -> int:
         compile_incomplete=not args.strict_descriptor_compile,
         allow_descriptor_model_removal=args.allow_descriptor_model_removal,
         run_promotion_gate=args.run_promotion_gate,
+        numa_mode=args.numa_mode,
     )
     report = run_stack_change_pipeline(config)
     _print_report(report)

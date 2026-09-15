@@ -59,7 +59,7 @@ source_artifacts:
     repo_commit: e9d4b817
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: ad1b006e05d6098aa4a58b340e61feaf9b965aab34648f33aa52049d2033aabe
+    sha256: 68d12f60bf4335fbb462d9d6843563fa57afa3fde75b549ff32bb9584d9fabbe
     repo_commit: e9d4b817
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
@@ -71,7 +71,7 @@ source_artifacts:
     repo_commit: e9d4b817
   launch_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/launch_manifest.yaml
-    sha256: c915af33c5d4cf0fc436ccf58c3c5578aa03965d3203c74213cc0e8549992f8b
+    sha256: 9b035a340c17c76532d5d3c1b2079b7e94992fe39c93141133d4d2d4da3bd13d
     repo_commit: e9d4b817
   stack_topology:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
@@ -79,7 +79,7 @@ source_artifacts:
     repo_commit: e9d4b817
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 48ba09f56f2a50ae8d6e93c4be150ecb43463215e8135dfb11244a132b83f736
+    sha256: cef9c9cefa1a1469d41504b20aec1adfff83c0c29363e85e2065e41909c73021
     repo_commit: e9d4b817
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py

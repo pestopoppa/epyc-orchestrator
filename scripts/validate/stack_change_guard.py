@@ -1139,6 +1139,7 @@ def _launch_manifest_targets(
     *,
     registry_path: Path = DEFAULT_REGISTRY,
     descriptor_path: Path = DEFAULT_DESCRIPTORS,
+    launch_numa_mode: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return live launch ports/tier per role from the computed manifest.
 
@@ -1150,6 +1151,7 @@ def _launch_manifest_targets(
     targets, _errors = _launch_manifest_targets_or_error(
         registry_path=registry_path,
         descriptor_path=descriptor_path,
+        launch_numa_mode=launch_numa_mode,
     )
     return targets
 
@@ -1158,6 +1160,7 @@ def _launch_manifest_targets_or_error(
     *,
     registry_path: Path = DEFAULT_REGISTRY,
     descriptor_path: Path = DEFAULT_DESCRIPTORS,
+    launch_numa_mode: str | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[str]]:
     """Build the launch view, reporting every input it could not evaluate.
 
@@ -1179,16 +1182,37 @@ def _launch_manifest_targets_or_error(
             "assertion was skipped"
         ]
 
-    from scripts.server.stack_numa_mode import env_stack_numa_mode
+    from scripts.server.stack_numa_mode import (
+        VALID_STACK_NUMA_MODES,
+        env_stack_numa_mode,
+    )
 
-    # ESC-8/WP-13: build the launch view against the REALIZED fleet mode, not
-    # the ambient env default ("full" in a clean shell). A quarter-realized
-    # fleet guarded against a full-mode launch view mismatches wholesale (the
-    # 105-error class, 2026-07-22). Env stays the fallback for fleet-less
-    # environments (tests, cold hosts).
-    numa_mode = _realized_launch_numa_mode()
-    if numa_mode is None:
-        numa_mode = env_stack_numa_mode()
+    if launch_numa_mode is not None:
+        # NIB2-69 (2026-09-15): an EXPLICIT mode wins and nothing ambient is
+        # consulted. The stack-change pipeline passes the DECLARED topology mode
+        # (orchestration/stack_topology.yaml) — the same mode the priors were
+        # compiled with — so the launch view and the artifact under test describe
+        # the same lineup. Without it a clean shell fell through to env default
+        # "full", filtered the half instances out of the view, and reported every
+        # half port the (correctly `both`-compiled) priors carry as a non-launch
+        # port: the 13-errors-x-3-guard-steps = 39 class on origin/main.
+        numa_mode = str(launch_numa_mode).strip().lower()
+        if numa_mode not in VALID_STACK_NUMA_MODES:
+            return {}, [
+                f"{COULD_NOT_CHECK}: invalid launch NUMA mode {launch_numa_mode!r} "
+                f"(expected one of {sorted(VALID_STACK_NUMA_MODES)}); EVERY "
+                "launch/serving alignment assertion was skipped"
+            ]
+    else:
+        # Legacy resolution for callers that pass no mode (standalone guard CLI,
+        # fixtures). ESC-8/WP-13: build the launch view against the REALIZED
+        # fleet mode, not the ambient env default ("full" in a clean shell). A
+        # quarter-realized fleet guarded against a full-mode launch view
+        # mismatches wholesale (the 105-error class, 2026-07-22). Env stays the
+        # fallback for fleet-less environments (tests, cold hosts).
+        numa_mode = _realized_launch_numa_mode()
+        if numa_mode is None:
+            numa_mode = env_stack_numa_mode()
     registry, registry_errors = _load_yaml_mapping_or_error(registry_path, "registry")
     errors.extend(registry_errors)
     registry_roles = registry.get("roles") if isinstance(registry.get("roles"), dict) else {}
@@ -1600,12 +1624,20 @@ def validate_launch_manifest_serving_alignment(
     launch_manifest_targets: dict[str, dict[str, Any]] | None = None,
     registry_path: Path = DEFAULT_REGISTRY,
     descriptor_path: Path = DEFAULT_DESCRIPTORS,
+    launch_numa_mode: str | None = None,
 ) -> list[str]:
-    """Validate generated live serving records against current launch roles."""
+    """Validate generated live serving records against current launch roles.
+
+    ``launch_numa_mode`` selects the lineup the launch view is filtered to. Pass
+    the mode the priors were compiled for; ``None`` keeps the legacy
+    realized-fleet -> ambient-env resolution.
+    """
     errors: list[str] = []
     if launch_manifest_targets is None:
         targets, view_errors = _launch_manifest_targets_or_error(
-            registry_path=registry_path, descriptor_path=descriptor_path
+            registry_path=registry_path,
+            descriptor_path=descriptor_path,
+            launch_numa_mode=launch_numa_mode,
         )
         errors.extend(view_errors)
         derived_view = True
@@ -2814,6 +2846,7 @@ def validate_stack_priors(
     descriptor_path: Path = DEFAULT_DESCRIPTORS,
     allow_production_blocker_waivers: bool = False,
     accepted_gaps_path: Path | None = DEFAULT_ACCEPTED_GAPS,
+    launch_numa_mode: str | None = None,
 ) -> GuardResult:
     errors: list[str] = []
     warnings: list[str] = []
@@ -2843,6 +2876,7 @@ def validate_stack_priors(
             launch_manifest_targets=launch_manifest_targets,
             registry_path=registry_path,
             descriptor_path=descriptor_path,
+            launch_numa_mode=launch_numa_mode,
         )
     )
     roles = priors.get("roles")

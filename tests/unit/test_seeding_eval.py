@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 
 _ROOT = Path(__file__).resolve().parents[2] / "scripts" / "benchmark"
 sys.path.insert(0, str(_ROOT))
@@ -15,6 +17,18 @@ _SPEC = importlib.util.spec_from_file_location("seeding_eval_test", _ROOT / "see
 _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules["seeding_eval_test"] = _MOD
 _SPEC.loader.exec_module(_MOD)
+
+
+@pytest.fixture(autouse=True)
+def _reset_seeding_shutdown_flag(monkeypatch):
+    """Isolate from the process-global ``seeding_types.state`` singleton.
+
+    ``evaluate_question_per_role`` breaks out of its wave loop when
+    ``state.shutdown`` is set; signal-handler tests in other files (e.g.
+    test_seed_specialist_routing_v2_helpers.py) leave it True, which made these
+    tests order-dependent under xdist.
+    """
+    monkeypatch.setattr(_MOD.state, "shutdown", False)
 
 
 def _rr(**overrides):

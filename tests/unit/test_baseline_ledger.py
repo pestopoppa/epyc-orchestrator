@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+
+from src.autopilot_core.authority_consent import CONSENT_PATH_ENV
 from src.autopilot_core.baseline_ledger import (
     BASELINE_LEDGER_AUTHORITY_STATE_FLAG,
     BASELINE_PROMOTION_EVENT_TYPE,
@@ -152,7 +155,14 @@ def test_reconcile_quality_mismatch_is_warning_only() -> None:
     ]
 
 
-def test_apply_baseline_ledger_authority_removes_matching_state_cache() -> None:
+def test_apply_baseline_ledger_authority_removes_matching_state_cache(
+    monkeypatch, tmp_path
+) -> None:
+    # Authority is fail-closed behind the operator-owned, gitignored consent
+    # file; grant it hermetically instead of depending on the checkout.
+    consent = tmp_path / "authority_consent.json"
+    consent.write_text(json.dumps({"baseline_ledger": "allow"}), encoding="utf-8")
+    monkeypatch.setenv(CONSENT_PATH_ENV, str(consent))
     state = {
         BASELINE_LEDGER_AUTHORITY_STATE_FLAG: True,
         "baseline_state": {"baselines_by_tier": {"1": 1.8}},

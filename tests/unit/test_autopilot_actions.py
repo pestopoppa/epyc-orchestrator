@@ -6,6 +6,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -1332,14 +1333,19 @@ def test_deep_eval_rejects_unreplayable_seq_promotion_numeric_candidate() -> Non
 
 def test_recent_eval_qids_excludes_only_rows_inside_recency_window(monkeypatch) -> None:
     monkeypatch.setattr(actions, "SEQ_PROMOTION_RECENT_QID_DAYS", 60)
+    # Timestamps are generated relative to wall-clock now (the code under test
+    # reads datetime.now) so the fixture cannot age out of the 60-day window.
+    now = datetime.now(timezone.utc)
+    old_ts = (now - timedelta(days=180)).isoformat().replace("+00:00", "Z")
+    fresh_ts = (now - timedelta(days=5)).isoformat().replace("+00:00", "Z")
     journal = SimpleNamespace(
         entries_with_supersessions=lambda: [
             SimpleNamespace(
-                timestamp="2026-01-01T00:00:00Z",
+                timestamp=old_ts,
                 eval_details={"question_results": [{"qid": "old-q"}]},
             ),
             SimpleNamespace(
-                timestamp="2026-07-01T00:00:00Z",
+                timestamp=fresh_ts,
                 eval_details={
                     "question_results": [
                         {

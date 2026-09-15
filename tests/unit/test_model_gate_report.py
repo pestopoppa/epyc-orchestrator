@@ -783,6 +783,13 @@ xmas_routing:
         "build_a9_collection_status",
         lambda path: {"ready": True, "status": "ready", "blockers": []},
     )
+    # Hermetic: a unit test must not read live process/port state. The DS-E1
+    # clean-window and X-MAS quiet-window probes shell out to pgrep and connect
+    # to a local port, so a live AutoPilot or llama-server would flip readiness.
+    # Pin the process/port seams to an idle host.
+    monkeypatch.setattr(report_mod, "_pgrep", lambda pattern: [])
+    monkeypatch.setattr(report_mod, "_pgrep_exact", lambda name: [])
+    monkeypatch.setattr(report_mod, "_tcp_port_accepting", lambda port, **kwargs: False)
 
     report = report_mod.build_model_gate_report(
         state={},

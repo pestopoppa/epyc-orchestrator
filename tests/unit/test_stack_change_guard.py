@@ -3159,3 +3159,32 @@ def test_staleness_check_is_reachable_from_the_guard_cli(staleness_repo, capsys)
 
     assert rc_clean == 0
     assert "OK: source artifacts match the pins" in clean_out
+
+
+def test_launch_view_rejects_invalid_explicit_numa_mode_as_could_not_check() -> None:
+    """NIB2-69: an explicit launch mode is never silently normalised to a default."""
+    targets, view_errors = stack_change_guard._launch_manifest_targets_or_error(
+        launch_numa_mode="halves"
+    )
+
+    assert targets == {}
+    assert _could_not_check(view_errors)
+    assert "invalid launch NUMA mode" in view_errors[0]
+
+
+def test_explicit_launch_numa_mode_bypasses_realized_fleet_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _probe_must_not_run() -> str:
+        raise AssertionError("explicit launch mode must not consult the realized fleet")
+
+    monkeypatch.setattr(stack_change_guard, "_realized_launch_numa_mode", _probe_must_not_run)
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+
+    both, both_errors = stack_change_guard._launch_manifest_targets_or_error(
+        launch_numa_mode="both"
+    )
+    full, _ = stack_change_guard._launch_manifest_targets_or_error(launch_numa_mode="full")
+
+    assert not both_errors
+    assert set(full["frontdoor"]["ports"]) < set(both["frontdoor"]["ports"])

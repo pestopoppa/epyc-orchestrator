@@ -29,6 +29,20 @@ runner = importlib.util.module_from_spec(spec)
 sys.modules["e8_reseed"] = runner
 spec.loader.exec_module(runner)
 
+# The legacy T1/r1 migration tests replay the real sealed candidate-v4 staging
+# bundle (and the relaxed context replacement map) byte-for-byte; their pinned
+# hashes cannot be synthesized. That bundle is historical E8 campaign evidence on
+# the host and is no longer present, so the dependency is declared explicitly.
+requires_legacy_t1_r1_bundle = pytest.mark.skipif(
+    not LEGACY_T1_R1.is_dir() or not runner.CONTEXT_REPLACEMENT_MAP.is_file(),
+    reason=(
+        "env-dependent historical evidence: sealed legacy T1/r1 bundle "
+        f"{LEGACY_T1_R1} and/or context replacement map "
+        f"{runner.CONTEXT_REPLACEMENT_MAP} absent from host; owner: E8 "
+        "quality-baseline campaign owner (NIB2-69 triage 2026-09-15)"
+    ),
+)
+
 
 class FakeQuestionResult:
     def __init__(
@@ -1136,6 +1150,20 @@ def test_runtime_binding_pins_full_cmdline_model_flags_and_state_path(
     monkeypatch.setattr(runner.os, "readlink", lambda _path: expected_binary)
     monkeypatch.setattr(runner, "process_cmdline", lambda pid: list(cmdlines[pid]))
     monkeypatch.setattr(runner, "_missing_listener_identities", lambda _pids: [])
+    # The frozen-tree identity check reads the live /mnt/raid0/llm/llama.cpp
+    # checkout, which has since versioned past v8 (production is v9). This
+    # test is about cmdline/model-flag pinning, so stub the host provenance
+    # with the exact v8 identity the runner demands instead of editing the
+    # frozen-kernel check itself (NIB2-69 triage 2026-09-15).
+    monkeypatch.setattr(
+        runner,
+        "frozen_llama_source_provenance",
+        lambda: {
+            "path": str(runner.FROZEN_V8_LLAMA_TREE),
+            "branch": runner.FROZEN_V8_LLAMA_BRANCH,
+            "head": runner.FROZEN_V8_LLAMA_HEAD,
+        },
+    )
     monkeypatch.setattr(
         runner,
         "runtime_artifact_identities",
@@ -1215,6 +1243,20 @@ def test_receipt_requires_canonical_path_and_current_runner_hash(
     args = _args(tmp_path)
     canonical_receipt = tmp_path / "canonical-receipt.json"
     monkeypatch.setattr(runner, "PROTOCOL_RECEIPT", canonical_receipt)
+    # The predecessor-evidence hash gate runs before the runner-hash gate and
+    # reads historical E8 operator artifacts that are no longer on the host.
+    # Bind it to hermetic stand-ins with matching hashes so this test reaches
+    # the runner-hash gate it exists to exercise (NIB2-69 triage 2026-09-15).
+    supersedes = {}
+    for name in runner.REPAIR_SUPERSEDES:
+        predecessor = tmp_path / "predecessors" / f"{name}.json"
+        predecessor.parent.mkdir(exist_ok=True)
+        predecessor.write_text(json.dumps({"predecessor": name}) + "\n")
+        supersedes[name] = {
+            "path": str(predecessor.resolve()),
+            "sha256": runner.sha256_path(predecessor),
+        }
+    monkeypatch.setattr(runner, "REPAIR_SUPERSEDES", supersedes)
 
     with pytest.raises(ValueError, match="canonical path"):
         runner.receipt_payload(args)
@@ -1752,6 +1794,7 @@ def _legacy_t1_questions() -> list[dict]:
     return [dict(replacements.get(runner._question_qid(question), question)) for question in questions]
 
 
+@requires_legacy_t1_r1_bundle
 def test_legacy_t1_migration_reuses_clean_rows_and_seals_two_attempt_judge_history(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1831,6 +1874,7 @@ def test_legacy_t1_migration_reuses_clean_rows_and_seals_two_attempt_judge_histo
     )
 
 
+@requires_legacy_t1_r1_bundle
 def test_legacy_t1_migration_fails_closed_on_vector_or_timeout_tamper(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         runner, "_legacy_raw_and_watcher_match",
@@ -1860,6 +1904,7 @@ def test_legacy_t1_migration_fails_closed_on_vector_or_timeout_tamper(tmp_path: 
         )
 
 
+@requires_legacy_t1_r1_bundle
 def test_focused_legacy_generation_is_one_question_and_separately_classified(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         runner, "_legacy_raw_and_watcher_match",
@@ -1893,6 +1938,7 @@ def test_focused_legacy_generation_is_one_question_and_separately_classified(tmp
     assert detail["runtime_window_classification"].startswith("focused_replacement_window")
 
 
+@requires_legacy_t1_r1_bundle
 def test_pinned_legacy_t1_watcher_uses_only_the_reviewed_candidate_exception() -> None:
     migration = runner.prepare_legacy_t1_r1_migration(
         LEGACY_T1_R1, _legacy_t1_questions(), default_api_url="http://127.0.0.1:8000"
@@ -1905,6 +1951,7 @@ def test_pinned_legacy_t1_watcher_uses_only_the_reviewed_candidate_exception() -
     ] == [32, 33, 38]
 
 
+@requires_legacy_t1_r1_bundle
 def test_legacy_raw_tamper_blocks_before_watcher(tmp_path: Path) -> None:
     tampered = tmp_path / "legacy"
     shutil.copytree(LEGACY_T1_R1, tampered)
@@ -1918,6 +1965,7 @@ def test_legacy_raw_tamper_blocks_before_watcher(tmp_path: Path) -> None:
         )
 
 
+@requires_legacy_t1_r1_bundle
 def test_legacy_source_change_after_preflight_blocks_scorer_replay(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         runner, "_legacy_raw_and_watcher_match",
@@ -1935,6 +1983,7 @@ def test_legacy_source_change_after_preflight_blocks_scorer_replay(tmp_path: Pat
         runner.verify_legacy_t1_r1_source_unchanged(migration)
 
 
+@requires_legacy_t1_r1_bundle
 def test_legacy_execution_preflight_must_match_the_sealed_candidate() -> None:
     migration = runner.prepare_legacy_t1_r1_migration(
         LEGACY_T1_R1, _legacy_t1_questions(), default_api_url="http://127.0.0.1:8000"
