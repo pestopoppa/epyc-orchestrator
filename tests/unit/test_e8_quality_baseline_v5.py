@@ -719,6 +719,10 @@ class FakeTower:
                 retry_count=0,
                 rubric_scores={},
                 rubric_source=None,
+                # Mirrors the real QuestionResult default
+                # (`rubric_threshold_source: str = ""`, added by RC-12 5a9442d3);
+                # `_compact_question_result` serializes it for every row.
+                rubric_threshold_source="",
             )
         ]
 
@@ -2500,7 +2504,9 @@ def test_final_wrapper_rejects_symlinked_test_sandbox_state_escape(tmp_path: Pat
     )
     root = tmp_path / "operator-root"
     root.mkdir()
-    canonical_state = PROJECT_ROOT / "orchestration/autopilot_state.json"
+    # The live AutoPilot state is gitignored and exists only in the main
+    # checkout; anchoring it on PROJECT_ROOT made this test fail in any worktree.
+    canonical_state = CANONICAL_STATE_PATH
     state_link = tmp_path / "state.json"
     state_link.symlink_to(canonical_state)
     lock = tmp_path / "apply.lock"
