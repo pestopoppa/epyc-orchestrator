@@ -995,10 +995,10 @@ Examples (legacy mode - DEPRECATED):
 
     # Rebuild pool — build and exit
     if args.rebuild_pool:
-        from question_pool import build_pool
         import time as _time
         t0 = _time.monotonic()
-        stats = build_pool()
+        # EVL-12 A2: bind the research question_pool by path, like the sampler.
+        stats = _seeding_sampling.build_question_pool()
         elapsed = _time.monotonic() - t0
         total = sum(stats.values())
         print(f"Pool rebuilt in {elapsed:.1f}s: {total} questions across {len(stats)} suites")
@@ -1160,8 +1160,8 @@ Examples (legacy mode - DEPRECATED):
         else:
             logger.error("--question-ids JSON must be a list of IDs or have 'all_question_ids' key")
             sys.exit(1)
-        from question_pool import load_questions_by_ids
-        _questions_override = load_questions_by_ids(_qid_list)
+        # EVL-12 A2: research pool via the path-bound loader, never a bare import.
+        _questions_override = _seeding_sampling.load_questions_by_ids(_qid_list, logger=logger)
         if not _questions_override:
             logger.error("No questions matched from --question-ids file")
             sys.exit(1)
