@@ -6,7 +6,7 @@ when no changes detected. Uses git diff against a stored commit hash.
 
 Phase 5: Dual-container architecture with AST-aware chunking.
   Code files → :8088 (LateOn-Code 130M, 128-dim)
-  Doc files  → :8089 (answerai-colbert-small-v1-onnx)
+  Doc files  → :8089 (GTE-ModernColBERT-v1 149M, 128-dim; see launch_manifest.yaml)
 
 Usage:
     python scripts/nextplaid/reindex_changed.py          # Incremental
