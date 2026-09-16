@@ -40,16 +40,21 @@ def search_records(
     limit: int = 20,
     vector_rows: Sequence[dict[str, Any]] | None = None,
     rrf_k: int = 60,
+    order: str | None = None,
     **filters: Any,
 ) -> list[dict[str, Any]]:
     """Search trace records by FTS text and optional structured filters.
+
+    Lexical rows are bm25-ranked (most relevant first) by default; pass
+    ``order="recency"`` for the latest matches instead. RRF fusion consumes
+    this rank order.
 
     ``vector_rows`` is optional and caller-supplied. Passing it enables RRF
     fusion without this module owning an embedding model or vector index.
     """
 
     normalized = _require_text(text, "text")
-    lexical_rows = query(db_path=db_path, text=normalized, limit=limit, **filters)
+    lexical_rows = query(db_path=db_path, text=normalized, limit=limit, order=order, **filters)
     if vector_rows is None:
         return _with_rank_source(lexical_rows, "fts")
     return rrf_fuse(
@@ -128,7 +133,8 @@ def get_conversation(
         )
     if session_id is None:
         raise TraceNavigationError("session_id or trial_id is required")
-    rows = query(db_path=db_path, session_id=session_id, limit=limit)
+    # Latest ``limit`` events of the session, then replayed oldest-first.
+    rows = query(db_path=db_path, session_id=session_id, limit=limit, order="recency")
     timeline = sorted(rows, key=lambda row: (str(row.get("ts_utc") or ""), row.get("id") or 0))
     return {
         "session_id": session_id,

@@ -1,8 +1,19 @@
 """Query API for the unified trace store.
 
-Filters can be combined freely. `text=` triggers FTS5 ranking against
-summary + detail_json. Filterless queries return rows ordered by ts_utc
-descending (most recent first).
+Filters can be combined freely. `text=` triggers an FTS5 search against
+summary + detail_json.
+
+Ordering (``order=``):
+  * ``None`` (default): ``"relevance"`` when ``text`` is given, else ``"recency"``.
+  * ``"relevance"``: FTS5 bm25, most relevant first (ties: newest first). The
+    ranking is applied BEFORE ``LIMIT``, so a limited search keeps the best
+    matches. Requires ``text``.
+  * ``"recency"``: ts_utc descending (most recent first). Use it with ``text``
+    when you want "the latest events mentioning X".
+
+Before 2026-09-16 text searches were silently ordered by recency despite this
+docstring promising bm25; callers that want that behaviour must now pass
+``order="recency"`` explicitly.
 
 Cross-source recipes (a few high-value patterns):
 
@@ -29,6 +40,10 @@ from typing import Any
 from src.trace.store import DEFAULT_DB_PATH, EventCategory
 
 
+ORDER_RELEVANCE = "relevance"
+ORDER_RECENCY = "recency"
+_ORDERS = frozenset({ORDER_RELEVANCE, ORDER_RECENCY})
+
 _BASE_COLUMNS = (
     "id, ts_utc, source, source_path, source_line, session_id, "
     "trial_id, role, category, status, summary, detail_json, redacted"
@@ -47,8 +62,19 @@ def query(
     source: str | None = None,
     text: str | None = None,
     limit: int = 50,
+    order: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Query the trace store. Returns a list of row-dicts."""
+    """Query the trace store. Returns a list of row-dicts.
+
+    See the module docstring for ``order`` semantics.
+    """
+    if order is None:
+        order = ORDER_RELEVANCE if text else ORDER_RECENCY
+    if order not in _ORDERS:
+        raise ValueError(f"order must be one of {sorted(_ORDERS)}, got {order!r}")
+    if order == ORDER_RELEVANCE and not text:
+        raise ValueError("order='relevance' requires text= (bm25 needs an FTS match)")
+
     db_path = Path(db_path)
     if not db_path.exists():
         return []
@@ -57,43 +83,50 @@ def query(
     conn.row_factory = sqlite3.Row
 
     if text:
-        # FTS5 path: rank by bm25, intersect with filters via subquery.
+        # FTS5 path: join so bm25() is available for ranking; filters apply to event.
+        cols = ", ".join(f"e.{c.strip()}" for c in _BASE_COLUMNS.split(","))
         sql = (
-            f"SELECT {_BASE_COLUMNS} "
-            "FROM event "
-            "WHERE id IN (SELECT rowid FROM event_fts WHERE event_fts MATCH ?)"
+            f"SELECT {cols} "
+            "FROM event_fts JOIN event e ON e.id = event_fts.rowid "
+            "WHERE event_fts MATCH ?"
         )
         params: list[Any] = [text]
+        prefix = "e."
     else:
         sql = f"SELECT {_BASE_COLUMNS} FROM event WHERE 1=1"
         params = []
+        prefix = ""
 
     if from_ts is not None:
-        sql += " AND ts_utc >= ?"
+        sql += f" AND {prefix}ts_utc >= ?"
         params.append(from_ts)
     if to_ts is not None:
-        sql += " AND ts_utc <= ?"
+        sql += f" AND {prefix}ts_utc <= ?"
         params.append(to_ts)
     if session_id is not None:
-        sql += " AND session_id = ?"
+        sql += f" AND {prefix}session_id = ?"
         params.append(session_id)
     if trial_id is not None:
-        sql += " AND trial_id = ?"
+        sql += f" AND {prefix}trial_id = ?"
         params.append(trial_id)
     if role is not None:
-        sql += " AND role = ?"
+        sql += f" AND {prefix}role = ?"
         params.append(role)
     if category is not None:
-        sql += " AND category = ?"
+        sql += f" AND {prefix}category = ?"
         params.append(category)
     if status is not None:
-        sql += " AND status = ?"
+        sql += f" AND {prefix}status = ?"
         params.append(status)
     if source is not None:
-        sql += " AND source = ?"
+        sql += f" AND {prefix}source = ?"
         params.append(source)
 
-    sql += " ORDER BY ts_utc DESC LIMIT ?"
+    if order == ORDER_RELEVANCE:
+        # bm25() is lower-is-better in SQLite FTS5.
+        sql += " ORDER BY bm25(event_fts) ASC, e.ts_utc DESC, e.id DESC LIMIT ?"
+    else:
+        sql += f" ORDER BY {prefix}ts_utc DESC LIMIT ?"
     params.append(int(limit))
 
     rows = conn.execute(sql, params).fetchall()
@@ -136,7 +169,7 @@ def trial_context(
     if trial_id is None:
         raise ValueError("trial_id is required")
 
-    trial_rows = query(db_path=db_path, trial_id=trial_id, limit=limit)
+    trial_rows = query(db_path=db_path, trial_id=trial_id, limit=limit, order=ORDER_RECENCY)
     parsed_ts = [
         dt
         for row in trial_rows
@@ -162,7 +195,9 @@ def trial_context(
     from_ts = _format_ts(min(parsed_ts) - window)
     to_ts = _format_ts(max(parsed_ts) + window)
     trial_event_ids = {row["id"] for row in trial_rows}
-    window_rows = query(db_path=db_path, from_ts=from_ts, to_ts=to_ts, limit=limit)
+    window_rows = query(
+        db_path=db_path, from_ts=from_ts, to_ts=to_ts, limit=limit, order=ORDER_RECENCY
+    )
     context_rows = [row for row in window_rows if row["id"] not in trial_event_ids]
     timeline = sorted(
         trial_rows + context_rows,
@@ -259,6 +294,7 @@ def decision_chain(
             trial_id=trial_id,
             category=cat,
             limit=limit,
+            order=ORDER_RECENCY,
         ):
             merged[row["id"]] = row
 
