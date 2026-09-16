@@ -1289,6 +1289,38 @@ def _completion_probabilities_confidence(rows: Any) -> float | None:
     return min(1.0, max(0.0, math.exp(sum(logps) / len(logps))))
 
 
+def _token_logprob_trace(
+    rows: Any, *, answer: str, scoring_config: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    """EV-CONF-2: bounded per-token trace for the sidecar (fail-open to ``None``).
+
+    ``AUTOPILOT_EVAL_TOKEN_LOGPROBS=0`` disables capture. The cap is
+    ``AUTOPILOT_EVAL_TOKEN_LOGPROBS_MAX_TOKENS`` (default 8192, i.e. <=16 KiB raw
+    per vector). Capture is observational: a failure here can never change a
+    verdict or the aggregate confidence, so it only logs.
+    """
+    if os.environ.get("AUTOPILOT_EVAL_TOKEN_LOGPROBS", "1").strip() in {"0", "false", "no"}:
+        return None
+    if not isinstance(rows, list) or not rows:
+        return None
+    try:
+        import token_confidence
+
+        pattern = (scoring_config or {}).get("extract_pattern")
+        return token_confidence.build_token_trace_record(
+            rows,
+            answer=answer,
+            extract_pattern=str(pattern) if pattern else None,
+            max_tokens=_env_int(
+                "AUTOPILOT_EVAL_TOKEN_LOGPROBS_MAX_TOKENS",
+                token_confidence.DEFAULT_MAX_TOKENS,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - observational capture only
+        log.warning("EV-CONF-2 token logprob trace capture failed: %s", exc)
+        return None
+
+
 def _upper_median(values: list[float]) -> float:
     return sorted(values)[len(values) // 2] if values else 0.0
 
@@ -2944,6 +2976,11 @@ class _EvalQuestionJsonlWriter:
         )
         if scored_at_s is not None:
             row["scored_at_s"] = round(float(scored_at_s), 3)
+        # EV-CONF-2: additive key; legacy readers ignore it, and legacy rows
+        # simply lack it (token_confidence.decode_token_trace -> None).
+        token_logprobs = getattr(result, "token_logprobs", None)
+        if token_logprobs:
+            row["token_logprobs"] = token_logprobs
         self.append_row(row)
 
     def append_complete(self, *, completed_n: int, elapsed_s: float) -> None:
@@ -3144,6 +3181,9 @@ class QuestionResult:
     # model scoring or a client transport timeout makes an explicit drain
     # necessary; aggregate telemetry deduplicates the shared reports.
     eval_backend_drain_reports: list[dict[str, Any]] = field(default_factory=list)
+    # EV-CONF-2: bounded per-token logprob trace (token_confidence.build_token_trace_record).
+    # Written ONLY to the question-result sidecar (never to the compact journal row).
+    token_logprobs: dict[str, Any] | None = None
 
 
 @dataclass
@@ -4629,6 +4669,11 @@ class EvalTower:
             probability_confidence=probability_confidence,
             rubric_scores=rubric_scores,
         )
+        token_logprobs = _token_logprob_trace(
+            resp.get("completion_probabilities"),
+            answer=answer,
+            scoring_config=scoring_config,
+        )
 
         # 2026-05-23 Phase 4 — exogenous-restart metadata propagation.
         # call_orchestrator_forced attaches the resilient_post meta dict
@@ -4702,6 +4747,7 @@ class EvalTower:
             rubric_threshold_source=rubric_threshold_source,
             host_covariates=outcome.host_covariates,
             retrieval_compaction=dict(outcome.retrieval_compaction),
+            token_logprobs=token_logprobs,
         )
 
     def _failed_question_result(
