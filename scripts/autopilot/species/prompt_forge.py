@@ -1035,6 +1035,524 @@ def _is_word_char(ch: str) -> bool:
     return ch.isalnum() or ch == "_"
 
 
+# ---------------------------------------------------------------------------
+# RTG-55 MHS-3, 2026-09-15 structural form — eval CONTENT leakage.
+#
+# Beyond naming an instance, a mutation can memorise the eval set by carrying
+# its CONTENT. Three refusals, all over the text a mutation ADDS:
+#
+#   eval_content_ngram_overlap     a verbatim >=8-token n-gram shared with an eval
+#                                  row (pool = every possible draw, core files,
+#                                  sentinels) or with the contrastive trace bank
+#                                  rendered into the proposer's context.
+#   eval_expected_answer_leakage   an exact expected answer of an eval row.
+#   eval_source_identity_leakage   content derived from a trace of an eval
+#                                  question: the trace resolves to a question id
+#                                  and the mutation shares >=3 rare tokens with
+#                                  it (paraphrase survives this, not n-grams).
+#
+# Each reason records the matched source id. Tokens are casefolded runs of
+# [A-Za-z0-9_] and non-ASCII bytes, so the match ignores punctuation/whitespace.
+#
+# INDEX (built in the same pass as the id vocabulary, same cache/fail-closed):
+#   shingles  64-bit hashed 8-token shingles packed as (hash >> b) << b | row,
+#             b = bit width of the row count (17 for the 79,479-row pool), so a
+#             47-bit hash survives. False-positive rate per looked-up shingle is
+#             about N / 2**47 (N = 18.5M -> 1.3e-7; ~7e-5 for a 500-shingle
+#             mutation). A shingle present in >= 32 distinct rows is TEMPLATE text
+#             (answer-format boilerplate) and is dropped. A hit counts when its 8
+#             tokens include a fresh ANCHOR token (below) or it lies in a run of >= 8
+#             consecutive hits (a >= 15-token verbatim copy). Rows over 32 KiB (1,417
+#             long-context rows) keep their first/last 512 shingles exactly and a
+#             width-16 winnowed sample in between, which guarantees detection of a
+#             shared run of >= 8 + 16 - 1 = 23 tokens there.
+#   answers   the same packing over whole expected answers of 1-7 tokens (longer
+#             answers are covered by the shingles) that carry an ANCHOR token which
+#             is also name-shaped in the answer (upper case, digit, underscore,
+#             non-ASCII) or, in a multi-word answer, near-unique (pool tf <= 2), and
+#             that are shared by < 32 rows.
+#   sketch    token-frequency count-min sketch (2 x 2**22, saturating uint16).
+#             ANCHOR token: >= 4 bytes, not all digits, pool frequency <= 200.
+#             Bare numbers and common words never anchor anything.
+# HARNESS EXCLUSION: n-grams and anchor tokens already present in the current
+# prompts, the orchestrator's own code (src/**/*.py, which contains the allowlist)
+# or the original content are never blamed on a mutation: text the harness
+# already carries is not newly introduced (this is what keeps import/boilerplate
+# lines of the long-context code documents from matching).
+# Measured cost and false-positive rates: meta-harness-operator-guide.md § 7.
+# ---------------------------------------------------------------------------
+
+_CONTENT_NGRAM = 8
+_CONTENT_TEMPLATE_DF = 32
+_CONTENT_LONG_ROW_BYTES = 32_768
+_CONTENT_LONG_EDGE_SHINGLES = 512
+_CONTENT_WINNOW = 16
+_CONTENT_CHUNK_BYTES = 1 << 21
+_CONTENT_SKETCH_BITS = 22
+_CONTENT_SKETCH_FLUSH = 1 << 24
+_CONTENT_RARE_TF = 200
+_CONTENT_MAX_ROWS = 1 << 24
+_ANSWER_MAX_TOKENS = _CONTENT_NGRAM - 1
+_ANSWER_MIN_BYTES = 4
+_ANCHOR_MIN_BYTES = 4
+_ANSWER_UNSHAPED_MAX_TF = 2
+_SOURCE_MIN_SHINGLE_HITS = 2
+# An n-gram hit whose 8 tokens are all common (no fresh anchor) counts only inside a run
+# of >= 8 consecutive hit shingles, i.e. a >= 15-token verbatim copy: shared code
+# boilerplate ("import os import re from pathlib import path") is not an eval instance.
+_CONTENT_MIN_UNANCHORED_RUN = 8
+_SOURCE_MIN_SHARED_ANCHORS = 3
+_SOURCE_MAX_QIDS = 3
+_ANSWER_PLACEHOLDER_RE = re.compile(r"^__\w+__$")
+_HASH_PRIME = 0x100000001B3
+_HASH_MASK = (1 << 64) - 1
+_HASH_M1 = 0xBF58476D1CE4E5B9
+_HASH_M2 = 0x94D049BB133111EB
+_HASH_LEN_SALT = 0x9E3779B97F4A7C15
+_HASH_SEQ_SALT = 0xD6E8FEB86659FD93
+_HASH_CONSTS: dict[str, Any] = {}
+
+
+def _np():
+    import numpy
+
+    return numpy
+
+
+def _hash_consts() -> dict[str, Any]:
+    if not _HASH_CONSTS:
+        np = _np()
+        word = np.zeros(256, dtype=bool)
+        for lo, hi in ((48, 57), (65, 90), (97, 122), (95, 95), (128, 255)):
+            word[lo : hi + 1] = True
+        digit = np.zeros(256, dtype=bool)
+        digit[48:58] = True
+        _HASH_CONSTS.update(
+            word=word,
+            digit=digit,
+            pinv=pow(_HASH_PRIME, -1, 1 << 64),
+            pows={
+                n: np.array(
+                    [pow(_HASH_PRIME, n - 1 - i, 1 << 64) for i in range(n)], dtype=np.uint64
+                )
+                for n in range(1, _CONTENT_NGRAM + 1)
+            },
+        )
+    return _HASH_CONSTS
+
+
+def _mix64(x):
+    np = _np()
+    u = np.uint64
+    x = x ^ (x >> u(30))
+    x *= u(_HASH_M1)
+    x ^= x >> u(27)
+    x *= u(_HASH_M2)
+    x ^= x >> u(31)
+    return x
+
+
+def _hash_token_buffer(buf: bytes):
+    """(starts, ends, hashes) of the tokens of an already casefolded byte buffer.
+
+    Vectorised polynomial hash: prefix sums of byte * P**i, divided by P**start
+    via the modular inverse (P is odd), so each token hashes independently of its
+    position. Integer overflow wraps modulo 2**64 by design.
+    """
+    np = _np()
+    consts = _hash_consts()
+    arr = np.frombuffer(buf, dtype=np.uint8)
+    n = arr.size
+    empty = np.empty(0, dtype=np.int64)
+    if n == 0:
+        return empty, empty, np.empty(0, dtype=np.uint64)
+    mask = consts["word"][arr]
+    edge = np.diff(mask.view(np.int8), prepend=np.int8(0), append=np.int8(0))
+    starts = np.flatnonzero(edge == 1)
+    ends = np.flatnonzero(edge == -1)
+    if starts.size == 0:
+        return starts, ends, np.empty(0, dtype=np.uint64)
+    with np.errstate(over="ignore"):
+        powers = np.full(n, _HASH_PRIME, dtype=np.uint64)
+        powers[0] = 1
+        np.cumprod(powers, out=powers)
+        prefix = arr.astype(np.uint64)
+        prefix += np.uint64(1)
+        prefix *= powers
+        del powers
+        np.cumsum(prefix, out=prefix)
+        raw = prefix[ends - 1] - np.where(
+            starts > 0, prefix[np.maximum(starts - 1, 0)], np.uint64(0)
+        )
+        del prefix
+        inverse = np.full(n, consts["pinv"], dtype=np.uint64)
+        inverse[0] = 1
+        np.cumprod(inverse, out=inverse)
+        raw *= inverse[starts]
+        del inverse
+        raw ^= (ends - starts).astype(np.uint64) * np.uint64(_HASH_LEN_SALT)
+        return starts, ends, _mix64(raw)
+
+
+def _content_tokens(text: str):
+    """(buffer, starts, ends, hashes) for ``text``; giant texts are hashed in pieces."""
+    np = _np()
+    buf = (text or "").encode("utf-8", errors="replace").lower()
+    if len(buf) <= _CONTENT_CHUNK_BYTES:
+        return (buf, *_hash_token_buffer(buf))
+    word = _hash_consts()["word"]
+    parts = []
+    pos = 0
+    while pos < len(buf):
+        cut = min(len(buf), pos + _CONTENT_CHUNK_BYTES)
+        while pos < cut < len(buf) and word[buf[cut - 1]] and word[buf[cut]]:
+            cut -= 1
+        if cut == pos:  # one token longer than a piece: split it
+            cut = min(len(buf), pos + _CONTENT_CHUNK_BYTES)
+        s, e, h = _hash_token_buffer(buf[pos:cut])
+        parts.append((s + pos, e + pos, h))
+        pos = cut
+    return (
+        buf,
+        np.concatenate([p[0] for p in parts]),
+        np.concatenate([p[1] for p in parts]),
+        np.concatenate([p[2] for p in parts]),
+    )
+
+
+def _window_hashes(windows, length: int):
+    """Hash rows of a (k, length) token-hash matrix; shingles when length == N-gram."""
+    np = _np()
+    with np.errstate(over="ignore"):
+        combined = windows @ _hash_consts()["pows"][length]
+        if length != _CONTENT_NGRAM:
+            combined ^= np.uint64((length * _HASH_SEQ_SALT) & _HASH_MASK)
+        return _mix64(combined)
+
+
+def _sequence_hashes(token_hashes, length: int):
+    """Hash of every ``length``-token window of ``token_hashes``."""
+    np = _np()
+    if token_hashes.size < length:
+        return np.empty(0, dtype=np.uint64)
+    return _window_hashes(np.lib.stride_tricks.sliding_window_view(token_hashes, length), length)
+
+
+def _packed_lookup(packed, hashes, row_bits: int):
+    """Row index per hash (-1 when absent) in a (hash >> b) << b | row sorted array."""
+    np = _np()
+    if packed is None or packed.size == 0 or hashes.size == 0:
+        return np.full(hashes.size, -1, dtype=np.int64)
+    shift = np.uint64(row_bits)
+    top = hashes >> shift
+    pos = np.searchsorted(packed, top << shift)
+    clipped = np.minimum(pos, packed.size - 1)
+    found = (pos < packed.size) & ((packed[clipped] >> shift) == top)
+    rows = (packed[clipped] & np.uint64((1 << row_bits) - 1)).astype(np.int64)
+    return np.where(found, rows, -1)
+
+
+def _row_label_id(row: dict) -> str:
+    for key in ("id", "qid", "stable_qid", "question_id"):
+        raw = str(row.get(key) or "").strip()
+        if raw:
+            return raw
+    return stable_question_qid(str(row.get("suite", "unknown")), str(row.get("prompt") or ""))
+
+
+def _anchor_mask(buf: bytes, starts, ends, hashes, sketch):
+    """Tokens specific enough to tie text to one eval item (see the notes above)."""
+    np = _np()
+    if hashes.size == 0:
+        return np.zeros(0, dtype=bool)
+    lengths = ends - starts
+    digits = np.concatenate(
+        ([0], np.cumsum(_hash_consts()["digit"][np.frombuffer(buf, dtype=np.uint8)]))
+    )
+    numeric = (digits[ends] - digits[starts]) == lengths
+    mask = np.uint64((1 << _CONTENT_SKETCH_BITS) - 1)
+    frequency = np.minimum(
+        sketch[0][(hashes & mask).astype(np.intp)],
+        sketch[1][((hashes >> np.uint64(40)) & mask).astype(np.intp)],
+    )
+    return (lengths >= _ANCHOR_MIN_BYTES) & ~numeric & (frequency <= _CONTENT_RARE_TF)
+
+
+@dataclass(frozen=True, eq=False)
+class EvalContentIndex:
+    """Hashed eval content: shingles, expected answers, token frequencies (see above)."""
+
+    shingles: Any
+    answers: Any
+    answer_lengths: tuple[int, ...]
+    row_bits: int
+    sketch: tuple[Any, Any]
+    labels: tuple[str, ...]
+    stats: tuple[tuple[str, Any], ...] = ()
+
+    @property
+    def nbytes(self) -> int:
+        """Array bytes plus an estimate for the row-label strings."""
+        return int(
+            self.shingles.nbytes
+            + self.answers.nbytes
+            + sum(s.nbytes for s in self.sketch)
+            + sum(len(label) + 49 for label in self.labels)
+        )
+
+    def label(self, row: int) -> str:
+        return self.labels[row] if 0 <= row < len(self.labels) else f"row:{row}"
+
+    def shingle_rows(self, hashes):
+        return _packed_lookup(self.shingles, hashes, self.row_bits)
+
+    def answer_rows(self, hashes):
+        return _packed_lookup(self.answers, hashes, self.row_bits)
+
+    def anchor_mask(self, buf: bytes, starts, ends, hashes):
+        return _anchor_mask(buf, starts, ends, hashes, self.sketch)
+
+
+class _EvalContentIndexBuilder:
+    """Streams eval rows into an :class:`EvalContentIndex` with bounded memory."""
+
+    def __init__(self) -> None:
+        np = _np()
+        self._np = np
+        self.labels: list[str] = []
+        self._source = ""
+        self._segments: list[bytes] = []
+        self._segment_rows: list[int] = []
+        self._pending_bytes = 0
+        self._keys: list[Any] = []
+        self._rows: list[Any] = []
+        self._sketch = (
+            np.zeros(1 << _CONTENT_SKETCH_BITS, dtype=np.uint32),
+            np.zeros(1 << _CONTENT_SKETCH_BITS, dtype=np.uint32),
+        )
+        self._sketch_pending: list[Any] = []
+        self._sketch_pending_n = 0
+        self._answers: list[tuple[int, str]] = []
+        self._tokens = 0
+        self._long_rows = 0
+        self._started = time.monotonic()
+
+    def begin_source(self, label: str) -> None:
+        self._source = label
+
+    def add_row(self, row: dict) -> None:
+        index = len(self.labels)
+        if index >= _CONTENT_MAX_ROWS:
+            raise ValueError(f"eval content index row limit {_CONTENT_MAX_ROWS} exceeded")
+        rid = _row_label_id(row)
+        self.labels.append(f"{self._source}:{rid}" if self._source else rid)
+        expected = row.get("expected")
+        if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+            expected = str(expected)
+        if isinstance(expected, str) and expected.strip():
+            self._answers.append((index, expected))
+        for text in (row.get("prompt"), expected):
+            if not isinstance(text, str) or not text:
+                continue
+            data = text.encode("utf-8", errors="replace").lower()
+            if len(data) > _CONTENT_LONG_ROW_BYTES:
+                self._flush()
+                self._add_long(text, index)
+                continue
+            self._segments.append(data)
+            self._segment_rows.append(index)
+            self._pending_bytes += len(data) + 1
+            if self._pending_bytes >= _CONTENT_CHUNK_BYTES:
+                self._flush()
+
+    def _count_tokens(self, hashes) -> None:
+        self._tokens += int(hashes.size)
+        self._sketch_pending.append(hashes)
+        self._sketch_pending_n += int(hashes.size)
+        if self._sketch_pending_n >= _CONTENT_SKETCH_FLUSH:
+            self._flush_sketch()
+
+    def _flush_sketch(self) -> None:
+        np = self._np
+        if not self._sketch_pending:
+            return
+        values = np.concatenate(self._sketch_pending)
+        self._sketch_pending = []
+        self._sketch_pending_n = 0
+        mask = np.uint64((1 << _CONTENT_SKETCH_BITS) - 1)
+        for table, part in (
+            (self._sketch[0], values & mask),
+            (self._sketch[1], (values >> np.uint64(40)) & mask),
+        ):
+            table += np.bincount(part.astype(np.intp), minlength=table.size).astype(np.uint32)
+
+    def _emit(self, keys, rows) -> None:
+        np = self._np
+        if keys.size == 0:
+            return
+        order = np.lexsort((rows, keys))
+        keys = keys[order]
+        rows = rows[order]
+        keep = np.ones(keys.size, dtype=bool)
+        keep[1:] = (keys[1:] != keys[:-1]) | (rows[1:] != rows[:-1])
+        self._keys.append(keys[keep])
+        self._rows.append(rows[keep])
+
+    def _flush(self) -> None:
+        np = self._np
+        if not self._segments:
+            return
+        buf = b"\x00".join(self._segments)
+        lengths = np.fromiter((len(s) + 1 for s in self._segments), np.int64, len(self._segments))
+        offsets = np.concatenate(([0], np.cumsum(lengths)[:-1]))
+        segment_rows = np.asarray(self._segment_rows, dtype=np.uint32)
+        self._segments, self._segment_rows, self._pending_bytes = [], [], 0
+        starts, _ends, hashes = _hash_token_buffer(buf)
+        if hashes.size == 0:
+            return
+        self._count_tokens(hashes)
+        if hashes.size < _CONTENT_NGRAM:
+            return
+        segment = np.searchsorted(offsets, starts, side="right") - 1
+        span = _CONTENT_NGRAM - 1
+        valid = segment[:-span] == segment[span:]
+        shingles = _sequence_hashes(hashes, _CONTENT_NGRAM)
+        self._emit(shingles[valid], segment_rows[segment[:-span][valid]])
+
+    def _add_long(self, text: str, index: int) -> None:
+        np = self._np
+        self._long_rows += 1
+        _buf, _starts, _ends, hashes = _content_tokens(text)
+        self._count_tokens(hashes)
+        shingles = _sequence_hashes(hashes, _CONTENT_NGRAM)
+        n = shingles.size
+        if n == 0:
+            return
+        keep = np.zeros(n, dtype=bool)
+        keep[:_CONTENT_LONG_EDGE_SHINGLES] = True
+        keep[max(0, n - _CONTENT_LONG_EDGE_SHINGLES) :] = True
+        if n > _CONTENT_WINNOW:
+            windows = np.lib.stride_tricks.sliding_window_view(shingles, _CONTENT_WINNOW)
+            keep[np.arange(windows.shape[0]) + windows.argmin(axis=1)] = True
+        else:
+            keep[:] = True
+        self._emit(shingles[keep], np.full(int(keep.sum()), index, dtype=np.uint32))
+
+    def _pack(self, keys_list: list, rows_list: list, row_bits: int):
+        """Pack (hash, row) pairs, consuming the input lists to bound peak memory."""
+        np = self._np
+        shift = np.uint64(row_bits)
+        packed = np.empty(sum(k.size for k in keys_list), dtype=np.uint64)
+        pos = 0
+        keys_list.reverse()
+        rows_list.reverse()
+        while keys_list:
+            keys = keys_list.pop()
+            rows = rows_list.pop()
+            packed[pos : pos + keys.size] = ((keys >> shift) << shift) | rows.astype(np.uint64)
+            pos += keys.size
+        packed.sort()
+        return packed
+
+    def _drop_template(self, packed, row_bits: int):
+        """Keep one entry (lowest row) per hash seen in < _CONTENT_TEMPLATE_DF rows."""
+        np = self._np
+        if packed.size == 0:
+            return packed
+        shift = np.uint64(row_bits)
+        head = np.ones(packed.size, dtype=bool)
+        step = 1 << 22
+        for lo in range(1, packed.size, step):
+            hi = min(packed.size, lo + step)
+            head[lo:hi] = (packed[lo:hi] >> shift) != (packed[lo - 1 : hi - 1] >> shift)
+        starts = np.flatnonzero(head)
+        runs = np.diff(np.append(starts, packed.size))
+        return packed[starts[runs < _CONTENT_TEMPLATE_DF]]
+
+    def _answer_entries(self, sketch, row_bits: int):
+        np = self._np
+        empty = np.empty(0, dtype=np.uint64)
+        if not self._answers:
+            return empty, ()
+        texts = [text.strip() for _row, text in self._answers]
+        encoded = [t.encode("utf-8", errors="replace").lower() for t in texts]
+        rows = np.fromiter((row for row, _text in self._answers), np.int64, len(texts))
+        buf = b"\x00".join(encoded)
+        starts, ends, hashes = _hash_token_buffer(buf)
+        if hashes.size == 0:
+            return empty, ()
+        sizes = np.fromiter((len(e) for e in encoded), np.int64, len(encoded))
+        offsets = np.concatenate(([0], np.cumsum(sizes + 1)[:-1]))
+        segment = np.searchsorted(offsets, starts, side="right") - 1
+        counts = np.bincount(segment, minlength=len(texts))
+        first = np.searchsorted(segment, np.arange(len(texts)))
+        # An answer anchor must also be NAME-shaped in the original text (an upper-case
+        # letter, digit, underscore or non-ASCII byte) or near-unique in the pool (tf <= 2):
+        # plain lower-case words such as "contention" are ordinary vocabulary.
+        cased = np.frombuffer(b"\x00".join(t.encode("utf-8", errors="replace") for t in texts), np.uint8)
+        shape = (cased >= 65) & (cased <= 90) | (cased >= 128) | (cased == 95)
+        shape |= _hash_consts()["digit"][cased]
+        shape_prefix = np.concatenate(([0], np.cumsum(shape)))
+        shaped = (shape_prefix[ends] - shape_prefix[starts]) > 0
+        mask = np.uint64((1 << _CONTENT_SKETCH_BITS) - 1)
+        unique_tf = np.minimum(
+            sketch[0][(hashes & mask).astype(np.intp)],
+            sketch[1][((hashes >> np.uint64(40)) & mask).astype(np.intp)],
+        ) <= _ANSWER_UNSHAPED_MAX_TF
+        single = counts[segment] == 1  # a one-word answer must itself be name-shaped
+        anchors = _anchor_mask(buf, starts, ends, hashes, sketch)
+        anchors &= shaped | (unique_tf & ~single)
+        anchors = anchors.astype(np.int64)
+        anchor_prefix = np.concatenate(([0], np.cumsum(anchors)))
+        tail = np.minimum(first + counts, anchors.size)
+        eligible = (sizes >= _ANSWER_MIN_BYTES) & (counts >= 1) & (counts <= _ANSWER_MAX_TOKENS)
+        eligible &= (anchor_prefix[tail] - anchor_prefix[np.minimum(first, anchors.size)]) > 0
+        eligible &= np.fromiter(
+            (not _ANSWER_PLACEHOLDER_RE.match(t) for t in texts), bool, len(texts)
+        )
+        keys, key_rows, used = [], [], []
+        for length in range(1, _ANSWER_MAX_TOKENS + 1):
+            chosen = np.flatnonzero(eligible & (counts == length))
+            if chosen.size == 0:
+                continue
+            windows = hashes[first[chosen][:, None] + np.arange(length)[None, :]]
+            keys.append(_window_hashes(windows, length))
+            key_rows.append(rows[chosen].astype(np.uint32))
+            used.append(length)
+        if not keys:
+            return empty, ()
+        return self._drop_template(self._pack(keys, key_rows, row_bits), row_bits), tuple(used)
+
+    def build(self) -> EvalContentIndex:
+        np = self._np
+        self._flush()
+        self._flush_sketch()
+        row_bits = max(1, (max(1, len(self.labels)) - 1).bit_length())
+        row_shingles = int(sum(k.size for k in self._keys))
+        shingles = self._drop_template(self._pack(self._keys, self._rows, row_bits), row_bits)
+        sketch = tuple(np.minimum(t, 65535).astype(np.uint16) for t in self._sketch)
+        self._sketch = ()
+        answers, answer_lengths = self._answer_entries(sketch, row_bits)
+        self._answers = []
+        return EvalContentIndex(
+            shingles=shingles,
+            answers=answers,
+            answer_lengths=answer_lengths,
+            row_bits=row_bits,
+            sketch=sketch,
+            labels=tuple(self.labels),
+            stats=(
+                ("rows", len(self.labels)),
+                ("tokens", self._tokens),
+                ("long_rows", self._long_rows),
+                ("row_shingles", row_shingles),
+                ("shingles", int(shingles.size)),
+                ("answers", int(answers.size)),
+                ("build_s", round(time.monotonic() - self._started, 2)),
+            ),
+        )
+
+
 @dataclass(frozen=True)
 class EvalIdVocabulary:
     """Casefolded eval-instance identifiers plus the id families derived from them."""
@@ -1044,19 +1562,34 @@ class EvalIdVocabulary:
     anchored_re: re.Pattern[str] | None = None
     sources: tuple[str, ...] = ()
     error: str = ""
+    # 2026-09-15 structural form: eval content index and the suite names it saw.
+    # A vocabulary without a content index is NOT available (fail-closed).
+    content: EvalContentIndex | None = None
+    suites: frozenset[str] = frozenset()
 
     @property
     def available(self) -> bool:
-        return not self.error and bool(self.ids)
+        return not self.error and bool(self.ids) and self.content is not None
 
     @classmethod
-    def from_rows(cls, rows: Any, *, sources: tuple[str, ...] = ()) -> EvalIdVocabulary:
+    def from_rows(
+        cls,
+        rows: Any,
+        *,
+        sources: tuple[str, ...] = (),
+        content_builder: _EvalContentIndexBuilder | None = None,
+    ) -> EvalIdVocabulary:
+        builder = content_builder if content_builder is not None else _EvalContentIndexBuilder()
         ids: set[str] = set()
         stems: set[str] = set()
+        suites: set[str] = set()
         family_counts: dict[str, int] = {}
         native_families: set[str] = set()
         for row in rows:
+            builder.add_row(row)
             suite = str(row.get("suite") or "").strip()
+            if suite:
+                suites.add(suite.casefold())
             if len(suite) >= _LEAKAGE_MIN_STEM:
                 stems.add(suite.casefold())
             prompt = row.get("prompt")
@@ -1110,6 +1643,8 @@ class EvalIdVocabulary:
             anchored_re=anchored_re,
             sources=sources,
             error="" if ids else "no_eval_ids_found",
+            content=builder.build(),
+            suites=frozenset(suites),
         )
 
     def find_leaks(self, text: str) -> list[str]:
@@ -1195,7 +1730,7 @@ def _notify_eval_leakage_observer(vocabulary: EvalIdVocabulary) -> None:
     if observer is None:
         return
     try:
-        observer(vocabulary.available, vocabulary.error or ("" if vocabulary.available else "empty"))
+        observer(vocabulary.available, _vocabulary_error(vocabulary))
     except Exception as exc:  # noqa: BLE001 - an observer must never change a verdict
         log.warning("eval-leakage observer failed: %s", exc)
 
@@ -1230,12 +1765,20 @@ def load_eval_id_vocabulary(
     if negative is not None and time.monotonic() - negative[0] < _eval_id_vocab_neg_ttl_s():
         return negative[1]
 
+    builder_holder: list[_EvalContentIndexBuilder] = []
+
     def _rows():
         for path in present:
+            builder_holder[0].begin_source(path.name)
             yield from _iter_eval_rows(path)
 
     try:
-        vocab = EvalIdVocabulary.from_rows(_rows(), sources=tuple(str(p) for p in present))
+        builder_holder.append(_EvalContentIndexBuilder())
+        vocab = EvalIdVocabulary.from_rows(
+            _rows(),
+            sources=tuple(str(p) for p in present),
+            content_builder=builder_holder[0],
+        )
     except Exception as exc:  # noqa: BLE001 - any parse failure must fail CLOSED
         vocab = EvalIdVocabulary(error=_truncate_reason(f"eval_id_source_unreadable:{exc}"))
     if vocab.available:
@@ -1248,18 +1791,475 @@ def load_eval_id_vocabulary(
     return vocab
 
 
-def eval_leakage_reason(text: str, vocabulary: EvalIdVocabulary) -> str | None:
-    """Fail-closed MHS-3 verdict: a rejection reason, or None when ``text`` is clean."""
+def _vocabulary_error(vocabulary: EvalIdVocabulary) -> str:
+    if vocabulary.error:
+        return vocabulary.error
+    if vocabulary.ids and vocabulary.content is None:
+        return "eval_content_index_missing"
+    return "" if vocabulary.available else "empty"
+
+
+def eval_leakage_reason(
+    text: str,
+    vocabulary: EvalIdVocabulary,
+    *,
+    original: str = "",
+    trace_context: str = "",
+    harness: _HarnessContent | None = None,
+) -> str | None:
+    """Fail-closed MHS-3 verdict: a rejection reason, or None when ``text`` is clean.
+
+    ``text`` is the ADDED text. Order: vocabulary availability, instance ids, then
+    the content refusals (n-gram, expected answer, source identity). ``original``
+    and the harness corpus are excluded from the content checks; ``trace_context``
+    is the proposer's failure context carrying the rendered trace bank.
+    """
     _notify_eval_leakage_observer(vocabulary)
     if not vocabulary.available:
-        return _truncate_reason(
-            f"eval_leakage_vocabulary_unavailable:{vocabulary.error or 'empty'}"
-        )
+        return _truncate_reason(f"eval_leakage_vocabulary_unavailable:{_vocabulary_error(vocabulary)}")
     leaks = vocabulary.find_leaks(text)
-    if not leaks:
+    if leaks:
+        shown = [leak[:48] for leak in leaks[:_LEAKAGE_MAX_REPORTED]]
+        return _truncate_reason(f"eval_instance_leakage: refs={shown} total={len(leaks)}")
+    try:
+        return eval_content_leakage_reason(
+            text,
+            vocabulary,
+            original=original,
+            trace_context=trace_context,
+            harness=harness,
+        )
+    except Exception as exc:  # noqa: BLE001 - a broken content check must fail CLOSED
+        log.error("eval content leakage check failed: %s", exc)
+        return _truncate_reason(f"eval_leakage_vocabulary_unavailable:content_check_failed:{exc}")
+
+
+# ---------------------------------------------------------------------------
+# RTG-55 MHS-3 per-call content checks (see the EvalContentIndex notes above).
+# ---------------------------------------------------------------------------
+
+_TRACE_SECTION_RE = re.compile(
+    r"^## (Contrastive Execution Traces|Harness Trace IR|Recent Execution Traces)[^\n]*$",
+    re.MULTILINE,
+)
+_CONTEXT_SECTION_END_RE = re.compile(
+    r"^(?:## (?:Contrastive Execution Traces|Harness Trace IR|Recent Execution Traces|"
+    r"PromptForge Convention Guardrails|Diversity Coverage Pressure|Cross-Species Insights|"
+    r"Past Strategy Insights|Previously Rejected)|Trial #\d+ \()",
+    re.MULTILINE,
+)
+_CONTRASTIVE_ENTRY_RE = re.compile(r"^\[\d+\] [^\n]*$", re.MULTILINE)
+_TRACE_IR_JSON_RE = re.compile(r"```json\s*\n(.*?)\n```", re.DOTALL)
+_TRACE_QID_FIELD_RE = re.compile(
+    r"\b(?:qid|question_id|sentinel_id|stable_qid)\b[\"']?\s*[:=]\s*[\"']?"
+    r"([A-Za-z0-9][A-Za-z0-9_./:+-]{3,})",
+    re.IGNORECASE,
+)
+_TRACE_ID_FIELDS = ("qid", "question_id", "sentinel_id", "stable_qid")
+
+
+def _trace_ir_blocks(body: str) -> list[tuple[str, str]]:
+    match = _TRACE_IR_JSON_RE.search(body)
+    try:
+        data = json.loads(match.group(1)) if match else None
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        return [("trace_ir", body)] if body.strip() else []
+    blocks: list[tuple[str, str]] = []
+    for example in data.get("trace_examples") or []:
+        if not isinstance(example, dict):
+            continue
+        label = " ".join(
+            str(part)
+            for part in (
+                f"trial #{example.get('trial_id')}",
+                example.get("outcome") or "",
+                example.get("trace_hash") or "",
+            )
+            if part
+        )
+        steps = [
+            str(step.get("content_preview") or "")
+            for step in example.get("steps") or []
+            if isinstance(step, dict)
+        ]
+        ids = {key: example[key] for key in _TRACE_ID_FIELDS if example.get(key)}
+        blocks.append(
+            (label, "\n".join([*steps, str(example.get("reason") or ""), json.dumps(ids)]))
+        )
+    return blocks
+
+
+def _trace_blocks(context: str) -> list[tuple[str, str]]:
+    """Per-example (label, text) blocks of the trace bank rendered into ``context``.
+
+    Understands the three renderings the proposer receives (actions.py): MH-7
+    contrastive traces, MH-11 trace IR JSON, and the raw recent-trace fallback.
+    """
+    blocks: list[tuple[str, str]] = []
+    for heading in _TRACE_SECTION_RE.finditer(context or ""):
+        end = _CONTEXT_SECTION_END_RE.search(context, heading.end())
+        body = context[heading.end() : end.start() if end else len(context)]
+        kind = heading.group(1)
+        if kind.startswith("Harness Trace IR"):
+            blocks.extend(_trace_ir_blocks(body))
+        elif kind.startswith("Contrastive"):
+            entries = list(_CONTRASTIVE_ENTRY_RE.finditer(body))
+            if not entries and body.strip():
+                blocks.append(("contrastive", body))
+            for i, entry in enumerate(entries):
+                stop = entries[i + 1].start() if i + 1 < len(entries) else len(body)
+                blocks.append((entry.group(0), body[entry.end() : stop]))
+        elif body.strip():
+            blocks.append(("recent_traces", body))
+    return [(" ".join(label.split())[:48], text) for label, text in blocks]
+
+
+@dataclass(frozen=True, eq=False)
+class _HarnessContent:
+    """Sorted unique shingles and tokens of text the harness already carries."""
+
+    shingles: Any
+    tokens: Any
+    token_files: Any = None  # per ``tokens`` entry: how many harness files contain it
+
+    def file_count(self, token_hash) -> int:
+        np = _np()
+        if self.token_files is None or self.tokens.size == 0:
+            return 0
+        value = np.asarray([token_hash], dtype=np.uint64)
+        pos = int(min(np.searchsorted(self.tokens, value)[0], self.tokens.size - 1))
+        return int(self.token_files[pos]) if self.tokens[pos] == value[0] else 0
+
+
+_HARNESS_CONTENT_CACHE: dict[tuple, _HarnessContent] = {}
+
+
+def _text_shingles_tokens(texts) -> _HarnessContent:
+    np = _np()
+    shingles, tokens = [], []
+    for text in texts:
+        _buf, _s, _e, hashes = _content_tokens(text)
+        tokens.append(np.unique(hashes))
+        shingles.append(_sequence_hashes(hashes, _CONTENT_NGRAM))
+    if not tokens:
+        empty = np.empty(0, dtype=np.uint64)
+        return _HarnessContent(shingles=empty, tokens=empty, token_files=np.empty(0, np.int64))
+    unique_tokens, token_files = np.unique(np.concatenate(tokens), return_counts=True)
+    return _HarnessContent(
+        shingles=np.unique(np.concatenate(shingles)),
+        tokens=unique_tokens,
+        token_files=token_files,
+    )
+
+
+def harness_content(prompts_dir: Path | None = None) -> _HarnessContent:
+    """Shingles/tokens of the current prompts and the orchestrator code (cached by file identity)."""
+    root = Path(prompts_dir) if prompts_dir is not None else PROMPTS_DIR
+    files = sorted(root.rglob("*.md")) if root.is_dir() else []
+    code_root = NEW_FILE_MUTATION_ROOT
+    files += sorted(code_root.rglob("*.py")) if code_root.is_dir() else []
+    files += [PROJECT_ROOT / rel for rel in CODE_MUTATION_ALLOWLIST]
+    files = list(dict.fromkeys(files))
+    key_parts = []
+    present = []
+    for path in files:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        key_parts.append((str(path), stat.st_mtime_ns, stat.st_size))
+        present.append(path)
+    key = tuple(key_parts)
+    cached = _HARNESS_CONTENT_CACHE.get(key)
+    if cached is None:
+        texts = []
+        for path in present:
+            try:
+                texts.append(path.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
+        cached = _text_shingles_tokens(texts)
+        _HARNESS_CONTENT_CACHE.clear()
+        _HARNESS_CONTENT_CACHE[key] = cached
+    return cached
+
+
+def _in_sorted(sorted_values, values):
+    np = _np()
+    if sorted_values.size == 0 or values.size == 0:
+        return np.zeros(values.size, dtype=bool)
+    pos = np.minimum(np.searchsorted(sorted_values, values), sorted_values.size - 1)
+    return sorted_values[pos] == values
+
+
+def _span_text(buf: bytes, starts, ends, first: int, last: int) -> str:
+    text = buf[int(starts[first]) : int(ends[last])].decode("utf-8", errors="replace")
+    return " ".join(text.split())[:60].replace('"', "'")
+
+
+def _resolve_trace_qids(
+    block: str, block_hashes, vocabulary: EvalIdVocabulary
+) -> list[str]:
+    """Question/sentinel ids a trace block belongs to: explicit fields, exact ids, content."""
+    np = _np()
+    qids: list[str] = [m.group(1) for m in _TRACE_QID_FIELD_RE.finditer(block)]
+    qids += [leak for leak in vocabulary.find_leaks(block) if leak in vocabulary.ids]
+    content = vocabulary.content
+    if content is not None and block_hashes.size >= _CONTENT_NGRAM:
+        rows = content.shingle_rows(_sequence_hashes(block_hashes, _CONTENT_NGRAM))
+        rows = rows[rows >= 0]
+        if rows.size:
+            values, counts = np.unique(rows, return_counts=True)
+            for index in np.argsort(-counts, kind="stable"):
+                if counts[index] >= _SOURCE_MIN_SHINGLE_HITS:
+                    qids.append(content.label(int(values[index])))
+    return list(dict.fromkeys(q[:64] for q in qids))[:_SOURCE_MAX_QIDS]
+
+
+def eval_content_leakage_reason(
+    text: str,
+    vocabulary: EvalIdVocabulary,
+    *,
+    original: str = "",
+    trace_context: str = "",
+    harness: _HarnessContent | None = None,
+) -> str | None:
+    """The three 2026-09-15 content refusals over added ``text`` (None when clean)."""
+    np = _np()
+    content = vocabulary.content
+    if content is None:
+        return "eval_leakage_vocabulary_unavailable:eval_content_index_missing"
+    buf, starts, ends, hashes = _content_tokens(text)
+    if hashes.size == 0:
         return None
-    shown = [leak[:48] for leak in leaks[:_LEAKAGE_MAX_REPORTED]]
-    return _truncate_reason(f"eval_instance_leakage: refs={shown} total={len(leaks)}")
+    known = harness if harness is not None else harness_content()
+    own = _text_shingles_tokens([original]) if original else None
+
+    def known_shingle(values):
+        hit = _in_sorted(known.shingles, values)
+        return hit | _in_sorted(own.shingles, values) if own is not None else hit
+
+    def known_token(values):
+        hit = _in_sorted(known.tokens, values)
+        return hit | _in_sorted(own.tokens, values) if own is not None else hit
+
+    anchors = content.anchor_mask(buf, starts, ends, hashes) & ~known_token(hashes)
+    anchor_prefix = np.concatenate(([0], np.cumsum(anchors)))
+    shingles = _sequence_hashes(hashes, _CONTENT_NGRAM)
+    fresh = ~known_shingle(shingles)
+    span = np.arange(shingles.size)
+    anchored = (anchor_prefix[span + _CONTENT_NGRAM] - anchor_prefix[span]) > 0
+
+    def identifying(hit):
+        """Hits whose window carries a fresh anchor, or that sit in a long verbatim run."""
+        if not hit.any():
+            return hit
+        edges = np.diff(np.concatenate(([0], hit.view(np.int8), [0])))
+        run_starts = np.flatnonzero(edges == 1)
+        run_ends = np.flatnonzero(edges == -1)
+        long_run = np.zeros(hit.size + 1, dtype=np.int64)
+        for lo, hi in zip(run_starts, run_ends):
+            if hi - lo >= _CONTENT_MIN_UNANCHORED_RUN:
+                long_run[lo] += 1
+                long_run[hi] -= 1
+        return hit & (anchored | (np.cumsum(long_run)[:-1] > 0))
+
+    # 1. Verbatim >= 8-token overlap: eval rows, then the rendered trace bank.
+    rows = np.where(fresh, content.shingle_rows(shingles), -1)
+    hits = np.flatnonzero(identifying(rows >= 0))
+    if hits.size:
+        first = int(hits[0])
+        return _truncate_reason(
+            f"eval_content_ngram_overlap: source={content.label(int(rows[first]))} "
+            f'ngram="{_span_text(buf, starts, ends, first, first + _CONTENT_NGRAM - 1)}" '
+            f"shared={hits.size}"
+        )
+    blocks = []
+    for label, block in _trace_blocks(trace_context):
+        _b, b_starts, b_ends, b_hashes = _content_tokens(block)
+        blocks.append((label, block, _b, b_starts, b_ends, b_hashes))
+    for label, block, _b, _s, _e, b_hashes in blocks:
+        shared = identifying(
+            fresh & _in_sorted(np.unique(_sequence_hashes(b_hashes, _CONTENT_NGRAM)), shingles)
+        )
+        if shared.any():
+            first = int(np.flatnonzero(shared)[0])
+            qids = _resolve_trace_qids(block, b_hashes, vocabulary)
+            return _truncate_reason(
+                f"eval_content_ngram_overlap: source=trace_bank[{label}] qids={qids} "
+                f'ngram="{_span_text(buf, starts, ends, first, first + _CONTENT_NGRAM - 1)}"'
+            )
+
+    # 2. Exact expected answer. The window must carry an anchor token the harness lacks.
+    for length in content.answer_lengths if anchors.any() else ():
+        rows = content.answer_rows(_sequence_hashes(hashes, length))
+        found = np.flatnonzero(rows >= 0)
+        found = found[(anchor_prefix[found + length] - anchor_prefix[found]) > 0]
+        if found.size:
+            first = int(found[0])
+            return _truncate_reason(
+                f"eval_expected_answer_leakage: source={content.label(int(rows[first]))} "
+                f'answer="{_span_text(buf, starts, ends, first, first + length - 1)}"'
+            )
+
+    # 3. Source identity: rare tokens shared with a trace that resolves to a question.
+    added_anchors = np.unique(hashes[anchors])
+    if blocks and added_anchors.size >= _SOURCE_MIN_SHARED_ANCHORS:
+        for label, block, b_buf, b_starts, b_ends, b_hashes in blocks:
+            b_anchor = content.anchor_mask(b_buf, b_starts, b_ends, b_hashes)
+            b_anchor &= ~known_token(b_hashes)
+            shared = np.intersect1d(added_anchors, b_hashes[b_anchor])
+            if shared.size < _SOURCE_MIN_SHARED_ANCHORS:
+                continue
+            qids = _resolve_trace_qids(block, b_hashes, vocabulary)
+            if not qids:
+                continue
+            positions = np.flatnonzero(anchors & _in_sorted(shared, hashes))
+            words = list(
+                dict.fromkeys(_span_text(buf, starts, ends, int(i), int(i)) for i in positions)
+            )[:4]
+            return _truncate_reason(
+                f"eval_source_identity_leakage: qids={qids} trace=[{label}] "
+                f"shared_tokens={words} n={shared.size}"
+            )
+    return None
+
+
+# In-suite special-casing (2026-09-15 form): the AP-33 check refuses only suites that
+# are ABSENT from the source context; a tactic keyed to a PRESENT suite is refused here.
+_SUITE_MENTION_MAX_TF = 300
+_SUITE_PHRASE_MAX_TF = 3000
+_SUITE_MIN_POOL_TOKENS = 1_000_000
+# A suite name the harness itself uses in >= 4 files (a tool, role or routing name such
+# as ``web_research``, ``long_context``, ``agentic``) is harness vocabulary: it counts
+# only in the KEYED form ("X suite", ``suite == "X"``), never as a bare mention/phrase.
+_SUITE_HARNESS_VOCAB_FILES = 4
+_SUITE_SHAPED_RE = re.compile(r"\d|_|(?:bench|qa|eval)$")
+_SUITE_RULES_CACHE: dict[int, tuple[Any, tuple]] = {}
+
+
+def _suite_term_pattern(term: str) -> str:
+    return r"[\s_-]+".join(re.escape(part) for part in term.split())
+
+
+def _suite_rules(vocabulary: EvalIdVocabulary, harness: _HarnessContent) -> tuple:
+    content = vocabulary.content
+    cache_key = (id(content), id(harness))
+    cached = _SUITE_RULES_CACHE.get(cache_key)
+    if cached is not None and cached[0] is content and cached[1] is harness:
+        return cached[2]
+    np = _np()
+    canonical_of = {term.casefold(): canon for term, canon in _SUITE_TERM_TO_CANONICAL.items()}
+    terms = {s for s in vocabulary.suites if len(s) >= 3} | set(canonical_of)
+    frequency: dict[str, int] = {}
+    harness_files: dict[str, int] = {}
+    for term in terms:
+        _b, _s, _e, hashes = _content_tokens(term)
+        harness_files[term] = min((harness.file_count(h) for h in hashes), default=0)
+        if hashes.size == 0 or content is None:
+            frequency[term] = 0
+            continue
+        mask = np.uint64((1 << _CONTENT_SKETCH_BITS) - 1)
+        tf = np.minimum(
+            content.sketch[0][(hashes & mask).astype(np.intp)],
+            content.sketch[1][((hashes >> np.uint64(40)) & mask).astype(np.intp)],
+        )
+        frequency[term] = int(tf.min() if hashes.size > 1 else tf[0])
+    for term, canon in canonical_of.items():  # multi-word aliases inherit their suite
+        if " " in term:
+            frequency[term] = frequency.get(canon, frequency[term])
+            harness_files[term] = harness_files.get(canon, harness_files[term])
+    terms_bare = {t for t in terms if harness_files[t] < _SUITE_HARNESS_VOCAB_FILES}
+    # Frequencies only mean something over a real pool; a tiny fixture pool sees every
+    # word as rare, so there only benchmark-SHAPED names count as bare mentions.
+    measured = dict(content.stats).get("tokens", 0) >= _SUITE_MIN_POOL_TOKENS if content else False
+
+    def shaped(term: str) -> bool:
+        joined = canonical_of.get(term, term) if " " in term else term
+        return bool(_SUITE_SHAPED_RE.search(joined))
+
+    mention = sorted(
+        (
+            t
+            for t in terms_bare
+            if frequency[t] <= _SUITE_MENTION_MAX_TF
+            and len(t) >= 4
+            and (shaped(t) or (measured and t in canonical_of))
+        ),
+        key=len,
+        reverse=True,
+    )
+    phrase = sorted(
+        set(mention) | {t for t in terms_bare if measured and frequency[t] <= _SUITE_PHRASE_MAX_TF},
+        key=len,
+        reverse=True,
+    )
+    every = sorted(terms, key=len, reverse=True)
+
+    def alternation(items):
+        return "|".join(_suite_term_pattern(t) for t in items) or r"(?!x)x"
+
+    key_ident = r"[\w.\[\]\"'()]*(?:suite|benchmark|dataset)[\w\"'\])]*"
+    mention_re = re.compile(rf"(?<!\w)({alternation(mention)})(?!\w)", re.IGNORECASE)
+    phrase_re = re.compile(
+        rf"(?<!\w)({alternation(phrase)})[\s-]+(?:style\s+|specific\s+)?"
+        r"(?:problems?|questions?|tasks?|items?|contests?)\b",
+        re.IGNORECASE,
+    )
+    keyed_re = re.compile(
+        rf"(?<!\w)({alternation(every)})[\s-]+(?:suite|benchmark|dataset)s?\b"
+        rf"|\b(?:suite|benchmark|dataset)\s*(?:is|==|=|:)\s*[\"'`]?({alternation(every)})(?!\w)"
+        rf"|{key_ident}\s*(?:==|!=|\bnot\s+in\b|\bin\b)\s*[(\[{{]?\s*"
+        rf"(?:[\"'][\w -]*[\"']\s*,\s*)*[\"']({alternation(every)})[\"']"
+        rf"|[\"']({alternation(every)})[\"']\s*(?:==|!=|\bnot\s+in\b|\bin\b)\s*{key_ident}"
+        rf"|{key_ident}\s*\.\s*(?:startswith|endswith)\(\s*[(\[]?\s*[\"']({alternation(every)})",
+        re.IGNORECASE,
+    )
+    rules = (mention_re, phrase_re, keyed_re)
+    _SUITE_RULES_CACHE.clear()
+    _SUITE_RULES_CACHE[cache_key] = (content, harness, rules)
+    return rules
+
+
+def suite_special_casing_reason(
+    original: str,
+    mutated: str,
+    vocabulary: EvalIdVocabulary,
+    *,
+    harness: _HarnessContent | None = None,
+) -> str | None:
+    """Refuse a mutation that keys behaviour on an eval suite (None when clean).
+
+    Forms: KEYED ("gpqa suite", ``suite == "math"``), PHRASE ("USACO problems"),
+    MENTION (a benchmark-shaped suite name whose count the mutation increases).
+    """
+    if not vocabulary.available:
+        return None  # the fail-closed leakage verdict already refused it
+    known = harness if harness is not None else harness_content()
+    mention_re, phrase_re, keyed_re = _suite_rules(vocabulary, known)
+    added = _added_text(original, mutated)
+    for form, pattern in (("keyed", keyed_re), ("phrase", phrase_re)):
+        match = pattern.search(added)
+        if match:
+            term = next(g for g in match.groups() if g)
+            return _truncate_reason(
+                f"eval_suite_special_casing: suite={term.casefold()} form={form}"
+            )
+
+    def counts(text: str) -> dict[str, int]:
+        found: dict[str, int] = {}
+        for match in mention_re.finditer(text or ""):
+            key = " ".join(re.split(r"[\s_-]+", match.group(1).casefold()))
+            found[key] = found.get(key, 0) + 1
+        return found
+
+    before = counts(original)
+    for term, count in counts(mutated).items():
+        if count > before.get(term, 0):
+            return _truncate_reason(f"eval_suite_special_casing: suite={term} form=mention")
+    return None
 
 
 class PromptForge:
@@ -1283,6 +2283,22 @@ class PromptForge:
         if self._injected_eval_id_vocabulary is not None:
             return self._injected_eval_id_vocabulary
         return load_eval_id_vocabulary()
+
+    def _leakage_reason(
+        self,
+        vocabulary: EvalIdVocabulary,
+        original: str,
+        mutated: str,
+        failure_context: str = "",
+    ) -> str | None:
+        """RTG-55 MHS-3: the one leakage checker for prompt, GEPA and code mutations."""
+        return eval_leakage_reason(
+            _added_text(original, mutated),
+            vocabulary,
+            original=original,
+            trace_context=failure_context,
+            harness=harness_content(self.prompts_dir),
+        )
 
     def list_prompts(self) -> list[str]:
         """List all hot-swappable prompt files (flat + roles/ subdirectory)."""
@@ -1476,9 +2492,14 @@ class PromptForge:
             )
             return mutation
         # RTG-55 MHS-3: GEPA candidates can memorise the eval set too.
-        leakage = eval_leakage_reason(
-            _added_text(mutation.original_content, mutation.mutated_content),
-            self._eval_id_vocabulary(),
+        vocabulary = self._eval_id_vocabulary()
+        leakage = self._leakage_reason(
+            vocabulary, mutation.original_content, mutation.mutated_content
+        ) or suite_special_casing_reason(
+            mutation.original_content,
+            mutation.mutated_content,
+            vocabulary,
+            harness=harness_content(self.prompts_dir),
         )
         if leakage is not None:
             mutation.safety_valid = False
@@ -2362,8 +3383,9 @@ class PromptForge:
 
         # RTG-55 MHS-3: under-generalization (eval-instance leakage), fail-closed.
         # Scoped to the text the mutation ADDS; the description is controller metadata.
-        leakage = eval_leakage_reason(
-            _added_text(original_content, mutated_content), self._eval_id_vocabulary()
+        vocabulary = self._eval_id_vocabulary()
+        leakage = self._leakage_reason(
+            vocabulary, original_content, mutated_content, failure_context
         )
         if leakage is not None:
             return TransferSafetyVerdict(
@@ -2394,6 +3416,23 @@ class PromptForge:
             return TransferSafetyVerdict(
                 valid=False,
                 reason=(f"misapplied_best_practice: introduced_suites={sorted(introduced_suites)}"),
+                warnings=tuple(warnings),
+                source_suites=tuple(sorted(source_suites)),
+                introduced_suites=tuple(sorted(introduced_suites)),
+                evidence_trial_count=evidence_count,
+            )
+
+        # RTG-55 MHS-3 (2026-09-15): in-suite special-casing, which the check above allows.
+        special = suite_special_casing_reason(
+            original_content,
+            mutated_content,
+            vocabulary,
+            harness=harness_content(self.prompts_dir),
+        )
+        if special is not None:
+            return TransferSafetyVerdict(
+                valid=False,
+                reason=special,
                 warnings=tuple(warnings),
                 source_suites=tuple(sorted(source_suites)),
                 introduced_suites=tuple(sorted(introduced_suites)),

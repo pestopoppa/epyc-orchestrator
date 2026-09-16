@@ -340,9 +340,17 @@ v = L(); print('available' if v.available else 'UNAVAILABLE', v.error, len(v.ids
   changes that identity, so the next mutation rebuilds at once.
 - **`AUTOPILOT_EVAL_ID_VOCAB_SOURCES` changed: restart required.** A running process cannot see
   an environment change. Restart through the normal autopilot lifecycle.
-- **Cost of the rebuild.** The first successful build takes about **3.6 s** (cold) and keeps
-  about **+253 MB RSS** in the autopilot process for its lifetime. The startup preflight pays
-  this once at boot; after a mid-run restore, the first mutation pays it.
+- **Cost of the rebuild.** Since 2026-09-16 (`sub-mhs3b`) the same pass also builds the eval
+  CONTENT index (below). Measured on the real pool (79,613 rows, 88.9M tokens): about **16 s**
+  cold, **+590 MB RSS** kept for the process lifetime (the id vocabulary was +253 MB; the content
+  index arrays are 173 MB, 18.5M packed shingles at 8 B each plus a 16 MB sketch), and a
+  **~1.37 GB transient peak** during the build. A cached lookup costs about 9 ms for a small
+  prompt edit and about 280 ms for a whole 2,700-line file. The harness corpus (prompts plus
+  `src/**/*.py`) takes 0.17 s cold and 3 ms warm (a stat per file). The startup preflight pays
+  the build once at boot; after a mid-run restore, the first mutation pays it. If the content
+  index cannot be built, or a content check raises, the guard fails closed with
+  `eval_leakage_vocabulary_unavailable:<...>` (`eval_content_index_missing`,
+  `content_check_failed:<exc>`, or `eval_id_source_unreadable:<exc>`) and the same alarm applies.
 
 ### Confirm recovery
 
@@ -375,3 +383,48 @@ matched strings. Before you treat a rejection as real memorisation, check which 
   Older ledger rows may still carry the assignment and mapping forms; read those as false
   positives.
 - **Suite-anchored reference** (`math problem #4`, `gsm8k question 12`): a real leak.
+
+### Reading rejection ledgers: the eval-content refusals (2026-09-15 structural form)
+
+Four more reasons come from the same guard. Each records the matched source, formatted as
+`<source file>:<row id>` (for example `question_pool.jsonl:simpleqa_general_00912`), or as
+`trace_bank[<entry label>]` together with the traced question ids. All four look only at the text
+the mutation ADDS. Text already in the original file, in any current prompt, or anywhere in
+`src/**/*.py` is never blamed on a mutation.
+
+| Reason | Fires when | Usually | Known false-positive class |
+|---|---|---|---|
+| `eval_content_ngram_overlap: source=... ngram="..." shared=N` | The added text shares a verbatim run of 8 or more tokens (case- and punctuation-insensitive) with an eval row, or with a trace in the proposer's context. The 8-gram must contain a rare token, or sit inside a copied run of 15 or more tokens. | A copied question, passage or model response. | Public code idioms or paper titles that also appear in a long-context document (`discriminant = (b * b) - (4 * a * c)`, a `find_class` signature). They are rare, and none are refused once the idiom exists in `src/`. |
+| `eval_expected_answer_leakage: source=... answer="..."` | The added text contains a whole expected answer of 1 to 7 tokens. The answer must be name-shaped (upper case, digit, underscore or non-ASCII) or unique. Numbers, placeholders and plain lower-case words are never indexed. | A hard-coded answer, such as `return "has_close_elements"` or a named entity. | Tool or identifier names shared with the BFCL and MBPP suites (`get_time`, `list_directory`, `http_post`, `word_len`), and proper nouns such as `DuckDuckGo` or `Eureka`. These fire only in NEW text that names something `src/` does not already use. |
+| `eval_source_identity_leakage: qids=[...] trace=[...] shared_tokens=[...] n=N` | The proposer's context carried a trace (MH-7 contrastive, MH-11 IR or recent traces) that resolves to an eval question, and the added text shares 3 or more rare tokens with it. Paraphrase does not avoid this. | A few-shot example rewritten from a failed eval trace. | Domain vocabulary shared with a trace by coincidence. The question id is always named, so check it against the trace. |
+| `eval_suite_special_casing: suite=<name> form=keyed\|phrase\|mention` | The added text keys behaviour on an eval suite. `keyed`: `suite == "math"` or "the math benchmark". `phrase`: "USACO problems". `mention`: a benchmark-shaped name whose count the mutation increases. It fires even when the suite IS in the source context. The AP-33 `domain_mismatched_anchoring` and `misapplied_best_practice` reasons keep precedence. | A benchmark-keyed tactic ("Function tasks (LeetCode/HumanEval): ..."), or code that branches on a suite. | A comment that names a benchmark as an example (`# e.g. HumanEval/MBPP`). Suite names the harness itself uses in 4 or more files (`web_research`, `long_context`, `agentic`) count only in the `keyed` form. |
+
+**Measured false positives (2026-09-16, real pool, offline).** For the whole-file measurements
+below, each file was treated as new text, and a file was never excused by its own copy in the
+harness.
+
+- **The 33 live mutation targets.**
+  - A benign edit to each target: **0/33** refused. This is pinned by
+    `test_real_pool_cost_coverage_and_no_false_positives_on_live_targets`.
+  - Each target as a whole file: **0/33** content refusals, and 5/33 suite mentions. Those 5 are
+    the benchmark names already written into `architect_investigate.md`, `planning_agent.md`,
+    `coder_escalation.md`, `chat.py` and `tool_policy.py`.
+- **467 `src/` and `docs/` files as whole files:** 34 flagged.
+  - Content-refusal false positives: 11/467 (2.4%). With the production harness, the 8 `src/`
+    cases are exempt.
+  - True positives: 1 real answer reference and 2 real instance references.
+  - The other 20 flags are suite mentions: about 14 name a benchmark on purpose, and about 6 are
+    harness identifiers (`long_context`, `tool_use`).
+- **91 historical autopilot mutation commits:**
+  - 0/91 content refusals.
+  - 10/91 special-casing refusals. 8 of these were special-casing by the new spec: suite-keyed
+    `tool_policy` code, "HumanEval/MBPP" prose, AIME routing, and the corrupted `frontdoor.md`
+    commentary.
+  - 2/91 (2.2%) were borderline refusals of comments.
+- **Detection coverage:** 1,998 of 2,000 verbatim pool prompts were refused.
+
+**Pre-existing leak found by this guard.** `orchestration/prompts/rules.md:67` and
+`src/prompt_builders/constants.py` both carry the pool question `simpleqa_general_00912`
+("At which university did Jurgen Aschoff study medicine?") verbatim as a worked example. The guard
+exempts text that is already present, so this needs an owner's edit.
+
