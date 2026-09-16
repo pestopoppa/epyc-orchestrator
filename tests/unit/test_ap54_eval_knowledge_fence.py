@@ -969,10 +969,56 @@ def test_kernel_enforcement_denies_every_leak(name, code, monkeypatch) -> None:
 @pytest.mark.parametrize(
     "name, code",
     [
+        ("ctypes_write", f"import ctypes; p={_WIKI}; libc=ctypes.CDLL(None,use_errno=True); "
+                         "libc.open.restype=ctypes.c_int; fd=libc.open(p.encode(),1); "
+                         "print('LEAK' if fd>=0 else 'DENIED')"),
+        ("py_append", f"p={_WIKI}\ntry:\n open(p,'a').write('x'); print('LEAK')\n"
+                      "except OSError: print('DENIED')"),
+        ("py_truncate", f"p={_WIKI}\ntry:\n open(p,'r+').truncate(0); print('LEAK')\n"
+                        "except OSError: print('DENIED')"),
+        ("os_truncate", f"import os; p={_WIKI}\ntry:\n os.truncate(p,0); print('LEAK')\n"
+                        "except OSError: print('DENIED')"),
+        ("py_unlink", f"import os; p={_WIKI}\ntry:\n os.unlink(p); print('LEAK')\n"
+                      "except OSError: print('DENIED')"),
+        ("make_in_fenced", f"d={_WIKI_DIR}\ntry:\n open(d+'/pwn','w').write('x'); print('LEAK')\n"
+                           "except OSError: print('DENIED')"),
+    ],
+)
+def test_kernel_enforcement_denies_writes_to_fenced(name, code, monkeypatch) -> None:
+    if not _real_wiki_present():
+        pytest.skip("real epyc-root wiki not present")
+    out = _run_fenced_python(code, ENFORCEMENT, monkeypatch)
+    assert "LEAK" not in out, f"{name}: {out}"
+    # A real Landlock denial surfaced, not a silent success.
+    assert "DENIED" in out or "EVAL FENCE" in out or "Permission" in out, f"{name}: {out}"
+
+
+def test_widened_landlock_masks_cover_write_class_rights() -> None:
+    masks = fk.landlock_access_masks(6)
+    handled = masks["handled"]
+    # WRITE_FILE, TRUNCATE, REFER, REMOVE_*, MAKE_*, EXECUTE all handled at ABI 6.
+    for bit in (1 << 0, 1 << 1, 1 << 4, 1 << 5, 1 << 7, 1 << 8, 1 << 13, 1 << 14):
+        assert handled & bit, hex(bit)
+    # A directory grant carries the write-class rights; a file grant carries the file subset.
+    assert masks["full"] == handled
+    assert masks["file"] & (1 << 1)  # WRITE_FILE
+    assert masks["file"] & (1 << 14)  # TRUNCATE
+    assert not masks["file"] & (1 << 7)  # not MAKE_DIR (a dir-only right)
+    # ABI 1 has no REFER/TRUNCATE.
+    assert not fk.landlock_access_masks(1)["handled"] & ((1 << 13) | (1 << 14))
+
+
+@_kernel
+@pytest.mark.parametrize(
+    "name, code",
+    [
         ("numpy", "import numpy; print('OK', int(numpy.array([1,2,3]).sum()))"),
         ("stdlib", "import json, collections, statistics; print('OK', json.dumps({'a':1}))"),
-        ("tmp_write_read", "p='/mnt/raid0/llm/tmp/ok_'+str(__import__('os').getpid()); "
-                           "open(p,'w').write('hi'); print('OK', open(p).read())"),
+        ("tmp_write_read", "import tempfile; f=tempfile.NamedTemporaryFile('w', suffix='.ok', delete=False); "
+                           "f.write('hi'); f.close(); print('OK', open(f.name).read())"),
+        ("run_dir_write", "open('scratch.txt','w').write('hi'); print('OK', open('scratch.txt').read())"),
+        ("slash_tmp_write", "import os; p='/tmp/ok_'+str(os.getpid()); "
+                            "open(p,'w').write('hi'); r=open(p).read(); os.unlink(p); print('OK', r)"),
         ("cwd_files", "import os; print('OK', all(os.path.isfile(f) or os.path.isdir(f) "
                       "for f in os.listdir('.')))"),
         ("subprocess_echo", "import subprocess; "

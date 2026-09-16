@@ -39,10 +39,30 @@ import sys as _k_sys
 _K_SYS = {"x86_64": (444, 445, 446), "aarch64": (444, 445, 446)}
 _K_CREATE_RULESET_VERSION = 1
 _K_RULE_PATH_BENEATH = 1
+_K_EXECUTE = 1 << 0
+_K_WRITE_FILE = 1 << 1
 _K_READ_FILE = 1 << 2
 _K_READ_DIR = 1 << 3
+_K_REMOVE_DIR = 1 << 4
+_K_REMOVE_FILE = 1 << 5
+_K_MAKE_CHAR = 1 << 6
+_K_MAKE_DIR = 1 << 7
+_K_MAKE_REG = 1 << 8
+_K_MAKE_SOCK = 1 << 9
+_K_MAKE_FIFO = 1 << 10
+_K_MAKE_BLOCK = 1 << 11
+_K_MAKE_SYM = 1 << 12
+_K_REFER = 1 << 13     # ABI >= 2
+_K_TRUNCATE = 1 << 14  # ABI >= 3
 _K_PR_SET_NO_NEW_PRIVS = 38
 _K_FULL, _K_DIR_ONLY, _K_FILE = 1, 2, 3
+
+# Read-only masks: the ABI-1 fallback used by --probe and by a spec that carries
+# no explicit masks. The parent normally passes handled/full/file masks widened
+# to write-class rights for the running ABI (see fence_kernel.landlock_access_masks).
+_K_RO_HANDLED = _K_READ_FILE | _K_READ_DIR
+_K_RO_FULL = _K_READ_FILE | _K_READ_DIR
+_K_RO_FILE = _K_READ_FILE
 _K_O_PATH = 0o10000000
 _K_CLONE_NEWNS = 0x00020000
 _K_CLONE_NEWUSER = 0x10000000
@@ -71,13 +91,16 @@ class _KPathBeneath(_k_ctypes.Structure):
     _fields_ = [("allowed_access", _k_ctypes.c_uint64), ("parent_fd", _k_ctypes.c_int32)]
 
 
-def _k_landlock_restrict(rules, extra):
+def _k_landlock_restrict(rules, extra, masks=None):
     nums = _K_SYS.get(_k_platform.machine())
     if nums is None:
         raise OSError(_k_errno.ENOSYS, "landlock syscall numbers unknown for this arch")
     create, add, restrict = nums
     libc = _k_libc()
-    attr = _KRulesetAttr(_K_READ_FILE | _K_READ_DIR)
+    handled = int((masks or {}).get("handled") or _K_RO_HANDLED)
+    full = int((masks or {}).get("full") or _K_RO_FULL)
+    file_access = int((masks or {}).get("file") or _K_RO_FILE)
+    attr = _KRulesetAttr(handled)
     ruleset = libc.syscall(create, _k_ctypes.byref(attr), _k_ctypes.c_size_t(8), _k_ctypes.c_uint32(0))
     if ruleset < 0:
         e = _k_ctypes.get_errno()
@@ -91,13 +114,14 @@ def _k_landlock_restrict(rules, extra):
                 continue  # vanished since the spec was built: nothing to grant
             try:
                 if kind == _K_FULL:
-                    access = _K_READ_FILE | _K_READ_DIR
-                    if not _k_os.path.isdir(path):
-                        access = _K_READ_FILE
+                    # A directory receives every handled right (its subtree stays
+                    # fully usable: read, write, create, remove, truncate, exec).
+                    # A regular file receives only file-applicable rights.
+                    access = full if _k_os.path.isdir(path) else (file_access & handled)
                 elif kind == _K_DIR_ONLY:
-                    access = _K_READ_DIR
+                    access = _K_READ_DIR & handled
                 else:
-                    access = _K_READ_FILE
+                    access = file_access & handled
                 rule = _KPathBeneath(access, fd)
                 rc = libc.syscall(add, _k_ctypes.c_int(ruleset), _k_ctypes.c_int(_K_RULE_PATH_BENEATH),
                                   _k_ctypes.byref(rule), _k_ctypes.c_uint32(0))
@@ -177,7 +201,7 @@ def _k_main(argv):
         extra = _k_json.loads(_k_os.environ.pop("EPYC_FENCE_KERNEL_EXTRA", "") or "[]")
         mode = spec.get("mode")
         if mode == "landlock":
-            _k_landlock_restrict(spec.get("rules") or [], extra)
+            _k_landlock_restrict(spec.get("rules") or [], extra, spec.get("masks"))
         elif mode == "mountns":
             _k_mountns_restrict(spec.get("fenced") or [])
         else:

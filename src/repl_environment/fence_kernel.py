@@ -24,11 +24,26 @@ The allow-set is computed once per ``knowledge_fence.ROOTS_TTL_S`` (keyed on the
 ``FenceRoots`` object) and written to a spec file that the shim reads. It is
 never rebuilt per call.
 
-Known limit, stated: a fenced file inside a volatile shared directory
-(``/dev/shm``, ``/tmp``, ``/run``, ``/var/tmp``) is left to the hook layer. The
-eval-secrets file lives in ``/dev/shm``. Fencing it at the kernel level would
-make the whole directory allow-listed entry by entry, and then files that
-``multiprocessing`` creates there later would become unreadable.
+Rights: the ruleset handles read, write, execute, create (MAKE_*), remove
+(REMOVE_*), plus REFER (ABI>=2) and TRUNCATE (ABI>=3). Allowed directories are
+granted all of them, so the run dir, ``/tmp`` and site-packages stay fully
+usable. A fenced dir is granted nothing, so armed code cannot read, write,
+truncate, unlink or execute anything beneath it, even through raw ctypes.
+
+Accepted residuals:
+- Directory NAMES stay listable: the root gets READ_DIR, which is hierarchical,
+  so a fenced dir's own name and its entries' names are visible. Only file
+  CONTENTS and write/exec are denied.
+- A fenced file inside a volatile shared directory (``/dev/shm``, ``/tmp``,
+  ``/run``, ``/var/tmp``) is covered by the hook layer only, not the kernel
+  layer. The eval-secrets file lives in ``/dev/shm``; fencing it at the kernel
+  level would allow-list that whole directory entry by entry and then break
+  files ``multiprocessing`` creates there later.
+- The allow-set is cached for 300 s (``knowledge_fence.ROOTS_TTL_S``): a
+  checkout created mid-campaign is fenced within that window, not instantly.
+- Creating a NEW file directly in a container dir that also holds fenced data
+  (e.g. ``/mnt/raid0/llm/tmp``) is denied; legitimate scratch goes to the run
+  dir or ``/tmp``.
 """
 
 from __future__ import annotations
@@ -54,6 +69,39 @@ ENFORCEMENT_ENV = "EPYC_EVAL_FENCE_ENFORCEMENT"  # tests / operator pin: landloc
 
 KIND_FULL, KIND_DIR_ONLY, KIND_FILE = 1, 2, 3
 VOLATILE_DIRS = ("/dev/shm", "/tmp", "/run", "/var/tmp")
+
+# Landlock access-fs bits (uapi/linux/landlock.h). ABI 1 defines through
+# MAKE_SYM; ABI 2 adds REFER; ABI 3 adds TRUNCATE. Later ABIs add IOCTL_DEV,
+# which is not a filesystem-content right and is left unhandled.
+_LL_EXECUTE = 1 << 0
+_LL_WRITE_FILE = 1 << 1
+_LL_READ_FILE = 1 << 2
+_LL_READ_DIR = 1 << 3
+_LL_ABI1 = (1 << 13) - 1  # EXECUTE..MAKE_SYM
+_LL_REFER = 1 << 13
+_LL_TRUNCATE = 1 << 14
+
+
+def landlock_access_masks(abi: int) -> dict[str, int]:
+    """(handled, full dir grant, file grant) widened to write-class rights for ``abi``.
+
+    ``handled`` is every content right the ABI knows: read, write, execute,
+    create (MAKE_*), remove (REMOVE_*), plus REFER (ABI>=2) and TRUNCATE
+    (ABI>=3). An allowed DIRECTORY is granted all of them, so the run dir, /tmp
+    and site-packages keep working for write, create, unlink, truncate and exec.
+    An allowed FILE is granted the file-applicable subset. A FENCED dir is
+    granted nothing, so armed code cannot read, write, truncate, unlink or
+    execute anything beneath it, even through raw ctypes.
+    """
+    handled = _LL_ABI1
+    if abi >= 2:
+        handled |= _LL_REFER
+    if abi >= 3:
+        handled |= _LL_TRUNCATE
+    file_bits = _LL_READ_FILE | _LL_WRITE_FILE | _LL_EXECUTE
+    if abi >= 3:
+        file_bits |= _LL_TRUNCATE
+    return {"handled": handled, "full": handled, "file": file_bits & handled}
 _LANDLOCK_SYSCALL_CREATE = {"x86_64": 444, "aarch64": 444}
 _LANDLOCK_CREATE_RULESET_VERSION = 1
 
@@ -250,6 +298,7 @@ def spec_path_for(roots: Any, mode: str) -> str:
     spec: dict[str, Any] = {"mode": mode, "fenced": sorted(fenced)}
     if mode == LANDLOCK:
         spec["rules"] = build_landlock_rules(fenced)
+        spec["masks"] = landlock_access_masks(landlock_abi() or 1)
     path = _write_cached(json.dumps(spec, sort_keys=True), f"spec-{mode}")
     with _lock:
         _spec_cache.update(roots=roots, mode=mode, path=path)
