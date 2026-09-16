@@ -55,7 +55,6 @@ import os
 import platform
 import subprocess
 import sys
-import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Iterable
@@ -69,6 +68,10 @@ ENFORCEMENT_ENV = "EPYC_EVAL_FENCE_ENFORCEMENT"  # tests / operator pin: landloc
 
 KIND_FULL, KIND_DIR_ONLY, KIND_FILE = 1, 2, 3
 VOLATILE_DIRS = ("/dev/shm", "/tmp", "/run", "/var/tmp")
+# Always-granted scratch root for kernel-restricted children (spec files and
+# per-call TMPDIRs). Must be one of VOLATILE_DIRS so it is never fenced.
+SCRATCH_ROOT = "/tmp"
+TMP_ENV_VARS = ("TMPDIR", "TEMP", "TMP")
 
 # Landlock access-fs bits (uapi/linux/landlock.h). ABI 1 defines through
 # MAKE_SYM; ABI 2 adds REFER; ABI 3 adds TRUNCATE. Later ABIs add IOCTL_DEV,
@@ -319,7 +322,11 @@ def hook_roots_file(roots: Any) -> str:
 
 def _write_cached(payload: str, kind: str) -> str:
     digest = hashlib.sha256(payload.encode()).hexdigest()[:16]
-    spec_dir = Path(tempfile.gettempdir()) / f"epyc-eval-fence-{os.getuid()}"
+    # Pinned to /tmp, never tempfile.gettempdir(): the API runs with
+    # TMPDIR=<llm>/tmp, a container dir that also holds fenced subtrees, and a
+    # spec dir created there after the allow-set scan would be unreadable to the
+    # restricted child. /tmp is volatile, never fenced, and granted in full.
+    spec_dir = Path(SCRATCH_ROOT) / f"epyc-eval-fence-{os.getuid()}"
     spec_dir.mkdir(mode=0o700, exist_ok=True)
     path = spec_dir / f"{kind}-{digest}.json"
     if not path.exists():

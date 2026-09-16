@@ -1140,3 +1140,98 @@ def test_unarmed_python_launch_is_output_identical(llm_root: Path, monkeypatch) 
     cmd, kwargs = seen[0]
     assert cmd[0] == "python3" and len(cmd) == 2 and "env" not in kwargs
     assert "SECRET wiki content" in out
+
+
+# ── inherited TMPDIR under a fenced-sibling container (orchestrator_stack sets TMPDIR=<llm>/tmp)
+
+
+_CONTAINER_TMP = "/mnt/raid0/llm/tmp"
+
+
+def _container_holds_fenced() -> bool:
+    roots = kf.fence_roots()
+    fenced = set(roots.fenced_dirs) | set(roots.explicit_roots) | set(roots.tree_only)
+    return any(f.startswith(_CONTAINER_TMP + "/") for f in fenced)
+
+
+@_kernel
+def test_armed_tempfile_works_with_inherited_container_tmpdir(monkeypatch) -> None:
+    if not Path(_CONTAINER_TMP).is_dir() or not _container_holds_fenced():
+        pytest.skip("no fenced-sibling container tmp dir on this host")
+    monkeypatch.setenv("TMPDIR", _CONTAINER_TMP)
+    monkeypatch.setattr(__import__("tempfile"), "tempdir", None)  # re-read TMPDIR
+    code = (
+        "import tempfile, os\n"
+        "f = tempfile.NamedTemporaryFile('w', delete=False); f.write('hi'); f.close()\n"
+        "d = tempfile.mkdtemp(); open(os.path.join(d, 'x'), 'w').write('y')\n"
+        "print('OK', open(f.name).read(), os.environ['TMPDIR'] != '" + _CONTAINER_TMP + "')\n"
+    )
+    out = _run_fenced_python(code, ENFORCEMENT, monkeypatch)
+    assert "OK hi True" in out, out
+
+
+@_kernel
+def test_inherited_container_tmpdir_is_itself_unwritable(monkeypatch) -> None:
+    """Negative control: the redirect is needed, because Landlock denies creating a
+    file directly in the container dir (widening it would reach the fenced subtrees)."""
+    if not Path(_CONTAINER_TMP).is_dir() or not _container_holds_fenced():
+        pytest.skip("no fenced-sibling container tmp dir on this host")
+    code = (
+        "import os\n"
+        "p = '" + _CONTAINER_TMP + "/direct_' + str(os.getpid())\n"
+        "try:\n"
+        "    open(p, 'w').write('x'); print('WROTE'); os.unlink(p)\n"
+        "except OSError:\n"
+        "    print('DENIED')\n"
+    )
+    out = _run_fenced_python(code, ENFORCEMENT, monkeypatch)
+    assert "DENIED" in out, out
+
+
+def test_shell_fence_command_redirects_tmp_only_when_kernel_armed(monkeypatch) -> None:
+    monkeypatch.setenv("TMPDIR", _CONTAINER_TMP)
+    kf.begin(None)
+    assert kf.shell_fence_command(["ls"]) == (["ls"], None, None)
+    kf.begin(False)
+    assert kf.shell_fence_command(["ls"]) == (["ls"], None, None)
+    monkeypatch.setenv(fk.ENFORCEMENT_ENV, fk.HOOK_ONLY)
+    kf.begin(True)
+    assert kf.shell_fence_command(["ls"]) == (["ls"], None, None)
+    if not _HAVE_KERNEL:
+        return
+    monkeypatch.setenv(fk.ENFORCEMENT_ENV, ENFORCEMENT)
+    kf.begin(True)
+    argv, env, scratch = kf.shell_fence_command(["ls"])
+    try:
+        assert argv[-1] == "ls" and argv[0] != "ls"
+        for name in fk.TMP_ENV_VARS:
+            assert env[name] == scratch
+        assert scratch.startswith(fk.SCRATCH_ROOT + "/") and Path(scratch).is_dir()
+    finally:
+        __import__("shutil").rmtree(scratch, ignore_errors=True)
+
+
+def test_run_shell_removes_its_scratch_dir(monkeypatch) -> None:
+    from src.repl_environment.external_access import _ExternalAccessMixin
+
+    made: list[str] = []
+    real = kf.shell_fence_command
+
+    def spy(argv):
+        result = real(argv)
+        if result[2]:
+            made.append(result[2])
+        return result
+
+    monkeypatch.setattr(kf, "shell_fence_command", spy)
+    kf.begin(True)
+    out = _ExternalAccessMixin._run_shell(_fake_shell_env(), "cat /etc/hostname")
+    assert "EVAL FENCE" not in out
+    for d in made:
+        assert not Path(d).exists()
+
+
+def test_spec_files_live_under_the_scratch_root(monkeypatch) -> None:
+    monkeypatch.setenv("TMPDIR", _CONTAINER_TMP)
+    path = fk.hook_roots_file(kf.fence_roots())
+    assert path.startswith(fk.SCRATCH_ROOT + "/epyc-eval-fence-")

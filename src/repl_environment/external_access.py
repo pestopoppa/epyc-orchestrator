@@ -215,15 +215,21 @@ class _ExternalAccessMixin:
             # production, the launch is unchanged.
             from src.repl_environment.knowledge_fence import shell_fence_command
 
-            shell_argv, shell_env = shell_fence_command(shlex.split(cmd))
-            result = subprocess.run(
-                shell_argv,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=_shell_cwd,  # task-root under A/B, else project root
-                **({"env": shell_env} if shell_env is not None else {}),
-            )
+            shell_argv, shell_env, shell_scratch = shell_fence_command(shlex.split(cmd))
+            try:
+                result = subprocess.run(
+                    shell_argv,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=_shell_cwd,  # task-root under A/B, else project root
+                    **({"env": shell_env} if shell_env is not None else {}),
+                )
+            finally:
+                if shell_scratch is not None:
+                    import shutil
+
+                    shutil.rmtree(shell_scratch, ignore_errors=True)
 
             output = result.stdout
             if result.stderr:

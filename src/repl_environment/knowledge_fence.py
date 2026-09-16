@@ -697,22 +697,40 @@ def _record_enforcement(carrier: FenceCarrier, level: str) -> None:
         carrier.enforcement = level
 
 
-def shell_fence_command(argv: list[str]) -> tuple[list[str], dict[str, str] | None]:
+def armed_tmp_env(tmp_dir: str) -> dict[str, str]:
+    """TMPDIR/TEMP/TMP for an ARMED child, pointed at an always-granted dir.
+
+    The API is launched with ``TMPDIR=<llm>/tmp`` (orchestrator_stack), a
+    container dir that also holds fenced subtrees. Under Landlock a child cannot
+    create files there, and widening rights on it would reach the fenced
+    subtrees by inheritance, so ``tempfile`` in an armed child is redirected
+    instead.
+    """
+    os.makedirs(tmp_dir, mode=0o700, exist_ok=True)
+    from src.repl_environment.fence_kernel import TMP_ENV_VARS
+
+    return {name: tmp_dir for name in TMP_ENV_VARS}
+
+
+def shell_fence_command(argv: list[str]) -> tuple[list[str], dict[str, str] | None, str | None]:
     """``run_shell`` launch: kernel-wrapped when ARMED, unchanged otherwise.
 
-    Returns ``(argv, None)`` in production and in the control arm, so the
-    ``subprocess.run`` call is exactly the legacy one.
+    Returns ``(argv, env, scratch_dir)``. In production, in the control arm and
+    under ``hook-only`` it is ``(argv, None, None)``, so the ``subprocess.run``
+    call is exactly the legacy one. Under kernel enforcement ``scratch_dir`` is a
+    per-call TMPDIR under ``/tmp`` that the caller removes afterwards.
     """
     carrier = _carrier.get()
     if carrier is None or not carrier.armed:
-        return argv, None
+        return argv, None, None
     from src.repl_environment import fence_kernel
 
     wrapped, extra_env, level = fence_kernel.wrap_command(argv)
     _record_enforcement(carrier, level)
     if level == fence_kernel.HOOK_ONLY:
-        return argv, None
-    return wrapped, {**os.environ, **extra_env}
+        return argv, None, None
+    scratch = tempfile.mkdtemp(prefix="epyc-fence-tmp-", dir=fence_kernel.SCRATCH_ROOT)
+    return wrapped, {**os.environ, **extra_env, **armed_tmp_env(scratch)}, scratch
 
 
 def python_fence_launch(script_path: str, tmp_dir: str) -> PythonFenceLaunch | None:
@@ -749,6 +767,9 @@ def python_fence_launch(script_path: str, tmp_dir: str) -> PythonFenceLaunch | N
     if carrier.armed:
         argv, extra_env, level = fence_kernel.wrap_command(argv, extra_allow=[tmp_dir])
         env.update(extra_env)
+        # tempfile in the child lands inside the granted run dir, never in an
+        # inherited TMPDIR such as <llm>/tmp.
+        env.update(armed_tmp_env(os.path.join(tmp_dir, "tmp")))
         _record_enforcement(carrier, level)
     return PythonFenceLaunch(argv=argv, env=env, touched_file=touched_file)
 
