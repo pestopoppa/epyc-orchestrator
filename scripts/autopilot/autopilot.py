@@ -10110,7 +10110,21 @@ def _run_loop_inner(
                 )
             else:
                 pareto_status = "dominated"  # placeholder for JournalEntry only
-            if not MULTITIER_PROMOTION_ENABLED and rate_measured and bool(verdict):
+            if (
+                not MULTITIER_PROMOTION_ENABLED
+                and rate_measured
+                and bool(verdict)
+                and ap55_gate.get("hold")
+            ):
+                log.info(
+                    "Trial %d: within-noise baseline promotion HELD by AP-55 (%s, mode=%s)",
+                    trial_counter,
+                    ",".join(ap55_gate.get("hold_reasons") or []),
+                    ap55_gate.get("mode"),
+                )
+            elif not MULTITIER_PROMOTION_ENABLED and rate_measured and bool(verdict):
+                # AP-55 (b)+(c) hold is honoured by the branch above (train integration
+                # 2026-09-16): without it an enforced hold is bypassed on this path.
                 # Decision (c), 2026-09-16: a within-noise reproduction is exactly the
                 # evidence a promotion requires (a >=3-member representative whose median
                 # clears the baseline by a quantum). Without this call only a CLEAN trial
