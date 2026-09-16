@@ -89,7 +89,11 @@ def with_timeout(seconds: int) -> Callable[[Callable[..., T]], Callable[..., T]]
             import concurrent.futures as _cf
 
             executor = _cf.ThreadPoolExecutor(max_workers=1)
-            future = executor.submit(func, *args, **kwargs)
+            # Copy the request context so per-request carriers (AP-54 eval
+            # knowledge fence) reach the worker thread.
+            from src.repl_environment.knowledge_fence import run_in_context
+
+            future = executor.submit(run_in_context(func), *args, **kwargs)
             try:
                 return future.result(timeout=seconds)
             except _cf.TimeoutError:

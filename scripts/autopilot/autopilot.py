@@ -10421,6 +10421,23 @@ def _run_loop_inner(
             # Which promotion rule the archive stage applied (frontier / empty_frontier_repro /
             # seed); also carried on the baseline_promotion ledger event.
             eval_details_dict["promotion_rule"] = getattr(baseline_update, "promotion_rule", "")
+        # AP-54: carry the trial's eval-fence state beside the infra regime, so a
+        # fenced and an unfenced run are never read as the same regime.
+        _fence_summary = (
+            eval_result.details.get("eval_fence")
+            if isinstance(getattr(eval_result, "details", None), dict)
+            else None
+        )
+        eval_details_dict["eval_fence_state"] = (
+            str(_fence_summary.get("state") or "absent")
+            if isinstance(_fence_summary, dict)
+            else "absent"
+        )
+        eval_details_dict["eval_fence_enforcement"] = (
+            str(_fence_summary.get("fence_enforcement") or "")
+            if isinstance(_fence_summary, dict)
+            else ""
+        )
         journal_entry = JournalEntry(
             trial_id=trial_counter,
             timestamp=trial_journal_ts,

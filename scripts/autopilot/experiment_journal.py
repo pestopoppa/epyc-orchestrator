@@ -523,6 +523,14 @@ def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, 
     comp = entry.comparability if isinstance(entry.comparability, dict) else {}
     if comp.get("status"):
         out["comparability"] = str(comp["status"])
+    # AP-54: whether the rollouts ran behind the eval knowledge fence, as the
+    # EvalTower recorded it from the API's echo. Absent on rows written before
+    # the fence existed (never back-filled).
+    fence = details.get("eval_fence") if isinstance(details.get("eval_fence"), dict) else {}
+    if fence.get("state"):
+        out["eval_fence"] = str(fence["state"])
+    if fence.get("fence_enforcement"):
+        out["eval_fence_enforcement"] = str(fence["fence_enforcement"])
     missing = [name for name, present in (("protocol_id", protocol_id), ("reps", reps),
                                           ("date", out["date"]))
                if not present]

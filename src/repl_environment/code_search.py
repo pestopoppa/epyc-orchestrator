@@ -229,6 +229,15 @@ class _CodeSearchMixin:
         Returns:
             JSON with matching doc passages and metadata.
         """
+        # AP-54: the docs index covers project docs and handoffs; refused while
+        # the eval knowledge fence is armed (no-op otherwise).
+        from src.repl_environment.knowledge_fence import check_tool_call
+
+        fence_denial = check_tool_call("doc_search", {})
+        if fence_denial is not None:
+            return self._maybe_wrap_tool_output(
+                json.dumps({"results": [], "error": fence_denial})
+            )
         return self._nextplaid_search(query, index="docs", limit=limit)
 
     def _nextplaid_search(self, query: str, index: str, limit: int) -> str:

@@ -114,6 +114,11 @@ def list_dir(
         else:
             entries = list(path.glob(pattern))
 
+        # AP-54: drop fenced entries from recursive/glob walks (no-op unless armed).
+        from src.repl_environment.knowledge_fence import filter_paths
+
+        entries = filter_paths(entries)
+
         # Filter hidden if needed
         if not show_hidden:
             entries = [e for e in entries if not e.name.startswith(".")]

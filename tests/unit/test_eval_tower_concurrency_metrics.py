@@ -1613,6 +1613,8 @@ def test_aggregate_emits_compact_stable_question_results() -> None:
             "tokens_generated": 5,
             "tools_used": 2,
             "answer_hash": eval_tower.normalized_answer_hash("4"),
+            # AP-54: every compact row states its fence; no API echo => absent.
+            "fence": "absent",
         }
     ]
     assert "prompt" not in out.question_results[0]
@@ -1661,6 +1663,7 @@ def test_aggregate_emits_truthy_question_provenance_flags() -> None:
             "scoring_method": "programmatic",
             "route": "frontdoor->worker_general",
             "tools_called": ["read_file"],
+            "fence": "absent",
             "error": True,
             "error_detail": "read_timeout",
             "partial": True,

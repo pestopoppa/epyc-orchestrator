@@ -1030,6 +1030,90 @@ def _sample_scoreable_eval_questions_for_pool_tier(
     )
 
 
+# AP-54 eval knowledge fence (operator decision 2026-09-16). EvalTower ALWAYS
+# sends `eval_fence` on its /chat rollouts; `AUTOPILOT_EVAL_FENCE=0` sends
+# eval_fence=false instead (the AP-54b unarmed control arm, still path-recorded).
+# A row's `fence` value comes from what the API ECHOED:
+# - `active`: the API echoed an armed fence.
+# - `control`: the API echoed an unarmed, record-only fence (AP-54b control arm).
+# - `absent`: nothing was echoed. An API build that predates the field ignores it,
+#   so such a row is recorded `absent` rather than silently assumed fenced.
+EVAL_FENCE_ACTIVE = "active"
+EVAL_FENCE_CONTROL = "control"
+EVAL_FENCE_ABSENT = "absent"
+_EVAL_FENCE_ECHO_STATES = {"active": EVAL_FENCE_ACTIVE, "unarmed": EVAL_FENCE_CONTROL}
+MAX_RECORDED_TOUCHED_PATHS = 32
+_MAX_RECORDED_PATH_CHARS = 256
+
+
+def _eval_fence_request_flag() -> bool:
+    raw = os.environ.get("AUTOPILOT_EVAL_FENCE", "1").strip().lower()
+    return raw not in {"0", "false", "off", "no", "unarmed"}
+
+
+def _eval_fence_enforcement_from_response(resp: Any) -> str:
+    """Kernel enforcement level the API reported for an ARMED fence, else ""."""
+    echo = resp.get("eval_fence") if isinstance(resp, Mapping) else None
+    if not isinstance(echo, Mapping) or echo.get("state") != EVAL_FENCE_ACTIVE:
+        return ""
+    # An armed echo without the field comes from a build that predates kernel
+    # enforcement: its children ran behind the hook layer only.
+    return str(echo.get("enforcement") or "hook-only")
+
+
+def _eval_fence_from_response(resp: Any) -> tuple[str, list[str] | None, int]:
+    """(fence state, touched paths or None when the API echoed nothing, denials)."""
+    echo = resp.get("eval_fence") if isinstance(resp, Mapping) else None
+    if not isinstance(echo, Mapping):
+        return EVAL_FENCE_ABSENT, None, 0
+    state = _EVAL_FENCE_ECHO_STATES.get(str(echo.get("state") or ""), EVAL_FENCE_ABSENT)
+    raw_paths = echo.get("touched_paths")
+    paths = [
+        str(p)[:_MAX_RECORDED_PATH_CHARS]
+        for p in (raw_paths if isinstance(raw_paths, list) else [])[:MAX_RECORDED_TOUCHED_PATHS]
+    ]
+    return state, paths, _nonnegative_int(echo.get("denied_count"), default=0)
+
+
+def _eval_fence_summary(results: Sequence[Any]) -> dict[str, Any]:
+    """Trial-level fence state over the scored rows (AP-54b reads this)."""
+    scored = [r for r in results if not getattr(r, "error", None)]
+    counts = {EVAL_FENCE_ACTIVE: 0, EVAL_FENCE_CONTROL: 0, EVAL_FENCE_ABSENT: 0}
+    for r in scored:
+        value = getattr(r, "fence", "") or EVAL_FENCE_ABSENT
+        counts[value if value in counts else EVAL_FENCE_ABSENT] += 1
+    present = [k for k, v in counts.items() if v]
+    if not scored:
+        state = EVAL_FENCE_ABSENT
+    elif len(present) == 1:
+        state = present[0]
+    else:
+        state = "mixed"
+    recorded = [r for r in scored if getattr(r, "touched_paths", None) is not None]
+    enforcement_counts: dict[str, int] = {}
+    for r in scored:
+        if (getattr(r, "fence", "") or "") == EVAL_FENCE_ACTIVE:
+            level = str(getattr(r, "fence_enforcement", "") or "hook-only")
+            enforcement_counts[level] = enforcement_counts.get(level, 0) + 1
+    if not enforcement_counts:
+        fence_enforcement = ""
+    elif len(enforcement_counts) == 1:
+        fence_enforcement = next(iter(enforcement_counts))
+    else:
+        fence_enforcement = "mixed"
+    return {
+        "fence_enforcement": fence_enforcement,
+        "enforcement_counts": dict(sorted(enforcement_counts.items())),
+        "state": state,
+        "active": counts[EVAL_FENCE_ACTIVE],
+        "control": counts[EVAL_FENCE_CONTROL],
+        "absent": counts[EVAL_FENCE_ABSENT],
+        "rows_with_touched_paths": len(recorded),
+        "rows_touching_any_path": sum(1 for r in recorded if r.touched_paths),
+        "denied_count": sum(int(getattr(r, "fence_denied_count", 0) or 0) for r in scored),
+    }
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, default))
@@ -1393,6 +1477,20 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         item["route"] = r.route_used
     if r.tools_called:
         item["tools_called"] = list(r.tools_called[:5])
+    # AP-54: fence state and touched paths (paths only, bounded). getattr: this
+    # function also receives duck-typed recovered rows that predate the fields.
+    item["fence"] = str(getattr(r, "fence", "") or EVAL_FENCE_ABSENT)
+    _touched = getattr(r, "touched_paths", None)
+    if _touched is not None:
+        item["touched_paths"] = [
+            str(p)[:_MAX_RECORDED_PATH_CHARS] for p in list(_touched)[:MAX_RECORDED_TOUCHED_PATHS]
+        ]
+    _fence_enforcement = str(getattr(r, "fence_enforcement", "") or "")
+    if _fence_enforcement:
+        item["fence_enforcement"] = _fence_enforcement
+    _fence_denied = int(getattr(r, "fence_denied_count", 0) or 0)
+    if _fence_denied:
+        item["fence_denied_count"] = _fence_denied
     if r.confidence_source and r.confidence_source != "binary_correctness_proxy":
         item["confidence"] = round(float(r.confidence), 6)
         item["confidence_source"] = r.confidence_source
@@ -3063,6 +3161,14 @@ class QuestionResult:
     # a recorded, planner-visible signal.
     tools_used: int = 0  # Number of tool invocations during this question.
     tools_called: list[str] = field(default_factory=list)  # Tool names, in call order.
+    # AP-54 eval knowledge fence: "active" (the API echoed an armed fence),
+    # "control" (it echoed a record-only fence) or "absent" (no echo).
+    # touched_paths is None when the API echoed nothing (pre-fence build).
+    fence: str = EVAL_FENCE_ABSENT
+    touched_paths: list[str] | None = None
+    fence_denied_count: int = 0
+    # Kernel enforcement behind an ACTIVE fence: landlock | mountns | hook-only.
+    fence_enforcement: str = ""
     # 2026-05-23 exogenous-restart resilience (handoff Phase 4).
     # Populated by reading the resilient_post `_meta` dict from the /chat response.
     # exogenous_recovered: a service reload was detected and a retry inside
@@ -4258,6 +4364,7 @@ class EvalTower:
                 workload_class="eval_batch",
                 batch_id=str(q.get("_eval_batch_id") or "") or None,
                 watcher=getattr(self, "watcher", None),
+                eval_fence=_eval_fence_request_flag(),
             )
             if resp.get("error"):
                 log.warning("rubric judge %s failed: %s", role, resp.get("error"))
@@ -4337,6 +4444,7 @@ class EvalTower:
                 "request_priority": "background",
                 "workload_class": "eval_batch",
                 "batch_placement_mode": _eval_batch_placement_mode(q),
+                "eval_fence": _eval_fence_request_flag(),
             }
             eval_batch_id = str(q.get("_eval_batch_id") or "").strip()
             if eval_batch_id:
@@ -4629,6 +4737,7 @@ class EvalTower:
             if disposition == DISPOSITION_INFRA_FAILED
             else ""
         )
+        fence_state, touched_paths, fence_denied_count = _eval_fence_from_response(resp)
         return QuestionResult(
             question_id=outcome.question_id,
             suite=outcome.suite,
@@ -4653,6 +4762,10 @@ class EvalTower:
             branching_density=_compute_branching_density(answer),
             tools_used=int(resp.get("tools_used", 0) or 0),
             tools_called=list(resp.get("tools_called") or []),
+            fence=fence_state,
+            touched_paths=touched_paths,
+            fence_denied_count=fence_denied_count,
+            fence_enforcement=_eval_fence_enforcement_from_response(resp),
             exogenous_recovered=bool(meta.get("exogenous_recovered", False)),
             exogenous_unrecovered=bool(meta.get("exogenous_unrecovered", False)),
             external_restart=bool(meta.get("external_restart", False)),
@@ -5806,6 +5919,7 @@ class EvalTower:
                 "rubric_dimension_means": rubric_dimension_means,
                 "rubric_n_questions": sum(1 for r in results if r.rubric_scores),
                 "rubric_source_counts": dict(sorted(rubric_source_counts.items())),
+                "eval_fence": _eval_fence_summary(results),
                 "ece_binning": "closed_top_bin_stat_tests",
                 "ece_instrument_era": "ev11b_closed_bin_2026_07_20",
                 "confidence_source_counts": dict(sorted(confidence_source_counts.items())),

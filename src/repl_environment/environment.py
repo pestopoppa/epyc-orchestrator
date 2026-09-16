@@ -529,6 +529,13 @@ class REPLEnvironment(
             allowed_prefixes = list(self.ALLOWED_FILE_PATHS)
         for allowed in allowed_prefixes:
             if resolved.startswith(allowed):
+                # AP-54 eval knowledge fence: no-op unless the request carried
+                # `eval_fence` (then it records the path, and denies when armed).
+                from src.repl_environment.knowledge_fence import check_path
+
+                fence_denial = check_path(path)
+                if fence_denial is not None:
+                    return False, fence_denial
                 return True, None
         return False, f"Path not in allowed locations: {allowed_prefixes}"
 

@@ -34,6 +34,7 @@ from src.api.models import ChatRequest, ChatResponse, RewardRequest
 from src.api.state import AppState
 from src.config import get_config
 from src.constants import TASK_IR_OBJECTIVE_LEN
+from src.repl_environment import knowledge_fence
 from src.scheduling import contention_gate_capture, gate_observation
 from src.delegation_reports import load_report
 from src.task_ir import canonicalize_task_ir
@@ -174,6 +175,24 @@ async def fetch_delegation_report(
     return payload
 
 
+_UNFENCED_EVAL_REQUESTS = 0
+
+
+def _note_unfenced_eval_request(request: ChatRequest) -> None:
+    """AP-54: an eval rollout from a client that predates `eval_fence` runs
+    UNFENCED. Say so in the log (first occurrence, then every 500th) rather than
+    letting the gap pass silently. Behaviour is unchanged."""
+    global _UNFENCED_EVAL_REQUESTS
+    _UNFENCED_EVAL_REQUESTS += 1
+    if _UNFENCED_EVAL_REQUESTS == 1 or _UNFENCED_EVAL_REQUESTS % 500 == 0:
+        log.warning(
+            "AP-54: eval_batch /chat request without eval_fence (request_id=%s, "
+            "count=%d) — rollout is UNFENCED; the client predates the knowledge fence",
+            request.request_id,
+            _UNFENCED_EVAL_REQUESTS,
+        )
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
@@ -244,10 +263,17 @@ async def chat(
     # exits below (the error JSONResponse and the plain return) are downstream of
     # the single stamp, so neither can drop it.
     gate_observation.begin()
+    # AP-54: per-request eval knowledge fence. No carrier (and no behaviour
+    # change) unless the client sent `eval_fence`.
+    fence_carrier = knowledge_fence.begin(request.eval_fence)
+    if fence_carrier is None and request.workload_class == "eval_batch":
+        _note_unfenced_eval_request(request)
     try:
         with prompt_dir_override(prompt_dir):
             response = await _handle_chat(request, state, cancel_event=cancel_event)
         response.contention_gate = gate_observation.snapshot()
+        if fence_carrier is not None:
+            response.eval_fence = fence_carrier.snapshot()
         # SC19 — persist the echoed verdict for the vidya belief kernel. Opt-in via
         # ORCHESTRATOR_CONTENTION_GATE_CAPTURE, never raises; the JSONL capture is the
         # durable bytes the adapter projects from. Both exits below (error JSONResponse
@@ -276,6 +302,7 @@ async def chat(
         # A carrier must never outlive its request — a leaked one would attribute
         # this request's gate verdict to the next caller on the same context.
         gate_observation.clear()
+        knowledge_fence.clear()
         if cancel_event.is_set() and handler_outcome == "failed":
             handler_outcome = "disconnected"
         emit_lifecycle_transition(

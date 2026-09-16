@@ -204,13 +204,32 @@ class _ExternalAccessMixin:
             from src.repl_environment.task_root import get_task_root, task_root_active
 
             _shell_cwd = str(get_task_root()) if task_root_active() else _get_project_root()
-            result = subprocess.run(
-                shlex.split(cmd),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=_shell_cwd,  # task-root under A/B, else project root
-            )
+            # AP-54 eval knowledge fence (no-op unless the request carried `eval_fence`).
+            from src.repl_environment.knowledge_fence import check_shell
+
+            fence_denial = check_shell(parts, str(_shell_cwd))
+            if fence_denial is not None:
+                return f"[ERROR: {fence_denial}]"
+            # AP-54: an ARMED eval request runs the command under kernel
+            # enforcement (Landlock) when available; otherwise, and in
+            # production, the launch is unchanged.
+            from src.repl_environment.knowledge_fence import shell_fence_command
+
+            shell_argv, shell_env, shell_scratch = shell_fence_command(shlex.split(cmd))
+            try:
+                result = subprocess.run(
+                    shell_argv,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=_shell_cwd,  # task-root under A/B, else project root
+                    **({"env": shell_env} if shell_env is not None else {}),
+                )
+            finally:
+                if shell_scratch is not None:
+                    import shutil
+
+                    shutil.rmtree(shell_scratch, ignore_errors=True)
 
             output = result.stdout
             if result.stderr:
@@ -250,6 +269,12 @@ class _ExternalAccessMixin:
 
         code = sanitize_code_unicode(code)
         self._exploration_calls += 1
+        # AP-54 eval knowledge fence (no-op unless armed on this request).
+        from src.repl_environment.knowledge_fence import check_python_source
+
+        fence_denial = check_python_source(code)
+        if fence_denial is not None:
+            return f"[ERROR: {fence_denial}]"
         timeout = min(timeout, 120)
 
         import tempfile
@@ -262,21 +287,44 @@ class _ExternalAccessMixin:
             tmp_dir = "/mnt/raid0/llm/tmp"
         os.makedirs(tmp_dir, exist_ok=True)
 
+        fence_launch = None
+        # AP-54: a fenced request runs in a private per-call directory (its only
+        # fully readable scratch space under kernel enforcement). None in production.
+        from src.repl_environment.knowledge_fence import python_fence_run_dir
+
+        fence_run_dir = python_fence_run_dir(tmp_dir)
+        script_dir = fence_run_dir or tmp_dir
         try:
             with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".py", dir=tmp_dir, delete=False,
+                mode="w", suffix=".py", dir=script_dir, delete=False,
             ) as f:
                 f.write(code)
                 script_path = f.name
 
-            result = subprocess.run(
-                ["python3", script_path],
-                input=stdin_data or None,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=tmp_dir,
-            )
+            # AP-54: under an eval fence (armed or control arm) the child runs
+            # behind the audit-hook bootstrap; production launches exactly as before.
+            from src.repl_environment.knowledge_fence import python_fence_launch
+
+            fence_launch = python_fence_launch(script_path, script_dir)
+            if fence_launch is None:
+                result = subprocess.run(
+                    ["python3", script_path],
+                    input=stdin_data or None,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=tmp_dir,
+                )
+            else:
+                result = subprocess.run(
+                    fence_launch.argv,
+                    input=stdin_data or None,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=script_dir,
+                    env=fence_launch.env,
+                )
 
             output = result.stdout
             if result.stderr:
@@ -302,3 +350,11 @@ class _ExternalAccessMixin:
                 os.unlink(script_path)
             except Exception:
                 pass
+            if fence_launch is not None:
+                from src.repl_environment.knowledge_fence import fold_python_touched
+
+                fold_python_touched(fence_launch.touched_file)
+            if fence_run_dir is not None:
+                import shutil
+
+                shutil.rmtree(fence_run_dir, ignore_errors=True)
