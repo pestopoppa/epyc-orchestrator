@@ -118,6 +118,22 @@ def test_stale_verdict_is_dropped_before_scoring_and_listed(tmp_path):
     assert row["attestation_locator"].endswith("#run=r1")
 
 
+def test_stale_arbitration_decoy_is_listed_apart_from_unscored(tmp_path):
+    """A stale verdict on a needs_arbitration decoy must not land in ``stale``."""
+    ids = ["v0", "d0", "d1", "d2", "d3", "d-arb"]
+    old = binding("d-arb", source_version="v0", source_hash=rev.content_hash("old"))
+    verdicts = [verdict("d0", True), verdict("d1", False), verdict("d-arb", True, bound=old)]
+    p = write_inputs(tmp_path, corpus(), verdicts, current_bindings(ids))
+    line = far.build_run_line(corpus_path=p["corpus"], verdicts_path=p["verdicts"],
+                              bindings_path=p["bindings"], run_id="arb1", out=tmp_path / "o")
+    res = line["result"]
+    assert line["stale"] == {} and list(line["stale_excluded"]) == ["d-arb"]
+    assert set(line["stale"]) <= set(res["unscored"])
+    assert set(line["stale_excluded"]) <= set(res["excluded_for_arbitration"])
+    [row] = line["belief_measurements"]
+    assert row["extra"]["stale"] == [] and row["extra"]["stale_excluded"] == ["d-arb"]
+
+
 def test_endorsement_is_read_from_the_signed_body_only(tmp_path):
     v = verdict("d0", None)
     v["endorsed"] = True                       # unsigned side field is ignored

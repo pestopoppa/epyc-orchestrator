@@ -44,6 +44,14 @@ windows into a SEPARATE ``*.retrospective.jsonl`` file, labelled
 ``retrospective: true``, with ``belief_measurements: []``. It reproduces the
 one-off analysis durably and asserts nothing the kernel can grade.
 
+JOURNAL REWIND
+--------------
+Windows are keyed by trial-id start, and a rewind reuses trial ids. Before
+writing, the hook checks that every journal prefix digest recorded by an emitted
+window still matches the journal. On a mismatch it renames the rate file to
+``<name>.rewound-<utc>`` (which the root reader's glob does not match), logs a
+warning, and re-arms from the current trial.
+
 FAIL-OPEN
 ---------
 ``record_closed_windows`` never raises and never touches the journal. A write
@@ -258,7 +266,7 @@ def source_identity(journal_dir: Path) -> dict[str, Any]:
     return {
         "journal_dir": str(journal_dir),
         "journal_shards": shards,
-        "mutation_ledger": _prefix_identity(rml.ledger_path(journal_dir)),
+        "rejected_mutation_ledger": _prefix_identity(rml.ledger_path(journal_dir)),
     }
 
 
@@ -426,6 +434,75 @@ def _state(path: Path) -> tuple[int | None, set[int], int | None]:
     return armed_from, emitted, armed_window
 
 
+# ── journal identity (rewind guard) ─────────────────────────────────────────
+#
+# Windows are keyed by trial-id start. After a journal rewind the ids are reused, so
+# without this check the old rows would stand and the re-run windows would never be
+# written. Every emitted line recorded the byte prefix digest of each journal shard;
+# an append-only journal keeps those prefixes, a rewound one does not.
+
+#: (path, bytes, prefix_sha256, st_dev, st_ino) -> prefix still matches. The size check
+#: runs before the lookup, so an in-place truncation is never masked by the memo.
+_PREFIX_MEMO: dict[tuple, bool] = {}
+
+
+def _recorded_shard_prefixes(lines: list[dict[str, Any]]) -> dict[str, set[tuple[int, str]]]:
+    out: dict[str, set[tuple[int, str]]] = {}
+    for line in lines:
+        if line.get("record") != "window":
+            continue
+        for shard in (line.get("sources") or {}).get("journal_shards") or []:
+            path, size, digest = shard.get("path"), shard.get("bytes"), shard.get("prefix_sha256")
+            if shard.get("absent") or not path or not isinstance(size, int) or not digest:
+                continue
+            out.setdefault(str(path), set()).add((size, str(digest)))
+    return out
+
+
+def journal_mismatch(lines: list[dict[str, Any]]) -> str:
+    """'' when every recorded journal prefix still matches, else the first reason."""
+    for path_s, prefixes in sorted(_recorded_shard_prefixes(lines).items()):
+        path = Path(path_s)
+        try:
+            st = path.stat()
+        except OSError:
+            return f"journal shard {path} recorded by an emitted window no longer exists"
+        pending = []
+        for size, digest in sorted(prefixes):
+            if st.st_size < size:
+                return f"journal shard {path} shrank below {size} recorded bytes ({st.st_size})"
+            key = (path_s, size, digest, st.st_dev, st.st_ino)
+            if key not in _PREFIX_MEMO:
+                pending.append((size, digest, key))
+        if not pending:
+            if not all(_PREFIX_MEMO[(path_s, sz, d, st.st_dev, st.st_ino)] for sz, d in prefixes):
+                return f"journal shard {path} prefix changed since it was recorded"
+            continue
+        # One pass per shard: snapshot the running digest at every recorded offset.
+        h = hashlib.sha256()
+        pos = 0
+        with open(path, "rb") as f:
+            for size, digest, key in pending:
+                while pos < size:
+                    chunk = f.read(min(1 << 20, size - pos))
+                    if not chunk:
+                        break
+                    h.update(chunk)
+                    pos += len(chunk)
+                _PREFIX_MEMO[key] = pos == size and h.copy().hexdigest() == digest
+        if not all(_PREFIX_MEMO[(path_s, sz, d, st.st_dev, st.st_ino)] for sz, d in prefixes):
+            return f"journal shard {path} prefix changed since it was recorded (rewind?)"
+    return ""
+
+
+def _rotate(path: Path, reason: str) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    dest = path.with_name(f"{path.name}.rewound-{stamp}")
+    os.replace(path, dest)
+    log.warning("VB-AP53-RATE: %s; rotated %s -> %s and re-arming", reason, path, dest.name)
+    return dest
+
+
 def _entries(journal: Any) -> list[Any]:
     if hasattr(journal, "entries_with_supersessions"):
         return list(journal.entries_with_supersessions())
@@ -442,6 +519,13 @@ def record_closed_windows(journal: Any, *, window: int = DEFAULT_WINDOW) -> list
             return []
         path = rate_path(journal_dir)
         armed_from, emitted, armed_window = _state(path)
+        if emitted:
+            reason = journal_mismatch(read_lines(path))
+            if reason:
+                # A rewound journal reuses trial ids: the recorded windows describe trials
+                # that no longer exist. Keep them (renamed, never ingested) and start over.
+                _rotate(path, reason)
+                armed_from, emitted, armed_window = None, set(), None
         raw = journal.all_entries()
         tids = [e.trial_id for e in raw if isinstance(getattr(e, "trial_id", None), int)]
         max_tid = max(tids) if tids else -1

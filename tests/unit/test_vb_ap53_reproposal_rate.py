@@ -126,6 +126,7 @@ def test_closed_windows_are_written_once_with_stated_denominators(tmp_path):
     body = dict(w8)
     digest = body.pop("line_sha256")
     assert digest == rr._sha(rr._canon(body))
+    assert not list(tmp_path.glob("*.rewound-*"))   # append-only growth never rotates
 
 
 def test_ledger_records_add_the_diff_repeat_rate(tmp_path):
@@ -219,3 +220,52 @@ def test_cli_backfill(tmp_path, capsys):
     assert rr.main(["backfill", "--journal-dir", str(tmp_path), "--out", str(out),
                     "--window", "2"]) == 0
     assert json.loads(capsys.readouterr().out)["belief_rows"] == 0
+
+
+def test_journal_rewind_rotates_the_rate_file_and_rearms(tmp_path, caplog):
+    j = _journal(tmp_path, 1)
+    rr.record_closed_windows(j, window=4)                 # arms at 4
+    for tid in range(1, 10):
+        j.record(_entry(tid, FLAG))
+        rr.record_closed_windows(j, window=4)
+    path = rr.rate_path(tmp_path)
+    assert [l["window"]["start"] for l in rr.read_lines(path) if l["record"] == "window"] == [4]
+
+    # Rewind: keep trials 0-2 only, then re-run ids 3.. with different content.
+    shard = tmp_path / "autopilot_journal.jsonl"
+    shard.write_text("".join(shard.read_text().splitlines(keepends=True)[:3]))
+    rr._PREFIX_MEMO.clear()
+    j2 = ej.ExperimentJournal(tmp_path, segment_snapshots=False)
+    j2.record(_entry(3, OTHER))
+    with caplog.at_level("WARNING", logger="autopilot"):
+        assert rr.record_closed_windows(j2, window=4) == []
+    [rotated] = list(tmp_path.glob(rr.RATE_FILENAME + ".rewound-*"))
+    assert [l["window"]["start"] for l in rr.read_lines(rotated) if l["record"] == "window"] == [4]
+    assert "rotated" in caplog.text
+    fresh = rr.read_lines(path)
+    assert [(l["record"], l["armed_from_trial"]) for l in fresh] == [("armed", 4)]
+
+    for tid in range(4, 8):
+        j2.record(_entry(tid, OTHER))
+        rr.record_closed_windows(j2, window=4)
+    windows = [l for l in rr.read_lines(path) if l["record"] == "window"]
+    assert [w["window"]["start"] for w in windows] == [4]    # the re-run window is written
+    old = [l for l in rr.read_lines(rotated) if l["record"] == "window"][0]
+    assert windows[0]["counts"]["fold_sha256"] != old["counts"]["fold_sha256"]   # new trials
+    assert len(list(tmp_path.glob(rr.RATE_FILENAME + ".rewound-*"))) == 1
+
+
+def test_in_place_prefix_edit_is_detected_despite_the_memo(tmp_path):
+    j = _journal(tmp_path, 1)
+    rr.record_closed_windows(j, window=2)
+    for tid in range(1, 4):
+        j.record(_entry(tid, FLAG))
+        rr.record_closed_windows(j, window=2)
+    lines = rr.read_lines(rr.rate_path(tmp_path))
+    assert rr.journal_mismatch(lines) == ""
+    shard = tmp_path / "autopilot_journal.jsonl"
+    data = bytearray(shard.read_bytes())
+    data[10:11] = b"X" if data[10:11] != b"X" else b"Y"
+    shard.write_bytes(bytes(data))       # same size, same inode, changed prefix
+    rr._PREFIX_MEMO.clear()
+    assert "prefix changed" in rr.journal_mismatch(lines)

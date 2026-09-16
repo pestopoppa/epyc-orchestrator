@@ -13,8 +13,10 @@ Rules, each pinned by a test:
 * **Staleness is a write-side filter (RA-12).** A verdict counts only if its
   envelope passes ``review_envelope.check_binding`` against the CURRENT inputs
   for that annotation. A stale, unbound or tampered verdict is dropped before
-  scoring. That decoy then shows up as ``unscored``, and the line lists it under
-  ``stale`` with the reasons. A verdict is never re-bound here.
+  scoring. A settled decoy then shows up as ``unscored``, and the line lists it
+  under ``stale`` with the reasons. A decoy still awaiting arbitration is
+  already ``excluded_for_arbitration``, so its stale verdict is listed under
+  ``stale_excluded`` instead. A verdict is never re-bound here.
 * **The endorsement comes from the signed body** (``review.endorsed`` or
   ``review.verdict`` in {endorse, reject}), never from an unsigned side field.
   A body that decides neither way counts as unscored.
@@ -148,12 +150,20 @@ def score_run(
     if accounted != result.n_decoys:
         raise FalseAcceptRecordError(
             f"denominator dropped decoys: {result.n_decoys} decoys, {accounted} accounted for")
-    decoy_ids = {a["annotation_id"] for a in annotations if a["status"] == ga.INVALID}
+    settled = {a["annotation_id"] for a in annotations
+               if a["status"] == ga.INVALID and not a["needs_arbitration"]}
+    arbitration = {a["annotation_id"] for a in annotations
+                   if a["status"] == ga.INVALID and a["needs_arbitration"]}
+    decoy_ids = settled | arbitration
     return {
         "corpus_id": corpus_ids[0],
         "n_annotations": len(annotations),
         "result": result.as_dict(),
-        "stale": {k: stale[k] for k in sorted(stale) if k in decoy_ids},
+        # ``stale`` holds settled decoys only, so it is always a subset of ``unscored``.
+        # A stale verdict on a decoy still awaiting arbitration is listed separately:
+        # ``false_accept_rate`` already routes that decoy to ``excluded_for_arbitration``.
+        "stale": {k: stale[k] for k in sorted(stale) if k in settled},
+        "stale_excluded": {k: stale[k] for k in sorted(stale) if k in arbitration},
         "stale_non_decoy": sorted(k for k in stale if k not in decoy_ids),
         "reviewer_config": next(iter(configs.values())) if configs else None,
         "current_verdicts": len(endorsements),
@@ -196,6 +206,7 @@ def belief_row(core: Mapping[str, Any], *, run_id: str, scored_at: str, out: Pat
             "unscored": res["unscored"],
             "excluded_for_arbitration": res["excluded_for_arbitration"],
             "stale": sorted(core["stale"]),
+            "stale_excluded": sorted(core["stale_excluded"]),
             "reviewer_config": cfg,
             "reviewer_config_sha256": cfg_digest,
             "corpus_id": core["corpus_id"],
