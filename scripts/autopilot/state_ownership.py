@@ -90,6 +90,7 @@ log = logging.getLogger("autopilot")
 DAEMON_OWNED_STATE_FIELDS: tuple[str, ...] = (
     "baseline_state",
     "baseline_infra_fingerprints",  # AP-55: regime of each tier's promoted reference
+    "ap55_seed_rerun_attempts",  # AP-55 (b): bounded regime-triggered re-run attempts
     "quality_history",
     "quality_history_by_tier",
     "quality_history_provenance_by_tier",

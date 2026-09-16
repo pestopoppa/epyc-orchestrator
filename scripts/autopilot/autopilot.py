@@ -359,6 +359,12 @@ SEQ_BASELINE_REFRESH_CADENCE = int(os.environ.get("AUTOPILOT_SEQ_BASELINE_REFRES
 AP55_REGIME_REFRESH_MIN_TRIALS = int(
     os.environ.get("AUTOPILOT_AP55_REGIME_REFRESH_MIN_TRIALS", "3")
 )
+# Forced re-runs that never land as a reference (invalid / skipped / blocked eval)
+# are bounded per reference: spaced by AP55_REGIME_REFRESH_MIN_TRIALS trial ids and
+# capped at this many attempts, after which forcing stops (logged) until a new
+# reference draw lands.
+AP55_SEED_RERUN_MAX_ATTEMPTS = int(os.environ.get("AUTOPILOT_AP55_SEED_RERUN_MAX_ATTEMPTS", "3"))
+AP55_SEED_RERUN_ATTEMPTS_STATE_KEY = "ap55_seed_rerun_attempts"
 SEQ_BASELINE_BLOCK_RETRY_CADENCE = int(
     os.environ.get("AUTOPILOT_SEQ_BASELINE_BLOCK_RETRY_CADENCE", "5")
 )
@@ -1818,15 +1824,21 @@ def _seq_baseline_reference_state(
     tier: int,
     now_ts: float | None = None,
     current_fingerprint: Mapping[str, Any] | None = None,
+    regime_forcing: bool = False,
 ) -> dict[str, Any]:
     """Return freshness/cadence state for the seq baseline reference profile.
 
     AP-55 (b): with ``current_fingerprint``, the latest reference draw is also
     checked against the current infra regime. ``regime_due`` is set when that draw
     is NON_COMPARABLE or carries no fingerprint (a pre-AP-55 row, read as-is), and
-    at least ``AP55_REGIME_REFRESH_MIN_TRIALS`` trials have run since it. UNVERIFIED
-    (e.g. a declared-only kernel) does not make a re-run due: another draw could
-    not verify it either.
+    at least ``AP55_REGIME_REFRESH_MIN_TRIALS`` trials have run since it, or when
+    no reference draw exists at all (bootstrap). UNVERIFIED (e.g. a declared-only
+    kernel) does not make a re-run due: another draw could not verify it either.
+
+    ``regime_due`` (and its effect on ``due``) is only ever set when
+    ``regime_forcing`` is true — the caller passes the AUTOPILOT_AP55_SEED_RERUN
+    knob, so an unset knob never schedules a regime re-run, seq on or off.
+    ``regime_status`` is reported either way.
     """
     now = time.time() if now_ts is None else float(now_ts)
     trusted_profile_trials = 0
@@ -1881,11 +1893,14 @@ def _seq_baseline_reference_state(
 
     regime: dict[str, Any] | None = None
     regime_due = False
-    if (
-        current_fingerprint is not None
-        and fingerprint_digest(current_fingerprint)
-        and latest_reference_trial_id is not None
-    ):
+    has_current = current_fingerprint is not None and bool(fingerprint_digest(current_fingerprint))
+    if has_current and latest_reference_trial_id is None:
+        regime = {"status": "NO_REFERENCE", "differing_components": []}
+        regime_due = bool(regime_forcing)
+        if regime_due:
+            due = True
+            reason = "no baseline reference draw for this tier (AP-55 bootstrap)"
+    elif has_current:
         if not fingerprint_digest(latest_reference_fp):
             regime = {"status": "UNFINGERPRINTED", "differing_components": []}
         else:
@@ -1894,7 +1909,8 @@ def _seq_baseline_reference_state(
                 reference_label=f"seq_baseline_reference_{latest_reference_trial_id}",
             )
         regime_due = (
-            regime["status"] in (INFRA_NON_COMPARABLE, "UNFINGERPRINTED")
+            bool(regime_forcing)
+            and regime["status"] in (INFRA_NON_COMPARABLE, "UNFINGERPRINTED")
             and trials_since_reference >= max(0, AP55_REGIME_REFRESH_MIN_TRIALS)
         )
         if regime_due:
@@ -2276,10 +2292,25 @@ def _maybe_force_seq_baseline_draw(
     if not enabled and not ap55_force:
         return action, rationale, None
     reference = _seq_baseline_reference_state(
-        journal, tier=tier, current_fingerprint=_infra_fingerprint_for_trial()
+        journal,
+        tier=tier,
+        # Only fingerprint when the knob can act on it: with the knob unset the
+        # seq cadence is exactly what it was before AP-55.
+        current_fingerprint=_infra_fingerprint_for_trial() if ap55_force else None,
+        regime_forcing=ap55_force,
     )
     if not (reference["due"] if enabled else reference.get("regime_due")):
         return action, rationale, None
+    if reference.get("regime_due") and not _ap55_seed_rerun_attempt_allowed(
+        state, reference, trial_counter=trial_counter
+    ):
+        if not enabled:
+            return action, rationale, None
+        # Seq cadence reasons still apply on their own terms; drop only the AP-55 one.
+        base = _seq_baseline_reference_state(journal, tier=tier)
+        if not base["due"]:
+            return action, rationale, None
+        reference = base
 
     forced = _seq_baseline_draw_action()
     reference_key = _seq_baseline_reference_block_key(reference)
@@ -2324,6 +2355,8 @@ def _maybe_force_seq_baseline_draw(
         next_rationale = _record_p0_3_reexploration_rationale(next_rationale, retry_meta)
         next_rationale["seq_baseline_reference_retryable_blacklist"] = True
     state["seq_baseline_draw_blocked"] = None
+    if reference.get("regime_due"):
+        _ap55_note_seed_rerun_attempt(state, reference, trial_counter=trial_counter)
     state["seq_baseline_draw_forced"] = {
         "trial_id": trial_counter,
         "action": forced,
@@ -5113,6 +5146,66 @@ BASELINE_INFRA_FINGERPRINTS_STATE_KEY = "baseline_infra_fingerprints"
 
 def _ap55_seed_rerun_forcing_enabled() -> bool:
     return os.environ.get("AUTOPILOT_AP55_SEED_RERUN", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ap55_attempt_key(reference: Mapping[str, Any]) -> str:
+    return f"tier={reference.get('tier')}:reference={reference.get('latest_reference_trial_id')}"
+
+
+def _ap55_seed_rerun_attempt_allowed(
+    state: Mapping[str, Any],
+    reference: Mapping[str, Any],
+    *,
+    trial_counter: int,
+) -> bool:
+    """Bound regime-triggered re-runs that never land as a reference draw.
+
+    A forced re-run whose eval comes back invalid/skipped is neither a reference nor
+    a trusted trial, so the reference state alone would re-force it forever. Attempts
+    are counted per reference (a landed draw changes the key and resets the count),
+    spaced by AP55_REGIME_REFRESH_MIN_TRIALS trial ids, and capped.
+    """
+    rec = state.get(AP55_SEED_RERUN_ATTEMPTS_STATE_KEY)
+    if not isinstance(rec, Mapping) or rec.get("key") != _ap55_attempt_key(reference):
+        return True
+    count = int(rec.get("count") or 0)
+    if count >= max(1, AP55_SEED_RERUN_MAX_ATTEMPTS):
+        log.warning(
+            "AP-55 seed re-run NOT forced: %d attempts since reference %s never landed "
+            "(cap AUTOPILOT_AP55_SEED_RERUN_MAX_ATTEMPTS=%d); promotion gate leg stays %s",
+            count, reference.get("latest_reference_trial_id"),
+            AP55_SEED_RERUN_MAX_ATTEMPTS, reference.get("regime_status"),
+        )
+        return False
+    try:
+        last = int(rec.get("last_trial_id"))
+    except (TypeError, ValueError):
+        return True
+    if trial_counter - last < max(1, AP55_REGIME_REFRESH_MIN_TRIALS):
+        log.info(
+            "AP-55 seed re-run deferred: attempt %d at trial %d did not land a reference; "
+            "next attempt after %d trials",
+            count, last, AP55_REGIME_REFRESH_MIN_TRIALS,
+        )
+        return False
+    return True
+
+
+def _ap55_note_seed_rerun_attempt(
+    state: dict[str, Any],
+    reference: Mapping[str, Any],
+    *,
+    trial_counter: int,
+) -> None:
+    key = _ap55_attempt_key(reference)
+    rec = state.get(AP55_SEED_RERUN_ATTEMPTS_STATE_KEY)
+    count = int(rec.get("count") or 0) if isinstance(rec, Mapping) and rec.get("key") == key else 0
+    state[AP55_SEED_RERUN_ATTEMPTS_STATE_KEY] = {
+        "key": key,
+        "count": count + 1,
+        "last_trial_id": int(trial_counter),
+        "reason": reference.get("reason", ""),
+    }
 
 
 def _infra_fingerprint_for_trial() -> dict[str, Any]:

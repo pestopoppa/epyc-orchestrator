@@ -301,21 +301,25 @@ def test_reference_state_regime_due_on_change_with_churn_guard(autopilot, monkey
     old = _fp(orchestrator="old")
     journal = _Journal([_entry(1, fp=old, seed=True), _entry(2, fp=old)])
     state = autopilot._seq_baseline_reference_state(
-        journal, tier=1, now_ts=0, current_fingerprint=_fp())
+        journal, tier=1, now_ts=0, current_fingerprint=_fp(), regime_forcing=True)
     assert state["regime_status"] == NON_COMPARABLE
     assert state["regime_due"] is False  # only one trial since the draw
     journal._entries.append(_entry(3, fp=_fp()))
     state = autopilot._seq_baseline_reference_state(
-        journal, tier=1, now_ts=0, current_fingerprint=_fp())
+        journal, tier=1, now_ts=0, current_fingerprint=_fp(), regime_forcing=True)
     assert state["regime_due"] and state["due"]
     assert "orchestrator" in state["reason"]
     # same regime -> not due; no fingerprint passed -> legacy behaviour
     same = autopilot._seq_baseline_reference_state(
         _Journal([_entry(1, fp=_fp(), seed=True), _entry(2), _entry(3)]),
-        tier=1, now_ts=0, current_fingerprint=_fp())
+        tier=1, now_ts=0, current_fingerprint=_fp(), regime_forcing=True)
     assert same["regime_status"] == COMPARABLE and not same["due"]
     legacy = autopilot._seq_baseline_reference_state(journal, tier=1, now_ts=0)
     assert legacy["regime_status"] == "" and not legacy["regime_due"]
+    # knob off: the regime is reported but never schedules a re-run
+    off = autopilot._seq_baseline_reference_state(
+        journal, tier=1, now_ts=0, current_fingerprint=_fp())
+    assert off["regime_status"] == NON_COMPARABLE and not off["regime_due"] and not off["due"]
 
 
 def test_reference_state_legacy_draw_triggers_one_refresh(autopilot, monkeypatch):
@@ -323,7 +327,7 @@ def test_reference_state_legacy_draw_triggers_one_refresh(autopilot, monkeypatch
     monkeypatch.setattr(autopilot, "AP55_REGIME_REFRESH_MIN_TRIALS", 1)
     journal = _Journal([_entry(1, seed=True), _entry(2)])
     state = autopilot._seq_baseline_reference_state(
-        journal, tier=1, now_ts=0, current_fingerprint=_fp())
+        journal, tier=1, now_ts=0, current_fingerprint=_fp(), regime_forcing=True)
     assert state["regime_status"] == "UNFINGERPRINTED" and state["regime_due"]
 
 
@@ -333,7 +337,7 @@ def test_declared_only_regime_does_not_force_reruns(autopilot, monkeypatch):
     fp = _fp("declared_only")
     journal = _Journal([_entry(1, fp=fp, seed=True), _entry(2, fp=fp)])
     state = autopilot._seq_baseline_reference_state(
-        journal, tier=1, now_ts=0, current_fingerprint=fp)
+        journal, tier=1, now_ts=0, current_fingerprint=fp, regime_forcing=True)
     assert state["regime_status"] == UNVERIFIED and not state["regime_due"]
 
 
@@ -424,3 +428,87 @@ def test_measurement_tuple_carries_gate_legs_and_legacy_carries_none(tmp_path):
     }
     assert rows[0].comparability["promotion_gate"]["batch_homogeneity"]["status"] == g.INSUFFICIENT
     assert "ap55_gate" not in rows[1].measurement
+
+
+def _force(autopilot, journal, state, trial, *, enabled):
+    return autopilot._maybe_force_seq_baseline_draw(
+        {"type": "numeric_trial"}, state=state, journal=journal, tier=1, blacklist=[],
+        rationale={}, trial_counter=trial, enabled=enabled)
+
+
+def test_seq_on_with_knob_unset_never_forces_a_regime_rerun(autopilot, monkeypatch):
+    """Review fix 1: AUTOPILOT_SEQ_VERDICT=1 must not imply AP-55 forcing."""
+    monkeypatch.setattr(autopilot, "SEQ_BASELINE_REFRESH_CADENCE", 100)
+    monkeypatch.setattr(autopilot, "AP55_REGIME_REFRESH_MIN_TRIALS", 0)
+    monkeypatch.delenv("AUTOPILOT_AP55_SEED_RERUN", raising=False)
+    calls = []
+    monkeypatch.setattr(autopilot, "_infra_fingerprint_for_trial", lambda: calls.append(1) or _fp())
+    legacy_ref = _Journal([_entry(1, seed=True), _entry(2)])          # unfingerprinted draw
+    moved = _Journal([_entry(1, fp=_fp(recipe="old"), seed=True), _entry(2)])
+    for journal in (legacy_ref, moved):
+        assert _force(autopilot, journal, {}, 5, enabled=True)[2] is None
+    assert calls == []  # no fingerprinting at all with the knob unset
+    monkeypatch.setenv("AUTOPILOT_AP55_SEED_RERUN", "1")
+    assert _force(autopilot, moved, {}, 5, enabled=True)[2]["regime_due"]
+
+
+def test_seq_off_bootstrap_forces_first_reference_draw(autopilot, monkeypatch):
+    """Review fix 2: no reference draw at all must not leave enforce holding forever."""
+    monkeypatch.setattr(autopilot, "SEQ_BASELINE_REFRESH_CADENCE", 100)
+    monkeypatch.setattr(autopilot, "_infra_fingerprint_for_trial", lambda: _fp())
+    monkeypatch.setenv("AUTOPILOT_AP55_SEED_RERUN", "1")
+    journal = _Journal([_entry(1, fp=_fp()), _entry(2, fp=_fp())])  # no reference draw
+    forced, rationale, reference = _force(autopilot, journal, {}, 3, enabled=False)
+    assert reference["regime_status"] == "NO_REFERENCE" and reference["regime_due"]
+    assert "bootstrap" in reference["reason"]
+    assert forced["type"] == "seed_batch" and rationale["seq_baseline_reference_draw"]
+    # without the knob the bootstrap is not scheduled with seq off
+    monkeypatch.delenv("AUTOPILOT_AP55_SEED_RERUN")
+    assert _force(autopilot, journal, {}, 3, enabled=False)[2] is None
+
+
+def test_invalid_forced_reruns_are_spaced_and_capped(autopilot, monkeypatch, caplog):
+    """Review fix 3: a re-run whose eval is invalid is neither a reference nor a trial."""
+    monkeypatch.setattr(autopilot, "SEQ_BASELINE_REFRESH_CADENCE", 100)
+    monkeypatch.setattr(autopilot, "AP55_REGIME_REFRESH_MIN_TRIALS", 3)
+    monkeypatch.setattr(autopilot, "AP55_SEED_RERUN_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(autopilot, "_infra_fingerprint_for_trial", lambda: _fp())
+    monkeypatch.setenv("AUTOPILOT_AP55_SEED_RERUN", "1")
+    old = _fp(recipe="old")
+    entries = [_entry(1, fp=old, seed=True)] + [_entry(i, fp=_fp()) for i in (2, 3, 4)]
+    journal = _Journal(entries)
+    state: dict = {}
+    key = autopilot.AP55_SEED_RERUN_ATTEMPTS_STATE_KEY
+    fired = []
+    for trial in range(5, 20):
+        if _force(autopilot, journal, state, trial, enabled=False)[2] is not None:
+            fired.append(trial)
+            # the forced draw comes back invalid: journaled, but ignored by the state
+            invalid = _entry(trial, fp=_fp(), seed=True)
+            invalid.outcome_status = "invalid"
+            journal._entries.append(invalid)
+    assert fired == [5, 8, 11]
+    assert state[key]["count"] == 3
+    assert "AP-55 seed re-run NOT forced" in caplog.text
+    # a landed reference draw (in the old regime again, so still due) resets the count
+    journal._entries.append(_entry(30, fp=old, seed=True))
+    journal._entries.extend(_entry(i, fp=_fp()) for i in (31, 32, 33))
+    assert _force(autopilot, journal, state, 34, enabled=False)[2] is not None
+    assert state[key]["count"] == 1 and "reference=30" in state[key]["key"]
+
+
+def test_capped_attempts_fall_back_to_seq_cadence_when_seq_on(autopilot, monkeypatch):
+    monkeypatch.setattr(autopilot, "SEQ_BASELINE_REFRESH_CADENCE", 2)
+    monkeypatch.setattr(autopilot, "AP55_REGIME_REFRESH_MIN_TRIALS", 0)
+    monkeypatch.setattr(autopilot, "AP55_SEED_RERUN_MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(autopilot, "_infra_fingerprint_for_trial", lambda: _fp())
+    monkeypatch.setenv("AUTOPILOT_AP55_SEED_RERUN", "1")
+    journal = _Journal([_entry(1, fp=_fp(recipe="old"), seed=True), _entry(2)])
+    state = {autopilot.AP55_SEED_RERUN_ATTEMPTS_STATE_KEY: {
+        "key": "tier=1:reference=1", "count": 1, "last_trial_id": 0}}
+    # capped, and the seq cadence (1 trial < 2) is not due -> nothing forced
+    assert _force(autopilot, journal, state, 9, enabled=True)[2] is None
+    journal._entries.append(_entry(3))
+    _, _, reference = _force(autopilot, journal, state, 9, enabled=True)
+    assert reference is not None and not reference["regime_due"]
+    assert state[autopilot.AP55_SEED_RERUN_ATTEMPTS_STATE_KEY]["count"] == 1
