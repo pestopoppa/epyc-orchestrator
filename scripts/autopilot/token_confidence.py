@@ -203,6 +203,8 @@ def locate_answer_span(
 
     1. The configured ``extract_pattern``, or ``<answer>...</answer>`` by default.
     2. The legacy ``#### value`` pattern.
+       Then an unterminated ``<answer>`` tag, because the direct stage's
+       ``</answer>`` stop strips the closing tag from the token stream.
     3. The last ``\\boxed{...}``, with nested braces handled by SCORE-16's
        ``_extract_boxed_answer``.
     4. The SCORE-03 ``_final_answer_region`` line.
@@ -228,6 +230,21 @@ def locate_answer_span(
             s += len(inner) - len(inner.lstrip())
             e -= len(inner) - len(inner.rstrip())
             return (s, e, source)
+    # Unterminated answer tag. The production direct stage stops on
+    # ``</answer>``, so the generated token stream ends at ``<answer>540``.
+    # The orchestrator restores the closing tag only in the returned answer
+    # (``direct_stage._restore_stripped_answer_stop``), so the scorer reads
+    # everything after the last ``<answer>``, and so does this span. Without
+    # this rule the span fell through to ``_final_answer_region`` and swallowed
+    # the tag tokens themselves.
+    if extract_pattern in (None, r"<answer>(.*?)</answer>") and "</answer>" not in text:
+        open_at = text.rfind("<answer>")
+        if open_at >= 0:
+            s = open_at + len("<answer>")
+            inner = text[s:]
+            if inner.strip():
+                s += len(inner) - len(inner.lstrip())
+                return (s, len(text.rstrip()), "unterminated_answer_tag")
     boxed = ds._extract_boxed_answer(text)
     if boxed is not None and boxed:
         start = text.rfind("\\boxed{") + len("\\boxed{")
