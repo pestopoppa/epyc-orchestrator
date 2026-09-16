@@ -124,6 +124,8 @@ python scripts/autopilot/preflight_audit.py
 python scripts/autopilot/autopilot.py start --tui
 ```
 
+If every PromptForge mutation is being rejected with `eval_leakage_vocabulary_unavailable`, follow the runbook in [`docs/guides/meta-harness-operator-guide.md` § 7](docs/guides/meta-harness-operator-guide.md#7-mutations-all-rejected-eval_leakage_vocabulary_unavailable).
+
 Dashboard at `http://localhost:8000/dashboard/`.
 
 ---

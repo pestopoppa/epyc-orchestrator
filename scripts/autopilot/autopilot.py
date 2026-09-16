@@ -94,6 +94,8 @@ from progress_plots import PLOTS_DIR, generate_all_plots
 import peaf
 from species import Seeder, NumericSwarm, PromptForge, StructuralLab, EvolutionManager
 from species.prompt_forge import CODE_MUTATION_ALLOWLIST, new_file_mutation_root_labels
+import species.prompt_forge as _prompt_forge_module
+from eval_leakage_monitor import EvalLeakageMonitor
 from digest import generate_digest, should_generate_today
 from short_term_memory import ShortTermMemory
 from self_criticism import SelfCriticism, generate_self_criticism
@@ -7863,6 +7865,16 @@ def _run_loop_inner(
     # Gate-frontier: install BEFORE SafetyGate(...) so no promotion check ever runs on the
     # legacy fallback scope in the live loop.
     _install_promotion_guard_scope(journal, state)
+    # RTG-55 MHS-3 operability: the leakage guard fails CLOSED (every mutation rejected)
+    # when the eval-id vocabulary cannot be built. Make that loud without blocking start:
+    # one ERROR + journal event now, a rate-limited operator alarm after N consecutive
+    # rejections, cleared when the vocabulary builds again. Runbook:
+    # docs/guides/meta-harness-operator-guide.md.
+    leakage_monitor = EvalLeakageMonitor(
+        journal=journal, state=state, prompt_forge_module=_prompt_forge_module
+    ).install()
+    if not leakage_monitor.preflight():
+        save_state(state)
     # Clear the deliberate-rebase bypass ONLY once the frontier has actually rebuilt
     # (a prior run admitted >=1 point). Clearing it at startup while the frontier is
     # still empty would re-arm the frontier-lost guard before the bootstrap lands —

@@ -253,3 +253,125 @@ The main loop in `_inner_loop()` (autopilot.py, line 779) loads state, builds th
    ```
 4. **Full reset**: `python autopilot.py reset-memory` clears short-term memory to start a fresh optimization trajectory
 5. **Kill switch**: If the loop is unresponsive, the process holds a file lock at `orchestration/.autopilot.lock` -- killing the process releases it
+
+---
+
+## 7. Mutations all rejected: eval_leakage_vocabulary_unavailable
+
+The RTG-55 MHS-3 leakage guard (`species/prompt_forge.py`) rejects a mutation that names a
+specific eval instance. It builds its id vocabulary from the eval data the tower samples from.
+If that vocabulary cannot be built, the guard **fails closed**: every prompt, GEPA and code
+mutation is rejected with `eval_leakage_vocabulary_unavailable:<error>`, and the trial is skipped.
+The loop keeps running, so this state looks like a quiet stall unless you know where to look.
+
+### Symptoms
+
+| Where | What you see |
+|---|---|
+| Autopilot log, at start | One `ERROR` line: `EVAL-LEAKAGE PREFLIGHT FAILED (<error>) ... Missing/unreadable source(s): <path> ... FIX: ...`. The autopilot still starts. |
+| Autopilot log, per mutation | `Prompt mutation failed transfer safety, skipping: eval_leakage_vocabulary_unavailable:...` (GEPA: `rejected by leakage guard`). |
+| Autopilot log, after N rejections | One `ERROR` line: `EVAL-LEAKAGE CIRCUIT OPEN — ...`. N defaults to 3 (`AUTOPILOT_LEAKAGE_ALARM_THRESHOLD`). |
+| Journal ledger | Rows with `"type": "eval_leakage_guard"` and `event` set to `preflight_failed`, `alarm_raised` or `alarm_cleared`, in `orchestration/autopilot_journal*.jsonl`: `grep -h '"type": "eval_leakage_guard"' orchestration/autopilot_journal*.jsonl` |
+| Rejection ledger (AP-53) | `orchestration/autopilot_rejected_mutations.jsonl` rows with `rejecting_gate: "transfer_safety"` and `gate_detail` starting `eval_leakage_vocabulary_unavailable`. |
+| Operator alarm | Session-bus alarm key `autopilot-eval-leakage-vocab-unavailable`, severity critical, delivered through `scripts/coordination/alarm_channel.py`. It notifies once, then re-asserts at most every 900 s (`AUTOPILOT_LEAKAGE_ALARM_REASSERT_S`). Check it with `python3 /mnt/raid0/llm/epyc-root/scripts/coordination/alarm_channel.py status`. |
+| Dashboard | The autopilot control line shows `MUTATIONS REJECTED: eval-leakage vocabulary unavailable (N consecutive[, alarm raised])` in red; hover for the error, paths and this runbook. The raw data is `/dashboard/api/process_status` → `autopilot_state.eval_leakage_guard`, which is persisted in `autopilot_state.json` under `eval_leakage_guard`. |
+
+### Cause
+
+At least one REQUIRED vocabulary source is missing, unreadable or unparseable, or the sources
+contained no ids. The required source is the research question pool:
+
+```
+/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool.jsonl
+```
+
+That path is `$EPYC_RESEARCH_ROOT/benchmarks/prompts/question_pool.jsonl`, with
+`EPYC_RESEARCH_ROOT` defaulting to `/mnt/raid0/llm/epyc-inference-research`. When
+`AUTOPILOT_EVAL_ID_VOCAB_SOURCES` is set (`os.pathsep`-separated), it replaces the default list
+and **every** listed file becomes required. Optional sources (`benchmarks/prompts/core_*.jsonl`,
+`scripts/autopilot/sentinel_questions.yaml`, `tool_sentinels.yaml`) are skipped when absent.
+The error suffix names the failure: `missing_eval_id_source:<path>`,
+`eval_id_source_unreadable:<exception>`, `no_eval_ids_found` or `no_eval_id_sources`.
+
+### Check
+
+```bash
+ls -la /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool.jsonl
+sha256sum /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool.jsonl
+# expected: 1350221880 bytes, 64218c27e07400acf3b10a3cac05a410d5ee67814f353788ab75a19c84dde584
+# (the pool pinned in epyc-root artifacts/audit/deterministic-rescore-ledger-20260812.json)
+echo "${AUTOPILOT_EVAL_ID_VOCAB_SOURCES:-<unset: default sources>}"
+```
+
+To prove that the guard can build its vocabulary, run the same loader offline (zero inference):
+
+```bash
+cd /mnt/raid0/llm/epyc-orchestrator && .venv/bin/python -c "
+import sys; sys.path[:0] = ['.', 'scripts/autopilot']
+from species.prompt_forge import load_eval_id_vocabulary as L
+v = L(); print('available' if v.available else 'UNAVAILABLE', v.error, len(v.ids))"
+```
+
+### Fix
+
+1. **Restore the byte-identical pool.** `question_pool.jsonl` is **not in git**: it is
+   gitignored (`benchmarks/prompts/question_pool*.jsonl`) in `epyc-inference-research`, so
+   `git checkout` cannot restore it. Copy it back from a byte-identical copy (verify the sha256
+   above) and keep the path exactly as it was.
+2. **Or point the guard at a valid copy.** Set
+   `AUTOPILOT_EVAL_ID_VOCAB_SOURCES=/path/to/question_pool.jsonl` in the autopilot's environment.
+   Every source you list is required. The copy must be the SAME pool the eval tower samples from;
+   a different pool gives the guard a vocabulary that does not match the eval set.
+3. **Do NOT run `question_pool.py --build`, and do NOT copy
+   `pool_rebuild_a3_20260721/question_pool.activated.jsonl` over the live pool**, just to make
+   this alarm go away. The pool is the EVAL INSTRUMENT: the activated copy is the pre-2026-07-26
+   amendment pool (sha256 `9b433fa7…`), and a rebuild pulls in a registry that has since grown.
+   Either one is an eval-instrument change, which is a human-owned measurement boundary. If no
+   byte-identical copy exists, regenerating the pool is the operator's instrument transaction
+   (`epyc-root/artifacts/operator/e8_quality_pool_regenerator.py`, a deterministic replay from
+   the activated pool), not an autopilot fix.
+
+### Restart needed?
+
+- **Default path restored in place: no restart.** The vocabulary cache is keyed by file
+  identity `(path, mtime_ns, size)`. A missing file is never cached, so the next mutation
+  rebuilds. A file that was present but unparseable is negative-cached for at most 60 s
+  (`AUTOPILOT_EVAL_ID_VOCAB_NEG_TTL_S`), and only under its old identity: replacing the file
+  changes that identity, so the next mutation rebuilds at once.
+- **`AUTOPILOT_EVAL_ID_VOCAB_SOURCES` changed: restart required.** A running process cannot see
+  an environment change. Restart through the normal autopilot lifecycle.
+- **Cost of the rebuild.** The first successful build takes about **3.6 s** (cold) and keeps
+  about **+253 MB RSS** in the autopilot process for its lifetime. The startup preflight pays
+  this once at boot; after a mid-run restore, the first mutation pays it.
+
+### Confirm recovery
+
+The circuit closes on the next mutation the guard evaluates, not on the file restore itself.
+
+- Log: `EVAL-LEAKAGE CIRCUIT CLOSED — vocabulary available again after N rejection(s); alarm cleared`.
+- Journal: an `eval_leakage_guard` row with `"event": "alarm_cleared"`.
+- Alarm: `alarm_channel.py status` no longer lists `autopilot-eval-leakage-vocab-unavailable`,
+  and the channel sends one RESOLVED notification.
+- Dashboard: the red `MUTATIONS REJECTED` suffix is gone, and `eval_leakage_guard` shows
+  `consecutive_unavailable_rejections: 0` and an empty `last_error`.
+- New `autopilot_rejected_mutations.jsonl` rows stop carrying `eval_leakage_vocabulary_unavailable`.
+
+If the alarm never fired (fewer than N rejections), only the log and dashboard lines change.
+
+### Reading rejection ledgers: `eval_instance_leakage` false positives
+
+A different reason, `eval_instance_leakage: refs=[...]`, means that the vocabulary WAS available
+and the guard matched an instance reference in the text the mutation ADDS. `refs` lists the
+matched strings. Before you treat a rejection as real memorisation, check which shape matched:
+
+- **Exact id or id-family member** (`gsm8k_00003`, `BigCodeBench/42`, a 16-hex prompt-hash qid):
+  almost always a real leak.
+- **Generic instance pattern** (`sample #12`, `question id: 42`, `problem number 3`,
+  `task_id == 17`): a real leak in prose. **Known false-positive class:** code-shaped lines. Before
+  2026-09-16 the pattern also matched snake_case assignment and mapping lines such as
+  `task_index = 0`, `sample_id = 1` and `task_id: 7`, which are ordinary code in a code mutation.
+  The pattern now counts a snake_case identifier only as a comparison (`==` / `is`), so those
+  three forms no longer match. Comparison forms (`if task_id == 17:`) still match by design.
+  Older ledger rows may still carry the assignment and mapping forms; read those as false
+  positives.
+- **Suite-anchored reference** (`math problem #4`, `gsm8k question 12`): a real leak.
