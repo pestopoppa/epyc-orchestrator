@@ -255,6 +255,17 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional OpenAI-compatible tool choice policy for the provided tools.",
     )
+    eval_fence: bool | None = Field(
+        default=None,
+        description=(
+            "AP-54 eval knowledge fence. Sent by the AutoPilot EvalTower on every "
+            "eval rollout. True: file/REPL/shell tools refuse the compiled wiki, "
+            "knowledge roots and eval gold files, and the response echoes the "
+            "paths the tools touched. False: nothing is refused but touched paths "
+            "are still echoed (AP-54b control arm). Absent: production behaviour, "
+            "unchanged. Older API builds ignore the field (extra='ignore')."
+        ),
+    )
     output_schema: dict | None = Field(
         default=None,
         description="Optional JSON Schema for the agent's FINAL() value. "

@@ -532,6 +532,38 @@ class ToolRegistry:
 
         use_structured = _get_features().structured_tool_output
 
+        # AP-54 eval knowledge fence. A no-op unless the request carried
+        # `eval_fence`; production chat never installs a carrier. A denial is an
+        # ordinary failed tool result, never an exception, so the rollout goes on.
+        from src.repl_environment import knowledge_fence as _fence
+
+        _fence_denial = _fence.check_tool_call(tool_name, kwargs)
+        if _fence_denial is not None:
+            elapsed = (time.perf_counter() - start) * 1000
+            self._record_invocation(
+                ToolInvocation(
+                    tool_name=tool_name,
+                    args=kwargs,
+                    role=role,
+                    success=False,
+                    result=None,
+                    error=_fence_denial,
+                    elapsed_ms=elapsed,
+                    caller_type=caller_type,
+                    chain_id=chain_id,
+                    chain_index=chain_index,
+                )
+            )
+            if use_structured:
+                return ToolOutput(
+                    ok=False,
+                    status="error",
+                    output=_fence_denial,
+                    side_effects_declared=tool.side_effects,
+                    metadata={"elapsed_ms": elapsed, "eval_fence": "denied"},
+                )
+            return {"success": False, "error": _fence_denial, "eval_fence": "denied"}
+
         # Check approval requirement for destructive tools
         if use_structured and tool.destructive and _get_features().side_effect_tracking:
             return ToolOutput(

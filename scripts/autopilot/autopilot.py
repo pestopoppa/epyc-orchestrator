@@ -10198,6 +10198,18 @@ def _run_loop_inner(
         # AP-55: eval-side consumers read eval_details, so stamp the regime there too.
         eval_details_dict["infra_fingerprint_digest"] = fingerprint_digest(trial_infra_fingerprint)
         eval_details_dict["infra_comparability"] = trial_comparability.get("status", "")
+        # AP-54: carry the trial's eval-fence state beside the infra regime, so a
+        # fenced and an unfenced run are never read as the same regime.
+        _fence_summary = (
+            eval_result.details.get("eval_fence")
+            if isinstance(getattr(eval_result, "details", None), dict)
+            else None
+        )
+        eval_details_dict["eval_fence_state"] = (
+            str(_fence_summary.get("state") or "absent")
+            if isinstance(_fence_summary, dict)
+            else "absent"
+        )
         journal_entry = JournalEntry(
             trial_id=trial_counter,
             timestamp=datetime.now(timezone.utc).isoformat(),

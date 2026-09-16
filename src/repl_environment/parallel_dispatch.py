@@ -265,10 +265,14 @@ def execute_parallel_calls(
             logger.warning(f"Parallel call {call.func_name} failed: {e}")
             result_list[idx] = f"[ERROR: {e}]"
 
+    from src.repl_environment.knowledge_fence import run_in_context
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for idx, call in enumerate(calls):
-            futures.append(executor.submit(_run_call, idx, call))
+            # run_in_context: per-request carriers (AP-54 eval knowledge fence)
+            # must reach the worker threads.
+            futures.append(executor.submit(run_in_context(_run_call), idx, call))
 
         # Wait for all to complete
         for f in futures:

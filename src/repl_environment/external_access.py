@@ -204,6 +204,12 @@ class _ExternalAccessMixin:
             from src.repl_environment.task_root import get_task_root, task_root_active
 
             _shell_cwd = str(get_task_root()) if task_root_active() else _get_project_root()
+            # AP-54 eval knowledge fence (no-op unless the request carried `eval_fence`).
+            from src.repl_environment.knowledge_fence import check_shell
+
+            fence_denial = check_shell(parts, str(_shell_cwd))
+            if fence_denial is not None:
+                return f"[ERROR: {fence_denial}]"
             result = subprocess.run(
                 shlex.split(cmd),
                 capture_output=True,
@@ -250,6 +256,12 @@ class _ExternalAccessMixin:
 
         code = sanitize_code_unicode(code)
         self._exploration_calls += 1
+        # AP-54 eval knowledge fence (no-op unless armed on this request).
+        from src.repl_environment.knowledge_fence import check_python_source
+
+        fence_denial = check_python_source(code)
+        if fence_denial is not None:
+            return f"[ERROR: {fence_denial}]"
         timeout = min(timeout, 120)
 
         import tempfile

@@ -335,6 +335,10 @@ def _register_file_tools(registry: ToolRegistry) -> None:
                 return {"error": f"Not a directory: {path}", "success": False}
 
             files = list(dir_path.glob(pattern))
+            # AP-54: a glob pattern can reach a fenced directory; no-op unless armed.
+            from src.repl_environment.knowledge_fence import filter_paths
+
+            files = filter_paths(files)
             return {
                 "files": [str(f) for f in files[:100]],  # Limit to 100
                 "count": len(files),
@@ -400,6 +404,8 @@ def _register_compatibility_tools(registry: ToolRegistry) -> None:
             if not root.is_dir():
                 return {"success": False, "error": f"Not a directory: {directory}", "matches": []}
 
+            from src.repl_environment.knowledge_fence import filter_paths
+
             iterator = root.rglob(pattern) if recursive else root.glob(pattern)
             matches: list[dict[str, Any]] = []
             scanned = 0
@@ -407,6 +413,9 @@ def _register_compatibility_tools(registry: ToolRegistry) -> None:
                 if len(matches) >= max_results:
                     break
                 if not path.is_file():
+                    continue
+                if not filter_paths([path]):
+                    # AP-54: skip fenced files inside the walk (no-op unless armed).
                     continue
                 scanned += 1
                 try:

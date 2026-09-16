@@ -810,6 +810,7 @@ def call_orchestrator_forced(
     prompt_root: str | None = None,
     watcher: Any | None = None,
     llama_port: int | None = None,
+    eval_fence: bool | None = None,
 ) -> dict[str, Any]:
     """Call orchestrator with forced role and mode routing.
 
@@ -850,6 +851,11 @@ def call_orchestrator_forced(
             the request is retried after waiting for /health. Backward-
             compatible: watcher=None preserves the legacy direct-post-with-
             exception-swallow behavior exactly.
+        eval_fence: AP-54 eval knowledge fence request flag, forwarded to
+            `/chat` as ``eval_fence``. Omitted when None (legacy payload shape).
+            An API build that predates the field ignores it (pydantic
+            extra='ignore'); the response then carries no ``eval_fence`` echo and
+            the caller must record the row as unfenced.
         llama_port: Optional explicit port hint for the target llama-server.
             When omitted, the watcher resolves it from force_role via
             /llama_fleet_ids.
@@ -956,6 +962,8 @@ def call_orchestrator_forced(
         payload["output_schema"] = output_schema
     if prompt_root:
         payload["x_orchestrator_prompt_root"] = str(prompt_root)
+    if eval_fence is not None:
+        payload["eval_fence"] = bool(eval_fence)
 
     def _timeout_result(exc: BaseException, reason: str) -> dict[str, Any]:
         _, detail = _classify_exc(exc)
