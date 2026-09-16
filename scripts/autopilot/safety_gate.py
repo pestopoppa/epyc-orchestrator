@@ -14,7 +14,7 @@ from collections import deque, namedtuple
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -25,9 +25,14 @@ from src.autopilot_core.tier_specs import (
     OBJECTIVE_AXIS_QUALITY,
     OBJECTIVE_AXIS_RATE,
     OBJECTIVE_AXIS_RELIABILITY,
+    LEGACY_OBJECTIVE_POLICY,
+    RATE_AXIS_UNIT_QUESTIONS_PER_HOUR,
+    RATE_AXIS_UNIT_TOKENS_PER_SECOND,
     has_objective_axis,
     objective_value,
     objectives_match_axes,
+    rate_axis_unit,
+    seq_task_rate_qph_from,
 )
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from src.autopilot_core.authority_consent import (
@@ -375,7 +380,17 @@ DEFAULT_BASELINE_QUALITY = 1.16  # Documented 2026-04-04 T2 calibration fallback
 
 
 def _pareto_archive_for_safety_guard() -> Any | None:
-    """Journal-authoritative archive view for baseline safety checks."""
+    """Journal-authoritative QUALITY-CEILING view (legacy policy, all eras).
+
+    Gate-frontier split (2026-09-16): this unscoped view now serves ONLY the load-path
+    corruption bound (``Baseline.load`` / ``apply_state`` / ``_drop_over_archive_max_tiers``),
+    which reads the quality axis alone — axis 1's unit never reaches it. Promotion evidence
+    (archive-max refusal, frontier-representative check, reproduced fields) reads the LIVE
+    scope through :func:`_promotion_guard_view`. See decision note D3 in
+    ``docs/autopilot/gate-frontier-live-scope-2026-09-16.md``: epoch-fencing the ceiling
+    would delete an operator-reseeded baseline whenever the young live-era frontier sits
+    below it.
+    """
     try:
         from scripts.autopilot.experiment_journal import ExperimentJournal
         from scripts.autopilot.pareto_archive import (
@@ -398,6 +413,73 @@ def _pareto_archive_for_safety_guard() -> Any | None:
         return None
 
 
+@dataclass(frozen=True)
+class PromotionGuardView:
+    """The archive a baseline PROMOTION is checked against, with the policy it was built under.
+
+    ``scope`` is ``"live"`` when the autopilot installed a provider (live objective policy,
+    live epoch fence — :func:`configure_promotion_guard_archive`), or
+    ``"legacy_unscoped"`` for the pre-2026-09-16 fallback (legacy t/s replay over every era).
+    ``objective_policy`` decides the UNIT of the rate axis; see
+    :func:`promotion_fields_from_objectives`.
+    """
+
+    archive: Any
+    objective_policy: str
+    scope: str
+    exclude_before_ts: float | None = None
+
+
+_PROMOTION_GUARD_PROVIDER: Callable[[], PromotionGuardView | None] | None = None
+_LEGACY_GUARD_FALLBACK_WARNED = False
+
+
+def configure_promotion_guard_archive(
+    provider: Callable[[], PromotionGuardView | None] | None,
+) -> None:
+    """Install (or clear, with None) the live-scope archive provider for promotion checks.
+
+    The autopilot installs one at startup that rebuilds the frontier from the journal under
+    the LIVE ``pareto_objective_policy`` and ``pareto_exclude_before_ts`` — the same
+    authority path (``_journal_archive_payload_for_authority``) that seeds the live archive.
+    """
+    global _PROMOTION_GUARD_PROVIDER, _LEGACY_GUARD_FALLBACK_WARNED
+    _PROMOTION_GUARD_PROVIDER = provider
+    _LEGACY_GUARD_FALLBACK_WARNED = False
+
+
+def _promotion_guard_view() -> PromotionGuardView | None:
+    """Archive view for promotion evidence; None when it cannot be read (caller: skip)."""
+    global _LEGACY_GUARD_FALLBACK_WARNED
+    provider = _PROMOTION_GUARD_PROVIDER
+    if provider is not None:
+        try:
+            return provider()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Promotion guard: live-scope archive unreadable (%s)", exc)
+            return None
+    if not _LEGACY_GUARD_FALLBACK_WARNED:
+        _LEGACY_GUARD_FALLBACK_WARNED = True
+        log.warning(
+            "Promotion guard: no live-scope archive provider installed; falling back to the "
+            "LEGACY tokens/second replay over every era. Rate-axis fields are still routed "
+            "by unit, so frontdoor_speed stays tokens/second."
+        )
+    archive = _pareto_archive_for_safety_guard()
+    if archive is None:
+        return None
+    return PromotionGuardView(
+        archive=archive, objective_policy=LEGACY_OBJECTIVE_POLICY, scope="legacy_unscoped"
+    )
+
+
+def _promotion_frontier(tier: int | None) -> tuple[PromotionGuardView, list[Any]] | None:
+    view = _promotion_guard_view()
+    if view is None or view.archive is None:
+        return None
+    return view, list(view.archive.frontier(tier=tier))
+
+
 def _pareto_frontier_context(tier: int | None = None) -> tuple[float, frozenset[int]] | None:
     """(best_quality, frozenset of same-tier frontier trial_ids) for the live Pareto archive, or None
     if it is empty/unreadable. Lazy import + fail-soft so a missing archive (fresh bootstrap)
@@ -414,29 +496,40 @@ def _pareto_frontier_context(tier: int | None = None) -> tuple[float, frozenset[
     return best_q, ids
 
 
+# Promotion-field name that carries a questions/hour rate. Deliberately NOT an EvalResult
+# field: ``update_baseline`` pops it before ``replace(result, ...)`` and hands it to
+# ``Baseline.update_tier`` as ``frontdoor_task_rate_qph``.
+PROMOTION_FIELD_TASK_RATE_QPH = "task_rate_qph"
+
+
 def promotion_fields_from_objectives(
-    objectives: Any, tier: int
+    objectives: Any, tier: int, objective_policy: str = LEGACY_OBJECTIVE_POLICY
 ) -> dict[str, float] | None:
-    """W3e: EvalResult fields a reproduced frontier representative supplies, read by axis NAME.
+    """W3e: fields a reproduced frontier representative supplies, read by axis NAME and UNIT.
 
-    None when the tuple does not match the axes the tier declares. The pre-W3e code read
-    ``[0]``/``[1]``/``[2]``/``[3]`` and only refused ``len < 4``, so a tuple built under a
-    different axis set would have silently fed reliability into ``cost``. A tier that retires
-    an axis simply stops supplying that field.
+    None when the tuple does not match the axes the tier declares, or when the policy's
+    rate unit is unknown (refuse rather than guess). A tier that retires an axis simply
+    stops supplying that field.
 
-    UNIT HAZARD: ``speed`` receives the RATE axis, whose unit belongs to the archive's objective
-    policy. ``_pareto_archive_for_safety_guard`` replays under the LEGACY policy (tokens/second),
-    so today this matches the t/s throughput floor. If that guard is ever moved to a rate policy
-    (questions/hour), ``speed`` -> ``frontdoor_speed`` would receive q/h and every later trial
-    would trip the 0.8x floor. Do not switch the guard's policy without handling this field.
+    The RATE axis is routed by the unit ``objective_policy`` gives it:
+      * tokens/second  -> ``speed`` (the value ``frontdoor_speed`` and the 0.8x floor use);
+      * questions/hour -> ``task_rate_qph`` ONLY. It never lands in ``speed``: that would put
+        q/h into ``frontdoor_speed`` and every later trial (t/s) would fail the 0.8x floor.
+        ``speed`` is then left to the source trial's own tokens/second measurement.
     """
     t = int(tier)
-    if not objectives_match_axes(objectives, t):
+    unit = rate_axis_unit(objective_policy)
+    if unit is None or not objectives_match_axes(objectives, t):
         return None
-    fields = {
-        "quality": objective_value(objectives, OBJECTIVE_AXIS_QUALITY, t),
-        "speed": objective_value(objectives, OBJECTIVE_AXIS_RATE, t),
-    }
+    fields = {"quality": objective_value(objectives, OBJECTIVE_AXIS_QUALITY, t)}
+    if has_objective_axis(OBJECTIVE_AXIS_RATE, t):
+        rate = objective_value(objectives, OBJECTIVE_AXIS_RATE, t)
+        if unit == RATE_AXIS_UNIT_TOKENS_PER_SECOND:
+            fields["speed"] = rate
+        elif unit == RATE_AXIS_UNIT_QUESTIONS_PER_HOUR:
+            fields[PROMOTION_FIELD_TASK_RATE_QPH] = rate
+        else:  # pragma: no cover - rate_axis_unit only returns the two units above
+            return None
     if has_objective_axis(OBJECTIVE_AXIS_NEG_COST, t):
         fields["cost"] = -objective_value(objectives, OBJECTIVE_AXIS_NEG_COST, t)
     if has_objective_axis(OBJECTIVE_AXIS_RELIABILITY, t):
@@ -885,6 +978,11 @@ class Baseline:
     # gate then falls back to the result's resolution (or the fixed -0.1 floor).
     per_suite_counts_by_tier: dict[int, dict[str, int]] = field(default_factory=dict)
     frontdoor_speed: float = 10.0
+    # Gate-frontier (2026-09-16): the promoted config's questions/hour, kept SEPARATE from
+    # ``frontdoor_speed`` so the tokens/second throughput floor never compares q/h against
+    # t/s. Informational — no floor reads it (decision note D1). None on every record written
+    # before it existed; a missing key decodes back to None.
+    frontdoor_task_rate_qph: float | None = None
     # Eval-instrument era this baseline was captured under (defect #1/#4 fix). Empty on a
     # legacy baseline (pre-provenance state) — which the gate treats as a PRE-E7 stamp, so a
     # legacy baseline vs the active E7 era trips the re-baseline hold. Set whenever a
@@ -1039,6 +1137,9 @@ class Baseline:
             per_suite_counts_by_tier=per_suite_counts_by_tier,
             tier_revisions=tier_revisions,
             frontdoor_speed=frontdoor_speed,
+            frontdoor_task_rate_qph=cls._optional_positive_float(
+                data.get("frontdoor_task_rate_qph"), "frontdoor_task_rate_qph", path
+            ),
             source_path=path,
         )
         if state:
@@ -1080,6 +1181,14 @@ class Baseline:
             )
             return fallback
         return value
+
+    @staticmethod
+    def _optional_positive_float(value: Any, label: str, path: Path) -> float | None:
+        """None for an absent value; a validated positive float otherwise (None if corrupt)."""
+        if value is None:
+            return None
+        fval = Baseline._validate_positive_float(value, math.nan, label, path)
+        return None if math.isnan(fval) else fval
 
     @staticmethod
     def _validate_positive_float(
@@ -1145,6 +1254,8 @@ class Baseline:
             "tier_revisions": self.tier_revisions,
             "frontdoor_speed": self.frontdoor_speed,
         }
+        if self.frontdoor_task_rate_qph is not None:
+            data["frontdoor_task_rate_qph"] = self.frontdoor_task_rate_qph
         _atomic_write_text(path, yaml.dump(data, default_flow_style=False, allow_unicode=True))
 
     def apply_state(self, state: dict[str, Any], path: Path | None = None) -> None:
@@ -1209,6 +1320,12 @@ class Baseline:
                 "state.frontdoor_speed",
                 state_path,
             )
+        if "frontdoor_task_rate_qph" in state:
+            qph = self._optional_positive_float(
+                state.get("frontdoor_task_rate_qph"), "state.frontdoor_task_rate_qph", state_path
+            )
+            if qph is not None:
+                self.frontdoor_task_rate_qph = qph
         if "per_suite_quality" in state:
             self.per_suite_quality = {
                 suite: self._validate_quality(
@@ -1319,7 +1436,7 @@ class Baseline:
         except (TypeError, ValueError):
             return str(value)
 
-    def update_tier(self, result: EvalResult) -> None:
+    def update_tier(self, result: EvalResult, *, task_rate_qph: float | None = None) -> None:
         """Rewrite the T<tier> baseline reference — with an explicit moved-reference record.
 
         EV-14c (defect, not enhancement): the pre-fix write was ``dict.update``
@@ -1364,7 +1481,13 @@ class Baseline:
             self.quality = result.quality
             self.per_suite_quality.update(result.per_suite_quality)
             if result.speed > 0:
+                # ``result.speed`` is always the trial's tokens/second measurement: a
+                # questions/hour promotion field is routed to ``task_rate_qph`` instead
+                # (promotion_fields_from_objectives), never into ``speed``.
                 self.frontdoor_speed = result.speed
+            qph = task_rate_qph if task_rate_qph is not None else seq_task_rate_qph_from(result)
+            if qph is not None and math.isfinite(float(qph)) and float(qph) > 0:
+                self.frontdoor_task_rate_qph = float(qph)
             # B3 / MISC-1: the top-level speed/cost/reliability scalars describe the
             # DEFAULT_FRONTIER_TIER production point and feed the throughput floor; gate
             # them on the same tier check as quality/frontdoor_speed. Previously an
@@ -1424,6 +1547,9 @@ class Baseline:
         # the pre-boundary default.
         if self.autopilot_speed_era:
             payload["autopilot_speed_era"] = self.autopilot_speed_era
+        # Only emit when known — a pre-2026-09-16 payload stays byte-identical.
+        if self.frontdoor_task_rate_qph is not None:
+            payload["frontdoor_task_rate_qph"] = self.frontdoor_task_rate_qph
         return payload
 
 
@@ -2500,18 +2626,34 @@ class SafetyGate:
 
     @staticmethod
     def _archive_best_quality(tier: int | None = None) -> float | None:
-        """Max quality on the live same-tier Pareto frontier, or None if it cannot be read.
+        """Max quality on the PROMOTION-scope same-tier frontier, or None if empty/unreadable.
 
         Fail-soft: a missing/unreadable archive returns None (the caller skips the archive-max
         guard but the scale + eligibility gates still apply), so this can never block a
-        legitimate bootstrap write on a fresh state."""
-        return _pareto_frontier_best_quality(tier=tier)
+        legitimate bootstrap write on a fresh state. An EMPTY live-scope frontier is handled
+        separately by :meth:`_live_frontier_empty` (decision note D2)."""
+        found = _promotion_frontier(tier)
+        if found is None or not found[1]:
+            return None
+        t = DEFAULT_FRONTIER_TIER if tier is None else int(tier)
+        return max(objective_value(e.objectives, OBJECTIVE_AXIS_QUALITY, t) for e in found[1])
 
     @staticmethod
     def _archive_frontier_trial_ids(tier: int | None = None) -> frozenset[int]:
-        """Trial ids currently on the same-tier Pareto frontier (empty set if empty/unreadable)."""
-        ctx = _pareto_frontier_context(tier=tier)
-        return ctx[1] if ctx is not None else frozenset()
+        """Trial ids on the promotion-scope same-tier frontier (empty if empty/unreadable)."""
+        found = _promotion_frontier(tier)
+        if found is None:
+            return frozenset()
+        return frozenset(int(e.trial_id) for e in found[1])
+
+    @staticmethod
+    def _live_frontier_empty(tier: int | None = None) -> bool:
+        """True when a LIVE-scope provider is installed and its same-tier frontier is empty.
+
+        Only a live scope counts: the legacy fallback spans every era, so emptiness there is
+        a genuinely fresh state (bootstrap), not "no evidence yet in this epoch"."""
+        found = _promotion_frontier(tier)
+        return found is not None and found[0].scope == "live" and not found[1]
 
     @staticmethod
     def _archive_frontier_entry(
@@ -2520,16 +2662,19 @@ class SafetyGate:
         """Same-tier frontier entry for source_trial_id, reduced to stable evidence fields."""
         if source_trial_id is None:
             return None
-        archive = _pareto_archive_for_safety_guard()
-        if archive is None:
+        found = _promotion_frontier(tier)
+        if found is None:
             return None
-        for entry in archive.frontier(tier=tier):
+        view, frontier = found
+        for entry in frontier:
             if int(entry.trial_id) == int(source_trial_id):
                 return {
                     "trial_id": int(entry.trial_id),
                     "objectives": tuple(float(x) for x in entry.objectives),
                     "n_reproductions": int(getattr(entry, "n_reproductions", 1) or 1),
                     "config_fingerprint": getattr(entry, "config_fingerprint", ""),
+                    "objective_policy": view.objective_policy,
+                    "scope": view.scope,
                 }
         return None
 
@@ -2740,6 +2885,21 @@ class SafetyGate:
                 False, reason, tier, previous_quality, result.quality, proof
             )
         archive_max = self._archive_best_quality(tier)
+        if archive_max is None and previous_quality is not None and self._live_frontier_empty(tier):
+            # D2 (gate-frontier, 2026-09-16): the live-scope frontier holds NO point in this
+            # epoch, so there is no reproduced evidence to promote from. The legacy all-era
+            # view never came back empty, so "skip the guard on an empty archive" used to mean
+            # a fresh install only; under the live scope it would mean "every epoch rebase
+            # opens single-trial promotions over an existing baseline". Refuse instead. A tier
+            # with no baseline at all still seeds (bootstrap is never blocked).
+            reason = (
+                "live-epoch frontier is empty for this tier: no reproduced frontier evidence "
+                "in the current epoch; baseline promotion over an existing baseline REFUSED"
+            )
+            log.warning("Baseline update REFUSED — %s", reason)
+            return BaselineUpdateResult(
+                False, reason, tier, previous_quality, result.quality, proof
+            )
         if archive_max is not None and result.quality > archive_max + BASELINE_ARCHIVE_TOLERANCE:
             # Above the frontier max. A genuine new-best must be archived FIRST (archive-first
             # precondition), so its source trial would already be on the frontier; if it is not,
@@ -2771,6 +2931,7 @@ class SafetyGate:
                     proof,
                 )
         promotion_result = result
+        promoted_task_rate_qph: float | None = None
         if archive_max is not None:
             quantum = self._quality_quantum(result)
             if quantum is None:
@@ -2790,7 +2951,11 @@ class SafetyGate:
                     False, reason, tier, previous_quality, result.quality, proof
                 )
             objectives = tuple(repro_entry.get("objectives") or ())
-            repro_fields = promotion_fields_from_objectives(objectives, tier)
+            repro_fields = promotion_fields_from_objectives(
+                objectives,
+                tier,
+                str(repro_entry.get("objective_policy") or LEGACY_OBJECTIVE_POLICY),
+            )
             if repro_fields is None:
                 reason = "frontier representative missing objective tuple"
                 log.warning("Baseline update REFUSED — %s", reason)
@@ -2818,6 +2983,7 @@ class SafetyGate:
                 return BaselineUpdateResult(
                     False, reason, tier, previous_quality, result.quality, proof
                 )
+            promoted_task_rate_qph = repro_fields.pop(PROMOTION_FIELD_TASK_RATE_QPH, None)
             promotion_result = replace(result, **repro_fields)
         if previous_quality is None:
             # SG-3 (B3a): explicit seed of a tier that had no strict same-tier baseline.
@@ -2846,7 +3012,7 @@ class SafetyGate:
             return BaselineUpdateResult(
                 False, reason, tier, previous_quality, promotion_result.quality, proof
             )
-        self.baseline.update_tier(promotion_result)
+        self.baseline.update_tier(promotion_result, task_rate_qph=promoted_task_rate_qph)
         # Defect #4: stamp the era this baseline was promoted under so a future boundary can
         # detect the cross-era condition (and so a post-reseed same-era promotion keeps the
         # stamp current). Only stamps when an active era is known; never clears an existing one.

@@ -13,12 +13,15 @@ from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
+    OBJECTIVE_AXIS_RATE,
     PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
     RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
     RATE_4D_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
     TASK_RATE_REFERENCE_POINT,
     legacy_objectives_from_row,
+    objective_axis_index,
+    objectives_match_axes,
     rate_objectives_from_row,
     spec_for,
     task_rate_objectives_from_row,
@@ -276,10 +279,12 @@ def reconstruct_archive_from_journal_rows(
             and deinflate_factor != 1.0
             and ts is not None
             and ts < deinflate_before_ts
-            and len(objectives) >= 2
+            and objectives_match_axes(objectives, tier)
         ):
+            # W3e: write the RATE axis by name, never by position.
             objectives = list(objectives)
-            objectives[1] = objectives[1] * deinflate_factor
+            rate_index = objective_axis_index(OBJECTIVE_AXIS_RATE, tier)
+            objectives[rate_index] = objectives[rate_index] * deinflate_factor
             deinflated = True
 
         shaped = {

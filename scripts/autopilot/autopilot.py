@@ -85,6 +85,7 @@ from pareto_archive import (
     pareto_archive_from_journal_rows,
 )
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate, _atomic_write_text
+from safety_gate import PromotionGuardView, configure_promotion_guard_archive
 from eval_tower import EVAL_EXECUTION_INSTRUMENT_ID, EvalTower
 from config_applicator import apply_params  # noqa: F401 - re-export for actions.py tests
 from config_applicator import health_check
@@ -7114,6 +7115,39 @@ def _journal_archive_payload_for_authority(
     )
 
 
+def _install_promotion_guard_scope(journal: Any, state: Mapping[str, Any]) -> None:
+    """Gate-frontier (2026-09-16): promotion evidence reads the LIVE frontier.
+
+    The safety gate's promotion checks (archive-max refusal, frontier-representative check,
+    reproduced fields) used to replay the whole journal under the LEGACY tokens/second policy,
+    pre-flip rows included. They now rebuild through the same authority path that seeds the
+    live archive: live ``pareto_objective_policy``, live ``pareto_exclude_before_ts`` epoch
+    fence, verified segment snapshot when its scope matches. ``state`` is the loop's live
+    dict, read on every call, so a rebase applied in-process is honoured.
+    """
+
+    def _provider() -> PromotionGuardView:
+        policy = _live_objective_policy_from_state(state)
+        deinflate_before_ts, deinflate_factor, exclude_before_ts = (
+            _archive_epoch_params_from_state(dict(state))
+        )
+        payload = _journal_archive_payload_for_authority(
+            journal,
+            deinflate_before_ts=deinflate_before_ts,
+            deinflate_factor=deinflate_factor,
+            exclude_before_ts=exclude_before_ts,
+            objective_policy=policy,
+        )
+        return PromotionGuardView(
+            archive=_ConcreteParetoArchive.from_archive_payload(payload, read_only=True),
+            objective_policy=str((payload or {}).get("objective_policy") or policy),
+            scope="live",
+            exclude_before_ts=exclude_before_ts,
+        )
+
+    configure_promotion_guard_archive(_provider)
+
+
 def _live_objective_policy_from_state(state: Mapping[str, Any]) -> str:
     return str(state.get("pareto_objective_policy") or LEGACY_OBJECTIVE_POLICY).strip()
 
@@ -7826,6 +7860,9 @@ def _run_loop_inner(
         state,
         archive_payload,
     )
+    # Gate-frontier: install BEFORE SafetyGate(...) so no promotion check ever runs on the
+    # legacy fallback scope in the live loop.
+    _install_promotion_guard_scope(journal, state)
     # Clear the deliberate-rebase bypass ONLY once the frontier has actually rebuilt
     # (a prior run admitted >=1 point). Clearing it at startup while the frontier is
     # still empty would re-arm the frontier-lost guard before the bootstrap lands —
