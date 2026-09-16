@@ -531,6 +531,18 @@ def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, 
         out["eval_fence"] = str(fence["state"])
     if fence.get("fence_enforcement"):
         out["eval_fence_enforcement"] = str(fence["fence_enforcement"])
+    # AP-55 (b)+(c): the promotion-gate legs as the trial recorded them. Absent on
+    # rows written before the gate existed; nothing is inferred for those.
+    gate = comp.get("promotion_gate")
+    if isinstance(gate, dict) and gate:
+        out["ap55_gate"] = {
+            "mode": str(gate.get("mode") or ""),
+            "seed_rerun": str((gate.get("seed_rerun") or {}).get("status") or gate.get("status") or ""),
+            "batch_homogeneity": str(
+                (gate.get("batch_homogeneity") or {}).get("status") or gate.get("status") or ""
+            ),
+            "hold": bool(gate.get("hold")),
+        }
     missing = [name for name, present in (("protocol_id", protocol_id), ("reps", reps),
                                           ("date", out["date"]))
                if not present]

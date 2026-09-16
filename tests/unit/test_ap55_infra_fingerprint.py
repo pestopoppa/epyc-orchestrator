@@ -143,7 +143,7 @@ def test_unreadable_component_on_both_sides_is_unverified_not_comparable(tmp_pat
 
 def test_fully_readable_identical_regime_is_comparable():
     digests = {name: f"d-{name}" for name in inf.COMPONENTS}
-    fp = {"digest": "x", "component_digests": digests}
+    fp = {"digest": "x", "component_digests": digests, "kernel_evidence": "live"}
     assert compare_infra_fingerprints(fp, dict(fp))["status"] == COMPARABLE
 
 
@@ -254,7 +254,7 @@ def autopilot():
 def _fp(**digests):
     full = {name: f"d-{name}" for name in inf.COMPONENTS}
     full.update(digests)
-    return {"digest": inf._digest(full), "component_digests": full}
+    return {"digest": inf._digest(full), "component_digests": full, "kernel_evidence": "live"}
 
 
 def test_trial_against_unfingerprinted_baseline_is_unverified(autopilot):
