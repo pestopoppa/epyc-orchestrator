@@ -10,6 +10,7 @@ exercised with stub/fake completion callables (zero real inference).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -84,6 +85,9 @@ REVIEW_ASSIGNED_ROLE = "verifier"
 
 # RA-10 artifact schema_version stamp, kept as a literal so this module does not
 # hard-depend on the trace package at import time (same pattern as CAT_* above).
+#: RD-9 plan-rubric axes, in ``PLAN_REVIEW_RUBRIC_PROMPT`` order (RC-9 snapshot).
+PLAN_RUBRIC_AXES: tuple[str, ...] = ("phase_coverage", "order", "executor_alignment")
+
 # Must track ``src.trace.review_ledger.REVIEW_DECISION_SCHEMA_VERSION``.
 REVIEW_DECISION_SCHEMA_VERSION = "1.0.0"
 
@@ -1370,6 +1374,21 @@ Rules:
             "feedback": str(advisory.get("feedback", data.get("f", ""))),
         }
         latency_ms = (time.perf_counter() - start) * 1000.0
+        parse_ok = not parse_failed and not model_call_failed
+        # RC-9: persistable rubric + per-item snapshots. Grades only when the
+        # emission parsed — the axis values above default to True otherwise.
+        rubric_snapshot = {
+            "rubric_id": "plan_rubric",
+            "template_sha256": hashlib.sha256(
+                self.PLAN_REVIEW_RUBRIC_PROMPT.encode("utf-8")
+            ).hexdigest(),
+            "items": list(PLAN_RUBRIC_AXES),
+        }
+        per_item_grades = (
+            [{"item": axis, "binary": int(result[axis])} for axis in PLAN_RUBRIC_AXES]
+            if parse_ok
+            else None
+        )
         self._emit_review_event(
             category=CAT_REVIEW_DECISION,
             summary=f"plan_rubric: {result['decision']}",
@@ -1378,7 +1397,9 @@ Rules:
                 "mode": "plan_rubric",
                 "phase": "plan",
                 **result,
-                "parse_ok": not parse_failed and not model_call_failed,
+                "rubric": rubric_snapshot,
+                "per_item_grades": per_item_grades,
+                "parse_ok": parse_ok,
                 "parse_failure": "unparseable_response"
                 if (parse_failed and not model_call_failed)
                 else None,

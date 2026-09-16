@@ -143,6 +143,23 @@ def build_reviewer_prompt(corpus_row: dict[str, Any], field_order: str = "defaul
     return _REVIEWER_PROMPT_HEADER + "\n\n" + "\n\n".join(blocks) + "\n\nDECISION:"
 
 
+def rubric_snapshot_for(field_order: str) -> dict[str, Any]:
+    """RC-9 ``rubric_json`` snapshot for a field-order arm (pure).
+
+    In this probe the "rubric" is the instruction header plus the ordered field
+    blocks — exactly what ``build_reviewer_prompt`` renders. Persisting it pins
+    the ``field_order:<name>`` ``rubric_version`` tag to the prompt it stood for.
+    The probe elicits a single APPROVE/REJECT token, so there are no per-item
+    grades to persist alongside it.
+    """
+    return {
+        "rubric_id": "corpus-probe-field-order",
+        "field_order": field_order,
+        "fields": [[label, key] for label, key in resolve_field_order(field_order)],
+        "instruction_header": _REVIEWER_PROMPT_HEADER,
+    }
+
+
 # ── PURE: per-decision row mapping (the fixture-tested core) ──────────────────
 def decision_id_for(
     reviewer: str,
@@ -195,12 +212,15 @@ def map_decision_to_ledger_row(
     explicitly, defaults it to the arm's ``field_order:<name>`` tag — which is the
     ``rubric_version`` grouping key ``reviewer_calibration_report.py`` compares
     FA/FR across (never a role key; the arm axis is the rubric ordering).
+    With ``field_order`` the row also carries the RC-9 ``rubric`` snapshot
+    (:func:`rubric_snapshot_for`); without it the prompt is the runner's default
+    and is not ours to describe, so ``rubric`` stays absent (NULL).
     """
     row_id = str(corpus_row.get("row_id") or corpus_row.get("candidate_id") or "")
     cid = corpus_id if corpus_id is not None else corpus_row.get("corpus_id")
     if field_order and rubric_version is None:
         rubric_version = rubric_version_for(field_order)
-    return {
+    row: dict[str, Any] = {
         "decision_id": decision_id_for(reviewer, cid, row_id, attempt, field_order=field_order),
         "reviewer_model_quant": reviewer,
         "grading_model": grading_model,
@@ -217,6 +237,9 @@ def map_decision_to_ledger_row(
         "tokens": None,  # probe returns no token count yet
         "era": era,
     }
+    if field_order:
+        row["rubric"] = rubric_snapshot_for(field_order)
+    return row
 
 
 # ── PURE: emit sinks ─────────────────────────────────────────────────────────
