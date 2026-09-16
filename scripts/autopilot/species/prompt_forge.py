@@ -747,8 +747,15 @@ def classify_mutation_effect(
 # (1.0) refuses only UNKNOWN/UNSAFE, i.e. fail-closed on unclassified effects;
 # an operator can lower it via ``AUTOPILOT_MUTATION_RISK_GATE`` (0.9 refuses
 # REPLACE, i.e. constrain/expand-only). The weights are an ordinal PRIOR, not a
-# calibrated probability — MHS-5 (the labelled held-out corpus) is what would
-# calibrate them.
+# calibrated probability.
+#
+# MHS-5 evidence (``orchestration/datasets/harness_r1_heldout_effect_corpus.json``,
+# 23 valid patches, 1,270 held-out tasks): the ORDERING holds. All 4 REPLACE patches
+# regressed (mean -8.4 pp, rescue:regression 0.21), while the 19 CONSTRAIN patches
+# averaged +3.9 pp (rescue:regression 1.65). But CONSTRAIN is NOT regression-free:
+# 4 of 19 regressed, and the single worst patch (-16.9 pp) is a hint-only CONSTRAIN
+# patch. "Every catastrophic regression came from an override" does not hold on
+# this corpus, so this gate ranks risk; it does not certify safety.
 # ---------------------------------------------------------------------------
 
 MUTATION_EFFECT_RISK: dict[MutationEffect, float] = {
