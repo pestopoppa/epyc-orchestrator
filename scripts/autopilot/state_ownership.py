@@ -89,6 +89,7 @@ log = logging.getLogger("autopilot")
 #: while the daemon lives is destroyed at the daemon's next save.
 DAEMON_OWNED_STATE_FIELDS: tuple[str, ...] = (
     "baseline_state",
+    "baseline_infra_fingerprints",  # AP-55: regime of each tier's promoted reference
     "quality_history",
     "quality_history_by_tier",
     "quality_history_provenance_by_tier",
