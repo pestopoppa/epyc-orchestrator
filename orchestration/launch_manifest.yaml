@@ -836,8 +836,15 @@ aux_services:
     optional: false
     description: epyc-root handoff progress hub (stdlib only, runs under any interpreter)
     argv: ["{python}", "-m", "dashboard.server", "--host", "0.0.0.0", "--port", "8100"]
-    cwd: "{llm_root}/worktrees/mains/autokernel-unified-20260908"
-    pythonpath: ["{llm_root}/worktrees/mains/autokernel-unified-20260908"]
+    # Served from the READ-ONLY VIEW (2026-09-16, operator-approved dashboard
+    # fix A): a standalone epyc-root clone detached at origin/main and marked
+    # `.epyc-view-readonly`. epyc-root scripts/dashboard/hub_supervisor.sh
+    # advances it via refresh_hub_view.sh every 180s. The previous source, the
+    # autokernel-unified-20260908 lane, sat 141 commits behind origin/main, so
+    # pushed handoff progress never reached the hub. Never point this at a lane
+    # or a linked worktree: the supervisor refreshes only a marked standalone view.
+    cwd: "{llm_root}/views/epyc-root-main"
+    pythonpath: ["{llm_root}/views/epyc-root-main"]
     env:
       AUTOKERNEL_LOOP_STORE_ROOT: /mnt/raid0/llm/tmp/aku12a-glm53-five-loop-store
     health_path: /health
