@@ -63,10 +63,12 @@ from src.autopilot_core.journal_reconstruction import (
 )
 from src.autopilot_core.journal_snapshot_replay import archive_payload_from_verified_snapshot
 from src.autopilot_core.infra_fingerprint import (
+    NON_COMPARABLE as INFRA_NON_COMPARABLE,
     collect_infra_fingerprint,
     compare_infra_fingerprints,
     fingerprint_digest,
 )
+from src.autopilot_core import ap55_promotion_gate
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from src.autopilot_core.measurement_guards import (
     is_quality_admissible as _is_quality_admissible,
@@ -350,6 +352,13 @@ SEQ_PRIOR_OBS_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_PRIOR_OBS_LIMIT", "120")
 # the axis (conservative: no rate evidence => no baseline ratchet), never substitutes a guess.
 SEQ_BASELINE_RATE_MIN_TRIALS = int(os.environ.get("AUTOPILOT_SEQ_BASELINE_RATE_MIN_TRIALS", "3"))
 SEQ_BASELINE_REFRESH_CADENCE = int(os.environ.get("AUTOPILOT_SEQ_BASELINE_REFRESH_CADENCE", "10"))
+# AP-55 (b): a baseline-reference draw (the incumbent's seed re-run) measured in a
+# different infra regime cannot anchor a comparison, so a regime change makes a
+# re-run due. The minimum spacing keeps a churning fingerprint (e.g. a tracked file
+# edited under a running daemon) from turning every other trial into a re-run.
+AP55_REGIME_REFRESH_MIN_TRIALS = int(
+    os.environ.get("AUTOPILOT_AP55_REGIME_REFRESH_MIN_TRIALS", "3")
+)
 SEQ_BASELINE_BLOCK_RETRY_CADENCE = int(
     os.environ.get("AUTOPILOT_SEQ_BASELINE_BLOCK_RETRY_CADENCE", "5")
 )
@@ -1682,8 +1691,14 @@ def _latest_seq_baseline_reference_vector(
     journal: ExperimentJournal,
     *,
     tier: int,
+    candidate_fingerprint: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Return the latest trusted marked baseline-reference vector for a tier."""
+    """Return the latest trusted marked baseline-reference vector for a tier.
+
+    AP-55 (b): with ``candidate_fingerprint``, a reference draw from a different
+    infra regime (NON_COMPARABLE) is skipped; the chosen draw's regime verdict is
+    returned as ``regime`` (UNVERIFIED for an unfingerprinted legacy draw).
+    """
     for entry in reversed(journal.entries_with_supersessions()):
         if getattr(entry, "bug_corrupted_by", ""):
             continue
@@ -1699,6 +1714,13 @@ def _latest_seq_baseline_reference_vector(
             continue
         if not eval_details.get("seq_baseline_reference_draw"):
             continue
+        regime = ""
+        if candidate_fingerprint is not None:
+            regime = compare_infra_fingerprints(
+                candidate_fingerprint, getattr(entry, "infra_fingerprint", None)
+            )["status"]
+            if regime == INFRA_NON_COMPARABLE:
+                continue
         vector = _question_outcome_vector(
             eval_details.get("question_results"),
             trial_id=getattr(entry, "trial_id", None),
@@ -1709,6 +1731,7 @@ def _latest_seq_baseline_reference_vector(
                 "timestamp": getattr(entry, "timestamp", ""),
                 "reason": eval_details.get("seq_baseline_reference_reason", ""),
                 "vector": vector,
+                "regime": regime,
             }
     return None
 
@@ -1720,6 +1743,7 @@ def _seq_paired_baseline_diagnostics(
     candidate: str,
     candidate_trial_id: int,
     question_results: Any,
+    candidate_fingerprint: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Observation-only same-qid baseline/candidate paired evidence."""
     candidate_vector = _question_outcome_vector(
@@ -1733,7 +1757,9 @@ def _seq_paired_baseline_diagnostics(
             "candidate_trial_id": candidate_trial_id,
             "used_for_gating": False,
         }
-    baseline = _latest_seq_baseline_reference_vector(journal, tier=tier)
+    baseline = _latest_seq_baseline_reference_vector(
+        journal, tier=tier, candidate_fingerprint=candidate_fingerprint
+    )
     if baseline is None:
         return {
             "status": "no_baseline_reference_vector",
@@ -1764,6 +1790,7 @@ def _seq_paired_baseline_diagnostics(
             "baseline_reference_trial_id": baseline.get("trial_id"),
             "baseline_reference_timestamp": baseline.get("timestamp", ""),
             "baseline_reference_reason": baseline.get("reason", ""),
+            "baseline_reference_regime": baseline.get("regime", ""),
             "baseline_reference_vector_qids": len(baseline["vector"]),
             "comparison": "latest_seq_baseline_reference_vs_candidate",
             "method": "exact_mcnemar_sign_test",
@@ -1790,14 +1817,24 @@ def _seq_baseline_reference_state(
     *,
     tier: int,
     now_ts: float | None = None,
+    current_fingerprint: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return freshness/cadence state for the seq baseline reference profile."""
+    """Return freshness/cadence state for the seq baseline reference profile.
+
+    AP-55 (b): with ``current_fingerprint``, the latest reference draw is also
+    checked against the current infra regime. ``regime_due`` is set when that draw
+    is NON_COMPARABLE or carries no fingerprint (a pre-AP-55 row, read as-is), and
+    at least ``AP55_REGIME_REFRESH_MIN_TRIALS`` trials have run since it. UNVERIFIED
+    (e.g. a declared-only kernel) does not make a re-run due: another draw could
+    not verify it either.
+    """
     now = time.time() if now_ts is None else float(now_ts)
     trusted_profile_trials = 0
     trials_since_reference = 0
     latest_profile_trial_id = None
     latest_reference_trial_id = None
     latest_reference_ts = None
+    latest_reference_fp: Any = None
 
     for entry in reversed(journal.entries_with_supersessions()):
         if getattr(entry, "bug_corrupted_by", ""):
@@ -1823,6 +1860,7 @@ def _seq_baseline_reference_state(
         if latest_reference_trial_id is None and eval_details.get("seq_baseline_reference_draw"):
             latest_reference_trial_id = getattr(entry, "trial_id", None)
             latest_reference_ts = entry_ts
+            latest_reference_fp = getattr(entry, "infra_fingerprint", None)
         elif latest_reference_trial_id is None:
             trials_since_reference += 1
 
@@ -1841,6 +1879,29 @@ def _seq_baseline_reference_state(
     elif trials_since_reference >= SEQ_BASELINE_REFRESH_CADENCE:
         reason = f"{trials_since_reference} trusted profile trials since baseline reference draw"
 
+    regime: dict[str, Any] | None = None
+    regime_due = False
+    if (
+        current_fingerprint is not None
+        and fingerprint_digest(current_fingerprint)
+        and latest_reference_trial_id is not None
+    ):
+        if not fingerprint_digest(latest_reference_fp):
+            regime = {"status": "UNFINGERPRINTED", "differing_components": []}
+        else:
+            regime = compare_infra_fingerprints(
+                current_fingerprint, latest_reference_fp,
+                reference_label=f"seq_baseline_reference_{latest_reference_trial_id}",
+            )
+        regime_due = (
+            regime["status"] in (INFRA_NON_COMPARABLE, "UNFINGERPRINTED")
+            and trials_since_reference >= max(0, AP55_REGIME_REFRESH_MIN_TRIALS)
+        )
+        if regime_due:
+            due = True
+            moved = ",".join(regime.get("differing_components") or []) or "no fingerprint"
+            reason = f"infra regime changed since baseline reference draw ({moved})"
+
     return {
         "tier": int(tier),
         "trusted_profile_trials": trusted_profile_trials,
@@ -1852,6 +1913,8 @@ def _seq_baseline_reference_state(
         "stale_reference": bool(stale_reference),
         "due": bool(due),
         "reason": reason,
+        "regime_status": regime["status"] if regime else "",
+        "regime_due": bool(regime_due),
     }
 
 
@@ -2203,11 +2266,19 @@ def _maybe_force_seq_baseline_draw(
     trial_counter: int,
     enabled: bool,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
-    """Force the 01c baseline-reference cadence when seq shadowing is enabled."""
-    if not enabled:
+    """Force the 01c baseline-reference cadence when seq shadowing is enabled.
+
+    AP-55 (b): a regime change since the last reference draw also makes a draw due.
+    With seq disabled, ``AUTOPILOT_AP55_SEED_RERUN=1`` forces ONLY those
+    regime-triggered re-runs (the cadence/staleness reasons stay seq-only).
+    """
+    ap55_force = _ap55_seed_rerun_forcing_enabled()
+    if not enabled and not ap55_force:
         return action, rationale, None
-    reference = _seq_baseline_reference_state(journal, tier=tier)
-    if not reference["due"]:
+    reference = _seq_baseline_reference_state(
+        journal, tier=tier, current_fingerprint=_infra_fingerprint_for_trial()
+    )
+    if not (reference["due"] if enabled else reference.get("regime_due")):
         return action, rationale, None
 
     forced = _seq_baseline_draw_action()
@@ -5040,6 +5111,10 @@ def _build_rejected_config_feedback(journal: Any) -> str:
 BASELINE_INFRA_FINGERPRINTS_STATE_KEY = "baseline_infra_fingerprints"
 
 
+def _ap55_seed_rerun_forcing_enabled() -> bool:
+    return os.environ.get("AUTOPILOT_AP55_SEED_RERUN", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _infra_fingerprint_for_trial() -> dict[str, Any]:
     """AP-55: capture the infra regime (never raises, zero inference)."""
     try:
@@ -5091,6 +5166,60 @@ def _infra_comparability_for_trial(
         return verdict
     except Exception as exc:  # noqa: BLE001
         return {"status": "UNVERIFIED", "reason": f"comparability error: {exc}"[:200]}
+
+
+def _question_outcome_counts(question_results: Any) -> tuple[int, int]:
+    """(correct, scored) over quality-admissible outcomes (CJ-8 exclusions apply)."""
+    outcomes = _question_outcome_map(question_results)
+    return sum(1 for ok in outcomes.values() if ok), len(outcomes)
+
+
+def _ap55_promotion_gate_for_trial(
+    journal: Any,
+    *,
+    tier: int,
+    baseline_pin: Mapping[str, Any] | None,
+    candidate_action: Mapping[str, Any],
+    question_results: Any,
+    trial_fingerprint: Mapping[str, Any],
+) -> dict[str, Any]:
+    """AP-55 (b)+(c): same-regime seed re-run and batch homogeneity, before a winner.
+
+    The batch is every trusted journal row of this tier judged against the same
+    baseline revision (EV-14e pin) in this trial's regime, pooled by config
+    fingerprint, plus this candidate. Rows without a pin or a fingerprint are
+    excluded as they are — never back-filled. Mode: AUTOPILOT_AP55_PROMOTION_GATE
+    (shadow by default: recorded, never binding). Never raises.
+    """
+    try:
+        entries = (
+            journal.entries_with_supersessions()
+            if hasattr(journal, "entries_with_supersessions")
+            else journal.all_entries()
+        )
+        revision = baseline_pin.get("baseline_revision") if isinstance(baseline_pin, Mapping) else None
+
+        def _key(row: Any) -> str:
+            snap = getattr(row, "config_snapshot", None)
+            return _config_fingerprint(snap) if isinstance(snap, dict) and snap else ""
+
+        return ap55_promotion_gate.promotion_gate(
+            entries,
+            tier=int(tier),
+            baseline_revision=revision,
+            candidate_key=_config_fingerprint(dict(candidate_action)),
+            candidate_counts=_question_outcome_counts(question_results),
+            candidate_fingerprint=trial_fingerprint,
+            counts_fn=lambda row: _question_outcome_counts(
+                (getattr(row, "eval_details", {}) or {}).get("question_results")
+            ),
+            key_fn=_key,
+        )
+    except Exception as exc:  # noqa: BLE001 - provenance must never fail a trial
+        mode = ap55_promotion_gate.gate_mode()
+        hold = mode != "shadow"
+        return {"mode": mode, "status": "error", "error": str(exc)[:200],
+                "hold": hold, "hold_reasons": ["gate_error"] if hold else []}
 
 
 def _record_baseline_infra_fingerprint(
@@ -9637,6 +9766,18 @@ def _run_loop_inner(
         # suppression remains tied to the mad_noise/reproduction_confirmed tag (criticism
         # below). Non-trusted exclusions (exogenous reload, etc.) still skip entirely.
         baseline_update = None
+        # AP-55 (b)+(c): evaluated before any winner is named; binding only when the
+        # operator arms AUTOPILOT_AP55_PROMOTION_GATE (enforce|strict).
+        ap55_gate = _ap55_promotion_gate_for_trial(
+            journal,
+            tier=int(getattr(eval_result, "tier", 0) or 0),
+            baseline_pin=baseline_pin_record,
+            candidate_action=effective_action,
+            question_results=list(getattr(eval_result, "question_results", []) or []),
+            trial_fingerprint=trial_infra_fingerprint,
+        )
+        if isinstance(trial_comparability, dict):
+            trial_comparability["promotion_gate"] = ap55_gate
         # W3 flip (2026-08-04): axis 1 of the live dominance vector is questions/hour, so a
         # trial that did not MEASURE a rate cannot be placed on the frontier — the pre-flip
         # `task_rate_qph_from` returned 0.0 for "unavailable" on 128 of 1466 journal rows,
@@ -9763,6 +9904,13 @@ def _run_loop_inner(
                         MULTITIER_POLICY_VERSION,
                         eligibility_reason,
                     )
+            elif ap55_gate.get("hold"):
+                log.info(
+                    "Trial %d: baseline promotion HELD by AP-55 (%s, mode=%s)",
+                    trial_counter,
+                    ",".join(ap55_gate.get("hold_reasons") or []),
+                    ap55_gate.get("mode"),
+                )
             else:
                 # Runs whether or not the RATE was measured: this promotes on QUALITY.
                 seq_confirmed = (
@@ -9789,6 +9937,7 @@ def _run_loop_inner(
             and multitier_validation_context.get("stage") == "final_t1"
             and baseline_update is None
             and bool(verdict)
+            and not ap55_gate.get("hold")
         ):
             seq_confirmed = (
                 bool(verdict.seq.get("baseline_promotion_finalized"))
@@ -10011,6 +10160,7 @@ def _run_loop_inner(
                     candidate=str(seq_inputs.get("candidate") or ""),
                     candidate_trial_id=trial_counter,
                     question_results=list(getattr(eval_result, "question_results", []) or []),
+                    candidate_fingerprint=trial_infra_fingerprint,
                 )
             except Exception as _paired_err:  # observe-only must never disrupt the loop
                 log.debug(
@@ -10198,6 +10348,9 @@ def _run_loop_inner(
         # AP-55: eval-side consumers read eval_details, so stamp the regime there too.
         eval_details_dict["infra_fingerprint_digest"] = fingerprint_digest(trial_infra_fingerprint)
         eval_details_dict["infra_comparability"] = trial_comparability.get("status", "")
+        eval_details_dict["ap55_promotion_gate"] = ap55_promotion_gate.gate_summary(
+            trial_comparability.get("promotion_gate")
+        )
         journal_entry = JournalEntry(
             trial_id=trial_counter,
             timestamp=datetime.now(timezone.utc).isoformat(),

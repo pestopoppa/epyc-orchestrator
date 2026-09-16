@@ -33,6 +33,13 @@ them, so :func:`compare_infra_fingerprints` can name WHICH component moved.
 Volatile facts (server PIDs, start times) are recorded under ``observed`` and
 excluded from every digest: a restart of an identical server is the same regime.
 
+The kernel component says where its identity came from: ``kernel_evidence`` is
+``"live"`` when at least one running server's ``/proc`` entry was readable, and
+``"declared_only"`` when only the on-disk ``llama-server`` could be hashed (for
+example inside a container that cannot see the stack's PIDs). A declared-only
+kernel can prove a regime CHANGED (the on-disk binaries differ) but never that
+two regimes are the same, so it compares as UNVERIFIED, never COMPARABLE.
+
 A component that cannot be read is recorded as ``{"status": "unavailable"}``
 rather than omitted or guessed; two unavailable components compare as unknown,
 never as equal, so a missing read can never manufacture comparability.
@@ -303,6 +310,44 @@ def _kernel_component(
     })
 
 
+KERNEL_EVIDENCE_LIVE = "live"
+KERNEL_EVIDENCE_DECLARED_ONLY = "declared_only"
+KERNEL_EVIDENCE_UNKNOWN = "unknown"
+
+
+def kernel_evidence(fingerprint: Mapping[str, Any] | None) -> str:
+    """How the kernel identity was obtained: live / declared_only / unknown.
+
+    Uses the explicit ``kernel_evidence`` field when present; otherwise derives it
+    from the stored kernel component (rows written on 2026-09-16 before the field
+    existed carry the component, so they are read, never back-filled). A
+    fingerprint with neither is ``unknown``, which never compares as COMPARABLE.
+    """
+    if not isinstance(fingerprint, Mapping):
+        return KERNEL_EVIDENCE_UNKNOWN
+    explicit = fingerprint.get("kernel_evidence")
+    if explicit in (KERNEL_EVIDENCE_LIVE, KERNEL_EVIDENCE_DECLARED_ONLY):
+        return str(explicit)
+    comp = (fingerprint.get("components") or {}).get("kernel")
+    if not isinstance(comp, Mapping) or comp.get("status") == "unavailable":
+        return KERNEL_EVIDENCE_UNKNOWN
+    if comp.get("live_binaries"):
+        return KERNEL_EVIDENCE_LIVE
+    if "live_binaries" in comp:
+        return KERNEL_EVIDENCE_DECLARED_ONLY
+    return KERNEL_EVIDENCE_UNKNOWN
+
+
+def _declared_kernel_digest(fingerprint: Mapping[str, Any]) -> str | None:
+    comp = (fingerprint.get("components") or {}).get("kernel")
+    if not isinstance(comp, Mapping):
+        return None
+    declared = comp.get("declared_binaries")
+    if not isinstance(declared, Mapping) or not any(declared.values()):
+        return None
+    return _digest(dict(declared))
+
+
 def _models_component(stack_state: Mapping[str, Any] | None) -> dict[str, Any]:
     roles: dict[str, dict[str, Any]] = {}
     started: dict[str, Any] = {}
@@ -415,7 +460,7 @@ def collect_infra_fingerprint(
                 components[name] = builders[name]()
             except Exception as exc:  # noqa: BLE001 - a component failure is data
                 components[name] = _unavailable(f"{type(exc).__name__}: {exc}")
-        return {
+        fingerprint = {
             "schema_version": INFRA_FINGERPRINT_SCHEMA_VERSION,
             "captured_at": datetime.now(timezone.utc).isoformat(),
             "components": components,
@@ -430,6 +475,9 @@ def collect_infra_fingerprint(
                 if comp.get("status") == "unavailable"
             ),
         }
+        # Outside every digest: it describes the evidence, not the regime.
+        fingerprint["kernel_evidence"] = kernel_evidence(fingerprint)
+        return fingerprint
     except Exception as exc:  # noqa: BLE001 - provenance must never fail a trial
         return {
             "schema_version": INFRA_FINGERPRINT_SCHEMA_VERSION,
@@ -454,6 +502,10 @@ def compare_infra_fingerprints(
     """Decide whether two measurements share one infra regime.
 
     ``NON_COMPARABLE`` when any component readable on BOTH sides differs.
+    The kernel is compared on its full (live) digest only when both sides read
+    live server processes; otherwise on the declared on-disk binary digest, where
+    a difference is NON_COMPARABLE and a match is only UNVERIFIED
+    (``kernel_basis`` records which basis was used).
     ``UNVERIFIED`` when either side has no fingerprint, or when no difference was
     found but some component could not be read on at least one side — absence
     of evidence is not comparability. ``COMPARABLE`` only when every component
@@ -466,6 +518,7 @@ def compare_infra_fingerprints(
         "reference_digest": fingerprint_digest(reference),
         "differing_components": [],
         "unverified_components": [],
+        "kernel_basis": "",
     }
     if not out["candidate_digest"] or not out["reference_digest"]:
         missing = []
@@ -478,8 +531,19 @@ def compare_infra_fingerprints(
         return out
     cand = candidate.get("component_digests") or {}
     ref = reference.get("component_digests") or {}
+    evidence = (kernel_evidence(candidate), kernel_evidence(reference))
     for name in COMPONENTS:
         a, b = cand.get(name), ref.get(name)
+        if name == "kernel" and evidence != (KERNEL_EVIDENCE_LIVE, KERNEL_EVIDENCE_LIVE):
+            da, db = _declared_kernel_digest(candidate), _declared_kernel_digest(reference)
+            out["kernel_basis"] = "declared_only"
+            if da and db and da != db:
+                out["differing_components"].append(name)
+            else:
+                out["unverified_components"].append(name)
+            continue
+        if name == "kernel":
+            out["kernel_basis"] = "live"
         if not a or not b:
             out["unverified_components"].append(name)
         elif a != b:
