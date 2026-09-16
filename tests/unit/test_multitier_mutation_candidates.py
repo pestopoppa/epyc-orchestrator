@@ -327,14 +327,14 @@ def _ctx(root, state):
 
 def test_restore_writes_and_attests_the_preimage(served):
     result = actions._restore_mutation_preimage(
-        _ctx(served.root, {}), served.record["restore"]
+        _ctx(served.root, {}), served.record["restore"], served.record
     )
     assert result["status"] == "ok" and served.target.read_text() == "original v1"
 
 
 def test_restore_attestation_fails_on_wrong_sha(served):
     bad = dict(served.record["restore"], preimage_sha256=_sha("something else"))
-    result = actions._restore_mutation_preimage(_ctx(served.root, {}), bad)
+    result = actions._restore_mutation_preimage(_ctx(served.root, {}), bad, served.record)
     assert result["status"] == "error" and "attestation failed" in result["error"]
 
 
@@ -344,7 +344,8 @@ def test_restore_removes_a_rejected_new_file(served):
     new.write_text("X = 1\n")
     restore = {"kind": "code", "file": "src/new_module.py", "new_file": True,
                "preimage": "", "preimage_sha256": _sha("")}
-    result = actions._restore_mutation_preimage(_ctx(served.root, {}), restore)
+    record = {"files": {"src/new_module.py": _sha("X = 1\n")}}
+    result = actions._restore_mutation_preimage(_ctx(served.root, {}), restore, record)
     assert result == {"status": "ok", "file": "src/new_module.py", "removed": True}
     assert not new.exists()
 
@@ -355,13 +356,16 @@ def test_rollback_action_restores_a_mutation_candidate(served, monkeypatch):
     state["multitier_rollback_pending"] = True
     checkpoints = []
     ctx = _ctx(served.root, state)
-    ctx.lab = SimpleNamespace(restore_checkpoint=lambda *a: checkpoints.append(a) or {"status": "ok"})
+    ctx.lab = SimpleNamespace(
+        restore_checkpoint=lambda *a, **kw: checkpoints.append(kw) or {"status": "ok"}
+    )
     outcome, _species = actions._action_rollback(
         {"type": "rollback", "to_checkpoint": "production_best"}, ctx
     )
     assert outcome == "evaluated"
     assert served.target.read_text() == "original v1"
-    assert checkpoints and "multitier_rollback_pending" not in state
+    assert checkpoints == [{"restore_prompts": False}]
+    assert "multitier_rollback_pending" not in state
     assert state["multitier_last_event"]["runtime_restore"]["status"] == "ok"
 
 
@@ -371,7 +375,7 @@ def test_rollback_action_fails_closed_without_preimage(served):
     state[autopilot.MULTITIER_PENDING_STATE_KEY].pop("candidate_restore")
     state["multitier_rollback_pending"] = True
     ctx = _ctx(served.root, state)
-    ctx.lab = SimpleNamespace(restore_checkpoint=lambda *a: {"status": "ok"})
+    ctx.lab = SimpleNamespace(restore_checkpoint=lambda *a, **kw: {"status": "ok"})
     outcome, _species = actions._action_rollback(
         {"type": "rollback", "to_checkpoint": "production_best"}, ctx
     )
@@ -406,3 +410,259 @@ def test_no_new_promotion_call_site_for_the_ap55_hold_pattern():
     source = Path(autopilot.__file__).read_text()
     body = source[source.index("def _run_loop_inner(") :]
     assert body.count("gate.update_baseline(\n") == 3
+
+
+# ── review of c12f17f5 ────────────────────────────────────────────────────
+
+
+def _rejected_state(served):
+    state = _state()
+    _stage(state, served.record)
+    state[autopilot.MULTITIER_PENDING_STATE_KEY]["status"] = "rejected"
+    state["multitier_rollback_pending"] = True
+    return state
+
+
+def test_fix1_unrelated_prompt_edit_survives_rollback(served, monkeypatch):
+    """The real checkpoint restore: only the candidate's file is restored."""
+    from species import structural_lab as sl
+
+    cp = served.root / "checkpoints" / "production_best"
+    (cp / "prompts").mkdir(parents=True)
+    (cp / "prompts" / "frontdoor.md").write_text("checkpoint frontdoor")
+    (cp / "prompts" / "worker.md").write_text("checkpoint worker")
+    prompts = served.root / "orchestration" / "prompts"
+    (prompts / "worker.md").write_text("operator edit, not in any checkpoint")
+    for name, value in {
+        "CHECKPOINT_DIR": served.root / "checkpoints",
+        "PROMPTS_DIR": prompts,
+        "CHECKPOINT_FILES": {},
+        "CLASSIFIER_CONFIG": served.root / "classifier_config.yaml",
+        "AP22_MEMORY": served.root / "ap22.md",
+        "STRATEGY_STORE_DIR": served.root / "strategies",
+    }.items():
+        monkeypatch.setattr(sl, name, value)
+    state = _rejected_state(served)
+    ctx = _ctx(served.root, state)
+    ctx.lab = object.__new__(sl.StructuralLab)
+    outcome, _species = actions._action_rollback(
+        {"type": "rollback", "to_checkpoint": "production_best"}, ctx
+    )
+    assert outcome == "evaluated"
+    assert (prompts / "worker.md").read_text() == "operator edit, not in any checkpoint"
+    assert served.target.read_text() == "original v1"  # final state, not the checkpoint copy
+    final = state["multitier_last_event"]["runtime_restore"]["final_attestation"]
+    assert final["status"] == "ok"
+
+
+def test_fix1_final_attestation_catches_a_later_overwrite(served):
+    state = _rejected_state(served)
+    ctx = _ctx(served.root, state)
+
+    def clobbering_restore(*a, **kw):
+        served.target.write_text("overwritten after the preimage write")
+        return {"status": "ok"}
+
+    ctx.lab = SimpleNamespace(restore_checkpoint=clobbering_restore)
+    outcome, _species = actions._action_rollback(
+        {"type": "rollback", "to_checkpoint": "production_best"}, ctx
+    )
+    assert outcome.status == "skipped" and "attestation failed" in outcome.reason
+    assert state["multitier_rollback_pending"] is True
+
+
+def test_fix2_external_change_is_not_overwritten(served, monkeypatch):
+    alarms = []
+    monkeypatch.setattr(actions, "_raise_rollback_alarm", lambda *a: alarms.append(a))
+    state = _rejected_state(served)
+    served.target.write_text("operator's own fix after staging")
+    checkpoints = []
+    ctx = _ctx(served.root, state)
+    ctx.lab = SimpleNamespace(restore_checkpoint=lambda *a, **kw: checkpoints.append(kw))
+    outcome, _species = actions._action_rollback(
+        {"type": "rollback", "to_checkpoint": "production_best"}, ctx
+    )
+    assert served.target.read_text() == "operator's own fix after staging"
+    assert checkpoints == []  # nothing else touched either
+    assert outcome.status == "skipped" and outcome.reason.startswith("rejected_external_change")
+    assert not getattr(outcome, "bug_corrupted_by", "")
+    assert autopilot.MULTITIER_PENDING_STATE_KEY not in state
+    assert "multitier_rollback_pending" not in state
+    assert state["multitier_last_rejected"]["status"] == "rejected_external_change"
+    assert "candidate_restore" not in state["multitier_last_rejected"]
+    assert alarms and alarms[0][0] == actions.ROLLBACK_EXTERNAL_CHANGE_ALARM_KEY
+    # The loop no longer re-forces a rollback.
+    assert autopilot._maybe_force_multitier_due_action(
+        state=state, blacklist=[], trial_counter=99
+    ) == (None, None, None)
+
+
+def test_fix2_deleted_file_is_an_external_change(served, monkeypatch):
+    monkeypatch.setattr(actions, "_raise_rollback_alarm", lambda *a: None)
+    result = actions._restore_mutation_preimage(
+        _ctx(served.root, {}), served.record["restore"], served.record
+    )
+    assert result["status"] == "ok"
+    served.target.unlink()
+    result = actions._restore_mutation_preimage(
+        _ctx(served.root, {}), served.record["restore"], served.record
+    )
+    assert result["status"] == "external_change" and not served.target.exists()
+
+
+def test_fix4_preimage_never_lingers_in_rejected_or_accepted_copies(served):
+    state = _state()
+    _stage(state, served.record)
+    autopilot._reject_multitier_candidate(
+        state, state[autopilot.MULTITIER_PENDING_STATE_KEY], reason="x", trial_counter=1
+    )
+    assert "candidate_restore" not in state["multitier_last_rejected"]
+    assert "candidate_restore" in state[autopilot.MULTITIER_PENDING_STATE_KEY]  # still pending
+    _, _, context = autopilot._maybe_force_multitier_due_action(
+        state=state, blacklist=[], trial_counter=2
+    )
+    assert context["stage"] == "rollback" and "candidate_restore" not in context
+
+    state = _state()
+    _stage(state, served.record)
+    pending = state[autopilot.MULTITIER_PENDING_STATE_KEY]
+    pending["next_tier"] = "final_t1"
+    autopilot._finish_multitier_promotion(
+        state, baseline_update=SimpleNamespace(updated=True, reason="ok"), trial_counter=3
+    )
+    assert "candidate_restore" not in state["multitier_last_accepted"]
+    assert "candidate_restore" not in str(state)
+
+
+def test_fix5_attempt_cap_never_below_the_reproduction_bar(monkeypatch):
+    import safety_gate
+
+    monkeypatch.setattr(autopilot, "MULTITIER_MAX_ATTEMPTS_PER_TIER", 1)
+    monkeypatch.delenv(safety_gate.EMPTY_FRONTIER_MIN_REPRO_ENV, raising=False)
+    assert autopilot._multitier_attempt_cap() == 3
+    monkeypatch.setenv(safety_gate.EMPTY_FRONTIER_MIN_REPRO_ENV, "5")
+    assert autopilot._multitier_attempt_cap() == 5
+    monkeypatch.setattr(autopilot, "MULTITIER_MAX_ATTEMPTS_PER_TIER", 7)
+    assert autopilot._multitier_attempt_cap() == 7
+
+
+def test_fix5_final_t1_is_not_rejected_before_it_can_reproduce(served, monkeypatch):
+    import safety_gate
+
+    monkeypatch.setattr(autopilot, "MULTITIER_MAX_ATTEMPTS_PER_TIER", 1)
+    monkeypatch.delenv(safety_gate.EMPTY_FRONTIER_MIN_REPRO_ENV, raising=False)
+    state = _state()
+    _stage(state, served.record)
+    pending = state[autopilot.MULTITIER_PENDING_STATE_KEY]
+    pending["next_tier"] = "final_t1"
+    refused = SimpleNamespace(updated=False, reason="needs >= 3 reproductions; source has 2")
+    for attempt in (1, 2):
+        pending["final_t1_attempts"] = attempt
+        autopilot._finish_multitier_promotion(state, baseline_update=refused, trial_counter=attempt)
+        assert pending["status"] == "pending", attempt
+    pending["final_t1_attempts"] = 3
+    autopilot._finish_multitier_promotion(state, baseline_update=refused, trial_counter=3)
+    assert pending["status"] == "rejected"
+
+
+def test_fix6_rollback_failures_are_bounded_and_alarmed(served, monkeypatch):
+    alarms = []
+    monkeypatch.setattr(actions, "_raise_rollback_alarm", lambda *a: alarms.append(a))
+    state = _rejected_state(served)
+    state[autopilot.MULTITIER_PENDING_STATE_KEY].pop("candidate_restore")
+    ctx = _ctx(served.root, state)
+    ctx.lab = SimpleNamespace(restore_checkpoint=lambda *a, **kw: {"status": "ok"})
+    for _ in range(actions.MULTITIER_ROLLBACK_MAX_FAILURES):
+        forced, _, _ = autopilot._maybe_force_multitier_due_action(
+            state=state, blacklist=[], trial_counter=5
+        )
+        assert forced["type"] == "rollback"
+        actions._action_rollback(forced, ctx)
+    assert state["multitier_rollback_stalled"]["failures"] == actions.MULTITIER_ROLLBACK_MAX_FAILURES
+    assert [a[0] for a in alarms] == [actions.ROLLBACK_STALLED_ALARM_KEY]
+    assert autopilot._maybe_force_multitier_due_action(
+        state=state, blacklist=[], trial_counter=6
+    ) == (None, None, None)
+    eligible, reason = autopilot._multitier_candidate_is_eligible(
+        state={k: v for k, v in state.items() if k != autopilot.MULTITIER_PENDING_STATE_KEY},
+        gate=_gate(), action={"type": "numeric_trial", "params": {"x": 1}},
+        eval_result=SimpleNamespace(tier=1, quality=1.5), verdict=_Verdict(),
+        pareto_status="frontier",
+    )
+    assert eligible is False and "stalled" in reason
+
+
+# ── fix 3: autopilot commits carry only the files they touched ────────────
+
+
+def _git(repo, *args):
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    ).stdout
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    from species import prompt_forge as pf
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.invalid")
+    _git(root, "config", "user.name", "t")
+    (root / "touched.md").write_text("v1")
+    (root / "unrelated.md").write_text("u1")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "init")
+    monkeypatch.setattr(pf, "PROJECT_ROOT", root)
+    return root
+
+
+def test_fix3_commit_excludes_staged_and_dirty_unrelated_files(repo):
+    from species.prompt_forge import PromptForge
+
+    (repo / "unrelated.md").write_text("operator staged work")
+    _git(repo, "add", "unrelated.md")
+    (repo / "dirty.md").write_text("untracked")
+    (repo / "touched.md").write_text("v2")
+    assert PromptForge._git_commit_paths([repo / "touched.md"], "autopilot: touch")
+    assert _git(repo, "show", "--name-only", "--format=", "HEAD").split() == ["touched.md"]
+    assert "unrelated.md" in _git(repo, "diff", "--cached", "--name-only")  # still staged
+    assert _git(repo, "show", "HEAD:unrelated.md") == "u1"
+
+
+def test_fix3_prompt_commit_without_path_refuses_to_sweep(repo):
+    from species.prompt_forge import PromptForge
+
+    forge = PromptForge(prompts_dir=repo, auto_commit=True)
+    (repo / "unrelated.md").write_text("dirty")
+    before = _git(repo, "rev-parse", "HEAD")
+    forge._git_commit("autopilot: sweep?")
+    assert _git(repo, "rev-parse", "HEAD") == before
+
+
+def test_fix3_new_file_revert_commits_only_the_deletion(repo):
+    from species.prompt_forge import CodeMutation, PromptForge
+
+    (repo / "new_module.py").write_text("X = 1\n")
+    assert PromptForge._git_commit_paths([repo / "new_module.py"], "autopilot: add")
+    (repo / "unrelated.md").write_text("operator staged work")
+    _git(repo, "add", "unrelated.md")
+    forge = PromptForge(prompts_dir=repo, auto_commit=True)
+    forge.revert_code_mutation(
+        CodeMutation(file="new_module.py", mutation_type="new_file", description="d",
+                     original_content="")
+    )
+    assert not (repo / "new_module.py").exists()
+    assert _git(repo, "show", "--name-only", "--format=", "HEAD").split() == ["new_module.py"]
+    assert "unrelated.md" in _git(repo, "diff", "--cached", "--name-only")
+
+
+def test_fix3_no_bare_commit_left_in_prompt_forge():
+    from species import prompt_forge as pf
+
+    source = Path(pf.__file__).read_text()
+    assert source.count('"commit"') + source.count("'commit'") == 1
+    assert '"git", "commit", "--only"' in source

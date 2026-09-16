@@ -103,14 +103,77 @@ def _mutation_restore(kind: str, mutation: Any) -> dict[str, Any] | None:
     }
 
 
-def _restore_mutation_preimage(ctx: "_ActionContext", restore: Any) -> dict[str, Any]:
-    """Multitier rollback of a rejected mutation candidate: write the preimage back, verify."""
+MULTITIER_ROLLBACK_MAX_FAILURES = max(
+    1, int(os.environ.get("AUTOPILOT_MULTITIER_ROLLBACK_MAX_FAILURES", "3") or 3)
+)
+ROLLBACK_EXTERNAL_CHANGE_ALARM_KEY = "autopilot-multitier-rollback-external-change"
+ROLLBACK_STALLED_ALARM_KEY = "autopilot-multitier-rollback-stalled"
+
+
+def _mutation_target_path(ctx: "_ActionContext", restore: dict[str, Any]) -> Path:
+    target = str(restore.get("file") or "")
+    if restore.get("kind") == "prompt":
+        return Path(ctx.forge._resolve_prompt_path(target))
+    return ORCH_ROOT / target
+
+
+def _file_sha(path: Path) -> str | None:
     import hashlib
 
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return None
+
+
+def _mutation_served_sha(ctx: "_ActionContext", restore: dict[str, Any], served: Any) -> str | None:
+    """The sha the candidate served for its target file (from the staged identity)."""
+    files = (served or {}).get("files") if isinstance(served, dict) else None
+    if not isinstance(files, dict):
+        return None
+    path = _mutation_target_path(ctx, restore).resolve()
+    for rel, sha in files.items():
+        if (ORCH_ROOT / rel).resolve() == path:
+            return str(sha)
+    return None
+
+
+def _restore_mutation_preimage(
+    ctx: "_ActionContext", restore: Any, served: Any = None
+) -> dict[str, Any]:
+    """Multitier rollback of a rejected mutation candidate: write the preimage back.
+
+    Writes ONLY when the file still holds exactly the content the candidate served. If the
+    file changed since staging (an operator edit, a pull, a merge), the change is not the
+    candidate's to undo: nothing is written and ``status = "external_change"`` is returned
+    (gate-frontier review fix 2). The final on-disk state is attested separately by
+    :func:`_attest_mutation_restore`, after the checkpoint restore (fix 1).
+    """
     if not isinstance(restore, dict) or not isinstance(restore.get("preimage"), str):
         return {"status": "error", "error": "mutation candidate lacks a restore preimage"}
     kind = restore.get("kind")
     target = str(restore.get("file") or "")
+    if kind not in {"prompt", "code"}:
+        return {"status": "error", "error": f"unknown mutation restore kind: {kind}"}
+    try:
+        path = _mutation_target_path(ctx, restore)
+        expected = _mutation_served_sha(ctx, restore, served)
+        current = _file_sha(path)
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "error": f"mutation restore precheck failed: {exc}"}
+    if expected is None:
+        return {"status": "error", "error": f"no staged served sha for {target}"}
+    if current != expected:
+        return {
+            "status": "external_change",
+            "file": target,
+            "served_sha256": expected,
+            "current_sha256": current,
+            "error": (
+                f"{target} changed since the candidate was staged (served {expected[:12]}, "
+                f"now {(current or 'missing')[:12]}); preimage NOT written"
+            ),
+        }
     try:
         if kind == "prompt":
             from species.prompt_forge import PromptMutation
@@ -123,8 +186,7 @@ def _restore_mutation_preimage(ctx: "_ActionContext", restore: Any) -> dict[str,
                     original_content=restore["preimage"],
                 )
             )
-            path = ctx.forge._resolve_prompt_path(target)
-        elif kind == "code":
+        else:
             from species.prompt_forge import CodeMutation
 
             new_file = bool(restore.get("new_file"))
@@ -136,22 +198,45 @@ def _restore_mutation_preimage(ctx: "_ActionContext", restore: Any) -> dict[str,
                     original_content=restore["preimage"],
                 )
             )
-            path = ORCH_ROOT / target
-            if new_file:
-                if path.exists():
-                    return {"status": "error", "error": f"new_file {target} still present"}
-                return {"status": "ok", "file": target, "removed": True}
-        else:
-            return {"status": "error", "error": f"unknown mutation restore kind: {kind}"}
-        restored_sha = hashlib.sha256(Path(path).read_bytes()).hexdigest()
     except Exception as exc:  # noqa: BLE001 - reported as a rollback failure
         return {"status": "error", "error": f"mutation restore failed: {exc}"}
-    if restored_sha != restore.get("preimage_sha256"):
+    return _attest_mutation_restore(ctx, restore)
+
+
+def _attest_mutation_restore(ctx: "_ActionContext", restore: dict[str, Any]) -> dict[str, Any]:
+    """The on-disk state of the candidate's file equals its preimage (or is absent)."""
+    target = str(restore.get("file") or "")
+    try:
+        path = _mutation_target_path(ctx, restore)
+        current = _file_sha(path)
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "error": f"mutation restore attestation failed: {exc}"}
+    if restore.get("new_file"):
+        if current is not None:
+            return {"status": "error", "error": f"new_file {target} still present"}
+        return {"status": "ok", "file": target, "removed": True}
+    if current != restore.get("preimage_sha256"):
         return {
             "status": "error",
-            "error": f"mutation restore attestation failed for {target}: sha {restored_sha}",
+            "error": f"mutation restore attestation failed for {target}: sha {current}",
         }
-    return {"status": "ok", "file": target, "sha256": restored_sha}
+    return {"status": "ok", "file": target, "sha256": current}
+
+
+def _public_pending_copy(pending: dict[str, Any]) -> dict[str, Any]:
+    """A pending-candidate snapshot without the preimage text (fix 4)."""
+    copy_ = dict(pending)
+    copy_.pop("candidate_restore", None)
+    return copy_
+
+
+def _raise_rollback_alarm(key: str, severity: str, message: str, evidence: dict[str, Any]) -> None:
+    try:
+        from eval_leakage_monitor import AlarmChannelClient
+
+        AlarmChannelClient().raise_alarm(message, evidence, key=key, severity=severity)
+    except Exception as exc:  # noqa: BLE001 - an alarm must never break the rollback path
+        log.error("multitier rollback alarm %s could not be raised: %s", key, exc)
 
 
 def _served_prompt_path(ctx: "_ActionContext", filename: str) -> Path | None:
@@ -2438,6 +2523,33 @@ def _action_deep_eval(action: dict[str, Any], ctx: _ActionContext):
     return eval_result, "seeder"
 
 
+def _count_rollback_failure(ctx: "_ActionContext", reason: str) -> None:
+    """Fix 6: bound the rollback retry loop; past the cap, stall loudly instead of spinning."""
+    failures = int(ctx.state.get("multitier_rollback_failures") or 0) + 1
+    ctx.state["multitier_rollback_failures"] = failures
+    if failures < MULTITIER_ROLLBACK_MAX_FAILURES or ctx.state.get("multitier_rollback_stalled"):
+        return
+    ctx.state["multitier_rollback_stalled"] = {
+        "failures": failures,
+        "reason": reason[:500],
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    log.error(
+        "MULTITIER ROLLBACK STALLED after %d failures: %s. Rollback is no longer re-forced "
+        "and no new candidate is staged until an operator resolves it (remove "
+        "state.multitier_rollback_stalled after restoring production state).",
+        failures,
+        reason,
+    )
+    _raise_rollback_alarm(
+        ROLLBACK_STALLED_ALARM_KEY,
+        "critical",
+        f"AutoPilot multitier rollback failed {failures} times: {reason[:300]}. "
+        "Rollback retries stopped; production state may still hold the rejected candidate.",
+        {"failures": failures, "reason": reason[:300]},
+    )
+
+
 def _action_rollback(action: dict[str, Any], ctx: _ActionContext):
     to_cp = action.get("to_checkpoint", "production_best")
     runtime_restore: dict[str, Any] | None = None
@@ -2452,7 +2564,46 @@ def _action_rollback(action: dict[str, Any], ctx: _ActionContext):
                 "error": "numeric candidate lacks restore preimage",
             }
         elif candidate_type in {"prompt_mutation", "code_mutation", "gepa_optimize"}:
-            runtime_restore = _restore_mutation_preimage(ctx, pending.get("candidate_restore"))
+            runtime_restore = _restore_mutation_preimage(
+                ctx, pending.get("candidate_restore"), pending.get("candidate_served_content")
+            )
+            if runtime_restore.get("status") == "external_change":
+                # Fix 2: the file no longer holds the candidate's content, so there is
+                # nothing of the candidate to undo and someone else's change must survive.
+                # Touch nothing (no preimage write, no checkpoint restore) and retire the
+                # candidate loudly.
+                reason = "rejected_external_change: " + str(runtime_restore.get("error"))
+                pending["status"] = "rejected_external_change"
+                pending["blocked_reason"] = reason
+                ctx.state["multitier_last_rejected"] = _public_pending_copy(pending)
+                ctx.state.pop("multitier_rollback_pending", None)
+                ctx.state.pop("multitier_pending_validation", None)
+                ctx.state.pop("multitier_rollback_failures", None)
+                ctx.state["multitier_last_event"] = {
+                    "event": "rollback_skipped_external_change",
+                    "candidate": pending.get("candidate"),
+                    "runtime_restore": runtime_restore,
+                }
+                log.error(
+                    "MULTITIER ROLLBACK NOT APPLIED — %s. The candidate is retired as "
+                    "rejected_external_change; inspect the file and its history before "
+                    "re-running anything.",
+                    reason,
+                )
+                _raise_rollback_alarm(
+                    ROLLBACK_EXTERNAL_CHANGE_ALARM_KEY,
+                    "warning",
+                    f"AutoPilot multitier rollback skipped: {runtime_restore.get('error')}. "
+                    "The rejected mutation candidate was NOT restored because its file was "
+                    "changed by someone else. Review the file, then clear this alarm.",
+                    {
+                        "file": runtime_restore.get("file"),
+                        "served_sha256": runtime_restore.get("served_sha256"),
+                        "current_sha256": runtime_restore.get("current_sha256"),
+                        "candidate": pending.get("candidate"),
+                    },
+                )
+                return SkipOutcome("skipped", reason, "rollback"), "structural_lab"
         elif candidate_type == "structural_experiment":
             restore_flags = candidate_action.get("_multitier_restore_flags")
             runtime_restore = (
@@ -2482,6 +2633,7 @@ def _action_rollback(action: dict[str, Any], ctx: _ActionContext):
             }
         if runtime_restore.get("status") != "ok":
             reason = f"multitier runtime rollback failed: {runtime_restore}"
+            _count_rollback_failure(ctx, reason)
             return (
                 SkipOutcome(
                     "skipped",
@@ -2492,13 +2644,30 @@ def _action_rollback(action: dict[str, Any], ctx: _ActionContext):
                 ),
                 "structural_lab",
             )
+    mutation_candidate = (
+        ctx.state.get("multitier_rollback_pending")
+        and isinstance(pending, dict)
+        and str((pending.get("candidate_action") or {}).get("type") or "")
+        in {"prompt_mutation", "code_mutation", "gepa_optimize"}
+    )
+    # Fix 1: a mutation candidate's rollback restores only its own file (above). The
+    # checkpoint's prompt copy would overwrite EVERY prompt, including unrelated operator
+    # edits, so it is skipped; the rest of the checkpoint restore still runs.
+    checkpoint_kwargs = {"restore_prompts": False} if mutation_candidate else {}
     if to_cp == "production_best":
-        restore_result = ctx.lab.restore_checkpoint()
+        restore_result = ctx.lab.restore_checkpoint(**checkpoint_kwargs)
     else:
-        restore_result = ctx.lab.restore_checkpoint(Path(to_cp))
+        restore_result = ctx.lab.restore_checkpoint(Path(to_cp), **checkpoint_kwargs)
+    if mutation_candidate and isinstance(restore_result, dict) and restore_result.get("status") == "ok":
+        # Attest the FINAL on-disk state, after everything the rollback wrote.
+        final = _attest_mutation_restore(ctx, pending.get("candidate_restore") or {})
+        runtime_restore = {**(runtime_restore or {}), "final_attestation": final}
+        if final.get("status") != "ok":
+            restore_result = {"status": "error", "error": final.get("error")}
     if ctx.state.get("multitier_rollback_pending"):
         if not isinstance(restore_result, dict) or restore_result.get("status") != "ok":
             reason = f"multitier rollback failed: {restore_result}"
+            _count_rollback_failure(ctx, reason)
             return (
                 SkipOutcome(
                     "skipped",
@@ -2511,6 +2680,8 @@ def _action_rollback(action: dict[str, Any], ctx: _ActionContext):
             )
         ctx.state.pop("multitier_rollback_pending", None)
         ctx.state.pop("multitier_pending_validation", None)
+        ctx.state.pop("multitier_rollback_failures", None)
+        ctx.state.pop("multitier_rollback_stalled", None)
         ctx.state["multitier_last_event"] = {
             "event": "rollback_applied",
             "result": restore_result,

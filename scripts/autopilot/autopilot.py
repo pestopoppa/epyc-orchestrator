@@ -153,7 +153,7 @@ from state_lock import (
 )
 from state_ownership import clear_halt_latch, halt_latch_message
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
-from actions import SERVED_CONTENT_STATE_KEY, served_content_record
+from actions import SERVED_CONTENT_STATE_KEY, _public_pending_copy, served_content_record
 from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_result
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
@@ -284,6 +284,25 @@ MULTITIER_MAX_ATTEMPTS_PER_TIER = int(
         str(DEFAULT_MAX_ATTEMPTS_PER_TIER),
     )
 )
+def _multitier_attempt_cap() -> int:
+    """Per-tier attempt cap, never below the reproduction bar a final_t1 must clear.
+
+    Review fix 5: final_t1 promotion needs >= N reproductions (N = the frontier rule's
+    ``BASELINE_PROMOTION_REPRO_MIN`` or rule (b)'s ``AUTOPILOT_EMPTY_FRONTIER_MIN_REPRO``).
+    Each final_t1 attempt adds one; if the source row does not count, the attempts alone
+    must reach N. A lower configured cap would reject every candidate before it could
+    reproduce enough — a silent freeze — so the cap is raised to N.
+    """
+    from safety_gate import BASELINE_PROMOTION_REPRO_MIN, empty_frontier_min_repro
+
+    return max(
+        1,
+        MULTITIER_MAX_ATTEMPTS_PER_TIER,
+        int(BASELINE_PROMOTION_REPRO_MIN),
+        int(empty_frontier_min_repro()),
+    )
+
+
 MULTITIER_BASELINE_STATE_KEY = "multitier_baseline_bundle"
 MULTITIER_PENDING_STATE_KEY = "multitier_pending_validation"
 
@@ -2904,6 +2923,8 @@ def _multitier_candidate_is_eligible(
         return False, "policy disabled"
     if isinstance(state.get(MULTITIER_PENDING_STATE_KEY), dict):
         return False, "another candidate is already pending"
+    if state.get("multitier_rollback_stalled"):
+        return False, "a multitier rollback is stalled; operator action required"
     if int(getattr(eval_result, "tier", 0) or 0) != DEFAULT_FRONTIER_TIER:
         return False, "not a T1 screening result"
     ready, reason = _multitier_required_baselines_ready(state)
@@ -3009,6 +3030,10 @@ def _maybe_force_multitier_due_action(
     if not MULTITIER_PROMOTION_ENABLED:
         return None, None, None
     pending = state.get(MULTITIER_PENDING_STATE_KEY)
+    if state.get("multitier_rollback_stalled"):
+        # Review fix 6: a rollback that failed MULTITIER_ROLLBACK_MAX_FAILURES times is not
+        # re-forced every trial (a stall); it waits for an operator (alarm already raised).
+        return None, None, None
     if state.get("multitier_rollback_pending") and isinstance(pending, dict):
         return (
             {"type": "rollback", "to_checkpoint": "production_best"},
@@ -3016,7 +3041,7 @@ def _maybe_force_multitier_due_action(
                 "multitier_rollback": True,
                 "reason": pending.get("blocked_reason") or "candidate rejected",
             },
-            {"stage": "rollback", **pending},
+            {"stage": "rollback", **_public_pending_copy(pending)},
         )
     if not isinstance(pending, dict) or pending.get("status") != "pending":
         return None, None, None
@@ -3029,7 +3054,7 @@ def _maybe_force_multitier_due_action(
     if blocker:
         pending["status"] = "blocked"
         pending["blocked_reason"] = blocker
-        state["multitier_last_rejected"] = dict(pending)
+        state["multitier_last_rejected"] = _public_pending_copy(pending)
         state["multitier_rollback_pending"] = True
         return (
             {"type": "rollback", "to_checkpoint": "production_best"},
@@ -3037,7 +3062,7 @@ def _maybe_force_multitier_due_action(
                 "multitier_rollback": True,
                 "reason": blocker,
             },
-            {"stage": "rollback", **pending},
+            {"stage": "rollback", **_public_pending_copy(pending)},
         )
 
     next_tier = pending.get("next_tier")
@@ -3049,7 +3074,7 @@ def _maybe_force_multitier_due_action(
         except (TypeError, ValueError):
             pending["status"] = "blocked"
             pending["blocked_reason"] = f"invalid next_tier={next_tier!r}"
-            state["multitier_last_rejected"] = dict(pending)
+            state["multitier_last_rejected"] = _public_pending_copy(pending)
             state["multitier_rollback_pending"] = True
             return (
                 {"type": "rollback", "to_checkpoint": "production_best"},
@@ -3057,7 +3082,7 @@ def _maybe_force_multitier_due_action(
                     "multitier_rollback": True,
                     "reason": pending["blocked_reason"],
                 },
-                {"stage": "rollback", **pending},
+                {"stage": "rollback", **_public_pending_copy(pending)},
             )
 
     forced = {"type": "deep_eval", "tier": tier}
@@ -3065,7 +3090,7 @@ def _maybe_force_multitier_due_action(
     if blocked_reason:
         pending["status"] = "blocked"
         pending["blocked_reason"] = f"multitier validation action blacklisted: {blocked_reason}"
-        state["multitier_last_rejected"] = dict(pending)
+        state["multitier_last_rejected"] = _public_pending_copy(pending)
         state["multitier_rollback_pending"] = True
         return (
             {"type": "rollback", "to_checkpoint": "production_best"},
@@ -3073,7 +3098,7 @@ def _maybe_force_multitier_due_action(
                 "multitier_rollback": True,
                 "reason": pending["blocked_reason"],
             },
-            {"stage": "rollback", **pending},
+            {"stage": "rollback", **_public_pending_copy(pending)},
         )
 
     context = {
@@ -3106,7 +3131,7 @@ def _reject_multitier_candidate(
     pending["status"] = "rejected"
     pending["blocked_reason"] = reason
     pending["terminal_trial_id"] = trial_counter
-    state["multitier_last_rejected"] = dict(pending)
+    state["multitier_last_rejected"] = _public_pending_copy(pending)
     state["multitier_rollback_pending"] = True
     state["multitier_last_event"] = {
         "event": "candidate_rejected",
@@ -3177,7 +3202,7 @@ def _record_multitier_validation_result(
         remaining = [required for required in REQUIRED_VALIDATION_TIERS if required > tier]
         pending["next_tier"] = remaining[0] if remaining else "final_t1"
     elif verdict_payload["status"] == "inconclusive" and len(attempts) < max(
-        1, MULTITIER_MAX_ATTEMPTS_PER_TIER
+        1, _multitier_attempt_cap()
     ):
         pending["next_tier"] = tier
     else:
@@ -3202,7 +3227,7 @@ def _finish_multitier_promotion(
     if baseline_update is not None and bool(getattr(baseline_update, "updated", False)):
         pending["status"] = "accepted"
         pending["terminal_trial_id"] = trial_counter
-        state["multitier_last_accepted"] = dict(pending)
+        state["multitier_last_accepted"] = _public_pending_copy(pending)
         state["multitier_last_event"] = {
             "event": "candidate_accepted",
             "trial_id": trial_counter,
@@ -3218,7 +3243,7 @@ def _finish_multitier_promotion(
         state.pop(MULTITIER_PENDING_STATE_KEY, None)
         return
     attempts = int(pending.get("final_t1_attempts") or 0)
-    if attempts >= max(1, MULTITIER_MAX_ATTEMPTS_PER_TIER):
+    if attempts >= _multitier_attempt_cap():
         _reject_multitier_candidate(
             state,
             pending,

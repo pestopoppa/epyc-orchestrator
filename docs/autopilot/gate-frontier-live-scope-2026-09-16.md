@@ -240,7 +240,35 @@ sha256 of the mutated file that was served.**
     through PromptForge's revert, which auto-commits. It then attests the restored file's sha.
     A rejected `new_file` must end up absent. A missing preimage, or a failed attestation,
     fails the rollback closed, the same as for numeric and structural candidates.
-  - **Cost.** The preimage text lives in `autopilot_state.json` while the candidate is pending.
+  - **Cost.** The preimage text lives in `autopilot_state.json` only while the candidate is
+    pending. The `multitier_last_rejected` and `multitier_last_accepted` snapshots, and every
+    rollback context, are stripped of it.
+  - **Review fixes (Fable review of c12f17f5, 2026-09-16).**
+    - **Only the candidate's own file is restored.** A mutation candidate's rollback calls
+      `restore_checkpoint(restore_prompts=False)`, so the checkpoint no longer copytrees every
+      prompt over unrelated operator edits. The rollback then attests the FINAL on-disk state
+      of the candidate's file after the checkpoint restore; a later overwrite fails the
+      attestation.
+    - **External changes survive.** The preimage is written only if the file still holds
+      exactly the content the candidate served. If someone changed it after staging (an
+      operator edit, a pull, a merge), nothing is written, the checkpoint is not restored,
+      and the candidate is retired as `rejected_external_change`. This is logged at ERROR and
+      raises the session-bus alarm `autopilot-multitier-rollback-external-change` (warning).
+    - **No commit sweep.** Every PromptForge commit goes through
+      `git add -A -- <paths>` followed by `git commit --only -- <paths>`: the apply, the revert,
+      the pre-code-mutation checkpoint and the new-file revert. Unrelated staged or dirty files
+      never ride along, and a prompt commit without a path is refused.
+    - **Attempt cap.** The per-tier attempt cap is
+      `max(AUTOPILOT_MULTITIER_MAX_ATTEMPTS_PER_TIER, BASELINE_PROMOTION_REPRO_MIN,
+      AUTOPILOT_EMPTY_FRONTIER_MIN_REPRO)`, so a lower configured cap cannot reject every
+      candidate before it has reproduced enough.
+    - **Bounded rollback retries.** After `AUTOPILOT_MULTITIER_ROLLBACK_MAX_FAILURES` (default
+      3) failed rollbacks, the rollback is no longer re-forced on every trial, staging refuses
+      new candidates, and the critical alarm `autopilot-multitier-rollback-stalled` is raised.
+      The operator resolves it by removing `multitier_rollback_stalled` from state once
+      production is restored. A later successful rollback also clears it.
+    - **Pre-existing issue, not changed.** Numeric and structural rollbacks still restore the
+      checkpoint's full prompt directory.
   - **`structural_prune`.** Out of scope: it is not replayable and stays non-promotable.
 
 **Regime part of the identity (verification note, 2026-09-16).** The identity uses
