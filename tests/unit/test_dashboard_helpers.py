@@ -622,6 +622,13 @@ def test_topology_parity_smoke_for_expected_listener_ports(monkeypatch) -> None:
 
 
 def test_topology_activity_initializes_expected_embedder_bucket(monkeypatch, tmp_path) -> None:
+    # Hermetic: with no explicit mode, expected_stack_services() prefers the LIVE
+    # host's runtime facts (which list only the currently-selected servers) over
+    # the stack manifest. The claim here is about bucket initialisation from the
+    # manifest's expected embedder ports, so pin the manifest path and mode.
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setattr(dashboard_topology, "read_runtime_stack_selected_servers", lambda: None)
+    monkeypatch.setattr(dashboard_topology, "active_stack_numa_mode", lambda: "full")
     monkeypatch.setattr(dashboard, "_read_tail", lambda *a, **kw: "")
     monkeypatch.setattr(dashboard, "_read_tap_events_tail", lambda *a, **kw: "")
     monkeypatch.setattr(dashboard, "_parse_inference_sections", lambda *a, **kw: [])

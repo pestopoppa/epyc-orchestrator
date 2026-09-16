@@ -268,7 +268,14 @@ class _ContextMixin:
         if hasattr(self, "_recall") and callable(getattr(self, "_recall", None)):
             try:
                 recall_result = self._recall(f"stuck: {reason}", limit=3)
-                if recall_result and "No memories" not in recall_result:
+                # Skip empty and "unavailable" (broken recall) payloads; they
+                # are not "similar past situations".
+                if (
+                    recall_result
+                    and "No memories" not in recall_result
+                    and '"status": "unavailable"' not in recall_result
+                    and '"results": []' not in recall_result
+                ):
                     memory_guidance = f"\n## Similar past situations\n{recall_result}"
             except Exception:
                 pass  # Recall is best-effort

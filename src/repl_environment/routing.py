@@ -6,6 +6,7 @@ Provides mixin with: escalate, my_role, route_advice, delegate, recall.
 from __future__ import annotations
 
 import json
+import logging
 
 from src.constants import TASK_IR_OBJECTIVE_LEN
 from src.delegation_reports import load_report
@@ -14,6 +15,23 @@ from src.task_ir import canonicalize_task_ir
 from src.roles import Role
 
 _MAX_SCHEMA_RETRIES = 2
+
+logger = logging.getLogger(__name__)
+
+
+def _recall_unavailable(reason: str) -> dict:
+    """Explicit "recall is broken/unavailable" payload.
+
+    Distinct from an empty-but-healthy result (``status == "ok"`` with
+    ``results == []``) so callers can tell "no memories" from "recall broken".
+    """
+    return {
+        "status": "unavailable",
+        "results": [],
+        "best_action": None,
+        "confidence": None,
+        "error": reason,
+    }
 
 
 def _render_delegate_schema_preamble(schema: dict) -> str:
@@ -119,6 +137,7 @@ class _RoutingMixin:
                 best_conf = None
 
             response = {
+                "status": "ok",
                 "results": results,
                 "best_action": best_action,
                 "confidence": best_conf,
@@ -135,58 +154,67 @@ class _RoutingMixin:
             return self._maybe_wrap_tool_output(output)
 
         except Exception as e:
-            output = json.dumps(
-                {"results": [], "best_action": None, "confidence": None, "error": str(e)}
-            )
+            logger.error("recall() via retriever FAILED: %s", e, exc_info=True)
+            output = json.dumps(_recall_unavailable(f"{type(e).__name__}: {e}"))
             return self._maybe_wrap_tool_output(output)
 
     def _recall_legacy(self, query: str, limit: int = 5) -> str:
-        """Legacy recall using fresh EpisodicStore + TaskEmbedder."""
+        """Fallback recall for REPLs built without a shared retriever.
+
+        Opens a fresh EpisodicStore + TaskEmbedder and uses the real store API
+        (``TaskEmbedder.embed_exploration`` + ``EpisodicStore.retrieve_by_similarity``,
+        exploration memories only, matching ``TwoPhaseRetriever.retrieve_for_exploration``).
+        Any failure is logged at ERROR and returned as an explicit
+        ``status: "unavailable"`` payload — never as a silent empty result.
+        """
         import json
 
+        logger.warning(
+            "recall() has no shared retriever; using legacy fallback "
+            "(fresh EpisodicStore + TaskEmbedder)"
+        )
         try:
             from orchestration.repl_memory.episodic_store import EpisodicStore
             from orchestration.repl_memory.embedder import TaskEmbedder
-        except ImportError:
-            return json.dumps(
-                {
-                    "results": [],
-                    "best_action": None,
-                    "confidence": None,
-                    "error": "Episodic memory not available",
-                }
-            )
+        except ImportError as e:
+            logger.error("recall() legacy fallback: episodic memory not importable: %s", e)
+            return json.dumps(_recall_unavailable(f"Episodic memory not available: {e}"))
 
+        store = None
+        embedder = None
         try:
             store = EpisodicStore()
             embedder = TaskEmbedder()
 
-            query_embedding = embedder.embed(query)
-            memories = store.search_similar(
-                embedding=query_embedding,
-                limit=limit,
-                min_similarity=0.3,
+            context_preview = self.context[:500] if self.context else ""
+            query_embedding = embedder.embed_exploration(query, context_preview)
+            memories = store.retrieve_by_similarity(
+                query_embedding,
+                k=limit,
+                action_type="exploration",
             )
 
             results = []
-            for mem in memories:
+            for mem in memories[:limit]:
+                ctx = mem.context or {}
                 results.append(
                     {
-                        "task": mem.task_description[:200] if mem.task_description else "",
-                        "outcome": mem.outcome,
-                        "action": mem.action[:100] if hasattr(mem, "action") else "unknown",
-                        "q_value": round(mem.q_value, 3) if hasattr(mem, "q_value") else 0.5,
-                        "similarity": round(mem.similarity, 3)
-                        if hasattr(mem, "similarity")
-                        else 0.0,
+                        "task": str(ctx.get("objective", mem.action))[:200],
+                        "outcome": mem.outcome or "pending",
+                        "action": mem.action[:100],
+                        "q_value": round(mem.q_value, 3),
+                        "similarity": round(mem.similarity_score, 3),
                         "combined_score": 0.0,
-                        "role_used": mem.context.get("role", "unknown")
-                        if mem.context
-                        else "unknown",
+                        "role_used": ctx.get("role", "unknown"),
                     }
                 )
 
-            response = {"results": results, "best_action": None, "confidence": None}
+            response = {
+                "status": "ok",
+                "results": results,
+                "best_action": None,
+                "confidence": None,
+            }
             self._exploration_log.add_event("recall", {"query": query}, response)
 
             if self.config.use_toon_encoding and len(results) >= 3:
@@ -198,10 +226,16 @@ class _RoutingMixin:
             return self._maybe_wrap_tool_output(output)
 
         except Exception as e:
-            output = json.dumps(
-                {"results": [], "best_action": None, "confidence": None, "error": str(e)}
-            )
+            logger.error("recall() legacy fallback FAILED: %s", e, exc_info=True)
+            output = json.dumps(_recall_unavailable(f"{type(e).__name__}: {e}"))
             return self._maybe_wrap_tool_output(output)
+        finally:
+            for resource in (embedder, store):
+                if resource is not None:
+                    try:
+                        resource.close()
+                    except Exception:  # pragma: no cover - best-effort cleanup
+                        logger.debug("recall() fallback cleanup failed", exc_info=True)
 
     def _escalate(self, reason: str, target_role: str | None = None) -> str:
         """Request escalation to a higher-tier or specific model.

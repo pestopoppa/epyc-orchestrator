@@ -190,8 +190,9 @@ END;
 # per reviewer DECISION (decision ≈ question — RC-7 evidence-plane alignment). The
 # column list is exactly the handoff's, plus provenance links back to the trace
 # `event` rows (`event_source_path` = the emit:// synthetic path a live review
-# verdict was written under; `event_id` = that row's integer id) and an RA-10
-# `schema_version` stamp threaded through from the review-artifact schema.
+# verdict was written under; `event_id` = that row's integer id), an RA-10
+# `schema_version` stamp threaded through from the review-artifact schema, and
+# (RC-9, `review_ledger.v2`) the `rubric_json` / `per_item_grades_json` snapshots.
 #
 # Writer/reader API + the sequential demotion monitor live in
 # `src/trace/review_ledger.py`; this module owns only the DDL (idempotent
@@ -222,6 +223,8 @@ CREATE TABLE IF NOT EXISTS review_ledger (
   event_id INTEGER,
   schema_version TEXT,
   created_ts_utc TEXT NOT NULL,
+  rubric_json TEXT,
+  per_item_grades_json TEXT,
   UNIQUE(decision_id)
 );
 CREATE INDEX IF NOT EXISTS rl_ts ON review_ledger(ts);
@@ -235,10 +238,60 @@ CREATE INDEX IF NOT EXISTS rl_group ON review_ledger(
 """
 
 
+# RC-9 `review_ledger.v2`: nullable canonical-JSON snapshots of the full rubric
+# applied and the per-item grades behind a decision. Added by ALTER TABLE on a
+# pre-v2 (`review_ledger.v1`) table; existing rows keep NULL (no back-fill — a
+# snapshot invented after the fact would claim a capture that never happened).
+# Order matters only for ALTER; the CREATE above already carries them.
+_REVIEW_LEDGER_V2_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("rubric_json", "TEXT"),
+    ("per_item_grades_json", "TEXT"),
+)
+
+
+def _migrate_review_ledger_v2(conn: sqlite3.Connection) -> None:
+    """Add the RC-9 v2 columns to a v1 table. Idempotent, additive, no back-fill.
+
+    A read-only connection (a reader opening a v1 ledger it may not write) and a
+    concurrent migrator that won the race are both tolerated: readers decode the
+    absent columns as NULL, so neither needs the ALTER to succeed.
+    """
+    present = {row[1] for row in conn.execute("PRAGMA table_info(review_ledger)")}
+    for name, decl in _REVIEW_LEDGER_V2_COLUMNS:
+        if name in present:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE review_ledger ADD COLUMN {name} {decl}")
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "readonly" in msg or "read-only" in msg:
+                continue
+            raise
+    try:
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+
 def ensure_review_ledger_schema(conn: sqlite3.Connection) -> sqlite3.Connection:
-    """Create the H4 `review_ledger` table if absent. Idempotent + additive."""
-    conn.executescript(_REVIEW_LEDGER_SCHEMA)
-    conn.commit()
+    """Create the H4 `review_ledger` table if absent, then migrate it to v2.
+
+    Idempotent + additive: a fresh store gets the v2 DDL; a v1 store gains the
+    RC-9 columns via ALTER TABLE, with its existing rows left NULL. On a
+    read-only connection to an existing ledger the DDL cannot run; that is
+    tolerated (readers decode absent v2 columns as NULL), anything else raises.
+    """
+    try:
+        conn.executescript(_REVIEW_LEDGER_SCHEMA)
+        conn.commit()
+    except sqlite3.OperationalError as exc:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_ledger'"
+        ).fetchone()
+        if not (exists and "readonly" in str(exc).lower()):
+            raise
+        return conn
+    _migrate_review_ledger_v2(conn)
     return conn
 
 

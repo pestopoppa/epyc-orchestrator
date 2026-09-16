@@ -24,6 +24,16 @@ from src.registry_loader import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_live_cpu_bench_claim(monkeypatch):
+    """_build_command consults the LIVE bench core claim (SS-BENCH-GATE-c) and
+    refuses while another session's CPU bench holds cores. These tests are about
+    command shape, so take the guard's quiet path (no claim -> no pin)."""
+    import scripts.server.bench_core_claim as bench_core_claim
+
+    monkeypatch.setattr(bench_core_claim, "api_enforce_placement", lambda *_a, **_k: None)
+
+
 @pytest.fixture
 def minimal_registry(tmp_path: Path) -> RegistryLoader:
     """Create a minimal registry for testing."""

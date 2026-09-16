@@ -16,6 +16,12 @@ whose DDL lives in :mod:`src.trace.store` (additive, idempotent). It implements:
     :mod:`src.autopilot_core.sequential_verdict`. It consumes ledger rows in
     order and yields demote-to-shadow verdicts on *either*-side breach. Library
     only — NOT wired to any live control plane (the shadow plane is not live).
+  * **RC-9** — ``review_ledger.v2`` rubric persistence: nullable canonical-JSON
+    ``rubric_json`` (the full rubric applied) and ``per_item_grades_json`` (the
+    per-item grades behind the decision). Writers pass Python objects on
+    :class:`ReviewLedgerRow` (``rubric`` / ``per_item_grades``); readers keep the
+    raw forensic columns and add decoded ``rubric`` / ``per_item_grades``
+    aliases. v1 rows read back with both NULL (no back-fill).
   * **RC-7** — evidence-plane alignment. A review **decision ≈ a per-question
     ledger row** (``evidence-plane-ledger-and-sequential-verdicts.md`` W1: a
     compact ``question_results`` row keyed by ``qid`` with ``correct`` +
@@ -75,7 +81,14 @@ REVIEW_DECISION_SCHEMA_VERSION = "1.0.0"
 
 #: Ledger DDL revision — bumped only on additive column changes to the table in
 #: store.py. Recorded for provenance; not a per-row column.
-LEDGER_DDL_VERSION = "review_ledger.v1"
+#: v1 → v2 (RC-9): + ``rubric_json`` / ``per_item_grades_json`` (nullable).
+LEDGER_DDL_VERSION = "review_ledger.v2"
+
+#: Raw JSON columns (RC-9) and the decoded alias each is exposed under on read.
+RUBRIC_JSON_COLUMNS: dict[str, str] = {
+    "rubric_json": "rubric",
+    "per_item_grades_json": "per_item_grades",
+}
 
 # --------------------------------------------------------------------------- #
 # Decision / gold vocabularies (mirror the schemas)
@@ -105,6 +118,53 @@ def _as_int_bool(value: Any) -> int | None:
     if value is None:
         return None
     return int(bool(value))
+
+
+def canonical_json(value: Any) -> str | None:
+    """Canonical JSON text for an RC-9 snapshot column, or ``None``.
+
+    Sorted keys, compact separators, UTF-8 preserved, NaN/Infinity refused (they
+    are not JSON and would not round-trip). A ``str`` is taken as JSON text
+    already and re-canonicalised, so a malformed string fails HERE, at write
+    time, rather than landing as an undecodable forensic blob. Anything that is
+    not JSON-serialisable raises ``TypeError`` — no ``default=str`` coercion,
+    because a stringified object is not the snapshot it claims to be.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        value = json.loads(value)
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        value = value.to_dict()
+    elif isinstance(value, (list, tuple)):
+        value = [v.to_dict() if hasattr(v, "to_dict") and callable(v.to_dict) else v for v in value]
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+
+
+def _decode_json_column(raw: Any) -> Any:
+    """Decode a stored snapshot column; ``None`` when absent/NULL/undecodable."""
+    if raw in (None, ""):
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def decode_review_ledger_row(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a ledger row dict with RC-9 decoded aliases added.
+
+    Raw ``rubric_json`` / ``per_item_grades_json`` are kept verbatim (forensic);
+    ``rubric`` / ``per_item_grades`` carry the decoded values. A v1 row (columns
+    absent) gets both raw keys as ``None`` so every reader sees one shape.
+    """
+    out = dict(raw)
+    for col, alias in RUBRIC_JSON_COLUMNS.items():
+        out.setdefault(col, None)
+        out[alias] = _decode_json_column(out[col])
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -145,6 +205,11 @@ class ReviewLedgerRow:
     # RA-10 stamp.
     schema_version: str = REVIEW_DECISION_SCHEMA_VERSION
     created_ts_utc: str = field(default_factory=_now_iso)
+    # RC-9 (review_ledger.v2): the full rubric applied and the per-item grades
+    # behind the decision, as JSON-serialisable objects. Stored canonicalised in
+    # ``rubric_json`` / ``per_item_grades_json``; ``None`` = not captured.
+    rubric: Any = None
+    per_item_grades: Any = None
 
     def __post_init__(self) -> None:
         if not self.ts:
@@ -175,6 +240,8 @@ _LEDGER_COLUMNS = (
     "event_id",
     "schema_version",
     "created_ts_utc",
+    "rubric_json",
+    "per_item_grades_json",
 )
 
 
@@ -184,6 +251,8 @@ def insert_review_ledger_row(conn: sqlite3.Connection, row: ReviewLedgerRow) -> 
     Append-only: ``INSERT OR IGNORE`` honors the ``UNIQUE(decision_id)``
     constraint, so re-inserting the same decision is a no-op (idempotent, like
     the event store). ``schema_version`` defaults to the RA-10 stamp.
+    ``rubric`` / ``per_item_grades`` (RC-9) are canonicalised into the v2 JSON
+    columns; a non-serialisable snapshot raises before anything is written.
     """
     ensure_review_ledger_schema(conn)
     values = [
@@ -210,6 +279,8 @@ def insert_review_ledger_row(conn: sqlite3.Connection, row: ReviewLedgerRow) -> 
         row.event_id,
         row.schema_version or REVIEW_DECISION_SCHEMA_VERSION,
         row.created_ts_utc,
+        canonical_json(row.rubric),
+        canonical_json(row.per_item_grades),
     ]
     placeholders = ", ".join("?" for _ in _LEDGER_COLUMNS)
     cur = conn.execute(
@@ -245,8 +316,88 @@ def _synth_decision_id(obj: Mapping[str, Any], source: str | None, role: str | N
     return "revdec-" + hashlib.sha256(blob.encode("utf-8")).hexdigest()[:24]
 
 
+def rubric_version_from_ref(rubric_ref: Any) -> str | None:
+    """``rubric_id@version`` -> ``version`` (the ledger group key); else the ref.
+
+    A ref without ``@`` is returned whole rather than dropped — it still names
+    the rubric, which is what the ``rubric_version`` group key is for.
+    """
+    if not isinstance(rubric_ref, str) or not rubric_ref.strip():
+        return None
+    ref = rubric_ref.strip()
+    _, sep, version = ref.rpartition("@")
+    return version if sep and version else ref
+
+
+def _grade_payload(result: Any) -> dict[str, Any]:
+    if isinstance(result, Mapping):
+        return dict(result)
+    if hasattr(result, "to_dict") and callable(result.to_dict):
+        return result.to_dict()
+    raise TypeError(f"expected a GradeResult or its to_dict() mapping, got {type(result).__name__}")
+
+
+def grade_result_to_ledger_row(
+    result: Any,
+    *,
+    decision_id: str,
+    reviewer_model_quant: str | None = None,
+    grading_model: str | None = None,
+    corpus_id: str | None = None,
+    candidate_id: str | None = None,
+    domain: str | None = None,
+    ts: str | None = None,
+    latency_ms: float | None = None,
+    tokens: int | None = None,
+    era: str | None = None,
+    **extra: Any,
+) -> ReviewLedgerRow:
+    """Map an RD-2 two-turn rubric ``GradeResult`` (or its ``to_dict()``) to a row.
+
+    This is the RC-9 writer for the one producer that holds both snapshots:
+    ``rubric_review.grade_candidate`` returns the full rubric and the per-item
+    grades and deliberately does not write the ledger itself. Duck-typed so this
+    module does not import ``src.proactive_delegation``.
+
+    ``per_item_grades`` is the per-item list of the pass the aggregate decision
+    was taken from (``GradeResult.per_item``). The majority-of-k audit trail
+    (``passes``) is not a per-item grade of the decision and is not stored here.
+    ``rubric_version`` is the rubric's own version; ``domain`` falls back to the
+    rubric's domain. ``extra`` passes any other ``ReviewLedgerRow`` field through
+    (gold fields, provenance links, ...).
+    """
+    payload = _grade_payload(result)
+    rubric = payload.get("rubric")
+    if domain is None and isinstance(rubric, Mapping):
+        domain = rubric.get("domain")
+    return ReviewLedgerRow(
+        decision_id=decision_id,
+        ts=ts,
+        reviewer_model_quant=reviewer_model_quant,
+        grading_model=grading_model,
+        rubric_version=payload.get("rubric_version")
+        or rubric_version_from_ref(payload.get("rubric_ref")),
+        corpus_id=corpus_id,
+        candidate_id=candidate_id,
+        domain=domain,
+        decision=payload.get("decision"),
+        confidence=payload.get("confidence"),
+        latency_ms=latency_ms,
+        tokens=tokens,
+        era=era,
+        rubric=rubric,
+        per_item_grades=payload.get("per_item"),
+        **extra,
+    )
+
+
 def review_decision_to_ledger_row(
-    obj: Mapping[str, Any], *, source: str | None = None, role: str | None = None
+    obj: Mapping[str, Any],
+    *,
+    source: str | None = None,
+    role: str | None = None,
+    rubric: Any = None,
+    per_item_grades: Any = None,
 ) -> ReviewLedgerRow:
     """Map a schema-valid ``ReviewDecision`` dict (review_decision.schema.json) to a
     :class:`ReviewLedgerRow`.
@@ -257,8 +408,14 @@ def review_decision_to_ledger_row(
       * ``telemetry.wall_ms`` / ``telemetry.tokens_out`` -> ``latency_ms`` / ``tokens``
       * ``provenance.{model,quant,role,instrument_era}`` -> ``reviewer_model_quant`` / ``era``
       * ``subtask_id`` (or ``candidate_ref``) -> ``candidate_id``
+      * ``rubric_ref`` (``rubric_id@version``) -> ``rubric_version``
     ``source`` (planner provider) and ``role`` are provenance hints; ``role`` is
     the ``reviewer_model_quant`` fallback when provenance carries no model/quant.
+
+    RC-9: a ``ReviewDecision`` carries only ``rubric_ref``, never the rubric body
+    or per-item grades (the schema is ``additionalProperties: false``). A caller
+    holding them (e.g. from a ``GradeResult``) passes ``rubric`` /
+    ``per_item_grades``; otherwise both columns stay NULL.
     """
     blocking = obj.get("blocking") or {}
     telemetry = obj.get("telemetry") or {}
@@ -280,7 +437,10 @@ def review_decision_to_ledger_row(
         latency_ms=telemetry.get("wall_ms"),
         tokens=telemetry.get("tokens_out"),
         era=provenance.get("instrument_era"),
+        rubric_version=rubric_version_from_ref(obj.get("rubric_ref")),
         schema_version=obj.get("schema_version") or REVIEW_DECISION_SCHEMA_VERSION,
+        rubric=rubric,
+        per_item_grades=per_item_grades,
     )
 
 
@@ -291,6 +451,8 @@ def record_review_decision(
     role: str | None = None,
     conn: sqlite3.Connection | None = None,
     db_path: str | Path | None = None,
+    rubric: Any = None,
+    per_item_grades: Any = None,
 ) -> tuple[int, int] | None:
     """Convenience sink: map a ``ReviewDecision`` dict to a ledger row and insert it.
 
@@ -309,7 +471,9 @@ def record_review_decision(
     """
     if not isinstance(obj, Mapping):
         return None
-    row = review_decision_to_ledger_row(obj, source=source, role=role)
+    row = review_decision_to_ledger_row(
+        obj, source=source, role=role, rubric=rubric, per_item_grades=per_item_grades
+    )
     if conn is not None:
         return insert_review_ledger_row(conn, row)
     if db_path is not None:
@@ -330,7 +494,11 @@ def iter_review_ledger_rows(
     reviewer_model_quant: str | None = None,
     order_by: str = "ts",
 ) -> Iterator[dict[str, Any]]:
-    """Yield ledger rows as dicts, optionally filtered, ordered by ``order_by``."""
+    """Yield ledger rows as dicts, optionally filtered, ordered by ``order_by``.
+
+    Each row carries the raw RC-9 JSON columns plus decoded ``rubric`` /
+    ``per_item_grades`` aliases (``None`` on v1 rows).
+    """
     ensure_review_ledger_schema(conn)
     clauses: list[str] = []
     params: list[Any] = []
@@ -345,7 +513,7 @@ def iter_review_ledger_rows(
     cur = conn.execute(f"SELECT * FROM review_ledger {where} ORDER BY {safe_order}, id", params)
     cols = [d[0] for d in cur.description]
     for raw in cur.fetchall():
-        yield dict(zip(cols, raw))
+        yield decode_review_ledger_row(dict(zip(cols, raw)))
 
 
 def review_ledger_count(conn: sqlite3.Connection) -> int:

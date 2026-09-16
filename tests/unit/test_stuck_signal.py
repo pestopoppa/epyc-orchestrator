@@ -115,9 +115,24 @@ class TestStuckMemoryIntegration:
     def test_graceful_with_no_memories(self):
         """Works fine when recall returns no memories."""
         repl = _make_repl()
-        # _recall exists but returns "No memories" (default with no store)
+        # Healthy recall with zero hits must not add a memory section.
+        repl._recall = MagicMock(
+            return_value='{\n  "status": "ok",\n  "results": [],\n  "best_action": null\n}'
+        )
         result = repl._stuck("stuck without memory")
         assert "Stuck" in result
+        assert "Similar past situations" not in result
+
+    def test_unavailable_recall_is_not_guidance(self):
+        """A broken-recall payload is not injected as 'similar past situations'."""
+        repl = _make_repl()
+        repl._recall = MagicMock(
+            return_value='{"status": "unavailable", "results": [], "error": "AttributeError: x"}'
+        )
+        result = repl._stuck("test")
+        assert "Stuck" in result
+        assert "Similar past situations" not in result
+        assert "AttributeError" not in result
 
     def test_recall_failure_graceful(self):
         """Recall exceptions are caught gracefully."""

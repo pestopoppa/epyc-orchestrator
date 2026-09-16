@@ -162,6 +162,31 @@ def _decision_value(event: dict[str, Any], detail: dict[str, Any]) -> str | None
     return str(raw)
 
 
+#: RD-9 plan-rubric axes, in prompt order (``ReviewService.PLAN_REVIEW_RUBRIC_PROMPT``).
+PLAN_RUBRIC_AXES: tuple[str, ...] = ("phase_coverage", "order", "executor_alignment")
+
+
+def _rubric_snapshots(detail: dict[str, Any]) -> tuple[Any, Any]:
+    """RC-9: recover ``(rubric, per_item_grades)`` from an event detail.
+
+    An event that carries explicit ``rubric`` / ``per_item_grades`` snapshots is
+    passed through verbatim. For a ``plan_rubric`` event that predates them, the
+    three axis booleans ARE the per-item grades — but only when the emission
+    parsed: ``review_plan_rubric`` defaults every axis to ``True`` on a parse
+    failure or a failed call, so an unparsed event's booleans are fabricated and
+    yield no grades. The legacy rubric body is not recoverable (the event never
+    recorded which prompt template was in force), so it stays ``None``.
+    """
+    rubric = detail.get("rubric")
+    grades = detail.get("per_item_grades")
+    if grades is None and detail.get("mode") == "plan_rubric" and detail.get("parse_ok") is True:
+        if all(isinstance(detail.get(axis), bool) for axis in PLAN_RUBRIC_AXES):
+            grades = [
+                {"item": axis, "binary": int(detail[axis])} for axis in PLAN_RUBRIC_AXES
+            ]
+    return rubric, grades
+
+
 def event_to_ledger_row(
     event: dict[str, Any],
     *,
@@ -179,6 +204,7 @@ def event_to_ledger_row(
     carry; when a stamp is None the event's own value (or None) is used.
     """
     detail = _parse_detail(event.get("detail_json"))
+    rubric, per_item_grades = _rubric_snapshots(detail)
     return ReviewLedgerRow(
         decision_id=_decision_id(event),
         ts=event.get("ts_utc"),
@@ -203,6 +229,8 @@ def event_to_ledger_row(
         era=era,
         event_source_path=event.get("source_path"),
         event_id=event.get("id"),
+        rubric=rubric,
+        per_item_grades=per_item_grades,
     )
 
 

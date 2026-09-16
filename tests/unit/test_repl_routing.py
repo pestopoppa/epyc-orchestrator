@@ -4,6 +4,8 @@
 import json
 from unittest.mock import Mock
 
+import pytest
+
 from src.repl_environment import REPLEnvironment
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
@@ -149,8 +151,40 @@ class TestEscalate:
 class TestRecall:
     """Test _recall() / recall() function with episodic memory."""
 
+    @pytest.fixture(autouse=True)
+    def _hermetic_legacy_backend(self, monkeypatch):
+        """No-retriever recall opens a fresh EpisodicStore + TaskEmbedder; keep
+        it off the repo's default store path and the embedding server."""
+        import numpy as np
+
+        import orchestration.repl_memory.embedder as embedder_mod
+        import orchestration.repl_memory.episodic_store as store_mod
+
+        class _EmptyStore:
+            def __init__(self, *a, **k):
+                pass
+
+            def retrieve_by_similarity(self, *a, **k):
+                return []
+
+            def close(self):
+                pass
+
+        class _Embedder:
+            def __init__(self, *a, **k):
+                pass
+
+            def embed_exploration(self, query, context_preview):
+                return np.zeros(4, dtype=np.float32)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(store_mod, "EpisodicStore", _EmptyStore)
+        monkeypatch.setattr(embedder_mod, "TaskEmbedder", _Embedder)
+
     def test_recall_without_retriever(self):
-        """Test recall() returns empty results when no retriever."""
+        """Test recall() falls back and reports an explicit status when no retriever."""
         repl = REPLEnvironment(context="test")
         result = repl.execute("""
 output = recall('similar tasks')
@@ -160,12 +194,12 @@ if '<<<TOOL_OUTPUT>>>' in output:
     output = output[start:end]
 data = json.loads(output)
 print(len(data.get('results', [])))
-print('error' in data)
+print(data.get('status'))
 """)
 
         assert result.error is None
-        # Should return empty results or error when retriever not available
-        assert "0" in result.output or "True" in result.output
+        assert "0" in result.output
+        assert "ok" in result.output
 
     def test_recall_with_mock_retriever(self):
         """Test recall() with mocked retriever."""
