@@ -301,6 +301,7 @@ def refresh_model_dir() -> "tuple[Path, str]":
     """
     global _MODEL_DIR, _MODEL_SLOT, _MODEL_PATH, _TOKENIZER_PATH
     global _session, _tokenizer, _prefix_tokens_ok, _input_names, _do_lower_case
+    global _count_tokenizer
 
     model_dir, slot = resolve_model_dir()
     if model_dir == _MODEL_DIR:
@@ -317,6 +318,7 @@ def refresh_model_dir() -> "tuple[Path, str]":
         _prefix_tokens_ok = False
         _input_names = ()
         _do_lower_case = False
+        _count_tokenizer = None
 
     _MODEL_DIR, _MODEL_SLOT = model_dir, slot
     _MODEL_PATH = _MODEL_DIR / "model_int8.onnx"
@@ -411,10 +413,11 @@ def ensure_loaded() -> bool:
     dependencies are missing or model files cannot be opened.
     """
     global _session, _tokenizer, _query_prefix, _document_prefix, _prefix_tokens_ok
-    global _input_names, _do_lower_case
+    global _input_names, _do_lower_case, _count_tokenizer
 
     if _session is not None and _tokenizer is not None:
         return True
+    _count_tokenizer = None
 
     if not is_available():
         logger.warning("ColBERT ONNX model not found at %s", _MODEL_PATH)
@@ -555,6 +558,43 @@ def encode(text: str, max_tokens: int, *, role: str) -> np.ndarray | None:
         # ordinary miss, so a model that CANNOT be encoded at all presents as an
         # empty index rather than a failure.
         logger.warning("ColBERT encode failed (%s): %s", type(e).__name__, e)
+        return None
+
+
+_count_tokenizer = None
+
+
+def count_tokens(text: str, *, role: str) -> int | None:
+    """UNTRUNCATED, unpadded token count of `text` as `encode()` would see it.
+
+    Same prefix, same case folding, same special tokens as `encode()` — but on a
+    private tokenizer copy with truncation and padding disabled. `encode()` sets
+    `enable_truncation(max_length)` + `enable_padding(length)` on the shared
+    tokenizer, so any count read from its output is always exactly the cap; a
+    query-length instrument built on that would report a 0 % over-cap rate forever
+    (KB-RAG H2). A copy is used, never the shared instance, so a concurrent
+    `encode()` can never observe truncation switched off.
+
+    Returns None when the encoder is not loaded or tokenization fails; the
+    caller records nothing rather than a fabricated count.
+    """
+    global _count_tokenizer
+    prefix = prefix_for_role(role)  # raises on an unknown role
+    tok = _tokenizer
+    if tok is None:
+        return None
+    try:
+        if _count_tokenizer is None:
+            from tokenizers import Tokenizer
+
+            copy = Tokenizer.from_str(tok.to_str())
+            copy.no_truncation()
+            copy.no_padding()
+            _count_tokenizer = copy
+        body = text.lower() if _do_lower_case else text
+        return len(_count_tokenizer.encode(prefix + body).ids)
+    except Exception as e:  # noqa: BLE001 — instrumentation must never fail a query
+        logger.debug("ColBERT count_tokens failed (%s): %s", type(e).__name__, e)
         return None
 
 
