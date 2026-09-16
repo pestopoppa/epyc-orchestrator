@@ -88,6 +88,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
         source=args.source,
         text=args.text,
         limit=args.limit,
+        order=args.order,
     )
     if args.json:
         print(json.dumps(rows, indent=2, default=str))
@@ -171,6 +172,7 @@ def _cmd_search_records(args: argparse.Namespace) -> int:
         status=args.status,
         source=args.source,
         limit=args.limit,
+        order=args.order,
     )
     if args.json:
         print(json.dumps(rows, indent=2, default=str))
@@ -274,6 +276,8 @@ def main(argv: list[str] | None = None) -> int:
     pq.add_argument("--source")
     pq.add_argument("--text", help="FTS5 query against summary + detail_json")
     pq.add_argument("--limit", type=int, default=50)
+    pq.add_argument("--order", choices=("relevance", "recency"), default=None,
+                    help="default: relevance (bm25) with --text, else recency")
     pq.add_argument("--json", action="store_true")
     pq.set_defaults(func=_cmd_query)
 
@@ -308,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
     psr.add_argument("--status")
     psr.add_argument("--source")
     psr.add_argument("--limit", type=int, default=20)
+    psr.add_argument("--order", choices=("relevance", "recency"), default=None,
+                     help="default: relevance (bm25)")
     psr.add_argument("--json", action="store_true")
     psr.set_defaults(func=_cmd_search_records)
 

@@ -17,6 +17,8 @@ Usage:
   python orchestration/validate_ir.py evidence path/to/evidence_item.json
   python orchestration/validate_ir.py envelope path/to/decision_envelope.json
   python orchestration/validate_ir.py profile path/to/assurance_profile.json
+  python orchestration/validate_ir.py review_envelope path/to/machine_review_envelope.json
+  python orchestration/validate_ir.py gold_annotation path/to/gold_annotation.json
   echo '{"task_id": ...}' | python orchestration/validate_ir.py task -
 
 Exit codes:
@@ -55,6 +57,9 @@ SCHEMA_RUBRIC = ROOT / "review_rubric.schema.json"
 SCHEMA_EVIDENCE = ROOT / "evidence_item.schema.json"
 SCHEMA_ENVELOPE = ROOT / "decision_envelope.schema.json"
 SCHEMA_PROFILE = ROOT / "assurance_profile.schema.json"
+# RA-12 machine-review envelope; RA-9 dual-gold annotation (negative-control axis).
+SCHEMA_REVIEW_ENVELOPE = ROOT / "machine_review_envelope.schema.json"
+SCHEMA_GOLD_ANNOTATION = ROOT / "gold_annotation.schema.json"
 
 # Ordered map of validator kind -> schema path (single source of truth).
 SCHEMA_MAP = {
@@ -68,6 +73,8 @@ SCHEMA_MAP = {
     "evidence": SCHEMA_EVIDENCE,
     "envelope": SCHEMA_ENVELOPE,
     "profile": SCHEMA_PROFILE,
+    "review_envelope": SCHEMA_REVIEW_ENVELOPE,
+    "gold_annotation": SCHEMA_GOLD_ANNOTATION,
 }
 
 

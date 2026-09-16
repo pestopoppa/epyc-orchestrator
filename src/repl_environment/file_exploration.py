@@ -55,17 +55,60 @@ class _FileExplorationMixin:
             except Exception:
                 pass  # Silently ignore research tracking failures
 
-    def _peek(self, n: int = 500, file_path: str | None = None) -> str:
-        """Return first n characters of context or file.
+    @staticmethod
+    def _page_text(text: str, n: int, offset: int) -> str:
+        """Slice ``n`` characters of ``text`` starting at ``offset`` (negative = from the end).
+
+        At offset 0 this is exactly the historical ``context[:n]``.
+        """
+        offset = int(offset)
+        if offset < 0:
+            offset = max(0, len(text) + offset)
+        return text[offset:][:int(n)]
+
+    @staticmethod
+    def _read_file_page(path: str, n: int, offset: int) -> str:
+        """Read ``n`` characters of a file starting at character ``offset``.
+
+        ``newline=""`` disables newline translation so character offsets match the
+        text that was written (exact recall of spilled output, TOC-SP-2). A
+        negative offset counts from the end of the file. A negative ``n`` reads to
+        the end, as the historical ``f.read(n)`` did.
+        """
+        n = int(n)
+        offset = int(offset)
+        with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
+            if offset < 0:
+                text = f.read()
+                start = max(0, len(text) + offset)
+                return text[start:] if n < 0 else text[start:start + n]
+            remaining = offset
+            while remaining > 0:
+                chunk = f.read(min(remaining, 1 << 20))
+                if not chunk:
+                    return ""
+                remaining -= len(chunk)
+            return f.read(n)
+
+    def _peek(self, n: int = 500, file_path: str | None = None, offset: int = 0) -> str:
+        """Return n characters of context or file, starting at ``offset``.
 
         Args:
             n: Number of characters to return (default 500).
             file_path: Optional file path to read from instead of context.
+            offset: Character offset to start from (default 0 = the start; a
+                negative value counts back from the end). Together with ``n``
+                this pages through a file exactly, e.g. a spilled tool output.
 
         Returns:
-            First n characters of the context or file.
+            Up to n characters of the context or file from ``offset``.
         """
         self._increment_exploration()
+        try:
+            n = int(n)
+            offset = int(offset)
+        except (TypeError, ValueError):
+            return f"[ERROR: peek(n, file_path=None, offset=0) needs integer n/offset, got n={n!r}, offset={offset!r}]"
 
         if file_path is not None:
             # Read from file
@@ -76,10 +119,12 @@ class _FileExplorationMixin:
             # writes + task setup put them. No-op in prod (task-root inactive → realpath).
             from src.repl_environment.task_root import resolve_task_path
             try:
-                with open(resolve_task_path(file_path), "r", encoding="utf-8", errors="replace") as f:
-                    result = f.read(n)
-                self._exploration_log.add_event("peek", {"n": n, "file_path": file_path}, result)
-                self._track_research("peek", f"n={n}, file={file_path}", result)
+                result = self._read_file_page(resolve_task_path(file_path), n, offset)
+                event = {"n": n, "file_path": file_path}
+                if offset:
+                    event["offset"] = offset
+                self._exploration_log.add_event("peek", event, result)
+                self._track_research("peek", f"n={n}, offset={offset}, file={file_path}", result)
                 return result
             except FileNotFoundError:
                 return f"[ERROR: File not found: {file_path}]"
@@ -88,9 +133,12 @@ class _FileExplorationMixin:
                 return f"[ERROR: {type(e).__name__}: {e}]"
 
         # Read from context
-        result = self.context[:n]
-        self._exploration_log.add_event("peek", {"n": n}, result)
-        self._track_research("peek", f"n={n}", result)
+        result = self._page_text(self.context, n, offset)
+        event = {"n": n}
+        if offset:
+            event["offset"] = offset
+        self._exploration_log.add_event("peek", event, result)
+        self._track_research("peek", f"n={n}" + (f", offset={offset}" if offset else ""), result)
         return result
 
     def _grep(

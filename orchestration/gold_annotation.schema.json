@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pestopoppa/amd-epyc-inference/schemas/gold_annotation.schema.json",
+  "title": "GoldAnnotation",
+  "description": "RA-9 dual-gold annotation envelope (pattern adopted from benchmrk, intake-948#record; nothing vendored). ONE annotated finding in a reviewer/security-review gold corpus. `status: valid` asserts a true finding a reviewer SHOULD endorse; `status: invalid` is a DECOY a reviewer SHOULD reject -- the negative-control axis that makes a false-accept rate measurable from our own data (the gap intake-845#record names). Dual gold: an executable oracle and a reasoning label, either may be null but not both; when both are present and disagree the row must be marked for arbitration. Machine-generated annotations must carry an executable oracle AND an admitted gold-sanity record (intake-983#record: gate before judge). Semantic rules beyond JSON Schema (stage order, temperature escalation, oracle agreement) live in src/proactive_delegation/gold_annotations.py and src/proactive_delegation/gold_sanity.py. Shared by reviewer-typed-artifacts.md RA-9 and security-review-skill.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "annotation_id",
+    "corpus_id",
+    "subject",
+    "finding",
+    "status",
+    "origin",
+    "annotated_by",
+    "gold",
+    "needs_arbitration"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "annotation_id": { "type": "string", "minLength": 1 },
+    "corpus_id": { "type": "string", "minLength": 1 },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "content_hash", "file"],
+      "description": "Where the finding is asserted. `content_hash` pins the exact subject bytes (a moved line is a different subject).",
+      "properties": {
+        "ref": { "type": "string", "minLength": 1, "description": "Repo@commit, package_id, or corpus row id." },
+        "content_hash": { "$ref": "#/$defs/sha256" },
+        "file": { "type": "string", "minLength": 1 },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 },
+        "post_cutoff": {
+          "type": "boolean",
+          "description": "Subject postdates the reviewer's training cutoff (benchmrk: public corpora are contaminated)."
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "category"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "category": { "type": "string", "minLength": 1, "description": "e.g. STRIDE/OWASP class, or a reviewer defect class for non-security corpora." },
+        "cwes": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^CWE-[0-9]+$" },
+          "uniqueItems": true
+        },
+        "description": { "type": "string" }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["valid", "invalid"],
+      "description": "valid = true finding (reviewer should endorse); invalid = decoy / negative control (reviewer should reject)."
+    },
+    "invalid_reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Why the decoy is not a real finding. Required iff status is invalid."
+    },
+    "criticality": {
+      "type": "string",
+      "enum": ["must", "should", "may"],
+      "description": "Tiered recall weight (benchmrk). Only meaningful for valid findings."
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "ref"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["file_span", "test_result", "advisory", "commit", "trace_event", "note"] },
+          "ref": { "type": "string", "minLength": 1 },
+          "content_hash": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "origin": {
+      "type": "string",
+      "enum": ["human", "machine_generated"]
+    },
+    "annotated_by": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["annotator", "kind"],
+        "properties": {
+          "annotator": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "enum": ["human", "model"] },
+          "model_quant": { "type": "string" },
+          "at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "consensus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n_annotators", "n_agree"],
+      "description": "Multi-annotator consensus filter (benchmrk).",
+      "properties": {
+        "n_annotators": { "type": "integer", "minimum": 1 },
+        "n_agree": { "type": "integer", "minimum": 0 },
+        "rule": { "type": "string" }
+      }
+    },
+    "gold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executable_oracle", "reasoning_label"],
+      "minProperties": 2,
+      "properties": {
+        "executable_oracle": {
+          "oneOf": [{ "$ref": "#/$defs/executable_oracle" }, { "type": "null" }]
+        },
+        "reasoning_label": {
+          "oneOf": [{ "$ref": "#/$defs/reasoning_label" }, { "type": "null" }]
+        }
+      },
+      "not": {
+        "properties": {
+          "executable_oracle": { "type": "null" },
+          "reasoning_label": { "type": "null" }
+        }
+      }
+    },
+    "needs_arbitration": {
+      "type": "boolean",
+      "description": "True when the dual gold disagrees or a single gold is inconclusive. Marked, never auto-decided."
+    },
+    "gold_sanity": { "$ref": "#/$defs/gold_sanity" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "invalid" } } },
+      "then": { "required": ["invalid_reason"], "not": { "required": ["criticality"] } },
+      "else": { "not": { "required": ["invalid_reason"] } }
+    },
+    {
+      "if": { "properties": { "origin": { "const": "machine_generated" } } },
+      "then": {
+        "required": ["gold_sanity"],
+        "properties": {
+          "gold": { "properties": { "executable_oracle": { "$ref": "#/$defs/executable_oracle" } } },
+          "gold_sanity": { "properties": { "outcome": { "const": "admitted" } } }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "executable_oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "instrument", "instrument_version", "witness_ref"],
+      "description": "A witness test run by the project's NATIVE runner. verdict = does the witness confirm `status` (pass) or contradict it (fail).",
+      "properties": {
+        "verdict": { "type": "string", "enum": ["pass", "fail", "inconclusive"] },
+        "instrument": { "type": "string", "minLength": 1, "description": "Native runner, e.g. pytest, cargo test, go test." },
+        "instrument_version": { "type": "string", "minLength": 1 },
+        "witness_ref": { "type": "string", "minLength": 1 },
+        "witness_hash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "reasoning_label": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "rationale"],
+      "properties": {
+        "verdict": { "type": "string", "enum": ["valid", "invalid"] },
+        "rationale": { "type": "string", "minLength": 1 }
+      }
+    },
+    "gold_sanity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["procedure_version", "attempts", "outcome"],
+      "description": "Gold-sanity gate record (intake-983#record). Stage order per attempt is inject -> apply_gold -> native_run -> judge, and judge is reached only after native_run passed on gold.",
+      "properties": {
+        "procedure_version": { "type": "string", "minLength": 1 },
+        "outcome": { "type": "string", "enum": ["admitted", "discarded_gold_failure", "discarded_judge"] },
+        "attempts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["attempt", "temperature", "stages"],
+            "properties": {
+              "attempt": { "type": "integer", "minimum": 1 },
+              "temperature": { "type": "number", "minimum": 0 },
+              "artifact_hash": { "$ref": "#/$defs/sha256" },
+              "stages": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["stage", "ok"],
+                  "properties": {
+                    "stage": { "type": "string", "enum": ["inject", "apply_gold", "native_run", "judge"] },
+                    "ok": { "type": "boolean" },
+                    "detail": { "type": "string" }
+                  }
+                }
+              },
+              "judge_votes": {
+                "type": "array",
+                "items": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "binding": {
+    "candidate": {
+      "content_hash": "sha256:5e5befda292e400dc76d57a744825909dc0287d4bf029fabafaf08187cb44be4",
+      "ref": "summary.txt",
+      "version": "v1"
+    },
+    "pipeline_version": "review-pipeline-2026.08.05",
+    "prompt_bundle_hash": "sha256:3fab5ea477f6e394e95211b092a4181e87335b67e3a547a30e612c4cca21300e",
+    "review_schema_version": "1.0.0",
+    "reviewer": {
+      "model": "Qwen3.6-27B",
+      "quant": "Q4_K_M"
+    },
+    "source": {
+      "content_hash": "sha256:e92d8224c673360fb0f1f8695674f0396428beba03dc1dfe110def8200051320",
+      "ref": "abstract.txt",
+      "version": "v1"
+    }
+  },
+  "binding_digest": "sha256:6ce71bfbeee01246b5c725856c5ceab937be921c43886c10685141ccf5f0ad8b",
+  "created_at": "2026-08-05T10:00:00+00:00",
+  "envelope_id": "rev-2026-08-05-0001",
+  "envelope_schema_version": "1.0.0",
+  "objections": [
+    {
+      "independent_corroboration": false,
+      "objection_id": "obj-1",
+      "status": "unverified_lead",
+      "text": "The n=200 per-suite count is not restated in the summary."
+    }
+  ],
+  "output_hash": "sha256:f632edb3ca78fc9cfa42e35ce841a99f5142cc5496a81d5e20b9c5201258dd74",
+  "supersedes": null,
+  "validation_status": "valid"
+}

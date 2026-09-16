@@ -1,0 +1,3 @@
+We present a speculative decoding scheme that improves decode throughput by 1.3x on a 27B dense model
+with no change in output distribution. Evaluation covers 3 suites at n=200 each; the earlier 1.8x
+figure was measured with a mis-pinned draft model and is withdrawn.

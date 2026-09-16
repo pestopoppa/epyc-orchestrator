@@ -9,7 +9,9 @@ decisions.
 
 Phase 5 architecture: two NextPLAID containers with specialized models.
   :8088  nextplaid-code   LateOn-Code (130M, 128-dim, INT8)   → code index (AST-chunked)
-  :8089  nextplaid-docs   answerai-colbert-small-v1-onnx      → docs index
+  :8089  nextplaid-docs   GTE-ModernColBERT-v1 (149M, 128-dim, INT8) → docs index
+         (answerai-colbert-small-v1 was retired 2026-02-20; the model is declared in
+         orchestration/launch_manifest.yaml `nextplaid-docs`, which is authoritative)
 
 Degrades gracefully: if docs container down, falls back to code container.
 

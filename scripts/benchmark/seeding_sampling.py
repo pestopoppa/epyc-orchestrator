@@ -70,6 +70,62 @@ def _load_research_benchmark_module(module_name: str) -> Any:
     return module
 
 
+def build_question_pool() -> dict[str, int]:
+    """Rebuild the question pool with the SAME research module the sampler reads.
+
+    EVL-12 A2 residue: ``--rebuild-pool`` used a bare ``from question_pool import``,
+    which bound whichever same-named copy ``sys.path`` put first (the orchestrator
+    copy sits first), while ``sample_unseen_questions`` binds the research copy by path.
+    """
+    question_pool = _load_research_benchmark_module("question_pool")
+    return getattr(question_pool, "build_pool")()
+
+
+def load_questions_by_ids(
+    question_ids: list[str],
+    *,
+    logger: logging.Logger,
+    pool_path: Path | None = None,
+) -> list[dict]:
+    """Look up pool questions by ID through the research ``question_pool.load_pool``.
+
+    Accepts bare IDs and ``suite/id``. Returns them in input order, de-duplicated.
+    The research module has no ``load_questions_by_ids``, so the lookup lives here and
+    binds the same pool reader as the sampler. It never falls back to a bare import
+    (EVL-12 A2 residue).
+    """
+    question_pool = _load_research_benchmark_module("question_pool")
+    pool = getattr(question_pool, "load_pool")(pool_path, warn_stale=False)
+    by_id: dict[str, dict] = {}
+    for questions in pool.values():
+        for q in questions:
+            by_id[q.get("id", "")] = q
+
+    deduped: list[dict] = []
+    seen_ids: set[str] = set()
+    missing: list[str] = []
+    for qid in question_ids:
+        bare_id = qid.split("/", 1)[1] if "/" in qid else qid
+        if bare_id in by_id:
+            q = by_id[bare_id]
+        elif qid in by_id:
+            q = by_id[qid]
+        else:
+            missing.append(qid)
+            continue
+        if q["id"] not in seen_ids:
+            seen_ids.add(q["id"])
+            deduped.append(q)
+
+    if missing:
+        logger.warning(
+            "load_questions_by_ids: %d IDs not found in pool: %s%s",
+            len(missing), missing[:5], "..." if len(missing) > 5 else "",
+        )
+    logger.info("Loaded %d/%d questions by ID", len(deduped), len(question_ids))
+    return deduped
+
+
 def _reference_text(q: dict) -> str:
     return str(q.get("reference") or q.get("reference_answer") or "")
 

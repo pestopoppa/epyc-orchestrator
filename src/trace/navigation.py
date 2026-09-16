@@ -40,16 +40,21 @@ def search_records(
     limit: int = 20,
     vector_rows: Sequence[dict[str, Any]] | None = None,
     rrf_k: int = 60,
+    order: str | None = None,
     **filters: Any,
 ) -> list[dict[str, Any]]:
     """Search trace records by FTS text and optional structured filters.
+
+    Lexical rows are bm25-ranked (most relevant first) by default; pass
+    ``order="recency"`` for the latest matches instead. RRF fusion consumes
+    this rank order.
 
     ``vector_rows`` is optional and caller-supplied. Passing it enables RRF
     fusion without this module owning an embedding model or vector index.
     """
 
     normalized = _require_text(text, "text")
-    lexical_rows = query(db_path=db_path, text=normalized, limit=limit, **filters)
+    lexical_rows = query(db_path=db_path, text=normalized, limit=limit, order=order, **filters)
     if vector_rows is None:
         return _with_rank_source(lexical_rows, "fts")
     return rrf_fuse(
@@ -128,7 +133,8 @@ def get_conversation(
         )
     if session_id is None:
         raise TraceNavigationError("session_id or trial_id is required")
-    rows = query(db_path=db_path, session_id=session_id, limit=limit)
+    # Latest ``limit`` events of the session, then replayed oldest-first.
+    rows = query(db_path=db_path, session_id=session_id, limit=limit, order="recency")
     timeline = sorted(rows, key=lambda row: (str(row.get("ts_utc") or ""), row.get("id") or 0))
     return {
         "session_id": session_id,
@@ -204,6 +210,92 @@ def rrf_fuse(
         row["_rrf_sources"] = sorted(sources.get(row_key, set()))
         fused.append(row)
     return fused
+
+
+def select_budgeted_records(
+    rows: Sequence[dict[str, Any]],
+    *,
+    history_is_truncated: bool = False,
+    history_tokens: int | None = None,
+    window_tokens: int | None = None,
+    pressure_threshold: float | None = None,
+    remaining_budget_fraction: float | None = None,
+) -> list[dict[str, Any]]:
+    """Select retrieved rows under a window-pressure-conditional token budget.
+
+    Pure and default-off (UTM-M7/M8). It never searches, counts tokens,
+    calls embeddings, or injects prompts; callers pass already-ranked rows.
+
+    * If ``history_is_truncated`` is false (the default: the untruncated
+      history fits), nothing is returned.
+    * Otherwise the caller must declare ``history_tokens``, ``window_tokens``,
+      ``pressure_threshold`` and ``remaining_budget_fraction``. Retrieval is
+      admitted only while ``history_tokens / window_tokens`` exceeds
+      ``pressure_threshold``.
+    * Only rows carrying an explicit positive integer ``estimated_tokens`` are
+      eligible (unknown cost fails closed). Rows are admitted in caller rank
+      order until the next row would exceed
+      ``remaining_budget_fraction * (window_tokens - history_tokens)``; the
+      selection stops there so a lower-ranked row never displaces a
+      higher-ranked one.
+    """
+
+    if not history_is_truncated:
+        return []
+    missing = [
+        name
+        for name, value in (
+            ("history_tokens", history_tokens),
+            ("window_tokens", window_tokens),
+            ("pressure_threshold", pressure_threshold),
+            ("remaining_budget_fraction", remaining_budget_fraction),
+        )
+        if value is None
+    ]
+    if missing:
+        raise TraceNavigationError("budgeted selection requires explicit " + ", ".join(missing))
+    history = _require_nonnegative_int(history_tokens, "history_tokens")
+    window = _require_nonnegative_int(window_tokens, "window_tokens")
+    if window <= 0:
+        raise TraceNavigationError("window_tokens must be positive")
+    threshold = _require_unit_fraction(pressure_threshold, "pressure_threshold", allow_zero=True)
+    fraction = _require_unit_fraction(
+        remaining_budget_fraction, "remaining_budget_fraction", allow_zero=False
+    )
+    if history / window <= threshold:
+        return []
+    remaining = window - history
+    if remaining <= 0:
+        return []
+    budget = int(fraction * remaining)
+    selected: list[dict[str, Any]] = []
+    spent = 0
+    for row in rows:
+        cost = row.get("estimated_tokens")
+        if isinstance(cost, bool) or not isinstance(cost, int) or cost <= 0:
+            continue
+        if spent + cost > budget:
+            break
+        spent += cost
+        selected.append(dict(row))
+    return selected
+
+
+def _require_nonnegative_int(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise TraceNavigationError(f"{field} must be a non-negative integer")
+    return value
+
+
+def _require_unit_fraction(value: Any, field: str, *, allow_zero: bool) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TraceNavigationError(f"{field} must be a number")
+    number = float(value)
+    low_ok = number >= 0.0 if allow_zero else number > 0.0
+    if not (low_ok and number <= 1.0):
+        bound = "[0, 1]" if allow_zero else "(0, 1]"
+        raise TraceNavigationError(f"{field} must be in {bound}")
+    return number
 
 
 def _require_text(value: str, field: str) -> str:

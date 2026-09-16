@@ -59,6 +59,23 @@ def _load_module(name: str, file_name: str):
     return module
 
 
+def _bind_research_pool(mod, monkeypatch, questions):
+    """EVL-12 A2: --question-ids must read the research pool via the path-bound loader.
+
+    A stale same-named module is planted in sys.modules; if the bare import comes
+    back, it raises.
+    """
+    stale = ModuleType("question_pool")
+    stale.load_questions_by_ids = Mock(side_effect=AssertionError("bare-import copy used"))
+    monkeypatch.setitem(sys.modules, "question_pool", stale)
+    pool_mod = ModuleType("question_pool")
+    pool_mod.load_pool = Mock(return_value={"suite_a": list(questions)})
+    monkeypatch.setattr(
+        mod._seeding_sampling, "_load_research_benchmark_module", Mock(return_value=pool_mod),
+    )
+    return pool_mod
+
+
 def _install_orchestration_module_tree_stubs(monkeypatch) -> None:
     orchestration_pkg = ModuleType("orchestration")
     orchestration_pkg.__path__ = []  # type: ignore[attr-defined]
@@ -230,9 +247,14 @@ def test_main_rebuild_pool_mode_prints_summary(file_name, monkeypatch, capsys):
     args = _base_args()
     args.rebuild_pool = True
 
+    # EVL-12 A2: a same-named module on sys.path must NOT capture --rebuild-pool.
+    stale = ModuleType("question_pool")
+    stale.build_pool = Mock(side_effect=AssertionError("bare-import copy used"))
+    monkeypatch.setitem(sys.modules, "question_pool", stale)
     pool_mod = ModuleType("question_pool")
     pool_mod.build_pool = Mock(return_value={"suite_a": 3, "suite_b": 1})
-    monkeypatch.setitem(sys.modules, "question_pool", pool_mod)
+    loader = Mock(return_value=pool_mod)
+    monkeypatch.setattr(mod._seeding_sampling, "_load_research_benchmark_module", loader)
 
     with patch("argparse.ArgumentParser.parse_args", return_value=args):
         mod.main()
@@ -240,6 +262,9 @@ def test_main_rebuild_pool_mode_prints_summary(file_name, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Pool rebuilt" in out
     assert "suite_a" in out
+    loader.assert_called_with("question_pool")
+    pool_mod.build_pool.assert_called_once_with()
+    stale.build_pool.assert_not_called()
 
 
 @pytest.mark.parametrize("file_name", _ROUTING_FILES)
@@ -1007,9 +1032,7 @@ def test_main_three_way_continuous_question_ids_override_break(tmp_path, monkeyp
     Path(args.question_ids).write_text(json.dumps(["suite_a/q1"]))
     questions = [{"id": "q1", "suite": "suite_a", "prompt": "p", "expected": "e"}]
 
-    pool_mod = ModuleType("question_pool")
-    pool_mod.load_questions_by_ids = Mock(return_value=questions)
-    monkeypatch.setitem(sys.modules, "question_pool", pool_mod)
+    _bind_research_pool(mod, monkeypatch, questions)
 
     with (
         patch("argparse.ArgumentParser.parse_args", return_value=args),
@@ -1031,9 +1054,7 @@ def test_main_question_ids_all_question_ids_dict_format(tmp_path, monkeypatch):
     Path(args.question_ids).write_text(json.dumps({"all_question_ids": ["suite_a/q1"]}))
     questions = [{"id": "q1", "suite": "suite_a", "prompt": "p", "expected": "e"}]
 
-    pool_mod = ModuleType("question_pool")
-    pool_mod.load_questions_by_ids = Mock(return_value=questions)
-    monkeypatch.setitem(sys.modules, "question_pool", pool_mod)
+    _bind_research_pool(mod, monkeypatch, questions)
 
     with (
         patch("argparse.ArgumentParser.parse_args", return_value=args),
@@ -1073,9 +1094,7 @@ def test_main_question_ids_forces_dry_run_and_passes_override(tmp_path, monkeypa
     qid_file.write_text(json.dumps(["suite_a/q1"]))
     questions = [{"id": "q1", "suite": "suite_a", "prompt": "p", "expected": "e"}]
 
-    pool_mod = ModuleType("question_pool")
-    pool_mod.load_questions_by_ids = Mock(return_value=questions)
-    monkeypatch.setitem(sys.modules, "question_pool", pool_mod)
+    _bind_research_pool(mod, monkeypatch, questions)
 
     with (
         patch("argparse.ArgumentParser.parse_args", return_value=args),

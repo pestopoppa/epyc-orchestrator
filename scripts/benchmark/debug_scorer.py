@@ -1004,9 +1004,18 @@ def _score_llm_judge(answer: str, expected: str, config: dict[str, Any]) -> bool
         timeout: HTTP timeout in seconds (default: 30).
         _eval_batch_id: Internal EvalTower batch correlation identifier.
     """
-    timeout = config.get("timeout", 30)
-    judge_url = _resolve_llm_judge_base_url(config)
-    use_orchestrator = _llm_judge_uses_orchestrator(config)
+    if config.get("per_nugget"):
+        # CME-1: a nugget-rubric item (BEAM) is judged ONCE PER NUGGET on a
+        # three-valued 0 / 0.5 / 1 scale and folded later. A single boolean here
+        # would binarise that scale, which is exactly the fold confusion that put
+        # one BEAM run at 49.0 and 55.7. Refuse loudly instead of answering a
+        # different question.
+        raise ScoringUnavailableError(
+            "llm_judge_per_nugget_item: scoring_config.per_nugget is set; a boolean "
+            "verdict would binarise the 0/0.5/1 nugget scale. Judge each nugget with "
+            "request_llm_judge_text() (epyc-inference-research "
+            "scripts/benchmark/judge_beam_run.py); refusing scorer fallback"
+        )
 
     # First try a boundary-aware substring fast path; contained words such as
     # "cat" in "concatenate" must still go to the judge.
@@ -1033,6 +1042,36 @@ def _score_llm_judge(answer: str, expected: str, config: dict[str, Any]) -> bool
         "Return only the JSON boolean true or false."
     )
 
+    verdict = request_llm_judge_text(
+        judge_prompt, config, max_tokens=8, output_schema={"type": "boolean"}
+    ).lower()
+    return verdict.startswith("true")
+
+
+def request_llm_judge_text(
+    judge_prompt: str,
+    config: dict[str, Any],
+    *,
+    max_tokens: int,
+    output_schema: dict[str, Any] | None,
+) -> str:
+    """Send one prompt to the resolved llm_judge endpoint and return its raw text verdict.
+
+    This is the transport ``_score_llm_judge`` uses, exposed so that a caller
+    with a non-boolean contract can reuse the same endpoint resolution, the same
+    protocol choice and the same fail-closed error taxonomy. The per-nugget BEAM
+    judge (CME-1, ``epyc-inference-research
+    scripts/benchmark/judge_beam_run.py``) is one such caller. It never parses
+    the verdict: the returned text is stripped but not lowercased, and the caller
+    owns the parse.
+
+    Any transport, HTTP, shape or empty-answer failure raises
+    ``ScoringUnavailableError``. It is never returned as text.
+    """
+    timeout = config.get("timeout", 30)
+    judge_url = _resolve_llm_judge_base_url(config)
+    use_orchestrator = _llm_judge_uses_orchestrator(config)
+
     import httpx
 
     try:
@@ -1057,11 +1096,11 @@ def _score_llm_judge(answer: str, expected: str, config: dict[str, Any]) -> bool
                     5_000,
                     max(1_000, int(float(timeout) * 250)),
                 ),
-                "max_tokens": 8,
+                "max_tokens": int(max_tokens),
                 "timeout_s": int(timeout),
                 "client_deadline_unix_s": client_deadline_unix_s,
                 "allow_delegation": False,
-                "output_schema": {"type": "boolean"},
+                "output_schema": output_schema,
             }
             eval_batch_id = str(config.get("_eval_batch_id") or "").strip()
             if eval_batch_id:
@@ -1076,7 +1115,7 @@ def _score_llm_judge(answer: str, expected: str, config: dict[str, Any]) -> bool
             )
             resp.raise_for_status()
             data = resp.json()
-            verdict = str(data.get("answer") or "").strip().lower()
+            verdict = str(data.get("answer") or "").strip()
             if data.get("error"):
                 # A structured backend error (200-with-error body) or an empty
                 # answer is scorer-unavailability, NOT a "false" verdict. Route
@@ -1095,7 +1134,7 @@ def _score_llm_judge(answer: str, expected: str, config: dict[str, Any]) -> bool
                 f"{judge_url}/v1/chat/completions",
                 json={
                     "messages": [{"role": "user", "content": judge_prompt}],
-                    "max_tokens": 8,
+                    "max_tokens": int(max_tokens),
                     "temperature": 0.0,
                 },
                 timeout=timeout,
@@ -1103,7 +1142,7 @@ def _score_llm_judge(answer: str, expected: str, config: dict[str, Any]) -> bool
             resp.raise_for_status()
             data = resp.json()
             try:
-                verdict = str(data["choices"][0]["message"]["content"]).strip().lower()
+                verdict = str(data["choices"][0]["message"]["content"]).strip()
             except (KeyError, IndexError, TypeError) as exc:
                 raise _JudgeResponseError("unexpected_shape", type(exc).__name__) from exc
             if not verdict:
@@ -1136,7 +1175,7 @@ def _score_llm_judge(answer: str, expected: str, config: dict[str, Any]) -> bool
         category = "invalid_json" if isinstance(exc, ValueError) else "unexpected_shape"
         detail = f"{type(exc).__name__}: {str(exc)[:120]}"
     else:
-        return verdict.startswith("true")
+        return verdict
 
     # The category and original exception class/message are deliberately first:
     # compact per-question sidecars truncate long errors. Never include prompts
