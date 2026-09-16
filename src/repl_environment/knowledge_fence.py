@@ -9,6 +9,12 @@ check, the REPL file tools allow all of ``/mnt/raid0/llm``, and ``run_shell``
 allows cat/grep/find. Stored traces keep tool names only, so absence of a read
 could never be shown.
 
+Discovery scope (intended): ~327 checkouts / ~1145 fenced dirs on this host. It
+covers every epyc-root worktree and marker-discovered checkout, the llama.cpp
+trees' ``handoffs/active``, and the orchestrator's ``handoffs``, ``docs/chapters``
+and ``benchmarks``. A checkout's ``.git`` is fenced too, so ``git show HEAD:wiki/x``
+cannot recover a blob.
+
 Arming
 ------
 The fence is armed PER REQUEST by ``ChatRequest.eval_fence`` (operator decision
@@ -17,7 +23,11 @@ production API sets that unconditionally, so gating on it would fence production
 chat. Three states:
 
 * ``eval_fence`` absent (``None``) — production traffic. ``begin()`` installs no
-  carrier, every hook below is a no-op, and tool behaviour is byte-identical.
+  carrier, every hook below is a no-op, and tool behaviour is unchanged. The
+  production LAUNCH is unchanged (no kernel wrapper, no config env). One
+  deliberate change reaches production: the ThreadPoolExecutor tool hops now run
+  under ``copy_context()``, so a timed-out tool thread sees the request deadline,
+  cancel flag and inference-tap context it could not before. Output is unchanged.
 * ``eval_fence=True`` — the fence is armed and touched paths are recorded.
 * ``eval_fence=False`` — explicit unarmed eval arm (the AP-54b A/B control):
   nothing is denied, but touched paths ARE recorded so the arm can show whether
@@ -108,6 +118,9 @@ class FenceCarrier:
     denied: list[str] = field(default_factory=list)
     touched_overflow: int = 0
     denied_count: int = 0
+    # Kernel enforcement level applied to (or available for) armed children:
+    # landlock | mountns | hook-only. None until known.
+    enforcement: str | None = None
     _seen: set[str] = field(default_factory=set)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -140,7 +153,17 @@ class FenceCarrier:
             }
             if self.touched_overflow:
                 out["touched_paths_overflow"] = int(self.touched_overflow)
-            return out
+            enforcement = self.enforcement
+        if self.armed:
+            if enforcement is None:
+                try:
+                    from src.repl_environment import fence_kernel
+
+                    enforcement = fence_kernel.probe_enforcement()
+                except Exception:  # noqa: BLE001
+                    enforcement = "hook-only"
+            out["enforcement"] = enforcement
+        return out
 
 
 _carrier: ContextVar[FenceCarrier | None] = ContextVar("eval_knowledge_fence", default=None)
@@ -293,7 +316,8 @@ def _compute_roots() -> FenceRoots:
     checkouts = discover_checkouts(llm)
     candidates_dirs: set[str] = set()
     for base in checkouts:
-        for sub in _rules.KNOWLEDGE_SUBDIRS:
+        # .git holds the blobs of every tracked knowledge file (`git show HEAD:wiki/x`).
+        for sub in (*_rules.KNOWLEDGE_SUBDIRS, ".git"):
             candidates_dirs.add(f"{base}/{sub}")
         for nested in _rules.KNOWLEDGE_NESTED:
             candidates_dirs.add(f"{base}/" + "/".join(nested))
@@ -481,10 +505,33 @@ _GIT_LOG_CONTENT_FLAGS = ("-p", "-u", "--patch", "--format", "--pretty", "--stat
 # awk can read files (getline <), run commands (system(), "cmd" | getline,
 # print | "cmd") and build paths by string concatenation, so under the fence an
 # awk program with any of those is refused outright.
-_AWK_IO_RE = re.compile(r"\bgetline\b|\bsystem\s*\(|\|\s*\"|\"\s*\||\bprint[f]?\b[^;{}]*[>|]")
+_AWK_IO_RE = re.compile(
+    r"\bgetline\b|\bsystem\s*\(|\|\s*\"|\"\s*\||\bprint[f]?\b[^;{}]*[>|]|\bARGV\b|\bARGC\b|\bENVIRON\b"
+)
 # GNU sed commands that read, write or execute: r/R file, w/W file, e command,
 # and the s///w and s///e flags.
-_SED_IO_RE = re.compile(r"(?:^|[\s;{}!0-9$/,])[rRwWe](?:\s|$)|s(.).*?\1.*?\1[gpiImM0-9]*[we]")
+_SED_S_CMD = re.compile(r"s(.)(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1([a-zA-Z0-9]*)")
+_SED_Y_CMD = re.compile(r"y(.)(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1")
+_SED_ADDR = re.compile(r"/(?:\\.|[^/])*/[IM]*|\\(.)(?:\\.|(?!\1).)*\1[IM]*")
+_SED_TEXT_CMD = re.compile(r"(?:^|(?<=[;{}\s!0-9$,]))[aic]\\?(?:\s[^\n]*)?(?:\n|$)")
+_SED_IO_CMD = re.compile(r"(?:^|(?<=[;{}\s!0-9$,+~]))[rRwWe]")
+
+
+def _sed_does_io(program: str) -> bool:
+    """True when a sed program reads, writes or executes (r R w W e, s///w, s///e).
+
+    Regex addresses, s/// and y/// bodies, and a/i/c text are stripped first, so
+    ``/re/p`` or ``s/x/r/`` are not mistaken for commands. The command letter
+    needs no following whitespace: ``1R/workspace/wiki/x`` is a read.
+    """
+    for match in _SED_S_CMD.finditer(program):
+        if set(match.group(2)) & {"w", "e"}:
+            return True
+    stripped = _SED_S_CMD.sub(";", program)
+    stripped = _SED_Y_CMD.sub(";", stripped)
+    stripped = _SED_ADDR.sub(" ", stripped)
+    stripped = _SED_TEXT_CMD.sub(";", stripped)
+    return bool(_SED_IO_CMD.search(stripped))
 _PATH_TOKEN_SPLIT = re.compile(r"[\s\"'<>;(){}|,=]+")
 
 
@@ -524,8 +571,8 @@ def _check_shell(carrier: FenceCarrier, parts: list[str], cwd: str) -> str | Non
     if base in {"awk", "gawk", "mawk", "nawk", "sed"}:
         program = _script_program(base, args)
         if carrier.armed and program is not None:
-            io_re = _SED_IO_RE if base == "sed" else _AWK_IO_RE
-            if io_re.search(program):
+            does_io = _sed_does_io(program) if base == "sed" else bool(_AWK_IO_RE.search(program))
+            if does_io:
                 return _refuse(carrier, base, "program performs file or command I/O")
         if carrier.armed and any(a in {"-f", "--file"} or a.startswith("--file=") for a in args):
             return _refuse(carrier, base, "-f program files cannot be inspected")
@@ -533,7 +580,8 @@ def _check_shell(carrier: FenceCarrier, parts: list[str], cwd: str) -> str | Non
             program_tokens = [t for t in _PATH_TOKEN_SPLIT.split(program) if "/" in t]
     recursive = base in _rules.RECURSIVE_COMMANDS or (
         base in {"grep", "egrep", "fgrep"} and any(_is_recursive_grep_flag(a) for a in args)
-    ) or (base == "ls" and any(a.startswith("-") and not a.startswith("--") and "R" in a for a in args))
+    ) or (base == "ls" and any(a == "--recursive" or (a.startswith("-") and not a.startswith("--") and "R" in a)
+                               for a in args))
     flag_values = [a.split("=", 1)[1] for a in args if a.startswith("--") and "=" in a]
     path_args = [v for v in (*positional, *flag_values) if _shell_arg_is_path(v, cwd)]
     for value in path_args:
@@ -619,16 +667,15 @@ def check_python_source(code: str) -> str | None:
 
 # ── run_python_code runtime fence (sys.addaudithook in the child) ───────
 
-FENCE_CONFIG_ENV = "EPYC_EVAL_FENCE_CONFIG"
+FENCE_CONFIG_ENV = "EPYC_EVAL_FENCE_CONFIG_FILE"
 
 
 def python_fence_bootstrap() -> str:
-    """``python3 -c`` source: the rules, the audit hook, then the user script."""
-    from src.repl_environment import _fence_audit_hook as _hook
-
+    """``python3 -c`` source: the rules (as a literal), the audit hook, then the script."""
+    hook_path = Path(__file__).with_name("_fence_audit_hook.py")
     rules_src = Path(_rules.__file__).read_text(encoding="utf-8")
-    hook_src = Path(_hook.__file__).read_text(encoding="utf-8")
-    return f"{rules_src}\n{hook_src}\n_fence_main()\n"
+    hook_src = hook_path.read_text(encoding="utf-8")
+    return f"_F_RULES_SRC = {rules_src!r}\n{hook_src}\n_fence_main()\n"
 
 
 @dataclass
@@ -638,27 +685,71 @@ class PythonFenceLaunch:
     touched_file: str
 
 
+def python_fence_run_dir(tmp_dir: str) -> str | None:
+    """A private per-call working directory for a fenced child; ``None`` in production."""
+    if _carrier.get() is None:
+        return None
+    return tempfile.mkdtemp(prefix="fence_run_", dir=tmp_dir)
+
+
+def _record_enforcement(carrier: FenceCarrier, level: str) -> None:
+    with carrier._lock:
+        carrier.enforcement = level
+
+
+def shell_fence_command(argv: list[str]) -> tuple[list[str], dict[str, str] | None]:
+    """``run_shell`` launch: kernel-wrapped when ARMED, unchanged otherwise.
+
+    Returns ``(argv, None)`` in production and in the control arm, so the
+    ``subprocess.run`` call is exactly the legacy one.
+    """
+    carrier = _carrier.get()
+    if carrier is None or not carrier.armed:
+        return argv, None
+    from src.repl_environment import fence_kernel
+
+    wrapped, extra_env, level = fence_kernel.wrap_command(argv)
+    _record_enforcement(carrier, level)
+    if level == fence_kernel.HOOK_ONLY:
+        return argv, None
+    return wrapped, {**os.environ, **extra_env}
+
+
 def python_fence_launch(script_path: str, tmp_dir: str) -> PythonFenceLaunch | None:
     """Launch spec for a fenced ``run_python_code`` child, or ``None`` (production).
 
-    Armed: the hook refuses fenced paths and records touched ones. Control arm
-    (``eval_fence=False``): the same hook records but never refuses, so both
-    AP-54b arms run the identical launcher.
+    Armed: the hook refuses fenced paths and records touched ones, and the child
+    runs under kernel enforcement when one is available. Control arm
+    (``eval_fence=False``): the same hook records but never refuses, and no
+    kernel layer is applied.
     """
     carrier = _carrier.get()
     if carrier is None:
         return None
     fd, touched_file = tempfile.mkstemp(prefix=".fence_touched.", suffix=".tsv", dir=tmp_dir)
     os.close(fd)
+    from src.repl_environment import fence_kernel
+
+    level = fence_kernel.probe_enforcement() if carrier.armed else fence_kernel.HOOK_ONLY
+    roots = fence_roots()
     config = {
-        **fence_roots().as_config(),
+        # The fenced roots run to tens of KB, so they go in a cached file, not the environment.
+        "roots_file": fence_kernel.hook_roots_file(roots),
         "deny": bool(carrier.armed),
+        "enforcement": level,
         "touched_file": touched_file,
         "max_records": MAX_TOUCHED_PATHS * 4,
         "skip": [script_path, touched_file],
     }
-    env = {**os.environ, FENCE_CONFIG_ENV: json.dumps(config)}
+    config_file = os.path.join(tmp_dir, ".fence_config.json")
+    with open(config_file, "w", encoding="utf-8") as fh:
+        json.dump(config, fh)
+    env = {**os.environ, FENCE_CONFIG_ENV: config_file}
     argv = ["python3", "-c", python_fence_bootstrap(), script_path]
+    if carrier.armed:
+        argv, extra_env, level = fence_kernel.wrap_command(argv, extra_allow=[tmp_dir])
+        env.update(extra_env)
+        _record_enforcement(carrier, level)
     return PythonFenceLaunch(argv=argv, env=env, touched_file=touched_file)
 
 

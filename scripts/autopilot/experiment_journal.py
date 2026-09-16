@@ -529,6 +529,8 @@ def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, 
     fence = details.get("eval_fence") if isinstance(details.get("eval_fence"), dict) else {}
     if fence.get("state"):
         out["eval_fence"] = str(fence["state"])
+    if fence.get("fence_enforcement"):
+        out["eval_fence_enforcement"] = str(fence["fence_enforcement"])
     missing = [name for name, present in (("protocol_id", protocol_id), ("reps", reps),
                                           ("date", out["date"]))
                if not present]

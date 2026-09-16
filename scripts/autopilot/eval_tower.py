@@ -1051,6 +1051,16 @@ def _eval_fence_request_flag() -> bool:
     return raw not in {"0", "false", "off", "no", "unarmed"}
 
 
+def _eval_fence_enforcement_from_response(resp: Any) -> str:
+    """Kernel enforcement level the API reported for an ARMED fence, else ""."""
+    echo = resp.get("eval_fence") if isinstance(resp, Mapping) else None
+    if not isinstance(echo, Mapping) or echo.get("state") != EVAL_FENCE_ACTIVE:
+        return ""
+    # An armed echo without the field comes from a build that predates kernel
+    # enforcement: its children ran behind the hook layer only.
+    return str(echo.get("enforcement") or "hook-only")
+
+
 def _eval_fence_from_response(resp: Any) -> tuple[str, list[str] | None, int]:
     """(fence state, touched paths or None when the API echoed nothing, denials)."""
     echo = resp.get("eval_fence") if isinstance(resp, Mapping) else None
@@ -1080,7 +1090,20 @@ def _eval_fence_summary(results: Sequence[Any]) -> dict[str, Any]:
     else:
         state = "mixed"
     recorded = [r for r in scored if getattr(r, "touched_paths", None) is not None]
+    enforcement_counts: dict[str, int] = {}
+    for r in scored:
+        if (getattr(r, "fence", "") or "") == EVAL_FENCE_ACTIVE:
+            level = str(getattr(r, "fence_enforcement", "") or "hook-only")
+            enforcement_counts[level] = enforcement_counts.get(level, 0) + 1
+    if not enforcement_counts:
+        fence_enforcement = ""
+    elif len(enforcement_counts) == 1:
+        fence_enforcement = next(iter(enforcement_counts))
+    else:
+        fence_enforcement = "mixed"
     return {
+        "fence_enforcement": fence_enforcement,
+        "enforcement_counts": dict(sorted(enforcement_counts.items())),
         "state": state,
         "active": counts[EVAL_FENCE_ACTIVE],
         "control": counts[EVAL_FENCE_CONTROL],
@@ -1462,6 +1485,9 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         item["touched_paths"] = [
             str(p)[:_MAX_RECORDED_PATH_CHARS] for p in list(_touched)[:MAX_RECORDED_TOUCHED_PATHS]
         ]
+    _fence_enforcement = str(getattr(r, "fence_enforcement", "") or "")
+    if _fence_enforcement:
+        item["fence_enforcement"] = _fence_enforcement
     _fence_denied = int(getattr(r, "fence_denied_count", 0) or 0)
     if _fence_denied:
         item["fence_denied_count"] = _fence_denied
@@ -3141,6 +3167,8 @@ class QuestionResult:
     fence: str = EVAL_FENCE_ABSENT
     touched_paths: list[str] | None = None
     fence_denied_count: int = 0
+    # Kernel enforcement behind an ACTIVE fence: landlock | mountns | hook-only.
+    fence_enforcement: str = ""
     # 2026-05-23 exogenous-restart resilience (handoff Phase 4).
     # Populated by reading the resilient_post `_meta` dict from the /chat response.
     # exogenous_recovered: a service reload was detected and a retry inside
@@ -4737,6 +4765,7 @@ class EvalTower:
             fence=fence_state,
             touched_paths=touched_paths,
             fence_denied_count=fence_denied_count,
+            fence_enforcement=_eval_fence_enforcement_from_response(resp),
             exogenous_recovered=bool(meta.get("exogenous_recovered", False)),
             exogenous_unrecovered=bool(meta.get("exogenous_unrecovered", False)),
             external_restart=bool(meta.get("external_restart", False)),

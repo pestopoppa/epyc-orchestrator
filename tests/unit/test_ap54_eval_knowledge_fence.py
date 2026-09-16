@@ -3,7 +3,7 @@
 Offline and inference-free. Covers:
   * a fenced request denies wiki / eval-gold reads through the registry, REPL,
     shell and python paths, as a tool error that does not raise;
-  * an unfenced request is byte-identical to today (golden comparison);
+  * an unfenced request produces output identical to today (golden comparison);
   * the ordering hazard: an API without the field ignores it, and a response to
     a request without it carries no new key;
   * touched paths are recorded (bounded, paths only) and carried into question
@@ -321,7 +321,7 @@ def test_parallel_dispatch_workers_see_the_carrier() -> None:
     assert out == {"v0": True, "v1": True, "v2": True}
 
 
-# ── API models and route: ordering hazard, byte-identical responses ─────
+# ── API models and route: ordering hazard, unchanged responses ─────
 
 
 def test_chat_request_accepts_flag_and_tolerates_unknown_fields() -> None:
@@ -830,3 +830,267 @@ def test_shell_io_evasions_are_refused_when_armed(cmd) -> None:
 def test_ordinary_shell_programs_still_run_when_armed(cmd) -> None:
     kf.begin(True)
     assert kf.check_shell(cmd, "/tmp") is None
+
+
+# ── kernel-level enforcement (Fable re-review of 80fa99aa) ───────────────
+
+from src.repl_environment import fence_kernel as fk  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_kernel_caches():
+    fk.reset_caches()
+    yield
+    fk.reset_caches()
+
+
+ENFORCEMENT = fk.probe_enforcement()
+_HAVE_KERNEL = ENFORCEMENT in (fk.LANDLOCK, fk.MOUNTNS)
+_kernel = pytest.mark.skipif(not _HAVE_KERNEL, reason=f"no kernel enforcement here ({ENFORCEMENT})")
+
+# The wiki path is assembled at runtime so the source pre-check never sees a
+# literal marker; that forces the request through the kernel layer.
+_WIKI = "chr(47).join(['', 'mnt', 'raid0', 'llm']) + '/ep' + 'yc-ro' + 'ot/wi' + 'ki/INDEX.md'"
+_WIKI_DIR = "'/mnt/raid0/llm/wor' + 'ktrees/mains/mainA/wi' + 'ki'"
+_LEAK = "EPYC Root"
+
+
+def _real_wiki_present() -> bool:
+    return Path("/mnt/raid0/llm/epyc-root/wiki/INDEX.md").is_file()
+
+
+def test_enforcement_level_is_landlock_here() -> None:
+    # This container (kernel 6.14, non-root) has Landlock ABI >= 1.
+    assert fk.landlock_abi() is not None
+    assert ENFORCEMENT == fk.LANDLOCK
+
+
+def test_probe_falls_back_when_landlock_syscall_missing(monkeypatch) -> None:
+    fk.reset_caches()
+    monkeypatch.setattr(fk, "landlock_abi", lambda: None)
+    monkeypatch.setattr(fk, "_probe_child", lambda mode: mode == fk.MOUNTNS)
+    assert fk.probe_enforcement() == fk.MOUNTNS
+    fk.reset_caches()
+    monkeypatch.setattr(fk, "_probe_child", lambda mode: False)
+    assert fk.probe_enforcement() == fk.HOOK_ONLY
+
+
+def test_probe_is_cached_per_process(monkeypatch) -> None:
+    fk.reset_caches()
+    calls = []
+    monkeypatch.setattr(fk, "landlock_abi", lambda: 6)
+    monkeypatch.setattr(fk, "_probe_child", lambda mode: calls.append(mode) or True)
+    assert fk.probe_enforcement() == fk.LANDLOCK
+    assert fk.probe_enforcement() == fk.LANDLOCK
+    assert calls == [fk.LANDLOCK]
+
+
+def test_build_landlock_rules_excludes_fenced_grants_siblings(tmp_path: Path) -> None:
+    root = tmp_path / "co"
+    (root / "wiki").mkdir(parents=True)
+    (root / "src").mkdir()
+    (root / "README").write_text("x")
+    fenced = {str(root / "wiki")}
+    rules = fk.build_landlock_rules(fenced, root=str(tmp_path))
+    granted = {p for p, _ in rules}
+    assert str(root / "src") in granted
+    assert str(root / "README") in granted
+    assert str(root / "wiki") not in granted
+    assert not any(str(root / "wiki") == p for p, _ in rules)
+
+
+def test_mount_aliases_follow_bind_mounts() -> None:
+    mounts = [
+        ("dev1", "/", "/"),
+        ("dev1", "/llm/epyc-root", "/workspace"),
+        ("dev1", "/llm", "/mnt/raid0/llm"),
+    ]
+    aliases = fk.with_mount_aliases({"/mnt/raid0/llm/epyc-root/wiki"}, mounts)
+    assert "/workspace/wiki" in aliases
+    assert "/mnt/raid0/llm/epyc-root/wiki" in aliases
+
+
+def test_hook_roots_file_is_cached(tmp_path: Path) -> None:
+    roots = kf.fence_roots()
+    a = fk.hook_roots_file(roots)
+    b = fk.hook_roots_file(roots)
+    assert a == b and Path(a).is_file()
+    assert json.loads(Path(a).read_text())["fenced_dirs"]
+
+
+def _run_fenced_python(code: str, level: str, monkeypatch) -> str:
+    monkeypatch.setenv(fk.ENFORCEMENT_ENV, level)
+    fk.reset_caches()
+    kf.begin(True)
+    return _run_python(code)
+
+
+@_kernel
+@pytest.mark.parametrize(
+    "name, code",
+    [
+        ("ctypes_libc", f"import ctypes; p={_WIKI}; libc=ctypes.CDLL(None,use_errno=True); "
+                        "libc.open.restype=ctypes.c_int; fd=libc.open(p.encode(),0); "
+                        "print('LEAK' if fd>=0 and __import__('os').read(fd,20) else 'DENIED')"),
+        ("os_system_var", f"import os; p={_WIKI}; os.system('cat '+p)"),
+        ("bash_c_eval", f"import subprocess; p={_WIKI}; "
+                        "subprocess.run(['bash','-c','q=$(echo '+p+'); cat $q'])"),
+        ("bash_lc", f"import subprocess; p={_WIKI}; subprocess.run(['bash','-lc','cat '+p])"),
+        ("env_C", f"import subprocess,os; d={_WIKI_DIR}; "
+                  "subprocess.run(['env','-C',d,'cat','INDEX.md'])"),
+        ("proc_self_cwd", f"import os; d={_WIKI_DIR}; os.chdir(d); "
+                          "print(open('/proc/self/cwd/INDEX.md').read())"),
+        ("dir_fd_listdir", f"import os; d={_WIKI_DIR}; fd=os.open(d, os.O_RDONLY); "
+                           "print(os.listdir(fd))"),
+        ("hardlink", f"import os; p={_WIKI}; t='/mnt/raid0/llm/tmp/hl_'+str(os.getpid()); "
+                     "os.link(p,t); print(open(t).read())"),
+        ("os_rename_read", f"import os; p={_WIKI}; t='/mnt/raid0/llm/tmp/rn_'+str(os.getpid()); "
+                           "os.rename(p,t); print(open(t).read())"),
+        ("perl", f"import subprocess; p={_WIKI}; "
+                 "subprocess.run(['perl','-e','open(F,\"<\".$ARGV[0]);print<F>', p])"),
+        ("copied_interp", f"import subprocess,shutil,os; p={_WIKI}; "
+                          "n='/mnt/raid0/llm/tmp/notpy_'+str(os.getpid()); "
+                          "shutil.copy('/usr/bin/python3',n); os.chmod(n,0o755); "
+                          "subprocess.run([n,'-c','print(open(__import__(\"sys\").argv[1]).read())',p])"),
+        ("tar_parent", f"import subprocess; d={_WIKI_DIR}; "
+                       "subprocess.run(['tar','cf','-',d])"),
+        ("cp_parent", f"import subprocess,os; d={_WIKI_DIR}; "
+                      "subprocess.run(['cp','-r',d,'/mnt/raid0/llm/tmp/cp_'+str(os.getpid())])"),
+    ],
+)
+def test_kernel_enforcement_denies_every_leak(name, code, monkeypatch) -> None:
+    if not _real_wiki_present():
+        pytest.skip("real epyc-root wiki not present")
+    out = _run_fenced_python(code, ENFORCEMENT, monkeypatch)
+    assert _LEAK not in out, f"{name} leaked: {out}"
+
+
+@_kernel
+@pytest.mark.parametrize(
+    "name, code",
+    [
+        ("numpy", "import numpy; print('OK', int(numpy.array([1,2,3]).sum()))"),
+        ("stdlib", "import json, collections, statistics; print('OK', json.dumps({'a':1}))"),
+        ("tmp_write_read", "p='/mnt/raid0/llm/tmp/ok_'+str(__import__('os').getpid()); "
+                           "open(p,'w').write('hi'); print('OK', open(p).read())"),
+        ("cwd_files", "import os; print('OK', all(os.path.isfile(f) or os.path.isdir(f) "
+                      "for f in os.listdir('.')))"),
+        ("subprocess_echo", "import subprocess; "
+                            "print('OK', subprocess.run(['echo','hi'],capture_output=True,text=True).stdout.strip())"),
+    ],
+)
+def test_kernel_enforcement_allows_legitimate_code(name, code, monkeypatch) -> None:
+    out = _run_fenced_python(code, ENFORCEMENT, monkeypatch)
+    assert "OK" in out, f"{name} broke under enforcement: {out}"
+
+
+@_kernel
+def test_disarm_from_inside_is_denied(monkeypatch) -> None:
+    if not _real_wiki_present():
+        pytest.skip("real epyc-root wiki not present")
+    attempts = [
+        f"import gc; p={_WIKI}\n"
+        "for o in gc.get_objects():\n"
+        "    d = getattr(o, '__self__', None)\n"
+        "print(open(p).read())",
+        f"import sys; p={_WIKI}\n"
+        "f = sys._getframe()\n"
+        "print(open(p).read())",
+        f"import sys; p={_WIKI}\n"
+        "for fr in sys._current_frames().values():\n"
+        "    pass\n"
+        "print(open(p).read())",
+    ]
+    for code in attempts:
+        out = _run_fenced_python(code, ENFORCEMENT, monkeypatch)
+        assert _LEAK not in out, out
+
+
+def test_hook_only_denies_ctypes_and_shell_indirection(monkeypatch) -> None:
+    if not _real_wiki_present():
+        pytest.skip("real epyc-root wiki not present")
+    # Force the fallback layer even though the kernel offers more here.
+    ctypes_code = (f"import ctypes; p={_WIKI}; libc=ctypes.CDLL(None,use_errno=True); "
+                   "libc.open.restype=ctypes.c_int; fd=libc.open(p.encode(),0); "
+                   "print('LEAK' if fd>=0 else 'DENIED')")
+    out = _run_fenced_python(ctypes_code, fk.HOOK_ONLY, monkeypatch)
+    assert "DENIED" in out and _LEAK not in out
+    shell_code = f"import os; p={_WIKI}; os.system('q=$(echo '+p+'); cat $q')"
+    out = _run_fenced_python(shell_code, fk.HOOK_ONLY, monkeypatch)
+    assert _LEAK not in out
+
+
+def test_hook_only_records_enforcement_level() -> None:
+    import os as _os
+
+    prev = _os.environ.get(fk.ENFORCEMENT_ENV)
+    _os.environ[fk.ENFORCEMENT_ENV] = fk.HOOK_ONLY
+    fk.reset_caches()
+    try:
+        carrier = kf.begin(True)
+        _run_python("print('OK')")
+        assert carrier.snapshot()["enforcement"] == fk.HOOK_ONLY
+    finally:
+        if prev is None:
+            _os.environ.pop(fk.ENFORCEMENT_ENV, None)
+        else:
+            _os.environ[fk.ENFORCEMENT_ENV] = prev
+        fk.reset_caches()
+
+
+def test_snapshot_reports_enforcement_only_when_armed() -> None:
+    assert "enforcement" not in kf.begin(False).snapshot()
+    armed = kf.begin(True).snapshot()
+    assert armed["enforcement"] in (fk.LANDLOCK, fk.MOUNTNS, fk.HOOK_ONLY)
+
+
+def test_row_and_summary_carry_enforcement() -> None:
+    import eval_tower
+
+    resp = {
+        "answer": "4", "tokens_generated": 3, "routed_to": "worker_math",
+        "eval_fence": {"state": "active", "enforcement": "landlock", "touched_paths": []},
+    }
+    assert eval_tower._eval_fence_enforcement_from_response(resp) == "landlock"
+    assert eval_tower._eval_fence_enforcement_from_response(
+        {"eval_fence": {"state": "active", "touched_paths": []}}) == "hook-only"
+    assert eval_tower._eval_fence_enforcement_from_response({"eval_fence": {"state": "unarmed"}}) == ""
+    r = eval_tower.QuestionResult(
+        question_id="q1", suite="math", prompt="p", expected="4", answer="4", correct=True,
+        fence="active", touched_paths=[], fence_enforcement="landlock",
+    )
+    assert eval_tower._compact_question_result(r)["fence_enforcement"] == "landlock"
+    summary = eval_tower._eval_fence_summary([r])
+    assert summary["fence_enforcement"] == "landlock"
+    assert summary["enforcement_counts"] == {"landlock": 1}
+
+
+def test_measurement_tuple_carries_enforcement() -> None:
+    import experiment_journal as ej
+
+    entry = ej.JournalEntry(
+        trial_id=1, timestamp="2026-09-16T00:00:00+00:00", species="s", action_type="a",
+        tier=1, quality=0.5, speed=1.0, cost=0.1, reliability=1.0, pareto_status="",
+        eval_details={"details": {"n_scored": 3,
+                                  "eval_fence": {"state": "active", "fence_enforcement": "landlock"}}},
+    )
+    tup = ej.measurement_tuple(entry)
+    assert tup["eval_fence"] == "active"
+    assert tup["eval_fence_enforcement"] == "landlock"
+
+
+def test_unarmed_python_launch_is_output_identical(llm_root: Path, monkeypatch) -> None:
+    import subprocess
+
+    wiki_file = str(llm_root / "worktrees" / "mains" / "mainA" / "wiki" / "INDEX.md")
+    code = f"print(open('{wiki_file}').read())"
+    kf.begin(None)
+    assert kf.python_fence_launch("/tmp/x.py", "/tmp") is None
+    seen = []
+    real = subprocess.run
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: seen.append((cmd, kw)) or real(cmd, **kw))
+    out = _run_python(code)
+    assert len(seen) == 1
+    cmd, kwargs = seen[0]
+    assert cmd[0] == "python3" and len(cmd) == 2 and "env" not in kwargs
+    assert "SECRET wiki content" in out

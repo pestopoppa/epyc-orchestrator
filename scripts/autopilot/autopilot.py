@@ -10210,6 +10210,11 @@ def _run_loop_inner(
             if isinstance(_fence_summary, dict)
             else "absent"
         )
+        eval_details_dict["eval_fence_enforcement"] = (
+            str(_fence_summary.get("fence_enforcement") or "")
+            if isinstance(_fence_summary, dict)
+            else ""
+        )
         journal_entry = JournalEntry(
             trial_id=trial_counter,
             timestamp=datetime.now(timezone.utc).isoformat(),
