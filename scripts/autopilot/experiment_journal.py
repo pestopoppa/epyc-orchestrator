@@ -637,6 +637,9 @@ class ExperimentJournal:
         self.journal_dir = journal_dir or DEFAULT_JOURNAL_DIR
         # W3: append a chained snapshot row when a shard closes (see _maybe_close_segment).
         self.segment_snapshots = segment_snapshots
+        # Replay scope for segment snapshots ({"objective_policy", "exclude_before_ts"});
+        # AutoPilot keeps it aligned with the live archive-authority scope.
+        self.segment_snapshot_scope: dict[str, Any] = {}
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         self._entries: list[JournalEntry] = []
         self._ledger_events_by_batch: dict[int, list[dict[str, Any]]] = {}
@@ -930,7 +933,9 @@ class ExperimentJournal:
                 from journal_snapshot_create import build_archive_snapshot
 
             result = build_archive_snapshot(
-                self, policy_version=SEGMENT_SNAPSHOT_POLICY_VERSION
+                self,
+                policy_version=SEGMENT_SNAPSHOT_POLICY_VERSION,
+                **dict(self.segment_snapshot_scope or {}),
             )
             if result.status != "ready" or result.snapshot is None:
                 log.warning(

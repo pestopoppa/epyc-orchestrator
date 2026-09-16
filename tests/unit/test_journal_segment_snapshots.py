@@ -238,3 +238,92 @@ def test_snapshot_scope_matcher():
                      deinflate_before_ts=None, deinflate_factor=1.0)
     assert not match({"exclusions": {}}, exclude_before_ts=None, deinflate_before_ts=1.0,
                      deinflate_factor=0.5)
+
+
+# ── scoped segment snapshots (live epoch exclusion) ───────────────────────────
+
+EPOCH = (T0 + timedelta(minutes=1996)).timestamp()
+
+
+@pytest.fixture
+def scoped_journal(tmp_path: Path) -> ExperimentJournal:
+    from src.autopilot_core.tier_specs import LEGACY_OBJECTIVE_POLICY
+
+    j = ExperimentJournal(journal_dir=tmp_path)
+    j.segment_snapshot_scope = {
+        "objective_policy": LEGACY_OBJECTIVE_POLICY,
+        "exclude_before_ts": EPOCH,
+    }
+    for trial_id, quality, speed in FIXTURE:
+        j.record(_entry(trial_id, quality, speed))
+    return j
+
+
+def test_scoped_snapshot_records_scope_and_verifies_under_it(scoped_journal, tmp_path):
+    last = scoped_journal.latest_journal_snapshot_event()
+    assert last["snapshot"]["archive"]["exclusions"]["exclude_before_ts"] == EPOCH
+    reloaded = ExperimentJournal(journal_dir=tmp_path)
+    rows = _rows(reloaded)
+    diagnostic = build_snapshot_replay_diagnostic(rows, reloaded.ledger_events())
+    assert diagnostic.status == "archive_prefix_match"
+    assert diagnostic.bounded_replay_readiness == "tail_unverified"
+    rebuilt = archive_payload_from_verified_snapshot(rows, reloaded.ledger_events())
+    full = reconstruct_archive_from_journal_rows(
+        rows, None, current_run_only=False, exclude_before_ts=EPOCH
+    )
+    assert _canon(rebuilt) == _canon(full)
+
+
+def test_authority_consumes_scoped_snapshot_under_matching_scope(scoped_journal, monkeypatch):
+    import autopilot
+
+    calls: list = []
+    real = autopilot.reconstruct_archive_from_journal_rows
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs.get("exclude_before_ts"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(autopilot, "reconstruct_archive_from_journal_rows", spy)
+    payload = autopilot._journal_archive_payload_for_authority(
+        scoped_journal, exclude_before_ts=EPOCH
+    )
+    assert calls == []
+    assert min(e["trial_id"] for e in payload["all_entries"]) >= 1996
+    # a different live scope falls back to the full replay
+    autopilot._journal_archive_payload_for_authority(scoped_journal)
+    assert calls == [None]
+
+
+def test_pre_epoch_tail_row_forces_full_replay(tmp_path):
+    from src.autopilot_core.tier_specs import LEGACY_OBJECTIVE_POLICY
+
+    j = ExperimentJournal(journal_dir=tmp_path)
+    j.segment_snapshot_scope = {"objective_policy": LEGACY_OBJECTIVE_POLICY,
+                                "exclude_before_ts": EPOCH}
+    j.record(_entry(1995, 1.2, 40.0))
+    late = _entry(1997, 1.3, 41.0)
+    late.timestamp = (T0 + timedelta(minutes=1997)).isoformat()
+    j.record(late)
+    early_tail = _entry(2000, 1.4, 42.0)
+    early_tail.timestamp = (T0 + timedelta(minutes=10)).isoformat()  # before the epoch
+    j.record(early_tail)
+    rows = _rows(j)
+    assert archive_payload_from_verified_snapshot(rows, j.ledger_events()) is None
+
+
+def test_scope_sync_follows_state_and_disables_under_deinflation(tmp_path):
+    import autopilot
+
+    j = ExperimentJournal(journal_dir=tmp_path)
+    autopilot._sync_segment_snapshot_scope(j, {
+        "pareto_exclude_before_ts": 123.0,
+        "pareto_objective_policy": "legacy_4d_v1",
+    })
+    assert j.segment_snapshot_scope == {"objective_policy": "legacy_4d_v1",
+                                        "exclude_before_ts": 123.0}
+    assert j.segment_snapshots is True
+    autopilot._sync_segment_snapshot_scope(j, {
+        "pareto_epoch_ts": 100.0, "pareto_pre_epoch_speed_factor": 0.5,
+    })
+    assert j.segment_snapshots is False

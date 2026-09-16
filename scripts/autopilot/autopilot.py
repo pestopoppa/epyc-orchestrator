@@ -7053,6 +7053,30 @@ def _snapshot_scope_matches(
         return False
 
 
+def _sync_segment_snapshot_scope(journal: Any, state: Mapping[str, Any]) -> None:
+    """W3: fold automatic segment snapshots under the live archive-authority scope.
+
+    Active deinflation is not recorded in an archive payload, so it disables
+    segment snapshots rather than writing one the authority path must refuse.
+    """
+    if not hasattr(journal, "segment_snapshot_scope"):
+        return
+    try:
+        deinflate_before_ts, deinflate_factor, exclude_before_ts = (
+            _archive_epoch_params_from_state(state)
+        )
+        if deinflate_before_ts is not None and deinflate_factor != 1.0:
+            journal.segment_snapshots = False
+            return
+        journal.segment_snapshot_scope = {
+            "objective_policy": _live_objective_policy_from_state(state),
+            "exclude_before_ts": exclude_before_ts,
+        }
+    except Exception as exc:  # noqa: BLE001 - never block a trial write
+        log.warning("W3 segment snapshot scope sync failed; disabling: %s", exc)
+        journal.segment_snapshots = False
+
+
 def _journal_archive_payload_for_authority(
     journal: ExperimentJournal,
     *,
@@ -7789,6 +7813,7 @@ def _run_loop_inner(
     # running unfenced mid-loop.
     eval_quality_era, quality_exclude_before_ts = _quality_epoch_params_from_state(state)
     journal = ExperimentJournal()
+    _sync_segment_snapshot_scope(journal, state)  # W3: scope rollover snapshots from the start
     _deinfl_ts, _deinfl_factor, _exclude_ts = _archive_epoch_params_from_state(state)
     archive_payload = _journal_archive_payload_for_authority(
         journal,
@@ -10218,6 +10243,7 @@ def _run_loop_inner(
             infra_fingerprint=trial_infra_fingerprint,  # AP-55
             comparability=trial_comparability,  # AP-55
         )
+        _sync_segment_snapshot_scope(journal, state)  # W3
         journal.record(journal_entry)
         # Evidence is the already-durable trial, supplied here rather than by the
         # planner, so a resolution can never cite a trial that did not run.

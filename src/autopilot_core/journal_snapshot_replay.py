@@ -12,6 +12,7 @@ from src.autopilot_core.action_identity import config_fingerprint_from_row
 from src.autopilot_core.baseline_ledger import canonical_jsonable
 from src.autopilot_core.journal_reconstruction import (
     fold_supersession_events,
+    parse_journal_ts,
     objectives_from_journal_row,
     reconstruct_archive_from_journal_rows,
 )
@@ -268,6 +269,14 @@ def archive_payload_from_verified_snapshot(
         if objectives_from_journal_row(row, objective_policy=policy) is None:
             return None
 
+    exclude_before_ts = snapshot_fold_scope(snapshot_archive)["exclude_before_ts"]
+    if exclude_before_ts is not None and any(
+        (ts := parse_journal_ts(row.get("timestamp"))) is None or ts < exclude_before_ts
+        for row in tail_rows
+    ):
+        # A pre-epoch tail row would need the exclusion bookkeeping of a full fold.
+        return None
+
     if any(_row_requires_prefix_raw_samples(row) for row in tail_rows):
         return _fold_representative_tail_into_snapshot(
             snapshot_archive,
@@ -282,6 +291,7 @@ def archive_payload_from_verified_snapshot(
         None,
         current_run_only=False,
         objective_policy=policy,
+        exclude_before_ts=exclude_before_ts,
     )
     if tail_archive is None:
         return None
@@ -750,6 +760,26 @@ def _rows_for_prefix_replay(
     return prefix_rows
 
 
+def snapshot_fold_scope(snapshot_archive: dict[str, Any]) -> dict[str, Any]:
+    """The replay scope a snapshot archive was folded under, from its own record.
+
+    W3: a snapshot folded under an epoch exclusion or a non-legacy objective
+    policy can only be verified — and extended by a tail — under that same scope.
+    """
+    exclusions = snapshot_archive.get("exclusions")
+    exclude_before_ts = (
+        exclusions.get("exclude_before_ts") if isinstance(exclusions, dict) else None
+    )
+    return {
+        "objective_policy": str(
+            snapshot_archive.get("objective_policy") or LEGACY_OBJECTIVE_POLICY
+        ),
+        "exclude_before_ts": (
+            float(exclude_before_ts) if exclude_before_ts is not None else None
+        ),
+    }
+
+
 def verify_snapshot_chain(ledger_events: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """W3: verify the append-order ``journal_snapshot`` chain end to end.
 
@@ -889,11 +919,16 @@ def build_snapshot_replay_diagnostic(
             for row in _rows_for_prefix_replay(rows_list, through_trial_id)
             if _trial_id_from_row(row) is not None
         ] + all_ledger_events[:latest_snapshot_index] + post_snapshot_prefix_events
-        prefix_archive = reconstruct_archive_from_journal_rows(
-            prefix_rows,
-            None,
-            current_run_only=False,
-        )
+        scope = snapshot_fold_scope(snapshot_archive)
+        try:
+            prefix_archive = reconstruct_archive_from_journal_rows(
+                prefix_rows,
+                None,
+                current_run_only=False,
+                **scope,
+            )
+        except ValueError:  # unknown recorded objective policy
+            prefix_archive = None
         if prefix_archive is None:
             status = "archive_prefix_empty"
             warnings.append("journal prefix replay produced no archive payload")
