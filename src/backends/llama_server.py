@@ -18,6 +18,7 @@ See research/radix_attention_handoff.md for implementation plan.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -107,6 +108,12 @@ def _write_logit_probe(prompt: str, first_token_probs: dict) -> None:
 
     except Exception:
         logger.debug("logit_probe write failed", exc_info=True)
+
+
+def _chat_payload(request: Any) -> dict[str, Any] | None:
+    """HS-4 P0.1: the structured /v1 client-tool-mode payload, if any."""
+    payload = getattr(request, "chat_payload", None)
+    return payload if isinstance(payload, dict) else None
 
 
 def _server_cfg():
@@ -320,7 +327,10 @@ class LlamaServerBackend(ModelBackend):
         # ServerConfig, route through /v1/chat/completions (server-side
         # jinja template applied by --jinja flag). Otherwise legacy
         # /completion path.
-        if self.config.use_chat_completions:
+        # HS-4 P0.1: a structured chat payload (the /v1 client-executed tool
+        # mode) can only be expressed on /v1/chat/completions, whatever this
+        # backend's default endpoint is.
+        if self.config.use_chat_completions or _chat_payload(request) is not None:
             return self._infer_chat_completions(role_config, request, start_time)
 
         # Build request payload
@@ -574,11 +584,27 @@ class LlamaServerBackend(ModelBackend):
                     user_content = user_content[:idx]
         user_content = user_content.strip()
 
+        chat_payload = _chat_payload(request)
+        if chat_payload is not None:
+            # HS-4 P0.1 client-executed tool mode: forward the caller's
+            # structured history (assistant tool_calls + tool results) and its
+            # tool definitions verbatim; llama-server --jinja templates them
+            # and parses the model's tool calls back out.
+            messages = [dict(m) for m in chat_payload.get("messages") or []]
+            user_content = json.dumps(messages, sort_keys=True)
+        else:
+            messages = [{"role": "user", "content": user_content}]
+
         payload: dict[str, Any] = {
-            "messages": [{"role": "user", "content": user_content}],
+            "messages": messages,
             "max_tokens": request.n_tokens if request.n_tokens > 0 else 4096,
             "stream": False,
         }
+        if chat_payload is not None:
+            if chat_payload.get("tools") is not None:
+                payload["tools"] = chat_payload["tools"]
+            if chat_payload.get("tool_choice") is not None:
+                payload["tool_choice"] = chat_payload["tool_choice"]
         self._apply_deterministic_sampling(payload, role_config, request)
         # Chat-path Option A (2026-07-22): llama's OpenAI-compat endpoint
         # IGNORES the native n_probs param the sampling applier just injected —
@@ -649,9 +675,13 @@ class LlamaServerBackend(ModelBackend):
             output = ""
             completion_reason = "stop"
             chat_logprob_rows: list[dict[str, Any]] = []
+            tool_calls: list[dict[str, Any]] = []
             if choices:
                 msg = choices[0].get("message", {})
                 output = msg.get("content", "") or ""
+                raw_tool_calls = msg.get("tool_calls") if chat_payload is not None else None
+                if isinstance(raw_tool_calls, list):
+                    tool_calls = [tc for tc in raw_tool_calls if isinstance(tc, dict)]
                 completion_reason = str(choices[0].get("finish_reason") or "stop")
                 # OpenAI-shape logprobs.content rows carry a top-level
                 # "logprob" per token — the confidence extractor
@@ -680,7 +710,8 @@ class LlamaServerBackend(ModelBackend):
                 else (tokens_generated / elapsed if elapsed > 0 else 0.0)
             )
 
-            empty_generation = _is_empty_long_generation(output, elapsed)
+            # A tool-call-only turn legitimately has empty content.
+            empty_generation = not tool_calls and _is_empty_long_generation(output, elapsed)
             if empty_generation:
                 logger.warning(
                     "Empty chat_completions response after %.1fs for %s "
@@ -714,6 +745,7 @@ class LlamaServerBackend(ModelBackend):
                     "empty_generation" if empty_generation else completion_reason
                 ),
                 completion_probabilities=chat_logprob_rows,
+                tool_calls=tool_calls,
             )
         except httpx.HTTPStatusError as e:
             elapsed = time.time() - start_time
@@ -832,6 +864,12 @@ class LlamaServerBackend(ModelBackend):
             InferenceResult with output and metrics (same shape as batch).
         """
         import json as _json
+
+        # HS-4 P0.1: tool calls only arrive whole on the batch response, so a
+        # structured chat payload is never streamed (the primitives layer
+        # already forces batch; this is the backstop).
+        if _chat_payload(request) is not None:
+            return self.infer(role_config, request)
 
         start_time = time.time()
         self.cache_stats.total_requests += 1

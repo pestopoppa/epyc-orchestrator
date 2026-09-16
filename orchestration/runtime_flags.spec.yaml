@@ -123,6 +123,7 @@ flags:
   unified_streaming: baseline
   ure_uncertainty_shadow_log: baseline
   user_modeling: baseline
+  v1_client_session_guard: baseline
   web_research_rerank: baseline
   worker_call_budget: baseline
 

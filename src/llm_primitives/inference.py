@@ -316,6 +316,20 @@ def _build_tap_metadata(
     }
 
 
+def _request_chat_payload(owner: Any) -> dict[str, Any] | None:
+    """HS-4 P0.1: structured /v1 client-tool-mode payload bound to this call."""
+    getter = getattr(owner, "get_request_chat_payload", None)
+    payload = getter() if callable(getter) else None
+    return payload if isinstance(payload, dict) else None
+
+
+def _request_trace_keys(owner: Any) -> dict[str, Any]:
+    """HS-4 P0.2: typed /v1 request keys to stamp onto the inference trace."""
+    getter = getattr(owner, "get_request_trace_keys", None)
+    keys = getter() if callable(getter) else None
+    return dict(keys) if isinstance(keys, dict) else {}
+
+
 class InferenceMixin:
     """Mixin for real inference methods."""
 
@@ -479,6 +493,7 @@ class InferenceMixin:
             and _get_features().content_cache
             and stop_sequences is None
             and n_probs is None
+            and _request_chat_payload(self) is None
         ):
             from src.llm_cache import ContentAddressableCache
 
@@ -600,6 +615,11 @@ class InferenceMixin:
         if self.model_server is None:
             raise RuntimeError(
                 f"No backend configured for role '{role}'. Provide server_urls or model_server."
+            )
+        if _request_chat_payload(self) is not None:
+            raise RuntimeError(
+                f"Client tool mode needs a llama-server chat-completions backend; "
+                f"role '{role}' is served by the legacy ModelServer path."
             )
 
         from src.model_server import InferenceRequest
@@ -735,6 +755,7 @@ class InferenceMixin:
         )
         role_timeout = self._clamp_timeout_to_request_budget(role_timeout)
 
+        chat_payload = _request_chat_payload(self)
         request = InferenceRequest(
             role=role,
             prompt=prompt,
@@ -749,6 +770,9 @@ class InferenceMixin:
             json_schema=json_schema,
             grammar=grammar,
             n_probs=n_probs,
+            # HS-4 P0.1: only passed when set, so the default request is
+            # constructed exactly as before.
+            **({"chat_payload": chat_payload} if chat_payload is not None else {}),
         )
         # Dynamic attrs consumed by ConcurrencyAwareBackend's dispatch-time
         # placement-aware contention gate. The local dataclass has no slots.
@@ -766,6 +790,9 @@ class InferenceMixin:
             else uuid.uuid4().hex
         )
         wants_probabilities = n_probs is not None and int(n_probs) > 0
+        # Probability capture and structured chat payloads (tool calls arrive
+        # whole) both need the batch response, never the text stream.
+        batch_only = wants_probabilities or getattr(request, "chat_payload", None) is not None
         req_started = time.perf_counter()
 
         # Admission control: reject early if backend queue is full
@@ -921,7 +948,7 @@ class InferenceMixin:
                         tap_enabled
                         and hasattr(backend, "infer_stream_text")
                         and _tap_should_stream_role(role)
-                        and not wants_probabilities
+                        and not batch_only
                     )
                     if tap_enabled:
                         tap_metadata = _build_tap_metadata(
@@ -945,6 +972,9 @@ class InferenceMixin:
                             ),
                         )
                         tap_metadata.update(direct_region_metadata)
+                        trace_keys = _request_trace_keys(self)
+                        if trace_keys:
+                            tap_metadata["request_keys"] = trace_keys
                         with tap_section(role, prompt, metadata=tap_metadata) as tap:
                             if can_stream:
                                 # Early-stop: if _early_stop_check is set, wrap the
@@ -986,7 +1016,7 @@ class InferenceMixin:
                                 )
                             else:
                                 # Prefer streaming for cancellation support
-                                if not wants_probabilities and hasattr(
+                                if not batch_only and hasattr(
                                     backend, "infer_stream_text"
                                 ):
                                     _cancel_tap = self.get_request_cancel_check()
@@ -1003,6 +1033,13 @@ class InferenceMixin:
                                     result = backend.infer(role_config, request)
                                 _emit_first_output(result.output)
                                 tap.write_response(result.output)
+                                if getattr(request, "chat_payload", None) is not None:
+                                    tap.set_metadata(
+                                        client_tool_calls=[
+                                            (tc.get("function") or {}).get("name")
+                                            for tc in (getattr(result, "tool_calls", None) or [])
+                                        ]
+                                    )
                             _emit_first_output(result.output)
                             tap.write_timings(
                                 result.tokens_generated,
@@ -1014,7 +1051,7 @@ class InferenceMixin:
                         # Use streaming even without tap — each chunk is a
                         # cancellation checkpoint, preventing indefinite lock
                         # hold when the httpx batch read hangs.
-                        if not wants_probabilities and hasattr(backend, "infer_stream_text"):
+                        if not batch_only and hasattr(backend, "infer_stream_text"):
                             _cancel_nt = self.get_request_cancel_check()
 
                             def _cancel_only(content: str) -> None:
@@ -1065,6 +1102,10 @@ class InferenceMixin:
                     getattr(result, "completion_probabilities", []) or []
                 ),
             }
+            if getattr(request, "chat_payload", None) is not None:
+                self._last_inference_meta["tool_calls"] = list(
+                    getattr(result, "tool_calls", None) or []
+                )
             if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
                 log.warning(
                     "Frontdoor inference telemetry: transport=%s elapsed_ms=%.1f "

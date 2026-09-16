@@ -187,6 +187,10 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("session_token_budget", False, False, "SESSION_TOKEN_BUDGET", "B5: per-session token budget"),
     # Claude Code Local
     FeatureSpec("claude_code_mcp_chat", False, False, "CLAUDE_CODE_MCP_CHAT", "CC Local: MCP chat delegation"),
+    # HS-4 P0.2: refuse (422) an agentic-shell /v1 request that lacks x_session_id
+    # (OpenCode user-agent or x_tool_mode=client) — a failed session plugin is only
+    # logged by OpenCode, so without this it degrades silently. Other clients unaffected.
+    FeatureSpec("v1_client_session_guard", True, True, "V1_CLIENT_SESSION_GUARD", "HS-4: require x_session_id from OpenCode/client-tool-mode /v1 requests"),
     # Web research reranking
     FeatureSpec("web_research_rerank", False, False, "WEB_RESEARCH_RERANK", "ColBERT snippet reranking in web_research pipeline"),
     # Routing telemetry
@@ -538,6 +542,7 @@ class Features:
 
     # Claude Code Local Integration (CC Local)
     claude_code_mcp_chat: bool = False  # MCP tools for delegating chat to running orchestrator
+    v1_client_session_guard: bool = False  # HS-4: 422 on OpenCode/client-mode /v1 requests without x_session_id
 
     # Web research reranking (ColBERT snippet pre-fetch filtering)
     web_research_rerank: bool = False  # Rerank DDG snippets via ColBERT before page fetch

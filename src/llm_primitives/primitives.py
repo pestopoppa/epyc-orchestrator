@@ -209,6 +209,15 @@ class LLMPrimitives(
             "llm_primitives_batch_placement_mode",
             default=None,
         )
+        # HS-4 P0.1: structured chat payload bound for one chat_completion_call.
+        self._chat_payload_ctx: contextvars.ContextVar[dict[str, Any] | None] = (
+            contextvars.ContextVar("llm_primitives_chat_payload", default=None)
+        )
+        # HS-4 P0.2: typed /v1 request keys stamped onto the inference trace.
+        # Instance-level (not a contextvar) because /v1 builds one primitives
+        # object per request and its streaming body runs in a different context
+        # from the endpoint function.
+        self._request_trace_keys: dict[str, Any] = {}
         self._budget_diagnostics: dict[str, Any] = {
             "deadline_present": False,
             "budget_applied": False,
@@ -699,6 +708,102 @@ class LLMPrimitives(
             )
         finally:
             self._recursion_depth -= 1
+
+    def get_request_chat_payload(self) -> dict[str, Any] | None:
+        """HS-4 P0.1: structured payload bound by ``chat_completion_call``."""
+        return self._chat_payload_ctx.get()
+
+    def set_request_trace_keys(self, keys: dict[str, Any] | None) -> None:
+        """HS-4 P0.2: bind typed request keys (x_session_id, ...) for tracing."""
+        self._request_trace_keys = {k: v for k, v in (keys or {}).items() if v is not None}
+
+    def get_request_trace_keys(self) -> dict[str, Any]:
+        return dict(getattr(self, "_request_trace_keys", None) or {})
+
+    def chat_completion_call(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        role: str,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        n_tokens: int | None = None,
+        temperature: float | None = None,
+        seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+    ) -> dict[str, Any]:
+        """HS-4 P0.1: one structured chat-completions call (client tool mode).
+
+        Unlike ``llm_call`` the caller's messages, tools and tool_choice reach
+        llama-server's ``/v1/chat/completions`` verbatim, and the model's tool
+        calls come back to the caller instead of being executed here.
+
+        The call runs through the same ``_real_call`` seam as ``llm_call``:
+        contention gate, per-role semaphore, admission control, region locks,
+        circuit breaker, same-tier model fallback and the inference tap all
+        apply. It deliberately does NOT apply the prompt-shaping steps of
+        ``llm_call`` (role system-prompt suffix, persona, RAG injection) —
+        the client owns the conversation — nor the content cache.
+
+        Returns ``{"content", "tool_calls", "finish_reason"}``. Backend
+        failures RAISE (no in-band ``[ERROR: ...]`` string).
+        """
+        if self.mock_mode:
+            raise RuntimeError("client tool mode requires a real backend (mock_mode is on)")
+        if n_tokens is None and self.registry:
+            n_tokens = self.registry.get_role_defaults(role)[0]
+        if n_tokens is None:
+            n_tokens = -1
+
+        payload: dict[str, Any] = {"messages": [dict(m) for m in messages]}
+        if tools is not None:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        # The text form is what the prefix-cache slot router hashes and the tap
+        # records as the prompt; the backend sends the structured payload.
+        trace_prompt = json.dumps(payload, sort_keys=True)
+
+        sampling_kwargs: dict[str, float | int] = {}
+        if temperature is not None:
+            sampling_kwargs["temperature"] = temperature
+        if seed is not None:
+            sampling_kwargs["seed"] = seed
+        if top_p is not None:
+            sampling_kwargs["top_p"] = top_p
+        if top_k is not None:
+            sampling_kwargs["top_k"] = top_k
+
+        start_time = time.perf_counter()
+        self.total_calls += 1
+        log_entry = CallLogEntry(
+            timestamp=time.time(),
+            call_type="chat_completion",
+            prompt=trace_prompt[:2000],
+            role=role,
+        )
+        self._last_inference_meta = {}
+        token = self._chat_payload_ctx.set(payload)
+        try:
+            role_for_call = self._resolve_depth_override_role(role)
+            content = self._real_call(trace_prompt, role_for_call, n_tokens, None, **sampling_kwargs)
+        except Exception as exc:
+            log_entry.error = str(exc)
+            raise
+        finally:
+            self._chat_payload_ctx.reset(token)
+            log_entry.elapsed_seconds = time.perf_counter() - start_time
+            self.call_log.append(log_entry)
+
+        meta = getattr(self, "_last_inference_meta", None) or {}
+        tool_calls = [tc for tc in (meta.get("tool_calls") or []) if isinstance(tc, dict)]
+        log_entry.result = (content or json.dumps(tool_calls))[:500]
+        return {
+            "content": content or "",
+            "tool_calls": tool_calls,
+            "finish_reason": str(meta.get("completion_reason") or "stop"),
+        }
 
     def _llm_call_impl(
         self,

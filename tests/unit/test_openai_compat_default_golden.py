@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""HS-4 P0.1(b) — the default /v1 tool mode stays byte-identical.
+
+The golden fixture was captured from the route BEFORE client-executed tool mode
+existed (origin/main 09bdb998). Each case records two things:
+
+* the exact arguments the route passed to ``LLMPrimitives.llm_call`` (the
+  prompt is where the REPL bridge rewrites client tools into ``CALL()`` text),
+* the exact response body (JSON, or the raw SSE stream), with only the
+  per-request volatile fields (``id``, ``created``, ``elapsed_seconds``)
+  normalised.
+
+Regenerate ONLY when a default-mode change is intended:
+``HS4_REGEN_GOLDEN=1 pytest tests/unit/test_openai_compat_default_golden.py``.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+from src.api import app
+from src.api.state import get_state, reset_state
+from src.features import reset_features
+
+GOLDEN = Path(__file__).parent / "fixtures" / "openai_compat_default_golden.json"
+
+_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a file",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+    }
+]
+
+_HISTORY = [
+    {"role": "system", "content": "You are helpful."},
+    {"role": "user", "content": "open a.txt"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": "{\"path\": \"a.txt\"}"},
+            }
+        ],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "alpha"},
+    {"role": "user", "content": "what did it say?"},
+]
+
+CASES: dict[str, dict[str, Any]] = {
+    "direct_nonstream_tools": {
+        "model": "frontdoor",
+        "messages": _HISTORY,
+        "tools": _TOOLS,
+        "tool_choice": "auto",
+        "x_disable_repl": True,
+        "x_show_routing": True,
+        "x_max_escalation": "B1",
+    },
+    "direct_stream_tools": {
+        "model": "frontdoor",
+        "messages": _HISTORY,
+        "tools": _TOOLS,
+        "tool_choice": {"type": "function", "function": {"name": "read_file"}},
+        "x_disable_repl": True,
+        "x_show_routing": True,
+        "stream": True,
+    },
+    "direct_nonstream_plain": {
+        "model": "orchestrator",
+        "messages": [{"role": "user", "content": "hi"}],
+        "x_disable_repl": True,
+    },
+    "repl_nonstream_tools": {
+        "model": "orchestrator",
+        "messages": _HISTORY,
+        "tools": _TOOLS,
+        "x_show_routing": True,
+    },
+    "repl_stream_tools": {
+        "model": "orchestrator",
+        "messages": _HISTORY,
+        "tools": _TOOLS,
+        "x_show_routing": True,
+        "stream": True,
+    },
+}
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_MOCK_MODE", "false")
+    reset_features()
+    reset_state()
+    get_state()
+    with TestClient(app, raise_server_exceptions=False) as c:
+        state = get_state()
+        if state.registry is None:
+            state.registry = MagicMock()
+        yield c
+    reset_features()
+
+
+def _install(monkeypatch, answer: str) -> MagicMock:
+    primitives = MagicMock()
+    primitives.llm_call.return_value = answer
+    primitives.total_tokens_generated = 7
+
+    import src.llm_primitives as llm_primitives_module
+
+    monkeypatch.setattr(llm_primitives_module, "LLMPrimitives", lambda **_kw: primitives)
+    return primitives
+
+
+def _normalise_obj(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if k in {"id", "created"}:
+                out[k] = f"<{k}>"
+            elif k == "elapsed_seconds":
+                out[k] = "<elapsed>"
+            else:
+                out[k] = _normalise_obj(v)
+        return out
+    if isinstance(obj, list):
+        return [_normalise_obj(v) for v in obj]
+    return obj
+
+
+def _normalise_sse(text: str) -> str:
+    text = re.sub(r'"id": "chatcmpl-[0-9a-f]+"', '"id": "<id>"', text)
+    text = re.sub(r'"created": \d+', '"created": "<created>"', text)
+    return re.sub(r'"elapsed_seconds": [0-9.e-]+', '"elapsed_seconds": "<elapsed>"', text)
+
+
+def _capture(client, monkeypatch, name: str) -> dict[str, Any]:
+    body = CASES[name]
+    # A bare expression is auto-wrapped into FINAL() by the REPL path; the direct
+    # path returns it verbatim.
+    answer = '"the answer"' if name.startswith("repl") else "the answer"
+    primitives = _install(monkeypatch, answer)
+    r = client.post("/v1/chat/completions", json=body)
+    calls = [
+        {"args": list(c.args), "kwargs": dict(sorted(c.kwargs.items()))}
+        for c in primitives.llm_call.call_args_list
+    ]
+    record: dict[str, Any] = {"status": r.status_code, "llm_calls": calls}
+    if body.get("stream"):
+        record["sse"] = _normalise_sse(r.text)
+    else:
+        record["json"] = _normalise_obj(r.json())
+    return record
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_default_mode_matches_pre_client_mode_golden(client, monkeypatch, name):
+    got = _capture(client, monkeypatch, name)
+    if os.environ.get("HS4_REGEN_GOLDEN") == "1":
+        GOLDEN.parent.mkdir(parents=True, exist_ok=True)
+        data = json.loads(GOLDEN.read_text()) if GOLDEN.exists() else {}
+        data[name] = got
+        GOLDEN.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        pytest.skip("golden regenerated")
+    expected = json.loads(GOLDEN.read_text())[name]
+    assert got["status"] == 200
+    assert got == expected

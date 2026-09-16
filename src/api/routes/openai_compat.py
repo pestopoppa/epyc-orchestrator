@@ -15,7 +15,7 @@ from binascii import Error as Base64Error
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from src.api.dependencies import dep_app_state
@@ -334,6 +334,173 @@ def _apply_openai_tool_contract_metadata(
     return meta
 
 
+# ── HS-4 P0.2: typed request keys ────────────────────────────────────────────
+_REQUEST_KEY_FIELDS = ("x_session_id", "x_user_id", "x_memory", "x_tool_mode")
+
+
+def _request_keys(request: OpenAIChatRequest) -> dict[str, str]:
+    """The typed HS-4 keys the caller actually sent (validated by the model)."""
+    return {
+        name: value
+        for name in _REQUEST_KEY_FIELDS
+        if (value := getattr(request, name, None)) is not None
+    }
+
+
+def _apply_request_key_metadata(meta: dict[str, Any], request_keys: dict[str, str]) -> dict[str, Any]:
+    """Echo the typed keys. Absent keys leave ``meta`` untouched (golden-pinned)."""
+    if request_keys:
+        meta["request_keys"] = dict(request_keys)
+        if request_keys.get("x_memory") == "on":
+            # Recorded, not acted on, until HS-4 P2 (same class as x_max_escalation).
+            meta["memory_injection"] = "not_implemented"
+    return meta
+
+
+_OPENCODE_USER_AGENT_MARKER = "opencode"
+
+
+def _session_guard_trigger(request: OpenAIChatRequest, user_agent: str) -> str | None:
+    """Why this request must carry x_session_id, or None if it need not.
+
+    Only agentic-shell requests are guarded: OpenCode (identified by its
+    user-agent) and anything using the client-executed tool mode. Other /v1
+    clients (Aider, eval harnesses, SDK scripts) are never affected.
+    """
+    if request.x_tool_mode == "client":
+        return "x_tool_mode=client"
+    if _OPENCODE_USER_AGENT_MARKER in user_agent.lower():
+        return "an OpenCode user-agent"
+    return None
+
+
+def _enforce_client_session_guard(request: OpenAIChatRequest, http_request: Request) -> None:
+    """HS-4 P0.2 guard (flag ``v1_client_session_guard``).
+
+    OpenCode only LOGS a plugin that fails to load, and ``OPENCODE_PURE``
+    skips plugins entirely; the session-stamping plugin is what sends
+    ``x_session_id``. Refusing here turns a silently missing plugin into a
+    visible 422 instead of an unkeyed session.
+    """
+    if request.x_session_id is not None:
+        return
+    from src.features import features as _features
+
+    if not getattr(_features(), "v1_client_session_guard", False):
+        return
+    trigger = _session_guard_trigger(request, http_request.headers.get("user-agent", ""))
+    if trigger is None:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"x_session_id is required for requests with {trigger} "
+            "(is the epyc-orchestrator session plugin loaded?). "
+            "Disable with ORCHESTRATOR_V1_CLIENT_SESSION_GUARD=0."
+        ),
+    )
+
+
+# ── HS-4 P0.1: client-executed tool mode ─────────────────────────────────────
+_CLIENT_FINISH_REASONS = frozenset({"stop", "length", "content_filter"})
+
+
+def _client_mode_messages(messages: list[OpenAIMessage]) -> list[dict[str, Any]]:
+    """Structured history for the backend: roles, tool_calls and tool results kept.
+
+    Multipart text is flattened to a string; image parts are refused (the
+    client-mode backend path is text-only for now).
+    """
+    out: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.content
+        if isinstance(content, list):
+            if any(
+                isinstance(part, dict) and part.get("type") not in (None, "text")
+                for part in content
+            ):
+                raise ValueError(
+                    "x_tool_mode='client' supports text content only; "
+                    "remove image parts or use the default tool mode"
+                )
+            content = _extract_text(content)
+        data: dict[str, Any] = {"role": message.role, "content": content}
+        if message.tool_calls:
+            data["tool_calls"] = message.tool_calls
+        if message.tool_call_id:
+            data["tool_call_id"] = message.tool_call_id
+        if message.name:
+            data["name"] = message.name
+        out.append(data)
+    return out
+
+
+def _normalise_client_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """OpenAI response shape: id, type=function, function{name, arguments:str}."""
+    normalised: list[dict[str, Any]] = []
+    for call in tool_calls:
+        func = call.get("function") if isinstance(call.get("function"), dict) else {}
+        name = func.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        args = func.get("arguments")
+        if isinstance(args, (dict, list)):
+            args = json.dumps(args)
+        elif not isinstance(args, str):
+            args = "{}"
+        call_id = call.get("id")
+        normalised.append(
+            {
+                "id": call_id if isinstance(call_id, str) and call_id else f"call_{uuid.uuid4().hex[:12]}",
+                "type": "function",
+                "function": {"name": name, "arguments": args},
+            }
+        )
+    return normalised
+
+
+def _run_client_tool_completion(
+    primitives: Any,
+    request: OpenAIChatRequest,
+    messages: list[dict[str, Any]],
+    *,
+    role: str | Role,
+    sampling_kwargs: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]], str]:
+    """One backend chat-completions call; returns (content, tool_calls, finish_reason).
+
+    Routing: ``role`` is the SAME resolved role the default mode would use
+    (x_force_model > x_orchestrator_role > model alias). No REPL, no
+    escalation — /v1 has none today in either mode.
+    """
+    result = primitives.chat_completion_call(
+        messages,
+        role=role,
+        tools=request.tools,
+        tool_choice=request.tool_choice,
+        n_tokens=request.max_tokens,
+        **sampling_kwargs,
+    )
+    tool_calls = _normalise_client_tool_calls(list(result.get("tool_calls") or []))
+    content = str(result.get("content") or "")
+    if tool_calls:
+        finish_reason = "tool_calls"
+    else:
+        finish_reason = str(result.get("finish_reason") or "stop")
+        if finish_reason not in _CLIENT_FINISH_REASONS:
+            finish_reason = "stop"
+    return content, tool_calls, finish_reason
+
+
+def _apply_client_tool_contract_metadata(
+    meta: dict[str, Any], tool_calls: list[dict[str, Any]]
+) -> dict[str, Any]:
+    meta["native_tool_contract"] = "client_execution"
+    meta["response_tool_calls"] = "emitted" if tool_calls else "none"
+    meta["tool_calls_emitted"] = [call["function"]["name"] for call in tool_calls]
+    return meta
+
+
 def _combined_prompt_with_context(prompt: str, context: str | None) -> str:
     if context:
         return f"{context}\n\nUser: {prompt}"
@@ -457,6 +624,7 @@ async def list_models() -> OpenAIModelsResponse:
 @router.post("/chat/completions", response_model=None)
 async def openai_chat_completions(
     request: OpenAIChatRequest,
+    http_request: Request,
     state: AppState = Depends(dep_app_state),
 ):
     """OpenAI-compatible chat completions endpoint.
@@ -530,6 +698,23 @@ async def openai_chat_completions(
     disable_repl = request.x_disable_repl
     sampling_kwargs = _sampling_kwargs(request)
 
+    # HS-4 P0.2 typed keys; HS-4 P0.1 client-executed tool mode. Routing above
+    # is shared: client mode changes WHO executes tools, never which role runs.
+    request_keys = _request_keys(request)
+    client_mode = request.x_tool_mode == "client"
+    _enforce_client_session_guard(request, http_request)
+    client_messages: list[dict[str, Any]] = []
+    if client_mode:
+        if prompt_parts.image_base64:
+            raise HTTPException(
+                status_code=400,
+                detail="x_tool_mode='client' does not support image input yet",
+            )
+        try:
+            client_messages = _client_mode_messages(request.messages)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
 
@@ -560,6 +745,8 @@ async def openai_chat_completions(
         except Exception as e:
             logger.warning("Failed to create LLMPrimitives: %s", e)
             primitives = None
+        if primitives is not None and request_keys:
+            primitives.set_request_trace_keys(request_keys)
 
     if request.stream:
         # Streaming mode with real orchestration
@@ -567,6 +754,8 @@ async def openai_chat_completions(
             start_time = time.perf_counter()
             total_tokens = 0
             response_text = ""
+            finish_reason = "stop"
+            client_tool_calls: list[dict[str, Any]] = []
 
             if not use_real_mode:
                 # Mock mode fallback
@@ -613,7 +802,39 @@ async def openai_chat_completions(
                     # Build combined context
                     combined_context = _combined_prompt_with_context(prompt, context)
 
-                    if prompt_parts.image_base64:
+                    if client_mode:
+                        # HS-4 P0.1: the backend call is buffered (tool calls
+                        # arrive whole); content and tool-call deltas are then
+                        # replayed in OpenAI chunk format below.
+                        try:
+                            response_text, client_tool_calls, finish_reason = (
+                                _run_client_tool_completion(
+                                    primitives, request, client_messages,
+                                    role=role, sampling_kwargs=sampling_kwargs,
+                                )
+                            )
+                        except ContentionDenied as e:
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=str(e), error_type="contention_denied",
+                                status_code=503,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
+                        except Exception as e:
+                            logger.exception(
+                                "Streaming client-tool call failed for role %s (chat %s)",
+                                role, chat_id,
+                            )
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=f"Backend failed: {e}",
+                                error_type="backend_error", status_code=502,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
+                        total_tokens = primitives.total_tokens_generated
+                    elif prompt_parts.image_base64:
                         try:
                             response_text = await _run_openai_vision_completion(
                                 prompt=prompt,
@@ -803,6 +1024,27 @@ async def openai_chat_completions(
                             chunk["x_role"] = role
                         yield f"data: {json.dumps(chunk)}\n\n"
 
+                    # HS-4 P0.1: one delta per tool call, complete arguments.
+                    for tc_index, tool_call in enumerate(client_tool_calls):
+                        delta: dict[str, Any] = {
+                            "tool_calls": [{"index": tc_index, **tool_call}],
+                        }
+                        if first_chunk:
+                            delta = {"role": "assistant", "content": None, **delta}
+                        chunk = {
+                            "id": chat_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": request.model,
+                            "choices": [
+                                {"index": 0, "delta": delta, "finish_reason": None}
+                            ],
+                        }
+                        first_chunk = False
+                        if request.x_show_routing:
+                            chunk["x_role"] = role
+                        yield f"data: {json.dumps(chunk)}\n\n"
+
             # Final chunk with finish_reason
             final_chunk = {
                 "id": chat_id,
@@ -813,7 +1055,7 @@ async def openai_chat_completions(
                     {
                         "index": 0,
                         "delta": {},
-                        "finish_reason": "stop",
+                        "finish_reason": finish_reason,
                     }
                 ],
             }
@@ -828,11 +1070,15 @@ async def openai_chat_completions(
                 if disable_repl:
                     meta["repl_disabled"] = True
                 meta.update(_sampling_metadata(sampling_kwargs))
-                _apply_openai_tool_contract_metadata(
-                    meta,
-                    request_tools=request.tools,
-                    repl=locals().get("repl_for_metadata"),
-                )
+                if client_mode and use_real_mode:
+                    _apply_client_tool_contract_metadata(meta, client_tool_calls)
+                else:
+                    _apply_openai_tool_contract_metadata(
+                        meta,
+                        request_tools=request.tools,
+                        repl=locals().get("repl_for_metadata"),
+                    )
+                _apply_request_key_metadata(meta, request_keys)
                 final_chunk["x_orchestrator_metadata"] = meta
             yield f"data: {json.dumps(final_chunk)}\n\n"
             yield "data: [DONE]\n\n"
@@ -849,6 +1095,8 @@ async def openai_chat_completions(
         # Non-streaming mode with real orchestration
         start_time = time.perf_counter()
         total_tokens = 0
+        finish_reason = "stop"
+        client_tool_calls: list[dict[str, Any]] = []
 
         if not use_real_mode:
             # Mock mode fallback
@@ -866,7 +1114,14 @@ async def openai_chat_completions(
 
                 combined_context = _combined_prompt_with_context(prompt, context)
 
-                if prompt_parts.image_base64:
+                if client_mode:
+                    response_text, client_tool_calls, finish_reason = (
+                        _run_client_tool_completion(
+                            primitives, request, client_messages,
+                            role=role, sampling_kwargs=sampling_kwargs,
+                        )
+                    )
+                elif prompt_parts.image_base64:
                     response_text = await _run_openai_vision_completion(
                         prompt=prompt,
                         context=context,
@@ -968,6 +1223,35 @@ async def openai_chat_completions(
 
         elapsed = time.perf_counter() - start_time
 
+        if client_tool_calls:
+            response_message = OpenAIMessage(
+                role="assistant",
+                content=response_text or None,
+                tool_calls=client_tool_calls,
+            )
+        else:
+            response_message = OpenAIMessage(role="assistant", content=response_text)
+
+        if request.x_show_routing:
+            response_meta = {
+                "role": role,
+                "elapsed_seconds": elapsed,
+                **({"max_escalation": max_escalation} if max_escalation else {}),
+                **({"repl_disabled": True} if disable_repl else {}),
+                **_sampling_metadata(sampling_kwargs),
+            }
+            if client_mode and use_real_mode:
+                _apply_client_tool_contract_metadata(response_meta, client_tool_calls)
+            else:
+                _apply_openai_tool_contract_metadata(
+                    response_meta,
+                    request_tools=request.tools,
+                    repl=repl_for_metadata,
+                )
+            _apply_request_key_metadata(response_meta, request_keys)
+        else:
+            response_meta = None
+
         return OpenAIChatResponse(
             id=chat_id,
             created=created,
@@ -975,8 +1259,8 @@ async def openai_chat_completions(
             choices=[
                 OpenAIChoice(
                     index=0,
-                    message=OpenAIMessage(role="assistant", content=response_text),
-                    finish_reason="stop",
+                    message=response_message,
+                    finish_reason=finish_reason,
                 )
             ],
             usage=OpenAIUsage(
@@ -984,19 +1268,7 @@ async def openai_chat_completions(
                 completion_tokens=total_tokens or len(response_text) // 4,
                 total_tokens=(len(prompt) // 4) + (total_tokens or len(response_text) // 4),
             ),
-            x_orchestrator_metadata=_apply_openai_tool_contract_metadata(
-                {
-                    "role": role,
-                    "elapsed_seconds": elapsed,
-                    **({"max_escalation": max_escalation} if max_escalation else {}),
-                    **({"repl_disabled": True} if disable_repl else {}),
-                    **_sampling_metadata(sampling_kwargs),
-                },
-                request_tools=request.tools,
-                repl=repl_for_metadata,
-            )
-            if request.x_show_routing
-            else None,
+            x_orchestrator_metadata=response_meta,
         )
 
 
