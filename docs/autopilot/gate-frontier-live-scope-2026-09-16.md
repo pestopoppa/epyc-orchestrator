@@ -198,10 +198,45 @@ decisions):
 | distill_skillbank | 1 |
 | rollback | 1 |
 
-Prompt, code and GEPA mutations name a request, not the text they produced. They stay
-non-promotable until the loop records a content identity for them. Candidates for that identity:
-the prompt or file sha after the mutation, or the AP-55 orchestrator commit once auto-commit has
-run.
+**Operator decision (2026-09-16): prompt, code and GEPA mutations are identified by the
+sha256 of the mutated file that was served.**
+- **Recording.** The mutation handler writes the file, then immediately hashes the file on disk
+  and leaves `{"files": {path: sha256}}` in the loop state, before the eval runs. The loop pops
+  that record into `eval_details.served_content`, and it also clears the record before every
+  dispatch, so a trial can only see its own.
+- **Why the sha is not on the action.** A forced re-run copies the stored action, so a sha
+  stored there would misidentify the re-run. Keeping it off the action also leaves
+  `config_fingerprint` and `action_signature` unchanged: archive representative keys and repeat
+  detection stay exactly as they were for old and new rows (tested).
+- **Identity.** It is the sorted set of (path, sha) pairs, plus the regime digest (below).
+  Two trials reproduce each other only if they served byte-identical content at the same paths
+  under the same regime.
+- **Old rows.** Rows without a sha stay non-promotable, and nothing is back-filled. The what-if
+  replay is unchanged, since no stored row carries a sha.
+- **Scope.** This applies to `prompt_mutation`, `code_mutation` and `gepa_optimize`.
+  `structural_prune` is not covered and stays non-promotable.
+- **Multitier mode.** Multitier staging accepts only numeric and structural candidates
+  (`_seq_promotion_replay_blocker`). So under the live launcher, mutation candidates reach a
+  promotion decision only outside multitier mode; that policy predates this change.
+
+**Regime part of the identity (verification note, 2026-09-16).** The identity uses
+`infra_fingerprint.regime_digest`: the AP-55 digest over the evaluator, kernel, recipe, models
+and host components, WITHOUT the orchestrator component (git HEAD plus dirty digest).
+- **Why the orchestrator component is dropped.** Every mutation auto-commit, merge or doc commit
+  moves HEAD. Keeping it would start a new cluster on each commit, and the 3-reproduction bar
+  could never be met.
+- **What replaces it.** Orchestrator code and prompts that a trial changed are identified by
+  the served-file sha instead.
+- **What still splits a cluster.** A kernel, model, recipe, host or evaluator change does.
+- **Deviation from the reviewer's list.** The evaluator stays in the regime, although the
+  reviewer listed only kernel, model, recipe and host: the scorer is the measurement instrument.
+- **Unreadable components.** An unreadable component enters the digest as "unavailable". The
+  AP-55 comparability verdict judges such rows separately (UNVERIFIED still counts under rule
+  (b), as decided).
+- **Where it is recorded.** Rows carry `eval_details.infra_regime_digest`. A row that only
+  carries a full fingerprint gets its regime digest derived from `component_digests`.
+- **Tests.** The same config across an unrelated orchestrator commit still counts as a
+  reproduction; a kernel or model change does not.
 
 **Forward simulation (the next restart).** The stored tasks/hour trials (1472 and later) are
 replayed as if they arrived after the live fence, starting from the live baselines

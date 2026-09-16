@@ -69,6 +69,7 @@ from src.autopilot_core.infra_fingerprint import (
     collect_infra_fingerprint,
     compare_infra_fingerprints,
     fingerprint_digest,
+    regime_digest,
 )
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from src.autopilot_core.live_reproductions import live_reproductions
@@ -152,14 +153,18 @@ from state_lock import (
 )
 from state_ownership import clear_halt_latch, halt_latch_message
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
+from actions import SERVED_CONTENT_STATE_KEY
 from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_result
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
     action_signature,
+    INFRA_REGIME_DIGEST_KEY,
+    SERVED_CONTENT_KEY,
     action_config_identity,
     canonical_action,
     config_fingerprint,
     row_config_identity,
+    served_content_files,
 )
 from src.autopilot_core.learning_exclusions import (
     FRONTIER_ADMISSION_KEY,
@@ -7142,6 +7147,17 @@ def _bug_tag_for_learning_exclusion(excluded_by: str, reason: str) -> tuple[str,
     return "", ""
 
 
+def _served_content_for_row(record: Any) -> dict[str, Any] | None:
+    """The row form of a handler's served-content record (validated), or None."""
+    files = served_content_files(record) if isinstance(record, dict) else None
+    if files is None:
+        return None
+    out: dict[str, Any] = {"files": files}
+    if isinstance(record, dict) and record.get("captured_at"):
+        out["captured_at"] = str(record["captured_at"])
+    return out
+
+
 def _provisional_trial_row(
     *,
     trial_id: int,
@@ -7153,6 +7169,8 @@ def _provisional_trial_row(
     frontier_admission: str,
     comparability: dict[str, Any] | None,
     infra_digest: str = "",
+    regime_digest: str = "",
+    served_content: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Decision (c): the objective-bearing projection of the row this trial WILL journal.
 
@@ -7168,7 +7186,10 @@ def _provisional_trial_row(
         "objective_policy_live": RATE_4D_OBJECTIVE_POLICY,
         "infra_comparability": str((comparability or {}).get("status", "") or ""),
         "infra_fingerprint_digest": infra_digest,
+        INFRA_REGIME_DIGEST_KEY: regime_digest,
     }
+    if served_content:
+        eval_details[SERVED_CONTENT_KEY] = served_content
     if learning_excluded_by:
         eval_details["learning_exclusion"] = {
             "by": learning_excluded_by,
@@ -9385,6 +9406,7 @@ def _run_loop_inner(
         #   - finds nothing (case b) → writes AUTOPILOT_KILLED placeholder
         # Both cases prevent silent corruption of the planner's view.
         dispatch_infra_fingerprint: dict[str, Any] | None = None
+        trial_served_content: dict[str, Any] | None = None  # set by mutation handlers
         if pre_dispatch_skip is None:
             dispatch_infra_fingerprint = _infra_fingerprint_for_trial()  # AP-55
             state["in_flight_trial"] = {
@@ -9423,6 +9445,9 @@ def _run_loop_inner(
                 action_type=action.get("type", ""),
                 idle_reason="running selected action",
             )
+            # Operator decision 2026-09-16: a mutation handler leaves the sha of the file it
+            # served; clear any stale record so this trial only ever sees its own.
+            state.pop(SERVED_CONTENT_STATE_KEY, None)
             eval_result, species_name = dispatch_action(
                 action,
                 seeder,
@@ -9447,6 +9472,7 @@ def _run_loop_inner(
                     seq_gate_preflight=seq_gate_preflight,
                 ),
             )
+            trial_served_content = state.pop(SERVED_CONTENT_STATE_KEY, None)
             phase.set(
                 "dispatch_complete",
                 trial_id=trial_counter,
@@ -9867,6 +9893,8 @@ def _run_loop_inner(
         # frontier representative and clusters with its config's reproductions.
         trial_journal_ts = datetime.now(timezone.utc).isoformat()
         trial_infra_digest = fingerprint_digest(trial_infra_fingerprint)
+        trial_regime_digest = regime_digest(trial_infra_fingerprint)
+        trial_served = _served_content_for_row(trial_served_content)
         # Re-review B1: only an action that names its served-config delta may join a
         # reproduction cluster; measurement actions (seed_batch, deep_eval, ...) stay raw
         # per-trial points exactly as before.
@@ -9876,7 +9904,8 @@ def _run_loop_inner(
             and bool(verdict.passed)
             and rate_measured
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
-            and action_config_identity(effective_action, trial_infra_digest) is not None
+            and action_config_identity(effective_action, trial_regime_digest, trial_served)
+            is not None
         )
         frontier_admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean_representative else ""
         provisional_row = _provisional_trial_row(
@@ -9889,6 +9918,8 @@ def _run_loop_inner(
             frontier_admission=frontier_admission,
             comparability=trial_comparability,
             infra_digest=trial_infra_digest,
+            regime_digest=trial_regime_digest,
+            served_content=trial_served,
         )
         # Re-review B2: the decision mutates gate.baseline in memory. Keep the pre-decision
         # baseline so a journal/decision mismatch can be rolled back before anything persists.
@@ -9931,9 +9962,6 @@ def _run_loop_inner(
                 )
             else:
                 pareto_status = "dominated"  # placeholder for JournalEntry only
-            # TODO(AP-55 merge train): add `and not ap55_gate.get("hold")` to this condition
-            # when sub/ap55bc-20260916 lands, as it does for the clean and final_t1 calls;
-            # otherwise AP-55 enforce does not bind on this promotion path.
             if not MULTITIER_PROMOTION_ENABLED and rate_measured and bool(verdict):
                 # Decision (c), 2026-09-16: a within-noise reproduction is exactly the
                 # evidence a promotion requires (a >=3-member representative whose median
@@ -10473,6 +10501,9 @@ def _run_loop_inner(
         # AP-55: eval-side consumers read eval_details, so stamp the regime there too.
         eval_details_dict["infra_fingerprint_digest"] = fingerprint_digest(trial_infra_fingerprint)
         eval_details_dict["infra_comparability"] = trial_comparability.get("status", "")
+        eval_details_dict[INFRA_REGIME_DIGEST_KEY] = trial_regime_digest
+        if trial_served:
+            eval_details_dict[SERVED_CONTENT_KEY] = trial_served
         if frontier_admission:
             eval_details_dict[FRONTIER_ADMISSION_KEY] = frontier_admission
         if baseline_update is not None:

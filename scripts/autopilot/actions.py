@@ -31,6 +31,52 @@ from src.autopilot_core.tier_specs import UnmeasuredObjectiveError, objectives_f
 
 ORCH_ROOT = Path(__file__).resolve().parents[2]
 
+# Operator decision 2026-09-16: a prompt / code / GEPA mutation is identified by the sha256
+# of the file content actually SERVED. Handlers hash the served file(s) right after the
+# mutation is written and immediately before the eval runs, and leave the record here; the
+# trial loop pops it into ``eval_details.served_content``. It is never written onto the
+# action, so a forced re-run (which copies the stored action) cannot inherit a stale sha,
+# and action fingerprints / repeat detection are unchanged.
+SERVED_CONTENT_STATE_KEY = "_trial_served_content"
+
+
+def served_content_record(paths: Iterable[Path], *, root: Path = ORCH_ROOT) -> dict[str, Any] | None:
+    """``{"files": {path: sha256}}`` for the files as they are on disk now, or None."""
+    import hashlib
+
+    files: dict[str, str] = {}
+    for path in paths:
+        path = Path(path)
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            log.warning("served-content hash failed for %s: %s", path, exc)
+            return None
+        try:
+            key = str(path.resolve().relative_to(Path(root).resolve()))
+        except ValueError:
+            key = str(path.resolve())
+        files[key] = hashlib.sha256(data).hexdigest()
+    if not files:
+        return None
+    return {"files": dict(sorted(files.items()))}
+
+
+def _record_served_content(ctx: "_ActionContext", paths: Iterable[Path]) -> None:
+    record = served_content_record(paths)
+    if record is None:
+        ctx.state.pop(SERVED_CONTENT_STATE_KEY, None)
+        return
+    record["captured_at"] = datetime.now(timezone.utc).isoformat()
+    ctx.state[SERVED_CONTENT_STATE_KEY] = record
+
+
+def _served_prompt_path(ctx: "_ActionContext", filename: str) -> Path | None:
+    try:
+        return ctx.forge._resolve_prompt_path(filename)
+    except Exception:  # noqa: BLE001 - identity is optional evidence, never a failure
+        return None
+
 SEQ_PROMOTION_RECENT_QID_TRIALS = int(
     os.environ.get("AUTOPILOT_SEQ_PROMOTION_RECENT_QID_TRIALS", "100")
 )
@@ -1331,6 +1377,9 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
     skill_without = _skill_efficacy_without_result(ctx)
     bsv2_baseline = _bsv2_baseline_result(ctx)
     ctx.forge.apply_mutation(mutation)
+    served_path = _served_prompt_path(ctx, mutation.file)
+    if served_path is not None:
+        _record_served_content(ctx, [served_path])
     eval_result = ctx.tower.hybrid_eval()
 
     # Revert if quality drops
@@ -1468,6 +1517,9 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
     skill_without = _skill_efficacy_without_result(ctx)
     bsv2_baseline = _bsv2_baseline_result(ctx)
     ctx.forge.apply_mutation(mutation)
+    served_path = _served_prompt_path(ctx, mutation.file)
+    if served_path is not None:
+        _record_served_content(ctx, [served_path])
     eval_result = ctx.tower.hybrid_eval()
 
     # Safety gate check
@@ -1591,7 +1643,9 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
 
     skill_without = _skill_efficacy_without_result(ctx)
     bsv2_baseline = _bsv2_baseline_result(ctx)
-    ctx.forge.apply_code_mutation(mutation)
+    applied = ctx.forge.apply_code_mutation(mutation)
+    if isinstance(applied, dict) and applied.get("status") not in {"rejected"}:
+        _record_served_content(ctx, [ORCH_ROOT / mutation.file])
     eval_result = ctx.tower.hybrid_eval()
 
     verdict = _action_gate_check(action, ctx, eval_result)

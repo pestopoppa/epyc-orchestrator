@@ -52,6 +52,9 @@ for _p in (REPO, REPO / "scripts" / "autopilot"):
 
 from src.autopilot_core.action_identity import (  # noqa: E402
     CONFIG_IDENTIFYING_ACTION_FIELDS,
+    CONTENT_IDENTIFIED_ACTION_TYPES,
+    INFRA_REGIME_DIGEST_KEY,
+    SERVED_CONTENT_KEY,
     action_from_journal_row,
     config_fingerprint_from_row,
     row_config_identity,
@@ -123,8 +126,12 @@ def _slim_action(row: dict[str, Any]) -> dict[str, Any]:
     if row_config_identity(row) is None:
         return {"fp": fp}
     action = action_from_journal_row(row)
-    field = CONFIG_IDENTIFYING_ACTION_FIELDS[str(action.get("type"))]
-    return {"type": action.get("type"), field: {"fp": fp}}
+    action_type = str(action.get("type"))
+    if action_type in CONTENT_IDENTIFIED_ACTION_TYPES:
+        # Identity comes from eval_details.served_content, which the slim row keeps.
+        return {"type": action_type, "fp": fp}
+    field = CONFIG_IDENTIFYING_ACTION_FIELDS[action_type]
+    return {"type": action_type, field: {"fp": fp}}
 
 
 def _slim_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -153,6 +160,9 @@ def _slim_row(row: dict[str, Any]) -> dict[str, Any]:
             "eval_wall_s": details.get("eval_wall_s") or inner.get("eval_wall_s"),
             "infra_comparability": details.get("infra_comparability") or "",
         }
+        for key in (SERVED_CONTENT_KEY, INFRA_REGIME_DIGEST_KEY):
+            if details.get(key):
+                slim_details[key] = details[key]
     return {
         "trial_id": row.get("trial_id"),
         "action_type": row.get("action_type")

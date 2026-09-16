@@ -90,6 +90,7 @@ class Loop:
         promote: bool = True,
         action: dict | None = None,
         infra_digest: str = "",
+        served: dict | None = None,
     ):
         tid = self.next_id
         self.next_id += 1
@@ -106,7 +107,10 @@ class Loop:
             eval_wall_s=wall_s,
             question_results=[{"qid": f"q{i}", "correct": True} for i in range(50)],
         )
-        clean = not exclusion and action_config_identity(action, infra_digest) is not None
+        clean = (
+            not exclusion
+            and action_config_identity(action, infra_digest, served) is not None
+        )
         admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean else ""
         comp = {"status": comparability}
         ts = self.clock.isoformat()
@@ -119,7 +123,8 @@ class Loop:
             learning_excluded_reason="r" if exclusion else "",
             frontier_admission=admission,
             comparability=comp,
-            infra_digest=infra_digest,
+            regime_digest=infra_digest,
+            served_content=served,
         )
         self.last_provisional = provisional
         update = None
@@ -585,7 +590,202 @@ def test_row_stamps_pending_commit_and_ledger_is_the_commit_record():
     ) < body.index("_append_baseline_promotion_event(")
 
 
-def test_within_noise_call_site_carries_the_ap55_todo():
+# ── operator decision 2026-09-16: mutated-file sha is the content identity ─
+
+
+def _sha(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+PROMPT = {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"}
+
+
+def _served(text: str, path: str = "orchestration/prompts/frontdoor.md") -> dict:
+    return {"files": {path: _sha(text)}}
+
+
+def test_identical_served_content_counts_as_a_reproduction(tmp_path):
+    loop = Loop(tmp_path)
+    updates = [
+        loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")[1]
+        for _ in range(3)
+    ]
+    assert [u.updated for u in updates] == [False, False, True], [u.reason for u in updates]
+    assert updates[-1].promotion_rule == sg.PROMOTION_RULE_EMPTY_FRONTIER_REPRO
+
+
+def test_different_served_content_does_not_count(tmp_path):
+    loop = Loop(tmp_path)
+    loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")
+    loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v3"), infra_digest="r1")
+    _, third = loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")
+    assert not third.updated and "has 2 of 3 required" in third.reason
+
+
+def test_mutation_row_without_sha_does_not_count(tmp_path):
+    loop = Loop(tmp_path)
+    loop.trial("p", 1.8, action=dict(PROMPT), served=None, infra_digest="r1")
+    loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")
+    _, third = loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")
+    # The sha-less row is not a cluster member: whichever rule applies, only 2 count.
+    assert not third.updated
+    assert "has 2 of 3 required" in third.reason or "source has 2" in third.reason
+    _, no_sha = loop.trial("p", 1.9, action=dict(PROMPT), served=None, infra_digest="r1")
+    assert not no_sha.updated and "no served-config identity" in no_sha.reason
+
+
+def test_multi_file_identity_is_the_sorted_path_sha_set():
+    a = {"files": {"b.py": _sha("2"), "a.py": _sha("1")}}
+    b = {"files": {"a.py": _sha("1"), "b.py": _sha("2")}}
+    c = {"files": {"a.py": _sha("1"), "b.py": _sha("3")}}
+    code = {"type": "code_mutation", "file": "a.py", "mutation": "targeted_fix"}
+    assert action_config_identity(code, "", a) == action_config_identity(code, "", b)
+    assert action_config_identity(code, "", a) != action_config_identity(code, "", c)
+    # The same content under a different path is a different served config.
+    moved = {"files": {"c.py": _sha("1"), "b.py": _sha("2")}}
+    assert action_config_identity(code, "", a) != action_config_identity(code, "", moved)
+
+
+@pytest.mark.parametrize("bad", [
+    None, {}, {"files": {}}, {"files": {"a.py": "nothex"}}, "0" * 64, {"files": "x"},
+])
+def test_malformed_served_content_has_no_identity(bad):
+    assert action_config_identity(dict(PROMPT), "", bad) is None
+
+
+def test_served_content_never_changes_action_fingerprints():
+    """Old rows keep their archive keys and repeat-detection signatures."""
+    from src.autopilot_core.action_identity import (
+        action_signature,
+        config_fingerprint,
+        config_fingerprint_from_row,
+    )
+
+    row_old = {"config_snapshot": dict(PROMPT), "eval_details": {}}
+    row_new = {
+        "config_snapshot": dict(PROMPT),
+        "eval_details": {"served_content": _served("v2"), "infra_regime_digest": "r1"},
+    }
+    assert config_fingerprint_from_row(row_old) == config_fingerprint_from_row(row_new)
+    assert config_fingerprint_from_row(row_old) == config_fingerprint(PROMPT)
+    assert action_signature(PROMPT) == action_signature(dict(PROMPT))
+    assert row_config_identity(row_old) is None
+    assert row_config_identity(row_new) is not None
+
+
+def _fingerprint(**overrides):
+    base = {
+        "orchestrator": "o1", "evaluator": "e1", "kernel": "k1",
+        "recipe": "r1", "models": "m1", "host": "h1",
+    }
+    base.update(overrides)
+    return {"component_digests": base, "digest": "|".join(sorted(base.values()))}
+
+
+def test_regime_ignores_orchestrator_commits_but_not_kernel_or_models():
+    from src.autopilot_core.infra_fingerprint import regime_digest
+
+    same = regime_digest(_fingerprint())
+    assert regime_digest(_fingerprint(orchestrator="o2")) == same
+    assert regime_digest(_fingerprint(kernel="k2")) != same
+    assert regime_digest(_fingerprint(models="m2")) != same
+    assert regime_digest(_fingerprint(recipe="r2")) != same
+    assert regime_digest(_fingerprint(host="h2")) != same
+    assert regime_digest(_fingerprint(evaluator="e2")) != same
+    assert regime_digest(None) == "" and regime_digest({"status": "capture_error"}) == ""
+
+
+def test_reproduction_survives_an_unrelated_orchestrator_commit(tmp_path):
+    from src.autopilot_core.infra_fingerprint import regime_digest
+
+    loop = Loop(tmp_path)
+    digests = [
+        regime_digest(_fingerprint(orchestrator=f"commit{i}")) for i in range(3)
+    ]
+    updates = [
+        loop.trial("A", 1.8, infra_digest=d)[1] for d in digests
+    ]
+    assert updates[-1].updated, updates[-1].reason
+
+
+def test_kernel_change_splits_the_cluster(tmp_path):
+    from src.autopilot_core.infra_fingerprint import regime_digest
+
+    loop = Loop(tmp_path)
+    loop.trial("A", 1.8, infra_digest=regime_digest(_fingerprint()))
+    loop.trial("A", 1.8, infra_digest=regime_digest(_fingerprint(kernel="k2")))
+    _, third = loop.trial("A", 1.8, infra_digest=regime_digest(_fingerprint()))
+    assert not third.updated and "has 2 of 3 required" in third.reason
+
+
+def test_row_regime_digest_falls_back_to_the_recorded_fingerprint():
+    from src.autopilot_core.action_identity import row_regime_digest
+    from src.autopilot_core.infra_fingerprint import regime_digest
+
+    fp = _fingerprint()
+    assert row_regime_digest({"infra_fingerprint": fp, "eval_details": {}}) == regime_digest(fp)
+    assert row_regime_digest({"eval_details": {"infra_regime_digest": "x"}}) == "x"
+    assert row_regime_digest({"eval_details": {}}) == ""
+
+
+# ── the sha is taken from the served file at eval time, never from the action ──
+
+
+def test_served_content_record_hashes_the_file_on_disk(tmp_path):
+    import actions
+
+    target = tmp_path / "orchestration" / "prompts" / "frontdoor.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("served v2")
+    record = actions.served_content_record([target], root=tmp_path)
+    assert record == {"files": {"orchestration/prompts/frontdoor.md": _sha("served v2")}}
+    assert actions.served_content_record([tmp_path / "missing"], root=tmp_path) is None
+
+
+def test_handlers_hash_after_apply_and_before_eval_without_touching_the_action():
+    import actions
+
+    source = Path(actions.__file__).read_text()
+    for handler, apply_call in (
+        ("def _action_prompt_mutation(", "ctx.forge.apply_mutation(mutation)"),
+        ("def _action_gepa_optimize(", "ctx.forge.apply_mutation(mutation)"),
+        ("def _action_code_mutation(", "ctx.forge.apply_code_mutation(mutation)"),
+    ):
+        body = source[source.index(handler):]
+        body = body[: body.index("\ndef ", 1)]
+        applied = body.index(apply_call)
+        recorded = body.index("_record_served_content(ctx", applied)
+        evaluated = body.index("ctx.tower.hybrid_eval()", applied)
+        assert applied < recorded < evaluated, handler
+        assert 'action["served_content"]' not in body
+
+
+def test_loop_clears_and_pops_the_served_content_around_dispatch():
     source = Path(autopilot.__file__).read_text()
-    at = source.index("if not MULTITIER_PROMOTION_ENABLED and rate_measured and bool(verdict):")
-    assert 'TODO(AP-55 merge train): add `and not ap55_gate.get("hold")`' in source[at - 400 : at]
+    body = source[source.index("def _run_loop_inner(") :]
+    clear = body.index("state.pop(SERVED_CONTENT_STATE_KEY, None)")
+    dispatch = body.index("eval_result, species_name = dispatch_action(")
+    take = body.index("trial_served_content = state.pop(SERVED_CONTENT_STATE_KEY, None)")
+    assert clear < dispatch < take
+
+
+def test_record_served_content_on_state(tmp_path):
+    import actions
+
+    target = tmp_path / "f.md"
+    target.write_text("x")
+
+    class Ctx:
+        state: dict = {}
+
+    ctx = Ctx()
+    ctx.state = {}
+    actions._record_served_content(ctx, [target])
+    record = ctx.state[actions.SERVED_CONTENT_STATE_KEY]
+    assert list(record["files"].values()) == [_sha("x")] and record["captured_at"]
+    actions._record_served_content(ctx, [tmp_path / "gone"])
+    assert actions.SERVED_CONTENT_STATE_KEY not in ctx.state
+    assert autopilot._served_content_for_row(record)["files"] == record["files"]
+    assert autopilot._served_content_for_row({"files": {"a": "bad"}}) is None
