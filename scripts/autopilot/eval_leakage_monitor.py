@@ -47,6 +47,9 @@ RUNBOOK = (
     "docs/guides/meta-harness-operator-guide.md -> "
     "'Mutations all rejected: eval_leakage_vocabulary_unavailable'"
 )
+# The live research pool pinned in epyc-root artifacts/audit/deterministic-rescore-ledger-20260812.json.
+POOL_SHA256 = "64218c27e07400acf3b10a3cac05a410d5ee67814f353788ab75a19c84dde584"
+POOL_SIZE_BYTES = 1350221880
 _ALARM_SCRIPT_CANDIDATES = (
     Path("/mnt/raid0/llm/epyc-root/scripts/coordination/alarm_channel.py"),
     Path("/workspace/scripts/coordination/alarm_channel.py"),
@@ -210,10 +213,11 @@ class EvalLeakageMonitor:
     def fix_text(self) -> str:
         env = getattr(self.pf, "EVAL_ID_VOCAB_SOURCES_ENV", "AUTOPILOT_EVAL_ID_VOCAB_SOURCES")
         return (
-            "restore the pool (git -C /mnt/raid0/llm/epyc-inference-research checkout -- "
-            "benchmarks/prompts/question_pool.jsonl) or point "
-            f"{env} at a valid copy; no restart needed if the default path is restored "
-            f"(an env change needs a restart). Runbook: {RUNBOOK}"
+            "restore a BYTE-IDENTICAL copy of the pool (it is gitignored, so git cannot "
+            f"restore it; expect {POOL_SIZE_BYTES} bytes, sha256 {POOL_SHA256}) at the same "
+            f"path, or point {env} at such a copy. NEVER rebuild the pool to silence this: "
+            "that is an eval-instrument change. No restart needed if the default path is "
+            f"restored (an env change needs a restart). Runbook: {RUNBOOK}"
         )
 
     # ── journal / state ───────────────────────────────────────────────────

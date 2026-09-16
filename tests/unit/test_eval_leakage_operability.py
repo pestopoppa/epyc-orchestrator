@@ -186,6 +186,17 @@ def test_success_resets_the_consecutive_count(pool_env, tmp_path):
     assert alarm.raised == [] and alarm.cleared == []
 
 
+def test_fix_text_never_suggests_git_and_pins_the_pool_identity():
+    """Review finding 2: the pool is gitignored, so git cannot restore it."""
+    text = mon.EvalLeakageMonitor(prompt_forge_module=pf, alarm=FakeAlarm()).fix_text()
+    assert "git checkout" not in text and "git -C" not in text
+    assert "64218c27e07400acf3b10a3cac05a410d5ee67814f353788ab75a19c84dde584" in text
+    assert "1350221880" in text
+    assert pf.EVAL_ID_VOCAB_SOURCES_ENV in text
+    assert "NEVER rebuild" in text
+    assert "BYTE-IDENTICAL" in text
+
+
 def test_threshold_is_env_tunable(monkeypatch):
     monkeypatch.setenv(mon.THRESHOLD_ENV, "5")
     assert mon.EvalLeakageMonitor(prompt_forge_module=pf, alarm=FakeAlarm()).threshold == 5
