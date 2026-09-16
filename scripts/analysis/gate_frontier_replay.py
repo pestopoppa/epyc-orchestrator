@@ -22,11 +22,9 @@ the first row that carried that policy. The legacy era therefore has ``exclude_b
 = None on BOTH paths, so the two paths must agree on every legacy-era row — the replay
 asserts that as a self-check.
 
-Two orderings are replayed:
-  * ``production`` — rows strictly BEFORE R. This is what the running loop sees: the trial
-    is journaled after ``update_baseline`` returns.
-  * ``archive_first`` — rows up to AND INCLUDING R, the ordering ``update_baseline``'s
-    docstring assumes.
+Three paths are replayed (see ``replay``): ``old`` (legacy scope), ``live`` (live scope,
+commit e401549d) and ``live_c`` (live scope + operator decisions (c) and (b), 2026-09-16).
+``forward_simulation`` replays the tasks/hour trials as if they arrived after the live fence.
 
 Usage:
     gate_frontier_replay.py slim --out tests/fixtures/gate_frontier_replay.json
@@ -43,6 +41,7 @@ import math
 import sys
 import tempfile
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +57,11 @@ from src.autopilot_core.journal_reconstruction import (  # noqa: E402
     parse_journal_ts,
     reconstruct_archive_from_journal_rows,
 )
+from src.autopilot_core.learning_exclusions import (  # noqa: E402
+    FRONTIER_ADMISSION_KEY,
+    FRONTIER_ADMISSION_REPRESENTATIVE,
+)
+from src.autopilot_core.live_reproductions import live_reproductions  # noqa: E402
 from src.autopilot_core.tier_specs import (  # noqa: E402
     LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
@@ -79,7 +83,6 @@ LIVE_POLICIES = (
     RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
     RATE_4D_OBJECTIVE_POLICY,
 )
-ORDERINGS = ("production", "archive_first")
 
 
 # ── slim fixture ────────────────────────────────────────────────────────────
@@ -129,6 +132,7 @@ def _slim_row(row: dict[str, Any]) -> dict[str, Any]:
             "objective_policy_live": details.get("objective_policy_live"),
             "learning_exclusion": details.get("learning_exclusion") or {},
             "eval_wall_s": details.get("eval_wall_s") or inner.get("eval_wall_s"),
+            "infra_comparability": details.get("infra_comparability") or "",
         }
     return {
         "trial_id": row.get("trial_id"),
@@ -143,6 +147,7 @@ def _slim_row(row: dict[str, Any]) -> dict[str, Any]:
         "n_questions": n_questions,
         "eval_wall_s": row.get("eval_wall_s"),
         "eval_details": slim_details,
+        "comparability": row.get("comparability") or {},
         "config_snapshot": {"fp": config_fingerprint_from_row(row)},
         "reasoning": "",
     }
@@ -188,16 +193,28 @@ def _epoch_by_policy(rows: list[dict[str, Any]]) -> dict[str, float | None]:
     return epochs
 
 
-def _is_candidate(row: dict[str, Any]) -> bool:
+def _is_candidate(row: dict[str, Any], *, include_within_noise: bool = False) -> bool:
+    """Rows whose trial reached ``update_baseline``.
+
+    The pre-(c) loop called it for clean trials only. The (c) loop also calls it for a
+    trusted within-noise reproduction (``mad_noise`` / ``reproduction_confirmed``) whose
+    live objectives were measured."""
     try:
         tier = int(row.get("tier") or 0)
     except (TypeError, ValueError):
         return False
-    if tier < MIN_FRONTIER_EVAL_TIER or row.get("bug_corrupted_by"):
+    if tier < MIN_FRONTIER_EVAL_TIER:
         return False
     details = row.get("eval_details") or {}
-    if (details.get("learning_exclusion") or {}).get("by"):
-        return False
+    excluded_by = str((details.get("learning_exclusion") or {}).get("by") or "")
+    bug = str(row.get("bug_corrupted_by") or "")
+    if excluded_by or bug:
+        if not include_within_noise or excluded_by not in {"mad_noise", "reproduction_confirmed"}:
+            return False
+        if bug and bug != "mad_noise":
+            return False
+        if not _row_objectives_measured(row):
+            return False
     return quality_from_row(row) is not None
 
 
@@ -232,6 +249,25 @@ def _view(rows, policy, exclude_before_ts, scope):
     )
 
 
+def stamp_clean_representatives(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What-if (c): every promotion candidate row carries the frontier-representative stamp,
+    as the new trial loop writes it. The stored journal itself is never modified."""
+    out = []
+    for row in rows:
+        if _is_candidate(row) and _row_objectives_measured(row):
+            row = dict(row)
+            details = dict(row.get("eval_details") or {})
+            details[FRONTIER_ADMISSION_KEY] = FRONTIER_ADMISSION_REPRESENTATIVE
+            row["eval_details"] = details
+        out.append(row)
+    return out
+
+
+def _row_objectives_measured(row: dict[str, Any]) -> bool:
+    policy = _row_policy(row)
+    return objectives_from_journal_row(row, objective_policy=policy) is not None
+
+
 COMPACT_KEYS = (
     "trial_id",
     "tier",
@@ -242,6 +278,8 @@ COMPACT_KEYS = (
     "row_speed_tps",
     "frontdoor_speed_after",
     "frontdoor_task_rate_qph_after",
+    "promotion_rule",
+    "frontier_size_after",
 )
 
 
@@ -260,7 +298,10 @@ def baselines_before(decisions: list[dict[str, Any]], trial_id: int) -> dict[int
 
 def _classify(reason: str) -> str:
     table = (
-        ("live-epoch frontier is empty", "refused_live_frontier_empty"),
+        ("empty-frontier rule (b): the candidate's journal row", "refused_b_no_candidate_row"),
+        ("empty-frontier rule (b): candidate config", "refused_b_too_few_reproductions"),
+        ("empty-frontier rule (b): reproduced median", "refused_b_median_below_quantum"),
+        ("promotion guard archive unavailable", "refused_guard_unavailable"),
         ("not a same-tier frontier representative", "refused_not_frontier_representative"),
         ("exceeds same-tier archive max", "refused_above_archive_max"),
         ("reproductions; source has", "refused_too_few_reproductions"),
@@ -275,26 +316,35 @@ def _classify(reason: str) -> str:
     return "other:" + reason[:60]
 
 
+PATHS = ("old", "live", "live_c")
+
+
 def replay(
     rows: list[dict[str, Any]],
     *,
     path: str,
-    ordering: str,
     start_trial_id: int | None = None,
     initial_baselines: dict[int, float] | None = None,
+    epochs: dict[str, float | None] | None = None,
     cache: dict | None = None,
 ) -> dict[str, Any]:
-    """Replay one (path, ordering). ``path`` is ``old`` (legacy) or ``new`` (live scope).
+    """Replay one path over ``rows`` (production ordering: the guard sees rows BEFORE R).
+
+    * ``old``    — legacy t/s replay over every era, no candidate row (pre-2026-09-16).
+    * ``live``   — live policy + epoch fence, no candidate row (commit e401549d).
+    * ``live_c`` — live scope plus decision (c): candidate rows are stamped as frontier
+      representatives and the candidate's own row is handed to the guard; the empty-frontier
+      rule (b) counts comparable live-regime reproductions.
 
     ``start_trial_id`` + ``initial_baselines`` replay a WINDOW: candidates before the start
-    are skipped and the tier baselines start from ``initial_baselines`` (the golden state
-    at that point); every archive still sees the full visible prefix.
+    are skipped and the tier baselines start from ``initial_baselines``; every archive still
+    sees the full visible prefix.
     """
     import safety_gate as sg
 
     cache = {} if cache is None else cache
-
-    epochs = _epoch_by_policy(rows)
+    epochs = epochs if epochs is not None else _epoch_by_policy(rows)
+    source = stamp_clean_representatives(rows) if path == "live_c" else rows
     decisions: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory() as tmp:
         gate = sg.SafetyGate(baseline_path=Path(tmp) / "absent.yaml")
@@ -304,62 +354,73 @@ def replay(
             {int(t): float(q) for t, q in (initial_baselines or {}).items()}
         )
         current: dict[str, Any] = {}
-        sg.configure_promotion_guard_archive(lambda: current["view"])
+        sg.configure_promotion_guard_archive(lambda pending_rows=(): current["view"])
         try:
-            for index, row in enumerate(rows):
-                if not _is_candidate(row):
+            for index, row in enumerate(source):
+                if not _is_candidate(row, include_within_noise=path == "live_c"):
                     continue
                 if start_trial_id is not None and int(row["trial_id"]) < start_trial_id:
                     continue
-                n_visible = index + 1 if ordering == "archive_first" else index
                 policy = _row_policy(row)
+                pending: tuple[dict[str, Any], ...] = ()
                 if path == "old":
                     current["view"] = _LazyView(
-                        rows, n_visible, LEGACY_OBJECTIVE_POLICY, None, "legacy_unscoped", cache
+                        source, index, LEGACY_OBJECTIVE_POLICY, None, "legacy_unscoped", cache, "old"
+                    )
+                elif path == "live":
+                    current["view"] = _LazyView(
+                        source, index, policy, epochs[policy], "live", cache, "live"
                     )
                 else:
+                    pending = (row,)
                     current["view"] = _LazyView(
-                        rows, n_visible, policy, epochs[policy], "live", cache
+                        source, index + 1, policy, epochs[policy], "live", cache, "live_c"
                     )
                 result = _eval_result(row)
-                before_speed = gate.baseline.frontdoor_speed
-                update = gate.update_baseline(result, source_trial_id=int(row["trial_id"]))
+                update = gate.update_baseline(
+                    result, source_trial_id=int(row["trial_id"]), pending_journal_rows=pending
+                )
                 if update.updated:
                     decision = "promoted"
                 elif update.reason.startswith("not a monotonic"):
                     continue  # ratchet skip, not a guard decision
                 else:
                     decision = _classify(update.reason)
+                tier = int(row["tier"])
                 decisions.append(
                     {
                         "trial_id": int(row["trial_id"]),
-                        "tier": int(row["tier"]),
+                        "tier": tier,
                         "row_policy": policy,
                         "decision": decision,
+                        "promotion_rule": update.promotion_rule,
                         "previous_quality": update.previous_quality,
                         "new_quality": float(update.new_quality),
                         "row_speed_tps": float(row.get("speed") or 0.0),
-                        "frontdoor_speed_before": before_speed,
                         "frontdoor_speed_after": gate.baseline.frontdoor_speed,
                         "frontdoor_task_rate_qph_after": gate.baseline.frontdoor_task_rate_qph,
-                        "guard_policy": current["view"].objective_policy,
+                        "frontier_size_after": len(current["view"].archive.frontier(tier))
+                        if path == "live_c"
+                        else None,
                     }
                 )
         finally:
             sg.configure_promotion_guard_archive(None)
     counts = Counter(d["decision"] for d in decisions)
-    return {"path": path, "ordering": ordering, "counts": dict(sorted(counts.items())), "decisions": decisions}
+    return {"path": path, "counts": dict(sorted(counts.items())), "decisions": decisions}
 
 
 class _LazyView:
     """PromotionGuardView built on first archive access (most candidates never need one).
 
-    Archives are cached by (visible prefix length, policy, fence): the old path and the new
-    path share every legacy-era view, and the two orderings share prefixes."""
+    Archives are cached by (path family, visible prefix length, policy, fence)."""
 
-    def __init__(self, rows, n_visible, policy, exclude_before_ts, scope, cache):
+    error = ""
+
+    def __init__(self, rows, n_visible, policy, exclude_before_ts, scope, cache, family):
         self._rows = rows
-        self._key = (n_visible, policy, exclude_before_ts)
+        self._n = n_visible
+        self._key = (family if family == "live_c" else "plain", n_visible, policy, exclude_before_ts)
         self._cache = cache
         self.objective_policy = policy
         self.scope = scope
@@ -368,9 +429,18 @@ class _LazyView:
     @property
     def archive(self):
         if self._key not in self._cache:
-            n_visible, policy, exclude = self._key
+            _family, n_visible, policy, exclude = self._key
             self._cache[self._key] = _view(self._rows[:n_visible], policy, exclude, "").archive
         return self._cache[self._key]
+
+    def reproductions(self, tier: int, fingerprint: str) -> list[dict[str, Any]]:
+        return live_reproductions(
+            self._rows[: self._n],
+            tier=tier,
+            fingerprint=fingerprint,
+            objective_policy=self.objective_policy,
+            exclude_before_ts=self.exclude_before_ts,
+        )
 
 
 def compare(
@@ -379,40 +449,94 @@ def compare(
     start_trial_id: int | None = None,
     initial_baselines: dict[str, dict[int, float]] | None = None,
 ) -> dict[str, Any]:
-    logging.getLogger("autopilot.safety").setLevel(logging.CRITICAL)
+    safety_log = logging.getLogger("autopilot.safety")
+    previous_level = safety_log.level
+    safety_log.setLevel(logging.CRITICAL)
     cache: dict = {}
-    runs = {
-        f"{p}/{o}": replay(
-            rows,
-            path=p,
-            ordering=o,
-            start_trial_id=start_trial_id,
-            initial_baselines=(initial_baselines or {}).get(f"{p}/{o}"),
-            cache=cache,
-        )
-        for o in ORDERINGS
-        for p in ("old", "new")
-    }
+    try:
+        runs = {
+            p: replay(
+                rows,
+                path=p,
+                start_trial_id=start_trial_id,
+                initial_baselines=(initial_baselines or {}).get(p),
+                cache=cache,
+            )
+            for p in PATHS
+        }
+    finally:
+        safety_log.setLevel(previous_level)
     differences = {}
-    for ordering in ORDERINGS:
-        old = {d["trial_id"]: d for d in runs[f"old/{ordering}"]["decisions"]}
-        new = {d["trial_id"]: d for d in runs[f"new/{ordering}"]["decisions"]}
+    for left, right in (("old", "live"), ("live", "live_c")):
+        a_map = {d["trial_id"]: d for d in runs[left]["decisions"]}
+        b_map = {d["trial_id"]: d for d in runs[right]["decisions"]}
         diff = []
-        for tid in sorted(set(old) | set(new)):
-            a, b = old.get(tid), new.get(tid)
+        for tid in sorted(set(a_map) | set(b_map)):
+            a, b = a_map.get(tid), b_map.get(tid)
             if (a or {}).get("decision") != (b or {}).get("decision"):
                 diff.append(
                     {
                         "trial_id": tid,
                         "row_policy": (a or b)["row_policy"],
-                        "old": (a or {}).get("decision", "not_reached(ratchet_skip)"),
-                        "new": (b or {}).get("decision", "not_reached(ratchet_skip)"),
+                        left: (a or {}).get("decision", "not_reached(ratchet_skip)"),
+                        right: (b or {}).get("decision", "not_reached(ratchet_skip)"),
                     }
                 )
-        differences[ordering] = diff
+        differences[f"{left}_vs_{right}"] = diff
     return {
         "runs": {k: {"counts": v["counts"], "decisions": v["decisions"]} for k, v in runs.items()},
         "differences": differences,
+    }
+
+
+def forward_simulation(rows: list[dict[str, Any]], state: dict[str, Any]) -> dict[str, Any]:
+    """Decision (c) going forward: the rate-era trials re-played as NEW trials after the fence.
+
+    The stored journal has no row after the live ``pareto_exclude_before_ts``. This takes
+    every row from the first tasks/hour trial on, shifts its timestamp to just after the
+    fence (order and spacing kept), stamps it as the new loop would, and replays it under the
+    live policy with the live state's tier baselines. It shows the empty-frontier rule (b)
+    refusing first, then the frontier filling and the normal frontier rule taking over.
+    """
+    policy = str(state.get("pareto_objective_policy") or RATE_4D_OBJECTIVE_POLICY)
+    fence = float(state.get("pareto_exclude_before_ts") or 0.0)
+    baselines = {
+        int(t): float(q)
+        for t, q in ((state.get("baseline_state") or {}).get("baselines_by_tier") or {}).items()
+    }
+    first = next(i for i, r in enumerate(rows) if _row_policy(r) != LEGACY_OBJECTIVE_POLICY)
+    t0 = parse_journal_ts(rows[first]["timestamp"])
+    shifted = list(rows[:first])
+    for row in rows[first:]:
+        row = dict(row)
+        ts = parse_journal_ts(row["timestamp"]) or t0
+        row["timestamp"] = datetime.fromtimestamp(fence + 60.0 + (ts - t0), timezone.utc).isoformat()
+        details = dict(row.get("eval_details") or {})
+        details["objective_policy_live"] = policy
+        row["eval_details"] = details
+        shifted.append(row)
+    safety_log = logging.getLogger("autopilot.safety")
+    previous_level = safety_log.level
+    safety_log.setLevel(logging.CRITICAL)
+    try:
+        run = replay(
+            shifted,
+            path="live_c",
+            start_trial_id=int(rows[first]["trial_id"]),
+            initial_baselines=baselines,
+            epochs={policy: fence, LEGACY_OBJECTIVE_POLICY: None},
+        )
+    finally:
+        safety_log.setLevel(previous_level)
+    stamped = stamp_clean_representatives(shifted)
+    final = _view(stamped, policy, fence, "live").archive
+    return {
+        "objective_policy": policy,
+        "fence": fence,
+        "initial_baselines": {str(k): v for k, v in sorted(baselines.items())},
+        "counts": run["counts"],
+        "decisions": run["decisions"],
+        "final_frontier_sizes": {str(t): len(final.frontier(t)) for t in (1, 2, 3)},
     }
 
 
@@ -462,6 +586,11 @@ def main(argv: list[str] | None = None) -> int:
                 "frontdoor_speed": (state.get("baseline_state") or {}).get("frontdoor_speed"),
             }
             fixture["golden"]["live_restart_probe"] = live_restart_probe(fixture["rows"], state)
+            forward = forward_simulation(fixture["rows"], state)
+            fixture["golden"]["forward_simulation"] = {
+                **{k: v for k, v in forward.items() if k != "decisions"},
+                "decisions": [compact(d) for d in forward["decisions"]],
+            }
         args.out.write_text(json.dumps(fixture, sort_keys=True, separators=(",", ":")) + "\n")
         print(json.dumps(fixture["golden"], indent=1, sort_keys=True))
         return 0

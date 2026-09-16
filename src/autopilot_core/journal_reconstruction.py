@@ -7,7 +7,10 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from src.autopilot_core.action_identity import config_fingerprint_from_row
-from src.autopilot_core.learning_exclusions import WITHIN_NOISE_EXCLUSIONS
+from src.autopilot_core.learning_exclusions import (
+    WITHIN_NOISE_EXCLUSIONS,
+    row_is_representative_member,
+)
 from src.autopilot_core.pareto_math import dominates, hypervolume, median_objectives
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
@@ -240,12 +243,12 @@ def reconstruct_archive_from_journal_rows(
             journal_max_trial_id = _row_tid
 
         bug = row.get("bug_corrupted_by") or ""
-        excl_by = (row.get("eval_details") or {}).get("learning_exclusion", {}).get("by", "")
         if bug and bug != "mad_noise":
             if _row_tid is not None:
                 _bump(excluded_bug, _row_tid)
             continue
-        trusted_within_noise = bug == "mad_noise" or excl_by in WITHIN_NOISE_EXCLUSIONS
+        # Trusted within-noise rows AND stamped clean representatives (decision (c)).
+        trusted_within_noise = row_is_representative_member(row)
 
         try:
             tier = int(row.get("tier", DEFAULT_FRONTIER_TIER))

@@ -42,7 +42,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, TYPE_CHECKING
+from typing import Any, Callable, Iterable, Mapping, TYPE_CHECKING
 
 # Setup paths
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -58,6 +58,7 @@ from src.registry.capability_registry import (
     load_capability_registry,
 )
 from src.autopilot_core.journal_reconstruction import (
+    objectives_from_journal_row,
     parse_journal_ts,
     reconstruct_archive_from_journal_rows,
 )
@@ -68,6 +69,7 @@ from src.autopilot_core.infra_fingerprint import (
     fingerprint_digest,
 )
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
+from src.autopilot_core.live_reproductions import live_reproductions
 from src.autopilot_core.measurement_guards import (
     is_quality_admissible as _is_quality_admissible,
 )
@@ -156,9 +158,12 @@ from src.autopilot_core.action_identity import (
     config_fingerprint,
 )
 from src.autopilot_core.learning_exclusions import (
+    FRONTIER_ADMISSION_KEY,
+    FRONTIER_ADMISSION_REPRESENTATIVE,
     BENIGN_LEARNING_EXCLUSIONS,
     NON_CORRUPT_LEARNING_EXCLUSIONS,
     classify_learning_exclusion,
+    row_is_representative_member,
 )
 from src.autopilot_core.multitier_decision import (
     DEFAULT_MAX_ATTEMPTS_PER_TIER,
@@ -1600,15 +1605,18 @@ def _log_baseline_update_result(trial_counter: int, baseline_update: Any) -> Non
     (no trustworthy null this trial => no ratchet), so it must be visible and not lost
     among unrelated 'baseline update skipped' reasons.
     """
+    rule = getattr(baseline_update, "promotion_rule", "") or "n/a"
     if baseline_update.updated:
         log.info(
-            "Trial %d: T%d baseline auto-raised %.3f → %.3f",
+            "Trial %d: T%d baseline auto-raised %.3f → %.3f (promotion_rule=%s)",
             trial_counter,
             baseline_update.tier,
             baseline_update.previous_quality or 0.0,
             baseline_update.new_quality,
+            rule,
         )
         return
+    log.info("Trial %d: baseline promotion not applied (promotion_rule=%s)", trial_counter, rule)
     reason = getattr(baseline_update, "reason", "") or ""
     # The gate carries the machine token on BaselineUpdateResult.seq_refused_reason
     # (the human `reason` is a longer sentence); check the token first, then fall back
@@ -6533,13 +6541,14 @@ def _maybe_reimport_pareto_from_journal(
     # robust-median REPRESENTATIVES, not raw per-trial points. Re-importing one as a single
     # noisy sample would contradict that policy, so skip — the representative is rebuilt from
     # the persisted reproduction cluster on the next reproduction.
+    # Decision (c): clean rows stamped as frontier representatives are cluster members too.
     excl_by = (entry.eval_details or {}).get("learning_exclusion", {}).get("by", "")
-    if excl_by in BENIGN_LEARNING_EXCLUSIONS:
+    if excl_by in BENIGN_LEARNING_EXCLUSIONS or row_is_representative_member(asdict(entry)):
         log.info(
-            "Pareto re-import: trial %d is a trusted within-noise exclusion (%s) — "
+            "Pareto re-import: trial %d is a representative-cluster member (%s) — "
             "representative-managed, not raw-re-imported.",
             trial_id,
-            excl_by,
+            excl_by or FRONTIER_ADMISSION_REPRESENTATIVE,
         )
         return False
     # Already in archive? (use the private _all_entries list — it's the
@@ -7087,8 +7096,9 @@ def _journal_archive_payload_for_authority(
     deinflate_factor: float = 1.0,
     exclude_before_ts: float | None = None,
     objective_policy: str = LEGACY_OBJECTIVE_POLICY,
+    extra_rows: Iterable[dict[str, Any]] = (),
 ) -> dict[str, Any] | None:
-    rows = _journal_rows_for_archive(journal)
+    rows = _journal_rows_for_archive(journal) + [dict(r) for r in extra_rows]
     if hasattr(journal, "ledger_events"):
         snapshot_payload = archive_payload_from_verified_snapshot(
             rows,
@@ -7117,6 +7127,99 @@ def _journal_archive_payload_for_authority(
     )
 
 
+def _bug_tag_for_learning_exclusion(excluded_by: str, reason: str) -> tuple[str, str]:
+    """The (bug_corrupted_by, reason) pair a trial row carries for its learning exclusion."""
+    if (
+        excluded_by
+        and excluded_by not in BENIGN_LEARNING_EXCLUSIONS
+        and excluded_by not in NON_CORRUPT_LEARNING_EXCLUSIONS
+    ):
+        return excluded_by, reason
+    return "", ""
+
+
+def _provisional_trial_row(
+    *,
+    trial_id: int,
+    timestamp: str,
+    eval_result: Any,
+    action: dict[str, Any],
+    learning_excluded_by: str,
+    learning_excluded_reason: str,
+    frontier_admission: str,
+    comparability: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Decision (c): the objective-bearing projection of the row this trial WILL journal.
+
+    Built from the same values the JournalEntry below is built from, so the promotion guard
+    sees the candidate exactly as replay will. ``_provisional_row_mismatch`` checks the
+    recorded row against it after ``journal.record``.
+    """
+    bug, _reason = _bug_tag_for_learning_exclusion(learning_excluded_by, learning_excluded_reason)
+    eval_details: dict[str, Any] = {
+        "question_results": list(getattr(eval_result, "question_results", []) or []),
+        "details": getattr(eval_result, "details", {}) or {},
+        "eval_wall_s": getattr(eval_result, "eval_wall_s", 0.0),
+        "objective_policy_live": RATE_4D_OBJECTIVE_POLICY,
+        "infra_comparability": str((comparability or {}).get("status", "") or ""),
+    }
+    if learning_excluded_by:
+        eval_details["learning_exclusion"] = {
+            "by": learning_excluded_by,
+            "reason": learning_excluded_reason,
+        }
+    if frontier_admission:
+        eval_details[FRONTIER_ADMISSION_KEY] = frontier_admission
+    return {
+        "trial_id": int(trial_id),
+        "timestamp": timestamp,
+        "tier": int(eval_result.tier),
+        "quality": eval_result.quality,
+        "speed": eval_result.speed,
+        "cost": eval_result.cost,
+        "reliability": eval_result.reliability,
+        "bug_corrupted_by": bug,
+        "config_snapshot": action,
+        "reasoning": json.dumps(action),
+        "eval_details": eval_details,
+        "comparability": dict(comparability or {}),
+    }
+
+
+def _provisional_row_mismatch(provisional: dict[str, Any], recorded: dict[str, Any]) -> list[str]:
+    """Fields where the journaled row disagrees with the row the promotion decision saw."""
+    from src.autopilot_core.live_reproductions import row_comparability_status
+
+    diffs: list[str] = []
+    for key in ("trial_id", "timestamp", "tier", "bug_corrupted_by"):
+        if provisional.get(key) != recorded.get(key):
+            diffs.append(key)
+    if _config_fingerprint(provisional.get("config_snapshot")) != _config_fingerprint(
+        recorded.get("config_snapshot")
+    ):
+        diffs.append("config_fingerprint")
+    if row_is_representative_member(provisional) != row_is_representative_member(recorded):
+        diffs.append("representative_membership")
+    if row_comparability_status(provisional) != row_comparability_status(recorded):
+        diffs.append("comparability")
+    for policy in (LEGACY_OBJECTIVE_POLICY, RATE_4D_OBJECTIVE_POLICY):
+        if objectives_from_journal_row(provisional, objective_policy=policy) != (
+            objectives_from_journal_row(recorded, objective_policy=policy)
+        ):
+            diffs.append(f"objectives[{policy}]")
+    return diffs
+
+
+CLEAN_TRIAL_REPRESENTATIVES_ENV = "AUTOPILOT_CLEAN_TRIAL_REPRESENTATIVES"
+
+
+def _clean_trial_representatives_enabled() -> bool:
+    """Decision (c) is ON unless explicitly disabled (``=0``)."""
+    return os.environ.get(CLEAN_TRIAL_REPRESENTATIVES_ENV, "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
 def _install_promotion_guard_scope(journal: Any, state: Mapping[str, Any]) -> None:
     """Gate-frontier (2026-09-16): promotion evidence reads the LIVE frontier.
 
@@ -7128,23 +7231,37 @@ def _install_promotion_guard_scope(journal: Any, state: Mapping[str, Any]) -> No
     dict, read on every call, so a rebase applied in-process is honoured.
     """
 
-    def _provider() -> PromotionGuardView:
+    def _provider(pending_rows: tuple[dict[str, Any], ...] = ()) -> PromotionGuardView:
         policy = _live_objective_policy_from_state(state)
         deinflate_before_ts, deinflate_factor, exclude_before_ts = (
             _archive_epoch_params_from_state(dict(state))
         )
+        pending = [dict(r) for r in pending_rows]
         payload = _journal_archive_payload_for_authority(
             journal,
             deinflate_before_ts=deinflate_before_ts,
             deinflate_factor=deinflate_factor,
             exclude_before_ts=exclude_before_ts,
             objective_policy=policy,
+            extra_rows=pending,
         )
+        resolved_policy = str((payload or {}).get("objective_policy") or policy)
+
+        def _reproductions(tier: int, fingerprint: str) -> list[dict[str, Any]]:
+            return live_reproductions(
+                _journal_rows_for_archive(journal) + pending,
+                tier=tier,
+                fingerprint=fingerprint,
+                objective_policy=resolved_policy,
+                exclude_before_ts=exclude_before_ts,
+            )
+
         return PromotionGuardView(
             archive=_ConcreteParetoArchive.from_archive_payload(payload, read_only=True),
-            objective_policy=str((payload or {}).get("objective_policy") or policy),
+            objective_policy=resolved_policy,
             scope="live",
             exclude_before_ts=exclude_before_ts,
+            reproductions=_reproductions,
         )
 
     configure_promotion_guard_archive(_provider)
@@ -9698,6 +9815,29 @@ def _run_loop_inner(
         # branch wholesale and silently suppressed quality baseline promotion whenever the
         # rate was missing — coupling two independent axes.
         rate_measured = objectives_measurable(eval_result)
+        # Decision (c), 2026-09-16: the row this trial journals is fixed NOW (same timestamp,
+        # same objective-bearing fields) and handed to update_baseline, so the promotion
+        # guard's live frontier includes the candidate. A clean trial is stamped as a
+        # frontier representative and clusters with its config's reproductions.
+        trial_journal_ts = datetime.now(timezone.utc).isoformat()
+        clean_representative = (
+            _clean_trial_representatives_enabled()
+            and not learning_excluded_by
+            and bool(verdict.passed)
+            and rate_measured
+            and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
+        )
+        frontier_admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean_representative else ""
+        provisional_row = _provisional_trial_row(
+            trial_id=trial_counter,
+            timestamp=trial_journal_ts,
+            eval_result=eval_result,
+            action=effective_action,
+            learning_excluded_by=learning_excluded_by,
+            learning_excluded_reason=learning_excluded_reason,
+            frontier_admission=frontier_admission,
+            comparability=trial_comparability,
+        )
         if not rate_measured:
             log.warning(
                 "Trial %d: Pareto archive write SKIPPED — dominance axis unmeasured "
@@ -9736,6 +9876,25 @@ def _run_loop_inner(
                 )
             else:
                 pareto_status = "dominated"  # placeholder for JournalEntry only
+            if not MULTITIER_PROMOTION_ENABLED and rate_measured and bool(verdict):
+                # Decision (c), 2026-09-16: a within-noise reproduction is exactly the
+                # evidence a promotion requires (a >=3-member representative whose median
+                # clears the baseline by a quantum). Without this call only a CLEAN trial
+                # reached update_baseline, but the 2nd+ run of an above-baseline config is
+                # labelled reproduction_confirmed, so its cluster could never promote.
+                # (Multitier mode stages the same trial below and re-checks at final_t1.)
+                seq_confirmed = (
+                    bool(verdict.seq.get("baseline_promotion_finalized"))
+                    if verdict.seq is not None
+                    else None
+                )
+                baseline_update = gate.update_baseline(
+                    eval_result,
+                    source_trial_id=trial_counter,
+                    seq_confirmed=seq_confirmed,
+                    pending_journal_rows=(provisional_row,),
+                )
+                _log_baseline_update_result(trial_counter, baseline_update)
             criticism = learning_exclusion_criticism(learning_excluded_by, learning_excluded_reason)
         elif learning_excluded_by:
             pareto_status = "dominated"  # placeholder for JournalEntry only
@@ -9761,7 +9920,21 @@ def _run_loop_inner(
                 ", ".join(verdict.categories) or "unspecified",
             )
         else:
-            if rate_measured:
+            if rate_measured and clean_representative:
+                # Decision (c): same median-representative admission as the replay applies
+                # to the stamped row, so the live archive and journal authority agree.
+                pareto_status, _rep_objs = archive.upsert_representative(
+                    _config_fingerprint(effective_action),
+                    eval_result.tier,
+                    objectives_from(eval_result),
+                    trial_id=trial_counter,
+                    config_snapshot=effective_action,
+                    species=species_name,
+                    timestamp=trial_journal_ts,
+                    memory_count=memory_count,
+                    reasoning=json.dumps(effective_action),
+                )
+            elif rate_measured:
                 pareto_status = archive.update(
                     ParetoEntry(
                         trial_id=trial_counter,
@@ -9823,6 +9996,7 @@ def _run_loop_inner(
                     eval_result,
                     source_trial_id=trial_counter,
                     seq_confirmed=seq_confirmed,
+                    pending_journal_rows=(provisional_row,),
                 )
                 # B4 / SEQ-2: surface the update/refusal outcome — including a distinct
                 # line for the gate's seq_inputs_unavailable refusal (seq_confirmed=None).
@@ -9848,6 +10022,7 @@ def _run_loop_inner(
                 eval_result,
                 source_trial_id=trial_counter,
                 seq_confirmed=seq_confirmed,
+                pending_journal_rows=(provisional_row,),
             )
             _log_baseline_update_result(trial_counter, baseline_update)
 
@@ -10099,16 +10274,9 @@ def _run_loop_inner(
         # trust render would treat a valid confirmation like a kill / reload /
         # commit-invalidation, and the planner would narrate a "noisy instrument"
         # (2026-05-31 incident → meta-action loop).
-        if (
-            learning_excluded_by
-            and learning_excluded_by not in BENIGN_LEARNING_EXCLUSIONS
-            and learning_excluded_by not in NON_CORRUPT_LEARNING_EXCLUSIONS
-        ):
-            bug_corrupted_by = learning_excluded_by
-            bug_corrupted_reason = learning_excluded_reason
-        else:
-            bug_corrupted_by = ""
-            bug_corrupted_reason = ""
+        bug_corrupted_by, bug_corrupted_reason = _bug_tag_for_learning_exclusion(
+            learning_excluded_by, learning_excluded_reason
+        )
         _update_contrastive_trace_state(
             state,
             tower,
@@ -10247,9 +10415,15 @@ def _run_loop_inner(
         # AP-55: eval-side consumers read eval_details, so stamp the regime there too.
         eval_details_dict["infra_fingerprint_digest"] = fingerprint_digest(trial_infra_fingerprint)
         eval_details_dict["infra_comparability"] = trial_comparability.get("status", "")
+        if frontier_admission:
+            eval_details_dict[FRONTIER_ADMISSION_KEY] = frontier_admission
+        if baseline_update is not None:
+            # Which promotion rule the archive stage applied (frontier / empty_frontier_repro /
+            # seed); also carried on the baseline_promotion ledger event.
+            eval_details_dict["promotion_rule"] = getattr(baseline_update, "promotion_rule", "")
         journal_entry = JournalEntry(
             trial_id=trial_counter,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=trial_journal_ts,
             species=species_name,
             action_type=action.get("type", ""),
             tier=eval_result.tier,
@@ -10294,6 +10468,15 @@ def _run_loop_inner(
         )
         _sync_segment_snapshot_scope(journal, state)  # W3
         journal.record(journal_entry)
+        provisional_diffs = _provisional_row_mismatch(provisional_row, asdict(journal_entry))
+        if provisional_diffs:
+            log.error(
+                "Trial %d: journaled row differs from the row the promotion guard evaluated "
+                "on %s — the promotion decision (%s) did not see the recorded evidence.",
+                trial_counter,
+                provisional_diffs,
+                getattr(baseline_update, "promotion_rule", "") if baseline_update else "none",
+            )
         # Evidence is the already-durable trial, supplied here rather than by the
         # planner, so a resolution can never cite a trial that did not run.
         _record_operator_hypothesis_resolution(rationale, trial_counter)
@@ -10706,6 +10889,7 @@ def _append_baseline_promotion_event(
             "reliability": eval_result.reliability,
             "n_questions": eval_result.n_questions,
             "pareto_status": pareto_status,
+            "promotion_rule": getattr(baseline_update, "promotion_rule", ""),
         },
         baseline_state=baseline_state,
         infra_fingerprint=infra_fingerprint,

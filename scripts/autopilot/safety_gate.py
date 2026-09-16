@@ -34,6 +34,8 @@ from src.autopilot_core.tier_specs import (
     rate_axis_unit,
     seq_task_rate_qph_from,
 )
+from src.autopilot_core.action_identity import config_fingerprint_from_row
+from src.autopilot_core.pareto_math import median_objectives
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from src.autopilot_core.authority_consent import (
     SEQ_P0_2_BRIDGE_MODE,
@@ -418,46 +420,94 @@ class PromotionGuardView:
     """The archive a baseline PROMOTION is checked against, with the policy it was built under.
 
     ``scope`` is ``"live"`` when the autopilot installed a provider (live objective policy,
-    live epoch fence — :func:`configure_promotion_guard_archive`), or
-    ``"legacy_unscoped"`` for the pre-2026-09-16 fallback (legacy t/s replay over every era).
+    live epoch fence — :func:`configure_promotion_guard_archive`), ``"legacy_unscoped"`` for
+    the pre-2026-09-16 fallback (legacy t/s replay over every era), or ``"unavailable"`` when
+    the archive could not be built (``error`` says why; promotion over an existing baseline is
+    then REFUSED — the guard never fails open).
     ``objective_policy`` decides the UNIT of the rate axis; see
     :func:`promotion_fields_from_objectives`.
+
+    Decision (c): the archive INCLUDES the pending candidate row(s) handed to
+    ``update_baseline``, so a clean candidate can be its own cluster's representative.
+    ``reproductions(tier, fingerprint)`` lists the live-regime cluster members of one config
+    (NON_COMPARABLE rows excluded) for the empty-frontier rule (b).
     """
 
     archive: Any
     objective_policy: str
     scope: str
     exclude_before_ts: float | None = None
+    reproductions: Callable[[int, str], list[dict[str, Any]]] | None = None
+    error: str = ""
 
 
-_PROMOTION_GUARD_PROVIDER: Callable[[], PromotionGuardView | None] | None = None
+PromotionGuardProvider = Callable[..., "PromotionGuardView | None"]
+_PROMOTION_GUARD_PROVIDER: PromotionGuardProvider | None = None
 _LEGACY_GUARD_FALLBACK_WARNED = False
+# Per-update_baseline evaluation context: the pending candidate row(s) and a one-build
+# cache (the live rebuild costs ~1 s; one promotion decision used to rebuild it 4 times).
+_GUARD_CONTEXT: dict[str, Any] | None = None
+
+PROMOTION_RULE_FRONTIER = "frontier"
+PROMOTION_RULE_EMPTY_FRONTIER_REPRO = "empty_frontier_repro"
+PROMOTION_RULE_SEED = "seed"
+PROMOTION_RULE_UNGUARDED = "archive_unavailable_no_baseline"
+EMPTY_FRONTIER_MIN_REPRO_ENV = "AUTOPILOT_EMPTY_FRONTIER_MIN_REPRO"
+DEFAULT_EMPTY_FRONTIER_MIN_REPRO = 3
 
 
-def configure_promotion_guard_archive(
-    provider: Callable[[], PromotionGuardView | None] | None,
-) -> None:
+def empty_frontier_min_repro() -> int:
+    """N for rule (b). Values below 2 (or unparseable) are refused and fall back to 3."""
+    raw = os.environ.get(EMPTY_FRONTIER_MIN_REPRO_ENV, "").strip()
+    if not raw:
+        return DEFAULT_EMPTY_FRONTIER_MIN_REPRO
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 2:
+        log.error(
+            "%s=%r refused (must be an integer >= 2: one trial is not a reproduction); "
+            "using %d.",
+            EMPTY_FRONTIER_MIN_REPRO_ENV,
+            raw,
+            DEFAULT_EMPTY_FRONTIER_MIN_REPRO,
+        )
+        return DEFAULT_EMPTY_FRONTIER_MIN_REPRO
+    return value
+
+
+def configure_promotion_guard_archive(provider: PromotionGuardProvider | None) -> None:
     """Install (or clear, with None) the live-scope archive provider for promotion checks.
 
     The autopilot installs one at startup that rebuilds the frontier from the journal under
     the LIVE ``pareto_objective_policy`` and ``pareto_exclude_before_ts`` — the same
     authority path (``_journal_archive_payload_for_authority``) that seeds the live archive.
+    The provider is called as ``provider(pending_rows=(...))``.
     """
     global _PROMOTION_GUARD_PROVIDER, _LEGACY_GUARD_FALLBACK_WARNED
     _PROMOTION_GUARD_PROVIDER = provider
     _LEGACY_GUARD_FALLBACK_WARNED = False
 
 
-def _promotion_guard_view() -> PromotionGuardView | None:
-    """Archive view for promotion evidence; None when it cannot be read (caller: skip)."""
+def _build_promotion_guard_view(pending_rows: tuple[dict[str, Any], ...]) -> PromotionGuardView:
     global _LEGACY_GUARD_FALLBACK_WARNED
     provider = _PROMOTION_GUARD_PROVIDER
     if provider is not None:
         try:
-            return provider()
+            view = provider(pending_rows=pending_rows)
         except Exception as exc:  # noqa: BLE001
-            log.warning("Promotion guard: live-scope archive unreadable (%s)", exc)
-            return None
+            log.error("Promotion guard: live-scope archive UNAVAILABLE (%s)", exc)
+            return PromotionGuardView(
+                archive=None, objective_policy="", scope="unavailable",
+                error=f"live-scope archive unavailable: {exc}"[:300],
+            )
+        if view is None or view.archive is None:
+            return PromotionGuardView(
+                archive=None, objective_policy="", scope="unavailable",
+                error="live-scope provider returned no archive",
+            )
+        return view
     if not _LEGACY_GUARD_FALLBACK_WARNED:
         _LEGACY_GUARD_FALLBACK_WARNED = True
         log.warning(
@@ -467,17 +517,43 @@ def _promotion_guard_view() -> PromotionGuardView | None:
         )
     archive = _pareto_archive_for_safety_guard()
     if archive is None:
-        return None
+        return PromotionGuardView(
+            archive=None, objective_policy="", scope="unavailable",
+            error="legacy archive unreadable",
+        )
     return PromotionGuardView(
         archive=archive, objective_policy=LEGACY_OBJECTIVE_POLICY, scope="legacy_unscoped"
     )
 
 
+def _promotion_guard_view() -> PromotionGuardView:
+    """Archive view for promotion evidence (cached for one ``update_baseline`` call)."""
+    ctx = _GUARD_CONTEXT
+    if ctx is None:
+        return _build_promotion_guard_view(())
+    if "view" not in ctx:
+        ctx["view"] = _build_promotion_guard_view(tuple(ctx.get("pending_rows") or ()))
+    return ctx["view"]
+
+
 def _promotion_frontier(tier: int | None) -> tuple[PromotionGuardView, list[Any]] | None:
     view = _promotion_guard_view()
-    if view is None or view.archive is None:
+    if view.archive is None:
         return None
     return view, list(view.archive.frontier(tier=tier))
+
+
+def _pending_candidate_row(source_trial_id: int | None) -> dict[str, Any] | None:
+    ctx = _GUARD_CONTEXT
+    if ctx is None or source_trial_id is None:
+        return None
+    for row in ctx.get("pending_rows") or ():
+        try:
+            if int(row.get("trial_id")) == int(source_trial_id):
+                return row
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _pareto_frontier_context(tier: int | None = None) -> tuple[float, frozenset[int]] | None:
@@ -1567,6 +1643,10 @@ class BaselineUpdateResult:
     # Empty on every eligible path (including ordinary monotonic/seq skips), so a caller
     # can distinguish "ratchet frozen, go re-measure" from "candidate simply not better".
     ineligible_reason: str = ""
+    # Gate-frontier (2026-09-16): which promotion rule the archive stage applied —
+    # ``frontier`` | ``empty_frontier_repro`` | ``seed`` (plus ``refused_guard_unavailable`` /
+    # ``archive_unavailable_no_baseline``). Empty when an earlier gate returned first.
+    promotion_rule: str = ""
     # B4 / SEQ-2: machine token naming WHY the sequential anti-ratchet refused a write.
     # ``seq_inputs_unavailable`` = the sequential path is ON but no confirmed/refuted
     # verdict could be rendered (fresh journal / missing question_results) → fail-closed.
@@ -2647,13 +2727,81 @@ class SafetyGate:
         return frozenset(int(e.trial_id) for e in found[1])
 
     @staticmethod
-    def _live_frontier_empty(tier: int | None = None) -> bool:
-        """True when a LIVE-scope provider is installed and its same-tier frontier is empty.
+    def _prior_frontier_empty(tier: int | None = None, source_trial_id: int | None = None) -> bool:
+        """True when the same-tier frontier holds no member OTHER than the candidate's config.
+
+        The guard archive includes the pending candidate row (decision (c)), so the
+        candidate's own representative cluster is always there once it is measured. Rule (b)
+        governs exactly that cluster; the normal frontier rule takes over as soon as any
+        other config holds a frontier point in the live epoch.
+        """
+        found = _promotion_frontier(tier)
+        if found is None:
+            return False
+        _view, frontier = found
+        row = _pending_candidate_row(source_trial_id)
+        fingerprint = config_fingerprint_from_row(row) if row is not None else None
+        for entry in frontier:
+            same_config = bool(fingerprint) and getattr(entry, "config_fingerprint", "") == fingerprint
+            same_trial = source_trial_id is not None and int(entry.trial_id) == int(source_trial_id)
+            if not (same_config or same_trial):
+                return False
+        return True
+
+    @staticmethod
+    def _live_frontier_empty(tier: int | None = None, source_trial_id: int | None = None) -> bool:
+        """True when a LIVE-scope provider is installed and the prior same-tier evidence is empty.
 
         Only a live scope counts: the legacy fallback spans every era, so emptiness there is
         a genuinely fresh state (bootstrap), not "no evidence yet in this epoch"."""
         found = _promotion_frontier(tier)
-        return found is not None and found[0].scope == "live" and not found[1]
+        return (
+            found is not None
+            and found[0].scope == "live"
+            and SafetyGate._prior_frontier_empty(tier, source_trial_id)
+        )
+
+    @staticmethod
+    def _candidate_live_reproductions(
+        tier: int, source_trial_id: int | None
+    ) -> tuple[str, list[dict[str, Any]]] | None:
+        """(config fingerprint, live-regime reproductions) for the pending candidate, or None."""
+        row = _pending_candidate_row(source_trial_id)
+        view = _promotion_guard_view()
+        if row is None or view.reproductions is None:
+            return None
+        fingerprint = config_fingerprint_from_row(row)
+        return fingerprint, list(view.reproductions(int(tier), fingerprint))
+
+    def _select_promotion_rule(
+        self, tier: int, previous_quality: float | None, source_trial_id: int | None
+    ) -> tuple[str, str]:
+        """(rule, refusal reason or ""). Rules: frontier | empty_frontier_repro | seed.
+
+        Never fails open: an unavailable guard archive refuses promotion over an existing
+        baseline (a tier with no baseline may still seed — bootstrap is never blocked).
+        """
+        view = _promotion_guard_view()
+        if view.error:
+            if previous_quality is None:
+                return PROMOTION_RULE_SEED, ""
+            return "refused_guard_unavailable", (
+                f"promotion guard archive unavailable ({view.error}); promotion over an "
+                "existing baseline REFUSED (fail-closed)"
+            )
+        if view.scope != "live":
+            # Legacy all-era fallback keeps its pre-2026-09-16 semantics: check against the
+            # frontier when it has a point, otherwise a genuinely fresh store (bootstrap).
+            if self._archive_best_quality(tier) is not None:
+                return PROMOTION_RULE_FRONTIER, ""
+            if previous_quality is None:
+                return PROMOTION_RULE_SEED, ""
+            return PROMOTION_RULE_UNGUARDED, ""
+        if not self._prior_frontier_empty(tier, source_trial_id):
+            return PROMOTION_RULE_FRONTIER, ""
+        if previous_quality is None:
+            return PROMOTION_RULE_SEED, ""
+        return PROMOTION_RULE_EMPTY_FRONTIER_REPRO, ""
 
     @staticmethod
     def _archive_frontier_entry(
@@ -2692,7 +2840,84 @@ class SafetyGate:
                 n = 0
         return (3.0 / n) if n > 0 else None
 
+    def _empty_frontier_promotion(
+        self,
+        result: EvalResult,
+        tier: int,
+        previous_quality: float | None,
+        source_trial_id: int | None,
+    ) -> str | tuple[EvalResult, float | None]:
+        """Rule (b): a refusal reason, or (promotion_result, promoted q/h)."""
+        n_min = empty_frontier_min_repro()
+        found = self._candidate_live_reproductions(tier, source_trial_id)
+        if found is None:
+            return (
+                "empty-frontier rule (b): the candidate's journal row was not supplied, so its "
+                "config and live-regime reproductions cannot be identified; REFUSED"
+            )
+        fingerprint, reps = found
+        trial_ids = sorted({int(r["trial_id"]) for r in reps})
+        log.info(
+            "Empty-frontier rule (b) T%d fp=%s: %d of %d required comparable live-regime "
+            "reproductions (trials %s)",
+            tier, fingerprint, len(trial_ids), n_min, trial_ids,
+        )
+        if len(trial_ids) < n_min:
+            return (
+                f"empty-frontier rule (b): candidate config {fingerprint} has {len(trial_ids)} "
+                f"of {n_min} required independent live-regime reproductions "
+                "(COMPARABLE/UNVERIFIED only); REFUSED until the frontier fills or the config "
+                "reproduces"
+            )
+        quantum = self._quality_quantum(result)
+        if quantum is None:
+            return "missing n_questions/per-suite counts for reproduced baseline promotion"
+        by_id = {int(r["trial_id"]): r for r in reps}
+        median = median_objectives([list(by_id[t]["objectives"]) for t in trial_ids])
+        policy = _promotion_guard_view().objective_policy
+        fields = promotion_fields_from_objectives(tuple(median), tier, policy)
+        if fields is None:
+            return "empty-frontier rule (b): reproduction median does not match the tier axes"
+        required = float(previous_quality or 0.0) + quantum
+        if fields["quality"] + BASELINE_ARCHIVE_TOLERANCE < required:
+            return (
+                f"empty-frontier rule (b): reproduced median q={fields['quality']:.3f} does not "
+                f"clear baseline {float(previous_quality or 0.0):.3f} by one quantum "
+                f"({quantum:.4f})"
+            )
+        qph = fields.pop(PROMOTION_FIELD_TASK_RATE_QPH, None)
+        return replace(result, **fields), qph
+
     def update_baseline(
+        self,
+        result: EvalResult,
+        source_trial_id: int | None = None,
+        *,
+        seq_confirmed: bool | None = None,
+        pending_journal_rows: Any = None,
+    ) -> BaselineUpdateResult:
+        """Promotion decision; see :meth:`_update_baseline_impl`.
+
+        ``pending_journal_rows`` (decision (c), 2026-09-16) are the journal row(s) this trial
+        WILL record, built from the same values. The guard archive includes them, so a clean
+        candidate is its own cluster's representative at decision time. The decision is
+        atomic with the journal write: nothing it changes is persisted (state save,
+        promotion event) until after ``journal.record``. The applied rule is returned as
+        ``promotion_rule``.
+        """
+        global _GUARD_CONTEXT
+        previous_context = _GUARD_CONTEXT
+        _GUARD_CONTEXT = {"pending_rows": tuple(pending_journal_rows or ())}
+        self._promotion_rule = ""
+        try:
+            update = self._update_baseline_impl(
+                result, source_trial_id, seq_confirmed=seq_confirmed
+            )
+        finally:
+            _GUARD_CONTEXT = previous_context
+        return replace(update, promotion_rule=self._promotion_rule)
+
+    def _update_baseline_impl(
         self,
         result: EvalResult,
         source_trial_id: int | None = None,
@@ -2884,22 +3109,35 @@ class SafetyGate:
             return BaselineUpdateResult(
                 False, reason, tier, previous_quality, result.quality, proof
             )
-        archive_max = self._archive_best_quality(tier)
-        if archive_max is None and previous_quality is not None and self._live_frontier_empty(tier):
-            # D2 (gate-frontier, 2026-09-16): the live-scope frontier holds NO point in this
-            # epoch, so there is no reproduced evidence to promote from. The legacy all-era
-            # view never came back empty, so "skip the guard on an empty archive" used to mean
-            # a fresh install only; under the live scope it would mean "every epoch rebase
-            # opens single-trial promotions over an existing baseline". Refuse instead. A tier
-            # with no baseline at all still seeds (bootstrap is never blocked).
-            reason = (
-                "live-epoch frontier is empty for this tier: no reproduced frontier evidence "
-                "in the current epoch; baseline promotion over an existing baseline REFUSED"
-            )
-            log.warning("Baseline update REFUSED — %s", reason)
+        rule, refusal = self._select_promotion_rule(tier, previous_quality, source_trial_id)
+        self._promotion_rule = rule
+        log.info(
+            "Baseline promotion rule for T%d source_trial_id=%s: %s", tier, source_trial_id, rule
+        )
+        if refusal:
+            log.error("Baseline update REFUSED — %s", refusal)
             return BaselineUpdateResult(
-                False, reason, tier, previous_quality, result.quality, proof
+                False, refusal, tier, previous_quality, result.quality, proof
             )
+        promotion_result = result
+        promoted_task_rate_qph: float | None = None
+        if rule == PROMOTION_RULE_EMPTY_FRONTIER_REPRO:
+            # Operator decision (b), 2026-09-16: the live-epoch frontier holds no evidence
+            # but this tier has a baseline. Promote only a config with >= N independent,
+            # AP-55-comparable reproductions under the live regime; the promoted fields are
+            # the median over exactly those reproductions.
+            outcome = self._empty_frontier_promotion(result, tier, previous_quality, source_trial_id)
+            if isinstance(outcome, str):
+                log.warning("Baseline update REFUSED — %s", outcome)
+                return BaselineUpdateResult(
+                    False, outcome, tier, previous_quality, result.quality, proof
+                )
+            promotion_result, promoted_task_rate_qph = outcome
+            archive_max = None
+        elif rule == PROMOTION_RULE_FRONTIER:
+            archive_max = self._archive_best_quality(tier)
+        else:
+            archive_max = None  # seed / legacy-empty bootstrap: nothing to check against
         if archive_max is not None and result.quality > archive_max + BASELINE_ARCHIVE_TOLERANCE:
             # Above the frontier max. A genuine new-best must be archived FIRST (archive-first
             # precondition), so its source trial would already be on the frontier; if it is not,
@@ -2930,8 +3168,6 @@ class SafetyGate:
                     result.quality,
                     proof,
                 )
-        promotion_result = result
-        promoted_task_rate_qph: float | None = None
         if archive_max is not None:
             quantum = self._quality_quantum(result)
             if quantum is None:

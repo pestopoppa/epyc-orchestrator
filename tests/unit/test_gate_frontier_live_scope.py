@@ -75,7 +75,7 @@ class _Archive:
 
 def _install(entries, policy=RATE_4D_OBJECTIVE_POLICY, scope="live"):
     view = PromotionGuardView(archive=_Archive(entries), objective_policy=policy, scope=scope)
-    sg.configure_promotion_guard_archive(lambda: view)
+    sg.configure_promotion_guard_archive(lambda pending_rows=(): view)
 
 
 def _result(quality=2.1, speed=TRIAL_TPS, tier=1, **kw):
@@ -144,8 +144,12 @@ def _no_throttle(monkeypatch):
     monkeypatch.setattr(hh.HostHealthState, "snapshot", staticmethod(lambda: _Host()))
 
 
+# Another config's frontier point, so the normal frontier rule (not rule (b)) applies.
+OTHER_CONFIG = _Entry(500, (1.0, 80.0, -0.5, 0.9))
+
+
 def _promote_under_live_policy(tmp_path):
-    _install([_Entry(777, LIVE_OBJECTIVES)])
+    _install([OTHER_CONFIG, _Entry(777, LIVE_OBJECTIVES)])
     gate = _gate(tmp_path)
     update = gate.update_baseline(_result(quality=2.1), source_trial_id=777)
     assert update.updated, update.reason
@@ -193,12 +197,15 @@ def test_mutation_old_routing_would_brick_the_floor(tmp_path, monkeypatch):
 # ── live scope semantics ──────────────────────────────────────────────────
 
 
-def test_empty_live_frontier_refuses_promotion_over_existing_baseline(tmp_path):
+def test_empty_live_frontier_applies_rule_b_over_existing_baseline(tmp_path):
+    """D2 superseded by operator decision (b): the empty live frontier routes to rule (b),
+    which refuses when the candidate's reproductions cannot be counted."""
     _install([])
     gate = _gate(tmp_path)
     update = gate.update_baseline(_result(quality=2.5), source_trial_id=1)
     assert not update.updated
-    assert "live-epoch frontier is empty" in update.reason
+    assert update.promotion_rule == sg.PROMOTION_RULE_EMPTY_FRONTIER_REPRO
+    assert "empty-frontier rule (b)" in update.reason
     assert gate.baseline.baselines_by_tier[1] == 1.9
 
 
@@ -232,13 +239,28 @@ def test_frontier_entry_carries_its_policy(tmp_path):
     assert entry["scope"] == "live"
 
 
-def test_provider_failure_is_fail_soft(tmp_path):
-    def broken():
+def test_provider_failure_refuses_promotion_over_a_baseline(tmp_path):
+    """Review finding 3: an unreadable guard archive never fails open."""
+
+    def broken(pending_rows=()):
         raise RuntimeError("journal unreadable")
 
     sg.configure_promotion_guard_archive(broken)
     assert SafetyGate._archive_best_quality(1) is None
     assert SafetyGate._live_frontier_empty(1) is False
+    gate = _gate(tmp_path)
+    update = gate.update_baseline(_result(quality=2.5), source_trial_id=1)
+    assert not update.updated
+    assert update.promotion_rule == "refused_guard_unavailable"
+    assert "journal unreadable" in update.reason and "fail-closed" in update.reason
+    assert gate.baseline.baselines_by_tier[1] == 1.9
+
+
+def test_legacy_archive_unreadable_also_refuses(tmp_path, monkeypatch):
+    monkeypatch.setattr(sg, "_pareto_archive_for_safety_guard", lambda: None)
+    gate = _gate(tmp_path)
+    update = gate.update_baseline(_result(quality=2.5), source_trial_id=1)
+    assert not update.updated and "legacy archive unreadable" in update.reason
 
 
 def test_legacy_fallback_without_provider_warns_once(monkeypatch, caplog):
@@ -337,31 +359,51 @@ def test_replay_fixture_provenance():
     assert len(data["rows"]) == 1372
 
 
-def test_replay_old_and_new_agree_on_every_legacy_era_row():
+def test_replay_old_and_live_agree_on_every_legacy_era_row():
     golden = _fixture()["golden"]
-    for ordering in ("production", "archive_first"):
-        for diff in golden["differences"][ordering]:
-            assert diff["row_policy"] != LEGACY_OBJECTIVE_POLICY, diff
+    for diff in golden["differences"]["old_vs_live"]:
+        assert diff["row_policy"] != LEGACY_OBJECTIVE_POLICY, diff
 
 
-def test_replay_promotions_are_identical_and_carry_genuine_tps():
+def test_replay_promotions_carry_genuine_tps():
     golden = _fixture()["golden"]
-    for ordering in ("production", "archive_first"):
-        old = [d for d in golden["decisions"][f"old/{ordering}"] if d["decision"] == "promoted"]
-        new = [d for d in golden["decisions"][f"new/{ordering}"] if d["decision"] == "promoted"]
-        assert [d["trial_id"] for d in old] == [d["trial_id"] for d in new]
+    old = [d for d in golden["decisions"]["old"] if d["decision"] == "promoted"]
+    live = [d for d in golden["decisions"]["live"] if d["decision"] == "promoted"]
+    assert [d["trial_id"] for d in old] == [d["trial_id"] for d in live]
     for run, decisions in golden["decisions"].items():
         for d in decisions:
-            if d["decision"] == "promoted" and d["tier"] == 1:
-                # frontdoor_speed only ever holds a tokens/second measurement.
+            if d["decision"] == "promoted" and d["tier"] == 1 and d["promotion_rule"] == "seed":
+                # A seed writes the trial's own measurement: tokens/second, never q/h.
                 assert d["frontdoor_speed_after"] == pytest.approx(d["row_speed_tps"]), (run, d)
 
 
-def test_replay_differences_are_refusal_reason_changes_only():
+def test_replay_old_vs_live_differences_are_refusal_reason_changes_only():
     golden = _fixture()["golden"]
-    for ordering, diffs in golden["differences"].items():
-        for diff in diffs:
-            assert diff["old"] != "promoted" and diff["new"] != "promoted", (ordering, diff)
+    for diff in golden["differences"]["old_vs_live"]:
+        assert diff["old"] != "promoted" and diff["live"] != "promoted", diff
+
+
+def test_replay_live_c_records_a_rule_for_every_decision():
+    golden = _fixture()["golden"]
+    rules = {d["promotion_rule"] for d in golden["decisions"]["live_c"]}
+    assert rules <= {"frontier", "empty_frontier_repro", "seed"}
+    assert "frontier" in rules
+
+
+def test_replay_compare_restores_the_safety_logger_level():
+    """Review finding 1: compare() must not leave autopilot.safety at CRITICAL."""
+    import logging
+
+    import gate_frontier_replay as gfr
+
+    logger = logging.getLogger("autopilot.safety")
+    before = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        gfr.compare(_fixture()["rows"][-40:], start_trial_id=10**9)
+        assert logger.level == logging.INFO
+    finally:
+        logger.setLevel(before)
 
 
 def test_live_restart_probe_documents_empty_live_frontier():
@@ -381,12 +423,12 @@ def test_replay_window_reproduces_golden_decisions():
     result = gfr.compare(data["rows"], start_trial_id=start, initial_baselines=initial)
     for run, payload in result["runs"].items():
         expected = [
-            {k: d[k] for k in ("trial_id", "decision", "previous_quality")}
+            {k: d[k] for k in ("trial_id", "decision", "previous_quality", "promotion_rule")}
             for d in golden[run]
             if d["trial_id"] >= start
         ]
         actual = [
-            {k: d[k] for k in ("trial_id", "decision", "previous_quality")}
+            {k: d[k] for k in ("trial_id", "decision", "previous_quality", "promotion_rule")}
             for d in payload["decisions"]
         ]
         assert actual == expected, run
