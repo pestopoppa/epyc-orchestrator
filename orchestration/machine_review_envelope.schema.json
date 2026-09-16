@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pestopoppa/amd-epyc-inference/schemas/machine_review_envelope.schema.json",
+  "title": "MachineReviewEnvelope",
+  "description": "RA-12 (intake-1004). The immutable, version-correct binding of ONE machine review (a model-emitted review body) to the exact inputs it was produced against. Distinct from DecisionEnvelope (the deterministic policy reducer's decision): this envelope records what a MODEL said and about WHICH bytes. A review is current ONLY for the exact source + candidate content hash and version, prompt bundle, pipeline version and review-schema version recorded in `binding`; any change to one of them makes the review STALE until re-run. A stale envelope is retained as history and is never spliced into a current view. Tamper evidence: `binding_digest` is the canonical sha256 over `binding`, and the review body itself is SIGNED with the same digest (`signed_body.binding_digest`), so an old body re-wrapped in an envelope that claims current inputs fails validation. Machine-generated objections are typed `unverified_lead` until a current primary artifact or an objective verifier resolves them, and they never count as independent corroboration. Validator: src/proactive_delegation/review_envelope.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope_schema_version",
+    "envelope_id",
+    "created_at",
+    "binding",
+    "binding_digest",
+    "output_hash",
+    "validation_status",
+    "supersedes",
+    "objections"
+  ],
+  "properties": {
+    "envelope_schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Version of THIS envelope schema (semver)."
+    },
+    "envelope_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "binding": {
+      "$ref": "#/$defs/binding"
+    },
+    "binding_digest": {
+      "$ref": "#/$defs/sha256",
+      "description": "Canonical sha256 over `binding` (sorted-key compact JSON). Recomputed on validation; a mismatch means the binding was edited after the review was signed."
+    },
+    "output_hash": {
+      "$ref": "#/$defs/sha256",
+      "description": "Canonical sha256 over the SIGNED review body `{binding_digest, review}`. The body travels separately; the validator refuses a body whose hash differs."
+    },
+    "validation_status": {
+      "type": "string",
+      "enum": ["valid", "schema_invalid", "parse_failure"],
+      "description": "Outcome of validating the review body against `binding.review_schema_version` AT EMISSION. Never mutated; staleness is derived at read time against current inputs, never written here (immutable structure)."
+    },
+    "supersedes": {
+      "description": "envelope_id of the prior envelope this re-run replaces, or null for a first review. The superseded envelope is retained unchanged as stale history.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ]
+    },
+    "objections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/objection" }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "versioned_content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_hash", "version"],
+      "properties": {
+        "ref": { "type": "string", "description": "Human-readable locator (path, URL, package_id)." },
+        "content_hash": { "$ref": "#/$defs/sha256" },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "candidate",
+        "reviewer",
+        "prompt_bundle_hash",
+        "pipeline_version",
+        "review_schema_version"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/versioned_content",
+          "description": "The primary material the review is about (spec, abstract, task statement)."
+        },
+        "candidate": {
+          "$ref": "#/$defs/versioned_content",
+          "description": "The artifact under review (diff, answer, package)."
+        },
+        "reviewer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "quant"],
+          "properties": {
+            "model": { "type": "string", "minLength": 1 },
+            "quant": { "type": "string", "minLength": 1 },
+            "model_hash": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "prompt_bundle_hash": { "$ref": "#/$defs/sha256" },
+        "pipeline_version": { "type": "string", "minLength": 1 },
+        "review_schema_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Version of the schema the review BODY is validated against (e.g. review_decision.schema.json)."
+        }
+      }
+    },
+    "objection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objection_id", "text", "status", "independent_corroboration"],
+      "properties": {
+        "objection_id": { "type": "string", "minLength": 1 },
+        "text": { "type": "string", "minLength": 1 },
+        "status": {
+          "type": "string",
+          "enum": ["unverified_lead", "confirmed", "refuted"],
+          "description": "A machine objection is an unverified_lead until a CURRENT primary artifact or an objective verifier resolves it."
+        },
+        "independent_corroboration": {
+          "const": false,
+          "description": "Machine-generated objections are never independent corroboration, whatever their status."
+        },
+        "resolved_by": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "ref", "content_hash"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["primary_artifact", "objective_verifier"] },
+            "ref": { "type": "string", "minLength": 1 },
+            "content_hash": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "unverified_lead" } } },
+          "then": { "not": { "required": ["resolved_by"] } },
+          "else": { "required": ["resolved_by"] }
+        }
+      ]
+    }
+  }
+}

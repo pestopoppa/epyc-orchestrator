@@ -83,7 +83,7 @@ def valid_verification_report() -> dict:
                 "check_id": "z3-solver",
                 "kind": "constraint_check",
                 "outcome": "inconclusive",
-                "inconclusive_reason": "solver timeout",
+                "inconclusive_reason": "timeout",  # closed cause registry (8b740065)
             },
         ],
     }
