@@ -151,8 +151,13 @@ def test_a_clean_host_with_the_live_stack_up_is_still_decision_grade() -> None:
     """
     probe = cm._host_health_probe(
         load_rules=_rules_loader(
-            _attestation(existing_llama_processes=[{"pid": "1", "cmd": "llama-server"}])
-        )
+            _attestation(
+                existing_llama_processes=[
+                    {"pid": "1", "args": "/opt/llama-server -m x.gguf --port 8080 -t 48"}
+                ]
+            )
+        ),
+        expected_ports={8070, 8080, 8180},
     )
     assert probe["status"] == cm.HOST_HEALTH_CLEAN
     assert probe["decision_grade"] is True
@@ -160,8 +165,101 @@ def test_a_clean_host_with_the_live_stack_up_is_still_decision_grade() -> None:
     assert probe["warnings"], "live llama processes must still appear in the record"
     assert probe["structural_for_harness"] == probe["warnings"]
     assert probe["llama_processes_at_attestation"] == 1
+    assert probe["llama_processes_lineup"] == 1
+    assert probe["llama_processes_foreign"] == []
     doc = yaml.safe_load(_emit(probe))
     assert doc["host_health_structural_for_harness"] == probe["warnings"]
+
+
+# ── 2b. RTG-35: the waiver covers the LINEUP, never a foreign server ──
+#
+# Origin: the probe read `llama_processes_at_attestation: 1` at load 13.7 while
+# sibling agents worked on this shared host. The whole-class waiver made a
+# foreign server invisible to the gate.
+
+
+def _lineup_and(foreign_args: str):
+    return _attestation(
+        existing_llama_processes=[
+            {"pid": "10", "args": "/opt/llama-server --port 8070 -t 96"},
+            {"pid": "99", "args": foreign_args},
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "foreign_args, shown_port",
+    [
+        ("/opt/llama-server -m other.gguf --port 18361", "18361"),
+        ("/opt/llama-server -m other.gguf --port=18361", "18361"),
+        ("/opt/llama-bench -m other.gguf -t 48", "unattributable"),
+    ],
+)
+def test_a_foreign_llama_process_gates(foreign_args, shown_port) -> None:
+    probe = cm._host_health_probe(
+        load_rules=_rules_loader(_lineup_and(foreign_args)),
+        expected_ports={8070, 8080, 8180},
+    )
+    assert probe["status"] == cm.HOST_HEALTH_WARN
+    assert probe["decision_grade"] is False
+    assert probe["llama_processes_at_attestation"] == 2
+    assert probe["llama_processes_lineup"] == 1
+    assert [p["pid"] for p in probe["llama_processes_foreign"]] == ["99"]
+    assert any(
+        "foreign llama process" in b and f"pid 99 (port {shown_port})" in b
+        for b in probe["decision_grade_blockers"]
+    ), probe["decision_grade_blockers"]
+    # The rule owner's own process warning fires in the GATING list, so it is
+    # no longer classified as structural.
+    assert probe["structural_for_harness"] == []
+    doc = yaml.safe_load(_emit(probe))
+    assert doc["decision_grade"] is False
+    assert doc["host_provenance"]["llama_processes_foreign"][0]["pid"] == "99"
+
+
+def test_a_port_prefix_is_not_a_lineup_match() -> None:
+    """`--port 80701` must not be read as the lineup's 8070."""
+    probe = cm._host_health_probe(
+        load_rules=_rules_loader(_lineup_and("/opt/llama-server --port 80701")),
+        expected_ports={8070},
+    )
+    assert probe["decision_grade"] is False
+    assert probe["llama_processes_foreign"] == [{"pid": "99", "port": 80701}]
+
+
+def test_an_unresolvable_lineup_waives_nothing() -> None:
+    def _boom():
+        raise FileNotFoundError("launch_manifest.yaml")
+
+    probe = cm._host_health_probe(
+        load_rules=_rules_loader(_lineup_and("/opt/llama-server --port 8080")),
+        resolve_lineup=_boom,
+    )
+    assert probe["decision_grade"] is False
+    assert probe["llama_processes_lineup"] == 0
+    assert any("could not be resolved" in b for b in probe["decision_grade_blockers"])
+
+
+def test_lineup_resolution_is_not_needed_on_an_empty_host() -> None:
+    """No llama process observed: a broken lineup source must not demote a clean host."""
+    def _boom():
+        raise AssertionError("must not be called")
+
+    probe = cm._host_health_probe(load_rules=_rules_loader(_attestation()), resolve_lineup=_boom)
+    assert probe["decision_grade"] is True
+
+
+def test_the_declared_lineup_covers_fulls_halves_and_embedders() -> None:
+    """The real resolver, against the declared artifacts (no process touched)."""
+    ports = cm._expected_lineup_ports()
+    from stack_numa import NUMA_CONFIG
+    import stack_manifest
+
+    for cfg in NUMA_CONFIG.values():
+        for inst in cfg.get("instances") or []:
+            assert int(inst[1]) in ports
+    assert set(stack_manifest.EMBEDDER_PORTS) <= ports
+    assert set(stack_manifest.PORT_MAP.values()) <= ports
 
 
 # ── 3. Real host state actually gates ────────────────────────────────

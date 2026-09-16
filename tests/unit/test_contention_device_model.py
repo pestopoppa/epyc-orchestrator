@@ -23,6 +23,8 @@ a real region `q3`, so it exercises the actual defect.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from scripts.server import contention_matrix as cm
@@ -442,3 +444,60 @@ def test_live_topology_device_map_is_consistent() -> None:
     assert gpu == {"architect_general", "worker_vision"}
     for role in gpu:
         assert resolved[role].corroborated, f"{role} device is uncorroborated"
+
+
+# ── RTG-35: a stale matrix must not refuse the feasibility enumeration ──
+#
+# The feasibility model reads no measured cell, so refusing it on matrix
+# freshness was a category error (landed in a517793c). The N-way path consumes
+# measured ratios and must still refuse. Pinned here so the asymmetry cannot
+# silently collapse in either direction.
+
+
+def _stale_matrix(tmp_path):
+    import scripts.server.contention_matrix as cm_mod
+
+    path = tmp_path / "stale_matrix.yaml"
+    path.write_text(
+        cm_mod._emit_yaml(
+            [],
+            topology_hash="0000stale0000",
+            binary={"git_commit": "abc1234"},
+            host="TestHost",
+            host_health=None,
+        )
+    )
+    return path
+
+
+def _enum_args(matrix, out_dir, *, feasibility):
+    import argparse
+
+    return argparse.Namespace(
+        matrix=str(matrix),
+        output=str(out_dir),
+        floor=None,
+        max_size=None,
+        run_id="test-run",
+        feasibility=feasibility,
+        vram_headroom=None,
+        allow_host_query=False,
+    )
+
+
+def test_stale_matrix_does_not_refuse_feasibility_enumeration(tmp_path) -> None:
+    matrix = _stale_matrix(tmp_path)
+    rc = cm.cmd_enumerate(_enum_args(matrix, tmp_path, feasibility=True))
+    assert rc == 0
+    manifest = json.loads((tmp_path / "j4a_feasible_manifest.json").read_text())
+    src = manifest["matrix_source"]
+    assert src["status"] != "ok", "fixture must actually be stale"
+    assert src["consumed_by_this_model"] is False
+    assert manifest["task_id"] == "J4a-feasible"
+
+
+def test_stale_matrix_still_refuses_nway_enumeration(tmp_path) -> None:
+    matrix = _stale_matrix(tmp_path)
+    rc = cm.cmd_enumerate(_enum_args(matrix, tmp_path, feasibility=False))
+    assert rc == 2
+    assert not (tmp_path / "j4a_candidate_manifest.json").exists()
