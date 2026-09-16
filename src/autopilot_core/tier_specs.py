@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 # Canonical 4D objective shape + hypervolume reference point (worst acceptable values).
 # (quality↑, speed↑, -cost↑ i.e. lower cost better, reliability↑)
@@ -527,6 +527,33 @@ rate_objectives_from = _rate_objectives_from
 rate_objectives_from_row = _rate_objectives_from_row
 
 
+# ── W3e: objective axes are read by NAME, never by position ─────────────────────
+#
+# `objectives_from` is the chokepoint on CONSTRUCTION; these names are the chokepoint on
+# CONSUMPTION. `safety_gate.py` and `pareto_archive.py` used to index the tuple as
+# `[2]`/`[3]`, which is what blocked retiring the tier-cost axis (W3e): a 3-D vector would
+# have silently shifted reliability into the cost slot. Consumers now resolve an axis
+# through its tier's declared `axes`, so dropping `neg_cost` becomes a TierSpec change
+# (a new objective policy + era stamp), not a hunt for integer literals.
+#
+# `rate` is axis 1's name under every policy: tokens/second for legacy replay,
+# questions/hour for the live rate vector. The unit belongs to the objective policy.
+OBJECTIVE_AXIS_QUALITY = "quality"
+OBJECTIVE_AXIS_RATE = "rate"
+OBJECTIVE_AXIS_NEG_COST = "neg_cost"  # -cost: higher is better
+OBJECTIVE_AXIS_RELIABILITY = "reliability"
+OBJECTIVE_AXES_4D: tuple[str, ...] = (
+    OBJECTIVE_AXIS_QUALITY,
+    OBJECTIVE_AXIS_RATE,
+    OBJECTIVE_AXIS_NEG_COST,
+    OBJECTIVE_AXIS_RELIABILITY,
+)
+
+
+class ObjectiveShapeError(ValueError):
+    """An objective tuple does not match the axes its tier declares."""
+
+
 @dataclass(frozen=True)
 class TierSpec:
     """How one eval tier's quality is scored for the Pareto archive + safety gate."""
@@ -535,6 +562,8 @@ class TierSpec:
     reference_point: tuple[float, ...] = DEFAULT_REFERENCE_POINT
     objectives_from: Callable[[Any], tuple[float, ...]] = _rate_objectives_from
     objectives_from_row: Callable[[dict], tuple[float, ...] | None] = _policy_aware_objectives_from_row
+    # W3e: the name of each position in the tuple `objectives_from` builds.
+    axes: tuple[str, ...] = OBJECTIVE_AXES_4D
 
 
 # Registry: tier -> spec. All current tiers share the 4D shape, with axis 1 = questions/hour
@@ -565,6 +594,45 @@ def objectives_from(result: Any, tier: int | None = None) -> tuple[float, ...]:
     """
     t = int(tier if tier is not None else getattr(result, "tier", DEFAULT_FRONTIER_TIER))
     return spec_for(t).objectives_from(result)
+
+
+def objective_axes(tier: int | None = None) -> tuple[str, ...]:
+    """Declared axis names for a tier's objective tuple (W3e)."""
+    return spec_for(DEFAULT_FRONTIER_TIER if tier is None else tier).axes
+
+
+def has_objective_axis(name: str, tier: int | None = None) -> bool:
+    """True when the tier's objective tuple carries axis ``name``."""
+    return name in objective_axes(tier)
+
+
+def objective_axis_index(name: str, tier: int | None = None) -> int:
+    """Position of axis ``name`` in the tier's tuple; KeyError when the tier lacks it."""
+    axes = objective_axes(tier)
+    try:
+        return axes.index(name)
+    except ValueError:
+        raise KeyError(f"objective axis {name!r} not declared for tier {tier}: {axes}") from None
+
+
+def objectives_match_axes(objectives: Sequence[float], tier: int | None = None) -> bool:
+    """True when ``objectives`` has exactly one value per declared axis."""
+    return len(tuple(objectives)) == len(objective_axes(tier))
+
+
+def objective_value(objectives: Sequence[float], name: str, tier: int | None = None) -> float:
+    """Read one axis by NAME. Raises ObjectiveShapeError on a tuple of the wrong shape.
+
+    The shape check is the point: a positional read of a tuple built under a different
+    axis set returns a number from the wrong axis instead of failing.
+    """
+    values = tuple(objectives)
+    axes = objective_axes(tier)
+    if len(values) != len(axes):
+        raise ObjectiveShapeError(
+            f"objective tuple has {len(values)} values; tier {tier} declares {len(axes)} axes {axes}"
+        )
+    return float(values[objective_axis_index(name, tier)])
 
 
 def reference_point_for(tier: int) -> tuple[float, ...]:
