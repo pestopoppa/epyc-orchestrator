@@ -34,7 +34,7 @@ from src.autopilot_core.tier_specs import (
     rate_axis_unit,
     seq_task_rate_qph_from,
 )
-from src.autopilot_core.action_identity import config_fingerprint_from_row
+from src.autopilot_core.action_identity import config_fingerprint_from_row, row_config_identity
 from src.autopilot_core.pareto_math import median_objectives
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from src.autopilot_core.authority_consent import (
@@ -2765,13 +2765,18 @@ class SafetyGate:
     def _candidate_live_reproductions(
         tier: int, source_trial_id: int | None
     ) -> tuple[str, list[dict[str, Any]]] | None:
-        """(config fingerprint, live-regime reproductions) for the pending candidate, or None."""
+        """(served-config identity, live-regime reproductions) for the pending candidate.
+
+        None when there is no candidate row or no reproduction source. The identity is ""
+        when the candidate's action does not identify a served config (re-review B1)."""
         row = _pending_candidate_row(source_trial_id)
         view = _promotion_guard_view()
         if row is None or view.reproductions is None:
             return None
-        fingerprint = config_fingerprint_from_row(row)
-        return fingerprint, list(view.reproductions(int(tier), fingerprint))
+        identity = row_config_identity(row) or ""
+        if not identity:
+            return "", []
+        return identity, list(view.reproductions(int(tier), identity))
 
     def _select_promotion_rule(
         self, tier: int, previous_quality: float | None, source_trial_id: int | None
@@ -2797,11 +2802,29 @@ class SafetyGate:
             if previous_quality is None:
                 return PROMOTION_RULE_SEED, ""
             return PROMOTION_RULE_UNGUARDED, ""
-        if not self._prior_frontier_empty(tier, source_trial_id):
-            return PROMOTION_RULE_FRONTIER, ""
-        if previous_quality is None:
+        if previous_quality is None and self._prior_frontier_empty(tier, source_trial_id):
             return PROMOTION_RULE_SEED, ""
-        return PROMOTION_RULE_EMPTY_FRONTIER_REPRO, ""
+        rule = (
+            PROMOTION_RULE_EMPTY_FRONTIER_REPRO
+            if self._prior_frontier_empty(tier, source_trial_id)
+            else PROMOTION_RULE_FRONTIER
+        )
+        candidate = _pending_candidate_row(source_trial_id)
+        if candidate is not None and not row_config_identity(candidate):
+            # Re-review B1: a measurement action (seed_batch, deep_eval, ...) or an
+            # unresolved mutation request hashes its REQUEST, not the served config, so its
+            # "reproduction cluster" spans config changes. It cannot be reproduction evidence.
+            action_type = str(
+                candidate.get("action_type")
+                or (candidate.get("config_snapshot") or {}).get("type")
+                or "?"
+            )
+            return rule, (
+                f"candidate action {action_type!r} carries no served-config identity (only "
+                "structural_experiment flags / numeric_trial params do); its reproductions "
+                "would span config changes, so it cannot promote a baseline; REFUSED"
+            )
+        return rule, ""
 
     @staticmethod
     def _archive_frontier_entry(
@@ -2856,6 +2879,11 @@ class SafetyGate:
                 "config and live-regime reproductions cannot be identified; REFUSED"
             )
         fingerprint, reps = found
+        if not fingerprint:
+            return (
+                "empty-frontier rule (b): the candidate carries no served-config identity; "
+                "REFUSED"
+            )
         trial_ids = sorted({int(r["trial_id"]) for r in reps})
         log.info(
             "Empty-frontier rule (b) T%d fp=%s: %d of %d required comparable live-regime "

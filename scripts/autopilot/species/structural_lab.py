@@ -145,10 +145,14 @@ class StructuralLab:
         log.info("Checkpoint %s: %d files copied, %d memories", ts, len(copied), memory_count)
         return cp_dir
 
-    def restore_checkpoint(self, checkpoint_path: Path | None = None) -> dict[str, Any]:
+    def restore_checkpoint(
+        self, checkpoint_path: Path | None = None, *, restore_prompts: bool = True
+    ) -> dict[str, Any]:
         """Restore routing intelligence from a checkpoint.
 
-        If no path given, restores from production_best.
+        If no path given, restores from production_best. ``restore_prompts=False`` skips
+        the checkpoint's prompt-directory copy (a mutation candidate's rollback restores
+        only its own file, and must not overwrite unrelated prompt edits).
         """
         if checkpoint_path is None:
             checkpoint_path = CHECKPOINT_DIR / "production_best"
@@ -171,7 +175,7 @@ class StructuralLab:
 
         # Restore prompts
         prompts_cp = checkpoint_path / "prompts"
-        if prompts_cp.exists():
+        if restore_prompts and prompts_cp.exists():
             shutil.copytree(prompts_cp, PROMPTS_DIR, dirs_exist_ok=True)
             restored.append("prompts/")
 

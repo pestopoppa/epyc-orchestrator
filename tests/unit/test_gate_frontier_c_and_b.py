@@ -30,6 +30,10 @@ import safety_gate as sg  # noqa: E402
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
 from safety_gate import EvalResult, SafetyGate  # noqa: E402
 
+from src.autopilot_core.action_identity import (  # noqa: E402
+    action_config_identity,
+    row_config_identity,
+)
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows  # noqa: E402
 from src.autopilot_core.journal_snapshot_replay import (  # noqa: E402
     _row_requires_prefix_raw_samples,
@@ -84,11 +88,14 @@ class Loop:
         comparability: str = "UNVERIFIED",
         record: bool = True,
         promote: bool = True,
+        action: dict | None = None,
+        infra_digest: str = "",
+        served: dict | None = None,
     ):
         tid = self.next_id
         self.next_id += 1
         self.clock += timedelta(minutes=10)
-        action = {"type": "numeric_trial", "surface": config}
+        action = action or {"type": "numeric_trial", "surface": "s", "params": {"cfg": config}}
         result = EvalResult(
             tier=1,
             quality=quality,
@@ -100,7 +107,10 @@ class Loop:
             eval_wall_s=wall_s,
             question_results=[{"qid": f"q{i}", "correct": True} for i in range(50)],
         )
-        clean = not exclusion
+        clean = (
+            not exclusion
+            and action_config_identity(action, infra_digest, served) is not None
+        )
         admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean else ""
         comp = {"status": comparability}
         ts = self.clock.isoformat()
@@ -113,7 +123,10 @@ class Loop:
             learning_excluded_reason="r" if exclusion else "",
             frontier_admission=admission,
             comparability=comp,
+            regime_digest=infra_digest,
+            served_content=served,
         )
+        self.last_provisional = provisional
         update = None
         if promote:
             update = self.gate.update_baseline(
@@ -391,8 +404,8 @@ def test_crash_before_record_leaves_no_persisted_promotion(tmp_path):
     assert placeholder["bug_corrupted_by"] == "autopilot_killed_mid_trial"
     assert not row_is_representative_member(placeholder)
     reps = live_reproductions(
-        rows, tier=1, fingerprint=autopilot._config_fingerprint(
-            {"type": "numeric_trial", "surface": "A"}
+        rows, tier=1, identity=action_config_identity(
+            {"type": "numeric_trial", "surface": "s", "params": {"cfg": "A"}}
         ),
         objective_policy=RATE_4D_OBJECTIVE_POLICY, exclude_before_ts=FENCE.timestamp(),
     )
@@ -442,3 +455,337 @@ def test_snapshot_authority_matches_full_replay_with_stamped_rows(tmp_path):
     )
     key = lambda p: sorted((e["trial_id"], e.get("n_reproductions", 1)) for e in p["all_entries"])  # noqa: E731
     assert key(full) == key(via_authority)
+
+
+# ── re-review B1: measurement actions are never reproduction evidence ─────
+
+
+SEED = {"type": "seed_batch", "n_questions": 10}
+
+
+@pytest.mark.parametrize("action", [
+    {"type": "seed_batch", "n_questions": 10},
+    {"type": "deep_eval", "tier": 1},
+    {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"},
+    {"type": "numeric_trial", "surface": "s", "params": {}},
+    {"type": "structural_experiment", "flags": {}},
+])
+def test_non_identifying_actions_have_no_served_config_identity(action):
+    assert action_config_identity(action) is None
+
+
+def test_identity_includes_the_infra_digest():
+    action = {"type": "structural_experiment", "flags": {"x": True}}
+    assert action_config_identity(action, "d1") != action_config_identity(action, "d2")
+    assert action_config_identity(action, "d1") == action_config_identity(action, "d1")
+
+
+def test_three_seed_batches_do_not_promote_under_rule_b(tmp_path):
+    """The re-review's reproduction: seeder runs after a config change must not promote."""
+    loop = Loop(tmp_path)
+    updates = [loop.trial("seed", 1.9, action=dict(SEED))[1] for _ in range(4)]
+    assert not any(u.updated for u in updates), [u.reason for u in updates]
+    assert all("no served-config identity" in u.reason for u in updates)
+    assert loop.gate.baseline.baselines_by_tier[1] == 1.5
+    rows = autopilot._journal_rows_for_archive(loop.journal)
+    assert not any(row_is_representative_member(r) for r in rows)  # never stamped
+
+
+def test_seed_batch_within_noise_cluster_cannot_promote_under_frontier_rule(tmp_path):
+    loop = Loop(tmp_path)
+    loop.trial("B", 1.6, wall_s=300.0, promote=False)
+    for _ in range(3):
+        loop.trial("seed", 1.9, action=dict(SEED), exclusion="mad_noise", promote=False)
+    _, update = loop.trial("seed", 1.9, action=dict(SEED), exclusion="reproduction_confirmed")
+    assert update.promotion_rule == sg.PROMOTION_RULE_FRONTIER
+    assert not update.updated and "no served-config identity" in update.reason
+
+
+def test_reproductions_on_a_different_infra_regime_do_not_count(tmp_path):
+    loop = Loop(tmp_path)
+    loop.trial("A", 1.8, infra_digest="d1")
+    loop.trial("A", 1.8, infra_digest="d2")
+    _, third = loop.trial("A", 1.8, infra_digest="d1")
+    assert not third.updated and "has 2 of 3 required" in third.reason
+
+
+def test_seed_still_allowed_for_a_tier_without_baseline(tmp_path):
+    loop = Loop(tmp_path, baseline=None)
+    _, update = loop.trial("seed", 1.9, action=dict(SEED))
+    assert update.updated and update.promotion_rule == sg.PROMOTION_RULE_SEED
+
+
+def test_what_if_replay_promotions_all_carry_a_served_config_identity():
+    data = json.loads(FIXTURE.read_text())
+    rows = {r["trial_id"]: r for r in data["rows"]}
+    promoted = [
+        d for d in data["golden"]["decisions"]["live_c"]
+        if d["decision"] == "promoted" and d["promotion_rule"] != "seed"
+    ]
+    for d in promoted:
+        assert row_config_identity(rows[d["trial_id"]]) is not None, d
+
+
+# ── re-review B2: a journal mismatch rolls the promotion back ─────────────
+
+
+def test_mismatch_restores_baseline_and_suppresses_the_promotion(tmp_path):
+    import copy
+
+    loop = Loop(tmp_path)
+    for _ in range(2):
+        loop.trial("A", 1.8)
+    before = copy.deepcopy(loop.gate.baseline)
+    tid, update = loop.trial("A", 1.8, record=False)
+    assert update.updated and loop.gate.baseline.baselines_by_tier[1] == pytest.approx(1.8)
+    recorded = dict(loop.last_provisional)
+    recorded["quality"] = 0.4  # the journal holds different evidence than the decision saw
+    result = autopilot._reconcile_promotion_with_journal(
+        loop.gate, update, before, loop.last_provisional, recorded, tid
+    )
+    assert result.updated is False and "rolled back" in result.reason
+    assert loop.gate.baseline.baselines_by_tier[1] == 1.5
+    assert autopilot._append_baseline_promotion_event(
+        journal=loop.journal, baseline_update=result, eval_result=None,
+        source_trial_id=tid, pareto_status="frontier", baseline_state={},
+    ) is None
+
+
+def test_matching_row_keeps_the_promotion(tmp_path):
+    import copy
+
+    loop = Loop(tmp_path)
+    for _ in range(2):
+        loop.trial("A", 1.8)
+    before = copy.deepcopy(loop.gate.baseline)
+    tid, update = loop.trial("A", 1.8, record=False)
+    result = autopilot._reconcile_promotion_with_journal(
+        loop.gate, update, before, loop.last_provisional, dict(loop.last_provisional), tid
+    )
+    assert result is update and loop.gate.baseline.baselines_by_tier[1] == pytest.approx(1.8)
+
+
+def test_loop_reconciles_before_any_persistence():
+    source = Path(autopilot.__file__).read_text()
+    body = source[source.index("def _run_loop_inner(") :]
+    record = body.index("journal.record(journal_entry)")
+    reconcile = body.index("_reconcile_promotion_with_journal(", record)
+    event = body.index("_append_baseline_promotion_event(", record)
+    state_write = body.index('state["baseline_state"] = baseline_state', record)
+    assert record < reconcile < min(event, state_write)
+    assert body.index("baseline_before_decision = copy.deepcopy(gate.baseline)") < body.index(
+        "gate.update_baseline(\n"
+    )
+
+
+# ── re-review B3: the row records a pending commit, confirmed by the ledger ─
+
+
+def test_row_stamps_pending_commit_and_ledger_is_the_commit_record():
+    source = Path(autopilot.__file__).read_text()
+    assert '"pending_commit" if getattr(baseline_update, "updated", False) else "refused"' in source
+    body = source[source.index("def _run_loop_inner(") :]
+    assert body.index('eval_details_dict["promotion_status"]') < body.index(
+        "journal.record(journal_entry)"
+    ) < body.index("_append_baseline_promotion_event(")
+
+
+# ── operator decision 2026-09-16: mutated-file sha is the content identity ─
+
+
+def _sha(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+PROMPT = {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"}
+
+
+def _served(text: str, path: str = "orchestration/prompts/frontdoor.md") -> dict:
+    return {"files": {path: _sha(text)}}
+
+
+def test_identical_served_content_counts_as_a_reproduction(tmp_path):
+    loop = Loop(tmp_path)
+    updates = [
+        loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")[1]
+        for _ in range(3)
+    ]
+    assert [u.updated for u in updates] == [False, False, True], [u.reason for u in updates]
+    assert updates[-1].promotion_rule == sg.PROMOTION_RULE_EMPTY_FRONTIER_REPRO
+
+
+def test_different_served_content_does_not_count(tmp_path):
+    loop = Loop(tmp_path)
+    loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")
+    loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v3"), infra_digest="r1")
+    _, third = loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")
+    assert not third.updated and "has 2 of 3 required" in third.reason
+
+
+def test_mutation_row_without_sha_does_not_count(tmp_path):
+    loop = Loop(tmp_path)
+    loop.trial("p", 1.8, action=dict(PROMPT), served=None, infra_digest="r1")
+    loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")
+    _, third = loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")
+    # The sha-less row is not a cluster member: whichever rule applies, only 2 count.
+    assert not third.updated
+    assert "has 2 of 3 required" in third.reason or "source has 2" in third.reason
+    _, no_sha = loop.trial("p", 1.9, action=dict(PROMPT), served=None, infra_digest="r1")
+    assert not no_sha.updated and "no served-config identity" in no_sha.reason
+
+
+def test_multi_file_identity_is_the_sorted_path_sha_set():
+    a = {"files": {"b.py": _sha("2"), "a.py": _sha("1")}}
+    b = {"files": {"a.py": _sha("1"), "b.py": _sha("2")}}
+    c = {"files": {"a.py": _sha("1"), "b.py": _sha("3")}}
+    code = {"type": "code_mutation", "file": "a.py", "mutation": "targeted_fix"}
+    assert action_config_identity(code, "", a) == action_config_identity(code, "", b)
+    assert action_config_identity(code, "", a) != action_config_identity(code, "", c)
+    # The same content under a different path is a different served config.
+    moved = {"files": {"c.py": _sha("1"), "b.py": _sha("2")}}
+    assert action_config_identity(code, "", a) != action_config_identity(code, "", moved)
+
+
+@pytest.mark.parametrize("bad", [
+    None, {}, {"files": {}}, {"files": {"a.py": "nothex"}}, "0" * 64, {"files": "x"},
+])
+def test_malformed_served_content_has_no_identity(bad):
+    assert action_config_identity(dict(PROMPT), "", bad) is None
+
+
+def test_served_content_never_changes_action_fingerprints():
+    """Old rows keep their archive keys and repeat-detection signatures."""
+    from src.autopilot_core.action_identity import (
+        action_signature,
+        config_fingerprint,
+        config_fingerprint_from_row,
+    )
+
+    row_old = {"config_snapshot": dict(PROMPT), "eval_details": {}}
+    row_new = {
+        "config_snapshot": dict(PROMPT),
+        "eval_details": {"served_content": _served("v2"), "infra_regime_digest": "r1"},
+    }
+    assert config_fingerprint_from_row(row_old) == config_fingerprint_from_row(row_new)
+    assert config_fingerprint_from_row(row_old) == config_fingerprint(PROMPT)
+    assert action_signature(PROMPT) == action_signature(dict(PROMPT))
+    assert row_config_identity(row_old) is None
+    assert row_config_identity(row_new) is not None
+
+
+def _fingerprint(**overrides):
+    base = {
+        "orchestrator": "o1", "evaluator": "e1", "kernel": "k1",
+        "recipe": "r1", "models": "m1", "host": "h1",
+    }
+    base.update(overrides)
+    return {"component_digests": base, "digest": "|".join(sorted(base.values()))}
+
+
+def test_regime_ignores_orchestrator_commits_but_not_kernel_or_models():
+    from src.autopilot_core.infra_fingerprint import regime_digest
+
+    same = regime_digest(_fingerprint())
+    assert regime_digest(_fingerprint(orchestrator="o2")) == same
+    assert regime_digest(_fingerprint(kernel="k2")) != same
+    assert regime_digest(_fingerprint(models="m2")) != same
+    assert regime_digest(_fingerprint(recipe="r2")) != same
+    assert regime_digest(_fingerprint(host="h2")) != same
+    assert regime_digest(_fingerprint(evaluator="e2")) != same
+    assert regime_digest(None) == "" and regime_digest({"status": "capture_error"}) == ""
+
+
+def test_reproduction_survives_an_unrelated_orchestrator_commit(tmp_path):
+    from src.autopilot_core.infra_fingerprint import regime_digest
+
+    loop = Loop(tmp_path)
+    digests = [
+        regime_digest(_fingerprint(orchestrator=f"commit{i}")) for i in range(3)
+    ]
+    updates = [
+        loop.trial("A", 1.8, infra_digest=d)[1] for d in digests
+    ]
+    assert updates[-1].updated, updates[-1].reason
+
+
+def test_kernel_change_splits_the_cluster(tmp_path):
+    from src.autopilot_core.infra_fingerprint import regime_digest
+
+    loop = Loop(tmp_path)
+    loop.trial("A", 1.8, infra_digest=regime_digest(_fingerprint()))
+    loop.trial("A", 1.8, infra_digest=regime_digest(_fingerprint(kernel="k2")))
+    _, third = loop.trial("A", 1.8, infra_digest=regime_digest(_fingerprint()))
+    assert not third.updated and "has 2 of 3 required" in third.reason
+
+
+def test_row_regime_digest_falls_back_to_the_recorded_fingerprint():
+    from src.autopilot_core.action_identity import row_regime_digest
+    from src.autopilot_core.infra_fingerprint import regime_digest
+
+    fp = _fingerprint()
+    assert row_regime_digest({"infra_fingerprint": fp, "eval_details": {}}) == regime_digest(fp)
+    assert row_regime_digest({"eval_details": {"infra_regime_digest": "x"}}) == "x"
+    assert row_regime_digest({"eval_details": {}}) == ""
+
+
+# ── the sha is taken from the served file at eval time, never from the action ──
+
+
+def test_served_content_record_hashes_the_file_on_disk(tmp_path):
+    import actions
+
+    target = tmp_path / "orchestration" / "prompts" / "frontdoor.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("served v2")
+    record = actions.served_content_record([target], root=tmp_path)
+    assert record == {"files": {"orchestration/prompts/frontdoor.md": _sha("served v2")}}
+    assert actions.served_content_record([tmp_path / "missing"], root=tmp_path) is None
+
+
+def test_handlers_hash_after_apply_and_before_eval_without_touching_the_action():
+    import actions
+
+    source = Path(actions.__file__).read_text()
+    for handler, apply_call in (
+        ("def _action_prompt_mutation(", "ctx.forge.apply_mutation(mutation)"),
+        ("def _action_gepa_optimize(", "ctx.forge.apply_mutation(mutation)"),
+        ("def _action_code_mutation(", "ctx.forge.apply_code_mutation(mutation)"),
+    ):
+        body = source[source.index(handler):]
+        body = body[: body.index("\ndef ", 1)]
+        applied = body.index(apply_call)
+        recorded = body.index("_record_served_content(", applied)
+        evaluated = body.index("ctx.tower.hybrid_eval()", applied)
+        assert applied < recorded < evaluated, handler
+        assert 'action["served_content"]' not in body
+
+
+def test_loop_clears_and_pops_the_served_content_around_dispatch():
+    source = Path(autopilot.__file__).read_text()
+    body = source[source.index("def _run_loop_inner(") :]
+    clear = body.index("state.pop(SERVED_CONTENT_STATE_KEY, None)")
+    dispatch = body.index("eval_result, species_name = dispatch_action(")
+    take = body.index("trial_served_content = state.pop(SERVED_CONTENT_STATE_KEY, None)")
+    assert clear < dispatch < take
+
+
+def test_record_served_content_on_state(tmp_path):
+    import actions
+
+    target = tmp_path / "f.md"
+    target.write_text("x")
+
+    class Ctx:
+        state: dict = {}
+
+    ctx = Ctx()
+    ctx.state = {}
+    actions._record_served_content(ctx, [target])
+    record = ctx.state[actions.SERVED_CONTENT_STATE_KEY]
+    assert list(record["files"].values()) == [_sha("x")] and record["captured_at"]
+    actions._record_served_content(ctx, [tmp_path / "gone"])
+    assert actions.SERVED_CONTENT_STATE_KEY not in ctx.state
+    assert autopilot._served_content_for_row(record)["files"] == record["files"]
+    assert autopilot._served_content_for_row({"files": {"a": "bad"}}) is None

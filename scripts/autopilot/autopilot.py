@@ -28,6 +28,8 @@ from __future__ import annotations
 import argparse
 import atexit
 from collections import deque
+import copy
+import dataclasses
 from dataclasses import asdict
 import fcntl
 import hashlib
@@ -68,6 +70,7 @@ from src.autopilot_core.infra_fingerprint import (
     collect_infra_fingerprint,
     compare_infra_fingerprints,
     fingerprint_digest,
+    regime_digest,
 )
 from src.autopilot_core import ap55_promotion_gate
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
@@ -153,12 +156,19 @@ from state_lock import (
 )
 from state_ownership import clear_halt_latch, halt_latch_message
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
+from actions import SERVED_CONTENT_STATE_KEY, _public_pending_copy, served_content_record
 from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_result
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
     action_signature,
+    CONTENT_IDENTIFIED_ACTION_TYPES,
+    INFRA_REGIME_DIGEST_KEY,
+    SERVED_CONTENT_KEY,
+    action_config_identity,
     canonical_action,
     config_fingerprint,
+    row_config_identity,
+    served_content_files,
 )
 from src.autopilot_core.learning_exclusions import (
     FRONTIER_ADMISSION_KEY,
@@ -277,6 +287,25 @@ MULTITIER_MAX_ATTEMPTS_PER_TIER = int(
         str(DEFAULT_MAX_ATTEMPTS_PER_TIER),
     )
 )
+def _multitier_attempt_cap() -> int:
+    """Per-tier attempt cap, never below the reproduction bar a final_t1 must clear.
+
+    Review fix 5: final_t1 promotion needs >= N reproductions (N = the frontier rule's
+    ``BASELINE_PROMOTION_REPRO_MIN`` or rule (b)'s ``AUTOPILOT_EMPTY_FRONTIER_MIN_REPRO``).
+    Each final_t1 attempt adds one; if the source row does not count, the attempts alone
+    must reach N. A lower configured cap would reject every candidate before it could
+    reproduce enough — a silent freeze — so the cap is raised to N.
+    """
+    from safety_gate import BASELINE_PROMOTION_REPRO_MIN, empty_frontier_min_repro
+
+    return max(
+        1,
+        MULTITIER_MAX_ATTEMPTS_PER_TIER,
+        int(BASELINE_PROMOTION_REPRO_MIN),
+        int(empty_frontier_min_repro()),
+    )
+
+
 MULTITIER_BASELINE_STATE_KEY = "multitier_baseline_bundle"
 MULTITIER_PENDING_STATE_KEY = "multitier_pending_validation"
 
@@ -2825,16 +2854,28 @@ def _maybe_force_seq_promotion_fresh_eval(
     return forced, next_rationale, dict(pending)
 
 
-def _seq_promotion_replay_blocker(action: Any) -> str:
+def _seq_promotion_replay_blocker(action: Any, served_content: Any = None) -> str:
     """Return why a seq-promotion candidate cannot be replayed for fresh eval.
 
     AP-9 still guards new planner-proposed numeric_trial actions before dispatch.
     W8 replay is different: a materialized NumericSwarm trial may contain several
     applied params, but it is a single recorded candidate being re-measured.
+
+    Operator decision 2026-09-16: a prompt / code / GEPA mutation is replayable only with a
+    served-file identity (``served_content``, the sha of what the candidate trial served).
+    A replay re-measures that same content; callers that pass no identity keep mutations
+    blocked (the seq fresh-eval and replay-selection paths are unchanged).
     """
     if not isinstance(action, dict):
         return "candidate action is missing or not an object"
     action_type = str(action.get("type") or "")
+    if action_type in CONTENT_IDENTIFIED_ACTION_TYPES:
+        if served_content_files(served_content) is None:
+            return (
+                f"candidate {action_type} has no served-file identity (served_content sha); "
+                "its content cannot be re-served for validation"
+            )
+        return ""
     if action_type == "numeric_trial":
         params = action.get("params")
         if not isinstance(params, dict) or not params:
@@ -2856,6 +2897,72 @@ def _seq_promotion_replay_blocker(action: Any) -> str:
         return f"candidate action type is not replayable: {action_type or 'unknown'}"
 
     return ""
+
+
+def _multitier_validation_served_content(
+    state: dict[str, Any], context: Mapping[str, Any], trial_counter: int
+) -> dict[str, Any] | None:
+    """A mutation candidate's validation stage: the served files, hashed right after eval.
+
+    The due-action check verified the content before the forced eval; this re-hash proves
+    it was still served when the eval finished. A change in between rejects the candidate
+    (and the stage row carries no identity, so it can never count as a reproduction).
+    """
+    expected = context.get("candidate_served_content")
+    if not expected or context.get("stage") in {None, "rollback"}:
+        return None
+    pending = state.get(MULTITIER_PENDING_STATE_KEY)
+    mismatch = _multitier_served_content_mismatch({"candidate_served_content": expected})
+    if mismatch:
+        if isinstance(pending, dict):
+            _reject_multitier_candidate(
+                state, pending, reason=f"during validation: {mismatch}", trial_counter=trial_counter
+            )
+        log.error("Trial %d: multitier mutation candidate rejected — %s", trial_counter, mismatch)
+        return None
+    return _multitier_served_content_now(expected)
+
+
+def _multitier_served_content_now(expected: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Hash the files a mutation candidate served, as they are on disk now (eval time)."""
+    files = served_content_files(expected) if isinstance(expected, Mapping) else None
+    if files is None:
+        return None
+    return served_content_record([ORCH_ROOT / path for path in files], root=ORCH_ROOT)
+
+
+def _multitier_served_content_mismatch(pending: Mapping[str, Any]) -> str:
+    """Why the currently served files are not the candidate's content ("" when they are)."""
+    expected = pending.get("candidate_served_content")
+    if not expected:
+        return ""
+    want = served_content_files(expected)
+    now = _multitier_served_content_now(expected)
+    if want is None or now is None:
+        return (
+            "mutation candidate content cannot be re-served: a served file is missing or "
+            "unreadable (reverted or moved since staging)"
+        )
+    if now["files"] != want:
+        changed = sorted(p for p in want if now["files"].get(p) != want[p])
+        return (
+            "mutation candidate content is no longer served: file sha changed since staging "
+            f"({', '.join(changed)}); it was reverted, re-mutated or auto-committed away"
+        )
+    return ""
+
+
+def _mutation_restore_is_complete(restore: Any, served_content: Any) -> bool:
+    files = served_content_files(served_content)
+    if not isinstance(restore, Mapping) or files is None:
+        return False
+    contents = restore.get("preimage")
+    return (
+        restore.get("kind") in {"prompt", "code"}
+        and bool(restore.get("file"))
+        and isinstance(contents, str)
+        and bool(restore.get("preimage_sha256"))
+    )
 
 
 def _multitier_baseline_for(state: Mapping[str, Any], tier: int) -> Mapping[str, Any] | None:
@@ -2915,21 +3022,28 @@ def _multitier_candidate_is_eligible(
     eval_result: EvalResult,
     verdict: Any,
     pareto_status: str,
+    served_content: Mapping[str, Any] | None = None,
 ) -> tuple[bool, str]:
     if not MULTITIER_PROMOTION_ENABLED:
         return False, "policy disabled"
     if isinstance(state.get(MULTITIER_PENDING_STATE_KEY), dict):
         return False, "another candidate is already pending"
+    if state.get("multitier_rollback_stalled"):
+        return False, "a multitier rollback is stalled; operator action required"
     if int(getattr(eval_result, "tier", 0) or 0) != DEFAULT_FRONTIER_TIER:
         return False, "not a T1 screening result"
     ready, reason = _multitier_required_baselines_ready(state)
     if not ready:
         return False, reason
-    blocker = _seq_promotion_replay_blocker(action)
+    blocker = _seq_promotion_replay_blocker(action, served_content)
     if blocker:
         return False, blocker
     action_type = str(action.get("type") or "")
-    if action_type == "numeric_trial":
+    if action_type in CONTENT_IDENTIFIED_ACTION_TYPES:
+        restore = (served_content or {}).get("restore") if isinstance(served_content, Mapping) else None
+        if not _mutation_restore_is_complete(restore, served_content):
+            return False, f"candidate {action_type} lacks an exact restore preimage"
+    elif action_type == "numeric_trial":
         preimage = action.get("_multitier_restore_preimage")
         if (
             not isinstance(preimage, dict)
@@ -2969,6 +3083,7 @@ def _start_multitier_validation(
     eval_result: EvalResult,
     verdict: Any,
     trial_counter: int,
+    served_content: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     seq = getattr(verdict, "seq", None)
     candidate_action = dict(action)
@@ -2992,6 +3107,15 @@ def _start_multitier_validation(
         "seq_context": dict(seq) if isinstance(seq, dict) else None,
         "final_t1_attempts": 0,
     }
+    files = served_content_files(served_content) if isinstance(served_content, Mapping) else None
+    if files is not None:
+        # Mutation candidates: the exact content every validation stage must re-serve, and
+        # the preimage a rejection restores. Kept on the pending record, never on the
+        # action, so action fingerprints and journal rows are unchanged.
+        pending["candidate_served_content"] = {"files": files}
+        restore = served_content.get("restore")
+        if isinstance(restore, Mapping):
+            pending["candidate_restore"] = dict(restore)
     state[MULTITIER_PENDING_STATE_KEY] = pending
     state["multitier_last_event"] = {
         "event": "candidate_staged",
@@ -3011,6 +3135,10 @@ def _maybe_force_multitier_due_action(
     if not MULTITIER_PROMOTION_ENABLED:
         return None, None, None
     pending = state.get(MULTITIER_PENDING_STATE_KEY)
+    if state.get("multitier_rollback_stalled"):
+        # Review fix 6: a rollback that failed MULTITIER_ROLLBACK_MAX_FAILURES times is not
+        # re-forced every trial (a stall); it waits for an operator (alarm already raised).
+        return None, None, None
     if state.get("multitier_rollback_pending") and isinstance(pending, dict):
         return (
             {"type": "rollback", "to_checkpoint": "production_best"},
@@ -3018,16 +3146,20 @@ def _maybe_force_multitier_due_action(
                 "multitier_rollback": True,
                 "reason": pending.get("blocked_reason") or "candidate rejected",
             },
-            {"stage": "rollback", **pending},
+            {"stage": "rollback", **_public_pending_copy(pending)},
         )
     if not isinstance(pending, dict) or pending.get("status") != "pending":
         return None, None, None
     candidate_action = pending.get("candidate_action")
-    blocker = _seq_promotion_replay_blocker(candidate_action)
+    blocker = _seq_promotion_replay_blocker(
+        candidate_action, pending.get("candidate_served_content")
+    )
+    if not blocker:
+        blocker = _multitier_served_content_mismatch(pending)
     if blocker:
         pending["status"] = "blocked"
         pending["blocked_reason"] = blocker
-        state["multitier_last_rejected"] = dict(pending)
+        state["multitier_last_rejected"] = _public_pending_copy(pending)
         state["multitier_rollback_pending"] = True
         return (
             {"type": "rollback", "to_checkpoint": "production_best"},
@@ -3035,7 +3167,7 @@ def _maybe_force_multitier_due_action(
                 "multitier_rollback": True,
                 "reason": blocker,
             },
-            {"stage": "rollback", **pending},
+            {"stage": "rollback", **_public_pending_copy(pending)},
         )
 
     next_tier = pending.get("next_tier")
@@ -3047,7 +3179,7 @@ def _maybe_force_multitier_due_action(
         except (TypeError, ValueError):
             pending["status"] = "blocked"
             pending["blocked_reason"] = f"invalid next_tier={next_tier!r}"
-            state["multitier_last_rejected"] = dict(pending)
+            state["multitier_last_rejected"] = _public_pending_copy(pending)
             state["multitier_rollback_pending"] = True
             return (
                 {"type": "rollback", "to_checkpoint": "production_best"},
@@ -3055,7 +3187,7 @@ def _maybe_force_multitier_due_action(
                     "multitier_rollback": True,
                     "reason": pending["blocked_reason"],
                 },
-                {"stage": "rollback", **pending},
+                {"stage": "rollback", **_public_pending_copy(pending)},
             )
 
     forced = {"type": "deep_eval", "tier": tier}
@@ -3063,7 +3195,7 @@ def _maybe_force_multitier_due_action(
     if blocked_reason:
         pending["status"] = "blocked"
         pending["blocked_reason"] = f"multitier validation action blacklisted: {blocked_reason}"
-        state["multitier_last_rejected"] = dict(pending)
+        state["multitier_last_rejected"] = _public_pending_copy(pending)
         state["multitier_rollback_pending"] = True
         return (
             {"type": "rollback", "to_checkpoint": "production_best"},
@@ -3071,7 +3203,7 @@ def _maybe_force_multitier_due_action(
                 "multitier_rollback": True,
                 "reason": pending["blocked_reason"],
             },
-            {"stage": "rollback", **pending},
+            {"stage": "rollback", **_public_pending_copy(pending)},
         )
 
     context = {
@@ -3084,6 +3216,8 @@ def _maybe_force_multitier_due_action(
         "trial_id": trial_counter,
         "seq_context": pending.get("seq_context"),
     }
+    if pending.get("candidate_served_content"):
+        context["candidate_served_content"] = dict(pending["candidate_served_content"])
     state["_multitier_candidate_validation"] = dict(context)
     return (
         forced,
@@ -3102,7 +3236,7 @@ def _reject_multitier_candidate(
     pending["status"] = "rejected"
     pending["blocked_reason"] = reason
     pending["terminal_trial_id"] = trial_counter
-    state["multitier_last_rejected"] = dict(pending)
+    state["multitier_last_rejected"] = _public_pending_copy(pending)
     state["multitier_rollback_pending"] = True
     state["multitier_last_event"] = {
         "event": "candidate_rejected",
@@ -3125,6 +3259,8 @@ def _record_multitier_validation_result(
     pending = state.get(MULTITIER_PENDING_STATE_KEY)
     if not isinstance(pending, dict):
         return None
+    if pending.get("status") not in {None, "pending"}:
+        return None  # already rejected this trial (e.g. its served content changed)
     if pending.get("candidate") != context.get("candidate"):
         _reject_multitier_candidate(
             state,
@@ -3171,7 +3307,7 @@ def _record_multitier_validation_result(
         remaining = [required for required in REQUIRED_VALIDATION_TIERS if required > tier]
         pending["next_tier"] = remaining[0] if remaining else "final_t1"
     elif verdict_payload["status"] == "inconclusive" and len(attempts) < max(
-        1, MULTITIER_MAX_ATTEMPTS_PER_TIER
+        1, _multitier_attempt_cap()
     ):
         pending["next_tier"] = tier
     else:
@@ -3196,7 +3332,7 @@ def _finish_multitier_promotion(
     if baseline_update is not None and bool(getattr(baseline_update, "updated", False)):
         pending["status"] = "accepted"
         pending["terminal_trial_id"] = trial_counter
-        state["multitier_last_accepted"] = dict(pending)
+        state["multitier_last_accepted"] = _public_pending_copy(pending)
         state["multitier_last_event"] = {
             "event": "candidate_accepted",
             "trial_id": trial_counter,
@@ -3212,7 +3348,7 @@ def _finish_multitier_promotion(
         state.pop(MULTITIER_PENDING_STATE_KEY, None)
         return
     attempts = int(pending.get("final_t1_attempts") or 0)
-    if attempts >= max(1, MULTITIER_MAX_ATTEMPTS_PER_TIER):
+    if attempts >= _multitier_attempt_cap():
         _reject_multitier_candidate(
             state,
             pending,
@@ -7370,6 +7506,17 @@ def _bug_tag_for_learning_exclusion(excluded_by: str, reason: str) -> tuple[str,
     return "", ""
 
 
+def _served_content_for_row(record: Any) -> dict[str, Any] | None:
+    """The row form of a handler's served-content record (validated), or None."""
+    files = served_content_files(record) if isinstance(record, dict) else None
+    if files is None:
+        return None
+    out: dict[str, Any] = {"files": files}
+    if isinstance(record, dict) and record.get("captured_at"):
+        out["captured_at"] = str(record["captured_at"])
+    return out
+
+
 def _provisional_trial_row(
     *,
     trial_id: int,
@@ -7380,6 +7527,9 @@ def _provisional_trial_row(
     learning_excluded_reason: str,
     frontier_admission: str,
     comparability: dict[str, Any] | None,
+    infra_digest: str = "",
+    regime_digest: str = "",
+    served_content: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Decision (c): the objective-bearing projection of the row this trial WILL journal.
 
@@ -7394,7 +7544,11 @@ def _provisional_trial_row(
         "eval_wall_s": getattr(eval_result, "eval_wall_s", 0.0),
         "objective_policy_live": RATE_4D_OBJECTIVE_POLICY,
         "infra_comparability": str((comparability or {}).get("status", "") or ""),
+        "infra_fingerprint_digest": infra_digest,
+        INFRA_REGIME_DIGEST_KEY: regime_digest,
     }
+    if served_content:
+        eval_details[SERVED_CONTENT_KEY] = served_content
     if learning_excluded_by:
         eval_details["learning_exclusion"] = {
             "by": learning_excluded_by,
@@ -7404,6 +7558,7 @@ def _provisional_trial_row(
         eval_details[FRONTIER_ADMISSION_KEY] = frontier_admission
     return {
         "trial_id": int(trial_id),
+        "action_type": str(action.get("type", "")) if isinstance(action, dict) else "",
         "timestamp": timestamp,
         "tier": int(eval_result.tier),
         "quality": eval_result.quality,
@@ -7418,6 +7573,43 @@ def _provisional_trial_row(
     }
 
 
+def _reconcile_promotion_with_journal(
+    gate: Any,
+    baseline_update: Any,
+    baseline_before: Any,
+    provisional: dict[str, Any],
+    recorded: dict[str, Any],
+    trial_counter: int,
+) -> Any:
+    """Re-review B2: roll back a promotion decided on evidence the journal does not hold.
+
+    Runs after ``journal.record`` and before anything else persists. On a mismatch the
+    in-memory baseline is restored to its pre-decision copy and the update is returned as
+    refused, so neither the baseline_promotion event nor the promoted baseline_state is
+    written. Returns the (possibly replaced) update.
+    """
+    diffs = _provisional_row_mismatch(provisional, recorded)
+    if not diffs:
+        return baseline_update
+    promoted = baseline_update is not None and bool(getattr(baseline_update, "updated", False))
+    log.error(
+        "Trial %d: journaled row differs from the row the promotion guard evaluated on %s; "
+        "the promotion decision (%s) did not see the recorded evidence.%s",
+        trial_counter,
+        diffs,
+        getattr(baseline_update, "promotion_rule", "") if baseline_update else "none",
+        " PROMOTION ROLLED BACK (baseline restored, no ledger event)." if promoted else "",
+    )
+    if not promoted:
+        return baseline_update
+    gate.baseline = baseline_before
+    return dataclasses.replace(
+        baseline_update,
+        updated=False,
+        reason=f"rolled back: journaled row differs from the evaluated row on {diffs}",
+    )
+
+
 def _provisional_row_mismatch(provisional: dict[str, Any], recorded: dict[str, Any]) -> list[str]:
     """Fields where the journaled row disagrees with the row the promotion decision saw."""
     from src.autopilot_core.live_reproductions import row_comparability_status
@@ -7430,6 +7622,8 @@ def _provisional_row_mismatch(provisional: dict[str, Any], recorded: dict[str, A
         recorded.get("config_snapshot")
     ):
         diffs.append("config_fingerprint")
+    if row_config_identity(provisional) != row_config_identity(recorded):
+        diffs.append("served_config_identity")
     if row_is_representative_member(provisional) != row_is_representative_member(recorded):
         diffs.append("representative_membership")
     if row_comparability_status(provisional) != row_comparability_status(recorded):
@@ -7479,11 +7673,11 @@ def _install_promotion_guard_scope(journal: Any, state: Mapping[str, Any]) -> No
         )
         resolved_policy = str((payload or {}).get("objective_policy") or policy)
 
-        def _reproductions(tier: int, fingerprint: str) -> list[dict[str, Any]]:
+        def _reproductions(tier: int, identity: str) -> list[dict[str, Any]]:
             return live_reproductions(
                 _journal_rows_for_archive(journal) + pending,
                 tier=tier,
-                fingerprint=fingerprint,
+                identity=identity,
                 objective_policy=resolved_policy,
                 exclude_before_ts=exclude_before_ts,
             )
@@ -9571,6 +9765,7 @@ def _run_loop_inner(
         #   - finds nothing (case b) → writes AUTOPILOT_KILLED placeholder
         # Both cases prevent silent corruption of the planner's view.
         dispatch_infra_fingerprint: dict[str, Any] | None = None
+        trial_served_content: dict[str, Any] | None = None  # set by mutation handlers
         if pre_dispatch_skip is None:
             dispatch_infra_fingerprint = _infra_fingerprint_for_trial()  # AP-55
             state["in_flight_trial"] = {
@@ -9609,6 +9804,9 @@ def _run_loop_inner(
                 action_type=action.get("type", ""),
                 idle_reason="running selected action",
             )
+            # Operator decision 2026-09-16: a mutation handler leaves the sha of the file it
+            # served; clear any stale record so this trial only ever sees its own.
+            state.pop(SERVED_CONTENT_STATE_KEY, None)
             eval_result, species_name = dispatch_action(
                 action,
                 seeder,
@@ -9633,6 +9831,11 @@ def _run_loop_inner(
                     seq_gate_preflight=seq_gate_preflight,
                 ),
             )
+            trial_served_content = state.pop(SERVED_CONTENT_STATE_KEY, None)
+            if trial_served_content is None and isinstance(multitier_validation_context, dict):
+                trial_served_content = _multitier_validation_served_content(
+                    state, multitier_validation_context, trial_counter
+                )
             phase.set(
                 "dispatch_complete",
                 trial_id=trial_counter,
@@ -10064,12 +10267,20 @@ def _run_loop_inner(
         # guard's live frontier includes the candidate. A clean trial is stamped as a
         # frontier representative and clusters with its config's reproductions.
         trial_journal_ts = datetime.now(timezone.utc).isoformat()
+        trial_infra_digest = fingerprint_digest(trial_infra_fingerprint)
+        trial_regime_digest = regime_digest(trial_infra_fingerprint)
+        trial_served = _served_content_for_row(trial_served_content)
+        # Re-review B1: only an action that names its served-config delta may join a
+        # reproduction cluster; measurement actions (seed_batch, deep_eval, ...) stay raw
+        # per-trial points exactly as before.
         clean_representative = (
             _clean_trial_representatives_enabled()
             and not learning_excluded_by
             and bool(verdict.passed)
             and rate_measured
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
+            and action_config_identity(effective_action, trial_regime_digest, trial_served)
+            is not None
         )
         frontier_admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean_representative else ""
         provisional_row = _provisional_trial_row(
@@ -10081,7 +10292,13 @@ def _run_loop_inner(
             learning_excluded_reason=learning_excluded_reason,
             frontier_admission=frontier_admission,
             comparability=trial_comparability,
+            infra_digest=trial_infra_digest,
+            regime_digest=trial_regime_digest,
+            served_content=trial_served,
         )
+        # Re-review B2: the decision mutates gate.baseline in memory. Keep the pre-decision
+        # baseline so a journal/decision mismatch can be rolled back before anything persists.
+        baseline_before_decision = copy.deepcopy(gate.baseline)
         if not rate_measured:
             log.warning(
                 "Trial %d: Pareto archive write SKIPPED — dominance axis unmeasured "
@@ -10220,6 +10437,7 @@ def _run_loop_inner(
                     eval_result=eval_result,
                     verdict=verdict,
                     pareto_status=pareto_status,
+                    served_content=trial_served_content,
                 )
                 if eligible:
                     pending = _start_multitier_validation(
@@ -10228,6 +10446,7 @@ def _run_loop_inner(
                         eval_result=eval_result,
                         verdict=verdict,
                         trial_counter=trial_counter,
+                        served_content=trial_served_content,
                     )
                     log.info(
                         "Trial %d: T1 baseline promotion HELD for binding T2/T3 "
@@ -10308,6 +10527,7 @@ def _run_loop_inner(
                 eval_result=eval_result,
                 verdict=verdict,
                 pareto_status=pareto_status,
+                served_content=trial_served_content,
             )
             if eligible:
                 _start_multitier_validation(
@@ -10316,6 +10536,7 @@ def _run_loop_inner(
                     eval_result=eval_result,
                     verdict=verdict,
                     trial_counter=trial_counter,
+                    served_content=trial_served_content,
                 )
 
         if (
@@ -10682,12 +10903,23 @@ def _run_loop_inner(
         # AP-55: eval-side consumers read eval_details, so stamp the regime there too.
         eval_details_dict["infra_fingerprint_digest"] = fingerprint_digest(trial_infra_fingerprint)
         eval_details_dict["infra_comparability"] = trial_comparability.get("status", "")
+        eval_details_dict[INFRA_REGIME_DIGEST_KEY] = trial_regime_digest
+        if trial_served:
+            eval_details_dict[SERVED_CONTENT_KEY] = trial_served
         if frontier_admission:
             eval_details_dict[FRONTIER_ADMISSION_KEY] = frontier_admission
         if baseline_update is not None:
             # Which promotion rule the archive stage applied (frontier / empty_frontier_repro /
             # seed); also carried on the baseline_promotion ledger event.
             eval_details_dict["promotion_rule"] = getattr(baseline_update, "promotion_rule", "")
+            # Re-review B3: the row is written BEFORE the promotion commits. "pending_commit"
+            # is confirmed only by a baseline_promotion ledger event with this source_trial_id
+            # (the commit record, appended with the final state save). A crash in between
+            # leaves the row pending and the baseline unchanged, which is consistent: readers
+            # must treat an unconfirmed pending row as NOT promoted; recovery needs no action.
+            eval_details_dict["promotion_status"] = (
+                "pending_commit" if getattr(baseline_update, "updated", False) else "refused"
+            )
         # AP-54: carry the trial's eval-fence state beside the infra regime, so a
         # fenced and an unfenced run are never read as the same regime.
         _fence_summary = (
@@ -10755,15 +10987,14 @@ def _run_loop_inner(
         )
         _sync_segment_snapshot_scope(journal, state)  # W3
         journal.record(journal_entry)
-        provisional_diffs = _provisional_row_mismatch(provisional_row, asdict(journal_entry))
-        if provisional_diffs:
-            log.error(
-                "Trial %d: journaled row differs from the row the promotion guard evaluated "
-                "on %s — the promotion decision (%s) did not see the recorded evidence.",
-                trial_counter,
-                provisional_diffs,
-                getattr(baseline_update, "promotion_rule", "") if baseline_update else "none",
-            )
+        baseline_update = _reconcile_promotion_with_journal(
+            gate,
+            baseline_update,
+            baseline_before_decision,
+            provisional_row,
+            asdict(journal_entry),
+            trial_counter,
+        )
         _record_reproposal_rate_windows(journal)  # VB-AP53-RATE
         # Evidence is the already-durable trial, supplied here rather than by the
         # planner, so a resolution can never cite a trial that did not run.

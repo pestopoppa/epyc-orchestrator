@@ -93,7 +93,8 @@ the finding below, 2026-06-18). The original refusal is now replaced by operator
   `AUTOPILOT_EMPTY_FRONTIER_MIN_REPRO` (default 3; a value below 2 is refused and falls back
   to 3).
 - What counts as a reproduction (`live_reproductions.py`):
-  - a representative-cluster member of the same tier and fingerprint;
+  - a representative-cluster member of the same tier and SERVED-CONFIG identity (see B1
+    below; the action hash alone is not enough);
   - inside the live epoch, with its live axes measured;
   - carrying an AP-55 verdict of `COMPARABLE`, `UNVERIFIED` or none (pre-AP-55 rows);
     `NON_COMPARABLE` rows never count.
@@ -152,7 +153,7 @@ sees the rows BEFORE the candidate, which is what the loop does.
 |---|---|---|---|---|---|---|
 | old | 2 | 479 | 18 | – | – | – |
 | live | 2 | 475 | 21 | – | – | 1 (no candidate row) |
-| live_c | 27 | 286 | 4 | 20 | 2 | 67 (64 median < quantum, 3 too few reproductions) |
+| live_c | 4 | 93 | 1 | 7 | – | 1 (1 of 3 reproductions); plus 441 refused for no served-config identity |
 
 **old vs live.** The promotions are identical: the T1 seed at trial 10 and the T3 seed at trial
 1251, both in the legacy era, where the two paths are equal by construction (asserted). The only
@@ -162,19 +163,156 @@ sees the rows BEFORE the candidate, which is what the loop does.
 - 1477, 1500 and 1501 now stop at *above archive max*: the young v7 frontier's best quality is
   below these candidates, while the all-era legacy frontier was above them.
 
-**live vs live_c.** Decision (c) produces 27 promotions where the other paths produce 2:
-3 seeds, 22 under rule (b), and 2 under the frontier rule. Rule (b) dominates here because early
-history is mostly one config at a time, so the frontier seldom held another config. Each of the
-25 non-seed promotions is backed by at least 3 reproductions whose median cleared the baseline by
-a quantum. The evidence requirement still binds: 66 decisions fail on the quantum and 23 on the
-reproduction count. The 517 differing decisions are listed in the golden.
+**live vs live_c.** With decisions (c) and (b) and the re-review B1 fix, the what-if yields 4
+promotions: the same 3 seeds, plus one frontier-rule promotion. That promotion is trial 755, a
+`structural_experiment` whose representative reproduced at least 3 times and cleared the
+baseline by a quantum. **Rule (b) promotes nothing.**
+
+The first (c)+(b) cut showed 27 promotions, 22 of them under rule (b). The re-review found them
+vacuous: 19 were T1 `seed_batch` runs (trials 18–137, quality 0.0 → 1.9 across a month of config
+changes) and 3 were T2 `deep_eval` runs. All of them clustered under one action hash, for example
+`{"type": "seed_batch", "n_questions": 10}` → `4289ed22…`, which is not a served config.
+
+**B1 fix — served-config identity.** A row can be reproduction evidence only if its action
+names its served-config delta. Today only two kinds of action do that:
+- a `structural_experiment` with non-empty `flags`;
+- a `numeric_trial` with non-empty resolved `params`.
+
+`action_identity.row_config_identity` computes the identity from that delta, plus the AP-55
+infra digest when the row records one. Rule (b) counts only same-identity rows. A candidate
+without an identity cannot promote under either rule, though a tier with no baseline can still
+seed. Clean rows are stamped as representatives only when they have an identity. Measurement
+and request-only actions are refused with "no served-config identity" in the what-if (441
+decisions):
+
+| action type | refusals |
+|---|---|
+| seed_batch | 331 |
+| numeric_trial with empty `params` | 72 |
+| deep_eval | 18 |
+| train_routing_models | 6 |
+| code_mutation | 5 |
+| prompt_mutation | 3 |
+| gepa_optimize | 2 |
+| structural_prune | 2 |
+| distill_skillbank | 1 |
+| rollback | 1 |
+
+**Operator decision (2026-09-16): prompt, code and GEPA mutations are identified by the
+sha256 of the mutated file that was served.**
+- **Recording.** The mutation handler writes the file, then immediately hashes the file on disk
+  and leaves `{"files": {path: sha256}}` in the loop state, before the eval runs. The loop pops
+  that record into `eval_details.served_content`, and it also clears the record before every
+  dispatch, so a trial can only see its own.
+- **Why the sha is not on the action.** A forced re-run copies the stored action, so a sha
+  stored there would misidentify the re-run. Keeping it off the action also leaves
+  `config_fingerprint` and `action_signature` unchanged: archive representative keys and repeat
+  detection stay exactly as they were for old and new rows (tested).
+- **Identity.** It is the sorted set of (path, sha) pairs, plus the regime digest (below).
+  Two trials reproduce each other only if they served byte-identical content at the same paths
+  under the same regime.
+- **Old rows.** Rows without a sha stay non-promotable, and nothing is back-filled. The what-if
+  replay is unchanged, since no stored row carries a sha.
+- **Scope.** This applies to `prompt_mutation`, `code_mutation` and `gepa_optimize`.
+  `structural_prune` is not covered and stays non-promotable.
+- **Multitier mode (operator decision, 2026-09-16, later the same day).** Multitier staging
+  now also accepts prompt, code and GEPA mutation candidates, but only when the candidate
+  carries a `served_content` sha identity and an exact restore preimage. How they are handled:
+  - **Replay check.** `_seq_promotion_replay_blocker` allows a mutation only with an identity.
+    The seq fresh-eval and replay-selection paths pass none, so they still block mutations.
+  - **Staging.** The pending multitier record keeps the candidate's served shas and preimage
+    (`candidate_served_content`, `candidate_restore`). The action is not changed, so its
+    fingerprint and the journal rows are unchanged.
+  - **Before every forced stage (T2, T3, final_t1).** `_maybe_force_multitier_due_action`
+    re-hashes the served files. If a file changed (reverted, re-mutated or auto-committed
+    away) or is missing, the candidate is refused with that reason and the rollback runs.
+  - **After the stage's eval.** The loop hashes the files again
+    (`_multitier_validation_served_content`). If they still match, that hash becomes the row's
+    identity, so the final_t1 row clusters with the candidate row. If they changed, the
+    candidate is rejected and the row carries no identity.
+  - **Promotion.** It goes through the existing final_t1 `update_baseline` call, with the usual
+    rules: at least 3 reproductions of byte-identical content, and the median must clear the
+    quantum. Each final_t1 attempt adds one reproduction, up to
+    `AUTOPILOT_MULTITIER_MAX_ATTEMPTS_PER_TIER`, which defaults to 3. No new promotion call
+    site is added, so the AP-55 hold guards from the merge train cover this path (a test pins
+    that there are exactly three call sites).
+  - **Rollback.** For a rejected mutation candidate, the rollback writes the preimage back
+    through PromptForge's revert, which auto-commits. It then attests the restored file's sha.
+    A rejected `new_file` must end up absent. A missing preimage, or a failed attestation,
+    fails the rollback closed, the same as for numeric and structural candidates.
+  - **Cost.** The preimage text lives in `autopilot_state.json` only while the candidate is
+    pending. The `multitier_last_rejected` and `multitier_last_accepted` snapshots, and every
+    rollback context, are stripped of it.
+  - **Review fixes (Fable review of c12f17f5, 2026-09-16).**
+    - **Only the candidate's own file is restored.** A mutation candidate's rollback calls
+      `restore_checkpoint(restore_prompts=False)`, so the checkpoint no longer copytrees every
+      prompt over unrelated operator edits. The rollback then attests the FINAL on-disk state
+      of the candidate's file after the checkpoint restore; a later overwrite fails the
+      attestation.
+    - **External changes survive.** The preimage is written only if the file still holds
+      exactly the content the candidate served. If someone changed it after staging (an
+      operator edit, a pull, a merge), nothing is written, the checkpoint is not restored,
+      and the candidate is retired as `rejected_external_change`. This is logged at ERROR and
+      raises the session-bus alarm `autopilot-multitier-rollback-external-change` (warning).
+    - **No commit sweep.** Every PromptForge commit goes through
+      `git add -A -- <paths>` followed by `git commit --only -- <paths>`: the apply, the revert,
+      the pre-code-mutation checkpoint and the new-file revert. Unrelated staged or dirty files
+      never ride along, and a prompt commit without a path is refused.
+    - **Attempt cap.** The per-tier attempt cap is
+      `max(AUTOPILOT_MULTITIER_MAX_ATTEMPTS_PER_TIER, BASELINE_PROMOTION_REPRO_MIN,
+      AUTOPILOT_EMPTY_FRONTIER_MIN_REPRO)`, so a lower configured cap cannot reject every
+      candidate before it has reproduced enough.
+    - **Bounded rollback retries.** After `AUTOPILOT_MULTITIER_ROLLBACK_MAX_FAILURES` (default
+      3) failed rollbacks, the rollback is no longer re-forced on every trial, staging refuses
+      new candidates, and the critical alarm `autopilot-multitier-rollback-stalled` is raised.
+      The operator resolves it by removing `multitier_rollback_stalled` from state once
+      production is restored. A later successful rollback also clears it.
+    - **Pre-existing issue, not changed.** Numeric and structural rollbacks still restore the
+      checkpoint's full prompt directory.
+  - **`structural_prune`.** Out of scope: it is not replayable and stays non-promotable.
+
+**Regime part of the identity (verification note, 2026-09-16).** The identity uses
+`infra_fingerprint.regime_digest`: the AP-55 digest over the evaluator, kernel, recipe, models
+and host components, WITHOUT the orchestrator component (git HEAD plus dirty digest).
+- **Why the orchestrator component is dropped.** Every mutation auto-commit, merge or doc commit
+  moves HEAD. Keeping it would start a new cluster on each commit, and the 3-reproduction bar
+  could never be met.
+- **What replaces it.** Orchestrator code and prompts that a trial changed are identified by
+  the served-file sha instead.
+- **What still splits a cluster.** A kernel, model, recipe, host or evaluator change does.
+- **Deviation from the reviewer's list.** The evaluator stays in the regime, although the
+  reviewer listed only kernel, model, recipe and host: the scorer is the measurement instrument.
+- **Unreadable components.** An unreadable component enters the digest as "unavailable". The
+  AP-55 comparability verdict judges such rows separately (UNVERIFIED still counts under rule
+  (b), as decided).
+- **Where it is recorded.** Rows carry `eval_details.infra_regime_digest`. A row that only
+  carries a full fingerprint gets its regime digest derived from `component_digests`.
+- **Tests.** The same config across an unrelated orchestrator commit still counts as a
+  reproduction; a kernel or model change does not.
 
 **Forward simulation (the next restart).** The stored tasks/hour trials (1472 and later) are
 replayed as if they arrived after the live fence, starting from the live baselines
 (T1 1.5, T2 1.356, T3 1.275):
-- trial 1472 falls under rule (b) and is refused (1 of 3 reproductions);
+- trial 1472 (`structural_experiment`) falls under rule (b) and is refused (1 of 3
+  reproductions);
 - the T1 frontier then fills (1, 2, …, 5 points) and every later decision uses the frontier rule;
-- nothing promotes, because no config in that window reproduced 3 times.
+- the `numeric_trial` candidates are refused for too few reproductions or for not being
+  representatives, and the two `seed_batch` runs are refused for having no served-config
+  identity;
+- nothing promotes.
+
+**Re-review B2 — a journal/decision mismatch rolls the promotion back.** Before the decision, the
+loop deep-copies `gate.baseline`. After `journal.record` it compares the recorded row with the
+row the guard evaluated (`_reconcile_promotion_with_journal`). On any mismatch it restores the
+baseline and turns the update into a refusal, so neither the promotion event nor the promoted
+`baseline_state` is written.
+
+**Re-review B3 — a crash after `journal.record`.** The row now carries
+`promotion_status: pending_commit` or `refused`. The commit record is the `baseline_promotion`
+ledger event with that `source_trial_id`, appended together with the final state save. A crash in
+between leaves a pending row without an event and an unchanged baseline, which is consistent.
+Readers must treat an unconfirmed pending row as NOT promoted, and recovery needs no action. This
+was the simpler of the two options.
 
 **Finding (pre-existing on both paths; fixed by decision (c) above).** In production ordering the source trial
 is never in the journal when `update_baseline` runs (`journal.record` comes after it). So a clean

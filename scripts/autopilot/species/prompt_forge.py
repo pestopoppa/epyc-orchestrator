@@ -1514,7 +1514,8 @@ class PromptForge:
 
         if self.auto_commit and mutation.git_diff:
             self._git_commit(
-                f"autopilot: {mutation.mutation_type} on {mutation.file}\n\n{mutation.description}"
+                f"autopilot: {mutation.mutation_type} on {mutation.file}\n\n{mutation.description}",
+                paths=[self._resolve_prompt_path(mutation.file)],
             )
 
         return {
@@ -1536,7 +1537,8 @@ class PromptForge:
         if self.auto_commit:
             self._git_commit(
                 f"autopilot: revert prompt mutation on {mutation.file}\n\n"
-                f"Reverted: {mutation.description}"
+                f"Reverted: {mutation.description}",
+                paths=[self._resolve_prompt_path(mutation.file)],
             )
         log.info("Reverted prompt mutation on %s (committed)", mutation.file)
 
@@ -1736,23 +1738,47 @@ class PromptForge:
         except Exception:
             return ""
 
-    def _git_commit(self, message: str) -> None:
+    def _git_commit(self, message: str, *, paths: list[Path] | None = None) -> None:
+        """Commit ONLY the prompt file(s) this mutation touched (never a directory sweep)."""
+        if not paths:
+            log.warning("Git commit skipped: no prompt path given (refusing a directory sweep)")
+            return
+        self._git_commit_paths(paths, message)
+
+    @staticmethod
+    def _git_commit_paths(paths: list[Path], message: str) -> bool:
+        """Stage and commit exactly ``paths``; unrelated staged or dirty files stay out.
+
+        ``git commit --only -- <paths>`` records just those paths and leaves every other
+        index entry as it was, so an operator's staged work never rides along with an
+        autopilot commit (gate-frontier review, 2026-09-16).
+        """
+        specs = [str(Path(p)) for p in paths]
         try:
             subprocess.run(
-                ["git", "add", str(self.prompts_dir)],
+                ["git", "add", "-A", "--", *specs],
                 timeout=10,
                 check=True,
                 cwd=str(PROJECT_ROOT),
+                capture_output=True,
             )
-            subprocess.run(
-                ["git", "commit", "-m", message],
+            proc = subprocess.run(
+                ["git", "commit", "--only", "-m", message, "--", *specs],
                 timeout=10,
-                check=True,
                 cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
             )
-            log.info("Committed prompt mutation")
-        except Exception as e:
+            if proc.returncode != 0:
+                log.warning(
+                    "Git commit of %s failed: %s", specs, (proc.stderr or proc.stdout).strip()[:300]
+                )
+                return False
+            log.info("Committed %s", ", ".join(Path(p).name for p in specs))
+            return True
+        except Exception as e:  # noqa: BLE001
             log.warning("Git commit failed: %s", e)
+            return False
 
     # ── Worktree-isolated mutations (AP-11) ────────────────────────
 
@@ -1957,26 +1983,12 @@ class PromptForge:
 
         abs_path = PROJECT_ROOT / mutation.file
 
-        # Git commit current state before mutation (safety net)
-        try:
-            subprocess.run(
-                ["git", "add", str(abs_path)],
-                timeout=10,
-                cwd=str(PROJECT_ROOT),
-            )
-            subprocess.run(
-                [
-                    "git",
-                    "commit",
-                    "-m",
-                    f"autopilot: pre-code-mutation checkpoint ({mutation.file})",
-                ],
-                timeout=10,
-                cwd=str(PROJECT_ROOT),
-                capture_output=True,
-            )
-        except Exception:
-            pass  # Commit may fail if no changes — that's OK
+        # Git commit current state before mutation (safety net). Only this file: a
+        # checkpoint must never sweep unrelated staged work into an autopilot commit.
+        if abs_path.exists():
+            self._git_commit_paths(
+                [abs_path], f"autopilot: pre-code-mutation checkpoint ({mutation.file})"
+            )  # may fail when there is nothing to commit — that's OK
 
         # Write the mutated code
         abs_path.write_text(mutation.mutated_content)
@@ -2031,27 +2043,11 @@ class PromptForge:
         # Commit the revert so corrupted state is never the HEAD
         if self.auto_commit:
             if mutation.mutation_type == "new_file" and not mutation.original_content:
-                try:
-                    subprocess.run(
-                        ["git", "add", "-A", str(abs_path)],
-                        timeout=10,
-                        check=True,
-                        cwd=str(PROJECT_ROOT),
-                    )
-                    subprocess.run(
-                        [
-                            "git",
-                            "commit",
-                            "-m",
-                            f"autopilot: revert code mutation on {mutation.file}\n\n"
-                            f"Reverted: {mutation.description}",
-                        ],
-                        timeout=10,
-                        check=True,
-                        cwd=str(PROJECT_ROOT),
-                    )
-                except Exception as e:
-                    log.warning("Git commit failed: %s", e)
+                self._git_commit_paths(
+                    [abs_path],
+                    f"autopilot: revert code mutation on {mutation.file}\n\n"
+                    f"Reverted: {mutation.description}",
+                )
             else:
                 self._git_commit_file(
                     abs_path,
@@ -2435,20 +2431,5 @@ class PromptForge:
         return original
 
     def _git_commit_file(self, path: Path, message: str) -> None:
-        """Git add + commit a specific file."""
-        try:
-            subprocess.run(
-                ["git", "add", str(path)],
-                timeout=10,
-                check=True,
-                cwd=str(PROJECT_ROOT),
-            )
-            subprocess.run(
-                ["git", "commit", "-m", message],
-                timeout=10,
-                check=True,
-                cwd=str(PROJECT_ROOT),
-            )
-            log.info("Committed code mutation: %s", path.name)
-        except Exception as e:
-            log.warning("Git commit failed: %s", e)
+        """Git add + commit exactly one file (no sweep of other staged changes)."""
+        self._git_commit_paths([path], message)

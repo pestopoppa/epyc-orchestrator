@@ -137,14 +137,21 @@ class AlarmChannelClient:
             )
         return proc.returncode == 0
 
-    def raise_alarm(self, message: str, evidence: dict[str, Any]) -> bool:
+    def raise_alarm(
+        self,
+        message: str,
+        evidence: dict[str, Any],
+        *,
+        key: str = ALARM_KEY,
+        severity: str = ALARM_SEVERITY,
+    ) -> bool:
         return self._run(
             [
                 "raise",
                 "--severity",
-                ALARM_SEVERITY,
+                severity,
                 "--key",
-                ALARM_KEY,
+                key,
                 "--message",
                 message,
                 "--evidence",
@@ -152,8 +159,8 @@ class AlarmChannelClient:
             ]
         )
 
-    def clear_alarm(self, message: str) -> bool:
-        return self._run(["clear", "--key", ALARM_KEY, "--message", message])
+    def clear_alarm(self, message: str, *, key: str = ALARM_KEY) -> bool:
+        return self._run(["clear", "--key", key, "--message", message])
 
 
 class EvalLeakageMonitor:

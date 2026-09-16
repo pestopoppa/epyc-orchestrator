@@ -486,6 +486,33 @@ def collect_infra_fingerprint(
         }
 
 
+# Components that define the serving REGIME for reproduction identity (gate-frontier,
+# 2026-09-16). The orchestrator component (git HEAD + dirty digest) is excluded: every
+# autopilot auto-commit, merge or doc commit moves HEAD, so including it would start a
+# fresh reproduction cluster on each commit and the 3-reproduction bar could never be
+# met. Orchestrator CODE and PROMPTS that a trial changed are identified instead by the
+# served-file sha on the row (``served_content``). The evaluator component stays: it is
+# the scoring instrument, and a scorer change is a different measurement.
+REGIME_COMPONENTS: tuple[str, ...] = ("evaluator", "kernel", "recipe", "models", "host")
+
+
+def regime_digest(fingerprint: Mapping[str, Any] | None) -> str:
+    """Digest over the non-orchestrator components; "" when there is no fingerprint.
+
+    An unreadable component is recorded by name ("unavailable"), so two rows that could
+    not read the same component agree on it; the AP-55 comparability verdict (which
+    reports such rows as UNVERIFIED) is the separate place where that is judged.
+    """
+    if not isinstance(fingerprint, Mapping):
+        return ""
+    digests = fingerprint.get("component_digests")
+    if not isinstance(digests, Mapping) or not digests:
+        return ""
+    return _digest(
+        {name: (digests.get(name) or "unavailable") for name in REGIME_COMPONENTS}
+    )
+
+
 def fingerprint_digest(fingerprint: Mapping[str, Any] | None) -> str:
     if not isinstance(fingerprint, Mapping):
         return ""
