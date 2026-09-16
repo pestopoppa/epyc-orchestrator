@@ -425,6 +425,15 @@ class JournalEntry:
     # SO. Never back-filled on load: a pin invented at read time would claim a
     # comparison identity the original trial never captured.
     baseline_pin: dict[str, Any] = field(default_factory=dict)
+    # 2026-09-16 (AP-55): the infra regime this trial ran in (orchestrator commit,
+    # evaluator digest, kernel binary/libraries, recipe, model files, host config) —
+    # see src/autopilot_core/infra_fingerprint.py. `comparability` compares it with
+    # the fingerprint of the baseline reference the delta was measured against and
+    # says COMPARABLE / NON_COMPARABLE / UNVERIFIED. Both default empty; rows written
+    # before this date load unchanged and are never back-filled (a fingerprint
+    # invented at read time would claim a regime the trial never recorded).
+    infra_fingerprint: dict[str, Any] = field(default_factory=dict)
+    comparability: dict[str, Any] = field(default_factory=dict)
 
 
 def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, Any]:
@@ -505,6 +514,14 @@ def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, 
                         "git_tag": entry.git_tag or ""},
         "captured_by": "experiment_journal.measurement_tuple/v1",
     }
+    # AP-55: bind the claim to its infra regime. Only present when the trial carried
+    # a fingerprint; a legacy/unfingerprinted row says nothing rather than guessing.
+    fp = entry.infra_fingerprint if isinstance(entry.infra_fingerprint, dict) else {}
+    if fp.get("digest"):
+        out["infra_fingerprint"] = str(fp["digest"])
+    comp = entry.comparability if isinstance(entry.comparability, dict) else {}
+    if comp.get("status"):
+        out["comparability"] = str(comp["status"])
     missing = [name for name, present in (("protocol_id", protocol_id), ("reps", reps),
                                           ("date", out["date"]))
                if not present]
@@ -553,6 +570,8 @@ class BaselinePromotionEvent:
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     type: str = BASELINE_PROMOTION_EVENT_TYPE
+    # AP-55: infra regime of the promoted reference (the source trial's fingerprint).
+    infra_fingerprint: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -813,6 +832,9 @@ class ExperimentJournal:
                     # unchanged and `baseline_pin_for()` is the one place that decides to
                     # fall back — and marks it.
                     baseline_pin=data.get("baseline_pin", {}) or {},
+                    # AP-55: absent on rows written before 2026-09-16; never back-filled.
+                    infra_fingerprint=data.get("infra_fingerprint", {}) or {},
+                    comparability=data.get("comparability", {}) or {},
                 )
                 self._entries.append(entry)
 
@@ -976,6 +998,7 @@ class ExperimentJournal:
         baseline_state: dict[str, Any],
         policy_version: str = "baseline-promotion-v1",
         actor: str = "autopilot.py",
+        infra_fingerprint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Append a baseline-promotion event row without changing baseline state."""
         return self.append_ledger_event(asdict(
@@ -990,6 +1013,7 @@ class ExperimentJournal:
                 baseline_state=baseline_state,
                 policy_version=policy_version,
                 actor=actor,
+                infra_fingerprint=copy.deepcopy(infra_fingerprint or {}),
             )
         ))
 

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
 from controller_io import suppressed_numeric_surfaces, validate_single_variable
+import rejected_mutation_ledger
 from safety_gate import EvalResult, SafetyGate
 from species.prompt_forge import diversity_coverage_penalty
 from src.autopilot_core.tier_specs import UnmeasuredObjectiveError, objectives_from
@@ -783,6 +784,68 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
     return eval_result, "numeric_swarm"
 
 
+def _verdict_detail(verdict: Any) -> str:
+    violations = getattr(verdict, "violations", None) or []
+    return "; ".join(str(v) for v in violations)[:500]
+
+
+def _ledger_journal_dir(ctx: _ActionContext) -> Path | None:
+    journal_dir = getattr(ctx.journal, "journal_dir", None)
+    return Path(journal_dir) if isinstance(journal_dir, (str, Path)) else None
+
+
+def _record_rejected_mutation(
+    ctx: _ActionContext,
+    *,
+    mutation: Any,
+    target: str,
+    mutation_type: str,
+    artifact_kind: str,
+    rejecting_gate: str,
+    eval_result: Any,
+    description: str = "",
+    gate_detail: str = "",
+) -> None:
+    """AP-53: harness-written rejection record. Fails open; never changes the trial."""
+    try:
+        journal_dir = _ledger_journal_dir(ctx)
+        if journal_dir is None:
+            return
+        baseline_per_suite: dict[str, Any] | None = None
+        tier = getattr(eval_result, "tier", None) if eval_result is not None else None
+        baseline = getattr(ctx.gate, "baseline", None)
+        if eval_result is not None and baseline is not None and hasattr(baseline, "pin_tier"):
+            try:
+                pin = baseline.pin_tier(int(tier or 0), register=False)
+                baseline_per_suite = dict(getattr(pin, "per_suite_quality", None) or {})
+            except Exception:  # noqa: BLE001 - deltas are optional context
+                baseline_per_suite = None
+        next_trial = getattr(ctx.journal, "next_trial_id", None)
+        trial_id = ctx.state.get("trial_counter")
+        if not isinstance(trial_id, int) and callable(next_trial):
+            trial_id = next_trial()
+        record = rejected_mutation_ledger.build_record(
+            target=target,
+            mutation_type=mutation_type,
+            artifact_kind=artifact_kind,
+            rejecting_gate=rejecting_gate,
+            original_content=str(getattr(mutation, "original_content", "") or ""),
+            mutated_content=str(getattr(mutation, "mutated_content", "") or ""),
+            description=description,
+            gate_detail=gate_detail,
+            per_suite_quality=(
+                getattr(eval_result, "per_suite_quality", None) if eval_result is not None else None
+            ),
+            baseline_per_suite_quality=baseline_per_suite,
+            quality=getattr(eval_result, "quality", None) if eval_result is not None else None,
+            tier=tier if isinstance(tier, int) else None,
+            trial_id=trial_id if isinstance(trial_id, int) else None,
+        )
+        rejected_mutation_ledger.append_record(journal_dir, record)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("AP-53 rejected-mutation record failed: %s", exc)
+
+
 def _build_mutation_context(
     action: dict[str, Any],
     ctx: _ActionContext,
@@ -873,6 +936,14 @@ def _build_mutation_context(
         last_traces = ctx.state.get("last_traces", "")
         if last_traces:
             failure_context = f"## Recent Execution Traces\n{last_traces}\n\n" + failure_context
+
+    # AP-53: harness-written memory of rejected changes to THIS target. Placed first
+    # so it survives any downstream truncation of the failure context.
+    journal_dir = _ledger_journal_dir(ctx)
+    if journal_dir is not None and target:
+        rejected_block = rejected_mutation_ledger.render_for_prompt(journal_dir, target)
+        if rejected_block:
+            failure_context = f"{rejected_block}\n\n{failure_context}"
 
     # Get per-suite quality from most recent eval
     last_entries = ctx.journal.recent(1)
@@ -1249,6 +1320,12 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
             "Prompt mutation failed transfer safety, skipping: %s",
             getattr(mutation, "safety_reason", "unsafe"),
         )
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+            artifact_kind="prompt", rejecting_gate="transfer_safety",
+            eval_result=None, description=description,
+            gate_detail=str(getattr(mutation, "safety_reason", "unsafe")),
+        )
         _discard_mutation_diversity_coverage(ctx)
         return None, "prompt_forge"
     skill_without = _skill_efficacy_without_result(ctx)
@@ -1268,6 +1345,11 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
             decision="reverted_safety_gate",
         )
         log.warning("Prompt mutation failed safety gate, reverting")
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+            artifact_kind="prompt", rejecting_gate="safety_gate",
+            eval_result=eval_result, description=description, gate_detail=_verdict_detail(verdict),
+        )
         ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
 
@@ -1287,6 +1369,11 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
             target=target,
             mutation_type=mutation_type,
             decision=f"reverted_simplicity:{deficiency or 'unknown'}",
+        )
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+            artifact_kind="prompt", rejecting_gate="simplicity",
+            eval_result=eval_result, description=description, gate_detail=str(deficiency or ""),
         )
         ctx.forge.revert_mutation(mutation)
         if deficiency == "shrinkage":
@@ -1308,6 +1395,11 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
             mutation_type=mutation_type,
             decision="reverted_skill_efficacy",
         )
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+            artifact_kind="prompt", rejecting_gate="skill_efficacy",
+            eval_result=eval_result, description=description, gate_detail="",
+        )
         ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
 
@@ -1325,6 +1417,11 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
             target=target,
             mutation_type=mutation_type,
             decision="reverted_bsv2_accept_gate",
+        )
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+            artifact_kind="prompt", rejecting_gate="bsv2_accept_gate",
+            eval_result=eval_result, description=description, gate_detail="",
         )
         ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
@@ -1377,6 +1474,11 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
     verdict = _action_gate_check(action, ctx, eval_result)
     if not verdict:
         log.warning("GEPA mutation failed safety gate, reverting")
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type="gepa",
+            artifact_kind="prompt", rejecting_gate="safety_gate",
+            eval_result=eval_result, description=description, gate_detail=_verdict_detail(verdict),
+        )
         ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
 
@@ -1389,6 +1491,11 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
         log_label="GEPA",
     )
     if not passed:
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type="gepa",
+            artifact_kind="prompt", rejecting_gate="simplicity",
+            eval_result=eval_result, description=description, gate_detail=str(deficiency or ""),
+        )
         ctx.forge.revert_mutation(mutation)
         if deficiency == "shrinkage":
             ctx.state["_dispatch_deficiency"] = "shrinkage"
@@ -1401,6 +1508,11 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
         target=target,
         mutation_type="gepa",
     ):
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type="gepa",
+            artifact_kind="prompt", rejecting_gate="skill_efficacy",
+            eval_result=eval_result, description=description, gate_detail="",
+        )
         ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
 
@@ -1411,6 +1523,11 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
         target=target,
         mutation_type="gepa",
     ):
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type="gepa",
+            artifact_kind="prompt", rejecting_gate="bsv2_accept_gate",
+            eval_result=eval_result, description=description, gate_detail="",
+        )
         ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
 
@@ -1440,12 +1557,23 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
 
     if not mutation.syntax_valid:
         log.warning("Code mutation failed syntax validation, skipping")
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+            artifact_kind="code", rejecting_gate="syntax_validation",
+            eval_result=None, description=description,
+        )
         _discard_mutation_diversity_coverage(ctx)
         return None, "prompt_forge"
     if not getattr(mutation, "safety_valid", True):
         log.warning(
             "Code mutation failed transfer safety, skipping: %s",
             getattr(mutation, "safety_reason", "unsafe"),
+        )
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+            artifact_kind="code", rejecting_gate="transfer_safety",
+            eval_result=None, description=description,
+            gate_detail=str(getattr(mutation, "safety_reason", "unsafe")),
         )
         _discard_mutation_diversity_coverage(ctx)
         return None, "prompt_forge"
@@ -1477,6 +1605,11 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
             decision="reverted_safety_gate",
         )
         log.warning("Code mutation failed safety gate, reverting")
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+            artifact_kind="code", rejecting_gate="safety_gate",
+            eval_result=eval_result, description=description, gate_detail=_verdict_detail(verdict),
+        )
         ctx.forge.revert_code_mutation(mutation)
         return eval_result, "prompt_forge"
 
@@ -1496,6 +1629,11 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
             target=target,
             mutation_type=mutation_type,
             decision=f"reverted_simplicity:{deficiency or 'unknown'}",
+        )
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+            artifact_kind="code", rejecting_gate="simplicity",
+            eval_result=eval_result, description=description, gate_detail=str(deficiency or ""),
         )
         ctx.forge.revert_code_mutation(mutation)
         if deficiency == "shrinkage":
@@ -1517,6 +1655,11 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
             mutation_type=mutation_type,
             decision="reverted_skill_efficacy",
         )
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+            artifact_kind="code", rejecting_gate="skill_efficacy",
+            eval_result=eval_result, description=description, gate_detail="",
+        )
         ctx.forge.revert_code_mutation(mutation)
         return eval_result, "prompt_forge"
 
@@ -1534,6 +1677,11 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
             target=target,
             mutation_type=mutation_type,
             decision="reverted_bsv2_accept_gate",
+        )
+        _record_rejected_mutation(
+            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+            artifact_kind="code", rejecting_gate="bsv2_accept_gate",
+            eval_result=eval_result, description=description, gate_detail="",
         )
         ctx.forge.revert_code_mutation(mutation)
         return eval_result, "prompt_forge"
