@@ -7027,6 +7027,32 @@ def _archive_entry_count(payload: object) -> int:
     return len(entries) if isinstance(entries, list) else 0
 
 
+def _snapshot_scope_matches(
+    payload: Mapping[str, Any],
+    *,
+    exclude_before_ts: float | None,
+    deinflate_before_ts: float | None,
+    deinflate_factor: float,
+) -> bool:
+    """A snapshot is authority only for the era scope it was folded under (W3).
+
+    Snapshots record ``exclusions.exclude_before_ts``; a snapshot folded without
+    the live epoch exclusion (e.g. an automatic segment snapshot) would otherwise
+    hand pre-epoch entries to the live frontier. Deinflation is not recorded at
+    archive level, so any active deinflation forces the full replay.
+    """
+    if deinflate_before_ts is not None and deinflate_factor != 1.0:
+        return False
+    exclusions = payload.get("exclusions")
+    recorded = exclusions.get("exclude_before_ts") if isinstance(exclusions, Mapping) else None
+    if recorded is None or exclude_before_ts is None:
+        return recorded is None and exclude_before_ts is None
+    try:
+        return float(recorded) == float(exclude_before_ts)
+    except (TypeError, ValueError):
+        return False
+
+
 def _journal_archive_payload_for_authority(
     journal: ExperimentJournal,
     *,
@@ -7045,6 +7071,12 @@ def _journal_archive_payload_for_authority(
             snapshot_payload is not None
             and str(snapshot_payload.get("objective_policy") or LEGACY_OBJECTIVE_POLICY)
             == objective_policy
+            and _snapshot_scope_matches(
+                snapshot_payload,
+                exclude_before_ts=exclude_before_ts,
+                deinflate_before_ts=deinflate_before_ts,
+                deinflate_factor=deinflate_factor,
+            )
         ):
             return snapshot_payload
     return reconstruct_archive_from_journal_rows(

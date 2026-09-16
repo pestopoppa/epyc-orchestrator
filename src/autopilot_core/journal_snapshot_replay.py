@@ -750,6 +750,57 @@ def _rows_for_prefix_replay(
     return prefix_rows
 
 
+def verify_snapshot_chain(ledger_events: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """W3: verify the append-order ``journal_snapshot`` chain end to end.
+
+    Every snapshot must hash-verify, name the previous snapshot's hash as its
+    parent (the first one has no parent), and never move ``through_trial_id``
+    backwards. Returns ``status`` ``no_snapshots`` / ``ok`` / ``broken`` with one
+    entry per defect in ``breaks``. Read-only.
+    """
+    events = [
+        event for _index, event in _snapshot_event_indices(
+            [e for e in ledger_events if isinstance(e, dict)]
+        )
+    ]
+    breaks: list[dict[str, Any]] = []
+    previous_hash = ""
+    previous_through: int | None = None
+    for position, event in enumerate(events):
+        recorded = str(event.get("snapshot_hash") or "")
+        expected = _expected_snapshot_hash(event)
+        if not recorded or recorded != expected:
+            breaks.append({"position": position, "defect": "hash_mismatch"})
+        parent = str(event.get("parent_snapshot_hash") or "")
+        if parent != previous_hash:
+            breaks.append({
+                "position": position,
+                "defect": "parent_mismatch",
+                "expected_parent": previous_hash,
+                "recorded_parent": parent,
+            })
+        through = _trial_id_from_row({"trial_id": event.get("through_trial_id")})
+        if through is None:
+            breaks.append({"position": position, "defect": "missing_through_trial_id"})
+        elif previous_through is not None and through < previous_through:
+            breaks.append({"position": position, "defect": "through_trial_id_regressed"})
+        else:
+            previous_through = through
+        previous_hash = recorded
+    return {
+        "status": "no_snapshots" if not events else ("broken" if breaks else "ok"),
+        "length": len(events),
+        "segments": [
+            (event.get("snapshot") or {}).get("segment")
+            for event in events
+            if isinstance((event.get("snapshot") or {}).get("segment"), dict)
+        ],
+        "breaks": breaks,
+        "head_hash": previous_hash,
+        "head_through_trial_id": previous_through,
+    }
+
+
 def build_snapshot_replay_diagnostic(
     rows: Iterable[dict[str, Any]],
     ledger_events: Iterable[dict[str, Any]],
@@ -828,7 +879,16 @@ def build_snapshot_replay_diagnostic(
     if snapshot_archive is None:
         warnings.append("latest snapshot payload has no archive view to verify")
     else:
-        prefix_rows = _rows_for_prefix_replay(rows_list, through_trial_id)
+        # Current-policy replay of the PREFIX: prefix trials, the ledger events that
+        # preceded the snapshot, and post-snapshot supersessions that retarget the
+        # prefix (those are real prefix drift). A post-snapshot event that only
+        # touches tail trials belongs to the tail fold; counting it here reported
+        # false prefix drift for every tail supersession (W3).
+        prefix_rows = [
+            row
+            for row in _rows_for_prefix_replay(rows_list, through_trial_id)
+            if _trial_id_from_row(row) is not None
+        ] + all_ledger_events[:latest_snapshot_index] + post_snapshot_prefix_events
         prefix_archive = reconstruct_archive_from_journal_rows(
             prefix_rows,
             None,
