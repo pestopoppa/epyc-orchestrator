@@ -215,7 +215,7 @@ Analysis: `FINAL("The function has O(n log n) complexity because the outer loop 
 List files: `result = list_dir('/path'); FINAL(result)`
 Read file: `text = peek(1000, file_path='/path'); FINAL(text)`
 Current info: `results = json.loads(CALL("web_research", query="2024 election results")); FINAL(results["sources"][0]["synthesis"])`
-Uncertain fact: `results = json.loads(CALL("web_research", query="Jurgen Aschoff university")); FINAL(results["sources"][0].get("synthesis", "Unknown"))`
+Uncertain fact: `results = json.loads(CALL("web_research", query="Halvard Oskeberg university")); FINAL(results["sources"][0].get("synthesis", "Unknown"))`
 Research: `results = CALL("search_arxiv", query="speculative decoding"); FINAL(json.loads(results))`
 Run tests: `results = CALL("run_tests", test_path="tests/"); FINAL(json.loads(results))`
 Summarize PDF: `doc = json.loads(ocr_document('/path.pdf')); FINAL(doc['full_text'][:2000])`

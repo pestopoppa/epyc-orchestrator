@@ -64,10 +64,10 @@ FINAL(results["sources"][0].get("synthesis", "Unknown"))
 ```
 
 ## Example 4b: Uncertain factual question (deep search for full content)
-Question: "At which university did Jurgen Aschoff study medicine?"
+Question: "At which university did Halvard Oskeberg study chemistry?"
 ```python
 import json
-results = json.loads(CALL("web_research", query="Jurgen Aschoff study medicine university"))
+results = json.loads(CALL("web_research", query="Halvard Oskeberg study chemistry university"))
 for s in results["sources"]:
     if s.get("synthesis"):
         print(f"[{s['title']}]: {s['synthesis']}")
