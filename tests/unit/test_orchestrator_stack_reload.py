@@ -122,7 +122,14 @@ def test_start_orchestrator_refuses_unmocked_pytest_spawn(monkeypatch) -> None:
         stack.start_orchestrator()
 
 
-def test_start_parser_compiles_registry_by_default(monkeypatch) -> None:
+@pytest.fixture
+def _no_running_cpu_bench(monkeypatch):
+    """main() refuses lifecycle commands (exit 2) while ANY CPU bench runs on the
+    host; the parser tests below are about argument defaults, not that guard."""
+    monkeypatch.setattr(stack, "guard_against_running_bench", lambda _command, _force: True)
+
+
+def test_start_parser_compiles_registry_by_default(monkeypatch, _no_running_cpu_bench) -> None:
     captured: dict[str, object] = {}
 
     def fake_cmd_start(args: Namespace) -> int:
@@ -140,7 +147,7 @@ def test_start_parser_compiles_registry_by_default(monkeypatch) -> None:
     assert captured["numa_mode"] is None
 
 
-def test_start_parser_accepts_explicit_numa_mode_both(monkeypatch) -> None:
+def test_start_parser_accepts_explicit_numa_mode_both(monkeypatch, _no_running_cpu_bench) -> None:
     captured: dict[str, object] = {}
 
     def fake_cmd_start(args: Namespace) -> int:
@@ -154,7 +161,7 @@ def test_start_parser_accepts_explicit_numa_mode_both(monkeypatch) -> None:
     assert captured["numa_mode"] == "both"
 
 
-def test_start_parser_accepts_no_compile_registry(monkeypatch) -> None:
+def test_start_parser_accepts_no_compile_registry(monkeypatch, _no_running_cpu_bench) -> None:
     captured: dict[str, object] = {}
 
     def fake_cmd_start(args: Namespace) -> int:

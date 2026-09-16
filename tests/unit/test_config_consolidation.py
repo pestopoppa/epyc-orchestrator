@@ -209,6 +209,19 @@ class TestGetConfig:
 class TestServerURLsDefaults:
     """Verify ServerURLsConfig is the single source of truth for server URLs."""
 
+    @pytest.fixture(autouse=True)
+    def _ignore_live_runtime_facts(self, monkeypatch: pytest.MonkeyPatch):
+        # The defaults under test are the declared topology, not whatever lineup
+        # the live host's runtime facts currently select (a sub-full fleet
+        # resolves ingest_long_context to :8185 alone). Same seam as
+        # tests/unit/test_config.py::TestServerURLsConfig.
+        from src.config.models import reset_stack_prior_server_url_cache
+
+        monkeypatch.setenv("ORCHESTRATOR_IGNORE_RUNTIME_STACK_FACTS", "1")
+        reset_stack_prior_server_url_cache()
+        yield
+        reset_stack_prior_server_url_cache()
+
     def test_as_dict_contains_all_role_urls(self):
         """as_dict() must contain all expected orchestrator role URLs."""
         cfg = ServerURLsConfig()
