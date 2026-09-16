@@ -21,6 +21,13 @@ import yaml
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     MIN_FRONTIER_EVAL_TIER,
+    OBJECTIVE_AXIS_NEG_COST,
+    OBJECTIVE_AXIS_QUALITY,
+    OBJECTIVE_AXIS_RATE,
+    OBJECTIVE_AXIS_RELIABILITY,
+    has_objective_axis,
+    objective_value,
+    objectives_match_axes,
 )
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from src.autopilot_core.authority_consent import (
@@ -401,9 +408,40 @@ def _pareto_frontier_context(tier: int | None = None) -> tuple[float, frozenset[
     frontier = archive.frontier(tier=tier)
     if not frontier:
         return None
-    best_q = max(e.objectives[0] for e in frontier)
+    t = DEFAULT_FRONTIER_TIER if tier is None else int(tier)
+    best_q = max(objective_value(e.objectives, OBJECTIVE_AXIS_QUALITY, t) for e in frontier)
     ids = frozenset(e.trial_id for e in frontier)
     return best_q, ids
+
+
+def promotion_fields_from_objectives(
+    objectives: Any, tier: int
+) -> dict[str, float] | None:
+    """W3e: EvalResult fields a reproduced frontier representative supplies, read by axis NAME.
+
+    None when the tuple does not match the axes the tier declares. The pre-W3e code read
+    ``[0]``/``[1]``/``[2]``/``[3]`` and only refused ``len < 4``, so a tuple built under a
+    different axis set would have silently fed reliability into ``cost``. A tier that retires
+    an axis simply stops supplying that field.
+
+    UNIT HAZARD: ``speed`` receives the RATE axis, whose unit belongs to the archive's objective
+    policy. ``_pareto_archive_for_safety_guard`` replays under the LEGACY policy (tokens/second),
+    so today this matches the t/s throughput floor. If that guard is ever moved to a rate policy
+    (questions/hour), ``speed`` -> ``frontdoor_speed`` would receive q/h and every later trial
+    would trip the 0.8x floor. Do not switch the guard's policy without handling this field.
+    """
+    t = int(tier)
+    if not objectives_match_axes(objectives, t):
+        return None
+    fields = {
+        "quality": objective_value(objectives, OBJECTIVE_AXIS_QUALITY, t),
+        "speed": objective_value(objectives, OBJECTIVE_AXIS_RATE, t),
+    }
+    if has_objective_axis(OBJECTIVE_AXIS_NEG_COST, t):
+        fields["cost"] = -objective_value(objectives, OBJECTIVE_AXIS_NEG_COST, t)
+    if has_objective_axis(OBJECTIVE_AXIS_RELIABILITY, t):
+        fields["reliability"] = objective_value(objectives, OBJECTIVE_AXIS_RELIABILITY, t)
+    return fields
 
 
 def _pareto_frontier_best_quality(tier: int | None = None) -> float | None:
@@ -2752,14 +2790,15 @@ class SafetyGate:
                     False, reason, tier, previous_quality, result.quality, proof
                 )
             objectives = tuple(repro_entry.get("objectives") or ())
-            if len(objectives) < 4:
+            repro_fields = promotion_fields_from_objectives(objectives, tier)
+            if repro_fields is None:
                 reason = "frontier representative missing objective tuple"
                 log.warning("Baseline update REFUSED — %s", reason)
                 return BaselineUpdateResult(
                     False, reason, tier, previous_quality, result.quality, proof
                 )
             n_reproductions = int(repro_entry.get("n_reproductions", 1) or 1)
-            median_quality = float(objectives[0])
+            median_quality = repro_fields["quality"]
             required_quality = float(previous_quality or 0.0) + quantum
             if n_reproductions < BASELINE_PROMOTION_REPRO_MIN:
                 reason = (
@@ -2779,13 +2818,7 @@ class SafetyGate:
                 return BaselineUpdateResult(
                     False, reason, tier, previous_quality, result.quality, proof
                 )
-            promotion_result = replace(
-                result,
-                quality=median_quality,
-                speed=float(objectives[1]),
-                cost=-float(objectives[2]),
-                reliability=float(objectives[3]),
-            )
+            promotion_result = replace(result, **repro_fields)
         if previous_quality is None:
             # SG-3 (B3a): explicit seed of a tier that had no strict same-tier baseline.
             # No cross-tier legacy fallback was consulted to gate this write.

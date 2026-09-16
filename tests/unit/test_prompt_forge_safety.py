@@ -17,6 +17,14 @@ import species.prompt_forge as prompt_forge_mod  # noqa: E402
 from species.prompt_forge import PromptForge  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_eval_id_vocabulary(tmp_path_factory, monkeypatch):
+    """RTG-55 MHS-3 fails closed without eval data; pin a tiny fixture pool."""
+    pool = tmp_path_factory.mktemp("eval_ids") / "question_pool.jsonl"
+    pool.write_text('{"id": "fixture_suite_000001", "suite": "fixture", "prompt": "p"}\n')
+    monkeypatch.setenv(prompt_forge_mod.EVAL_ID_VOCAB_SOURCES_ENV, str(pool))
+
+
 def _forge_with_prompt(
     tmp_path: Path,
     content: str = "Base prompt\n",

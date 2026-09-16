@@ -6,8 +6,10 @@ and propose targeted prompt mutations on hot-swappable .md files.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -301,6 +303,9 @@ class PromptMutation:
     safety_valid: bool = True
     safety_reason: str = "ok"
     safety_warnings: list[str] = field(default_factory=list)
+    # RTG-55 MHS-4: prompt-side effect (``MutationEffect``) and its risk weight.
+    effect: MutationEffect | None = None
+    effect_risk: float | None = None
 
 
 class MutationEffect(str, Enum):
@@ -731,6 +736,98 @@ def classify_mutation_effect(
     return MutationEffect.CONSTRAIN
 
 
+# ---------------------------------------------------------------------------
+# RTG-55 MHS-4 — ANTI-OVERRIDE risk prior.
+#
+# In Harness-R1's released held-out corpus every catastrophic regression came
+# from an override (REPLACE-class) patch, and the trained editor converged to
+# constrain-only (intake-1323#04). The prior is encoded as a closed per-effect
+# risk weight: lower is safer. Ranking sorts candidates by it; the gate refuses
+# any mutation whose weight reaches ``mutation_risk_gate()``. The default gate
+# (1.0) refuses only UNKNOWN/UNSAFE, i.e. fail-closed on unclassified effects;
+# an operator can lower it via ``AUTOPILOT_MUTATION_RISK_GATE`` (0.9 refuses
+# REPLACE, i.e. constrain/expand-only). The weights are an ordinal PRIOR, not a
+# calibrated probability.
+#
+# MHS-5 evidence (``orchestration/datasets/harness_r1_heldout_effect_corpus.json``,
+# 23 valid patches, 1,270 held-out tasks): the ORDERING holds. All 4 REPLACE patches
+# regressed (mean -8.4 pp, rescue:regression 0.21), while the 19 CONSTRAIN patches
+# averaged +3.9 pp (rescue:regression 1.65). But CONSTRAIN is NOT regression-free:
+# 4 of 19 regressed, and the single worst patch (-16.9 pp) is a hint-only CONSTRAIN
+# patch. "Every catastrophic regression came from an override" does not hold on
+# this corpus, so this gate ranks risk; it does not certify safety.
+# ---------------------------------------------------------------------------
+
+MUTATION_EFFECT_RISK: dict[MutationEffect, float] = {
+    MutationEffect.INERT: 0.05,
+    MutationEffect.CONSTRAIN: 0.25,
+    MutationEffect.EXPAND: 0.50,
+    MutationEffect.REPLACE: 0.90,
+    MutationEffect.UNKNOWN: 1.00,
+    MutationEffect.UNSAFE: math.inf,
+}
+MUTATION_RISK_GATE_ENV = "AUTOPILOT_MUTATION_RISK_GATE"
+DEFAULT_MUTATION_RISK_GATE = 1.0
+
+
+def mutation_effect_risk(effect: Any) -> float:
+    """Risk weight of an effect; anything unrecognised is weighted as UNKNOWN."""
+    return MUTATION_EFFECT_RISK[MutationEffect.normalize(effect)]
+
+
+def mutation_risk_gate() -> float:
+    """Active gate. A malformed or out-of-range override falls back to the default."""
+    raw = os.environ.get(MUTATION_RISK_GATE_ENV, "").strip()
+    if not raw:
+        return DEFAULT_MUTATION_RISK_GATE
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("Ignoring malformed %s=%r", MUTATION_RISK_GATE_ENV, raw)
+        return DEFAULT_MUTATION_RISK_GATE
+    if not math.isfinite(value) or value <= 0.0 or value > DEFAULT_MUTATION_RISK_GATE:
+        # A gate above 1.0 would admit UNKNOWN effects; never allow loosening.
+        log.warning("Ignoring out-of-range %s=%r", MUTATION_RISK_GATE_ENV, raw)
+        return DEFAULT_MUTATION_RISK_GATE
+    return value
+
+
+def mutation_risk_gate_reason(effect: Any, gate: float | None = None) -> str | None:
+    """Rejection reason when ``effect`` reaches the gate, else None."""
+    threshold = mutation_risk_gate() if gate is None else gate
+    normalized = MutationEffect.normalize(effect)
+    risk = MUTATION_EFFECT_RISK[normalized]
+    if risk >= threshold:
+        return f"effect_risk_gate:{normalized.value} risk={risk:g} gate={threshold:g}"
+    return None
+
+
+def rank_mutations_by_risk(mutations: Any) -> list[Any]:
+    """Order candidate mutations safest-first (stable, so ties keep proposal order)."""
+    return sorted(mutations, key=lambda m: mutation_effect_risk(getattr(m, "effect", None)))
+
+
+def classify_prompt_effect(original: str, mutated: str) -> MutationEffect:
+    """CONSTRAIN/REPLACE split for prompt text (the prompt-side analogue of MHS-1).
+
+    Add-only edits (every original non-blank line survives) CONSTRAIN; any
+    removed or rewritten line REPLACEs. An unchanged prompt is INERT.
+    """
+    if mutated == original:
+        return MutationEffect.INERT
+    if not isinstance(original, str) or not isinstance(mutated, str):
+        return MutationEffect.UNKNOWN
+    remaining = [line.strip() for line in mutated.splitlines() if line.strip()]
+    for line in (line.strip() for line in original.splitlines()):
+        if not line:
+            continue
+        if line in remaining:
+            remaining.remove(line)
+        else:
+            return MutationEffect.REPLACE
+    return MutationEffect.CONSTRAIN
+
+
 @dataclass
 class CodeMutation:
     file: str  # Relative path, e.g. "src/escalation.py"
@@ -747,6 +844,8 @@ class CodeMutation:
     # RTG-55 MHS-1: the typed return-effect the static screen assigned.
     effect: MutationEffect = MutationEffect.UNKNOWN
     effect_reason: str = ""
+    # RTG-55 MHS-4: the ANTI-OVERRIDE prior weight of ``effect``.
+    effect_risk: float = 1.0
 
 
 def _resolve_code_mutation_target(target_file: str) -> Path:
@@ -818,6 +917,274 @@ def _prompt_integrity_reason(filename: str, content: str) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# RTG-55 MHS-3 — anti-leakage (UNDER-generalization) guard.
+#
+# ``_UNIVERSAL_TRANSFER_RE`` rejects OVER-generalization. This is the other half:
+# a mutation that names a specific eval instance (question/sample/item id) is
+# memorising the eval set, not fixing a behaviour. The id vocabulary is sourced
+# from the eval DATA the tower actually samples from (the research question
+# pool, the designed core files, the sentinel sets), never from a hand list.
+# The guard is FAIL-CLOSED: if the vocabulary cannot be built, every mutation
+# is rejected with ``eval_leakage_vocabulary_unavailable``.
+# ---------------------------------------------------------------------------
+
+# os.pathsep-separated override of the vocabulary sources; every listed source is
+# then REQUIRED (a missing one fails closed).
+EVAL_ID_VOCAB_SOURCES_ENV = "AUTOPILOT_EVAL_ID_VOCAB_SOURCES"
+_EVAL_ID_KEYS = ("id", "qid", "stable_qid", "question_id")
+_LEAKAGE_MIN_ID_LEN = 6
+_LEAKAGE_MIN_NUMERIC_ID_LEN = 12
+_LEAKAGE_MIN_FAMILY_PREFIX = 4
+_LEAKAGE_MIN_FAMILY_MEMBERS = 3
+_LEAKAGE_MIN_STEM = 4
+_LEAKAGE_MAX_REPORTED = 5
+
+# Generic instance references that need no vocabulary: "sample #12",
+# "question id 42", "task_id == 17", "problem number 3". A qualifier (#/id/index/
+# number) is required so ordinary prose such as "step 3" is not rejected.
+_LEAKAGE_GENERIC_RE = re.compile(
+    r"\b(?:task|sample|item|question|problem|instance)[\s_-]*"
+    r"(?:#\s*|(?:id|idx|index|number|no\.)\s*(?:==|#|:|=|is)?\s*[\"']?)\d{1,6}\b",
+    re.IGNORECASE,
+)
+_ID_FAMILY_TAIL_RE = re.compile(r"^(.*?[_/\-])(\d+|[0-9a-f]{8,})$", re.IGNORECASE)
+_ID_NATIVE_FAMILY_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9+\-]{2,}/)\d+")
+_ID_STEM_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)")
+
+
+def _default_eval_id_sources() -> tuple[tuple[Path, bool], ...]:
+    """(path, required) pairs for the eval-id vocabulary.
+
+    The research question pool is the population every EvalTower draw comes
+    from, so it is REQUIRED. Core and sentinel files are added when present.
+    """
+    override = os.environ.get(EVAL_ID_VOCAB_SOURCES_ENV, "").strip()
+    if override:
+        return tuple((Path(p), True) for p in override.split(os.pathsep) if p.strip())
+    research_root = Path(
+        os.environ.get("EPYC_RESEARCH_ROOT", "/mnt/raid0/llm/epyc-inference-research")
+    )
+    sources: list[tuple[Path, bool]] = [
+        (research_root / "benchmarks" / "prompts" / "question_pool.jsonl", True)
+    ]
+    core_dir = ORCH_ROOT / "benchmarks" / "prompts"
+    sources.extend((p, False) for p in sorted(core_dir.glob("core_*.jsonl")))
+    autopilot_dir = Path(__file__).resolve().parents[1]
+    for name in ("sentinel_questions.yaml", "tool_sentinels.yaml"):
+        sources.append((autopilot_dir / name, False))
+    return tuple(sources)
+
+
+def _iter_eval_rows(path: Path):
+    """Yield dict rows from a .jsonl / .json / .yaml eval source (metadata rows skipped)."""
+    suffix = path.suffix.lower()
+    if suffix == ".jsonl":
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                if isinstance(row, dict) and not any(str(k).startswith("__") for k in row):
+                    yield row
+        return
+    if suffix in {".yaml", ".yml"}:
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    elif suffix == ".json":
+        data = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        raise ValueError(f"unsupported eval-id source type: {path.name}")
+    if isinstance(data, dict):
+        data = data.get("questions", data.get("items", []))
+    for row in data or []:
+        if isinstance(row, dict):
+            yield row
+
+
+def stable_question_qid(suite: str, prompt_text: str) -> str:
+    """Text-only question identity; MUST equal ``eval_tower._stable_question_qid``.
+
+    Duplicated rather than imported so the proposer does not import the eval
+    tower; a unit test pins the parity.
+    """
+    payload = f"{suite}\x00{prompt_text}".encode("utf-8", errors="replace")
+    return hashlib.sha1(payload).hexdigest()[:16]
+
+
+def _is_identifier_shaped(raw: str) -> bool:
+    """An id specific enough to name ONE instance (bare small integers are not)."""
+    if len(raw) < _LEAKAGE_MIN_ID_LEN:
+        return False
+    return not raw.isdigit() or len(raw) >= _LEAKAGE_MIN_NUMERIC_ID_LEN
+
+
+def _is_word_char(ch: str) -> bool:
+    return ch.isalnum() or ch == "_"
+
+
+@dataclass(frozen=True)
+class EvalIdVocabulary:
+    """Casefolded eval-instance identifiers plus the id families derived from them."""
+
+    ids: frozenset[str] = frozenset()
+    family_re: re.Pattern[str] | None = None
+    anchored_re: re.Pattern[str] | None = None
+    sources: tuple[str, ...] = ()
+    error: str = ""
+
+    @property
+    def available(self) -> bool:
+        return not self.error and bool(self.ids)
+
+    @classmethod
+    def from_rows(cls, rows: Any, *, sources: tuple[str, ...] = ()) -> EvalIdVocabulary:
+        ids: set[str] = set()
+        stems: set[str] = set()
+        family_counts: dict[str, int] = {}
+        native_families: set[str] = set()
+        for row in rows:
+            suite = str(row.get("suite") or "").strip()
+            if len(suite) >= _LEAKAGE_MIN_STEM:
+                stems.add(suite.casefold())
+            prompt = row.get("prompt")
+            if isinstance(prompt, str) and prompt:
+                # The prompt-hash qid journals and failure context carry.
+                ids.add(stable_question_qid(str(row.get("suite", "unknown")), prompt))
+            for nested in row.values():
+                if isinstance(nested, dict):  # e.g. core files' ``core_selection``
+                    for key in _EVAL_ID_KEYS[1:]:
+                        raw = str(nested.get(key) or "").strip()
+                        if _is_identifier_shaped(raw):
+                            ids.add(raw.casefold())
+            for key in _EVAL_ID_KEYS:
+                raw = str(row.get(key) or "").strip()
+                if not _is_identifier_shaped(raw):
+                    continue
+                ids.add(raw.casefold())
+                if key != "id":
+                    continue
+                tail = _ID_FAMILY_TAIL_RE.match(raw)
+                if tail and len(tail.group(1)) >= _LEAKAGE_MIN_FAMILY_PREFIX:
+                    prefix = tail.group(1).casefold()
+                    family_counts[prefix] = family_counts.get(prefix, 0) + 1
+                for native in _ID_NATIVE_FAMILY_RE.finditer(raw):
+                    native_families.add(native.group(1).casefold())
+                stem = _ID_STEM_RE.match(raw)
+                if stem and len(stem.group(1)) >= _LEAKAGE_MIN_STEM:
+                    stems.add(stem.group(1).casefold())
+        families = {p for p, n in family_counts.items() if n >= _LEAKAGE_MIN_FAMILY_MEMBERS}
+        families |= native_families
+        family_re = None
+        if families:
+            family_re = re.compile(
+                r"(?<![\w])(?:"
+                + "|".join(re.escape(p) for p in sorted(families, key=len, reverse=True))
+                + r")(?:\d+|[0-9a-f]{8,})(?![\w])",
+                re.IGNORECASE,
+            )
+        anchored_re = None
+        if stems:
+            anchored_re = re.compile(
+                r"(?<![\w])(?:"
+                + "|".join(re.escape(s) for s in sorted(stems, key=len, reverse=True))
+                + r")(?:[\s_-]*(?:problem|question|task|sample|item|instance)s?\s*#?|\s*#)"
+                r"\s*\d{1,6}\b",
+                re.IGNORECASE,
+            )
+        return cls(
+            ids=frozenset(ids),
+            family_re=family_re,
+            anchored_re=anchored_re,
+            sources=sources,
+            error="" if ids else "no_eval_ids_found",
+        )
+
+    def find_leaks(self, text: str) -> list[str]:
+        """Instance references in ``text``: exact ids, id-family members, anchored refs."""
+        folded = (text or "").casefold()
+        if not folded:
+            return []
+        hits: list[str] = []
+        lengths = sorted({len(i) for i in self.ids})
+        n = len(folded)
+        for start in range(n):
+            if start and _is_word_char(folded[start - 1]):
+                continue
+            for length in lengths:
+                end = start + length
+                if end > n:
+                    break
+                if end < n and _is_word_char(folded[end]):
+                    continue
+                candidate = folded[start:end]
+                if candidate in self.ids:
+                    hits.append(candidate)
+        for pattern in (self.family_re, self.anchored_re, _LEAKAGE_GENERIC_RE):
+            if pattern is not None:
+                hits.extend(m.group(0).casefold() for m in pattern.finditer(folded))
+        return list(dict.fromkeys(hits))
+
+
+_EVAL_ID_VOCAB_CACHE: dict[tuple, EvalIdVocabulary] = {}
+
+
+def load_eval_id_vocabulary(
+    sources: tuple[tuple[Path, bool], ...] | None = None,
+) -> EvalIdVocabulary:
+    """Build (and cache by file identity) the eval-id vocabulary. Never raises.
+
+    A missing REQUIRED source, an unreadable source, or an empty vocabulary
+    returns a vocabulary whose ``error`` is set; the guard then fails closed.
+    """
+    resolved = sources if sources is not None else _default_eval_id_sources()
+    if not resolved:
+        return EvalIdVocabulary(error="no_eval_id_sources")
+    key_parts: list[tuple] = []
+    present: list[Path] = []
+    for path, required in resolved:
+        try:
+            stat = path.stat()
+        except OSError:
+            if required:
+                return EvalIdVocabulary(error=f"missing_eval_id_source:{path}")
+            continue
+        key_parts.append((str(path), stat.st_mtime_ns, stat.st_size))
+        present.append(path)
+    cache_key = tuple(key_parts)
+    cached = _EVAL_ID_VOCAB_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    def _rows():
+        for path in present:
+            yield from _iter_eval_rows(path)
+
+    try:
+        vocab = EvalIdVocabulary.from_rows(_rows(), sources=tuple(str(p) for p in present))
+    except Exception as exc:  # noqa: BLE001 - any parse failure must fail CLOSED
+        return EvalIdVocabulary(error=_truncate_reason(f"eval_id_source_unreadable:{exc}"))
+    if vocab.available:
+        _EVAL_ID_VOCAB_CACHE.clear()
+        _EVAL_ID_VOCAB_CACHE[cache_key] = vocab
+    return vocab
+
+
+def eval_leakage_reason(text: str, vocabulary: EvalIdVocabulary) -> str | None:
+    """Fail-closed MHS-3 verdict: a rejection reason, or None when ``text`` is clean."""
+    if not vocabulary.available:
+        return _truncate_reason(
+            f"eval_leakage_vocabulary_unavailable:{vocabulary.error or 'empty'}"
+        )
+    leaks = vocabulary.find_leaks(text)
+    if not leaks:
+        return None
+    shown = [leak[:48] for leak in leaks[:_LEAKAGE_MAX_REPORTED]]
+    return _truncate_reason(f"eval_instance_leakage: refs={shown} total={len(leaks)}")
+
+
 class PromptForge:
     """Species 2: LLM-guided prompt mutation and optimization."""
 
@@ -826,11 +1193,19 @@ class PromptForge:
         prompts_dir: Path | None = None,
         timeout: int = 300,
         auto_commit: bool = True,
+        eval_id_vocabulary: EvalIdVocabulary | None = None,
     ):
         self.prompts_dir = prompts_dir or PROMPTS_DIR
         self.timeout = timeout
         self.auto_commit = auto_commit
         self._session_id: str | None = None
+        # RTG-55 MHS-3: injected vocabulary (tests) or the data-sourced default.
+        self._injected_eval_id_vocabulary = eval_id_vocabulary
+
+    def _eval_id_vocabulary(self) -> EvalIdVocabulary:
+        if self._injected_eval_id_vocabulary is not None:
+            return self._injected_eval_id_vocabulary
+        return load_eval_id_vocabulary()
 
     def list_prompts(self) -> list[str]:
         """List all hot-swappable prompt files (flat + roles/ subdirectory)."""
@@ -950,6 +1325,7 @@ class PromptForge:
             per_suite_quality=per_suite_quality,
             description=description,
         )
+        self._attach_prompt_effect(mutation)
         if not mutation.safety_valid:
             log.warning(
                 "Prompt mutation rejected by transfer safety (%s): %s",
@@ -958,6 +1334,19 @@ class PromptForge:
             )
             mutation.mutated_content = original
         return mutation
+
+    def _attach_prompt_effect(self, mutation: PromptMutation) -> None:
+        """RTG-55 MHS-4: classify a prompt mutation and apply the risk gate."""
+        mutation.effect = classify_prompt_effect(
+            mutation.original_content, mutation.mutated_content
+        )
+        mutation.effect_risk = mutation_effect_risk(mutation.effect)
+        if not mutation.safety_valid:
+            return
+        gate_reason = mutation_risk_gate_reason(mutation.effect)
+        if gate_reason is not None:
+            mutation.safety_valid = False
+            mutation.safety_reason = gate_reason
 
     def _propose_via_gepa(
         self,
@@ -1008,6 +1397,25 @@ class PromptForge:
                 mutation.file,
                 integrity_reason,
             )
+            return mutation
+        # RTG-55 MHS-3: GEPA candidates can memorise the eval set too.
+        leakage = eval_leakage_reason(
+            _added_text(mutation.original_content, mutation.mutated_content),
+            self._eval_id_vocabulary(),
+        )
+        if leakage is not None:
+            mutation.safety_valid = False
+            mutation.safety_reason = leakage
+            mutation.mutated_content = mutation.original_content
+            log.warning(
+                "GEPA prompt mutation rejected by leakage guard (%s): %s",
+                mutation.file,
+                leakage,
+            )
+            return mutation
+        self._attach_prompt_effect(mutation)
+        if not mutation.safety_valid:
+            mutation.mutated_content = mutation.original_content
         return mutation
 
     def apply_mutation(self, mutation: PromptMutation) -> dict[str, Any]:
@@ -1332,6 +1740,9 @@ class PromptForge:
             return {"status": "rejected", "reason": "syntax_invalid"}
         if MutationEffect.normalize(mutation.effect) is MutationEffect.UNSAFE:
             return {"status": "rejected", "reason": "effect_unsafe"}
+        gate_reason = mutation_risk_gate_reason(mutation.effect)
+        if gate_reason is not None:
+            return {"status": "rejected", "reason": gate_reason}
         ctx.apply_file(mutation.file, mutation.mutated_content)
         mutation.accepted = True
         return {
@@ -1339,6 +1750,7 @@ class PromptForge:
             "file": mutation.file,
             "mutation_type": mutation.mutation_type,
             "effect": MutationEffect.normalize(mutation.effect).value,
+            "effect_risk": mutation_effect_risk(mutation.effect),
             "worktree": str(ctx.worktree_path),
         }
 
@@ -1444,6 +1856,16 @@ class PromptForge:
             mutation.effect = MutationEffect.UNSAFE
             mutation.effect_reason = _truncate_reason(mutation.safety_reason)
 
+        # RTG-55 MHS-4: ANTI-OVERRIDE risk prior + gate.
+        mutation.effect_risk = mutation_effect_risk(mutation.effect)
+        if report.safe and mutation.safety_valid:
+            gate_reason = mutation_risk_gate_reason(mutation.effect)
+            if gate_reason is not None:
+                log.warning("Code mutation rejected by risk gate (%s): %s", target_file, gate_reason)
+                mutation.safety_valid = False
+                mutation.safety_reason = gate_reason
+                mutation.mutated_content = original
+
         return mutation
 
     def apply_code_mutation(self, mutation: CodeMutation) -> dict[str, Any]:
@@ -1452,6 +1874,9 @@ class PromptForge:
             return {"status": "rejected", "reason": "syntax_invalid"}
         if MutationEffect.normalize(mutation.effect) is MutationEffect.UNSAFE:
             return {"status": "rejected", "reason": "effect_unsafe"}
+        gate_reason = mutation_risk_gate_reason(mutation.effect)
+        if gate_reason is not None:
+            return {"status": "rejected", "reason": gate_reason}
 
         abs_path = PROJECT_ROOT / mutation.file
 
@@ -1514,6 +1939,7 @@ class PromptForge:
             "file": mutation.file,
             "mutation_type": mutation.mutation_type,
             "effect": MutationEffect.normalize(mutation.effect).value,
+            "effect_risk": mutation_effect_risk(mutation.effect),
             "diff_lines": len(mutation.git_diff.splitlines()),
         }
 
@@ -1809,7 +2235,13 @@ class PromptForge:
             f"- If fewer than {_MIN_VALIDATION_TRIALS} trial IDs are cited, phrase "
             "changes as exploratory and do not claim validation.\n"
             "- Do not turn suite-specific fixes into universal always/never/all-tasks "
-            "best practices."
+            "best practices.\n"
+            "- Never name a specific eval question, sample, item or task id (e.g. "
+            "`<suite>_00042`, `question #12`); a change keyed to one instance memorises "
+            "the eval set and is rejected automatically (RTG-55 MHS-3).\n"
+            "- Prefer CONSTRAIN edits (add a check, block a bad path, re-prompt) over "
+            "REPLACE edits (rewrite or force an action, hard-code an answer). Override "
+            "edits carry the highest regression risk and are ranked last (RTG-55 MHS-4)."
         )
 
     def _attach_transfer_safety(
@@ -1854,6 +2286,21 @@ class PromptForge:
         warnings: list[str] = []
         if failure_context.strip() and evidence_count < _MIN_VALIDATION_TRIALS:
             warnings.append(f"low_evidence_trial_count:{evidence_count}")
+
+        # RTG-55 MHS-3: under-generalization (eval-instance leakage), fail-closed.
+        # Scoped to the text the mutation ADDS; the description is controller metadata.
+        leakage = eval_leakage_reason(
+            _added_text(original_content, mutated_content), self._eval_id_vocabulary()
+        )
+        if leakage is not None:
+            return TransferSafetyVerdict(
+                valid=False,
+                reason=leakage,
+                warnings=tuple(warnings),
+                source_suites=tuple(sorted(source_suites)),
+                introduced_suites=tuple(sorted(introduced_suites)),
+                evidence_trial_count=evidence_count,
+            )
 
         mismatched = introduced_suites - source_suites
         if source_suites and mismatched:

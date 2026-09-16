@@ -31,6 +31,12 @@ from src.autopilot_core.tier_specs import (  # noqa: E402
     DEFAULT_REFERENCE_POINT,
     LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
+    OBJECTIVE_AXIS_NEG_COST,
+    OBJECTIVE_AXIS_QUALITY,
+    OBJECTIVE_AXIS_RATE,
+    OBJECTIVE_AXIS_RELIABILITY,
+    has_objective_axis,
+    objective_value,
     spec_for,
 )
 REFERENCE_POINT = DEFAULT_REFERENCE_POINT
@@ -134,6 +140,30 @@ class ParetoArchive:
     def _front(self, tier: int | None = None) -> list[ParetoEntry]:
         """Live (mutable) frontier list for a tier — created empty on first access."""
         return self._frontiers.setdefault(self._tier(tier), [])
+
+    # W3e: every semantic read of an objective goes through the tier's declared axis
+    # NAMES, never an integer position (see tier_specs.objective_value).
+    def _axis(self, objectives: Any, name: str, tier: int | None = None) -> float:
+        return objective_value(objectives, name, self._tier(tier))
+
+    def _quality_of(self, entry: ParetoEntry, tier: int | None = None) -> float:
+        return self._axis(entry.objectives, OBJECTIVE_AXIS_QUALITY, tier)
+
+    def _rate_of(self, entry: ParetoEntry, tier: int | None = None) -> float:
+        return self._axis(entry.objectives, OBJECTIVE_AXIS_RATE, tier)
+
+    def _objective_label(self, objectives: Any, tier: int | None = None) -> str:
+        """``q=… s=… c=… r=…`` for the axes the tier declares (c/r only when present)."""
+        t = self._tier(tier)
+        parts = [
+            f"q={self._axis(objectives, OBJECTIVE_AXIS_QUALITY, t):.3f}",
+            f"s={self._axis(objectives, OBJECTIVE_AXIS_RATE, t):.1f}",
+        ]
+        if has_objective_axis(OBJECTIVE_AXIS_NEG_COST, t):
+            parts.append(f"c={-self._axis(objectives, OBJECTIVE_AXIS_NEG_COST, t):.3f}")
+        if has_objective_axis(OBJECTIVE_AXIS_RELIABILITY, t):
+            parts.append(f"r={self._axis(objectives, OBJECTIVE_AXIS_RELIABILITY, t):.2f}")
+        return " ".join(parts)
 
     def _hv_hist(self, tier: int | None = None) -> list[tuple[int, float]]:
         return self._hv_history_by_tier.setdefault(self._tier(tier), [])
@@ -651,7 +681,7 @@ class ParetoArchive:
 
         scored = sorted(
             front,
-            key=lambda e: (_normalized_axis_sum(e), e.objectives[0]),
+            key=lambda e: (_normalized_axis_sum(e), self._quality_of(e, tier)),
             reverse=True,
         )
         top_k = scored[:k]
@@ -776,7 +806,7 @@ class ParetoArchive:
         by_id = {e.trial_id: e for e in self._all_entries}
 
         def _quality(e: ParetoEntry) -> float:
-            return float(e.objectives[0])
+            return self._quality_of(e, tier)
 
         # score component: minmax over candidates on quality (aira-evo
         # `_normalize_minmax_values`: a degenerate single-value range maps to
@@ -880,19 +910,23 @@ class ParetoArchive:
         front = self._front(tier)
         if not front:
             return {"frontier_size": 0, "hypervolume": 0.0, "tier": self._tier(tier)}
-        best_quality = max(e.objectives[0] for e in front)
-        best_speed = max(e.objectives[1] for e in front)
-        best_cost = max(e.objectives[2] for e in front)  # -cost, higher is better
-        return {
+        best_quality = max(self._quality_of(e, tier) for e in front)
+        best_speed = max(self._rate_of(e, tier) for e in front)
+        out: dict[str, Any] = {
             "tier": self._tier(tier),
             "frontier_size": len(front),
             "total_entries": len(self._all_entries),
             "hypervolume": self.hypervolume(tier=tier),
             "best_quality": best_quality,
             "best_speed": best_speed,
-            "best_neg_cost": best_cost,
-            "hv_slope_50": self.hypervolume_slope(50, tier=tier),
         }
+        if has_objective_axis(OBJECTIVE_AXIS_NEG_COST, self._tier(tier)):
+            # -cost, higher is better; absent once a tier retires the cost axis (W3e).
+            out["best_neg_cost"] = max(
+                self._axis(e.objectives, OBJECTIVE_AXIS_NEG_COST, tier) for e in front
+            )
+        out["hv_slope_50"] = self.hypervolume_slope(50, tier=tier)
+        return out
 
     def tier_overview(self) -> str:
         """One compact line per tier (frontier size + best quality) for the planner — so it sees
@@ -904,7 +938,7 @@ class ParetoArchive:
             front = self._frontiers[t]
             if not front:
                 continue
-            bq = max(e.objectives[0] for e in front)
+            bq = max(self._quality_of(e, t) for e in front)
             parts.append(f"T{t}: {len(front)} pts, best_q={bq:.3f}")
         return "Per-tier frontiers — " + "; ".join(parts) if parts else "(no tier frontiers yet)"
 
@@ -924,11 +958,10 @@ class ParetoArchive:
         ]
         if front:
             lines.append("\nFrontier entries:")
-            for e in sorted(front, key=lambda x: -x.objectives[0]):
+            for e in sorted(front, key=lambda x: -self._quality_of(x, t)):
                 lines.append(
                     f"  #{e.trial_id} [{e.species}] "
-                    f"q={e.objectives[0]:.3f} s={e.objectives[1]:.1f} "
-                    f"c={-e.objectives[2]:.3f} r={e.objectives[3]:.2f}"
+                    + self._objective_label(e.objectives, t)
                     + (" [PROD]" if e.is_production_best else "")
                 )
         return "\n".join(lines)
@@ -1006,7 +1039,7 @@ class ParetoArchive:
         for entry in candidates:
             action = self._entry_action_label(entry)
             margin = self._dominance_margin(entry, front, ranges)
-            quality = float(entry.objectives[0])
+            quality = self._quality_of(entry, t)
             ranked.append(((margin, -quality, -entry.trial_id), entry, action))
         ranked.sort(key=lambda item: item[0])
 
@@ -1056,9 +1089,8 @@ class ParetoArchive:
             action = row["action"] or "unknown_action"
             lines.append(
                 f"  #{row['trial_id']} [{row['species'] or 'unknown_species'}:{action}] "
-                f"q={objectives[0]:.3f} s={objectives[1]:.1f} "
-                f"c={-objectives[2]:.3f} r={objectives[3]:.2f} "
-                f"margin={row['dominance_margin']:.3f}"
+                + self._objective_label(objectives, tier)
+                + f" margin={row['dominance_margin']:.3f}"
             )
         return "\n".join(lines)
 
@@ -1090,6 +1122,13 @@ class ParetoArchive:
         gaps, hv_slope_10, suggested_attack.
         """
         front = self._front(tier)
+
+        def q_of(e: ParetoEntry) -> float:
+            return self._quality_of(e, tier)
+
+        def s_of(e: ParetoEntry) -> float:
+            return self._rate_of(e, tier)
+
         out: dict[str, Any] = {
             "shape": "empty",
             "blocking_quality": None,
@@ -1105,18 +1144,18 @@ class ParetoArchive:
             out["shape"] = "single"
             e = front[0]
             out["suggested_attack"] = (
-                f"single frontier point trial #{e.trial_id} q={e.objectives[0]:.2f} "
-                f"sp={e.objectives[1]:.1f} — propose explore actions to add "
+                f"single frontier point trial #{e.trial_id} q={q_of(e):.2f} "
+                f"sp={s_of(e):.1f} — propose explore actions to add "
                 "diversity"
             )
             return out
 
         # Project to (quality, speed). Sort by quality ascending.
         pts = sorted(
-            front, key=lambda x: (x.objectives[0], -x.objectives[1])
+            front, key=lambda x: (q_of(x), -s_of(x))
         )
-        q_vals = [e.objectives[0] for e in pts]
-        s_vals = [e.objectives[1] for e in pts]
+        q_vals = [q_of(e) for e in pts]
+        s_vals = [s_of(e) for e in pts]
         q_min, q_max = min(q_vals), max(q_vals)
         s_min, s_max = min(s_vals), max(s_vals)
         q_range = q_max - q_min
@@ -1144,19 +1183,19 @@ class ParetoArchive:
                 out["shape"] = "linear" if n >= 3 else "scattered"
 
         # Blocking points per axis.
-        blocking_q = max(front, key=lambda e: e.objectives[0])
-        blocking_s = max(front, key=lambda e: e.objectives[1])
+        blocking_q = max(front, key=q_of)
+        blocking_s = max(front, key=s_of)
         out["blocking_quality"] = {
             "trial_id": blocking_q.trial_id,
             "objectives": list(blocking_q.objectives),
             "species": blocking_q.species,
-            "gives_up_speed": s_max - blocking_q.objectives[1] if s_max > 0 else 0.0,
+            "gives_up_speed": s_max - s_of(blocking_q) if s_max > 0 else 0.0,
         }
         out["blocking_speed"] = {
             "trial_id": blocking_s.trial_id,
             "objectives": list(blocking_s.objectives),
             "species": blocking_s.species,
-            "gives_up_quality": q_max - blocking_s.objectives[0] if q_max > 0 else 0.0,
+            "gives_up_quality": q_max - q_of(blocking_s) if q_max > 0 else 0.0,
         }
 
         # Gap detection: walk q-sorted points, look for consecutive pairs
@@ -1164,13 +1203,13 @@ class ParetoArchive:
         gaps: list[dict[str, Any]] = []
         for i in range(1, len(pts)):
             a, b = pts[i - 1], pts[i]
-            dq = b.objectives[0] - a.objectives[0]
-            ds = a.objectives[1] - b.objectives[1]  # frontier expected: speed drops as quality rises
+            dq = q_of(b) - q_of(a)
+            ds = s_of(a) - s_of(b)  # frontier expected: speed drops as quality rises
             if dq > 0.15 * q_range or ds > 0.25 * s_range:
                 gaps.append({
                     "between_trials": [a.trial_id, b.trial_id],
-                    "q_window": [a.objectives[0], b.objectives[0]],
-                    "s_window": [b.objectives[1], a.objectives[1]],
+                    "q_window": [q_of(a), q_of(b)],
+                    "s_window": [s_of(b), s_of(a)],
                     "size_q_frac": dq / q_range if q_range else 0.0,
                     "size_s_frac": ds / s_range if s_range else 0.0,
                 })
@@ -1228,14 +1267,16 @@ class ParetoArchive:
             bq = g["blocking_quality"]
             lines.append(
                 f"Blocking quality: trial #{bq['trial_id']} ({bq['species']}) "
-                f"q={bq['objectives'][0]:.3f} sp={bq['objectives'][1]:.1f} — "
+                f"q={self._axis(bq['objectives'], OBJECTIVE_AXIS_QUALITY, tier):.3f} "
+                f"sp={self._axis(bq['objectives'], OBJECTIVE_AXIS_RATE, tier):.1f} — "
                 f"to advance q here, would give up {bq['gives_up_speed']:.1f} t/s"
             )
         if g["blocking_speed"]:
             bs = g["blocking_speed"]
             lines.append(
                 f"Blocking speed:   trial #{bs['trial_id']} ({bs['species']}) "
-                f"q={bs['objectives'][0]:.3f} sp={bs['objectives'][1]:.1f} — "
+                f"q={self._axis(bs['objectives'], OBJECTIVE_AXIS_QUALITY, tier):.3f} "
+                f"sp={self._axis(bs['objectives'], OBJECTIVE_AXIS_RATE, tier):.1f} — "
                 f"to advance sp here, would give up {bs['gives_up_quality']:.3f} q"
             )
         if g["gaps"]:

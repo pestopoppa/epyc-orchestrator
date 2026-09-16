@@ -1,0 +1,757 @@
+{
+ "by_effect": {
+  "constrain": {
+   "delta_pass_mean": 17.0,
+   "delta_pass_sum": 323,
+   "delta_pp_mean": 3.9435,
+   "delta_pp_min": -16.9388,
+   "n_negative": 4,
+   "n_patches": 19,
+   "regressed_successes": 497,
+   "rescue_to_regression": 1.6499,
+   "rescued_failures": 820
+  },
+  "replace": {
+   "delta_pass_mean": -41.0,
+   "delta_pass_sum": -164,
+   "delta_pp_mean": -8.3673,
+   "delta_pp_min": -14.4898,
+   "n_negative": 4,
+   "n_patches": 4,
+   "regressed_successes": 207,
+   "rescue_to_regression": 0.2077,
+   "rescued_failures": 43
+  },
+  "unsafe": {
+   "delta_pass_mean": 0.0,
+   "delta_pass_sum": 0,
+   "delta_pp_mean": 0.0,
+   "delta_pp_min": 0.0,
+   "n_negative": 0,
+   "n_patches": 4,
+   "regressed_successes": 0,
+   "rescue_to_regression": null,
+   "rescued_failures": 0
+  }
+ },
+ "by_effect_valid_only": {
+  "constrain": {
+   "delta_pass_mean": 17.0,
+   "delta_pass_sum": 323,
+   "delta_pp_mean": 3.9435,
+   "delta_pp_min": -16.9388,
+   "n_negative": 4,
+   "n_patches": 19,
+   "regressed_successes": 497,
+   "rescue_to_regression": 1.6499,
+   "rescued_failures": 820
+  },
+  "replace": {
+   "delta_pass_mean": -41.0,
+   "delta_pass_sum": -164,
+   "delta_pp_mean": -8.3673,
+   "delta_pp_min": -14.4898,
+   "n_negative": 4,
+   "n_patches": 4,
+   "regressed_successes": 207,
+   "rescue_to_regression": 0.2077,
+   "rescued_failures": 43
+  }
+ },
+ "mapping": {
+  "constrain_kinds": [
+   "block_and_prompt",
+   "inject_hint"
+  ],
+  "dynamic_kind": "unknown",
+  "invalid_patch": "unsafe (validator-rejected; scored as no-patch, delta 0)",
+  "no_kind": "constrain (prompt-side hooks only)",
+  "patch_effect": "riskiest effect under MUTATION_EFFECT_RISK",
+  "replace_kinds": [
+   "force_action",
+   "rewrite_action"
+  ]
+ },
+ "rows": [
+  {
+   "benchmark": "alfworld",
+   "code_chars": 0,
+   "delta_pass": 0,
+   "dynamic_kind": false,
+   "editor": "deepseek-v4-pro",
+   "effect": "unsafe",
+   "effect_kinds": [],
+   "effect_risk": Infinity,
+   "held_out_tasks": 490,
+   "hooks": [],
+   "patch_sha256": null,
+   "regressed_successes": 0,
+   "rescued_failures": 0,
+   "seed": "20260720",
+   "valid": false,
+   "validation_error": "PatchValidationError('patch.actions must be a non-empty list')"
+  },
+  {
+   "benchmark": "dbbench",
+   "code_chars": 3227,
+   "delta_pass": 6,
+   "dynamic_kind": false,
+   "editor": "deepseek-v4-pro",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 290,
+   "hooks": [
+    "make_pre_hint",
+    "on_before_action",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "a7c3d44d6d46aecc6c06d4b488fe9172075c5f6d88798557ae69364c10a367fb",
+   "regressed_successes": 12,
+   "rescued_failures": 18,
+   "seed": "20260720",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "webshop",
+   "code_chars": 1344,
+   "delta_pass": -34,
+   "dynamic_kind": false,
+   "editor": "deepseek-v4-pro",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 490,
+   "hooks": [
+    "on_before_action"
+   ],
+   "patch_sha256": "36e79d27c46925eeded18af1fc4a9d672ac66b450b9f9b09f4bd178c132b8a45",
+   "regressed_successes": 48,
+   "rescued_failures": 14,
+   "seed": "20260720",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "alfworld",
+   "code_chars": 3612,
+   "delta_pass": -83,
+   "dynamic_kind": false,
+   "editor": "deepseek-v4-pro",
+   "effect": "constrain",
+   "effect_kinds": [
+    "inject_hint"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 490,
+   "hooks": [
+    "make_pre_hint",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "a01e8623eb0727c584dbf75e6fbe49382400456b3ca6bfb0c487c6cddbffa859",
+   "regressed_successes": 130,
+   "rescued_failures": 47,
+   "seed": "20260721",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "dbbench",
+   "code_chars": 0,
+   "delta_pass": 0,
+   "dynamic_kind": false,
+   "editor": "deepseek-v4-pro",
+   "effect": "unsafe",
+   "effect_kinds": [],
+   "effect_risk": Infinity,
+   "held_out_tasks": 290,
+   "hooks": [],
+   "patch_sha256": null,
+   "regressed_successes": 0,
+   "rescued_failures": 0,
+   "seed": "20260721",
+   "valid": false,
+   "validation_error": "PatchValidationError('hook uses forbidden syntax: Import')"
+  },
+  {
+   "benchmark": "webshop",
+   "code_chars": 589,
+   "delta_pass": 48,
+   "dynamic_kind": false,
+   "editor": "deepseek-v4-pro",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 490,
+   "hooks": [
+    "on_before_action"
+   ],
+   "patch_sha256": "7c10a33d2413f3be8bce2513878e79f0d3b3894ffbaf0957c9ff0bae67643377",
+   "regressed_successes": 3,
+   "rescued_failures": 51,
+   "seed": "20260721",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "alfworld",
+   "code_chars": 0,
+   "delta_pass": 0,
+   "dynamic_kind": false,
+   "editor": "deepseek-v4-pro",
+   "effect": "unsafe",
+   "effect_kinds": [],
+   "effect_risk": Infinity,
+   "held_out_tasks": 490,
+   "hooks": [],
+   "patch_sha256": null,
+   "regressed_successes": 0,
+   "rescued_failures": 0,
+   "seed": "20260722",
+   "valid": false,
+   "validation_error": "PatchValidationError('hook code may contain at most 5 helper functions')"
+  },
+  {
+   "benchmark": "dbbench",
+   "code_chars": 1783,
+   "delta_pass": 5,
+   "dynamic_kind": false,
+   "editor": "deepseek-v4-pro",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 290,
+   "hooks": [
+    "on_before_action",
+    "on_init"
+   ],
+   "patch_sha256": "0ea70719a6eb7108489501b59866ab76468bda88093a71953a2cb7e1a761e4b7",
+   "regressed_successes": 8,
+   "rescued_failures": 13,
+   "seed": "20260722",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "webshop",
+   "code_chars": 799,
+   "delta_pass": 42,
+   "dynamic_kind": false,
+   "editor": "deepseek-v4-pro",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 490,
+   "hooks": [
+    "on_before_action"
+   ],
+   "patch_sha256": "210885ec0c3d470dae3eeaf39f1d975fa745cce767ec231a92984fc638ea5236",
+   "regressed_successes": 6,
+   "rescued_failures": 48,
+   "seed": "20260722",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "alfworld",
+   "code_chars": 7578,
+   "delta_pass": 43,
+   "dynamic_kind": false,
+   "editor": "harness-r1",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 490,
+   "hooks": [
+    "make_pre_hint",
+    "on_before_action",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "d89e34f0602342331fbbb8a368df3e910ed3fd2ba00a4ed0fb750fef208282b3",
+   "regressed_successes": 59,
+   "rescued_failures": 102,
+   "seed": "20260720",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "dbbench",
+   "code_chars": 4551,
+   "delta_pass": 15,
+   "dynamic_kind": false,
+   "editor": "harness-r1",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 290,
+   "hooks": [
+    "make_pre_hint",
+    "on_before_action",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "0b397ac101517300c4f0e4ad9e375bf47b6cb60feb604377ade4956a7394dd21",
+   "regressed_successes": 7,
+   "rescued_failures": 22,
+   "seed": "20260720",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "webshop",
+   "code_chars": 719,
+   "delta_pass": 48,
+   "dynamic_kind": false,
+   "editor": "harness-r1",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 490,
+   "hooks": [
+    "on_before_action"
+   ],
+   "patch_sha256": "0efc5a41dfbcd834a1b9ac27a85b9b0ce16b764178e2710f9f7b7ee6d7fc3b3e",
+   "regressed_successes": 2,
+   "rescued_failures": 50,
+   "seed": "20260720",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "alfworld",
+   "code_chars": 9331,
+   "delta_pass": 82,
+   "dynamic_kind": false,
+   "editor": "harness-r1",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 490,
+   "hooks": [
+    "make_pre_hint",
+    "on_before_action",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "1c911c973e2ebcdd890b45f947a31d24b12043cb9fb1c348115c9dd227fa17a0",
+   "regressed_successes": 47,
+   "rescued_failures": 129,
+   "seed": "20260721",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "dbbench",
+   "code_chars": 4785,
+   "delta_pass": 13,
+   "dynamic_kind": false,
+   "editor": "harness-r1",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 290,
+   "hooks": [
+    "make_pre_hint",
+    "on_before_action",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "7a42788a9687783b759b57cf3346354b3c63a452645adf770fed8024afea9b1d",
+   "regressed_successes": 8,
+   "rescued_failures": 21,
+   "seed": "20260721",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "webshop",
+   "code_chars": 645,
+   "delta_pass": 40,
+   "dynamic_kind": false,
+   "editor": "harness-r1",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 490,
+   "hooks": [
+    "on_before_action"
+   ],
+   "patch_sha256": "65a030bf1e5e61208d880a8cc709008bfc57660bdb81f529ff7edd98e3d25d83",
+   "regressed_successes": 6,
+   "rescued_failures": 46,
+   "seed": "20260721",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "alfworld",
+   "code_chars": 8401,
+   "delta_pass": 39,
+   "dynamic_kind": false,
+   "editor": "harness-r1",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 490,
+   "hooks": [
+    "make_pre_hint",
+    "on_before_action",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "38ef9c8003a36bd8eaa80a603b302fe966315b01ed25b7e68df9195736c0dada",
+   "regressed_successes": 61,
+   "rescued_failures": 100,
+   "seed": "20260722",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "dbbench",
+   "code_chars": 4803,
+   "delta_pass": 14,
+   "dynamic_kind": false,
+   "editor": "harness-r1",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 290,
+   "hooks": [
+    "make_pre_hint",
+    "on_before_action",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "5e69c6023eb2cfaf59f349c2d19d8950d0dd42b60d3a752ddc961f87d228277b",
+   "regressed_successes": 9,
+   "rescued_failures": 23,
+   "seed": "20260722",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "webshop",
+   "code_chars": 1064,
+   "delta_pass": 46,
+   "dynamic_kind": false,
+   "editor": "harness-r1",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 490,
+   "hooks": [
+    "on_before_action"
+   ],
+   "patch_sha256": "10a8a977f8e792f825b8e3165b7d3efa0971af0097f09def31ce7d29972ddb1c",
+   "regressed_successes": 4,
+   "rescued_failures": 50,
+   "seed": "20260722",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "alfworld",
+   "code_chars": 0,
+   "delta_pass": 0,
+   "dynamic_kind": false,
+   "editor": "qwen3.5-397b",
+   "effect": "unsafe",
+   "effect_kinds": [],
+   "effect_risk": Infinity,
+   "held_out_tasks": 490,
+   "hooks": [],
+   "patch_sha256": null,
+   "regressed_successes": 0,
+   "rescued_failures": 0,
+   "seed": "20260720",
+   "valid": false,
+   "validation_error": "PatchValidationError('hook uses forbidden syntax: Import')"
+  },
+  {
+   "benchmark": "dbbench",
+   "code_chars": 2606,
+   "delta_pass": 15,
+   "dynamic_kind": false,
+   "editor": "qwen3.5-397b",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 290,
+   "hooks": [
+    "make_pre_hint",
+    "on_before_action",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "4ceb98ccdb2f8d5b9d6648369d3a234f7625658242fbb650bec5b0840174d2ed",
+   "regressed_successes": 6,
+   "rescued_failures": 21,
+   "seed": "20260720",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "webshop",
+   "code_chars": 1078,
+   "delta_pass": -68,
+   "dynamic_kind": false,
+   "editor": "qwen3.5-397b",
+   "effect": "replace",
+   "effect_kinds": [
+    "rewrite_action"
+   ],
+   "effect_risk": 0.9,
+   "held_out_tasks": 490,
+   "hooks": [
+    "on_before_action"
+   ],
+   "patch_sha256": "fd1851cd991bc3aacf8b2ab47bc95efb37ff197908f827ab978bb364ccf42694",
+   "regressed_successes": 70,
+   "rescued_failures": 2,
+   "seed": "20260720",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "alfworld",
+   "code_chars": 4691,
+   "delta_pass": -12,
+   "dynamic_kind": false,
+   "editor": "qwen3.5-397b",
+   "effect": "constrain",
+   "effect_kinds": [
+    "inject_hint"
+   ],
+   "effect_risk": 0.25,
+   "held_out_tasks": 490,
+   "hooks": [
+    "make_pre_hint",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "e69e3a229b2f585c036f262c25843ca562ab2a8f8b68ba45d414f23c488ec7f3",
+   "regressed_successes": 59,
+   "rescued_failures": 47,
+   "seed": "20260721",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "dbbench",
+   "code_chars": 2790,
+   "delta_pass": -5,
+   "dynamic_kind": false,
+   "editor": "qwen3.5-397b",
+   "effect": "constrain",
+   "effect_kinds": [],
+   "effect_risk": 0.25,
+   "held_out_tasks": 290,
+   "hooks": [
+    "make_pre_hint",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "74e07365e4d6764c197aa2846880beebd584035f192154ea8579480f20889d0f",
+   "regressed_successes": 11,
+   "rescued_failures": 6,
+   "seed": "20260721",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "webshop",
+   "code_chars": 2689,
+   "delta_pass": -71,
+   "dynamic_kind": false,
+   "editor": "qwen3.5-397b",
+   "effect": "replace",
+   "effect_kinds": [
+    "block_and_prompt",
+    "rewrite_action"
+   ],
+   "effect_risk": 0.9,
+   "held_out_tasks": 490,
+   "hooks": [
+    "on_before_action"
+   ],
+   "patch_sha256": "9dfc6de33b21e499d486dd97ac77891b333ff4b7d821f0742561b812f04a6840",
+   "regressed_successes": 71,
+   "rescued_failures": 0,
+   "seed": "20260721",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "alfworld",
+   "code_chars": 7180,
+   "delta_pass": -23,
+   "dynamic_kind": false,
+   "editor": "qwen3.5-397b",
+   "effect": "replace",
+   "effect_kinds": [
+    "force_action"
+   ],
+   "effect_risk": 0.9,
+   "held_out_tasks": 490,
+   "hooks": [
+    "make_pre_hint",
+    "on_before_action",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "2e6c4b99c5875e7253103450ac14540aae18bcbc2405d01b9b22d1ed2d58f91d",
+   "regressed_successes": 62,
+   "rescued_failures": 39,
+   "seed": "20260722",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "dbbench",
+   "code_chars": 3410,
+   "delta_pass": 1,
+   "dynamic_kind": false,
+   "editor": "qwen3.5-397b",
+   "effect": "constrain",
+   "effect_kinds": [],
+   "effect_risk": 0.25,
+   "held_out_tasks": 290,
+   "hooks": [
+    "make_pre_hint",
+    "on_init",
+    "on_post_step"
+   ],
+   "patch_sha256": "57e069979412f64818feee42df7986fbe45d095d4205d15ca9605f072033c390",
+   "regressed_successes": 11,
+   "rescued_failures": 12,
+   "seed": "20260722",
+   "valid": true,
+   "validation_error": null
+  },
+  {
+   "benchmark": "webshop",
+   "code_chars": 1834,
+   "delta_pass": -2,
+   "dynamic_kind": false,
+   "editor": "qwen3.5-397b",
+   "effect": "replace",
+   "effect_kinds": [
+    "force_action"
+   ],
+   "effect_risk": 0.9,
+   "held_out_tasks": 490,
+   "hooks": [
+    "on_before_action"
+   ],
+   "patch_sha256": "0763d4437830b30a55bb987e13abc6eba8f354bdab23cf17124dc0378b8897fd",
+   "regressed_successes": 4,
+   "rescued_failures": 2,
+   "seed": "20260722",
+   "valid": true,
+   "validation_error": null
+  }
+ ],
+ "schema": "epyc.rtg55.heldout_effect_corpus.v1",
+ "source": {
+  "held_out_tasks": {
+   "alfworld": 490,
+   "dbbench": 290,
+   "pooled": 1270,
+   "webshop": 490
+  },
+  "license": "Apache-2.0",
+  "path": "examples/heldout_generalization",
+  "protocol": "random10_failure_evidence_one_patch_full_split",
+  "repository": "github.com/DeepExperience/Harness-R1",
+  "results_sha256": "cf4ce8c0593ee009111da39b1f5a69161d2f22d0384b8be582136734032c59e2",
+  "revision": "411bb5489ada85e6118897039eab84b4e4aaa4f0",
+  "target_agent": "Qwen3.5-9B (frozen, vanilla)"
+ },
+ "worst_valid_patches": [
+  {
+   "benchmark": "alfworld",
+   "delta_pass": -83,
+   "editor": "deepseek-v4-pro",
+   "effect": "constrain",
+   "effect_kinds": [
+    "inject_hint"
+   ],
+   "seed": "20260721"
+  },
+  {
+   "benchmark": "webshop",
+   "delta_pass": -71,
+   "editor": "qwen3.5-397b",
+   "effect": "replace",
+   "effect_kinds": [
+    "block_and_prompt",
+    "rewrite_action"
+   ],
+   "seed": "20260721"
+  },
+  {
+   "benchmark": "webshop",
+   "delta_pass": -68,
+   "editor": "qwen3.5-397b",
+   "effect": "replace",
+   "effect_kinds": [
+    "rewrite_action"
+   ],
+   "seed": "20260720"
+  },
+  {
+   "benchmark": "webshop",
+   "delta_pass": -34,
+   "editor": "deepseek-v4-pro",
+   "effect": "constrain",
+   "effect_kinds": [
+    "block_and_prompt"
+   ],
+   "seed": "20260720"
+  },
+  {
+   "benchmark": "alfworld",
+   "delta_pass": -23,
+   "editor": "qwen3.5-397b",
+   "effect": "replace",
+   "effect_kinds": [
+    "force_action"
+   ],
+   "seed": "20260722"
+  }
+ ]
+}
