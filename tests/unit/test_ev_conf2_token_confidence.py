@@ -148,6 +148,8 @@ def test_topk_entropy_lower_bound_with_residual() -> None:
         ("so\n#### 17", "17", "hash_marker"),
         ("x \\boxed{1} then \\boxed{\\frac{1}{2}}", "\\frac{1}{2}", "boxed"),
         ("Step: 5\nThe final answer is 7\nThanks", "The final answer is 7", "final_answer_region"),
+        # direct-stage `</answer>` stop: the token stream ends inside the tag
+        ("180 x 3 = 540\n\n<answer> 540 \n", "540", "unterminated_answer_tag"),
     ],
 )
 def test_locate_answer_span(text: str, expected: str, source: str) -> None:
@@ -330,3 +332,23 @@ def test_weighted_ece_uniform_equals_stat_tests() -> None:
     xs = [rng.random() for _ in range(300)] + [1.0, 0.0]
     ys = [float(rng.random() < x) for x in xs]
     assert csc.weighted_ece(xs, ys, [1.0] * len(xs)) == pytest.approx(expected_calibration_error(xs, ys))
+
+
+def test_unterminated_answer_tag_span_excludes_tag_tokens() -> None:
+    # The production direct stage stops on `</answer>`, so the stream has no closing tag.
+    rows = [
+        _oai_row("work", -0.3, [-2.0]),
+        _oai_row("\n<answer>", -0.001, [-8.0]),
+        _oai_row("54", -1.5, [-2.0]),
+        _oai_row("0", -0.7, [-2.0]),
+    ]
+    rec = tc.build_token_trace_record(rows, answer="work\n<answer>540</answer>")
+    assert rec["answer_span"] == {"start": 2, "end": 4, "source": "unterminated_answer_tag"}
+    tr = tc.decode_token_trace(rec)
+    assert tc.answer_span_min_prob(tr) == pytest.approx(math.exp(-1.5))
+
+
+def test_unterminated_rule_ignores_custom_extract_pattern() -> None:
+    assert tc.locate_answer_span("x <answer>5", r"ANS:(.*)$") is None or (
+        tc.locate_answer_span("x <answer>5", r"ANS:(.*)$")[2] != "unterminated_answer_tag"
+    )
