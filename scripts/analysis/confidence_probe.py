@@ -147,7 +147,12 @@ RUNNER_PREAMBLE = """\
 #    is interrupted.
 # 3. Read each arm with:
 #      confidence_source_compare.py orchestration/reports/ev_conf2_probe/question_results.<arm>.jsonl \\
-#        --reweight-prevalence {prev} --out .../compare.<arm>.json
+#        --reweight-prevalence {prev} --out orchestration/reports/ev_conf2_probe/compare.<arm>.json
+# 4. Belief write side (VB-EVCONF2, root repo; until root c8c68662 merges, use the
+#    /mnt/raid0/llm/worktrees/sub-evconf2-root copy), once per arm, right after step 3:
+#      python3 /workspace/scripts/vidya/adapters/confidence_source_capture.py \\
+#        --report .../compare.<arm>.json --identity .../serving_identity.<arm>.json \\
+#        --arm <arm> --run-id evconf2-probe-<date> --binary-path {bin} --binary-sha256 <step-0 hash>
 """.format(bin=CHAMPION_BIN, prev=E7C_WORKER_GENERAL_PREVALENCE)
 
 
