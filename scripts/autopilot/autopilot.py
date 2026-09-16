@@ -120,6 +120,7 @@ import controller_io
 from controller_io import PLANNER_ARCHIVE_PATH, invoke_controller as _invoke_controller_impl
 from run_manifest import build_run_manifest, manifest_drift_reasons
 import rejected_mutation_ledger
+import reproposal_rate
 from planner_coordinator import plan_with_providers, uncritiqued_dispatch_block_reason
 from state_store import (
     OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST,
@@ -5137,6 +5138,14 @@ def _baseline_pin_for_trial(gate: Any, eval_result: Any) -> dict[str, Any]:
         return {"schema_version": 1, "source": "capture_error", "error": str(exc)[:200]}
 
 
+def _record_reproposal_rate_windows(journal: Any) -> None:
+    """VB-AP53-RATE: append closed-window re-proposal rate rows (fail-open, never alters a trial)."""
+    try:
+        reproposal_rate.record_closed_windows(journal)
+    except Exception as exc:  # noqa: BLE001 - record_closed_windows is already fail-open
+        log.debug("VB-AP53-RATE hook failed: %s", exc)
+
+
 def _build_rejected_config_feedback(journal: Any) -> str:
     """AP-53: still-standing hard rejections of concrete configs, from the folded journal."""
     try:
@@ -5389,6 +5398,7 @@ def _record_skip_trial(
         bug_corrupted_reason=bug_corrupted_reason,
     )
     journal.record(entry)
+    _record_reproposal_rate_windows(journal)
 
 
 def _record_rejected_draft(
@@ -10754,6 +10764,7 @@ def _run_loop_inner(
                 provisional_diffs,
                 getattr(baseline_update, "promotion_rule", "") if baseline_update else "none",
             )
+        _record_reproposal_rate_windows(journal)  # VB-AP53-RATE
         # Evidence is the already-durable trial, supplied here rather than by the
         # planner, so a resolution can never cite a trial that did not run.
         _record_operator_hypothesis_resolution(rationale, trial_counter)
