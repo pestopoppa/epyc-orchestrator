@@ -50,6 +50,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _repl_memrl_kwargs(state: AppState) -> dict[str, Any]:
+    """MemRL components for a /v1 REPL, matching the /chat REPL sites.
+
+    Without these a /v1 REPL had no retriever or router, so ``recall()`` fell
+    into a broken legacy fallback for every /v1 client (the /chat paths in
+    ``chat.py`` and ``chat_pipeline/`` always pass both).
+    ``ensure_memrl_initialized`` is idempotent and returns False when the
+    ``memrl`` flag is off; then both values are None and the REPL tools
+    report their explicit fallback/unavailable results.
+    """
+    from src.api.services.memrl import ensure_memrl_initialized
+
+    ensure_memrl_initialized(state)
+    hybrid_router = state.hybrid_router
+    return {
+        "retriever": hybrid_router.retriever if hybrid_router is not None else None,
+        "hybrid_router": hybrid_router,
+    }
+
+
 def _sse_error_event(
     *,
     chat_id: str,
@@ -678,6 +698,7 @@ async def openai_chat_completions(
                             tool_registry=state.tool_registry,
                             script_registry=state.script_registry,
                             role=role,
+                            **_repl_memrl_kwargs(state),
                         )
                         repl_for_metadata = repl
 
@@ -879,6 +900,7 @@ async def openai_chat_completions(
                         tool_registry=state.tool_registry,
                         script_registry=state.script_registry,
                         role=role,
+                        **_repl_memrl_kwargs(state),
                     )
                     repl_for_metadata = repl
 
