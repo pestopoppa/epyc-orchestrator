@@ -13,6 +13,7 @@ from src.trace.navigation import (
     rrf_fuse,
     search_conversation,
     search_records,
+    select_budgeted_records,
 )
 
 
@@ -153,3 +154,87 @@ def test_rrf_fuse_combines_lexical_and_vector_rankings():
     assert [row["id"] for row in fused] == [1, 2]
     assert fused[0]["_rrf_sources"] == ["fts", "vector"]
     assert fused[0]["_rrf_score"] == fused[1]["_rrf_score"]
+
+
+_BUDGET_KW = dict(
+    history_is_truncated=True,
+    history_tokens=800,
+    window_tokens=1000,
+    pressure_threshold=0.5,
+    remaining_budget_fraction=0.5,
+)
+
+
+def test_select_budgeted_records_is_default_off_when_history_fits():
+    rows = [{"id": 1, "estimated_tokens": 10}]
+    assert select_budgeted_records(rows) == []
+    assert select_budgeted_records(rows, **{**_BUDGET_KW, "history_is_truncated": False}) == []
+
+
+def test_select_budgeted_records_requires_explicit_parameters():
+    with pytest.raises(TraceNavigationError, match="window_tokens, pressure_threshold"):
+        select_budgeted_records([], history_is_truncated=True, history_tokens=10)
+    for field, bad in (
+        ("window_tokens", 0),
+        ("history_tokens", -1),
+        ("history_tokens", True),
+        ("pressure_threshold", 1.5),
+        ("remaining_budget_fraction", 0.0),
+        ("remaining_budget_fraction", "0.5"),
+    ):
+        with pytest.raises(TraceNavigationError):
+            select_budgeted_records([], **{**_BUDGET_KW, field: bad})
+
+
+def test_select_budgeted_records_skips_retrieval_below_pressure_threshold():
+    rows = [{"id": 1, "estimated_tokens": 10}]
+    low = {**_BUDGET_KW, "history_tokens": 500}
+    assert select_budgeted_records(rows, **low) == []
+    assert select_budgeted_records(rows, **_BUDGET_KW) == [{"id": 1, "estimated_tokens": 10}]
+
+
+def test_select_budgeted_records_caps_by_fraction_of_remaining_budget():
+    # remaining = 200, fraction 0.5 -> budget 100
+    rows = [
+        {"id": 1, "estimated_tokens": 60},
+        {"id": 2, "estimated_tokens": 40},
+        {"id": 3, "estimated_tokens": 1},
+    ]
+    selected = select_budgeted_records(rows, **_BUDGET_KW)
+    assert [row["id"] for row in selected] == [1, 2]
+    assert sum(row["estimated_tokens"] for row in selected) <= 100
+
+
+def test_select_budgeted_records_stops_at_first_overflow_in_rank_order():
+    rows = [
+        {"id": 1, "estimated_tokens": 60},
+        {"id": 2, "estimated_tokens": 50},
+        {"id": 3, "estimated_tokens": 5},
+    ]
+    assert [row["id"] for row in select_budgeted_records(rows, **_BUDGET_KW)] == [1]
+
+
+def test_select_budgeted_records_fails_closed_on_unknown_token_cost():
+    rows = [
+        {"id": 1},
+        {"id": 2, "estimated_tokens": None},
+        {"id": 3, "estimated_tokens": 0},
+        {"id": 4, "estimated_tokens": "10"},
+        {"id": 5, "estimated_tokens": True},
+        {"id": 6, "estimated_tokens": 2.5},
+        {"id": 7, "estimated_tokens": 10},
+    ]
+    assert [row["id"] for row in select_budgeted_records(rows, **_BUDGET_KW)] == [7]
+
+
+def test_select_budgeted_records_returns_nothing_when_window_is_full():
+    rows = [{"id": 1, "estimated_tokens": 1}]
+    assert select_budgeted_records(rows, **{**_BUDGET_KW, "history_tokens": 1000}) == []
+    assert select_budgeted_records(rows, **{**_BUDGET_KW, "history_tokens": 1200}) == []
+
+
+def test_select_budgeted_records_does_not_mutate_inputs():
+    rows = [{"id": 1, "estimated_tokens": 10}]
+    selected = select_budgeted_records(rows, **_BUDGET_KW)
+    selected[0]["id"] = 99
+    assert rows == [{"id": 1, "estimated_tokens": 10}]
