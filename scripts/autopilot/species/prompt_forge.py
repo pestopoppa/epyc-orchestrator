@@ -12,9 +12,10 @@ import logging
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 log = logging.getLogger("autopilot.prompt_forge")
 
@@ -943,9 +944,18 @@ _LEAKAGE_MAX_REPORTED = 5
 # Generic instance references that need no vocabulary: "sample #12",
 # "question id 42", "task_id == 17", "problem number 3". A qualifier (#/id/index/
 # number) is required so ordinary prose such as "step 3" is not rejected.
+#
+# Two shapes (2026-09-16 review narrowing). PROSE — noun and qualifier separated by
+# space/hyphen — accepts every separator ("question id: 42"). CODE — a snake_case
+# identifier such as ``task_id`` — counts only as a COMPARISON (``==`` / ``is``):
+# ``task_index = 0``, ``sample_id = 1`` and ``task_id: 7`` are ordinary
+# assignment / mapping lines in code-shaped prompt text, not a pinned instance.
 _LEAKAGE_GENERIC_RE = re.compile(
-    r"\b(?:task|sample|item|question|problem|instance)[\s_-]*"
-    r"(?:#\s*|(?:id|idx|index|number|no\.)\s*(?:==|#|:|=|is)?\s*[\"']?)\d{1,6}\b",
+    r"\b(?:task|sample|item|question|problem|instance)"
+    r"(?:"
+    r"[\s-]*(?:#\s*|(?:id|idx|index|number|no\.)\s*(?:==|#|:|=|is)?\s*[\"']?)"
+    r"|_(?:id|idx|index|number)\s*(?:==|\bis\b)\s*[\"']?"
+    r")\d{1,6}\b",
     re.IGNORECASE,
 )
 _ID_FAMILY_TAIL_RE = re.compile(r"^(.*?[_/\-])(\d+|[0-9a-f]{8,})$", re.IGNORECASE)
@@ -1129,6 +1139,65 @@ class EvalIdVocabulary:
 
 
 _EVAL_ID_VOCAB_CACHE: dict[tuple, EvalIdVocabulary] = {}
+# Failed builds, keyed by the same file identity (path, mtime_ns, size) and held for a
+# short TTL. Without it a MALFORMED 1.35 GB pool is re-parsed on every mutation. Keyed by
+# file identity, so restoring or editing the file misses the entry at once; the TTL bounds
+# the wait for a fix that does not change identity (e.g. a chmod).
+EVAL_ID_VOCAB_NEG_TTL_ENV = "AUTOPILOT_EVAL_ID_VOCAB_NEG_TTL_S"
+DEFAULT_EVAL_ID_VOCAB_NEG_TTL_S = 60.0
+_EVAL_ID_VOCAB_NEG_CACHE: dict[tuple, tuple[float, EvalIdVocabulary]] = {}
+
+
+def _eval_id_vocab_neg_ttl_s() -> float:
+    raw = os.environ.get(EVAL_ID_VOCAB_NEG_TTL_ENV, "").strip()
+    try:
+        value = float(raw) if raw else DEFAULT_EVAL_ID_VOCAB_NEG_TTL_S
+    except ValueError:
+        return DEFAULT_EVAL_ID_VOCAB_NEG_TTL_S
+    return value if value >= 0 and math.isfinite(value) else DEFAULT_EVAL_ID_VOCAB_NEG_TTL_S
+
+
+def clear_eval_id_vocabulary_cache() -> None:
+    """Drop both the built-vocabulary cache and the failed-build cache."""
+    _EVAL_ID_VOCAB_CACHE.clear()
+    _EVAL_ID_VOCAB_NEG_CACHE.clear()
+
+
+def describe_eval_id_sources(
+    sources: tuple[tuple[Path, bool], ...] | None = None,
+) -> list[dict[str, Any]]:
+    """Resolved vocabulary sources with their on-disk status (for operator messages)."""
+    resolved = sources if sources is not None else _default_eval_id_sources()
+    out: list[dict[str, Any]] = []
+    for path, required in resolved:
+        entry: dict[str, Any] = {"path": str(path), "required": bool(required)}
+        try:
+            stat = path.stat()
+            entry.update(exists=True, size=stat.st_size, readable=os.access(path, os.R_OK))
+        except OSError:
+            entry.update(exists=False, size=None, readable=False)
+        out.append(entry)
+    return out
+
+
+# Observer of every leakage-guard verdict's vocabulary state: ``fn(available, error)``.
+# The autopilot installs its operability monitor here (startup preflight + circuit alarm).
+_EVAL_LEAKAGE_OBSERVER: Callable[[bool, str], None] | None = None
+
+
+def set_eval_leakage_observer(observer: Callable[[bool, str], None] | None) -> None:
+    global _EVAL_LEAKAGE_OBSERVER
+    _EVAL_LEAKAGE_OBSERVER = observer
+
+
+def _notify_eval_leakage_observer(vocabulary: EvalIdVocabulary) -> None:
+    observer = _EVAL_LEAKAGE_OBSERVER
+    if observer is None:
+        return
+    try:
+        observer(vocabulary.available, vocabulary.error or ("" if vocabulary.available else "empty"))
+    except Exception as exc:  # noqa: BLE001 - an observer must never change a verdict
+        log.warning("eval-leakage observer failed: %s", exc)
 
 
 def load_eval_id_vocabulary(
@@ -1157,6 +1226,9 @@ def load_eval_id_vocabulary(
     cached = _EVAL_ID_VOCAB_CACHE.get(cache_key)
     if cached is not None:
         return cached
+    negative = _EVAL_ID_VOCAB_NEG_CACHE.get(cache_key)
+    if negative is not None and time.monotonic() - negative[0] < _eval_id_vocab_neg_ttl_s():
+        return negative[1]
 
     def _rows():
         for path in present:
@@ -1165,15 +1237,20 @@ def load_eval_id_vocabulary(
     try:
         vocab = EvalIdVocabulary.from_rows(_rows(), sources=tuple(str(p) for p in present))
     except Exception as exc:  # noqa: BLE001 - any parse failure must fail CLOSED
-        return EvalIdVocabulary(error=_truncate_reason(f"eval_id_source_unreadable:{exc}"))
+        vocab = EvalIdVocabulary(error=_truncate_reason(f"eval_id_source_unreadable:{exc}"))
     if vocab.available:
         _EVAL_ID_VOCAB_CACHE.clear()
         _EVAL_ID_VOCAB_CACHE[cache_key] = vocab
+        _EVAL_ID_VOCAB_NEG_CACHE.clear()
+    else:
+        _EVAL_ID_VOCAB_NEG_CACHE.clear()
+        _EVAL_ID_VOCAB_NEG_CACHE[cache_key] = (time.monotonic(), vocab)
     return vocab
 
 
 def eval_leakage_reason(text: str, vocabulary: EvalIdVocabulary) -> str | None:
     """Fail-closed MHS-3 verdict: a rejection reason, or None when ``text`` is clean."""
+    _notify_eval_leakage_observer(vocabulary)
     if not vocabulary.available:
         return _truncate_reason(
             f"eval_leakage_vocabulary_unavailable:{vocabulary.error or 'empty'}"

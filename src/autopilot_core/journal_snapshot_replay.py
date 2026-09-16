@@ -16,7 +16,10 @@ from src.autopilot_core.journal_reconstruction import (
     objectives_from_journal_row,
     reconstruct_archive_from_journal_rows,
 )
-from src.autopilot_core.learning_exclusions import WITHIN_NOISE_EXCLUSIONS
+from src.autopilot_core.learning_exclusions import (
+    WITHIN_NOISE_EXCLUSIONS,
+    row_is_representative_member,
+)
 from src.autopilot_core.pareto_math import dominates, hypervolume, median_objectives
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
@@ -328,15 +331,7 @@ def _shaped_row_for_archive(
 
 
 def _row_requires_prefix_raw_samples(row: dict[str, Any]) -> bool:
-    bug = row.get("bug_corrupted_by") or ""
-    eval_details = row.get("eval_details") or {}
-    learning_exclusion = {}
-    if isinstance(eval_details, dict):
-        learning_exclusion = eval_details.get("learning_exclusion") or {}
-    excluded_by = ""
-    if isinstance(learning_exclusion, dict):
-        excluded_by = str(learning_exclusion.get("by") or "")
-    return bug == "mad_noise" or excluded_by in WITHIN_NOISE_EXCLUSIONS
+    return row_is_representative_member(row)
 
 
 def _load_representative_replay_clusters(

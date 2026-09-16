@@ -6467,6 +6467,17 @@ function _renderAutopilotControls(d) {
         status.textContent = 'dispatch enabled';
         status.style.color = 'var(--muted)';
     }
+    // RTG-55 MHS-3: the leakage guard fails CLOSED. Say so on the control line,
+    // or "dispatch enabled" hides a loop that rejects every mutation.
+    const leak = state.eval_leakage_guard || null;
+    if (!errored && leak && leak.last_error) {
+        const n = Number(leak.consecutive_unavailable_rejections || 0);
+        status.textContent += ' · MUTATIONS REJECTED: eval-leakage vocabulary unavailable'
+            + ` (${n} consecutive${leak.alarm_active ? ', alarm raised' : ''})`;
+        status.style.color = 'var(--bad)';
+        status.title = `${leak.last_error} · paths: ${(leak.problem_paths || []).join(', ')}`
+            + ` · runbook: ${leak.runbook || ''}`;
+    }
 }
 
 async function controlAutopilotDispatch(action) {

@@ -3301,6 +3301,10 @@ def _autopilot_state_summary(
         "pause_collision": state.get("pause_collision"),
         "dispatch_deficiency": state.get("_dispatch_deficiency"),
         "trial_counter": state.get("trial_counter"),
+        # RTG-55 MHS-3 operability: fail-closed leakage-guard status (vocabulary
+        # availability, consecutive rejections, alarm state). None before the first
+        # autopilot start that carries the monitor.
+        "eval_leakage_guard": state.get("eval_leakage_guard"),
     }
 
 

@@ -119,3 +119,39 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
         )
 
     return "", "", ""
+
+
+# ── Clean-trial representatives (operator decision (c), 2026-09-16) ─────────────
+#
+# A clean trial (SafetyGate passed, no learning exclusion) used to enter the archive as a
+# raw per-trial point, and it was journaled only AFTER the baseline-promotion decision, so
+# it could never be the "same-tier frontier representative" a promotion requires. New clean
+# rows are stamped ``eval_details.frontier_admission = "representative"`` and cluster by
+# config fingerprint exactly like trusted within-noise rows. Rows written before the stamp
+# existed keep their per-trial semantics — nothing is back-filled.
+FRONTIER_ADMISSION_KEY = "frontier_admission"
+FRONTIER_ADMISSION_REPRESENTATIVE = "representative"
+
+
+def row_is_representative_member(row: Any) -> bool:
+    """True when a journal row joins its (tier, config fingerprint) representative cluster.
+
+    The single predicate for runtime replay, snapshot tail folding and live-reproduction
+    counting: a trusted within-noise row (``mad_noise`` tag or a benign learning exclusion),
+    or a clean row stamped as a frontier representative.
+    """
+    if not isinstance(row, dict):
+        return False
+    bug = str(row.get("bug_corrupted_by") or "")
+    eval_details = row.get("eval_details")
+    if not isinstance(eval_details, dict):
+        eval_details = {}
+    exclusion = eval_details.get("learning_exclusion")
+    excluded_by = str(exclusion.get("by") or "") if isinstance(exclusion, dict) else ""
+    if bug == "mad_noise" or excluded_by in WITHIN_NOISE_EXCLUSIONS:
+        return True
+    return (
+        not bug
+        and not excluded_by
+        and eval_details.get(FRONTIER_ADMISSION_KEY) == FRONTIER_ADMISSION_REPRESENTATIVE
+    )

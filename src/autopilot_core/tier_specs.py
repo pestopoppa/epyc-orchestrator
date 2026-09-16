@@ -635,6 +635,30 @@ def objective_value(objectives: Sequence[float], name: str, tier: int | None = N
     return float(values[objective_axis_index(name, tier)])
 
 
+# ── W3e / gate-frontier (2026-09-16): the UNIT of the rate axis belongs to the POLICY ──
+#
+# `rate` is axis 1's name under every policy, so a reader that holds only the tuple and the
+# tier cannot tell tokens/second from questions/hour. Any consumer that copies the rate
+# axis into a unit-bearing field (the safety gate's `frontdoor_speed` throughput floor) MUST
+# resolve the unit here first. An unknown policy returns None: the caller must refuse, not
+# guess — guessing t/s for a q/h tuple is exactly the "every later trial fails the 0.8x
+# throughput floor" defect.
+RATE_AXIS_UNIT_TOKENS_PER_SECOND = "tokens_per_second"
+RATE_AXIS_UNIT_QUESTIONS_PER_HOUR = "questions_per_hour"
+_RATE_AXIS_UNIT_BY_POLICY: dict[str, str] = {
+    LEGACY_OBJECTIVE_POLICY: RATE_AXIS_UNIT_TOKENS_PER_SECOND,
+    TASK_RATE_OBJECTIVE_POLICY: RATE_AXIS_UNIT_QUESTIONS_PER_HOUR,
+    PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY: RATE_AXIS_UNIT_QUESTIONS_PER_HOUR,
+    RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY: RATE_AXIS_UNIT_QUESTIONS_PER_HOUR,
+    RATE_4D_OBJECTIVE_POLICY: RATE_AXIS_UNIT_QUESTIONS_PER_HOUR,
+}
+
+
+def rate_axis_unit(objective_policy: str | None) -> str | None:
+    """Unit of the ``rate`` axis under ``objective_policy``; None when the policy is unknown."""
+    return _RATE_AXIS_UNIT_BY_POLICY.get(str(objective_policy or "").strip())
+
+
 def reference_point_for(tier: int) -> tuple[float, ...]:
     """Hypervolume reference point for a tier."""
     return spec_for(tier).reference_point

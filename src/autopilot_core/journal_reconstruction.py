@@ -7,18 +7,24 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from src.autopilot_core.action_identity import config_fingerprint_from_row
-from src.autopilot_core.learning_exclusions import WITHIN_NOISE_EXCLUSIONS
+from src.autopilot_core.learning_exclusions import (
+    WITHIN_NOISE_EXCLUSIONS,
+    row_is_representative_member,
+)
 from src.autopilot_core.pareto_math import dominates, hypervolume, median_objectives
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
+    OBJECTIVE_AXIS_RATE,
     PRE_RESOURCE_LANES_RATE_4D_OBJECTIVE_POLICY,
     RESOURCE_LANES_V2_RATE_4D_OBJECTIVE_POLICY,
     RATE_4D_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
     TASK_RATE_REFERENCE_POINT,
     legacy_objectives_from_row,
+    objective_axis_index,
+    objectives_match_axes,
     rate_objectives_from_row,
     spec_for,
     task_rate_objectives_from_row,
@@ -237,12 +243,12 @@ def reconstruct_archive_from_journal_rows(
             journal_max_trial_id = _row_tid
 
         bug = row.get("bug_corrupted_by") or ""
-        excl_by = (row.get("eval_details") or {}).get("learning_exclusion", {}).get("by", "")
         if bug and bug != "mad_noise":
             if _row_tid is not None:
                 _bump(excluded_bug, _row_tid)
             continue
-        trusted_within_noise = bug == "mad_noise" or excl_by in WITHIN_NOISE_EXCLUSIONS
+        # Trusted within-noise rows AND stamped clean representatives (decision (c)).
+        trusted_within_noise = row_is_representative_member(row)
 
         try:
             tier = int(row.get("tier", DEFAULT_FRONTIER_TIER))
@@ -276,10 +282,12 @@ def reconstruct_archive_from_journal_rows(
             and deinflate_factor != 1.0
             and ts is not None
             and ts < deinflate_before_ts
-            and len(objectives) >= 2
+            and objectives_match_axes(objectives, tier)
         ):
+            # W3e: write the RATE axis by name, never by position.
             objectives = list(objectives)
-            objectives[1] = objectives[1] * deinflate_factor
+            rate_index = objective_axis_index(OBJECTIVE_AXIS_RATE, tier)
+            objectives[rate_index] = objectives[rate_index] * deinflate_factor
             deinflated = True
 
         shaped = {
