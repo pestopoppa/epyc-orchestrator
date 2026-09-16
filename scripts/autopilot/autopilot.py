@@ -153,11 +153,12 @@ from state_lock import (
 )
 from state_ownership import clear_halt_latch, halt_latch_message
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
-from actions import SERVED_CONTENT_STATE_KEY
+from actions import SERVED_CONTENT_STATE_KEY, served_content_record
 from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_result
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
     action_signature,
+    CONTENT_IDENTIFIED_ACTION_TYPES,
     INFRA_REGIME_DIGEST_KEY,
     SERVED_CONTENT_KEY,
     action_config_identity,
@@ -2729,16 +2730,28 @@ def _maybe_force_seq_promotion_fresh_eval(
     return forced, next_rationale, dict(pending)
 
 
-def _seq_promotion_replay_blocker(action: Any) -> str:
+def _seq_promotion_replay_blocker(action: Any, served_content: Any = None) -> str:
     """Return why a seq-promotion candidate cannot be replayed for fresh eval.
 
     AP-9 still guards new planner-proposed numeric_trial actions before dispatch.
     W8 replay is different: a materialized NumericSwarm trial may contain several
     applied params, but it is a single recorded candidate being re-measured.
+
+    Operator decision 2026-09-16: a prompt / code / GEPA mutation is replayable only with a
+    served-file identity (``served_content``, the sha of what the candidate trial served).
+    A replay re-measures that same content; callers that pass no identity keep mutations
+    blocked (the seq fresh-eval and replay-selection paths are unchanged).
     """
     if not isinstance(action, dict):
         return "candidate action is missing or not an object"
     action_type = str(action.get("type") or "")
+    if action_type in CONTENT_IDENTIFIED_ACTION_TYPES:
+        if served_content_files(served_content) is None:
+            return (
+                f"candidate {action_type} has no served-file identity (served_content sha); "
+                "its content cannot be re-served for validation"
+            )
+        return ""
     if action_type == "numeric_trial":
         params = action.get("params")
         if not isinstance(params, dict) or not params:
@@ -2760,6 +2773,72 @@ def _seq_promotion_replay_blocker(action: Any) -> str:
         return f"candidate action type is not replayable: {action_type or 'unknown'}"
 
     return ""
+
+
+def _multitier_validation_served_content(
+    state: dict[str, Any], context: Mapping[str, Any], trial_counter: int
+) -> dict[str, Any] | None:
+    """A mutation candidate's validation stage: the served files, hashed right after eval.
+
+    The due-action check verified the content before the forced eval; this re-hash proves
+    it was still served when the eval finished. A change in between rejects the candidate
+    (and the stage row carries no identity, so it can never count as a reproduction).
+    """
+    expected = context.get("candidate_served_content")
+    if not expected or context.get("stage") in {None, "rollback"}:
+        return None
+    pending = state.get(MULTITIER_PENDING_STATE_KEY)
+    mismatch = _multitier_served_content_mismatch({"candidate_served_content": expected})
+    if mismatch:
+        if isinstance(pending, dict):
+            _reject_multitier_candidate(
+                state, pending, reason=f"during validation: {mismatch}", trial_counter=trial_counter
+            )
+        log.error("Trial %d: multitier mutation candidate rejected — %s", trial_counter, mismatch)
+        return None
+    return _multitier_served_content_now(expected)
+
+
+def _multitier_served_content_now(expected: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Hash the files a mutation candidate served, as they are on disk now (eval time)."""
+    files = served_content_files(expected) if isinstance(expected, Mapping) else None
+    if files is None:
+        return None
+    return served_content_record([ORCH_ROOT / path for path in files], root=ORCH_ROOT)
+
+
+def _multitier_served_content_mismatch(pending: Mapping[str, Any]) -> str:
+    """Why the currently served files are not the candidate's content ("" when they are)."""
+    expected = pending.get("candidate_served_content")
+    if not expected:
+        return ""
+    want = served_content_files(expected)
+    now = _multitier_served_content_now(expected)
+    if want is None or now is None:
+        return (
+            "mutation candidate content cannot be re-served: a served file is missing or "
+            "unreadable (reverted or moved since staging)"
+        )
+    if now["files"] != want:
+        changed = sorted(p for p in want if now["files"].get(p) != want[p])
+        return (
+            "mutation candidate content is no longer served: file sha changed since staging "
+            f"({', '.join(changed)}); it was reverted, re-mutated or auto-committed away"
+        )
+    return ""
+
+
+def _mutation_restore_is_complete(restore: Any, served_content: Any) -> bool:
+    files = served_content_files(served_content)
+    if not isinstance(restore, Mapping) or files is None:
+        return False
+    contents = restore.get("preimage")
+    return (
+        restore.get("kind") in {"prompt", "code"}
+        and bool(restore.get("file"))
+        and isinstance(contents, str)
+        and bool(restore.get("preimage_sha256"))
+    )
 
 
 def _multitier_baseline_for(state: Mapping[str, Any], tier: int) -> Mapping[str, Any] | None:
@@ -2819,6 +2898,7 @@ def _multitier_candidate_is_eligible(
     eval_result: EvalResult,
     verdict: Any,
     pareto_status: str,
+    served_content: Mapping[str, Any] | None = None,
 ) -> tuple[bool, str]:
     if not MULTITIER_PROMOTION_ENABLED:
         return False, "policy disabled"
@@ -2829,11 +2909,15 @@ def _multitier_candidate_is_eligible(
     ready, reason = _multitier_required_baselines_ready(state)
     if not ready:
         return False, reason
-    blocker = _seq_promotion_replay_blocker(action)
+    blocker = _seq_promotion_replay_blocker(action, served_content)
     if blocker:
         return False, blocker
     action_type = str(action.get("type") or "")
-    if action_type == "numeric_trial":
+    if action_type in CONTENT_IDENTIFIED_ACTION_TYPES:
+        restore = (served_content or {}).get("restore") if isinstance(served_content, Mapping) else None
+        if not _mutation_restore_is_complete(restore, served_content):
+            return False, f"candidate {action_type} lacks an exact restore preimage"
+    elif action_type == "numeric_trial":
         preimage = action.get("_multitier_restore_preimage")
         if (
             not isinstance(preimage, dict)
@@ -2873,6 +2957,7 @@ def _start_multitier_validation(
     eval_result: EvalResult,
     verdict: Any,
     trial_counter: int,
+    served_content: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     seq = getattr(verdict, "seq", None)
     candidate_action = dict(action)
@@ -2896,6 +2981,15 @@ def _start_multitier_validation(
         "seq_context": dict(seq) if isinstance(seq, dict) else None,
         "final_t1_attempts": 0,
     }
+    files = served_content_files(served_content) if isinstance(served_content, Mapping) else None
+    if files is not None:
+        # Mutation candidates: the exact content every validation stage must re-serve, and
+        # the preimage a rejection restores. Kept on the pending record, never on the
+        # action, so action fingerprints and journal rows are unchanged.
+        pending["candidate_served_content"] = {"files": files}
+        restore = served_content.get("restore")
+        if isinstance(restore, Mapping):
+            pending["candidate_restore"] = dict(restore)
     state[MULTITIER_PENDING_STATE_KEY] = pending
     state["multitier_last_event"] = {
         "event": "candidate_staged",
@@ -2927,7 +3021,11 @@ def _maybe_force_multitier_due_action(
     if not isinstance(pending, dict) or pending.get("status") != "pending":
         return None, None, None
     candidate_action = pending.get("candidate_action")
-    blocker = _seq_promotion_replay_blocker(candidate_action)
+    blocker = _seq_promotion_replay_blocker(
+        candidate_action, pending.get("candidate_served_content")
+    )
+    if not blocker:
+        blocker = _multitier_served_content_mismatch(pending)
     if blocker:
         pending["status"] = "blocked"
         pending["blocked_reason"] = blocker
@@ -2988,6 +3086,8 @@ def _maybe_force_multitier_due_action(
         "trial_id": trial_counter,
         "seq_context": pending.get("seq_context"),
     }
+    if pending.get("candidate_served_content"):
+        context["candidate_served_content"] = dict(pending["candidate_served_content"])
     state["_multitier_candidate_validation"] = dict(context)
     return (
         forced,
@@ -3029,6 +3129,8 @@ def _record_multitier_validation_result(
     pending = state.get(MULTITIER_PENDING_STATE_KEY)
     if not isinstance(pending, dict):
         return None
+    if pending.get("status") not in {None, "pending"}:
+        return None  # already rejected this trial (e.g. its served content changed)
     if pending.get("candidate") != context.get("candidate"):
         _reject_multitier_candidate(
             state,
@@ -9473,6 +9575,10 @@ def _run_loop_inner(
                 ),
             )
             trial_served_content = state.pop(SERVED_CONTENT_STATE_KEY, None)
+            if trial_served_content is None and isinstance(multitier_validation_context, dict):
+                trial_served_content = _multitier_validation_served_content(
+                    state, multitier_validation_context, trial_counter
+                )
             phase.set(
                 "dispatch_complete",
                 trial_id=trial_counter,
@@ -10048,6 +10154,7 @@ def _run_loop_inner(
                     eval_result=eval_result,
                     verdict=verdict,
                     pareto_status=pareto_status,
+                    served_content=trial_served_content,
                 )
                 if eligible:
                     pending = _start_multitier_validation(
@@ -10056,6 +10163,7 @@ def _run_loop_inner(
                         eval_result=eval_result,
                         verdict=verdict,
                         trial_counter=trial_counter,
+                        served_content=trial_served_content,
                     )
                     log.info(
                         "Trial %d: T1 baseline promotion HELD for binding T2/T3 "
@@ -10128,6 +10236,7 @@ def _run_loop_inner(
                 eval_result=eval_result,
                 verdict=verdict,
                 pareto_status=pareto_status,
+                served_content=trial_served_content,
             )
             if eligible:
                 _start_multitier_validation(
@@ -10136,6 +10245,7 @@ def _run_loop_inner(
                     eval_result=eval_result,
                     verdict=verdict,
                     trial_counter=trial_counter,
+                    served_content=trial_served_content,
                 )
 
         if (

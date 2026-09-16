@@ -756,7 +756,7 @@ def test_handlers_hash_after_apply_and_before_eval_without_touching_the_action()
         body = source[source.index(handler):]
         body = body[: body.index("\ndef ", 1)]
         applied = body.index(apply_call)
-        recorded = body.index("_record_served_content(ctx", applied)
+        recorded = body.index("_record_served_content(", applied)
         evaluated = body.index("ctx.tower.hybrid_eval()", applied)
         assert applied < recorded < evaluated, handler
         assert 'action["served_content"]' not in body

@@ -40,9 +40,13 @@ ORCH_ROOT = Path(__file__).resolve().parents[2]
 SERVED_CONTENT_STATE_KEY = "_trial_served_content"
 
 
-def served_content_record(paths: Iterable[Path], *, root: Path = ORCH_ROOT) -> dict[str, Any] | None:
+def served_content_record(
+    paths: Iterable[Path], *, root: Path | None = None
+) -> dict[str, Any] | None:
     """``{"files": {path: sha256}}`` for the files as they are on disk now, or None."""
     import hashlib
+
+    root = ORCH_ROOT if root is None else root
 
     files: dict[str, str] = {}
     for path in paths:
@@ -62,13 +66,92 @@ def served_content_record(paths: Iterable[Path], *, root: Path = ORCH_ROOT) -> d
     return {"files": dict(sorted(files.items()))}
 
 
-def _record_served_content(ctx: "_ActionContext", paths: Iterable[Path]) -> None:
+def _record_served_content(
+    ctx: "_ActionContext",
+    paths: Iterable[Path],
+    *,
+    restore: dict[str, Any] | None = None,
+) -> None:
+    """Leave the served-file record for the loop; ``restore`` is the multitier preimage.
+
+    ``restore`` = ``{"kind": "prompt"|"code", "file": ..., "preimage": original text,
+    "preimage_sha256": ...}``. It stays in loop state and the pending multitier record only;
+    the journal row keeps the served shas alone.
+    """
     record = served_content_record(paths)
     if record is None:
         ctx.state.pop(SERVED_CONTENT_STATE_KEY, None)
         return
     record["captured_at"] = datetime.now(timezone.utc).isoformat()
+    if restore is not None:
+        record["restore"] = restore
     ctx.state[SERVED_CONTENT_STATE_KEY] = record
+
+
+def _mutation_restore(kind: str, mutation: Any) -> dict[str, Any] | None:
+    import hashlib
+
+    original = getattr(mutation, "original_content", None)
+    if not isinstance(original, str):
+        return None
+    return {
+        "kind": kind,
+        "file": str(getattr(mutation, "file", "") or ""),
+        "new_file": bool(getattr(mutation, "mutation_type", "") == "new_file" and not original),
+        "preimage": original,
+        "preimage_sha256": hashlib.sha256(original.encode("utf-8")).hexdigest(),
+    }
+
+
+def _restore_mutation_preimage(ctx: "_ActionContext", restore: Any) -> dict[str, Any]:
+    """Multitier rollback of a rejected mutation candidate: write the preimage back, verify."""
+    import hashlib
+
+    if not isinstance(restore, dict) or not isinstance(restore.get("preimage"), str):
+        return {"status": "error", "error": "mutation candidate lacks a restore preimage"}
+    kind = restore.get("kind")
+    target = str(restore.get("file") or "")
+    try:
+        if kind == "prompt":
+            from species.prompt_forge import PromptMutation
+
+            ctx.forge.revert_mutation(
+                PromptMutation(
+                    file=target,
+                    mutation_type="multitier_rollback",
+                    description="multitier rollback of a rejected mutation candidate",
+                    original_content=restore["preimage"],
+                )
+            )
+            path = ctx.forge._resolve_prompt_path(target)
+        elif kind == "code":
+            from species.prompt_forge import CodeMutation
+
+            new_file = bool(restore.get("new_file"))
+            ctx.forge.revert_code_mutation(
+                CodeMutation(
+                    file=target,
+                    mutation_type="new_file" if new_file else "multitier_rollback",
+                    description="multitier rollback of a rejected mutation candidate",
+                    original_content=restore["preimage"],
+                )
+            )
+            path = ORCH_ROOT / target
+            if new_file:
+                if path.exists():
+                    return {"status": "error", "error": f"new_file {target} still present"}
+                return {"status": "ok", "file": target, "removed": True}
+        else:
+            return {"status": "error", "error": f"unknown mutation restore kind: {kind}"}
+        restored_sha = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except Exception as exc:  # noqa: BLE001 - reported as a rollback failure
+        return {"status": "error", "error": f"mutation restore failed: {exc}"}
+    if restored_sha != restore.get("preimage_sha256"):
+        return {
+            "status": "error",
+            "error": f"mutation restore attestation failed for {target}: sha {restored_sha}",
+        }
+    return {"status": "ok", "file": target, "sha256": restored_sha}
 
 
 def _served_prompt_path(ctx: "_ActionContext", filename: str) -> Path | None:
@@ -1379,7 +1462,7 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
     ctx.forge.apply_mutation(mutation)
     served_path = _served_prompt_path(ctx, mutation.file)
     if served_path is not None:
-        _record_served_content(ctx, [served_path])
+        _record_served_content(ctx, [served_path], restore=_mutation_restore("prompt", mutation))
     eval_result = ctx.tower.hybrid_eval()
 
     # Revert if quality drops
@@ -1519,7 +1602,7 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
     ctx.forge.apply_mutation(mutation)
     served_path = _served_prompt_path(ctx, mutation.file)
     if served_path is not None:
-        _record_served_content(ctx, [served_path])
+        _record_served_content(ctx, [served_path], restore=_mutation_restore("prompt", mutation))
     eval_result = ctx.tower.hybrid_eval()
 
     # Safety gate check
@@ -1645,7 +1728,9 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
     bsv2_baseline = _bsv2_baseline_result(ctx)
     applied = ctx.forge.apply_code_mutation(mutation)
     if isinstance(applied, dict) and applied.get("status") not in {"rejected"}:
-        _record_served_content(ctx, [ORCH_ROOT / mutation.file])
+        _record_served_content(
+            ctx, [ORCH_ROOT / mutation.file], restore=_mutation_restore("code", mutation)
+        )
     eval_result = ctx.tower.hybrid_eval()
 
     verdict = _action_gate_check(action, ctx, eval_result)
@@ -2366,6 +2451,8 @@ def _action_rollback(action: dict[str, Any], ctx: _ActionContext):
                 "status": "error",
                 "error": "numeric candidate lacks restore preimage",
             }
+        elif candidate_type in {"prompt_mutation", "code_mutation", "gepa_optimize"}:
+            runtime_restore = _restore_mutation_preimage(ctx, pending.get("candidate_restore"))
         elif candidate_type == "structural_experiment":
             restore_flags = candidate_action.get("_multitier_restore_flags")
             runtime_restore = (

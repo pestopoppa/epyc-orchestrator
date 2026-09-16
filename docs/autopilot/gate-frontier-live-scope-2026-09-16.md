@@ -215,9 +215,33 @@ sha256 of the mutated file that was served.**
   replay is unchanged, since no stored row carries a sha.
 - **Scope.** This applies to `prompt_mutation`, `code_mutation` and `gepa_optimize`.
   `structural_prune` is not covered and stays non-promotable.
-- **Multitier mode.** Multitier staging accepts only numeric and structural candidates
-  (`_seq_promotion_replay_blocker`). So under the live launcher, mutation candidates reach a
-  promotion decision only outside multitier mode; that policy predates this change.
+- **Multitier mode (operator decision, 2026-09-16, later the same day).** Multitier staging
+  now also accepts prompt, code and GEPA mutation candidates, but only when the candidate
+  carries a `served_content` sha identity and an exact restore preimage. How they are handled:
+  - **Replay check.** `_seq_promotion_replay_blocker` allows a mutation only with an identity.
+    The seq fresh-eval and replay-selection paths pass none, so they still block mutations.
+  - **Staging.** The pending multitier record keeps the candidate's served shas and preimage
+    (`candidate_served_content`, `candidate_restore`). The action is not changed, so its
+    fingerprint and the journal rows are unchanged.
+  - **Before every forced stage (T2, T3, final_t1).** `_maybe_force_multitier_due_action`
+    re-hashes the served files. If a file changed (reverted, re-mutated or auto-committed
+    away) or is missing, the candidate is refused with that reason and the rollback runs.
+  - **After the stage's eval.** The loop hashes the files again
+    (`_multitier_validation_served_content`). If they still match, that hash becomes the row's
+    identity, so the final_t1 row clusters with the candidate row. If they changed, the
+    candidate is rejected and the row carries no identity.
+  - **Promotion.** It goes through the existing final_t1 `update_baseline` call, with the usual
+    rules: at least 3 reproductions of byte-identical content, and the median must clear the
+    quantum. Each final_t1 attempt adds one reproduction, up to
+    `AUTOPILOT_MULTITIER_MAX_ATTEMPTS_PER_TIER`, which defaults to 3. No new promotion call
+    site is added, so the AP-55 hold guards from the merge train cover this path (a test pins
+    that there are exactly three call sites).
+  - **Rollback.** For a rejected mutation candidate, the rollback writes the preimage back
+    through PromptForge's revert, which auto-commits. It then attests the restored file's sha.
+    A rejected `new_file` must end up absent. A missing preimage, or a failed attestation,
+    fails the rollback closed, the same as for numeric and structural candidates.
+  - **Cost.** The preimage text lives in `autopilot_state.json` while the candidate is pending.
+  - **`structural_prune`.** Out of scope: it is not replayable and stays non-promotable.
 
 **Regime part of the identity (verification note, 2026-09-16).** The identity uses
 `infra_fingerprint.regime_digest`: the AP-55 digest over the evaluator, kernel, recipe, models
