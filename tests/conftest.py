@@ -152,6 +152,28 @@ def _pin_runtime_feature_flags(tmp_path_factory):
             os.environ[RUNTIME_FLAGS_ENV] = previous
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _disable_kb_rag_query_length_log():
+    """Keep the suite out of the live KB-RAG query-length telemetry (H2).
+
+    `kb_rag.query()` appends to `data/kb_rag/telemetry/query_lengths.jsonl` by
+    default; a test run from the shared clone would otherwise mix synthetic
+    queries into the production observation. Tests that exercise the log
+    monkeypatch the env var to their own tmp path.
+    """
+    from src.retrieval.kb_rag_query_telemetry import LOG_ENV
+
+    previous = os.environ.get(LOG_ENV)
+    os.environ[LOG_ENV] = "off"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(LOG_ENV, None)
+        else:
+            os.environ[LOG_ENV] = previous
+
+
 @pytest.fixture(autouse=True)
 def _reset_config_between_tests():
     """Ensure config cache is clean between tests.

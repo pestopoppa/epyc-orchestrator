@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 
@@ -44,30 +45,78 @@ def _persist_solution_file(state: TaskState, code: str) -> None:
         log.debug("Failed to persist solution file: %s", e)
 
 
+SPILL_DIR = "/mnt/raid0/llm/tmp"
+_SPILL_HASH_CHARS = 16
+_SPILL_MIN_BODY = 200
+
+
+def _spill_file_path(text: str, label: str, state: TaskState) -> str:
+    """Content-addressed spill path: ``{task}_{label}_{sha256[:16]}.txt``.
+
+    The name is a function of the content, so a pointer already emitted into a
+    transcript can never be silently re-pointed at different bytes by a later
+    spill (the old ``{task}_{label}_t{turn}`` name was reopened with "w" on every
+    re-run of the same task/turn). Identical output spills once. Files written
+    under the old scheme are never touched, so their pointers keep resolving.
+    """
+    task_id = state.task_id or "scratch"
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in task_id)[:80]
+    safe_label = "".join(c if c.isalnum() or c in "-_" else "_" for c in label)[:40]
+    digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+    return f"{SPILL_DIR}/{safe_id}_{safe_label}_{digest[:_SPILL_HASH_CHARS]}.txt"
+
+
+def _write_spill_file(path: str, text: str) -> None:
+    """Write *text* to *path* atomically; an existing file (same content by name) is kept."""
+    if os.path.exists(path):
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
 def _spill_if_truncated(text: str, max_chars: int, label: str, state: TaskState) -> str:
-    """Return *text* with a retrieval pointer appended if it exceeds *max_chars*."""
+    """Return a head + tail excerpt of *text* with an exact-recall pointer if it exceeds *max_chars*.
+
+    The full text is spilled to a content-addressed file. The excerpt keeps the
+    head AND the tail (failure evidence usually lives at the end of a log), and
+    the marker between them is an executable ``peek(n, file_path=..., offset=k)``
+    call that returns exactly the omitted span. The whole result fits within
+    *max_chars* whenever *max_chars* leaves room for the marker, so a downstream
+    truncation cannot clip the pointer.
+    """
     if len(text) <= max_chars:
         return text
     from src.features import features
 
     if not features().output_spill_to_file:
         return text
-    task_id = state.task_id or "scratch"
-    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in task_id)[:80]
-    turn = state.turns
-    spill_path = f"/mnt/raid0/llm/tmp/{safe_id}_{label}_t{turn}.txt"
+    spill_path = _spill_file_path(text, label, state)
     try:
-        os.makedirs(os.path.dirname(spill_path), exist_ok=True)
-        with open(spill_path, "w", encoding="utf-8") as f:
-            f.write(text)
-        pointer_reserve = 150
-        preview_end = max(200, max_chars - pointer_reserve)
-        truncated = text[:preview_end]
-        pointer = (
-            f"\n[... {len(text) - preview_end} chars truncated; "
-            f'full {label}: peek(99999, file_path="{spill_path}")]'
-        )
-        return truncated + pointer
+        _write_spill_file(spill_path, text)
+
+        def _marker(omitted: int, start: int) -> str:
+            return (
+                f"\n[... {omitted} of {len(text)} chars truncated; exact {label} span: "
+                f'peek({omitted}, file_path="{spill_path}", offset={start})]\n'
+            )
+
+        # Size the marker with worst-case digit widths, then split the body 3:1 head:tail.
+        reserve = len(_marker(len(text), len(text)))
+        body = max(_SPILL_MIN_BODY, max_chars - reserve)
+        body = min(body, len(text) - 1)
+        tail_len = body // 4
+        head_len = body - tail_len
+        tail_start = len(text) - tail_len
+        omitted = tail_start - head_len
+        tail = text[tail_start:] if tail_len else ""
+        return text[:head_len] + _marker(omitted, head_len) + tail
     except Exception as e:
         log.debug("Failed to spill %s to file: %s", label, e)
         return text

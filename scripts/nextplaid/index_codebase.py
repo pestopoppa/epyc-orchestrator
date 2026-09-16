@@ -6,7 +6,7 @@ Usage:
 
 Phase 5: Dual-container architecture with AST-aware chunking.
   Code index → :8088 (LateOn-Code 130M, 128-dim)
-  Docs index → :8089 (answerai-colbert-small-v1-onnx)
+  Docs index → :8089 (GTE-ModernColBERT-v1 149M, 128-dim; see launch_manifest.yaml)
 
 Each index is served by a dedicated NextPLAID container with a model
 optimized for that content type. Embeddings are model-specific and
