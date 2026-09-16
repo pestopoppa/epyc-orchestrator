@@ -240,7 +240,7 @@ class TestVerificationReportV11:
     def test_operational_error_not_failure(self, report):
         # A crashed verifier: logical=unknown, execution=error (NOT a fail).
         report["checks"][0]["outcome"] = "inconclusive"
-        report["checks"][0]["inconclusive_reason"] = "verifier crashed"
+        report["checks"][0]["inconclusive_reason"] = "checker_error"  # closed cause registry (8b740065)
         report["checks"][0]["logical_status"] = "unknown"
         report["checks"][0]["execution_status"] = "error"
         del report["checks"][0]["certificate"]
