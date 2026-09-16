@@ -1033,11 +1033,15 @@ def _sample_scoreable_eval_questions_for_pool_tier(
 # AP-54 eval knowledge fence (operator decision 2026-09-16). EvalTower ALWAYS
 # sends `eval_fence` on its /chat rollouts; `AUTOPILOT_EVAL_FENCE=0` sends
 # eval_fence=false instead (the AP-54b unarmed control arm, still path-recorded).
-# A row is `fence: active` only when the API ECHOED an active fence; an API build
-# that predates the field ignores it and echoes nothing, so the row is recorded
-# `fence: absent` rather than silently assumed fenced.
+# A row's `fence` value comes from what the API ECHOED:
+# - `active`: the API echoed an armed fence.
+# - `control`: the API echoed an unarmed, record-only fence (AP-54b control arm).
+# - `absent`: nothing was echoed. An API build that predates the field ignores it,
+#   so such a row is recorded `absent` rather than silently assumed fenced.
 EVAL_FENCE_ACTIVE = "active"
+EVAL_FENCE_CONTROL = "control"
 EVAL_FENCE_ABSENT = "absent"
+_EVAL_FENCE_ECHO_STATES = {"active": EVAL_FENCE_ACTIVE, "unarmed": EVAL_FENCE_CONTROL}
 MAX_RECORDED_TOUCHED_PATHS = 32
 _MAX_RECORDED_PATH_CHARS = 256
 
@@ -1052,7 +1056,7 @@ def _eval_fence_from_response(resp: Any) -> tuple[str, list[str] | None, int]:
     echo = resp.get("eval_fence") if isinstance(resp, Mapping) else None
     if not isinstance(echo, Mapping):
         return EVAL_FENCE_ABSENT, None, 0
-    state = EVAL_FENCE_ACTIVE if echo.get("state") == EVAL_FENCE_ACTIVE else EVAL_FENCE_ABSENT
+    state = _EVAL_FENCE_ECHO_STATES.get(str(echo.get("state") or ""), EVAL_FENCE_ABSENT)
     raw_paths = echo.get("touched_paths")
     paths = [
         str(p)[:_MAX_RECORDED_PATH_CHARS]
@@ -1064,21 +1068,23 @@ def _eval_fence_from_response(resp: Any) -> tuple[str, list[str] | None, int]:
 def _eval_fence_summary(results: Sequence[Any]) -> dict[str, Any]:
     """Trial-level fence state over the scored rows (AP-54b reads this)."""
     scored = [r for r in results if not getattr(r, "error", None)]
-    active = sum(1 for r in scored if getattr(r, "fence", "") == EVAL_FENCE_ACTIVE)
-    absent = len(scored) - active
+    counts = {EVAL_FENCE_ACTIVE: 0, EVAL_FENCE_CONTROL: 0, EVAL_FENCE_ABSENT: 0}
+    for r in scored:
+        value = getattr(r, "fence", "") or EVAL_FENCE_ABSENT
+        counts[value if value in counts else EVAL_FENCE_ABSENT] += 1
+    present = [k for k, v in counts.items() if v]
     if not scored:
         state = EVAL_FENCE_ABSENT
-    elif absent == 0:
-        state = EVAL_FENCE_ACTIVE
-    elif active == 0:
-        state = EVAL_FENCE_ABSENT
+    elif len(present) == 1:
+        state = present[0]
     else:
         state = "mixed"
     recorded = [r for r in scored if getattr(r, "touched_paths", None) is not None]
     return {
         "state": state,
-        "active": active,
-        "absent": absent,
+        "active": counts[EVAL_FENCE_ACTIVE],
+        "control": counts[EVAL_FENCE_CONTROL],
+        "absent": counts[EVAL_FENCE_ABSENT],
         "rows_with_touched_paths": len(recorded),
         "rows_touching_any_path": sum(1 for r in recorded if r.touched_paths),
         "denied_count": sum(int(getattr(r, "fence_denied_count", 0) or 0) for r in scored),
@@ -3092,8 +3098,9 @@ class QuestionResult:
     # a recorded, planner-visible signal.
     tools_used: int = 0  # Number of tool invocations during this question.
     tools_called: list[str] = field(default_factory=list)  # Tool names, in call order.
-    # AP-54 eval knowledge fence: "active" only when the API echoed an armed
-    # fence; touched_paths is None when the API echoed nothing (pre-fence build).
+    # AP-54 eval knowledge fence: "active" (the API echoed an armed fence),
+    # "control" (it echoed a record-only fence) or "absent" (no echo).
+    # touched_paths is None when the API echoed nothing (pre-fence build).
     fence: str = EVAL_FENCE_ABSENT
     touched_paths: list[str] | None = None
     fence_denied_count: int = 0

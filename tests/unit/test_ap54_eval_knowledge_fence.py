@@ -106,11 +106,11 @@ def test_deny_reason_leaves_ordinary_paths_alone(path: str) -> None:
 def test_eval_secrets_file_is_fenced(monkeypatch, tmp_path: Path) -> None:
     secrets = tmp_path / "secrets.json"
     monkeypatch.setenv("EVAL_SECRETS_PATH", str(secrets))
-    kf._explicit_roots_cached.cache_clear()
+    kf.refresh_roots()
     try:
         assert kf.deny_reason(str(secrets)) == "knowledge_root"
     finally:
-        kf._explicit_roots_cached.cache_clear()
+        kf.refresh_roots()
 
 
 # ── registry path: builtin file tools ────────────────────────────────────
@@ -568,3 +568,265 @@ async def test_unfenced_eval_request_is_logged_not_silent(caplog) -> None:
             response = await chat_mod.chat(request, _FakeHttpRequest(), MagicMock())
     assert response.eval_fence is None
     assert any("UNFENCED" in rec.getMessage() for rec in caplog.records)
+
+
+
+# ── review fixes (Fable review of a8bdb15f) ──────────────────────────────
+
+
+@pytest.fixture()
+def llm_root(tmp_path: Path, monkeypatch) -> Path:
+    """A hermetic llm root with checkouts the name rule cannot see."""
+    root = tmp_path / "llm"
+    for rel in ("worktrees/mains/mainA", "tmp/deploy"):
+        wiki = root / rel / "wiki"
+        wiki.mkdir(parents=True)
+        (wiki / "INDEX.md").write_text("SECRET wiki content\n")
+    (root / "worktrees" / "mains" / "mainA" / "src").mkdir()
+    (root / "worktrees" / "mains" / "mainA" / "src" / "ok.py").write_text("x = 1\n")
+    (root / "work").mkdir()
+    (root / "work" / "notes.txt").write_text("plain\n")
+    monkeypatch.setattr(kf, "_llm_root", lambda: str(root))
+    kf.refresh_roots()
+    yield root
+    kf.refresh_roots()
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/mnt/raid0/llm/worktrees/mains/mainA/wiki/INDEX.md", "/mnt/raid0/llm/tmp/deploy/wiki/INDEX.md"],
+)
+def test_live_worktree_checkouts_are_fenced(path: str) -> None:
+    if not Path(path).parent.is_dir():
+        pytest.skip("checkout not present on this host")
+    kf.refresh_roots()
+    assert kf.deny_reason(path) == "knowledge_root"
+
+
+def test_marker_discovered_checkouts_are_fenced(llm_root: Path) -> None:
+    for rel in ("worktrees/mains/mainA", "tmp/deploy"):
+        assert kf.deny_reason(str(llm_root / rel / "wiki" / "INDEX.md")) == "knowledge_root"
+    assert kf.deny_reason(str(llm_root / "worktrees/mains/mainA/src/ok.py")) is None
+
+
+def test_git_worktree_list_discovers_checkouts_outside_the_glob(tmp_path: Path, monkeypatch) -> None:
+    import subprocess
+
+    llm = tmp_path / "llm"
+    repo = llm / "epyc-root"
+    repo.mkdir(parents=True)
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q", str(repo)], check=True)
+    (repo / "README").write_text("r\n")
+    subprocess.run([*git, "-C", str(repo), "add", "README"], check=True)
+    subprocess.run([*git, "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+    far = tmp_path / "far" / "a" / "b" / "c" / "d" / "wt"
+    subprocess.run([*git, "-C", str(repo), "worktree", "add", "-q", str(far)], check=True)
+    (far / "handoffs").mkdir()
+    assert str(far) in kf.discover_checkouts(str(llm))
+    monkeypatch.setattr(kf, "_llm_root", lambda: str(llm))
+    kf.refresh_roots()
+    try:
+        assert kf.deny_reason(str(far / "handoffs" / "x.md")) == "knowledge_root"
+    finally:
+        kf.refresh_roots()
+
+
+def test_walks_rooted_at_a_worktree_are_refused(llm_root: Path) -> None:
+    reg = _registry()
+    main_a = str(llm_root / "worktrees" / "mains" / "mainA")
+    kf.begin(True)
+    for cmd in (["grep", "-r", "SECRET", main_a], ["find", main_a], ["ls", "-R", main_a]):
+        msg = kf.check_shell(cmd, "/tmp")
+        assert msg and "walk_contains_fenced_root" in msg, cmd
+    assert kf.check_shell(["grep", "-r", "x"], main_a) is not None
+    found = reg.invoke("search_files", "frontdoor", directory=main_a, content="SECRET")
+    assert found["success"] is False and "walk_contains_fenced_root" in found["error"]
+    # A single file in the same checkout outside the knowledge folders stays readable.
+    assert kf.check_shell(["cat", f"{main_a}/src/ok.py"], "/tmp") is None
+
+
+@pytest.mark.skipif(sys.version_info >= (3, 13), reason="realpath no longer raises here")
+def test_unresolvable_path_is_denied_not_crashed() -> None:
+    reg = _registry()
+    path = "/proc/1/root/etc/passwd"
+    try:
+        __import__("os").path.realpath(path)
+        pytest.skip("realpath resolves /proc/1/root on this host")
+    except OSError:
+        pass
+    carrier = kf.begin(True)
+    result = reg.invoke("read_file", "frontdoor", path=path)
+    assert result["success"] is False
+    assert "unresolvable_path" in result["error"]
+    assert carrier.snapshot()["denied_paths"] == [path]
+    kf.begin(False)
+    assert reg.invoke("read_file", "frontdoor", path=path)["success"] is False  # OS refusal
+    kf.begin(None)
+    assert kf.check_tool_call("read_file", {"path": path}) is None
+
+
+def test_check_tool_call_fails_closed_when_armed(monkeypatch) -> None:
+    def boom(*_a, **_k):
+        raise RuntimeError("classification exploded")
+
+    monkeypatch.setattr(kf, "fence_roots", boom)
+    kf.begin(True)
+    assert kf.check_tool_call("read_file", {"path": "/tmp/x"}).startswith(kf.DENY_PREFIX)
+    kf.begin(False)
+    assert kf.check_tool_call("read_file", {"path": "/tmp/x"}) is None
+
+
+# run_python_code runtime fence
+
+
+def _run_python(code: str) -> str:
+    from src.repl_environment.external_access import _ExternalAccessMixin
+
+    return _ExternalAccessMixin._run_python_code(_fake_shell_env(), code)
+
+
+_BYPASSES = {
+    "concat": "print(open('{wiki_dir}'[:-5] + '/wiki/INDEX.md').read())",
+    "pathlib": "from pathlib import Path\nprint((Path('{wiki_dir}').parent / 'wiki' / 'INDEX.md').read_text())",
+    "os_walk": "import os\nfor r, d, f in os.walk('{root}'):\n    for n in f:\n        p = os.path.join(r, n)\n        print(p, open(p).read())",
+    "subprocess_cat": "import subprocess\nprint(subprocess.run(['cat', '{wiki_dir}/INDEX.md'], capture_output=True, text=True).stdout)",
+    "shell_true": "import subprocess\nprint(subprocess.run('cat {wiki_dir}/INDEX.md', shell=True, capture_output=True, text=True).stdout)",
+    "os_system": "import os\nos.system('cat {wiki_dir}/INDEX.md')",
+    "glob": "import glob\nprint(glob.glob('{root}/**/INDEX.md', recursive=True))",
+    "nested_python": "import subprocess\nprint(subprocess.run(['python3', '-c', 'print(open(\"{wiki_dir}/INDEX.md\").read())'], capture_output=True, text=True).stdout)",
+}
+
+
+@pytest.mark.parametrize("name", sorted(_BYPASSES))
+def test_run_python_code_bypasses_are_fenced(llm_root: Path, name: str) -> None:
+    wiki_dir = str(llm_root / "worktrees" / "mains" / "mainA" / "wiki")
+    code = _BYPASSES[name].format(wiki_dir=wiki_dir, root=str(llm_root))
+    carrier = kf.begin(True)
+    out = _run_python(code)
+    assert "SECRET" not in out, out
+    assert name == "os_walk" or name == "glob" or kf.DENY_PREFIX in out, out
+    snap = carrier.snapshot()
+    assert snap["denied_count"] >= 1, snap
+    if name not in ("nested_python", "glob", "os_walk"):
+        assert f"{wiki_dir}/INDEX.md" in snap["touched_paths"]
+    # The plain file under the same root is still readable by the walk.
+    if name == "os_walk":
+        assert "plain" in out
+
+
+def test_run_python_code_control_arm_records_without_denying(llm_root: Path) -> None:
+    wiki_file = str(llm_root / "worktrees" / "mains" / "mainA" / "wiki" / "INDEX.md")
+    carrier = kf.begin(False)
+    out = _run_python(f"print(open('{wiki_file}').read())")
+    assert "SECRET wiki content" in out
+    snap = carrier.snapshot()
+    assert wiki_file in snap["touched_paths"]
+    assert snap["denied_count"] == 0
+
+
+def test_run_python_code_unfenced_is_unchanged(llm_root: Path, monkeypatch) -> None:
+    import subprocess
+
+    wiki_file = str(llm_root / "worktrees" / "mains" / "mainA" / "wiki" / "INDEX.md")
+    code = f"import sys\nprint(open('{wiki_file}').read())\nprint(sys.argv[0].endswith('.py'), __name__)\nraise ValueError('boom')"
+    kf.begin(None)
+    assert kf.python_fence_launch("/tmp/x.py", "/tmp") is None
+    seen: list = []
+    real_run = subprocess.run
+
+    def spy(cmd, **kwargs):
+        seen.append((cmd, kwargs))
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    out = _run_python(code)
+    assert len(seen) == 1
+    cmd, kwargs = seen[0]
+    assert cmd[0] == "python3" and len(cmd) == 2 and "env" not in kwargs
+    assert "SECRET wiki content" in out and "True __main__" in out
+    assert 'raise ValueError' in out and "ValueError: boom" in out
+
+
+def test_fenced_child_keeps_script_semantics(llm_root: Path) -> None:
+    code = (
+        "from __future__ import annotations\n"
+        "import sys\n"
+        "def f() -> undefined_name: return 1\n"
+        "print(__name__, sys.argv[0].endswith('.py'), f())\n"
+        "raise ValueError('boom')\n"
+    )
+    kf.begin(True)
+    out = _run_python(code)
+    assert "__main__ True 1" in out
+    assert "ValueError: boom" in out
+    assert 'line 5' in out
+    assert "<string>" not in out
+
+
+# control arm and shell evasions
+
+
+def test_control_arm_is_distinguishable_from_an_old_api() -> None:
+    import eval_tower
+
+    control = {"eval_fence": {"state": "unarmed", "touched_paths": [], "denied_count": 0}}
+    assert eval_tower._eval_fence_from_response(control) == ("control", [], 0)
+    assert eval_tower._eval_fence_from_response({}) == ("absent", None, 0)
+    r = eval_tower.QuestionResult(
+        question_id="q1", qid="stable-q1", suite="math", prompt="p", expected="4",
+        answer="4", correct=True, elapsed_s=1.0, fence="control", touched_paths=[],
+    )
+    assert eval_tower._compact_question_result(r) == {
+        "qid": "stable-q1",
+        "question_id": "q1",
+        "suite": "math",
+        "partition": "core",
+        "correct": True,
+        "latency_ms": 1000,
+        "tokens_generated": 0,
+        "tools_used": 0,
+        "answer_hash": eval_tower.normalized_answer_hash("4"),
+        "fence": "control",
+        "touched_paths": [],
+    }
+    summary = eval_tower._eval_fence_summary([r])
+    assert summary["state"] == "control"
+    assert summary["control"] == 1 and summary["active"] == 0 and summary["absent"] == 0
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        ["awk", 'BEGIN { while ((getline line < "/mnt/raid0/llm/epyc-root/wiki/INDEX.md") > 0) print line }'],
+        ["awk", 'BEGIN { system("cat x") }'],
+        ["awk", 'BEGIN { "cat x" | getline y }'],
+        ["sed", "r /mnt/raid0/llm/epyc-root/wiki/INDEX.md", "/etc/hostname"],
+        ["sed", "-e", "1r x", "/etc/hostname"],
+        ["sed", "s/a/b/w out", "/etc/hostname"],
+        ["sed", "-f", "prog.sed", "/etc/hostname"],
+        ["git", "log", "--format=%B"],
+        ["git", "log", "--pretty=full"],
+    ],
+)
+def test_shell_io_evasions_are_refused_when_armed(cmd) -> None:
+    kf.begin(True)
+    assert kf.check_shell(cmd, "/tmp") is not None
+    kf.begin(False)
+    assert kf.check_shell(cmd, "/tmp") is None
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        ["awk", "{print $1}", "/etc/hostname"],
+        ["awk", "$1 > 3 || $2 == 1 {print}", "/etc/hostname"],
+        ["sed", "s/a/b/g", "/etc/hostname"],
+        ["sed", "-n", "/re/p", "/etc/hostname"],
+        ["git", "log", "--oneline"],
+        ["git", "status"],
+    ],
+)
+def test_ordinary_shell_programs_still_run_when_armed(cmd) -> None:
+    kf.begin(True)
+    assert kf.check_shell(cmd, "/tmp") is None

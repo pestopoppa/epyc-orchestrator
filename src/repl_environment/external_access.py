@@ -274,6 +274,7 @@ class _ExternalAccessMixin:
             tmp_dir = "/mnt/raid0/llm/tmp"
         os.makedirs(tmp_dir, exist_ok=True)
 
+        fence_launch = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".py", dir=tmp_dir, delete=False,
@@ -281,14 +282,30 @@ class _ExternalAccessMixin:
                 f.write(code)
                 script_path = f.name
 
-            result = subprocess.run(
-                ["python3", script_path],
-                input=stdin_data or None,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=tmp_dir,
-            )
+            # AP-54: under an eval fence (armed or control arm) the child runs
+            # behind the audit-hook bootstrap; production launches exactly as before.
+            from src.repl_environment.knowledge_fence import python_fence_launch
+
+            fence_launch = python_fence_launch(script_path, tmp_dir)
+            if fence_launch is None:
+                result = subprocess.run(
+                    ["python3", script_path],
+                    input=stdin_data or None,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=tmp_dir,
+                )
+            else:
+                result = subprocess.run(
+                    fence_launch.argv,
+                    input=stdin_data or None,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=tmp_dir,
+                    env=fence_launch.env,
+                )
 
             output = result.stdout
             if result.stderr:
@@ -314,3 +331,7 @@ class _ExternalAccessMixin:
                 os.unlink(script_path)
             except Exception:
                 pass
+            if fence_launch is not None:
+                from src.repl_environment.knowledge_fence import fold_python_touched
+
+                fold_python_touched(fence_launch.touched_file)

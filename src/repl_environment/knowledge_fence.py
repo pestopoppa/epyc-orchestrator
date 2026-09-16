@@ -34,8 +34,11 @@ parallel dispatch) submit through ``run_in_context`` below.
 What the fence denies
 ---------------------
 * knowledge roots: ``wiki``, ``handoffs``, ``research``, ``progress`` and
-  ``docs/chapters`` of any epyc-root checkout (``/workspace``, ``<llm>/epyc-root*``,
-  ``<llm>/root-archetype*``), plus every root listed in
+  ``docs/chapters`` of every knowledge-carrying checkout. Checkouts are found by
+  name (``/workspace``, ``<llm>/epyc-root*``, ``<llm>/root-archetype*``), by
+  ``git worktree list``, and by globbing up to four levels below the llm root for
+  ``wiki/`` or ``handoffs/active/``, which catches ``worktrees/mains/mainA`` and
+  ``tmp/deploy``. The fence also covers every root listed in
   ``config/kb_rag_config.yaml`` and any ``data/kb_rag`` index directory;
 * eval gold: any ``benchmarks/prompts`` or ``benchmarks/results`` directory (the
   question pool, designed cores and past rows carry expected answers), the
@@ -46,23 +49,40 @@ What the fence denies
 Recursive walks (``search_files``, recursive listings, ``grep -r``, ``find``) are
 denied when their root CONTAINS a concrete fenced directory.
 
-Residual gap, stated rather than hidden: ``run_python_code`` executes arbitrary
-code in a subprocess. Under the fence it is refused only when its source names a
-fenced location literally; a program that builds the path at runtime is not
-caught. ``run_shell`` refuses ``python``/``python3`` outright under the fence.
+A path whose realpath cannot be resolved (``/proc/1/root/...``) is refused.
+
+``run_python_code`` runs its child under a ``sys.addaudithook`` bootstrap
+(``_fence_audit_hook``). It refuses fenced ``open``, ``os.scandir``,
+``os.listdir``, ``glob.glob``, ``subprocess.Popen``, ``os.system``, exec and
+spawn, and it refuses nested Python interpreters. Touched paths go to a side
+file that the parent folds into the carrier. ``run_shell`` refuses
+``python``/``python3``, as well as awk/sed programs that do file or command I/O.
+
+Residual gaps, stated rather than hidden:
+- The audit hook does not see ``ctypes``/libc calls.
+- It does not see shell variable indirection inside a ``sh -c`` string spawned
+  by the child.
 """
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import glob
+import json
 import os
+import re
 import shlex
+import subprocess
+import tempfile
 import threading
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from functools import lru_cache
+from pathlib import Path
 from typing import Any, Callable, Iterable
+
+from src.repl_environment import _fence_rules as _rules
 
 FENCE_ACTIVE = "active"
 FENCE_UNARMED = "unarmed"
@@ -73,11 +93,6 @@ MAX_PATH_CHARS = 256
 
 DENY_PREFIX = "EVAL FENCE"
 
-_KNOWLEDGE_SUBDIRS = frozenset({"wiki", "handoffs", "research", "progress"})
-_KNOWLEDGE_CHECKOUT_PREFIXES = ("epyc-root", "root-archetype")
-_GOLD_PAIRS = (("benchmarks", "prompts"), ("benchmarks", "results"), ("data", "kb_rag"))
-_GOLD_BASENAMES = frozenset({"sentinel_questions.yaml", "tool_sentinels.yaml"})
-_PHYSREASON_DIR = "PhysReason_full"
 
 # Tool arguments that name a filesystem location, across the builtin and
 # src/tools registries.
@@ -167,6 +182,31 @@ def run_in_context(fn: Callable[..., Any]) -> Callable[..., Any]:
 
 # ── roots ────────────────────────────────────────────────────────────────
 
+# Checkout discovery walks up to four directory levels under the llm root and asks
+# git for the epyc-root worktrees. That takes about 0.7s cold, so the result is
+# cached. The TTL is short enough that a checkout created mid-campaign is fenced
+# within minutes.
+ROOTS_TTL_S = 300.0
+_MARKER_MAX_DEPTH = 4
+_KNOWLEDGE_MARKERS = ("wiki", "handoffs/active")
+_roots_lock = threading.Lock()
+_roots_cache: dict[str, Any] = {"at": 0.0, "key": None, "value": None}
+
+
+@dataclass(frozen=True)
+class FenceRoots:
+    fenced_dirs: tuple[str, ...]
+    explicit_roots: tuple[str, ...]
+    tree_only: tuple[str, ...]
+    checkouts: tuple[str, ...]
+
+    def as_config(self) -> dict[str, Any]:
+        return {
+            "fenced_dirs": list(self.fenced_dirs),
+            "explicit_roots": list(self.explicit_roots),
+            "tree_only": list(self.tree_only),
+        }
+
 
 def _llm_root() -> str:
     try:
@@ -180,11 +220,11 @@ def _llm_root() -> str:
 def _project_root() -> str:
     from src.repl_environment.task_root import _project_root as _pr
 
-    return os.path.realpath(str(_pr()))
+    return _rules.safe_realpath(str(_pr())) or str(_pr())
 
 
-def _kb_rag_roots() -> list[str]:
-    cfg = os.path.join(_project_root(), "config", "kb_rag_config.yaml")
+def _kb_rag_roots(project: str) -> list[str]:
+    cfg = os.path.join(project, "config", "kb_rag_config.yaml")
     try:
         import yaml
 
@@ -203,123 +243,146 @@ def _eval_artifact_root() -> str:
     return os.environ.get("AUTOPILOT_EVAL_ARTIFACT_ROOT", "/mnt/raid0/llm/tmp/eval_tower_trials")
 
 
-def _norm(path: str) -> str:
-    return os.path.realpath(path).rstrip("/") or "/"
+def _git_worktrees(repo: str) -> list[str]:
+    """Worktree paths of ``repo`` from ``git worktree list --porcelain``. Never raises."""
+    if not os.path.isdir(repo):
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo, "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    return [line[len("worktree ") :].strip() for line in proc.stdout.splitlines()
+            if line.startswith("worktree ")]
 
 
-@lru_cache(maxsize=4)
-def _explicit_roots_cached(_key: str) -> tuple[str, ...]:
-    roots: set[str] = set()
-    for raw in _kb_rag_roots():
-        roots.add(raw.rstrip("/"))
-        roots.add(_norm(raw))
-    for raw in (_eval_secrets_path(), _eval_artifact_root()):
-        roots.add(raw.rstrip("/"))
-        roots.add(_norm(raw))
-    return tuple(sorted(r for r in roots if r and r != "/"))
+def discover_checkouts(llm: str) -> set[str]:
+    """Every directory that looks like a knowledge-carrying checkout.
+
+    The sources are:
+    - ``/workspace``;
+    - ``<llm>/epyc-root*`` and ``<llm>/root-archetype*``;
+    - every git worktree of epyc-root;
+    - any directory up to four levels below the llm root that contains ``wiki/``
+      or ``handoffs/active/``, such as ``worktrees/mains/mainA`` or ``tmp/deploy``.
+    """
+    bases: set[str] = {"/workspace"}
+    for prefix in _rules.KNOWLEDGE_CHECKOUT_PREFIXES:
+        bases.update(glob.glob(f"{llm}/{prefix}*"))
+    for repo in ("/workspace", f"{llm}/epyc-root"):
+        bases.update(_git_worktrees(repo))
+    for depth in range(1, _MARKER_MAX_DEPTH + 1):
+        stem = f"{llm}/" + "*/" * depth
+        for marker in _KNOWLEDGE_MARKERS:
+            for hit in glob.glob(stem + marker):
+                bases.add(hit[: -len(marker) - 1])
+    return {b.rstrip("/") for b in bases if b and os.path.isdir(b)}
 
 
-def _explicit_roots() -> tuple[str, ...]:
-    return _explicit_roots_cached(f"{_project_root()}|{_eval_secrets_path()}|{_eval_artifact_root()}")
-
-
-@lru_cache(maxsize=4)
-def _concrete_fenced_dirs_cached(_key: str) -> tuple[str, ...]:
-    """Concrete fenced directories, used to refuse recursive walks that contain one."""
+def _compute_roots() -> FenceRoots:
     llm = _llm_root()
     project = _project_root()
     research = os.environ.get("EPYC_RESEARCH_ROOT", f"{llm}/epyc-inference-research")
-    found: set[str] = set(_explicit_roots())
-    checkouts = ["/workspace"]
-    for prefix in _KNOWLEDGE_CHECKOUT_PREFIXES:
-        checkouts.extend(glob.glob(f"{llm}/{prefix}*"))
+    checkouts = discover_checkouts(llm)
+    candidates_dirs: set[str] = set()
     for base in checkouts:
-        for sub in (*_KNOWLEDGE_SUBDIRS, "docs/chapters"):
-            found.add(f"{base}/{sub}")
-    repo_bases = {project, research, *glob.glob(f"{llm}/*"), *glob.glob(f"{llm}/worktrees/*")}
+        for sub in _rules.KNOWLEDGE_SUBDIRS:
+            candidates_dirs.add(f"{base}/{sub}")
+        for nested in _rules.KNOWLEDGE_NESTED:
+            candidates_dirs.add(f"{base}/" + "/".join(nested))
+    repo_bases = {project, research, *checkouts, *glob.glob(f"{llm}/*"),
+                  *glob.glob(f"{llm}/worktrees/*")}
     for base in repo_bases:
-        for a, b in _GOLD_PAIRS:
-            found.add(f"{base}/{a}/{b}")
-    found.add(f"{project}/scripts/autopilot")
-    found.update(glob.glob(f"{llm}/tmp/physreason/{_PHYSREASON_DIR}"))
-    out: set[str] = set()
-    for p in found:
-        if os.path.exists(p):
-            out.add(p.rstrip("/"))
-            out.add(_norm(p))
-    return tuple(sorted(out))
+        for a, b in _rules.GOLD_PAIRS:
+            candidates_dirs.add(f"{base}/{a}/{b}")
+    fenced: set[str] = set()
+    for d in candidates_dirs:
+        if os.path.isdir(d):
+            fenced.add(d.rstrip("/"))
+            real = _rules.safe_realpath(d)
+            if real:
+                fenced.add(real)
+    explicit: set[str] = set()
+    raw_explicit = [*_kb_rag_roots(project), _eval_secrets_path(), _eval_artifact_root(),
+                    *(f"{project}/scripts/autopilot/{n}" for n in _rules.GOLD_BASENAMES)]
+    for raw in raw_explicit:
+        explicit.add(raw.rstrip("/"))
+        real = _rules.safe_realpath(raw)
+        if real:
+            explicit.add(real)
+    tree_only = {p.rstrip("/") for p in glob.glob(f"{llm}/tmp/physreason/{_rules.PHYSREASON_DIR}")}
+    return FenceRoots(
+        fenced_dirs=tuple(sorted(d for d in fenced if d != "/")),
+        explicit_roots=tuple(sorted(r for r in explicit if r and r != "/")),
+        tree_only=tuple(sorted(tree_only)),
+        checkouts=tuple(sorted(checkouts)),
+    )
 
 
-def _concrete_fenced_dirs() -> tuple[str, ...]:
-    return _concrete_fenced_dirs_cached(f"{_llm_root()}|{_project_root()}")
+def fence_roots() -> FenceRoots:
+    """The current fence roots, recomputed at most once per ``ROOTS_TTL_S``."""
+    key = (_llm_root(), _eval_secrets_path(), _eval_artifact_root(),
+           os.environ.get("EPYC_RESEARCH_ROOT", ""))
+    now = time.monotonic()
+    with _roots_lock:
+        cached = _roots_cache["value"]
+        if cached is not None and _roots_cache["key"] == key and now - _roots_cache["at"] < ROOTS_TTL_S:
+            return cached
+    value = _compute_roots()
+    with _roots_lock:
+        _roots_cache.update(at=now, key=key, value=value)
+    return value
 
 
-def _under(path: str, root: str) -> bool:
-    return path == root or path.startswith(root.rstrip("/") + "/")
+def refresh_roots() -> None:
+    """Drop the cached roots (tests, or after creating a checkout)."""
+    with _roots_lock:
+        _roots_cache.update(at=0.0, key=None, value=None)
 
 
-def _component_reason(path: str) -> str | None:
-    parts = [p for p in path.split("/") if p]
-    if path.startswith("/workspace/") and len(parts) >= 2:
-        if parts[1] in _KNOWLEDGE_SUBDIRS or parts[1:3] == ["docs", "chapters"]:
-            return "knowledge_root"
-    for i, part in enumerate(parts[:-1]):
-        if part.startswith(_KNOWLEDGE_CHECKOUT_PREFIXES):
-            nxt = parts[i + 1]
-            if nxt in _KNOWLEDGE_SUBDIRS or parts[i + 1 : i + 3] == ["docs", "chapters"]:
-                return "knowledge_root"
-        if (part, parts[i + 1]) in _GOLD_PAIRS:
-            return "knowledge_root" if part == "data" else "eval_gold"
-        if part == _PHYSREASON_DIR:
-            # <PhysReason_full>/<problem>/images/... is the served image; the rest
-            # (problem.json) carries the solution.
-            if not (len(parts) > i + 2 and parts[i + 2] == "images"):
-                return "eval_gold"
-    if parts and parts[-1] in _GOLD_BASENAMES:
-        return "eval_gold"
-    return None
+def _resolve_cwd(path: str, cwd: str | None) -> str:
+    if cwd is not None:
+        return cwd
+    if os.path.isabs(os.path.expanduser(path)):
+        return "/"
+    from src.repl_environment.task_root import get_task_root, task_root_active
+
+    return str(get_task_root()) if task_root_active() else os.getcwd()
 
 
-def _candidates(path: str, cwd: str | None) -> list[str]:
-    raw = os.path.expanduser(str(path))
-    if not os.path.isabs(raw):
-        if cwd is not None:
-            raw = os.path.join(cwd, raw)
-        else:
-            from src.repl_environment.task_root import resolve_task_path
-
-            raw = resolve_task_path(raw)
-    lexical = os.path.normpath(raw)
-    real = _norm(raw)
-    return [lexical] if lexical == real else [lexical, real]
+def _classify(path: str, *, cwd: str | None, tree: bool) -> str | None:
+    if not path:
+        return None
+    roots = fence_roots()
+    return _rules.classify(
+        str(path),
+        _resolve_cwd(str(path), cwd),
+        roots.fenced_dirs,
+        roots.explicit_roots,
+        roots.tree_only,
+        tree=tree,
+    )
 
 
 def deny_reason(path: str, *, cwd: str | None = None) -> str | None:
-    """Why ``path`` is fenced, or ``None``. Pure: ignores whether the fence is armed."""
-    if not path:
-        return None
-    for cand in _candidates(path, cwd):
-        reason = _component_reason(cand)
-        if reason:
-            return reason
-        for root in _explicit_roots():
-            if _under(cand, root):
-                return "knowledge_root"
-    return None
+    """Why ``path`` is fenced, or ``None``. Pure: ignores whether the fence is armed.
+
+    A path whose realpath cannot be resolved (e.g. ``/proc/1/root/...``) is
+    reported as ``unresolvable_path``, which an armed fence refuses.
+    """
+    return _classify(path, cwd=cwd, tree=False)
 
 
 def tree_deny_reason(path: str, *, cwd: str | None = None) -> str | None:
     """Like ``deny_reason`` but also refuses a directory that CONTAINS fenced data."""
-    reason = deny_reason(path, cwd=cwd)
-    if reason:
-        return reason
-    for cand in _candidates(path, cwd):
-        if cand == "/":
-            return "walk_contains_fenced_root"
-        for fenced in _concrete_fenced_dirs():
-            if _under(fenced, cand):
-                return "walk_contains_fenced_root"
-    return None
+    return _classify(path, cwd=cwd, tree=True)
 
 
 def _deny_message(path: str, reason: str) -> str:
@@ -333,11 +396,17 @@ def _deny_message(path: str, reason: str) -> str:
 
 
 def check_path(path: str, *, tree: bool = False, cwd: str | None = None) -> str | None:
-    """Record ``path`` and return a denial message when the armed fence refuses it."""
+    """Record ``path`` and return a denial message when the armed fence refuses it.
+
+    Fails closed: if classification itself raises, an armed fence refuses.
+    """
     carrier = _carrier.get()
     if carrier is None or not path:
         return None
-    reason = (tree_deny_reason if tree else deny_reason)(str(path), cwd=cwd)
+    try:
+        reason = (tree_deny_reason if tree else deny_reason)(str(path), cwd=cwd)
+    except Exception as exc:  # noqa: BLE001 - the fence must never crash a rollout
+        reason = f"fence_error:{type(exc).__name__}"
     denied = bool(carrier.armed and reason)
     carrier.record(str(path), denied=denied)
     return _deny_message(path, reason) if denied and reason else None
@@ -351,7 +420,11 @@ def filter_paths(paths: Iterable[Any]) -> list[Any]:
         return items
     kept = []
     for item in items:
-        if deny_reason(str(item)):
+        try:
+            fenced = deny_reason(str(item)) is not None
+        except Exception:  # noqa: BLE001
+            fenced = True
+        if fenced:
             with carrier._lock:
                 carrier.denied_count += 1
             continue
@@ -360,10 +433,19 @@ def filter_paths(paths: Iterable[Any]) -> list[Any]:
 
 
 def check_tool_call(tool_name: str, kwargs: dict[str, Any]) -> str | None:
-    """Registry-level hook: path-like arguments of any tool."""
+    """Registry-level hook: path-like arguments of any tool. Never raises."""
     carrier = _carrier.get()
     if carrier is None:
         return None
+    try:
+        return _check_tool_call(carrier, tool_name, kwargs)
+    except Exception as exc:  # noqa: BLE001 - fail closed when armed, open otherwise
+        if carrier.armed:
+            return f"{DENY_PREFIX}: {tool_name} refused (fence_error:{type(exc).__name__})"
+        return None
+
+
+def _check_tool_call(carrier: FenceCarrier, tool_name: str, kwargs: dict[str, Any]) -> str | None:
     if tool_name == "doc_search" and carrier.armed:
         carrier.record("doc_search:<index>", denied=True)
         return f"{DENY_PREFIX}: doc_search indexes project docs and handoffs; disabled during evaluation"
@@ -393,8 +475,17 @@ def _is_recursive_call(tool_name: str, kwargs: dict[str, Any]) -> bool:
     return "**" in str(kwargs.get("pattern") or "")
 
 
-_RECURSIVE_SHELL = frozenset({"find", "du"})
 _GIT_CONTENT_SUBCMDS = frozenset({"show", "diff"})
+_GIT_LOG_CONTENT_FLAGS = ("-p", "-u", "--patch", "--format", "--pretty", "--stat",
+                          "--numstat", "--follow", "-L", "-G", "-S")
+# awk can read files (getline <), run commands (system(), "cmd" | getline,
+# print | "cmd") and build paths by string concatenation, so under the fence an
+# awk program with any of those is refused outright.
+_AWK_IO_RE = re.compile(r"\bgetline\b|\bsystem\s*\(|\|\s*\"|\"\s*\||\bprint[f]?\b[^;{}]*[>|]")
+# GNU sed commands that read, write or execute: r/R file, w/W file, e command,
+# and the s///w and s///e flags.
+_SED_IO_RE = re.compile(r"(?:^|[\s;{}!0-9$/,])[rRwWe](?:\s|$)|s(.).*?\1.*?\1[gpiImM0-9]*[we]")
+_PATH_TOKEN_SPLIT = re.compile(r"[\s\"'<>;(){}|,=]+")
 
 
 def check_shell(parts: list[str], cwd: str) -> str | None:
@@ -402,35 +493,84 @@ def check_shell(parts: list[str], cwd: str) -> str | None:
     carrier = _carrier.get()
     if carrier is None or not parts:
         return None
+    try:
+        return _check_shell(carrier, parts, cwd)
+    except Exception as exc:  # noqa: BLE001
+        if carrier.armed:
+            return f"{DENY_PREFIX}: run_shell refused (fence_error:{type(exc).__name__})"
+        return None
+
+
+def _refuse(carrier: FenceCarrier, what: str, why: str) -> str:
+    carrier.record(f"run_shell:{what}", denied=True)
+    return f"{DENY_PREFIX}: {what} {why}; disabled during evaluation"
+
+
+def _check_shell(carrier: FenceCarrier, parts: list[str], cwd: str) -> str | None:
     base = parts[0].split("/")[-1]
-    if carrier.armed and base in {"python", "python3"}:
-        carrier.record(f"run_shell:{base}", denied=True)
-        return f"{DENY_PREFIX}: run_shell {base} can read any file; disabled during evaluation"
+    if carrier.armed and base.startswith(_rules.PYTHON_EXECUTABLE_PREFIXES):
+        return _refuse(carrier, base, "can read any file")
     args = parts[1:]
     if base == "git" and args:
         sub = args[0]
         if carrier.armed and (
             sub in _GIT_CONTENT_SUBCMDS
-            or (sub == "log" and any(a in {"-p", "-u", "--patch"} for a in args))
+            or (sub == "log" and any(a.startswith(_GIT_LOG_CONTENT_FLAGS) for a in args[1:]))
         ):
-            carrier.record(f"run_shell:git {sub}", denied=True)
-            return f"{DENY_PREFIX}: git {sub} can print file contents; disabled during evaluation"
+            return _refuse(carrier, f"git {sub}", "can print repository contents")
         args = args[1:]
-    recursive = base in _RECURSIVE_SHELL or (
-        base == "grep" and any(_is_recursive_grep_flag(a) for a in args)
-    ) or (base == "ls" and any(a.startswith("-") and not a.startswith("--") and "R" in a for a in args))
     positional = [a for a in args if not a.startswith("-")]
-    path_args = [v for v in positional if _shell_arg_is_path(v, cwd)]
+    program_tokens: list[str] = []
+    if base in {"awk", "gawk", "mawk", "nawk", "sed"}:
+        program = _script_program(base, args)
+        if carrier.armed and program is not None:
+            io_re = _SED_IO_RE if base == "sed" else _AWK_IO_RE
+            if io_re.search(program):
+                return _refuse(carrier, base, "program performs file or command I/O")
+        if carrier.armed and any(a in {"-f", "--file"} or a.startswith("--file=") for a in args):
+            return _refuse(carrier, base, "-f program files cannot be inspected")
+        if program is not None:
+            program_tokens = [t for t in _PATH_TOKEN_SPLIT.split(program) if "/" in t]
+    recursive = base in _rules.RECURSIVE_COMMANDS or (
+        base in {"grep", "egrep", "fgrep"} and any(_is_recursive_grep_flag(a) for a in args)
+    ) or (base == "ls" and any(a.startswith("-") and not a.startswith("--") and "R" in a for a in args))
+    flag_values = [a.split("=", 1)[1] for a in args if a.startswith("--") and "=" in a]
+    path_args = [v for v in (*positional, *flag_values) if _shell_arg_is_path(v, cwd)]
     for value in path_args:
         msg = check_path(value, tree=recursive, cwd=cwd)
         if msg:
             return msg
+    for token in program_tokens:
+        if deny_reason(token, cwd=cwd) not in (None, "unresolvable_path"):
+            msg = check_path(token, cwd=cwd)
+            if msg:
+                return msg
     if recursive and not path_args:
         # `grep -r pat` / `find` with no path walks the working directory.
         msg = check_path(cwd, tree=True, cwd=cwd)
         if msg:
             return msg
-    return None
+    msg = check_path(cwd, cwd=cwd) if deny_reason(cwd, cwd=cwd) else None
+    return msg
+
+
+def _script_program(base: str, args: list[str]) -> str | None:
+    """The inline awk/sed program text (``-e`` values, else the first positional)."""
+    programs: list[str] = []
+    it = iter(range(len(args)))
+    for i in it:
+        a = args[i]
+        if a in {"-e", "--expression"} and i + 1 < len(args):
+            programs.append(args[i + 1])
+            next(it, None)
+        elif a.startswith("--expression="):
+            programs.append(a.split("=", 1)[1])
+        elif base == "sed" and a.startswith("-e") and len(a) > 2:
+            programs.append(a[2:])
+    if programs:
+        return "\n".join(programs)
+    positional = [a for a in args if not a.startswith("-")]
+    return positional[0] if positional else None
 
 
 def _shell_arg_is_path(value: str, cwd: str) -> bool:
@@ -442,7 +582,9 @@ def _shell_arg_is_path(value: str, cwd: str) -> bool:
     if value in {".", ".."}:
         return True
     joined = value if os.path.isabs(value) else os.path.join(cwd, value)
-    return os.path.exists(joined) or deny_reason(value, cwd=cwd) is not None
+    if os.path.exists(joined):
+        return True
+    return deny_reason(value, cwd=cwd) not in (None, "unresolvable_path")
 
 
 def _is_recursive_grep_flag(arg: str) -> bool:
@@ -452,14 +594,18 @@ def _is_recursive_grep_flag(arg: str) -> bool:
 
 
 def check_python_source(code: str) -> str | None:
-    """``run_python_code`` hook: refuse source that literally names a fenced place."""
+    """``run_python_code`` pre-check: refuse source that literally names a fenced place.
+
+    This is only the cheap first layer. The runtime audit hook
+    (``python_fence_launch``) is what catches constructed paths.
+    """
     carrier = _carrier.get()
     if carrier is None or not carrier.armed:
         return None
     # Anchored to this host's layout: generic words such as "/wiki" would refuse
     # legitimate code that builds a Wikipedia URL.
     markers = ["epyc-root", "root-archetype", "/workspace/", "benchmarks/prompts",
-               "benchmarks/results", "kb_rag", _PHYSREASON_DIR, "sentinel_questions",
+               "benchmarks/results", "kb_rag", _rules.PHYSREASON_DIR, "sentinel_questions",
                "tool_sentinels", "eval_secrets", "eval_tower_trials"]
     for marker in markers:
         if marker in code:
@@ -469,6 +615,68 @@ def check_python_source(code: str) -> str | None:
                 "which is not readable during evaluation"
             )
     return None
+
+
+# ── run_python_code runtime fence (sys.addaudithook in the child) ───────
+
+FENCE_CONFIG_ENV = "EPYC_EVAL_FENCE_CONFIG"
+
+
+def python_fence_bootstrap() -> str:
+    """``python3 -c`` source: the rules, the audit hook, then the user script."""
+    from src.repl_environment import _fence_audit_hook as _hook
+
+    rules_src = Path(_rules.__file__).read_text(encoding="utf-8")
+    hook_src = Path(_hook.__file__).read_text(encoding="utf-8")
+    return f"{rules_src}\n{hook_src}\n_fence_main()\n"
+
+
+@dataclass
+class PythonFenceLaunch:
+    argv: list[str]
+    env: dict[str, str]
+    touched_file: str
+
+
+def python_fence_launch(script_path: str, tmp_dir: str) -> PythonFenceLaunch | None:
+    """Launch spec for a fenced ``run_python_code`` child, or ``None`` (production).
+
+    Armed: the hook refuses fenced paths and records touched ones. Control arm
+    (``eval_fence=False``): the same hook records but never refuses, so both
+    AP-54b arms run the identical launcher.
+    """
+    carrier = _carrier.get()
+    if carrier is None:
+        return None
+    fd, touched_file = tempfile.mkstemp(prefix=".fence_touched.", suffix=".tsv", dir=tmp_dir)
+    os.close(fd)
+    config = {
+        **fence_roots().as_config(),
+        "deny": bool(carrier.armed),
+        "touched_file": touched_file,
+        "max_records": MAX_TOUCHED_PATHS * 4,
+        "skip": [script_path, touched_file],
+    }
+    env = {**os.environ, FENCE_CONFIG_ENV: json.dumps(config)}
+    argv = ["python3", "-c", python_fence_bootstrap(), script_path]
+    return PythonFenceLaunch(argv=argv, env=env, touched_file=touched_file)
+
+
+def fold_python_touched(touched_file: str) -> None:
+    """Fold the child's side file into the carrier, then delete it."""
+    carrier = _carrier.get()
+    try:
+        if carrier is not None:
+            with open(touched_file, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    kind, _, path = line.rstrip("\n").partition("\t")
+                    if path:
+                        carrier.record(path, denied=(kind == "D" and carrier.armed))
+    except OSError:
+        pass
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(touched_file)
 
 
 def shell_split(cmd: str) -> list[str]:
