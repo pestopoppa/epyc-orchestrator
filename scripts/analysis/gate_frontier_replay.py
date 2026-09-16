@@ -50,7 +50,12 @@ for _p in (REPO, REPO / "scripts" / "autopilot"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from src.autopilot_core.action_identity import config_fingerprint_from_row  # noqa: E402
+from src.autopilot_core.action_identity import (  # noqa: E402
+    CONFIG_IDENTIFYING_ACTION_FIELDS,
+    action_from_journal_row,
+    config_fingerprint_from_row,
+    row_config_identity,
+)
 from src.autopilot_core.journal_reconstruction import (  # noqa: E402
     fold_supersession_events,
     objectives_from_journal_row,
@@ -108,6 +113,20 @@ def _row_policy(row: dict[str, Any]) -> str:
     return policy or str(row.get("objective_policy_live") or "") or LEGACY_OBJECTIVE_POLICY
 
 
+def _slim_action(row: dict[str, Any]) -> dict[str, Any]:
+    """Clustering- and identity-preserving stand-in for the action dict.
+
+    The original fingerprint is embedded, so distinct configs stay distinct; an action that
+    identifies a served config keeps its type and a non-empty delta field, so
+    ``row_config_identity`` is None exactly when it was None on the full row."""
+    fp = config_fingerprint_from_row(row)
+    if row_config_identity(row) is None:
+        return {"fp": fp}
+    action = action_from_journal_row(row)
+    field = CONFIG_IDENTIFYING_ACTION_FIELDS[str(action.get("type"))]
+    return {"type": action.get("type"), field: {"fp": fp}}
+
+
 def _slim_row(row: dict[str, Any]) -> dict[str, Any]:
     """Keep exactly what objective building, clustering and exclusion read."""
     details = row.get("eval_details") if isinstance(row.get("eval_details"), dict) else {}
@@ -136,6 +155,8 @@ def _slim_row(row: dict[str, Any]) -> dict[str, Any]:
         }
     return {
         "trial_id": row.get("trial_id"),
+        "action_type": row.get("action_type")
+        or str((action_from_journal_row(row) or {}).get("type") or ""),
         "timestamp": row.get("timestamp"),
         "tier": row.get("tier"),
         "quality": row.get("quality"),
@@ -148,7 +169,7 @@ def _slim_row(row: dict[str, Any]) -> dict[str, Any]:
         "eval_wall_s": row.get("eval_wall_s"),
         "eval_details": slim_details,
         "comparability": row.get("comparability") or {},
-        "config_snapshot": {"fp": config_fingerprint_from_row(row)},
+        "config_snapshot": _slim_action(row),
         "reasoning": "",
     }
 
@@ -166,6 +187,7 @@ def build_slim_fixture(paths: list[Path]) -> dict[str, Any]:
             b = objectives_from_journal_row(small, objective_policy=policy)
             assert a == b, (full.get("trial_id"), policy, a, b)
         assert _row_policy(full) == _row_policy(small)
+        assert (row_config_identity(full) is None) == (row_config_identity(small) is None)
     return {
         "_provenance": {
             "source_shards": provenance,
@@ -254,7 +276,11 @@ def stamp_clean_representatives(rows: list[dict[str, Any]]) -> list[dict[str, An
     as the new trial loop writes it. The stored journal itself is never modified."""
     out = []
     for row in rows:
-        if _is_candidate(row) and _row_objectives_measured(row):
+        if (
+            _is_candidate(row)
+            and _row_objectives_measured(row)
+            and row_config_identity(row) is not None
+        ):
             row = dict(row)
             details = dict(row.get("eval_details") or {})
             details[FRONTIER_ADMISSION_KEY] = FRONTIER_ADMISSION_REPRESENTATIVE
@@ -270,6 +296,7 @@ def _row_objectives_measured(row: dict[str, Any]) -> bool:
 
 COMPACT_KEYS = (
     "trial_id",
+    "action_type",
     "tier",
     "row_policy",
     "decision",
@@ -298,6 +325,7 @@ def baselines_before(decisions: list[dict[str, Any]], trial_id: int) -> dict[int
 
 def _classify(reason: str) -> str:
     table = (
+        ("carries no served-config identity", "refused_no_config_identity"),
         ("empty-frontier rule (b): the candidate's journal row", "refused_b_no_candidate_row"),
         ("empty-frontier rule (b): candidate config", "refused_b_too_few_reproductions"),
         ("empty-frontier rule (b): reproduced median", "refused_b_median_below_quantum"),
@@ -392,6 +420,7 @@ def replay(
                         "trial_id": int(row["trial_id"]),
                         "tier": tier,
                         "row_policy": policy,
+                        "action_type": str(row.get("action_type") or ""),
                         "decision": decision,
                         "promotion_rule": update.promotion_rule,
                         "previous_quality": update.previous_quality,
@@ -433,11 +462,11 @@ class _LazyView:
             self._cache[self._key] = _view(self._rows[:n_visible], policy, exclude, "").archive
         return self._cache[self._key]
 
-    def reproductions(self, tier: int, fingerprint: str) -> list[dict[str, Any]]:
+    def reproductions(self, tier: int, identity: str) -> list[dict[str, Any]]:
         return live_reproductions(
             self._rows[: self._n],
             tier=tier,
-            fingerprint=fingerprint,
+            identity=identity,
             objective_policy=self.objective_policy,
             exclude_before_ts=self.exclude_before_ts,
         )

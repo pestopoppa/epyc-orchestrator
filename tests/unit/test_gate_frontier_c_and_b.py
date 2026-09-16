@@ -30,6 +30,10 @@ import safety_gate as sg  # noqa: E402
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
 from safety_gate import EvalResult, SafetyGate  # noqa: E402
 
+from src.autopilot_core.action_identity import (  # noqa: E402
+    action_config_identity,
+    row_config_identity,
+)
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows  # noqa: E402
 from src.autopilot_core.journal_snapshot_replay import (  # noqa: E402
     _row_requires_prefix_raw_samples,
@@ -84,11 +88,13 @@ class Loop:
         comparability: str = "UNVERIFIED",
         record: bool = True,
         promote: bool = True,
+        action: dict | None = None,
+        infra_digest: str = "",
     ):
         tid = self.next_id
         self.next_id += 1
         self.clock += timedelta(minutes=10)
-        action = {"type": "numeric_trial", "surface": config}
+        action = action or {"type": "numeric_trial", "surface": "s", "params": {"cfg": config}}
         result = EvalResult(
             tier=1,
             quality=quality,
@@ -100,7 +106,7 @@ class Loop:
             eval_wall_s=wall_s,
             question_results=[{"qid": f"q{i}", "correct": True} for i in range(50)],
         )
-        clean = not exclusion
+        clean = not exclusion and action_config_identity(action, infra_digest) is not None
         admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean else ""
         comp = {"status": comparability}
         ts = self.clock.isoformat()
@@ -113,7 +119,9 @@ class Loop:
             learning_excluded_reason="r" if exclusion else "",
             frontier_admission=admission,
             comparability=comp,
+            infra_digest=infra_digest,
         )
+        self.last_provisional = provisional
         update = None
         if promote:
             update = self.gate.update_baseline(
@@ -391,8 +399,8 @@ def test_crash_before_record_leaves_no_persisted_promotion(tmp_path):
     assert placeholder["bug_corrupted_by"] == "autopilot_killed_mid_trial"
     assert not row_is_representative_member(placeholder)
     reps = live_reproductions(
-        rows, tier=1, fingerprint=autopilot._config_fingerprint(
-            {"type": "numeric_trial", "surface": "A"}
+        rows, tier=1, identity=action_config_identity(
+            {"type": "numeric_trial", "surface": "s", "params": {"cfg": "A"}}
         ),
         objective_policy=RATE_4D_OBJECTIVE_POLICY, exclude_before_ts=FENCE.timestamp(),
     )
@@ -442,3 +450,142 @@ def test_snapshot_authority_matches_full_replay_with_stamped_rows(tmp_path):
     )
     key = lambda p: sorted((e["trial_id"], e.get("n_reproductions", 1)) for e in p["all_entries"])  # noqa: E731
     assert key(full) == key(via_authority)
+
+
+# ── re-review B1: measurement actions are never reproduction evidence ─────
+
+
+SEED = {"type": "seed_batch", "n_questions": 10}
+
+
+@pytest.mark.parametrize("action", [
+    {"type": "seed_batch", "n_questions": 10},
+    {"type": "deep_eval", "tier": 1},
+    {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"},
+    {"type": "numeric_trial", "surface": "s", "params": {}},
+    {"type": "structural_experiment", "flags": {}},
+])
+def test_non_identifying_actions_have_no_served_config_identity(action):
+    assert action_config_identity(action) is None
+
+
+def test_identity_includes_the_infra_digest():
+    action = {"type": "structural_experiment", "flags": {"x": True}}
+    assert action_config_identity(action, "d1") != action_config_identity(action, "d2")
+    assert action_config_identity(action, "d1") == action_config_identity(action, "d1")
+
+
+def test_three_seed_batches_do_not_promote_under_rule_b(tmp_path):
+    """The re-review's reproduction: seeder runs after a config change must not promote."""
+    loop = Loop(tmp_path)
+    updates = [loop.trial("seed", 1.9, action=dict(SEED))[1] for _ in range(4)]
+    assert not any(u.updated for u in updates), [u.reason for u in updates]
+    assert all("no served-config identity" in u.reason for u in updates)
+    assert loop.gate.baseline.baselines_by_tier[1] == 1.5
+    rows = autopilot._journal_rows_for_archive(loop.journal)
+    assert not any(row_is_representative_member(r) for r in rows)  # never stamped
+
+
+def test_seed_batch_within_noise_cluster_cannot_promote_under_frontier_rule(tmp_path):
+    loop = Loop(tmp_path)
+    loop.trial("B", 1.6, wall_s=300.0, promote=False)
+    for _ in range(3):
+        loop.trial("seed", 1.9, action=dict(SEED), exclusion="mad_noise", promote=False)
+    _, update = loop.trial("seed", 1.9, action=dict(SEED), exclusion="reproduction_confirmed")
+    assert update.promotion_rule == sg.PROMOTION_RULE_FRONTIER
+    assert not update.updated and "no served-config identity" in update.reason
+
+
+def test_reproductions_on_a_different_infra_regime_do_not_count(tmp_path):
+    loop = Loop(tmp_path)
+    loop.trial("A", 1.8, infra_digest="d1")
+    loop.trial("A", 1.8, infra_digest="d2")
+    _, third = loop.trial("A", 1.8, infra_digest="d1")
+    assert not third.updated and "has 2 of 3 required" in third.reason
+
+
+def test_seed_still_allowed_for_a_tier_without_baseline(tmp_path):
+    loop = Loop(tmp_path, baseline=None)
+    _, update = loop.trial("seed", 1.9, action=dict(SEED))
+    assert update.updated and update.promotion_rule == sg.PROMOTION_RULE_SEED
+
+
+def test_what_if_replay_promotions_all_carry_a_served_config_identity():
+    data = json.loads(FIXTURE.read_text())
+    rows = {r["trial_id"]: r for r in data["rows"]}
+    promoted = [
+        d for d in data["golden"]["decisions"]["live_c"]
+        if d["decision"] == "promoted" and d["promotion_rule"] != "seed"
+    ]
+    for d in promoted:
+        assert row_config_identity(rows[d["trial_id"]]) is not None, d
+
+
+# ── re-review B2: a journal mismatch rolls the promotion back ─────────────
+
+
+def test_mismatch_restores_baseline_and_suppresses_the_promotion(tmp_path):
+    import copy
+
+    loop = Loop(tmp_path)
+    for _ in range(2):
+        loop.trial("A", 1.8)
+    before = copy.deepcopy(loop.gate.baseline)
+    tid, update = loop.trial("A", 1.8, record=False)
+    assert update.updated and loop.gate.baseline.baselines_by_tier[1] == pytest.approx(1.8)
+    recorded = dict(loop.last_provisional)
+    recorded["quality"] = 0.4  # the journal holds different evidence than the decision saw
+    result = autopilot._reconcile_promotion_with_journal(
+        loop.gate, update, before, loop.last_provisional, recorded, tid
+    )
+    assert result.updated is False and "rolled back" in result.reason
+    assert loop.gate.baseline.baselines_by_tier[1] == 1.5
+    assert autopilot._append_baseline_promotion_event(
+        journal=loop.journal, baseline_update=result, eval_result=None,
+        source_trial_id=tid, pareto_status="frontier", baseline_state={},
+    ) is None
+
+
+def test_matching_row_keeps_the_promotion(tmp_path):
+    import copy
+
+    loop = Loop(tmp_path)
+    for _ in range(2):
+        loop.trial("A", 1.8)
+    before = copy.deepcopy(loop.gate.baseline)
+    tid, update = loop.trial("A", 1.8, record=False)
+    result = autopilot._reconcile_promotion_with_journal(
+        loop.gate, update, before, loop.last_provisional, dict(loop.last_provisional), tid
+    )
+    assert result is update and loop.gate.baseline.baselines_by_tier[1] == pytest.approx(1.8)
+
+
+def test_loop_reconciles_before_any_persistence():
+    source = Path(autopilot.__file__).read_text()
+    body = source[source.index("def _run_loop_inner(") :]
+    record = body.index("journal.record(journal_entry)")
+    reconcile = body.index("_reconcile_promotion_with_journal(", record)
+    event = body.index("_append_baseline_promotion_event(", record)
+    state_write = body.index('state["baseline_state"] = baseline_state', record)
+    assert record < reconcile < min(event, state_write)
+    assert body.index("baseline_before_decision = copy.deepcopy(gate.baseline)") < body.index(
+        "gate.update_baseline(\n"
+    )
+
+
+# ── re-review B3: the row records a pending commit, confirmed by the ledger ─
+
+
+def test_row_stamps_pending_commit_and_ledger_is_the_commit_record():
+    source = Path(autopilot.__file__).read_text()
+    assert '"pending_commit" if getattr(baseline_update, "updated", False) else "refused"' in source
+    body = source[source.index("def _run_loop_inner(") :]
+    assert body.index('eval_details_dict["promotion_status"]') < body.index(
+        "journal.record(journal_entry)"
+    ) < body.index("_append_baseline_promotion_event(")
+
+
+def test_within_noise_call_site_carries_the_ap55_todo():
+    source = Path(autopilot.__file__).read_text()
+    at = source.index("if not MULTITIER_PROMOTION_ENABLED and rate_measured and bool(verdict):")
+    assert 'TODO(AP-55 merge train): add `and not ap55_gate.get("hold")`' in source[at - 400 : at]

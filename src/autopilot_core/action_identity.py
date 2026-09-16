@@ -69,3 +69,44 @@ def action_from_journal_row(row: dict[str, Any]) -> Any:
 def config_fingerprint_from_row(row: dict[str, Any]) -> str:
     """Config fingerprint for a journal row."""
     return config_fingerprint(action_from_journal_row(row))
+
+
+# ── Served-config identity (gate-frontier re-review B1, 2026-09-16) ─────────────
+#
+# ``config_fingerprint`` hashes the ACTION dict. For most action types that is not the
+# served configuration: ``{"type": "seed_batch", "n_questions": 10}`` hashes identically
+# across a month of config changes (one fingerprint covers 394 journal rows), and
+# ``{"type": "prompt_mutation", "file": ..., "mutation": "targeted_fix"}`` names a request,
+# not the text it produced. Clustering those as "reproductions of one config" makes
+# reproduction evidence vacuous. Only an action that carries its explicit config delta
+# identifies what was served: a structural experiment's ``flags`` or a numeric trial's
+# resolved ``params``. Everything else has NO config identity and never counts as a
+# reproduction. The AP-55 infra digest, when the row has one, is part of the identity:
+# the same delta on a different code/prompt/model regime is a different served config.
+CONFIG_IDENTIFYING_ACTION_FIELDS = {
+    "structural_experiment": "flags",
+    "numeric_trial": "params",
+}
+
+
+def action_config_identity(action: Any, infra_digest: str = "") -> str | None:
+    """Served-config identity of an action, or None when the action does not identify one."""
+    if not isinstance(action, dict):
+        return None
+    field = CONFIG_IDENTIFYING_ACTION_FIELDS.get(str(action.get("type") or ""))
+    if field is None:
+        return None
+    delta = action.get(field)
+    if not isinstance(delta, dict) or not delta:
+        return None
+    base = config_fingerprint(action)
+    return f"{base}@{infra_digest}" if infra_digest else base
+
+
+def row_config_identity(row: dict[str, Any]) -> str | None:
+    """Served-config identity of a journal row (see ``action_config_identity``)."""
+    details = row.get("eval_details") if isinstance(row, dict) else None
+    digest = ""
+    if isinstance(details, dict):
+        digest = str(details.get("infra_fingerprint_digest") or "")
+    return action_config_identity(action_from_journal_row(row), digest)

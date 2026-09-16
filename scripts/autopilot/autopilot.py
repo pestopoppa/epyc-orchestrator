@@ -28,6 +28,8 @@ from __future__ import annotations
 import argparse
 import atexit
 from collections import deque
+import copy
+import dataclasses
 from dataclasses import asdict
 import fcntl
 import hashlib
@@ -154,8 +156,10 @@ from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_res
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
     action_signature,
+    action_config_identity,
     canonical_action,
     config_fingerprint,
+    row_config_identity,
 )
 from src.autopilot_core.learning_exclusions import (
     FRONTIER_ADMISSION_KEY,
@@ -7148,6 +7152,7 @@ def _provisional_trial_row(
     learning_excluded_reason: str,
     frontier_admission: str,
     comparability: dict[str, Any] | None,
+    infra_digest: str = "",
 ) -> dict[str, Any]:
     """Decision (c): the objective-bearing projection of the row this trial WILL journal.
 
@@ -7162,6 +7167,7 @@ def _provisional_trial_row(
         "eval_wall_s": getattr(eval_result, "eval_wall_s", 0.0),
         "objective_policy_live": RATE_4D_OBJECTIVE_POLICY,
         "infra_comparability": str((comparability or {}).get("status", "") or ""),
+        "infra_fingerprint_digest": infra_digest,
     }
     if learning_excluded_by:
         eval_details["learning_exclusion"] = {
@@ -7172,6 +7178,7 @@ def _provisional_trial_row(
         eval_details[FRONTIER_ADMISSION_KEY] = frontier_admission
     return {
         "trial_id": int(trial_id),
+        "action_type": str(action.get("type", "")) if isinstance(action, dict) else "",
         "timestamp": timestamp,
         "tier": int(eval_result.tier),
         "quality": eval_result.quality,
@@ -7186,6 +7193,43 @@ def _provisional_trial_row(
     }
 
 
+def _reconcile_promotion_with_journal(
+    gate: Any,
+    baseline_update: Any,
+    baseline_before: Any,
+    provisional: dict[str, Any],
+    recorded: dict[str, Any],
+    trial_counter: int,
+) -> Any:
+    """Re-review B2: roll back a promotion decided on evidence the journal does not hold.
+
+    Runs after ``journal.record`` and before anything else persists. On a mismatch the
+    in-memory baseline is restored to its pre-decision copy and the update is returned as
+    refused, so neither the baseline_promotion event nor the promoted baseline_state is
+    written. Returns the (possibly replaced) update.
+    """
+    diffs = _provisional_row_mismatch(provisional, recorded)
+    if not diffs:
+        return baseline_update
+    promoted = baseline_update is not None and bool(getattr(baseline_update, "updated", False))
+    log.error(
+        "Trial %d: journaled row differs from the row the promotion guard evaluated on %s; "
+        "the promotion decision (%s) did not see the recorded evidence.%s",
+        trial_counter,
+        diffs,
+        getattr(baseline_update, "promotion_rule", "") if baseline_update else "none",
+        " PROMOTION ROLLED BACK (baseline restored, no ledger event)." if promoted else "",
+    )
+    if not promoted:
+        return baseline_update
+    gate.baseline = baseline_before
+    return dataclasses.replace(
+        baseline_update,
+        updated=False,
+        reason=f"rolled back: journaled row differs from the evaluated row on {diffs}",
+    )
+
+
 def _provisional_row_mismatch(provisional: dict[str, Any], recorded: dict[str, Any]) -> list[str]:
     """Fields where the journaled row disagrees with the row the promotion decision saw."""
     from src.autopilot_core.live_reproductions import row_comparability_status
@@ -7198,6 +7242,8 @@ def _provisional_row_mismatch(provisional: dict[str, Any], recorded: dict[str, A
         recorded.get("config_snapshot")
     ):
         diffs.append("config_fingerprint")
+    if row_config_identity(provisional) != row_config_identity(recorded):
+        diffs.append("served_config_identity")
     if row_is_representative_member(provisional) != row_is_representative_member(recorded):
         diffs.append("representative_membership")
     if row_comparability_status(provisional) != row_comparability_status(recorded):
@@ -7247,11 +7293,11 @@ def _install_promotion_guard_scope(journal: Any, state: Mapping[str, Any]) -> No
         )
         resolved_policy = str((payload or {}).get("objective_policy") or policy)
 
-        def _reproductions(tier: int, fingerprint: str) -> list[dict[str, Any]]:
+        def _reproductions(tier: int, identity: str) -> list[dict[str, Any]]:
             return live_reproductions(
                 _journal_rows_for_archive(journal) + pending,
                 tier=tier,
-                fingerprint=fingerprint,
+                identity=identity,
                 objective_policy=resolved_policy,
                 exclude_before_ts=exclude_before_ts,
             )
@@ -9820,12 +9866,17 @@ def _run_loop_inner(
         # guard's live frontier includes the candidate. A clean trial is stamped as a
         # frontier representative and clusters with its config's reproductions.
         trial_journal_ts = datetime.now(timezone.utc).isoformat()
+        trial_infra_digest = fingerprint_digest(trial_infra_fingerprint)
+        # Re-review B1: only an action that names its served-config delta may join a
+        # reproduction cluster; measurement actions (seed_batch, deep_eval, ...) stay raw
+        # per-trial points exactly as before.
         clean_representative = (
             _clean_trial_representatives_enabled()
             and not learning_excluded_by
             and bool(verdict.passed)
             and rate_measured
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
+            and action_config_identity(effective_action, trial_infra_digest) is not None
         )
         frontier_admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean_representative else ""
         provisional_row = _provisional_trial_row(
@@ -9837,7 +9888,11 @@ def _run_loop_inner(
             learning_excluded_reason=learning_excluded_reason,
             frontier_admission=frontier_admission,
             comparability=trial_comparability,
+            infra_digest=trial_infra_digest,
         )
+        # Re-review B2: the decision mutates gate.baseline in memory. Keep the pre-decision
+        # baseline so a journal/decision mismatch can be rolled back before anything persists.
+        baseline_before_decision = copy.deepcopy(gate.baseline)
         if not rate_measured:
             log.warning(
                 "Trial %d: Pareto archive write SKIPPED — dominance axis unmeasured "
@@ -9876,6 +9931,9 @@ def _run_loop_inner(
                 )
             else:
                 pareto_status = "dominated"  # placeholder for JournalEntry only
+            # TODO(AP-55 merge train): add `and not ap55_gate.get("hold")` to this condition
+            # when sub/ap55bc-20260916 lands, as it does for the clean and final_t1 calls;
+            # otherwise AP-55 enforce does not bind on this promotion path.
             if not MULTITIER_PROMOTION_ENABLED and rate_measured and bool(verdict):
                 # Decision (c), 2026-09-16: a within-noise reproduction is exactly the
                 # evidence a promotion requires (a >=3-member representative whose median
@@ -10421,6 +10479,14 @@ def _run_loop_inner(
             # Which promotion rule the archive stage applied (frontier / empty_frontier_repro /
             # seed); also carried on the baseline_promotion ledger event.
             eval_details_dict["promotion_rule"] = getattr(baseline_update, "promotion_rule", "")
+            # Re-review B3: the row is written BEFORE the promotion commits. "pending_commit"
+            # is confirmed only by a baseline_promotion ledger event with this source_trial_id
+            # (the commit record, appended with the final state save). A crash in between
+            # leaves the row pending and the baseline unchanged, which is consistent: readers
+            # must treat an unconfirmed pending row as NOT promoted; recovery needs no action.
+            eval_details_dict["promotion_status"] = (
+                "pending_commit" if getattr(baseline_update, "updated", False) else "refused"
+            )
         journal_entry = JournalEntry(
             trial_id=trial_counter,
             timestamp=trial_journal_ts,
@@ -10468,15 +10534,14 @@ def _run_loop_inner(
         )
         _sync_segment_snapshot_scope(journal, state)  # W3
         journal.record(journal_entry)
-        provisional_diffs = _provisional_row_mismatch(provisional_row, asdict(journal_entry))
-        if provisional_diffs:
-            log.error(
-                "Trial %d: journaled row differs from the row the promotion guard evaluated "
-                "on %s — the promotion decision (%s) did not see the recorded evidence.",
-                trial_counter,
-                provisional_diffs,
-                getattr(baseline_update, "promotion_rule", "") if baseline_update else "none",
-            )
+        baseline_update = _reconcile_promotion_with_journal(
+            gate,
+            baseline_update,
+            baseline_before_decision,
+            provisional_row,
+            asdict(journal_entry),
+            trial_counter,
+        )
         # Evidence is the already-durable trial, supplied here rather than by the
         # planner, so a resolution can never cite a trial that did not run.
         _record_operator_hypothesis_resolution(rationale, trial_counter)

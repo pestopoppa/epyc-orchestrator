@@ -93,7 +93,8 @@ the finding below, 2026-06-18). The original refusal is now replaced by operator
   `AUTOPILOT_EMPTY_FRONTIER_MIN_REPRO` (default 3; a value below 2 is refused and falls back
   to 3).
 - What counts as a reproduction (`live_reproductions.py`):
-  - a representative-cluster member of the same tier and fingerprint;
+  - a representative-cluster member of the same tier and SERVED-CONFIG identity (see B1
+    below; the action hash alone is not enough);
   - inside the live epoch, with its live axes measured;
   - carrying an AP-55 verdict of `COMPARABLE`, `UNVERIFIED` or none (pre-AP-55 rows);
     `NON_COMPARABLE` rows never count.
@@ -152,7 +153,7 @@ sees the rows BEFORE the candidate, which is what the loop does.
 |---|---|---|---|---|---|---|
 | old | 2 | 479 | 18 | – | – | – |
 | live | 2 | 475 | 21 | – | – | 1 (no candidate row) |
-| live_c | 27 | 286 | 4 | 20 | 2 | 67 (64 median < quantum, 3 too few reproductions) |
+| live_c | 4 | 93 | 1 | 7 | – | 1 (1 of 3 reproductions); plus 441 refused for no served-config identity |
 
 **old vs live.** The promotions are identical: the T1 seed at trial 10 and the T3 seed at trial
 1251, both in the legacy era, where the two paths are equal by construction (asserted). The only
@@ -162,19 +163,69 @@ sees the rows BEFORE the candidate, which is what the loop does.
 - 1477, 1500 and 1501 now stop at *above archive max*: the young v7 frontier's best quality is
   below these candidates, while the all-era legacy frontier was above them.
 
-**live vs live_c.** Decision (c) produces 27 promotions where the other paths produce 2:
-3 seeds, 22 under rule (b), and 2 under the frontier rule. Rule (b) dominates here because early
-history is mostly one config at a time, so the frontier seldom held another config. Each of the
-25 non-seed promotions is backed by at least 3 reproductions whose median cleared the baseline by
-a quantum. The evidence requirement still binds: 66 decisions fail on the quantum and 23 on the
-reproduction count. The 517 differing decisions are listed in the golden.
+**live vs live_c.** With decisions (c) and (b) and the re-review B1 fix, the what-if yields 4
+promotions: the same 3 seeds, plus one frontier-rule promotion. That promotion is trial 755, a
+`structural_experiment` whose representative reproduced at least 3 times and cleared the
+baseline by a quantum. **Rule (b) promotes nothing.**
+
+The first (c)+(b) cut showed 27 promotions, 22 of them under rule (b). The re-review found them
+vacuous: 19 were T1 `seed_batch` runs (trials 18–137, quality 0.0 → 1.9 across a month of config
+changes) and 3 were T2 `deep_eval` runs. All of them clustered under one action hash, for example
+`{"type": "seed_batch", "n_questions": 10}` → `4289ed22…`, which is not a served config.
+
+**B1 fix — served-config identity.** A row can be reproduction evidence only if its action
+names its served-config delta. Today only two kinds of action do that:
+- a `structural_experiment` with non-empty `flags`;
+- a `numeric_trial` with non-empty resolved `params`.
+
+`action_identity.row_config_identity` computes the identity from that delta, plus the AP-55
+infra digest when the row records one. Rule (b) counts only same-identity rows. A candidate
+without an identity cannot promote under either rule, though a tier with no baseline can still
+seed. Clean rows are stamped as representatives only when they have an identity. Measurement
+and request-only actions are refused with "no served-config identity" in the what-if (441
+decisions):
+
+| action type | refusals |
+|---|---|
+| seed_batch | 331 |
+| numeric_trial with empty `params` | 72 |
+| deep_eval | 18 |
+| train_routing_models | 6 |
+| code_mutation | 5 |
+| prompt_mutation | 3 |
+| gepa_optimize | 2 |
+| structural_prune | 2 |
+| distill_skillbank | 1 |
+| rollback | 1 |
+
+Prompt, code and GEPA mutations name a request, not the text they produced. They stay
+non-promotable until the loop records a content identity for them. Candidates for that identity:
+the prompt or file sha after the mutation, or the AP-55 orchestrator commit once auto-commit has
+run.
 
 **Forward simulation (the next restart).** The stored tasks/hour trials (1472 and later) are
 replayed as if they arrived after the live fence, starting from the live baselines
 (T1 1.5, T2 1.356, T3 1.275):
-- trial 1472 falls under rule (b) and is refused (1 of 3 reproductions);
+- trial 1472 (`structural_experiment`) falls under rule (b) and is refused (1 of 3
+  reproductions);
 - the T1 frontier then fills (1, 2, …, 5 points) and every later decision uses the frontier rule;
-- nothing promotes, because no config in that window reproduced 3 times.
+- the `numeric_trial` candidates are refused for too few reproductions or for not being
+  representatives, and the two `seed_batch` runs are refused for having no served-config
+  identity;
+- nothing promotes.
+
+**Re-review B2 — a journal/decision mismatch rolls the promotion back.** Before the decision, the
+loop deep-copies `gate.baseline`. After `journal.record` it compares the recorded row with the
+row the guard evaluated (`_reconcile_promotion_with_journal`). On any mismatch it restores the
+baseline and turns the update into a refusal, so neither the promotion event nor the promoted
+`baseline_state` is written.
+
+**Re-review B3 — a crash after `journal.record`.** The row now carries
+`promotion_status: pending_commit` or `refused`. The commit record is the `baseline_promotion`
+ledger event with that `source_trial_id`, appended together with the final state save. A crash in
+between leaves a pending row without an event and an unchanged baseline, which is consistent.
+Readers must treat an unconfirmed pending row as NOT promoted, and recovery needs no action. This
+was the simpler of the two options.
 
 **Finding (pre-existing on both paths; fixed by decision (c) above).** In production ordering the source trial
 is never in the journal when `update_baseline` runs (`journal.record` comes after it). So a clean
