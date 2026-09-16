@@ -436,13 +436,21 @@ def _client_mode_messages(messages: list[OpenAIMessage]) -> list[dict[str, Any]]
 
 
 def _normalise_client_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """OpenAI response shape: id, type=function, function{name, arguments:str}."""
+    """OpenAI response shape: id, type=function, function{name, arguments:str}.
+
+    A backend tool call without a function name is a backend failure, not a
+    droppable item: skipping it could turn a tool turn into an empty "stop".
+    It raises, which the route maps to 502 / a terminal SSE error event.
+    """
     normalised: list[dict[str, Any]] = []
-    for call in tool_calls:
+    for position, call in enumerate(tool_calls):
         func = call.get("function") if isinstance(call.get("function"), dict) else {}
         name = func.get("name")
         if not isinstance(name, str) or not name:
-            continue
+            raise RuntimeError(
+                f"backend returned tool call #{position} without a function name: "
+                f"{json.dumps(call, default=str)[:200]}"
+            )
         args = func.get("arguments")
         if isinstance(args, (dict, list)):
             args = json.dumps(args)
@@ -472,6 +480,9 @@ def _run_client_tool_completion(
     Routing: ``role`` is the SAME resolved role the default mode would use
     (x_force_model > x_orchestrator_role > model alias). No REPL, no
     escalation — /v1 has none today in either mode.
+
+    Output size: ``llm_call``'s ``output_cap`` (8192-char truncation) does NOT
+    apply in client mode; ``max_tokens`` is the only bound.
     """
     result = primitives.chat_completion_call(
         messages,

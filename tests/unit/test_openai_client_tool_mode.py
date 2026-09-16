@@ -174,6 +174,36 @@ def test_stream_tool_call_only_turn_carries_role_on_first_delta(client, monkeypa
     assert events[-1]["choices"][0]["finish_reason"] == "tool_calls"
 
 
+@pytest.mark.parametrize(
+    "bad_call",
+    [
+        {"id": "call_x", "type": "function", "function": {"name": "", "arguments": "{}"}},
+        {"id": "call_x", "type": "function", "function": {"arguments": "{}"}},
+        {"id": "call_x", "type": "function"},
+    ],
+)
+def test_nameless_backend_tool_call_is_502_not_a_silent_stop(client, monkeypatch, bad_call):
+    _install(monkeypatch, result=_tool_result(tool_calls=[MODEL_TOOL_CALL, bad_call]))
+
+    r = client.post("/v1/chat/completions", json=_body())
+
+    assert r.status_code == 502, r.text
+    assert "without a function name" in json.dumps(r.json())
+    assert "choices" not in r.json()
+
+
+def test_nameless_backend_tool_call_is_terminal_sse_error(client, monkeypatch):
+    bad_call = {"id": "call_x", "type": "function", "function": {"arguments": "{}"}}
+    _install(monkeypatch, result=_tool_result(tool_calls=[bad_call]))
+
+    events = _sse_events(client.post("/v1/chat/completions", json=_body(stream=True)).text)
+
+    assert len(events) == 1
+    assert events[0]["error"]["type"] == "backend_error"
+    assert "without a function name" in events[0]["error"]["message"]
+    assert events[0]["choices"][0]["finish_reason"] == "error"
+
+
 def test_tool_call_without_id_gets_one(client, monkeypatch):
     anonymous = {"type": "function", "function": {"name": "read", "arguments": "{}"}}
     _install(monkeypatch, result=_tool_result(tool_calls=[anonymous]))
@@ -562,6 +592,35 @@ def test_backend_forwards_structured_payload_and_parses_tool_calls(role_config, 
     assert result.output == ""
     assert result.tool_calls == [MODEL_TOOL_CALL]
     assert result.completion_reason == "tool_calls"
+
+
+def test_backend_http_error_keeps_server_reason(role_config):
+    """A llama-server without --jinja rejects `tools` with a 400 and a reason."""
+    import httpx
+
+    from src.model_server import InferenceRequest
+
+    backend = _backend(True)
+    request = InferenceRequest(
+        role="frontdoor", prompt="p", n_tokens=16,
+        chat_payload={"messages": [{"role": "user", "content": "x"}], "tools": [READ_TOOL]},
+    )
+    body = '{"error":{"code":400,"message":"tools param requires --jinja flag"}}' + "x" * 500
+    http_request = httpx.Request("POST", "http://test:8080/v1/chat/completions")
+    http_response = httpx.Response(400, text=body, request=http_request)
+
+    def _post(path, json=None, timeout=None):
+        return http_response
+
+    with patch.object(backend.client, "post", side_effect=_post), patch(
+        "src.registry.registry_loader.chat_template_kwargs_for_role", return_value=None
+    ):
+        result = backend.infer(role_config, request)
+
+    assert result.success is False
+    assert result.error_message.startswith("chat_completions HTTP 400: ")
+    assert "tools param requires --jinja" in result.error_message
+    assert len(result.error_message) <= len("chat_completions HTTP 400: ") + 200
 
 
 def test_backend_without_payload_ignores_tool_calls_and_keeps_single_turn(role_config):

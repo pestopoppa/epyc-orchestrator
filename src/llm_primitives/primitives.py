@@ -747,7 +747,9 @@ class LLMPrimitives(
         the client owns the conversation — nor the content cache.
 
         Returns ``{"content", "tool_calls", "finish_reason"}``. Backend
-        failures RAISE (no in-band ``[ERROR: ...]`` string).
+        failures RAISE (no in-band ``[ERROR: ...]`` string). The
+        ``output_cap`` truncation of ``_llm_call_impl`` is not applied here;
+        ``n_tokens`` (the request's ``max_tokens``) bounds the output.
         """
         if self.mock_mode:
             raise RuntimeError("client tool mode requires a real backend (mock_mode is on)")

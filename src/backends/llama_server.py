@@ -116,6 +116,14 @@ def _chat_payload(request: Any) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _response_text(response: Any) -> str:
+    try:
+        text = response.text
+    except Exception:
+        return ""
+    return text.strip() if isinstance(text, str) else ""
+
+
 def _server_cfg():
     from src.config import get_config
 
@@ -752,7 +760,12 @@ class LlamaServerBackend(ModelBackend):
             return InferenceResult(
                 role=role_config.name, output="", tokens_generated=0,
                 generation_speed=0.0, elapsed_time=elapsed, success=False,
-                error_message=f"chat_completions HTTP {e.response.status_code}",
+                # Keep the server's reason (e.g. llama-server without --jinja
+                # rejecting `tools`), not just the bare status code.
+                error_message=(
+                    f"chat_completions HTTP {e.response.status_code}"
+                    + (f": {_response_text(e.response)[:200]}" if _response_text(e.response) else "")
+                ),
                 failure_stage="transport", failure_reason="http_status",
                 completion_reason="http_error",
             )
