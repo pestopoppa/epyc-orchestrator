@@ -405,3 +405,22 @@ def test_autopilot_gate_helper_never_raises(autopilot, monkeypatch):
         object(), tier=1, baseline_pin=None, candidate_action={}, question_results=None,
         trial_fingerprint=_fp())
     assert out["hold"] is False
+
+
+def test_measurement_tuple_carries_gate_legs_and_legacy_carries_none(tmp_path):
+    from experiment_journal import ExperimentJournal, JournalEntry
+
+    base = dict(timestamp="2026-09-16T00:00:00+00:00", species="s", action_type="t", tier=1,
+                quality=1.0, speed=1.0, cost=1.0, reliability=1.0, pareto_status="candidate")
+    gate = _gate([], _fp())
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(JournalEntry(trial_id=1, comparability={"status": UNVERIFIED,
+                                                           "promotion_gate": gate}, **base))
+    journal.record(JournalEntry(trial_id=2, comparability={"status": UNVERIFIED}, **base))
+    rows = ExperimentJournal(journal_dir=tmp_path).all_entries()
+    assert rows[0].measurement["ap55_gate"] == {
+        "mode": "enforce", "seed_rerun": g.MISSING,
+        "batch_homogeneity": g.INSUFFICIENT, "hold": True,
+    }
+    assert rows[0].comparability["promotion_gate"]["batch_homogeneity"]["status"] == g.INSUFFICIENT
+    assert "ap55_gate" not in rows[1].measurement
