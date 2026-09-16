@@ -43,7 +43,7 @@ from typing import Any
 
 import numpy as np
 
-from src.retrieval import colbert_encoder, cross_encoder
+from src.retrieval import colbert_encoder, cross_encoder, kb_rag_query_telemetry
 from src.retrieval.markdown_chunker import chunk_file
 
 logger = logging.getLogger(__name__)
@@ -763,6 +763,14 @@ def query(
     if q_emb is None:
         conn.close()
         return []
+    # H2: observe the UNTRUNCATED query length (encode() output always equals the cap).
+    kb_rag_query_telemetry.record_query_length(
+        text,
+        cap=_QUERY_MAX_TOKENS,
+        role=query_role,
+        prefix_convention=convention,
+        index_dir=index_dir,
+    )
 
     rows = conn.execute(
         "SELECT chunk_id, file_path, heading_path, line_start, line_end, "

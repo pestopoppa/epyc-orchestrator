@@ -1,0 +1,15 @@
+{
+  "binding_digest": "sha256:6ce71bfbeee01246b5c725856c5ceab937be921c43886c10685141ccf5f0ad8b",
+  "review": {
+    "advisory": {
+      "feedback": "Summary faithfully reports the 1.8x speedup.",
+      "score": 0.9
+    },
+    "blocking": {
+      "blocking_issues": [],
+      "tripwire": false
+    },
+    "confidence": 0.92,
+    "decision": "approve"
+  }
+}

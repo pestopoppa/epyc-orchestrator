@@ -1,0 +1,1 @@
+Summary: the paper reports a 1.8x decode speedup at unchanged output distribution.

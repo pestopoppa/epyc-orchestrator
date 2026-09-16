@@ -504,11 +504,62 @@ def _load_host_health_rules():
     return server_np_sweep, server_numa_np_sweep
 
 
+_PORT_ARG_RE = re.compile(r"(?:^|\s)--port(?:=|\s+)(\d+)(?=\s|$)")
+
+
+def _expected_lineup_ports() -> frozenset[int]:
+    """Every port the declared stack lineup may legitimately occupy.
+
+    Union of the launch manifest's primary ``PORT_MAP``, every NUMA_CONFIG
+    instance (fulls + halves/quarters) and the embedder pool. Declared artifacts
+    only — no process is touched. An explicit-only lane (e.g. the GPU shadow
+    lane) is deliberately NOT in the lineup: it is exactly the kind of extra
+    tenant a contention measurement must not absorb silently.
+    """
+    import stack_manifest  # noqa: PLC0415
+    from stack_numa import NUMA_CONFIG  # noqa: PLC0415
+
+    ports = {int(p) for p in stack_manifest.PORT_MAP.values()}
+    ports |= {
+        int(inst[1])
+        for cfg in NUMA_CONFIG.values()
+        for inst in (cfg.get("instances") or [])
+    }
+    ports |= {int(p) for p in stack_manifest.EMBEDDER_PORTS}
+    return frozenset(ports)
+
+
+def _llama_process_port(proc: dict[str, Any]) -> int | None:
+    """The ``--port`` a llama process was launched with, or None if unattributable."""
+    args = str(proc.get("args") or proc.get("cmd") or "")
+    match = _PORT_ARG_RE.search(args)
+    return int(match.group(1)) if match else None
+
+
+def _split_llama_processes(
+    processes: list[dict[str, Any]], expected_ports: frozenset[int]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Partition observed llama processes into (lineup instrument, FOREIGN).
+
+    A process is the instrument only if it listens on a declared lineup port.
+    Everything else — an undeclared port, or no attributable port at all
+    (llama-bench, llama-cli, a server launched via env) — is foreign.
+    """
+    lineup: list[dict[str, Any]] = []
+    foreign: list[dict[str, Any]] = []
+    for proc in processes:
+        port = _llama_process_port(proc)
+        (lineup if port is not None and port in expected_ports else foreign).append(proc)
+    return lineup, foreign
+
+
 def _host_health_probe(
     *,
     host_meta: dict[str, str] | None = None,
     extra_blockers: list[str] | None = None,
     load_rules=_load_host_health_rules,
+    expected_ports=None,
+    resolve_lineup=_expected_lineup_ports,
 ) -> dict[str, Any]:
     """Collect host-health provenance for the matrix artifact. Never raises.
 
@@ -530,6 +581,8 @@ def _host_health_probe(
         "scaling_governors": [],
         "loadavg": "",
         "llama_processes_at_attestation": None,
+        "llama_processes_lineup": None,
+        "llama_processes_foreign": [],
         "attestation_status": "unavailable",
         "attestation_error": "",
         "rule_source": _HOST_HEALTH_RULE_SOURCE,
@@ -558,11 +611,45 @@ def _host_health_probe(
         # owner in charge: a reworded or newly added process-derived warning
         # re-classifies itself automatically.
         #
-        # NOTE the limit of this waiver, stated in the artifact: it does NOT
-        # distinguish lineup members from foreign llama processes.
+        # Only the DECLARED lineup is the instrument. On a shared host a
+        # foreign llama process (another agent's server, a llama-bench) is
+        # exactly the contamination a contention measurement must not absorb,
+        # so it stays in the gating attestation and fires the rule there.
+        observed = list(attestation.get("existing_llama_processes") or [])
+        foreign_blockers: list[str] = []
+        lineup_procs: list[dict[str, Any]] = []
+        foreign_procs: list[dict[str, Any]] = []
+        if observed:
+            try:
+                ports = frozenset(
+                    int(p)
+                    for p in (expected_ports if expected_ports is not None else resolve_lineup())
+                )
+                lineup_procs, foreign_procs = _split_llama_processes(observed, ports)
+            except Exception as exc:  # noqa: BLE001 — unresolvable lineup = nothing is waived
+                foreign_procs = observed
+                foreign_blockers.append(
+                    "expected stack lineup could not be resolved "
+                    f"({type(exc).__name__}: {exc}); no llama process can be "
+                    "attributed to the instrument, so none is waived"
+                )
+            if foreign_procs:
+                described = ", ".join(
+                    f"pid {p.get('pid', '?')} (port {_llama_process_port(p) or 'unattributable'})"
+                    for p in foreign_procs
+                )
+                foreign_blockers.append(
+                    f"{len(foreign_procs)} foreign llama process(es) outside the "
+                    f"declared stack lineup: {described}"
+                )
         instrument_elided = dict(attestation)
-        instrument_elided["existing_llama_processes"] = []
-        gating = list(np_sweep.host_health_warnings(instrument_elided)) + freq_warnings
+        instrument_elided["existing_llama_processes"] = foreign_procs
+        gating = (
+            list(np_sweep.host_health_warnings(instrument_elided))
+            + freq_warnings
+            + foreign_blockers
+        )
+        full = full + foreign_blockers
 
         structural = [w for w in full if w not in gating]
 
@@ -586,9 +673,12 @@ def _host_health_probe(
                 "numa_balancing": attestation.get("numa_balancing"),
                 "scaling_governors": list(attestation.get("scaling_governors") or []),
                 "loadavg": str(attestation.get("loadavg") or ""),
-                "llama_processes_at_attestation": len(
-                    attestation.get("existing_llama_processes") or []
-                ),
+                "llama_processes_at_attestation": len(observed),
+                "llama_processes_lineup": len(lineup_procs),
+                "llama_processes_foreign": [
+                    {"pid": str(p.get("pid", "")), "port": _llama_process_port(p)}
+                    for p in foreign_procs
+                ],
                 "warnings": full,
                 "structural_for_harness": structural,
             }
@@ -885,8 +975,9 @@ def _host_health_stamp_lines(host_health: dict[str, Any] | None) -> list[str]:
     lines.append("# `host_health_warnings` is the complete unfiltered rule output.")
     lines.append("# `host_health_structural_for_harness` is the subset waived from gating because")
     lines.append("# a contention matrix benches the LIVE stack by design (llama-server presence is")
-    lines.append("# the instrument). That waiver does NOT distinguish lineup members from foreign")
-    lines.append("# llama processes — this harness cannot tell them apart.")
+    lines.append("# the instrument). Only processes on a DECLARED lineup port are waived; a foreign")
+    lines.append("# llama process (undeclared or unattributable port) gates and is listed under")
+    lines.append("# host_provenance.llama_processes_foreign.")
     lines.append(f'host_health_status: "{host_health.get("status", HOST_HEALTH_UNKNOWN)}"')
     warnings = _str_list("warnings")
     if warnings:
@@ -918,6 +1009,8 @@ def _host_health_stamp_lines(host_health: dict[str, Any] | None) -> list[str]:
         "scaling_governors",
         "loadavg",
         "llama_processes_at_attestation",
+        "llama_processes_lineup",
+        "llama_processes_foreign",
         "attestation_status",
         "attestation_error",
         "rule_source",

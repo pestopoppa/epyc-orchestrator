@@ -839,7 +839,7 @@ aux_services:
     cwd: "{llm_root}/worktrees/mains/autokernel-unified-20260908"
     pythonpath: ["{llm_root}/worktrees/mains/autokernel-unified-20260908"]
     env:
-      AUTOKERNEL_LOOP_STORE_ROOT: /mnt/raid0/llm/tmp/aku12a-glm53-five-loop-store
+      AUTOKERNEL_LOOP_STORE_ROOT: /mnt/raid0/llm/tmp/aku-glm53-continuous-20260915-v12
     health_path: /health
     health_timeout: 30
     model_label: epyc-root handoff progress hub (stdlib)

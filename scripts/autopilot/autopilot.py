@@ -62,6 +62,11 @@ from src.autopilot_core.journal_reconstruction import (
     reconstruct_archive_from_journal_rows,
 )
 from src.autopilot_core.journal_snapshot_replay import archive_payload_from_verified_snapshot
+from src.autopilot_core.infra_fingerprint import (
+    collect_infra_fingerprint,
+    compare_infra_fingerprints,
+    fingerprint_digest,
+)
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from src.autopilot_core.measurement_guards import (
     is_quality_admissible as _is_quality_admissible,
@@ -107,6 +112,7 @@ from phase_status import (
 import controller_io
 from controller_io import PLANNER_ARCHIVE_PATH, invoke_controller as _invoke_controller_impl
 from run_manifest import build_run_manifest, manifest_drift_reasons
+import rejected_mutation_ledger
 from planner_coordinator import plan_with_providers, uncritiqued_dispatch_block_reason
 from state_store import (
     OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST,
@@ -5016,6 +5022,94 @@ def _baseline_pin_for_trial(gate: Any, eval_result: Any) -> dict[str, Any]:
         return {"schema_version": 1, "source": "capture_error", "error": str(exc)[:200]}
 
 
+def _build_rejected_config_feedback(journal: Any) -> str:
+    """AP-53: still-standing hard rejections of concrete configs, from the folded journal."""
+    try:
+        entries = (
+            journal.entries_with_supersessions()
+            if hasattr(journal, "entries_with_supersessions")
+            else journal.all_entries()
+        )
+        block = rejected_mutation_ledger.render_rejected_configs_for_planner(list(entries))
+    except Exception as exc:  # noqa: BLE001 - prompt context must never block planning
+        log.debug("AP-53 rejected-config feedback failed: %s", exc)
+        return ""
+    return f"\n\n{block}" if block else ""
+
+
+BASELINE_INFRA_FINGERPRINTS_STATE_KEY = "baseline_infra_fingerprints"
+
+
+def _infra_fingerprint_for_trial() -> dict[str, Any]:
+    """AP-55: capture the infra regime (never raises, zero inference)."""
+    try:
+        return collect_infra_fingerprint()
+    except Exception as exc:  # noqa: BLE001 - provenance must never fail a trial
+        return {"schema_version": 1, "status": "capture_error", "error": str(exc)[:200]}
+
+
+def _infra_comparability_for_trial(
+    state: Mapping[str, Any],
+    tier: int,
+    trial_fingerprint: Mapping[str, Any],
+    *,
+    dispatch_fingerprint: Mapping[str, Any] | None = None,
+    baseline_revision: Any = None,
+) -> dict[str, Any]:
+    """AP-55: compare this trial's regime with its tier baseline reference's regime.
+
+    The reference fingerprint is recorded when a baseline is promoted
+    (``state[BASELINE_INFRA_FINGERPRINTS_STATE_KEY][tier]``). A baseline seeded
+    before AP-55 has none, so the verdict is UNVERIFIED — never COMPARABLE by
+    default. A regime change between dispatch and eval completion is marked
+    NON_COMPARABLE regardless of the baseline: the trial itself straddled regimes.
+    """
+    try:
+        refs = state.get(BASELINE_INFRA_FINGERPRINTS_STATE_KEY)
+        reference = refs.get(str(int(tier))) if isinstance(refs, Mapping) else None
+        label = f"baseline_tier_{int(tier)}"
+        if baseline_revision is not None:
+            label += f"_rev{baseline_revision}"
+        verdict = compare_infra_fingerprints(
+            trial_fingerprint,
+            reference if isinstance(reference, Mapping) else None,
+            reference_label=label,
+        )
+        if dispatch_fingerprint is not None:
+            drift = compare_infra_fingerprints(
+                trial_fingerprint, dispatch_fingerprint, reference_label="trial_dispatch"
+            )
+            verdict["mid_trial"] = {
+                "status": drift["status"],
+                "differing_components": drift["differing_components"],
+            }
+            if drift["status"] == "NON_COMPARABLE":
+                verdict["status"] = "NON_COMPARABLE"
+                verdict["reason"] = (
+                    "infra changed during trial: " + ",".join(drift["differing_components"])
+                )
+        return verdict
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "UNVERIFIED", "reason": f"comparability error: {exc}"[:200]}
+
+
+def _record_baseline_infra_fingerprint(
+    state: dict[str, Any],
+    baseline_update: Any,
+    trial_fingerprint: Mapping[str, Any],
+) -> None:
+    """AP-55: a promoted baseline carries the regime it was measured in."""
+    if baseline_update is None or not getattr(baseline_update, "updated", False):
+        return
+    if not fingerprint_digest(trial_fingerprint):
+        return
+    refs = state.get(BASELINE_INFRA_FINGERPRINTS_STATE_KEY)
+    if not isinstance(refs, dict):
+        refs = {}
+    refs[str(int(baseline_update.tier))] = dict(trial_fingerprint)
+    state[BASELINE_INFRA_FINGERPRINTS_STATE_KEY] = refs
+
+
 def _record_skip_trial(
     journal: Any,
     trial_id: int,
@@ -6933,6 +7027,56 @@ def _archive_entry_count(payload: object) -> int:
     return len(entries) if isinstance(entries, list) else 0
 
 
+def _snapshot_scope_matches(
+    payload: Mapping[str, Any],
+    *,
+    exclude_before_ts: float | None,
+    deinflate_before_ts: float | None,
+    deinflate_factor: float,
+) -> bool:
+    """A snapshot is authority only for the era scope it was folded under (W3).
+
+    Snapshots record ``exclusions.exclude_before_ts``; a snapshot folded without
+    the live epoch exclusion (e.g. an automatic segment snapshot) would otherwise
+    hand pre-epoch entries to the live frontier. Deinflation is not recorded at
+    archive level, so any active deinflation forces the full replay.
+    """
+    if deinflate_before_ts is not None and deinflate_factor != 1.0:
+        return False
+    exclusions = payload.get("exclusions")
+    recorded = exclusions.get("exclude_before_ts") if isinstance(exclusions, Mapping) else None
+    if recorded is None or exclude_before_ts is None:
+        return recorded is None and exclude_before_ts is None
+    try:
+        return float(recorded) == float(exclude_before_ts)
+    except (TypeError, ValueError):
+        return False
+
+
+def _sync_segment_snapshot_scope(journal: Any, state: Mapping[str, Any]) -> None:
+    """W3: fold automatic segment snapshots under the live archive-authority scope.
+
+    Active deinflation is not recorded in an archive payload, so it disables
+    segment snapshots rather than writing one the authority path must refuse.
+    """
+    if not hasattr(journal, "segment_snapshot_scope"):
+        return
+    try:
+        deinflate_before_ts, deinflate_factor, exclude_before_ts = (
+            _archive_epoch_params_from_state(state)
+        )
+        if deinflate_before_ts is not None and deinflate_factor != 1.0:
+            journal.segment_snapshots = False
+            return
+        journal.segment_snapshot_scope = {
+            "objective_policy": _live_objective_policy_from_state(state),
+            "exclude_before_ts": exclude_before_ts,
+        }
+    except Exception as exc:  # noqa: BLE001 - never block a trial write
+        log.warning("W3 segment snapshot scope sync failed; disabling: %s", exc)
+        journal.segment_snapshots = False
+
+
 def _journal_archive_payload_for_authority(
     journal: ExperimentJournal,
     *,
@@ -6951,6 +7095,12 @@ def _journal_archive_payload_for_authority(
             snapshot_payload is not None
             and str(snapshot_payload.get("objective_policy") or LEGACY_OBJECTIVE_POLICY)
             == objective_policy
+            and _snapshot_scope_matches(
+                snapshot_payload,
+                exclude_before_ts=exclude_before_ts,
+                deinflate_before_ts=deinflate_before_ts,
+                deinflate_factor=deinflate_factor,
+            )
         ):
             return snapshot_payload
     return reconstruct_archive_from_journal_rows(
@@ -7663,6 +7813,7 @@ def _run_loop_inner(
     # running unfenced mid-loop.
     eval_quality_era, quality_exclude_before_ts = _quality_epoch_params_from_state(state)
     journal = ExperimentJournal()
+    _sync_segment_snapshot_scope(journal, state)  # W3: scope rollover snapshots from the start
     _deinfl_ts, _deinfl_factor, _exclude_ts = _archive_epoch_params_from_state(state)
     archive_payload = _journal_archive_payload_for_authority(
         journal,
@@ -8512,7 +8663,10 @@ def _run_loop_inner(
                         lab,
                         denylisted_flags=_PLANNER_DENYLISTED_FEATURE_FLAGS,
                     ),
-                    last_invalid_feedback=_build_last_invalid_feedback(state),
+                    last_invalid_feedback=(
+                        _build_last_invalid_feedback(state)
+                        + _build_rejected_config_feedback(journal)  # AP-53
+                    ),
                     plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
                 )
                 + peaf.peaf_prompt_addendum()
@@ -9018,7 +9172,9 @@ def _run_loop_inner(
         #   - finds the trial in the journal (case a) → re-syncs counter
         #   - finds nothing (case b) → writes AUTOPILOT_KILLED placeholder
         # Both cases prevent silent corruption of the planner's view.
+        dispatch_infra_fingerprint: dict[str, Any] | None = None
         if pre_dispatch_skip is None:
+            dispatch_infra_fingerprint = _infra_fingerprint_for_trial()  # AP-55
             state["in_flight_trial"] = {
                 "trial_id": trial_counter,
                 "action": action,
@@ -9295,6 +9451,22 @@ def _run_loop_inner(
         # own number masquerading as its own incumbent. Recorded on the JournalEntry so the
         # delta is self-contained instead of being regex-recovered from failure prose.
         baseline_pin_record = _baseline_pin_for_trial(gate, eval_result)
+        # AP-55: the regime this trial was measured in, compared with the regime of the
+        # baseline reference it is about to be judged against (captured before
+        # update_baseline() can replace that reference).
+        trial_infra_fingerprint = _infra_fingerprint_for_trial()
+        trial_comparability = _infra_comparability_for_trial(
+            state,
+            int(getattr(eval_result, "tier", 0) or 0),
+            trial_infra_fingerprint,
+            dispatch_fingerprint=dispatch_infra_fingerprint,
+            baseline_revision=(
+                baseline_pin_record.get("baseline_revision")
+                if isinstance(baseline_pin_record, dict) else None
+            ),
+        )
+        if isinstance(baseline_pin_record, dict) and baseline_pin_record:
+            baseline_pin_record["infra_comparability"] = trial_comparability.get("status")
 
         if has_exo_unrecovered:
             # Bypass safety gate + archive update. Trial is journaled below
@@ -10023,6 +10195,9 @@ def _run_loop_inner(
                 "verdict": multitier_tier_verdict,
             }
 
+        # AP-55: eval-side consumers read eval_details, so stamp the regime there too.
+        eval_details_dict["infra_fingerprint_digest"] = fingerprint_digest(trial_infra_fingerprint)
+        eval_details_dict["infra_comparability"] = trial_comparability.get("status", "")
         journal_entry = JournalEntry(
             trial_id=trial_counter,
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -10065,7 +10240,10 @@ def _run_loop_inner(
             bug_corrupted_by=bug_corrupted_by,
             bug_corrupted_reason=bug_corrupted_reason,
             baseline_pin=baseline_pin_record,  # EV-14e
+            infra_fingerprint=trial_infra_fingerprint,  # AP-55
+            comparability=trial_comparability,  # AP-55
         )
+        _sync_segment_snapshot_scope(journal, state)  # W3
         journal.record(journal_entry)
         # Evidence is the already-durable trial, supplied here rather than by the
         # planner, so a resolution can never cite a trial that did not run.
@@ -10158,6 +10336,7 @@ def _run_loop_inner(
         state["quality_history_provenance_by_tier"] = gate.quality_history_provenance_by_tier
         baseline_state = gate.baseline.to_state_dict()
         state["baseline_state"] = baseline_state
+        _record_baseline_infra_fingerprint(state, baseline_update, trial_infra_fingerprint)
         try:
             _append_baseline_promotion_event(
                 journal=journal,
@@ -10166,6 +10345,7 @@ def _run_loop_inner(
                 source_trial_id=trial_counter - 1,
                 pareto_status=pareto_status,
                 baseline_state=baseline_state,
+                infra_fingerprint=trial_infra_fingerprint,
             )
         except Exception as exc:  # noqa: BLE001
             log.warning(
@@ -10459,6 +10639,7 @@ def _append_baseline_promotion_event(
     source_trial_id: int,
     pareto_status: str,
     baseline_state: dict[str, Any],
+    infra_fingerprint: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if baseline_update is None or not baseline_update.updated:
         return None
@@ -10478,6 +10659,7 @@ def _append_baseline_promotion_event(
             "pareto_status": pareto_status,
         },
         baseline_state=baseline_state,
+        infra_fingerprint=infra_fingerprint,
     )
 
 

@@ -95,6 +95,7 @@ class DeficiencyCategory(str, Enum):
 
 DEFAULT_JOURNAL_DIR = Path(__file__).resolve().parents[2] / "orchestration"
 MAX_TRIALS_PER_FILE = 1000
+SEGMENT_SNAPSHOT_POLICY_VERSION = "journal-segment-snapshot-v1"
 
 _BASELINE_QUALITY_RE = re.compile(r"\bbaseline\s+([0-9]+(?:\.[0-9]+)?)")
 _SUITE_REGRESSION_RE = re.compile(
@@ -425,6 +426,15 @@ class JournalEntry:
     # SO. Never back-filled on load: a pin invented at read time would claim a
     # comparison identity the original trial never captured.
     baseline_pin: dict[str, Any] = field(default_factory=dict)
+    # 2026-09-16 (AP-55): the infra regime this trial ran in (orchestrator commit,
+    # evaluator digest, kernel binary/libraries, recipe, model files, host config) —
+    # see src/autopilot_core/infra_fingerprint.py. `comparability` compares it with
+    # the fingerprint of the baseline reference the delta was measured against and
+    # says COMPARABLE / NON_COMPARABLE / UNVERIFIED. Both default empty; rows written
+    # before this date load unchanged and are never back-filled (a fingerprint
+    # invented at read time would claim a regime the trial never recorded).
+    infra_fingerprint: dict[str, Any] = field(default_factory=dict)
+    comparability: dict[str, Any] = field(default_factory=dict)
 
 
 def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, Any]:
@@ -505,6 +515,14 @@ def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, 
                         "git_tag": entry.git_tag or ""},
         "captured_by": "experiment_journal.measurement_tuple/v1",
     }
+    # AP-55: bind the claim to its infra regime. Only present when the trial carried
+    # a fingerprint; a legacy/unfingerprinted row says nothing rather than guessing.
+    fp = entry.infra_fingerprint if isinstance(entry.infra_fingerprint, dict) else {}
+    if fp.get("digest"):
+        out["infra_fingerprint"] = str(fp["digest"])
+    comp = entry.comparability if isinstance(entry.comparability, dict) else {}
+    if comp.get("status"):
+        out["comparability"] = str(comp["status"])
     missing = [name for name, present in (("protocol_id", protocol_id), ("reps", reps),
                                           ("date", out["date"]))
                if not present]
@@ -553,6 +571,8 @@ class BaselinePromotionEvent:
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     type: str = BASELINE_PROMOTION_EVENT_TYPE
+    # AP-55: infra regime of the promoted reference (the source trial's fingerprint).
+    infra_fingerprint: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -613,8 +633,13 @@ def _snapshot_hash(
 class ExperimentJournal:
     """Append-only experiment log with TSV (human-readable) + JSONL (machine-readable)."""
 
-    def __init__(self, journal_dir: Path | None = None):
+    def __init__(self, journal_dir: Path | None = None, *, segment_snapshots: bool = True):
         self.journal_dir = journal_dir or DEFAULT_JOURNAL_DIR
+        # W3: append a chained snapshot row when a shard closes (see _maybe_close_segment).
+        self.segment_snapshots = segment_snapshots
+        # Replay scope for segment snapshots ({"objective_policy", "exclude_before_ts"});
+        # AutoPilot keeps it aligned with the live archive-authority scope.
+        self.segment_snapshot_scope: dict[str, Any] = {}
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         self._entries: list[JournalEntry] = []
         self._ledger_events_by_batch: dict[int, list[dict[str, Any]]] = {}
@@ -813,6 +838,9 @@ class ExperimentJournal:
                     # unchanged and `baseline_pin_for()` is the one place that decides to
                     # fall back — and marks it.
                     baseline_pin=data.get("baseline_pin", {}) or {},
+                    # AP-55: absent on rows written before 2026-09-16; never back-filled.
+                    infra_fingerprint=data.get("infra_fingerprint", {}) or {},
+                    comparability=data.get("comparability", {}) or {},
                 )
                 self._entries.append(entry)
 
@@ -872,8 +900,76 @@ class ExperimentJournal:
 
     # ── writing ──────────────────────────────────────────────────
 
+    def _maybe_close_segment(self, next_trial_id: int) -> dict[str, Any] | None:
+        """W3: chain a closing snapshot row onto a shard before the journal rotates.
+
+        When the next trial belongs to a later ``MAX_TRIALS_PER_FILE`` segment than
+        the last recorded trial, the full reconstructed archive view is appended as
+        a ``journal_snapshot`` event to the CLOSING shard (``append_ledger_event``
+        targets the current batch), parented on the previous snapshot hash. Each
+        segment therefore ends with the snapshot that lets a rebuild start there and
+        fold only the newer tail.
+
+        Skipped when disabled, when the latest snapshot already covers the last
+        trial, or when there is nothing to snapshot. FAILS OPEN: a snapshot is a
+        replay accelerator, never a precondition for recording a trial.
+        """
+        if not self.segment_snapshots or not self._entries:
+            return None
+        closing_batch = self._current_batch()
+        if next_trial_id // MAX_TRIALS_PER_FILE <= closing_batch:
+            return None
+        last_trial_id = self._entries[-1].trial_id
+        latest = self.latest_journal_snapshot_event() or {}
+        try:
+            if int(latest.get("through_trial_id", -1)) >= last_trial_id:
+                return None
+        except (TypeError, ValueError):
+            pass
+        try:
+            try:
+                from scripts.autopilot.journal_snapshot_create import build_archive_snapshot
+            except ModuleNotFoundError:  # pragma: no cover - bare-module import context
+                from journal_snapshot_create import build_archive_snapshot
+
+            result = build_archive_snapshot(
+                self,
+                policy_version=SEGMENT_SNAPSHOT_POLICY_VERSION,
+                **dict(self.segment_snapshot_scope or {}),
+            )
+            if result.status != "ready" or result.snapshot is None:
+                log.warning(
+                    "W3 segment snapshot for shard %d not appended: %s %s",
+                    closing_batch, result.status, result.warning,
+                )
+                return None
+            snapshot = dict(result.snapshot)
+            segment_ids = [
+                e.trial_id for e in self._entries
+                if e.trial_id // MAX_TRIALS_PER_FILE == closing_batch
+            ]
+            snapshot["segment"] = {
+                "batch": closing_batch,
+                "shard": self._jsonl_path(closing_batch).name,
+                "first_trial_id": min(segment_ids) if segment_ids else None,
+                "last_trial_id": max(segment_ids) if segment_ids else None,
+                "trial_count": len(segment_ids),
+                "next_trial_id": int(next_trial_id),
+            }
+            return self.append_journal_snapshot_event(
+                through_trial_id=int(result.through_trial_id),
+                snapshot=snapshot,
+                policy_version=result.policy_version,
+                actor="experiment_journal.segment_rollover",
+                parent_snapshot_hash=result.parent_snapshot_hash,
+            )
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            log.warning("W3 segment snapshot for shard %d failed: %s", closing_batch, exc)
+            return None
+
     def record(self, entry: JournalEntry) -> None:
         """Append a trial entry to both TSV and JSONL."""
+        self._maybe_close_segment(entry.trial_id)
         batch = entry.trial_id // MAX_TRIALS_PER_FILE
         tsv = self._tsv_path(batch)
         jsonl = self._jsonl_path(batch)
@@ -976,6 +1072,7 @@ class ExperimentJournal:
         baseline_state: dict[str, Any],
         policy_version: str = "baseline-promotion-v1",
         actor: str = "autopilot.py",
+        infra_fingerprint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Append a baseline-promotion event row without changing baseline state."""
         return self.append_ledger_event(asdict(
@@ -990,6 +1087,7 @@ class ExperimentJournal:
                 baseline_state=baseline_state,
                 policy_version=policy_version,
                 actor=actor,
+                infra_fingerprint=copy.deepcopy(infra_fingerprint or {}),
             )
         ))
 

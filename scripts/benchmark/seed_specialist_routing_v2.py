@@ -917,10 +917,10 @@ Examples (legacy mode - DEPRECATED):
 
     # Rebuild pool — build and exit
     if args.rebuild_pool:
-        from question_pool import build_pool
         import time as _time
         t0 = _time.monotonic()
-        stats = build_pool()
+        # EVL-12 A2: bind the research question_pool by path, like the sampler.
+        stats = _seeding_sampling.build_question_pool()
         elapsed = _time.monotonic() - t0
         total = sum(stats.values())
         print(f"Pool rebuilt in {elapsed:.1f}s: {total} questions across {len(stats)} suites")

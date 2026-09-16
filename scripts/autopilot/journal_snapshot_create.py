@@ -80,8 +80,15 @@ def build_archive_snapshot(
     *,
     policy_version: str = DEFAULT_POLICY_VERSION,
     force: bool = False,
+    objective_policy: str = LEGACY_OBJECTIVE_POLICY,
+    exclude_before_ts: float | None = None,
 ) -> JournalSnapshotBuildResult:
-    """Build the current full-journal archive snapshot without writing it."""
+    """Build the current full-journal archive snapshot without writing it.
+
+    ``objective_policy`` / ``exclude_before_ts`` fold the snapshot under the live
+    authority scope; the scope is recorded in the archive payload itself, so replay
+    diagnostics and the authority consumer can match it.
+    """
     trial_rows = _trial_rows(journal)
     through_trial_id = _max_trial_id(trial_rows)
     if through_trial_id is None:
@@ -113,6 +120,8 @@ def build_archive_snapshot(
         rows,
         None,
         current_run_only=False,
+        objective_policy=objective_policy,
+        exclude_before_ts=exclude_before_ts,
     )
     if archive is None:
         return JournalSnapshotBuildResult(

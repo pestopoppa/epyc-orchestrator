@@ -385,3 +385,74 @@ def test_retrieval_config_and_profile_application(monkeypatch):
     assert args.cooldown == 2.0
     assert isinstance(args.timeout, int)
     assert os.environ.get("ORCHESTRATOR_DEFERRED_TOOL_RESULTS") == "1"
+
+
+# ── EVL-12 A2 residue: --rebuild-pool / --question-ids bind the research pool by path ──
+
+_FAKE_RESEARCH_POOL = '''
+WHICH_COPY = "research"
+BUILD_CALLS = []
+
+def build_pool(output_path=None):
+    BUILD_CALLS.append(output_path)
+    return {"research_suite": 2}
+
+def load_pool(pool_path=None, warn_stale=True):
+    assert warn_stale is False
+    return {
+        "suite_a": [{"id": "q1", "suite": "suite_a"}, {"id": "q2", "suite": "suite_a"}],
+        "suite_b": [{"id": "suite_b/raw", "suite": "suite_b"}],
+    }
+'''
+
+
+@pytest.fixture()
+def research_pool_tree(tmp_path, monkeypatch):
+    import seeding_sampling
+
+    bench = tmp_path / "scripts" / "benchmark"
+    bench.mkdir(parents=True)
+    (bench / "question_pool.py").write_text(_FAKE_RESEARCH_POOL, encoding="utf-8")
+    monkeypatch.setenv("EPYC_RESEARCH_ROOT", str(tmp_path))
+    monkeypatch.setattr(seeding_sampling, "_RESEARCH_BENCHMARK_MODULE_CACHE", {})
+    decoy = ModuleType("question_pool")
+    decoy.WHICH_COPY = "orchestrator-decoy"
+    decoy.build_pool = Mock(side_effect=AssertionError("bare-import copy used"))
+    decoy.load_pool = Mock(side_effect=AssertionError("bare-import copy used"))
+    decoy.load_questions_by_ids = Mock(side_effect=AssertionError("bare-import copy used"))
+    monkeypatch.setitem(sys.modules, "question_pool", decoy)
+    return seeding_sampling, decoy
+
+
+def test_build_question_pool_binds_research_copy_not_sys_modules(research_pool_tree):
+    seeding_sampling, decoy = research_pool_tree
+    assert seeding_sampling.build_question_pool() == {"research_suite": 2}
+    decoy.build_pool.assert_not_called()
+    assert sys.modules["question_pool"] is decoy, "must not clobber the bare name"
+
+
+def test_load_questions_by_ids_binds_research_copy_and_preserves_semantics(research_pool_tree):
+    seeding_sampling, decoy = research_pool_tree
+    log = Mock()
+    out = seeding_sampling.load_questions_by_ids(
+        ["suite_a/q2", "q1", "suite_a/q1", "suite_b/raw", "nope"], logger=log,
+    )
+    # input order, suite/ prefix stripped, de-duplicated, raw slash id matched
+    assert [q["id"] for q in out] == ["q2", "q1", "suite_b/raw"]
+    decoy.load_pool.assert_not_called()
+    decoy.load_questions_by_ids.assert_not_called()
+    log.warning.assert_called_once()
+    assert "nope" in str(log.warning.call_args)
+
+
+def test_load_questions_by_ids_fails_closed_without_research_module(tmp_path, monkeypatch):
+    import seeding_sampling
+
+    monkeypatch.setenv("EPYC_RESEARCH_ROOT", str(tmp_path))
+    monkeypatch.setattr(seeding_sampling, "_RESEARCH_BENCHMARK_MODULE_CACHE", {})
+    decoy = ModuleType("question_pool")
+    decoy.load_questions_by_ids = Mock(return_value=[{"id": "stale"}])
+    monkeypatch.setitem(sys.modules, "question_pool", decoy)
+    with pytest.raises(FileNotFoundError):
+        seeding_sampling.load_questions_by_ids(["q1"], logger=Mock())
+    decoy.load_questions_by_ids.assert_not_called()

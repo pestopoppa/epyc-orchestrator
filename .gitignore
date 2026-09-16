@@ -118,6 +118,7 @@ orchestration/autopilot_journal.*
 # anyone noticed. Runtime data belongs on disk, not in the repo.
 orchestration/autopilot_journal_*
 orchestration/autopilot_plots/
+orchestration/autopilot_rejected_mutations.jsonl
 orchestration/autopilot_short_term_memory.md
 orchestration/autopilot_state.json*
 orchestration/autopilot_state.pre-*.json
