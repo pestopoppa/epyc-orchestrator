@@ -38,12 +38,41 @@ _MODULE = REPO / "src/mutation_ledger.py"
 _CLAIM = "consults the ledger before composing a new mutation onto the live config"
 
 
-def _production_references() -> list[str]:
+#: Whole-identifier match. 2026-09-16: the AP-53 merge (`753343f5`) added
+#: `scripts/autopilot/rejected_mutation_ledger.py` — a DIFFERENT ledger (the proposer's
+#: memory of rejected prompt/code mutations) — and its `import rejected_mutation_ledger`
+#: callers in `actions.py`/`autopilot.py` matched the old substring pattern, so this
+#: tripwire fired on a false positive. BSV-3's conflict ledger (`src/mutation_ledger.py`)
+#: still has no production importer; the claim still contradicts reality.
+_PATTERN = r"(^|[^[:alnum:]_])mutation_ledger([^[:alnum:]_]|$)|MutationLedger"
+
+#: The near-miss, kept as a regression guard: the AP-53 module must exist and be wired,
+#: and must NOT count as a BSV-3 reference.
+_AP53_MODULE = "scripts/autopilot/rejected_mutation_ledger.py"
+
+
+def _git_grep(pattern: str) -> list[str]:
     out = subprocess.run(
-        ["git", "grep", "-n", "-E", r"mutation_ledger|MutationLedger", "--", "src", "scripts"],
+        ["git", "grep", "-n", "-E", pattern, "--", "src", "scripts"],
         cwd=REPO, capture_output=True, text=True, check=False).stdout
-    return [ln for ln in out.splitlines()
-            if ln.strip() and not ln.startswith("src/mutation_ledger.py:")]
+    return [ln for ln in out.splitlines() if ln.strip()]
+
+
+def _production_references() -> list[str]:
+    return [ln for ln in _git_grep(_PATTERN)
+            if not ln.startswith("src/mutation_ledger.py:")]
+
+
+def test_the_ap53_rejected_ledger_is_not_a_bsv3_reference() -> None:
+    """Regression for the 2026-09-16 false positive. `rejected_mutation_ledger` is the
+    AP-53 proposer memory, not the BSV-3 conflict ledger; its callers must not satisfy
+    (or trip) this tripwire. If this fails because the AP-53 module was removed, delete
+    this test; if it fails because the narrow pattern now matches it, the pattern rotted."""
+    assert (REPO / _AP53_MODULE).exists()
+    wide = [ln for ln in _git_grep(r"rejected_mutation_ledger")
+            if not ln.startswith(_AP53_MODULE + ":")]
+    assert wide, "AP-53 ledger has no callers — its own tripwire, not this one"
+    assert not [ln for ln in _production_references() if "rejected_mutation_ledger" in ln]
 
 
 def test_the_docstring_still_claims_an_integration_that_does_not_exist() -> None:
