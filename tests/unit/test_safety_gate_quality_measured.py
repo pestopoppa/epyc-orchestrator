@@ -78,6 +78,9 @@ def test_unmeasured_quality_is_not_promotable(tmp_path):
     assert not verdict.passed
     assert "quality_not_measured" in verdict.categories
     assert verdict.reliability_blocked is False, "this is NOT the REL-1 path"
+    # ETR-5: the state is a first-class verdict field, not only a category string.
+    assert verdict.quality_unmeasured is True
+    assert verdict.retry_not_revert is True
     assert any("NOT MEASURED" in v and "all_rows_infra_failed" in v for v in verdict.violations)
     # Not conflated with a measured collapse: the quality legs are suppressed, not charged.
     assert "quality_floor" not in verdict.categories
@@ -110,6 +113,7 @@ def test_measured_quality_still_passes(tmp_path):
     verdict = g.check(_result(quality=2.5, quality_measured=True))
     assert verdict.passed, verdict.violations
     assert "quality_not_measured" not in verdict.categories
+    assert verdict.quality_unmeasured is False
 
 
 def test_measured_zero_is_a_measurement_not_a_placeholder(tmp_path):
@@ -119,6 +123,8 @@ def test_measured_zero_is_a_measurement_not_a_placeholder(tmp_path):
     verdict = g.check(_result(quality=0.0, quality_measured=True, reliability=0.99))
     assert not verdict.passed
     assert "quality_not_measured" not in verdict.categories
+    assert verdict.quality_unmeasured is False
+    assert verdict.retry_not_revert is False  # a measured collapse IS revert evidence
     # Charged on the quality axis, which is the correct attribution for a measurement.
     assert "quality_floor" in verdict.categories
     assert "regression" in verdict.categories

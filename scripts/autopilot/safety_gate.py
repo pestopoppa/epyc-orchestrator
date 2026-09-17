@@ -760,6 +760,17 @@ class SafetyVerdict:
     # infra-error trial as a quality regression, and the gate skips the consecutive-failure
     # increment for it. Defaults False so every existing verdict is behavior-identical.
     reliability_blocked: bool = False
+    # ETR-5: first-class carrier for ETR-2's state. True when the candidate's quality was a
+    # PLACEHOLDER (EvalResult.quality_measured=False): the quality legs were suppressed and
+    # the trial failed closed. Kept distinct from reliability_blocked (REL-1 is a DIFFERENT
+    # cause — reliability below the floor) so a consumer can tell the two apart; both mean
+    # RETRY, not revert, which `retry_not_revert` folds for consumers that only need that.
+    quality_unmeasured: bool = False
+
+    @property
+    def retry_not_revert(self) -> bool:
+        """True when the failure is untrustworthy/absent evidence, not a measured regression."""
+        return self.reliability_blocked or self.quality_unmeasured
 
     def __bool__(self) -> bool:
         return self.passed
@@ -2565,6 +2576,7 @@ class SafetyGate:
             categories=categories,
             seq=seq_block,
             reliability_blocked=reliability_blocked,
+            quality_unmeasured=quality_unmeasured,
         )
 
         # Track consecutive failures only for the first gate pass over this
@@ -2572,7 +2584,7 @@ class SafetyGate:
         # per-question evidence after an action handler already cached a legacy
         # verdict; that seq-aware upgrade must not double-count failures.
         if record_side_effects:
-            if reliability_blocked or quality_unmeasured:
+            if verdict.retry_not_revert:
                 # REL-1 (B1): an untrustworthy-evidence failure signals RETRY, not a
                 # revert — it must NOT advance the auto-rollback counter (nor reset it).
                 # Otherwise a run of infra-error trials would trip should_rollback() and

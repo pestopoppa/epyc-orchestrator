@@ -1223,7 +1223,6 @@ from src.autopilot_core.measurement_guards import (  # noqa: E402
     DISPOSITION_INFRA_FAILED,
     DISPOSITION_SCORED,
     DISPOSITION_SCORING_FAILED,
-    INBAND_ERROR_PREFIX as _INBAND_ERROR_PREFIX,
     forced_role_serving_mismatch as _forced_role_serving_mismatch,
     inband_error_text as _inband_error_text,
     infra_failure_reason,

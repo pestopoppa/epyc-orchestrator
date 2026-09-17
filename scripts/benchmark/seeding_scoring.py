@@ -130,7 +130,6 @@ def score_answer_or_error(
 # Two copies of an ADMISSIBILITY rule drift silently, and the drift only ever
 # surfaces as two paths disagreeing about the same measurement.
 from src.autopilot_core.measurement_guards import (
-    INBAND_ERROR_PREFIX as _INBAND_ERROR_PREFIX,
     INFRA_ERROR_PATTERNS as _INFRA_ERROR_PATTERNS,
     forced_role_serving_mismatch as _forced_role_serving_mismatch,
     inband_error_text as _inband_error_text,

@@ -116,6 +116,9 @@ def _execute_mock(
         answer=answer,
         turns=turns,
         tokens_used=0,
+        # ETR-6: set explicitly, like vision_stage's unavailable response, so the two
+        # "no decode" shapes serialize identically even under exclude_unset.
+        tokens_generated=0,
         elapsed_seconds=elapsed,
         mock_mode=True,
         real_mode=False,
