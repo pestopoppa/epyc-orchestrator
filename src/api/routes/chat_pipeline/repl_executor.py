@@ -31,6 +31,7 @@ from src.graph import run_task, GraphConfig, TaskDeps, TaskState
 from src.llm_primitives import LLMPrimitives
 from src.constants import TOOL_OUTPUT_MATCH_LEN
 from src.repl_environment import REPLEnvironment
+from src.session.lease import HeldSessionLease, SessionLeaseManager
 from src.session.models import Checkpoint
 from src.session.protocol import normalize_checkpoint_for_repl_restore
 
@@ -329,7 +330,40 @@ async def _execute_repl(
     start_time: float,
     initial_role,
 ) -> ChatResponse:
-    """Handle REPL orchestration mode (file exploration, tool access, large context)."""
+    """Handle REPL orchestration mode (file exploration, tool access, large context).
+
+    A request that carries ``session_id`` restores and then re-checkpoints that
+    session's globals. uvicorn runs several worker processes, so two such
+    requests can land on different workers; without cross-process ownership
+    both restore the same checkpoint and the later save erases the earlier
+    turn. The request therefore holds the session's SQLite lease (D-f) for its
+    whole duration and fences its checkpoint write with the lease token.
+    """
+    session_id = getattr(request, "session_id", None)
+    session_store = getattr(state, "session_store", None)
+    manager = getattr(session_store, "leases", None) if session_id else None
+    if not isinstance(manager, SessionLeaseManager):
+        return await _execute_repl_body(
+            request, routing, primitives, state, start_time, initial_role, None
+        )
+    async with HeldSessionLease(
+        manager, session_id, label=f"chat:{routing.task_id}"
+    ) as held:
+        return await _execute_repl_body(
+            request, routing, primitives, state, start_time, initial_role, held
+        )
+
+
+async def _execute_repl_body(
+    request: ChatRequest,
+    routing: RoutingResult,
+    primitives: LLMPrimitives,
+    state,
+    start_time: float,
+    initial_role,
+    session_lease: HeldSessionLease | None,
+) -> ChatResponse:
+    """Body of :func:`_execute_repl`; ``session_lease`` is None when unleased."""
     task_id = routing.task_id
     routing_strategy = routing.routing_strategy
     formalization_applied = routing.formalization_applied
@@ -412,8 +446,23 @@ async def _execute_repl(
         "save_error": None,
         "restore_protocol": {},
         "save_protocol_version": None,
+        "lease_token": None,
+        "lease_error": None,
+        "lease_lost": False,
     }
-    if session_id and session_store:
+    lease_blocked = False
+    if session_lease is not None:
+        session_persistence["lease_token"] = session_lease.token
+        if session_lease.error:
+            # Another live owner kept the session past the wait budget. Neither
+            # restore (its checkpoint is about to be superseded) nor save (the
+            # write would be refused) is honest, so the turn runs stateless and
+            # says so.
+            lease_blocked = True
+            session_persistence["lease_error"] = session_lease.error
+            session_persistence["restore_error"] = "session_lease_unavailable"
+            session_persistence["save_error"] = "session_lease_unavailable"
+    if session_id and session_store and not lease_blocked:
         try:
             checkpoint = session_store.get_latest_checkpoint(session_id)
             if checkpoint:
@@ -801,7 +850,7 @@ async def _execute_repl(
                 read_only = set()
         parallel_tools = all(t in read_only for t in tools_called) and len(tools_called) >= 2
 
-    if session_id and session_store:
+    if session_id and session_store and not lease_blocked:
         try:
             session = session_store.get_session(session_id)
             if session:
@@ -821,7 +870,12 @@ async def _execute_repl(
                     skipped_user_globals=repl_checkpoint.get("skipped_user_globals", []),
                     protocol_version=1,
                 )
-                session_store.save_checkpoint(checkpoint)
+                if session_lease is not None:
+                    session_store.save_checkpoint(
+                        checkpoint, fencing_token=session_lease.token
+                    )
+                else:
+                    session_store.save_checkpoint(checkpoint)
                 session_persistence["checkpoint_saved"] = True
                 session_persistence["checkpoint_id"] = checkpoint.id
                 session_persistence["saved_globals"] = len(checkpoint.user_globals)
@@ -830,6 +884,8 @@ async def _execute_repl(
                 session_persistence["save_error"] = "session_not_found"
         except Exception as e:
             session_persistence["save_error"] = str(e)
+            if session_lease is not None:
+                session_persistence["lease_lost"] = session_lease.lost
             log.warning(
                 "Session checkpoint save failed for %s: %s",
                 session_id[:8],

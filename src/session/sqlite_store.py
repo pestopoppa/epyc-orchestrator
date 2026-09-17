@@ -31,6 +31,7 @@ from src.session.models import (
     SessionDocument,
     SessionStatus,
 )
+from src.session.lease import SessionLeaseManager, check_fence
 from src.session.protocol import BaseSessionStore, WhereFilter
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,10 @@ class SQLiteSessionStore(BaseSessionStore):
 
         # Initialize database
         self._init_db()
+
+        # Cross-process ownership (D-f): uvicorn runs several worker processes,
+        # so session ownership lives in the shared database, not in a mutex.
+        self.leases = SessionLeaseManager(self.db_path)
 
         # Load or create embeddings array
         self._load_embeddings()
@@ -440,9 +445,17 @@ class SQLiteSessionStore(BaseSessionStore):
             last_topic=row["last_topic"],
         )
 
-    def update_session(self, session: Session) -> Session:
-        """Update an existing session."""
+    def update_session(
+        self, session: Session, *, fencing_token: int | None = None
+    ) -> Session:
+        """Update an existing session.
+
+        ``fencing_token`` must be the live lease token when the session is
+        leased; see :func:`src.session.lease.check_fence`.
+        """
         with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            check_fence(conn, session.id, fencing_token)
             existing = conn.execute(
                 "SELECT id FROM sessions WHERE id = ?", (session.id,)
             ).fetchone()
@@ -488,9 +501,11 @@ class SQLiteSessionStore(BaseSessionStore):
 
         return session
 
-    def delete_session(self, session_id: str) -> bool:
-        """Delete a session and all associated data."""
+    def delete_session(self, session_id: str, *, fencing_token: int | None = None) -> bool:
+        """Delete a session and all associated data (refused while leased by another)."""
         with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            check_fence(conn, session_id, fencing_token)
             existing = conn.execute(
                 "SELECT id FROM sessions WHERE id = ?", (session_id,)
             ).fetchone()
@@ -730,9 +745,18 @@ class SQLiteSessionStore(BaseSessionStore):
     # Checkpoints
     # =========================================================================
 
-    def save_checkpoint(self, checkpoint: Checkpoint) -> Checkpoint:
-        """Save a checkpoint for crash recovery."""
+    def save_checkpoint(
+        self, checkpoint: Checkpoint, *, fencing_token: int | None = None
+    ) -> Checkpoint:
+        """Save a checkpoint for crash recovery.
+
+        The fence check, the checkpoint insert and the session's
+        ``last_checkpoint_at`` bump happen in ONE write transaction, so a
+        delayed writer holding a stale lease token cannot land either half.
+        """
         with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            check_fence(conn, checkpoint.session_id, fencing_token)
             conn.execute(
                 """
                 INSERT INTO checkpoints (
@@ -758,13 +782,11 @@ class SQLiteSessionStore(BaseSessionStore):
                     json.dumps(checkpoint.pickled_globals),
                 ),
             )
+            conn.execute(
+                "UPDATE sessions SET last_checkpoint_at = ? WHERE id = ?",
+                (checkpoint.created_at.isoformat(), checkpoint.session_id),
+            )
             conn.commit()
-
-        # Update session's last_checkpoint_at
-        session = self.get_session(checkpoint.session_id)
-        if session:
-            session.last_checkpoint_at = checkpoint.created_at
-            self.update_session(session)
 
         return checkpoint
 

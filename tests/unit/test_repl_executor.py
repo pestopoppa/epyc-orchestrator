@@ -1358,3 +1358,95 @@ class TestToolOutputsInAnswer:
                 assert chain["wave_timeline"][0]["tools"] == ["read_file"]
                 assert chain["wave_timeline"][1]["wave_index"] == 1
                 assert chain["wave_timeline"][1]["tools"] == ["list_directory"]
+
+
+# ── D-f: request-scoped cross-process session lease ──────────────────────
+
+
+def _lease_state(store):
+    state = MagicMock()
+    state.tool_registry = MagicMock()
+    state.script_registry = MagicMock()
+    state.progress_logger = None
+    state.hybrid_router = None
+    state.failure_graph = MagicMock()
+    state.increment_request = MagicMock()
+    state.session_store = store
+    return state
+
+
+class TestSessionLease:
+    @pytest.mark.asyncio
+    async def test_request_holds_and_releases_the_lease_and_fences_its_save(
+        self, basic_routing, mock_primitives, tmp_path
+    ):
+        store = SQLiteSessionStore(
+            db_path=tmp_path / "sessions.db", embeddings_path=tmp_path / "embeddings.npy"
+        )
+        session = Session.create(name="lease", working_directory="/tmp")
+        store.create_session(session)
+        seen = {}
+
+        async def _fake_run_task(task_state, task_deps, start_role=None):
+            # While the turn runs, the session is owned: an unfenced writer
+            # (e.g. another worker's request) is refused.
+            seen["live"] = store.leases.get(session.id).is_live(time.time())
+            with pytest.raises(Exception, match="unfenced write is refused"):
+                store.update_session(store.get_session(session.id))
+            return TaskResult(answer="ok", success=True, turns=1, role_history=["frontdoor"])
+
+        request = ChatRequest(
+            prompt="p", context="", real_mode=True, mock_mode=False, max_turns=3,
+            force_role="frontdoor", session_id=session.id,
+        )
+        try:
+            with patch("src.api.routes.chat_pipeline.repl_executor.run_task", side_effect=_fake_run_task):
+                r = await _execute_repl(
+                    request=request, routing=basic_routing, primitives=mock_primitives,
+                    state=_lease_state(store), start_time=time.perf_counter(),
+                    initial_role=Role.FRONTDOOR,
+                )
+            assert seen["live"] is True
+            assert r.session_persistence["lease_token"] == 1
+            assert r.session_persistence["lease_error"] is None
+            assert r.session_persistence["checkpoint_saved"] is True
+            assert not store.leases.get(session.id).is_live(time.time())  # released
+        finally:
+            store.close()
+
+    @pytest.mark.asyncio
+    async def test_session_owned_elsewhere_runs_stateless_and_says_so(
+        self, basic_routing, mock_primitives, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ORCHESTRATOR_SESSION_LEASE_WAIT_S", "0")
+        store = SQLiteSessionStore(
+            db_path=tmp_path / "sessions.db", embeddings_path=tmp_path / "embeddings.npy"
+        )
+        session = Session.create(name="lease", working_directory="/tmp")
+        store.create_session(session)
+        other = store.leases.try_acquire(session.id, ttl_s=60)  # another worker's turn
+        request = ChatRequest(
+            prompt="p", context="", real_mode=True, mock_mode=False, max_turns=3,
+            force_role="frontdoor", session_id=session.id,
+        )
+        try:
+            with patch(
+                "src.api.routes.chat_pipeline.repl_executor.run_task",
+                return_value=TaskResult(answer="ok", success=True, turns=1, role_history=["frontdoor"]),
+            ):
+                r = await _execute_repl(
+                    request=request, routing=basic_routing, primitives=mock_primitives,
+                    state=_lease_state(store), start_time=time.perf_counter(),
+                    initial_role=Role.FRONTDOOR,
+                )
+            sp = r.session_persistence
+            assert sp["lease_token"] is None
+            assert sp["lease_error"].startswith("held_by_other_owner")
+            assert sp["restore_error"] == "session_lease_unavailable"
+            assert sp["checkpoint_saved"] is False
+            assert store.get_checkpoints(session.id) == []
+            # The other owner's lease is untouched.
+            assert store.leases.get(session.id).fencing_token == other.fencing_token
+            assert store.leases.get(session.id).is_live(time.time())
+        finally:
+            store.close()

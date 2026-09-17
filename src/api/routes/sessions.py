@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,6 +28,7 @@ from src.api.models import (
     SessionResumeResponse,
 )
 from src.session import SQLiteSessionStore, Session, Finding, FindingSource
+from src.session.lease import SessionLeaseError
 from src.api.dependencies import dep_session_store
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,15 @@ router = APIRouter()
 
 # In-memory pending permissions (not persisted - short-lived)
 _pending_permissions: dict[str, dict] = {}
+
+
+@contextmanager
+def _lease_conflict_as_409():
+    """A session leased by an in-flight chat turn (D-f) refuses unfenced writes."""
+    try:
+        yield
+    except SessionLeaseError as exc:
+        raise HTTPException(status_code=409, detail=f"session is in use: {exc}") from exc
 
 
 def _session_to_info(session: Session) -> SessionInfo:
@@ -143,7 +154,9 @@ async def delete_session(
     store: SQLiteSessionStore = Depends(dep_session_store),
 ) -> dict[str, str]:
     """Delete a session and all associated data."""
-    if not store.delete_session(session_id):
+    with _lease_conflict_as_409():
+        deleted = store.delete_session(session_id)
+    if not deleted:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
 
     return {"status": "deleted", "session_id": session_id}
@@ -175,7 +188,8 @@ async def resume_session(
     session = context.session
     session.update_activity()
     new_task_id = session.fork_task_id()
-    store.update_session(session)
+    with _lease_conflict_as_409():
+        store.update_session(session)
 
     logger.info(
         f"Resumed session {session_id[:8]}, "
@@ -218,7 +232,8 @@ async def rename_session(
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         session.name = name
         session.update_activity()
-        store.update_session(session)
+        with _lease_conflict_as_409():
+            store.update_session(session)
     else:
         # Create new session with this name (backward compatibility)
         session = Session.create(name=name)
@@ -417,7 +432,9 @@ async def archive_session(
     store: SQLiteSessionStore = Depends(dep_session_store),
 ) -> dict[str, str]:
     """Archive a session to cold storage."""
-    if not store.archive_session(session_id):
+    with _lease_conflict_as_409():
+        archived = store.archive_session(session_id)
+    if not archived:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
 
     return {"status": "archived", "session_id": session_id}
