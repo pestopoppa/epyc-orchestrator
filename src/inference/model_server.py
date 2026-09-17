@@ -109,6 +109,12 @@ class InferenceRequest:
     grammar: str | None = None  # GBNF grammar for constrained generation
     n_probs: int | None = None  # Optional llama.cpp completion_probabilities top-k capture
     max_tokens: int | None = field(default=None, repr=False)
+    # HS-4 P0.1: structured OpenAI chat payload (messages, tools, tool_choice) for
+    # the /v1 client-executed tool mode. When set, llama-server backends send it
+    # to /v1/chat/completions verbatim instead of wrapping prompt as a single
+    # user turn. A real field (not a dynamic attr) so dataclasses.replace() in
+    # the prefix-cache router preserves it.
+    chat_payload: dict[str, Any] | None = field(default=None, repr=False)
 
     def __post_init__(self):
         """Sync max_tokens ↔ n_tokens bidirectionally.
@@ -150,6 +156,9 @@ class InferenceResult:
     stream_chunks: int = 0
     completion_reason: str = ""
     completion_probabilities: list[dict[str, Any]] = field(default_factory=list)
+    # HS-4 P0.1: OpenAI-shape tool calls parsed by llama-server (--jinja) on the
+    # chat-completions path. Empty for every other path.
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""

@@ -1,0 +1,168 @@
+{
+  "direct_nonstream_plain": {
+    "json": {
+      "choices": [
+        {
+          "delta": null,
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "content": "the answer",
+            "name": null,
+            "role": "assistant",
+            "tool_call_id": null,
+            "tool_calls": null
+          }
+        }
+      ],
+      "created": "<created>",
+      "id": "<id>",
+      "model": "orchestrator",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 0,
+        "total_tokens": 7
+      },
+      "x_orchestrator_metadata": null
+    },
+    "llm_calls": [
+      {
+        "args": [
+          "hi"
+        ],
+        "kwargs": {
+          "n_tokens": 1024,
+          "role": "frontdoor"
+        }
+      }
+    ],
+    "status": 200
+  },
+  "direct_nonstream_tools": {
+    "json": {
+      "choices": [
+        {
+          "delta": null,
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "content": "the answer",
+            "name": null,
+            "role": "assistant",
+            "tool_call_id": null,
+            "tool_calls": null
+          }
+        }
+      ],
+      "created": "<created>",
+      "id": "<id>",
+      "model": "frontdoor",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 4,
+        "total_tokens": 11
+      },
+      "x_orchestrator_metadata": {
+        "elapsed_seconds": "<elapsed>",
+        "max_escalation": "B1",
+        "native_tool_contract": "internal_repl_execution",
+        "repl_disabled": true,
+        "response_tool_calls": "not_emitted",
+        "role": "frontdoor",
+        "tools_called": [],
+        "tools_used": 0
+      }
+    },
+    "llm_calls": [
+      {
+        "args": [
+          "System: You are helpful.\n\nUser: open a.txt\n\nAssistant tool_calls: call_1: read_file({\"path\": \"a.txt\"})\n\nTool result call_1: alpha\n\nOpenAI native tools were supplied by the caller.\nUse the existing REPL bridge to execute function tools as Python code:\n  result = CALL(\"tool_name\", arg=value)\nDo not invent tool results; call the tool before FINAL when the answer depends on it.\nAvailable function tools:\n- read_file - Read a file\n  parameters: {\"properties\": {\"path\": {\"type\": \"string\"}}, \"required\": [\"path\"], \"type\": \"object\"}\n\nUser: what did it say?"
+        ],
+        "kwargs": {
+          "n_tokens": 1024,
+          "role": "frontdoor"
+        }
+      }
+    ],
+    "status": 200
+  },
+  "direct_stream_tools": {
+    "llm_calls": [
+      {
+        "args": [
+          "System: You are helpful.\n\nUser: open a.txt\n\nAssistant tool_calls: call_1: read_file({\"path\": \"a.txt\"})\n\nTool result call_1: alpha\n\nOpenAI native tools were supplied by the caller.\nUse the existing REPL bridge to execute function tools as Python code:\n  result = CALL(\"tool_name\", arg=value)\nDo not invent tool results; call the tool before FINAL when the answer depends on it.\nTool choice policy: read_file.\nAvailable function tools:\n- read_file - Read a file\n  parameters: {\"properties\": {\"path\": {\"type\": \"string\"}}, \"required\": [\"path\"], \"type\": \"object\"}\n\nUser: what did it say?"
+        ],
+        "kwargs": {
+          "n_tokens": 1024,
+          "role": "frontdoor"
+        }
+      }
+    ],
+    "sse": "data: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"frontdoor\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"t\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"frontdoor\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"h\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"frontdoor\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"e\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"frontdoor\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \" \"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"frontdoor\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"a\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"frontdoor\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"n\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"frontdoor\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"s\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"frontdoor\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"w\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"frontdoor\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"e\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"frontdoor\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"r\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"frontdoor\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\"}], \"x_orchestrator_metadata\": {\"role\": \"frontdoor\", \"elapsed_seconds\": \"<elapsed>\", \"tokens\": 7, \"repl_disabled\": true, \"native_tool_contract\": \"internal_repl_execution\", \"response_tool_calls\": \"not_emitted\", \"tools_used\": 0, \"tools_called\": []}}\n\ndata: [DONE]\n\n",
+    "status": 200
+  },
+  "repl_nonstream_tools": {
+    "json": {
+      "choices": [
+        {
+          "delta": null,
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "content": "the answer",
+            "name": null,
+            "role": "assistant",
+            "tool_call_id": null,
+            "tool_calls": null
+          }
+        }
+      ],
+      "created": "<created>",
+      "id": "<id>",
+      "model": "orchestrator",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 4,
+        "total_tokens": 11
+      },
+      "x_orchestrator_metadata": {
+        "elapsed_seconds": "<elapsed>",
+        "native_tool_contract": "internal_repl_execution",
+        "response_tool_calls": "not_emitted",
+        "role": "frontdoor",
+        "tools_called": [],
+        "tools_used": 0
+      }
+    },
+    "llm_calls": [
+      {
+        "args": [
+          "Simple questions: FINAL(\"answer\") immediately. No code, no tools. Follow ALL user formatting constraints exactly.\n\nComplex tasks: write Python in the sandboxed REPL. End with FINAL(answer).\n- Facts uncertain? web_research() or web_search(), then FINAL(answer).\n- Code tasks? Test with CALL(\"run_python_code\", code=..., stdin_data=...) first.\n\nOutput ONLY valid Python \u2014 no prose, no markdown, no comment-only responses.\n\nONE answer. No self-correction, rephrasing, or multiple versions.\n\nAfter CALL(), STOP. Do not continue reasoning. Wait for REPL results before answering.\n\n## Available Tools\n## Tools\n\n**Research & Web**\n- `CALL(\"web_research\", query=\"...\", max_pages=3)`: Deep web research; search, fetch, synthesize. Use for factual questions needing source content, not just URLs.\n- `CALL(\"web_search\", query=\"...\", max_results=5)`: Quick search; returns URLs + snippets. Use for links or quick fact checks.\n- `CALL(\"search_wikipedia\", query=\"...\")`: Search Wikipedia for verified info.\n- `search_arxiv(query)` / `search_papers(query)` / `search_books(query)`: Academic and book search via CALL.\n- `get_wikipedia_article(title)`: Full Wikipedia article by exact title.\n- `fetch_docs(url)`: Fetch content from a URL.\n\n**Context & Files**\n- `context`: str \u2014 full input. Inspect with peek/grep; never pass to llm_call.\n- `artifacts`: dict \u2014 store intermediate results between turns.\n- `peek(n, file_path=None)` / `grep(pattern, file_path=None)`: Inspect context or files.\n- `list_dir(path)` / `file_info(path)`: Directory listing, file metadata.\n\n**Code & Documents**\n- `CALL(\"run_python_code\", code=\"...\", stdin_data=\"...\")`: Test code before submitting. Always test first.\n- `ocr_document(path)` / `analyze_figure(image_path, prompt)` / `extract_figure(pdf, page, bbox)`: Document/image processing (returns JSON).\n- `run_tests(path)` / `lint_python(path, fix=False)` / `json_parse(content)`: Code quality via CALL.\n- `run_shell(cmd)`: Sandboxed shell (ls, grep, git status only).\n\n**Routing & Delegation**\n- `my_role()`: Get your role and capabilities.\n- `route_advice(task)` / `delegate(prompt, target_role, reason)`: Get routing advice or delegate subtasks.\n- `escalate(reason, target_role=None)`: Request escalation when task exceeds your tier.\n- `fetch_report(report_id, offset=0, max_chars=2400)`: Load delegation report by handle.\n- `recall(query)`: Search episodic memory for past routing outcomes.\n\n**LLM & Long Context**\n- `llm_call(prompt, role='worker')` / `llm_batch(prompts, role='worker')`: Sub-LM calls; keep prompts short.\n- `context_len()` / `chunk_context(n_chunks=4)` / `summarize_chunks(task, n_chunks=4)`: Long document processing.\n\n**Invocation & Completion**\n- `CALL(name, **kw)`: Invoke tool, returns JSON string. `TOOL(name, **kw)`: Returns Python object.\n  Example: `result = CALL(\"search_arxiv\", query=\"transformers\"); data = json.loads(result)`\n- `list_tools()`: Discover all tools.\n- `FINAL(answer)`: Signal completion. REQUIRED for every task.\n\n## Rules\n## WHEN TO USE TOOLS vs DIRECT ANSWER\n\nPRIORITY ORDER \u2014 try earlier options first:\n1. **Compute** (math, logic, code): Write Python. Never web-search for computable answers.\n2. **Answer directly** (facts you know): well-known science, history, general knowledge, simple questions. Do NOT search to confirm what you already know.\n3. **Reason thoroughly** (analysis, explanations): multi-step problems, \"why\" questions \u2014 think through them, don't search.\n4. **Use run_python_code**: testing code BEFORE submitting \u2014 always test, never submit untested code.\n5. **Search ONLY for genuine gaps**: Use web_research/web_search when you genuinely lack the information \u2014 current events, specific dates, obscure facts, live URLs, recent data you couldn't know from training. Ask: \"Could I answer this confidently without searching?\" If yes, don't search.\n\nTOOL SPECIFICS (when search IS needed):\n- **web_research** for: real content needed (fetches and synthesizes pages)\n- **web_search** for: quick link/URL lookup (snippets only)\n- **search_wikipedia** for: biographical, historical, or encyclopedic questions\n\n## CRITICAL RULES\n1. **SAFE IMPORTS ONLY** - `math`, `json`, `re`, `numpy`, `scipy`, `itertools`, `collections`, `functools`,\n   `statistics`, `datetime`, `fractions`, `decimal` are available. `os`, `sys`, `subprocess`, `socket` are BLOCKED.\n2. **USE list_dir()** for files - NOT os.listdir or pathlib\n3. **ALWAYS call FINAL(answer)** to complete the task. Do NOT keep calling tools after\n   you have enough information.\n4. **FIX ERRORS INCREMENTALLY** - If your code returns an error, your previous code is saved\n   to a file. Read it with peek(), fix ONLY the broken part, and rewrite with file_write_safe().\n   Do NOT rewrite from scratch \u2014 make targeted fixes to the existing code.\n5. **TOOL CALLS ARE CODE** - Write CALL() as executable Python code, NOT as prose.\n   When you need to call a tool, write ONLY the code \u2014 no explanation before or after.\n   STOP generating after the CALL() line. The REPL will execute it and return results\n   in the next turn. Do NOT continue reasoning after a CALL \u2014 wait for the result.\n   WRONG: \"Let me search for this. CALL(\"web_research\", query=\"...\")\" \u2190 prose, won't execute\n   RIGHT: `result = CALL(\"web_research\", query=\"...\")\nprint(result)` \u2190 executable code\n5. **\"Write a function\" tasks**: submit CODE as a string, NOT the function's return value.\n   `solution = '''def foo(): ...'''; FINAL(solution)` \u2190 CORRECT\n   `FINAL(foo(x))` \u2190 WRONG (submits return value, not code)\n\n## EXAMPLES: Write/Fix a Function (LeetCode, DebugBench, etc.)\nWhen the task says \"write a function\" or \"fix the bug\", submit the CODE ITSELF as a string.\n```\nsolution = '''\ndef shortestPalindrome(s: str) -> str:\n    if not s: return s\n    combined = s + \"#\" + s[::-1]\n    lps = [0] * len(combined)\n    length = 0\n    for i in range(1, len(combined)):\n        while length and combined[i] != combined[length]:\n            length = lps[length - 1]\n        if combined[i] == combined[length]:\n            length += 1\n        lps[i] = length\n    return s[lps[-1]:][::-1] + s\n'''\nFINAL(solution)\n```\n\n## EXAMPLES: Direct Answer (NO tools needed)\nFactual: `FINAL(\"Paris\")`  # \"What is the capital of France?\"\nMultiple choice: `FINAL(\"B\")`  # \"Which option is correct? A) ... B) ...\"\nShort math: `FINAL(\"42\")`  # \"What is 6 * 7?\"\nReasoning: `FINAL(\"Step 1: The premises state all A are B and all B are C. Step 2: By transitivity, all A are C. Step 3: Since x is A, x must be C. Therefore x is C.\")`  # \"Explain why x is C given...\"\nAnalysis: `FINAL(\"The function has O(n log n) complexity because the outer loop runs n times and the inner binary search runs log n times. This is optimal for comparison-based sorting.\")`  # \"Analyze the complexity\"\n\n## EXAMPLES: Tool Use (external data needed)\nList files: `result = list_dir('/path'); FINAL(result)`\nRead file: `text = peek(1000, file_path='/path'); FINAL(text)`\nCurrent info: `results = json.loads(CALL(\"web_research\", query=\"2024 election results\")); FINAL(results[\"sources\"][0][\"synthesis\"])`\nUncertain fact: `results = json.loads(CALL(\"web_research\", query=\"Halvard Oskeberg university\")); FINAL(results[\"sources\"][0].get(\"synthesis\", \"Unknown\"))`\nResearch: `results = CALL(\"search_arxiv\", query=\"speculative decoding\"); FINAL(json.loads(results))`\nRun tests: `results = CALL(\"run_tests\", test_path=\"tests/\"); FINAL(json.loads(results))`\nSummarize PDF: `doc = json.loads(ocr_document('/path.pdf')); FINAL(doc['full_text'][:2000])`\n\n## EXAMPLES: Competitive Programming (stdin/stdout: USACO, Codeforces, etc.)\nNOTE: input() is BLOCKED in the REPL. Wrap code in a string, test with CALL, submit with FINAL.\n```\nsolution = '''\nimport sys\ninput = sys.stdin.readline\nn = int(input())\na = list(map(int, input().split()))\nbest = cur = a[0]\nfor x in a[1:]:\n    cur = max(x, cur + x)\n    best = max(best, cur)\nprint(best)\n'''\ntest_out = CALL(\"run_python_code\", code=solution, stdin_data=\"5\n-2 1 -3 4 -1\")\n# verify output looks correct, then submit the code itself\nFINAL(solution)\n```\n\n## COMPLEX CODE (algorithms, implementations)\n- Your code is auto-saved to a file on each turn. On error, the file path is shown.\n- Your session log tracks all previous turns. Check [Session History] block above for what was already tried.\n- Read previous code: `prev = peek(99999, file_path=\"/mnt/raid0/llm/tmp/<task>_solution.py\")`\n- Fix incrementally: `file_write_safe(\"/mnt/raid0/llm/tmp/<task>_solution.py\", corrected_code)`\n- Test: `CALL(\"run_python_code\", code=corrected_code, stdin_data=test_input)`\n- NEVER regenerate from scratch \u2014 always read, patch, rewrite.\n- NEVER repeat an approach that already failed \u2014 check session history for past errors.\n- If stuck after 2 attempts: consult architect or escalate to coder_escalation.\n- For stdin/stdout programs: wrap in string, use `CALL(\"run_python_code\", code=..., stdin_data=...)` to test. Do NOT use `import sys` or `input()` directly \u2014 they are blocked.\n\n## ESCALATION (three modes)\n- **Consult**: `answer = llm_call(\"Be concise. \" + question, role=\"architect\")` then `FINAL(answer)`.\n  Ask a stronger model for help \u2014 you keep control and format the answer.\n  Example: `answer = llm_call(\"Answer with just the letter. \" + question, role=\"architect\"); FINAL(answer)`\n- **Delegate**: `escalate(reason, target_role=\"coder_escalation\")` \u2014 hand off code tasks to a specialist coder.\n  Use for: algorithms, competitive programming, complex implementations.\n- **Handoff**: `escalate(reason)` \u2014 transfer the entire task when it exceeds your tier.\n\n## OTHER RULES\n- NEVER send full context to llm_call - use peek() or grep() first\n- Output ONLY valid Python code - no markdown, no prose, no explanations\n- Do NOT reason in Python comments. Think before writing code, then write only executable statements ending with FINAL().\n- Each turn: write ONLY code. If calling a tool, write the CALL line and STOP. Wait for the result in the next turn before continuing.\n\n## Current State\nTurn 1\ncontext: str (551 chars)\nartifacts: {}\n\n## Task\nwhat did it say?\n\n## Your Code\nAnswer or write code. End with FINAL().\n\n"
+        ],
+        "kwargs": {
+          "n_tokens": 1024,
+          "role": "frontdoor"
+        }
+      }
+    ],
+    "status": 200
+  },
+  "repl_stream_tools": {
+    "llm_calls": [
+      {
+        "args": [
+          "Simple questions: FINAL(\"answer\") immediately. No code, no tools. Follow ALL user formatting constraints exactly.\n\nComplex tasks: write Python in the sandboxed REPL. End with FINAL(answer).\n- Facts uncertain? web_research() or web_search(), then FINAL(answer).\n- Code tasks? Test with CALL(\"run_python_code\", code=..., stdin_data=...) first.\n\nOutput ONLY valid Python \u2014 no prose, no markdown, no comment-only responses.\n\nONE answer. No self-correction, rephrasing, or multiple versions.\n\nAfter CALL(), STOP. Do not continue reasoning. Wait for REPL results before answering.\n\n## Available Tools\n## Tools\n\n**Research & Web**\n- `CALL(\"web_research\", query=\"...\", max_pages=3)`: Deep web research; search, fetch, synthesize. Use for factual questions needing source content, not just URLs.\n- `CALL(\"web_search\", query=\"...\", max_results=5)`: Quick search; returns URLs + snippets. Use for links or quick fact checks.\n- `CALL(\"search_wikipedia\", query=\"...\")`: Search Wikipedia for verified info.\n- `search_arxiv(query)` / `search_papers(query)` / `search_books(query)`: Academic and book search via CALL.\n- `get_wikipedia_article(title)`: Full Wikipedia article by exact title.\n- `fetch_docs(url)`: Fetch content from a URL.\n\n**Context & Files**\n- `context`: str \u2014 full input. Inspect with peek/grep; never pass to llm_call.\n- `artifacts`: dict \u2014 store intermediate results between turns.\n- `peek(n, file_path=None)` / `grep(pattern, file_path=None)`: Inspect context or files.\n- `list_dir(path)` / `file_info(path)`: Directory listing, file metadata.\n\n**Code & Documents**\n- `CALL(\"run_python_code\", code=\"...\", stdin_data=\"...\")`: Test code before submitting. Always test first.\n- `ocr_document(path)` / `analyze_figure(image_path, prompt)` / `extract_figure(pdf, page, bbox)`: Document/image processing (returns JSON).\n- `run_tests(path)` / `lint_python(path, fix=False)` / `json_parse(content)`: Code quality via CALL.\n- `run_shell(cmd)`: Sandboxed shell (ls, grep, git status only).\n\n**Routing & Delegation**\n- `my_role()`: Get your role and capabilities.\n- `route_advice(task)` / `delegate(prompt, target_role, reason)`: Get routing advice or delegate subtasks.\n- `escalate(reason, target_role=None)`: Request escalation when task exceeds your tier.\n- `fetch_report(report_id, offset=0, max_chars=2400)`: Load delegation report by handle.\n- `recall(query)`: Search episodic memory for past routing outcomes.\n\n**LLM & Long Context**\n- `llm_call(prompt, role='worker')` / `llm_batch(prompts, role='worker')`: Sub-LM calls; keep prompts short.\n- `context_len()` / `chunk_context(n_chunks=4)` / `summarize_chunks(task, n_chunks=4)`: Long document processing.\n\n**Invocation & Completion**\n- `CALL(name, **kw)`: Invoke tool, returns JSON string. `TOOL(name, **kw)`: Returns Python object.\n  Example: `result = CALL(\"search_arxiv\", query=\"transformers\"); data = json.loads(result)`\n- `list_tools()`: Discover all tools.\n- `FINAL(answer)`: Signal completion. REQUIRED for every task.\n\n## Rules\n## WHEN TO USE TOOLS vs DIRECT ANSWER\n\nPRIORITY ORDER \u2014 try earlier options first:\n1. **Compute** (math, logic, code): Write Python. Never web-search for computable answers.\n2. **Answer directly** (facts you know): well-known science, history, general knowledge, simple questions. Do NOT search to confirm what you already know.\n3. **Reason thoroughly** (analysis, explanations): multi-step problems, \"why\" questions \u2014 think through them, don't search.\n4. **Use run_python_code**: testing code BEFORE submitting \u2014 always test, never submit untested code.\n5. **Search ONLY for genuine gaps**: Use web_research/web_search when you genuinely lack the information \u2014 current events, specific dates, obscure facts, live URLs, recent data you couldn't know from training. Ask: \"Could I answer this confidently without searching?\" If yes, don't search.\n\nTOOL SPECIFICS (when search IS needed):\n- **web_research** for: real content needed (fetches and synthesizes pages)\n- **web_search** for: quick link/URL lookup (snippets only)\n- **search_wikipedia** for: biographical, historical, or encyclopedic questions\n\n## CRITICAL RULES\n1. **SAFE IMPORTS ONLY** - `math`, `json`, `re`, `numpy`, `scipy`, `itertools`, `collections`, `functools`,\n   `statistics`, `datetime`, `fractions`, `decimal` are available. `os`, `sys`, `subprocess`, `socket` are BLOCKED.\n2. **USE list_dir()** for files - NOT os.listdir or pathlib\n3. **ALWAYS call FINAL(answer)** to complete the task. Do NOT keep calling tools after\n   you have enough information.\n4. **FIX ERRORS INCREMENTALLY** - If your code returns an error, your previous code is saved\n   to a file. Read it with peek(), fix ONLY the broken part, and rewrite with file_write_safe().\n   Do NOT rewrite from scratch \u2014 make targeted fixes to the existing code.\n5. **TOOL CALLS ARE CODE** - Write CALL() as executable Python code, NOT as prose.\n   When you need to call a tool, write ONLY the code \u2014 no explanation before or after.\n   STOP generating after the CALL() line. The REPL will execute it and return results\n   in the next turn. Do NOT continue reasoning after a CALL \u2014 wait for the result.\n   WRONG: \"Let me search for this. CALL(\"web_research\", query=\"...\")\" \u2190 prose, won't execute\n   RIGHT: `result = CALL(\"web_research\", query=\"...\")\nprint(result)` \u2190 executable code\n5. **\"Write a function\" tasks**: submit CODE as a string, NOT the function's return value.\n   `solution = '''def foo(): ...'''; FINAL(solution)` \u2190 CORRECT\n   `FINAL(foo(x))` \u2190 WRONG (submits return value, not code)\n\n## EXAMPLES: Write/Fix a Function (LeetCode, DebugBench, etc.)\nWhen the task says \"write a function\" or \"fix the bug\", submit the CODE ITSELF as a string.\n```\nsolution = '''\ndef shortestPalindrome(s: str) -> str:\n    if not s: return s\n    combined = s + \"#\" + s[::-1]\n    lps = [0] * len(combined)\n    length = 0\n    for i in range(1, len(combined)):\n        while length and combined[i] != combined[length]:\n            length = lps[length - 1]\n        if combined[i] == combined[length]:\n            length += 1\n        lps[i] = length\n    return s[lps[-1]:][::-1] + s\n'''\nFINAL(solution)\n```\n\n## EXAMPLES: Direct Answer (NO tools needed)\nFactual: `FINAL(\"Paris\")`  # \"What is the capital of France?\"\nMultiple choice: `FINAL(\"B\")`  # \"Which option is correct? A) ... B) ...\"\nShort math: `FINAL(\"42\")`  # \"What is 6 * 7?\"\nReasoning: `FINAL(\"Step 1: The premises state all A are B and all B are C. Step 2: By transitivity, all A are C. Step 3: Since x is A, x must be C. Therefore x is C.\")`  # \"Explain why x is C given...\"\nAnalysis: `FINAL(\"The function has O(n log n) complexity because the outer loop runs n times and the inner binary search runs log n times. This is optimal for comparison-based sorting.\")`  # \"Analyze the complexity\"\n\n## EXAMPLES: Tool Use (external data needed)\nList files: `result = list_dir('/path'); FINAL(result)`\nRead file: `text = peek(1000, file_path='/path'); FINAL(text)`\nCurrent info: `results = json.loads(CALL(\"web_research\", query=\"2024 election results\")); FINAL(results[\"sources\"][0][\"synthesis\"])`\nUncertain fact: `results = json.loads(CALL(\"web_research\", query=\"Halvard Oskeberg university\")); FINAL(results[\"sources\"][0].get(\"synthesis\", \"Unknown\"))`\nResearch: `results = CALL(\"search_arxiv\", query=\"speculative decoding\"); FINAL(json.loads(results))`\nRun tests: `results = CALL(\"run_tests\", test_path=\"tests/\"); FINAL(json.loads(results))`\nSummarize PDF: `doc = json.loads(ocr_document('/path.pdf')); FINAL(doc['full_text'][:2000])`\n\n## EXAMPLES: Competitive Programming (stdin/stdout: USACO, Codeforces, etc.)\nNOTE: input() is BLOCKED in the REPL. Wrap code in a string, test with CALL, submit with FINAL.\n```\nsolution = '''\nimport sys\ninput = sys.stdin.readline\nn = int(input())\na = list(map(int, input().split()))\nbest = cur = a[0]\nfor x in a[1:]:\n    cur = max(x, cur + x)\n    best = max(best, cur)\nprint(best)\n'''\ntest_out = CALL(\"run_python_code\", code=solution, stdin_data=\"5\n-2 1 -3 4 -1\")\n# verify output looks correct, then submit the code itself\nFINAL(solution)\n```\n\n## COMPLEX CODE (algorithms, implementations)\n- Your code is auto-saved to a file on each turn. On error, the file path is shown.\n- Your session log tracks all previous turns. Check [Session History] block above for what was already tried.\n- Read previous code: `prev = peek(99999, file_path=\"/mnt/raid0/llm/tmp/<task>_solution.py\")`\n- Fix incrementally: `file_write_safe(\"/mnt/raid0/llm/tmp/<task>_solution.py\", corrected_code)`\n- Test: `CALL(\"run_python_code\", code=corrected_code, stdin_data=test_input)`\n- NEVER regenerate from scratch \u2014 always read, patch, rewrite.\n- NEVER repeat an approach that already failed \u2014 check session history for past errors.\n- If stuck after 2 attempts: consult architect or escalate to coder_escalation.\n- For stdin/stdout programs: wrap in string, use `CALL(\"run_python_code\", code=..., stdin_data=...)` to test. Do NOT use `import sys` or `input()` directly \u2014 they are blocked.\n\n## ESCALATION (three modes)\n- **Consult**: `answer = llm_call(\"Be concise. \" + question, role=\"architect\")` then `FINAL(answer)`.\n  Ask a stronger model for help \u2014 you keep control and format the answer.\n  Example: `answer = llm_call(\"Answer with just the letter. \" + question, role=\"architect\"); FINAL(answer)`\n- **Delegate**: `escalate(reason, target_role=\"coder_escalation\")` \u2014 hand off code tasks to a specialist coder.\n  Use for: algorithms, competitive programming, complex implementations.\n- **Handoff**: `escalate(reason)` \u2014 transfer the entire task when it exceeds your tier.\n\n## OTHER RULES\n- NEVER send full context to llm_call - use peek() or grep() first\n- Output ONLY valid Python code - no markdown, no prose, no explanations\n- Do NOT reason in Python comments. Think before writing code, then write only executable statements ending with FINAL().\n- Each turn: write ONLY code. If calling a tool, write the CALL line and STOP. Wait for the result in the next turn before continuing.\n\n## Current State\nTurn 1\ncontext: str (551 chars)\nartifacts: {}\n\n## Task\nwhat did it say?\n\n## Your Code\nAnswer or write code. End with FINAL().\n\n"
+        ],
+        "kwargs": {
+          "n_tokens": 1024,
+          "role": "frontdoor"
+        }
+      }
+    ],
+    "sse": "data: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"t\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"h\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"e\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \" \"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"a\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"n\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"s\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"w\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"e\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"r\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\"}], \"x_orchestrator_metadata\": {\"role\": \"frontdoor\", \"elapsed_seconds\": \"<elapsed>\", \"tokens\": 7, \"native_tool_contract\": \"internal_repl_execution\", \"response_tool_calls\": \"not_emitted\", \"tools_used\": 0, \"tools_called\": []}}\n\ndata: [DONE]\n\n",
+    "status": 200
+  }
+}

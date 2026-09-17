@@ -237,13 +237,28 @@ def _score_multiple_choice(answer: str, expected: str, config: dict[str, Any]) -
 
     Config:
         choices: Optional list of choice texts.
+        choice_labels: Optional contiguous label range starting at ``A``
+            (e.g. ``"ABCDEFGHIJ"`` for MMLU-Pro's 10 options). Default ``A-H``;
+            rows that do not set it keep the historical range byte-for-byte.
     """
     choices = config.get("choices")
     if not isinstance(choices, list):
         choices = []
+    labels = _choice_labels(config)
 
-    expected_letter = _expected_choice_letter(expected, choices)
+    expected_letter = _expected_choice_letter(expected, choices, labels)
     expected_index = _expected_choice_index(expected, choices)
+    if (
+        expected_letter is not None
+        and choices
+        and labels.index(expected_letter) >= len(choices)
+    ):
+        # A gold letter pointing past the configured options is a corpus-join
+        # defect (wrong options list, or letter/index skew), never a model error.
+        raise ScoringUnavailableError(
+            f"multiple_choice gold is unusable: expected={expected!r} points past "
+            f"the {len(choices)} configured choices."
+        )
     if expected_letter is None and expected_index is None:
         # CJ-8. The GOLD is neither an A-H letter nor a member of `choices`, so
         # there is nothing to decide against. This is a corpus/gold defect, and
@@ -259,13 +274,14 @@ def _score_multiple_choice(answer: str, expected: str, config: dict[str, Any]) -
         # row from the quality denominator — it is not converted into a pass.
         raise ScoringUnavailableError(
             f"multiple_choice gold is unusable: expected={expected!r} is neither "
-            f"a choice letter nor one of the {len(choices)} configured choices, "
+            f"a choice letter in {labels[0]}-{labels[-1]} nor one of the "
+            f"{len(choices)} configured choices, "
             f"so no verdict can be reached. Fix the corpus join or supply "
             f"scoring_config['choices']; refusing to score the model wrong "
             f"against a gold that cannot be resolved."
         )
 
-    parsed_letter = _extract_multiple_choice_letter(answer)
+    parsed_letter = _extract_multiple_choice_letter(answer, labels)
     if parsed_letter is not None and expected_letter is not None:
         return parsed_letter == expected_letter
 
@@ -276,9 +292,38 @@ def _score_multiple_choice(answer: str, expected: str, config: dict[str, Any]) -
     return False
 
 
-def _expected_choice_letter(expected: str, choices: list[Any]) -> str | None:
+#: Historical letter range. Rows that do not declare ``choice_labels`` keep it,
+#: so sealed captures scored before 2026-09-17 re-score identically.
+_DEFAULT_CHOICE_LABELS = "ABCDEFGH"
+
+
+def _choice_labels(config: dict[str, Any]) -> str:
+    """Resolve ``scoring_config['choice_labels']`` to a contiguous ``A..X`` string.
+
+    Accepts a string (``"ABCDEFGHIJ"``) or a list of single letters. Anything
+    that is not a contiguous run starting at ``A`` is a malformed row and
+    raises: silently falling back to A-H is exactly how MMLU-Pro's I/J gold
+    became unscoreable (PRB-T4, 2026-09-16).
+    """
+    raw = config.get("choice_labels")
+    if raw is None:
+        return _DEFAULT_CHOICE_LABELS
+    if isinstance(raw, (list, tuple)):
+        raw = "".join(str(x) for x in raw)
+    labels = str(raw).strip().upper()
+    expected = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[: len(labels)]
+    if not labels or labels != expected:
+        raise ScoringUnavailableError(
+            f"multiple_choice choice_labels={raw!r} is not a contiguous A.. range"
+        )
+    return labels
+
+
+def _expected_choice_letter(
+    expected: str, choices: list[Any], labels: str = _DEFAULT_CHOICE_LABELS
+) -> str | None:
     expected_match = re.fullmatch(
-        r"\s*[\(\[\{]?\s*([A-H])\s*[\)\]\}]?\s*\.?\s*",
+        rf"\s*[\(\[\{{]?\s*([{labels}])\s*[\)\]\}}]?\s*\.?\s*",
         expected,
         re.IGNORECASE,
     )
@@ -286,8 +331,8 @@ def _expected_choice_letter(expected: str, choices: list[Any]) -> str | None:
         return expected_match.group(1).upper()
 
     idx = _expected_choice_index(expected, choices)
-    if idx is not None and idx < 8:
-        return chr(ord("A") + idx)
+    if idx is not None and idx < len(labels):
+        return labels[idx]
     return None
 
 
@@ -310,7 +355,9 @@ def _normalize_choice_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _extract_multiple_choice_letter(answer: str) -> str | None:
+def _extract_multiple_choice_letter(
+    answer: str, labels: str = _DEFAULT_CHOICE_LABELS
+) -> str | None:
     # ⚠ NOT interchangeable with epyc-inference-research
     # `scripts/benchmark/answer_scoring.py:extract_letter_answer`, despite the
     # resemblance. Proven per-consumer 2026-08-11 (`mainC`, A10) rather than assumed:
@@ -330,29 +377,33 @@ def _extract_multiple_choice_letter(answer: str) -> str | None:
     #
     # Strategy 1: Explicit "Answer: X" — take LAST match (verbose models repeat)
     # Negative lookahead prevents "option is correct" matching as letter "C"
-    explicit_pat = r"(?:answer|choice|option)\s*(?:is|:)\s*\(?([A-H])\)?(?![a-zA-Z])"
+    cls = f"[{labels}]"
+    explicit_pat = rf"(?:answer|choice|option)\s*(?:is|:)\s*\(?({cls})\)?(?![a-zA-Z])"
     explicit_matches = re.findall(explicit_pat, answer, re.IGNORECASE)
     if explicit_matches:
         return explicit_matches[-1].upper()
 
     # Strategy 2: Letter on its own line near the end of output
-    last_line_pat = r"^\s*\(?([A-H])\)?\s*$"
+    last_line_pat = rf"^\s*\(?({cls})\)?\s*$"
     line_matches = re.findall(last_line_pat, answer, re.MULTILINE)
     if line_matches:
         return line_matches[-1].upper()
 
     # Strategy 3: Letter at very start of output (before any prose)
-    match = re.match(r"\s*\(?([A-H])\)?\s*[.:\-\n]", answer)
+    match = re.match(rf"\s*\(?({cls})\)?\s*[.:\-\n]", answer)
     if match:
         return match.group(1).upper()
 
     # Strategy 4: Bold letter — take LAST match
-    bold_matches = re.findall(r"\*\*([A-H])\*\*", answer)
+    bold_matches = re.findall(rf"\*\*({cls})\*\*", answer)
     if bold_matches:
         return bold_matches[-1].upper()
 
-    # Strategy 5: Last standalone letter A-H in the text (not first!)
-    standalone = re.findall(r"\b([A-H])\b", answer)
+    # Strategy 5: Last standalone letter in the text (not first!). The pronoun
+    # "I" is never a standalone-letter vote: once a row widens the range past H
+    # ("I think ...") it would otherwise parse as option I.
+    loose = cls if "I" not in labels else f"[{labels.replace('I', '')}]"
+    standalone = re.findall(rf"\b({loose})\b", answer)
     if standalone:
         return standalone[-1].upper()
 
@@ -832,6 +883,20 @@ def _score_substring(answer: str, expected: str, config: dict[str, Any]) -> bool
     failing on 06-01 once the compute-first prompt made the model emit
     comma-grouped results.
     """
+    if config.get("language"):
+        # PRB-T4 (2026-09-17). A row that declares a programming `language` but is
+        # scored by `substring` has no correctness oracle: every such row in the
+        # live pool (2,349 livecodebench + 3 real_suite_v1) carries the needle
+        # "def ", which any Python answer — right or wrong — contains. The
+        # adapter was rebuilt to an executable oracle on 2026-08-12 (research
+        # cb0761b5), but a pool built before that still ships these rows. Refuse
+        # rather than pass vacuously; the caller EXCLUDES the row.
+        raise ScoringUnavailableError(
+            f"substring oracle on a {config.get('language')!r} code row "
+            f"(needle={(expected.strip() or config.get('substring'))!r}) cannot decide "
+            "correctness; rebuild the pool so the row carries an executable "
+            "code_execution oracle"
+        )
     case_sensitive = config.get("case_sensitive", False)
 
     def _strip_digit_separators(s: str) -> str:

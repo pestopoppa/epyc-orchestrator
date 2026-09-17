@@ -2,7 +2,7 @@
 
 import time
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -74,6 +74,11 @@ _UNHONOURED_SEMANTIC_FIELDS: dict = {
 }
 
 
+# HS-4 P0.2: opaque client identifiers — printable, no whitespace, bounded.
+_REQUEST_KEY_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:@+/=-]*$"
+_CLIENT_TOOL_CHOICE_STRINGS = frozenset({"auto", "none", "required"})
+
+
 class OpenAIChatRequest(BaseModel):
     """OpenAI-compatible chat completion request."""
 
@@ -118,6 +123,68 @@ class OpenAIChatRequest(BaseModel):
         description="Skip REPL code execution — force direct text response only.",
     )
     x_show_routing: bool = Field(default=False, description="Include routing metadata")
+    # HS-4 P0.2 — typed session/arm keys. Each value is validated (422 on a bad
+    # one), echoed into x_orchestrator_metadata["request_keys"] and stamped onto
+    # the inference-tap trace. Absent keys change nothing.
+    x_session_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=_REQUEST_KEY_ID_PATTERN,
+        description="Client conversation/session id (HS-4). Recorded; P1/P3 key their stores on it.",
+    )
+    x_user_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=_REQUEST_KEY_ID_PATTERN,
+        description="Client user id (HS-4). Recorded; P2 keys the user profile on it.",
+    )
+    x_memory: Literal["on", "off"] | None = Field(
+        default=None,
+        description="Memory-injection arm (HS-4). Recorded only until HS-4 P2 ships: "
+        "nothing is injected on /v1 today, so 'on' is reported as "
+        "memory_injection='not_implemented' in the metadata.",
+    )
+    x_tool_mode: Literal["repl", "client"] | None = Field(
+        default=None,
+        description="Tool execution mode (HS-4 P0.1). 'repl' (default when absent): client "
+        "tools are bridged to the orchestrator REPL CALL(). 'client': tools, tool_choice and "
+        "tool history are forwarded to the backend and tool_calls are returned for the "
+        "client to execute.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_client_tool_choice(self) -> "OpenAIChatRequest":
+        # Only client mode is strict: the default REPL bridge keeps today's
+        # permissive handling byte-for-byte (HS-4 P0.1(b)).
+        if self.x_tool_mode != "client" or self.tool_choice is None:
+            return self
+        choice = self.tool_choice
+        if isinstance(choice, str):
+            if choice not in _CLIENT_TOOL_CHOICE_STRINGS:
+                raise ValueError(
+                    f"tool_choice {choice!r} is not one of "
+                    f"{sorted(_CLIENT_TOOL_CHOICE_STRINGS)} (x_tool_mode='client')"
+                )
+            if choice == "required" and not self.tools:
+                raise ValueError("tool_choice 'required' needs a non-empty tools list")
+            return self
+        func = choice.get("function") if choice.get("type") == "function" else None
+        name = func.get("name") if isinstance(func, dict) else None
+        if not isinstance(name, str) or not name:
+            raise ValueError(
+                "tool_choice object must be "
+                '{"type": "function", "function": {"name": ...}} (x_tool_mode=\'client\')'
+            )
+        declared = {
+            (t.get("function") or {}).get("name")
+            for t in (self.tools or [])
+            if isinstance(t, dict) and isinstance(t.get("function"), dict)
+        }
+        if name not in declared:
+            raise ValueError(f"tool_choice names undeclared tool {name!r}")
+        return self
 
     @model_validator(mode="before")
     @classmethod

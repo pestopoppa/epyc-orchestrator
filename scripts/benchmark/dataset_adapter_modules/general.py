@@ -255,22 +255,60 @@ class MMLUProAdapter(BaseAdapter):
     # Tier 1: business + other
     EASY_CATEGORIES = {"business", "other"}
 
+    #: Pinned local snapshot of the test split (revision b189ec76…, sha256
+    #: 0e24a191…). Read directly when present so the gold is re-derived from a
+    #: fixed source, offline, without the `datasets` package.
+    SNAPSHOT_PARQUET = Path(
+        "/mnt/raid0/llm/cache/huggingface/hub/datasets--TIGER-Lab--MMLU-Pro/"
+        "snapshots/b189ec765aa7ed75c8acfea42df31fdae71f97be/data/"
+        "test-00000-of-00001.parquet"
+    )
+
     def _ensure_loaded(self):
         if self._dataset is not None:
             return
         try:
-            import datasets as hf
-            self._dataset = hf.load_dataset(
-                "TIGER-Lab/MMLU-Pro", split="test",
-            )
+            if self.SNAPSHOT_PARQUET.is_file():
+                import pyarrow.parquet as pq
+                self._dataset = pq.read_table(self.SNAPSHOT_PARQUET).to_pylist()
+            else:
+                import datasets as hf
+                self._dataset = hf.load_dataset(
+                    "TIGER-Lab/MMLU-Pro", split="test",
+                )
         except Exception as e:
             print(f"  [adapter] MMLU-Pro load failed: {e}")
             self._dataset = []
 
+    @classmethod
+    def gold_letter(cls, row: dict) -> str:
+        """Derive the gold letter from ``answer_index`` and cross-check ``answer``.
+
+        ``answer_index`` (0-based into ``options``) is the canonical key; the
+        upstream ``answer`` letter must agree with it. Any disagreement or an
+        index outside the options list is a corpus defect and raises — the row
+        is dropped rather than emitted with a gold nobody can score.
+        """
+        options = row.get("options")
+        if not isinstance(options, (list, tuple)) or not 1 <= len(options) <= len(cls.CHOICE_LABELS):
+            raise ValueError(f"mmlu_pro options malformed: {options!r}")
+        idx = row.get("answer_index")
+        if isinstance(idx, bool) or not isinstance(idx, int):
+            raise ValueError(f"mmlu_pro answer_index missing/non-int: {idx!r}")
+        if not 0 <= idx < len(options):
+            raise ValueError(f"mmlu_pro answer_index {idx} outside {len(options)} options")
+        derived = cls.CHOICE_LABELS[idx]
+        letter = str(row.get("answer") or "").strip().upper()
+        if letter and letter != derived:
+            raise ValueError(
+                f"mmlu_pro answer letter {letter!r} disagrees with answer_index {idx} ({derived!r})"
+            )
+        return derived
+
     def _row_to_prompt(self, idx: int, row: dict) -> dict:
         question = row["question"]
-        options = row["options"]
-        answer = row["answer"]
+        options = list(row["options"])
+        answer = self.gold_letter(row)
         category = row.get("category", "other")
 
         prompt_lines = [question, ""]
@@ -289,7 +327,14 @@ class MMLUProAdapter(BaseAdapter):
             "image_path": "",
             "tier": self._get_tier_for_index(idx),
             "scoring_method": "multiple_choice",
-            "scoring_config": {},
+            # PRB-T4 (2026-09-17): the shared scorer's default letter range is
+            # A-H, so the ~17% of rows whose gold is I or J were unscoreable
+            # with an empty config. Declare the row's real label range and its
+            # options so every letter resolves and out-of-range gold is caught.
+            "scoring_config": {
+                "choices": options,
+                "choice_labels": "".join(self.CHOICE_LABELS[: len(options)]),
+            },
         }
 
     def _get_tier_for_index(self, idx: int) -> int:
