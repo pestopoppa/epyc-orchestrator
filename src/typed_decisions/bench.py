@@ -1,0 +1,379 @@
+"""Offline-safe JSON-vs-native benchmark harness for the typed decision plane.
+
+``run_mode_benchmark`` runs the SAME catalogue and state through both decoding
+paths — JSON mode (``runner.run_typed_decisions``) and native candidate
+scoring (``native.run_typed_decisions_native``) — against a caller-supplied
+live ``LLMPrimitives`` seam, and reports, per arm:
+
+  * wall time (outer ``perf_counter``) and the runner's own ``elapsed_ms``;
+  * generated-token counts read from ``_last_inference_meta`` when the
+    primitives object exposes them (``None``, never ``0``, when it does not —
+    absent telemetry is not a measurement);
+  * argmax agreement per question between the arms, type-aware (``True``
+    never equals ``1``), with unresolved pairs counted separately;
+  * candidate-slice sums per resolved decision: each decision's candidate
+    distribution should sum to ``1.0``, which is the direct check that the
+    native slice renormalized correctly.
+
+Fabrication guard: the harness refuses to run against primitives in
+``mock_mode`` or without an ``llm_call`` seam, and raises ``BenchmarkError``
+when neither arm resolves a single question (there would be nothing to
+compare, and zeroed rates would be fabricated). The CLI refuses to make real
+model calls unless ``--live`` is passed; ``--help`` never touches a server.
+The module is import-safe offline: no config, backend, or network object is
+constructed at import time.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+import time
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from src.typed_decisions.native import run_typed_decisions_native
+from src.typed_decisions.runner import run_typed_decisions
+from src.typed_decisions.types import DecisionResult, Question
+
+__all__ = ["BenchmarkError", "main", "run_mode_benchmark"]
+
+_MODE_CHOICES = ("json", "native")
+_DEFAULT_MODES = ("json", "native")
+
+
+class BenchmarkError(RuntimeError):
+    """A benchmark run could not produce a real comparison.
+
+    Raised when the primitives seam is missing, mocked, or when no arm
+    resolved a single question. Benchmarks raise instead of emitting zeroed
+    rates: a fabricated comparison is worse than no comparison.
+    """
+
+
+def run_mode_benchmark(
+    primitives: Any,
+    *,
+    state: str,
+    questions: Sequence[Question],
+    role: str,
+    modes: Sequence[str] = _DEFAULT_MODES,
+    n_tokens: int | None = None,
+    n_probs: int | None = None,
+) -> dict[str, Any]:
+    """Run both decoding modes over one catalogue and compare them.
+
+    Args:
+        primitives: A live ``LLMPrimitives``-shaped object exposing
+            ``llm_call``. Mock-mode objects are refused (fabrication guard).
+        state: Task/context state passed to both arms unchanged.
+        questions: The catalogue to ask; ids must be unique and non-empty.
+        role: Registry role both arms are charged to.
+        modes: Which arms to run; a non-empty subset of ``("json",
+            "native")``. Order is preserved in the report.
+        n_tokens: Optional output budget forwarded to both arms.
+        n_probs: Optional native top-K capture override (native arm only).
+
+    Returns:
+        The report dict (see module docstring for the fields). Raises
+        ``BenchmarkError`` when no arm resolves a question.
+    """
+    catalogue = list(questions)
+    if not catalogue:
+        raise ValueError("run_mode_benchmark requires at least one Question")
+    mode_list = list(modes)
+    if not mode_list:
+        raise ValueError("run_mode_benchmark requires at least one mode")
+    invalid = [mode for mode in mode_list if mode not in _MODE_CHOICES]
+    if invalid:
+        raise ValueError(f"unknown benchmark mode(s): {invalid!r}")
+    if primitives is None or not callable(getattr(primitives, "llm_call", None)):
+        got = "None" if primitives is None else type(primitives).__name__
+        raise BenchmarkError(
+            f"run_mode_benchmark requires a live primitives object exposing "
+            f"llm_call(...); got {got}. Benchmarks never fabricate numbers."
+        )
+    if getattr(primitives, "mock_mode", False):
+        raise BenchmarkError("primitives is in mock_mode; benchmark numbers would be fabricated")
+
+    arms: dict[str, dict[str, Any]] = {}
+    results: dict[str, DecisionResult] = {}
+    for mode in mode_list:
+        started = time.perf_counter()
+        if mode == "native":
+            result = run_typed_decisions_native(
+                primitives,
+                state=state,
+                questions=catalogue,
+                role=role,
+                n_tokens=n_tokens,
+                n_probs=n_probs,
+            )
+        else:
+            result = run_typed_decisions(
+                primitives,
+                state=state,
+                questions=catalogue,
+                role=role,
+                mode="json",
+                n_tokens=n_tokens,
+            )
+        wall_ms = (time.perf_counter() - started) * 1000.0
+        # Meta is instance-level: read immediately after the arm's calls (the
+        # JSON arm may have retried, so this is the LAST attempt's telemetry).
+        meta = _meta_snapshot(primitives)
+        results[mode] = result
+        arms[mode] = _arm_record(mode, result, wall_ms, meta)
+
+    if not any(results[mode].decisions for mode in mode_list):
+        raise BenchmarkError("no mode resolved a single question; there is nothing to compare")
+
+    agreement = _agreement(catalogue, results)
+
+    return {
+        "benchmark": "typed_decisions_modes",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "state_sha256": hashlib.sha256(state.encode("utf-8")).hexdigest(),
+        "role": role,
+        "questions": [question.id for question in catalogue],
+        "modes": mode_list,
+        "arms": arms,
+        "agreement": agreement,
+    }
+
+
+# ── report assembly ───────────────────────────────────────────────────────
+
+
+def _meta_snapshot(primitives: Any) -> dict[str, Any] | None:
+    meta = getattr(primitives, "_last_inference_meta", None)
+    if not isinstance(meta, Mapping):
+        return None
+    return {str(key): value for key, value in meta.items()}
+
+
+def _arm_record(
+    mode: str,
+    result: DecisionResult,
+    wall_ms: float,
+    meta: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    slice_sums = [
+        {
+            "question_id": decision.question_id,
+            "candidates": len(decision.probabilities),
+            "probability_sum": sum(decision.probabilities.values()),
+        }
+        for decision in result.decisions
+    ]
+    sums = [entry["probability_sum"] for entry in slice_sums]
+    tokens = meta.get("tokens") if isinstance(meta, Mapping) else None
+    completion_reason = meta.get("completion_reason") if isinstance(meta, Mapping) else None
+    return {
+        "mode": mode,
+        "wall_ms": wall_ms,
+        "elapsed_ms": result.elapsed_ms,
+        "resolved": {decision.question_id: decision.value for decision in result.decisions},
+        "decisions": len(result.decisions),
+        "failures": [
+            {"reason": failure.reason, "detail": failure.detail} for failure in result.failures
+        ],
+        "prompt_sha256": result.prompt_sha256,
+        "raw_text_chars": len(result.raw_text),
+        "tokens_generated": (
+            tokens if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) else None
+        ),
+        "completion_reason": completion_reason if isinstance(completion_reason, str) else None,
+        "candidate_slice_sums": slice_sums,
+        "candidate_slice_sum_range": ([min(sums), max(sums)] if sums else None),
+    }
+
+
+def _agreement(
+    questions: Sequence[Question],
+    results: Mapping[str, DecisionResult],
+) -> dict[str, Any]:
+    """Per-question cross-arm agreement, type-aware and unresolved-aware."""
+    modes = list(results)
+    resolved: dict[str, dict[str, Any]] = {
+        mode: {decision.question_id: decision.value for decision in result.decisions}
+        for mode, result in results.items()
+    }
+    per_question: list[dict[str, Any]] = []
+    disagreements: list[dict[str, Any]] = []
+    comparable = 0
+    agreeing = 0
+    unresolved_pairs = 0
+
+    for question in questions:
+        values: dict[str, Any] = {}
+        missing: list[str] = []
+        for mode in modes:
+            if question.id in resolved[mode]:
+                values[mode] = resolved[mode][question.id]
+            else:
+                missing.append(mode)
+        if missing:
+            unresolved_pairs += 1
+            per_question.append(
+                {
+                    "question_id": question.id,
+                    "comparable": False,
+                    "values": values,
+                    "missing_modes": missing,
+                }
+            )
+            continue
+        comparable += 1
+        first_mode = modes[0]
+        equal = all(_same_value(values[first_mode], values[mode]) for mode in modes[1:])
+        if equal:
+            agreeing += 1
+        else:
+            disagreements.append({"question_id": question.id, "values": values})
+        per_question.append(
+            {
+                "question_id": question.id,
+                "comparable": True,
+                "agreeing": equal,
+                "values": values,
+            }
+        )
+
+    return {
+        "modes": modes,
+        "comparable": comparable,
+        "agreeing": agreeing,
+        "disagreeing": len(disagreements),
+        "unresolved_pairs": unresolved_pairs,
+        "agreement_rate": (agreeing / comparable) if comparable else None,
+        "per_question": per_question,
+        "disagreements": disagreements,
+    }
+
+
+def _same_value(left: object, right: object) -> bool:
+    """Type-aware equality (``True`` must not equal ``1`` in a report)."""
+    return type(left) is type(right) and left == right
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m src.typed_decisions.bench",
+        description=(
+            "Compare the JSON and native typed-decision paths on one question "
+            "catalogue. Makes real model calls and requires --live."
+        ),
+    )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="required: allow real model calls against the configured backends",
+    )
+    parser.add_argument("--state-file", required=True, help="JSON file with the state string")
+    parser.add_argument("--questions-file", required=True, help="JSON catalogue file")
+    parser.add_argument("--role", default="worker", help="registry role the calls are charged to")
+    parser.add_argument(
+        "--mode",
+        action="append",
+        choices=_MODE_CHOICES,
+        default=None,
+        help="arm to run; repeatable (default: json and native)",
+    )
+    parser.add_argument("--n-tokens", type=int, default=None, help="optional output budget")
+    parser.add_argument("--n-probs", type=int, default=None, help="optional native top-K capture")
+    parser.add_argument("--out", default=None, help="write the report JSON to this path too")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entry point. Returns a process exit code (0 ok, 1 error, 2 gate)."""
+    args = _build_parser().parse_args(argv)
+    if not args.live:
+        print(
+            "refusing to run: this benchmark makes real model calls; pass --live",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        primitives = _live_primitives()
+        report = run_mode_benchmark(
+            primitives,
+            state=_load_state(args.state_file),
+            questions=_load_questions(args.questions_file),
+            role=args.role,
+            modes=tuple(args.mode) if args.mode else _DEFAULT_MODES,
+            n_tokens=args.n_tokens,
+            n_probs=args.n_probs,
+        )
+    except (BenchmarkError, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    text = json.dumps(report, indent=2, sort_keys=True, default=str)
+    if args.out:
+        Path(args.out).write_text(text + "\n", encoding="utf-8")
+    print(text)
+    return 0
+
+
+def _live_primitives() -> Any:
+    """Build live ``LLMPrimitives`` for --live runs; import stays lazy/offline."""
+    from src.config import get_config
+    from src.llm_primitives import LLMPrimitives
+
+    config = get_config()
+    primitives = LLMPrimitives(
+        mock_mode=False,
+        server_urls=config.server_urls.as_dict(),
+        num_slots=config.server.num_slots,
+    )
+    if not getattr(primitives, "_backends", None):
+        raise BenchmarkError(
+            "no LLM backends available for the configured server URLs; start the stack first"
+        )
+    return primitives
+
+
+def _load_state(path: str | Path) -> str:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, Mapping) and isinstance(payload.get("state"), str):
+        return payload["state"]
+    raise ValueError(f"state file {path} must contain a string or {{'state': string}}")
+
+
+def _load_questions(path: str | Path) -> list[Question]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(payload, Mapping):
+        payload = payload.get("questions")
+    if not isinstance(payload, list):
+        raise ValueError(f"questions file {path} must contain a list or {{'questions': list}}")
+    questions: list[Question] = []
+    for item in payload:
+        if not isinstance(item, Mapping):
+            raise ValueError(f"questions file {path} contains a non-object entry")
+        questions.append(
+            Question(
+                id=str(item["id"]),
+                kind=item["kind"],
+                text=str(item["text"]),
+                options=tuple(item.get("options", ())),
+                levels=tuple(item.get("levels", ())),
+                criteria=tuple(item.get("criteria", ())),
+            )
+        )
+    return questions
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

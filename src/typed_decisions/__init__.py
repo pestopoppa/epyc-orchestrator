@@ -13,8 +13,10 @@ Contents:
     * ``confidence`` — adapter-verified local confidence formulas from
       intake-1473 (NOT calibrated confidence; see the module docstring).
     * ``schema`` — Draft 2020-12 response-schema and GBNF builders.
-    * ``runner`` — ``run_typed_decisions`` (mode="json"; mode="native" lands
-      in ``src/typed_decisions/native.py``, TD-1a).
+    * ``runner`` — ``run_typed_decisions`` (mode="json"; mode="native"
+      dispatches to ``native``).
+    * ``native`` — ``run_typed_decisions_native`` (TD-1a): one constrained
+      generation, one token per question, candidate-probability slicing.
 
 Scope note: TD-1 ships the core only. Nothing in this package is wired into
 a live route; TD-5 performs that wiring, gated by the default-off
@@ -23,6 +25,7 @@ a live route; TD-5 performs that wiring, gated by the default-off
 
 from __future__ import annotations
 
+from src.typed_decisions.native import run_typed_decisions_native
 from src.typed_decisions.runner import run_typed_decisions
 from src.typed_decisions.types import (
     Decision,
@@ -39,4 +42,5 @@ __all__ = [
     "Question",
     "QuestionKind",
     "run_typed_decisions",
+    "run_typed_decisions_native",
 ]

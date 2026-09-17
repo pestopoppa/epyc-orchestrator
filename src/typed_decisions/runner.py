@@ -4,8 +4,9 @@
 object answering every ``Question`` in the catalogue, validates it against the
 generated Draft 2020-12 response schema, and returns a ``DecisionResult`` of
 typed decisions plus typed parse failures. No live route calls this yet —
-TD-5 wires it in; TD-1a adds ``mode="native"`` sampling in
-``src/typed_decisions/native.py``.
+TD-5 wires it in. ``mode="native"`` dispatches to
+``src/typed_decisions/native.py`` (TD-1a), which scores the declared
+candidates from one constrained generation instead.
 
 Why one pass / one prompt:
     * One prefill instead of N, and the prompt is built so the instructions +
@@ -115,12 +116,16 @@ def run_typed_decisions(
         state: Task/context state injected after the stable prefix.
         questions: The catalogue; ids must be unique and non-empty.
         role: Registry role the call is charged to.
-        mode: ``"json"`` (implemented) or ``"native"`` (TD-1a, raises
-            ``NotImplementedError``). Any other value is rejected.
+        mode: ``"json"`` (this function) or ``"native"`` (dispatches to
+            ``native.run_typed_decisions_native``: one constrained token per
+            question with candidate-probability slicing). Any other value is
+            rejected.
         max_retries: Corrective retries after the first attempt
-            (default 1 -> at most 2 calls).
+            (default 1 -> at most 2 calls). IGNORED in native mode: a
+            grammar-constrained decode has no free-form text to correct.
         n_tokens: Output budget; a per-question default is computed when
-            ``None``.
+            ``None``. Forwarded to the native runner in native mode (where
+            the default is exactly one token per native-capable question).
 
     Returns:
         ``DecisionResult``. ``prompt_sha256`` hashes the canonical
@@ -128,8 +133,16 @@ def run_typed_decisions(
         stable identity for identical inputs.
     """
     if mode == "native":
-        raise NotImplementedError(
-            "native mode is implemented in src/typed_decisions/native.py (TD-1a)"
+        # Lazy import: native.py imports this module's validation contract and
+        # transport reason, so a module-level import here would be circular.
+        from src.typed_decisions.native import run_typed_decisions_native
+
+        return run_typed_decisions_native(
+            primitives,
+            state=state,
+            questions=questions,
+            role=role,
+            n_tokens=n_tokens,
         )
     if mode != "json":
         raise ValueError(f"unknown typed-decisions mode: {mode!r}")
