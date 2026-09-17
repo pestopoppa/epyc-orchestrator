@@ -62,7 +62,7 @@ class FakeReviewService:
         self._with_reminder = with_reminder
         self.reminder_calls: list[int] = []
 
-    def review(self, spec, subtask, output, quick_mode=False):
+    def review(self, spec, subtask, output, quick_mode=False, **kwargs):
         self.calls.append({"subtask": subtask, "output": output})
         decision = self.decisions.pop(0) if self.decisions else self.default
         return ArchitectReview(

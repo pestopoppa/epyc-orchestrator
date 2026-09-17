@@ -159,11 +159,17 @@ class InferenceResult:
     # HS-4 P0.1: OpenAI-shape tool calls parsed by llama-server (--jinja) on the
     # chat-completions path. Empty for every other path.
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    # RTG-47 data plane: the server's OWN terminal prompt-token count
+    # (`tokens_evaluated` / `usage.prompt_tokens`). None means the server did
+    # not report one (early-stop, transport failure, usage-less stream) — it is
+    # never estimated here, so a consumer can tell measured from unknown.
+    prompt_tokens: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "role": self.role,
+            "prompt_tokens": self.prompt_tokens,
             "output": self.output,
             "tokens_generated": self.tokens_generated,
             "generation_speed": self.generation_speed,

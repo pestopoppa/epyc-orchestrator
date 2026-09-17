@@ -585,6 +585,70 @@ def _ps_llama_scan() -> str:
 # role→substrate list is exactly the drift class RTG-47 removes.
 _SUBSTRATE_MARKER_RE = re.compile(r"hip|rocm|gfx", re.IGNORECASE)
 
+# Manifest `device` strings that DECLARE a GPU lane (model_registry.yaml
+# server_mode.<role>.serving_shape.device, e.g. "ROCm0"). Host lanes declare no
+# device at all — the manifest's own convention (`serving_shape_capacity_report`
+# books a device-less role against host RAM), so omission reads as cpu HERE and
+# only here, where the manifest is the declared source of truth.
+_MANIFEST_GPU_DEVICE_RE = re.compile(r"rocm|hip|gfx|gpu|cuda", re.IGNORECASE)
+
+
+def manifest_declared_substrate(roles: Any) -> dict[str, Any] | None:
+    """Substrate the stack MANIFEST declares for a server's roles — not observed.
+
+    RTG-47 data plane: an ``expected-stack-server`` node has no process
+    evidence (nothing is running on its port), so ``_service_substrate`` /
+    the binary-path rule cannot speak for it and the page used to fall back
+    to a port/name heuristic. The manifest does declare where the role runs
+    (``master_declared(role, "device")``), so read THAT — and label it as a
+    declaration, never as an observation.
+
+    Returns ``{"substrate": "gpu"|"cpu", "source": "manifest",
+    "declared_by": <where the declaration lives>}`` or ``None`` when the
+    manifest cannot be consulted (import failure) or the roles resolve to no
+    master row at all. ``declared_by`` names the master row + binding for an
+    explicit device, or ``"device-omitted"`` for a host lane, so an operator
+    can tell "declared ROCm0" from "declared nothing, host by convention".
+    """
+    raw_roles = [str(r) for r in roles if isinstance(r, str) and r] if isinstance(roles, list) else []
+    if not raw_roles:
+        return None
+    # Master rows are keyed by canonical role; an instance label ("frontdoor.q0")
+    # or numbered sibling ("embedder_3") resolves through its base role.
+    role_list: list[str] = []
+    for raw in raw_roles:
+        for cand in (raw, re.sub(r"\.q\d+$", "", raw), base_role(re.sub(r"\.q\d+$", "", raw))):
+            if cand and cand not in role_list:
+                role_list.append(cand)
+    try:
+        from scripts.server.stack_manifest import master_declared, master_server_row
+    except Exception as exc:  # manifest unreadable: declare nothing, never guess
+        logger.debug("stack manifest unavailable for declared substrate: %s", exc)
+        return None
+    for role in role_list:
+        try:
+            device, source = master_declared(role, "device")
+        except Exception:
+            continue
+        if isinstance(device, str) and device.strip():
+            substrate = "gpu" if _MANIFEST_GPU_DEVICE_RE.search(device) else "cpu"
+            return {
+                "substrate": substrate,
+                "source": "manifest",
+                "declared_by": f"{source or role} device={device}",
+            }
+    # No role declares a device. If at least one role HAS a master row the
+    # manifest is declaring a host lane by omission; if none does, the
+    # manifest knows nothing about these roles and we say nothing.
+    for role in role_list:
+        try:
+            _name, row, _binding = master_server_row(role)
+        except Exception:
+            continue
+        if row is not None:
+            return {"substrate": "cpu", "source": "manifest", "declared_by": "device-omitted"}
+    return None
+
 
 def _service_substrate(pid: Any, model_hint: str = "") -> str | None:
     """Best-effort substrate for an aux service: read argv[0] from /proc.

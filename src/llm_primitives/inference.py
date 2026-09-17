@@ -1046,6 +1046,12 @@ class InferenceMixin:
                                 result.prompt_eval_ms,
                                 result.generation_ms,
                                 result.predicted_per_second,
+                                # 5th positional = terminal prompt-token count
+                                # as the server reported it (None when it did
+                                # not); the tap records it WITH provenance and
+                                # never estimates. Positional so duck-typed
+                                # tap stubs (`write_timings(*a)`) keep working.
+                                getattr(result, "prompt_tokens", None),
                             )
                     else:
                         # Use streaming even without tap — each chunk is a

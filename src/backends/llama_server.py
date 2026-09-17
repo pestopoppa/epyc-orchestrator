@@ -496,6 +496,7 @@ class LlamaServerBackend(ModelBackend):
                     "empty_generation" if empty_generation else completion_reason
                 ),
                 completion_probabilities=list(result_data.get("completion_probabilities") or []),
+                prompt_tokens=int(prompt_tokens) if prompt_tokens else None,
             )
 
         except httpx.TimeoutException:
@@ -754,6 +755,7 @@ class LlamaServerBackend(ModelBackend):
                 ),
                 completion_probabilities=chat_logprob_rows,
                 tool_calls=tool_calls,
+                prompt_tokens=int(prompt_tokens) if prompt_tokens else None,
             )
         except httpx.HTTPStatusError as e:
             elapsed = time.time() - start_time
@@ -1087,6 +1089,7 @@ class LlamaServerBackend(ModelBackend):
                 completion_reason=(
                     "empty_generation" if empty_generation else completion_reason
                 ),
+                prompt_tokens=int(prompt_tokens) if prompt_tokens else None,
             )
 
         except httpx.ReadTimeout:

@@ -264,3 +264,93 @@ class TestMaxEscalationDescription:
         assert "not enforced" in lowered
         assert "metadata" in lowered
         assert "p4" in lowered
+
+
+class TestFieldDescriptionsMatchSeamBehaviour:
+    """Truth-in-advertising guards (HS-4 P4-pre follow-up).
+
+    Each /v1 field description must name what openai_compat.py actually does
+    with the field today. If a behaviour change outruns the docs, the matching
+    assertion here trips. Same shape as ``TestMaxEscalationDescription``.
+    """
+
+    @staticmethod
+    def _desc(name: str) -> str:
+        desc = OpenAIChatRequest.model_fields[name].description
+        assert desc is not None, f"{name} has no description"
+        return desc.lower()
+
+    def test_x_force_model_says_it_is_a_role_label_not_a_registry_model(self):
+        d = self._desc("x_force_model")
+        assert "force a specific model by registry name" not in d
+        assert "does not select a model by registry name" in d
+        assert "x_orchestrator_role" in d
+        assert "not resolved" in d
+
+    def test_x_orchestrator_role_names_no_validation_and_vision_limit(self):
+        d = self._desc("x_orchestrator_role")
+        assert "bypassing frontdoor routing" not in d
+        assert "not validated" in d
+        assert "vision" in d and "ignored" in d
+
+    def test_x_disable_repl_names_the_paths_that_do_not_consult_it(self):
+        d = self._desc("x_disable_repl")
+        assert "not consulted" in d
+        assert "client" in d and "vision" in d
+        assert "no executor" in d
+
+    def test_x_session_id_is_recorded_only_and_names_the_guard(self):
+        d = self._desc("x_session_id")
+        assert "p1/p3 key their stores" not in d
+        assert "recorded only" in d
+        assert "no store is keyed" in d
+        assert "x_show_routing" in d
+        assert "422" in d and "v1_client_session_guard" in d
+
+    def test_x_user_id_is_recorded_only(self):
+        d = self._desc("x_user_id")
+        assert "p2 keys the user profile" not in d
+        assert "recorded only" in d
+        assert "no user profile" in d
+        assert "x_show_routing" in d
+
+    def test_x_memory_names_the_metadata_visibility_condition(self):
+        d = self._desc("x_memory")
+        assert "not_implemented" in d
+        assert "x_show_routing" in d
+
+    def test_x_tool_mode_names_repl_rendering_and_client_refusals(self):
+        d = self._desc("x_tool_mode")
+        assert "never returned" in d
+        assert "422" in d and "400" in d
+        assert "neither mode escalates" in d
+
+    def test_max_tokens_says_it_is_not_the_repl_token_budget(self):
+        d = self._desc("max_tokens")
+        assert "not the token budget" in d
+        assert "1024" in d and "500" in d
+        assert "vision" in d
+        assert "max_completion_tokens" in d
+
+    def test_temperature_says_default_is_not_forwarded(self):
+        d = self._desc("temperature")
+        assert "not forwarded" in d
+        assert "explicitly" in d
+        assert "vision" in d
+
+    @pytest.mark.parametrize("name", ["top_p", "top_k", "seed"])
+    def test_sampling_overrides_name_the_vision_gap(self, name):
+        d = self._desc(name)
+        assert "forwarded when set" in d
+        assert "vision" in d
+
+    def test_tools_says_repl_mode_never_returns_tool_calls(self):
+        d = self._desc("tools")
+        assert "never returned as tool_calls" in d
+        assert "x_tool_mode='client'" in d
+        assert "x_disable_repl" in d
+
+    def test_tool_choice_says_it_is_enforced_only_in_client_mode(self):
+        d = self._desc("tool_choice")
+        assert "only with x_tool_mode='client'" in d
+        assert "not enforced" in d

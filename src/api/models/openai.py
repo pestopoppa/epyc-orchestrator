@@ -84,29 +84,68 @@ class OpenAIChatRequest(BaseModel):
 
     model: str = Field(default="orchestrator", description="Model/role to use")
     messages: list[OpenAIMessage] = Field(..., description="Conversation messages")
-    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
-    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0,
+        description="Decode temperature. Forwarded to the backend ONLY when sent explicitly; "
+        "the schema default 0.0 is NOT forwarded, so an omitted temperature uses the "
+        "backend's per-role default. Ignored on image (vision) requests, which take no "
+        "sampling overrides.",
+    )
+    top_p: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Nucleus sampling override. Forwarded when set; ignored on image (vision) "
+        "requests, which take no sampling overrides.",
+    )
     top_k: int | None = Field(
         default=None,
         ge=1,
-        description="Orchestrator extension: llama.cpp top-k sampling override.",
+        description="Orchestrator extension: llama.cpp top-k sampling override. Forwarded when "
+        "set; ignored on image (vision) requests, which take no sampling overrides.",
     )
-    seed: int | None = Field(default=None, description="Optional deterministic decode seed")
-    max_tokens: int = Field(default=1024, ge=1, le=32768)
+    seed: int | None = Field(
+        default=None,
+        description="Optional deterministic decode seed. Forwarded when set; ignored on image "
+        "(vision) requests, which take no sampling overrides.",
+    )
+    max_tokens: int = Field(
+        default=1024,
+        ge=1,
+        le=32768,
+        description="Generation cap ONLY with x_tool_mode='client' or x_disable_repl=true. In the "
+        "default REPL mode it is NOT the token budget: each REPL turn generates up to a "
+        "fixed 1024 tokens and max_tokens only sets the turn count (max_tokens // 500, "
+        "clamped to 1..5). Ignored on image (vision) requests. max_completion_tokens is "
+        "accepted as an alias (422 if both are sent).",
+    )
     stream: bool = Field(default=False, description="Enable streaming")
     tools: list[dict[str, Any]] | None = Field(
         default=None,
-        description="OpenAI native tool definitions. Function tools are bridged to REPL CALL().",
+        description="OpenAI native tool definitions. Forwarded to the backend verbatim ONLY with "
+        "x_tool_mode='client'. In the default REPL mode they are rendered into the prompt as "
+        "CALL() instructions for the orchestrator REPL and are never returned as tool_calls "
+        "(metadata native_tool_contract='internal_repl_execution'). With x_disable_repl=true "
+        "they are still rendered as prompt text but there is no REPL to execute them.",
     )
     tool_choice: str | dict[str, Any] | None = Field(
         default=None,
-        description="OpenAI tool choice policy, e.g. 'auto', 'none', 'required', or function choice.",
+        description="OpenAI tool choice policy, e.g. 'auto', 'none', 'required', or function choice. "
+        "Validated (422) and forwarded to the backend ONLY with x_tool_mode='client'. In the "
+        "default REPL mode 'none' suppresses the rendered tool block and any other value is "
+        "rendered as advisory prompt text, not enforced.",
     )
     # Extension fields — orchestrator routing overrides
     x_orchestrator_role: str | None = Field(
         default=None,
-        description="Force specific orchestrator role, bypassing frontdoor routing. "
-        "Values: any role from /v1/models (e.g. 'architect_general', 'worker_math').",
+        description="Force specific orchestrator role. Values: any role from /v1/models (e.g. "
+        "'architect_general', 'worker_math'). Honoured as the backend role on the text and "
+        "client-tool paths; NOT validated against /v1/models here, so an unknown value is "
+        "passed through to the backend lookup rather than refused with a 422. On image "
+        "(vision) requests only 'worker_vision'/'vision_escalation' constrain the server; any "
+        "other role is ignored by the vision path.",
     )
     x_max_escalation: str | None = Field(
         default=None,
@@ -118,12 +157,18 @@ class OpenAIChatRequest(BaseModel):
     )
     x_force_model: str | None = Field(
         default=None,
-        description="Force a specific model by registry name (e.g. 'architect_qwen2_5_72b'), "
-        "bypassing all routing logic. Takes precedence over x_orchestrator_role.",
+        description="Highest-precedence ROLE override (x_force_model > x_orchestrator_role > "
+        "model). Despite the name it does NOT select a model by registry name: on /v1 the "
+        "value is treated exactly like x_orchestrator_role -- normalised as a role label and "
+        "looked up in the role->server map -- so a registry model name (e.g. "
+        "'architect_qwen2_5_72b') is not resolved to a model. Send a role from /v1/models.",
     )
     x_disable_repl: bool = Field(
         default=False,
-        description="Skip REPL code execution — force direct text response only.",
+        description="Skip REPL code execution -- direct text response only. Honoured on the text "
+        "path. Not consulted with x_tool_mode='client' (which never uses the REPL) or on image "
+        "(vision) requests. Any tools sent alongside it are rendered as prompt text with no "
+        "executor.",
     )
     x_show_routing: bool = Field(default=False, description="Include routing metadata")
     # HS-4 P0.2 — typed session/arm keys. Each value is validated (422 on a bad
@@ -134,27 +179,39 @@ class OpenAIChatRequest(BaseModel):
         min_length=1,
         max_length=128,
         pattern=_REQUEST_KEY_ID_PATTERN,
-        description="Client conversation/session id (HS-4). Recorded; P1/P3 key their stores on it.",
+        description="Client conversation/session id (HS-4). Validated (422 on a bad value). "
+        "RECORDED ONLY: stamped onto the inference-tap trace and echoed in "
+        "x_orchestrator_metadata.request_keys when x_show_routing=true. No store is keyed on "
+        "it on /v1 today (HS-4 P1/P3 are future work). Its ABSENCE is refused with a 422 for "
+        "x_tool_mode='client' or an OpenCode user-agent when the v1_client_session_guard "
+        "flag is on.",
     )
     x_user_id: str | None = Field(
         default=None,
         min_length=1,
         max_length=128,
         pattern=_REQUEST_KEY_ID_PATTERN,
-        description="Client user id (HS-4). Recorded; P2 keys the user profile on it.",
+        description="Client user id (HS-4). Validated (422 on a bad value). RECORDED ONLY: "
+        "stamped onto the inference-tap trace and echoed in x_orchestrator_metadata."
+        "request_keys when x_show_routing=true. No user profile exists on /v1 today (HS-4 P2 "
+        "is future work); the value changes nothing about the response.",
     )
     x_memory: Literal["on", "off"] | None = Field(
         default=None,
         description="Memory-injection arm (HS-4). Recorded only until HS-4 P2 ships: "
         "nothing is injected on /v1 today, so 'on' is reported as "
-        "memory_injection='not_implemented' in the metadata.",
+        "memory_injection='not_implemented' in the metadata (visible only with "
+        "x_show_routing=true).",
     )
     x_tool_mode: Literal["repl", "client"] | None = Field(
         default=None,
         description="Tool execution mode (HS-4 P0.1). 'repl' (default when absent): client "
-        "tools are bridged to the orchestrator REPL CALL(). 'client': tools, tool_choice and "
-        "tool history are forwarded to the backend and tool_calls are returned for the "
-        "client to execute.",
+        "tools are rendered into the prompt as orchestrator REPL CALL() instructions and "
+        "tool_calls are never returned (with x_disable_repl=true nothing executes them). "
+        "'client': tools, tool_choice and tool history are forwarded to the backend and "
+        "tool_calls are returned for the client to execute; tool_choice is validated (422), "
+        "image input is refused (400), and x_session_id may be required (422, "
+        "v1_client_session_guard flag). Neither mode escalates.",
     )
 
     @model_validator(mode="after")
