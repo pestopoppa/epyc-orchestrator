@@ -609,11 +609,16 @@ class ProactiveDelegator:
                         success=True,
                     )
 
-            # Architect review
+            # Architect review. UTM-P1a.2: the delegator OWNS the review-fix loop, so
+            # it genuinely knows which iteration this review is -- the count of
+            # iterations already recorded for this step (0-based). The aggregate
+            # review and the parallel executor run one review with no loop, so they
+            # pass nothing and their ordinal stays NULL rather than an invented 0.
             review = self.review_service.review(
                 spec=task_ir,
                 subtask=step,
                 output=current_output,
+                turn_ordinal=ctx.subtask_iterations.get(subtask_id, 0),
             )
 
             # Record iteration

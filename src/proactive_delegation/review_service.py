@@ -600,12 +600,18 @@ Rules:
         session_id: Any | None = None,
         trial_id: int | None = None,
         executor_model_id: str | None = None,
+        turn_ordinal: Any | None = None,
     ) -> ArchitectReview:
         """Have architect review a specialist's output.
 
         TM-3: every invocation emits a REVIEW_DECISION trace event (with per-decision
         latency_ms + token counts) regardless of downstream acting. The RETURNED
         ``ArchitectReview`` is byte-identical to the pre-decision-plane behavior.
+
+        UTM-P1a.2: ``turn_ordinal`` is the caller's own 0-based review-iteration
+        index for this step (the delegator's review-fix loop holds one; a single
+        one-shot review does not). Pass-through only -- the service never counts
+        turns itself, so an unsupplied ordinal stays NULL = "never captured".
 
         RD-12: the emitted detail carries prompt+completion tokens (``tokens``),
         ``phase="review"``, and (when known) ``executor_model_id``; a reviewer
@@ -726,6 +732,8 @@ Rules:
             # supplied one (delegator: ``task_ir["task_id"]``). Never derived from
             # ``subtask_id`` -- step ids like "S1" recur across unrelated tasks.
             task_key=spec.get("task_id") if isinstance(spec, dict) else None,
+            # UTM-P1a.2: the caller's review-iteration index, when it holds one.
+            turn_ordinal=turn_ordinal,
         )
         return review
 
@@ -980,8 +988,14 @@ Rules:
         session_id: Any | None = None,
         trial_id: int | None = None,
         executor_model_id: str | None = None,
+        task_key: Any | None = None,
     ) -> ArchitectReview:
         """Pointwise review of a PRE-SANITIZED CandidatePackage view (RD-6).
+
+        UTM-P1a.2: ``task_key`` is the caller's cross-harness task identity (the
+        replay harness passes its corpus ``task_id``), threaded through to
+        ``Event.task_key`` exactly like ``review()`` threads ``spec["task_id"]``.
+        Never derived from ``subtask_id`` or ``task_ref``; unsupplied -> NULL.
 
         ``sanitized_view`` MUST be the ``candidate_package.schema.json``
         ``sanitized_view`` projection (author self-assessment / confidence assertions
@@ -1067,6 +1081,8 @@ Rules:
             },
             session_id=session_id,
             trial_id=trial_id,
+            # UTM-P1a.2: pass-through of the caller's task identity (replay corpus id).
+            task_key=task_key,
         )
         return review
 

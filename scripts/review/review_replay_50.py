@@ -81,6 +81,11 @@ if str(_REPO) not in sys.path:
 
 REVIEW_SESSION_PREFIX = "rr50-"
 
+# UTM-P1a.2: ``Event.harness`` for every trace row this script writes. The live
+# review plane stamps ``REVIEW_HARNESS`` ("orchestrator"); this offline replay is a
+# different harness driving the same service, so it names itself.
+REPLAY_HARNESS = "review_replay"
+
 
 # ── live-server seam (stdlib only; mirrors production llm_call's str contract) ──
 
@@ -224,10 +229,16 @@ def run_shadow(
     trace_db = Path(trace_db)
     if trace_db.exists():
         trace_db.unlink()  # fresh run: a stale DB would pollute coverage
+    # UTM-P1a.2: this script is its own harness, distinct from the in-process
+    # orchestrator review plane, so its trace rows say so. Every review row also
+    # carries the corpus ``task_id`` as ``task_key`` (below) -- the same convention
+    # the delegator uses for ``TaskIR.task_id`` -- so a live review of the same
+    # task pairs against this replay in ``paired_runs()``.
     svc = ArchitectReviewService(
         primitives,
         trace_db_path=str(trace_db),
         warn_only=True,
+        harness=REPLAY_HARNESS,
     )
     artifacts_dir = Path(artifacts_dir) if artifacts_dir else None
     if artifacts_dir is not None:
@@ -247,6 +258,7 @@ def run_shadow(
             subtask_id=task_id,
             session_id=session_id,
             executor_model_id=executor,
+            task_key=task_id,  # UTM-P1a.2: corpus id, pass-through
         )
         wall_ms = (time.perf_counter() - t0) * 1000.0
         # Mirror the service's own accounting (written to the trace row) into the
