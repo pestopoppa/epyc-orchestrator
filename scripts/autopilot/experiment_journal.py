@@ -148,6 +148,11 @@ TSV_COLUMNS = [
 
 SUPERSESSION_EVENT_TYPE = "supersession"
 BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
+# AP-57 (operator ruled B, 2026-09-17): the append-only receipt for a speed-axis reseed on
+# the quality-refusal path (safety_gate RTG-02). It carries a post-write ``baseline_state``
+# snapshot, so the baseline ledger fold replays it exactly like a promotion.
+SPEED_AXIS_RESEED_EVENT_TYPE = "speed_axis_reseed"
+BASELINE_LEDGER_EVENT_TYPES = (BASELINE_PROMOTION_EVENT_TYPE, SPEED_AXIS_RESEED_EVENT_TYPE)
 JOURNAL_SNAPSHOT_EVENT_TYPE = "journal_snapshot"
 ROLE_RESTART_BOUNDARY_EVENT_TYPE = "role_restart_boundary"
 
@@ -671,6 +676,36 @@ class BaselinePromotionEvent:
 
 
 @dataclass
+class SpeedAxisReseedEvent:
+    """Append-only ledger event recording a speed-axis reseed on a refused promotion (AP-57).
+
+    The quality promotion was refused (eval-instrument re-baseline hold), but the independent
+    SPEED axis was re-anchored from the same in-era measurement: ``frontdoor_speed`` and
+    ``autopilot_speed_era`` changed. ``baseline_state`` is the post-write snapshot.
+    """
+
+    source_trial_id: int
+    tier: int
+    previous_speed: float | None
+    new_speed: float
+    previous_speed_era: str
+    new_speed_era: str
+    reason: str
+    refusal_reason: str
+    eval_quality_era: str
+    run_manifest_sha256: str
+    result_metrics: dict[str, Any]
+    baseline_state: dict[str, Any]
+    policy_version: str
+    actor: str
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    type: str = SPEED_AXIS_RESEED_EVENT_TYPE
+    infra_fingerprint: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class JournalSnapshotEvent:
     """Append-only segment snapshot for bounded journal replay."""
 
@@ -1189,6 +1224,56 @@ class ExperimentJournal:
             )
         ))
 
+    def append_speed_axis_reseed_event(
+        self,
+        *,
+        source_trial_id: int,
+        tier: int,
+        previous_speed: float | None,
+        new_speed: float,
+        previous_speed_era: str,
+        new_speed_era: str,
+        refusal_reason: str,
+        result_metrics: dict[str, Any],
+        baseline_state: dict[str, Any],
+        eval_quality_era: str = "",
+        run_manifest_sha256: str = "",
+        policy_version: str = "speed-axis-reseed-v1",
+        actor: str = "autopilot.py",
+        infra_fingerprint: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Append a speed-axis reseed receipt (AP-57), at most once per source trial.
+
+        Idempotent: a second call for a ``source_trial_id`` that already has a receipt in the
+        loaded ledger returns the existing row and writes nothing.
+        """
+        source_trial_id = int(source_trial_id)
+        for existing in self.speed_axis_reseed_events():
+            try:
+                if int(existing.get("source_trial_id")) == source_trial_id:
+                    return existing
+            except (TypeError, ValueError):
+                continue
+        return self.append_ledger_event(asdict(
+            SpeedAxisReseedEvent(
+                source_trial_id=source_trial_id,
+                tier=int(tier),
+                previous_speed=previous_speed,
+                new_speed=float(new_speed),
+                previous_speed_era=str(previous_speed_era or ""),
+                new_speed_era=str(new_speed_era or ""),
+                reason="quality_refusal",
+                refusal_reason=str(refusal_reason or ""),
+                eval_quality_era=str(eval_quality_era or ""),
+                run_manifest_sha256=str(run_manifest_sha256 or ""),
+                result_metrics=copy.deepcopy(result_metrics),
+                baseline_state=copy.deepcopy(baseline_state),
+                policy_version=policy_version,
+                actor=actor,
+                infra_fingerprint=copy.deepcopy(infra_fingerprint or {}),
+            )
+        ))
+
     def append_journal_snapshot_event(
         self,
         *,
@@ -1280,6 +1365,23 @@ class ExperimentJournal:
     def baseline_promotion_events(self) -> list[dict[str, Any]]:
         """Return loaded append-only baseline promotion event rows."""
         return self.ledger_events(BASELINE_PROMOTION_EVENT_TYPE)
+
+    def speed_axis_reseed_events(self) -> list[dict[str, Any]]:
+        """Return loaded append-only speed-axis reseed receipts (AP-57)."""
+        return self.ledger_events(SPEED_AXIS_RESEED_EVENT_TYPE)
+
+    def baseline_ledger_events(self) -> list[dict[str, Any]]:
+        """Every baseline-state-writing ledger event, in append order.
+
+        Promotions and speed-axis reseeds both carry a post-write ``baseline_state``
+        snapshot; the baseline ledger fold must see both, in order, to replay the state.
+        Use :meth:`baseline_promotion_events` where only real promotions count.
+        """
+        return [
+            event
+            for event in self.ledger_events()
+            if event.get("type") in BASELINE_LEDGER_EVENT_TYPES
+        ]
 
     def journal_snapshot_events(self) -> list[dict[str, Any]]:
         """Return loaded append-only journal snapshot event rows."""

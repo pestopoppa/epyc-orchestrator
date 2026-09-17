@@ -339,6 +339,9 @@ def test_cmd_status_reports_the_pause_owner_and_collision(
         def baseline_promotion_events(self):
             return []
 
+        def baseline_ledger_events(self):
+            return []
+
     class _Archive:
         def summary_text(self, *_a, **_k):
             return ""

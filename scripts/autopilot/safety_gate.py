@@ -1672,6 +1672,11 @@ class BaselineUpdateResult:
     # both eras as part of the write), so a caller can tell "the throughput fence just closed
     # on its own instrument" from "the baseline ratcheted".
     speed_reseeded: bool = False
+    # AP-57 (operator ruled B, 2026-09-17): the provenance of that speed-axis reseed —
+    # ``{previous_speed, new_speed, previous_speed_era, new_speed_era, tier}`` — so the
+    # caller can journal an append-only ``speed_axis_reseed`` receipt. Empty unless
+    # ``speed_reseeded`` is True.
+    speed_reseed: dict[str, Any] = field(default_factory=dict)
 
 
 class SafetyGate:
@@ -1714,6 +1719,8 @@ class SafetyGate:
         # (single-era world / pre-existing tests) and every new branch below is inert, so
         # the gate is byte-identical to the pre-fence version.
         self._autopilot_speed_era = (autopilot_speed_era or "").strip() or None
+        # AP-57: provenance of the most recent speed-axis reseed (see _reseed_speed_axis_if_held).
+        self._last_speed_reseed: dict[str, Any] = {}
         self._quality_exclude_before_ts = quality_exclude_before_ts
         self._rebaseline_hold_logged = False
         self._speed_rebaseline_hold_logged = False
@@ -1841,8 +1848,9 @@ class SafetyGate:
         * never touches quality, per-suite, tier revisions or ``eval_quality_era`` — the
           quality refusal that surrounds it stays fail-closed.
 
-        Returns True when it wrote.
+        Returns True when it wrote; the before/after pair is left on ``_last_speed_reseed``.
         """
+        self._last_speed_reseed = {}
         if not self.speed_rebaseline_required:
             return False
         speed = float(getattr(result, "speed", 0.0) or 0.0)
@@ -1850,9 +1858,18 @@ class SafetyGate:
             self._log_speed_rebaseline_hold_once(result)
             return False
         previous_speed = self.baseline.frontdoor_speed
-        previous_era = self.baseline.autopilot_speed_era or "<pre-boundary>"
+        previous_era_raw = self.baseline.autopilot_speed_era or ""
+        previous_era = previous_era_raw or "<pre-boundary>"
         self.baseline.frontdoor_speed = speed
         self.baseline.autopilot_speed_era = self._autopilot_speed_era or ""
+        # AP-57: keep the before/after pair so the caller can journal the reseed receipt.
+        self._last_speed_reseed = {
+            "tier": int(result.tier),
+            "previous_speed": previous_speed,
+            "new_speed": speed,
+            "previous_speed_era": previous_era_raw,
+            "new_speed_era": self.baseline.autopilot_speed_era,
+        }
         log.warning(
             "SPEED-AXIS RESEED (RTG-02) — the eval-quality re-baseline hold refused the "
             "QUALITY promotion, but the throughput fence is a different instrument and this "
@@ -3076,6 +3093,7 @@ class SafetyGate:
                 proof,
                 ineligible_reason="quality_rebaseline_required",
                 speed_reseeded=speed_reseeded,
+                speed_reseed=dict(self._last_speed_reseed) if speed_reseeded else {},
             )
         # LEDGER-W4 (01c §3): when the sequential path is active, a promotion requires
         # a CONFIRMED joint e-process verdict (E_quality >= confirm_e AND

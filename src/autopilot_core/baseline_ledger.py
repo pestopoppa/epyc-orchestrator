@@ -16,6 +16,13 @@ from src.autopilot_core.authority_consent import authority_consent
 
 
 BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
+# AP-57 (operator ruled B, 2026-09-17): a speed-axis reseed on the quality-refusal path is a
+# baseline_state write too. Its receipt carries the post-write snapshot, so the fold replays it
+# in append order next to promotions (it is never counted as a promotion).
+SPEED_AXIS_RESEED_EVENT_TYPE = "speed_axis_reseed"
+BASELINE_LEDGER_EVENT_TYPES = frozenset(
+    {BASELINE_PROMOTION_EVENT_TYPE, SPEED_AXIS_RESEED_EVENT_TYPE}
+)
 BASELINE_LEDGER_AUTHORITY_STATE_FLAG = "baseline_ledger_authority_enabled"
 
 
@@ -25,6 +32,8 @@ class BaselineLedgerReconciliation:
 
     status: str
     event_count: int = 0
+    # AP-57: how many of ``event_count`` are speed-axis reseed receipts.
+    reseed_event_count: int = 0
     valid_snapshot_count: int = 0
     cutover_ready: bool = False
     cutover_blockers: list[str] = field(default_factory=list)
@@ -47,6 +56,16 @@ def _promotion_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         event
         for event in events
         if event.get("type") == BASELINE_PROMOTION_EVENT_TYPE
+        and "trial_id" not in event
+    ]
+
+
+def _ledger_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Promotion and speed-axis reseed events, in the caller's (append) order."""
+    return [
+        event
+        for event in events
+        if event.get("type") in BASELINE_LEDGER_EVENT_TYPES
         and "trial_id" not in event
     ]
 
@@ -76,14 +95,16 @@ def reconcile_baseline_ledger(
     events: list[dict[str, Any]],
     state_baseline: dict[str, Any] | None,
 ) -> BaselineLedgerReconciliation:
-    """Fold baseline promotion events by append order and compare to state.
+    """Fold baseline ledger events by append order and compare to state.
 
-    Latest valid ``baseline_state`` snapshot wins. Missing or malformed event
-    state is not inferred from event metrics, YAML, Pareto archive, or current
-    state; it only contributes a warning.
+    Latest valid ``baseline_state`` snapshot wins. Both ``baseline_promotion`` and
+    (AP-57) ``speed_axis_reseed`` events carry one; ``events`` must be in append
+    order. Missing or malformed event state is not inferred from event metrics,
+    YAML, Pareto archive, or current state; it only contributes a warning.
+    A ledger with reseed receipts but no promotion stays ``no_events``: a reseed
+    only re-anchors the speed axis of a baseline some promotion must have seeded.
     """
-    promotion_events = _promotion_events(events)
-    if not promotion_events:
+    if not _promotion_events(events):
         return BaselineLedgerReconciliation(
             status="no_events",
             cutover_blockers=[
@@ -91,6 +112,10 @@ def reconcile_baseline_ledger(
             ],
         )
 
+    promotion_events = _ledger_events(events)
+    reseed_event_count = sum(
+        1 for event in promotion_events if event.get("type") == SPEED_AXIS_RESEED_EVENT_TYPE
+    )
     folded_state: dict[str, Any] | None = None
     latest_valid_event: dict[str, Any] | None = None
     valid_snapshot_count = 0
@@ -108,6 +133,7 @@ def reconcile_baseline_ledger(
         return BaselineLedgerReconciliation(
             status="unreconstructable",
             event_count=len(promotion_events),
+            reseed_event_count=reseed_event_count,
             valid_snapshot_count=valid_snapshot_count,
             cutover_blockers=[
                 "no promotion event has a usable baseline_state snapshot"
@@ -115,7 +141,16 @@ def reconcile_baseline_ledger(
             warnings=warnings,
         )
 
-    warning = _event_quality_warning(latest_valid_event or {}, folded_state)
+    latest_promotion = next(
+        (
+            event
+            for event in reversed(promotion_events)
+            if event.get("type") == BASELINE_PROMOTION_EVENT_TYPE
+            and isinstance(event.get("baseline_state"), dict)
+        ),
+        None,
+    )
+    warning = _event_quality_warning(latest_promotion or {}, folded_state)
     if warning:
         warnings.append(warning)
 
@@ -148,6 +183,7 @@ def reconcile_baseline_ledger(
     return BaselineLedgerReconciliation(
         status=status,
         event_count=len(promotion_events),
+        reseed_event_count=reseed_event_count,
         valid_snapshot_count=valid_snapshot_count,
         cutover_ready=not cutover_blockers,
         cutover_blockers=cutover_blockers,
@@ -214,21 +250,37 @@ def format_baseline_ledger_summary(
     reconciliation: BaselineLedgerReconciliation,
 ) -> list[str]:
     """Human-readable status/report lines for baseline ledger diagnostics."""
-    lines = [f"Baseline promotion events: {reconciliation.event_count}"]
+    promotions = reconciliation.event_count - reconciliation.reseed_event_count
+    header = f"Baseline promotion events: {promotions}"
+    if reconciliation.reseed_event_count:
+        header += f" (+{reconciliation.reseed_event_count} speed-axis reseed(s))"
+    lines = [header]
     if reconciliation.status == "no_events":
         lines.append("Baseline ledger state: no promotion events")
     elif reconciliation.status == "unreconstructable":
         lines.append("Baseline ledger state: unreconstructable")
     else:
         event = reconciliation.latest_event or {}
-        lines.append(
-            "Latest baseline event: "
-            f"trial #{event.get('source_trial_id', 'n/a')} "
-            f"T{event.get('tier', 'n/a')} "
-            f"{_format_optional_metric(event.get('previous_quality'))} -> "
-            f"{_format_optional_metric(event.get('new_quality'))} "
-            f"at {event.get('timestamp', 'n/a')}"
-        )
+        if event.get("type") == SPEED_AXIS_RESEED_EVENT_TYPE:
+            lines.append(
+                "Latest baseline event: speed-axis reseed "
+                f"trial #{event.get('source_trial_id', 'n/a')} "
+                f"T{event.get('tier', 'n/a')} "
+                f"{_format_optional_metric(event.get('previous_speed'))} -> "
+                f"{_format_optional_metric(event.get('new_speed'))} t/s "
+                f"era {event.get('previous_speed_era') or '<pre-boundary>'} -> "
+                f"{event.get('new_speed_era') or 'n/a'} "
+                f"at {event.get('timestamp', 'n/a')}"
+            )
+        else:
+            lines.append(
+                "Latest baseline event: "
+                f"trial #{event.get('source_trial_id', 'n/a')} "
+                f"T{event.get('tier', 'n/a')} "
+                f"{_format_optional_metric(event.get('previous_quality'))} -> "
+                f"{_format_optional_metric(event.get('new_quality'))} "
+                f"at {event.get('timestamp', 'n/a')}"
+            )
         lines.append(f"Baseline ledger state status: {reconciliation.status}")
     lines.append(
         "Baseline fold cutover dry-run: "

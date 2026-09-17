@@ -2073,6 +2073,9 @@ def _run_loop_inner_seq_harness(
         def baseline_promotion_events(self) -> list[dict[str, Any]]:
             return list(self._promotions)
 
+        def baseline_ledger_events(self) -> list[dict[str, Any]]:
+            return list(self._promotions)
+
         def append_baseline_promotion_event(self, **payload: Any) -> dict[str, Any]:
             self._promotions.append(payload)
             return payload

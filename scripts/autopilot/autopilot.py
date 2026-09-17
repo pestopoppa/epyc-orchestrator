@@ -7629,6 +7629,15 @@ def _reconcile_promotion_with_journal(
         " PROMOTION ROLLED BACK (baseline restored, no ledger event)." if promoted else "",
     )
     if not promoted:
+        if baseline_update is not None and getattr(baseline_update, "speed_reseeded", False):
+            # AP-57: a speed-axis reseed decided on the same unrecorded evidence is rolled
+            # back exactly like a promotion, so no reseed receipt or reseeded state lands.
+            log.error(
+                "Trial %d: SPEED-AXIS RESEED ROLLED BACK (baseline restored, no ledger event).",
+                trial_counter,
+            )
+            gate.baseline = baseline_before
+            return dataclasses.replace(baseline_update, speed_reseeded=False, speed_reseed={})
         return baseline_update
     gate.baseline = baseline_before
     return dataclasses.replace(
@@ -8015,7 +8024,7 @@ def _baseline_state_for_startup_gate(
     if isinstance(state_baseline, dict) and state_baseline:
         return state_baseline
     reconciliation = reconcile_baseline_ledger(
-        journal.baseline_promotion_events(),
+        journal.baseline_ledger_events(),  # AP-57: promotions + reseeds
         None,
     )
     if reconciliation.cutover_ready and isinstance(reconciliation.folded_state, dict):
@@ -8043,7 +8052,7 @@ def _save_state_with_journal_archive_authority(
     archive_changed = _apply_journal_archive_authority(state, journal, archive)
     baseline_changed = apply_baseline_ledger_authority(
         state,
-        journal.baseline_promotion_events(),
+        journal.baseline_ledger_events(),  # AP-57: promotions + reseeds
     )
     if archive_changed is None:
         log.warning(
@@ -11128,22 +11137,16 @@ def _run_loop_inner(
         baseline_state = gate.baseline.to_state_dict()
         state["baseline_state"] = baseline_state
         _record_baseline_infra_fingerprint(state, baseline_update, trial_infra_fingerprint)
-        try:
-            _append_baseline_promotion_event(
-                journal=journal,
-                baseline_update=baseline_update,
-                eval_result=eval_result,
-                source_trial_id=trial_counter - 1,
-                pareto_status=pareto_status,
-                baseline_state=baseline_state,
-                infra_fingerprint=trial_infra_fingerprint,
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "Baseline promotion event append failed for trial %d: %s",
-                trial_counter - 1,
-                exc,
-            )
+        _journal_baseline_ledger_event(
+            state,
+            journal=journal,
+            baseline_update=baseline_update,
+            eval_result=eval_result,
+            source_trial_id=trial_counter - 1,
+            pareto_status=pareto_status,
+            baseline_state=baseline_state,
+            infra_fingerprint=trial_infra_fingerprint,
+        )
         # H4: the out-of-band control merge now happens UNDER the write lock
         # inside save_state (merge_control=True), so an operator/dashboard/
         # host_health pause set while this trial ran survives this whole-file save.
@@ -11431,9 +11434,41 @@ def _append_baseline_promotion_event(
     pareto_status: str,
     baseline_state: dict[str, Any],
     infra_fingerprint: dict[str, Any] | None = None,
+    run_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    if baseline_update is None or not baseline_update.updated:
+    if baseline_update is None:
         return None
+    if not baseline_update.updated:
+        # AP-57 (operator ruled B, 2026-09-17): a refused promotion that re-anchored the
+        # speed axis is still a baseline_state WRITE; journal its append-only receipt so the
+        # reseed is auditable and the ledger fold can replay it.
+        if not getattr(baseline_update, "speed_reseeded", False):
+            return None
+        reseed = dict(getattr(baseline_update, "speed_reseed", None) or {})
+        return journal.append_speed_axis_reseed_event(
+            source_trial_id=source_trial_id,
+            tier=int(reseed.get("tier", baseline_update.tier)),
+            previous_speed=reseed.get("previous_speed"),
+            new_speed=float(reseed.get("new_speed", eval_result.speed)),
+            previous_speed_era=str(reseed.get("previous_speed_era") or ""),
+            new_speed_era=str(
+                reseed.get("new_speed_era") or baseline_state.get("autopilot_speed_era") or ""
+            ),
+            refusal_reason=str(getattr(baseline_update, "ineligible_reason", "") or ""),
+            eval_quality_era=str(baseline_state.get("eval_quality_era") or ""),
+            run_manifest_sha256=str((run_manifest or {}).get("manifest_sha256") or ""),
+            result_metrics={
+                "quality": eval_result.quality,
+                "speed": eval_result.speed,
+                "cost": eval_result.cost,
+                "reliability": eval_result.reliability,
+                "n_questions": eval_result.n_questions,
+                "pareto_status": pareto_status,
+                "refusal_detail": baseline_update.reason,
+            },
+            baseline_state=baseline_state,
+            infra_fingerprint=infra_fingerprint,
+        )
     return journal.append_baseline_promotion_event(
         source_trial_id=source_trial_id,
         tier=baseline_update.tier,
@@ -11455,13 +11490,77 @@ def _append_baseline_promotion_event(
     )
 
 
+SPEED_AXIS_RESEED_JOURNAL_ERROR_KEY = "speed_axis_reseed_journal_error"
+
+
+def _journal_baseline_ledger_event(
+    state: dict[str, Any],
+    *,
+    journal: ExperimentJournal,
+    baseline_update: Any,
+    eval_result: EvalResult,
+    source_trial_id: int,
+    pareto_status: str,
+    baseline_state: dict[str, Any],
+    infra_fingerprint: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Append the trial's baseline ledger event; a failure is loud and never blocks the save.
+
+    The state write (``baseline_state``) always proceeds, matching the promotion path. A
+    failed speed-axis reseed receipt (AP-57) additionally leaves
+    ``state[SPEED_AXIS_RESEED_JOURNAL_ERROR_KEY]`` set, so the missing receipt is visible
+    in persisted telemetry until a later receipt lands.
+    """
+    reseed = bool(
+        baseline_update is not None
+        and not getattr(baseline_update, "updated", False)
+        and getattr(baseline_update, "speed_reseeded", False)
+    )
+    try:
+        event = _append_baseline_promotion_event(
+            journal=journal,
+            baseline_update=baseline_update,
+            eval_result=eval_result,
+            source_trial_id=source_trial_id,
+            pareto_status=pareto_status,
+            baseline_state=baseline_state,
+            infra_fingerprint=infra_fingerprint,
+            run_manifest=_in_flight_run_manifest(state, source_trial_id),
+        )
+    except Exception as exc:  # noqa: BLE001
+        if reseed:
+            log.warning(
+                "Speed-axis reseed event append FAILED for trial %d: %s — the reseeded "
+                "baseline_state is still saved, but it has no ledger receipt (AP-57); "
+                "state.%s is set",
+                source_trial_id,
+                exc,
+                SPEED_AXIS_RESEED_JOURNAL_ERROR_KEY,
+            )
+            state[SPEED_AXIS_RESEED_JOURNAL_ERROR_KEY] = {
+                "trial_id": source_trial_id,
+                "error": f"{type(exc).__name__}: {exc}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        else:
+            log.warning(
+                "Baseline promotion event append failed for trial %d: %s",
+                source_trial_id,
+                exc,
+            )
+        return None
+    if reseed and event is not None:
+        state.pop(SPEED_AXIS_RESEED_JOURNAL_ERROR_KEY, None)
+    return event
+
+
 def _baseline_promotion_summary_lines(
     state: dict[str, Any],
     journal: ExperimentJournal,
 ) -> list[str]:
     """Read-only baseline-as-ledger preview for operator commands."""
     reconciliation = reconcile_baseline_ledger(
-        journal.baseline_promotion_events(),
+        journal.baseline_ledger_events(),  # AP-57: promotions + reseeds
         state.get("baseline_state"),
     )
     return format_baseline_ledger_summary(reconciliation)
