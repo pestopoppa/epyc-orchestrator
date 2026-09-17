@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 import uuid
 from base64 import b64decode
@@ -48,6 +49,59 @@ from src.roles import Role
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# B2 context compression on /v1 is FAIL-OPEN by policy: any compressor failure
+# falls back to the unfolded history so a request never dies on a telemetry-grade
+# optimisation. Fail-open conceals its own corruption, so the fallback must be
+# VISIBLE: it is counted here (same in-process convention as
+# ``TOOL_CALL_JSON_REPAIR_COUNTS`` in ``src/prompt_builders/code_utils.py`` --
+# there is no prometheus_client in src/) and logged with the exception type as a
+# structured ``context_compression_fallback exc_type=...`` WARNING. Changing the
+# fail-open itself is a policy decision nobody has taken; this only makes it seen.
+_compression_fallback_lock = threading.Lock()
+CONTEXT_COMPRESSION_FALLBACK_COUNTS: dict[str, int] = {"total": 0}
+
+
+def _record_compression_fallback(exc: BaseException, message_count: int) -> None:
+    exc_type = type(exc).__name__
+    with _compression_fallback_lock:
+        CONTEXT_COMPRESSION_FALLBACK_COUNTS["total"] += 1
+        CONTEXT_COMPRESSION_FALLBACK_COUNTS[exc_type] = (
+            CONTEXT_COMPRESSION_FALLBACK_COUNTS.get(exc_type, 0) + 1
+        )
+    logger.warning(
+        "context_compression_fallback exc_type=%s messages=%d detail=%s "
+        "(fail-open: serving unfolded history)",
+        exc_type, message_count, exc,
+    )
+
+
+def _compressed_history_dicts(history_messages: list[OpenAIMessage]) -> list[dict[str, Any]]:
+    """Return history dicts, B2-compressed when the flag is on and the history is long.
+
+    Fail-open on compressor error (see ``_record_compression_fallback``): the
+    unfolded history is returned, and the fallback is counted and logged.
+    """
+    from src.features import features as _feat
+
+    unfolded = [_history_message_dict(m) for m in history_messages]
+    if not (_feat().context_compression and len(history_messages) > 8):
+        return unfolded
+    try:
+        from src.context_compression import ContextCompressor
+
+        # Fresh copy for the compressor: a compressor that mutates its input
+        # before raising must not corrupt the unfolded history we fall back to.
+        result = ContextCompressor().compress([_history_message_dict(m) for m in history_messages])
+        if result.tool_outputs_summarized > 0 or result.tool_pairs_fixed > 0:
+            logger.info(
+                "B2 context compression: %d outputs summarized, %d pairs fixed",
+                result.tool_outputs_summarized, result.tool_pairs_fixed,
+            )
+        return result.messages
+    except Exception as exc:  # fail-open by policy; made visible, not swallowed
+        _record_compression_fallback(exc, len(history_messages))
+        return unfolded
 
 
 def _repl_memrl_kwargs(state: AppState) -> dict[str, Any]:
@@ -664,27 +718,11 @@ async def openai_chat_completions(
     prompt = prompt_parts.text
 
     # Build conversation context from message history
-    # B2: Apply context compression on structured messages before flattening
+    # B2: Apply context compression on structured messages before flattening.
+    # Runs once here, so BOTH the streaming and non-streaming branches below
+    # share the same (visible) fail-open fallback.
     history_messages = list(request.messages[:-1])
-    from src.features import features as _feat
-    if _feat().context_compression and len(history_messages) > 8:
-        try:
-            from src.context_compression import ContextCompressor
-            _compressor = ContextCompressor()
-            _result = _compressor.compress(
-                [_history_message_dict(m) for m in history_messages]
-            )
-            if _result.tool_outputs_summarized > 0 or _result.tool_pairs_fixed > 0:
-                import logging
-                logging.getLogger(__name__).info(
-                    "B2 context compression: %d outputs summarized, %d pairs fixed",
-                    _result.tool_outputs_summarized, _result.tool_pairs_fixed,
-                )
-            history_messages_dicts = _result.messages
-        except Exception:
-            history_messages_dicts = [_history_message_dict(m) for m in history_messages]
-    else:
-        history_messages_dicts = [_history_message_dict(m) for m in history_messages]
+    history_messages_dicts = _compressed_history_dicts(history_messages)
 
     context_parts = _context_parts_from_history(
         history_messages_dicts,

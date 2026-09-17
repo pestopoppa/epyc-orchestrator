@@ -110,8 +110,11 @@ class OpenAIChatRequest(BaseModel):
     )
     x_max_escalation: str | None = Field(
         default=None,
-        description="Cap escalation tier. Values: 'A' (frontdoor only), 'B1' (coder), "
-        "'B2' (architect), 'C' (worker). Prevents escalation beyond the specified tier.",
+        description="Requested escalation-tier cap. Values: 'A' (frontdoor only), 'B1' (coder), "
+        "'B2' (architect), 'C' (worker). METADATA ONLY on /v1 today: the value is recorded "
+        "in routing metadata and NOT enforced -- role/override resolution applies no "
+        "escalation cap, and client tool mode performs no escalation at all. Enforcement "
+        "is HS-4 P4 work; until then this field does not prevent anything.",
     )
     x_force_model: str | None = Field(
         default=None,
