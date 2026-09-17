@@ -495,7 +495,11 @@ def run_calibration_study(
             ],
             "elapsed_ms": result.elapsed_ms,
         },
-        "metric_directions": {"ece": "lower_better", "brier": "lower_better", "accuracy": "higher_better"},
+        "metric_directions": {
+            "ece": "lower_better",
+            "brier": "lower_better",
+            "accuracy": "higher_better",
+        },
         "prompt_sha256": _prompt_hashes([result]),
     }
     _write_receipt(receipt, receipt_path=receipt_path, artifacts_dir=artifacts_dir)
