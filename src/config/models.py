@@ -1315,6 +1315,11 @@ class DelegationConfig:
     max_review_tokens: int = 128
     max_taskir_tokens: int = 256
     max_plan_review_tokens: int = 128
+    review_output_max_chars: int = 4000
+    """EVL-42 1c-fix (b): char budget for the candidate output shown to the
+    reviewer in ``ArchitectReviewService.review()``. Over-budget outputs are
+    condensed head+tail with an explicit elision marker (never a silent prefix
+    cut), so a long-but-correct answer is not judged on its first 500 chars."""
 
 
 @dataclass
