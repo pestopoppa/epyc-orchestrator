@@ -426,22 +426,48 @@ class TapWriter:
         prompt_ms: float,
         gen_ms: float,
         tps: float,
+        prompt_tokens: int | None = None,
     ) -> None:
+        """Record the request's terminal timings.
+
+        ``prompt_tokens`` is llama-server's OWN terminal prompt-token count
+        (``tokens_evaluated`` on /completion, ``usage.prompt_tokens`` on
+        chat/completions — the same figure ``/slots`` reports as
+        ``n_prompt_tokens`` mid-run). It is recorded ONLY when the server
+        reported a positive value, and always together with
+        ``prompt_tokens_source="server_terminal"`` so a reader can tell a
+        measured count from the character-length estimate a card would
+        otherwise fall back to (RTG-47 data plane). A request that was never
+        observed mid-run therefore still carries TRUE prompt tokens at
+        completion; an early-stopped or usage-less request carries none and
+        stays legibly an estimate rather than a fabricated zero.
+        """
         total_s = (prompt_ms + gen_ms) / 1000.0
+        measured_prompt = (
+            int(prompt_tokens)
+            if isinstance(prompt_tokens, (int, float))
+            and not isinstance(prompt_tokens, bool)
+            and prompt_tokens > 0
+            else None
+        )
+        prompt_note = f", prompt_tokens={measured_prompt}" if measured_prompt else ""
         self._append(
             f"\n{'-' * 72}\n"
             f"TIMINGS: {tokens} tokens in {total_s:.2f}s "
-            f"(prompt={prompt_ms:.0f}ms, gen={gen_ms:.0f}ms, {tps:.1f} t/s)\n"
+            f"(prompt={prompt_ms:.0f}ms, gen={gen_ms:.0f}ms, {tps:.1f} t/s{prompt_note})\n"
             f"{'=' * 72}\n\n"
         )
-        self._emit_event(
-            "timings",
-            tokens=tokens,
-            prompt_ms=prompt_ms,
-            gen_ms=gen_ms,
-            tps=tps,
-            total_s=total_s,
-        )
+        fields: dict[str, Any] = {
+            "tokens": tokens,
+            "prompt_ms": prompt_ms,
+            "gen_ms": gen_ms,
+            "tps": tps,
+            "total_s": total_s,
+        }
+        if measured_prompt is not None:
+            fields["prompt_tokens"] = measured_prompt
+            fields["prompt_tokens_source"] = "server_terminal"
+        self._emit_event("timings", **fields)
 
     def set_metadata(self, **metadata: Any) -> None:
         clean = {k: v for k, v in metadata.items() if v is not None}
@@ -483,6 +509,7 @@ class _NullWriter:
         prompt_ms: float,
         gen_ms: float,
         tps: float,
+        prompt_tokens: int | None = None,
     ) -> None:
         pass
 

@@ -346,6 +346,22 @@ def _parse_structured_tap_requests(
             rec["timings_raw"] = event
             rec["timings"] = _fmt_structured_timings(event)
             rec["status"] = "complete"
+            # RTG-47 data plane: the writer records llama-server's terminal
+            # prompt-token count with its provenance. Surface both as
+            # top-level fields so a COMPLETED card can show TRUE prompt tokens
+            # even when no /slots sample ever saw the request mid-run — and so
+            # a measured count is never indistinguishable from the character
+            # estimate (`prompt_len`) the page otherwise falls back to.
+            measured = event.get("prompt_tokens")
+            if (
+                isinstance(measured, (int, float))
+                and not isinstance(measured, bool)
+                and measured > 0
+            ):
+                rec["prompt_tokens"] = int(measured)
+                rec["prompt_tokens_source"] = str(
+                    event.get("prompt_tokens_source") or "server_terminal"
+                )
         elif event_type == "end":
             rec["status"] = "complete"
             rec["ended_at"] = event.get("ts")
@@ -356,6 +372,11 @@ def _parse_structured_tap_requests(
         public = {k: v for k, v in rec.items() if not k.startswith("_")}
         public.setdefault("prompt_len", len(public.get("prompt") or ""))
         public.setdefault("prompt_preview_len", len(public.get("prompt") or ""))
+        # Provenance is explicit in both directions: a record the server never
+        # measured says so (`chars_estimate`, value None) rather than omitting
+        # the field and letting a consumer assume.
+        public.setdefault("prompt_tokens", None)
+        public.setdefault("prompt_tokens_source", "chars_estimate")
         public["response_len"] = len(public.get("response") or "")
         if now_epoch is not None:
             try:

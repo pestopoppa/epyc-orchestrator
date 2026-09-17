@@ -94,6 +94,7 @@ from src.api.routes.dashboard_topology import (
     _role_color,
     base_role,
     expected_stack_services,
+    manifest_declared_substrate,
 )
 from src.api.routes.dashboard_topology import _load_state_services as _load_state_services_impl
 from src.autopilot_core.action_identity import (
@@ -6533,10 +6534,16 @@ def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
         # Substrate (gpu/cpu) from the process's binary path — role names carry
         # no substrate (architect_general is a GPU role and nothing in its name
         # says so), so the page must not be left to guess from role lists.
+        # `substrate_source` says WHICH evidence produced the value: "process"
+        # (binary path / /proc), "role-kind" (the mi210 testbed kind), or —
+        # for expected-but-not-running nodes below — "manifest" (declared, not
+        # observed). A declared substrate must never read as an observed one.
         if proc.get("substrate"):
             node["substrate"] = proc["substrate"]
+            node["substrate_source"] = "process"
         elif node_kind == "gpu-llama-server":
             node["substrate"] = "gpu"
+            node["substrate_source"] = "role-kind"
         nodes.append(node)
 
     # Auxiliary services not already covered.
@@ -6560,6 +6567,7 @@ def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
         }
         if svc.get("substrate"):
             svc_node["substrate"] = svc["substrate"]
+            svc_node["substrate_source"] = "process"
         nodes.append(svc_node)
 
     # Expected stack servers that are not currently visible via /proc or the
@@ -6571,24 +6579,32 @@ def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
         if not port or port in seen_ports or not role:
             continue
         seen_ports.add(port)
-        nodes.append(
-            {
-                "id": f"expected_{port}",
-                "label": svc.get("name") or role,
-                "role": role,
-                "port": port,
-                "color": _role_color(role),
-                "kind": "expected-stack-server",
-                "model": "",
-                "aliases": [r for r in svc.get("roles", [])[1:] if isinstance(r, str)],
-                "expected": True,
-                "running": False,
-                "manifest_roles": svc.get("roles", []),
-                "embedding": bool(svc.get("embedding")),
-                "vision": bool(svc.get("vision")),
-                "worker_pool": bool(svc.get("worker_pool")),
-            }
-        )
+        expected_node: dict[str, Any] = {
+            "id": f"expected_{port}",
+            "label": svc.get("name") or role,
+            "role": role,
+            "port": port,
+            "color": _role_color(role),
+            "kind": "expected-stack-server",
+            "model": "",
+            "aliases": [r for r in svc.get("roles", [])[1:] if isinstance(r, str)],
+            "expected": True,
+            "running": False,
+            "manifest_roles": svc.get("roles", []),
+            "embedding": bool(svc.get("embedding")),
+            "vision": bool(svc.get("vision")),
+            "worker_pool": bool(svc.get("worker_pool")),
+        }
+        # No process exists for this node, so no process evidence can. Take the
+        # substrate from the manifest DECLARATION and say so — the page must not
+        # fall to its port/name heuristic, and the value must not read as
+        # observed (RTG-47 data plane).
+        declared = manifest_declared_substrate(svc.get("roles") or [role])
+        if declared:
+            expected_node["substrate"] = declared["substrate"]
+            expected_node["substrate_source"] = declared["source"]
+            expected_node["substrate_declared_by"] = declared["declared_by"]
+        nodes.append(expected_node)
 
     return nodes
 
