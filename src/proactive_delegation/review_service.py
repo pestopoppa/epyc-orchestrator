@@ -83,6 +83,14 @@ REVIEW_WARN_ONLY_ENV = "REVIEW_DECISION_WARN_ONLY"
 # routing_decision.routing_meta()'s ``assigned_role`` field. Value == TrinityRole.VERIFIER.value.
 REVIEW_ASSIGNED_ROLE = "verifier"
 
+# UTM-P1a: the ``Event.harness`` stamp on every review-plane trace row — the harness
+# that PRODUCED the review turn. The review service is an in-process component of the
+# orchestrator at every production construction site (delegator, parallel step
+# executor, the chat_review route), so the default names the orchestrator; a driver
+# that is a different harness (e.g. an offline replay) passes its own ``harness=``,
+# and ``harness=None`` leaves the column NULL ("never captured") rather than guessing.
+REVIEW_HARNESS = "orchestrator"
+
 # RA-10 artifact schema_version stamp, kept as a literal so this module does not
 # hard-depend on the trace package at import time (same pattern as CAT_* above).
 #: RD-9 plan-rubric axes, in ``PLAN_REVIEW_RUBRIC_PROMPT`` order (RC-9 snapshot).
@@ -101,6 +109,29 @@ _PARSE_FALLBACK = {
     "decision": "request_changes",
     "feedback": "Parse error",
 }
+
+
+def _pairing_task_key(value: Any | None) -> str | None:
+    """UTM-P1a: normalize a caller-supplied task identity for ``Event.task_key``.
+
+    Pass-through only -- never derived. ``None`` / empty / whitespace -> ``None``
+    (the column stays NULL = "never captured").
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _pairing_ordinal(value: Any | None) -> int | None:
+    """UTM-P1a: normalize a caller-supplied turn index for ``Event.turn_ordinal``.
+
+    Accepts a non-negative ``int`` only (``bool`` is refused: ``True`` is not turn
+    1). Anything else -> ``None`` so a malformed index never drops the row.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _estimate_tokens(text: str | None) -> int:
@@ -298,6 +329,33 @@ d=decision, s=score, f=feedback, c=changes (optional, max 3 items)"""
 Output: {output_preview}
 Reply: {{"d":"approve|changes","s":0.0-1.0,"f":"<5 words"}}"""
 
+    # EVL-42 1c-fix (b): quick_mode keeps its small preview budget, but goes through
+    # the same head+tail condensation so the conclusion is never silently dropped.
+    QUICK_REVIEW_MAX_CHARS = 200
+
+    @staticmethod
+    def condense_output(output: str, max_chars: int) -> str:
+        """Condense ``output`` to roughly ``max_chars`` for the reviewer prompt.
+
+        EVL-42 1c-fix (b). The legacy behaviour was a silent ``output[:500]``
+        prefix cut: a long-but-correct specialist answer whose conclusion sits
+        past char 500 was judged on an unfinished fragment, biasing
+        ``all_approved`` (→ memrl reward) against verbose-but-right outputs.
+
+        Within budget → returned verbatim. Over budget → head (60%) + tail (40%)
+        joined by an explicit marker stating how many chars were elided, so the
+        reviewer sees the conclusion and knows the gap is ours, not the model's.
+        The marker is not counted against the budget. ``max_chars <= 0`` disables
+        condensation.
+        """
+        if max_chars <= 0 or len(output) <= max_chars:
+            return output
+        head = max(1, (max_chars * 6) // 10)
+        tail = max(1, max_chars - head)
+        elided = len(output) - head - tail
+        marker = f"\n[... {elided} chars elided by reviewer budget; {len(output)} total ...]\n"
+        return output[:head] + marker + output[-tail:]
+
     # RD-6: framing-neutral, pointwise, single-candidate reviewer over the SANITIZED
     # CandidatePackage view. Verdict FIRST; fixes only AFTER the verdict, phrased as
     # checkable artifacts (not prose advice); no competence priming; no comparison to
@@ -360,6 +418,7 @@ Rules:
         warn_only: bool | None = None,
         trace_sink: "Callable[[Any], None] | None" = None,
         trace_db_path: "str | None" = None,
+        harness: "str | None" = REVIEW_HARNESS,
     ):
         """Initialize the review service.
 
@@ -374,6 +433,9 @@ Rules:
             trace_sink: TM-3 test seam — a callable receiving each ``Event`` instead of
                 writing through to the store. ``None`` → best-effort write via emit.py.
             trace_db_path: Optional trace DB path override (tests point at a temp DB).
+            harness: UTM-P1a ``Event.harness`` stamp for every emitted trace row — the
+                harness producing the review turn (default ``REVIEW_HARNESS``,
+                ``"orchestrator"``). ``None`` leaves the column NULL.
         """
         self.primitives = primitives
         cfg = get_config()
@@ -387,6 +449,11 @@ Rules:
         self.max_review_tokens = deleg_cfg.max_review_tokens
         self.max_taskir_tokens = deleg_cfg.max_taskir_tokens
         self.max_plan_review_tokens = deleg_cfg.max_plan_review_tokens
+        # EVL-42 1c-fix (b): reviewer sees up to this many chars of the candidate
+        # (head+tail condensed with an elision marker beyond it), not a 500-char prefix.
+        self.review_output_max_chars = int(
+            getattr(deleg_cfg, "review_output_max_chars", 4000)
+        )
         # RD-5: warn-only shadow downgrade (env-gated; default ON, mirrors safety_gate).
         if warn_only is None:
             warn_only = os.environ.get(REVIEW_WARN_ONLY_ENV, "1").strip().lower() in (
@@ -399,6 +466,8 @@ Rules:
         # TM-3: trace emission sink (injectable for tests; default → src/trace/emit.py).
         self._trace_sink = trace_sink
         self._trace_db_path = trace_db_path
+        # UTM-P1a: pairing-key stamp (see REVIEW_HARNESS). Empty string == None.
+        self.harness = (str(harness).strip() or None) if harness is not None else None
         # RD-12: distinct fallback counters. ``parse_failure_count`` counts reviewer
         # emissions that could not be parsed into a decision (incremented EXACTLY once
         # per failed parse); ``model_call_failures`` counts llm_call raising before any
@@ -430,11 +499,20 @@ Rules:
         role: str | None = None,
         session_id: Any | None = None,
         trial_id: int | None = None,
+        task_key: Any | None = None,
+        turn_ordinal: Any | None = None,
     ) -> None:
         """Write-through a review-plane trace event. NEVER raises, NEVER alters the
         caller's return value (TM-3 always-on emission). When a ``trace_sink`` is
         injected it receives the ``Event``; otherwise the event is committed via
         ``src/trace/emit.py`` (write-through, content-addressed, idempotent).
+
+        UTM-P1a pairing keys (event schema v2): ``harness`` is the service-level
+        stamp (``self.harness``); ``task_key`` / ``turn_ordinal`` are passed ONLY by
+        call sites that genuinely hold them (a TaskIR ``task_id``, a plan step index)
+        and stay NULL otherwise. ``seed`` is never stamped here: ``llm_call`` carries
+        no seed, so the service cannot know one. A malformed key degrades to NULL
+        instead of raising -- a bad ordinal must not cost the row it rides on.
         """
         try:
             from src.trace.store import Event, EventSource, detail_to_json
@@ -457,6 +535,9 @@ Rules:
                 status=status,
                 summary=summary,
                 detail_json=detail_to_json(detail),
+                harness=self.harness,
+                task_key=_pairing_task_key(task_key),
+                turn_ordinal=_pairing_ordinal(turn_ordinal),
             )
             if self._trace_sink is not None:
                 self._trace_sink(ev)
@@ -534,8 +615,9 @@ Rules:
         subtask_id = subtask.get("id", "unknown")
         action = subtask.get("action", "")
 
-        # Truncate output aggressively to save input tokens
-        output_truncated = output[:500] + "..." if len(output) > 500 else output
+        # EVL-42 1c-fix (b): head+tail condensation with an explicit elision marker
+        # (was a silent output[:500] prefix cut — see condense_output()).
+        output_truncated = self.condense_output(output, self.review_output_max_chars)
 
         # Build concise review prompt - only include objective, not full spec
         objective = spec.get("objective", "")[:200]
@@ -543,7 +625,7 @@ Rules:
         if quick_mode:
             prompt = self.QUICK_REVIEW_PROMPT.format(
                 action=action[:50],
-                output_preview=output[:200],
+                output_preview=self.condense_output(output, self.QUICK_REVIEW_MAX_CHARS),
             )
         else:
             prompt = self.REVIEW_PROMPT_TEMPLATE.format(
@@ -640,6 +722,10 @@ Rules:
             },
             session_id=session_id,
             trial_id=trial_id,
+            # UTM-P1a: the TaskIR's own task identity, passed through when the caller
+            # supplied one (delegator: ``task_ir["task_id"]``). Never derived from
+            # ``subtask_id`` -- step ids like "S1" recur across unrelated tasks.
+            task_key=spec.get("task_id") if isinstance(spec, dict) else None,
         )
         return review
 
@@ -1465,6 +1551,9 @@ Rules:
                 },
                 session_id=session_id,
                 trial_id=trial_id,
+                # UTM-P1a: the plan step index is the one genuine turn index the
+                # review plane holds (0-based per the schema; step_index > 0 here).
+                turn_ordinal=step_index,
             )
         return message
 

@@ -249,3 +249,18 @@ class TestOpenAIModelsResponse:
         assert info.object == "model"
         assert info.owned_by == "orchestrator"
         assert isinstance(info.created, int)
+
+
+class TestMaxEscalationDescription:
+    """HS-4 P4-pre: the field must describe what it does today (recorded, not enforced)."""
+
+    def test_x_max_escalation_description_names_the_enforcement_gap(self):
+        desc = OpenAIChatRequest.model_fields["x_max_escalation"].description
+        assert desc is not None
+        lowered = desc.lower()
+        # Must NOT claim the cap is enforced.
+        assert "prevents escalation beyond" not in lowered
+        # Must say it is metadata-only / not enforced, and point at P4 for enforcement.
+        assert "not enforced" in lowered
+        assert "metadata" in lowered
+        assert "p4" in lowered

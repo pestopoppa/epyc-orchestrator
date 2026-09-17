@@ -52,8 +52,9 @@ class TestChatRequest:
         assert req.thinking_budget == 0
         assert req.permission_mode == "normal"
         assert req.session_id is None
-        assert req.tools is None
-        assert req.tool_choice is None
+        # tools/tool_choice are deprecated (EVL-42 1c-fix d): read via dump, not attribute
+        assert req.model_dump()["tools"] is None
+        assert req.model_dump()["tool_choice"] is None
         assert req.routing_preferences is None
 
     def test_native_tool_fields(self):
@@ -68,8 +69,11 @@ class TestChatRequest:
             tool_choice="auto",
         )
 
-        assert req.tools[0]["function"]["name"] == "web_search"
-        assert req.tool_choice == "auto"
+        # Still accepted on the wire, but attribute access warns (EVL-42 1c-fix d).
+        with pytest.warns(DeprecationWarning):
+            assert req.tools[0]["function"]["name"] == "web_search"
+        with pytest.warns(DeprecationWarning):
+            assert req.tool_choice == "auto"
 
     def test_routing_preferences_optional(self):
         req = ChatRequest(prompt="x", routing_preferences={"perf": 0.8, "cost": 0.2})
@@ -183,3 +187,45 @@ class TestGateRequest:
         req = GateRequest(stop_on_first_failure=False, required_only=True)
         assert req.stop_on_first_failure is False
         assert req.required_only is True
+
+
+class TestChatRequestDeprecatedToolFields:
+    """EVL-42 1c-fix (d): ``tools``/``tool_choice`` are dead on /chat.
+
+    Audit 2026-07-24 found them accepted-but-never-consumed (tool use is the
+    REPL TOOL()/CALL()/FINAL() protocol). Decision: deprecate, do not remove —
+    they are part of the published /chat schema and ``extra='ignore'`` would
+    silently swallow them anyway. Native tools live on /v1/chat/completions.
+    """
+
+    def test_schema_marks_fields_deprecated(self):
+        props = ChatRequest.model_json_schema()["properties"]
+        assert props["tools"].get("deprecated") is True
+        assert props["tool_choice"].get("deprecated") is True
+
+    def test_description_no_longer_claims_repl_exposure(self):
+        props = ChatRequest.model_json_schema()["properties"]
+        assert "CALL(" not in props["tools"]["description"]
+        assert "DEPRECATED" in props["tools"]["description"]
+        assert "/v1/chat/completions" in props["tools"]["description"]
+
+    def test_ignored_tool_fields_empty_by_default(self):
+        assert ChatRequest(prompt="x").ignored_tool_fields() == ()
+
+    def test_ignored_tool_fields_reports_what_caller_set(self):
+        req = ChatRequest(prompt="x", tools=[{"type": "function", "function": {"name": "f"}}])
+        assert req.ignored_tool_fields() == ("tools",)
+        both = ChatRequest(prompt="x", tools=[], tool_choice="auto")
+        assert both.ignored_tool_fields() == ("tools", "tool_choice")
+
+    def test_ignored_tool_fields_does_not_emit_deprecation_warning(self):
+        import warnings
+
+        req = ChatRequest(prompt="x", tools=[], tool_choice="auto")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            assert req.ignored_tool_fields() == ("tools", "tool_choice")
+
+    def test_fields_still_accepted_on_the_wire(self):
+        req = ChatRequest.model_validate({"prompt": "x", "tools": [], "tool_choice": "none"})
+        assert "tools" in req.model_fields_set

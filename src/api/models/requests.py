@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -246,15 +246,39 @@ class ChatRequest(BaseModel):
         "Merged with any pipeline-default stop sequences (e.g. QWEN_STOP). "
         "Used by benchmark seeding to stop after answer tags.",
     )
+    # EVL-42 1c-fix (d): DEPRECATED, accepted-but-ignored. Nothing on the /chat
+    # path consumes these (audit 2026-07-24: tool use is the bespoke REPL
+    # TOOL()/CALL()/FINAL() protocol, not native function calling). They are kept
+    # on the wire so published clients keep validating (extra='ignore' would drop
+    # them silently anyway); native tool schemas are honoured ONLY by
+    # /v1/chat/completions (OpenAIChatRequest.tools). Routes call
+    # ignored_tool_fields() to log when a caller relies on them.
+    DEPRECATED_TOOL_FIELDS: ClassVar[tuple[str, ...]] = ("tools", "tool_choice")
+
     tools: list[dict] | None = Field(
         default=None,
-        description="Optional OpenAI-compatible tool schemas for callers that route "
-        "through the chat API. Function tools are exposed to the REPL as CALL(name, **kwargs).",
+        deprecated="DEPRECATED (EVL-42 1c-fix d): accepted but NOT consumed by /chat. "
+        "Native tool schemas are only honoured by /v1/chat/completions.",
+        description="DEPRECATED and ignored on /chat: OpenAI-compatible tool schemas are "
+        "NOT exposed to the REPL here. Use /v1/chat/completions (OpenAIChatRequest.tools) "
+        "for native function tools.",
     )
     tool_choice: str | dict | None = Field(
         default=None,
-        description="Optional OpenAI-compatible tool choice policy for the provided tools.",
+        deprecated="DEPRECATED (EVL-42 1c-fix d): accepted but NOT consumed by /chat. "
+        "Native tool_choice is only honoured by /v1/chat/completions.",
+        description="DEPRECATED and ignored on /chat: tool choice policy is NOT applied "
+        "here. Use /v1/chat/completions for native tool_choice.",
     )
+
+    def ignored_tool_fields(self) -> tuple[str, ...]:
+        """Names of deprecated tool fields the caller explicitly set (EVL-42 1c-fix d).
+
+        Reads ``model_fields_set`` so it never triggers the field-level
+        DeprecationWarning; routes log a warning when this is non-empty so a
+        client relying on /chat tool schemas is visible instead of silently ignored.
+        """
+        return tuple(f for f in self.DEPRECATED_TOOL_FIELDS if f in self.model_fields_set)
     eval_fence: bool | None = Field(
         default=None,
         description=(

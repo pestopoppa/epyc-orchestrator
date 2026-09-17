@@ -215,6 +215,16 @@ async def chat(
 
     if not request.request_id:
         request.request_id = f"api-{uuid.uuid4().hex[:12]}"
+    # EVL-42 1c-fix (d): ChatRequest.tools/tool_choice are deprecated and never
+    # consumed on /chat; make a caller that relies on them visible, not silent.
+    ignored_tool_fields = request.ignored_tool_fields()
+    if ignored_tool_fields:
+        log.warning(
+            "ChatRequest %s: deprecated field(s) %s supplied but /chat does not consume "
+            "native tool schemas; use /v1/chat/completions.",
+            request.request_id,
+            ",".join(ignored_tool_fields),
+        )
     api_identity = {
         "request_id": request.request_id,
         "batch_id": request.batch_id,
