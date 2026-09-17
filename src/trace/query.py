@@ -37,7 +37,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from src.trace.store import DEFAULT_DB_PATH, EventCategory
+from src.trace.store import (
+    DEFAULT_DB_PATH,
+    EVENT_PAIRING_COLUMNS,
+    EventCategory,
+    event_columns,
+)
 
 
 ORDER_RELEVANCE = "relevance"
@@ -48,6 +53,23 @@ _BASE_COLUMNS = (
     "id, ts_utc, source, source_path, source_line, session_id, "
     "trial_id, role, category, status, summary, detail_json, redacted"
 )
+
+
+_PAIRING_COLUMN_NAMES = tuple(name for name, _ in EVENT_PAIRING_COLUMNS)
+
+
+def _select_columns(conn: sqlite3.Connection, prefix: str) -> str:
+    """Base columns plus the v2 pairing columns, NULL-projected when absent.
+
+    ``query`` opens the store read-side without ``ensure_schema``, so it must
+    read a v1 store (no pairing columns) as well as a v2 one. Every row dict
+    carries the pairing keys either way.
+    """
+    present = event_columns(conn)
+    cols = [f"{prefix}{c.strip()}" for c in _BASE_COLUMNS.split(",")]
+    for name in _PAIRING_COLUMN_NAMES:
+        cols.append(f"{prefix}{name}" if name in present else f"NULL AS {name}")
+    return ", ".join(cols)
 
 
 def query(
@@ -63,10 +85,16 @@ def query(
     text: str | None = None,
     limit: int = 50,
     order: str | None = None,
+    harness: str | None = None,
+    seed: int | None = None,
+    turn_ordinal: int | None = None,
+    task_key: str | None = None,
 ) -> list[dict[str, Any]]:
     """Query the trace store. Returns a list of row-dicts.
 
-    See the module docstring for ``order`` semantics.
+    See the module docstring for ``order`` semantics. ``harness`` / ``seed`` /
+    ``turn_ordinal`` / ``task_key`` filter on the UTM-P1 pairing keys; against a
+    v1 store (columns absent) a pairing filter matches nothing.
     """
     if order is None:
         order = ORDER_RELEVANCE if text else ORDER_RECENCY
@@ -82,9 +110,21 @@ def query(
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
 
+    pairing_filters = {
+        "harness": harness,
+        "seed": seed,
+        "turn_ordinal": turn_ordinal,
+        "task_key": task_key,
+    }
+    if any(v is not None for v in pairing_filters.values()):
+        missing = [n for n in _PAIRING_COLUMN_NAMES if n not in event_columns(conn)]
+        if missing:
+            conn.close()
+            return []
+
     if text:
         # FTS5 path: join so bm25() is available for ranking; filters apply to event.
-        cols = ", ".join(f"e.{c.strip()}" for c in _BASE_COLUMNS.split(","))
+        cols = _select_columns(conn, "e.")
         sql = (
             f"SELECT {cols} "
             "FROM event_fts JOIN event e ON e.id = event_fts.rowid "
@@ -93,7 +133,7 @@ def query(
         params: list[Any] = [text]
         prefix = "e."
     else:
-        sql = f"SELECT {_BASE_COLUMNS} FROM event WHERE 1=1"
+        sql = f"SELECT {_select_columns(conn, '')} FROM event WHERE 1=1"
         params = []
         prefix = ""
 
@@ -121,6 +161,10 @@ def query(
     if source is not None:
         sql += f" AND {prefix}source = ?"
         params.append(source)
+    for name, value in pairing_filters.items():
+        if value is not None:
+            sql += f" AND {prefix}{name} = ?"
+            params.append(value)
 
     if order == ORDER_RELEVANCE:
         # bm25() is lower-is-better in SQLite FTS5.
@@ -132,6 +176,32 @@ def query(
     rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def paired_runs(
+    task_key: str,
+    db_path: Path | str = DEFAULT_DB_PATH,
+    seed: int | None = None,
+    harnesses: list[str] | None = None,
+    limit: int = 10_000,
+) -> dict[int | None, dict[str, list[dict[str, Any]]]]:
+    """Pair runs of one task across harnesses (UTM-P1).
+
+    Returns ``{turn_ordinal: {harness: [events...]}}`` for every event carrying
+    ``task_key`` (and ``seed``, when given). Only rows that name a harness take
+    part -- an unattributed row cannot be one side of a pair. Events inside a
+    cell are in time order. ``harnesses`` restricts the output to those
+    harnesses; turns that no listed harness reached are dropped.
+    """
+    rows = query(db_path=db_path, task_key=task_key, seed=seed, limit=limit)
+    wanted = set(harnesses) if harnesses else None
+    out: dict[int | None, dict[str, list[dict[str, Any]]]] = {}
+    for row in sorted(rows, key=lambda r: (r["ts_utc"] or "", r["id"])):
+        h = row.get("harness")
+        if not h or (wanted is not None and h not in wanted):
+            continue
+        out.setdefault(row.get("turn_ordinal"), {}).setdefault(h, []).append(row)
+    return out
 
 
 def _parse_ts(ts: str) -> datetime | None:

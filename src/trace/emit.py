@@ -118,20 +118,25 @@ def _content_key(ev: Event) -> str:
     Used when a caller emits an Event without supplying its own synthetic
     ``source_path``: byte-identical content collapses to one row.
     """
-    material = "\x1f".join(
-        str(x)
-        for x in (
-            ev.ts_utc,
-            ev.source,
-            ev.session_id,
-            ev.trial_id,
-            ev.role,
-            ev.category,
-            ev.status,
-            ev.summary,
-            ev.detail_json,
-        )
+    fields: tuple[Any, ...] = (
+        ev.ts_utc,
+        ev.source,
+        ev.session_id,
+        ev.trial_id,
+        ev.role,
+        ev.category,
+        ev.status,
+        ev.summary,
+        ev.detail_json,
     )
+    # UTM-P1: two harnesses emitting identical content for the same task must
+    # stay two rows, so the pairing keys are identity-bearing. They are appended
+    # only when set, which keeps every pre-v2 key byte-identical (re-emitting an
+    # unpaired event is still a no-op against rows already in the store).
+    pairing = (ev.harness, ev.seed, ev.turn_ordinal, ev.task_key)
+    if any(v is not None for v in pairing):
+        fields = fields + ("utm-p1",) + pairing
+    material = "\x1f".join(str(x) for x in fields)
     return hashlib.sha1(material.encode("utf-8", "replace")).hexdigest()[:16]
 
 
@@ -258,6 +263,7 @@ class ReviewTracingProcessor:
             ts_utc=trace.started_at,
             session_id=trace.session_id,
             trial_id=trace.trial_id,
+            pairing=_trace_pairing(trace),
             category="trace_start",
             summary=trace.name or f"trace {trace.trace_id} started",
             detail={
@@ -283,6 +289,7 @@ class ReviewTracingProcessor:
         role = data.pop("role", None)
         status = data.pop("status", None)
         latency_ms = data.pop("latency_ms", None)
+        turn_ordinal = data.pop("turn_ordinal", None)
         if latency_ms is None:
             latency_ms = _duration_ms(span.started_at, span.ended_at)
         detail = {
@@ -300,6 +307,7 @@ class ReviewTracingProcessor:
             ts_utc=span.ended_at or _now_utc(),
             session_id=trace.session_id if trace else span.trace_id,
             trial_id=trace.trial_id if trace else None,
+            pairing={**(_trace_pairing(trace) if trace else {}), "turn_ordinal": turn_ordinal},
             role=role,
             category=category,
             status=status or ("error" if span.error else None),
@@ -316,6 +324,7 @@ class ReviewTracingProcessor:
             ts_utc=trace.ended_at,
             session_id=trace.session_id,
             trial_id=trace.trial_id,
+            pairing=_trace_pairing(opened),
             category="trace_end",
             summary=trace.name or f"trace {trace.trace_id} ended",
             detail={
@@ -358,8 +367,10 @@ class ReviewTracingProcessor:
         detail: Any,
         role: str | None = None,
         status: str | None = None,
+        pairing: dict[str, Any] | None = None,
     ) -> None:
         ev = Event(
+            **(pairing or {}),
             ts_utc=ts_utc,
             source=self._source,
             source_path=source_path,
@@ -375,6 +386,16 @@ class ReviewTracingProcessor:
         ins, skp = emit(ev, conn=self._conn)
         self._inserted += ins
         self._skipped += skp
+
+
+# Trace.metadata keys that carry the UTM-P1 pairing identity for a whole run.
+# ``turn_ordinal`` is per span and travels in ``Span.span_data`` instead.
+_TRACE_PAIRING_KEYS = ("harness", "seed", "task_key")
+
+
+def _trace_pairing(trace: Trace) -> dict[str, Any]:
+    meta = trace.metadata or {}
+    return {k: meta[k] for k in _TRACE_PAIRING_KEYS if meta.get(k) is not None}
 
 
 def _duration_ms(started_at: str | None, ended_at: str | None) -> float | None:

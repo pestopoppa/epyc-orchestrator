@@ -91,6 +91,22 @@ class EventCategory:
     EVIDENCE_RESULT = "evidence_result"
 
 
+# Event-row schema version. v1 = the original 13 columns (T1). v2 (UTM-P1,
+# 2026-09-17) adds the cross-harness pairing keys below plus a per-row
+# ``schema_version`` stamp. Bumped only on additive, backward-compatible changes.
+EVENT_SCHEMA_VERSION = 2
+
+# Added by ALTER TABLE on a v1 store. Every column is nullable and existing rows
+# keep NULL; the CREATE TABLE below already carries them for a fresh store.
+EVENT_PAIRING_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("harness", "TEXT"),
+    ("seed", "INTEGER"),
+    ("turn_ordinal", "INTEGER"),
+    ("task_key", "TEXT"),
+    ("schema_version", "INTEGER"),
+)
+
+
 @dataclass
 class Event:
     """Normalized event row.
@@ -103,6 +119,16 @@ class Event:
     - summary: short human-readable description.
     - detail_json: full original record encoded as JSON.
     - source_path + source_line: dedup key.
+    - harness, seed, turn_ordinal, task_key: UTM-P1 pairing keys (event schema
+      v2). Two runs of the same ``task_key`` under different ``harness`` values,
+      with the same ``seed``, are paired turn-by-turn on ``turn_ordinal`` (the
+      horizon / turn index, 0-based). All four are optional: file-ingested
+      sources that carry none of them leave them NULL.
+    - schema_version: the event-row schema the row was WRITTEN under.
+      ``EVENT_SCHEMA_VERSION`` for new rows; rows written before v2 read back
+      as NULL, which means "pairing keys were never captured" -- not "absent".
+      Never back-fill it (a stamp invented after the fact would claim a capture
+      that never happened).
     """
 
     ts_utc: str
@@ -117,6 +143,28 @@ class Event:
     summary: str | None = None
     detail_json: str | None = None
     redacted: int = 0
+    # --- UTM-P1 pairing keys (event schema v2) ---
+    harness: str | None = None
+    seed: int | None = None
+    turn_ordinal: int | None = None
+    task_key: str | None = None
+    schema_version: int = 0  # 0 -> stamped with EVENT_SCHEMA_VERSION in __post_init__
+
+    def __post_init__(self) -> None:
+        if not self.schema_version:
+            self.schema_version = EVENT_SCHEMA_VERSION
+        self.seed = _coerce_optional_int(self.seed, "seed")
+        self.turn_ordinal = _coerce_optional_int(self.turn_ordinal, "turn_ordinal")
+        if self.turn_ordinal is not None and self.turn_ordinal < 0:
+            raise ValueError(f"turn_ordinal must be >= 0, got {self.turn_ordinal}")
+        if self.harness is not None:
+            self.harness = str(self.harness).strip() or None
+        if self.task_key is not None:
+            self.task_key = str(self.task_key).strip() or None
+
+    def pairing_key(self) -> tuple[str | None, int | None, int | None]:
+        """``(task_key, seed, turn_ordinal)`` -- the identity two harnesses share."""
+        return (self.task_key, self.seed, self.turn_ordinal)
 
     def as_row(self) -> tuple:
         return (
@@ -132,7 +180,29 @@ class Event:
             self.summary,
             self.detail_json,
             self.redacted,
+            self.harness,
+            self.seed,
+            self.turn_ordinal,
+            self.task_key,
+            self.schema_version,
         )
+
+
+def _coerce_optional_int(value: object, field_name: str) -> int | None:
+    """Accept ints and integral strings; refuse bools, floats and junk loudly.
+
+    A seed silently coerced from ``True`` or ``3.7`` would pair runs that were
+    never on the same seed, which is exactly the defect UTM-P1 exists to remove.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise TypeError(f"{field_name} must be an int, got bool")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    raise TypeError(f"{field_name} must be an int or integral string, got {value!r}")
 
 
 _SCHEMA = """
@@ -150,6 +220,11 @@ CREATE TABLE IF NOT EXISTS event (
   summary TEXT,
   detail_json TEXT,
   redacted INTEGER NOT NULL DEFAULT 0,
+  harness TEXT,
+  seed INTEGER,
+  turn_ordinal INTEGER,
+  task_key TEXT,
+  schema_version INTEGER,
   UNIQUE(source_path, source_line)
 );
 
@@ -362,6 +437,52 @@ def ensure_decision_envelope_schema(conn: sqlite3.Connection) -> sqlite3.Connect
     return conn
 
 
+_EVENT_PAIRING_INDEX = (
+    "CREATE INDEX IF NOT EXISTS event_pairing ON event(task_key, seed, turn_ordinal, harness)"
+)
+
+
+def event_columns(conn: sqlite3.Connection) -> set[str]:
+    """Column names currently present on ``event`` (empty if the table is absent)."""
+    return {row[1] for row in conn.execute("PRAGMA table_info(event)")}
+
+
+def migrate_event_pairing_columns(conn: sqlite3.Connection) -> bool:
+    """Bring a v1 ``event`` table to v2. Idempotent, additive, no back-fill.
+
+    Returns True when the table carries every pairing column afterwards. A
+    read-only connection to a v1 store, or a concurrent migrator that won the
+    race, is tolerated: readers (``src.trace.query``) project absent columns as
+    NULL, so neither needs the ALTER to succeed.
+    """
+    present = event_columns(conn)
+    if not present:
+        return False
+    for name, decl in EVENT_PAIRING_COLUMNS:
+        if name in present:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE event ADD COLUMN {name} {decl}")
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "readonly" in msg or "read-only" in msg:
+                continue
+            raise
+    present = event_columns(conn)
+    complete = all(name in present for name, _ in EVENT_PAIRING_COLUMNS)
+    if complete:
+        try:
+            conn.execute(_EVENT_PAIRING_INDEX)
+        except sqlite3.OperationalError as exc:
+            if "readonly" not in str(exc).lower() and "read-only" not in str(exc).lower():
+                raise
+    try:
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    return complete
+
+
 def ensure_schema(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     """Create the schema if absent, return an open connection.
 
@@ -372,6 +493,9 @@ def ensure_schema(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.executescript(_SCHEMA)
     conn.commit()
+    # UTM-P1: a store created before v2 keeps its table (CREATE IF NOT EXISTS is
+    # a no-op on it), so the pairing columns arrive by additive ALTER instead.
+    migrate_event_pairing_columns(conn)
     # Apply the shared harness/trace schema (intake-607 cluster: HLE/BSV/URE/EXM).
     # Imported lazily to keep the event-store core importable on its own.
     from src.trace.harness_schema import ensure_harness_schema
@@ -392,13 +516,20 @@ def upsert_events(conn: sqlite3.Connection, events: Iterable[Event]) -> tuple[in
     """
     inserted = 0
     skipped = 0
+    # A caller may hand in a connection to a v1 store that never went through
+    # ensure_schema(); migrate it rather than failing on the v2 INSERT.
+    if not migrate_event_pairing_columns(conn):
+        raise sqlite3.OperationalError(
+            "event table is missing the v2 pairing columns and could not be migrated"
+        )
     cur = conn.cursor()
     for ev in events:
         cur.execute(
             "INSERT OR IGNORE INTO event "
             "(ts_utc, source, source_path, source_line, session_id, trial_id, "
-            "role, category, status, summary, detail_json, redacted) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "role, category, status, summary, detail_json, redacted, "
+            "harness, seed, turn_ordinal, task_key, schema_version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ev.as_row(),
         )
         if cur.rowcount == 1:

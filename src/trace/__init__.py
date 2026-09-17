@@ -13,13 +13,14 @@ Per handoffs/active/unified-trace-memory-service.md.
 
 from src.trace.store import (
     DEFAULT_DB_PATH,
+    EVENT_SCHEMA_VERSION,
     Event,
     EventCategory,
     EventSource,
     ensure_schema,
     upsert_events,
 )
-from src.trace.query import query, trial_context
+from src.trace.query import paired_runs, query, trial_context
 from src.trace.harness_schema import (
     SCHEMA_VERSION,
     GovernanceLevel,
@@ -45,11 +46,13 @@ from src.trace.harness_schema import (
 
 __all__ = [
     "DEFAULT_DB_PATH",
+    "EVENT_SCHEMA_VERSION",
     "Event",
     "EventCategory",
     "EventSource",
     "ensure_schema",
     "upsert_events",
+    "paired_runs",
     "query",
     "trial_context",
     # shared harness/trace schema (intake-607 cluster)
