@@ -552,6 +552,24 @@ def _plan_review_gate(
     state,
 ) -> list | None:
     """Run architect plan review if applicable. Returns modified routing_decision or None."""
+    # TD-5: observability-only typed-decision shadow next to the incumbent
+    # route. `_route_request` decides the route before request-scoped
+    # primitives exist, so this gate is the first point on BOTH pipeline paths
+    # (chat.py and stream_adapter.py) where the pre-review decision and the
+    # primitives coexist. It submits and returns; it never mutates routing,
+    # never raises, and is skipped entirely — no import, no call — when off.
+    if features().typed_decisions_shadow:
+        from src.typed_decisions.shadow import submit_route_shadow
+
+        submit_route_shadow(
+            primitives,
+            prompt=request.prompt,
+            context=request.context or "",
+            incumbent_roles=routing.routing_decision,
+            strategy=routing.routing_strategy,
+            task_id=routing.task_id,
+        )
+
     plan_review_result = None
     # RI-3: Force plan review when factual risk is high, regardless of complexity heuristics.
     # High-risk prompts need architect oversight to catch factual errors.

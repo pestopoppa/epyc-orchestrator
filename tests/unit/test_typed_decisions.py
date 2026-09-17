@@ -389,12 +389,26 @@ class TestModeContract:
             ]
         }
 
+        # TD-1b: native mode binds candidates to token ids through the
+        # tokenizer seam; this test injects one so the dispatch path is
+        # exercised without a live server.
+        def tokenize(text: str) -> list[int]:
+            return {
+                "alpha": [1],
+                " alpha": [11],
+                "beta": [2],
+                " beta": [12],
+                "gamma": [3],
+                " gamma": [13],
+            }.get(text, [97, 98])
+
         result = run_typed_decisions(
             primitives,
             state=STATE,
             questions=QUESTIONS[:1],
             role=ROLE,
             mode="native",
+            tokenize_fn=tokenize,
         )
 
         assert result.mode == "native"

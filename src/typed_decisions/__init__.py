@@ -15,8 +15,11 @@ Contents:
     * ``schema`` — Draft 2020-12 response-schema and GBNF builders.
     * ``runner`` — ``run_typed_decisions`` (mode="json"; mode="native"
       dispatches to ``native``).
-    * ``native`` — ``run_typed_decisions_native`` (TD-1a): one constrained
-      generation, one token per question, candidate-probability slicing.
+    * ``native`` — ``run_typed_decisions_native`` (TD-1b): one constrained
+      generation, one token per question, candidate-probability slicing. The
+      candidates are bound to exact token ids through a tokenizer seam
+      (``/tokenize`` by default); multi-token or un-tokenizable candidates
+      fall back to JSON mode as typed failures instead of being guessed.
 
 Scope note: TD-1 ships the core only. Nothing in this package is wired into
 a live route; TD-5 performs that wiring, gated by the default-off

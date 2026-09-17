@@ -234,6 +234,10 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # TD-1 ships the core only and is NOT wired into any live route — TD-5
     # performs the wiring under this flag.
     FeatureSpec("typed_decisions", False, False, "TYPED_DECISIONS", "TD-1: one-pass typed decision plane (choice/score/noul)"),
+    # TD-5: observability-only shadow of the incumbent routing decision. The
+    # flag alone is not enough — a log path must also be configured via
+    # ORCHESTRATOR_TYPED_DECISIONS_SHADOW_LOG, otherwise submit_shadow no-ops.
+    FeatureSpec("typed_decisions_shadow", False, False, "TYPED_DECISIONS_SHADOW", "TD-5: log one typed-decision shadow call beside the incumbent routing decision; never changes routing"),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
 )
@@ -597,6 +601,11 @@ class Features:
     # ships the core (types/confidence/schema/runner) only; no route reads
     # this flag yet — TD-5 wires the plane in under it.
     typed_decisions: bool = False
+
+    # TD-5: observability-only shadow of the incumbent routing decision.
+    # Default OFF; also requires ORCHESTRATOR_TYPED_DECISIONS_SHADOW_LOG to be
+    # set — with no configured sink the shadow no-ops even when on.
+    typed_decisions_shadow: bool = False
 
     # RTE-Prefix (repl-turn-efficiency): render fixed prompt sections (task,
     # instruction) BEFORE per-turn-mutating ones (state, context,

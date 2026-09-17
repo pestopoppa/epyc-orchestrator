@@ -37,7 +37,7 @@ import json
 import logging
 import time
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jsonschema import Draft202012Validator
 
@@ -54,6 +54,9 @@ from src.typed_decisions.types import (
     Question,
     QuestionKind,
 )
+
+if TYPE_CHECKING:
+    from src.typed_decisions.native import TokenizeFn
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +109,7 @@ def run_typed_decisions(
     mode: str = "json",
     max_retries: int = 1,
     n_tokens: int | None = None,
+    tokenize_fn: TokenizeFn | None = None,
 ) -> DecisionResult:
     """Run one typed-decision pass and return typed decisions / failures.
 
@@ -126,6 +130,12 @@ def run_typed_decisions(
         n_tokens: Output budget; a per-question default is computed when
             ``None``. Forwarded to the native runner in native mode (where
             the default is exactly one token per native-capable question).
+        tokenize_fn: Text -> token ids seam for native-mode candidate binding
+            (TD-1b). IGNORED by the JSON arm, which never tokenizes
+            candidates; forwarded to the native runner, which resolves a
+            default from ``primitives`` when ``None`` and fails every
+            question closed with ``native_tokenizer_unavailable`` when no
+            tokenizer can be resolved.
 
     Returns:
         ``DecisionResult``. ``prompt_sha256`` hashes the canonical
@@ -143,6 +153,7 @@ def run_typed_decisions(
             questions=questions,
             role=role,
             n_tokens=n_tokens,
+            tokenize_fn=tokenize_fn,
         )
     if mode != "json":
         raise ValueError(f"unknown typed-decisions mode: {mode!r}")
