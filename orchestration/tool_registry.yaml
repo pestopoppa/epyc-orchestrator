@@ -712,74 +712,14 @@ tools:
     allowed_callers: ["direct", "chain"]
 
   # ============ ARCHIVE TOOLS ============
-  archive_open:
-    category: system
-    description: "Open an archive and return its manifest (zip, tar, tar.gz, 7z)"
-    parameters:
-      path: {type: string, required: true, description: "Path to archive file"}
-    returns: {type: object, fields: [total_files, total_size, types, recommendation, nested_archives]}
-    implementation:
-      type: python
-      module: src.services.archive_extractor
-      function: archive_open
-    side_effects: ["read_only"]
-    permissions: [filesystem]
-    allowed_callers: ["direct", "chain"]
-    examples:
-      - input: {path: "/mnt/raid0/llm/uploads/documents.zip"}
-        description: "Open archive and view contents"
-
-  archive_extract:
-    category: system
-    description: "Extract files from an opened archive"
-    parameters:
-      archive_name: {type: string, required: false, description: "Archive name (uses most recent if omitted)"}
-      pattern: {type: string, required: false, description: "Glob pattern (e.g., *.pdf)"}
-      files: {type: array, required: false, description: "Specific files to extract"}
-      process_documents: {type: boolean, required: false, default: true, description: "Route PDFs through OCR"}
-    returns: {type: object, fields: [extracted, processed, sections_total, stored_in]}
-    implementation:
-      type: python
-      module: src.services.archive_extractor
-      function: archive_extract
-    permissions: [filesystem]
-    allowed_callers: ["direct"]
-    examples:
-      - input: {pattern: "*.pdf", process_documents: true}
-        description: "Extract and OCR all PDFs"
-
-  archive_file:
-    category: system
-    description: "Get content of a specific file from an extracted archive"
-    parameters:
-      filename: {type: string, required: true, description: "Path within archive"}
-      archive_name: {type: string, required: false, description: "Archive name (searches all if omitted)"}
-    returns: {type: string, description: "File content or document metadata"}
-    implementation:
-      type: python
-      module: src.services.archive_extractor
-      function: archive_file
-    side_effects: ["read_only"]
-    permissions: [filesystem]
-    allowed_callers: ["direct", "chain"]
-
-  archive_search:
-    category: system
-    description: "Search across all extracted archive content"
-    parameters:
-      query: {type: string, required: true, description: "Search query"}
-      archive_name: {type: string, required: false, description: "Archive to search (all if omitted)"}
-    returns: {type: array, items: {type: object, fields: [file, line, section, match]}}
-    implementation:
-      type: python
-      module: src.services.archive_extractor
-      function: archive_search
-    side_effects: ["read_only"]
-    permissions: [filesystem]
-    allowed_callers: ["direct", "chain"]
-    examples:
-      - input: {query: "authentication"}
-        description: "Search for authentication across all extracted files"
+  # archive_open / archive_extract / archive_file / archive_search are REPL builtins
+  # (src/repl_environment/archive_tools.py, _ArchiveToolsMixin), NOT registry tools.
+  # Entries pointing at src.services.archive_extractor.<fn> were removed 2026-09-17
+  # (NIB2-79): those functions never existed (git history since 882d97d4, 2026-01-26),
+  # so the registry only ever served an error stub and logged a warning per worker.
+  # The builtins cannot be registry handlers as-is: they keep opened-archive state in
+  # the per-session REPL artifacts and apply the REPL path sandbox
+  # (_validate_file_path). A stateless module-level handler would bypass both.
 
   # ============ LLM TOOLS ============
   embed_text:
