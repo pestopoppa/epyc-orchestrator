@@ -435,6 +435,76 @@ class JournalEntry:
     # invented at read time would claim a regime the trial never recorded).
     infra_fingerprint: dict[str, Any] = field(default_factory=dict)
     comparability: dict[str, Any] = field(default_factory=dict)
+    # 2026-09-17 (AP-63(a)): the AP-1510 run manifest bound before dispatch (sources,
+    # task, evaluator, manifest_sha256), copied from the in-flight WAL marker so the
+    # receipt survives the marker being cleared. Empty on rows written before this date
+    # and on rows that never dispatched; never back-filled on load (a manifest built at
+    # read time would attest to sources the trial never ran).
+    run_manifest: dict[str, Any] = field(default_factory=dict)
+    # 2026-09-17 (AP-63(a)): explicit, stored parent selection — see
+    # select_lineage_parent(). `parent_trial` above keeps its legacy same-species
+    # heuristic meaning (config_diff, PEAF, BSV, Pareto consume it); `lineage` records the
+    # rule-named ACCEPTED parent. Empty on legacy rows; never back-filled.
+    lineage: dict[str, Any] = field(default_factory=dict)
+
+
+LINEAGE_SCHEMA_VERSION = 1
+LINEAGE_PARENT_RULE = "latest_committed_baseline_promotion_same_species"
+LINEAGE_HEURISTIC_RULE = "latest_same_species_row"
+
+
+def select_lineage_parent(
+    journal: "ExperimentJournal",
+    species: str,
+    *,
+    before_trial_id: int,
+) -> dict[str, Any]:
+    """Select a trial's parent explicitly and say which rule chose it (AP-63(a)).
+
+    The accepted parent is the newest trial of the same species whose baseline
+    promotion was COMMITTED — i.e. that has an append-only ``baseline_promotion``
+    ledger event, the existing evidence/quality gate's commit record. A row whose
+    promotion is only ``pending_commit`` is not accepted, and a row later marked
+    ``bug_corrupted_by`` (directly or by supersession) is never a parent. No accepted
+    parent yields ``parent_trial_id=None`` rather than a fallback: an unaccepted
+    parent is exactly what the orx refill disposition forbids.
+
+    The legacy heuristic (newest same-species row, whatever its outcome) is recorded
+    alongside so a reader can see where the two differ; it decides nothing here.
+    """
+    before = int(before_trial_id)
+    entries = {
+        e.trial_id: e
+        for e in journal.entries_with_supersessions()
+        if e.trial_id < before
+    }
+    heuristic = None
+    for e in reversed(journal.by_species(species)):
+        if e.trial_id < before:
+            heuristic = e.trial_id
+            break
+    accepted: int | None = None
+    promotion_ts = ""
+    for event in reversed(journal.baseline_promotion_events()):
+        try:
+            source = int(event.get("source_trial_id"))
+        except (TypeError, ValueError):
+            continue
+        row = entries.get(source)
+        if row is None or row.species != species or row.bug_corrupted_by:
+            continue
+        accepted = source
+        promotion_ts = str(event.get("timestamp") or "")
+        break
+    return {
+        "schema_version": LINEAGE_SCHEMA_VERSION,
+        "rule": LINEAGE_PARENT_RULE,
+        "species": species,
+        "parent_trial_id": accepted,
+        "parent_promotion_timestamp": promotion_ts,
+        "heuristic_rule": LINEAGE_HEURISTIC_RULE,
+        "heuristic_parent_trial_id": heuristic,
+    }
 
 
 def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, Any]:
@@ -523,6 +593,11 @@ def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, 
     comp = entry.comparability if isinstance(entry.comparability, dict) else {}
     if comp.get("status"):
         out["comparability"] = str(comp["status"])
+    # AP-63(a): bind the claim to the run manifest that dispatched it. Absent on
+    # legacy/undispatched rows; nothing is inferred for those.
+    manifest = entry.run_manifest if isinstance(entry.run_manifest, dict) else {}
+    if manifest.get("manifest_sha256"):
+        out["run_manifest"] = str(manifest["manifest_sha256"])
     # AP-54: whether the rollouts ran behind the eval knowledge fence, as the
     # EvalTower recorded it from the API's echo. Absent on rows written before
     # the fence existed (never back-filled).
@@ -861,6 +936,9 @@ class ExperimentJournal:
                     # AP-55: absent on rows written before 2026-09-16; never back-filled.
                     infra_fingerprint=data.get("infra_fingerprint", {}) or {},
                     comparability=data.get("comparability", {}) or {},
+                    # AP-63(a): absent on rows written before 2026-09-17; never back-filled.
+                    run_manifest=data.get("run_manifest", {}) or {},
+                    lineage=data.get("lineage", {}) or {},
                 )
                 self._entries.append(entry)
 

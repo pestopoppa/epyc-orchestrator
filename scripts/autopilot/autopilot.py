@@ -83,6 +83,7 @@ from experiment_journal import (
     JournalEntry,
     build_baseline_pin,
     scrub_legacy_scale_text,
+    select_lineage_parent,
 )
 from planner_roster import PlannerRosterError, validate_active_environment
 from pareto_archive import (
@@ -5499,6 +5500,7 @@ def _record_skip_trial(
     *,
     bug_corrupted_by: str = "",
     bug_corrupted_reason: str = "",
+    run_manifest: dict[str, Any] | None = None,
 ) -> None:
     """Journal a non-executing trial so it leaves durable residue (audit + planner).
 
@@ -5532,6 +5534,7 @@ def _record_skip_trial(
         outcome_status=status,
         bug_corrupted_by=bug_corrupted_by,
         bug_corrupted_reason=bug_corrupted_reason,
+        run_manifest=dict(run_manifest or {}),  # AP-63(a)
     )
     journal.record(entry)
     _record_reproposal_rate_windows(journal)
@@ -7036,6 +7039,9 @@ def _recover_from_in_flight_trial(
                 bug_corrupted_by="autopilot_killed_mid_trial",
                 bug_corrupted_reason="incomplete trial; no eval evidence available",
                 deficiency_category="autopilot_killed_mid_trial",
+                # AP-63(a): the manifest the killed dispatch was bound to (drift was
+                # already refused above by _reject_in_flight_manifest_drift).
+                run_manifest=_in_flight_run_manifest(state, prior_tid),
             )
             journal.record(placeholder)
             trial_counter = max(trial_counter, prior_tid + 1)
@@ -7067,6 +7073,26 @@ def _run_manifest_source_paths() -> dict[str, Path]:
 
 def _run_manifest_evaluator() -> dict[str, str]:
     return {"class": "EvalTower", "url": ORCHESTRATOR_URL}
+
+
+def _in_flight_run_manifest(state: dict[str, Any], trial_id: int) -> dict[str, Any]:
+    """Return the dispatch-bound run manifest for ``trial_id`` (AP-63(a)).
+
+    Only the manifest the in-flight WAL marker bound BEFORE dispatch is stamped onto
+    the journal row. A marker for another trial, a legacy marker without a manifest,
+    or no marker at all (the trial never dispatched) yields ``{}`` — a manifest built
+    at write time would attest to sources the dispatch never ran.
+    """
+    in_flight = state.get("in_flight_trial")
+    if not isinstance(in_flight, dict):
+        return {}
+    try:
+        if int(in_flight.get("trial_id", -1)) != int(trial_id):
+            return {}
+    except (TypeError, ValueError):
+        return {}
+    manifest = in_flight.get("run_manifest")
+    return copy.deepcopy(manifest) if isinstance(manifest, dict) else {}
 
 
 def _reject_in_flight_manifest_drift(state: dict[str, Any]) -> None:
@@ -9947,6 +9973,7 @@ def _run_loop_inner(
                     memory_count,
                     bug_corrupted_by=skip_bug_corrupted_by,
                     bug_corrupted_reason=skip_bug_corrupted_reason,
+                    run_manifest=_in_flight_run_manifest(state, trial_counter),  # AP-63(a)
                 )
             except Exception:
                 log.debug("skip-trial journal write failed", exc_info=True)
@@ -10609,6 +10636,15 @@ def _run_loop_inner(
         # can carry the same parent-trial identity as the journal entry.
         parent_trial_id = None
         config_diff: dict[str, Any] = {}
+        # AP-63(a): explicit, rule-named parent selection, stored on the row. Computed
+        # before this trial is journaled, so a trial is never its own parent. Fails open
+        # to an error record: lineage is provenance and must never lose a trial.
+        try:
+            trial_lineage = select_lineage_parent(
+                journal, species_name, before_trial_id=trial_counter
+            )
+        except Exception as exc:  # noqa: BLE001
+            trial_lineage = {"selection_error": f"{type(exc).__name__}: {exc}"[:200]}
         species_history = journal.by_species(species_name)
         if species_history:
             parent = species_history[-1]
@@ -10984,6 +11020,8 @@ def _run_loop_inner(
             baseline_pin=baseline_pin_record,  # EV-14e
             infra_fingerprint=trial_infra_fingerprint,  # AP-55
             comparability=trial_comparability,  # AP-55
+            run_manifest=_in_flight_run_manifest(state, trial_counter),  # AP-63(a)
+            lineage=trial_lineage,  # AP-63(a)
         )
         _sync_segment_snapshot_scope(journal, state)  # W3
         journal.record(journal_entry)
