@@ -1,56 +1,66 @@
-"""Native candidate-scoring fast path for the typed decision plane (TD-1b).
+"""Native candidate-scoring fast path for the typed decision plane (TD-1b/1c).
 
 ``run_typed_decisions_native`` answers a whole ``Question`` catalogue in ONE
-grammar-constrained ``LLMPrimitives.llm_call``: it generates exactly one token
-per question, in catalogue order, under a GBNF grammar whose position ``i``
-only accepts question ``i``'s candidate TOKEN IDS. The token probabilities of
-the generated positions (``n_probs=K``) are then sliced to the question's
-declared candidates, renormalized, and the argmax becomes the ``Decision``
-value.
+grammar-constrained ``LLMPrimitives.llm_call``. In TD-1b it generated exactly
+one token per question, in catalogue order, under a GBNF grammar whose
+position ``i`` only accepted question ``i``'s candidate TOKEN IDS. TD-1c
+changes the generation layout because the live measurement showed that bare
+concatenation is NOT semantically equivalent to JSON mode (agreement 11/16,
+native accuracy 68.8% vs JSON 91.7% on the same 16 questions, a false-bias
+on noul positions):
 
-Why native mode exists:
-    * JSON mode asks the model to write out a probability vector per question.
-      That spends output tokens on numbers the sampler already has, and the
-      written numbers are free-form text that the runner can only trust.
-    * Native mode reads the sampler's own distribution at each generated
-      position: the same one generation, but the probabilities are captured
-      instead of re-typed, and the grammar makes an out-of-catalogue answer
-      impossible at the token level.
+TD-1c — why the answer cue is REPLAYED, not merely listed:
+    A single completion has exactly one "next token" position, so a prompt
+    that merely lists N questions with N answer cues cannot condition answer
+    ``i`` on cue ``i`` — the model sees every cue before it emits anything.
+    The live failure was exactly that: at position 1 (no prior emission) the
+    model answered the first noul correctly, and positions 2..8 collapsed to
+    ``false`` even when the JSON arm answered ``true``. TD-1c makes the
+    decoder re-emit each question's cue as fixed token ids BETWEEN the answer
+    slots::
 
-TD-1b — what changed from TD-1a:
-    TD-1a guessed which candidate strings are single tokens with a
-    conservative text predicate, emitted quoted label literals in the
-    grammar, and matched captured rows by token text. Measured live
-    (2026-09-17, 27B): a quoted GBNF literal is parsed as a sequence of
-    CHARACTER elements (``llama-grammar.cpp::parse_sequence`` -- every char
-    becomes a ``LLAMA_GRETYPE_CHAR``), so the grammar could be satisfied by a
-    partial token piece (``fal`` for ``false``); the emitted piece then
-    matched no declared candidate and the question failed typed
-    (``native_unknown_candidate``, 23/24). TD-1b tokenizes for real:
+        <cue 1 tokens> <answer 1 token> <cue 2 tokens> <answer 2 token> ...
 
-    * Eligibility: a candidate is native-eligible iff llama-server
-      ``POST /tokenize`` returns EXACTLY ONE token id for the candidate's
-      declared text or for the same text with a leading space (llama.cpp's
-      pre-tokenizer distinguishes ``false`` from `` false``; every
-      single-token variant found is kept). Everything else is
-      ``native_unsupported_candidates`` -> JSON-mode fallback. No guessing.
-    * Grammar: each position rule is an alternation of exact-token terminals
-      ``<[id]>`` (``LLAMA_GRETYPE_TOKEN``, parsed by
-      ``llama-grammar.cpp::parse_token``), one alternative per eligible
-      candidate token variant, in declaration order. A quoted literal would
-      be character-level again (the TD-1a bug); the id terminal pins exactly
-      one generated token, preserving the one-token-per-question contract.
-    * Matching: production-consolidated-v9 rows carry token ids
-      (``server-task.cpp::probs_vector_to_json``), so the emitted token and
-      every top-probability entry are matched BY ID; when several variants of
-      one label are captured, their weights SUM. Text matching is retained
-      ONLY as a documented fallback for rows that lack ``id`` ALTOGETHER
-      (legacy ``content``/``probs``/``tok_str`` shapes); an id-bearing row
-      never text-matches, and fallback text must equal one of the exact
-      variant strings sent to ``/tokenize``.
-    * ``n_probs`` sizes to the true token-alternative count per question
-      after tokenization (variants included), plus the near-miss buffer,
-      capped at 128.
+    so every answer token is generated immediately after its own question's
+    cue (question id + question text + ``Answer (one of: ...):``), which is
+    the conditioning the JSON arm gets from writing one answer object per
+    question. The cue tokens are obtained from the SAME tokenization seam the
+    candidates use (``POST /tokenize`` by default) and are compiled into the
+    grammar as exact-token terminals, so the layout is deterministic and the
+    "one constrained token per question" readout is preserved.
+
+Probability semantics (investigated 2026-09-17 against the frozen v9 tree):
+    ``post_sampling_probs=false`` (the default; ``src/backends/llama_server.py``
+    does not set it) captures the PRE-sampler distribution:
+    ``server-context.cpp`` sets ``need_pre_sample_logits = n_probs > 0 &&
+    !post_sampling_probs`` and therefore disables backend sampling, so
+    ``get_token_probabilities`` (``server-common.cpp``) softmaxes the raw
+    full-vocab logits from ``llama_get_logits_ith``. The GBNF grammar mask is
+    applied in the CPU sampler chain to a COPY, so ``top_logprobs`` never
+    reflect it. Consequences: (a) the slice is raw model mass, and mass that
+    landed outside the declared candidates is invisible in the runner's
+    renormalized distribution; (b) the emitted token is the greedy argmax over
+    the grammar-masked candidates, which coincides with the argmax of the raw
+    candidate slice. ``native_diagnostics`` exists to expose (a) live: it
+    reports the raw top-k rows, the sliced raw mass, the mass outside the
+    candidate set, and the argmax per question.
+
+Natural noul surface forms:
+    ``true``/``false`` are the JSON labels but not always the model's natural
+    boolean answer tokens. For ``noul`` questions native mode ALSO binds the
+    single-token surface forms ``yes``/``no`` (with and without a leading
+    space) to the ``true``/``false`` labels, so a model that prefers ``Yes`` /
+    ``No`` still contributes its probability mass to the right label. The
+    grammar accepts them, the sliced weights SUM per label, and the ``Decision``
+    probability keys stay ``"true"``/``"false"``. The cue echoes the declared
+    labels only; yes/no are read as insurance against vocabulary mismatch.
+    One consequence is pinned deliberately: ``Decision.value`` is the argmax of
+    the SUMMED label distribution, so when a label's surface forms split the
+    raw mass (e.g. ``false`` 0.15 versus ``true`` 0.10 + ``yes`` 0.10), the
+    emitted token can map to a different label than the reported value.
+    ``native_diagnostics`` exposes ``emitted_matches_argmax`` for exactly that
+    audit; a real capture with the question's own cue in context should keep
+    the two aligned.
 
 Tokenizer seam:
     ``tokenize_fn: Callable[[str], Sequence[int] | None]`` is injectable on
@@ -65,18 +75,21 @@ Tokenizer seam:
     to a ``len(text) // 4`` heuristic on error, which cannot satisfy the
     exact-single-token-id contract (a heuristic count of 1 would fabricate
     eligibility). Its ``base_url`` is used as a last-resort resolution source.
+    The same seam tokenizes each question's cue text; a cue that cannot be
+    tokenized (or that tokenizes to nothing) fails that question closed.
 
 Contract:
-    * ONE call, exactly ``len(native_questions)`` generated tokens (the
-      default ``n_tokens``), temperature ``0.0`` and seed ``0``.
+    * ONE call, ``len(native_questions)`` answer tokens plus the fixed cue
+      tokens between them. ``n_tokens`` defaults to that exact total;
+      temperature ``0.0`` and seed ``0``.
     * ``n_probs`` defaults to the largest per-question token-alternative count
       plus ``_N_PROBS_BUFFER``, capped at ``_MAX_N_PROBS`` (128 — the
       llama-server payload cap in ``src/backends/llama_server.py``). The
       buffer exists because the captured top-K is global (all tokens), not
       per-candidate.
-    * At each position the returned top-probability entries are matched to
-      that question's candidate token ids (text fallback only for a whole row
-      without ids), giving every declared candidate a weight (absent
+    * At each ANSWER position the returned top-probability entries are matched
+      to that question's candidate token ids (text fallback only for a whole
+      row without ids), giving every declared candidate a weight (absent
       candidates weigh ``0.0``), then
       ``confidence.normalize_probabilities`` renormalizes. The argmax of the
       renormalized distribution is the ``Decision.value``;
@@ -90,7 +103,7 @@ Contract:
       (``native_unknown_candidate``) — never a default, and never a uniform
       fallback over an empty slice.
     * Questions that cannot be tokenized into single tokens — or whose
-      candidates cannot be tokenized at all — are NEVER forced into the
+      candidates or cue cannot be tokenized — are NEVER forced into the
       native batch. Multi-token candidates are returned as
       ``ParseFailure(native_unsupported_candidates)``; an unresolvable or
       unresponsive tokenizer yields ``ParseFailure(native_tokenizer_unavailable)``
@@ -104,25 +117,38 @@ Contract:
       short-circuit to a single ``transport_error`` failure; the stale
       ``_last_inference_meta`` is deliberately NOT read on that path.
 
+Layout side channel (for ``native_diagnostics``):
+    Immediately before the call, ``run_typed_decisions_native`` attaches the
+    exact per-position layout (question ids, candidate token bindings, cue
+    lengths, answer row indices, the prompt, ``n_probs``) to the primitives
+    object as ``_last_native_layout``. This is the same instance-level
+    side-channel trade-off as ``_last_inference_meta`` and shares its
+    concurrency caveat. ``native_diagnostics(result, primitives_snapshot)``
+    accepts the primitives object (best), a mapping with
+    ``{"native_layout": ..., "meta"/"completion_probabilities": ...}``, or a
+    bare meta mapping (row-level output only — no question binding).
+
 Row-shape note (production-consolidated-v9):
     ``/completion`` with ``n_probs`` set returns ``completion_probabilities``
     rows shaped ``{"id": int, "token": str, "bytes": [...], "logprob": float,
     "top_logprobs": [{"id", "token", "bytes", "logprob"}, ...]}``
     (``tools/server/server-task.cpp::probs_vector_to_json`` with
-    ``post_sampling_probs=false``, the default). The row and every entry carry
-    the token ``id``, which is the primary match key. Older builds shipped the
-    legacy ``{"content": str, "probs": [{"tok_str", "prob"}, ...]}`` shape and
+    ``post_sampling_probs=false``, the default). One row is captured per
+    generated token, cues included; answer rows are addressed by their
+    precomputed index. Older builds shipped the legacy
+    ``{"content": str, "probs": [{"tok_str", "prob"}, ...]}`` shape and
     ``post_sampling_probs=true`` ships ``top_probs`` with linear ``prob`` and
     no ids; for a row without ``id`` the match falls back to the exact token
     text against the variant strings sent to ``/tokenize`` (see above).
 
 Concurrency caveat:
-    ``primitives._last_inference_meta`` is an INSTANCE-level attribute, not a
-    request-scoped return value (``src/llm_primitives/inference.py``). This
-    module reads it immediately after its single call, but a concurrent
-    ``llm_call`` on the SAME primitives object can overwrite it between the
-    call and the read. Native scoring therefore requires serialized use of
-    one primitives object; sharing one across threads is unsupported.
+    ``primitives._last_inference_meta`` and ``primitives._last_native_layout``
+    are INSTANCE-level attributes, not request-scoped return values
+    (``src/llm_primitives/inference.py``). This module reads them immediately
+    after its single call, but a concurrent ``llm_call`` on the SAME
+    primitives object can overwrite them. Native scoring therefore requires
+    serialized use of one primitives object; sharing one across threads is
+    unsupported.
 """
 
 from __future__ import annotations
@@ -156,6 +182,8 @@ __all__ = [
     "REASON_NATIVE_UNKNOWN_CANDIDATE",
     "REASON_NATIVE_UNSUPPORTED_CANDIDATES",
     "TokenizeFn",
+    "build_native_prompt",
+    "native_diagnostics",
     "run_typed_decisions_native",
 ]
 
@@ -188,12 +216,22 @@ REASON_NATIVE_UNSUPPORTED_CANDIDATES = "native_unsupported_candidates"
 REASON_NATIVE_UNKNOWN_CANDIDATE = "native_unknown_candidate"
 REASON_NATIVE_TOKENIZER_UNAVAILABLE = "native_tokenizer_unavailable"
 
+# Single-token surface forms bound to a noul label in addition to the declared
+# text (and its leading-space variant). A chat model asked a yes/no question
+# answers "Yes"/"No" far more naturally than the JSON label "true"/"false";
+# reading both token families measures the same semantic dimension.
+_NOUL_SURFACE_FORMS: Mapping[str, tuple[str, ...]] = {
+    "true": ("yes",),
+    "false": ("no",),
+}
+
 _NATIVE_INSTRUCTIONS = """\
-Answer the question sequence below by emitting EXACTLY ONE token per question.
-The decoder is grammar-constrained: position 1 may only be one of the first
-question's candidates, position 2 one of the second question's candidates, and
-so on. Emit the candidate labels verbatim, in order, with no separators,
-whitespace, punctuation or explanation."""
+Answer the numbered questions below. Each block ends with its own
+"Answer (one of: ...):" cue. The decoder writes each question, in order, as
+"Q <id>: <question text>" followed by that cue, and allows EXACTLY ONE answer
+token at each cue; the token must be one of the block's declared candidates.
+Answer every question with one of its declared candidates, in question order.
+Emit nothing else: no separators, prose, punctuation or explanation."""
 
 
 @dataclass(frozen=True)
@@ -201,9 +239,10 @@ class _NativeCandidate:
     """One declared label bound to its exact token id(s).
 
     ``token_ids`` / ``token_texts`` hold one entry per single-token variant
-    found by the tokenizer (the declared text and, when distinct, its
-    space-prefixed form), in probe order. More than one id means the label has
-    two tokenizations; their captured weights sum.
+    found by the tokenizer, in probe order: the declared text and, when
+    distinct, its space-prefixed form; noul labels additionally carry their
+    natural surface forms (see ``_NOUL_SURFACE_FORMS``). More than one id
+    means the label has several tokenizations; their captured weights sum.
     """
 
     label: str
@@ -218,24 +257,30 @@ class _NativeCandidate:
 
 @dataclass(frozen=True)
 class _NativeQuestion:
-    """A question whose every candidate is bound to exact token ids."""
+    """A question whose every candidate (and cue) is bound to exact token ids."""
 
     question: Question
     candidates: tuple[_NativeCandidate, ...]
+    cue_token_ids: tuple[int, ...] = ()
 
     @property
     def alternatives(self) -> int:
-        """Total token alternatives in this question's grammar position."""
+        """Total token alternatives in this question's answer rule."""
         return sum(candidate.alternatives for candidate in self.candidates)
+
+    @property
+    def cue_length(self) -> int:
+        """Number of fixed cue tokens generated immediately before the answer."""
+        return len(self.cue_token_ids)
 
 
 class _CandidateTokenizationError(Exception):
-    """A question's candidates could not be bound to exact token ids.
+    """A question's candidates or cue could not be bound to exact token ids.
 
     Carries the ``ParseFailure`` reason so the catalogue split can record it
     verbatim: ``native_unsupported_candidates`` (multi-token label or an
     id collision) or ``native_tokenizer_unavailable`` (the tokenizer could not
-    answer for a candidate text).
+    answer for a candidate/cue text).
     """
 
     def __init__(self, reason: str, detail: str) -> None:
@@ -260,26 +305,28 @@ def run_typed_decisions_native(
         primitives: The ``LLMPrimitives`` seam. Only the serial
             ``llm_call(prompt, role=..., n_tokens=..., grammar=...,
             temperature=..., seed=..., n_probs=...)`` contract is used, and
-            ``_last_inference_meta`` is read immediately after the call (see
-            the module docstring's concurrency caveat). Also the source of the
-            default tokenizer's base URL when ``tokenize_fn`` is not given.
+            ``_last_inference_meta`` / ``_last_native_layout`` are read
+            immediately after the call (see the module docstring's concurrency
+            caveat). Also the source of the default tokenizer's base URL when
+            ``tokenize_fn`` is not given.
         state: Task/context state injected after the stable prefix.
         questions: The catalogue; ids must be unique and non-empty.
         role: Registry role the call is charged to.
-        n_tokens: Output budget; defaults to exactly one token per
-            native-capable question. A smaller explicit value truncates the
-            batch (the missing positions fail typed); a larger one is capped
-            by the grammar itself, which ends after the last position.
+        n_tokens: Output budget; defaults to exactly the cue tokens plus one
+            answer token per native-capable question. A smaller explicit value
+            truncates the batch (the missing positions fail typed); a larger
+            one is capped by the grammar itself, which ends after the last
+            answer slot.
         n_probs: Top-K probability capture override. Defaults to the largest
             per-question token-alternative count (after tokenization) plus
             ``_N_PROBS_BUFFER``; always clamped to ``[1, _MAX_N_PROBS]``.
             Values below 1 raise ``ValueError``.
-        tokenize_fn: Text -> token ids seam used to bind candidates to exact
-            tokens (see module docstring). When ``None``, a default resolver
-            derives the role's backend base URL from ``primitives`` and uses
-            its ``POST /tokenize`` endpoint. When no tokenizer can be
-            resolved, no model call is made and every question fails with
-            ``native_tokenizer_unavailable``.
+        tokenize_fn: Text -> token ids seam used to bind candidates and cue
+            text to exact tokens (see module docstring). When ``None``, a
+            default resolver derives the role's backend base URL from
+            ``primitives`` and uses its ``POST /tokenize`` endpoint. When no
+            tokenizer can be resolved, no model call is made and every
+            question fails with ``native_tokenizer_unavailable``.
 
     Returns:
         ``DecisionResult`` with ``mode="native"``. ``decisions`` holds the
@@ -334,11 +381,22 @@ def _score_native_batch(
     else:
         native_questions, tokenizer_failures = _tokenize_catalogue(catalogue, tokenize)
 
-    prompt = _build_native_prompt(state, native_questions)
+    prompt = build_native_prompt(state, [native.question for native in native_questions])
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
     if not native_questions:
         # Nothing is grammar-forceable; do not call the model at all.
+        _record_native_layout(
+            primitives,
+            _native_layout(
+                [],
+                prompt=prompt,
+                prompt_sha256=prompt_sha256,
+                n_probs=0,
+                n_tokens=0,
+                excluded=tokenizer_failures,
+            ),
+        )
         return DecisionResult(
             decisions=(),
             failures=tuple(tokenizer_failures),
@@ -349,7 +407,7 @@ def _score_native_batch(
         )
 
     if n_tokens is None:
-        n_tokens = len(native_questions)
+        n_tokens = _total_generated_tokens(native_questions)
     if n_probs is None:
         n_probs = min(
             _MAX_N_PROBS,
@@ -362,6 +420,17 @@ def _score_native_batch(
         n_probs = min(_MAX_N_PROBS, n_probs)
 
     grammar = _build_native_grammar(native_questions)
+    _record_native_layout(
+        primitives,
+        _native_layout(
+            native_questions,
+            prompt=prompt,
+            prompt_sha256=prompt_sha256,
+            n_probs=n_probs,
+            n_tokens=n_tokens,
+            excluded=tokenizer_failures,
+        ),
+    )
     started = time.perf_counter()
     raw_text = str(
         primitives.llm_call(
@@ -401,6 +470,83 @@ def _score_native_batch(
         elapsed_ms=elapsed_ms,
         prompt_sha256=prompt_sha256,
     )
+
+
+# ── generation layout ─────────────────────────────────────────────────────
+
+
+def _total_generated_tokens(questions: Sequence[_NativeQuestion]) -> int:
+    """Cue tokens plus one answer token per question."""
+    return sum(native.cue_length for native in questions) + len(questions)
+
+
+def _answer_row_index(questions: Sequence[_NativeQuestion], index: int) -> int:
+    """Row index of question ``index``'s answer token in the capture.
+
+    The generation order is ``cue-0 answer-0 cue-1 answer-1 ...``, so
+    ``answer-i`` sits at ``i + sum(cue lengths of questions 0..i)``.
+    """
+    return index + sum(native.cue_length for native in questions[: index + 1])
+
+
+def _native_layout(
+    questions: Sequence[_NativeQuestion],
+    *,
+    prompt: str,
+    prompt_sha256: str,
+    n_probs: int,
+    n_tokens: int,
+    excluded: Sequence[ParseFailure],
+) -> dict[str, Any]:
+    """JSON-safe per-position layout attached to the primitives before the call."""
+    positions: list[dict[str, Any]] = []
+    for index, native in enumerate(questions):
+        question = native.question
+        positions.append(
+            {
+                "position": index,
+                "row_index": _answer_row_index(questions, index),
+                "cue_token_ids": list(native.cue_token_ids),
+                "cue_length": native.cue_length,
+                "question": {
+                    "id": question.id,
+                    "kind": question.kind.value,
+                    "text": question.text,
+                    "options": list(question.options),
+                    "levels": list(question.levels),
+                    "criteria": list(question.criteria),
+                },
+                "candidates": [
+                    {
+                        "label": candidate.label,
+                        "token_ids": list(candidate.token_ids),
+                        "token_texts": list(candidate.token_texts),
+                    }
+                    for candidate in native.candidates
+                ],
+            }
+        )
+    return {
+        "prompt": prompt,
+        "prompt_sha256": prompt_sha256,
+        "n_probs": n_probs,
+        "n_tokens": n_tokens,
+        "total_tokens": _total_generated_tokens(questions),
+        "positions": positions,
+        "excluded": [{"reason": failure.reason, "detail": failure.detail} for failure in excluded],
+    }
+
+
+def _record_native_layout(primitives: Any, layout: Mapping[str, Any]) -> None:
+    """Best-effort attach of the layout for ``native_diagnostics``.
+
+    Never fails the run: a primitives object that refuses attribute writes
+    only loses diagnostics, not the answer.
+    """
+    try:
+        setattr(primitives, "_last_native_layout", dict(layout))
+    except Exception:  # noqa: BLE001 - diagnostics are best-effort
+        logger.debug("native layout could not be attached to the primitives object")
 
 
 # ── tokenizer resolution and the /tokenize seam ───────────────────────────
@@ -576,10 +722,10 @@ def _tokenize_catalogue(
 
 
 def _tokenize_question(question: Question, tokenize: TokenizeFn) -> _NativeQuestion:
-    """Bind every candidate label of one question to exact token id(s).
+    """Bind every candidate label of one question — and its cue — to token ids.
 
     Raises:
-        _CandidateTokenizationError: when a candidate text cannot be
+        _CandidateTokenizationError: when a candidate or cue text cannot be
             tokenized at all (``native_tokenizer_unavailable``), or when any
             label is not a single token / two labels collide on one token id
             (``native_unsupported_candidates``). Partial eligibility is not a
@@ -591,7 +737,7 @@ def _tokenize_question(question: Question, tokenize: TokenizeFn) -> _NativeQuest
     for label in _candidate_labels(question):
         token_ids: list[int] = []
         token_texts: list[str] = []
-        for text in _candidate_variants(label):
+        for text in _label_variants(label, question.kind):
             ids = tokenize(text)
             if ids is None:
                 raise _CandidateTokenizationError(
@@ -619,7 +765,19 @@ def _tokenize_question(question: Question, tokenize: TokenizeFn) -> _NativeQuest
             "(with or without a leading space); ask this question in JSON mode",
         )
     _reject_token_id_collisions(candidates)
-    return _NativeQuestion(question=question, candidates=tuple(candidates))
+    cue_text = _cue_text(question)
+    cue_ids = tokenize(cue_text)
+    if cue_ids is None or not cue_ids:
+        raise _CandidateTokenizationError(
+            REASON_NATIVE_TOKENIZER_UNAVAILABLE,
+            f"the tokenizer returned no ids for the cue text {cue_text!r}; "
+            "ask this question in JSON mode",
+        )
+    return _NativeQuestion(
+        question=question,
+        candidates=tuple(candidates),
+        cue_token_ids=tuple(cue_ids),
+    )
 
 
 def _candidate_variants(label: str) -> tuple[str, ...]:
@@ -635,6 +793,25 @@ def _candidate_variants(label: str) -> tuple[str, ...]:
         stripped = label[1:]
         return (label, stripped) if stripped else (label,)
     return (label, " " + label)
+
+
+def _label_variants(label: str, kind: QuestionKind) -> tuple[str, ...]:
+    """All token texts bound to one declared label.
+
+    The declared text and its leading-space variant, plus (for ``noul``
+    labels) the natural surface forms from ``_NOUL_SURFACE_FORMS`` and their
+    leading-space variants. Order is probe order and deduplicated.
+    """
+    texts: list[str] = []
+    for text in _candidate_variants(label):
+        if text not in texts:
+            texts.append(text)
+    if kind is QuestionKind.NOUL:
+        for form in _NOUL_SURFACE_FORMS.get(label, ()):
+            for text in _candidate_variants(form):
+                if text not in texts:
+                    texts.append(text)
+    return tuple(texts)
 
 
 def _reject_token_id_collisions(candidates: Sequence[_NativeCandidate]) -> None:
@@ -657,43 +834,86 @@ def _reject_token_id_collisions(candidates: Sequence[_NativeCandidate]) -> None:
 
 
 def _build_native_grammar(questions: Sequence[_NativeQuestion]) -> str:
-    """Build the bare-token-sequence grammar for the native batch.
+    """Build the cue/answer token-sequence grammar for the native batch.
 
-    ``root`` concatenates one rule per question in catalogue order; rule ``i``
-    is the alternation of question ``i``'s token alternatives as exact-token
-    terminals (``<[id]>``). This is NOT ``schema.build_gbnf`` (that one builds
-    the JSON-object grammar): native mode never emits JSON, it emits one forced
-    token per question, so the grammar is the sequence itself.
+    The generation order is ``cue-0 answer-0 cue-1 answer-1 ...``: cue rule
+    ``i`` pins the question's cue to its exact token ids, answer rule ``i`` is
+    the alternation of question ``i``'s candidate token alternatives. This is
+    NOT ``schema.build_gbnf`` (that one builds the JSON-object grammar):
+    native mode never emits JSON, it emits a fixed token layout with one
+    constrained answer per question.
 
     Token-id terminals are load-bearing: a quoted literal would be parsed as
     character elements by ``llama-grammar.cpp::parse_sequence``, and the
     decoder could satisfy it with a partial piece (the TD-1a ``fal`` bug).
-    ``<[id]>`` can only be advanced by exactly that token, so each position
-    consumes exactly one generated token.
+    ``<[id]>`` can only be advanced by exactly that token, so each cue and
+    answer consumes exactly the tokens the layout assumes.
     """
-    rules = ["root ::= " + " ".join(f"position-{index}" for index in range(len(questions)))]
+    root_parts: list[str] = []
+    rules: list[str] = []
     for index, native in enumerate(questions):
+        cue = " ".join(f"<[{token_id}]>" for token_id in native.cue_token_ids)
         alternatives = " | ".join(
             f"<[{token_id}]>" for candidate in native.candidates for token_id in candidate.token_ids
         )
-        rules.append(f"position-{index} ::= {alternatives}")
-    return "\n".join(rules) + "\n"
+        rules.append(f"cue-{index} ::= {cue}")
+        rules.append(f"answer-{index} ::= {alternatives}")
+        root_parts.extend((f"cue-{index}", f"answer-{index}"))
+    root = "root ::= " + " ".join(root_parts)
+    return "\n".join([root, *rules]) + "\n"
 
 
-def _build_native_prompt(state: str, questions: Sequence[_NativeQuestion]) -> str:
-    """Build the deterministic native prompt for the native batch in order."""
-    lines = [f"Emit exactly {len(questions)} tokens.", "", _NATIVE_INSTRUCTIONS, ""]
+def _cue_text(question: Question) -> str:
+    """The fixed cue replayed immediately before this question's answer token.
+
+    Kept free of the candidate labels' prose beyond the declared labels
+    themselves; the leading newline makes the generated transcript readable.
+    """
+    labels = _candidate_labels(question)
+    return f"\nQ {question.id}: {question.text}\nAnswer (one of: {', '.join(labels)}): "
+
+
+def build_native_prompt(
+    state: str,
+    questions: Sequence[Question | _NativeQuestion],
+) -> str:
+    """Build the deterministic native prompt for a batch, in catalogue order.
+
+    Pure helper (no tokenizer, no model): identical inputs give a
+    byte-identical prompt. Each question is its own numbered block with the
+    candidates echoed and an explicit ``Answer (one of: ...):`` cue. The
+    decoder replays those blocks' question + cue text as fixed tokens between
+    the answer slots (see ``_cue_text`` and ``_build_native_grammar``).
+
+    Accepts plain ``Question`` objects or the runner's token-bound
+    ``_NativeQuestion`` (whose ``.question`` is used); the runner calls it with
+    only the native-capable questions, so a preview built from a full
+    catalogue may be longer than the exact runtime prompt. The exact runtime
+    prompt is stored on the layout side channel (``_last_native_layout``).
+    """
+    prompt_questions = [_as_question(question) for question in questions]
+    lines = [_NATIVE_INSTRUCTIONS, ""]
     lines.append(f"STATE:\n{state}")
     lines.append("")
     lines.append("QUESTION SEQUENCE:")
-    for index, native in enumerate(questions, start=1):
-        question = native.question
+    for index, question in enumerate(prompt_questions, start=1):
+        labels = _candidate_labels(question)
         lines.append(f"{index}. id={question.id} kind={question.kind.value}")
         lines.append(f"   question: {question.text}")
-        lines.append(f"   candidates: {' | '.join(_candidate_labels(question))}")
-        for criterion in question.criteria:
-            lines.append(f"   criterion: {criterion}")
+        lines.append(f"   candidates: {' | '.join(labels)}")
+        lines.append(f"   Answer (one of: {', '.join(labels)}):")
     return "\n".join(lines) + "\n"
+
+
+def _as_question(item: Question | _NativeQuestion) -> Question:
+    if isinstance(item, _NativeQuestion):
+        return item.question
+    if isinstance(item, Question):
+        return item
+    raise TypeError(
+        "build_native_prompt expects Question or _NativeQuestion entries, "
+        f"got {type(item).__name__}"
+    )
 
 
 def _candidate_labels(question: Question) -> list[str]:
@@ -712,23 +932,29 @@ def _decisions_from_rows(
     meta: Any,
     questions: Sequence[_NativeQuestion],
 ) -> tuple[list[Decision], list[ParseFailure]]:
-    """Turn captured probability rows into typed decisions / per-position failures."""
+    """Turn captured probability rows into typed decisions / per-position failures.
+
+    Rows are 1:1 with generated tokens (cue rows included), so question
+    ``i``'s answer row is addressed by ``_answer_row_index``.
+    """
     rows = _rows_from_meta(meta)
     decisions: list[Decision] = []
     failures: list[ParseFailure] = []
 
     for index, native in enumerate(questions):
         question = native.question
-        if index >= len(rows):
+        row_index = _answer_row_index(questions, index)
+        if row_index >= len(rows):
             failures.append(
                 ParseFailure(
                     REASON_NATIVE_UNKNOWN_CANDIDATE,
                     f"position {index + 1} question {question.id!r}: no "
-                    "completion_probabilities row was captured",
+                    f"completion_probabilities row was captured at generated-token "
+                    f"index {row_index} (rows captured: {len(rows)})",
                 )
             )
             continue
-        row = rows[index]
+        row = rows[row_index]
         id_to_label = {
             token_id: candidate.label
             for candidate in native.candidates
@@ -815,9 +1041,12 @@ def _decision_from_weights(
     ``weights`` carries one entry per declared label (absent candidates at
     ``0.0``), so the renormalized distribution always covers the full
     candidate set. The value is the argmax of the slice (ties resolve to the
-    first declared candidate); under the grammar's masked greedy decode the
-    emitted token and the argmax coincide, which is why the emitted token was
-    only used as an alignment check upstream.
+    first declared candidate). When every label maps to exactly one token
+    this coincides with the emitted token under the grammar's masked greedy
+    decode; when a label has several accepted surface forms the summed mass
+    can outrank the emitted token's own label, so the emitted token was only
+    used as a membership check upstream (see the module docstring and
+    ``emitted_matches_argmax`` in ``native_diagnostics``).
     """
     question = native.question
     probabilities = normalize_probabilities(weights)
@@ -851,6 +1080,338 @@ def _decision_from_weights(
         mode="native",
         token_logprob=token_logprob,
     )
+
+
+# ── live diagnostics ──────────────────────────────────────────────────────
+
+
+def native_diagnostics(result: DecisionResult, primitives_snapshot: Any) -> dict[str, Any]:
+    """Report, per question, the raw capture at its answer position.
+
+    Answers "was the candidate slice representative, or did the model's mass
+    land outside the candidates?" from the runner's own evidence, without
+    another model call.
+
+    Args:
+        result: The ``DecisionResult`` returned by
+            ``run_typed_decisions_native`` (or by
+            ``run_typed_decisions(mode="native")``).
+        primitives_snapshot: The primitives object used for the run (it carries
+            both ``_last_inference_meta`` and the layout side channel), a
+            mapping with ``{"native_layout": ..., "meta"/"completion_probabilities":
+            ...}``, or a bare meta/``completion_probabilities`` mapping (then
+            output is row-level only — there is no question binding).
+
+    Returns:
+        A JSON-safe dict. With a layout: one entry per question carrying the
+        question id, its answer row index, the emitted token, the raw captured
+        weights per candidate label (``candidate_weights_raw``), the sliced raw
+        mass, the exact mass OUTSIDE the candidate set when every candidate
+        variant was captured (``mass_outside_candidates``), the slice's argmax,
+        whether the emitted token maps to that argmax (``emitted_matches_argmax``
+        — must be true on a real grammar-constrained capture), the full raw
+        top-k row entries, and the subset of top-k entries that are not declared
+        candidate tokens. Without a layout: one entry per captured row with the
+        raw top-k. ``result``'s decisions/failures fill ``resolved_value`` /
+        ``failure`` per question.
+    """
+    rows = _snapshot_rows(primitives_snapshot)
+    layout = _snapshot_layout(primitives_snapshot)
+    decisions = {decision.question_id: decision for decision in result.decisions}
+    report: dict[str, Any] = {
+        "mode": result.mode,
+        "prompt_sha256": result.prompt_sha256,
+        "layout_present": layout is not None,
+        "rows_captured": len(rows),
+        "total_tokens_expected": None,
+        "n_probs": None,
+        "excluded": [],
+        "failures": [
+            {"reason": failure.reason, "detail": failure.detail} for failure in result.failures
+        ],
+        "positions": [],
+        "notes": [],
+    }
+    if layout is None:
+        report["notes"].append(
+            "no native layout found on the snapshot: pass the primitives object (or a "
+            "mapping with 'native_layout') to bind rows to question ids; reporting raw "
+            "rows only"
+        )
+        for row_index, row in enumerate(rows):
+            report["positions"].append(_row_diagnostic(row_index, row))
+        return report
+
+    report["total_tokens_expected"] = layout.get("total_tokens")
+    report["n_probs"] = layout.get("n_probs")
+    excluded = layout.get("excluded")
+    if isinstance(excluded, list):
+        report["excluded"] = list(excluded)
+    layout_sha = layout.get("prompt_sha256")
+    if isinstance(layout_sha, str) and layout_sha:
+        report["prompt_sha256"] = layout_sha
+    positions = layout.get("positions")
+    if not isinstance(positions, list):
+        report["notes"].append("native layout carries no positions list")
+        return report
+    for position in positions:
+        if not isinstance(position, Mapping):
+            continue
+        row_index = position.get("row_index")
+        row = None
+        if isinstance(row_index, int) and 0 <= row_index < len(rows):
+            row = rows[row_index]
+        report["positions"].append(_position_diagnostic(position, row, decisions, result.failures))
+    if len(rows) < int(report["total_tokens_expected"] or 0):
+        report["notes"].append(
+            "fewer probability rows than expected generated tokens: positions beyond "
+            "rows_captured have no capture (truncated generation or dropped rows)"
+        )
+    return report
+
+
+def _snapshot_rows(primitives_snapshot: Any) -> list[Mapping[str, Any]]:
+    """Extract the captured rows from any supported snapshot shape."""
+    meta: Any = primitives_snapshot
+    if not isinstance(meta, Mapping):
+        meta = getattr(primitives_snapshot, "_last_inference_meta", None)
+    elif isinstance(meta.get("meta"), Mapping):
+        meta = meta["meta"]
+    return _rows_from_meta(meta)
+
+
+def _snapshot_layout(primitives_snapshot: Any) -> Mapping[str, Any] | None:
+    """Extract the native layout from any supported snapshot shape."""
+    layout: Any = None
+    if isinstance(primitives_snapshot, Mapping):
+        layout = primitives_snapshot.get("native_layout") or primitives_snapshot.get("layout")
+    if layout is None:
+        layout = getattr(primitives_snapshot, "_last_native_layout", None)
+    return layout if isinstance(layout, Mapping) else None
+
+
+def _row_diagnostic(row_index: int, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Row-level diagnostic for snapshots without a layout (no question binding)."""
+    row_id = row.get("id")
+    return {
+        "position": None,
+        "row_index": row_index,
+        "question_id": None,
+        "resolved_value": None,
+        "failure": None,
+        "emitted": {
+            "id": row_id if _is_token_id(row_id) else None,
+            "text": _row_token_text(row),
+        },
+        "row_logprob": _finite_or_none(_entry_logprob(row)),
+        "candidate_weights_raw": None,
+        "candidate_mass_raw": None,
+        "mass_outside_candidates": None,
+        "all_candidate_variants_captured": None,
+        "argmax_label": None,
+        "emitted_matches_argmax": None,
+        "top_k": [_entry_diagnostic(entry) for entry in _row_entries(row)],
+        "top_k_outside_candidates": [],
+        "note": "no layout in snapshot: candidate slicing unavailable",
+    }
+
+
+def _position_diagnostic(
+    position: Mapping[str, Any],
+    row: Mapping[str, Any] | None,
+    decisions: Mapping[str, Decision],
+    failures: Sequence[ParseFailure],
+) -> dict[str, Any]:
+    """Per-question diagnostic: raw capture, sliced mass, argmax, emitted, value."""
+    question_id = str(position.get("question_id") or _layout_question_id(position))
+    diagnostic: dict[str, Any] = {
+        "position": position.get("position"),
+        "row_index": position.get("row_index"),
+        "question_id": question_id,
+        "kind": position.get("kind") or _layout_question_kind(position),
+        "resolved_value": None,
+        "confidence": None,
+        "token_logprob": None,
+        "failure": None,
+        "emitted": None,
+        "emitted_label": None,
+        "candidate_weights_raw": None,
+        "candidate_weights_normalized": None,
+        "candidate_mass_raw": None,
+        "mass_outside_candidates": None,
+        "all_candidate_variants_captured": None,
+        "argmax_label": None,
+        "emitted_matches_argmax": None,
+        "top_k": [],
+        "top_k_outside_candidates": [],
+    }
+    decision = decisions.get(question_id)
+    if decision is not None:
+        diagnostic["resolved_value"] = decision.value
+        diagnostic["confidence"] = decision.confidence
+        diagnostic["token_logprob"] = decision.token_logprob
+    else:
+        diagnostic["failure"] = _failure_for(question_id, failures)
+    if row is None:
+        diagnostic["note"] = "no captured row at this index"
+        return diagnostic
+
+    native = _native_from_layout(position)
+    row_id = row.get("id")
+    diagnostic["emitted"] = {
+        "id": row_id if _is_token_id(row_id) else None,
+        "text": _row_token_text(row),
+    }
+    entries = _row_entries(row)
+    text_fallback = not _is_token_id(row_id)
+    id_to_label = {
+        token_id: candidate.label
+        for candidate in native.candidates
+        for token_id in candidate.token_ids
+    }
+    text_to_label = {
+        text: candidate.label for candidate in native.candidates for text in candidate.token_texts
+    }
+    diagnostic["emitted_label"] = _match_row_label(row, id_to_label, text_to_label)
+    weights = _candidate_weights(entries, native, text_fallback=text_fallback)
+    diagnostic["candidate_weights_raw"] = {
+        candidate.label: weights[candidate.label] for candidate in native.candidates
+    }
+    diagnostic["candidate_mass_raw"] = sum(weights.values())
+    diagnostic["candidate_weights_normalized"] = normalize_probabilities(weights)
+    if any(weight > 0.0 for weight in weights.values()):
+        diagnostic["argmax_label"] = max(weights, key=lambda label: weights[label])
+    diagnostic["emitted_matches_argmax"] = (
+        diagnostic["argmax_label"] == diagnostic["emitted_label"]
+        if diagnostic["emitted_label"] is not None and diagnostic["argmax_label"] is not None
+        else None
+    )
+    diagnostic["all_candidate_variants_captured"] = _all_variants_captured(
+        entries, native, text_fallback=text_fallback
+    )
+    if diagnostic["all_candidate_variants_captured"]:
+        # Every declared variant is somewhere in the captured top-K, so the
+        # slice sums exactly and the remainder is the true outside mass.
+        diagnostic["mass_outside_candidates"] = max(
+            0.0, 1.0 - float(diagnostic["candidate_mass_raw"])
+        )
+    top_k = [_entry_diagnostic(entry) for entry in entries]
+    diagnostic["top_k"] = top_k
+    diagnostic["top_k_outside_candidates"] = [
+        diagnostic_entry
+        for raw, diagnostic_entry in zip(entries, top_k)
+        if not _entry_is_candidate(raw, id_to_label, text_to_label, text_fallback=text_fallback)
+    ]
+    return diagnostic
+
+
+def _entry_is_candidate(
+    entry: Mapping[str, Any],
+    id_to_label: Mapping[int, str],
+    text_to_label: Mapping[str, str],
+    *,
+    text_fallback: bool,
+) -> bool:
+    """Whether one captured entry resolves to a declared candidate token.
+
+    Same row-scoped matching rules as ``_candidate_weights``: id-bearing
+    entries by id only, id-less entries by text only under ``text_fallback``.
+    """
+    token_id = entry.get("id")
+    if _is_token_id(token_id):
+        return token_id in id_to_label
+    if not text_fallback:
+        return False
+    text = _entry_token_text(entry)
+    return text is not None and text in text_to_label
+
+
+def _failure_for(question_id: str, failures: Sequence[ParseFailure]) -> dict[str, str] | None:
+    needle = f"question {question_id!r}"
+    for failure in failures:
+        if needle in failure.detail:
+            return {"reason": failure.reason, "detail": failure.detail}
+    return None
+
+
+def _layout_question_id(position: Mapping[str, Any]) -> str:
+    question = position.get("question")
+    return str(question.get("id")) if isinstance(question, Mapping) else ""
+
+
+def _layout_question_kind(position: Mapping[str, Any]) -> str | None:
+    question = position.get("question")
+    return str(question.get("kind")) if isinstance(question, Mapping) else None
+
+
+def _native_from_layout(position: Mapping[str, Any]) -> _NativeQuestion:
+    """Rebuild the runner's token binding for one layout position."""
+    raw_question = position.get("question")
+    question_data = raw_question if isinstance(raw_question, Mapping) else {}
+    question = Question(
+        id=str(question_data.get("id", "")),
+        kind=question_data.get("kind"),
+        text=str(question_data.get("text", "")),
+        options=tuple(question_data.get("options", ()) or ()),
+        levels=tuple(question_data.get("levels", ()) or ()),
+        criteria=tuple(question_data.get("criteria", ()) or ()),
+    )
+    candidates = tuple(
+        _NativeCandidate(
+            label=str(candidate.get("label", "")),
+            token_ids=tuple(int(token_id) for token_id in candidate.get("token_ids", ()) or ()),
+            token_texts=tuple(str(text) for text in candidate.get("token_texts", ()) or ()),
+        )
+        for candidate in position.get("candidates", ()) or ()
+        if isinstance(candidate, Mapping)
+    )
+    cue_token_ids = tuple(int(token_id) for token_id in position.get("cue_token_ids", ()) or ())
+    return _NativeQuestion(
+        question=question,
+        candidates=candidates,
+        cue_token_ids=cue_token_ids,
+    )
+
+
+def _all_variants_captured(
+    entries: Sequence[Mapping[str, Any]],
+    native: _NativeQuestion,
+    *,
+    text_fallback: bool,
+) -> bool:
+    """True when every declared candidate variant appears in the captured rows.
+
+    Mirrors ``_candidate_weights``' matching rules: id-bearing entries resolve
+    by id only; id-less entries resolve by exact text only when
+    ``text_fallback`` is set.
+    """
+    captured_ids = {entry.get("id") for entry in entries if _is_token_id(entry.get("id"))}
+    captured_texts = {text for entry in entries if (text := _entry_token_text(entry)) is not None}
+    for candidate in native.candidates:
+        for token_id, token_text in zip(candidate.token_ids, candidate.token_texts):
+            if token_id in captured_ids:
+                continue
+            if text_fallback and token_text in captured_texts:
+                continue
+            return False
+    return True
+
+
+def _entry_diagnostic(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """One raw top-k entry, JSON-safe."""
+    token_id = entry.get("id")
+    return {
+        "id": token_id if _is_token_id(token_id) else None,
+        "text": _entry_token_text(entry),
+        "logprob": _finite_or_none(_entry_logprob(entry)),
+        "weight": _finite_or_none(_entry_weight(entry)),
+    }
+
+
+def _finite_or_none(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    return None
 
 
 def _rows_from_meta(meta: Any) -> list[Mapping[str, Any]]:
@@ -946,7 +1507,7 @@ def _candidate_weights(
     entries match by exact token text against the variant strings sent to
     ``/tokenize`` (each distinct text contributes once) ONLY when
     ``text_fallback`` is set, i.e. when the enclosing row carries no id. A
-    label with two single-token variants has its captured weights summed.
+    label with several single-token variants has its captured weights summed.
     """
     id_to_label = {
         token_id: candidate.label
@@ -992,7 +1553,7 @@ def _logprob_for(
 ) -> float | None:
     """Raw log-probability of a candidate's token in the captured row, if present.
 
-    A label with two single-token variants returns the first listed match
+    A label with several single-token variants returns the first listed match
     (llama.cpp lists top entries in descending probability), i.e. the most
     probable captured variant. Text matching follows the same row-scoped
     ``text_fallback`` rule as ``_candidate_weights``.

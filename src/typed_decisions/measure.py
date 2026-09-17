@@ -20,6 +20,12 @@ TD-1 runner drives and each writing a JSON receipt:
   counts from ``_last_inference_meta`` where the primitives object exposes
   them, and answer agreement between the two arms. Rationale: TD-3 replaces
   a vendor's advertised batching multiplier with our own measurement.
+  By default the catalogue is a content-neutral GENERATED probe (a transport
+  measurement); pass ``questions=`` to ask a real catalogue under every
+  state, which is what makes the agreement metric interpretable. The receipt
+  records the choice as ``probe_source``. Live fixture:
+  ``/mnt/raid0/llm/worktrees/intake-jev-sageattn-20260917/artifacts/typed_decisions/decision_set_v1/state.json``
+  and ``.../questions.json`` (referenced, never copied).
 
 Contract:
 
@@ -560,8 +566,9 @@ def run_fanout_study(
     *,
     states: Sequence[str],
     role: str,
-    questions_per_state: int,
+    questions_per_state: int | None = None,
     mode: str = "json",
+    questions: Sequence[Question] | None = None,
     receipt_path: str | Path | None = None,
     artifacts_dir: str | Path | None = None,
     dry_run: bool = False,
@@ -569,10 +576,27 @@ def run_fanout_study(
     """Measure batched-vs-singleton cost and answer agreement.
 
     Arm A (batched): one ``run_typed_decisions`` call per state answering the
-    whole probe catalogue. Arm B (singleton): one call per (state, question)
-    pair. The probe catalogue is synthetic and content-neutral — the study
-    measures TRANSPORT/BATCHING overhead, not semantics — and its ids are
-    stable for a given ``questions_per_state``.
+    whole catalogue. Arm B (singleton): one call per (state, question) pair.
+
+    ``questions`` selects the catalogue:
+
+    * ``None`` (default) — the generated content-neutral probe: the study
+      measures TRANSPORT/BATCHING overhead, not semantics, and its ids are
+      stable for a given ``questions_per_state``. Agreement over such a probe
+      is dominated by the model's position/batching sensitivity, not by the
+      state, so read it as a stability statistic.
+    * a provided catalogue — every state is asked that IDENTICAL catalogue
+      (ids, text, options/levels and criteria verbatim). This is the
+      interpretable mode: agreement answers whether batching changes the
+      model's answer to a real question about a real state. The receipt
+      records ``probe_source: "provided"`` (``"generated"`` on the default
+      path). When ``questions`` is provided, ``questions_per_state`` may be
+      omitted (it is derived from the catalogue) but if given must equal
+      ``len(questions)``.
+
+    Live catalogue fixture (reference it do not copy):
+    ``/mnt/raid0/llm/worktrees/intake-jev-sageattn-20260917/artifacts/typed_decisions/decision_set_v1/questions.json``
+    with the matching state fixture ``.../state.json``.
 
     Reports per arm: call count, wall time, serial sum of per-call
     ``DecisionResult.elapsed_ms``, the per-call list, and generated-token
@@ -585,19 +609,38 @@ def run_fanout_study(
     states = list(states)
     if not states:
         raise MeasurementError("fanout study requires at least one state")
-    if questions_per_state < 1:
-        raise ValueError("questions_per_state must be >= 1")
-    probe = _fanout_probe_questions(questions_per_state)
+    if questions is not None:
+        catalogue = list(questions)
+        _validate_unique_ids(catalogue)
+        if not catalogue:
+            raise ValueError("questions must contain at least one Question")
+        if questions_per_state is None:
+            questions_per_state = len(catalogue)
+        elif questions_per_state != len(catalogue):
+            raise ValueError(
+                "questions_per_state must equal the provided catalogue length "
+                f"({len(catalogue)}), got {questions_per_state}"
+            )
+        probe_source = "provided"
+    else:
+        if questions_per_state is None or questions_per_state < 1:
+            raise ValueError(
+                "questions_per_state must be >= 1 when no questions catalogue is provided"
+            )
+        catalogue = _fanout_probe_questions(questions_per_state)
+        probe_source = "generated"
 
     if dry_run:
         return {
             "study": "fanout",
             "dry_run": True,
+            "probe_source": probe_source,
             "plan": {
                 "mode": mode,
                 "role": role,
+                "probe_source": probe_source,
                 "states": len(states),
-                "questions": [question.id for question in probe],
+                "questions": [question.id for question in catalogue],
                 "questions_per_state": questions_per_state,
                 "batched_calls": len(states),
                 "singleton_calls": len(states) * questions_per_state,
@@ -613,19 +656,19 @@ def run_fanout_study(
         result = run_typed_decisions(
             primitives,
             state=state,
-            questions=probe,
+            questions=catalogue,
             role=role,
             mode=mode,
         )
         batched_results.append(result)
-        batched_records.append(_fanout_run_record(state_index, probe, result, primitives))
+        batched_records.append(_fanout_run_record(state_index, catalogue, result, primitives))
     batched_wall_ms = (time.perf_counter() - batched_started) * 1000.0
 
     singleton_records: list[dict[str, Any]] = []
     singleton_results: list[DecisionResult] = []
     singleton_started = time.perf_counter()
     for state_index, state in enumerate(states):
-        for question in probe:
+        for question in catalogue:
             result = run_typed_decisions(
                 primitives,
                 state=state,
@@ -641,14 +684,14 @@ def run_fanout_study(
 
     disagreements: list[dict[str, Any]] = []
     per_question_agreement: dict[str, dict[str, int]] = {
-        question.id: {"compared": 0, "agreeing": 0} for question in probe
+        question.id: {"compared": 0, "agreeing": 0} for question in catalogue
     }
     comparable = 0
     agreeing = 0
     unresolved_pairs = 0
     for state_index in range(len(states)):
         batched_values = batched_records[state_index]["resolved"]
-        for question_index, question in enumerate(probe):
+        for question_index, question in enumerate(catalogue):
             singleton_values = singleton_records[
                 state_index * questions_per_state + question_index
             ]["resolved"]
@@ -684,6 +727,7 @@ def run_fanout_study(
 
     receipt = {
         "study": "fanout",
+        "probe_source": probe_source,
         "timestamp": _now_iso(),
         "mode": mode,
         "role": role,
@@ -698,7 +742,7 @@ def run_fanout_study(
             "unresolved_pairs": unresolved_pairs,
         },
         "results": {
-            "questions": [question.id for question in probe],
+            "questions": [question.id for question in catalogue],
             "batched": batched_summary,
             "singleton": singleton_summary,
             "agreement_rate": agreeing / comparable,
@@ -879,8 +923,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="batched-vs-singleton fan-out study (TD-3)",
     )
     _add_common_options(fanout)
-    fanout.add_argument("--states-file", required=True, help="JSON list of state strings")
-    fanout.add_argument("--questions-per-state", type=int, required=True)
+    fanout.add_argument(
+        "--states-file",
+        required=True,
+        help="JSON list of state strings (a single string or {'state': str} is one state)",
+    )
+    fanout.add_argument(
+        "--questions-per-state",
+        type=int,
+        default=None,
+        help="generated probe size; required unless --questions-file is given",
+    )
+    fanout.add_argument(
+        "--questions-file",
+        default=None,
+        help=(
+            "JSON catalogue used verbatim for every state (overrides the generated "
+            "probe); the decision_set_v1 fixture lives at "
+            ".../intake-jev-sageattn-20260917/artifacts/typed_decisions/decision_set_v1/questions.json"
+        ),
+    )
     fanout.add_argument("--mode", default="json", help="runner mode (json | native)")
     return parser
 
@@ -889,6 +951,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point. Returns a process exit code (0 ok, 1 study error, 2 gate)."""
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.study == "fanout" and args.questions_file is None and args.questions_per_state is None:
+        parser.error("fanout requires --questions-per-state or --questions-file")
 
     if not args.live and not args.dry_run:
         print(
@@ -929,6 +994,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 role=args.role,
                 questions_per_state=args.questions_per_state,
                 mode=args.mode,
+                questions=(
+                    _load_questions(args.questions_file)
+                    if args.questions_file is not None
+                    else None
+                ),
                 receipt_path=args.receipt,
                 artifacts_dir=args.artifacts_dir,
                 dry_run=args.dry_run,
@@ -994,10 +1064,15 @@ def _load_state(path: str | Path) -> str:
 def _load_states(path: str | Path) -> list[str]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if isinstance(payload, Mapping):
-        payload = payload.get("states")
-    if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
-        raise ValueError(f"states file {path} must contain a list of strings")
-    return list(payload)
+        payload = payload.get("states", payload.get("state"))
+    if isinstance(payload, str):
+        return [payload]
+    if isinstance(payload, list) and all(isinstance(item, str) for item in payload):
+        return list(payload)
+    raise ValueError(
+        f"states file {path} must contain a string, a list of strings, "
+        "or an object with 'states'/'state'"
+    )
 
 
 def _load_labels(path: str | Path) -> dict[str, object]:

@@ -376,6 +376,9 @@ class TestModeContract:
         primitives = _FakePrimitives("")
         primitives._last_inference_meta = {
             "completion_probabilities": [
+                # TD-1c: the question's cue is replayed as one fixed token,
+                # so the answer row sits at index 1.
+                {"id": 97, "token": "", "logprob": 0.0, "top_logprobs": []},
                 {
                     "id": 1,
                     "token": "alpha",
@@ -385,13 +388,14 @@ class TestModeContract:
                         {"id": 1, "token": "alpha", "bytes": [97], "logprob": -0.1},
                         {"id": 2, "token": "beta", "bytes": [98], "logprob": -2.0},
                     ],
-                }
+                },
             ]
         }
 
         # TD-1b: native mode binds candidates to token ids through the
         # tokenizer seam; this test injects one so the dispatch path is
-        # exercised without a live server.
+        # exercised without a live server. TD-1c reuses the seam for the cue
+        # text, so anything unmapped (the cue) tokenizes to one opaque token.
         def tokenize(text: str) -> list[int]:
             return {
                 "alpha": [1],
@@ -400,7 +404,7 @@ class TestModeContract:
                 " beta": [12],
                 "gamma": [3],
                 " gamma": [13],
-            }.get(text, [97, 98])
+            }.get(text, [97])
 
         result = run_typed_decisions(
             primitives,
