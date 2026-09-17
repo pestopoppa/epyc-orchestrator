@@ -53,6 +53,7 @@ from src.typed_decisions.native import (
     REASON_NATIVE_TOKENIZER_UNAVAILABLE,
     REASON_NATIVE_UNKNOWN_CANDIDATE,
     REASON_NATIVE_UNSUPPORTED_CANDIDATES,
+    CueStyle,
     _cue_text,
     build_native_prompt,
     native_diagnostics,
@@ -219,23 +220,29 @@ def _v9_row(
     return row
 
 
-def _cue_length(tokenizer: _FakeTokenizer, question: Question) -> int:
-    return len(tokenizer(_cue_text(question)))
+def _cue_length(
+    tokenizer: _FakeTokenizer,
+    question: Question,
+    cue_style: CueStyle | str = CueStyle.FULL,
+) -> int:
+    return len(tokenizer(_cue_text(question, cue_style)))
 
 
 def _build_meta(
     questions: Sequence[Question],
     answer_rows: Sequence[Mapping[str, Any]],
     tokenizer: _FakeTokenizer,
+    cue_style: CueStyle | str = CueStyle.FULL,
 ) -> dict[str, Any]:
     """A meta whose rows are 1:1 with the TD-1c generated tokens.
 
     ``answer_rows[i]`` is placed at question ``i``'s answer index; the cue
     tokens before it become opaque filler rows (the runner never slices them).
+    ``cue_style`` selects the cue whose tokenized length the filler matches.
     """
     rows: list[Mapping[str, Any]] = []
     for question, answer_row in zip(questions, answer_rows):
-        for _ in range(_cue_length(tokenizer, question)):
+        for _ in range(_cue_length(tokenizer, question, cue_style)):
             rows.append({"id": _CUE_TOKEN, "token": "", "logprob": 0.0, "top_logprobs": []})
         rows.append(answer_row)
     return {"completion_probabilities": rows}
@@ -1114,6 +1121,139 @@ class TestPromptCueing:
         assert "cue-2 ::= <[990]>" in grammar
 
 
+# ── 8b. Cue styles (TD-1d) ────────────────────────────────────────────────
+
+
+class TestCueStyles:
+    LONG_QUESTION = Question(
+        id="s01",
+        kind=QuestionKind.SCORE,
+        text="Using the number priority rules, what is the priority of Item B?",
+        levels=(0, 1, 2, 3),
+    )
+
+    def test_cue_style_is_a_str_enum(self):
+        assert issubclass(CueStyle, str)
+        assert CueStyle.FULL == "full"
+        assert {style.value for style in CueStyle} == {"full", "short", "id_only"}
+
+    def test_full_is_the_default_and_the_td1c_cue(self):
+        expected = "\nQ choice: Pick a colour.\nAnswer (one of: red, blue, green): "
+
+        assert _cue_text(CHOICE) == expected
+        assert _cue_text(CHOICE, CueStyle.FULL) == expected
+        assert _cue_text(CHOICE, "full") == expected
+
+    def test_short_cue_is_id_plus_first_six_words(self):
+        assert _cue_text(self.LONG_QUESTION, CueStyle.SHORT) == (
+            "\nQ s01: Using the number priority rules, what\n"
+        )
+
+    def test_short_cue_keeps_a_short_question_whole(self):
+        assert _cue_text(NOUL, CueStyle.SHORT) == "\nQ noul: Ship it?\n"
+
+    def test_id_only_cue_is_the_minimal_delimiter(self):
+        assert _cue_text(CHOICE, CueStyle.ID_ONLY) == "\nchoice: "
+        assert _cue_text(SCORE, CueStyle.ID_ONLY) == "\nscore: "
+
+    def test_plain_value_strings_are_accepted(self):
+        assert _cue_text(CHOICE, "short") == _cue_text(CHOICE, CueStyle.SHORT)
+        assert _cue_text(CHOICE, "id_only") == _cue_text(CHOICE, CueStyle.ID_ONLY)
+
+    def test_unknown_cue_style_is_rejected(self):
+        with pytest.raises(ValueError, match="unknown cue style"):
+            _cue_text(CHOICE, "medium")
+
+    def test_each_style_replays_its_own_cue_as_exact_token_terminals(self):
+        tokenizer = _FakeTokenizer()
+        primitives = _FakePrimitives(
+            "", meta=_build_meta(QUESTIONS, _main_answer_rows(), tokenizer, CueStyle.ID_ONLY)
+        )
+
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer, cue_style=CueStyle.ID_ONLY)
+
+        call = primitives.calls[0]
+        expected_cue = " ".join(f"<[{ord(char)}]>" for char in _cue_text(CHOICE, CueStyle.ID_ONLY))
+        assert f"cue-0 ::= {expected_cue}" in call["grammar"]
+        assert (
+            f"cue-2 ::= {' '.join(f'<[{ord(char)}]>' for char in _cue_text(NOUL, CueStyle.ID_ONLY))}"
+            in call["grammar"]
+        )
+        # Exact-token terminals only (no quoted literals), and the answer cue
+        # prose is prompt-side: the grammar replays just the id delimiter.
+        assert '"' not in call["grammar"]
+        assert "Answer (one of" not in call["grammar"]
+        # The ID_ONLY cue text — and only it — was tokenized for the replay.
+        assert _cue_text(CHOICE, CueStyle.ID_ONLY) in tokenizer.calls
+        assert _cue_text(CHOICE, CueStyle.FULL) not in tokenizer.calls
+        # The answer readout is unchanged.
+        assert [decision.value for decision in result.decisions] == ["blue", 2, True]
+        assert result.failures == ()
+
+    def test_cue_style_changes_only_the_replayed_tokens(self):
+        full_tokenizer = _FakeTokenizer()
+        id_tokenizer = _FakeTokenizer()
+        full = _FakePrimitives(
+            "", meta=_build_meta(QUESTIONS, _main_answer_rows(), full_tokenizer, CueStyle.FULL)
+        )
+        id_only = _FakePrimitives(
+            "", meta=_build_meta(QUESTIONS, _main_answer_rows(), id_tokenizer, CueStyle.ID_ONLY)
+        )
+
+        full_result = _run(full, QUESTIONS, tokenize_fn=full_tokenizer)
+        id_result = _run(id_only, QUESTIONS, tokenize_fn=id_tokenizer, cue_style="id_only")
+
+        full_call, id_call = full.calls[0], id_only.calls[0]
+        # Byte-identical prompt and hash: the numbered catalogue grounds every
+        # style, so the cue replay is the only variable.
+        assert full_call["prompt"] == id_call["prompt"]
+        assert full_result.prompt_sha256 == id_result.prompt_sha256
+        assert "   question: Pick a colour." in id_call["prompt"]
+        assert "   candidates: red | blue | green" in id_call["prompt"]
+        # Only the replayed cue terminals (and therefore the budget) differ.
+        assert full_call["grammar"] != id_call["grammar"]
+        assert id_call["n_tokens"] < full_call["n_tokens"]
+        assert [decision.value for decision in full_result.decisions] == [
+            decision.value for decision in id_result.decisions
+        ]
+
+    def test_layout_records_the_cue_style_and_per_style_cue_lengths(self):
+        tokenizer = _FakeTokenizer()
+        layouts: dict[str, dict[str, Any]] = {}
+        for style in (CueStyle.FULL, CueStyle.SHORT, CueStyle.ID_ONLY):
+            primitives = _FakePrimitives(
+                "", meta=_build_meta(QUESTIONS, _main_answer_rows(), tokenizer, style)
+            )
+            _run(primitives, QUESTIONS, tokenize_fn=tokenizer, cue_style=style)
+            layouts[style.value] = primitives._last_native_layout
+
+        for style, layout in layouts.items():
+            assert layout["cue_style"] == style
+            assert layout["total_tokens"] == sum(
+                position["cue_length"] for position in layout["positions"]
+            ) + len(QUESTIONS)
+
+        for index, question in enumerate(QUESTIONS):
+            full_length = layouts["full"]["positions"][index]["cue_length"]
+            short_length = layouts["short"]["positions"][index]["cue_length"]
+            id_length = layouts["id_only"]["positions"][index]["cue_length"]
+            assert full_length == len(_cue_text(question, CueStyle.FULL))
+            assert short_length == len(_cue_text(question, CueStyle.SHORT))
+            assert id_length == len(_cue_text(question, CueStyle.ID_ONLY))
+            assert id_length < short_length < full_length
+
+        # Answer rows are addressed by the style's own cue lengths.
+        expected_rows = [
+            index
+            + sum(len(_cue_text(question, CueStyle.ID_ONLY)) for question in QUESTIONS[: index + 1])
+            for index in range(len(QUESTIONS))
+        ]
+        assert [p["row_index"] for p in layouts["id_only"]["positions"]] == expected_rows
+        assert layouts["id_only"]["positions"][0]["row_index"] == len(
+            _cue_text(CHOICE, CueStyle.ID_ONLY)
+        )
+
+
 # ── 9. Natural noul surface forms ─────────────────────────────────────────
 
 
@@ -1360,6 +1500,17 @@ class TestNativeDiagnostics:
         assert report["failures"][0]["reason"] == "transport_error"
         assert report["positions"][0]["failure"] is None
 
+    def test_diagnostics_reports_the_replayed_cue_style(self):
+        tokenizer = _FakeTokenizer()
+        primitives = _FakePrimitives(
+            "", meta=_build_meta(QUESTIONS, _main_answer_rows(), tokenizer, CueStyle.SHORT)
+        )
+
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer, cue_style=CueStyle.SHORT)
+        report = native_diagnostics(result, primitives)
+
+        assert report["cue_style"] == "short"
+
 
 # ── 11. Runner dispatch and JSON-mode non-regression ──────────────────────
 
@@ -1429,3 +1580,82 @@ class TestRunnerDispatch:
         assert "json_schema" in call
         assert "grammar" not in call
         assert "n_probs" not in call
+
+    def test_runner_native_mode_defaults_to_full_cues(self):
+        tokenizer = _FakeTokenizer()
+        primitives = _FakePrimitives("", meta=_main_meta(tokenizer))
+
+        run_typed_decisions(
+            primitives,
+            state=STATE,
+            questions=QUESTIONS,
+            role=ROLE,
+            mode="native",
+            tokenize_fn=tokenizer,
+        )
+
+        assert primitives._last_native_layout["cue_style"] == "full"
+        assert _cue_text(CHOICE, CueStyle.FULL) in tokenizer.calls
+
+    def test_runner_native_mode_forwards_cue_style(self):
+        tokenizer = _FakeTokenizer()
+        primitives = _FakePrimitives(
+            "", meta=_build_meta(QUESTIONS, _main_answer_rows(), tokenizer, CueStyle.ID_ONLY)
+        )
+
+        result = run_typed_decisions(
+            primitives,
+            state=STATE,
+            questions=QUESTIONS,
+            role=ROLE,
+            mode="native",
+            cue_style="id_only",
+            tokenize_fn=tokenizer,
+        )
+
+        assert result.mode == "native"
+        assert [decision.value for decision in result.decisions] == ["blue", 2, True]
+        assert primitives._last_native_layout["cue_style"] == "id_only"
+        assert _cue_text(CHOICE, CueStyle.ID_ONLY) in tokenizer.calls
+        assert _cue_text(CHOICE, CueStyle.FULL) not in tokenizer.calls
+
+    def test_runner_native_mode_rejects_an_unknown_cue_style(self):
+        with pytest.raises(ValueError, match="unknown cue style"):
+            run_typed_decisions(
+                _FakePrimitives("", meta=_main_meta()),
+                state=STATE,
+                questions=QUESTIONS,
+                role=ROLE,
+                mode="native",
+                cue_style="medium",
+                tokenize_fn=_FakeTokenizer(),
+            )
+
+    def test_json_mode_ignores_cue_style(self):
+        response = (
+            '{"answers": {"noul": {"noul": true, "probabilities": '
+            '{"true": 0.8, "false": 0.2}, "confidence": 0.8}}}'
+        )
+        primitives = _FakePrimitives(response, meta=_main_meta())
+
+        result = run_typed_decisions(
+            primitives,
+            state=STATE,
+            questions=[NOUL],
+            role=ROLE,
+            mode="json",
+            cue_style="id_only",
+        )
+
+        assert result.mode == "json"
+        assert result.decisions[0].value is True
+        assert "grammar" not in primitives.calls[0]
+
+    def test_native_runner_rejects_an_unknown_cue_style(self):
+        with pytest.raises(ValueError, match="unknown cue style"):
+            _run(
+                _FakePrimitives("", meta=_main_meta()),
+                QUESTIONS,
+                tokenize_fn=_FakeTokenizer(),
+                cue_style="medium",
+            )

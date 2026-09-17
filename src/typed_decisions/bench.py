@@ -15,6 +15,17 @@ live ``LLMPrimitives`` seam, and reports, per arm:
     distribution should sum to ``1.0``, which is the direct check that the
     native slice renormalized correctly.
 
+TD-1d cue-style sweep: ``cue_styles`` (CLI ``--cue-style``, repeatable) runs the
+JSON arm ONCE and one native arm per cue style, so one invocation produces the
+comparison table for every candidate cue. Each native arm gets its own record
+(``wall_ms``, ``tokens_generated``, ``failures``, resolved values) and
+``agreements`` holds that style's per-question agreement against JSON;
+``agreement`` stays the all-arms-vs-first-arm fold it always was. Accuracy
+against ground-truth labels is NOT this harness's job — labels live elsewhere
+and agreement is the parity question TD-1d asks. With exactly one cue style the
+native arm keeps its legacy ``"native"`` key and the report keeps its legacy
+shape (plus the additive ``cue_styles``/``agreements`` keys).
+
 Fabrication guard: the harness refuses to run against primitives in
 ``mock_mode`` or without an ``llm_call`` seam, and raises ``BenchmarkError``
 when neither arm resolves a single question (there would be nothing to
@@ -36,7 +47,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.typed_decisions.native import run_typed_decisions_native
+from src.typed_decisions.native import CueStyle, TokenizeFn, run_typed_decisions_native
 from src.typed_decisions.runner import run_typed_decisions
 from src.typed_decisions.types import DecisionResult, Question
 
@@ -64,8 +75,10 @@ def run_mode_benchmark(
     modes: Sequence[str] = _DEFAULT_MODES,
     n_tokens: int | None = None,
     n_probs: int | None = None,
+    cue_styles: Sequence[CueStyle | str] | str | CueStyle | None = None,
+    tokenize_fn: TokenizeFn | None = None,
 ) -> dict[str, Any]:
-    """Run both decoding modes over one catalogue and compare them.
+    """Run the decoding modes over one catalogue and compare them.
 
     Args:
         primitives: A live ``LLMPrimitives``-shaped object exposing
@@ -74,9 +87,19 @@ def run_mode_benchmark(
         questions: The catalogue to ask; ids must be unique and non-empty.
         role: Registry role both arms are charged to.
         modes: Which arms to run; a non-empty subset of ``("json",
-            "native")``. Order is preserved in the report.
+            "native")``. Order is preserved in the report. The JSON arm runs
+            once; the native arm runs once per cue style.
         n_tokens: Optional output budget forwarded to both arms.
         n_probs: Optional native top-K capture override (native arm only).
+        cue_styles: Native cue styles to sweep (TD-1d), in run order. Defaults
+            to ``(CueStyle.FULL,)``. Unknown values raise ``ValueError``;
+            duplicates are collapsed. With exactly one style the native arm
+            keeps the legacy ``"native"`` key; with several it is keyed
+            ``"native:<style>"``.
+        tokenize_fn: Optional text -> token ids seam for native-mode candidate
+            and cue binding (TD-1b), forwarded unchanged to every native arm.
+            ``None`` uses the native runner's default ``/tokenize`` resolver.
+            IGNORED by the JSON arm.
 
     Returns:
         The report dict (see module docstring for the fields). Raises
@@ -91,6 +114,7 @@ def run_mode_benchmark(
     invalid = [mode for mode in mode_list if mode not in _MODE_CHOICES]
     if invalid:
         raise ValueError(f"unknown benchmark mode(s): {invalid!r}")
+    style_list = _cue_styles(cue_styles)
     if primitives is None or not callable(getattr(primitives, "llm_call", None)):
         got = "None" if primitives is None else type(primitives).__name__
         raise BenchmarkError(
@@ -102,18 +126,10 @@ def run_mode_benchmark(
 
     arms: dict[str, dict[str, Any]] = {}
     results: dict[str, DecisionResult] = {}
+    native_arm_names: list[str] = []
     for mode in mode_list:
-        started = time.perf_counter()
-        if mode == "native":
-            result = run_typed_decisions_native(
-                primitives,
-                state=state,
-                questions=catalogue,
-                role=role,
-                n_tokens=n_tokens,
-                n_probs=n_probs,
-            )
-        else:
+        if mode == "json":
+            started = time.perf_counter()
             result = run_typed_decisions(
                 primitives,
                 state=state,
@@ -122,17 +138,46 @@ def run_mode_benchmark(
                 mode="json",
                 n_tokens=n_tokens,
             )
-        wall_ms = (time.perf_counter() - started) * 1000.0
-        # Meta is instance-level: read immediately after the arm's calls (the
-        # JSON arm may have retried, so this is the LAST attempt's telemetry).
-        meta = _meta_snapshot(primitives)
-        results[mode] = result
-        arms[mode] = _arm_record(mode, result, wall_ms, meta)
+            wall_ms = (time.perf_counter() - started) * 1000.0
+            # Meta is instance-level: read immediately after the arm's calls
+            # (the JSON arm may have retried, so this is the LAST attempt's).
+            meta = _meta_snapshot(primitives)
+            results["json"] = result
+            arms["json"] = _arm_record("json", result, wall_ms, meta)
+            continue
+        for style in style_list:
+            arm_name = "native" if len(style_list) == 1 else f"native:{style.value}"
+            started = time.perf_counter()
+            result = run_typed_decisions_native(
+                primitives,
+                state=state,
+                questions=catalogue,
+                role=role,
+                n_tokens=n_tokens,
+                n_probs=n_probs,
+                cue_style=style,
+                tokenize_fn=tokenize_fn,
+            )
+            wall_ms = (time.perf_counter() - started) * 1000.0
+            meta = _meta_snapshot(primitives)
+            results[arm_name] = result
+            arms[arm_name] = _arm_record(arm_name, result, wall_ms, meta, cue_style=style)
+            native_arm_names.append(arm_name)
 
-    if not any(results[mode].decisions for mode in mode_list):
-        raise BenchmarkError("no mode resolved a single question; there is nothing to compare")
+    if not any(result.decisions for result in results.values()):
+        raise BenchmarkError("no arm resolved a single question; there is nothing to compare")
 
-    agreement = _agreement(catalogue, results)
+    # Per-style parity against the JSON arm. ``None`` when the JSON arm was not
+    # run (``modes=("native",)``): there is no reference, so no rate is invented.
+    json_result = results.get("json")
+    agreements: dict[str, dict[str, Any] | None] = {
+        arm_name: (
+            _agreement(catalogue, {"json": json_result, arm_name: results[arm_name]})
+            if json_result is not None
+            else None
+        )
+        for arm_name in native_arm_names
+    }
 
     return {
         "benchmark": "typed_decisions_modes",
@@ -141,9 +186,39 @@ def run_mode_benchmark(
         "role": role,
         "questions": [question.id for question in catalogue],
         "modes": mode_list,
+        "cue_styles": [style.value for style in style_list],
         "arms": arms,
-        "agreement": agreement,
+        "agreement": _agreement(catalogue, results),
+        "agreements": agreements,
     }
+
+
+def _cue_styles(
+    cue_styles: Sequence[CueStyle | str] | str | CueStyle | None,
+) -> tuple[CueStyle, ...]:
+    """Normalize the cue-style sweep: default FULL, order-preserving dedupe.
+
+    A bare style (or its string) is treated as a one-element sequence; unknown
+    values raise ``ValueError`` (the same contract as the native runner).
+    """
+    if cue_styles is None:
+        return (CueStyle.FULL,)
+    if isinstance(cue_styles, str):  # CueStyle is a str subclass
+        raw: Sequence[CueStyle | str] = (cue_styles,)
+    else:
+        raw = cue_styles
+    styles: list[CueStyle] = []
+    for style in raw:
+        try:
+            normalized = CueStyle(style)
+        except ValueError:
+            expected = [candidate.value for candidate in CueStyle]
+            raise ValueError(f"unknown cue style: {style!r}; expected one of {expected}") from None
+        if normalized not in styles:
+            styles.append(normalized)
+    if not styles:
+        raise ValueError("run_mode_benchmark requires at least one cue style")
+    return tuple(styles)
 
 
 # ── report assembly ───────────────────────────────────────────────────────
@@ -161,6 +236,8 @@ def _arm_record(
     result: DecisionResult,
     wall_ms: float,
     meta: Mapping[str, Any] | None,
+    *,
+    cue_style: CueStyle | None = None,
 ) -> dict[str, Any]:
     slice_sums = [
         {
@@ -175,6 +252,7 @@ def _arm_record(
     completion_reason = meta.get("completion_reason") if isinstance(meta, Mapping) else None
     return {
         "mode": mode,
+        "cue_style": cue_style.value if cue_style is not None else None,
         "wall_ms": wall_ms,
         "elapsed_ms": result.elapsed_ms,
         "resolved": {decision.question_id: decision.value for decision in result.decisions},
@@ -269,7 +347,8 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="python -m src.typed_decisions.bench",
         description=(
             "Compare the JSON and native typed-decision paths on one question "
-            "catalogue. Makes real model calls and requires --live."
+            "catalogue (one native arm per --cue-style). Makes real model "
+            "calls and requires --live."
         ),
     )
     parser.add_argument(
@@ -286,6 +365,16 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=_MODE_CHOICES,
         default=None,
         help="arm to run; repeatable (default: json and native)",
+    )
+    parser.add_argument(
+        "--cue-style",
+        action="append",
+        choices=[style.value for style in CueStyle],
+        default=None,
+        help=(
+            "native cue style to sweep; repeatable (default: full). One run "
+            "executes the JSON arm once and one native arm per style."
+        ),
     )
     parser.add_argument("--n-tokens", type=int, default=None, help="optional output budget")
     parser.add_argument("--n-probs", type=int, default=None, help="optional native top-K capture")
@@ -313,6 +402,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             modes=tuple(args.mode) if args.mode else _DEFAULT_MODES,
             n_tokens=args.n_tokens,
             n_probs=args.n_probs,
+            cue_styles=tuple(args.cue_style) if args.cue_style else None,
         )
     except (BenchmarkError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)

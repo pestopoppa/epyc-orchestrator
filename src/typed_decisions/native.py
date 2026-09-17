@@ -29,6 +29,18 @@ TD-1c — why the answer cue is REPLAYED, not merely listed:
     grammar as exact-token terminals, so the layout is deterministic and the
     "one constrained token per question" readout is preserved.
 
+TD-1d — cue styles (speed at parity):
+    The TD-1c replay restored conditioning at the cost of ~300+ grammar-forced
+    cue tokens for a 24-question catalogue (523 generated tokens, 2.08x vs
+    JSON). ``CueStyle`` selects how much of that cue is replayed: ``FULL`` is
+    the TD-1c layout and remains the default; ``SHORT`` replays
+    ``Q <id>: <first six words>``; ``ID_ONLY`` replays ``<id>: `` alone. The
+    numbered catalogue rendered by ``build_native_prompt`` is byte-identical
+    across styles — the prompt carries the grounding, the cue only re-conditions
+    the answer position — so a sweep varies exactly one thing: which cue tokens
+    are replayed. The tokenizer bind, the exact-token grammar terminals, the
+    probability slicing and every fail-closed contract are unchanged.
+
 Probability semantics (investigated 2026-09-17 against the frozen v9 tree):
     ``post_sampling_probs=false`` (the default; ``src/backends/llama_server.py``
     does not set it) captures the PRE-sampler distribution:
@@ -159,6 +171,7 @@ import math
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 import httpx
@@ -181,6 +194,7 @@ __all__ = [
     "REASON_NATIVE_TOKENIZER_UNAVAILABLE",
     "REASON_NATIVE_UNKNOWN_CANDIDATE",
     "REASON_NATIVE_UNSUPPORTED_CANDIDATES",
+    "CueStyle",
     "TokenizeFn",
     "build_native_prompt",
     "native_diagnostics",
@@ -193,6 +207,40 @@ logger = logging.getLogger(__name__)
 # endpoint failed, or the response shape was unusable). ``None`` is never
 # coerced into a count: the caller fails closed instead.
 TokenizeFn = Callable[[str], Sequence[int] | None]
+
+
+class CueStyle(str, Enum):
+    """How much of a question's cue is replayed before its answer token (TD-1d).
+
+    The cue is the only thing a style changes: the prompt built by
+    ``build_native_prompt`` and every fail-closed contract are identical, so a
+    sweep isolates the conditioning value of the replayed tokens.
+
+    ``FULL``    — ``"\\nQ <id>: <text>\\nAnswer (one of: ...): "`` (TD-1c; default).
+    ``SHORT``   — ``"\\nQ <id>: <first _SHORT_CUE_WORDS words>\\n"``.
+    ``ID_ONLY`` — ``"\\n<id>: "``; the prompt's numbered catalogue carries the
+    grounding.
+    """
+
+    FULL = "full"
+    SHORT = "short"
+    ID_ONLY = "id_only"
+
+
+def _normalize_cue_style(cue_style: CueStyle | str) -> CueStyle:
+    """Coerce a style value to ``CueStyle``; unknown values raise ``ValueError``.
+
+    ``CueStyle`` is a ``str`` enum, so the plain value strings ("full", "short",
+    "id_only") are accepted wherever the enum is.
+    """
+    if isinstance(cue_style, CueStyle):
+        return cue_style
+    try:
+        return CueStyle(cue_style)
+    except ValueError:
+        expected = [style.value for style in CueStyle]
+        raise ValueError(f"unknown cue style: {cue_style!r}; expected one of {expected}") from None
+
 
 # Deterministic decode, identical policy to the JSON runner: temperature 0.0
 # plus a pinned seed. The grammar removes most sampling freedom anyway (the
@@ -211,6 +259,9 @@ _MAX_N_PROBS = 128
 # /tokenize is a local, CPU-cheap endpoint; a short timeout keeps an
 # unresponsive server from stalling the batch.
 _TOKENIZE_TIMEOUT_S = 2.0
+
+# SHORT cues replay the question id plus this many leading words of the text.
+_SHORT_CUE_WORDS = 6
 
 REASON_NATIVE_UNSUPPORTED_CANDIDATES = "native_unsupported_candidates"
 REASON_NATIVE_UNKNOWN_CANDIDATE = "native_unknown_candidate"
@@ -297,6 +348,7 @@ def run_typed_decisions_native(
     role: str,
     n_tokens: int | None = None,
     n_probs: int | None = None,
+    cue_style: CueStyle | str = CueStyle.FULL,
     tokenize_fn: TokenizeFn | None = None,
 ) -> DecisionResult:
     """Score one question catalogue in a single constrained generation.
@@ -321,6 +373,13 @@ def run_typed_decisions_native(
             per-question token-alternative count (after tokenization) plus
             ``_N_PROBS_BUFFER``; always clamped to ``[1, _MAX_N_PROBS]``.
             Values below 1 raise ``ValueError``.
+        cue_style: Which cue text is replayed before each answer token (TD-1d;
+            see ``CueStyle``). ``CueStyle.FULL`` (the default) is the TD-1c
+            layout; the value strings "full"/"short"/"id_only" are accepted.
+            Unknown values raise ``ValueError``. The prompt, grammar shape,
+            probability slicing and failure contracts do not depend on the
+            style — only the replayed cue tokens do — so a sweep changes one
+            variable at a time.
         tokenize_fn: Text -> token ids seam used to bind candidates and cue
             text to exact tokens (see module docstring). When ``None``, a
             default resolver derives the role's backend base URL from
@@ -338,6 +397,7 @@ def run_typed_decisions_native(
         never silently defaulted.
     """
     catalogue = _validated_catalogue(questions)
+    style = _normalize_cue_style(cue_style)
     tokenize = tokenize_fn if tokenize_fn is not None else _resolve_tokenize_fn(primitives, role)
     own_tokenizer = (
         tokenize if tokenize_fn is None and isinstance(tokenize, _HttpTokenizer) else None
@@ -350,6 +410,7 @@ def run_typed_decisions_native(
             role=role,
             n_tokens=n_tokens,
             n_probs=n_probs,
+            cue_style=style,
             tokenize=tokenize,
         )
     finally:
@@ -365,6 +426,7 @@ def _score_native_batch(
     role: str,
     n_tokens: int | None,
     n_probs: int | None,
+    cue_style: CueStyle,
     tokenize: TokenizeFn | None,
 ) -> DecisionResult:
     """Tokenize, generate and slice one catalogue (tokenizer already resolved)."""
@@ -379,7 +441,9 @@ def _score_native_batch(
             for question in catalogue
         ]
     else:
-        native_questions, tokenizer_failures = _tokenize_catalogue(catalogue, tokenize)
+        native_questions, tokenizer_failures = _tokenize_catalogue(
+            catalogue, tokenize, cue_style=cue_style
+        )
 
     prompt = build_native_prompt(state, [native.question for native in native_questions])
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
@@ -394,6 +458,7 @@ def _score_native_batch(
                 prompt_sha256=prompt_sha256,
                 n_probs=0,
                 n_tokens=0,
+                cue_style=cue_style,
                 excluded=tokenizer_failures,
             ),
         )
@@ -428,6 +493,7 @@ def _score_native_batch(
             prompt_sha256=prompt_sha256,
             n_probs=n_probs,
             n_tokens=n_tokens,
+            cue_style=cue_style,
             excluded=tokenizer_failures,
         ),
     )
@@ -496,6 +562,7 @@ def _native_layout(
     prompt_sha256: str,
     n_probs: int,
     n_tokens: int,
+    cue_style: CueStyle,
     excluded: Sequence[ParseFailure],
 ) -> dict[str, Any]:
     """JSON-safe per-position layout attached to the primitives before the call."""
@@ -529,6 +596,7 @@ def _native_layout(
     return {
         "prompt": prompt,
         "prompt_sha256": prompt_sha256,
+        "cue_style": cue_style.value,
         "n_probs": n_probs,
         "n_tokens": n_tokens,
         "total_tokens": _total_generated_tokens(questions),
@@ -693,12 +761,14 @@ def _normalize_server_url(raw: Any) -> str | None:
 def _tokenize_catalogue(
     questions: Sequence[Question],
     tokenize: TokenizeFn,
+    cue_style: CueStyle = CueStyle.FULL,
 ) -> tuple[list[_NativeQuestion], list[ParseFailure]]:
     """Partition the catalogue into token-bound questions and typed failures.
 
     Tokens are memoized per run (the same label appears in many questions), and
     every failure is recorded in catalogue order with the reason that keeps the
-    question out of the native batch.
+    question out of the native batch. ``cue_style`` selects the cue text bound
+    to exact tokens (TD-1d); candidate binding is style-independent.
     """
     cache: dict[str, Sequence[int] | None] = {}
 
@@ -715,13 +785,17 @@ def _tokenize_catalogue(
     failures: list[ParseFailure] = []
     for question in questions:
         try:
-            native.append(_tokenize_question(question, tokenize_cached))
+            native.append(_tokenize_question(question, tokenize_cached, cue_style=cue_style))
         except _CandidateTokenizationError as exc:
             failures.append(ParseFailure(exc.reason, f"question {question.id!r}: {exc.detail}"))
     return native, failures
 
 
-def _tokenize_question(question: Question, tokenize: TokenizeFn) -> _NativeQuestion:
+def _tokenize_question(
+    question: Question,
+    tokenize: TokenizeFn,
+    cue_style: CueStyle = CueStyle.FULL,
+) -> _NativeQuestion:
     """Bind every candidate label of one question — and its cue — to token ids.
 
     Raises:
@@ -765,7 +839,7 @@ def _tokenize_question(question: Question, tokenize: TokenizeFn) -> _NativeQuest
             "(with or without a leading space); ask this question in JSON mode",
         )
     _reject_token_id_collisions(candidates)
-    cue_text = _cue_text(question)
+    cue_text = _cue_text(question, cue_style)
     cue_ids = tokenize(cue_text)
     if cue_ids is None or not cue_ids:
         raise _CandidateTokenizationError(
@@ -863,12 +937,22 @@ def _build_native_grammar(questions: Sequence[_NativeQuestion]) -> str:
     return "\n".join([root, *rules]) + "\n"
 
 
-def _cue_text(question: Question) -> str:
+def _cue_text(question: Question, cue_style: CueStyle | str = CueStyle.FULL) -> str:
     """The fixed cue replayed immediately before this question's answer token.
 
-    Kept free of the candidate labels' prose beyond the declared labels
-    themselves; the leading newline makes the generated transcript readable.
+    ``FULL`` (default) is the TD-1c cue: id, full question text and the declared
+    labels, ending on an explicit answer delimiter. ``SHORT`` keeps the id and
+    the first ``_SHORT_CUE_WORDS`` words of the question. ``ID_ONLY`` keeps just
+    ``"\\n<id>: "``: a minimal delimiter whose grounding comes from the
+    numbered catalogue in ``build_native_prompt``. Every style starts with a
+    newline so the generated transcript stays readable.
     """
+    style = _normalize_cue_style(cue_style)
+    if style is CueStyle.ID_ONLY:
+        return f"\n{question.id}: "
+    if style is CueStyle.SHORT:
+        excerpt = " ".join(question.text.split()[:_SHORT_CUE_WORDS])
+        return f"\nQ {question.id}: {excerpt}\n"
     labels = _candidate_labels(question)
     return f"\nQ {question.id}: {question.text}\nAnswer (one of: {', '.join(labels)}): "
 
@@ -882,8 +966,13 @@ def build_native_prompt(
     Pure helper (no tokenizer, no model): identical inputs give a
     byte-identical prompt. Each question is its own numbered block with the
     candidates echoed and an explicit ``Answer (one of: ...):`` cue. The
-    decoder replays those blocks' question + cue text as fixed tokens between
-    the answer slots (see ``_cue_text`` and ``_build_native_grammar``).
+    decoder replays a cue as fixed tokens between the answer slots (see
+    ``_cue_text`` and ``_build_native_grammar``).
+
+    Deliberately cue-style invariant (TD-1d): the catalogue is byte-identical
+    for every ``CueStyle``, so a sweep changes exactly which cue tokens the
+    decoder replays between answers — and shorter cues draw their grounding
+    from this catalogue.
 
     Accepts plain ``Question`` objects or the runner's token-bound
     ``_NativeQuestion`` (whose ``.question`` is used); the runner calls it with
@@ -1103,7 +1192,8 @@ def native_diagnostics(result: DecisionResult, primitives_snapshot: Any) -> dict
             output is row-level only — there is no question binding).
 
     Returns:
-        A JSON-safe dict. With a layout: one entry per question carrying the
+        A JSON-safe dict. With a layout: the replayed ``cue_style`` and one
+        entry per question carrying the
         question id, its answer row index, the emitted token, the raw captured
         weights per candidate label (``candidate_weights_raw``), the sliced raw
         mass, the exact mass OUTSIDE the candidate set when every candidate
@@ -1123,6 +1213,7 @@ def native_diagnostics(result: DecisionResult, primitives_snapshot: Any) -> dict
         "prompt_sha256": result.prompt_sha256,
         "layout_present": layout is not None,
         "rows_captured": len(rows),
+        "cue_style": None,
         "total_tokens_expected": None,
         "n_probs": None,
         "excluded": [],
@@ -1142,6 +1233,7 @@ def native_diagnostics(result: DecisionResult, primitives_snapshot: Any) -> dict
             report["positions"].append(_row_diagnostic(row_index, row))
         return report
 
+    report["cue_style"] = layout.get("cue_style")
     report["total_tokens_expected"] = layout.get("total_tokens")
     report["n_probs"] = layout.get("n_probs")
     excluded = layout.get("excluded")

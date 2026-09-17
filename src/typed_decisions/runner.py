@@ -56,7 +56,7 @@ from src.typed_decisions.types import (
 )
 
 if TYPE_CHECKING:
-    from src.typed_decisions.native import TokenizeFn
+    from src.typed_decisions.native import CueStyle, TokenizeFn
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,7 @@ def run_typed_decisions(
     mode: str = "json",
     max_retries: int = 1,
     n_tokens: int | None = None,
+    cue_style: CueStyle | str = "full",
     tokenize_fn: TokenizeFn | None = None,
 ) -> DecisionResult:
     """Run one typed-decision pass and return typed decisions / failures.
@@ -130,6 +131,13 @@ def run_typed_decisions(
         n_tokens: Output budget; a per-question default is computed when
             ``None``. Forwarded to the native runner in native mode (where
             the default is exactly one token per native-capable question).
+        cue_style: Native-mode cue style (TD-1d): ``"full"`` (the default),
+            ``"short"`` or ``"id_only"``, or the ``native.CueStyle`` enum.
+            Forwarded to the native runner, which replays that cue before each
+            answer token. IGNORED by the JSON arm, which replays no cue. The
+            default is the enum's value string because importing ``CueStyle``
+            at module scope here would close an import cycle (``native``
+            imports this module's validation contract).
         tokenize_fn: Text -> token ids seam for native-mode candidate binding
             (TD-1b). IGNORED by the JSON arm, which never tokenizes
             candidates; forwarded to the native runner, which resolves a
@@ -153,6 +161,7 @@ def run_typed_decisions(
             questions=questions,
             role=role,
             n_tokens=n_tokens,
+            cue_style=cue_style,
             tokenize_fn=tokenize_fn,
         )
     if mode != "json":
