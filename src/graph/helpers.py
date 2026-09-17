@@ -401,11 +401,20 @@ def _log_state_snapshot(ctx: Ctx, role: str) -> None:
         }
         store = getattr(ctx.deps, "session_store", None)
         if store is not None:
-            store.save_checkpoint(state.task_id, _json.dumps(blob), "state_snapshot")
+            # D-f3: routed to the dedicated graph-snapshot writer (the old
+            # positional save_checkpoint call never matched the store API).
+            # Session-scoped only when the turn holds the session lease.
+            store.save_graph_snapshot(
+                state.task_id,
+                _json.dumps(blob, default=str),
+                "state_snapshot",
+                session_id=getattr(ctx.deps, "session_id", None),
+                fencing_token=getattr(ctx.deps, "session_fencing_token", None),
+            )
         else:
             log.debug("State snapshot: turn=%d role=%s fields=%d", state.turns, role, len(blob["state"]))
-    except Exception:
-        log.debug("State snapshot failed", exc_info=True)
+    except Exception as exc:
+        log.warning("State snapshot persist failed (turn snapshot dropped): %s", exc)
 
 
 # ── BEP (J8): batched-edit parallel-apply turn divergence ────────────────────

@@ -69,7 +69,8 @@ class TestSQLiteStatePersistence:
         node = FrontdoorNode()
 
         await persistence.snapshot_node(state, node)
-        store.save_checkpoint.assert_called_once()
+        store.save_graph_snapshot.assert_called_once()
+        store.save_checkpoint.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_snapshot_end(self):
@@ -80,7 +81,8 @@ class TestSQLiteStatePersistence:
         end = End(TaskResult(answer="done", success=True))
 
         await persistence.snapshot_end(state, end)
-        store.save_checkpoint.assert_called_once()
+        store.save_graph_snapshot.assert_called_once()
+        store.save_checkpoint.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_load_next_returns_none(self):

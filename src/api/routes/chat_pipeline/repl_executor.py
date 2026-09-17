@@ -653,6 +653,10 @@ async def _execute_repl_body(
         config=graph_config,
         progress_logger=state.progress_logger,
         session_store=state.session_store if hasattr(state, "session_store") else None,
+        session_id=session_id if (session_lease is not None and not lease_blocked) else None,
+        session_fencing_token=(
+            session_lease.token if (session_lease is not None and not lease_blocked) else None
+        ),
     )
 
     # Up to 2 attempts: initial run + one retry-with-error if schema validation fails.

@@ -287,5 +287,9 @@ class TaskDeps:
     config: GraphConfig = field(default_factory=GraphConfig)
     progress_logger: Any = None  # ProgressLoggerProtocol
     session_store: Any = None  # SQLiteSessionStore
+    # D-f3: set only when the turn holds the session lease, so graph snapshot
+    # writes are session-scoped and fenced; otherwise snapshots are run-scoped.
+    session_id: str | None = None
+    session_fencing_token: int | None = None
     approval_callback: Any = None  # ApprovalCallback protocol (Phase 4A)
     interrupt_conditions: list[Any] = field(default_factory=list)  # InterruptCondition protocol instances

@@ -1393,6 +1393,14 @@ class TestSessionLease:
             seen["live"] = store.leases.get(session.id).is_live(time.time())
             with pytest.raises(Exception, match="unfenced write is refused"):
                 store.update_session(store.get_session(session.id))
+            # D-f3: the graph gets the session id + live token, so its
+            # snapshot writes are session-scoped and fenced.
+            seen["deps"] = (task_deps.session_id, task_deps.session_fencing_token)
+            store.save_graph_snapshot(
+                task_state.task_id, "{}", "state_snapshot",
+                session_id=task_deps.session_id,
+                fencing_token=task_deps.session_fencing_token,
+            )
             return TaskResult(answer="ok", success=True, turns=1, role_history=["frontdoor"])
 
         request = ChatRequest(
@@ -1407,6 +1415,7 @@ class TestSessionLease:
                     initial_role=Role.FRONTDOOR,
                 )
             assert seen["live"] is True
+            assert seen["deps"] == (session.id, 1)
             assert r.session_persistence["lease_token"] == 1
             assert r.session_persistence["lease_error"] is None
             assert r.session_persistence["checkpoint_saved"] is True
@@ -1429,10 +1438,16 @@ class TestSessionLease:
             prompt="p", context="", real_mode=True, mock_mode=False, max_turns=3,
             force_role="frontdoor", session_id=session.id,
         )
+        seen = {}
+
+        async def _fake_run_task(task_state, task_deps, start_role=None):
+            seen["deps"] = (task_deps.session_id, task_deps.session_fencing_token)
+            return TaskResult(answer="ok", success=True, turns=1, role_history=["frontdoor"])
+
         try:
             with patch(
                 "src.api.routes.chat_pipeline.repl_executor.run_task",
-                return_value=TaskResult(answer="ok", success=True, turns=1, role_history=["frontdoor"]),
+                side_effect=_fake_run_task,
             ):
                 r = await _execute_repl(
                     request=request, routing=basic_routing, primitives=mock_primitives,
@@ -1445,6 +1460,8 @@ class TestSessionLease:
             assert sp["restore_error"] == "session_lease_unavailable"
             assert sp["checkpoint_saved"] is False
             assert store.get_checkpoints(session.id) == []
+            # D-f3: a stateless turn's snapshots stay run-scoped.
+            assert seen["deps"] == (None, None)
             # The other owner's lease is untouched.
             assert store.leases.get(session.id).fencing_token == other.fencing_token
             assert store.leases.get(session.id).is_live(time.time())

@@ -13,6 +13,7 @@ import json
 import logging
 import sqlite3
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -196,6 +197,26 @@ class SQLiteSessionStore(BaseSessionStore):
                     pickled_globals TEXT DEFAULT '{}'
                 )
             """)
+
+            # Graph snapshots (D-f3): append-only per-run TaskState snapshots
+            # written by the graph layer. Deliberately NOT the checkpoints
+            # table: get_latest_checkpoint() drives REPL restore, and a
+            # snapshot row there would shadow the real globals checkpoint.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS graph_snapshots (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    session_id TEXT,
+                    snapshot_type TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    fencing_token INTEGER,
+                    data TEXT NOT NULL
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_graph_snapshots_run "
+                "ON graph_snapshots(run_id, created_at)"
+            )
 
             # Tags table (many-to-many)
             conn.execute("""
@@ -789,6 +810,71 @@ class SQLiteSessionStore(BaseSessionStore):
             conn.commit()
 
         return checkpoint
+
+    def save_graph_snapshot(
+        self,
+        run_id: str,
+        data: str,
+        snapshot_type: str,
+        *,
+        session_id: str | None = None,
+        fencing_token: int | None = None,
+    ) -> str:
+        """Append one graph-layer TaskState snapshot (D-f3); return its id.
+
+        ``run_id`` is the graph run (the task id). When the run belongs to a
+        session, pass ``session_id`` and the live lease ``fencing_token``: the
+        fence check and the insert share one write transaction, so a turn that
+        lost its lease cannot attribute snapshots to the session. With no
+        ``session_id`` the row is run-scoped and unfenced.
+        """
+        snapshot_id = str(uuid.uuid4())
+        with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if session_id is not None:
+                check_fence(conn, session_id, fencing_token)
+            conn.execute(
+                """
+                INSERT INTO graph_snapshots (
+                    id, run_id, session_id, snapshot_type, created_at,
+                    fencing_token, data
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot_id,
+                    run_id,
+                    session_id,
+                    snapshot_type,
+                    datetime.now(timezone.utc).isoformat(),
+                    fencing_token,
+                    data,
+                ),
+            )
+            conn.commit()
+        return snapshot_id
+
+    def get_graph_snapshots(self, run_id: str, limit: int = 100) -> list[dict]:
+        """Return a run's graph snapshots, oldest first."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM graph_snapshots WHERE run_id = ?
+                ORDER BY created_at ASC, rowid ASC LIMIT ?
+                """,
+                (run_id, limit),
+            ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "run_id": r["run_id"],
+                "session_id": r["session_id"],
+                "snapshot_type": r["snapshot_type"],
+                "created_at": r["created_at"],
+                "fencing_token": r["fencing_token"],
+                "data": json.loads(r["data"]),
+            }
+            for r in rows
+        ]
 
     def get_latest_checkpoint(self, session_id: str) -> Checkpoint | None:
         """Get the most recent checkpoint for a session."""

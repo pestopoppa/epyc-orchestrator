@@ -58,7 +58,13 @@ class SQLiteStatePersistence(BaseStatePersistence[TaskState, TaskResult]):
     - Each snapshot is a JSON blob with full ``TaskState`` + current node class name
     """
 
-    def __init__(self, session_store: Any, session_id: str):
+    def __init__(
+        self,
+        session_store: Any,
+        session_id: str,
+        *,
+        fencing_token: int | None = None,
+    ):
         super().__init__()
         warnings.warn(
             "SQLiteStatePersistence is deprecated (TM-7): it is write-only and "
@@ -70,6 +76,7 @@ class SQLiteStatePersistence(BaseStatePersistence[TaskState, TaskResult]):
         )
         self._store = session_store
         self._session_id = session_id
+        self._fencing_token = fencing_token
         self._snapshots: list[dict] = []
 
     @asynccontextmanager
@@ -142,17 +149,25 @@ class SQLiteStatePersistence(BaseStatePersistence[TaskState, TaskResult]):
         return list(self._snapshots)  # type: ignore[return-value]
 
     def _write(self, blob: dict) -> None:
-        """Write snapshot to SQLite via session store."""
+        """Write snapshot to SQLite via the store's graph-snapshot writer.
+
+        D-f3: this used to call ``save_checkpoint(session_id=, data=,
+        checkpoint_type=)``, a signature the store never had, and swallowed
+        the ``TypeError`` at debug level, so no snapshot ever landed. The
+        write is fenced with the session lease token when one was supplied.
+        """
         if self._store is None:
             return
         try:
-            self._store.save_checkpoint(
+            self._store.save_graph_snapshot(
+                self._session_id,
+                json.dumps(blob),
+                "graph_snapshot",
                 session_id=self._session_id,
-                data=json.dumps(blob),
-                checkpoint_type="graph_snapshot",
+                fencing_token=self._fencing_token,
             )
         except Exception as exc:
-            log.debug("Graph snapshot persist failed: %s", exc)
+            log.warning("Graph snapshot persist failed for %s: %s", self._session_id, exc)
 
 
 def _state_to_dict_minimal(state: TaskState) -> dict:
