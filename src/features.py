@@ -229,6 +229,11 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # lane serves NO production traffic until the P3-3 three-gates sign-off
     # (shadow-only invariant, program decision D3).
     FeatureSpec("gpu_shadow_lane", False, False, "GPU_SHADOW_LANE", "GPU-resident shadow serving lane (MI210): tenant-as-data scaffolding, shadow-only"),
+    # Typed decision plane (TD-1, intake-1473): one-pass choice/score/noul
+    # decisions over the llm_call seam. Default-off in BOTH test and prod;
+    # TD-1 ships the core only and is NOT wired into any live route — TD-5
+    # performs the wiring under this flag.
+    FeatureSpec("typed_decisions", False, False, "TYPED_DECISIONS", "TD-1: one-pass typed decision plane (choice/score/noul)"),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
 )
@@ -587,6 +592,11 @@ class Features:
     # Gates the np_ceiling policy loader + preflight scaffolding only; no
     # production routing or launch path reads this flag (D3 shadow-only).
     gpu_shadow_lane: bool = False
+
+    # Typed decision plane (TD-1, intake-1473): default OFF everywhere. TD-1
+    # ships the core (types/confidence/schema/runner) only; no route reads
+    # this flag yet — TD-5 wires the plane in under it.
+    typed_decisions: bool = False
 
     # RTE-Prefix (repl-turn-efficiency): render fixed prompt sections (task,
     # instruction) BEFORE per-turn-mutating ones (state, context,
