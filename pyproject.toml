@@ -102,6 +102,18 @@ sandbox = [
     # Python sandboxing for REPL code execution
     "RestrictedPython>=7.0",
 ]
+graph = [
+    # Kuzu embedded graph DB for FailureGraph / HypothesisGraph / BipartiteRoutingGraph
+    # (orchestration/repl_memory/*_graph.py) -> GraphEnhancedRetriever under
+    # specialist_routing, the GNN graph_router, canvas export and seed_graphs.py.
+    # Used-but-undeclared before 2026-09-17 (NIB2-78): absent from the API venv, so the
+    # graph layer never ran in production and each worker logged a fallback traceback.
+    # Pinned exactly: upstream kuzudb/kuzu was ARCHIVED 2025-10-10 and 0.11.3 is its final
+    # release; it opens the on-disk orchestration/repl_memory/kuzu_db files (storage
+    # version 39). Kuzu holds an exclusive per-file lock, so only one API worker can own
+    # a graph file (the others degrade with a one-line warning). Not installed by default.
+    "kuzu==0.11.3",
+]
 colbert-export = [
     # One-off ColBERT/LateOn ONNX export + parity validation (NIB2-47).
     # Not needed at runtime — onnxruntime + tokenizers alone handle inference.

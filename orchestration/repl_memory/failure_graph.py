@@ -90,7 +90,7 @@ class FailureGraph:
         try:
             import kuzu
         except ImportError as e:
-            raise ImportError("kuzu not installed. Run: pip install kuzu") from e
+            raise ImportError("kuzu not installed. Run: pip install 'epyc-orchestrator[graph]'") from e
 
         self._kuzu = kuzu
         self.path = Path(path)
@@ -558,6 +558,7 @@ class FailureGraph:
         return stats
 
     def close(self) -> None:
-        """Close the database connection."""
-        # Kuzu handles cleanup automatically
-        pass
+        """Close the connection and database, releasing Kuzu's file lock."""
+        from .graph_backend import close_kuzu_handles
+
+        close_kuzu_handles(self)

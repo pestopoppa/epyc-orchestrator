@@ -450,6 +450,68 @@ async def background_cleanup(state: "AppState") -> None:
             logger.warning(f"Background cleanup error: {e}", exc_info=True)
 
 
+def _build_graph_retriever(state: "AppState", embedder, retrieval_config):
+    """Build the Kuzu-backed GraphEnhancedRetriever, or return None to fall back.
+
+    Expected degradations (``kuzu`` not installed; graph file locked by another
+    uvicorn worker) log exactly one WARNING line with no traceback (NIB2-78).
+    Anything else is unexpected and keeps its traceback.
+    """
+    from orchestration.repl_memory.graph_backend import (
+        graph_backend_unavailable_reason,
+        is_kuzu_lock_contention,
+    )
+
+    fallback = "failure/hypothesis graph scoring inactive, using TwoPhaseRetriever"
+    reason = graph_backend_unavailable_reason()
+    if reason is not None:
+        logger.warning("Graph layer disabled: %s; %s", reason, fallback)
+        return None
+
+    failure_graph = hypothesis_graph = None
+    try:
+        from orchestration.repl_memory.failure_graph import FailureGraph
+        from orchestration.repl_memory.hypothesis_graph import HypothesisGraph
+        from orchestration.repl_memory.retriever import GraphEnhancedRetriever
+
+        failure_graph = FailureGraph()
+        hypothesis_graph = HypothesisGraph()
+        retriever = GraphEnhancedRetriever(
+            store=state.episodic_store,
+            embedder=embedder,
+            failure_graph=failure_graph,
+            hypothesis_graph=hypothesis_graph,
+            config=retrieval_config,
+        )
+    except Exception as e:
+        for graph in (failure_graph, hypothesis_graph):
+            if graph is not None:
+                try:
+                    graph.close()
+                except Exception:
+                    logger.debug("graph close after failed init raised", exc_info=True)
+        if is_kuzu_lock_contention(e):
+            logger.warning(
+                "Graph layer disabled in this worker (pid %d): graph DB is held by another "
+                "process (%s); %s",
+                os.getpid(),
+                str(e).splitlines()[0],
+                fallback,
+            )
+        else:
+            logger.warning(
+                "GraphEnhancedRetriever init failed, falling back to TwoPhaseRetriever: %s",
+                e,
+                exc_info=True,
+            )
+        return None
+
+    state.failure_graph = failure_graph
+    state.hypothesis_graph = hypothesis_graph
+    logger.info("MemRL initialized with GraphEnhancedRetriever (specialist routing)")
+    return retriever
+
+
 def ensure_memrl_initialized(state: "AppState") -> bool:
     """Lazy-load MemRL components on first real use.
 
@@ -504,28 +566,8 @@ def ensure_memrl_initialized(state: "AppState") -> bool:
 
         # Phase 3: Use GraphEnhancedRetriever when specialist routing is enabled
         if features().specialist_routing:
-            try:
-                from orchestration.repl_memory.failure_graph import FailureGraph
-                from orchestration.repl_memory.hypothesis_graph import HypothesisGraph
-                from orchestration.repl_memory.retriever import GraphEnhancedRetriever
-
-                failure_graph = FailureGraph()
-                hypothesis_graph = HypothesisGraph()
-                retriever = GraphEnhancedRetriever(
-                    store=state.episodic_store,
-                    embedder=embedder,
-                    failure_graph=failure_graph,
-                    hypothesis_graph=hypothesis_graph,
-                    config=retrieval_config,
-                )
-                state.failure_graph = failure_graph
-                state.hypothesis_graph = hypothesis_graph
-                logger.info("MemRL initialized with GraphEnhancedRetriever (specialist routing)")
-            except Exception as e:
-                logger.warning(
-                    f"GraphEnhancedRetriever init failed, falling back to TwoPhaseRetriever: {e}",
-                    exc_info=True,
-                )
+            retriever = _build_graph_retriever(state, embedder, retrieval_config)
+            if retriever is None:
                 retriever = TwoPhaseRetriever(
                     store=state.episodic_store,
                     embedder=embedder,
