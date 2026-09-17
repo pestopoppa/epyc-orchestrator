@@ -397,6 +397,23 @@ def _existing_seed_keys(store: EpisodicStore) -> set[tuple[str, str, str]]:
     return keys
 
 
+class SeedLoadError(RuntimeError):
+    """One or more canonical seeds failed to load (EPD-3-R6).
+
+    Raised AFTER the rows that did load are flushed, so the SQLite rows and the
+    FAISS index stay in step; ``stats`` carries the full counts and a
+    ``failures`` list of ``{"task", "error"}`` entries.
+    """
+
+    def __init__(self, stats: dict):
+        self.stats = stats
+        super().__init__(
+            f"{stats['failed']} of {stats['failed'] + stats['loaded']} attempted seed(s) "
+            f"failed to load (loaded {stats['loaded']}, skipped {stats['skipped']}); "
+            f"first error: {stats['failures'][0]['error'] if stats['failures'] else '?'}"
+        )
+
+
 def seed_memory(force: bool = False, init: bool = False) -> dict:
     """
     Load seed examples into episodic memory.
@@ -407,6 +424,12 @@ def seed_memory(force: bool = False, init: bool = False) -> dict:
 
     Returns:
         Stats dict with counts
+
+    Raises:
+        SeedLoadError: if any seed failed to load. The write loop keeps going
+            past a bad row (so one report names every failure) and flushes the
+            rows that did load, but it never reports success over a failure --
+            a total embed outage used to print ``failed: N`` and exit 0.
     """
     store = EpisodicStore()
     embedder = TaskEmbedder()
@@ -451,6 +474,7 @@ def seed_memory(force: bool = False, init: bool = False) -> dict:
         "failed": 0,
         "skipped": 0,
         "by_category": {},
+        "failures": [],
     }
 
     for i, seed in enumerate(seed_records):
@@ -497,8 +521,12 @@ def seed_memory(force: bool = False, init: bool = False) -> dict:
                 print(f"  Loaded {stats['loaded']}/{len(seed_records)} examples...")
 
         except Exception as e:
+            # Record and continue so one run names every bad row; the run as a
+            # whole still fails closed below (EPD-3-R6).
             print(f"  Failed to load '{task[:50]}...': {e}")
+            logger.warning("seed load failed for %r: %s", task[:50], e)
             stats["failed"] += 1
+            stats["failures"].append({"task": task, "error": f"{type(e).__name__}: {e}"})
 
     # Flush FAISS index to disk before reporting stats
     if stats["loaded"] > 0:
@@ -518,6 +546,8 @@ def seed_memory(force: bool = False, init: bool = False) -> dict:
     print(f"  FAISS embeddings: {store._embedding_store.count}")
     print(f"  Average Q-value: {final_stats['overall_avg_q']:.2f}")
 
+    if stats["failed"]:
+        raise SeedLoadError(stats)
     return stats
 
 
@@ -531,7 +561,11 @@ def main():
     parser.add_argument("--force", action="store_true", help="Clear existing memories first")
     args = parser.parse_args()
 
-    seed_memory(force=args.force, init=args.init)
+    try:
+        seed_memory(force=args.force, init=args.init)
+    except SeedLoadError as exc:
+        print(f"\nSEEDING FAILED: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

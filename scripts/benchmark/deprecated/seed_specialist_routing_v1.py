@@ -1497,8 +1497,14 @@ def _precompute_embedding(
     Returns:
         List of float embeddings, or None on failure.
     """
-    # Build the text the same way q_scorer does
-    text = f"type:chat | objective:{task_description[:200]}"
+    # EPD-3-R5 -- DEPRECATED CONVENTION, DO NOT COPY. This hard-codes
+    # `type:chat` and truncates the objective to 200 chars, one of the foreign
+    # conventions that made the episodic embedding leak the writer path
+    # (handoffs/active/learned-routing-controller.md, EPD-3). The live writer
+    # is scripts/benchmark/seeding_injection.py::_precompute_embedding, which
+    # calls orchestration.repl_memory.memory_record.embedding_text_for with the
+    # row's own task_type. Build embedding text ONLY through that builder.
+    text = f"type:chat | objective:{task_description[:200]}"  # EPD-3-R5: deprecated, do not copy
 
     for port in EMBEDDER_PORTS:
         try:

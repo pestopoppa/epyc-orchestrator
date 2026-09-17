@@ -263,6 +263,33 @@ def extract_work(source: Any) -> dict[str, Any]:
     return {k: source.get(k) for k in WORK_KEYS if source.get(k)}
 
 
+#: Separator between ``key:value`` segments in every embedding convention.
+EMBED_SEGMENT_SEPARATOR = " | "
+
+
+def join_embedding_segments(segments: Any, max_chars: int = EMBED_TEXT_MAX_CHARS) -> str:
+    """THE shared shape of every embedding text: ``key:value | key:value``.
+
+    Every embedder input in the episodic memory family -- the task convention
+    (``MemoryRecord.embedding_text``) and the failure / exploration /
+    classification conventions in ``embedder.py`` -- is assembled here, so the
+    separator, the ``None`` rule and the length bound cannot drift between
+    writers (EPD-3-R8; the same defect EPD-3-R2/R3 fixed for the task text).
+
+    Rules:
+      * ``segments`` is an ordered iterable of ``(key, value)``; order is kept.
+      * ``value is None`` drops the segment. A caller that wants an optional
+        field dropped when EMPTY passes ``value or None``; a caller that wants
+        a mandatory segment passes ``""`` and gets ``key:``. The literal text
+        ``None`` is never emitted.
+      * The joined text is capped at ``max_chars`` (default
+        ``EMBED_TEXT_MAX_CHARS``). Per-field truncation stays with the caller,
+        because it is part of that convention's meaning.
+    """
+    parts = [f"{key}:{value}" for key, value in segments if value is not None]
+    return EMBED_SEGMENT_SEPARATOR.join(parts)[:max_chars]
+
+
 @dataclass
 class MemoryRecord:
     """One episodic memory, in the shape every write site must produce."""
@@ -290,14 +317,13 @@ class MemoryRecord:
         vectors written before and after this change remain comparable, but is
         now produced in exactly one place instead of four.
         """
-        parts: list[str] = []
-        if self.task_type:
-            parts.append(f"type:{self.task_type}")
-        parts.append(f"objective:{(self.objective or '').strip()}")
-        if self.priority:
-            parts.append(f"priority:{self.priority}")
-        text = " | ".join(parts)
-        return text[:EMBED_TEXT_MAX_CHARS]
+        return join_embedding_segments(
+            (
+                ("type", self.task_type or None),
+                ("objective", (self.objective or "").strip()),
+                ("priority", self.priority or None),
+            )
+        )
 
     def to_context(self) -> dict[str, Any]:
         """The stored payload. This method truncates nothing.

@@ -29,13 +29,27 @@ logger = logging.getLogger(__name__)
 
 from src.inference_lock import inference_lock
 
-from .memory_record import embedding_text_for
+from .memory_record import embedding_text_for, join_embedding_segments
 
 # Default model path (BGE-large-en-v1.5 for embeddings)
 # BGE-large produces 1024-dim embeddings, purpose-built for similarity search
 DEFAULT_MODEL_PATH = Path("/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf")
 DEFAULT_EMBEDDING_BINARY = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-embedding")
 DEFAULT_SERVER_URL = "http://127.0.0.1:8090"
+
+# Per-field truncation for the non-task embedding conventions (EPD-3-R8). These
+# are part of each convention's meaning; the joined text is additionally bounded
+# by memory_record.EMBED_TEXT_MAX_CHARS inside join_embedding_segments.
+FAILURE_MESSAGE_EMBED_CHARS = 200
+EXPLORATION_PREVIEW_EMBED_CHARS = 500
+CLASSIFICATION_PROMPT_EMBED_CHARS = 300
+
+
+def _head(value: Any, n: int) -> Any:
+    """First ``n`` chars of a string; ``None``/empty pass through unchanged."""
+    if not value:
+        return value
+    return value[:n]
 
 
 # ── Degenerate-embedding detection ───────────────────────────────────────────
@@ -265,33 +279,33 @@ class TaskEmbedder:
         )
 
     def _serialize_failure_context(self, failure_context: Dict[str, Any]) -> str:
-        """Serialize failure context for escalation memory."""
-        parts = []
+        """Serialize failure context for escalation memory.
 
-        if "error_type" in failure_context:
-            parts.append(f"error:{failure_context['error_type']}")
-
-        if "gate_name" in failure_context:
-            parts.append(f"gate:{failure_context['gate_name']}")
-
-        if "agent_tier" in failure_context:
-            parts.append(f"tier:{failure_context['agent_tier']}")
-
-        if "failure_message" in failure_context:
-            # Truncate message to avoid embedding noise
-            msg = failure_context["failure_message"][:200]
-            parts.append(f"message:{msg}")
-
-        return " | ".join(parts)
+        Assembled by ``join_embedding_segments`` (EPD-3-R8), so a key that is
+        present but ``None`` is dropped instead of embedding ``error:None``.
+        """
+        return join_embedding_segments(
+            (
+                ("error", failure_context.get("error_type")),
+                ("gate", failure_context.get("gate_name")),
+                ("tier", failure_context.get("agent_tier")),
+                # Truncate message to avoid embedding noise
+                ("message", _head(failure_context.get("failure_message"), FAILURE_MESSAGE_EMBED_CHARS)),
+            )
+        )
 
     def _serialize_exploration(self, query: str, context_preview: str) -> str:
-        """Serialize exploration context for REPL memory."""
-        # Truncate to focus on structure
-        preview_truncated = context_preview[:500] if context_preview else ""
-        return f"query:{query} | preview:{preview_truncated}"
+        """Serialize exploration context for REPL memory (via the shared builder)."""
+        # Truncate to focus on structure; both segments are mandatory.
+        return join_embedding_segments(
+            (
+                ("query", query if query is not None else ""),
+                ("preview", _head(context_preview, EXPLORATION_PREVIEW_EMBED_CHARS) or ""),
+            )
+        )
 
     def _serialize_classification_prompt(self, prompt: str, classification_type: str) -> str:
-        """Serialize a prompt for classification lookup.
+        """Serialize a prompt for classification lookup (via the shared builder).
 
         Args:
             prompt: User prompt to classify.
@@ -301,8 +315,12 @@ class TaskEmbedder:
             Serialized string for embedding.
         """
         # Truncate long prompts (first 300 chars capture intent)
-        prompt_truncated = prompt[:300] if len(prompt) > 300 else prompt
-        return f"classify:{classification_type} | prompt:{prompt_truncated}"
+        return join_embedding_segments(
+            (
+                ("classify", classification_type),
+                ("prompt", _head(prompt, CLASSIFICATION_PROMPT_EMBED_CHARS) or ""),
+            )
+        )
 
     def embed_classification_prompt(
         self,
