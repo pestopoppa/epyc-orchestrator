@@ -5469,7 +5469,9 @@ def _ap55_promotion_gate_for_trial(
         mode = ap55_promotion_gate.gate_mode()
         hold = mode != "shadow"
         return {"mode": mode, "status": "error", "error": str(exc)[:200],
-                "hold": hold, "hold_reasons": ["gate_error"] if hold else []}
+                "hold": hold, "hold_reasons": ["gate_error"] if hold else [],
+                "counterfactual": {m: {"hold": True, "hold_reasons": ["gate_error"]}
+                                   for m in ("enforce", "strict")}}
 
 
 def _record_baseline_infra_fingerprint(

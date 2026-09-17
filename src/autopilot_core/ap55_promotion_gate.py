@@ -361,6 +361,24 @@ def _holds(mode: str, seed: Mapping[str, Any], batch: Mapping[str, Any]) -> list
     return reasons
 
 
+def counterfactual_holds(seed: Mapping[str, Any], batch: Mapping[str, Any]) -> dict[str, Any]:
+    """What each BINDING mode would have decided on the same legs (AP-55-ARM).
+
+    In shadow mode ``hold`` is always False by construction, so the recorded ``hold``
+    field cannot answer "how often would enforce have held?". This records the
+    answer at write time with the same rule (`_holds`) the binding modes use.
+    """
+    out: dict[str, Any] = {}
+    for mode in ("enforce", "strict"):
+        reasons = _holds(mode, seed, batch)
+        out[mode] = {"hold": bool(reasons), "hold_reasons": reasons}
+    return out
+
+
+def _errored_counterfactual() -> dict[str, Any]:
+    return {mode: {"hold": True, "hold_reasons": ["gate_error"]} for mode in ("enforce", "strict")}
+
+
 def promotion_gate(
     entries: Iterable[Any],
     *,
@@ -399,6 +417,7 @@ def promotion_gate(
             "batch_homogeneity": batch,
             "hold": bool(reasons),
             "hold_reasons": reasons,
+            "counterfactual": counterfactual_holds(seed, batch),
         }
     except Exception as exc:  # noqa: BLE001 - the gate must never lose a trial
         err = f"{type(exc).__name__}: {exc}"[:200]
@@ -411,6 +430,7 @@ def promotion_gate(
             # An errored gate cannot certify anything: fail closed when binding.
             "hold": hold,
             "hold_reasons": ["gate_error"] if hold else [],
+            "counterfactual": _errored_counterfactual(),
         }
 
 
@@ -431,4 +451,46 @@ def gate_summary(gate: Mapping[str, Any] | None) -> dict[str, Any]:
         "batch_p_value": test.get("p_value"),
         "hold": bool(gate.get("hold")),
         "hold_reasons": list(gate.get("hold_reasons") or []),
+        **_counterfactual_summary(gate),
     }
+
+
+def _counterfactual_summary(gate: Mapping[str, Any]) -> dict[str, Any]:
+    cf = gate.get("counterfactual")
+    if not isinstance(cf, Mapping):
+        return {}  # written before AP-55-ARM prep: see would_hold_from_summary()
+    enforce = cf.get("enforce") or {}
+    strict = cf.get("strict") or {}
+    return {
+        "would_hold_enforce": bool(enforce.get("hold")),
+        "would_hold_enforce_reasons": list(enforce.get("hold_reasons") or []),
+        "would_hold_strict": bool(strict.get("hold")),
+    }
+
+
+def would_hold_from_summary(summary: Mapping[str, Any], mode: str = "enforce") -> dict[str, Any]:
+    """Counterfactual hold for a recorded ``gate_summary`` (AP-55-ARM review).
+
+    Uses the recorded ``would_hold_<mode>`` when the row carries it (``basis:
+    recorded``). Older summaries are re-derived with the same `_holds` rule from
+    the recorded leg statuses (``basis: reconstructed``); an errored gate holds.
+    An empty summary is ``basis: absent`` — no verdict is invented for it.
+    """
+    if mode not in ("enforce", "strict"):
+        raise ValueError(f"not a binding mode: {mode}")
+    if not isinstance(summary, Mapping) or not summary:
+        return {"basis": "absent", "hold": None, "hold_reasons": []}
+    key = f"would_hold_{mode}"
+    if key in summary:
+        reasons = summary.get(f"{key}_reasons")
+        return {
+            "basis": "recorded",
+            "hold": bool(summary[key]),
+            "hold_reasons": list(reasons) if isinstance(reasons, list) else [],
+        }
+    if summary.get("seed_rerun") == "error" or summary.get("batch_homogeneity") == "error":
+        return {"basis": "reconstructed", "hold": True, "hold_reasons": ["gate_error"]}
+    seed = {"status": summary.get("seed_rerun"), "trial_id": summary.get("seed_rerun_trial_id")}
+    batch = {"status": summary.get("batch_homogeneity"), "batch_regime": summary.get("batch_regime")}
+    reasons = _holds(mode, seed, batch)
+    return {"basis": "reconstructed", "hold": bool(reasons), "hold_reasons": reasons}

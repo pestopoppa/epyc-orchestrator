@@ -127,6 +127,21 @@ comparability verdict; it does not depend on the gate's mode. Follow-up task AP-
 AutoPilot run in shadow mode, report how often enforce would have held a promotion, then arm
 enforce plus seed re-runs (the operator pre-approved option B for after that review).
 
+**AP-55-ARM runbook (prepared 2026-09-17).** The launcher now pins the shadow run:
+`start_authority_daemon.py` `AUTHORITY_ENV` sets `AUTOPILOT_AP55_PROMOTION_GATE=shadow` and
+`AUTOPILOT_AP55_SEED_RERUN=0`, so an inherited shell variable cannot arm it. In shadow the recorded
+`hold` is always False, so it cannot answer the review question. Each trial therefore also records
+`eval_details.ap55_promotion_gate.would_hold_enforce` (plus reasons and `would_hold_strict`), computed
+with the same rule the binding modes use. After the shadow run:
+
+1. `python3 scripts/autopilot/ap55_shadow_review.py --since <shadow-run start ISO ts>` (read-only).
+   It reports how often enforce would have held, over gated trials, attempted promotions and committed
+   promotions (`baseline_promotion` events). Exit 3 means no shadow verdict is in the window, so flip nothing.
+2. Report the committed-promotion would-hold count and rate, plus the reason histogram.
+3. Flip the two `AUTHORITY_ENV` lines: `AUTOPILOT_AP55_PROMOTION_GATE` `shadow` → `enforce` and
+   `AUTOPILOT_AP55_SEED_RERUN` `0` → `1`. Restart AutoPilot through the wrapper. The flip binds only
+   from that restart.
+
 **D3 — the load-path quality ceiling is not epoch-fenced.** `Baseline.load`, `apply_state` and
 `_drop_over_archive_max_tiers` still read the unscoped legacy view
 (`_pareto_archive_for_safety_guard`). They read the quality axis only, so axis 1's unit never

@@ -41,6 +41,21 @@ def test_authority_env_forces_required_flags() -> None:
     assert env["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "0"
 
 
+def test_authority_env_pins_the_ap55_gate_mode() -> None:
+    """AP-55: the launcher pins the gate mode and the seed re-run knob, so an inherited
+    shell variable can neither arm nor disarm them. Derived from AUTHORITY_ENV (the
+    AP-55-ARM flip edits that dict), and both values must be ones the loop understands."""
+    env = launcher.authority_env(
+        {"AUTOPILOT_AP55_PROMOTION_GATE": "strict", "AUTOPILOT_AP55_SEED_RERUN": "yes"}
+    )
+    mode = launcher.AUTHORITY_ENV["AUTOPILOT_AP55_PROMOTION_GATE"]
+    rerun = launcher.AUTHORITY_ENV["AUTOPILOT_AP55_SEED_RERUN"]
+    assert env["AUTOPILOT_AP55_PROMOTION_GATE"] == mode
+    assert env["AUTOPILOT_AP55_SEED_RERUN"] == rerun
+    assert mode in {"shadow", "enforce", "strict"}
+    assert rerun in {"0", "1"}
+
+
 def test_authority_env_enforces_sealed_two_codex_zero_claude_roster() -> None:
     env = launcher.authority_env(
         {

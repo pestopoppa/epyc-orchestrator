@@ -111,6 +111,18 @@ AUTHORITY_ENV: dict[str, str] = {
     # staged-multitier-v1: T1 screens; matched T2/T3 evidence is binding
     # before the final fresh T1 baseline-promotion draw.
     "AUTOPILOT_MULTITIER_PROMOTION": "1",
+    # AP-55 (b)+(c) promotion gate — operator decision 2026-09-16, mode A: the next
+    # AutoPilot run is SHADOW (legs recorded, never binding). Pinned here so an
+    # inherited shell variable cannot arm it silently.
+    #
+    # AP-55-ARM (pre-approved by the operator for AFTER one shadow run): first run
+    #     python3 scripts/autopilot/ap55_shadow_review.py --since <shadow-run start ISO ts>
+    # and report its would-hold numbers, then flip exactly these two lines:
+    #   * AUTOPILOT_AP55_PROMOTION_GATE "shadow" -> "enforce"
+    #   * AUTOPILOT_AP55_SEED_RERUN     "0"      -> "1"
+    # and restart AutoPilot through this wrapper. The flip takes effect at restart only.
+    "AUTOPILOT_AP55_PROMOTION_GATE": "shadow",
+    "AUTOPILOT_AP55_SEED_RERUN": "0",
 }
 
 LOCAL_PLANNER_DEFAULT_ENV: dict[str, str] = {
