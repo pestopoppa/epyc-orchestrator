@@ -14,7 +14,9 @@ servers:
     timeout: 30
 
   "orchestrator":
-    command: "python3"
+    # The project venv carries the pinned fastmcp>=3, which refuses undeclared tool
+    # arguments (HS-4 P0-MCP-a). A bare "python3" resolves to whatever is on PATH.
+    command: "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python"
     args: ["/mnt/raid0/llm/epyc-orchestrator/src/mcp_server.py"]
     env:
       PYTHONPATH: "/mnt/raid0/llm/epyc-orchestrator"

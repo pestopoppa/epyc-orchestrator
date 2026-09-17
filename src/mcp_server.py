@@ -13,7 +13,7 @@ Configuration (.mcp.json):
     {
       "mcpServers": {
         "orchestrator": {
-          "command": "python",
+          "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python",
           "args": ["src/mcp_server.py"]
         }
       }
@@ -38,6 +38,14 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 mcp = FastMCP("orchestrator-info")
 
+# HS-4 P0-MCP-b: every tool declares ``session_id``.
+# OpenCode names MCP tools "<server>_<tool>", and the epyc OpenCode plugin stamps
+# ``session_id`` onto every ``orchestrator_*`` call. fastmcp>=3 refuses undeclared
+# arguments (tests/unit/test_mcp_undeclared_args_refused.py), so a tool without the
+# parameter would refuse every stamped call. The chat tools forward it to /chat as
+# ``ChatRequest.session_id``. The other tools read static state and do not depend on
+# the session, so they accept the value and ignore it.
+
 # Plugin loader for dynamic tool discovery
 _plugin_loader = None
 
@@ -56,7 +64,7 @@ def _get_plugin_loader():
 
 
 @mcp.tool()
-def lookup_model(role: str) -> str:
+def lookup_model(role: str, session_id: str = "") -> str:
     """Look up model config for an orchestrator role.
 
     Args:
@@ -102,7 +110,7 @@ def lookup_model(role: str) -> str:
 
 
 @mcp.tool()
-def list_roles() -> str:
+def list_roles(session_id: str = "") -> str:
     """List all configured orchestrator roles by tier.
 
     Returns:
@@ -131,7 +139,7 @@ def list_roles() -> str:
 
 
 @mcp.tool()
-def server_status() -> str:
+def server_status(session_id: str = "") -> str:
     """Get current status of all orchestrator services.
 
     Returns:
@@ -165,7 +173,7 @@ def server_status() -> str:
 
 
 @mcp.tool()
-def query_benchmarks(model_name: str = "", suite: str = "") -> str:
+def query_benchmarks(model_name: str = "", suite: str = "", session_id: str = "") -> str:
     """Query benchmark results from the summary CSV.
 
     Args:
@@ -220,6 +228,7 @@ def export_reasoning_canvas(
     graph_type: str = "hypothesis",
     include_evidence: bool = True,
     output_path: str = "",
+    session_id: str = "",
 ) -> str:
     """Export a reasoning graph to JSON Canvas format.
 
@@ -245,7 +254,7 @@ def export_reasoning_canvas(
 
 
 @mcp.tool()
-def import_canvas_edits(canvas_path: str, baseline_path: str = "") -> str:
+def import_canvas_edits(canvas_path: str, baseline_path: str = "", session_id: str = "") -> str:
     """Import an edited canvas and extract planning constraints.
 
     Args:
@@ -265,7 +274,7 @@ def import_canvas_edits(canvas_path: str, baseline_path: str = "") -> str:
 
 
 @mcp.tool()
-def list_canvases(directory: str = "") -> str:
+def list_canvases(directory: str = "", session_id: str = "") -> str:
     """List available canvas files.
 
     Args:
@@ -285,7 +294,7 @@ def list_canvases(directory: str = "") -> str:
 
 # Plugin management tools
 @mcp.tool()
-def list_plugins(enabled_only: bool = True) -> str:
+def list_plugins(enabled_only: bool = True, session_id: str = "") -> str:
     """List all available tool plugins.
 
     Args:
@@ -324,7 +333,7 @@ def list_plugins(enabled_only: bool = True) -> str:
 
 
 @mcp.tool()
-def reload_plugins() -> str:
+def reload_plugins(session_id: str = "") -> str:
     """Reload any changed plugins (hot-reload).
 
     Returns:
@@ -446,6 +455,7 @@ def orchestrator_chat(
     force_role: str = "",
     force_mode: str = "",
     timeout_s: int = 120,
+    session_id: str = "",
 ) -> str:
     """Send a prompt to the local orchestrator for inference via the full routing pipeline.
 
@@ -460,6 +470,8 @@ def orchestrator_chat(
         force_mode: Force a mode ("direct", "repl", "delegated").
                     Empty string uses automatic selection.
         timeout_s: Request timeout in seconds (default 120).
+        session_id: Shell session identifier. Forwarded as ``ChatRequest.session_id``
+                    when non-empty (the OpenCode plugin stamps it on every call).
 
     Returns:
         The model's response with routing metadata.
@@ -482,6 +494,8 @@ def orchestrator_chat(
         payload["force_role"] = force_role
     if force_mode:
         payload["force_mode"] = force_mode
+    if session_id:
+        payload["session_id"] = session_id
 
     resp = _post_chat(payload)
     return _format_chat_response(resp)
@@ -491,6 +505,7 @@ def orchestrator_chat(
 def orchestrator_route_explain(
     prompt: str,
     context: str = "",
+    session_id: str = "",
 ) -> str:
     """Explain how the orchestrator would route a prompt WITHOUT running inference.
 
@@ -500,6 +515,8 @@ def orchestrator_route_explain(
     Args:
         prompt: The prompt to analyze.
         context: Additional context to include.
+        session_id: Shell session identifier, forwarded as ``ChatRequest.session_id``
+                    when non-empty.
 
     Returns:
         Routing analysis showing selected role, strategy, mode, and timeout.
@@ -514,6 +531,8 @@ def orchestrator_route_explain(
     }
     if context:
         payload["context"] = context
+    if session_id:
+        payload["session_id"] = session_id
 
     resp = _post_chat(payload)
 
