@@ -372,15 +372,35 @@ class TestPromptStability:
 
 
 class TestModeContract:
-    def test_native_mode_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="TD-1a"):
-            run_typed_decisions(
-                _FakePrimitives(""),
-                state=STATE,
-                questions=QUESTIONS[:1],
-                role=ROLE,
-                mode="native",
-            )
+    def test_native_mode_dispatches_to_the_native_runner(self):
+        primitives = _FakePrimitives("")
+        primitives._last_inference_meta = {
+            "completion_probabilities": [
+                {
+                    "id": 1,
+                    "token": "alpha",
+                    "bytes": [97],
+                    "logprob": -0.1,
+                    "top_logprobs": [
+                        {"id": 1, "token": "alpha", "bytes": [97], "logprob": -0.1},
+                        {"id": 2, "token": "beta", "bytes": [98], "logprob": -2.0},
+                    ],
+                }
+            ]
+        }
+
+        result = run_typed_decisions(
+            primitives,
+            state=STATE,
+            questions=QUESTIONS[:1],
+            role=ROLE,
+            mode="native",
+        )
+
+        assert result.mode == "native"
+        assert [decision.value for decision in result.decisions] == ["alpha"]
+        assert primitives.calls[0]["grammar"] is not None
+        assert "json_schema" not in primitives.calls[0]
 
     def test_unknown_mode_is_rejected(self):
         with pytest.raises(ValueError, match="unknown typed-decisions mode"):

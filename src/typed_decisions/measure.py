@@ -332,6 +332,7 @@ def run_contamination_study(
             "flip_rate": flips / comparable,
             "canonical_unresolved_ids": canonical_unresolved,
         },
+        "metric_directions": {"flip_rate": "lower_better"},
         "prompt_sha256": _prompt_hashes(results),
     }
     _write_receipt(receipt, receipt_path=receipt_path, artifacts_dir=artifacts_dir)
@@ -481,6 +482,11 @@ def run_calibration_study(
                 "accuracy": accuracy,
                 "mean_confidence": mean_confidence,
                 "n_bins": _ECE_BINS,
+                "metric_direction": {
+                    "ece": "lower_better",
+                    "brier": "lower_better",
+                    "accuracy": "higher_better",
+                },
             },
             "reliability_bins": _reliability_bins(confidences, outcomes, n_bins=_ECE_BINS),
             "unknown_label_ids": unknown_labels,
@@ -489,6 +495,7 @@ def run_calibration_study(
             ],
             "elapsed_ms": result.elapsed_ms,
         },
+        "metric_directions": {"ece": "lower_better", "brier": "lower_better", "accuracy": "higher_better"},
         "prompt_sha256": _prompt_hashes([result]),
     }
     _write_receipt(receipt, receipt_path=receipt_path, artifacts_dir=artifacts_dir)
@@ -699,6 +706,11 @@ def run_fanout_study(
             "batched_speedup_wall": (
                 singleton_wall_ms / batched_wall_ms if batched_wall_ms > 0.0 else None
             ),
+            "metric_directions": {
+                "agreement_rate": "higher_better",
+                "batched_speedup_serial": "higher_better",
+                "batched_speedup_wall": "higher_better",
+            },
         },
         "prompt_sha256": _prompt_hashes(batched_results + singleton_results),
     }
