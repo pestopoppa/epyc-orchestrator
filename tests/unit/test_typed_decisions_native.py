@@ -1,9 +1,15 @@
-"""Unit tests for the TD-1b native candidate-scoring path.
+"""Unit tests for the TD-1b/TD-1c native candidate-scoring path.
 
 Mirrors the fake-primitives pattern of ``tests/unit/test_typed_decisions.py``
 (one canned response, captured call kwargs) but adds the instance-level
 ``_last_inference_meta`` that carries synthetic ``completion_probabilities``
 rows, plus a fake tokenizer seam.
+
+The TD-1c generation layout is ``cue-0 answer-0 cue-1 answer-1 ...``: each
+question's cue is replayed as fixed tokens so every answer token is generated
+immediately after its own question. The tests therefore build metas whose rows
+are 1:1 with generated tokens (cue rows included) via ``_build_meta``, and the
+answer row indices are computed from the tokenizer's cue lengths.
 
 The primary row shape pinned here is the production-consolidated-v9
 ``/completion`` shape emitted by
@@ -22,7 +28,8 @@ The fake tokenizer makes both the bare and the space-prefixed form of every
 fixture label a single token with distinct ids — as llama.cpp tokenizers
 commonly do — so eligibility, grammar construction and id-based slicing are
 all exercised against realistic tokenizer output. Texts outside the fake
-vocabulary fall back to one id per character (multi-token).
+vocabulary fall back to one id per character (multi-token) unless the test
+passes a single-id ``fallback`` for short, pinned cues.
 """
 
 from __future__ import annotations
@@ -46,10 +53,18 @@ from src.typed_decisions.native import (
     REASON_NATIVE_TOKENIZER_UNAVAILABLE,
     REASON_NATIVE_UNKNOWN_CANDIDATE,
     REASON_NATIVE_UNSUPPORTED_CANDIDATES,
+    _cue_text,
+    build_native_prompt,
+    native_diagnostics,
 )
 
 ROLE = "worker"
 STATE = "unit-test state: native candidate scoring over a three-question catalogue."
+
+# A single token id substituted for every text absent from a fake vocabulary
+# when a test passes ``fallback=(_CUE_TOKEN,)``: keeps cues one token long and
+# the pinned grammar strings short.
+_CUE_TOKEN = 990
 
 
 # ── fake tokenizer ────────────────────────────────────────────────────────
@@ -89,17 +104,20 @@ class _FakeTokenizer:
     """Text -> token ids with a recorded call log.
 
     ``failing`` texts return ``None`` (the seam's "no answer" signal). Texts
-    absent from ``vocab`` tokenize to one id per character, so multi-token
-    candidates are representable without special-casing.
+    absent from ``vocab`` tokenize to ``fallback`` when one is given, else to
+    one id per character, so multi-token candidates are representable without
+    special-casing.
     """
 
     def __init__(
         self,
         vocab: Mapping[str, tuple[int, ...]] | None = None,
         failing: Sequence[str] = (),
+        fallback: Sequence[int] | None = None,
     ) -> None:
         self.vocab = {text: tuple(ids) for text, ids in (vocab or _DEFAULT_VOCAB).items()}
         self.failing = set(failing)
+        self.fallback = tuple(fallback) if fallback is not None else None
         self.calls: list[str] = []
 
     def __call__(self, text: str) -> list[int] | None:
@@ -108,6 +126,8 @@ class _FakeTokenizer:
             return None
         if text in self.vocab:
             return list(self.vocab[text])
+        if self.fallback is not None:
+            return list(self.fallback)
         return [ord(char) for char in text]
 
 
@@ -199,31 +219,52 @@ def _v9_row(
     return row
 
 
-def _main_meta() -> dict[str, Any]:
-    """Three rows: choice (renormalizes 0.5/0.2/0.1 -> sum 0.8), score, noul."""
-    return {
-        "role": ROLE,
-        "transport": "batch",
-        "tokens": 3,
-        "completion_reason": "stop",
-        "completion_probabilities": [
-            _v9_row(
-                "blue",
-                math.log(0.5),
-                [("blue", math.log(0.5)), ("red", math.log(0.2)), ("green", math.log(0.1))],
-            ),
-            _v9_row(
-                "2",
-                math.log(0.6),
-                [("2", math.log(0.6)), ("1", math.log(0.25)), ("0", math.log(0.1))],
-            ),
-            _v9_row(
-                "true",
-                math.log(0.9),
-                [("true", math.log(0.9)), ("false", math.log(0.1))],
-            ),
-        ],
-    }
+def _cue_length(tokenizer: _FakeTokenizer, question: Question) -> int:
+    return len(tokenizer(_cue_text(question)))
+
+
+def _build_meta(
+    questions: Sequence[Question],
+    answer_rows: Sequence[Mapping[str, Any]],
+    tokenizer: _FakeTokenizer,
+) -> dict[str, Any]:
+    """A meta whose rows are 1:1 with the TD-1c generated tokens.
+
+    ``answer_rows[i]`` is placed at question ``i``'s answer index; the cue
+    tokens before it become opaque filler rows (the runner never slices them).
+    """
+    rows: list[Mapping[str, Any]] = []
+    for question, answer_row in zip(questions, answer_rows):
+        for _ in range(_cue_length(tokenizer, question)):
+            rows.append({"id": _CUE_TOKEN, "token": "", "logprob": 0.0, "top_logprobs": []})
+        rows.append(answer_row)
+    return {"completion_probabilities": rows}
+
+
+def _main_answer_rows() -> list[dict[str, Any]]:
+    """Three rows: choice (0.5/0.2/0.1), score (0.6/0.25/0.1), noul (0.9/0.1)."""
+    return [
+        _v9_row(
+            "blue",
+            math.log(0.5),
+            [("blue", math.log(0.5)), ("red", math.log(0.2)), ("green", math.log(0.1))],
+        ),
+        _v9_row(
+            "2",
+            math.log(0.6),
+            [("2", math.log(0.6)), ("1", math.log(0.25)), ("0", math.log(0.1))],
+        ),
+        _v9_row(
+            "true",
+            math.log(0.9),
+            [("true", math.log(0.9)), ("false", math.log(0.1))],
+        ),
+    ]
+
+
+def _main_meta(tokenizer: _FakeTokenizer | None = None) -> dict[str, Any]:
+    tokenizer = tokenizer or _FakeTokenizer()
+    return _build_meta(QUESTIONS, _main_answer_rows(), tokenizer)
 
 
 def _by_id(result: DecisionResult) -> dict[str, Any]:
@@ -242,11 +283,22 @@ def _run(primitives: _FakePrimitives, questions: Sequence[Question], **kwargs):
 
 
 _MAIN_GRAMMAR = (
-    "root ::= position-0 position-1 position-2\n"
-    "position-0 ::= <[1000]> | <[1001]> | <[1002]> | <[1003]> | <[1004]> | <[1005]>\n"
-    "position-1 ::= <[1006]> | <[1007]> | <[1008]> | <[1009]> | <[1010]> | <[1011]> | <[1012]> | <[1013]>\n"
-    "position-2 ::= <[1014]> | <[1015]> | <[1016]> | <[1017]>\n"
+    "root ::= cue-0 answer-0 cue-1 answer-1 cue-2 answer-2\n"
+    "cue-0 ::= <[990]>\n"
+    "answer-0 ::= <[1000]> | <[1001]> | <[1002]> | <[1003]> | <[1004]> | <[1005]>\n"
+    "cue-1 ::= <[990]>\n"
+    "answer-1 ::= <[1006]> | <[1007]> | <[1008]> | <[1009]> | <[1010]> | <[1011]> | <[1012]> | <[1013]>\n"
+    "cue-2 ::= <[990]>\n"
+    "answer-2 ::= <[1014]> | <[1015]> | <[1018]> | <[1019]> | <[1016]> | <[1017]> | <[1020]> | <[1021]>\n"
 )
+
+
+def _single_cue_run(questions: Sequence[Question]):
+    """A run whose cue texts are one token (``_CUE_TOKEN``) and answers follow."""
+    tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+    answer_rows = _main_answer_rows()[: len(questions)]
+    primitives = _FakePrimitives("", meta=_build_meta(questions, answer_rows, tokenizer))
+    return _run(primitives, questions, tokenize_fn=tokenizer), primitives, tokenizer
 
 
 # ── 1. Pinned row shape, slicing, renormalization, argmax ─────────────────
@@ -254,6 +306,7 @@ _MAIN_GRAMMAR = (
 
 class TestNativeSlicing:
     def test_production_v9_row_shape_is_pinned(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
         row = _v9_row(
             "blue",
             math.log(0.5),
@@ -266,23 +319,24 @@ class TestNativeSlicing:
         for entry in row["top_logprobs"]:
             assert set(entry) == {"id", "token", "bytes", "logprob"}
 
-        primitives = _FakePrimitives("", meta={"completion_probabilities": [row]})
         question = Question(
             id="colour",
             kind=QuestionKind.CHOICE,
             text="Pick a colour.",
             options=("red", "blue", "green"),
         )
+        primitives = _FakePrimitives("", meta=_build_meta([question], [row], tokenizer))
 
-        result = _run(primitives, [question])
+        result = _run(primitives, [question], tokenize_fn=tokenizer)
 
         assert len(result.decisions) == 1
         assert result.failures == ()
 
     def test_slice_is_renormalized_and_argmax_is_reported(self):
-        primitives = _FakePrimitives("", meta=_main_meta())
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        primitives = _FakePrimitives("", meta=_main_meta(tokenizer))
 
-        result = _run(primitives, QUESTIONS)
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
 
         assert isinstance(result, DecisionResult)
         assert result.mode == "native"
@@ -326,27 +380,24 @@ class TestNativeSlicing:
         assert noul.token_logprob == pytest.approx(math.log(0.9))
 
     def test_legacy_content_probs_shape_is_accepted(self):
-        meta = {
-            "completion_probabilities": [
-                {
-                    "content": "red",
-                    "probs": [
-                        {"tok_str": "red", "prob": 0.6},
-                        {"tok_str": "blue", "prob": 0.3},
-                        {"tok_str": "green", "prob": 0.1},
-                    ],
-                }
-            ]
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        answer_row = {
+            "content": "red",
+            "probs": [
+                {"tok_str": "red", "prob": 0.6},
+                {"tok_str": "blue", "prob": 0.3},
+                {"tok_str": "green", "prob": 0.1},
+            ],
         }
-        primitives = _FakePrimitives("", meta=meta)
         question = Question(
             id="colour",
             kind=QuestionKind.CHOICE,
             text="Pick a colour.",
             options=("red", "blue", "green"),
         )
+        primitives = _FakePrimitives("", meta=_build_meta([question], [answer_row], tokenizer))
 
-        result = _run(primitives, [question])
+        result = _run(primitives, [question], tokenize_fn=tokenizer)
 
         decision = result.decisions[0]
         assert decision.value == "red"
@@ -358,22 +409,19 @@ class TestNativeSlicing:
         assert decision.token_logprob == pytest.approx(math.log(0.6))
 
     def test_post_sampling_top_probs_shape_is_accepted(self):
-        meta = {
-            "completion_probabilities": [
-                {
-                    "token": "false",
-                    "prob": 0.7,
-                    "top_probs": [
-                        {"token": "false", "prob": 0.7},
-                        {"token": "true", "prob": 0.3},
-                    ],
-                }
-            ]
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        answer_row = {
+            "token": "false",
+            "prob": 0.7,
+            "top_probs": [
+                {"token": "false", "prob": 0.7},
+                {"token": "true", "prob": 0.3},
+            ],
         }
-        primitives = _FakePrimitives("", meta=meta)
         question = Question(id="flag", kind=QuestionKind.NOUL, text="Ship it?")
+        primitives = _FakePrimitives("", meta=_build_meta([question], [answer_row], tokenizer))
 
-        result = _run(primitives, [question])
+        result = _run(primitives, [question], tokenize_fn=tokenizer)
 
         decision = result.decisions[0]
         assert decision.value is False
@@ -384,20 +432,22 @@ class TestNativeSlicing:
         assert decision.token_logprob == pytest.approx(math.log(0.7))
 
 
-# ── 2. Call contract: grammar, n_probs, n_tokens, determinism ─────────────
+# ── 2. Call contract: cue/answer grammar, n_probs, n_tokens, determinism ──
 
 
 class TestNativeCallContract:
-    def test_captured_kwargs_carry_grammar_and_probability_capture(self):
-        primitives = _FakePrimitives("", meta=_main_meta())
+    def test_captured_kwargs_carry_cue_grammar_and_probability_capture(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        primitives = _FakePrimitives("", meta=_main_meta(tokenizer))
 
-        _run(primitives, QUESTIONS)
+        _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
 
         assert len(primitives.calls) == 1
         call = primitives.calls[0]
         assert call["role"] == ROLE
-        assert call["n_tokens"] == 3
-        # score contributes the most alternatives: 4 labels x 2 variants + buffer.
+        # 3 one-token cues + one answer token per question.
+        assert call["n_tokens"] == 6
+        # score/noul contribute the most alternatives: 8 + buffer 4.
         assert call["n_probs"] == 12
         assert call["temperature"] == 0.0
         assert call["seed"] == 0
@@ -406,58 +456,67 @@ class TestNativeCallContract:
 
     def test_n_probs_accounts_for_tokenized_alternatives(self):
         # yes: bare + spaced single; no: bare single only -> 3 alternatives.
-        vocab = {"yes": (41,), " yes": (42,), "no": (43,)}
-        tokenizer = _FakeTokenizer(vocab)
-        meta = {
-            "completion_probabilities": [
-                _v9_row(
-                    "yes",
-                    math.log(0.8),
-                    [("yes", math.log(0.8)), ("no", math.log(0.2))],
-                    ids={"yes": 41, "no": 43},
-                )
-            ]
-        }
-        primitives = _FakePrimitives("", meta=meta)
+        vocab = {"yes": (41,), " yes": (42,), "no": (43,), " no": (900, 901)}
+        tokenizer = _FakeTokenizer(vocab, fallback=(_CUE_TOKEN,))
+        answer_row = _v9_row(
+            "yes",
+            math.log(0.8),
+            [("yes", math.log(0.8)), ("no", math.log(0.2))],
+            ids={"yes": 41, "no": 43},
+        )
+        primitives = _FakePrimitives("", meta=_build_meta([SINGLE_TOKEN], [answer_row], tokenizer))
 
         _run(primitives, [SINGLE_TOKEN], tokenize_fn=tokenizer)
 
         call = primitives.calls[0]
         assert call["n_probs"] == 7  # max alternatives (3) + buffer 4
-        assert call["grammar"] == "root ::= position-0\nposition-0 ::= <[41]> | <[42]> | <[43]>\n"
+        assert call["n_tokens"] == 2  # one cue token + one answer token
+        assert call["grammar"] == (
+            "root ::= cue-0 answer-0\ncue-0 ::= <[990]>\nanswer-0 ::= <[41]> | <[42]> | <[43]>\n"
+        )
 
     def test_prompt_is_deterministic_and_hashed(self):
-        first = _FakePrimitives("", meta=_main_meta())
-        second = _FakePrimitives("", meta=_main_meta())
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        first = _FakePrimitives("", meta=_main_meta(tokenizer))
+        second = _FakePrimitives("", meta=_main_meta(tokenizer))
 
-        first_result = _run(first, QUESTIONS)
-        second_result = _run(second, QUESTIONS)
+        first_result = _run(first, QUESTIONS, tokenize_fn=tokenizer)
+        second_result = _run(second, QUESTIONS, tokenize_fn=tokenizer)
 
         prompt = first.calls[0]["prompt"]
         assert prompt == second.calls[0]["prompt"]
+        assert prompt == build_native_prompt(STATE, QUESTIONS)
         assert first_result.prompt_sha256 == second_result.prompt_sha256
         assert first_result.prompt_sha256 == hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         assert "candidates: red | blue | green" in prompt
         assert prompt.index("id=choice") < prompt.index("id=score") < prompt.index("id=noul")
 
     def test_explicit_n_probs_is_forwarded_and_capped(self):
-        low = _FakePrimitives("", meta=_main_meta())
-        high = _FakePrimitives("", meta=_main_meta())
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        low = _FakePrimitives("", meta=_main_meta(tokenizer))
+        high = _FakePrimitives("", meta=_main_meta(tokenizer))
 
-        _run(low, QUESTIONS, n_probs=7)
-        _run(high, QUESTIONS, n_probs=1000)
+        _run(low, QUESTIONS, tokenize_fn=tokenizer, n_probs=7)
+        _run(high, QUESTIONS, tokenize_fn=tokenizer, n_probs=1000)
 
         assert low.calls[0]["n_probs"] == 7
         assert high.calls[0]["n_probs"] == 128
 
     def test_non_positive_n_probs_is_rejected(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
         with pytest.raises(ValueError, match="n_probs must be >= 1"):
-            _run(_FakePrimitives("", meta=_main_meta()), QUESTIONS, n_probs=0)
+            _run(
+                _FakePrimitives("", meta=_main_meta(tokenizer)),
+                QUESTIONS,
+                tokenize_fn=tokenizer,
+                n_probs=0,
+            )
 
     def test_explicit_n_tokens_is_forwarded(self):
-        primitives = _FakePrimitives("", meta=_main_meta())
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        primitives = _FakePrimitives("", meta=_main_meta(tokenizer))
 
-        _run(primitives, QUESTIONS, n_tokens=16)
+        _run(primitives, QUESTIONS, tokenize_fn=tokenizer, n_tokens=16)
 
         assert primitives.calls[0]["n_tokens"] == 16
 
@@ -468,24 +527,25 @@ class TestNativeCallContract:
 class TestTokenizedEligibility:
     def test_each_candidate_binds_to_its_single_token_variant(self):
         # true: only the bare form is one token; false: only the spaced form.
-        vocab = {"true": (11,), " false": (23,)}
-        tokenizer = _FakeTokenizer(vocab)
-        meta = {
-            "completion_probabilities": [
-                _v9_row(
-                    " false",
-                    math.log(0.7),
-                    [(" false", math.log(0.7)), ("true", math.log(0.3))],
-                    ids={" false": 23, "true": 11},
-                )
-            ]
-        }
-        primitives = _FakePrimitives("", meta=meta)
+        tokenizer = _FakeTokenizer({"true": (11,), " false": (23,)})
+        cue_length = _cue_length(tokenizer, NOUL)
+        answer_row = _v9_row(
+            " false",
+            math.log(0.7),
+            [(" false", math.log(0.7)), ("true", math.log(0.3))],
+            ids={" false": 23, "true": 11},
+        )
+        primitives = _FakePrimitives("", meta=_build_meta([NOUL], [answer_row], tokenizer))
 
         result = _run(primitives, [NOUL], tokenize_fn=tokenizer)
 
         call = primitives.calls[0]
-        assert call["grammar"] == "root ::= position-0\nposition-0 ::= <[11]> | <[23]>\n"
+        assert call["grammar"] == (
+            "root ::= cue-0 answer-0\n"
+            f"cue-0 ::= {' '.join('<[%d]>' % ord(char) for char in _cue_text(NOUL))}\n"
+            "answer-0 ::= <[11]> | <[23]>\n"
+        )
+        assert call["n_tokens"] == cue_length + 1
         assert call["n_probs"] == 6  # 2 alternatives + buffer 4
         decision = result.decisions[0]
         assert decision.value is False
@@ -497,6 +557,7 @@ class TestTokenizedEligibility:
         # The multi-token variants were probed, not guessed.
         assert " true" in tokenizer.calls
         assert "false" in tokenizer.calls
+        assert "yes" in tokenizer.calls  # noul surface forms probed too
 
     def test_two_id_candidates_are_deferred_to_json_mode(self):
         vocab = {
@@ -514,26 +575,22 @@ class TestTokenizedEligibility:
             id="lock", kind=QuestionKind.CHOICE, text="Lock it?", options=("lock", "unlock")
         )
         noul = Question(id="confirm", kind=QuestionKind.NOUL, text="Confirm?")
-        meta = {
-            "completion_probabilities": [
-                _v9_row(
-                    " true",
-                    math.log(0.8),
-                    [(" true", math.log(0.8)), ("false", math.log(0.2))],
-                    ids={" true": 12, "false": 21},
-                )
-            ]
-        }
-        primitives = _FakePrimitives("", meta=meta)
+        cue_length = _cue_length(tokenizer, noul)
+        answer_row = _v9_row(
+            " true",
+            math.log(0.8),
+            [(" true", math.log(0.8)), ("false", math.log(0.2))],
+            ids={" true": 12, "false": 21},
+        )
+        primitives = _FakePrimitives("", meta=_build_meta([noul], [answer_row], tokenizer))
 
         result = _run(primitives, [choice, noul], tokenize_fn=tokenizer)
 
         # Only the single-token noul question entered the native batch, in order.
         call = primitives.calls[0]
-        assert call["n_tokens"] == 1
-        assert call["grammar"] == (
-            "root ::= position-0\nposition-0 ::= <[11]> | <[12]> | <[21]> | <[22]>\n"
-        )
+        assert call["n_tokens"] == cue_length + 1
+        assert call["grammar"].startswith("root ::= cue-0 answer-0\n")
+        assert "answer-0 ::= <[11]> | <[12]> | <[21]> | <[22]>" in call["grammar"]
         assert call["n_probs"] == 8
         assert [decision.question_id for decision in result.decisions] == ["confirm"]
         # id-based slicing: the spaced " true" variant carries the 0.8.
@@ -556,7 +613,7 @@ class TestTokenizedEligibility:
         question = Question(
             id="colour", kind=QuestionKind.CHOICE, text="Pick.", options=("red", "blue")
         )
-        primitives = _FakePrimitives("", meta=_main_meta())
+        primitives = _FakePrimitives("", meta=_main_meta(tokenizer))
 
         result = _run(primitives, [question], tokenize_fn=tokenizer)
 
@@ -572,19 +629,21 @@ class TestTokenizedEligibility:
 class TestMultiTokenFallback:
     def test_unsupported_question_is_excluded_and_recorded(self):
         questions = (SINGLE_TOKEN, MULTI_TOKEN, NOUL)
-        meta = {
-            "completion_probabilities": [
-                _v9_row("yes", math.log(0.8), [("yes", math.log(0.8)), ("no", math.log(0.2))]),
-                _v9_row(
-                    "false",
-                    math.log(0.6),
-                    [("false", math.log(0.6)), ("true", math.log(0.4))],
-                ),
-            ]
-        }
-        primitives = _FakePrimitives("", meta=meta)
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        answer_rows = [
+            _v9_row("yes", math.log(0.8), [("yes", math.log(0.8)), ("no", math.log(0.2))]),
+            _v9_row(
+                "false",
+                math.log(0.6),
+                [("false", math.log(0.6)), ("true", math.log(0.4))],
+            ),
+        ]
+        primitives = _FakePrimitives(
+            "",
+            meta=_build_meta([SINGLE_TOKEN, NOUL], answer_rows, tokenizer),
+        )
 
-        result = _run(primitives, questions)
+        result = _run(primitives, questions, tokenize_fn=tokenizer)
 
         assert [decision.question_id for decision in result.decisions] == ["single", "noul"]
         assert len(result.failures) == 1
@@ -594,17 +653,21 @@ class TestMultiTokenFallback:
         assert "JSON mode" in failure.detail
 
         call = primitives.calls[0]
-        assert call["n_tokens"] == 2
+        assert call["n_tokens"] == 4  # two cue tokens + two answer tokens
         assert call["grammar"] == (
-            "root ::= position-0 position-1\n"
-            "position-0 ::= <[1018]> | <[1019]> | <[1020]> | <[1021]>\n"
-            "position-1 ::= <[1014]> | <[1015]> | <[1016]> | <[1017]>\n"
+            "root ::= cue-0 answer-0 cue-1 answer-1\n"
+            "cue-0 ::= <[990]>\n"
+            "answer-0 ::= <[1018]> | <[1019]> | <[1020]> | <[1021]>\n"
+            "cue-1 ::= <[990]>\n"
+            "answer-1 ::= <[1014]> | <[1015]> | <[1018]> | <[1019]> | <[1016]> | "
+            "<[1017]> | <[1020]> | <[1021]>\n"
         )
         assert "do the thing" not in call["grammar"]
-        assert call["n_probs"] == 8  # max alternatives (4) + buffer 4
+        assert call["n_probs"] == 12  # max alternatives (8) + buffer 4
 
     def test_all_unsupported_questions_make_no_call_at_all(self):
-        primitives = _FakePrimitives("", meta=_main_meta())
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        primitives = _FakePrimitives("", meta=_main_meta(tokenizer))
         other_multi = Question(
             id="multi-2",
             kind=QuestionKind.CHOICE,
@@ -613,7 +676,7 @@ class TestMultiTokenFallback:
         )
         questions = (MULTI_TOKEN, other_multi)
 
-        result = _run(primitives, questions)
+        result = _run(primitives, questions, tokenize_fn=tokenizer)
 
         assert primitives.calls == []
         assert result.decisions == ()
@@ -631,20 +694,7 @@ class TestMultiTokenFallback:
         # up front and the partial piece is never generated or accepted.
         vocab = {"true": (11,), " true": (12,), "false": (901, 902), " false": (903, 904)}
         tokenizer = _FakeTokenizer(vocab)
-        meta = {
-            "completion_probabilities": [
-                {
-                    "id": 901,
-                    "token": "fal",
-                    "bytes": [102, 97, 108],
-                    "logprob": math.log(0.9),
-                    "top_logprobs": [
-                        {"id": 901, "token": "fal", "bytes": [], "logprob": math.log(0.9)}
-                    ],
-                }
-            ]
-        }
-        primitives = _FakePrimitives("", meta=meta)
+        primitives = _FakePrimitives("", meta=_main_meta(tokenizer))
 
         result = _run(primitives, [NOUL], tokenize_fn=tokenizer)
 
@@ -705,26 +755,33 @@ class TestTokenizerUnavailable:
 
     def test_unavailable_question_does_not_block_eligible_questions(self):
         tokenizer = _FakeTokenizer(failing={"true", " true"})
-        meta = {
-            "completion_probabilities": [
-                _v9_row("yes", math.log(0.8), [("yes", math.log(0.8)), ("no", math.log(0.2))]),
-            ]
-        }
-        primitives = _FakePrimitives("", meta=meta)
+        answer_row = _v9_row("yes", math.log(0.8), [("yes", math.log(0.8)), ("no", math.log(0.2))])
+        cue_length = _cue_length(tokenizer, SINGLE_TOKEN)
+        primitives = _FakePrimitives("", meta=_build_meta([SINGLE_TOKEN], [answer_row], tokenizer))
 
         result = _run(primitives, (SINGLE_TOKEN, NOUL), tokenize_fn=tokenizer)
 
         assert len(primitives.calls) == 1
         call = primitives.calls[0]
-        assert call["n_tokens"] == 1
-        assert call["grammar"] == (
-            "root ::= position-0\nposition-0 ::= <[1018]> | <[1019]> | <[1020]> | <[1021]>\n"
-        )
+        assert call["n_tokens"] == cue_length + 1
+        assert "answer-0 ::= <[1018]> | <[1019]> | <[1020]> | <[1021]>" in call["grammar"]
         assert [decision.question_id for decision in result.decisions] == ["single"]
         assert [failure.reason for failure in result.failures] == [
             REASON_NATIVE_TOKENIZER_UNAVAILABLE
         ]
         assert "noul" in result.failures[0].detail
+
+    def test_cue_tokenization_failure_fails_the_question_closed(self):
+        # Candidates tokenize fine; the cue text is refused by the seam.
+        tokenizer = _FakeTokenizer(failing={_cue_text(NOUL)})
+        primitives = _FakePrimitives("", meta=_main_meta())
+
+        result = _run(primitives, [NOUL], tokenize_fn=tokenizer)
+
+        assert primitives.calls == []
+        assert result.decisions == ()
+        assert result.failures[0].reason == REASON_NATIVE_TOKENIZER_UNAVAILABLE
+        assert "cue text" in result.failures[0].detail
 
 
 # ── 6. Default resolver: role backend base URL -> /tokenize ───────────────
@@ -787,21 +844,35 @@ def _install_fake_http_client(monkeypatch, responder):
 
 class TestDefaultTokenizerResolver:
     def test_role_backend_url_is_used_and_owned_client_is_closed(self, monkeypatch):
-        ids = {"true": 7, " true": 8, "false": 9, " false": 10}
+        ids = {
+            "true": 7,
+            " true": 8,
+            "false": 9,
+            " false": 10,
+            "yes": 11,
+            " yes": 12,
+            "no": 13,
+            " no": 14,
+            _cue_text(NOUL): 990,
+        }
 
         def responder(payload: dict[str, Any]) -> dict[str, Any]:
             text = payload.get("content", "")
-            return {"tokens": [] if text == "" else [ids[text]]}
+            if text == "":
+                return {"tokens": []}
+            # Unknown texts (other cues) are one opaque token.
+            return {"tokens": [ids[text]] if text in ids else [991]}
 
         created = _install_fake_http_client(monkeypatch, responder)
         meta = {
             "completion_probabilities": [
+                {"id": 990, "token": "", "logprob": 0.0, "top_logprobs": []},
                 _v9_row(
                     " false",
                     math.log(0.7),
                     [(" false", math.log(0.7)), ("true", math.log(0.3))],
                     ids=ids,
-                )
+                ),
             ]
         }
         primitives = _ResolverPrimitives("http://test-host:8123", meta=meta)
@@ -821,10 +892,13 @@ class TestDefaultTokenizerResolver:
         assert client.requests[0][1]["content"] == ""  # probe
         probe_and_candidates = {request[1]["content"] for request in client.requests}
         assert {"", "true", " true", "false", " false"} <= probe_and_candidates
+        assert _cue_text(NOUL) in probe_and_candidates
         assert client.closed is True  # the owned tokenizer is closed after the run
 
         assert primitives.calls[0]["grammar"] == (
-            "root ::= position-0\nposition-0 ::= <[7]> | <[8]> | <[9]> | <[10]>\n"
+            "root ::= cue-0 answer-0\n"
+            "cue-0 ::= <[990]>\n"
+            "answer-0 ::= <[7]> | <[8]> | <[11]> | <[12]> | <[9]> | <[10]> | <[13]> | <[14]>\n"
         )
         decision = result.decisions[0]
         assert decision.value is False
@@ -854,7 +928,9 @@ class TestDefaultTokenizerResolver:
 
         def responder(payload: dict[str, Any]) -> dict[str, Any]:
             text = payload.get("content", "")
-            return {"tokens": [] if text == "" else [ids[text]]}
+            if text == "":
+                return {"tokens": []}
+            return {"tokens": [ids[text]] if text in ids else [990]}
 
         created = _install_fake_http_client(monkeypatch, responder)
         primitives = _FakePrimitives("", meta=_main_meta())
@@ -870,15 +946,16 @@ class TestDefaultTokenizerResolver:
 
 class TestNativeFailurePaths:
     def test_emitted_token_outside_candidates_is_typed_failure(self):
-        meta = _main_meta()
-        meta["completion_probabilities"][0] = _v9_row(
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        answer_rows = _main_answer_rows()
+        answer_rows[0] = _v9_row(
             "purple",
             math.log(0.9),
             [("purple", math.log(0.9)), ("red", math.log(0.1))],
         )
-        primitives = _FakePrimitives("", meta=meta)
+        primitives = _FakePrimitives("", meta=_build_meta(QUESTIONS, answer_rows, tokenizer))
 
-        result = _run(primitives, QUESTIONS)
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
 
         decisions = _by_id(result)
         assert set(decisions) == {"score", "noul"}
@@ -887,20 +964,17 @@ class TestNativeFailurePaths:
         assert "id=" in result.failures[0].detail
 
     def test_idless_row_outside_candidates_still_fails(self):
-        meta = {
-            "completion_probabilities": [
-                {
-                    "content": "purple",
-                    "probs": [{"tok_str": "purple", "prob": 0.9}, {"tok_str": "red", "prob": 0.1}],
-                }
-            ]
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        answer_row = {
+            "content": "purple",
+            "probs": [{"tok_str": "purple", "prob": 0.9}, {"tok_str": "red", "prob": 0.1}],
         }
-        primitives = _FakePrimitives("", meta=meta)
         question = Question(
             id="colour", kind=QuestionKind.CHOICE, text="Pick.", options=("red", "blue")
         )
+        primitives = _FakePrimitives("", meta=_build_meta([question], [answer_row], tokenizer))
 
-        result = _run(primitives, [question])
+        result = _run(primitives, [question], tokenize_fn=tokenizer)
 
         assert result.decisions == ()
         assert result.failures[0].reason == REASON_NATIVE_UNKNOWN_CANDIDATE
@@ -908,47 +982,46 @@ class TestNativeFailurePaths:
 
     def test_id_bearing_row_does_not_text_match_ids_less_entries(self):
         # The text fallback is scoped to rows that lack an id altogether.
-        meta = {
-            "completion_probabilities": [
-                {
-                    "id": _DEFAULT_IDS["red"],
-                    "token": "red",
-                    "bytes": [114, 101, 100],
-                    "logprob": math.log(0.9),
-                    "probs": [{"tok_str": "red", "prob": 0.9}],
-                }
-            ]
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        answer_row = {
+            "id": _DEFAULT_IDS["red"],
+            "token": "red",
+            "bytes": [114, 101, 100],
+            "logprob": math.log(0.9),
+            "probs": [{"tok_str": "red", "prob": 0.9}],
         }
-        primitives = _FakePrimitives("", meta=meta)
         question = Question(
             id="colour", kind=QuestionKind.CHOICE, text="Pick.", options=("red", "blue")
         )
+        primitives = _FakePrimitives("", meta=_build_meta([question], [answer_row], tokenizer))
 
-        result = _run(primitives, [question])
+        result = _run(primitives, [question], tokenize_fn=tokenizer)
 
         assert result.decisions == ()
         assert result.failures[0].reason == REASON_NATIVE_UNKNOWN_CANDIDATE
         assert "none of the declared candidate tokens" in result.failures[0].detail
 
     def test_no_candidate_token_in_the_capture_is_failure_not_uniform(self):
-        meta = _main_meta()
-        meta["completion_probabilities"][0] = _v9_row(
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        answer_rows = _main_answer_rows()
+        answer_rows[0] = _v9_row(
             "blue",
             math.log(0.9),
             [("x", math.log(0.5)), ("y", math.log(0.5))],
         )
-        primitives = _FakePrimitives("", meta=meta)
+        primitives = _FakePrimitives("", meta=_build_meta(QUESTIONS, answer_rows, tokenizer))
 
-        result = _run(primitives, QUESTIONS)
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
 
         assert "choice" not in _by_id(result)
         assert result.failures[0].reason == REASON_NATIVE_UNKNOWN_CANDIDATE
         assert "none of the declared candidate tokens" in result.failures[0].detail
 
     def test_missing_meta_yields_typed_failures_for_every_position(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
         primitives = _FakePrimitives("", meta=None)
 
-        result = _run(primitives, QUESTIONS)
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
 
         assert result.decisions == ()
         assert len(result.failures) == 3
@@ -958,11 +1031,13 @@ class TestNativeFailurePaths:
         )
 
     def test_short_row_count_fails_only_the_missing_positions(self):
-        meta = _main_meta()
-        meta["completion_probabilities"] = meta["completion_probabilities"][:2]
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        meta = _main_meta(tokenizer)
+        # Keep cue-0, answer-0, cue-1, answer-1: the noul answer row is gone.
+        meta["completion_probabilities"] = meta["completion_probabilities"][:4]
         primitives = _FakePrimitives("", meta=meta)
 
-        result = _run(primitives, QUESTIONS)
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
 
         assert [decision.question_id for decision in result.decisions] == ["choice", "score"]
         assert len(result.failures) == 1
@@ -970,9 +1045,10 @@ class TestNativeFailurePaths:
         assert "noul" in result.failures[0].detail
 
     def test_transport_error_short_circuits_and_ignores_stale_meta(self):
-        primitives = _FakePrimitives("[ERROR: connection refused]", meta=_main_meta())
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        primitives = _FakePrimitives("[ERROR: connection refused]", meta=_main_meta(tokenizer))
 
-        result = _run(primitives, QUESTIONS)
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
 
         assert len(primitives.calls) == 1  # no retry
         assert result.decisions == ()
@@ -981,9 +1057,10 @@ class TestNativeFailurePaths:
 
     def test_transport_failure_precedes_unsupported_question_failures(self):
         questions = (MULTI_TOKEN, SINGLE_TOKEN)
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
         primitives = _FakePrimitives("[ERROR: timeout]", meta={"completion_probabilities": []})
 
-        result = _run(primitives, questions)
+        result = _run(primitives, questions, tokenize_fn=tokenizer)
 
         assert [failure.reason for failure in result.failures] == [
             "transport_error",
@@ -991,12 +1068,306 @@ class TestNativeFailurePaths:
         ]
 
 
-# ── 7. Runner dispatch and JSON-mode non-regression ───────────────────────
+# ── 8. Prompt cueing (TD-1c) ──────────────────────────────────────────────
+
+
+class TestPromptCueing:
+    def test_prompt_blocks_have_explicit_answer_cue_and_echoed_candidates(self):
+        prompt = build_native_prompt(STATE, QUESTIONS)
+
+        for index, question in enumerate(QUESTIONS, start=1):
+            assert f"{index}. id={question.id} kind={question.kind.value}" in prompt
+            assert f"   question: {question.text}" in prompt
+        assert "   Answer (one of: red, blue, green):" in prompt
+        assert "   Answer (one of: 0, 1, 2, 3):" in prompt
+        assert "   Answer (one of: true, false):" in prompt
+        # One answer cue per block, in catalogue order.
+        assert prompt.index("Answer (one of: red, blue, green):") < prompt.index(
+            "Answer (one of: 0, 1, 2, 3):"
+        )
+        assert prompt.index("Answer (one of: 0, 1, 2, 3):") < prompt.index(
+            "Answer (one of: true, false):"
+        )
+
+    def test_prompt_is_identical_for_plain_and_tokenized_questions(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        from src.typed_decisions.native import _tokenize_catalogue
+
+        native, failures = _tokenize_catalogue(QUESTIONS, tokenizer)
+
+        assert failures == []
+        assert build_native_prompt(STATE, native) == build_native_prompt(STATE, QUESTIONS)
+
+    def test_build_native_prompt_rejects_unknown_entries(self):
+        with pytest.raises(TypeError, match="expects Question or _NativeQuestion"):
+            build_native_prompt(STATE, ["not-a-question"])  # type: ignore[list-item]
+
+    def test_cue_replay_is_grammar_forced_between_answers(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        primitives = _FakePrimitives("", meta=_main_meta(tokenizer))
+
+        _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
+
+        grammar = primitives.calls[0]["grammar"]
+        assert grammar.startswith("root ::= cue-0 answer-0 cue-1 answer-1 cue-2 answer-2\n")
+        assert grammar.count("cue-0 ::=") == 1
+        assert "cue-2 ::= <[990]>" in grammar
+
+
+# ── 9. Natural noul surface forms ─────────────────────────────────────────
+
+
+class TestNoulSurfaceForms:
+    _VOCAB = {
+        "true": (11,),
+        " true": (12,),
+        "yes": (13,),
+        " yes": (14,),
+        "false": (21,),
+        " false": (22,),
+        "no": (23,),
+        " no": (24,),
+    }
+
+    def test_yes_and_no_are_bound_to_the_boolean_labels(self):
+        tokenizer = _FakeTokenizer(self._VOCAB, fallback=(_CUE_TOKEN,))
+        answer_row = _v9_row(
+            "yes",
+            math.log(0.6),
+            [("yes", math.log(0.6)), ("no", math.log(0.4))],
+            ids={text: ids[0] for text, ids in self._VOCAB.items()},
+        )
+        primitives = _FakePrimitives("", meta=_build_meta([NOUL], [answer_row], tokenizer))
+
+        result = _run(primitives, [NOUL], tokenize_fn=tokenizer)
+
+        assert primitives.calls[0]["grammar"] == (
+            "root ::= cue-0 answer-0\n"
+            "cue-0 ::= <[990]>\n"
+            "answer-0 ::= <[11]> | <[12]> | <[13]> | <[14]> | <[21]> | <[22]> | <[23]> | <[24]>\n"
+        )
+        decision = result.decisions[0]
+        assert decision.value is True
+        assert dict(decision.probabilities) == {
+            "true": pytest.approx(0.6),
+            "false": pytest.approx(0.4),
+        }
+        assert decision.token_logprob == pytest.approx(math.log(0.6))
+
+    def test_surface_mass_sums_into_the_declared_label(self):
+        tokenizer = _FakeTokenizer(self._VOCAB, fallback=(_CUE_TOKEN,))
+        answer_row = _v9_row(
+            " true",
+            math.log(0.5),
+            [
+                (" true", math.log(0.5)),
+                ("yes", math.log(0.2)),
+                ("false", math.log(0.2)),
+                (" no", math.log(0.1)),
+            ],
+            ids={text: ids[0] for text, ids in self._VOCAB.items()},
+        )
+        primitives = _FakePrimitives("", meta=_build_meta([NOUL], [answer_row], tokenizer))
+
+        result = _run(primitives, [NOUL], tokenize_fn=tokenizer)
+
+        decision = result.decisions[0]
+        assert decision.value is True
+        # true = " true" 0.5 + yes 0.2; false = "false" 0.2 + " no" 0.1.
+        assert dict(decision.probabilities) == {
+            "true": pytest.approx(0.7),
+            "false": pytest.approx(0.3),
+        }
+
+    def test_variant_split_can_make_the_summed_label_argmax_win_over_emitted(self):
+        # Pinned consequence of summing surface forms: the emitted token is the
+        # masked per-token argmax, the value is the argmax of the summed label
+        # distribution, and diagnostics exposes the disagreement for audit.
+        tokenizer = _FakeTokenizer(self._VOCAB, fallback=(_CUE_TOKEN,))
+        answer_row = _v9_row(
+            "false",
+            math.log(0.15),
+            [("false", math.log(0.15)), ("true", math.log(0.1)), ("yes", math.log(0.1))],
+            ids={text: ids[0] for text, ids in self._VOCAB.items()},
+        )
+        primitives = _FakePrimitives("", meta=_build_meta([NOUL], [answer_row], tokenizer))
+
+        result = _run(primitives, [NOUL], tokenize_fn=tokenizer)
+        report = native_diagnostics(result, primitives)
+        entry = report["positions"][0]
+
+        decision = result.decisions[0]
+        assert decision.value is True  # true 0.1 + yes 0.1 > false 0.15
+        assert dict(decision.probabilities) == {
+            "true": pytest.approx(0.2 / 0.35),
+            "false": pytest.approx(0.15 / 0.35),
+        }
+        assert entry["emitted_label"] == "false"
+        assert entry["argmax_label"] == "true"
+        assert entry["emitted_matches_argmax"] is False
+
+
+# ── 10. native_diagnostics ────────────────────────────────────────────────
+
+
+class TestNativeDiagnostics:
+    def _run_with_mixed_rows(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        answer_rows = _main_answer_rows()
+        # Noul answer row: every candidate variant is captured, plus two
+        # outside tokens. true: 4x0.05=0.20, false: 4x0.10=0.40, outside: 0.40.
+        answer_rows[2] = _v9_row(
+            "false",
+            math.log(0.4),
+            [
+                ("true", math.log(0.05)),
+                (" true", math.log(0.05)),
+                ("yes", math.log(0.05)),
+                (" yes", math.log(0.05)),
+                ("false", math.log(0.1)),
+                (" false", math.log(0.1)),
+                ("no", math.log(0.1)),
+                (" no", math.log(0.1)),
+                ("purple", math.log(0.3)),
+                ("x", math.log(0.1)),
+            ],
+        )
+        primitives = _FakePrimitives("", meta=_build_meta(QUESTIONS, answer_rows, tokenizer))
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
+        return result, primitives
+
+    def test_primitives_snapshot_reports_per_question_raw_capture(self):
+        result, primitives = self._run_with_mixed_rows()
+
+        report = native_diagnostics(result, primitives)
+
+        assert report["layout_present"] is True
+        assert report["rows_captured"] == 6
+        assert report["total_tokens_expected"] == 6
+        assert report["n_probs"] == 12
+        assert report["excluded"] == []
+        by_question = {entry["question_id"]: entry for entry in report["positions"]}
+        assert set(by_question) == {"choice", "score", "noul"}
+        assert by_question["choice"]["row_index"] == 1
+        assert by_question["score"]["row_index"] == 3
+        assert by_question["noul"]["row_index"] == 5
+
+        noul = by_question["noul"]
+        assert noul["resolved_value"] is False
+        assert noul["emitted"] == {"id": _DEFAULT_IDS["false"], "text": "false"}
+        assert noul["emitted_label"] == "false"
+        assert noul["candidate_weights_raw"] == {
+            "true": pytest.approx(0.2),
+            "false": pytest.approx(0.4),
+        }
+        assert noul["candidate_mass_raw"] == pytest.approx(0.6)
+        assert noul["all_candidate_variants_captured"] is True
+        assert noul["mass_outside_candidates"] == pytest.approx(0.4)
+        assert noul["argmax_label"] == "false"
+        assert noul["emitted_matches_argmax"] is True
+        outside_ids = {entry["id"] for entry in noul["top_k_outside_candidates"]}
+        assert outside_ids == {_DEFAULT_IDS["purple"], _DEFAULT_IDS["x"]}
+        assert len(noul["top_k"]) == 10
+
+        choice = by_question["choice"]
+        assert choice["candidate_mass_raw"] == pytest.approx(0.8)
+        assert choice["all_candidate_variants_captured"] is False
+        assert choice["mass_outside_candidates"] is None
+        assert choice["argmax_label"] == "blue"
+
+    def test_bare_meta_snapshot_degrades_to_row_level(self):
+        result, primitives = self._run_with_mixed_rows()
+
+        report = native_diagnostics(result, primitives._last_inference_meta)
+
+        assert report["layout_present"] is False
+        assert len(report["positions"]) == report["rows_captured"] == 6
+        assert all(entry["question_id"] is None for entry in report["positions"])
+        assert report["positions"][5]["emitted"]["text"] == "false"
+        assert any("no native layout" in note for note in report["notes"])
+
+    def test_mapping_snapshot_with_layout_binds_questions(self):
+        result, primitives = self._run_with_mixed_rows()
+
+        report = native_diagnostics(
+            result,
+            {
+                "native_layout": primitives._last_native_layout,
+                "meta": primitives._last_inference_meta,
+            },
+        )
+
+        assert report["layout_present"] is True
+        assert {entry["question_id"] for entry in report["positions"]} == {
+            "choice",
+            "score",
+            "noul",
+        }
+
+    def test_diagnostics_classifies_idless_entries_by_text(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        answer_row = {
+            "content": "red",
+            "probs": [
+                {"tok_str": "red", "prob": 0.6},
+                {"tok_str": "green", "prob": 0.3},
+                {"tok_str": "purple", "prob": 0.1},
+            ],
+        }
+        question = Question(
+            id="colour", kind=QuestionKind.CHOICE, text="Pick.", options=("red", "blue", "green")
+        )
+        primitives = _FakePrimitives("", meta=_build_meta([question], [answer_row], tokenizer))
+
+        result = _run(primitives, [question], tokenize_fn=tokenizer)
+        report = native_diagnostics(result, primitives)
+        entry = report["positions"][0]
+
+        assert [outside["text"] for outside in entry["top_k_outside_candidates"]] == ["purple"]
+        assert entry["all_candidate_variants_captured"] is False  # "blue" absent
+        assert entry["mass_outside_candidates"] is None
+
+    def test_diagnostics_reports_missing_variant_as_unknown_outside_mass(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        answer_rows = _main_answer_rows()
+        # " no" never appears in the top-K: candidate mass is undercounted, so
+        # the exact outside mass must stay None rather than be fabricated.
+        answer_rows[2] = _v9_row(
+            "true",
+            math.log(0.9),
+            [("true", math.log(0.9)), ("false", math.log(0.1))],
+        )
+        primitives = _FakePrimitives("", meta=_build_meta(QUESTIONS, answer_rows, tokenizer))
+
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
+        report = native_diagnostics(result, primitives)
+        noul = {entry["question_id"]: entry for entry in report["positions"]}["noul"]
+
+        assert noul["all_candidate_variants_captured"] is False
+        assert noul["mass_outside_candidates"] is None
+        assert noul["candidate_mass_raw"] == pytest.approx(1.0)
+
+    def test_diagnostics_without_rows_reports_no_capture(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        primitives = _FakePrimitives("[ERROR: refused]", meta={})
+
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
+        report = native_diagnostics(result, primitives)
+
+        assert report["rows_captured"] == 0
+        assert len(report["positions"]) == 3
+        assert all(entry["emitted"] is None for entry in report["positions"])
+        assert report["failures"][0]["reason"] == "transport_error"
+        assert report["positions"][0]["failure"] is None
+
+
+# ── 11. Runner dispatch and JSON-mode non-regression ──────────────────────
 
 
 class TestRunnerDispatch:
     def test_runner_native_mode_dispatches_to_native_runner(self):
-        primitives = _FakePrimitives("", meta=_main_meta())
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        primitives = _FakePrimitives("", meta=_main_meta(tokenizer))
 
         result = run_typed_decisions(
             primitives,
@@ -1004,7 +1375,7 @@ class TestRunnerDispatch:
             questions=QUESTIONS,
             role=ROLE,
             mode="native",
-            tokenize_fn=_FakeTokenizer(),
+            tokenize_fn=tokenizer,
         )
 
         assert result.mode == "native"
@@ -1013,7 +1384,8 @@ class TestRunnerDispatch:
         assert "json_schema" not in primitives.calls[0]
 
     def test_runner_native_mode_forwards_explicit_n_tokens(self):
-        primitives = _FakePrimitives("", meta=_main_meta())
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        primitives = _FakePrimitives("", meta=_main_meta(tokenizer))
 
         run_typed_decisions(
             primitives,
@@ -1022,7 +1394,7 @@ class TestRunnerDispatch:
             role=ROLE,
             mode="native",
             n_tokens=11,
-            tokenize_fn=_FakeTokenizer(),
+            tokenize_fn=tokenizer,
         )
 
         assert primitives.calls[0]["n_tokens"] == 11

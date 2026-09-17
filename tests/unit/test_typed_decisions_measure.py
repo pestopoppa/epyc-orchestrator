@@ -605,7 +605,189 @@ class TestFanoutStudy:
             )
 
 
-# ── 4. CLI surface ────────────────────────────────────────────────────────
+# ── 4. Fan-out with a provided catalogue (TD-3b) ──────────────────────────
+
+PROVIDED_QUESTIONS = (
+    Question(
+        id="provided-choice",
+        kind=QuestionKind.CHOICE,
+        text="Which deployment ring carries the canary?",
+        options=("ring-a", "ring-b"),
+        criteria=("choose exactly one ring",),
+    ),
+    Question(
+        id="provided-score",
+        kind=QuestionKind.SCORE,
+        text="How many replicas should the canary use?",
+        levels=(2, 3, 4),
+    ),
+    Question(
+        id="provided-noul",
+        kind=QuestionKind.NOUL,
+        text="Is the pre-flight check green?",
+        criteria=("answer from the state alone",),
+    ),
+)
+
+
+def _candidates(question: Question) -> list[str]:
+    if question.kind is QuestionKind.CHOICE:
+        return list(question.options)
+    if question.kind is QuestionKind.SCORE:
+        return [str(level) for level in question.levels]
+    return ["true", "false"]
+
+
+class TestFanoutProvidedCatalogue:
+    def test_provided_catalogue_reaches_primitives_verbatim(self, tmp_path: Path):
+        primitives = _FakePrimitives(_stable_responder)
+        receipt_path = tmp_path / "fanout-provided.json"
+
+        receipt = run_fanout_study(
+            primitives,
+            states=("state-a", "state-b"),
+            role=ROLE,
+            questions=PROVIDED_QUESTIONS,
+            receipt_path=receipt_path,
+        )
+
+        assert receipt["probe_source"] == "provided"
+        assert receipt["results"]["questions"] == [q.id for q in PROVIDED_QUESTIONS]
+        assert receipt["counts"] == {
+            "states": 2,
+            "questions_per_state": 3,
+            "batched_calls": 2,
+            "singleton_calls": 6,
+            "comparable_pairs": 6,
+            "agreeing_pairs": 6,
+            "disagreements": 0,
+            "unresolved_pairs": 0,
+        }
+        assert receipt["results"]["agreement_rate"] == 1.0
+        expected_ids = [question.id for question in PROVIDED_QUESTIONS]
+        expected_candidates = [_candidates(question) for question in PROVIDED_QUESTIONS]
+
+        assert len(primitives.calls) == 8
+        batched_prompts = [call["prompt"] for call in primitives.calls[:2]]
+        singleton_prompts = [call["prompt"] for call in primitives.calls[2:]]
+        for prompt in batched_prompts:
+            entries = _parse_catalog(prompt)
+            assert [entry["id"] for entry in entries] == expected_ids
+            assert [entry["candidates"] for entry in entries] == expected_candidates
+            for question in PROVIDED_QUESTIONS:
+                assert f"question: {question.text}" in prompt
+            assert "question: Fan-out probe" not in prompt
+        for index, prompt in enumerate(singleton_prompts):
+            question = PROVIDED_QUESTIONS[index % len(PROVIDED_QUESTIONS)]
+            entries = _parse_catalog(prompt)
+            assert [entry["id"] for entry in entries] == [question.id]
+            assert entries[0]["candidates"] == _candidates(question)
+            assert f"question: {question.text}" in prompt
+        for question in PROVIDED_QUESTIONS:
+            for criterion in question.criteria:
+                assert any(f"criterion: {criterion}" in call["prompt"] for call in primitives.calls)
+
+        loaded = json.loads(receipt_path.read_text(encoding="utf-8"))
+        assert loaded == receipt
+        assert receipt["mode"] == "json"
+
+    def test_questions_per_state_is_derived_and_mismatch_rejected(self, tmp_path: Path):
+        matching = run_fanout_study(
+            _FakePrimitives(_stable_responder),
+            states=("state-a",),
+            role=ROLE,
+            questions=PROVIDED_QUESTIONS,
+            questions_per_state=3,
+            receipt_path=tmp_path / "matching.json",
+        )
+        assert matching["counts"]["questions_per_state"] == 3
+        assert matching["probe_source"] == "provided"
+
+        primitives = _FakePrimitives(_stable_responder)
+        derived = run_fanout_study(
+            primitives,
+            states=("state-a",),
+            role=ROLE,
+            questions=PROVIDED_QUESTIONS,
+            dry_run=True,
+        )
+        assert derived["plan"]["questions_per_state"] == 3
+        assert primitives.calls == []
+
+        with pytest.raises(ValueError):
+            run_fanout_study(
+                None,
+                states=("state-a",),
+                role=ROLE,
+                questions=PROVIDED_QUESTIONS,
+                questions_per_state=4,
+                dry_run=True,
+            )
+
+    def test_empty_or_duplicate_provided_catalogues_fail_loudly(self):
+        with pytest.raises(ValueError):
+            run_fanout_study(
+                None,
+                states=("state-a",),
+                role=ROLE,
+                questions=[],
+                dry_run=True,
+            )
+        with pytest.raises(ValueError):
+            run_fanout_study(
+                None,
+                states=("state-a",),
+                role=ROLE,
+                questions=[PROVIDED_QUESTIONS[0], PROVIDED_QUESTIONS[0]],
+                dry_run=True,
+            )
+        with pytest.raises(ValueError):
+            run_fanout_study(
+                None,
+                states=("state-a",),
+                role=ROLE,
+                dry_run=True,
+            )
+
+    def test_provided_dry_run_makes_no_calls(self, tmp_path: Path):
+        primitives = _FakePrimitives(_stable_responder)
+        receipt_path = tmp_path / "fanout-provided.json"
+
+        receipt = run_fanout_study(
+            primitives,
+            states=("state-a",),
+            role=ROLE,
+            questions=PROVIDED_QUESTIONS,
+            dry_run=True,
+            receipt_path=receipt_path,
+        )
+
+        assert receipt["dry_run"] is True
+        assert receipt["probe_source"] == "provided"
+        assert receipt["plan"]["probe_source"] == "provided"
+        assert receipt["plan"]["questions"] == [q.id for q in PROVIDED_QUESTIONS]
+        assert receipt["plan"]["batched_calls"] == 1
+        assert receipt["plan"]["singleton_calls"] == 3
+        assert primitives.calls == []
+        assert not receipt_path.exists()
+
+    def test_generated_path_marks_probe_source_and_keeps_ids(self):
+        receipt = run_fanout_study(
+            _FakePrimitives(_stable_responder),
+            states=("state-a",),
+            role=ROLE,
+            questions_per_state=3,
+        )
+
+        assert receipt["probe_source"] == "generated"
+        assert receipt["results"]["questions"] == [
+            "fanout-000",
+            "fanout-001",
+            "fanout-002",
+        ]
+
+
+# ── 5. CLI surface ────────────────────────────────────────────────────────
 
 
 class TestCli:
@@ -636,3 +818,49 @@ class TestCli:
         )
 
         assert code == 2
+
+    def test_fanout_cli_requires_a_catalogue(self, tmp_path: Path):
+        states_file = tmp_path / "states.json"
+        states_file.write_text(json.dumps(["state-a"]), encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            main(["fanout", "--states-file", str(states_file)])
+
+        assert excinfo.value.code == 2
+
+    def test_fanout_cli_questions_file_dry_run(self, tmp_path: Path, capsys: pytest.CaptureFixture):
+        states_file = tmp_path / "state.json"
+        states_file.write_text(json.dumps({"state": "single state"}), encoding="utf-8")
+        questions_file = tmp_path / "questions.json"
+        questions_file.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "q-choice",
+                        "kind": "choice",
+                        "text": "Pick a lane.",
+                        "options": ["a", "b"],
+                    },
+                    {"id": "q-score", "kind": "score", "text": "Rate it.", "levels": [0, 1, 2]},
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        code = main(
+            [
+                "fanout",
+                "--states-file",
+                str(states_file),
+                "--questions-file",
+                str(questions_file),
+                "--dry-run",
+            ]
+        )
+
+        assert code == 0
+        printed = json.loads(capsys.readouterr().out)
+        assert printed["probe_source"] == "provided"
+        assert printed["plan"]["questions"] == ["q-choice", "q-score"]
+        assert printed["plan"]["questions_per_state"] == 2
+        assert printed["plan"]["states"] == 1
