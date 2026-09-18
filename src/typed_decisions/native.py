@@ -216,10 +216,12 @@ class CueStyle(str, Enum):
     ``build_native_prompt`` and every fail-closed contract are identical, so a
     sweep isolates the conditioning value of the replayed tokens.
 
-    ``FULL``    — ``"\\nQ <id>: <text>\\nAnswer (one of: ...): "`` (TD-1c; default).
-    ``SHORT``   — ``"\\nQ <id>: <first _SHORT_CUE_WORDS words>\\n"``.
     ``ID_ONLY`` — ``"\\n<id>: "``; the prompt's numbered catalogue carries the
-    grounding.
+    grounding. **Native default since TD-6**: the cue sweep measured 11.98x at
+    15/16 agreement vs the JSON arm (``bench-cue-sweep-worker.json``).
+    ``FULL``    — ``"\\nQ <id>: <text>\\nAnswer (one of: ...): "`` (TD-1c;
+    selectable, still the cue a ``full`` request replays).
+    ``SHORT``   — ``"\\nQ <id>: <first _SHORT_CUE_WORDS words>\\n"``.
     """
 
     FULL = "full"
@@ -348,7 +350,7 @@ def run_typed_decisions_native(
     role: str,
     n_tokens: int | None = None,
     n_probs: int | None = None,
-    cue_style: CueStyle | str = CueStyle.FULL,
+    cue_style: CueStyle | str = CueStyle.ID_ONLY,
     tokenize_fn: TokenizeFn | None = None,
 ) -> DecisionResult:
     """Score one question catalogue in a single constrained generation.
@@ -374,12 +376,12 @@ def run_typed_decisions_native(
             ``_N_PROBS_BUFFER``; always clamped to ``[1, _MAX_N_PROBS]``.
             Values below 1 raise ``ValueError``.
         cue_style: Which cue text is replayed before each answer token (TD-1d;
-            see ``CueStyle``). ``CueStyle.FULL`` (the default) is the TD-1c
-            layout; the value strings "full"/"short"/"id_only" are accepted.
-            Unknown values raise ``ValueError``. The prompt, grammar shape,
-            probability slicing and failure contracts do not depend on the
-            style — only the replayed cue tokens do — so a sweep changes one
-            variable at a time.
+            see ``CueStyle``). ``CueStyle.ID_ONLY`` is the default since TD-6
+            (cue sweep: 11.98x at 15/16 agreement); "full" and "short" remain
+            selectable via the value strings "full"/"short"/"id_only". Unknown
+            values raise ``ValueError``. The prompt, grammar shape, probability
+            slicing and failure contracts do not depend on the style — only the
+            replayed cue tokens do — so a sweep changes one variable at a time.
         tokenize_fn: Text -> token ids seam used to bind candidates and cue
             text to exact tokens (see module docstring). When ``None``, a
             default resolver derives the role's backend base URL from
@@ -761,7 +763,7 @@ def _normalize_server_url(raw: Any) -> str | None:
 def _tokenize_catalogue(
     questions: Sequence[Question],
     tokenize: TokenizeFn,
-    cue_style: CueStyle = CueStyle.FULL,
+    cue_style: CueStyle = CueStyle.ID_ONLY,
 ) -> tuple[list[_NativeQuestion], list[ParseFailure]]:
     """Partition the catalogue into token-bound questions and typed failures.
 
@@ -794,7 +796,7 @@ def _tokenize_catalogue(
 def _tokenize_question(
     question: Question,
     tokenize: TokenizeFn,
-    cue_style: CueStyle = CueStyle.FULL,
+    cue_style: CueStyle = CueStyle.ID_ONLY,
 ) -> _NativeQuestion:
     """Bind every candidate label of one question — and its cue — to token ids.
 
@@ -937,15 +939,16 @@ def _build_native_grammar(questions: Sequence[_NativeQuestion]) -> str:
     return "\n".join([root, *rules]) + "\n"
 
 
-def _cue_text(question: Question, cue_style: CueStyle | str = CueStyle.FULL) -> str:
+def _cue_text(question: Question, cue_style: CueStyle | str = CueStyle.ID_ONLY) -> str:
     """The fixed cue replayed immediately before this question's answer token.
 
-    ``FULL`` (default) is the TD-1c cue: id, full question text and the declared
-    labels, ending on an explicit answer delimiter. ``SHORT`` keeps the id and
-    the first ``_SHORT_CUE_WORDS`` words of the question. ``ID_ONLY`` keeps just
-    ``"\\n<id>: "``: a minimal delimiter whose grounding comes from the
-    numbered catalogue in ``build_native_prompt``. Every style starts with a
-    newline so the generated transcript stays readable.
+    ``ID_ONLY`` (default since TD-6) keeps just ``"\\n<id>: "``: a minimal
+    delimiter whose grounding comes from the numbered catalogue in
+    ``build_native_prompt``. ``FULL`` is the TD-1c cue: id, full question text
+    and the declared labels, ending on an explicit answer delimiter. ``SHORT``
+    keeps the id and the first ``_SHORT_CUE_WORDS`` words of the question.
+    Every style starts with a newline so the generated transcript stays
+    readable.
     """
     style = _normalize_cue_style(cue_style)
     if style is CueStyle.ID_ONLY:

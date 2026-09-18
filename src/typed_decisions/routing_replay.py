@@ -35,6 +35,24 @@ contract names — and records the per-row path (``native`` / ``json`` /
 ``unresolved``) plus both failure lists, so the receipt never lies about how
 each answer was produced.
 
+TD-9 code map and incumbent-aware framing
+-----------------------------------------
+The TD-7 run resolved **0/200** rows natively: every recorded routing action is
+a multi-token label (``frontdoor`` = ``front``+``door``), so the native arm
+failed the whole question closed and all rows took the JSON fallback. TD-9
+maps every distinct action to a deterministic single-token code (``A``..``Z``,
+then ``0``..``9``) and exposes the mapping in the question text
+(``A = frontdoor``); the native grammar binds the codes, and the chosen code is
+mapped back to the action in code. The incumbent action stays among the
+candidates, the per-row framing names it and asks for the best role for the
+task, and both the chosen code and the incumbent are recorded.
+
+**The frozen label still describes the INCUMBENT action's outcome**, not the
+chosen one. For a disagreeing row it is not a label for the chosen action, so
+the agreement rate and every confidence-versus-label metric (AUROC, ECE) are
+**informative-only** until a counterfactual design labels the counterfactual
+outcome of the chosen action; the receipt carries this caveat verbatim.
+
 Measurement contract:
     * ``--dry-run`` reads the snapshot and prints the plan; no model call, no
       receipt.
@@ -94,12 +112,16 @@ __all__ = [
     "LIVE_DB_PATH",
     "PURGE_DATE",
     "ReplayError",
+    "RoutingCodeMap",
     "RoutingRow",
     "RowOutcome",
     "Snapshot",
     "aggregate",
+    "build_code_map",
     "build_question",
     "calibration_stats",
+    "check_code_tokens",
+    "default_tokenize_fn",
     "discover_snapshots",
     "load_rows",
     "main",
@@ -124,6 +146,15 @@ DEFAULT_ECE_BINS = 10
 
 ENV_SERVER = "TD_ROUTING_REPLAY_SERVER"
 ENV_ROLE = "TD_ROUTING_REPLAY_ROLE"
+
+# TD-9: single-token routing codes. A..Z first (matching the handoff's A..E
+# obligation), then digits 0..9; a corpus with more than 36 distinct actions is
+# refused rather than given a multi-character code.
+_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+# The acceptance bar TD-9 was written against: the native arm must resolve at
+# least this fraction of rows without the JSON fallback.
+NATIVE_RESOLUTION_ACCEPTANCE = 0.95
 
 LIVE_DB_PATH = Path(
     "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions/episodic.db"
@@ -150,6 +181,8 @@ _ROUTING_QUESTION = (
     "Answer with exactly one of the declared action classes."
 )
 
+_ROUTING_CODE_QUESTION = "Which routing action is the best role for the task described in STATE?"
+
 _METRIC_DIRECTIONS: dict[str, str] = {
     "agreement.rate": "higher_is_better",
     "agreement.wilson_95_low": "higher_is_better",
@@ -160,6 +193,7 @@ _METRIC_DIRECTIONS: dict[str, str] = {
     "calibration.top1_accuracy": "higher_is_better",
     "calibration.bottom1_accuracy": "lower_is_better",
     "calibration.spearman_rho": "higher_is_better",
+    "path_split.native_resolution_rate": "higher_is_better",
     "path_split.unresolved": "lower_is_better",
     "wall_ms_total": "lower_is_better",
 }
@@ -402,6 +436,141 @@ def load_options(rows: Sequence[RoutingRow]) -> tuple[str, ...]:
     return tuple(options)
 
 
+# ── TD-9: deterministic single-token code map ─────────────────────────────
+
+
+@dataclass(frozen=True)
+class RoutingCodeMap:
+    """A deterministic routing-action -> single-token-code map (TD-9).
+
+    ``actions`` is the input order (``load_options`` returns sorted distinct
+    actions) and ``codes`` is aligned index-for-index. The mapping is total and
+    bidirectional: every action gets exactly one code and every code maps to
+    exactly one action. Codes are single letters ``A``..``Z`` first, then
+    digits ``0``..``9``; more than 36 classes raise ``ReplayError`` rather than
+    generating a multi-character code the native grammar could not bind.
+    """
+
+    actions: tuple[str, ...]
+    codes: tuple[str, ...]
+
+    @property
+    def code_to_action(self) -> dict[str, str]:
+        return dict(zip(self.codes, self.actions))
+
+    @property
+    def action_to_code(self) -> dict[str, str]:
+        return dict(zip(self.actions, self.codes))
+
+    def code_for(self, action: str) -> str | None:
+        """The code bound to ``action``, or ``None`` when it is not a candidate."""
+        return self.action_to_code.get(action)
+
+    def action_for(self, code: str) -> str | None:
+        """The action bound to ``code``, or ``None`` when the code is unknown."""
+        return self.code_to_action.get(code)
+
+    def legend(self) -> str:
+        """The ``"A = frontdoor; B = SELF"`` text exposed to the model."""
+        return "; ".join(f"{code} = {action}" for code, action in zip(self.codes, self.actions))
+
+    def to_record(self) -> dict[str, Any]:
+        """JSON-safe map block for the receipt/config."""
+        return {
+            "codes": list(self.codes),
+            "actions": list(self.actions),
+            "code_to_action": self.code_to_action,
+            "action_to_code": self.action_to_code,
+        }
+
+
+def build_code_map(options: Sequence[str]) -> RoutingCodeMap:
+    """Bind each distinct routing action to a deterministic single-token code.
+
+    Codes follow the input order, so the sorted ``load_options`` result gives a
+    receipt-stable map. A duplicate or empty action is a caller bug and raises
+    ``ValueError``; more classes than the alphabet raises ``ReplayError``.
+    """
+    actions = tuple(str(action) for action in options)
+    if len(set(actions)) != len(actions):
+        raise ValueError("routing code map requires distinct actions")
+    if any(not action.strip() for action in actions):
+        raise ValueError("routing code map requires non-empty actions")
+    if len(actions) > len(_CODE_ALPHABET):
+        raise ReplayError(
+            f"{len(actions)} routing actions exceed the {len(_CODE_ALPHABET)} single-token "
+            "codes available (A-Z, 0-9); the native grammar cannot bind a longer code"
+        )
+    return RoutingCodeMap(actions=actions, codes=tuple(_CODE_ALPHABET[: len(actions)]))
+
+
+def _code_variants(code: str) -> tuple[str, ...]:
+    """The code texts the native candidate binder probes (bare and space-prefixed)."""
+    return (code, " " + code)
+
+
+def check_code_tokens(code_map: RoutingCodeMap, tokenize_fn: Any) -> dict[str, Any]:
+    """Probe every code (and its space-prefixed variant) for single-token binding.
+
+    The native arm binds the exact token id(s) of a candidate text; a code that
+    is not exactly one token (with or without a leading space) excludes the
+    whole question, so this check runs BEFORE the model and refuses the run when
+    any code would fall back to JSON.
+
+    Returns:
+        A JSON-safe record: ``ok`` is True only when every probe resolved to
+        exactly one id; ``multi_token`` / ``unavailable`` list the offending
+        probe texts; ``probes`` carries the raw id lists.
+    """
+    probes: dict[str, dict[str, Any]] = {}
+    multi_token: list[str] = []
+    unavailable: list[str] = []
+    seen_ids: dict[int, str] = {}
+    collisions: list[str] = []
+    for code in code_map.codes:
+        code_probes: dict[str, Any] = {}
+        for text in _code_variants(code):
+            try:
+                ids = tokenize_fn(text)
+            except Exception:  # noqa: BLE001 - any failure is "no answer"
+                ids = None
+            if ids is None:
+                code_probes[text] = None
+                unavailable.append(text)
+                continue
+            ids = list(ids)
+            code_probes[text] = ids
+            if len(ids) != 1:
+                multi_token.append(text)
+                continue
+            token_id = ids[0]
+            other = seen_ids.get(token_id)
+            if other is not None and other != code:
+                collisions.append(f"{other!r} and {code!r} both tokenize to id {token_id}")
+            seen_ids[token_id] = code
+        probes[code] = code_probes
+    return {
+        "ok": not multi_token and not unavailable and not collisions,
+        "multi_token": multi_token,
+        "unavailable": unavailable,
+        "collisions": collisions,
+        "probes": probes,
+    }
+
+
+def default_tokenize_fn(primitives: Any, role: str) -> Any:
+    """Resolve the native runner's HTTP ``/tokenize`` seam for one role.
+
+    Lazy import: ``native.py`` imports this module's runner contract (through
+    ``runner``), so a module-level import here would close a cycle. Returns the
+    resolver's tokenizer object (``None`` when no backend URL could be found);
+    callers that receive an ``_HttpTokenizer`` should ``close()`` it.
+    """
+    from src.typed_decisions.native import _resolve_tokenize_fn
+
+    return _resolve_tokenize_fn(primitives, role)
+
+
 # ── state and question construction ───────────────────────────────────────
 
 
@@ -415,14 +584,56 @@ def prepare_state(context: str, budget: int = DEFAULT_STATE_BUDGET_CHARS) -> tup
     return text[:budget] + f"\n[... truncated at {budget} chars]", True
 
 
-def build_question(options: Sequence[str]) -> Question:
-    """One choice question over the snapshot's action classes, option order kept."""
+def build_question(
+    options: Sequence[str],
+    *,
+    code_map: RoutingCodeMap | None = None,
+    incumbent: str | None = None,
+) -> Question:
+    """One choice question over the snapshot's action classes.
+
+    Without ``code_map`` this is the TD-7 question: option labels are the raw
+    routing action names. With a ``code_map`` (TD-9) the declared options are
+    the single-token codes, the question text exposes the ``A = action`` legend,
+    and ``incumbent`` (when given) is named as the recorded incumbent action so
+    the framing is incumbent-aware while still asking for the best role for the
+    task. The incumbent must be one of the declared actions.
+    """
+    if code_map is None:
+        if incumbent is not None:
+            raise ValueError("incumbent-aware framing requires a code map")
+        return Question(
+            id=QUESTION_ID,
+            kind=QuestionKind.CHOICE,
+            text=_ROUTING_QUESTION,
+            options=tuple(options),
+            criteria=("Pick one recorded action class; do not answer the request itself.",),
+        )
+
+    declared = tuple(str(action) for action in options)
+    if declared != code_map.actions:
+        raise ValueError(
+            "options do not match the code map actions; build both from the same load_options()"
+        )
+    legend = code_map.legend()
+    text = f"{_ROUTING_CODE_QUESTION} Declared codes: {legend}."
+    criteria: list[str] = [
+        "Pick the code of the best role for the task; do not answer the request itself.",
+        f"code map: {legend}",
+    ]
+    if incumbent is not None:
+        incumbent_code = code_map.code_for(incumbent)
+        if incumbent_code is None:
+            raise ValueError(f"incumbent {incumbent!r} is not one of the declared code map actions")
+        text += f" The recorded incumbent action is {incumbent_code} = {incumbent}."
+        criteria.append(f"incumbent recorded action: {incumbent_code} = {incumbent}")
+    text += " Answer with exactly one of the declared codes."
     return Question(
         id=QUESTION_ID,
         kind=QuestionKind.CHOICE,
-        text=_ROUTING_QUESTION,
-        options=tuple(options),
-        criteria=("Pick one recorded action class; do not answer the request itself.",),
+        text=text,
+        options=code_map.codes,
+        criteria=tuple(criteria),
     )
 
 
@@ -447,6 +658,8 @@ class RowOutcome:
     json_failures: tuple[Mapping[str, str], ...]
     prompt_sha256: str | None
     elapsed_ms: float
+    chosen_code: str | None = None
+    incumbent_code: str | None = None
 
     def to_record(self) -> dict[str, Any]:
         """JSON-safe row record (probabilities key-sorted for stability)."""
@@ -467,6 +680,8 @@ class RowOutcome:
             "state_truncated": self.state_truncated,
             "path": self.path,
             "action": self.action,
+            "chosen_code": self.chosen_code,
+            "incumbent_code": self.incumbent_code,
             "confidence": self.confidence,
             "probabilities": probabilities,
             "native_failures": [dict(failure) for failure in self.native_failures],
@@ -487,8 +702,16 @@ def run_row(
     json_n_tokens: int = DEFAULT_JSON_N_TOKENS,
     cue_style: str = DEFAULT_CUE_STYLE,
     tokenize_fn: Any = None,
+    code_map: RoutingCodeMap | None = None,
 ) -> RowOutcome:
-    """Replay one row: native first, JSON only for questions native excluded."""
+    """Replay one row: native first, JSON only for questions native excluded.
+
+    With a ``code_map`` (TD-9) the question carries single-token codes as
+    options; the decision's code and probability keys are mapped back to the
+    routing actions here, and both the chosen code and the incumbent's code are
+    recorded. An unmappable code is a harness bug, not a model answer: it
+    raises ``ReplayError`` rather than fabricating a role.
+    """
     started = time.perf_counter()
     state, truncated = prepare_state(row.context, state_budget)
     state_sha256 = _sha256_text(state)
@@ -517,6 +740,7 @@ def run_row(
             json_failures=(),
             prompt_sha256=native.prompt_sha256,
             elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            code_map=code_map,
         )
 
     json_result = run_typed_decisions(
@@ -542,6 +766,7 @@ def run_row(
             json_failures=json_failures,
             prompt_sha256=json_result.prompt_sha256,
             elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            code_map=code_map,
         )
 
     return _outcome(
@@ -556,6 +781,7 @@ def run_row(
         json_failures=json_failures,
         prompt_sha256=json_result.prompt_sha256 or native.prompt_sha256,
         elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        code_map=code_map,
     )
 
 
@@ -572,17 +798,38 @@ def _outcome(
     json_failures: tuple[Mapping[str, str], ...],
     prompt_sha256: str | None,
     elapsed_ms: float,
+    code_map: RoutingCodeMap | None = None,
 ) -> RowOutcome:
+    chosen_code: str | None = None
+    incumbent_code = code_map.code_for(row.action) if code_map is not None else None
     if decision is None:
         action: str | None = None
         confidence: float | None = None
         probabilities: Mapping[str, float] | None = None
-    else:
+    elif code_map is None:
         action = str(decision.value)
         confidence = float(decision.confidence)
         probabilities = {
             str(label): float(value) for label, value in decision.probabilities.items()
         }
+    else:
+        chosen_code = str(decision.value)
+        action = code_map.action_for(chosen_code)
+        if action is None:
+            raise ReplayError(
+                f"chosen code {chosen_code!r} is not in the routing code map "
+                f"{code_map.code_to_action!r}; the question and map disagree"
+            )
+        confidence = float(decision.confidence)
+        probabilities = {}
+        for label, value in decision.probabilities.items():
+            mapped = code_map.action_for(str(label))
+            if mapped is None:
+                raise ReplayError(
+                    f"probability label {label!r} is not in the routing code map "
+                    f"{code_map.code_to_action!r}; the question and map disagree"
+                )
+            probabilities[mapped] = float(value)
     return RowOutcome(
         position=position,
         incumbent=row.action,
@@ -598,6 +845,8 @@ def _outcome(
         json_failures=json_failures,
         prompt_sha256=prompt_sha256,
         elapsed_ms=elapsed_ms,
+        chosen_code=chosen_code,
+        incumbent_code=incumbent_code,
     )
 
 
@@ -664,6 +913,19 @@ def aggregate(outcomes: Sequence[RowOutcome], *, n_bins: int = DEFAULT_ECE_BINS)
             "native": sum(1 for outcome in decided if outcome.path == "native"),
             "json": sum(1 for outcome in decided if outcome.path == "json"),
             "unresolved": len(unresolved),
+            "native_resolution_rate": (
+                sum(1 for outcome in decided if outcome.path == "native") / len(outcomes)
+                if outcomes
+                else None
+            ),
+        },
+        "acceptance": {
+            "native_resolution_ge_95pct": (
+                bool(outcomes)
+                and sum(1 for outcome in decided if outcome.path == "native") / len(outcomes)
+                >= NATIVE_RESOLUTION_ACCEPTANCE
+            ),
+            "native_resolution_threshold": NATIVE_RESOLUTION_ACCEPTANCE,
         },
         "failures": {
             "total": int(sum(failure_counts.values())),
@@ -766,11 +1028,18 @@ def run_replay(
     dry_run: bool = False,
     timestamp: str | None = None,
 ) -> dict[str, Any]:
-    """Replay N sampled rows; return the receipt (and write it unless dry-run)."""
+    """Replay N sampled rows; return the receipt (and write it unless dry-run).
+
+    Every row's question is built from the deterministic TD-9 code map with the
+    row's own incumbent named in the framing. When a ``tokenize_fn`` is given,
+    every code is probed for single-token binding BEFORE the first model call
+    and a non-single-token code aborts the run (``ReplayError``): the native
+    arm would otherwise fall back to JSON for every row.
+    """
     frame = [row for row in rows if row.action.strip()]
     excluded_empty_action = len(rows) - len(frame)
     options = load_options(frame)
-    question = build_question(options)
+    code_map = build_code_map(options)
     sample = sample_rows(frame, n, seed)
     started_at = timestamp or _utc_now()
 
@@ -783,8 +1052,10 @@ def run_replay(
         "state_budget_chars": int(state_budget),
         "json_n_tokens": int(json_n_tokens),
         "question_id": QUESTION_ID,
-        "question_text": _ROUTING_QUESTION,
+        "framing": "incumbent_aware_code_map",
+        "question_text": _ROUTING_CODE_QUESTION,
         "options": list(options),
+        "code_map": code_map.to_record(),
     }
     plan = {
         "plan": "td7-routing-replay",
@@ -808,9 +1079,19 @@ def run_replay(
         return plan
 
     require_live_primitives(primitives)
+    preflight: dict[str, Any] | None = None
+    if tokenize_fn is not None:
+        preflight = check_code_tokens(code_map, tokenize_fn)
+        if not preflight["ok"]:
+            raise ReplayError(
+                "refusing the replay before any model call: the routing code map is not "
+                f"single-token (multi_token={preflight['multi_token']!r}, "
+                f"unavailable={preflight['unavailable']!r})"
+            )
     outcomes: list[RowOutcome] = []
     replay_started = time.perf_counter()
     for position, row in enumerate(sample):
+        question = build_question(options, code_map=code_map, incumbent=row.action)
         outcome = run_row(
             primitives,
             row,
@@ -821,13 +1102,14 @@ def run_replay(
             json_n_tokens=json_n_tokens,
             cue_style=cue_style,
             tokenize_fn=tokenize_fn,
+            code_map=code_map,
         )
         outcomes.append(outcome)
         print(
             f"[{position + 1}/{len(sample)}] {outcome.path:10s} "
-            f"choice={outcome.action!r:32s} incumbent={row.action!r:32s} "
-            f"label={row.label!s:5s} conf={outcome.confidence} "
-            f"wall={outcome.elapsed_ms / 1000.0:.2f}s",
+            f"code={outcome.chosen_code!r:4s} choice={outcome.action!r:32s} "
+            f"incumbent={row.action!r:32s} label={row.label!s:5s} "
+            f"conf={outcome.confidence} wall={outcome.elapsed_ms / 1000.0:.2f}s",
             flush=True,
         )
     wall_ms_total = (time.perf_counter() - replay_started) * 1000.0
@@ -842,6 +1124,7 @@ def run_replay(
         "aggregates": aggregate(outcomes),
         "wall_ms_total": wall_ms_total,
         "metric_directions": dict(_METRIC_DIRECTIONS),
+        "code_token_preflight": preflight,
         "label_provenance": {
             "status": "frozen-snapshot",
             "label_definition": "outcome == 'success' from the frozen snapshot above",
@@ -851,6 +1134,14 @@ def run_replay(
                 "The LIVE episodic.db is not admissible ground truth: the "
                 "2026-09-17 leak purge changed it. Every label in this receipt "
                 "was read from the frozen snapshot, identified by path+SHA-256."
+            ),
+            "agreement_scope": "vs_incumbent_action",
+            "counterfactual_caveat": (
+                "The frozen label describes the INCUMBENT action's outcome, not the "
+                "chosen action's; for a disagreeing row it is not a label for the "
+                "chosen action. Agreement/AUROC/ECE are informative-only until a "
+                "counterfactual design labels the counterfactual outcome of the "
+                "chosen action."
             ),
         },
     }
@@ -1043,6 +1334,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.snapshot is None:
         parser.error("--snapshot is required unless --list-snapshots is given")
 
+    tokenize_fn: Any = None
     try:
         snapshot = resolve_snapshot(args.snapshot)
         rows = load_rows(snapshot.db_path)
@@ -1051,6 +1343,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             if (args.live and not args.dry_run)
             else None
         )
+        if primitives is not None:
+            # One tokenizer for both the pre-model code preflight and the run's
+            # candidate binding, so the verified map is the map the run uses.
+            tokenize_fn = default_tokenize_fn(primitives, args.role)
+            if tokenize_fn is None:
+                raise ReplayError(
+                    f"could not resolve a /tokenize endpoint for role {args.role!r} at "
+                    f"{args.server_url}; refusing a live run that cannot bind codes natively"
+                )
         receipt = run_replay(
             rows,
             snapshot_provenance=snapshot.provenance(),
@@ -1058,6 +1359,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             n=args.n,
             seed=args.seed,
             role=args.role,
+            tokenize_fn=tokenize_fn,
             state_budget=args.state_budget_chars,
             json_n_tokens=args.json_n_tokens,
             receipt_path=args.receipt,
@@ -1067,6 +1369,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ReplayError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        close = getattr(tokenize_fn, "close", None)
+        if callable(close):
+            close()
 
     print(json.dumps(receipt, indent=2, sort_keys=True, default=str))
     return 0
