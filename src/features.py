@@ -238,6 +238,10 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # flag alone is not enough — a log path must also be configured via
     # ORCHESTRATOR_TYPED_DECISIONS_SHADOW_LOG, otherwise submit_shadow no-ops.
     FeatureSpec("typed_decisions_shadow", False, False, "TYPED_DECISIONS_SHADOW", "TD-5: log one typed-decision shadow call beside the incumbent routing decision; never changes routing"),
+    # TD-4: closed-set typed selection of tool-call arguments, wired at the
+    # REPL tool dispatch chokepoint (src/repl_environment/context.py). The
+    # typed arm is fail-open: any decline keeps the model-provided arguments.
+    FeatureSpec("typed_decisions_tool_args", False, False, "TYPED_DECISIONS_TOOL_ARGS", "TD-4: closed-set typed selection of tool-call arguments; fail-open to the model-provided arguments"),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
 )
@@ -606,6 +610,11 @@ class Features:
     # Default OFF; also requires ORCHESTRATOR_TYPED_DECISIONS_SHADOW_LOG to be
     # set — with no configured sink the shadow no-ops even when on.
     typed_decisions_shadow: bool = False
+
+    # TD-4: closed-set typed selection of tool-call arguments at the REPL tool
+    # dispatch chokepoint. Default OFF in both test and prod; fail-open — any
+    # decline keeps the model-provided arguments.
+    typed_decisions_tool_args: bool = False
 
     # RTE-Prefix (repl-turn-efficiency): render fixed prompt sections (task,
     # instruction) BEFORE per-turn-mutating ones (state, context,

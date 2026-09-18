@@ -26,6 +26,15 @@ TD-1 runner drives and each writing a JSON receipt:
   records the choice as ``probe_source``. Live fixture:
   ``/mnt/raid0/llm/worktrees/intake-jev-sageattn-20260917/artifacts/typed_decisions/decision_set_v1/state.json``
   and ``.../questions.json`` (referenced, never copied).
+* ``run_parallel_fanout_study`` (TD-3b) — the Jev-style parallel-sampler arm
+  the sequential fan-out cannot express: the same per-(state, question)
+  singleton calls as the sequential arm issued through a
+  ``ThreadPoolExecutor(workers)``, against one cached prompt prefix. Arm C
+  requires a ``primitives_factory`` (one instance per worker, all pointing
+  at the same server) because ``LLMPrimitives`` carries instance-level,
+  non-request-scoped state; without it the study refuses rather than racing
+  a shared object. Reports pairwise agreement with the batched arm and
+  wall-clock speedups over both existing arms.
 
 Contract:
 
@@ -57,9 +66,11 @@ import random
 import sys
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from queue import Queue
 from typing import Any
 
 from src.llm_primitives.stat_tests import expected_calibration_error
@@ -77,6 +88,7 @@ __all__ = [
     "run_calibration_study",
     "run_contamination_study",
     "run_fanout_study",
+    "run_parallel_fanout_study",
 ]
 
 # Equal-width reliability bins; the same count ``expected_calibration_error``
@@ -856,6 +868,338 @@ def _fanout_arm_summary(
     }
 
 
+# ── TD-3b: parallel fan-out ──────────────────────────────────────────────
+
+
+def run_parallel_fanout_study(
+    primitives: Any,
+    *,
+    states: Sequence[str],
+    questions: Sequence[Question],
+    role: str,
+    workers: int = 4,
+    primitives_factory: Callable[[], Any] | None = None,
+    receipt_path: str | Path | None = None,
+    artifacts_dir: str | Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Measure batched vs sequential-singleton vs CONCURRENT-singleton fan-out.
+
+    Arm A (batched): one ``run_typed_decisions`` call per state answering the
+    whole catalogue. Arm B (sequential singleton): one call per (state,
+    question) pair, issued one after another. Arm C (concurrent singleton):
+    the SAME calls as Arm B, issued through ``ThreadPoolExecutor(workers)``,
+    so per-question decoding runs in parallel over one cached prompt prefix.
+
+    ``primitives_factory`` supplies Arm C's pool and is REQUIRED for any
+    non-dry run: ``LLMPrimitives`` carries instance-level state
+    (``_last_inference_meta`` and backend/slot bookkeeping) that is NOT
+    request-scoped, so the study refuses with ``MeasurementError`` rather
+    than racing one shared object across worker threads. The factory is
+    called exactly ``workers`` times, once per pool slot; each call's
+    inference meta is read back from the slot that issued it, so per-worker
+    capture is correctly attributed. Every instance returned MUST point at
+    the same model server — the measurement is concurrent requests against
+    ONE cached prefix, not a cross-server comparison. A factory returning
+    the same object twice is rejected (that is the shared-object race the
+    factory exists to prevent). (A ``primitives_list`` parameter was the
+    alternative; the factory won because it makes pool ownership and
+    cardinality explicit instead of trusting the caller to size a list.)
+
+    Determinism: all arms ask the states and the catalogue in the same order,
+    and the runner's canonical prompt builder yields byte-identical prompts
+    for the same (state, question) pair, which the receipt records by
+    comparing Arm C's per-call ``prompt_sha256`` list with Arm B's.
+
+    Per arm the receipt reports ``wall_ms``, ``serial_sum_ms``,
+    ``tokens_generated`` and per-call latency; agreement is computed per
+    (state, question) pair with type-aware equality against Arm A (and Arm C
+    vs Arm B as a concurrency-noise check). Pairs missing on either side are
+    counted as unresolved, never as agreements. ``metric_directions`` records
+    that agreements and speedups are higher-better and wall/serial times
+    lower-better.
+    """
+    states = list(states)
+    catalogue = list(questions)
+    if not states:
+        raise MeasurementError("parallel fanout study requires at least one state")
+    if not catalogue:
+        raise ValueError("questions must contain at least one Question")
+    _validate_unique_ids(catalogue)
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+
+    calls_per_arm = len(states) * len(catalogue)
+    if dry_run:
+        return {
+            "study": "parallel_fanout",
+            "dry_run": True,
+            "plan": {
+                "mode": "json",
+                "role": role,
+                "states": len(states),
+                "state_sha256": [
+                    hashlib.sha256(state.encode("utf-8")).hexdigest() for state in states
+                ],
+                "questions": [question.id for question in catalogue],
+                "questions_per_state": len(catalogue),
+                "workers": workers,
+                "batched_calls": len(states),
+                "sequential_singleton_calls": calls_per_arm,
+                "concurrent_singleton_calls": calls_per_arm,
+                "primitives_factory_supplied": primitives_factory is not None,
+            },
+        }
+
+    _require_primitives(primitives, "parallel fanout")
+    if primitives_factory is None:
+        raise MeasurementError(
+            "concurrent arm refused: LLMPrimitives instance-level state "
+            "(_last_inference_meta, backend/slot bookkeeping) is not request-scoped, "
+            "so the concurrent arm needs a primitives_factory returning one instance "
+            "per worker (all pointing at the same server); a shared object would race"
+        )
+    if not callable(primitives_factory):
+        raise MeasurementError(
+            "primitives_factory must be callable returning one live primitives "
+            f"instance per worker; got {type(primitives_factory).__name__}"
+        )
+    worker_primitives: list[Any] = []
+    for worker_index in range(workers):
+        instance = primitives_factory()
+        _require_primitives(instance, f"parallel fanout worker {worker_index}")
+        if any(instance is existing for existing in worker_primitives):
+            raise MeasurementError(
+                "primitives_factory returned the same object twice; the concurrent "
+                "arm would race one primitives instance across workers"
+            )
+        worker_primitives.append(instance)
+
+    batched_records: list[dict[str, Any]] = []
+    batched_results: list[DecisionResult] = []
+    batched_started = time.perf_counter()
+    for state_index, state in enumerate(states):
+        result = run_typed_decisions(
+            primitives,
+            state=state,
+            questions=catalogue,
+            role=role,
+        )
+        batched_results.append(result)
+        batched_records.append(_fanout_run_record(state_index, catalogue, result, primitives))
+    batched_wall_ms = (time.perf_counter() - batched_started) * 1000.0
+
+    sequential_records: list[dict[str, Any]] = []
+    sequential_results: list[DecisionResult] = []
+    sequential_started = time.perf_counter()
+    for state_index, state in enumerate(states):
+        for question in catalogue:
+            result = run_typed_decisions(
+                primitives,
+                state=state,
+                questions=[question],
+                role=role,
+            )
+            sequential_results.append(result)
+            sequential_records.append(
+                _fanout_run_record(state_index, [question], result, primitives)
+            )
+    sequential_wall_ms = (time.perf_counter() - sequential_started) * 1000.0
+
+    pooled: Queue[Any] = Queue()
+    for instance in worker_primitives:
+        pooled.put(instance)
+
+    def _concurrent_call(
+        state_index: int, state: str, question: Question
+    ) -> tuple[DecisionResult, dict[str, Any]]:
+        # One pooled primitives instance per worker slot: the slot is held for
+        # the whole call, so the inference meta read from it belongs to THIS
+        # call, and releasing it in ``finally`` cannot leak the slot on error.
+        instance = pooled.get()
+        try:
+            result = run_typed_decisions(
+                instance,
+                state=state,
+                questions=[question],
+                role=role,
+            )
+            record = _fanout_run_record(state_index, [question], result, instance)
+            return result, record
+        finally:
+            pooled.put(instance)
+
+    tasks = [
+        (state_index, state, question)
+        for state_index, state in enumerate(states)
+        for question in catalogue
+    ]
+    concurrent_results: list[DecisionResult] = []
+    concurrent_records: list[dict[str, Any]] = []
+    concurrent_started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="tdp-parallel") as executor:
+        futures = [executor.submit(_concurrent_call, *task) for task in tasks]
+        for future in futures:
+            result, record = future.result()
+            concurrent_results.append(result)
+            concurrent_records.append(record)
+    concurrent_wall_ms = (time.perf_counter() - concurrent_started) * 1000.0
+
+    batched_pairs = _resolved_by_pair(batched_records, catalogue, batched=True)
+    sequential_pairs = _resolved_by_pair(sequential_records, catalogue, batched=False)
+    concurrent_pairs = _resolved_by_pair(concurrent_records, catalogue, batched=False)
+    concurrent_vs_batched = _parallel_agreement(
+        batched_pairs, concurrent_pairs, states_count=len(states), catalogue=catalogue
+    )
+    sequential_vs_batched = _parallel_agreement(
+        batched_pairs, sequential_pairs, states_count=len(states), catalogue=catalogue
+    )
+    concurrent_vs_sequential = _parallel_agreement(
+        sequential_pairs, concurrent_pairs, states_count=len(states), catalogue=catalogue
+    )
+    if concurrent_vs_batched["comparable_pairs"] == 0:
+        raise MeasurementError(
+            "parallel fanout study produced no (state, question) pair resolved in "
+            "both the batched and concurrent arms"
+        )
+
+    batched_summary = _fanout_arm_summary(batched_records, batched_wall_ms)
+    sequential_summary = _fanout_arm_summary(sequential_records, sequential_wall_ms)
+    concurrent_summary = _fanout_arm_summary(concurrent_records, concurrent_wall_ms)
+
+    batched_hashes = _prompt_hashes(batched_results)
+    sequential_hashes = _prompt_hashes(sequential_results)
+    concurrent_hashes = _prompt_hashes(concurrent_results)
+
+    batched_wall = batched_summary["wall_ms"]
+    sequential_wall = sequential_summary["wall_ms"]
+    concurrent_wall = concurrent_summary["wall_ms"]
+
+    receipt = {
+        "study": "parallel_fanout",
+        "timestamp": _now_iso(),
+        "mode": "json",
+        "role": role,
+        "counts": {
+            "states": len(states),
+            "questions_per_state": len(catalogue),
+            "workers": workers,
+            "batched_calls": len(batched_records),
+            "sequential_singleton_calls": len(sequential_records),
+            "concurrent_singleton_calls": len(concurrent_records),
+        },
+        "results": {
+            "questions": [question.id for question in catalogue],
+            "arms": {
+                "batched": batched_summary,
+                "sequential_singleton": sequential_summary,
+                "concurrent_singleton": concurrent_summary,
+            },
+            "agreement": {
+                "concurrent_vs_batched": concurrent_vs_batched,
+                "sequential_vs_batched": sequential_vs_batched,
+                "concurrent_vs_sequential": concurrent_vs_sequential,
+            },
+            "speedup_concurrent_vs_batched": (
+                batched_wall / concurrent_wall if concurrent_wall > 0.0 else None
+            ),
+            "speedup_concurrent_vs_sequential": (
+                sequential_wall / concurrent_wall if concurrent_wall > 0.0 else None
+            ),
+            "prompt_sha256_identical_concurrent_vs_sequential": (
+                concurrent_hashes == sequential_hashes
+            ),
+        },
+        "metric_directions": {
+            "agreement_rate_vs_batched": "higher_better",
+            "speedup_concurrent_vs_batched": "higher_better",
+            "speedup_concurrent_vs_sequential": "higher_better",
+            "wall_ms": "lower_better",
+            "serial_sum_ms": "lower_better",
+        },
+        "prompt_sha256": {
+            "batched": batched_hashes,
+            "sequential_singleton": sequential_hashes,
+            "concurrent_singleton": concurrent_hashes,
+        },
+    }
+    _write_receipt(receipt, receipt_path=receipt_path, artifacts_dir=artifacts_dir)
+    return receipt
+
+
+def _parallel_agreement(
+    baseline: Mapping[tuple[int, str], Any],
+    candidate: Mapping[tuple[int, str], Any],
+    *,
+    states_count: int,
+    catalogue: Sequence[Question],
+) -> dict[str, Any]:
+    """Per-(state, question) agreement between two flattened arms.
+
+    ``baseline``/``candidate`` come from ``_resolved_by_pair``; a key missing
+    on either side is an unresolved pair, never an agreement.
+    """
+    per_question: dict[str, dict[str, int]] = {
+        question.id: {"compared": 0, "agreeing": 0} for question in catalogue
+    }
+    disagreements: list[dict[str, Any]] = []
+    comparable = 0
+    agreeing = 0
+    unresolved = 0
+    for state_index in range(states_count):
+        for question in catalogue:
+            key = (state_index, question.id)
+            if key not in baseline or key not in candidate:
+                unresolved += 1
+                continue
+            comparable += 1
+            per_question[question.id]["compared"] += 1
+            baseline_value = baseline[key]
+            candidate_value = candidate[key]
+            if _same_value(baseline_value, candidate_value):
+                agreeing += 1
+                per_question[question.id]["agreeing"] += 1
+            else:
+                disagreements.append(
+                    {
+                        "state_index": state_index,
+                        "question_id": question.id,
+                        "baseline_value": baseline_value,
+                        "candidate_value": candidate_value,
+                    }
+                )
+    return {
+        "comparable_pairs": comparable,
+        "agreeing_pairs": agreeing,
+        "unresolved_pairs": unresolved,
+        "disagreements": disagreements,
+        "agreement_rate": agreeing / comparable if comparable else None,
+        "per_question": per_question,
+    }
+
+
+def _resolved_by_pair(
+    records: Sequence[Mapping[str, Any]],
+    catalogue: Sequence[Question],
+    *,
+    batched: bool,
+) -> dict[tuple[int, str], Any]:
+    """Flatten arm records to ``(state_index, question_id) -> value``.
+
+    Batched records are one per state (each holding the whole catalogue);
+    singleton records are one per call in (state-major, catalogue-minor)
+    order. Unresolved questions are simply absent — absence is an unresolved
+    pair downstream, never a default value.
+    """
+    values: dict[tuple[int, str], Any] = {}
+    questions_per_state = len(catalogue)
+    for position, record in enumerate(records):
+        state_index = position if batched else position // questions_per_state
+        for question_id, value in record["resolved"].items():
+            values[(state_index, question_id)] = value
+    return values
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────
 
 
@@ -888,7 +1232,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="python -m src.typed_decisions.measure",
         description=(
             "Typed-decision measurement harnesses (TD-2 contamination/calibration, "
-            "TD-3 fan-out). Real model calls require --live."
+            "TD-3 fan-out and TD-3b parallel fan-out). Real model calls require --live."
         ),
     )
     subparsers = parser.add_subparsers(dest="study", required=True)
@@ -944,6 +1288,32 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     fanout.add_argument("--mode", default="json", help="runner mode (json | native)")
+
+    parallel = subparsers.add_parser(
+        "parallel",
+        help="batched vs sequential-singleton vs concurrent-singleton fan-out (TD-3b)",
+    )
+    _add_common_options(parallel)
+    parallel.add_argument(
+        "--states-file",
+        required=True,
+        help="JSON list of state strings (a single string or {'state': str} is one state)",
+    )
+    parallel.add_argument(
+        "--questions-file",
+        required=True,
+        help=(
+            "JSON catalogue used verbatim for every state; the decision_set_v1 fixture "
+            "lives at .../intake-jev-sageattn-20260917/artifacts/typed_decisions/"
+            "decision_set_v1/questions.json"
+        ),
+    )
+    parallel.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="concurrent-singleton pool size; each worker gets its own primitives instance",
+    )
     return parser
 
 
@@ -983,6 +1353,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 questions=_load_questions(args.questions_file),
                 labels=_load_labels(args.labels_file),
                 role=args.role,
+                receipt_path=args.receipt,
+                artifacts_dir=args.artifacts_dir,
+                dry_run=args.dry_run,
+            )
+        elif args.study == "parallel":
+            receipt = run_parallel_fanout_study(
+                primitives,
+                states=_load_states(args.states_file),
+                questions=_load_questions(args.questions_file),
+                role=args.role,
+                workers=args.workers,
+                primitives_factory=(_live_primitives if (args.live and not args.dry_run) else None),
                 receipt_path=args.receipt,
                 artifacts_dir=args.artifacts_dir,
                 dry_run=args.dry_run,
