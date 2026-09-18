@@ -532,7 +532,7 @@ def _run_client_tool_completion(
     """One backend chat-completions call; returns (content, tool_calls, finish_reason).
 
     Routing: ``role`` is the SAME resolved role the default mode would use
-    (x_force_model > x_orchestrator_role > model alias). No REPL, no
+    (x_force_role > x_force_model > x_orchestrator_role > model alias). No REPL, no
     escalation — /v1 has none today in either mode.
 
     Output size: ``llm_call``'s ``output_cap`` (8192-char truncation) does NOT
@@ -631,12 +631,98 @@ async def _run_openai_vision_completion(
 
 COMPATIBILITY_MODEL_ALIASES = ("orchestrator", "architect", "worker")
 
+# `model` values an OpenAI client sends that mean "let the orchestrator route":
+# they resolve to the frontdoor. This is the `model`-field path only (HS-OD-7
+# leaves it alone); the explicit override fields take ROLES, not model names.
+FRONTDOOR_MODEL_ALIASES = ("orchestrator", "gpt-4", "gpt-3.5-turbo", "claude-3")
+
+# HS-OD-7: the compatibility aliases /v1/models advertises are legal override
+# values, so they must resolve to the role they stand for. `worker` shares
+# `worker_general`'s server URL byte-for-byte; the other two resolved to NO
+# backend before this map existed (they died at `server_urls.get(role, "")`).
+_COMPATIBILITY_ALIAS_ROLES: dict[str, Role] = {
+    "orchestrator": Role.FRONTDOOR,
+    "architect": Role.ARCHITECT_GENERAL,
+    "worker": Role.WORKER_GENERAL,
+}
+
+# The explicit role-override fields, highest precedence first (HS-OD-3).
+# `x_force_model` is the deprecated alias of `x_force_role`; the request model
+# already refused the two-different-values case with a 422.
+_ROLE_OVERRIDE_FIELDS = ("x_force_role", "x_force_model", "x_orchestrator_role")
+
 
 def _canonical_role_name(role: str) -> str:
     canonical = normalize_ingress_role(role)
     if isinstance(canonical, Role):
         return canonical.value
     return str(canonical)
+
+
+def _servable_role_names() -> set[str]:
+    """Role names a request may be routed to.
+
+    The union of what ``/v1/models`` lists (live stack truth, canonicalised)
+    and the role->server map the backend lookup itself consults
+    (``server_urls.get(role, "")`` in ``llm_primitives/inference.py``). A
+    value outside this set would have died at that lookup; a value inside it
+    resolves exactly as before.
+    """
+    from src.config import get_config
+
+    names = set(available_roles())
+    try:
+        names.update(get_config().server_urls.as_dict())
+    except Exception as exc:  # degraded config: /v1/models truth still applies
+        logger.debug("Could not load server_urls for role validation: %s", exc)
+    return names
+
+
+def normalize_override_role(value: str) -> object:
+    """Normalise an explicit role-override value (never the ``model`` field).
+
+    Ingress aliases (``worker_coder`` -> ``worker_general``) and legacy Role
+    aliases (``coder`` -> ``coder_escalation``) go through
+    ``normalize_ingress_role`` exactly as before; the ``/v1/models``
+    compatibility aliases resolve to the role they advertise.
+    """
+    role = normalize_ingress_role(value)
+    if isinstance(role, str):
+        return _COMPATIBILITY_ALIAS_ROLES.get(role, role)
+    return role
+
+
+def _resolve_role_override(request: OpenAIChatRequest) -> object | None:
+    """Return the normalised, validated role override, or None if none was set.
+
+    Precedence: x_force_role > x_force_model (deprecated alias) >
+    x_orchestrator_role. Every override is validated AFTER normalisation
+    against ``_servable_role_names()``; an unknown value is refused with a 422
+    naming the field and pointing at ``/v1/models`` (HS-OD-7) instead of
+    reaching the backend lookup as a silent miss.
+    """
+    if request.x_force_model:
+        logger.warning(
+            "x_force_model is deprecated on /v1/chat/completions; send the role as "
+            "x_force_role instead (HS-OD-3). value=%r",
+            request.x_force_model,
+        )
+    for field in _ROLE_OVERRIDE_FIELDS:
+        value = getattr(request, field)
+        if not value:
+            continue
+        role = normalize_override_role(value)
+        role_name = role.value if isinstance(role, Role) else str(role)
+        if role_name not in _servable_role_names():
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{field}={value!r} does not name a servable role; legal values are "
+                    "the ids listed by GET /v1/models (HS-OD-7)"
+                ),
+            )
+        return role
+    return None
 
 
 def _degraded_available_roles() -> list[str]:
@@ -731,16 +817,15 @@ async def openai_chat_completions(
     )
     context = "\n\n".join(context_parts) if context_parts else None
 
-    # Map model to role — x_force_model > x_orchestrator_role > model field
-    if request.x_force_model:
-        role = request.x_force_model
-    elif request.x_orchestrator_role:
-        role = request.x_orchestrator_role
-    elif request.model in ("orchestrator", "gpt-4", "gpt-3.5-turbo", "claude-3"):
-        role = Role.FRONTDOOR
-    else:
-        role = request.model
-    role = normalize_ingress_role(role)
+    # Map model to role — x_force_role > x_force_model (deprecated alias) >
+    # x_orchestrator_role > model field. Overrides are validated (422) in
+    # _resolve_role_override; the `model` field keeps its own alias handling.
+    role = _resolve_role_override(request)
+    if role is None:
+        if request.model in FRONTDOOR_MODEL_ALIASES:
+            role = Role.FRONTDOOR
+        else:
+            role = normalize_ingress_role(request.model)
 
     # Escalation cap and REPL disable flags — pass through to metadata
     max_escalation = request.x_max_escalation
