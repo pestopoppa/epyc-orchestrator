@@ -62,12 +62,12 @@ Usage:
     python escalation_prediction_probe.py --snapshot-dir /mnt/raid0/llm/tmp/esc_snapshot \
         --out-json orchestration/reports/escalation_prediction_probe/escalation_prediction_probe.json
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-import os
 import shutil
 import sqlite3
 import sys
@@ -113,7 +113,10 @@ def snapshot_provenance(snap_dir: Path) -> dict:
     for name in ("episodic.db", "embeddings.faiss"):
         p = snap_dir / name
         st = p.stat()
-        prov[name] = {"bytes": st.st_size, "mtime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime))}
+        prov[name] = {
+            "bytes": st.st_size,
+            "mtime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime)),
+        }
     return prov
 
 
@@ -151,7 +154,9 @@ def load_vectors(snap_dir: Path, needed_idx: np.ndarray) -> tuple[dict[int, int]
 
     in_range = needed_idx[(needed_idx >= 0) & (needed_idx < index.ntotal)]
     uniq = np.unique(in_range)
-    log(f"[load] reconstructing {len(uniq)} of {index.ntotal} vectors ({100.0 * len(uniq) / index.ntotal:.2f}%)")
+    log(
+        f"[load] reconstructing {len(uniq)} of {index.ntotal} vectors ({100.0 * len(uniq) / index.ntotal:.2f}%)"
+    )
 
     t = time.time()
     vecs = np.vstack([index.reconstruct(int(i)) for i in uniq]).astype(np.float32)
@@ -201,9 +206,13 @@ def run_probe(X: np.ndarray, y: np.ndarray, groups: np.ndarray, seed: int, group
 
     n_splits = 5
     if grouped:
-        splitter = GroupShuffleSplit(n_splits=n_splits, test_size=0.25, random_state=seed).split(X, y, groups)
+        splitter = GroupShuffleSplit(n_splits=n_splits, test_size=0.25, random_state=seed).split(
+            X, y, groups
+        )
     else:
-        splitter = StratifiedShuffleSplit(n_splits=n_splits, test_size=0.25, random_state=seed).split(X, y)
+        splitter = StratifiedShuffleSplit(
+            n_splits=n_splits, test_size=0.25, random_state=seed
+        ).split(X, y)
 
     row_auc, row_ap, grp_auc, grp_ap = [], [], [], []
     for train_idx, test_idx in splitter:
@@ -231,18 +240,102 @@ def run_probe(X: np.ndarray, y: np.ndarray, groups: np.ndarray, seed: int, group
     def summarize(vals):
         if not vals:
             return None
-        return {"mean": float(np.mean(vals)), "std": float(np.std(vals)),
-                "min": float(min(vals)), "max": float(max(vals)), "folds": len(vals)}
+        return {
+            "mean": float(np.mean(vals)),
+            "std": float(np.std(vals)),
+            "min": float(min(vals)),
+            "max": float(max(vals)),
+            "folds": len(vals),
+        }
 
     if not row_auc:
         return {"auc": None, "note": "no evaluable folds"}
     return {
-        "auc": float(np.mean(row_auc)),                     # headline == row-weighted mean
+        "auc": float(np.mean(row_auc)),  # headline == row-weighted mean
         "row_weighted": {"auc": summarize(row_auc), "ap": summarize(row_ap)},
         "group_weighted": {"auc": summarize(grp_auc), "ap": summarize(grp_ap)},
         "base_rate": float(y.mean()),
         "n": int(len(y)),
         "n_groups": int(len(np.unique(groups))),
+    }
+
+
+def cross_fit_predict(
+    X_fit: np.ndarray,
+    y_failure_fit: np.ndarray,
+    groups_fit: np.ndarray,
+    X_eval: np.ndarray,
+    groups_eval: np.ndarray,
+    seed: int,
+    n_splits: int = 5,
+    test_size: float = 0.25,
+) -> dict:
+    """Out-of-fold P(success | e(x)) for held-out points, from run_probe's estimator.
+
+    TD-10's counterfactual evaluation needs per-point probabilities, which
+    ``run_probe`` never exports — it reports only fold metrics. This is the
+    SAME estimator, not a second one: same ``grouped=True`` splitter
+    (GroupShuffleSplit, groups = embedding identity), same
+    ``LogisticRegression(max_iter=2000, C=1.0, solver="lbfgs", random_state=seed)``,
+    same failure-label sign convention (``y_failure_fit = 1 for outcome=='failure'``).
+    The returned probabilities are ``1 - P(failure)``.
+
+    For each split the model is fit on that split's train rows and predicts
+    every ``X_eval`` row; an eval row's prediction from that split is admitted
+    ONLY when no training group equals its own group (``groups_eval[i]`` not in
+    the split's train groups). A group that never lands in a test draw simply
+    has no out-of-fold prediction for the rows it owns — ``None`` is returned,
+    never an in-sample fit. This matters because evaluation rows here are
+    sampled from the same frozen corpus the model is fit on.
+
+    Args:
+        X_fit / y_failure_fit / groups_fit: the action's support frame.
+        X_eval / groups_eval: points to score (same vector convention).
+        seed / n_splits / test_size: splitter knobs; defaults mirror run_probe.
+
+    Returns:
+        ``predictions`` — list aligned to ``X_eval`` (mean over admitted splits,
+        ``None`` when no split admitted the row); ``per_split`` — aligned
+        ``{"p_success": [...], "oof": [...]}`` per fitted split; ``folds``;
+        ``coverage``; ``n_predicted``; ``n_eval_rows``.
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import GroupShuffleSplit
+
+    n_eval = int(len(X_eval))
+    admitted: list[list[float]] = [[] for _ in range(n_eval)]
+    per_split: list[dict] = []
+    folds = 0
+
+    splitter = GroupShuffleSplit(n_splits=n_splits, test_size=test_size, random_state=seed).split(
+        X_fit, y_failure_fit, groups_fit
+    )
+    for train_idx, _test_idx in splitter:
+        if len(np.unique(y_failure_fit[train_idx])) < 2:
+            continue
+        train_groups = set(groups_fit[train_idx].tolist())
+        clf = LogisticRegression(max_iter=2000, C=1.0, solver="lbfgs", random_state=seed)
+        clf.fit(X_fit[train_idx], y_failure_fit[train_idx])
+        p_success = 1.0 - clf.predict_proba(X_eval)[:, 1]
+        oof = [g not in train_groups for g in groups_eval.tolist()]
+        per_split.append({"p_success": [float(v) for v in p_success], "oof": oof})
+        for index in range(n_eval):
+            if oof[index]:
+                admitted[index].append(float(p_success[index]))
+        folds += 1
+
+    predictions = [float(np.mean(values)) if values else None for values in admitted]
+    n_predicted = int(sum(value is not None for value in predictions))
+    return {
+        "predictions": predictions,
+        "per_split": per_split,
+        "folds": folds,
+        "n_splits": int(n_splits),
+        "test_size": float(test_size),
+        "seed": int(seed),
+        "n_eval_rows": n_eval,
+        "n_predicted": n_predicted,
+        "coverage": (n_predicted / n_eval) if n_eval else None,
     }
 
 
@@ -257,11 +350,18 @@ def verdict_for(auc: Optional[float]) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--snapshot-dir", default="/mnt/raid0/llm/tmp/esc_snapshot")
     ap.add_argument("--live-dir", default=str(LIVE_SESSIONS))
-    ap.add_argument("--make-snapshot", action="store_true", help="copy live stores into --snapshot-dir first")
-    ap.add_argument("--out-json", default="orchestration/reports/escalation_prediction_probe/escalation_prediction_probe.json")
+    ap.add_argument(
+        "--make-snapshot", action="store_true", help="copy live stores into --snapshot-dir first"
+    )
+    ap.add_argument(
+        "--out-json",
+        default="orchestration/reports/escalation_prediction_probe/escalation_prediction_probe.json",
+    )
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -282,8 +382,10 @@ def main() -> int:
     X_all = vecs[np.array([pos[int(i)] for i in idx])]
     # Group by the EMBEDDING, not the context string — see _vector_key.
     group = np.array([_vector_key(X_all[i]) for i in range(len(X_all))], dtype=object)
-    log(f"[probe] distinct vectors: {len(np.unique(group))} across {len(group)} rows "
-        f"({len(group) / max(1, len(np.unique(group))):.1f}x reuse)")
+    log(
+        f"[probe] distinct vectors: {len(np.unique(group))} across {len(group)} rows "
+        f"({len(group) / max(1, len(np.unique(group))):.1f}x reuse)"
+    )
 
     results: dict[str, dict] = {}
     roles = sorted({a for a in action}, key=lambda a: -int((action == a).sum()))
@@ -297,12 +399,17 @@ def main() -> int:
             results[role] = {"n": n, "skipped": "single-class outcome"}
             continue
         if int(y.sum()) < MIN_POSITIVES or int((1 - y).sum()) < MIN_POSITIVES:
-            results[role] = {"n": n, "positives": int(y.sum()),
-                             "skipped": f"fewer than {MIN_POSITIVES} in a class — not evaluable"}
+            results[role] = {
+                "n": n,
+                "positives": int(y.sum()),
+                "skipped": f"fewer than {MIN_POSITIVES} in a class — not evaluable",
+            }
             log(f"[probe] {role}: SKIPPED (positives={int(y.sum())})")
             continue
         X, g = X_all[sel], group[sel]
-        log(f"[probe] {role}: n={n} failures={int(y.sum())} ({100.0 * y.mean():.1f}%) groups={len(np.unique(g))}")
+        log(
+            f"[probe] {role}: n={n} failures={int(y.sum())} ({100.0 * y.mean():.1f}%) groups={len(np.unique(g))}"
+        )
 
         grouped = run_probe(X, y, g, args.seed, grouped=True)
         # How concentrated is the data? If a few objectives carry most rows, the row-weighted
@@ -323,7 +430,9 @@ def main() -> int:
             "grouped": grouped,
             "ungrouped_leakage_anchor": ungrouped,
             "shuffled_label_control": shuffled,
-            "verdict": verdict_for(((grouped.get("group_weighted") or {}).get("auc") or {}).get("mean")),
+            "verdict": verdict_for(
+                ((grouped.get("group_weighted") or {}).get("auc") or {}).get("mean")
+            ),
             "verdict_basis": "group-weighted AUC (one point per distinct objective)",
         }
         gw = (grouped.get("group_weighted") or {}).get("auc") or {}
@@ -337,6 +446,7 @@ def main() -> int:
 
     def _gw(r):
         return ((r.get("grouped") or {}).get("group_weighted") or {}).get("auc", {}) or {}
+
     evaluable = [r for r in results.values() if _gw(r).get("mean") is not None]
     best = max((_gw(r)["mean"] for r in evaluable), default=None)
     payload = {
