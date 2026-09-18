@@ -287,11 +287,27 @@ class TestFieldDescriptionsMatchSeamBehaviour:
         assert "x_orchestrator_role" in d
         assert "not resolved" in d
 
-    def test_x_orchestrator_role_names_no_validation_and_vision_limit(self):
+    def test_x_orchestrator_role_names_validation_and_vision_limit(self):
+        # HS-OD-7: the override IS validated now; the description must say so
+        # and must no longer claim the opposite.
         d = self._desc("x_orchestrator_role")
         assert "bypassing frontdoor routing" not in d
-        assert "not validated" in d
+        assert "not validated" not in d
+        assert "validated" in d and "422" in d and "/v1/models" in d
         assert "vision" in d and "ignored" in d
+
+    def test_x_force_role_is_the_highest_precedence_role_override(self):
+        d = self._desc("x_force_role")
+        assert "highest-precedence role override" in d
+        assert "/v1/models" in d
+        assert "x_force_model" in d and "deprecated" in d
+
+    def test_x_force_model_is_marked_deprecated_in_the_schema(self):
+        # HS-OD-3: the alias stays accepted but advertises itself as deprecated.
+        schema = OpenAIChatRequest.model_json_schema()["properties"]
+        assert schema["x_force_model"].get("deprecated") is True
+        assert schema["x_force_role"].get("deprecated") is not True
+        assert "deprecated" in self._desc("x_force_model")
 
     def test_x_disable_repl_names_the_paths_that_do_not_consult_it(self):
         d = self._desc("x_disable_repl")

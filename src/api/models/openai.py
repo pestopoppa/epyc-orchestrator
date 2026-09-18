@@ -142,8 +142,10 @@ class OpenAIChatRequest(BaseModel):
         default=None,
         description="Force specific orchestrator role. Values: any role from /v1/models (e.g. "
         "'architect_general', 'worker_math'). Honoured as the backend role on the text and "
-        "client-tool paths; NOT validated against /v1/models here, so an unknown value is "
-        "passed through to the backend lookup rather than refused with a 422. On image "
+        "client-tool paths. Validated after normalisation (HS-OD-7): a value that does not "
+        "name a servable role is refused with a 422 naming this field and pointing at "
+        "/v1/models, instead of reaching the backend lookup. Precedence: x_force_role > "
+        "x_force_model (deprecated alias) > x_orchestrator_role > model alias. On image "
         "(vision) requests only 'worker_vision'/'vision_escalation' constrain the server; any "
         "other role is ignored by the vision path.",
     )
@@ -155,13 +157,26 @@ class OpenAIChatRequest(BaseModel):
         "escalation cap, and client tool mode performs no escalation at all. Enforcement "
         "is HS-4 P4 work; until then this field does not prevent anything.",
     )
+    x_force_role: str | None = Field(
+        default=None,
+        description="Highest-precedence ROLE override (x_force_role > x_force_model (deprecated "
+        "alias) > x_orchestrator_role > model alias). The ROLE is the contract on this seam "
+        "(operator decision 2026-09-17): legal values are exactly what GET /v1/models lists, "
+        "plus the ingress aliases the orchestrator already normalises. Validated after "
+        "normalisation; a value that does not name a servable role is refused with a 422 "
+        "naming this field (HS-OD-7). Replaces x_force_model (HS-OD-3).",
+    )
     x_force_model: str | None = Field(
         default=None,
-        description="Highest-precedence ROLE override (x_force_model > x_orchestrator_role > "
-        "model). Despite the name it does NOT select a model by registry name: on /v1 the "
-        "value is treated exactly like x_orchestrator_role -- normalised as a role label and "
-        "looked up in the role->server map -- so a registry model name (e.g. "
-        "'architect_qwen2_5_72b') is not resolved to a model. Send a role from /v1/models.",
+        json_schema_extra={"deprecated": True},
+        description="DEPRECATED alias of x_force_role -- identical behaviour and precedence "
+        "(x_force_role > x_force_model > x_orchestrator_role > model alias), kept so existing "
+        "callers keep working (HS-OD-3); setting it logs a warning naming the replacement. "
+        "Despite the name it does NOT select a model by registry name: the "
+        "value is a ROLE label, normalised and validated exactly like x_force_role, so a "
+        "registry model name (e.g. 'architect_qwen2_5_72b') is not resolved and is refused "
+        "with a 422. Sending both x_force_role and x_force_model with different values is "
+        "refused with a 422 naming both fields. Send a role from /v1/models via x_force_role.",
     )
     x_disable_repl: bool = Field(
         default=False,
@@ -213,6 +228,23 @@ class OpenAIChatRequest(BaseModel):
         "image input is refused (400), and x_session_id may be required (422, "
         "v1_client_session_guard flag). Neither mode escalates.",
     )
+
+    @model_validator(mode="after")
+    def _refuse_conflicting_force_role_alias(self) -> "OpenAIChatRequest":
+        # HS-OD-3: x_force_model is a deprecated alias of x_force_role. Same
+        # discipline as max_tokens/max_completion_tokens -- a double supply with
+        # DIFFERENT values is refused rather than silently resolved by precedence.
+        if (
+            self.x_force_role is not None
+            and self.x_force_model is not None
+            and self.x_force_role != self.x_force_model
+        ):
+            raise ValueError(
+                f"x_force_role={self.x_force_role!r} and its deprecated alias "
+                f"x_force_model={self.x_force_model!r} were both supplied with different "
+                "values; send exactly one (prefer x_force_role)"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_client_tool_choice(self) -> "OpenAIChatRequest":
