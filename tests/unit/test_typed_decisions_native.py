@@ -535,7 +535,7 @@ class TestTokenizedEligibility:
     def test_each_candidate_binds_to_its_single_token_variant(self):
         # true: only the bare form is one token; false: only the spaced form.
         tokenizer = _FakeTokenizer({"true": (11,), " false": (23,)})
-        cue_length = _cue_length(tokenizer, NOUL)
+        cue_length = _cue_length(tokenizer, NOUL, CueStyle.FULL)
         answer_row = _v9_row(
             " false",
             math.log(0.7),
@@ -544,12 +544,12 @@ class TestTokenizedEligibility:
         )
         primitives = _FakePrimitives("", meta=_build_meta([NOUL], [answer_row], tokenizer))
 
-        result = _run(primitives, [NOUL], tokenize_fn=tokenizer)
+        result = _run(primitives, [NOUL], tokenize_fn=tokenizer, cue_style=CueStyle.FULL)
 
         call = primitives.calls[0]
         assert call["grammar"] == (
             "root ::= cue-0 answer-0\n"
-            f"cue-0 ::= {' '.join('<[%d]>' % ord(char) for char in _cue_text(NOUL))}\n"
+            f"cue-0 ::= {' '.join('<[%d]>' % ord(char) for char in _cue_text(NOUL, CueStyle.FULL))}\n"
             "answer-0 ::= <[11]> | <[23]>\n"
         )
         assert call["n_tokens"] == cue_length + 1
@@ -582,7 +582,7 @@ class TestTokenizedEligibility:
             id="lock", kind=QuestionKind.CHOICE, text="Lock it?", options=("lock", "unlock")
         )
         noul = Question(id="confirm", kind=QuestionKind.NOUL, text="Confirm?")
-        cue_length = _cue_length(tokenizer, noul)
+        cue_length = _cue_length(tokenizer, noul, CueStyle.FULL)
         answer_row = _v9_row(
             " true",
             math.log(0.8),
@@ -591,7 +591,7 @@ class TestTokenizedEligibility:
         )
         primitives = _FakePrimitives("", meta=_build_meta([noul], [answer_row], tokenizer))
 
-        result = _run(primitives, [choice, noul], tokenize_fn=tokenizer)
+        result = _run(primitives, [choice, noul], tokenize_fn=tokenizer, cue_style=CueStyle.FULL)
 
         # Only the single-token noul question entered the native batch, in order.
         call = primitives.calls[0]
@@ -763,10 +763,12 @@ class TestTokenizerUnavailable:
     def test_unavailable_question_does_not_block_eligible_questions(self):
         tokenizer = _FakeTokenizer(failing={"true", " true"})
         answer_row = _v9_row("yes", math.log(0.8), [("yes", math.log(0.8)), ("no", math.log(0.2))])
-        cue_length = _cue_length(tokenizer, SINGLE_TOKEN)
+        cue_length = _cue_length(tokenizer, SINGLE_TOKEN, CueStyle.FULL)
         primitives = _FakePrimitives("", meta=_build_meta([SINGLE_TOKEN], [answer_row], tokenizer))
 
-        result = _run(primitives, (SINGLE_TOKEN, NOUL), tokenize_fn=tokenizer)
+        result = _run(
+            primitives, (SINGLE_TOKEN, NOUL), tokenize_fn=tokenizer, cue_style=CueStyle.FULL
+        )
 
         assert len(primitives.calls) == 1
         call = primitives.calls[0]
@@ -1137,12 +1139,15 @@ class TestCueStyles:
         assert CueStyle.FULL == "full"
         assert {style.value for style in CueStyle} == {"full", "short", "id_only"}
 
-    def test_full_is_the_default_and_the_td1c_cue(self):
-        expected = "\nQ choice: Pick a colour.\nAnswer (one of: red, blue, green): "
+    def test_id_only_is_the_native_default_and_full_remains_selectable(self):
+        # TD-6 flipped the native default to id_only (cue sweep 11.98x at
+        # 15/16 agreement); full stays selectable.
+        full_cue = "\nQ choice: Pick a colour.\nAnswer (one of: red, blue, green): "
 
-        assert _cue_text(CHOICE) == expected
-        assert _cue_text(CHOICE, CueStyle.FULL) == expected
-        assert _cue_text(CHOICE, "full") == expected
+        assert _cue_text(CHOICE) == "\nchoice: "
+        assert _cue_text(CHOICE, CueStyle.ID_ONLY) == "\nchoice: "
+        assert _cue_text(CHOICE, CueStyle.FULL) == full_cue
+        assert _cue_text(CHOICE, "full") == full_cue
 
     def test_short_cue_is_id_plus_first_six_words(self):
         assert _cue_text(self.LONG_QUESTION, CueStyle.SHORT) == (
@@ -1200,7 +1205,7 @@ class TestCueStyles:
             "", meta=_build_meta(QUESTIONS, _main_answer_rows(), id_tokenizer, CueStyle.ID_ONLY)
         )
 
-        full_result = _run(full, QUESTIONS, tokenize_fn=full_tokenizer)
+        full_result = _run(full, QUESTIONS, tokenize_fn=full_tokenizer, cue_style="full")
         id_result = _run(id_only, QUESTIONS, tokenize_fn=id_tokenizer, cue_style="id_only")
 
         full_call, id_call = full.calls[0], id_only.calls[0]
@@ -1581,9 +1586,12 @@ class TestRunnerDispatch:
         assert "grammar" not in call
         assert "n_probs" not in call
 
-    def test_runner_native_mode_defaults_to_full_cues(self):
+    def test_runner_native_mode_defaults_to_id_only_cues(self):
+        # TD-6: the native default is id_only (11.98x at 15/16 agreement).
         tokenizer = _FakeTokenizer()
-        primitives = _FakePrimitives("", meta=_main_meta(tokenizer))
+        primitives = _FakePrimitives(
+            "", meta=_build_meta(QUESTIONS, _main_answer_rows(), tokenizer, CueStyle.ID_ONLY)
+        )
 
         run_typed_decisions(
             primitives,
@@ -1594,8 +1602,9 @@ class TestRunnerDispatch:
             tokenize_fn=tokenizer,
         )
 
-        assert primitives._last_native_layout["cue_style"] == "full"
-        assert _cue_text(CHOICE, CueStyle.FULL) in tokenizer.calls
+        assert primitives._last_native_layout["cue_style"] == "id_only"
+        assert _cue_text(CHOICE, CueStyle.ID_ONLY) in tokenizer.calls
+        assert _cue_text(CHOICE, CueStyle.FULL) not in tokenizer.calls
 
     def test_runner_native_mode_forwards_cue_style(self):
         tokenizer = _FakeTokenizer()

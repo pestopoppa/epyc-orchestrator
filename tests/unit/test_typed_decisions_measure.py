@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from src.typed_decisions.measure import (
     run_calibration_study,
     run_contamination_study,
     run_fanout_study,
+    run_parallel_fanout_study,
 )
 from src.typed_decisions.types import Question, QuestionKind
 
@@ -787,7 +789,195 @@ class TestFanoutProvidedCatalogue:
         ]
 
 
-# ── 5. CLI surface ────────────────────────────────────────────────────────
+# ── 5. Parallel fan-out (TD-3b) ───────────────────────────────────────────
+
+
+def _delayed_responder(delay_s: float, responder: Callable[..., str]) -> Callable[..., str]:
+    """Wrap a responder with a fixed sleep so concurrency changes wall time."""
+
+    def wrapped(prompt: str, **kwargs) -> str:
+        time.sleep(delay_s)
+        return responder(prompt, **kwargs)
+
+    return wrapped
+
+
+class TestParallelFanoutStudy:
+    def test_concurrent_arm_is_faster_than_sequential_and_agrees(self, tmp_path: Path):
+        primitives = _FakePrimitives(_delayed_responder(0.05, _stable_responder))
+        created: list[_FakePrimitives] = []
+
+        def factory() -> _FakePrimitives:
+            fake = _FakePrimitives(_delayed_responder(0.05, _stable_responder))
+            created.append(fake)
+            return fake
+
+        receipt_path = tmp_path / "parallel.json"
+        receipt = run_parallel_fanout_study(
+            primitives,
+            states=("state-a",),
+            questions=PROVIDED_QUESTIONS,
+            role=ROLE,
+            workers=3,
+            primitives_factory=factory,
+            receipt_path=receipt_path,
+        )
+
+        assert receipt["study"] == "parallel_fanout"
+        assert receipt["counts"] == {
+            "states": 1,
+            "questions_per_state": 3,
+            "workers": 3,
+            "batched_calls": 1,
+            "sequential_singleton_calls": 3,
+            "concurrent_singleton_calls": 3,
+        }
+        arms = receipt["results"]["arms"]
+        assert arms["batched"]["calls"] == 1
+        assert arms["sequential_singleton"]["calls"] == 3
+        assert arms["concurrent_singleton"]["calls"] == 3
+        assert arms["batched"]["tokens_generated"] == 11.0
+        assert arms["sequential_singleton"]["tokens_generated"] == 33.0
+        assert arms["concurrent_singleton"]["tokens_generated"] == 33.0
+        assert arms["concurrent_singleton"]["calls_with_token_meta"] == 3
+
+        for comparison in receipt["results"]["agreement"].values():
+            assert comparison["agreement_rate"] == 1.0
+            assert comparison["comparable_pairs"] == 3
+            assert comparison["unresolved_pairs"] == 0
+
+        assert receipt["results"]["prompt_sha256_identical_concurrent_vs_sequential"] is True
+        assert (
+            receipt["prompt_sha256"]["concurrent_singleton"]
+            == receipt["prompt_sha256"]["sequential_singleton"]
+        )
+        assert len(receipt["prompt_sha256"]["batched"]) == 1
+
+        # The artificial per-call sleep makes Arm C provably faster in
+        # wall-clock while the per-call serial sums stay equal.
+        assert arms["concurrent_singleton"]["wall_ms"] < (
+            arms["sequential_singleton"]["wall_ms"] * 0.75
+        )
+        assert arms["concurrent_singleton"]["serial_sum_ms"] == pytest.approx(
+            arms["sequential_singleton"]["serial_sum_ms"], rel=0.25
+        )
+        assert receipt["results"]["speedup_concurrent_vs_sequential"] > 1.0
+        assert receipt["results"]["speedup_concurrent_vs_batched"] > 0.0
+
+        assert receipt["metric_directions"] == {
+            "agreement_rate_vs_batched": "higher_better",
+            "speedup_concurrent_vs_batched": "higher_better",
+            "speedup_concurrent_vs_sequential": "higher_better",
+            "wall_ms": "lower_better",
+            "serial_sum_ms": "lower_better",
+        }
+
+        # One primitives object per worker, each used for exactly one call;
+        # the shared object carries the batched + sequential arms.
+        assert len(created) == 3
+        assert all(len(fake.calls) == 1 for fake in created)
+        assert len(primitives.calls) == 4
+
+        # All arms share the runner's canonical instruction prefix.
+        all_prompts = [call["prompt"] for call in primitives.calls] + [
+            call["prompt"] for fake in created for call in fake.calls
+        ]
+        shared_prefix = all_prompts[0].split("RESPONSE JSON SCHEMA (authoritative):")[0]
+        assert shared_prefix
+        assert all(prompt.startswith(shared_prefix) for prompt in all_prompts)
+
+        loaded = json.loads(receipt_path.read_text(encoding="utf-8"))
+        assert loaded == receipt
+        assert receipt["timestamp"]
+
+    def test_missing_factory_refuses_concurrent_arm_before_any_call(self):
+        primitives = _FakePrimitives(_stable_responder)
+
+        with pytest.raises(MeasurementError, match="primitives_factory"):
+            run_parallel_fanout_study(
+                primitives,
+                states=("state-a",),
+                questions=PROVIDED_QUESTIONS,
+                role=ROLE,
+                workers=2,
+            )
+
+        assert primitives.calls == []
+
+    def test_factory_returning_the_same_object_is_rejected(self):
+        primitives = _FakePrimitives(_stable_responder)
+        shared = _FakePrimitives(_stable_responder)
+
+        with pytest.raises(MeasurementError, match="same object twice"):
+            run_parallel_fanout_study(
+                primitives,
+                states=("state-a",),
+                questions=PROVIDED_QUESTIONS,
+                role=ROLE,
+                workers=2,
+                primitives_factory=lambda: shared,
+            )
+
+        assert primitives.calls == []
+        assert shared.calls == []
+
+    def test_dry_run_plans_all_three_arms_and_makes_no_calls(self, tmp_path: Path):
+        primitives = _FakePrimitives(_stable_responder)
+        receipt_path = tmp_path / "parallel.json"
+
+        receipt = run_parallel_fanout_study(
+            primitives,
+            states=("state-a", "state-b"),
+            questions=PROVIDED_QUESTIONS,
+            role=ROLE,
+            workers=4,
+            dry_run=True,
+            receipt_path=receipt_path,
+        )
+
+        assert receipt["dry_run"] is True
+        assert receipt["study"] == "parallel_fanout"
+        plan = receipt["plan"]
+        assert plan["workers"] == 4
+        assert plan["states"] == 2
+        assert plan["batched_calls"] == 2
+        assert plan["sequential_singleton_calls"] == 6
+        assert plan["concurrent_singleton_calls"] == 6
+        assert plan["questions"] == [question.id for question in PROVIDED_QUESTIONS]
+        assert plan["primitives_factory_supplied"] is False
+        assert len(plan["state_sha256"]) == 2
+        assert primitives.calls == []
+        assert not receipt_path.exists()
+
+    def test_states_questions_and_workers_are_validated(self):
+        with pytest.raises(MeasurementError):
+            run_parallel_fanout_study(
+                None,
+                states=(),
+                questions=PROVIDED_QUESTIONS,
+                role=ROLE,
+                dry_run=True,
+            )
+        with pytest.raises(ValueError):
+            run_parallel_fanout_study(
+                None,
+                states=("state-a",),
+                questions=[],
+                role=ROLE,
+                dry_run=True,
+            )
+        with pytest.raises(ValueError):
+            run_parallel_fanout_study(
+                None,
+                states=("state-a",),
+                questions=PROVIDED_QUESTIONS,
+                role=ROLE,
+                workers=0,
+                dry_run=True,
+            )
+
+
+# ── 6. CLI surface ────────────────────────────────────────────────────────
 
 
 class TestCli:
@@ -864,3 +1054,66 @@ class TestCli:
         assert printed["plan"]["questions"] == ["q-choice", "q-score"]
         assert printed["plan"]["questions_per_state"] == 2
         assert printed["plan"]["states"] == 1
+
+    def test_parallel_cli_dry_run_prints_plan(self, tmp_path: Path, capsys: pytest.CaptureFixture):
+        states_file = tmp_path / "states.json"
+        states_file.write_text(json.dumps(["state-a"]), encoding="utf-8")
+        questions_file = tmp_path / "questions.json"
+        questions_file.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "q-choice",
+                        "kind": "choice",
+                        "text": "Pick a lane.",
+                        "options": ["a", "b"],
+                    },
+                    {"id": "q-noul", "kind": "noul", "text": "Is it so?"},
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        code = main(
+            [
+                "parallel",
+                "--states-file",
+                str(states_file),
+                "--questions-file",
+                str(questions_file),
+                "--workers",
+                "2",
+                "--dry-run",
+            ]
+        )
+
+        assert code == 0
+        printed = json.loads(capsys.readouterr().out)
+        assert printed["study"] == "parallel_fanout"
+        assert printed["dry_run"] is True
+        assert printed["plan"]["questions"] == ["q-choice", "q-noul"]
+        assert printed["plan"]["workers"] == 2
+        assert printed["plan"]["batched_calls"] == 1
+        assert printed["plan"]["sequential_singleton_calls"] == 2
+        assert printed["plan"]["concurrent_singleton_calls"] == 2
+
+    def test_parallel_cli_refuses_without_live_or_dry_run(self, tmp_path: Path):
+        states_file = tmp_path / "states.json"
+        states_file.write_text(json.dumps(["state-a"]), encoding="utf-8")
+        questions_file = tmp_path / "questions.json"
+        questions_file.write_text(
+            json.dumps([{"id": "q0", "kind": "noul", "text": "Is it so?"}]),
+            encoding="utf-8",
+        )
+
+        code = main(
+            [
+                "parallel",
+                "--states-file",
+                str(states_file),
+                "--questions-file",
+                str(questions_file),
+            ]
+        )
+
+        assert code == 2

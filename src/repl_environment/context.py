@@ -548,6 +548,13 @@ class _ContextMixin:
         chain_index = int(getattr(self, "_active_tool_chain_index", 0))
         caller_type = "chain" if chain_id else "direct"
 
+        # TD-4: closed-set typed argument selection (flag
+        # ``typed_decisions_tool_args``, default off). Fail-open: None keeps
+        # the model-provided kwargs and the existing validation path.
+        typed_arguments = self._typed_tool_arguments(tool_name)
+        if typed_arguments is not None:
+            kwargs = typed_arguments
+
         # Fall back to REPL globals for tools like run_python_code that are
         # registered as direct REPL functions, not in the tool registry.
         try:
@@ -583,6 +590,36 @@ class _ContextMixin:
                 pass  # Silently ignore research tracking failures
 
         return result
+
+    def _typed_tool_arguments(self, tool_name: str) -> dict[str, Any] | None:
+        """Closed-set typed arguments for one tool call (TD-4), or ``None``.
+
+        Delegates to ``src.typed_decisions.tool_args_integration``, which owns
+        the default-off flag and the fail-open contract. The import is lazy so
+        the REPL package does not depend on jsonschema at import time, and the
+        call never raises: any failure returns ``None`` and the caller keeps
+        the model-provided arguments.
+        """
+        registry = getattr(self, "tool_registry", None)
+        tools = getattr(registry, "_tools", None)
+        tool = tools.get(tool_name) if isinstance(tools, dict) else None
+        if tool is None:
+            return None
+        try:
+            from src.typed_decisions.tool_args_integration import (
+                maybe_typed_arguments,
+                registry_parameters_to_schema,
+            )
+
+            return maybe_typed_arguments(
+                tool_name=tool_name,
+                parameters=registry_parameters_to_schema(getattr(tool, "parameters", None)),
+                state=getattr(self, "context", None),
+                primitives=getattr(self, "llm_primitives", None),
+                role=getattr(self, "role", ""),
+            )
+        except Exception:  # pragma: no cover - defensive: never break dispatch
+            return None
 
     def _tool_budget_bucket(self, tool: Any) -> str | None:
         """Map tool metadata to a coarse budget bucket."""
