@@ -845,8 +845,9 @@ aux_services:
     # or a linked worktree: the supervisor refreshes only a marked standalone view.
     cwd: "{llm_root}/views/epyc-root-main"
     pythonpath: ["{llm_root}/views/epyc-root-main"]
-    env:
-      AUTOKERNEL_LOOP_STORE_ROOT: /mnt/raid0/llm/tmp/aku12a-glm53-five-loop-store
+    # AUTOKERNEL_LOOP_STORE_ROOT pin removed 2026-09-22: it pointed at the retired
+    # GLM-5.3 campaign store (deleted with GLM-5.3-Flash). The hub now resolves the
+    # serial-run pointer, then its default /mnt/raid0/llm/autokernel/loop-memory.
     health_path: /health
     health_timeout: 30
     model_label: epyc-root handoff progress hub (stdlib)
