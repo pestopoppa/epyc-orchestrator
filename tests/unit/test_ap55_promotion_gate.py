@@ -9,11 +9,39 @@ change (with a churn guard) and the paired diagnostic skips foreign-regime draws
 
 from __future__ import annotations
 
+import os
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+# ── clock pinning ────────────────────────────────────────────────────────────
+# `_seq_baseline_reference_state` defaults `now_ts` to `time.time()` and marks a
+# reference draw stale after SEQ_BASELINE_REFERENCE_STALE_AFTER_S (48h), so a
+# journal fixture dated with a hard-coded wall-clock timestamp silently flips the
+# seq-cadence assertions 48h after it was written (it did: the fixtures were
+# pinned to 2026-09-16T00:00:00Z in 0e6e2288 and rotted two days later).
+# Fixtures are therefore dated RELATIVE to a pinned clock, and `_pinned_clock`
+# freezes `time.time()` at that same instant for every test in this file, so the
+# reference age is a property of the fixture and never of the calendar.
+# Move the pin to prove the file is clock-independent, e.g.
+#   AP55_TEST_PINNED_NOW_S=1852675200 python -m pytest tests/unit/test_ap55_promotion_gate.py
+_PINNED_NOW_S = float(os.environ.get("AP55_TEST_PINNED_NOW_S", "1789516800"))  # 2026-09-16Z
+_FIXTURE_AGE_S = 3600.0  # fresh w.r.t. the 48h staleness threshold
+
+
+def _fixture_ts(age_s: float = _FIXTURE_AGE_S) -> str:
+    """An ISO timestamp `age_s` seconds before the pinned clock."""
+    return datetime.fromtimestamp(_PINNED_NOW_S - age_s, tz=timezone.utc).isoformat()
+
+
+@pytest.fixture(autouse=True)
+def _pinned_clock(monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: _PINNED_NOW_S)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
@@ -271,14 +299,15 @@ def autopilot():
     return module
 
 
-def _entry(tid, *, fp=None, seed=False, qr=None, pin_rev=None, snap=None):
+def _entry(tid, *, fp=None, seed=False, qr=None, pin_rev=None, snap=None,
+           age_s=_FIXTURE_AGE_S):
     from experiment_journal import JournalEntry
 
     details = {"question_results": qr or [{"qid": f"q{i}", "correct": i % 2 == 0} for i in range(4)]}
     if seed:
         details["seq_baseline_reference_draw"] = True
     return JournalEntry(
-        trial_id=tid, timestamp="2026-09-16T00:00:00+00:00", species="s",
+        trial_id=tid, timestamp=_fixture_ts(age_s), species="s",
         action_type="seed_batch", tier=1, quality=1.0, speed=1.0, cost=1.0,
         reliability=1.0, pareto_status="candidate", eval_details=details,
         infra_fingerprint=fp or {},
@@ -450,6 +479,21 @@ def test_seq_on_with_knob_unset_never_forces_a_regime_rerun(autopilot, monkeypat
     assert calls == []  # no fingerprinting at all with the knob unset
     monkeypatch.setenv("AUTOPILOT_AP55_SEED_RERUN", "1")
     assert _force(autopilot, moved, {}, 5, enabled=True)[2]["regime_due"]
+
+
+def test_seq_on_still_refreshes_a_stale_reference(autopilot, monkeypatch):
+    """The staleness leg the clock pin must not mask: age is fixture-relative, not calendar-relative."""
+    monkeypatch.setattr(autopilot, "SEQ_BASELINE_REFRESH_CADENCE", 100)
+    monkeypatch.delenv("AUTOPILOT_AP55_SEED_RERUN", raising=False)
+    stale_age = autopilot.SEQ_BASELINE_REFERENCE_STALE_AFTER_S + 60
+    journal = _Journal([_entry(1, fp=_fp(), seed=True, age_s=stale_age), _entry(2, fp=_fp())])
+    forced, rationale, reference = _force(autopilot, journal, {}, 5, enabled=True)
+    assert reference is not None and reference["stale_reference"] and not reference["regime_due"]
+    assert reference["latest_reference_age_s"] == pytest.approx(stale_age)
+    assert "stale threshold" in reference["reason"]
+    assert forced["type"] == "seed_batch" and rationale["seq_baseline_reference_draw"]
+    # seq off with the knob unset: staleness alone never forces a draw
+    assert _force(autopilot, journal, {}, 5, enabled=False)[2] is None
 
 
 def test_seq_off_bootstrap_forces_first_reference_draw(autopilot, monkeypatch):
