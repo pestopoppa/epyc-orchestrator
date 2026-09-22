@@ -1266,9 +1266,31 @@ def validate_declaration_parity() -> None:
 # function is why the grouping was worth doing.
 #
 # ── THE ARITHMETIC ───────────────────────────────────────────────────────────
-#     KV KiB/token @f16 = block_count * head_count_kv * (key_length + value_length) * 2 / 1024
-# read straight out of the GGUF header, and declared per role as
-# `serving_shape.kv_kib_per_token_f16`. K and V are quantised INDEPENDENTLY, so
+#     KV KiB/token @f16 = KV_LAYERS * head_count_kv * (key_length + value_length) * 2 / 1024
+# read out of the GGUF header, and declared per role as
+# `serving_shape.kv_kib_per_token_f16`.
+#
+# KV_LAYERS IS NOT ALWAYS block_count. This formula used to say block_count, and that
+# is wrong for every model whose attention is not uniformly global. When the GGUF
+# declares `<arch>.full_attention_interval = N`, only every Nth layer keeps a KV cache
+# and the rest are filtered out of it entirely; the server says so itself, e.g.
+#     llama_kv_cache: size = 2176.00 MiB ( 65536 cells,  16 layers, ...)
+# for Qwen3.8-27B, which has block_count 65 and full_attention_interval 4 -> 16 layers.
+#
+#     KV_LAYERS = block_count // full_attention_interval   (when the key is present)
+#     KV_LAYERS = block_count                              (otherwise)
+#
+# Measured 2026-09-22 against the live v10 GPU build, from the server's own KV buffer
+# report at n_ctx 65536: f16 4096 MiB, q8_0 2176 MiB, q4_0 1152 MiB -> 64.0 / 34.0 /
+# 18.0 KiB per token. The block_count form gives 260.0 KiB/token f16 for the same
+# model: 4.06x too high.
+#
+# The error direction matters. Over-counting KV makes this gate REFUSE lineups that
+# fit, and it did: a 262144-context role was scored as infeasible on a card with
+# 16 GiB to spare, which nearly bought a KV-quantisation quality tradeoff that was
+# never needed. Six fleet models are affected -- every Qwen3.6/3.8 -- because they all
+# carry full_attention_interval 4. Models without the key (Qwen3-Next-80B, gemma-4)
+# are declared correctly. K and V are quantised INDEPENDENTLY, so
 # each side is scaled separately: f16 = 1.0, q8_0 = 0.5, q4_0 = 0.25 of that
 # side's half. Total KV bytes for an instance = KiB/token * n_ctx; `-np` does
 # NOT multiply it (llama-server partitions one -c-sized cache across slots).
@@ -1320,6 +1342,30 @@ _KV_TYPE_F16_RATIO: dict[str, float] = {
 }
 
 _GIB_PER_KIB_TOKEN = 1.0 / (1024.0 * 1024.0)
+
+
+def kv_layers(block_count: int, full_attention_interval: int | None) -> int:
+    """How many layers actually keep a KV cache.
+
+    NOT block_count when the GGUF declares `<arch>.full_attention_interval`: only
+    every Nth layer is globally attentive and the others are filtered out of the
+    cache. See the arithmetic note above for the measurement this comes from.
+    """
+    if not full_attention_interval or full_attention_interval <= 1:
+        return int(block_count)
+    return int(block_count) // int(full_attention_interval)
+
+
+def kv_kib_per_token_f16(block_count: int, head_count_kv: int, key_length: int,
+                         value_length: int, full_attention_interval: int | None = None) -> float:
+    """The value a role's `serving_shape.kv_kib_per_token_f16` must declare.
+
+    Every input is a GGUF header fact. Compute the declaration with this rather than
+    by hand: hand-computing it with block_count is what put a 4.06x over-count into
+    six fleet rows.
+    """
+    layers = kv_layers(block_count, full_attention_interval)
+    return layers * int(head_count_kv) * (int(key_length) + int(value_length)) * 2 / 1024.0
 
 
 def kv_gib_for(role: str, n_ctx: int, kv_quant: tuple[str, str] | None) -> float:
