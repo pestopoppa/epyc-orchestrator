@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-09-22T09:52:27Z'
-status: compiled
+compiled_at: '2026-09-22T14:48:23Z'
+status: compiled_with_gaps
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 2a609f5c
-    sha256: d836f1531061aec9e81d740d16340ef29ebbd84edf57ac2832eb2288681f14a8
+    repo_commit: a909b7f6
+    sha256: 9ba361d784e3865b74a40a0cc8514fea874191b8a502ee9805030722da40c4d3
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: f75ffc54
-    sha256: 1db2c665435de73c848e0a0503dc0f33641102308814faf8f17f865eef575114
+    repo_commit: 7b0627c4
+    sha256: 8919bbd38b208d9ea7a82928de9ced4721c5b9e00d34afc347e2f844e120a198
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -18,345 +18,6 @@ known_global_gaps:
 - Research registry and bench-artifact enrichment is provenance-recorded but not yet field-promoted.
 - Source registry comments remain the measurement witness; do not reformat them in place.
 models:
-- model_id: gemma4-26b-a4b-it-orig-q4_k_m
-  display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
-  family: gemma4
-  arch: gemma4
-  params_b: 26.0
-  active_b: 4.0
-  quant: Q4_K_M
-  mem_gb: 16.0
-  ctx_max: 16384
-  ctx_model_max: null
-  modalities:
-  - text
-  role_bindings:
-    roles:
-    - toolrunner
-    - worker_explore
-    - worker_general
-    - worker_math
-    server_roles:
-    - worker
-    runtime_aliases:
-    - worker
-    shared_mmap: true
-    alias_overrides:
-    - role: toolrunner
-      served_by: worker_general
-      ignored_model_id: qwen3-coder-30b-a3b-q4_k_m
-      reason: server_mode.shared_with runtime takes precedence
-    - role: worker_math
-      served_by: worker_general
-      ignored_model_id: qwen2.5-math-7b-q4_k_m
-      reason: server_mode.shared_with runtime takes precedence
-  quality:
-    suite_vector:
-      overall: 0.8067
-      tool_compliance: 0.96
-    overall_basis: 'public benchmarks: mean(mmlu_pro, gpqa_diamond, livecodebench_v6) — vendor_reported, bf16, mode=not stated'
-    source: orchestration/model_registry.yaml
-    eval_protocol: MEASUREMENT.md#canonical-quality
-    measured:
-    - date: null
-      protocol: registry performance block
-      value:
-        baseline_tps: 37.63
-        optimized_tps: 56.86
-        optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
-        quality_pct: 90
-        tool_compliance_pct: 96
-        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at data/t5_gemma_worker_draft_depth_20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76 t/s with 492/666
-          accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
-        mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
-          and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
-        mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
-          85.77) but did not improve non-repetitive coding explanation speed and failed the required-heading contract under the 640-token cap; short edit was only marginally faster than draft-mtp and all
-          modes failed the exact patch contract. Treat ngram-mod,draft-mtp as a task-specific token-reuse lane, not the broad worker default. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_prompt_diverse_20260719T004626Z/compact_summary.json.'
-    - date: null
-      protocol: registry performance block
-      value:
-        baseline_tps: 37.63
-        optimized_tps: 56.86
-        optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
-        quality_pct: 90
-        tool_compliance_pct: 96
-        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at data/t5_gemma_worker_draft_depth_20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76 t/s with 492/666
-          accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
-        mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
-          and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
-        mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
-          85.77) but did not improve non-repetitive coding explanation speed and failed the required-heading contract under the 640-token cap; short edit was only marginally faster than draft-mtp and all
-          modes failed the exact patch contract. Treat ngram-mod,draft-mtp as a task-specific token-reuse lane, not the broad worker default. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_prompt_diverse_20260719T004626Z/compact_summary.json.'
-    - date: null
-      protocol: registry performance block
-      value:
-        baseline_tps: 37.63
-        optimized_tps: 56.86
-        optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
-        quality_pct: 90
-        tool_compliance_pct: 96
-        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at data/t5_gemma_worker_draft_depth_20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76 t/s with 492/666
-          accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
-        mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
-          and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
-        mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
-          85.77) but did not improve non-repetitive coding explanation speed and failed the required-heading contract under the 640-token cap; short edit was only marginally faster than draft-mtp and all
-          modes failed the exact patch contract. Treat ngram-mod,draft-mtp as a task-specific token-reuse lane, not the broad worker default. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_prompt_diverse_20260719T004626Z/compact_summary.json.'
-    - date: null
-      protocol: registry performance block
-      value:
-        baseline_tps: 37.63
-        optimized_tps: 56.86
-        optimized_tps_attest: '[P-BENCH-PLACEMENT-1, n=3, 2026-07-30, attest data/numa_placement/20260730-P-BENCH-PLACEMENT-1/prodopt_results.txt]'
-        quality_pct: 90
-        tool_compliance_pct: 96
-        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at data/t5_gemma_worker_draft_depth_20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76 t/s with 492/666
-          accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
-        mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
-          and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
-        mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
-          85.77) but did not improve non-repetitive coding explanation speed and failed the required-heading contract under the 640-token cap; short edit was only marginally faster than draft-mtp and all
-          modes failed the exact patch contract. Treat ngram-mod,draft-mtp as a task-specific token-reuse lane, not the broad worker default. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_prompt_diverse_20260719T004626Z/compact_summary.json.'
-    public:
-      benchmarks:
-        mmlu_pro: 0.826
-        gpqa_diamond: 0.823
-        aime26: 0.883
-        livecodebench_v6: 0.771
-        codeforces_elo: 1718
-        mmmu_pro: 0.738
-        mrcr_v2_128k: 0.441
-        tool_compliance_local: 0.778
-      benchmark_provenance:
-        mmlu_pro: vendor_reported
-        gpqa_diamond: vendor_reported
-        aime26: vendor_reported
-        livecodebench_v6: vendor_reported
-        codeforces_elo: vendor_reported
-        mmmu_pro: vendor_reported
-        mrcr_v2_128k: vendor_reported
-        tool_compliance_local: measured_local
-      provenance: vendor_reported
-      reported_precision: bf16
-      served_precision: Q4_K_M
-      reported_mode: not stated
-      source_url: https://huggingface.co/google/gemma-4-26b-a4b-it
-      absent_from_card:
-      - swe_bench_verified
-      - ifeval
-      - bfcl_v3
-      - bfcl_v4
-      - terminal_bench_2
-      retrieved: &id001 2026-08-02
-      axes:
-        mmlu_pro: reasoning
-        gpqa_diamond: science
-        aime26: math
-        aime25: math
-        hmmt25: math
-        livecodebench_v6: coding
-        aider_polyglot: coding
-        codeforces_elo: coding
-        swe_bench_verified: agentic_coding
-        terminal_bench_2: agentic_terminal
-        tool_compliance_local: tool_use
-        bfcl_v3: tool_use
-        bfcl_v4: tool_use
-        ifeval: instruction_following
-        mmmu: vision_language
-        mmmu_pro: vision_language
-        mathvision: vision_language
-        ruler_1m: long_context
-        longbench_v2: long_context
-        aa_lcr: long_context
-        mrcr_v2_128k: long_context
-      universal_keys:
-      - mmlu_pro
-      - gpqa_diamond
-      - livecodebench_v6
-    for_role:
-      value: 0.778
-      axis: tool_use
-      benchmark: tool_compliance_local
-      rankable: true
-      comparable_value: 0.8067
-      skipped_axes: []
-      basis: role-relevant axis tool_use via tool_compliance_local
-  speed:
-    solo_96t_tps: 37.63
-    quarter_48t_tps: null
-    prefill_tps: null
-    optimized_tps: 56.86
-    source: orchestration/model_registry.yaml
-    measured:
-    - date: null
-      protocol: server_mode throughput
-      value_tps: 56.86
-  acceleration:
-    spec_type: draft-mtp
-    draft_compat:
-    - draft_gemma4_26b_a4b_assistant_q8
-    enable_thinking: false
-    thinking_control:
-      mode: reasoning_off
-      source: reasoning
-    kv:
-      k: null
-      v: null
-    draft_max: 2
-    draft_p_min: 0.0
-    lookup: false
-    corpus_retrieval: false
-  serving:
-    binary: llama.cpp
-    binary_dir: null
-    numa_policy: 2x48t_half_instances
-    mlock: true
-    ports:
-    - 8072
-    - 8082
-    - 8182
-    server_role: worker
-    requirements: {}
-  known_gaps: []
-- model_id: qwen3-next-80b-a3b-q4_k_m
-  display_name: Qwen3-Next-80B-A3B-Instruct
-  family: qwen3-next
-  arch: ssm_moe_hybrid
-  params_b: 80.0
-  active_b: 3.0
-  quant: Q4_K_M
-  mem_gb: 45.0
-  ctx_max: 262144
-  ctx_model_max: null
-  modalities:
-  - long_context
-  - text
-  role_bindings:
-    roles:
-    - ingest_long_context
-    server_roles:
-    - ingest_long_context
-    runtime_aliases: []
-    shared_mmap: true
-  quality:
-    suite_vector:
-      long_context: 0.9259
-      overall: 0.7003
-    overall_basis: 'public benchmarks: mean(mmlu_pro, gpqa_diamond, livecodebench_v6) — vendor_reported, bf16, mode=instruct (non-thinking variant)'
-    source: orchestration/model_registry.yaml
-    eval_protocol: MEASUREMENT.md#canonical-quality
-    measured:
-    - date: null
-      protocol: registry benchmark_score
-      value: 25/27 (93%) on canonical long_context suite, May-4
-    public:
-      benchmarks:
-        mmlu_pro: 0.806
-        gpqa_diamond: 0.729
-        aime25: 0.695
-        hmmt25: 0.541
-        livecodebench_v6: 0.566
-        aider_polyglot: 0.498
-        ifeval: 0.876
-        bfcl_v3: 0.703
-        ruler_1m: 0.918
-        tool_compliance_local: 0.704
-      benchmark_provenance:
-        mmlu_pro: vendor_reported
-        gpqa_diamond: vendor_reported
-        aime25: vendor_reported
-        hmmt25: vendor_reported
-        livecodebench_v6: vendor_reported
-        aider_polyglot: vendor_reported
-        ifeval: vendor_reported
-        bfcl_v3: vendor_reported
-        ruler_1m: vendor_reported
-        tool_compliance_local: measured_local
-      provenance: vendor_reported
-      reported_precision: bf16
-      served_precision: Q4_K_M
-      reported_mode: instruct (non-thinking variant)
-      source_url: https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct
-      absent_from_card:
-      - swe_bench_verified
-      - terminal_bench_2
-      - longbench_v2
-      - mmmu
-      retrieved: *id001
-      axes:
-        mmlu_pro: reasoning
-        gpqa_diamond: science
-        aime26: math
-        aime25: math
-        hmmt25: math
-        livecodebench_v6: coding
-        aider_polyglot: coding
-        codeforces_elo: coding
-        swe_bench_verified: agentic_coding
-        terminal_bench_2: agentic_terminal
-        tool_compliance_local: tool_use
-        bfcl_v3: tool_use
-        bfcl_v4: tool_use
-        ifeval: instruction_following
-        mmmu: vision_language
-        mmmu_pro: vision_language
-        mathvision: vision_language
-        ruler_1m: long_context
-        longbench_v2: long_context
-        aa_lcr: long_context
-        mrcr_v2_128k: long_context
-      universal_keys:
-      - mmlu_pro
-      - gpqa_diamond
-      - livecodebench_v6
-    for_role:
-      value: 0.918
-      axis: long_context
-      benchmark: ruler_1m
-      rankable: false
-      comparable_value: 0.7003
-      skipped_axes:
-      - long_context(ruler_1m)
-      basis: role-relevant axis long_context via ruler_1m — NOT cross-model comparable (no two fleet models share a benchmark on this axis); use comparable_value to rank
-  speed:
-    solo_96t_tps: 10.12
-    quarter_48t_tps: null
-    prefill_tps: null
-    optimized_tps: 10.12
-    source: orchestration/model_registry.yaml
-    measured:
-    - date: null
-      protocol: server_mode throughput
-      value_tps: 14.4
-  acceleration:
-    spec_type: none
-    draft_compat: []
-    enable_thinking: null
-    thinking_control:
-      mode: template_ignores_enable_thinking
-      effective_mode: native
-      evidence_strength: direct_registry_note
-      evidence: Current Qwen3-Next GGUF template ignores chat_template_kwargs.enable_thinking; preserve native behavior.
-    kv:
-      k: null
-      v: null
-  serving:
-    binary: llama.cpp
-    binary_dir: null
-    numa_policy: 2x48t_half_instances
-    mlock: true
-    ports:
-    - 8085
-    - 8185
-    - 8285
-    server_role: ingest_long_context
-    requirements: {}
-  known_gaps: []
-  architecture:
-    attention_layers: 32
-    source: registry.model
 - model_id: qwen3-vl-30b-a3b-q4_k_m
   display_name: Qwen3-VL-30B-A3B-Instruct
   family: qwen3-vl
@@ -441,7 +102,7 @@ models:
       - mmlu_pro
       - gpqa_diamond
       - livecodebench_v6
-      retrieved: *id001
+      retrieved: &id001 2026-08-02
       axes:
         mmlu_pro: reasoning
         gpqa_diamond: science
@@ -515,185 +176,6 @@ models:
     requirements:
       mmproj_path: /mnt/raid0/llm/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf
   known_gaps: []
-- model_id: qwen3.5-122b-a10b-q4_k_m
-  display_name: Qwen3.5-122B-A10B
-  family: qwen3.5
-  arch: moe_hybrid
-  params_b: 122.0
-  active_b: 10.0
-  quant: Q4_K_M
-  mem_gb: 69.0
-  ctx_max: 262144
-  ctx_model_max: null
-  modalities:
-  - text
-  role_bindings:
-    roles:
-    - architect_critic
-    - qwen35_122b_q4km
-    server_roles:
-    - architect_critic
-    runtime_aliases: []
-    shared_mmap: true
-  quality:
-    suite_vector:
-      overall: 0.8407
-    overall_basis: 'public benchmarks: mean(mmlu_pro, gpqa_diamond, livecodebench_v6) — vendor_reported, bf16, mode=thinking'
-    source: orchestration/model_registry.yaml
-    eval_protocol: MEASUREMENT.md#canonical-quality
-    measured:
-    - date: null
-      protocol: registry performance block
-      value:
-        baseline_tps: 11.3
-        optimized_tps: 24.0
-        optimized_tps_long_context: 15.76
-        speedup: 2.12x
-        quality_score: 2.57/3
-        measurement_category: OPTIMUM
-        measurement_date: '2026-07-31'
-        contention_note: This role's single full instance on 0-95 holds ALL FOUR CPU region locks; while it runs it serializes the entire CPU NUMA topology (stack_numa.py:274-276). That is inherent and
-          accepted for this role, but it is the real cost of tier:hot — not the 69 GB.
-    - date: null
-      protocol: registry performance block
-      value:
-        baseline_tps: null
-        optimized_tps: null
-        speedup: null
-        measured:
-        - protocol: p_rev1
-          instrument_era: p_rev1_attested
-          attestation: MEASUREMENT-P-REV1-OPERATOR-APPROVED-20260719
-          date: 2026-07-19
-          role: patch_reviewer
-          corpus: c-crab
-          slice: GC-shadow-repair4b.2c
-          n: 48
-          accept_controls: 24
-          hard_negatives: 24
-          reviewer_arm: architect_general_self_review_status_quo
-          false_accept_rate: 0.458
-          false_reject_rate: 0.417
-          auc: 0.463
-          ece: 0.385
-          brier: 0.397
-          parse_failure_rate: 0.0
-          median_latency_seconds: 41.4
-          total_wall_seconds: 2164.234
-          role_ready: false
-          verdict: status_quo_self_review_failed_patch_reviewer
-          evidence: /mnt/raid0/llm/epyc-inference-research/data/reviewer_model_ablations/rm2-next-a1-architect-statusquo-ccrab-p-rev1-20260719T210513Z
-    public:
-      benchmarks:
-        mmlu_pro: 0.867
-        gpqa_diamond: 0.866
-        ifeval: 0.934
-        livecodebench_v6: 0.789
-        swe_bench_verified: 0.72
-        terminal_bench_2: 0.494
-        bfcl_v4: 0.722
-        mmmu: 0.839
-        mmmu_pro: 0.769
-        mathvision: 0.862
-        aa_lcr: 0.669
-        longbench_v2: 0.602
-        tool_compliance_local: 0.852
-      benchmark_provenance:
-        mmlu_pro: vendor_reported
-        gpqa_diamond: vendor_reported
-        ifeval: vendor_reported
-        livecodebench_v6: vendor_reported
-        swe_bench_verified: vendor_reported
-        terminal_bench_2: vendor_reported
-        bfcl_v4: vendor_reported
-        mmmu: vendor_reported
-        mmmu_pro: vendor_reported
-        mathvision: vendor_reported
-        aa_lcr: vendor_reported
-        longbench_v2: vendor_reported
-        tool_compliance_local: measured_local
-      provenance: vendor_reported
-      reported_precision: bf16
-      served_precision: Q4_K_M
-      reported_mode: thinking
-      source_url: https://huggingface.co/Qwen/Qwen3.5-122B-A10B
-      absent_from_card:
-      - aime26
-      - aime25
-      - ruler_1m
-      retrieved: *id001
-      axes:
-        mmlu_pro: reasoning
-        gpqa_diamond: science
-        aime26: math
-        aime25: math
-        hmmt25: math
-        livecodebench_v6: coding
-        aider_polyglot: coding
-        codeforces_elo: coding
-        swe_bench_verified: agentic_coding
-        terminal_bench_2: agentic_terminal
-        tool_compliance_local: tool_use
-        bfcl_v3: tool_use
-        bfcl_v4: tool_use
-        ifeval: instruction_following
-        mmmu: vision_language
-        mmmu_pro: vision_language
-        mathvision: vision_language
-        ruler_1m: long_context
-        longbench_v2: long_context
-        aa_lcr: long_context
-        mrcr_v2_128k: long_context
-      universal_keys:
-      - mmlu_pro
-      - gpqa_diamond
-      - livecodebench_v6
-    for_role:
-      value: 0.867
-      axis: reasoning
-      benchmark: mmlu_pro
-      rankable: true
-      comparable_value: 0.8407
-      skipped_axes: []
-      basis: role-relevant axis reasoning via mmlu_pro
-  speed:
-    solo_96t_tps: 24.0
-    quarter_48t_tps: null
-    prefill_tps: null
-    optimized_tps: 24.0
-    source: orchestration/model_registry.yaml
-    measured:
-    - date: '2026-07-31'
-      protocol: server_mode throughput
-      value_tps: 24.0
-  acceleration:
-    spec_type: draft-mtp
-    draft_compat:
-    - qwen3.5-122b-a10b-ud-q4_k_m
-    enable_thinking: false
-    thinking_control:
-      mode: toggle_off
-      source: chat_template_kwargs.enable_thinking
-    kv:
-      k: null
-      v: null
-    draft_max: 4
-    k: 4
-    p_split: 0
-    lookup: false
-  serving:
-    binary: llama.cpp
-    binary_dir: null
-    numa_policy: single_96t
-    mlock: true
-    ports:
-    - 8074
-    server_role: architect_critic
-    requirements: {}
-  known_gaps: []
-  architecture:
-    attention_layers: 64
-    source: registry.model
 - model_id: qwen3.6-35b-a3b-mtp-q8_0
   display_name: Qwen3.6-35B-A3B-MTP-Q8_0
   family: qwen3.6
@@ -709,9 +191,16 @@ models:
   role_bindings:
     roles:
     - frontdoor
+    - qwen36_35b_a3b_mtp_q8_local
+    - toolrunner
+    - worker
+    - worker_explore
+    - worker_general
+    - worker_math
     - worker_summarize
     server_roles:
     - frontdoor
+    - worker
     runtime_aliases:
     - frontdoor
     shared_mmap: true
@@ -722,6 +211,7 @@ models:
       gpqa_diamond: 0.55
       cruxeval: 0.325
       overall: 0.8387
+      agentic: 0.8667
       general: 1.0
       coder: 0.9667
       thinking: 0.9333
@@ -730,6 +220,21 @@ models:
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
+    - date: '2026-05-04'
+      protocol: registry benchmark_score
+      value: 170/183 (92.9%)
+    - date: '2026-05-04'
+      protocol: registry benchmark_score
+      value: 170/183 (92.9%)
+    - date: '2026-05-04'
+      protocol: registry benchmark_score
+      value: 170/183 (92.9%)
+    - date: '2026-05-04'
+      protocol: registry benchmark_score
+      value: 170/183 (92.9%)
+    - date: '2026-05-04'
+      protocol: registry benchmark_score
+      value: 170/183 (92.9%)
     - date: '2026-05-04'
       protocol: registry benchmark_score
       value: 170/183 (92.9%)
@@ -842,137 +347,6 @@ models:
   architecture:
     attention_layers: 28
     source: registry.model
-- model_id: qwen3.6-35b-a3b-q8_0
-  display_name: Qwen3.6-35B-A3B
-  family: qwen3.6
-  arch: qwen35moe
-  params_b: 35.0
-  active_b: 3.0
-  quant: Q8_0
-  mem_gb: 37.0
-  ctx_max: 262144
-  ctx_model_max: null
-  modalities:
-  - text
-  role_bindings:
-    roles:
-    - qwen36_q8_0
-    server_roles:
-    - frontdoor
-    runtime_aliases: []
-    shared_mmap: true
-  quality:
-    suite_vector:
-      overall: 0.8387
-    overall_basis: 'public benchmarks: mean(mmlu_pro, gpqa_diamond, livecodebench_v6) — vendor_reported, bf16, mode=thinking'
-    source: orchestration/model_registry.yaml
-    eval_protocol: MEASUREMENT.md#canonical-quality
-    measured:
-    - date: '2026-05-04'
-      protocol: registry benchmark_score
-      value: 170/183 (92.9%)
-    public:
-      benchmarks:
-        mmlu_pro: 0.852
-        gpqa_diamond: 0.86
-        aime26: 0.927
-        livecodebench_v6: 0.804
-        swe_bench_verified: 0.734
-        terminal_bench_2: 0.515
-        mmmu: 0.817
-        mmmu_pro: 0.753
-        tool_compliance_local: 0.778
-      benchmark_provenance:
-        mmlu_pro: vendor_reported
-        gpqa_diamond: vendor_reported
-        aime26: vendor_reported
-        livecodebench_v6: vendor_reported
-        swe_bench_verified: vendor_reported
-        terminal_bench_2: vendor_reported
-        mmmu: vendor_reported
-        mmmu_pro: vendor_reported
-        tool_compliance_local: measured_local
-      provenance: vendor_reported
-      reported_precision: bf16
-      served_precision: Q8_0
-      reported_mode: thinking
-      source_url: https://huggingface.co/Qwen/Qwen3.6-35B-A3B
-      absent_from_card:
-      - ifeval
-      - bfcl_v3
-      - bfcl_v4
-      - ruler_1m
-      - longbench_v2
-      retrieved: *id001
-      axes:
-        mmlu_pro: reasoning
-        gpqa_diamond: science
-        aime26: math
-        aime25: math
-        hmmt25: math
-        livecodebench_v6: coding
-        aider_polyglot: coding
-        codeforces_elo: coding
-        swe_bench_verified: agentic_coding
-        terminal_bench_2: agentic_terminal
-        tool_compliance_local: tool_use
-        bfcl_v3: tool_use
-        bfcl_v4: tool_use
-        ifeval: instruction_following
-        mmmu: vision_language
-        mmmu_pro: vision_language
-        mathvision: vision_language
-        ruler_1m: long_context
-        longbench_v2: long_context
-        aa_lcr: long_context
-        mrcr_v2_128k: long_context
-      universal_keys:
-      - mmlu_pro
-      - gpqa_diamond
-      - livecodebench_v6
-    for_role:
-      value: 0.852
-      axis: reasoning
-      benchmark: mmlu_pro
-      rankable: true
-      comparable_value: 0.8387
-      skipped_axes: []
-      basis: role-relevant axis reasoning via mmlu_pro
-  speed:
-    solo_96t_tps: 25.6
-    quarter_48t_tps: null
-    prefill_tps: null
-    optimized_tps: 27.4
-    source: orchestration/model_registry.yaml
-    measured:
-    - date: '2026-05-04'
-      protocol: server_mode throughput
-      value_tps: 40.22
-  acceleration:
-    spec_type: draft-mtp
-    draft_compat: []
-    enable_thinking: false
-    thinking_control:
-      mode: toggle_off
-      source: model.disable_thinking
-    kv:
-      k: null
-      v: null
-    draft_max: 4
-    lookup: false
-    corpus_retrieval: true
-  serving:
-    binary: llama.cpp
-    binary_dir: null
-    numa_policy: 2x48t_half_instances
-    mlock: false
-    ports:
-    - 8070
-    - 8080
-    - 8180
-    server_role: frontdoor
-    requirements: {}
-  known_gaps: []
 - model_id: qwen3.8-27b-q8_0
   display_name: Qwen3.8-27B-Q8_0
   family: qwen3.8
@@ -989,10 +363,12 @@ models:
     roles:
     - architect_general
     - coder_escalation
+    - ingest_long_context
     - qwen38_27b_q8_local
     server_roles:
     - architect_general
     - coder_escalation
+    - ingest_long_context
     runtime_aliases: []
     shared_mmap: true
   quality:
@@ -1068,6 +444,20 @@ models:
         coder_suite: null
         agentic_suite: null
         speedup: 1.55x
+    - date: null
+      protocol: registry performance block
+      value:
+        baseline_tps: null
+        optimized_tps: null
+        speedup: n/a
+        previous_model_record:
+          model: Qwen3-Next-80B-A3B-Instruct-Q4_K_M
+          baseline_tps: 10.12
+          optimized_tps: 10.12
+          long_context_tps_range: 14.4-20.8 t/s @ ~12K context (May-4 long_context suite)
+          summarization_benchmark: 73.8s for 464 tokens on Twyne whitepaper (10K context)
+          long_context_quality: 25/27 (93%) on canonical long_context suite, May-4 Claude-as-Judge
+        long_context_quality: null
   speed:
     solo_96t_tps: 47.79
     quarter_48t_tps: null
@@ -1082,10 +472,10 @@ models:
     spec_type: draft-mtp
     draft_compat:
     - qwen3.8-27b-q8_0
-    enable_thinking: false
+    enable_thinking: true
     thinking_control:
-      mode: toggle_off
-      source: model.disable_thinking
+      mode: toggle_on
+      source: chat_template_kwargs.enable_thinking
     kv:
       k: null
       v: null
@@ -1105,4 +495,86 @@ models:
   known_gaps: []
   architecture:
     attention_layers: 64
+    source: registry.model
+- model_id: qwen3.8-flash-next-ud-iq4_xs
+  display_name: Qwen3.8-Flash-Next-UD-IQ4_XS
+  family: qwen3.8-flash-next-ud-iq4_xs
+  arch: qwen4exp
+  params_b: null
+  active_b: null
+  quant: UD-IQ4_XS
+  mem_gb: 87.25
+  ctx_max: 262144
+  ctx_model_max: null
+  modalities:
+  - text
+  role_bindings:
+    roles:
+    - architect_critic
+    - qwen38_flash_next_ud_iq4xs_local
+    server_roles:
+    - architect_critic
+    runtime_aliases: []
+    shared_mmap: true
+  quality:
+    suite_vector: {}
+    overall_basis: null
+    source: orchestration/model_registry.yaml
+    eval_protocol: MEASUREMENT.md#canonical-quality
+    measured:
+    - date: null
+      protocol: registry performance block
+      value:
+        baseline_tps: 27.893
+        optimized_tps: 43.281
+        speedup: 1.55x
+        measurement_scope: -c 8192, -np 1, IQ4_XS-uniform, build 10241 — NOT the served shape
+        quality_score: null
+        measurement_category: OBSERVATION
+        measurement_date: '2026-09-08'
+        contention_note: 'This role''s single full instance on 0-95 holds ALL FOUR CPU region locks; while it runs it serializes the entire CPU NUMA topology (stack_numa.py:274-276). That is inherent and
+          accepted for this role, but it is the real cost of tier:hot — not the 69 GB — which is now 90 GiB. ⚠ 2026-09-22: THIS IS WHY ingest_long_context WAS NOT ALIASED HERE. An earlier draft merged it
+          onto this instance, which would have put routine traffic (Stage 1 of three_stage_summarization) behind the whole-machine lock. The D2 ruling (2026-07-31) narrowed the `reasoning` escalation chain
+          to explicit_request ONLY so routine traffic could never summon it, and D2''s named prerequisite — `region_lock_wait_s_by_holder` telemetry — still does not exist anywhere in the codebase. Operator
+          ruling C2 sent ingest_long_context to the GPU 27B instead. This instance remains single-role, and the `reasoning` chain remains the only routed path to it.'
+  speed:
+    solo_96t_tps: 52.7
+    quarter_48t_tps: null
+    prefill_tps: null
+    optimized_tps: 43.281
+    source: orchestration/model_registry.yaml
+    measured:
+    - date: '2026-09-14'
+      protocol: server_mode throughput
+      value_tps: 52.7
+  acceleration:
+    spec_type: draft-mtp
+    draft_compat:
+    - mtp-qwen3.8-flash-next-shared-q8_0
+    enable_thinking: false
+    thinking_control:
+      mode: toggle_off
+      source: chat_template_kwargs.enable_thinking
+    kv:
+      k: null
+      v: null
+    draft_max: 4
+    draft_p_min: 0.5
+    k: 4
+    p_split: 0
+    lookup: false
+  serving:
+    binary: llama.cpp
+    binary_dir: null
+    numa_policy: single_96t
+    mlock: true
+    ports:
+    - 8074
+    server_role: architect_critic
+    requirements: {}
+  known_gaps:
+  - Missing quality suite_vector evidence
+  architecture:
+    n_layers: 48
+    attention_layers: 12
     source: registry.model

@@ -1240,13 +1240,19 @@ _NO_SPEC_DECODE = NO_SPEC_DECODE_ROLES
 # q4_0 K / f16 V = quality-neutral (PPL +0.017 with Hadamard), 37% KV savings, zero speed cost.
 # q4_0 / q4_0 = 71% KV savings but 71% prefill regression on pure-attn. OK for hybrid (SSM amortizes).
 # --kv-hadamard: production binary rebuilt with Hadamard support (commit b51c905ec, 2026-03-28).
+# 2026-09-22 lineup change: built from the roles that HAVE their own launch
+# context, instead of indexing two fixed names. ingest_long_context became an
+# ALIAS on architect_general's :8083 server and no longer has an entry here, so
+# the old literal `LAUNCH_CONTEXT_TOKENS["ingest_long_context"]` raised KeyError
+# at import and took down every entry point that imports this module -- the
+# stack launcher included. An alias has no context of its own by definition; it
+# inherits its host's, and a table keyed on "roles that launch a server" is the
+# thing that stays true across lineups.
+_KV_CONTEXT_ROLES = ("architect_general", "ingest_long_context")
 _KV_CONTEXT_SIZES = {
-    "architect_general": str(
-        LAUNCH_CONTEXT_TOKENS["architect_general"]
-    ),  # 122B MoE hybrid → ~16GB KV
-    "ingest_long_context": str(
-        LAUNCH_CONTEXT_TOKENS["ingest_long_context"]
-    ),  # 80B SSM, needs long context (Stage 1 of three_stage_summarization)
+    role: str(LAUNCH_CONTEXT_TOKENS[role])
+    for role in _KV_CONTEXT_ROLES
+    if role in LAUNCH_CONTEXT_TOKENS
 }
 _KV_QUANT_CONFIGS = LAUNCH_KV_QUANT_CONFIGS
 

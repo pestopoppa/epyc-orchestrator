@@ -27,7 +27,7 @@ inputs:
     description: Role assignment for the model
     required: true
     validation:
-      enum: ["architect_critic", "architect_general", "coder_escalation", "frontdoor", "ingest_long_context", "qwen35_122b_q4km", "qwen36_q8_0", "qwen38_27b_q8_local", "toolrunner", "vision_escalation", "worker_explore", "worker_general", "worker_math", "worker_summarize", "worker_vision"]
+      enum: ["architect_critic", "architect_general", "coder_escalation", "frontdoor", "ingest_long_context", "qwen36_35b_a3b_mtp_q8_local", "qwen38_27b_q8_local", "qwen38_flash_next_ud_iq4xs_local", "toolrunner", "vision_escalation", "worker", "worker_explore", "worker_general", "worker_math", "worker_summarize", "worker_vision"]
   - name: quantization
     type: string
     description: Quantization format

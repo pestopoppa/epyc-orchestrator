@@ -105,34 +105,21 @@ roles:
     alias_to: frontdoor
 
   worker_general:
-    model: gemma-4-26B-A4B-it
-    quant: Q4_K_M
-    tier: HOT
-    ram_gb: 16
-    full:
-      port: 8072
-      numa: FULL
-      threads: 96
-      slot_save_path: /tmp/kv_worker_full
-      spec_overrides:
-        draft_max: 2
-        p_split: 0
-    quarters:
-      - { port: 8082, numa: HALF_A, threads: 48 }
-      - { port: 8182, numa: HALF_B, threads: 48 }
-
+    # 2026-09-22 lineup change: gemma-4-26B-A4B-it retired. This role no longer launches
+    # a server of its own -- it joined frontdoor's Qwen3.6-35B-A3B-MTP-Q8_0 process via
+    # server_mode.frontdoor.shared_with, so :8072/:8082/:8182 are vacated and its context
+    # and slots come from frontdoor. Same shape worker_summarize has had.
+    tier: ALIAS
+    alias_to: frontdoor
   worker_explore:
     tier: ALIAS
-    alias_to: worker_general
-
+    alias_to: frontdoor   # 2026-09-22: was worker_general, itself now an alias
   worker_math:
     tier: ALIAS
-    alias_to: worker_general
-
+    alias_to: frontdoor   # 2026-09-22: was worker_general, itself now an alias
   toolrunner:
     tier: ALIAS
-    alias_to: worker_general
-
+    alias_to: frontdoor   # 2026-09-22: was worker_general, itself now an alias
   architect_general:
     # 2026-07-31/08-01: repointed to the 27B on MI210; the 122B vacated to the
     # new architect_critic role (:8074). Was Qwen3.5-122B-A10B / Q4_K_M / 69 GB.
@@ -156,8 +143,8 @@ roles:
   architect_critic:
     # 2026-07-31/08-01: the 122B that used to sit on architect_general. Whole
     # machine, CPU-resident. Terminal rung of the escalation ladder.
-    model: Qwen3.5-122B-A10B
-    quant: Q4_K_M
+    model: Qwen3.8-Flash-Next-UD-IQ4_XS   # 2026-09-22: was Qwen3.5-122B-A10B (retired)
+    quant: UD-IQ4_XS
     tier: HOT
     ram_gb: 69
     full:
@@ -166,18 +153,11 @@ roles:
       threads: 96
 
   ingest_long_context:
-    model: Qwen3-Next-80B-A3B
-    quant: Q4_K_M
-    tier: HOT
-    ram_gb: 45
-    full:
-      port: 8085
-      numa: FULL
-      threads: 96
-    quarters:
-      - { port: 8185, numa: HALF_A, threads: 48 }
-      - { port: 8285, numa: HALF_B, threads: 48 }
-
+    # 2026-09-22 lineup change: Qwen3-Next-80B-A3B retired. The role moved onto
+    # architect_general's Qwen3.8-27B GPU server at :8083 (n_ctx 196608), so it no longer
+    # launches its own CPU server and :8085/:8185/:8285 are vacated.
+    tier: ALIAS
+    alias_to: architect_general
   worker_vision:
     # 2026-07-31: Qwen2.5-VL-7B retired on both vision roles (MMMU-250 52.4% ->
     # 63.6%). Was Qwen2.5-VL-7B / 4.4 GB.

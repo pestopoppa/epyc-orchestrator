@@ -66,10 +66,10 @@ port_map:
   # escalation for the first time since the 2026-05-09 consolidation.
   coder_escalation: 8083   # Alias -> architect_general shared Qwen3.6-27B GPU server
   worker_summarize: 8070   # Alias -> frontdoor shared Qwen3.6 server (its ONLY alias now)
-  worker_general: 8072     # Full-speed 1×96t (quarters: 8082, 8182, 8282, 8382)
-  worker_explore: 8072     # Alias -> worker_general (legacy name; pre-2026-03-19)
-  worker_math: 8072        # Shares with worker_general
-  toolrunner: 8072         # Shares with worker_general
+  worker_general: 8070     # Alias -> frontdoor shared Qwen3.6-35B-A3B server (gemma4 retired 2026-09-22; halves 8080/8180)
+  worker_explore: 8070     # Alias -> frontdoor (legacy name; pre-2026-03-19)
+  worker_math: 8070        # Alias -> frontdoor, shares the 35B-A3B server
+  toolrunner: 8070         # Alias -> frontdoor, shares the 35B-A3B server
   worker_vision: 8086      # Dedicated VL server — Qwen3-VL-30B-A3B Q4_K_M on MI210 (2026-08-01)
   vision_escalation: 8086  # Alias -> worker_vision, SAME process (was :8087 own 7B server)
   eval_batch_frontdoor: 18070  # Warm eval-batch Qwen3.6 frontdoor lane (-np 2)
@@ -83,7 +83,7 @@ port_map:
   # architect_coding role and stack_change_guard.py L326/L346 reject them.
   architect_critic: 8074
   # architect_coding REMOVED 2026-05-06 — REAP-246B 70% coder < frontdoor 97%; role eliminated. 139 GB freed.
-  ingest_long_context: 8085
+  ingest_long_context: 8083  # Alias -> architect_general Qwen3.8-27B GPU server (Next-80B retired 2026-09-22)
   # Embedding servers (6 parallel instances for redundancy)
   embedder: 8090           # Primary embedding server
   embedder_1: 8091
@@ -209,6 +209,12 @@ serial_roles:
 # the embedder pool, worker_fast and eval_batch_frontdoor have no server_mode
 # row at all. The parity guard asserts the 6 matched rows agree.
 role_launch_meta:
+  # worker_general and ingest_long_context role_launch_meta entries REMOVED
+  # 2026-09-22 (lineup change): both became ALIASES and no longer launch a
+  # server of their own. Every other alias -- coder_escalation,
+  # worker_summarize, vision_escalation, worker_explore, toolrunner,
+  # worker_math -- is likewise absent here, so this follows the convention
+  # rather than adding a no_numa flag to a role that has no launch to flag.
   # ---- HOT tier (always started) ----
   # 2026-05-09: coder_escalation + worker_summarize CONSOLIDATED onto frontdoor's
   # llama-server. All three share the same Qwen3.6-35B-A3B Q8 GGUF since the
@@ -220,31 +226,6 @@ role_launch_meta:
   frontdoor:
     tier: hot
     mode: default
-    # aliases DERIVED: server_mode.frontdoor.shared_with -> [worker_summarize].
-    # 2026-08-01 W1 removed coder_escalation from that list when it moved to
-    # :8083; there is no longer a launcher-side copy that could miss the memo.
-  # coder_escalation entry REMOVED 2026-05-09 — consolidated into frontdoor above.
-  # 2026-08-01: it is still not its own launch entry, but its host changed from
-  # frontdoor to architect_general (see that role's shared_with_first_n below).
-  worker_general:
-    tier: hot
-    mode: worker_pool
-    worker_type: explore
-    # aliases DERIVED: server_mode.worker.shared_with -> [worker_math, toolrunner].
-    #
-    # worker_explore is the ONE alias master does not list, and it is NOT dead:
-    # src/roles.py:332 + src/api/routes/health.py:30 canonicalise it to
-    # worker_general, src/config/models.py:943 gives it its own server_url,
-    # model_registry.yaml:76 gives it a 60s timeout row and lists it under
-    # "Active roles", three orchestration/lab_jobs.yaml jobs run with
-    # `model_role: worker_explore`, and the compiled stack priors carry a
-    # worker_explore record (tests/unit/test_stack_priors_compiler.py:119
-    # asserts its ports equal worker_general's) that exists ONLY because the
-    # launcher attaches the alias here. Dropping it to match master would delete
-    # a live role record, so master's list is the INCOMPLETE side. Declared as a
-    # launcher-only extra until master adds it — see `parity:` at the end of
-    # this file, which is where the guard reads the exception from.
-    shared_with_first_n_count: 2   # aliases on full + first quarter
   # 2026-08-01 W1 CUTOVER: architect_general is Qwen3.6-27B dense Q8 on MI210
   # (ROCm0) and now HOSTS coder_escalation as an alias on its :8083 process.
   architect_general:
@@ -254,9 +235,6 @@ role_launch_meta:
   # architect_critic — NEW 2026-08-01. The 122B UD-Q4_K_M on the full CPU
   # instance architect_general vacated, port 8074, tier hot per OPERATOR D1.
   architect_critic:
-    tier: hot
-    mode: default
-  ingest_long_context:
     tier: hot
     mode: default
   # 2026-08-01 W1 CUTOVER: one MI210 vision process serving BOTH role names.

@@ -246,99 +246,14 @@ numa_config:
   # AND far worse than frontdoor (Qwen3.6-35B-A3B Q8 at 97%). 139 GB warm freed.
   # Hard coding escalations now route to coder_escalation.
 
-  # Qwen3-Next-80B-A3B Q4_K_M (45 GB) — pre-warm: 1×96t full + sub-full halves
-  # 2026-05-24 Phase 0.5 bench: 48t single-quarter = 12.34 t/s, viable for
-  # quartering despite the 45 GB GGUF being snug against per-quarter capacity.
-  ingest_long_context:
-    # 2026-07-30 HALF FLEET. The full previously sat on NUMA_NODE0
-    # ("0-47,96-143") with NO memory policy at all, straddling NPS4 nodes 0+1
-    # so every weight page landed wherever it was first touched. Measured
-    # cost under P-BENCH-PLACEMENT-1: 12.42 -> 22.92 tok/s, a 1.85x loss.
-    # This is also the ONE role where the split shape beats the full under
-    # load rather than merely trailing it — aggregate tok/s: T=4 half 60.88
-    # vs full 58.04; T=8 half 86.17 vs full 72.53. The SSM/MoE hybrid
-    # behaves differently from the dense-attention MoEs.
-    instances:
-      - {cpu_shape: NUMA_FULL,   port: 8085}   # full   0-95, interleave=all
-      - {cpu_shape: NUMA_HALF_A, port: 8185}   # half A nodes 0,1 — GPU-disjoint
-      - {cpu_shape: NUMA_HALF_B, port: 8285}   # half B nodes 2,3 — GPU co-tenant
-    full_instance_idx: 0
-    # Was ABSENT, so this role fell through to SOLO_PREFER_FULL and its full
-    # instance — which holds all four region locks — could be acquired by a
-    # single solo request and serialize the machine. That is the DISPATCH-A
-    # shape (2026-07-21). frontdoor and worker_general were protected; this
-    # role was not. Parity, not a preference: autopilot can tune it via the
-    # AXA3 placement_policy knob surface once the enum is shape-agnostic.
-    placement_policy: burst_prefer_split
-    numactl_policy_instances:
-      0: interleave=all
-      1: interleave=0,1
-      2: interleave=2,3
-    # ~46 GB per instance — latency-critical for ingest pipeline
-    # (Stage 1 of three_stage_summarization since 2026-05-06)
-    mlock: true
-    numa_pre_evict_gib: 40   # INF-70/C7 CPU role: force even interleave (see header)
-
-  # Worker: gemma4-26B-A4B Q4_K_M MTP (16 GB) — pre-warm: 1×96t + sub-full halves.
-  # Swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4_K_M (was 39 t/s at 48t).
-  # gemma4-26B-A4B + ik_llama.cpp PR #1744 MTP: 76.5 t/s at 96t (full canonical), 95.2% draft acceptance.
-  # +18pp on tool_compliance (96% vs 78%), +6pp on full suite (90% vs 84%).
-  # Pre-2026-05-08: 7B f16 (until 2026-03-21), then Qwen3-Coder-30B-A3B Q4_K_M.
-  # NB: full + sub-full instances share overlapping CPU sets — pick one mode at
-  # start time (full uses 0-95; the two halves together also cover 0-95).
-  worker_general:
-    # 2026-05-08 swap to gemma4-26B-A4B MTP via ik_llama.cpp PR #1744:
-    # full instance MUST use "0-95" (both NUMA nodes' physical cores) +
-    # numactl --interleave=all to satisfy MTP's tensor-buffer NUMA expectation.
-    # NUMA_NODE0's "0-47,96-143" (one-socket-with-SMT) crashed the MTP draft
-    # path with "tensor buffer not set" assertion.
-    # 2026-07-30 HALF FLEET. Quarters retired — they lose at every
-    # matched concurrency (gemma aggregate tok/s at T=8: full 256.77,
-    # 2xhalf 200.12, 4xquarter 150.57) and the margin widens with load.
-    # The full keeps "0-95" + interleave=all: gemma4 MTP asserts
-    # "tensor buffer not set" on a one-socket cpuset, per the 2026-05-08
-    # note this replaces.
-    instances:
-      - {cpu_shape: NUMA_FULL,   port: 8072}   # full   0-95, interleave=all
-      - {cpu_shape: NUMA_HALF_A, port: 8082}   # half A nodes 0,1 — GPU-disjoint
-      - {cpu_shape: NUMA_HALF_B, port: 8182}   # half B nodes 2,3 — GPU co-tenant
-    full_instance_idx: 0
-    # WP-7/J6 (2026-05-26): J5 -t48 re-bench → same_role borderline (mean
-    # 0.879, all 6 quarter pairs net-positive 1.54-1.89x aggregate; gate
-    # block→borderline). NOTE full="0-95" OVERLAPS all sub-full shapes, so full+
-    # half never co-place (topology veto).
-    # DISPATCH-A (2026-07-21, operator-granted): FULL_DISABLED. The full
-    # (0-95) instance is NOT in the live serving stack (quarters-only; no
-    # 8072 — orchestration/derived/stack_priors.yaml). Emitting a full-first
-    # candidate made the burst placement SM acquire idx-0's ALL-region lock
-    # (all four per-role region locks + all four global cross-role mutexes),
-    # serializing the machine and starving concurrent same-role requests on
-    # a 150ms poll. full="0-95" overlaps every quarter, so full can never
-    # co-place with a quarter anyway: quarters-only is the correct static
-    # mode until an operator redeploys a real full instance. This reclaims
-    # the full's mlock and lets 4 same-role requests occupy 4 disjoint
-    # quarters (design contract: big instance idle under concurrent load).
-    # LINEUP RESTORATION (2026-07-23, operator-directed): the v7-cutover
-    # quarter-mode launch dropping 8072 was ruled an accidental lineup
-    # regression, not policy — "all models run as a full performance
-    # instance and quarter instances for concurrent aggregate boost;
-    # overlapping instances cannot infer concurrently." The full is being
-    # redeployed (the condition named above), so FULL_DISABLED reverts to
-    # BURST_PREFER_SPLIT: solo keeps full-first for peak throughput;
-    # any self-role holder demotes the full to a trailing candidate, and
-    # 0-95 overlapping every quarter keeps it region-vetoed under burst.
-    placement_policy: burst_prefer_split
-    mlock: true
-    numa_pre_evict_gib: 40   # INF-70/C7 CPU role: force even interleave (see header)
-    spec_overrides: {draft_max: 2, p_split: 0}   # gemma4 MTP recipe (was dm=8 for Qwen3-Coder)
-    # Every instance now declares a policy. Previously only idx0 did, which
-    # left the sub-full instances on default first-touch — the defect class
-    # that cost frontdoor and ingest_long_context ~2x for months.
-    numactl_policy_instances:
-      0: interleave=all    # required for gemma4 MTP idx0
-      1: interleave=0,1
-      2: interleave=2,3
-
+  # ingest_long_context and worker_general numa_config blocks REMOVED 2026-09-22
+  # (lineup change). Both roles stopped being their own CPU servers:
+  #   ingest_long_context -> alias of architect_general on :8083 (GPU, no NUMA fanout)
+  #   worker_general      -> alias of frontdoor on :8070 with halves :8080/:8180,
+  #                          whose numa_config above already declares that wiring.
+  # Leaving them would have kept the launcher declaring :8072/:8082/:8182 and
+  # :8085/:8185/:8285 against a master that no longer has those ports, which is
+  # exactly the declaration-parity violation that blocked the cutover.
   # NOTE — CROSS-ROLE mmap sharing (retained as the standing warning). When
   # worker_vision and vision_escalation were two SEPARATE roles pinned to two
   # DIFFERENT NPS4 nodes pointing at ONE shared VL GGUF, its pages were placed
