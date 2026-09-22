@@ -36,6 +36,14 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.registry.kernel_paths import backend_dir  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,9 +57,10 @@ def _resolve_math_tools_binary() -> Path:
         candidates.append(Path(explicit))
 
     llm_root = Path(os.environ.get("ORCHESTRATOR_PATHS_LLM_ROOT", "/mnt/raid0/llm"))
-    llama_cpp_bin = Path(
-        os.environ.get("ORCHESTRATOR_PATHS_LLAMA_CPP_BIN", llm_root / "llama.cpp/build/bin")
-    )
+    env_bin = os.environ.get("ORCHESTRATOR_PATHS_LLAMA_CPP_BIN")
+    # Kernel store, not a build path: production/cpu follows a promotion, a
+    # literal does not. Resolution raises rather than substituting.
+    llama_cpp_bin = Path(env_bin) if env_bin else backend_dir("cpu")
     candidates.extend(
         [
             llama_cpp_bin / "llama-math-tools",

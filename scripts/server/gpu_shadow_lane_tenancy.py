@@ -41,6 +41,7 @@ from scripts.server.gpu_shadow_lane import (
     np_ceiling,
 )
 from src.features import Features
+from src.registry.kernel_paths import backend_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -265,6 +266,27 @@ def _parse_tenant(tenant_id: str, raw: Any) -> Tenant:
     )
 
 
+def _resolve_slot_binary_dir(binary: dict[str, Any]) -> str:
+    """Resolve ``slot.binary`` to a directory, preferring the kernel store.
+
+    ``backend:`` names a CAPABILITY and is resolved through
+    ``src/registry/kernel_paths.py``, so a kernel promotion that repoints
+    ``/mnt/raid0/llm/kernels/production/<backend>`` moves the lane with it. An
+    explicit ``dir:`` remains an override (the same distinction stack_priors
+    draws for ``runtime_requirements.binary_dir``) and is used verbatim.
+
+    Deliberately fatal when neither resolves: substituting a build path here is
+    how a lane keeps serving off a retired kernel without anything noticing.
+    """
+    explicit = binary.get("dir")
+    if explicit is not None:
+        return str(explicit)
+    backend = binary.get("backend")
+    if backend is None:
+        raise TenancyError("slot.binary must declare either 'backend' or 'dir'")
+    return str(backend_dir(str(backend)))
+
+
 def _parse_slot(raw: Any) -> LaneSlot:
     slot = _require_mapping(raw, "slot")
     binary = _require_mapping(slot.get("binary"), "slot.binary")
@@ -274,7 +296,7 @@ def _parse_slot(raw: Any) -> LaneSlot:
         port=int(slot["port"]),
         host_cpuset=str(slot["host_cpuset"]),
         host_threads=int(slot["host_threads"]),
-        binary_dir=str(binary["dir"]),
+        binary_dir=_resolve_slot_binary_dir(binary),
         binary_version=str(binary["version"]),
         binary_commit=str(binary["commit"]),
         lock_role=str(claim["lock_role"]),

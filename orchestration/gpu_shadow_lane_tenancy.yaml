@@ -44,7 +44,13 @@ slot:
   host_cpuset: "184-191"
   host_threads: 8
   binary:
-    dir: /mnt/raid0/llm/llama.cpp/build-hip/bin
+    # The kernel STORE backend, not a build directory. A build-path literal here
+    # would keep the lane on the outgoing kernel after a promotion repoints
+    # `/mnt/raid0/llm/kernels/production/gpu` — silently. An explicit `dir:` is
+    # still honoured by the loader as a deliberate override; absent one, the
+    # backend resolves through src/registry/kernel_paths.py and a dangling store
+    # raises rather than substituting a path.
+    backend: gpu
     version: "10107"
     commit: 67a433bf4
     freeze: production-consolidated-v8 (2026-07-25 final freeze)

@@ -1923,14 +1923,26 @@ def _launch_runtime_record(
     # every role silently changes env policy. Keep the two distinguishable.
     explicit_binary_override = bool(binary_dir)
     if not binary_dir:
-        try:
-            from src.registry.kernel_paths import backend_dir as _kernel_backend_dir
+        # FAIL CLOSED. This used to swallow every exception and leave binary_dir
+        # None, which fell through to the CPU-only `LLAMA_SERVER` literal below —
+        # so a dangling or mis-pointed `production/<backend>` symlink after a
+        # promotion compiled a GPU role onto a CPU build, silently, with nothing
+        # downstream able to tell. The ONLY legitimate "no store consulted" case is
+        # an EXPLICIT registry `runtime_requirements.binary_dir`, and that is the
+        # `if not binary_dir` guard above — not a catch-all here.
+        from src.registry.kernel_paths import (
+            KernelPathError as _KernelPathError,
+            backend_dir as _kernel_backend_dir,
+        )
 
+        try:
             binary_dir = str(_kernel_backend_dir(backend))
-        except Exception:
-            # Layer unavailable (fresh checkout / test fixture): keep the previous
-            # behaviour rather than failing the whole compile.
-            binary_dir = None
+        except _KernelPathError as exc:
+            raise _KernelPathError(
+                f"role {role!r} resolves to kernel backend {backend!r}, which does not "
+                f"resolve: {exc}. Declare runtime_requirements.binary_dir for this role "
+                f"or repoint the production kernel store."
+            ) from exc
 
     # 2026-08-01 (INC vision `invalid device: ROCm0`): resolving binary_dir from the
     # backend was only HALF the derivation. The binary is chosen by backend but its
@@ -1941,15 +1953,27 @@ def _launch_runtime_record(
     # from the SAME backend that chose the binary, so the two can never disagree.
     # An EXPLICIT registry ld_library_path stays authoritative (it is an override,
     # and the only reason to write one is to name something non-derivable).
+    #
+    # FAIL CLOSED here too: `ld_paths = []` on failure is not a neutral default, it
+    # is the exact condition the 2026-08-01 incident describes — the HIP binary with
+    # the CPU tree's ggml ahead of it on LD_LIBRARY_PATH. Note `[]` remains the
+    # CORRECT resolved answer for the `cpu` backend (the ambient environment already
+    # is that tree); what is gone is `[]` as the answer to "we could not tell".
     if not ld_paths:
-        try:
-            from src.registry.kernel_paths import (
-                backend_ld_library_path as _kernel_backend_ld,
-            )
+        from src.registry.kernel_paths import (
+            KernelPathError as _KernelPathError,
+            backend_ld_library_path as _kernel_backend_ld,
+        )
 
+        try:
             ld_paths = _kernel_backend_ld(backend)
-        except Exception:
-            ld_paths = []
+        except _KernelPathError as exc:
+            raise _KernelPathError(
+                f"role {role!r} resolves to kernel backend {backend!r}, whose "
+                f"LD_LIBRARY_PATH does not resolve: {exc}. Declare "
+                f"runtime_requirements.ld_library_path for this role or repoint the "
+                f"production kernel store."
+            ) from exc
 
     binary_path = str(Path(binary_dir) / "llama-server") if binary_dir else str(LLAMA_SERVER)
     binary_family = (

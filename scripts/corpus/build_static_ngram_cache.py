@@ -19,7 +19,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
-DEFAULT_LLAMA_BIN_DIR = Path("/mnt/raid0/llm/llama.cpp/build/bin")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.registry.kernel_paths import backend_dir  # noqa: E402
+
+DEFAULT_LLAMA_BIN_DIR = backend_dir("cpu")
 DEFAULT_CORPUS_DIR = Path("/mnt/raid0/llm/cache/corpus/v3_sharded")
 DEFAULT_CHUNK_BYTES = 128 * 1024 * 1024
 DEFAULT_MAX_BYTES = 1024 * 1024 * 1024

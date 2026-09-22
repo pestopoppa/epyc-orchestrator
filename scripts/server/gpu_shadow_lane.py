@@ -32,6 +32,7 @@ from typing import Any
 import yaml
 
 from src.features import Features, features as _global_features
+from src.registry.kernel_paths import backend_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -44,9 +45,13 @@ LANE_DEVICE = "ROCm0"
 # never on physical cores 88-95 (memory: feedback_mi210_host_threads_smt_siblings).
 LANE_HOST_CPUSET = "184-191"
 LANE_HOST_THREADS = 8
-# Production v8 HIP tree (2026-07-25 final freeze). Serving off any other tree
-# violates production-kernel discipline.
-LANE_BINARY_DIR = Path("/mnt/raid0/llm/llama.cpp/build-hip/bin")
+# The lane serves off the CURRENT production GPU kernel, resolved through the
+# kernel store (`/mnt/raid0/llm/kernels/production/gpu`) rather than named as a
+# build directory. A build-path literal here would keep the lane on the OLD
+# kernel after a promotion repoints the store — silently, because a stale-but-
+# present binary launches and serves. Resolution is deliberately fatal: an
+# unresolvable backend raises KernelPathError instead of substituting a path.
+LANE_BINARY_DIR = backend_dir("gpu")
 LANE_BINARY = LANE_BINARY_DIR / "llama-server"
 LANE_BINARY_VERSION = "10107"
 LANE_BINARY_COMMIT = "67a433bf4"

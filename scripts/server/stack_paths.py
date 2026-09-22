@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from src.registry.kernel_paths import backend_dir as _kernel_backend_dir
+
 
 def _get_paths() -> dict[str, Path]:
     """Resolve launcher paths without importing the full config object graph.
@@ -41,10 +43,15 @@ def _get_paths() -> dict[str, Path]:
         "model_base": Path(
             os.environ.get("ORCHESTRATOR_PATHS_MODEL_BASE", str(llm_root / "models"))
         ),
+        # Kernel STORE, not a build path. `production/cpu` is repointed by a
+        # kernel promotion; a `llama.cpp/build/bin` literal is not, so a launcher
+        # holding one keeps running the retired kernel. `backend_dir` resolves the
+        # symlink (same string as the old literal today) and RAISES rather than
+        # substituting when the store is dangling.
         "llama_cpp_bin": Path(
             os.environ.get(
                 "ORCHESTRATOR_PATHS_LLAMA_CPP_BIN",
-                str(llm_root / "llama.cpp/build/bin"),
+                str(_kernel_backend_dir("cpu")),
             )
         ),
         "log_dir": Path(

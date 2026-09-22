@@ -585,6 +585,45 @@ def _ps_llama_scan() -> str:
 # role→substrate list is exactly the drift class RTG-47 removes.
 _SUBSTRATE_MARKER_RE = re.compile(r"hip|rocm|gfx", re.IGNORECASE)
 
+
+def _is_gpu_binary(path: str) -> bool:
+    """True when `path` is served by an accelerator backend.
+
+    Resolve through the KERNEL STORE first; fall back to the substring marker.
+
+    Why: the marker above keys on the frozen source tree's directory NAMING
+    (`llama.cpp/build-hip/bin`). When kernels/production/gpu was repointed at a
+    versioned store dir on 2026-09-21 (`kernels/builds/gpu-<date>-<sha>/bin`) the
+    substring vanished -- that path contains no "hip", "rocm" or "gfx" -- and every
+    GPU role silently began reporting substrate "cpu". Nothing errors; the topology
+    view just becomes quietly wrong, which is the same class of silent-wrongness the
+    marker was introduced to avoid. Verified 2026-09-22: the regex matches the v9
+    path and neither v10 path.
+
+    The store mapping is authoritative because it is what the launcher resolves
+    (src/registry/kernel_paths.backend_dir). Non-llama backends (stt/tts) are
+    accelerator-backed on this host too, so anything that is not the `cpu` backend
+    counts as GPU here, matching the previous marker's intent.
+    """
+    if not path:
+        return False
+    try:
+        from pathlib import Path as _P
+
+        from src.registry.kernel_paths import BACKEND_BINARIES, backend_dir
+
+        resolved = _P(path).resolve()
+        for backend in BACKEND_BINARIES:
+            try:
+                bdir = _P(backend_dir(backend)).resolve()
+            except Exception:
+                continue
+            if resolved == bdir or bdir in resolved.parents:
+                return backend != "cpu"
+    except Exception:
+        pass
+    return bool(_SUBSTRATE_MARKER_RE.search(path))
+
 # Manifest `device` strings that DECLARE a GPU lane (model_registry.yaml
 # server_mode.<role>.serving_shape.device, e.g. "ROCm0"). Host lanes declare no
 # device at all — the manifest's own convention (`serving_shape_capacity_report`
@@ -662,7 +701,7 @@ def _service_substrate(pid: Any, model_hint: str = "") -> str | None:
     try:
         with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
             argv0 = f.read().split(b"\0", 1)[0].decode("utf-8", "replace")
-        if argv0 and _SUBSTRATE_MARKER_RE.search(argv0):
+        if argv0 and _is_gpu_binary(argv0):
             return "gpu"
     except (OSError, ValueError, TypeError):
         pass
@@ -724,7 +763,7 @@ def _discover_llama_processes() -> dict[int, dict[str, Any]]:
         # so no-marker legitimately reads as CPU here — unlike aux services.
         binary = next((tok for tok in line.split() if "llama-server" in tok), "")
         if binary:
-            info["substrate"] = "gpu" if _SUBSTRATE_MARKER_RE.search(binary) else "cpu"
+            info["substrate"] = "gpu" if _is_gpu_binary(binary) else "cpu"
         if verdict.get("marker_stale"):
             info["marker_stale"] = True
         role = _port_hint(port)

@@ -48,47 +48,47 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-09-03T12:55:37Z'
+compiled_at: '2026-09-22T09:52:27Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 033d442fa14505fa9b2a667d3bf8089501e033a93ce023dfbf285f2ef3e87320
-    repo_commit: e9d4b817
+    sha256: d836f1531061aec9e81d740d16340ef29ebbd84edf57ac2832eb2288681f14a8
+    repo_commit: 2a609f5c
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 68d12f60bf4335fbb462d9d6843563fa57afa3fde75b549ff32bb9584d9fabbe
-    repo_commit: e9d4b817
+    sha256: bfcae76be2e305d379a67057cfddf5b640e7c5f00d278b9e6d4267f7ce996159
+    repo_commit: 2a609f5c
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 13b7feda6023758985da139b2c863f032f4a2ce8b0bcca9e5e82ce5920cf4f48
-    repo_commit: e9d4b817
+    repo_commit: 2a609f5c
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 8a9e4eade957c71b9694160668f982deff31960d3ec5ad0f2d8fc50369b3c703
-    repo_commit: e9d4b817
+    repo_commit: 2a609f5c
   launch_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/launch_manifest.yaml
-    sha256: 9b035a340c17c76532d5d3c1b2079b7e94992fe39c93141133d4d2d4da3bd13d
-    repo_commit: e9d4b817
+    sha256: 57672e2893ad873fa81fbb75d03e1d5adceeac54c019d76619bb23899e85afbb
+    repo_commit: 2a609f5c
   stack_topology:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
     sha256: a6694a427519916dadf11c7b268bbf5afde9bc2db22e0c16141f133c11d08658
-    repo_commit: e9d4b817
+    repo_commit: 2a609f5c
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: cef9c9cefa1a1469d41504b20aec1adfff83c0c29363e85e2065e41909c73021
-    repo_commit: e9d4b817
+    sha256: f6e7d5569c20ccf0b60c30a6cda3fa6096d19f08cd55a28479e3f3a5d0f07baf
+    repo_commit: 2a609f5c
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
-    sha256: 52b173eb69b0838394e7d48d6112827f686e06d848a107291754f791e64b1064
-    repo_commit: e9d4b817
+    sha256: 4a7ca842a87b6ffec022f4f6433d755751cac32b9102747d88f3f4f2e4cb24de
+    repo_commit: 2a609f5c
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: e9d4b817
+    repo_commit: 2a609f5c
 roles:
   architect_critic:
     role: architect_critic
@@ -126,8 +126,8 @@ roles:
           draft_model_path: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -334,10 +334,10 @@ roles:
           draft_model_path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build-hip/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin
           ld_library_path:
-          - /mnt/raid0/llm/llama.cpp/build-hip/bin
+          - /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin
           - /opt/rocm/lib
           env_policy: canonical
           kmp_blocktime: null
@@ -542,10 +542,10 @@ roles:
           draft_model_path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build-hip/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin
           ld_library_path:
-          - /mnt/raid0/llm/llama.cpp/build-hip/bin
+          - /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin
           - /opt/rocm/lib
           env_policy: canonical
           kmp_blocktime: null
@@ -767,8 +767,8 @@ roles:
           draft_model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -962,8 +962,8 @@ roles:
           model_path: /mnt/raid0/llm/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -1567,8 +1567,8 @@ roles:
           model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -1801,10 +1801,10 @@ roles:
           model_path: /mnt/raid0/llm/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build-hip/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin
           ld_library_path:
-          - /mnt/raid0/llm/llama.cpp/build-hip/bin
+          - /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin
           - /opt/rocm/lib
           env_policy: canonical
           kmp_blocktime: null
@@ -2010,8 +2010,8 @@ roles:
           model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -2263,8 +2263,8 @@ roles:
           model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -2508,8 +2508,8 @@ roles:
           model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -2744,8 +2744,8 @@ roles:
           draft_model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/cpu-20260921-ffc1bac82/bin
           ld_library_path: []
           env_policy: canonical
           kmp_blocktime: null
@@ -2924,10 +2924,10 @@ roles:
           model_path: /mnt/raid0/llm/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server
-          binary_dir: /mnt/raid0/llm/llama.cpp/build-hip/bin
+          binary_path: /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin/llama-server
+          binary_dir: /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin
           ld_library_path:
-          - /mnt/raid0/llm/llama.cpp/build-hip/bin
+          - /mnt/raid0/llm/kernels/builds/gpu-20260921-ffc1bac82/bin
           - /opt/rocm/lib
           env_policy: canonical
           kmp_blocktime: null

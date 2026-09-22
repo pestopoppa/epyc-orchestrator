@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from src.roles import Role
+from src.registry.kernel_paths import (
+    backend_dir as _kernel_backend_dir,
+    server_binary as _kernel_server_binary,
+)
 from src.registry.stack_priors import live_stack_serving_url_values
 
 from .validation import _registry_runtime_value, _registry_timeout
@@ -914,7 +918,7 @@ class PathsConfig:
     llama_cpp_bin: Path = field(
         default_factory=lambda: Path(
             os.environ.get(
-                "ORCHESTRATOR_PATHS_LLAMA_CPP_BIN", f"{_get_default_llm_root()}/llama.cpp/build/bin"
+                "ORCHESTRATOR_PATHS_LLAMA_CPP_BIN", str(_kernel_backend_dir("cpu"))
             )
         )
     )
@@ -1180,7 +1184,7 @@ class VisionConfig:
         default_factory=lambda: Path(
             os.environ.get(
                 "ORCHESTRATOR_PATHS_LLAMA_MTMD",
-                f"{_get_default_llm_root()}/llama.cpp/build/bin/llama-mtmd-cli",
+                str(_kernel_backend_dir("cpu") / "llama-mtmd-cli"),
             )
         )
     )
@@ -1616,7 +1620,7 @@ class WorkerPoolPathsConfig:
         default_factory=lambda: Path(
             os.environ.get(
                 "ORCHESTRATOR_PATHS_LLAMA_SERVER",
-                f"{_get_default_llm_root()}/llama.cpp/build/bin/llama-server",
+                str(_kernel_server_binary("cpu")),
             )
         )
     )
