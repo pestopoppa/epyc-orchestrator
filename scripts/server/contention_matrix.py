@@ -62,6 +62,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "server"))
 # setup above, which is what makes `src.` resolvable when this file is run as a
 # standalone script. `device_model` is pure and import-safe: it reads declared
 # artifacts only and touches no process.
+from src.registry.kernel_paths import server_binary  # noqa: E402
 from src.scheduling.device_model import (  # noqa: E402
     DEFAULT_VRAM_HEADROOM_GIB,
     DeviceClass,
@@ -2208,7 +2209,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return 2
 
-    binary_path = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-server")
+    # Provenance must name the kernel the bench ACTUALLY ran on. A build-path
+    # literal keeps reporting the old tree after a promotion repoints the store.
+    binary_path = server_binary("cpu")
     bin_meta = _binary_metadata(binary_path)
     host_meta = _host_metadata()
     measured_roles = {role for pb in measured for role in pb.roles}

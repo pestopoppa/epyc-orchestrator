@@ -417,8 +417,13 @@ def _default_stack_state_path() -> Path | None:
 
 
 def _default_llama_server() -> Path | None:
+    # Resolve the production CPU kernel through the store, not a build path: the
+    # fingerprint exists to record WHICH binary ran, and a literal would keep
+    # naming the retired tree after a promotion repoints production/cpu.
+    from src.registry.kernel_paths import backend_dir
+
     bin_dir = os.environ.get("ORCHESTRATOR_PATHS_LLAMA_CPP_BIN")
-    base = Path(bin_dir) if bin_dir else Path("/mnt/raid0/llm/llama.cpp/build/bin")
+    base = Path(bin_dir) if bin_dir else backend_dir("cpu")
     return base / "llama-server"
 
 

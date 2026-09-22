@@ -56,12 +56,40 @@ def get_binary_paths(registry: Optional["ModelRegistry"] = None) -> dict[str, st
         except Exception:
             pass
 
+    binaries = dict(fallback)
     if registry and hasattr(registry, "data"):
-        binaries = registry.data.get("runtime_defaults", {}).get("binaries", {})
-        if binaries:
-            return binaries
+        declared = registry.data.get("runtime_defaults", {}).get("binaries", {})
+        if declared:
+            binaries = dict(declared)
 
-    return fallback
+    # base_dir comes from the KERNEL STORE, not from the registry literal.
+    #
+    # The registry owns the binary NAMES (completion/speculative/lookup/cli/server);
+    # it does not own which kernel build they come from. kernels/README.md is explicit
+    # that `production/<backend>` is "the only path anything should name".
+    #
+    # Why this override exists: `get_binary()` is a LAUNCH path (scripts/lib/executor.py
+    # uses it for server/speculative/lookup/mtmd). The master registry's
+    # `runtime_defaults.binaries.base_dir` is a build-path literal, and its own comment
+    # claims ORCHESTRATOR_PATHS_LLAMA_CPP_BIN overrides it -- which was NOT true: this
+    # function read the registry directly. After the v10 promotion repointed
+    # production/cpu, that left executor.py launching the OLD kernel (the stale path
+    # still exists, so it resolves and serves silently) while stack_priors,
+    # orchestrator_stack and env.sh had all followed the promotion. Split-brain kernel
+    # resolution, detectable only by reading argv of a running server.
+    #
+    # Fails closed: an unresolvable store raises KernelPathError naming the backend,
+    # consistent with kernel_paths' other consumers. An explicit
+    # ORCHESTRATOR_PATHS_LLAMA_CPP_BIN still wins, so an operator can still pin a tree.
+    explicit = os.environ.get("ORCHESTRATOR_PATHS_LLAMA_CPP_BIN", "").strip()
+    if explicit:
+        binaries["base_dir"] = explicit
+    else:
+        from src.registry.kernel_paths import backend_dir as _kernel_backend_dir
+
+        binaries["base_dir"] = str(_kernel_backend_dir("cpu"))
+
+    return binaries
 
 
 def get_binary(name: str, registry: Optional["ModelRegistry"] = None) -> str:

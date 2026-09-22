@@ -649,14 +649,25 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     )
     runtime = worker["serving"]["launch"]["runtime"]
     assert runtime["binary_family"] == "llama.cpp"
-    assert runtime["binary_path"].endswith("/llama.cpp/build/bin/llama-server")
+    # 2026-09-21: assert the binary is whatever the KERNEL STORE resolves, not a
+    # specific build tree. This previously pinned "/llama.cpp/build/bin/llama-server",
+    # which encoded the pre-v10 state where production/cpu pointed into the frozen
+    # source tree. A promotion repoints that symlink by design, so a tree-path literal
+    # here would fail on every future promotion while proving nothing about the
+    # binding under test (which is that the role's device selects the backend).
+    from src.registry.kernel_paths import server_binary as _store_server_binary
+
+    assert runtime["binary_path"] == str(_store_server_binary("cpu"))
+    assert runtime["binary_path"].endswith("/llama-server")
     # 2026-07-31: binary_dir is now ALWAYS resolved, from the role's declared device
     # via the stable kernel layer, instead of being left None and letting a CPU-only
     # literal decide. A CPU role resolves to the cpu backend; a role declaring
     # device: ROCm0 resolves to the gpu backend, which is what makes that
     # declaration reach the launcher at all.
     assert runtime["binary_dir"] is not None
-    assert runtime["binary_dir"].endswith("/llama.cpp/build/bin")
+    from src.registry.kernel_paths import backend_dir as _store_backend_dir
+
+    assert runtime["binary_dir"] == str(_store_backend_dir("cpu"))
     assert runtime["ld_library_path"] == []
     # A DERIVED backend must not carry the env consequences of an EXPLICIT
     # registry binary_dir override — otherwise every role silently changes policy.

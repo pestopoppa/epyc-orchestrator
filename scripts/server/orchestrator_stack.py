@@ -154,18 +154,30 @@ _WORKER_GENERAL_DEGRADED_FALLBACK = {
 }
 
 def _kernel_server_binary(backend: str) -> Path:
-    """Resolve a production server binary by BACKEND, with a safe last resort.
+    """Resolve a production server binary by BACKEND, or RAISE.
 
-    Prefers the stable kernel layer so a build-path literal never decides what a
-    GPU lane actually launches. Falls back to the previously-hardcoded path only
-    if the layer is unavailable, so this cannot make a working host worse.
+    Fails closed on purpose. This used to catch every exception and substitute
+    ``/mnt/raid0/llm/llama.cpp/build{-hip}/bin/llama-server``, which turned the one
+    condition the kernel store exists to detect — a dangling or mis-pointed
+    ``production/<backend>`` symlink after a promotion — into a silent launch of
+    whatever that literal happened to contain. A CPU build serving a lane that
+    declared the GPU does not crash and does not look unhealthy; it just answers
+    slowly and wrongly. `kernel_paths` raises `KernelPathError` naming the backend
+    and the path it tried, and that message must reach the operator unmodified.
+
+    Callers must resolve LAZILY (only when no explicit binary_path is declared):
+    an unusable store must not fail a launch that never consults the store.
     """
     try:
         from src.registry.kernel_paths import server_binary
+    except ImportError as exc:  # in-repo module; absence is a packaging defect
+        raise RuntimeError(
+            f"cannot resolve the production kernel binary for backend {backend!r}: "
+            f"src.registry.kernel_paths is unavailable ({exc}). Refusing to substitute "
+            "a hardcoded build path — that is how a GPU lane silently launches a CPU build."
+        ) from exc
 
-        return server_binary(backend)
-    except Exception:
-        return Path(f"/mnt/raid0/llm/llama.cpp/build{'-hip' if backend == 'gpu' else ''}/bin/llama-server")
+    return server_binary(backend)
 
 
 _CPU_ONLY_DEVICE_FLAGS = ("--device", "-dev")
@@ -1163,14 +1175,14 @@ def _build_gpu_shadow_lane_command(port: int, numa_instance: int = 0) -> list[st
     requirements, runtime = _stack_prior_launch(source_role)
     cache = _runtime_cache(runtime)
     flags = _runtime_flags(runtime)
+    # Backend, not a build path. A literal here is how a GPU lane silently acquires
+    # whatever that directory happens to contain. Resolved LAZILY: a declared
+    # binary_path from the compiled priors is authoritative and must not be made to
+    # depend on the store, but with nothing declared an unresolvable `gpu` backend is
+    # fatal — `_kernel_server_binary` raises rather than substituting a CPU build.
+    declared_binary = _runtime_string(runtime, "binary_path", "")
     cmd = [
-        _runtime_string(
-            runtime,
-            "binary_path",
-            # Backend, not a build path. A literal here is how a GPU lane silently
-            # acquires whatever that directory happens to contain.
-            str(_kernel_server_binary("gpu")),
-        ),
+        declared_binary or str(_kernel_server_binary("gpu")),
         "-m",
         _runtime_string(requirements, "model_path", ""),
         "--host",

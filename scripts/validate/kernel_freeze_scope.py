@@ -33,8 +33,42 @@ DEFAULT_PRIORS = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 
 
 def _backend_of(binary_path: str) -> str:
-    """Classify a resolved binary path back to its backend."""
+    """Classify a resolved binary path back to its backend.
+
+    Resolve through the KERNEL STORE first, and fall back to path-substring sniffing
+    only if the store cannot answer.
+
+    Why: this used to classify solely on `"build-hip" in path`. That marker is an
+    artifact of the frozen source tree's directory naming (llama.cpp/build-hip/bin).
+    The moment kernels/production/gpu was repointed at a versioned store dir
+    (kernels/builds/gpu-<date>-<sha>/bin, 2026-09-21 v10 promotion) the marker
+    vanished and ALL FOUR GPU ROLES silently reclassified as `cpu`:
+    `--backend gpu` returned "0 role(s) must show no regression" and `--backend cpu`
+    went 8 -> 12. A future promotion would have derived an EMPTY GPU gate from this
+    and skipped the entire GPU half of step 3 without a single error — which is how
+    the -30% Qwen3-VL-30B regression would have shipped, since that cell is only
+    reachable via the gpu scope.
+
+    Store resolution is authoritative because it is the same mapping the launcher
+    uses (src/registry/kernel_paths.backend_dir). The substring fallback is kept so
+    the tool still works against historical records and pre-store paths.
+    """
     p = binary_path or ""
+    if p:
+        try:
+            from src.registry.kernel_paths import BACKEND_BINARIES, backend_dir
+
+            resolved = Path(p).resolve()
+            for backend in BACKEND_BINARIES:
+                try:
+                    bdir = Path(backend_dir(backend)).resolve()
+                except Exception:
+                    continue
+                if resolved == bdir or bdir in resolved.parents:
+                    return backend
+        except Exception:
+            pass  # fall through to the legacy markers below
+
     if "build-hip" in p:
         return "gpu"
     if "whisper" in p:

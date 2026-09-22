@@ -28,9 +28,10 @@ from statistics import mean, median
 from typing import Any
 
 from scripts.benchmark.mtp_acceptance_report import parse_log
+from src.registry.kernel_paths import server_binary
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BINARY = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-server")
+DEFAULT_BINARY = server_binary("cpu")
 DEFAULT_MODEL = Path("/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf")
 DEFAULT_PROMPT = (
     "Solve this precisely and show the final numeric answer only after ####.\n"

@@ -58,12 +58,40 @@ export MODELS_DIR="${ORCHESTRATOR_PATHS_MODELS_DIR}"
 export ORCHESTRATOR_PATHS_MODEL_BASE="${ORCHESTRATOR_PATHS_MODEL_BASE:-${LLM_ROOT}/lmstudio/models}"
 export MODEL_BASE="${ORCHESTRATOR_PATHS_MODEL_BASE}"
 
-# llama.cpp binaries
-export ORCHESTRATOR_PATHS_LLAMA_CPP_BIN="${ORCHESTRATOR_PATHS_LLAMA_CPP_BIN:-${LLM_ROOT}/llama.cpp/build/bin}"
-export LLAMA_CPP_BIN="${ORCHESTRATOR_PATHS_LLAMA_CPP_BIN}"
+# llama.cpp binaries — resolved through the KERNEL STORE, never a build-path literal.
+#
+# This export overrides every Python default in src/config/models.py and
+# scripts/server/stack_paths.py for any process that sources this file, so a literal
+# here silently outranks the whole kernel-store layer: after a v10 promotion repoints
+# kernels/production/cpu, a literal would keep every sourcing script on the OLD kernel.
+#
+# `readlink -e` yields the RESOLVED path (e.g. .../llama.cpp/build/bin), not the symlink,
+# which matters because dashboard_topology.py detects GPU roles by looking for the
+# `build-hip` marker in argv[0]. Exporting the unresolved store path would break that.
+#
+# On failure we export NOTHING and say so loudly. We do NOT substitute the old literal
+# (that is the silent-wrong-kernel bug) and we do NOT `return 1` (this file is sourced as
+# `source A 2>/dev/null || source B`, so a non-zero return would source the OTHER file).
+# With the vars unset, the Python layer resolves through kernel_paths and raises
+# KernelPathError naming the backend and the path it tried.
+if [[ -z "${ORCHESTRATOR_PATHS_LLAMA_CPP_BIN:-}" ]]; then
+  _epyc_store_cpu="$(readlink -e "${LLM_ROOT}/kernels/production/cpu" 2>/dev/null)" || _epyc_store_cpu=""
+  if [[ -n "${_epyc_store_cpu}" ]]; then
+    export ORCHESTRATOR_PATHS_LLAMA_CPP_BIN="${_epyc_store_cpu}"
+  else
+    echo "env.sh: ${LLM_ROOT}/kernels/production/cpu does not resolve." >&2
+    echo "        NOT exporting ORCHESTRATOR_PATHS_LLAMA_CPP_BIN / LLAMA_SERVER — refusing to" >&2
+    echo "        substitute a build-path literal, which is how a stale kernel gets served." >&2
+    echo "        Repoint it: ln -sfn <build dir> ${LLM_ROOT}/kernels/production/cpu" >&2
+  fi
+  unset _epyc_store_cpu
+fi
 
-export ORCHESTRATOR_PATHS_LLAMA_SERVER="${ORCHESTRATOR_PATHS_LLAMA_SERVER:-${LLAMA_CPP_BIN}/llama-server}"
-export LLAMA_SERVER="${ORCHESTRATOR_PATHS_LLAMA_SERVER}"
+if [[ -n "${ORCHESTRATOR_PATHS_LLAMA_CPP_BIN:-}" ]]; then
+  export LLAMA_CPP_BIN="${ORCHESTRATOR_PATHS_LLAMA_CPP_BIN}"
+  export ORCHESTRATOR_PATHS_LLAMA_SERVER="${ORCHESTRATOR_PATHS_LLAMA_SERVER:-${LLAMA_CPP_BIN}/llama-server}"
+  export LLAMA_SERVER="${ORCHESTRATOR_PATHS_LLAMA_SERVER}"
+fi
 
 if [[ -z "${ORCHESTRATOR_PATHS_LLAMA_MTMD:-}" ]]; then
   # -x IS NOT A RUNNABILITY CHECK. Build trees here carry executables that die at
