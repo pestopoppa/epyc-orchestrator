@@ -1273,20 +1273,50 @@ def validate_declaration_parity() -> None:
 # side's half. Total KV bytes for an instance = KiB/token * n_ctx; `-np` does
 # NOT multiply it (llama-server partitions one -c-sized cache across slots).
 
-# Byte-width of one KV element RELATIVE TO f16, per llama.cpp cache type. Only
-# the types this fleet actually uses are listed: an unrecognised type RAISES
+# Byte-width of one KV element RELATIVE TO f16, per llama.cpp cache type.
+# DERIVED FROM ggml's BLOCK LAYOUT, not from the nominal bit-width. A quantised
+# KV block stores its scale(s) alongside the quants, so q8_0 is 34 bytes per 32
+# elements (1.0625 B/elem), NOT 1.0 — the naive "half of f16" understates it by
+# 5.88%, and q4_0 by 11.11%.
+#
+# This was wrong here until 2026-09-22, and the shape of the error is what gives
+# it away: q5_0 and q5_1 already carried their true ratios (0.34375, 0.375) while
+# q8_0, q4_0 and q4_1 carried nominal fractions (0.5, 0.25, 0.28125). A deliberate
+# simplification would have been uniformly nominal; a half-corrected table is an
+# oversight. The gate therefore UNDERSTATED KV for the three most-used types and
+# could pass an infeasible lineup — precisely the failure the comment below says
+# must never happen. Measured impact at the time: Qwen3.8-27B at n_ctx 262144,
+# q8_0/q8_0, was scored 32.50 GiB against a true 34.53 GiB.
+#
+# Block sizes are asserted by ggml itself in ggml/src/ggml-common.h:
+#   block_q4_0 = half + 32/2      = 18 B      block_q4_1 = 2*half + 32/2       = 20 B
+#   block_q5_0 = half + u32 + 32/2 = 22 B     block_q5_1 = 2*half + u32 + 32/2 = 24 B
+#   block_q8_0 = half + 32         = 34 B
+# ratio = (block_bytes / 32) / 2.0, i.e. bytes-per-element relative to f16.
+#
+# Only the types this fleet actually uses are listed: an unrecognised type RAISES
 # rather than being assumed f16, because assuming the LARGEST type would silently
 # pass an infeasible lineup and assuming the smallest would silently fail a
 # feasible one. Neither is a safe default, so there is none.
+_GGML_QK = 32
+_GGML_HALF = 2
+_GGML_U32 = 4
+
+
+def _block_ratio(block_bytes: int) -> float:
+    """Element width relative to f16, from a ggml block's true size."""
+    return (block_bytes / _GGML_QK) / 2.0
+
+
 _KV_TYPE_F16_RATIO: dict[str, float] = {
     "f32": 2.0,
     "f16": 1.0,
     "bf16": 1.0,
-    "q8_0": 0.5,
-    "q5_1": 0.375,
-    "q5_0": 0.34375,
-    "q4_1": 0.28125,
-    "q4_0": 0.25,
+    "q8_0": _block_ratio(_GGML_HALF + _GGML_QK),                        # 34 B -> 0.53125
+    "q5_1": _block_ratio(2 * _GGML_HALF + _GGML_U32 + _GGML_QK // 2),   # 24 B -> 0.375
+    "q5_0": _block_ratio(_GGML_HALF + _GGML_U32 + _GGML_QK // 2),       # 22 B -> 0.34375
+    "q4_1": _block_ratio(2 * _GGML_HALF + _GGML_QK // 2),               # 20 B -> 0.3125
+    "q4_0": _block_ratio(_GGML_HALF + _GGML_QK // 2),                   # 18 B -> 0.28125
 }
 
 _GIB_PER_KIB_TOKEN = 1.0 / (1024.0 * 1024.0)

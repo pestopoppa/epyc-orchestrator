@@ -446,12 +446,28 @@ def test_stack_paths_imports_cleanly() -> None:
 
 
 def test_math_tools_path_supports_subproject_build() -> None:
-    from scripts.server.stack_paths import LLAMA_MATH_TOOLS
+    """The math-tools binary resolves next to the other kernel binaries.
+
+    Updated 2026-09-22 for the v10 cutover. This used to assert the literal
+    substring "build/bin/llama-math-tools", which was the in-tree layout
+    (llama.cpp/build/bin). v10 is the first production kernel served from the
+    KERNEL STORE, so the path is now
+    kernels/builds/<backend>-<date>-<commit>/bin/llama-math-tools and the old
+    spelling no longer appears.
+
+    The intent was never the word "build" -- it was that math-tools is found
+    beside the kernel it belongs to, rather than at some unrelated path. So the
+    assertion now checks THAT: the binary sits in the same directory as
+    llama-server. Pinning the store's dated directory name instead would just
+    re-break at v11.
+    """
+    from scripts.server.stack_paths import LLAMA_MATH_TOOLS, LLAMA_SERVER
 
     assert LLAMA_MATH_TOOLS.name == "llama-math-tools"
-    assert "build/bin/llama-math-tools" in str(
-        LLAMA_MATH_TOOLS
-    ) or "tools/math-tools/build/llama-math-tools" in str(LLAMA_MATH_TOOLS)
+    assert LLAMA_MATH_TOOLS.parent == LLAMA_SERVER.parent, (
+        f"math-tools ({LLAMA_MATH_TOOLS}) is not beside the server "
+        f"({LLAMA_SERVER}); it would be a different kernel build."
+    )
 
 
 # =============================================================================
