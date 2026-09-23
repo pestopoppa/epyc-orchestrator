@@ -60,7 +60,7 @@ from src.autopilot_core.measurement_guards import (
 from src.classifiers.role_taxonomy import VALID_TRINITY_ROLES
 
 from .embedder import TaskEmbedder
-from .episodic_store import EpisodicStore
+from .episodic_store import EpisodicStore, outcome_from_reward
 from .memory_record import (
     WORK_KEYS,
     build_memory_record,
@@ -1703,7 +1703,7 @@ class QScorer:
                     # store; without it the column was NULL on every row.
                     assigned_role=_assigned_role_from_entry(routing_decision),
                     context=record.to_context(),
-                    outcome="success" if reward > 0 else "failure",
+                    outcome=outcome_from_reward(reward),
                     initial_q=initial_q,
                 )
 
@@ -1894,7 +1894,7 @@ class QScorer:
                 model_id=_model_id_for_action(action),
                 assigned_role=_assigned_role_from_entry(routing_decision),
                 context=record.to_context(),
-                outcome="success" if reward > 0 else "failure",
+                outcome=outcome_from_reward(reward),
                 initial_q=initial_q,
             )
 
@@ -2059,7 +2059,7 @@ class QScorer:
                 action_type=action_type,
                 model_id=_model_id_for_action(action),
                 context=record.to_context(),
-                outcome="success" if reward > 0 else "failure",
+                outcome=outcome_from_reward(reward),
                 initial_q=initial_q,
             )
 

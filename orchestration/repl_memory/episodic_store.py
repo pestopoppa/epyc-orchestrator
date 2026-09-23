@@ -86,6 +86,20 @@ def apply_td_update(
     return max(0.0, min(1.0, new_q))
 
 
+def outcome_from_reward(reward: float) -> str:
+    """First-observation label, used at INSERT (``q_scorer.py``)."""
+    return "success" if reward > 0 else "failure"
+
+
+def outcome_from_q(q_value: float) -> str:
+    """Current label: which side of the neutral 0.5 the running Q sits on (EPD-1).
+
+    Used by ``update_q_value`` so ``outcome`` never contradicts ``q_value`` —
+    a single late reward must not flip a Q=0.9 row to ``failure``.
+    """
+    return "success" if q_value > 0.5 else "failure"
+
+
 @contextmanager
 def _exclusive_file_lock(path: Path):
     """Cross-process lock for FAISS index/id-map mutations."""
@@ -831,28 +845,26 @@ class EpisodicStore:
 
             # Update database.
             #
-            # `outcome` is deliberately NOT recomputed here. It is a record of
-            # the FIRST observation, and a 2026-07-27 audit established that is
-            # the correct semantics rather than a bug: nothing in the live read
-            # path consumes it (retriever.py contains the string "outcome" zero
-            # times in 951 lines; there is no SQL WHERE on the column anywhere in
-            # the repo), and the value that DOES drive routing — q_value — is
-            # updated here correctly. Rewriting `outcome` from the running
-            # average would silently redefine a historical field that offline
-            # analyses treat as an observation record.
+            # EPD-1 (2026-09-23): `outcome` is re-derived from the updated Q on
+            # every update. Live readers treat it as the CURRENT label
+            # (state.py exploration gate, builder.py/routing.py prompt context,
+            # training extraction, DAR/EP-5 probes); pinning it to the first
+            # observation let a row read `Q=0.90 (failure)`. Rows never updated
+            # again keep their INSERT label (no backfill here).
             #
-            # What was genuinely broken is update_count: the live table lost its
-            # column default in a migration, the INSERT relied on that default,
-            # and NULL + 1 = NULL kept 22,949 rows permanently unobserved from
+            # `update_count` was also broken: the live table lost its column
+            # default in a migration, the INSERT relied on that default, and
+            # NULL + 1 = NULL kept 22,949 rows permanently unobserved from
             # should_use_learned()'s perspective. Seeded explicitly at insert
             # now; COALESCE here repairs pre-existing NULL rows on next update.
             conn.execute(
                 """
                 UPDATE memories
-                SET q_value = ?, updated_at = ?, update_count = COALESCE(update_count, 0) + 1
+                SET q_value = ?, outcome = ?, updated_at = ?,
+                    update_count = COALESCE(update_count, 0) + 1
                 WHERE id = ?
             """,
-                (new_q, now_iso, memory_id),
+                (new_q, outcome_from_q(new_q), now_iso, memory_id),
             )
             conn.commit()
 
