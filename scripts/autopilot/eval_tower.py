@@ -1223,12 +1223,23 @@ from src.autopilot_core.measurement_guards import (  # noqa: E402
     DISPOSITION_INFRA_FAILED,
     DISPOSITION_SCORED,
     DISPOSITION_SCORING_FAILED,
+    DISPOSITION_TASK_FAILED,
     forced_role_serving_mismatch as _forced_role_serving_mismatch,
     inband_error_text as _inband_error_text,
     infra_failure_reason,
     is_quality_admissible,
     measurement_disposition,
 )
+
+# ETR-1 (handoffs/active/eval-tower-loop-robustness-audit-2026-07-20.md,
+# operator ruling 2026-09-23): names the quality-denominator policy applied
+# in `EvalTower._aggregate`, so a journal/details row is self-describing
+# across the era boundary without a reader having to diff source. The era
+# registry row this policy backs should key off this constant (see the
+# report of the change that introduced it for the exact era-boundary
+# identifier to reference — `instrument_eras.yaml`/`autopilot_baseline.yaml`
+# are human-only and are not edited here).
+QUALITY_DENOMINATOR_POLICY = "task_failed_scores_zero_v1"
 
 
 def _exception_reason(exc: BaseException) -> str:
@@ -3143,8 +3154,12 @@ class QuestionResult:
     #   scored          — a real verdict was produced (`correct` is meaningful)
     #   infra_failed    — the endpoint produced no answer to score
     #   scoring_failed  — an answer exists but the scorer could not grade it
-    #   task_failed     — the model genuinely failed the task
-    # Only `scored` rows may enter a quality denominator.
+    #   task_failed     — the model/agent genuinely failed the task
+    # ETR-1 (operator ruling 2026-09-23): `scored` AND `task_failed` rows
+    # enter the quality denominator — a task_failed row scores incorrect,
+    # since the failure is agent/config-caused, not a platform outage.
+    # `infra_failed`/`scoring_failed` still never enter it: they carry no
+    # quality information about the model at all.
     disposition: str = DISPOSITION_SCORED
     # Structural reason behind an `infra_failed` disposition (`http_status`,
     # `read_timeout`, `connect_error`, `empty_response`, …). "" otherwise.
@@ -5588,8 +5603,6 @@ class EvalTower:
             )
 
         total_count = len(results)
-        scored_results = [r for r in results if not r.error]
-        n_scored = len(scored_results)
 
         # ── Disposition rollup (2026-08-03 incident) ─────────────────────
         # `errors` alone cannot answer "was this run's 0.0 a model result or a
@@ -5604,6 +5617,38 @@ class EvalTower:
         def _disposition_of(row: Any) -> str:
             return str(getattr(row, "disposition", "") or DISPOSITION_SCORED)
 
+        # ── ETR-1 quality-denominator policy (operator ruling 2026-09-23) ──
+        # Agent/config-caused failures (`task_failed`: an error that is
+        # neither an infra transport/refusal failure nor a broken scoring
+        # instrument — i.e. the model/agent itself produced the failure)
+        # SCORE 0 and stay IN the quality denominator, so a config that
+        # crashes more is penalized instead of shrinking its own
+        # denominator. Platform-caused failures (`infra_failed`,
+        # `scoring_failed`) stay fully EXCLUDED — they carry no quality
+        # information about the model. A row whose disposition is anything
+        # else (missing entirely, or the `scored` default that every
+        # QuestionResult carries until `measurement_disposition()` overrides
+        # it) keeps EXACTLY the pre-ETR-1 accounting: excluded iff
+        # `r.error`, scored otherwise — history is not reinterpreted.
+        # See ETR-1, handoffs/active/eval-tower-loop-robustness-audit-
+        # 2026-07-20.md, operator ruling 2026-09-23.
+        scored_results = [
+            r for r in results if _disposition_of(r) == DISPOSITION_TASK_FAILED or not r.error
+        ]
+        n_scored = len(scored_results)
+        task_failed_count = sum(
+            1 for r in results if _disposition_of(r) == DISPOSITION_TASK_FAILED
+        )
+
+        def _quality_correct(row: Any) -> bool:
+            # A task_failed row is incorrect for quality purposes by
+            # construction — never trust a stale `correct` field on it (it
+            # defaults to False in the live path, but duck-typed/replay rows
+            # are not guaranteed to).
+            if _disposition_of(row) == DISPOSITION_TASK_FAILED:
+                return False
+            return bool(row.correct)
+
         infra_failed_count = sum(
             1 for r in results if _disposition_of(r) == DISPOSITION_INFRA_FAILED
         )
@@ -5617,11 +5662,12 @@ class EvalTower:
             reason = str(getattr(r, "infra_reason", "") or "") or "unclassified"
             infra_failed_reasons[reason] = infra_failed_reasons.get(reason, 0) + 1
 
-        # Quality: fraction correct over scored (non-error) rows, scaled to 0-3.
-        # Infrastructure/scoring failures are reliability evidence, not wrong-answer
-        # evidence. This matches verifier/calibration paths and keeps the two
-        # denominators explicit in details.
-        correct_count = sum(1 for r in scored_results if r.correct)
+        # Quality: fraction correct over the scored quality denominator
+        # (scored + task_failed rows, scaled to 0-3). Infrastructure/scoring
+        # failures are reliability evidence, not wrong-answer evidence — they
+        # stay excluded. task_failed rows ARE wrong-answer evidence under
+        # ETR-1 and are counted incorrect via `_quality_correct` above.
+        correct_count = sum(1 for r in scored_results if _quality_correct(r))
         quality = (correct_count / n_scored) * 3.0 if n_scored else 0.0
         # `quality` is a plain float on the Pareto/SafetyGate contract and cannot
         # become None without breaking every consumer — so the honesty lives in
@@ -5693,8 +5739,12 @@ class EvalTower:
         cost_tiers = [r.cost_tier for r in results if r.cost_tier > 0]
         cost = (sum(cost_tiers) / len(cost_tiers) / 4.0) if cost_tiers else 0.5
 
-        # Reliability: fraction of non-error responses
-        non_error = n_scored
+        # Reliability: fraction of non-error responses. ETR-1 widened
+        # `n_scored`/`scored_results` to also carry task_failed (errored)
+        # rows for the QUALITY denominator, so reliability — a distinct
+        # metric that means what it says, "no error occurred" — is computed
+        # from the true non-error count instead of reusing n_scored.
+        non_error = sum(1 for r in results if not r.error)
         reliability = non_error / total_count
 
         # Per-suite quality
@@ -5703,7 +5753,7 @@ class EvalTower:
         for r in results:
             suite_total_counts[r.suite] = suite_total_counts.get(r.suite, 0) + 1
         for r in scored_results:
-            suite_correct.setdefault(r.suite, []).append(r.correct)
+            suite_correct.setdefault(r.suite, []).append(_quality_correct(r))
         per_suite = {suite: (sum(vals) / len(vals)) * 3.0 for suite, vals in suite_correct.items()}
         # Per-suite question counts (2026-06-06). The per-suite regression gate is
         # otherwise blind to sample size: on a hybrid eval each suite draws only
@@ -5722,9 +5772,10 @@ class EvalTower:
             partition_total_counts[partition] = partition_total_counts.get(partition, 0) + 1
         for r in scored_results:
             partition = r.eval_partition or "core"
-            partition_correct.setdefault(partition, []).append(r.correct)
+            _r_correct = _quality_correct(r)
+            partition_correct.setdefault(partition, []).append(_r_correct)
             partition_suite_correct.setdefault(partition, {}).setdefault(r.suite, []).append(
-                r.correct
+                _r_correct
             )
         partition_quality = {
             partition: (sum(vals) / len(vals)) * 3.0
@@ -5751,9 +5802,26 @@ class EvalTower:
         total_routed = sum(route_counts.values()) or 1
         routing_dist = {k: v / total_routed for k, v in route_counts.items()}
 
-        # EV-2: Calibration metrics (ECE, AUC, calibration violations)
-        confidences = [r.confidence for r in results if not r.error]
-        correctness_vals = [float(r.correct) for r in results if not r.error]
+        # EV-2: Calibration metrics (ECE, AUC, calibration violations). Paired
+        # 1:1 with correctness_vals below. Non-task_failed rows keep the
+        # pre-ETR-1 filter (`not r.error`) unchanged. task_failed rows are
+        # added ONLY when a confidence value is actually present on the row
+        # (`getattr` — a duck-typed/replay row need not carry one), forced to
+        # correctness 0.0 — they count for QUALITY (via scored_results/
+        # n_scored above) even when they are excluded here for lack of a
+        # confidence signal to calibrate against.
+        confidences: list[float] = []
+        correctness_vals: list[float] = []
+        for r in results:
+            if _disposition_of(r) == DISPOSITION_TASK_FAILED:
+                _conf = getattr(r, "confidence", None)
+                if _conf is None:
+                    continue
+                confidences.append(_conf)
+                correctness_vals.append(0.0)
+            elif not r.error:
+                confidences.append(r.confidence)
+                correctness_vals.append(float(r.correct))
         confidence_source_counts: dict[str, int] = {}
         for r in scored_results:
             source = r.confidence_source or "unknown"
@@ -5960,7 +6028,17 @@ class EvalTower:
                 "infra_failed": infra_failed_count,
                 "infra_failed_reasons": dict(sorted(infra_failed_reasons.items())),
                 "scoring_failed": scoring_failed_count,
+                # ETR-1: task_failed rows are IN the quality denominator
+                # (counted incorrect), unlike infra_failed/scoring_failed
+                # above which stay excluded. This count is how many of
+                # `correct_count`'s shortfall came from agent/config
+                # failures rather than a genuinely wrong model answer.
+                "task_failed": task_failed_count,
+                "quality_denominator_policy": QUALITY_DENOMINATOR_POLICY,
                 # False ⇒ `quality` above is a PLACEHOLDER, not a measurement.
+                # A batch that is ENTIRELY task_failed still has
+                # quality_measured=True (0.0 is a real measurement there —
+                # n_scored counts task_failed rows).
                 "quality_measured": quality_measured,
                 "quality_unmeasured_reason": quality_unmeasured_reason,
                 "per_suite_counts": per_suite_counts,
@@ -6035,6 +6113,7 @@ class EvalTower:
             # know a details key exists.
             infra_failed_count=infra_failed_count,
             scoring_failed_count=scoring_failed_count,
+            task_failed_count=task_failed_count,
             infra_failed_reasons=dict(sorted(infra_failed_reasons.items())),
             quality_measured=quality_measured,
             quality_unmeasured_reason=quality_unmeasured_reason,
@@ -6088,6 +6167,7 @@ class EvalTower:
                 quality_unmeasured_reason="all_rows_excluded_by_partition_filter",
                 infra_failed_count=full_result.infra_failed_count,
                 scoring_failed_count=full_result.scoring_failed_count,
+                task_failed_count=full_result.task_failed_count,
                 infra_failed_reasons=dict(full_result.infra_failed_reasons),
             )
 

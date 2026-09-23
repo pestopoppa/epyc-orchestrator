@@ -816,6 +816,13 @@ class EvalResult:
     # construction site behaviour-identical.
     infra_failed_count: int = 0
     scoring_failed_count: int = 0
+    # ETR-1 (operator ruling 2026-09-23): rows whose disposition is
+    # `task_failed` — an agent/config-caused error, neither infra nor
+    # scoring-instrument failure — stay IN the quality denominator and score
+    # incorrect, unlike infra_failed_count/scoring_failed_count above which
+    # stay excluded. Carried as its own count so a reader can see how many
+    # of a run's zeros came from agent failures vs platform failures.
+    task_failed_count: int = 0
     infra_failed_reasons: dict[str, int] = field(default_factory=dict)
     quality_measured: bool = True
     quality_unmeasured_reason: str = ""

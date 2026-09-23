@@ -166,7 +166,7 @@ def test_eval_question_fake_transport_error_paths(
     assert result.tokens_generated == 0
 
 
-def test_eval_batch_fake_transport_errors_use_non_error_quality_denominator(
+def test_eval_batch_fake_transport_errors_split_by_disposition_etr1(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
@@ -215,12 +215,25 @@ def test_eval_batch_fake_transport_errors_use_non_error_quality_denominator(
     assert results[0].error is None
     assert "backend busy" in str(results[1].error)
     assert "backend down" in str(results[2].error)
+    # "backend busy" (200, in-band error text) is not a recognized infra
+    # pattern, so measurement_disposition() classifies it task_failed; "backend
+    # down" (503) is infra_failed. These dispositions are pre-existing and
+    # unchanged by ETR-1 — only what the aggregator DOES with them changed.
+    assert results[1].disposition == "task_failed"
+    assert results[2].disposition == "infra_failed"
 
     agg = tower._aggregate(results, tier=1)
-    assert agg.details["n_scored"] == 1
-    assert agg.details["quality_denominator"] == 1
-    assert agg.details["scoring_errors"] == 2
-    assert agg.quality == 3.0
+    # ETR-1 (operator ruling 2026-09-23): the task_failed row ("payload-error")
+    # now enters the quality denominator scored incorrect; the infra_failed
+    # row ("http-error") stays excluded. n_scored = 2 (ok, payload-error).
+    assert agg.details["n_scored"] == 2
+    assert agg.details["quality_denominator"] == 2
+    assert agg.details["scoring_errors"] == 1
+    assert agg.details["task_failed"] == 1
+    assert agg.details["infra_failed"] == 1
+    assert agg.quality == pytest.approx(1.5)
+    # Reliability is unchanged: it counts true non-error responses regardless
+    # of the quality-denominator policy.
     assert agg.reliability == pytest.approx(1 / 3)
 
 
