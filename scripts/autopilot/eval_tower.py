@@ -1242,6 +1242,26 @@ from src.autopilot_core.measurement_guards import (  # noqa: E402
 QUALITY_DENOMINATOR_POLICY = "task_failed_scores_zero_v1"
 
 
+def _row_disposition(row: Any) -> str:
+    return str(getattr(row, "disposition", "") or DISPOSITION_SCORED)
+
+
+def _quality_denominator(results: list[Any]) -> list[Any]:
+    """ETR-1: rows in the quality denominator — scored rows plus task_failed rows.
+
+    infra_failed / scoring_failed stay out; a row with no disposition keeps the
+    pre-ETR-1 accounting (excluded iff it errored).
+    """
+    return [r for r in results if _row_disposition(r) == DISPOSITION_TASK_FAILED or not r.error]
+
+
+def _quality_correct(row: Any) -> bool:
+    """A task_failed row is wrong by construction; never trust a stale `correct` on it."""
+    if _row_disposition(row) == DISPOSITION_TASK_FAILED:
+        return False
+    return bool(row.correct)
+
+
 def _exception_reason(exc: BaseException) -> str:
     """Structural failure reason for an exception (never its message text).
 
@@ -5632,22 +5652,11 @@ class EvalTower:
         # `r.error`, scored otherwise — history is not reinterpreted.
         # See ETR-1, handoffs/active/eval-tower-loop-robustness-audit-
         # 2026-07-20.md, operator ruling 2026-09-23.
-        scored_results = [
-            r for r in results if _disposition_of(r) == DISPOSITION_TASK_FAILED or not r.error
-        ]
+        scored_results = _quality_denominator(results)
         n_scored = len(scored_results)
         task_failed_count = sum(
             1 for r in results if _disposition_of(r) == DISPOSITION_TASK_FAILED
         )
-
-        def _quality_correct(row: Any) -> bool:
-            # A task_failed row is incorrect for quality purposes by
-            # construction — never trust a stale `correct` field on it (it
-            # defaults to False in the live path, but duck-typed/replay rows
-            # are not guaranteed to).
-            if _disposition_of(row) == DISPOSITION_TASK_FAILED:
-                return False
-            return bool(row.correct)
 
         infra_failed_count = sum(
             1 for r in results if _disposition_of(r) == DISPOSITION_INFRA_FAILED
@@ -7224,8 +7233,8 @@ class EvalTower:
                 role_qs = [self._with_forced_role(q, role) for q in questions]
                 results = self._eval_batch(role_qs, client, log_every=100, label=f"ev11-{role}")
                 agg = self._aggregate(results, tier=2)
-                scored = [r for r in results if not r.error]
-                correct = sum(1 for r in scored if r.correct)
+                scored = _quality_denominator(results)
+                correct = sum(1 for r in scored if _quality_correct(r))
                 arm_label = f"ev11-math-rebaseline::{role}::seed{int(seed)}::{dataset_sha256[:12]}"
                 # EV-11c: ECE/AUROC are decision-grade ONLY when every scored row
                 # carried real (completion-probability geomean) confidence. The math
@@ -7360,8 +7369,8 @@ class EvalTower:
                 role_qs = [self._with_forced_role(q, role) for q in questions]
                 results = self._eval_batch(role_qs, client, log_every=100, label=f"retry-{role}")
                 agg = self._aggregate(results, tier=2)
-                scored = [r for r in results if not r.error]
-                correct = sum(1 for r in scored if r.correct)
+                scored = _quality_denominator(results)
+                correct = sum(1 for r in scored if _quality_correct(r))
                 cal_real = bool(agg.details.get("confidence_is_real"))
                 per_role[role] = {
                     "role": role,
@@ -7460,8 +7469,8 @@ class EvalTower:
                     if role_qs
                     else []
                 )
-                scored = [r for r in results if not r.error]
-                correct = sum(1 for r in scored if r.correct)
+                scored = _quality_denominator(results)
+                correct = sum(1 for r in scored if _quality_correct(r))
                 agg = self._aggregate(results, tier=2) if results else None
                 cal_real = bool(agg.details.get("confidence_is_real")) if agg else False
                 per_role[role] = {
