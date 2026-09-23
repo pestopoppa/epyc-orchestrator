@@ -386,6 +386,12 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         # 2026-09-15 NIB2-69: numa_mode leads — the ONE lineup the compile and the
         # guard's launch view both evaluate, printed with its provenance.
         "numa_mode",
+        # 2026-09-23 SSU-F4: the shared_with recompute-and-diff runs second, before
+        # the lean compile, so all four restating surfaces (port_map,
+        # role_launch_meta, numa_config, roles.<alias>.model) fail in ONE run
+        # instead of one class per run. It SKIPS when this config declares no
+        # master registry / launch manifest / topology.
+        "shared_with_derivations",
         "lean_registry",
         "descriptors",
         "stack_priors",

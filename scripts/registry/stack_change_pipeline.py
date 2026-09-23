@@ -30,6 +30,11 @@ from scripts.registry.render_stack_summary import (  # noqa: E402
     render_current_stack_summary,
     write_current_stack_summary,
 )
+from scripts.validate.check_shared_with_derivations import (  # noqa: E402
+    SourceError as SharedWithSourceError,
+    check_all as check_shared_with_derivations,
+    load_sources as load_shared_with_sources,
+)
 from scripts.validate.stack_change_guard import (  # noqa: E402
     DEFAULT_ACCEPTED_GAPS,
     DEFAULT_SURFACE_EXCEPTIONS,
@@ -966,6 +971,64 @@ def _update_operator_summary(config: StackChangePipelineConfig) -> PipelineStep:
     )
 
 
+def _shared_with_derivations_step(config: StackChangePipelineConfig) -> PipelineStep:
+    """Recompute the four surfaces that restate `shared_with` and diff them.
+
+    RUNS FIRST, before the lean compile, because every one of these disagreements
+    is visible from the hand-edited sources alone. On 2026-09-22 they surfaced one
+    class per pipeline run -- nine runs, one error each, with the stack down --
+    only because nothing recomputed them until a later stage happened to trip over
+    the copy. `sync_procedure_role_enums` already does this correctly for the fifth
+    surface (the procedure role enums); this is the same move for the other four.
+    """
+    if config.research_registry is None:
+        return PipelineStep(
+            name="shared_with_derivations",
+            status="skipped",
+            details=["no master registry configured for this pipeline config"],
+        )
+    manifest_path = config.repo_root / "orchestration" / "launch_manifest.yaml"
+    topology_path = _topology_path(config)
+    missing = [
+        str(path)
+        for path in (config.research_registry, manifest_path, topology_path)
+        if not path.exists()
+    ]
+    if missing:
+        # A surface this config does not declare is another step's problem. Only a
+        # PRESENT-but-unparseable source is this step's failure.
+        return PipelineStep(
+            name="shared_with_derivations",
+            status="skipped",
+            details=[f"source not present in this config: {path}" for path in missing],
+        )
+    try:
+        sources = load_shared_with_sources(
+            config.research_registry, manifest_path, topology_path
+        )
+        findings = check_shared_with_derivations(sources)
+    except SharedWithSourceError as exc:
+        return PipelineStep(
+            name="shared_with_derivations", status="failed", errors=[str(exc)]
+        )
+    if not findings:
+        return PipelineStep(
+            name="shared_with_derivations",
+            status="ok",
+            details=[
+                "port_map, role_launch_meta, numa_config and roles.<alias>.model all "
+                "recompute from server_mode.*.shared_with"
+            ],
+        )
+    errors = [
+        f"{finding.surface} [{finding.role}] {finding.message} "
+        f"({finding.file}:{finding.line}; found {finding.found}, expected {finding.expected}"
+        + ("; fixable: check_shared_with_derivations.py --fix)" if finding.fixable else ")")
+        for finding in findings
+    ]
+    return PipelineStep(name="shared_with_derivations", status="failed", errors=errors)
+
+
 def _guard_step(
     name: str,
     config: StackChangePipelineConfig,
@@ -1184,6 +1247,7 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
     # which lineup was evaluated and the compile and the guard cannot disagree.
     numa_resolution = resolve_pipeline_numa_mode(config)
     report.steps.append(_numa_mode_step(numa_resolution))
+    report.steps.append(_shared_with_derivations_step(config))
     if config.mode == "check":
         report.steps.append(_lean_registry_step(config, check=True))
         report.steps.append(_check_descriptors(config))

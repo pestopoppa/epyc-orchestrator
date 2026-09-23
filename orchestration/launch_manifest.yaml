@@ -59,6 +59,7 @@ schema_version: launch_manifest.v1
 # guard. `validate_declaration_parity()` asserts the 11 matched rows agree, so
 # the half that IS doubly declared cannot drift.
 port_map:
+  worker: 8070
   frontdoor: 8070          # Full-speed 1×96t (quarters: 8080, 8180, 8280, 8380)
   # 2026-08-01 W1 CUTOVER: coder_escalation LEFT frontdoor's :8070 35B process.
   # It is now an alias on architect_general's :8083 MI210 27B dense Q8 — a
@@ -308,14 +309,24 @@ models:
     # through the launcher; until then this path is informational only — production
     # launcher still uses default LLAMA_SERVER and will fail on gemma4 arch).
     # 2026-06-26 v6 cutover: ORIG base GGUF — old gemma-4-26B-A4B-it-Q4_K_M.gguf garbles on v6.
-    explore: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf
+      # 2026-09-23: the gemma4 path this named was DELETED with the model.
+      # worker_explore is now an ALIAS on frontdoor's Qwen3.6-35B-A3B-MTP process
+      # (server_mode.frontdoor.shared_with), so this pool entry selects nothing at
+      # launch today -- but it named an ABSENT file, which is exactly the shape that
+      # makes a launcher surface lie. Repointed at the artifact the lane actually
+      # resolves to, so the entry stays valid if the pool path is reactivated.
+    explore: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
     fast: "{model_base}/QuantFactory/Qwen2.5-Coder-1.5B-GGUF/Qwen2.5-Coder-1.5B.Q4_K_M.gguf"
 
   # Draft model for MTP speculative decoding on explore worker.
   # gemma4 assistant Q8 — in-house GGUF converted from google/gemma-4-26B-A4B-it-assistant
   # safetensors (no community GGUF existed). 4-layer drafter, 58% acceptance at draft_max=2.
   # 2026-06-26 v6 cutover: v6 MTP head — old -assistant-Q8_0.gguf is the ik gemma4_mtp format, incompatible with v6.
-  explore_draft_model: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
+  # 2026-09-23: the gemma4 v6 MTP head was DELETED with the model. The explore lane
+  # now resolves to frontdoor's Qwen3.6-35B-A3B-MTP artifact, whose MTP head is FUSED
+  # into the same GGUF (mtp_capable: true) rather than living in a separate drafter
+  # file, so there is no external draft model to name here any more.
+  explore_draft_model: null
 
   # Dev-mode tiny model (orchestrator_stack --dev)
   dev_model: Qwen2.5-Coder-0.5B-Instruct-Q8_0.gguf
