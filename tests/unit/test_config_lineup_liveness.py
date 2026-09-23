@@ -389,30 +389,64 @@ def test_runtime_selected_aliases_do_not_fall_back_to_dead_static_ports() -> Non
             assert str(dead_port) not in value
 
 
+def _quarterable_host_and_alias() -> tuple[str, int, list[int], str]:
+    """(host role, full port, sibling ports, one alias on it) — DERIVED.
+
+    The fixture below used to name worker_general and the ports 8072/8082/8182 as
+    literals. The 2026-09-22 cutover moved the worker lane onto frontdoor's process
+    and left worker_general with no NUMA_CONFIG entry at all, so the fixture described
+    a fleet the topology no longer declares — `_selected_server_url_values` could not
+    identify a full instance for a `topology_role` it does not know, and silently
+    dropped the `full:` marker the test exists to protect. Re-pinning to today's ports
+    would guarantee the same breakage at the next lineup change.
+    """
+    from scripts.server import stack_manifest
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    for role in sorted(NUMA_CONFIG):
+        cfg = NUMA_CONFIG[role]
+        instances = cfg.get("instances") or ()
+        full_idx = cfg.get("full_instance_idx")
+        if len(instances) < 2 or full_idx is None:
+            continue
+        meta = stack_manifest.ROLE_LAUNCH_META.get(role) or {}
+        aliases = [a for a in (meta.get("shared_with_first_n") or []) if isinstance(a, str)]
+        if not aliases:
+            continue
+        return (
+            role,
+            instances[full_idx][1],
+            [inst[1] for idx, inst in enumerate(instances) if idx != full_idx],
+            aliases[0],
+        )
+    raise AssertionError(
+        "no multi-instance host role with an alias in the topology — this fixture "
+        "has nothing to exercise and would pass vacuously"
+    )
+
+
 def test_runtime_selected_worker_shape_preserves_full_marker() -> None:
+    host, full_port, sibling_ports, alias = _quarterable_host_and_alias()
+    # The host answers on every instance of its own fleet; the alias here rides all
+    # of them, which is the shape whose `full:` marker is under test. Roles are
+    # listed per row the way the launcher emits them, not keyed off topology_role.
     lineup = [
         {
-            "port": 8072,
-            "roles": ["worker_explore", "worker_general"],
-            "numa_instance": 0,
-            "topology_role": "worker_general",
-        },
-        {
-            "port": 8082,
-            "roles": ["worker_explore"],
-            "numa_instance": 1,
-            "topology_role": "worker_general",
-        },
-        {
-            "port": 8182,
-            "roles": ["worker_explore"],
-            "numa_instance": 2,
-            "topology_role": "worker_general",
-        },
+            "port": port,
+            "roles": [host, alias],
+            "numa_instance": idx,
+            "topology_role": host,
+        }
+        for idx, port in enumerate([full_port, *sibling_ports])
     ]
 
     urls = models._selected_server_url_values(lineup)
 
-    expected = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182"
-    assert urls["worker_general"] == expected
-    assert urls["worker_explore"] == expected
+    expected = "full:" + ",".join(
+        f"http://localhost:{port}" for port in [full_port, *sibling_ports]
+    )
+    assert urls[host] == expected
+    # The alias spans every instance, so it must carry the same marked fleet: the
+    # `full:` prefix is what arms ConcurrencyAwareBackend's full slot, and losing it
+    # silently demotes the whole fleet to an unmarked URL list.
+    assert urls[alias] == expected

@@ -59,6 +59,39 @@ def _alias_hosts(mode: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     return {str(a): str(h) for a, h in (aliases or {}).items()}
 
 
+def _host_roles(mode: str, monkeypatch: pytest.MonkeyPatch) -> set[str]:
+    """DERIVE the host/primary role set from the same producer: every role with a
+    port fleet that is NOT an alias.
+
+    This was a hardcoded {"frontdoor", "worker_general", "ingest_long_context",
+    "vision_escalation"} literal, and three of its four entries had become aliases.
+    The 2026-09-22 cutover made worker_general (with worker_explore / worker_math /
+    toolrunner / worker / worker_summarize) an alias on frontdoor's :8070 process,
+    so the literal asserted HOST agreement about an ALIAS — and the readers then
+    disagreed exactly as they are designed to: the launch views report the instances
+    an alias is TAGGED onto (stack_manifest.py, shared_with_first_n_count), the
+    serving view reports the whole host fleet the alias is actually served from
+    (WP-13 fleet convergence, stack_priors.py ~1241, whose comment records that
+    emitting only the tagged ports serialized worker_math eval traffic on one
+    quarter). [8080] vs [8080, 8180] is that divergence, asserted by the sibling
+    test below as CORRECT. ingest_long_context and vision_escalation are aliases
+    too, and passed only vacuously: their GPU hosts run one instance in every mode.
+
+    Deriving the set also covers every NEW host role automatically, and is strictly
+    wider than the literal it replaces (15 roles, of which the literal named 1).
+    """
+    from src.registry.stack_priors import _stack_manifest_info
+
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", mode)
+    aliases, roles = _stack_manifest_info()
+    alias_names = {str(a) for a in (aliases or {})}
+    return {
+        str(role)
+        for role, record in (roles or {}).items()
+        if record.get("ports") and str(role) not in alias_names
+    }
+
+
 def _stack_change_guard_ports(
     mode: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -120,16 +153,15 @@ def test_stack_numa_readers_agree_on_host_role_ports(
     guard_ports = _stack_change_guard_ports(mode, monkeypatch)
     manifest_ports = _manifest_ports(mode)
 
-    host_roles = {
-        "frontdoor",
-        "worker_general",
-        "ingest_long_context",
-        "vision_escalation",
-    }
+    host_roles = _host_roles(mode, monkeypatch)
+    assert host_roles, (
+        "no host roles derived — the mapping producer returned nothing, so this "
+        "agreement check would pass vacuously"
+    )
     for role in host_roles:
-        assert manifest_ports.get(role) == stack_prior_ports.get(role)
-        assert dashboard_ports.get(role) == stack_prior_ports.get(role)
-        assert guard_ports.get(role) == stack_prior_ports.get(role)
+        assert manifest_ports.get(role) == stack_prior_ports.get(role), role
+        assert dashboard_ports.get(role) == stack_prior_ports.get(role), role
+        assert guard_ports.get(role) == stack_prior_ports.get(role), role
 
 
 @pytest.mark.parametrize("mode", ["full", "quarter", "both"])

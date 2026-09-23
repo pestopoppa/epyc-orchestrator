@@ -197,6 +197,25 @@ def master_server_row(role: str) -> tuple[str | None, dict | None, str]:
     return None, None, "unresolved"
 
 
+def _master_declared_model_path(role: str) -> str | None:
+    """The GGUF path master declares for `role`, through the alias-aware binding.
+
+    `model_path` is the explicit key; rows that carry only `model` spell the path
+    there (as a string, or as `{"path": ...}` for the multimodal rows). A row that
+    declares no path at all returns None -- "not declared" is not "missing file".
+    """
+    _name, row, _binding = master_server_row(role)
+    if not isinstance(row, dict):
+        return None
+    declared = row.get("model_path")
+    if not isinstance(declared, str):
+        model = row.get("model")
+        declared = model.get("path") if isinstance(model, dict) else model
+    if isinstance(declared, str) and declared.strip().startswith("/"):
+        return declared.strip()
+    return None
+
+
 # The master registry's KV-FEASIBILITY GROUP. `n_ctx`, `slots_by_shape` and
 # `kv_quant` are declared together under `server_mode.<role>.serving_shape`
 # because they are not independent: KV bytes are
@@ -1766,28 +1785,39 @@ def validate_model_paths() -> list[str]:
         if not Path(path).exists():
             errors.append(f"[HOT] Worker '{worker_type}': {path}")
 
-    # Draft model for explore worker spec decode
-    if not Path(EXPLORE_DRAFT_MODEL).exists():
+    # Draft model for explore worker spec decode. `models.explore_draft_model` is
+    # NULLABLE by design (launch_manifest.yaml): a NEXTN/MTP lane FUSES its draft head
+    # into the base GGUF, so there is no separate drafter file to validate. `None` means
+    # "no external drafter", not "a missing file". Unguarded this raised
+    # `TypeError: expected str, bytes or os.PathLike object, not NoneType` inside the
+    # `[0.5] Validating model paths` preflight (stack_commands.py), i.e. a non-dev stack
+    # start crashed before launching anything. Every other consumer of the constant
+    # already treats it as nullable (stack_change_guard.py, stack_priors.py,
+    # orchestrator_stack.py); this was the one site that did not.
+    if EXPLORE_DRAFT_MODEL and not Path(EXPLORE_DRAFT_MODEL).exists():
         errors.append(f"[HOT] Explore draft: {EXPLORE_DRAFT_MODEL}")
 
-    # Frontdoor model (swapped to Qwen3.6-35B-A3B Q8 2026-05-04; same file shared by
-    # coder_escalation + worker_summarize via mmap)
-    frontdoor_model = "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf"
-    if not Path(frontdoor_model).exists():
-        errors.append(f"[HOT] frontdoor: {frontdoor_model}")
-
-    # Architect/ingest models
+    # Serving artifacts for the fleet-hosting roles, DERIVED from the row master says
+    # governs each one -- the same binding the compiled priors use.
+    #
+    # 2026-09-23 (SSU-F8). All three were hardcoded literals and all three were wrong:
+    #   frontdoor            named .../Qwen_Qwen3.6-35B-A3B-Q8_0.gguf, NOT the
+    #                        ...-MTP-Q8_0.gguf it actually serves. The file it named
+    #                        happened to exist, so the preflight reported green while
+    #                        validating the wrong artifact.
+    #   architect_general    named .../unsloth/Qwen3.5-122B-A10B-GGUF/
+    #   ingest_long_context  named .../lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/
+    #                        -- both retired directories that no longer exist on disk, so
+    #                        once the EXPLORE_DRAFT_MODEL TypeError above stopped masking
+    #                        this function, the `[0.5] Validating model paths` preflight
+    #                        would have failed a non-dev stack start on two phantom paths.
+    # A role whose master row declares no path is not this check's business; the
+    # declaration-parity guard owns that.
     # 2026-05-06: architect_coding REMOVED (REAP-246B role eliminated; 139 GB freed).
-    architect_models = [
-        ("architect_general", str(_PATHS["model_base"] / "unsloth/Qwen3.5-122B-A10B-GGUF/")),
-        (
-            "ingest_long_context",
-            str(_PATHS["model_base"] / "lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/"),
-        ),
-    ]
-    for role, path in architect_models:
-        if not Path(path).exists():
-            errors.append(f"[HOT] {role}: {path}")
+    for role in ("frontdoor", "architect_general", "ingest_long_context"):
+        declared = _master_declared_model_path(role)
+        if declared and not Path(declared).exists():
+            errors.append(f"[HOT] {role}: {declared}")
 
     # Vision models (VL with multimodal projector)
     for label, path in [

@@ -105,9 +105,12 @@ def test_mlock_roles_derived_from_numa_config() -> None:
     """Every NUMA_CONFIG entry with mlock=True must show up in MLOCK_ROLES."""
     expected = {role for role, cfg in NUMA_CONFIG.items() if cfg.get("mlock")}
     assert MLOCK_ROLES == expected
-    # Sanity: frontdoor and worker_general both have mlock
-    assert "frontdoor" in MLOCK_ROLES
-    assert "worker_general" in MLOCK_ROLES
+    # Non-vacuity: the derivation above is trivially true over an empty set, so the
+    # sanity arm must prove SOMETHING declares mlock. It used to name frontdoor and
+    # worker_general as two literals; the 2026-09-22 cutover made worker_general an
+    # alias with no NUMA_CONFIG entry at all, and the literal then asserted mlock on
+    # a role that declares no topology. A count, not a name.
+    assert MLOCK_ROLES, "no NUMA_CONFIG entry declares mlock — the check is vacuous"
 
 
 def test_numa_config_schema_all_instances_are_three_tuples() -> None:

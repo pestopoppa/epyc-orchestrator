@@ -526,50 +526,99 @@ def test_resolve_slots_is_per_instance_for_a_split_role() -> None:
     the MECHANISM under test — full and half resolve through DIFFERENT shape
     classes, and `declared_slots_by_port` joins that against the topology's ports
     — never moved, and the `.full`/`.half` source suffixes below are what pin it.
+
+    2026-09-23: the ROLE NAMES and PORTS went the same way the slot literals did.
+    `worker_general` (8072/8082/8182) stopped being a launch target of its own
+    when the CPU fleet host role was renamed and the worker lane became an alias
+    set, so the second row of this table named a role with no topology entry and
+    a master row reachable only through `shared_with`. WHICH role is split, WHICH
+    ports it owns and WHICH master row governs it are now all read out of the
+    same three sources the production code reads, so the next lineup move
+    re-points this test instead of rotting it.
     """
-    from scripts.server.stack_manifest import declared_slots_by_port, resolve_slots
+    from scripts.server.stack_manifest import (
+        declared_slots_by_port,
+        master_server_row,
+        resolve_slots,
+    )
+    from scripts.server.stack_numa import NUMA_CONFIG, NUMA_INSTANCE_SHAPE_CLASSES
 
     registry = yaml.safe_load(
         (ROOT / "orchestration" / "model_registry.yaml").read_text()
     )["server_mode"]
 
-    def master_row(launcher_role: str) -> dict:
-        row = registry.get(launcher_role)
-        if not isinstance(row, dict):
-            row = next(
-                cfg for cfg in registry.values() if cfg.get("model_role") == launcher_role
-            )
-        return row
+    def master_row(launcher_role: str) -> tuple[dict, str]:
+        """Resolve through the SAME binding master uses: direct, model_role, shared_with.
 
-    for role, full_port, half_ports in (
-        ("frontdoor", 8070, (8080, 8180)),
-        ("worker_general", 8072, (8082, 8182)),
-    ):
-        by_shape = master_row(role)["serving_shape"]["slots_by_shape"]
-        full_slots, half_slots = by_shape["full"], by_shape["half"]
+        Returning the master role NAME as well is what lets the `source` string be
+        derived instead of spelled out.
+        """
+        name, _row, binding = master_server_row(launcher_role)
+        assert binding != "unresolved", f"master declares nothing for {launcher_role!r}"
+        return registry[name], f"master:{name}/{binding}"
 
-        full = resolve_slots(role, numa_instance=0)
-        assert full.slots == full_slots
-        assert full.source.endswith(".full")
-        for idx in (1, 2):
-            half = resolve_slots(role, numa_instance=idx)
-            assert half.slots == half_slots
-            assert half.source.endswith(".half")
-        assert declared_slots_by_port(role) == {
-            full_port: full_slots,
-            half_ports[0]: half_slots,
-            half_ports[1]: half_slots,
-        }
+    # WHICH role is split is topology, not a literal: any role whose instances do
+    # not all carry the same shape class. Read from stack_numa, the module that
+    # owns the table, so a relocated lane is seen here the same way the launcher
+    # sees it.
+    split_roles = sorted(
+        role
+        for role, classes in NUMA_INSTANCE_SHAPE_CLASSES.items()
+        if len(set(classes)) > 1
+    )
+    assert split_roles, "the topology declares at least one multi-shape role"
+
+    # The mechanism only has teeth where master declares MORE THAN ONE class for
+    # a split role — that is the "two shapes, two answers" case. Assert at least
+    # one role reaches it, so this can never pass vacuously through the fallback
+    # branch alone.
+    multi_class_roles = []
+
+    for role in split_roles:
+        classes = NUMA_INSTANCE_SHAPE_CLASSES[role]
+        ports = [instance[1] for instance in NUMA_CONFIG[role]["instances"]]
+        row, flat_source = master_row(role)
+        by_shape = (row.get("serving_shape") or {}).get("slots_by_shape") or {}
+        if len(set(classes) & set(by_shape)) > 1:
+            multi_class_roles.append(role)
+
+        expected_by_port = {}
+        for idx, shape_class in enumerate(classes):
+            decision = resolve_slots(role, numa_instance=idx)
+            if shape_class in by_shape:
+                # (1) the per-instance answer, tagged with the class it came from.
+                assert decision.slots == by_shape[shape_class]
+                assert decision.source.endswith(f".{shape_class}")
+            else:
+                # (2) a class master does not declare falls through to the flat
+                # compat scalar — documented in `resolve_slots`, and the reason
+                # `slots_by_shape` is optional.
+                assert decision.slots == row["slots"]
+                assert decision.source == flat_source
+            expected_by_port[ports[idx]] = decision.slots
+
+        assert declared_slots_by_port(role) == expected_by_port
+
+    assert multi_class_roles, (
+        "no split role declares two shape classes in master — the per-instance "
+        "branch of resolve_slots would not be exercised at all"
+    )
 
     # A single-shape role has no split and resolves through the flat compat scalar.
-    gpu = resolve_slots("architect_general", numa_instance=0)
-    assert "slots_by_shape" not in (
-        master_row("architect_general").get("serving_shape") or {}
-    )
-    assert (gpu.slots, gpu.source) == (
-        registry["architect_general"]["slots"],
-        "master:architect_general/direct",
-    )
+    flat_roles = []
+    for role, classes in NUMA_INSTANCE_SHAPE_CLASSES.items():
+        _name, row, binding = master_server_row(role)
+        if row is None or binding == "unresolved":
+            continue
+        if len(set(classes)) == 1 and "slots_by_shape" not in (
+            row.get("serving_shape") or {}
+        ):
+            flat_roles.append(role)
+    assert flat_roles, "at least one role resolves through the flat compat scalar"
+    for role in flat_roles:
+        row, flat_source = master_row(role)
+        flat = resolve_slots(role, numa_instance=0)
+        assert (flat.slots, flat.source) == (row["slots"], flat_source)
 
 
 def test_resolve_slots_matches_master_for_every_declared_role() -> None:
@@ -708,28 +757,55 @@ def test_parity_guard_fails_when_a_derived_field_is_redeclared(monkeypatch) -> N
         sm.validate_declaration_parity()
 
 
-def _with_launcher_only_alias(sm, monkeypatch, alias: str, *, role: str = "worker_general"):
+def _launcher_role_bound_to_master(sm) -> str:
+    """A launcher role that master actually governs — DERIVED, never a literal.
+
+    2026-09-23: the previous caller default here was the literal `worker_general`.
+    When the CPU fleet host role was renamed that name left `role_launch_meta`
+    entirely, so the synthetic row below landed on NOTHING, step 3 of the guard
+    never ran, and both tests went vacuous A SECOND TIME — the exact failure the
+    docstring below was written to prevent, minus the assert that would have
+    caught it. Derive the role from the same mapping the guard iterates.
+    """
+    role = next(
+        (r for r in sm._MANIFEST["role_launch_meta"] if sm.master_server_row(r)[1] is not None),
+        None,
+    )
+    assert role is not None, "no launcher role resolves to a master server_mode row"
+    return role
+
+
+def _with_launcher_only_alias(sm, monkeypatch, alias: str, *, role: str | None = None) -> str:
     """Give `role` a SYNTHETIC `launcher_only_aliases` row for the duration of a test.
+
+    Returns the role it attached to, so a caller can name the SAME role in its
+    `parity.exceptions` row and in its master mutation instead of restating one.
 
     The two guards below exercise step 3 of `validate_declaration_parity()`,
     which only runs for roles that declare `launcher_only_aliases`. The live
-    manifest declares none: the sole real one (worker_general/worker_explore) was
-    deleted on 2026-08-02 when the research master started declaring
-    `server_mode.worker.shared_with: [worker_explore, worker_math, toolrunner]`,
-    which made the launcher-side extra redundant. Both tests used to depend on
-    that production row still existing and silently went VACUOUS when it went
-    away — `pytest.raises` then failed loudly, which is how this was found. They
-    are hermetic now, exactly like the sibling
+    manifest declares none: the sole real one was deleted on 2026-08-02 when the
+    research master started declaring the alias itself, which made the
+    launcher-side extra redundant. Both tests used to depend on that production
+    row still existing and silently went VACUOUS when it went away. They are
+    hermetic now, exactly like the sibling
     `test_numa_prefix_taskset_only_when_no_policy` in tests/unit/test_stack_numa.py:
     the branch stays covered without requiring the shipped config to keep a
-    redundant entry alive purely so a unit test has something to assert.
+    redundant entry alive purely so a unit test has something to assert — and the
+    assert below turns "the row landed on nothing" back into a loud failure.
     """
+    role = role or _launcher_role_bound_to_master(sm)
+    assert role in sm._MANIFEST["role_launch_meta"], (
+        f"{role!r} is not a launcher role; the synthetic launcher_only_aliases row "
+        f"would land on nothing and step 3 of the guard would never run"
+    )
     manifest = {**sm._MANIFEST}
     manifest["role_launch_meta"] = {
         name: ({**meta, "launcher_only_aliases": [alias]} if name == role else meta)
         for name, meta in sm._MANIFEST["role_launch_meta"].items()
     }
     monkeypatch.setattr(sm, "_MANIFEST", manifest)
+    assert manifest["role_launch_meta"][role]["launcher_only_aliases"] == [alias]
+    return role
 
 
 def test_parity_guard_fails_on_an_unargued_launcher_only_alias(monkeypatch) -> None:
@@ -752,7 +828,13 @@ def test_parity_guard_fails_on_a_stale_exception(monkeypatch) -> None:
     """When master starts declaring the alias, the exception must be deleted."""
     from scripts.server import stack_manifest as sm
 
-    _with_launcher_only_alias(sm, monkeypatch, "worker_explore")
+    # A SYNTHETIC alias, on a DERIVED role, mutated into the master row that role
+    # actually binds to. Naming a real alias (`worker_explore`), a real launcher
+    # role (`worker_general`) and a real master key (`worker`) pinned this test to
+    # one lineup; all three moved on 2026-09-22 and it stopped raising.
+    alias = "_fixture_shadow_alias"
+    role = _with_launcher_only_alias(sm, monkeypatch, alias)
+    master_name, _master_row, _binding = sm.master_server_row(role)
     monkeypatch.setattr(
         sm,
         "_PARITY",
@@ -761,7 +843,7 @@ def test_parity_guard_fails_on_a_stale_exception(monkeypatch) -> None:
             "exceptions": [
                 {
                     "field": "shared_with",
-                    "launcher_role": "worker_general",
+                    "launcher_role": role,
                     "reason": "fixture: argued at the time it was written",
                 }
             ],
@@ -769,8 +851,8 @@ def test_parity_guard_fails_on_a_stale_exception(monkeypatch) -> None:
     )
     mutated = {
         name: (
-            {**cfg, "shared_with": ["worker_explore", *cfg.get("shared_with", [])]}
-            if name == "worker"
+            {**cfg, "shared_with": [alias, *(cfg.get("shared_with") or [])]}
+            if name == master_name
             else cfg
         )
         for name, cfg in sm.MASTER_SERVER_MODE.items()

@@ -283,6 +283,12 @@ def _get_default_stack_priors_path() -> str:
 # was single-instance). A stale port here is not cosmetic: dispatch fails
 # OPEN on a port it cannot resolve to a topology index, so an unknown
 # endpoint yields NO region lock rather than an error.
+# GATED SURFACE (SSU-F8, 2026-09-23). This table is the SIXTH surface that restates
+# `server_mode.<host>.shared_with`, and the only one that used to be unwired -- which is
+# why it is the one that rotted. `scripts/validate/check_shared_with_derivations.py` now
+# RECOMPUTES each row from the master registry (`server_mode.<host>.port` + `numa_ports`)
+# and diffs it. Do not hand-edit a row to today's ports: move the role in the registry,
+# run the checker, and copy the value it prints as `expected`.
 _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
     "frontdoor": (
         "full:http://localhost:8070,http://localhost:8080,"
@@ -293,13 +299,20 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
     # 27B is one MI210 server, not a 1-full-plus-2-halves CPU lineup, so the
     # "full:" multi-URL form would advertise ports that do not exist.
     "coder_escalation": "http://localhost:8083",
+    # 2026-09-22 CUTOVER (row corrected 2026-09-23, SSU-F8): the worker lane
+    # -- worker_general, worker_math, toolrunner -- left its own :8072/:8082/:8182
+    # server and became ALIASES on frontdoor's :8070 process
+    # (server_mode.frontdoor.shared_with). The five wired surfaces were updated at the
+    # cutover; these three rows were not, and kept resolving to a retired fleet in
+    # exactly the degraded mode this table exists to serve. Value = frontdoor's, by
+    # derivation and not by copy.
     "worker_general": (
-        "full:http://localhost:8072,http://localhost:8082,"
-        "http://localhost:8182"
+        "full:http://localhost:8070,http://localhost:8080,"
+        "http://localhost:8180"
     ),
     "worker_math": (
-        "full:http://localhost:8072,http://localhost:8082,"
-        "http://localhost:8182"
+        "full:http://localhost:8070,http://localhost:8080,"
+        "http://localhost:8180"
     ),
     # 2026-08-03: RESTORED. `ServerURLsConfig.toolrunner` used to ask for the
     # literal "worker_general"; the 2026-08-01 W1 cutover repointed it at its OWN
@@ -314,8 +327,8 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
     # below already warns about. Value mirrors worker_general, its shared process,
     # which is byte-identical to the pre-cutover delegation.
     "toolrunner": (
-        "full:http://localhost:8072,http://localhost:8082,"
-        "http://localhost:8182"
+        "full:http://localhost:8070,http://localhost:8080,"
+        "http://localhost:8180"
     ),
     "worker_vision": "http://localhost:8086",
     "vision_escalation": "http://localhost:8086",  # 2026-08-01 W1: alias, same process (was :8087)
@@ -323,10 +336,12 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
     "worker_summarize": "full:http://localhost:8070,http://localhost:8080,http://localhost:8180",  # frontdoor-fleet alias, parity-guarded
     "architect_general": "http://localhost:8083",
     "architect_critic": "http://localhost:8074",  # NEW 2026-08-01 (W1): the 122B on CPU
-    "ingest_long_context": (
-        "full:http://localhost:8085,http://localhost:8185,"
-        "http://localhost:8285"
-    ),
+    # 2026-09-23 (SSU-F8): ingest_long_context is an alias on architect_general's
+    # single GPU process (server_mode.architect_general.shared_with), not a three-
+    # instance CPU fleet of its own. The :8085/:8185/:8285 fleet this row named was
+    # retired with the role's own server; recomputed from its host it is the bare
+    # :8083 the host declares. Found by the sixth-surface check, not by a reader.
+    "ingest_long_context": "http://localhost:8083",
     "api_url": "http://localhost:8000",
     "ocr_server": "http://localhost:9001",
     "vision_api": "http://localhost:8000/v1/vision/analyze",
@@ -721,7 +736,23 @@ def _selected_server_url_values(selected_servers: list[dict[str, Any]] | None) -
             if port in seen:
                 continue
             seen.add(port)
-            cfg = NUMA_CONFIG.get(canonical_role) if isinstance(NUMA_CONFIG, dict) else None
+            # NUMA_CONFIG is keyed by the role that OWNS the topology -- an alias
+            # launches no server and therefore has no entry, which is the invariant
+            # `check_shared_with_derivations` enforces on stack_topology.yaml. Looking
+            # the alias up directly always missed, so `is_full` was False for every
+            # port of every alias and the `full:` marker (which arms
+            # ConcurrencyAwareBackend's full slot) could never be emitted for one.
+            # Harmless while the worker lane hosted its own fleet; a silent demotion
+            # since 2026-09-22, when the lane became aliases. The runtime-facts writer
+            # already records the owning role per server row as `topology_role`
+            # (scripts/server/runtime_facts_manifest.py); this reads it instead of
+            # re-deriving it. Falls back to the role's own name when absent, so a row
+            # without the key behaves exactly as before.
+            topology_role = server.get("topology_role")
+            lookup_role = (
+                topology_role if isinstance(topology_role, str) and topology_role else canonical_role
+            )
+            cfg = NUMA_CONFIG.get(lookup_role) if isinstance(NUMA_CONFIG, dict) else None
             full_idx = cfg.get("full_instance_idx") if isinstance(cfg, dict) else None
             is_full = (
                 isinstance(full_idx, int)

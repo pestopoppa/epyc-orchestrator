@@ -18,10 +18,27 @@ with the stack down.
     stack_topology.yaml   numa_config.<role>             an alias must have none
     orchestration/procedures/*.yaml role enums           the live role set
     model_registry.yaml   roles.<alias>.model            must equal the host's artifact
+    src/config/models.py  _LEGACY_SERVER_URL_FALLBACKS   which URL fleet a role dials
 
 The fourth is ALREADY solved correctly by ``scripts/registry/sync_procedure_role_enums.py``
-(it regenerates from the compiled priors). This module does the other four, in the shape
+(it regenerates from the compiled priors). This module does the other five, in the shape
 that one solves them: derive from the source, diff, report the line and the expected value.
+
+THE SIXTH SURFACE (SSU-F8, 2026-09-23). ``_LEGACY_SERVER_URL_FALLBACKS`` is the
+last-resort literal table that ``models._server_url_default()`` ENDS IN -- a bare
+subscript, no ``.get``, no default. It is reached in exactly the degraded mode it exists
+to serve: priors unreadable, no runtime facts, fresh checkout, bootstrap. It was the one
+surface of the six NOT wired into this checker, and it is the one that rotted: the
+2026-09-22 cutover moved worker_general / worker_math / toolrunner onto frontdoor's
+:8070 process and all three rows kept naming the retired :8072 fleet, so in the degraded
+mode those roles resolved to a fleet with nothing listening. It read correct only because
+live runtime facts win before the table is ever reached. The five wired surfaces did not
+rot; the unwired one did, which is the whole argument for wiring it.
+
+The invariant is the same as every other surface here: a role's fallback URL is a
+FUNCTION of its HOST's declared fleet, so it is RECOMPUTED from ``server_mode.<host>``
+(``port`` + ``numa_ports``) and diffed -- never compared literal-to-literal, and never
+repinned to today's ports.
 
 SOURCE OF TRUTH is the MASTER registry in epyc-inference-research -- the hand-edited file
 a stack change touches FIRST -- not the lean copy. ``stack_manifest.validate_declaration_parity``
@@ -39,6 +56,7 @@ Exit codes: 0 clean, 1 findings, 2 usage / unreadable input.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
@@ -54,8 +72,14 @@ DEFAULT_MASTER_REGISTRY = Path(
 )
 DEFAULT_LAUNCH_MANIFEST = REPO_ROOT / "orchestration" / "launch_manifest.yaml"
 DEFAULT_STACK_TOPOLOGY = REPO_ROOT / "orchestration" / "stack_topology.yaml"
+DEFAULT_MODELS_PY = REPO_ROOT / "src" / "config" / "models.py"
 
-# Surfaces this tool may rewrite. The master registry is deliberately absent.
+# The module-level dict in DEFAULT_MODELS_PY that restates the fleet URLs.
+SERVER_URL_FALLBACK_TABLE = "_LEGACY_SERVER_URL_FALLBACKS"
+
+# Surfaces this tool may rewrite. The master registry is deliberately absent, and so is
+# models.py: a hand-annotated table whose comments carry cutover history is not something
+# a line-rewriter should touch. Its findings are reported MANUAL with the exact value.
 FIXABLE_FILES = {"launch_manifest.yaml", "stack_topology.yaml"}
 
 
@@ -147,6 +171,80 @@ def _load(path: Path) -> tuple[dict[str, Any], YamlLines, str]:
     return data, YamlLines(text, path), text
 
 
+def load_server_url_fallbacks(path: Path) -> tuple[dict[str, str], dict[str, int]]:
+    """``{role: url}`` and ``{role: 1-based line}`` for the models.py fallback table.
+
+    Parsed with ``ast`` rather than imported: ``src.config.models`` pulls in the whole
+    config stack, and a checker that must run on an uncompiled tree cannot depend on
+    that importing cleanly. Adjacent string literals are folded by the parser, so the
+    parenthesised multi-line ``"full:...," "http://..."`` rows read back as one string.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SourceError(f"cannot read {path}: {exc}") from exc
+    try:
+        tree = ast.parse(text, filename=str(path))
+    except SyntaxError as exc:  # pragma: no cover - malformed input
+        raise SourceError(f"{path}: {exc}") from exc
+
+    node: ast.Dict | None = None
+    for stmt in tree.body:
+        targets: list[ast.expr] = []
+        if isinstance(stmt, ast.Assign):
+            targets = list(stmt.targets)
+        elif isinstance(stmt, ast.AnnAssign):
+            targets = [stmt.target]
+        if not any(
+            isinstance(t, ast.Name) and t.id == SERVER_URL_FALLBACK_TABLE for t in targets
+        ):
+            continue
+        value = stmt.value
+        if isinstance(value, ast.Dict):
+            node = value
+        break
+    if node is None:
+        raise SourceError(
+            f"{path}: no module-level {SERVER_URL_FALLBACK_TABLE} dict literal — the "
+            f"sixth shared_with surface cannot be recomputed"
+        )
+
+    values: dict[str, str] = {}
+    lines: dict[str, int] = {}
+    for key_node, value_node in zip(node.keys, node.values):
+        if key_node is None:  # ``**spread`` — not a literal row
+            continue
+        try:
+            key = ast.literal_eval(key_node)
+            val = ast.literal_eval(value_node)
+        except (ValueError, SyntaxError):
+            continue
+        if isinstance(key, str) and isinstance(val, str):
+            values[key] = val
+            lines[key] = key_node.lineno
+    return values, lines
+
+
+def fleet_url(cfg: dict[str, Any]) -> str | None:
+    """The URL a role's OWN server fleet answers on, recomputed from its registry row.
+
+    The wire form the operative layer emits: a single instance is bare, a multi-instance
+    fleet is the ``full:``-prefixed comma list with the full instance first. Reproduces
+    every row this table already gets right (frontdoor, architect_general, worker_vision,
+    architect_critic), which is what makes a disagreement evidence of drift rather than
+    of a second, differently-shaped renderer.
+    """
+    port = cfg.get("port")
+    if port is None:
+        return None
+    ports: list[Any] = [port]
+    for extra in cfg.get("numa_ports") or []:
+        if extra not in ports:
+            ports.append(extra)
+    urls = [f"http://localhost:{p}" for p in ports]
+    return urls[0] if len(urls) == 1 else "full:" + ",".join(urls)
+
+
 @dataclass
 class Sources:
     master: dict[str, Any]
@@ -158,6 +256,27 @@ class Sources:
     topology: dict[str, Any]
     topology_lines: YamlLines
     topology_path: Path
+    # Sixth surface. OPTIONAL by construction: callers that hand this checker a
+    # synthetic three-file stack (the unit fixtures) have no models.py to recompute
+    # against, and a surface with no source declares no findings rather than diffing a
+    # fixture registry against the real repo's table.
+    models_path: Path | None = None
+    fallbacks: dict[str, str] = field(default_factory=dict)
+    fallback_lines: dict[str, int] = field(default_factory=dict)
+
+    def attach_models_py(self, models_py: Path | None) -> "Sources":
+        """Load the sixth surface onto an already-loaded Sources.
+
+        SEPARATE from `load_sources` on purpose: callers (and the SSU-F5 standing
+        regression, which substitutes a moved registry) bind `load_sources` as a
+        THREE-argument function, and widening that call would break them. Attaching
+        afterwards leaves every existing call site and stub untouched.
+        """
+        if models_py is None:
+            return self
+        self.models_path = models_py
+        self.fallbacks, self.fallback_lines = load_server_url_fallbacks(models_py)
+        return self
 
     @property
     def server_mode(self) -> dict[str, dict[str, Any]]:
@@ -184,11 +303,17 @@ class Sources:
         return {k: v for k, v in raw.items() if isinstance(v, dict)}
 
 
-def load_sources(master: Path, manifest: Path, topology: Path) -> Sources:
+def load_sources(
+    master: Path, manifest: Path, topology: Path, models_py: Path | None = None
+) -> Sources:
+    """Load the declared sources. ``models_py`` is keyword-defaulted on purpose: every
+    existing caller passes three positional paths and must keep working unchanged."""
     m, ml, _ = _load(master)
     lm, lml, _ = _load(manifest)
     st, stl, _ = _load(topology)
-    return Sources(m, ml, master, lm, lml, manifest, st, stl, topology)
+    return Sources(m, ml, master, lm, lml, manifest, st, stl, topology).attach_models_py(
+        models_py
+    )
 
 
 @dataclass
@@ -681,12 +806,61 @@ def check_role_models(sources: Sources, d: Derivation) -> list[Finding]:
     return findings
 
 
+def check_server_url_fallbacks(sources: Sources, d: Derivation) -> list[Finding]:
+    """`_LEGACY_SERVER_URL_FALLBACKS[role]` restates the fleet URL of role's HOST.
+
+    Scope: every role the registry places in the alias graph — hosts and aliases alike —
+    that ALSO carries its own literal here. A role with no literal restates nothing and
+    is not a finding: the table is not required to cover the whole lineup, only to be
+    right about what it does cover. A role outside the alias graph (`worker_fast`,
+    `api_url`, `ocr_server`, the vision endpoints) has no `shared_with` relationship to
+    recompute and is out of this surface's scope by definition.
+    """
+    if sources.models_path is None:
+        return []
+    findings: list[Finding] = []
+    sm = sources.server_mode
+    fb = sources.fallbacks
+    for role in sorted(d.aliases | d.hosts):
+        actual = fb.get(role)
+        if actual is None:
+            continue
+        host = d.alias_to_host.get(role, role)
+        expected = fleet_url(sm.get(host) or {})
+        if expected is None or actual == expected:
+            continue
+        relation = (
+            f"is an alias on {host!r}'s process (server_mode.{host}.shared_with)"
+            if host != role
+            else f"hosts {d.host_to_aliases.get(role, [])}"
+        )
+        findings.append(
+            Finding(
+                surface=f"models.py {SERVER_URL_FALLBACK_TABLE}",
+                role=role,
+                file=str(sources.models_path),
+                line=sources.fallback_lines.get(role),
+                found=actual,
+                expected=expected,
+                message=(
+                    f"last-resort URL for role {role!r}: it {relation}, whose declared "
+                    f"fleet is server_mode.{host}.port + numa_ports. "
+                    f"`_server_url_default` ENDS in a bare subscript of this table, so a "
+                    f"stale row resolves this role to a fleet with nothing listening in "
+                    f"exactly the degraded mode the table exists to serve"
+                ),
+            )
+        )
+    return findings
+
+
 CHECKS = (
     check_alias_of_coherence,
     check_port_map,
     check_role_launch_meta,
     check_numa_config,
     check_role_models,
+    check_server_url_fallbacks,
 )
 
 
@@ -809,6 +983,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--master-registry", type=Path, default=DEFAULT_MASTER_REGISTRY)
     parser.add_argument("--launch-manifest", type=Path, default=DEFAULT_LAUNCH_MANIFEST)
     parser.add_argument("--stack-topology", type=Path, default=DEFAULT_STACK_TOPOLOGY)
+    parser.add_argument("--models-py", type=Path, default=DEFAULT_MODELS_PY)
     parser.add_argument("--check", action="store_true", help="report only (the default)")
     parser.add_argument(
         "--fix",
@@ -821,7 +996,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         sources = load_sources(
             args.master_registry, args.launch_manifest, args.stack_topology
-        )
+        ).attach_models_py(args.models_py)
         findings = check_all(sources)
     except SourceError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -832,7 +1007,7 @@ def main(argv: list[str] | None = None) -> int:
         applied, _ = apply_fixes(sources, findings)
         sources = load_sources(
             args.master_registry, args.launch_manifest, args.stack_topology
-        )
+        ).attach_models_py(args.models_py)
         findings = check_all(sources)
 
     if args.json:
@@ -852,8 +1027,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FIXED  {line}")
     if not findings:
         print(
-            "shared_with derivations: OK — port_map, role_launch_meta, numa_config and "
-            "roles.<alias>.model all agree with server_mode.*.shared_with"
+            "shared_with derivations: OK — port_map, role_launch_meta, numa_config, "
+            "roles.<alias>.model and _LEGACY_SERVER_URL_FALLBACKS all agree with "
+            "server_mode.*.shared_with"
         )
         return 0
     print(

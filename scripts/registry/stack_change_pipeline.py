@@ -972,14 +972,19 @@ def _update_operator_summary(config: StackChangePipelineConfig) -> PipelineStep:
 
 
 def _shared_with_derivations_step(config: StackChangePipelineConfig) -> PipelineStep:
-    """Recompute the four surfaces that restate `shared_with` and diff them.
+    """Recompute the five surfaces that restate `shared_with` and diff them.
 
     RUNS FIRST, before the lean compile, because every one of these disagreements
     is visible from the hand-edited sources alone. On 2026-09-22 they surfaced one
     class per pipeline run -- nine runs, one error each, with the stack down --
     only because nothing recomputed them until a later stage happened to trip over
     the copy. `sync_procedure_role_enums` already does this correctly for the fifth
-    surface (the procedure role enums); this is the same move for the other four.
+    surface (the procedure role enums); this is the same move for the other five.
+
+    The fifth of those five is `src/config/models.py::_LEGACY_SERVER_URL_FALLBACKS`
+    (SSU-F8): the last-resort URL table `_server_url_default` ends in a bare subscript
+    of. It is passed explicitly because `load_shared_with_sources` defaults it OFF --
+    a caller handing the checker a synthetic stack has no models.py to recompute.
     """
     if config.research_registry is None:
         return PipelineStep(
@@ -989,6 +994,12 @@ def _shared_with_derivations_step(config: StackChangePipelineConfig) -> Pipeline
         )
     manifest_path = config.repo_root / "orchestration" / "launch_manifest.yaml"
     topology_path = _topology_path(config)
+    # models.py is OPTIONAL to this step, unlike the three declared surfaces: a config
+    # whose repo_root holds only orchestration/ (the check-mode fixtures do) declares no
+    # sixth surface, and an absent surface is another step's problem, not a failure here.
+    models_path = config.repo_root / "src" / "config" / "models.py"
+    if not models_path.exists():
+        models_path = None
     missing = [
         str(path)
         for path in (config.research_registry, manifest_path, topology_path)
@@ -1005,7 +1016,7 @@ def _shared_with_derivations_step(config: StackChangePipelineConfig) -> Pipeline
     try:
         sources = load_shared_with_sources(
             config.research_registry, manifest_path, topology_path
-        )
+        ).attach_models_py(models_path)
         findings = check_shared_with_derivations(sources)
     except SharedWithSourceError as exc:
         return PipelineStep(
@@ -1016,8 +1027,9 @@ def _shared_with_derivations_step(config: StackChangePipelineConfig) -> Pipeline
             name="shared_with_derivations",
             status="ok",
             details=[
-                "port_map, role_launch_meta, numa_config and roles.<alias>.model all "
-                "recompute from server_mode.*.shared_with"
+                "port_map, role_launch_meta, numa_config, roles.<alias>.model and "
+                "_LEGACY_SERVER_URL_FALLBACKS all recompute from "
+                "server_mode.*.shared_with"
             ],
         )
     errors = [

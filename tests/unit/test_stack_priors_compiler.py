@@ -49,26 +49,135 @@ def _write_yaml(path: Path, data: dict) -> Path:
     return path
 
 
+# ---------------------------------------------------------------------------
+# Lineup derivation helpers (SSU-F5)
+# ---------------------------------------------------------------------------
+# THE DEFECT THESE CLOSE (session friction audit 2026-09-22 §2, *restated
+# derivation*): a fact that is a function of ``server_mode.<host>.shared_with``
+# was copied into these fixtures as a PORT LITERAL. The 2026-09-22 lineup change
+# moved worker_general / worker_explore / worker_math / toolrunner off their own
+# :8072 server onto frontdoor's :8070 process, and eleven tests in this file went
+# red for a reason unrelated to anything they assert. Re-pinning 8072 -> 8070
+# would make today green and guarantee the identical breakage at the next lineup
+# change -- that is the defect re-applied, not the fix.
+#
+# So every port expectation below is RECOMPUTED from the same declarations the
+# launcher reads, then diffed against the compiler's projection:
+#
+#   launch_manifest.yaml  port_map          -> stack_manifest.PORT_MAP
+#   launch_manifest.yaml  role_launch_meta  -> stack_manifest.ROLE_LAUNCH_META
+#                                              (its ``shared_with_first_n`` is
+#                                              itself DERIVED from the registry's
+#                                              ``server_mode.<host>.shared_with``)
+#   stack_topology.yaml   numa_config       -> stack_numa.NUMA_CONFIG
+#
+# They read the LIVE module attributes rather than a snapshot, so they follow a
+# real lineup change AND the monkeypatched fleets some tests below install.
+#
+# When a literal genuinely IS the thing under test (a deliberate historical pin),
+# it is kept and the comment says WHY, so the next reader does not "modernise" it.
+
+
+def _lineup_alias_map() -> dict[str, str]:
+    """alias -> host, recomputed from the launcher's own declaration."""
+    from scripts.server import stack_manifest
+
+    out: dict[str, str] = {}
+    for host, meta in stack_manifest.ROLE_LAUNCH_META.items():
+        if not isinstance(meta, dict):
+            continue
+        for alias in meta.get("shared_with_first_n") or []:
+            if isinstance(alias, str):
+                out[alias] = str(host)
+    return out
+
+
+def _lineup_host_of(role: str) -> str:
+    """The role whose llama-server process ``role`` answers on (itself if host)."""
+    return _lineup_alias_map().get(role, role)
+
+
+def _lineup_is_alias(role: str) -> bool:
+    return role in _lineup_alias_map()
+
+
+def _lineup_launch_mode(role: str) -> str | None:
+    """The launch mode of the process ``role`` rides (``worker_pool``, ...)."""
+    from scripts.server import stack_manifest
+
+    meta = stack_manifest.ROLE_LAUNCH_META.get(_lineup_host_of(role))
+    return (meta or {}).get("mode") if isinstance(meta, dict) else None
+
+
+def _declared_fleet_ports(role: str, numa_mode: str = "full") -> list[int]:
+    """The serving fleet ``role`` must resolve to, from the DECLARATIONS.
+
+    Derived from stack_topology's ``numa_config`` (instances + full_instance_idx)
+    for the resolved HOST, falling back to launch_manifest's ``port_map`` for a
+    role with no NUMA wiring. Deliberately computed from the declaration rather
+    than from ``stack_manifest.HOT_SERVERS``/``WARM_SERVERS``, which is the
+    structure the code under test consumes -- a recompute, not a second copy.
+
+    ``numa_mode`` follows ``stack_manifest._filter_by_numa_mode``: ``full`` keeps
+    only the full instance, ``both`` keeps the whole fleet, anything else (the
+    legacy ``quarter`` token) keeps the sub-full siblings.
+    """
+    from scripts.server import stack_manifest
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    host = _lineup_host_of(role)
+    cfg = NUMA_CONFIG.get(host) or {}
+    instances = list(cfg.get("instances") or [])
+    full_idx = cfg.get("full_instance_idx")
+
+    if len(instances) <= 1 or not isinstance(full_idx, int):
+        ports = [inst[1] for inst in instances]
+        if not ports:
+            declared = stack_manifest.PORT_MAP.get(host)
+            ports = [declared] if isinstance(declared, int) else []
+        return sorted({p for p in ports if isinstance(p, int)})
+
+    if numa_mode == "both":
+        keep = range(len(instances))
+    elif numa_mode == "full":
+        keep = [full_idx]
+    else:
+        keep = [i for i in range(len(instances)) if i != full_idx]
+    return sorted({instances[i][1] for i in keep})
+
+
+def _declared_primary_port(role: str, numa_mode: str = "full") -> int | None:
+    ports = _declared_fleet_ports(role, numa_mode)
+    return ports[0] if ports else None
+
+
+def _declared_url(role: str, numa_mode: str = "full") -> str | None:
+    port = _declared_primary_port(role, numa_mode)
+    return f"http://localhost:{port}" if isinstance(port, int) else None
+
+
+
 def test_stack_manifest_info_defaults_to_launcher_full_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
 
     _aliases, roles = _stack_manifest_info()
 
-    assert roles["frontdoor"]["url"] == "http://localhost:8070"
-    assert roles["frontdoor"]["ports"] == [8070]
-    # 2026-08-01 W1 cutover: coder_escalation was http://localhost:8070 (alias on
-    # frontdoor's 35B CPU process); it is now an alias on architect_general's
-    # :8083 MI210 Qwen3.6-27B process.
-    assert roles["coder_escalation"]["url"] == "http://localhost:8083"
-    assert roles["worker_summarize"]["url"] == "http://localhost:8070"
-    assert roles["worker_general"]["url"] == "http://localhost:8072"
-    assert roles["worker_general"]["ports"] == [8072]
-    assert roles["ingest_long_context"]["url"] == "http://localhost:8085"
-    # 2026-08-01 W1 cutover: vision_escalation was its own server on
-    # http://localhost:8087; it is now an alias on worker_vision's :8086 process
-    # (port 8087 retired). The requirements-equality assertion below is what makes
-    # it an alias rather than a second VL model, so it is kept verbatim.
-    assert roles["vision_escalation"]["url"] == "http://localhost:8086"
+    # SSU-F5: every port here is DERIVED (see the helpers above). The literals
+    # that stood in their place were restatements of `shared_with` + `port_map`
+    # and went red at the 2026-09-22 lineup change; these follow it. Each role is
+    # asserted against BOTH its declared fleet and the host it resolves to, so an
+    # alias that silently stops riding its host is still caught.
+    for role in (
+        "frontdoor",
+        "coder_escalation",
+        "worker_summarize",
+        "worker_general",
+        "ingest_long_context",
+        "vision_escalation",
+    ):
+        assert roles[role]["ports"] == _declared_fleet_ports(role), role
+        assert roles[role]["url"] == _declared_url(role), role
+        assert roles[role]["ports"] == roles[_lineup_host_of(role)]["ports"], role
     assert (
         roles["vision_escalation"]["launch"]["requirements"]
         == roles["worker_vision"]["launch"]["requirements"]
@@ -86,14 +195,18 @@ def test_stack_manifest_info_can_compile_explicit_both_mode(
 
     _aliases, roles = _stack_manifest_info()
 
-    assert roles["frontdoor"]["url"] == "http://localhost:8070"
-    # Half fleet: full + 2 halves. Was [8070, 8080, 8180, 8280, 8380] (full + 4
-    # quarters) before the 2026-07-30 quarter retirement in stack_numa.py; asserted
-    # against the current lineup as of the 2026-08-01 W1 cutover sweep.
-    assert roles["frontdoor"]["ports"] == [8070, 8080, 8180]
-    assert roles["worker_general"]["url"] == "http://localhost:8072"
-    # Was [8072, 8082, 8182, 8282, 8382] (full + 4 quarters); now full + 2 halves.
-    assert roles["worker_general"]["ports"] == [8072, 8082, 8182]
+    # SSU-F5: DERIVED from numa_config (full instance + sub-full siblings) rather
+    # than pinned. The literals here have already been rewritten twice by topology
+    # events -- the 2026-07-30 quarter retirement ([8070, 8080, 8180, 8280, 8380]
+    # -> full + 2 halves) and the 2026-09-22 lineup change -- which is the whole
+    # argument for computing them.
+    for role in ("frontdoor", "worker_general"):
+        assert roles[role]["ports"] == _declared_fleet_ports(role, "both"), role
+        assert roles[role]["url"] == _declared_url(role, "both"), role
+    # `both` must be a strict superset of `full`: the full instance plus siblings.
+    assert set(_declared_fleet_ports("frontdoor", "both")) > set(
+        _declared_fleet_ports("frontdoor", "full")
+    )
 
 
 def test_alias_roles_inherit_host_full_fleet_ports(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,30 +217,53 @@ def test_alias_roles_inherit_host_full_fleet_ports(monkeypatch: pytest.MonkeyPat
 
     _aliases, roles = _stack_manifest_info()
 
-    # Host roles keep their own fleet + primary port/url (unchanged by the fix).
-    # Fleets were full + 4 quarters ([...8282, 8382] / [...8280, 8380]) until the
-    # 2026-07-30 quarter retirement; they are now full + 2 halves.
-    assert roles["worker_general"]["ports"] == [8072, 8082, 8182]
-    assert roles["worker_general"]["port"] == 8072
-    assert roles["worker_general"]["url"] == "http://localhost:8072"
-    assert roles["frontdoor"]["ports"] == [8070, 8080, 8180]
-    assert roles["frontdoor"]["port"] == 8070
+    # SSU-F5: the property under test is a RELATION (alias rides host), so it is
+    # asserted as one. It used to be spelled as three pairs of port literals --
+    # worker_general [8072, 8082, 8182] as a HOST, coder_escalation -> 8083,
+    # worker_summarize -> frontdoor -- which meant each lineup change rewrote the
+    # test instead of exercising it. worker_general is an ALIAS since 2026-09-22
+    # and the relation still holds, unedited.
+    alias_map = _lineup_alias_map()
+    assert alias_map, "no alias resolves at all: the lineup source is unreadable"
 
-    # Aliases now inherit the FULL host fleet (previously a single quarter).
-    assert roles["worker_math"]["ports"] == roles["worker_general"]["ports"]
-    assert roles["toolrunner"]["ports"] == roles["worker_general"]["ports"]
-    assert roles["worker_explore"]["ports"] == roles["worker_general"]["ports"]
-    # 2026-08-01 W1 cutover: coder_escalation's host changed frontdoor -> architect_general.
-    assert roles["coder_escalation"]["ports"] == roles["architect_general"]["ports"]
-    assert roles["worker_summarize"]["ports"] == roles["frontdoor"]["ports"]
+    # Every host keeps its own declared fleet, and its primary is that fleet's
+    # first port.
+    for host in sorted(set(alias_map.values())):
+        assert roles[host]["ports"] == _declared_fleet_ports(host, "both"), host
+        assert roles[host]["port"] == _declared_primary_port(host, "both"), host
 
-    # Alias primary port/url still resolves to the host's primary (first) port.
-    assert roles["worker_math"]["port"] == 8072
-    assert roles["worker_math"]["url"] == "http://localhost:8072"
-    # 2026-08-01 W1 cutover: was http://localhost:8070 / host "frontdoor".
-    assert roles["coder_escalation"]["url"] == "http://localhost:8083"
-    assert _aliases["worker_math"] == "worker_general"
-    assert _aliases["coder_escalation"] == "architect_general"
+    # Every alias inherits its host's WHOLE fleet (previously a single quarter),
+    # and its primary port/url resolve to the host's primary.
+    for alias, host in sorted(alias_map.items()):
+        assert roles[alias]["ports"] == roles[host]["ports"], alias
+        assert roles[alias]["port"] == roles[host]["port"], alias
+        assert roles[alias]["url"] == roles[host]["url"], alias
+        assert _aliases[alias] == host, alias
+
+    # Recompute-and-diff across the repo boundary: the launcher's alias map must
+    # agree with the one derived from the registry's own `server_mode.*.shared_with`.
+    # Reuses the resolver in scripts/validate/check_shared_with_derivations.py so
+    # there is ONE implementation of "which server does this role resolve to".
+    from scripts.validate.check_shared_with_derivations import (
+        DEFAULT_LAUNCH_MANIFEST,
+        DEFAULT_STACK_TOPOLOGY,
+        derive as _derive_shared_with,
+        load_sources as _load_lineup_sources,
+    )
+
+    _lean_registry = (
+        Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
+    )
+    _declared_aliases = _derive_shared_with(
+        _load_lineup_sources(
+            _lean_registry, DEFAULT_LAUNCH_MANIFEST, DEFAULT_STACK_TOPOLOGY
+        )
+    ).alias_to_host
+    for alias, host in alias_map.items():
+        # `.get(alias, host)` tolerates a launcher_only_alias (a name the launcher
+        # carries with a declared parity exception); a name the registry DOES
+        # declare must agree exactly.
+        assert _declared_aliases.get(alias, host) == host, alias
 
 
 def test_serving_record_projects_alias_host_fleet_full_url() -> None:
@@ -186,18 +322,24 @@ def test_regenerated_worker_math_url_byte_equals_fix_a_delegated_value(
     )
     regenerated = stack_prior_serving_url_value(serving)
 
-    fix_a_worker_math = _LEGACY_SERVER_URL_FALLBACKS["worker_math"]
-    assert regenerated == fix_a_worker_math
-    # worker_math delegates its URL default to worker_general's fleet; the two
-    # legacy literals are byte-identical (commit 89748805), so the generated
-    # serving URL matches whichever the operative layer resolves.
-    assert fix_a_worker_math == _LEGACY_SERVER_URL_FALLBACKS["worker_general"]
-    # Fleet literal tracks the live lineup: was
-    # "...8182,http://localhost:8282,http://localhost:8382" (full + 4 quarters)
-    # before the 2026-07-30 quarter retirement; now full + 2 halves.
-    assert regenerated == (
-        "full:http://localhost:8072,http://localhost:8082,http://localhost:8182"
+    # SSU-F5: worker_math has no URL of its own -- it DELEGATES to whichever role
+    # hosts its process, which is the entire point of "delegated value" in this
+    # test's name. Reading `_LEGACY_SERVER_URL_FALLBACKS["worker_math"]` asserted
+    # against the alias's own restatement of that delegation; resolving the host
+    # first asserts against the delegation itself, and follows a lineup change.
+    host = _lineup_host_of("worker_math")
+    fix_a_delegated = _LEGACY_SERVER_URL_FALLBACKS[host]
+    assert regenerated == fix_a_delegated
+    # Not a literal: the generated URL is the host's whole declared fleet, in
+    # order, in the `full:` wire form the operative layer emits.
+    assert regenerated == "full:" + ",".join(
+        f"http://localhost:{port}" for port in _declared_fleet_ports("worker_math", "both")
     )
+    # DELIBERATE PIN, do not "modernise": `full:` is the wire prefix the operative
+    # layer and the generator must both emit for a multi-instance fleet. A single
+    # instance is emitted bare (no prefix), which is why this is asserted on a
+    # role whose host declares a fleet.
+    assert regenerated.startswith("full:")
 
 
 def test_alias_without_host_fleet_falls_back_to_own_launch_ports(
@@ -590,7 +732,61 @@ def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path
     assert coder["serving"]["shared_mmap"] is True
 
 
-def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
+def test_compile_maps_model_role_server_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``server_mode.<server>.model_role`` binds a server row to a role.
+
+    SSU-F5: this test used to describe a synthetic ``worker`` server in its
+    registry and then assert a RUNTIME RECORD that the compiler resolves from the
+    REAL launcher -- so ten of its assertions (ports, primary role, mode,
+    requirements, slots, ubatch, no_mmap, spec) were restatements of the live
+    lineup, and every one of them went stale on 2026-09-22 when worker_general
+    stopped hosting a server. The fixture now DECLARES the launcher lineup it
+    needs (a self-hosted worker-pool worker_general, which is what the registry
+    half always described), so the record under test is a function of the
+    fixture. The live-lineup path is covered by the tests above, which derive
+    their expectations instead of pinning them.
+    """
+    from scripts.server import stack_manifest
+
+    worker_pool_model = "/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf"
+    explore_draft_model = "/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf"
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setattr(
+        stack_manifest,
+        "ROLE_LAUNCH_META",
+        {
+            "worker_general": {
+                "tier": "hot",
+                "mode": "worker_pool",
+                "worker_type": "explore",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        stack_manifest,
+        "HOT_SERVERS",
+        [
+            {
+                "port": 8072,
+                "roles": ["worker_general"],
+                "numa_instance": 0,
+                # the launcher's server dicts flag the mode as a boolean key
+                # (`worker_pool` / `vision` / `embedding`); `_launch_mode_for_server`
+                # reads exactly these.
+                "worker_pool": True,
+                "worker_type": "explore",
+            }
+        ],
+    )
+    monkeypatch.setattr(stack_manifest, "WARM_SERVERS", [])
+    monkeypatch.setattr(stack_manifest, "PORT_MAP", {"worker_general": 8072})
+    monkeypatch.setattr(
+        stack_manifest, "WORKER_POOL_MODELS", {"explore": worker_pool_model}
+    )
+    monkeypatch.setattr(stack_manifest, "EXPLORE_DRAFT_MODEL", explore_draft_model)
+
     registry_path = _write_yaml(
         tmp_path / "registry.yaml",
         {
@@ -632,21 +828,34 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     worker = priors["roles"]["worker_general"]
     assert worker["serving"]["server_role"] == "worker"
     assert worker["serving"]["binding"] == "server_mode.model_role"
-    assert worker["serving"]["ports"] == [8072]
+    # SSU-F5: DERIVED, not restated. This synthetic registry declares port 8072,
+    # but the endpoint is resolved from the REAL launcher manifest -- which is the
+    # binding this test is about. The literal 8072 that stood here was a copy of
+    # `port_map` and went red when the 2026-09-22 lineup change moved
+    # worker_general onto frontdoor's process, proving nothing about the binding.
+    assert worker["serving"]["ports"] == _declared_fleet_ports("worker_general")
     # 16384 -> 262144 (2026-08-02, operator-ratified). DERIVED from
     # server_mode.worker.serving_shape.n_ctx, which reaches worker_general through
     # the model_role binding this test is about. The 16384 it used to read was the
     # stale `roles.worker_general.model.max_context`; the gemma4 GGUF's own
     # context_length is 262144.
     assert worker["serving"]["effective_context_tokens"] == 262144
-    assert worker["serving"]["launch"]["primary_roles"] == ["worker_general"]
-    assert worker["serving"]["launch"]["modes"] == ["worker_pool"]
-    assert worker["serving"]["launch"]["requirements"]["model_path"].endswith(
-        "gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf"
-    )
-    assert worker["serving"]["launch"]["requirements"]["draft_model_path"].endswith(
-        "gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf"
-    )
+    # SSU-F5: the primary role and the launch mode are the SAME lineup fact as
+    # the port above -- which process this role rides -- so they are derived from
+    # the same place. The pair ["worker_general"] / ["worker_pool"] described the
+    # pre-2026-09-22 lineup, when worker_general ran its own worker-pool server.
+    assert worker["serving"]["launch"]["primary_roles"] == [
+        _lineup_host_of("worker_general")
+    ]
+    assert worker["serving"]["launch"]["modes"] == [_lineup_launch_mode("worker_general")]
+    # A worker-pool launch takes its paths from the launcher's declared pool
+    # model + explore drafter, so they are read from the declaration rather than
+    # spelled out. The gemma-4 literals that stood here restated
+    # stack_manifest.WORKER_POOL_MODELS, which has since changed model twice.
+    assert worker["serving"]["launch"]["requirements"] == {
+        "model_path": worker_pool_model,
+        "draft_model_path": explore_draft_model,
+    }
     runtime = worker["serving"]["launch"]["runtime"]
     assert runtime["binary_family"] == "llama.cpp"
     # 2026-09-21: assert the binary is whatever the KERNEL STORE resolves, not a
@@ -676,12 +885,30 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     # Same 16384 -> 262144 move as serving.effective_context_tokens above; this is
     # the runtime half of the same number, and the two must not diverge.
     assert runtime["cache"]["context_tokens"] == 262144
-    assert runtime["cache"]["slots"] == 1
+    # Slots come from the launcher's DECLARED per-mode fallback for this launch
+    # shape, not from a pinned 1 (launch_shape.fallback_slots.worker_pool).
+    assert (
+        runtime["cache"]["slots"]
+        == stack_manifest.fallback_slots_for_mode(
+            mode="worker_pool", worker_type="explore"
+        ).slots
+    )
+    # DELIBERATE PIN: 512 is the canonical explore-recipe micro-batch, the
+    # compiler's own `fallback=512` for a worker_pool+explore launch with no
+    # declared ubatch. It is a property of the RECIPE, not of the lineup, so it
+    # does not follow a topology change and must not be "derived" from one.
     assert runtime["cache"]["ubatch"] == 512
-    assert runtime["cache"]["kv_type_k"] == "q8_0"
-    assert runtime["cache"]["kv_type_v"] == "q8_0"
+    # KV quant is declared per role by the launcher; read it rather than restate.
+    assert (
+        runtime["cache"]["kv_type_k"],
+        runtime["cache"]["kv_type_v"],
+    ) == stack_manifest.LAUNCH_KV_QUANT_CONFIGS["worker_general"]
+    # no_mmap True is the worker_pool+explore canonical-recipe default (fixture),
+    # mlock follows the topology's declared MLOCK_ROLES for this role.
     assert runtime["cache"]["no_mmap"] is True
-    assert runtime["cache"]["mlock"] is False
+    from scripts.server.stack_numa import MLOCK_ROLES
+
+    assert runtime["cache"]["mlock"] is ("worker_general" in MLOCK_ROLES)
     assert runtime["flags"]["jinja"] is True
     assert runtime["flags"]["reasoning"] == "off"
     assert runtime["flags"]["spec"]["enabled"] is True
@@ -739,10 +966,18 @@ def test_compile_prefers_server_mode_launch_requirement_paths(tmp_path: Path) ->
         launch["requirements"]["draft_model_path"]
         == "/models/gemma-4-26B-A4B-it-draft-Q8_0.gguf"
     )
-    assert (
-        launch["runtime"]["flags"]["spec"]["draft_model_path"]
-        == "/models/gemma-4-26B-A4B-it-draft-Q8_0.gguf"
-    )
+    # SSU-F5: the runtime spec block is a function of the LINEUP, not of this
+    # fixture. A role that launches its own process carries the drafter declared
+    # in its requirements; an ALIAS rides its host's process and carries no
+    # drafter of its own (worker_general became an alias on 2026-09-22, which is
+    # what turned this literal into a failure). Both branches are asserted, so the
+    # test keeps its meaning whichever side of the lineup worker_general is on.
+    spec = launch["runtime"]["flags"]["spec"]
+    if _lineup_is_alias("worker_general"):
+        assert spec["enabled"] is False
+        assert spec["draft_model_path"] is None
+    else:
+        assert spec["draft_model_path"] == launch["requirements"]["draft_model_path"]
 
 
 def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
@@ -823,9 +1058,17 @@ def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
             }
         ]
 
-    assert priors["roles"]["worker_general"]["serving"]["ports"] == [8072]
-    assert priors["roles"]["worker_math"]["serving"]["ports"] == [8072]
-    assert priors["roles"]["toolrunner"]["serving"]["ports"] == [8072]
+    # SSU-F5: DERIVED from the real launcher declaration (this synthetic registry
+    # says 8072; the compiler resolves ports from the launcher). The three roles
+    # must land on the SAME fleet -- that co-residency is what the test asserts --
+    # and that fleet is whatever the lineup currently declares.
+    for role in ("worker_general", "worker_math", "toolrunner"):
+        assert priors["roles"][role]["serving"]["ports"] == _declared_fleet_ports(role), role
+    assert (
+        priors["roles"]["worker_math"]["serving"]["ports"]
+        == priors["roles"]["worker_general"]["serving"]["ports"]
+        == priors["roles"]["toolrunner"]["serving"]["ports"]
+    )
     # 16384 -> 262144 (2026-08-02): both aliases ride worker's process and inherit
     # its serving_shape.n_ctx, which is the property this test asserts.
     assert priors["roles"]["worker_math"]["serving"]["effective_context_tokens"] == 262144
@@ -1111,9 +1354,15 @@ def test_compile_preserves_conflicts_as_gaps_when_allowed(tmp_path: Path) -> Non
     assert role["status"] == "compiled_with_gaps"
     assert "Role-server conflict: stale worker server binding" in role["known_gaps"]
     assert role["serving"]["binding"] == "stack_manifest.alias->stack_manifest.role"
-    assert role["serving"]["ports"] == [8072]
+    # SSU-F5: this registry declares NO server_mode at all, so both the port and
+    # the primary role fall back to the real launcher -- i.e. they are functions
+    # of the lineup and must be read from it. The pair of literals that stood here
+    # (8072 / "worker_general") both went stale on 2026-09-22.
+    assert role["serving"]["ports"] == _declared_fleet_ports("worker_math")
     assert role["serving"]["launch"]["entries"][0]["alias"] is True
-    assert role["serving"]["launch"]["entries"][0]["primary_role"] == "worker_general"
+    assert role["serving"]["launch"]["entries"][0]["primary_role"] == _lineup_host_of(
+        "worker_math"
+    )
 
 
 def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) -> None:
@@ -1226,12 +1475,19 @@ def test_compile_refuses_missing_descriptor_without_allow_incomplete(tmp_path: P
 # ESC-8 Fix 6: priors compile must not read the ambient default-full env.       #
 # --------------------------------------------------------------------------- #
 
-_FIX6_FULL_HOST_PORTS = {8070, 8072, 8085}
-
-
 def _quarters_connect(_host: str, port: int) -> bool:
-    """Quarters-only fleet: the full host ports are dead, everything else live."""
-    return port not in _FIX6_FULL_HOST_PORTS
+    """Quarters-only fleet: the full host ports are dead, everything else live.
+
+    SSU-F5: the dead set is DERIVED from stack_topology's ``full_instance_idx``
+    via the same helper the probe under test uses to decide what to probe. The
+    literal ``{8070, 8072, 8085}`` that stood here was a third restatement of the
+    lineup -- 8072 was worker_general's own full port and 8085 a retired
+    ingest_long_context server, so this fixture was simulating a fleet that has
+    not existed since 2026-09-22 while still passing.
+    """
+    from scripts.server.realized_fleet import full_instance_ports
+
+    return port not in full_instance_ports()
 
 
 def _fulls_connect(_host: str, _port: int) -> bool:
@@ -1327,10 +1583,15 @@ def test_compile_require_realized_mode_derives_quarter_lineup(
     )
 
     ports = priors["roles"]["worker_math"]["serving"]["ports"]
-    assert 8072 not in ports  # the dead full host port must not appear
-    # Was [8082, 8182, 8282, 8382] (4 quarters) before the 2026-07-30 quarter
-    # retirement; worker_general's sub-full lineup is now 2 halves.
-    assert ports == [8082, 8182]
+    # SSU-F5: the invariant is shape- AND lineup-independent, so both halves are
+    # DERIVED. The dead FULL port of whichever host worker_math rides must not
+    # appear, and the fleet must be exactly that host's sub-full siblings. The
+    # literals were [8082, 8182] (2 halves on worker_general's own server) and,
+    # before the 2026-07-30 quarter retirement, four quarters.
+    for dead in _declared_fleet_ports("worker_math", "full"):
+        assert dead not in ports, dead
+    assert ports == _declared_fleet_ports("worker_math", "quarter")
+    assert ports, "sub-full lineup resolved empty: the probe derived nothing"
 
 
 def test_compile_require_realized_mode_refuses_without_signal(tmp_path: Path) -> None:
@@ -1367,8 +1628,12 @@ def test_compile_default_does_not_probe_realized_fleet(
         active_roles={"worker_math"},
         allow_incomplete=True,
     )
-    # Legacy full-mode default is unchanged.
-    assert priors["roles"]["worker_math"]["serving"]["ports"] == [8072]
+    # Legacy full-mode default is unchanged -- SSU-F5: DERIVED, so "full mode"
+    # means the host's declared full instance rather than a port that happened to
+    # be worker_general's own in 2026-08.
+    assert priors["roles"]["worker_math"]["serving"]["ports"] == _declared_fleet_ports(
+        "worker_math", "full"
+    )
 
 
 def test_policy_hints_returns_none_thresholds_when_model_memory_unknown() -> None:
@@ -1456,11 +1721,17 @@ def test_compile_projects_ctx_model_max_and_policy_hints(tmp_path: Path) -> None
     assert worker["model"]["ctx_max"] == 16384
     # Additive fields must not break the generated contract shape.
     assert validate_stack_priors_contract(priors) == []
-    # 622: policy hints projected. The worker rides a shared worker_pool launch,
-    # so it is a light/shared role; 37 GB is below both memory thresholds.
+    # 622: policy hints projected. lock/contention class is a function of the
+    # LAUNCH MODE of the process the role rides -- a shared `worker_pool` launch
+    # takes a shared lock and is light; every other launch is exclusive/heavy.
+    # SSU-F5: that mode is DERIVED from role_launch_meta rather than pinned.
+    # "shared"/"light" was correct while worker_general ran its own worker_pool
+    # server; the 2026-09-22 lineup change moved it onto frontdoor's `default`
+    # process, which flips both classes -- correctly, and without a test edit.
+    shared_launch = _lineup_launch_mode("worker_general") == "worker_pool"
     policy = worker["policy"]
-    assert policy["lock_class"] == "shared"
-    assert policy["contention_class"] == "light"
+    assert policy["lock_class"] == ("shared" if shared_launch else "exclusive")
+    assert policy["contention_class"] == ("light" if shared_launch else "heavy")
     assert policy["tap_safe_non_stream"] is False
     assert policy["high_cost"] is False
     assert policy["model_mem_gb"] == 37.0

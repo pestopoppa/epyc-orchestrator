@@ -19,9 +19,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.validate.check_shared_with_derivations import (  # noqa: E402
+    SourceError,
     apply_fixes,
     check_all,
     derive,
+    fleet_url,
+    load_server_url_fallbacks,
     load_sources,
 )
 
@@ -346,6 +349,208 @@ def test_fix_inserts_a_missing_port_map_entry(tmp_path):
     apply_fixes(sources, check_all(sources))
     assert yaml.safe_load(manifest.read_text())["port_map"]["toolrunner"] == 8070
     assert check_all(load_sources(master, manifest, topology)) == []
+
+
+# ---------------------------------------------------------------------------
+# SIXTH SURFACE (SSU-F8): src/config/models.py::_LEGACY_SERVER_URL_FALLBACKS.
+#
+# The real 2026-09-22 defect, reproduced: the worker lane moved onto frontdoor's
+# :8070 process and the last-resort URL table kept naming the retired :8072 fleet.
+# `_server_url_default` ENDS in a bare subscript of that table, so the stale rows
+# resolved three roles to a fleet with nothing listening in exactly the degraded
+# mode the table exists to serve. It read correct only because live runtime facts
+# win first. Five surfaces were wired into this checker and did not rot; this one
+# was not wired and did.
+# ---------------------------------------------------------------------------
+
+
+FRONTDOOR_FLEET_URL = (
+    "full:http://localhost:8070,http://localhost:8080,http://localhost:8180"
+)
+RETIRED_WORKER_FLEET_URL = (
+    "full:http://localhost:8072,http://localhost:8082,http://localhost:8182"
+)
+
+# What a correct table says for the fixture stack, DERIVED once here so the tests
+# below mutate a row rather than restating the whole table per case.
+CLEAN_FALLBACKS = {
+    "frontdoor": FRONTDOOR_FLEET_URL,
+    "worker_general": FRONTDOOR_FLEET_URL,
+    "worker_math": FRONTDOOR_FLEET_URL,
+    "toolrunner": FRONTDOOR_FLEET_URL,
+    "architect_general": "http://localhost:8083",
+    "ingest_long_context": "http://localhost:8083",
+    # Outside the alias graph entirely: no shared_with relationship to recompute.
+    "worker_fast": "http://localhost:8102",
+    "api_url": "http://localhost:8000",
+}
+
+
+def _write_models_py(tmp_path: Path, table: dict | None = None, *, name: str = "models.py") -> Path:
+    """A models.py stand-in carrying only the table under test.
+
+    Written as SOURCE, not as data, because the checker parses it with `ast` rather
+    than importing it -- `src.config.models` drags in the whole config stack and a
+    checker that must run on an uncompiled tree cannot depend on that importing.
+    """
+    rows = table if table is not None else CLEAN_FALLBACKS
+    body = "\n".join(f"    {key!r}: {value!r}," for key, value in rows.items())
+    path = tmp_path / name
+    path.write_text(
+        "_LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {\n" + body + "\n}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _fallback_findings(tmp_path: Path, table: dict | None = None, **mutations):
+    master, manifest, topology = _write(tmp_path, **mutations)
+    models = _write_models_py(tmp_path, table)
+    findings = check_all(load_sources(master, manifest, topology, models))
+    return [f for f in findings if "_LEGACY_SERVER_URL_FALLBACKS" in f.surface]
+
+
+def test_fleet_url_reproduces_both_wire_forms():
+    """The recompute must emit the SAME wire form the operative layer does, or every
+    comparison below is between two differently-shaped renderers rather than a diff."""
+    assert fleet_url({"port": 8070, "numa_ports": [8080, 8180]}) == FRONTDOOR_FLEET_URL
+    # one instance is emitted bare -- the `full:` prefix would advertise ports that
+    # do not exist (the 2026-08-01 coder_escalation comment in models.py)
+    assert fleet_url({"port": 8083, "numa_ports": [8083]}) == "http://localhost:8083"
+    assert fleet_url({"port": 8086}) == "http://localhost:8086"
+    assert fleet_url({}) is None
+
+
+def test_clean_fallback_table_has_no_findings(tmp_path):
+    """Baseline. Non-vacuous: the fixture table must actually cover alias rows."""
+    assert _fallback_findings(tmp_path) == []
+    d = derive(load_sources(*_write(tmp_path)))
+    assert d.aliases & set(CLEAN_FALLBACKS), "fixture table covers no alias — vacuous"
+
+
+def test_stale_worker_lane_rows_are_the_2026_09_22_defect(tmp_path):
+    """THE defect SSU-F8 names, with its real values."""
+    table = dict(CLEAN_FALLBACKS)
+    for role in ("worker_general", "worker_math", "toolrunner"):
+        table[role] = RETIRED_WORKER_FLEET_URL
+    findings = _fallback_findings(tmp_path, table)
+
+    assert sorted(f.role for f in findings) == ["toolrunner", "worker_general", "worker_math"]
+    for f in findings:
+        assert f.found == RETIRED_WORKER_FLEET_URL
+        assert f.expected == FRONTDOOR_FLEET_URL
+        assert "alias on 'frontdoor'" in f.message
+        assert "bare subscript" in f.message
+        # a finding without a line is half a finding
+        assert f.line and f.line > 0
+        # models.py is hand-annotated with cutover history: reported, never rewritten
+        assert not f.fixable
+
+
+def test_stale_fallback_row_points_at_its_own_line(tmp_path):
+    table = dict(CLEAN_FALLBACKS)
+    table["worker_math"] = RETIRED_WORKER_FLEET_URL
+    (finding,) = _fallback_findings(tmp_path, table)
+    models = _write_models_py(tmp_path, table)
+    line = models.read_text(encoding="utf-8").splitlines()[finding.line - 1]
+    assert "worker_math" in line
+
+
+def test_host_row_drift_is_caught_too(tmp_path):
+    """Not only aliases: a HOST whose own row stops matching its declared fleet."""
+    table = dict(CLEAN_FALLBACKS)
+    table["frontdoor"] = "http://localhost:8070"
+    (finding,) = _fallback_findings(tmp_path, table)
+    assert finding.role == "frontdoor"
+    assert finding.expected == FRONTDOOR_FLEET_URL
+    assert "hosts [" in finding.message
+
+
+def test_row_follows_the_registry_not_the_literal(tmp_path):
+    """DERIVED, not repinned: move the fleet in the registry and the SAME table that
+    was clean becomes a finding, naming the new ports. A literal-to-literal gate
+    cannot do this, which is why the five wired surfaces survived the cutover."""
+
+    def move_the_fleet(m):
+        m["server_mode"]["frontdoor"]["port"] = 8090
+        m["server_mode"]["frontdoor"]["numa_ports"] = [8091, 8092]
+
+    findings = _fallback_findings(tmp_path, master=move_the_fleet)
+    moved = "full:http://localhost:8090,http://localhost:8091,http://localhost:8092"
+    assert {f.role for f in findings} == {
+        "frontdoor",
+        "worker_general",
+        "worker_math",
+        "toolrunner",
+    }
+    assert {f.expected for f in findings} == {moved}
+
+
+def test_roles_outside_the_alias_graph_are_out_of_scope(tmp_path):
+    """`worker_fast` / `api_url` restate no shared_with relationship, so there is
+    nothing to recompute for them -- and a missing row restates nothing either. The
+    table is not required to cover the lineup, only to be right about what it covers."""
+    table = {k: v for k, v in CLEAN_FALLBACKS.items() if k != "toolrunner"}
+    table["worker_fast"] = "http://localhost:9999"
+    table["api_url"] = "http://localhost:9998"
+    assert _fallback_findings(tmp_path, table) == []
+
+
+def test_absent_models_py_source_declares_no_findings(tmp_path):
+    """Three-arg `load_sources` (every pre-SSU-F8 caller) leaves the surface unloaded:
+    a surface with no source diffs nothing rather than diffing a synthetic registry
+    against the real repo's table."""
+    master, manifest, topology = _write(tmp_path)
+    sources = load_sources(master, manifest, topology)
+    assert sources.models_path is None
+    assert check_all(sources) == []
+
+
+def test_a_models_py_without_the_table_is_a_source_error(tmp_path):
+    """Silence would be the failure mode this whole file exists to prevent: if the
+    table is renamed away, the checker must say so, not report a clean sixth surface."""
+    path = tmp_path / "renamed.py"
+    path.write_text("SERVER_URLS = {'frontdoor': 'http://localhost:8070'}\n", encoding="utf-8")
+    with pytest.raises(SourceError, match="no module-level _LEGACY_SERVER_URL_FALLBACKS"):
+        load_server_url_fallbacks(path)
+
+
+def test_multiline_implicit_concatenation_reads_back_as_one_row(tmp_path):
+    """The live table writes its `full:` rows as parenthesised adjacent literals; the
+    parser must fold them, or every fleet row would silently drop out of scope."""
+    path = tmp_path / "concat.py"
+    path.write_text(
+        "_LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {\n"
+        '    "frontdoor": (\n'
+        '        "full:http://localhost:8070,http://localhost:8080,"\n'
+        '        "http://localhost:8180"\n'
+        "    ),\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    values, lines = load_server_url_fallbacks(path)
+    assert values == {"frontdoor": FRONTDOOR_FLEET_URL}
+    assert lines == {"frontdoor": 2}
+
+
+def test_live_models_py_table_agrees_with_the_live_registry():
+    """Regression fence on the real tree (skipped where the master registry is not
+    present), so the surface is exercised against the values that actually ship."""
+    master = Path("/mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml")
+    models = REPO_ROOT / "src" / "config" / "models.py"
+    if not master.exists() or not models.exists():
+        pytest.skip("live sources not present in this checkout")
+    sources = load_sources(
+        master,
+        REPO_ROOT / "orchestration" / "launch_manifest.yaml",
+        REPO_ROOT / "orchestration" / "stack_topology.yaml",
+        models,
+    )
+    # non-vacuity: the live table must actually cover the live alias graph
+    d = derive(sources)
+    assert d.aliases & set(sources.fallbacks)
+    stale = [f.render() for f in check_all(sources) if "_LEGACY" in f.surface]
+    assert stale == [], "\n".join(stale)
 
 
 # ---------------------------------------------------------------------------

@@ -57,6 +57,42 @@ def _topology_fleet_ports(role: str) -> tuple[int, list[int]]:
     ]
 
 
+def _quarterable_roles() -> tuple[str, ...]:
+    """Roles the topology declares a MULTI-INSTANCE fleet for — derived, not listed.
+
+    This was the literal ("frontdoor", "worker_general", "ingest_long_context"), and
+    the 2026-09-22 cutover made two of its three entries aliases with no NUMA_CONFIG
+    entry at all, so `_topology_fleet_ports` raised KeyError: 'worker_general'. A role
+    is quarterable iff stack_topology.yaml gives it more than one instance and names
+    which one is the full — exactly what the readers below need, and exactly what the
+    old literal was standing in for.
+    """
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    return tuple(
+        sorted(
+            role
+            for role, cfg in NUMA_CONFIG.items()
+            if len(cfg.get("instances") or ()) > 1 and cfg.get("full_instance_idx") is not None
+        )
+    )
+
+
+def _lineup_host_of(role: str) -> str:
+    """The role whose llama-server process `role` answers on (itself if it hosts one).
+
+    Read from `role_launch_meta.<host>.shared_with_first_n`, which phase 2 DERIVES
+    from `server_mode.<host>.shared_with` — so this follows a lineup change instead
+    of restating one.
+    """
+    from scripts.server import stack_manifest
+
+    for host, meta in stack_manifest.ROLE_LAUNCH_META.items():
+        if isinstance(meta, dict) and role in (meta.get("shared_with_first_n") or []):
+            return str(host)
+    return role
+
+
 def _expected_full_mode_fleet_url(role: str) -> str:
     """The `full:`-prefixed fleet URL string the topology implies for ``role``."""
     full_port, sibling_ports = _topology_fleet_ports(role)
@@ -419,7 +455,8 @@ roles:
     def test_quarter_numa_mode_urls_skip_dead_full_ports(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        quarterable_roles = ("frontdoor", "worker_general", "ingest_long_context")
+        quarterable_roles = _quarterable_roles()
+        assert quarterable_roles, "topology declares no multi-instance fleet"
         live_ports: set[int] = set()
         for role in quarterable_roles:
             _, sibling_ports = _topology_fleet_ports(role)
@@ -462,14 +499,62 @@ roles:
             {
                 "ORCHESTRATOR_PATHS_STACK_PRIORS_PATH": str(tmp_path / "missing.yaml"),
                 "ORCHESTRATOR_STACK_NUMA_MODE": "both",
+                # HERMETIC. Priors missing is only HALF the degraded mode this test is
+                # about: without this, live runtime facts from whatever happens to be
+                # serving on this shared host win before the last-resort table is ever
+                # reached, so the assertions below described the box rather than the
+                # code. Runtime facts describe realized ports and are rightly preferred
+                # in production; here they are exactly the thing being excluded.
+                "ORCHESTRATOR_IGNORE_RUNTIME_STACK_FACTS": "1",
             },
         ):
             reset_stack_prior_server_url_cache()
             cfg = ServerURLsConfig()
-            assert cfg.frontdoor.startswith("full:http://localhost:8070")
-            assert "http://localhost:8080" in cfg.frontdoor
-            assert cfg.worker_general.startswith("full:http://localhost:8072")
-            assert "http://localhost:8082" in cfg.worker_general
+            # Every host of a multi-instance fleet keeps the `full:` prefix and the
+            # whole fleet, RECOMPUTED from the topology. The previous version pinned
+            # frontdoor's :8070 fleet and worker_general's :8072 fleet as two separate
+            # facts; the 2026-09-22 cutover moved the worker lane onto frontdoor's
+            # process and the second pin became an assertion about a retired fleet.
+            hosts = _quarterable_roles()
+            assert hosts, "topology declares no multi-instance fleet"
+            checked_aliases: list[str] = []
+            for role in hosts:
+                if not hasattr(cfg, role):
+                    continue
+                resolved = getattr(cfg, role)
+                full_port, sibling_ports = _topology_fleet_ports(role)
+                assert resolved == _expected_full_mode_fleet_url(role), role
+                assert resolved.startswith("full:"), role
+                # An ALIAS on that process launches no server of its own, so every
+                # port it dials must be a port of its HOST's fleet. Asserted as a
+                # SUBSET, not as equality: which of the host's instances an alias is
+                # served from is a live disagreement between the launch view (the
+                # tagged subset) and the serving view (WP-13 fleet convergence, whole
+                # fleet), and this test is not the place to rule on it. The subset
+                # form is what has teeth against the defect that actually happens --
+                # an alias still dialling a RETIRED fleet (SSU-F8: worker_general on
+                # :8072 after the 2026-09-22 cutover), which no subset can hide.
+                host_ports = {
+                    str(port) for port in [full_port, *sibling_ports]
+                }
+                for alias in ServerURLsConfig.__dataclass_fields__:
+                    if alias == role or _lineup_host_of(alias) != role:
+                        continue
+                    alias_url = getattr(cfg, alias)
+                    alias_ports = {
+                        part.rsplit(":", 1)[-1]
+                        for part in alias_url.removeprefix("full:").split(",")
+                    }
+                    assert alias_ports, alias
+                    assert alias_ports <= host_ports, (
+                        f"{alias} dials {sorted(alias_ports)}, which is not a subset "
+                        f"of its host {role}'s declared fleet {sorted(host_ports)}"
+                    )
+                    checked_aliases.append(alias)
+            assert checked_aliases, (
+                "no alias of a multi-instance host is a ServerURLsConfig field — the "
+                "alias arm of this test has gone vacuous"
+            )
 
         reset_stack_prior_server_url_cache()
 

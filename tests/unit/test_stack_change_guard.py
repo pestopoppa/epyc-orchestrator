@@ -453,32 +453,65 @@ def test_validate_stack_priors_rejects_launch_manifest_requirement_drift(
 def test_launch_manifest_targets_prefer_server_mode_launch_requirement_paths(
     tmp_path: Path,
 ) -> None:
+    # `_launch_manifest_targets` derives its TARGETS and launch entries from the
+    # LIVE launcher view; only the overrides come from the handed registry. The tmp
+    # files made this test LOOK hermetic while it silently depended on one lineup:
+    # `worker_general` was a worker_pool/explore launch target in 2026-06 and is an
+    # ALIAS on another host role today, and an alias correctly compiles a DISABLED
+    # spec (it inherits its host's draft rather than launching one). The role is
+    # discovered from the same view the function uses, by SHAPE — its own
+    # primary_role, not an alias — and every path below is a fixture literal that
+    # appears nowhere in the lineup.
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    probe = _write_yaml(tmp_path / "probe.yaml", {"server_mode": {}, "roles": {}})
+    probe_targets = stack_change_guard._launch_manifest_targets(
+        registry_path=probe,
+        descriptor_path=descriptors,
+    )
+
+    def _first_entry(target: dict) -> dict:
+        entries = target.get("launch_entries") or [{}]
+        return entries[0]
+
+    host_role = next(
+        (
+            role
+            for role, target in probe_targets.items()
+            if _first_entry(target).get("mode") == "default"
+            and not _first_entry(target).get("alias")
+        ),
+        None,
+    )
+    assert host_role, "the launch view declares at least one non-alias default-mode host role"
+
     registry = _write_yaml(
         tmp_path / "registry.yaml",
         {
             "server_mode": {
-                "worker": {
-                    "model_role": "worker_general",
-                    "model_path": "/models/gemma-4-26B-A4B-it-Q8_0.gguf",
-                    "draft_model_path": "/models/gemma-4-26B-A4B-it-draft-Q8_0.gguf",
+                # Keyed under a name that is NOT the launch role, so the
+                # `model_role` binding step stays under test too.
+                "fixture_server": {
+                    "model_role": host_role,
+                    "model_path": "/models/fixture-base.gguf",
+                    "draft_model_path": "/models/fixture-draft.gguf",
+                    "acceleration": {"spec_type": "draft-mtp", "draft_max": 4},
                 }
             },
             "roles": {},
         },
     )
-    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
 
     targets = stack_change_guard._launch_manifest_targets(
         registry_path=registry,
         descriptor_path=descriptors,
     )
 
-    requirements = targets["worker_general"]["launch_requirements"]
-    assert requirements["model_path"] == "/models/gemma-4-26B-A4B-it-Q8_0.gguf"
-    assert requirements["draft_model_path"] == "/models/gemma-4-26B-A4B-it-draft-Q8_0.gguf"
+    requirements = targets[host_role]["launch_requirements"]
+    assert requirements["model_path"] == "/models/fixture-base.gguf"
+    assert requirements["draft_model_path"] == "/models/fixture-draft.gguf"
     assert (
-        targets["worker_general"]["launch_runtime"]["flags"]["spec"]["draft_model_path"]
-        == "/models/gemma-4-26B-A4B-it-draft-Q8_0.gguf"
+        targets[host_role]["launch_runtime"]["flags"]["spec"]["draft_model_path"]
+        == "/models/fixture-draft.gguf"
     )
 
 
