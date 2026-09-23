@@ -435,6 +435,20 @@ eras:
       production-consolidated-v9 stack. Do not rescale across this boundary;
       re-measure within era under P-BENCH protocols with host attestation.
 
+  - id: E17-eval-task-failed-scores-zero-quality
+    from: "2026-09-23T21:37:09Z"
+    scope: eval_quality
+    note: >
+      ETR-1 quality-denominator boundary (operator ruling 2026-09-23; MEASUREMENT.md §5).
+      Agent/config-caused failures (disposition task_failed) score 0 and stay in the
+      quality denominator; infra_failed / scoring_failed stay excluded. Before this
+      boundary both were dropped, so pre-E17 quality overstates any configuration that
+      fails. Rows carry details.quality_denominator_policy == task_failed_scores_zero_v1
+      (absent = pre-E17) — era-label by that key where present, by timestamp otherwise.
+      Implementation: epyc-orchestrator 44d0d4a0 + 927380a5. RECONCILIATION: pre-boundary
+      quality is a prior only; rebuild the frontier from post-boundary trials, or
+      re-aggregate stored per-question rows where their disposition was persisted.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.
