@@ -232,7 +232,13 @@ class FrontdoorNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             error_cat = _classify_error(error)
             _record_failure(ctx, error_cat, error)
 
-            if error_cat == ErrorCategory.EARLY_ABORT:
+            if error_cat == ErrorCategory.EARLY_ABORT and state.escalation_count < ctx.deps.config.max_escalations:
+                # NIB2-80: budget-gated. Immediate escalation (skipping the retry
+                # precondition _should_escalate enforces for other categories) is
+                # deliberate; the max_escalations bound still applies. When the
+                # budget is exhausted, fall through to the same
+                # think-harder / _should_escalate / _should_retry / fail chain
+                # every sibling site uses when its own gate refuses.
                 state.escalation_count += 1
                 state.consecutive_failures = 0
                 from_role = str(state.current_role)
@@ -347,7 +353,8 @@ class WorkerNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             error_cat = _classify_error(error)
             _record_failure(ctx, error_cat, error)
 
-            if error_cat == ErrorCategory.EARLY_ABORT:
+            if error_cat == ErrorCategory.EARLY_ABORT and state.escalation_count < ctx.deps.config.max_escalations:
+                # NIB2-80: budget-gated — see FrontdoorNode for rationale.
                 state.escalation_count += 1
                 state.consecutive_failures = 0
                 from_role = str(state.current_role)
@@ -464,7 +471,8 @@ class CoderNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             error_cat = _classify_error(error)
             _record_failure(ctx, error_cat, error)
 
-            if error_cat == ErrorCategory.EARLY_ABORT:
+            if error_cat == ErrorCategory.EARLY_ABORT and state.escalation_count < ctx.deps.config.max_escalations:
+                # NIB2-80: budget-gated — see FrontdoorNode for rationale.
                 state.escalation_count += 1
                 state.consecutive_failures = 0
                 from_role = str(state.current_role)
@@ -568,7 +576,8 @@ class CoderEscalationNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             error_cat = _classify_error(error)
             _record_failure(ctx, error_cat, error)
 
-            if error_cat == ErrorCategory.EARLY_ABORT:
+            if error_cat == ErrorCategory.EARLY_ABORT and state.escalation_count < ctx.deps.config.max_escalations:
+                # NIB2-80: budget-gated — see FrontdoorNode for rationale.
                 state.escalation_count += 1
                 state.consecutive_failures = 0
                 from_role = str(state.current_role)
@@ -671,7 +680,8 @@ class IngestNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             error_cat = _classify_error(error)
             _record_failure(ctx, error_cat, error)
 
-            if error_cat == ErrorCategory.EARLY_ABORT:
+            if error_cat == ErrorCategory.EARLY_ABORT and state.escalation_count < ctx.deps.config.max_escalations:
+                # NIB2-80: budget-gated — see FrontdoorNode for rationale.
                 state.escalation_count += 1
                 state.consecutive_failures = 0
                 from_role = str(state.current_role)
