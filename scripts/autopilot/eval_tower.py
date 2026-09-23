@@ -1543,6 +1543,12 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
     _rubric_threshold_source = getattr(r, "rubric_threshold_source", "")
     if _rubric_threshold_source:
         item["rubric_threshold_source"] = _rubric_threshold_source
+    # EV-6b: cross-family independence label for an llm_judge row (see the
+    # QuestionResult.judge_independence field docstring). Same defensive
+    # getattr as rubric_threshold_source above — recovered rows predate it.
+    _judge_independence = getattr(r, "judge_independence", "")
+    if _judge_independence:
+        item["judge_independence"] = _judge_independence
     return item
 
 
@@ -3047,7 +3053,11 @@ sys.path.insert(0, str(_orch_root / "scripts" / "benchmark"))
 sys.path.insert(0, str(_orch_root))
 
 from seeding_orchestrator import call_orchestrator_forced  # noqa: E402
-from seeding_scoring import score_answer_deterministic, score_answer_or_error  # noqa: E402
+from seeding_scoring import (  # noqa: E402
+    score_answer_deterministic,
+    score_answer_or_error,
+    _load_orchestrator_debug_scorer,
+)
 from rubric_scoring import (  # noqa: E402
     MINDDR_PROCESS_DIMENSIONS,
     aggregate_rubric_score,
@@ -3202,6 +3212,15 @@ class QuestionResult:
     # "undeclared-default-0.60" (a defaulted threshold is one nobody chose;
     # surfaced so rows resting on it are never silent). "" for non-rubric.
     rubric_threshold_source: str = ""
+    # EV-6b (2026-09-23): cross-family independence label for an `llm_judge`
+    # (scoring_method == "llm_judge") row — "cross_family" / "same_family" /
+    # "unverified" (see verification_families.cross_family_status), "" when
+    # no model judge was involved. The llm_judge scorer itself never blocks
+    # on this (that would silently exclude every row on an all-one-family
+    # lineup); this is a LABEL, not a gate, so a same-family or unverified
+    # judgment can never be misread as a confirmed cross-family verdict.
+    # Surfaced in the aggregate details as judge_independence_counts.
+    judge_independence: str = ""
     host_covariates: dict[str, Any] = field(default_factory=dict)
     retrieval_compaction: dict[str, Any] = field(default_factory=dict)
     # Batch-level backend lifecycle certificates. Populated only when nested
@@ -3246,35 +3265,67 @@ class _GenOutcome:
     retrieval_compaction: dict[str, Any] = field(default_factory=dict)
 
 
-# EV-6: Cross-family verification constraint.
+# EV-6 / EV-6b: Cross-family verification constraint.
 # Verifier model must be from a different family than generator to avoid confirmation bias.
 # See eval-tower-verification.md for research basis (confirmation bias amplifies 52%→87%).
-VERIFICATION_FAMILIES = {
-    "qwen": {"Qwen", "qwen", "QwQ"},
-    "llama": {"Llama", "llama", "Meta-Llama"},
-    "deepseek": {"DeepSeek", "deepseek"},
-    "ouro": {"Ouro", "ouro", "ByteDance"},
-    "mistral": {"Mistral", "mistral"},
-    "gemma": {"Gemma", "gemma", "Google"},
-}
+#
+# EV-6b (2026-09-23): this used to be a self-contained substring match over
+# whatever two strings the caller passed in, with `gen_family == "unknown"`
+# treated as a PERMISSIVE default. On the only production call site below,
+# `verifier_model` is a ROLE NAME (e.g. "architect_general") — no pattern
+# matches a role name, so the family was always "unknown" and the check
+# always returned True. It was vacuous on its only real caller. The
+# classification, the role->model resolution, and the fail-closed semantics
+# now live in `src.autopilot_core.verification_families` — one copy of an
+# admissibility rule, per the `measurement_guards.py` precedent in the same
+# package. `VERIFICATION_FAMILIES` is re-exported here unchanged so any
+# existing caller reading `eval_tower.VERIFICATION_FAMILIES` keeps working.
+#
+# The `llm_judge` scoring path (`debug_scorer._score_llm_judge`) does NOT
+# gate on this: the live production lineup is entirely Qwen-family (every
+# served generator AND the default `architect_general` judge), so a fail-
+# closed GATE there would turn every one of the ~3.8k live llm_judge rows
+# (physreason/zeroscrolls/leval/physics) into scoring_failed/excluded. EV-6b
+# instead LABELS the row — see `QuestionResult.judge_independence` and
+# `_llm_judge_verifier_identity` below — so a same-family or unverified
+# judgment is visible and can never be misread as a confirmed cross-family
+# verdict, without silently discarding the measurement.
+from src.autopilot_core.verification_families import (  # noqa: E402
+    VERIFICATION_FAMILIES,
+    cross_family_status as _cross_family_status,
+)
+
+
+def check_cross_family_status(generator_model: str, verifier_model: str) -> tuple[bool, str]:
+    """Return ``(independent, status)`` — see ``verification_families.cross_family_status``.
+
+    ``generator_model``/``verifier_model`` may each be a role name (resolved
+    against the lean model registry) or an already-resolved model name/path.
+    """
+    return _cross_family_status(generator_model, verifier_model)
 
 
 def check_cross_family(generator_model: str, verifier_model: str) -> bool:
-    """Ensure verifier is from a different model family than generator.
+    """Ensure verifier is from a different, KNOWN model family than generator.
 
-    Returns True if cross-family constraint is satisfied (safe to proceed).
-    Returns True if either model family is unknown (permissive default).
+    Returns True only when both sides resolve to different, known families
+    (FAIL CLOSED — an unknown family on either side is never independent;
+    see ``check_cross_family_status`` for the distinguishable reason).
     """
+    return check_cross_family_status(generator_model, verifier_model)[0]
 
-    def _get_family(model_name: str) -> str:
-        for family, patterns in VERIFICATION_FAMILIES.items():
-            if any(p.lower() in model_name.lower() for p in patterns):
-                return family
-        return "unknown"
 
-    gen_family = _get_family(generator_model)
-    ver_family = _get_family(verifier_model)
-    return gen_family != ver_family or gen_family == "unknown"
+def _llm_judge_verifier_identity(scoring_config: Mapping[str, Any]) -> str:
+    """The judge role/identity `debug_scorer._score_llm_judge` will actually use.
+
+    Reuses `debug_scorer._llm_judge_force_role`'s own precedence
+    (`scoring_config['judge_role']` > `LLM_JUDGE_ROLE` env >
+    `architect_general`) via the same private, module-identity-safe loader
+    `seeding_scoring` uses for the scorer itself, rather than restating that
+    precedence a second time and letting the two drift.
+    """
+    scorer = _load_orchestrator_debug_scorer()
+    return str(scorer._llm_judge_force_role(dict(scoring_config)))
 
 
 def compute_calibration_metrics(
@@ -4343,10 +4394,17 @@ class EvalTower:
         )
         judge_scores: list[dict[str, float]] = []
         for role in judge_roles:
-            if not check_cross_family(generator_model, role):
+            independent, family_status = check_cross_family_status(generator_model, role)
+            if not independent:
+                # EV-6b: `family_status` distinguishes a real same-family
+                # rejection from an "unverified" (unresolvable/unknown model
+                # family) skip — both are fail-closed (never used as a
+                # judge), but only the former is a confirmed same-family
+                # finding.
                 log.warning(
-                    "Skipping rubric judge role %s; not cross-family with %s",
+                    "Skipping rubric judge role %s (%s); not verified cross-family with %s",
                     role,
+                    family_status,
                     generator_model,
                 )
                 continue
@@ -4629,6 +4687,7 @@ class EvalTower:
         rubric_scores: dict[str, float] = {}
         rubric_source = ""
         rubric_threshold_source = ""
+        judge_independence = ""
         if not error and _is_scoreable_question(q):
             if _is_rubric_scored_question(q):
                 rubric_scores, rubric_source = self._rubric_scores_for_answer(
@@ -4664,6 +4723,20 @@ class EvalTower:
                     # EV-11: guarantee math_verify actually runs; never let a
                     # missing library silently degrade to exact_match.
                     _require_math_verify()
+                if scoring_method == "llm_judge":
+                    # EV-6b: LABEL (never gate — see the module-level EV-6b
+                    # comment above VERIFICATION_FAMILIES) the independence of
+                    # this row's judge from its generator. Computed here,
+                    # before scoring, because this is the only place that
+                    # knows both: the generator model (`resp`, this
+                    # question's generation response) and the judge role the
+                    # scorer is about to resolve (`_llm_judge_verifier_identity`
+                    # mirrors debug_scorer's own precedence rather than
+                    # duplicating it).
+                    _independent, judge_independence = check_cross_family_status(
+                        str(resp.get("model") or resp.get("routed_to") or ""),
+                        _llm_judge_verifier_identity(scoring_config),
+                    )
                 verdict, scoring_error = score_answer_or_error(
                     answer=answer,
                     expected=expected,
@@ -4773,6 +4846,7 @@ class EvalTower:
             rubric_scores=rubric_scores,
             rubric_source=rubric_source,
             rubric_threshold_source=rubric_threshold_source,
+            judge_independence=judge_independence,
             host_covariates=outcome.host_covariates,
             retrieval_compaction=dict(outcome.retrieval_compaction),
             token_logprobs=token_logprobs,
@@ -5818,6 +5892,18 @@ class EvalTower:
                 rubric_source_counts[r.rubric_source] = (
                     rubric_source_counts.get(r.rubric_source, 0) + 1
                 )
+        # EV-6b: cross-family independence rollup for llm_judge-scored rows
+        # ("cross_family" / "same_family" / "unverified"; see
+        # QuestionResult.judge_independence). A LABEL, not a gate, so a run
+        # entirely on one model family (a same_family-only lineup) still
+        # scores every row — this count is how a reader sees that instead.
+        judge_independence_counts: dict[str, int] = {}
+        for r in results:
+            _judge_independence = getattr(r, "judge_independence", "")
+            if _judge_independence:
+                judge_independence_counts[_judge_independence] = (
+                    judge_independence_counts.get(_judge_independence, 0) + 1
+                )
         orphan_contamination_count = sum(
             1 for r in results if r.error and "eval_orphan_contamination" in r.error
         )
@@ -5918,6 +6004,7 @@ class EvalTower:
                 "rubric_dimension_means": rubric_dimension_means,
                 "rubric_n_questions": sum(1 for r in results if r.rubric_scores),
                 "rubric_source_counts": dict(sorted(rubric_source_counts.items())),
+                "judge_independence_counts": dict(sorted(judge_independence_counts.items())),
                 "eval_fence": _eval_fence_summary(results),
                 "ece_binning": "closed_top_bin_stat_tests",
                 "ece_instrument_era": "ev11b_closed_bin_2026_07_20",
