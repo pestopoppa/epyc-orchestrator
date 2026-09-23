@@ -376,6 +376,34 @@ def _runtime_positive_int(
     return str(fallback)
 
 
+def _warn_if_ubatch_exceeds_batch(
+    role_name: str, ubatch: int | str, batch: int | str | None = None
+) -> None:
+    """K4 guard: llama.cpp clamps cparams.n_ubatch = min(n_batch, n_ubatch).
+
+    Every command builder here emits ``-ub`` without an accompanying ``-b``, so
+    the effective micro-batch is whatever ``-b`` would default to (2048) unless
+    ``batch`` names an explicit value this builder actually emits. A declared
+    ubatch above that ceiling is silently inert — warn at build time so the
+    next case of this (handoffs/active/dynamic-stack-concurrency.md K4) is
+    visible instead of requiring a fresh audit to rediscover.
+    """
+    try:
+        ubatch_int = int(ubatch)
+    except (TypeError, ValueError):
+        return
+    try:
+        batch_int = int(batch) if batch is not None else 2048
+    except (TypeError, ValueError):
+        batch_int = 2048
+    if ubatch_int > batch_int:
+        print(
+            f"    [WARN] {role_name}: -ub {ubatch_int} exceeds the effective "
+            f"-b {batch_int} (llama.cpp clamps n_ubatch to n_batch; no -b is "
+            "emitted here) -- the declared ubatch is INERT. K4."
+        )
+
+
 def _runtime_nonnegative_int(
     container: dict[str, Any],
     key: str,
@@ -1016,10 +1044,17 @@ def _build_worker_general_command(
         if "ngram_mod_n_match" in spec
         else None,
     )
+    # K4 (handoffs/active/dynamic-stack-concurrency.md): no -b is emitted on
+    # this path either, so a declared ubatch above the 2048 n_batch default
+    # would be silently clamped exactly as on the default-mode builder.
+    worker_general_ubatch = _runtime_positive_int(
+        cache, "ubatch", _WORKER_GENERAL_DEGRADED_FALLBACK["ubatch"]
+    )
+    _warn_if_ubatch_exceeds_batch("worker_general", worker_general_ubatch)
     cmd.extend(
         [
             "-ub",
-            _runtime_positive_int(cache, "ubatch", _WORKER_GENERAL_DEGRADED_FALLBACK["ubatch"]),
+            worker_general_ubatch,
             *(
                 ["--no-mmap"] if cache.get("no_mmap", True) is True else []
             ),  # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
@@ -1122,6 +1157,14 @@ def _build_eval_batch_frontdoor_command(port: int, numa_instance: int = 0) -> li
         if source_config is not None:
             model_path = str(source_config.model.full_path)
     binary = _runtime_string(runtime, "binary_path", str(_resolve_binary_for_role(source_role)))
+    # K4 (handoffs/active/dynamic-stack-concurrency.md): this lane never emits
+    # -b either, so the same n_batch=2048 default clamp applies to its -ub as
+    # to the main role builder's. The degraded-fallback literal below tracks
+    # DEFAULT_UBATCH_TOKENS (now the clamp value) rather than a stale 8192.
+    eval_batch_frontdoor_ubatch = _runtime_positive_int(
+        cache, "ubatch", DEFAULT_UBATCH_TOKENS
+    )
+    _warn_if_ubatch_exceeds_batch("eval_batch_frontdoor", eval_batch_frontdoor_ubatch)
     cmd = [
         binary,
         "-m",
@@ -1147,7 +1190,7 @@ def _build_eval_batch_frontdoor_command(port: int, numa_instance: int = 0) -> li
         "-t",
         _resolve_thread_count("eval_batch_frontdoor", numa_instance),
         "-ub",
-        _runtime_positive_int(cache, "ubatch", 8192),
+        eval_batch_frontdoor_ubatch,
         "-ctk",
         _runtime_string(cache, "kv_type_k", "q8_0"),
         "-ctv",
@@ -1442,9 +1485,13 @@ def _build_role_command(
     binary = _runtime_string(runtime, "binary_path", str(_resolve_binary_for_role(role_name)))
     ubatch = _runtime_positive_int(cache, "ubatch", DEFAULT_UBATCH_TOKENS)
 
-    # -ub 8192: matches the canonical-bench single-instance recipe
-    # (scripts/benchmark/run_qwen36_retest.py uses `-ub 8192` + `-c 8192` + `--parallel 1`).
-    # Without this, frontdoor's decode throughput was 12.66 t/s vs 25-27 t/s in the bench CSV.
+    # K4 (handoffs/active/dynamic-stack-concurrency.md): this builder never
+    # emits -b, and llama.cpp clamps cparams.n_ubatch = min(n_batch, n_ubatch)
+    # against the DEFAULT n_batch (2048) whenever -b is absent. So the -ub
+    # value below is a ceiling that is only ever real up to 2048 — raising it
+    # further requires ALSO passing -b, plus a measured window (this is not a
+    # config-only change). See _warn_if_ubatch_exceeds_batch just below.
+    _warn_if_ubatch_exceeds_batch(role_name, ubatch)
     cmd = [
         binary,
         "-m",

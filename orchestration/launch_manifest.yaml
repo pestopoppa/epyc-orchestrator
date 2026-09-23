@@ -416,7 +416,14 @@ vision:
 # them to DERIVED the way `slots` / `device` / `shared_with` already are.
 launch_shape:
   default_effective_context_tokens: 32768
-  default_ubatch_tokens: 8192
+  # K4 (handoffs/active/dynamic-stack-concurrency.md): llama.cpp clamps
+  # cparams.n_ubatch = min(n_batch, n_ubatch), and the launcher never passes
+  # -b, so n_batch defaults to 2048 for every role built off this value.
+  # A declared 8192 here was misrepresenting itself: the EFFECTIVE micro-batch
+  # was already 2048 for every server, silently. This value must equal the
+  # clamp until a future change adds -b and validates a real >2048 batch shape
+  # under a measured window (raising it is NOT a config-only change).
+  default_ubatch_tokens: 2048
 
   # ---------------------------------------------------------------------------
   # SLOT FALLBACKS — the ONLY slot numbers the launcher still owns.

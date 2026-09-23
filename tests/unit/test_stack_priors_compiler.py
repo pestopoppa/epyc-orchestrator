@@ -717,7 +717,15 @@ def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path
         frontdoor_runtime["cache"]["slots"]
         == _launch_manifest["launch_shape"]["fallback_slots"]["default"]
     )
-    assert frontdoor_runtime["cache"]["ubatch"] == 8192
+    # K4 (handoffs/active/dynamic-stack-concurrency.md): read the DECLARED
+    # default from launch_manifest.yaml rather than restating it as a literal,
+    # same rationale as the `slots` assertion above it -- a literal here is
+    # exactly what let 8192 (clamped inert to 2048 by llama.cpp's n_batch
+    # default with no -b emitted) go unnoticed.
+    assert (
+        frontdoor_runtime["cache"]["ubatch"]
+        == _launch_manifest["launch_shape"]["default_ubatch_tokens"]
+    )
     assert frontdoor_runtime["cache"]["kv_type_k"] == "q8_0"
     assert frontdoor_runtime["cache"]["kv_type_v"] == "q8_0"
     assert frontdoor_runtime["cache"]["mlock"] is True
