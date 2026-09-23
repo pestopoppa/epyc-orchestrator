@@ -1253,7 +1253,7 @@ class VisionConfig:
     default_batch_size: int = 100
     max_concurrent_workers: int = 4
     default_video_fps: float = 1.0
-    default_vl_max_tokens: int = 512
+    default_vl_max_tokens: int = 1024  # S-15: floor, reasoning VL models truncate below it
     default_vl_threads: int = 8
 
     # Thumbnail settings

@@ -527,7 +527,7 @@ class TestVisionDefaults:
         assert cfg.default_batch_size == 100
         assert cfg.max_concurrent_workers == 4
         assert cfg.default_video_fps == 1.0
-        assert cfg.default_vl_max_tokens == 512
+        assert cfg.default_vl_max_tokens == 1024
         assert cfg.default_vl_threads == 8
 
     def test_thumbnail_settings(self):
