@@ -48,7 +48,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-09-23T17:17:54Z'
+compiled_at: '2026-09-23T20:10:12Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -56,39 +56,39 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: 82cd7b96ffb3ce4e5edc07ccb449c65a54c197449797b9a8d8a25d961eed6f2b
-    repo_commit: c3f2cbc2
+    repo_commit: 927380a5
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 0ac0fb4ab1239fa28c29308f7442f1c8075446113619aa379e7cd896b3c2c285
-    repo_commit: c3f2cbc2
+    sha256: 9c0d330b9fd8f3793b4027a16f7a2f79d464c1247b0167409404cbaf4c1f8caa
+    repo_commit: 927380a5
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 0a5849e2702ac029973a96e9a7427067c7a6f5deb1e7060c60586b3a98d91c75
-    repo_commit: c3f2cbc2
+    repo_commit: 927380a5
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 8a9e4eade957c71b9694160668f982deff31960d3ec5ad0f2d8fc50369b3c703
-    repo_commit: c3f2cbc2
+    repo_commit: 927380a5
   launch_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/launch_manifest.yaml
-    sha256: 152ba470240c206d4dfc501399e252fbba9edf87534529b5e2cf311bba8e82a3
-    repo_commit: c3f2cbc2
+    sha256: 0b918378cf0992d8bbe58241f2ae7dbd1ed030b782dc0f6abd3949ba065e12ee
+    repo_commit: 927380a5
   stack_topology:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
     sha256: f802ef5b1636bec903344f800ce6ecbb7e97af20018dec678080b3af538dfbea
-    repo_commit: c3f2cbc2
+    repo_commit: 927380a5
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 5dc115aaa59aa780e6702694cb2668a74ef64dc81a1cb9d2bc9027e977c8f1fe
-    repo_commit: c3f2cbc2
+    sha256: 8703b0603af9f8c615ac44dcac2767f239db9644b82dd428382a7be4f21ef017
+    repo_commit: 927380a5
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 4a7ca842a87b6ffec022f4f6433d755751cac32b9102747d88f3f4f2e4cb24de
-    repo_commit: c3f2cbc2
+    repo_commit: 927380a5
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: c3f2cbc2
+    repo_commit: 927380a5
 roles:
   architect_critic:
     role: architect_critic
@@ -136,7 +136,7 @@ roles:
             slots: 1
             slots_by_port:
               8074: 1
-            ubatch: 8192
+            ubatch: 2048
             kv_type_k: f16
             kv_type_v: f16
             kv_hadamard: false
@@ -315,7 +315,7 @@ roles:
             slots: 2
             slots_by_port:
               8083: 2
-            ubatch: 8192
+            ubatch: 2048
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
@@ -538,7 +538,7 @@ roles:
             slots: 2
             slots_by_port:
               8083: 2
-            ubatch: 8192
+            ubatch: 2048
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
@@ -778,7 +778,7 @@ roles:
               8070: 4
               8080: 1
               8180: 1
-            ubatch: 8192
+            ubatch: 2048
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
@@ -974,7 +974,7 @@ roles:
             slots: 2
             slots_by_port:
               8083: 2
-            ubatch: 8192
+            ubatch: 2048
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
@@ -1638,7 +1638,7 @@ roles:
               8070: 4
               8080: 1
               8180: 1
-            ubatch: 8192
+            ubatch: 2048
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
@@ -2035,7 +2035,7 @@ roles:
               8070: 4
               8080: 4
               8180: 4
-            ubatch: 8192
+            ubatch: 2048
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
@@ -2234,7 +2234,7 @@ roles:
               8070: 4
               8080: 1
               8180: 1
-            ubatch: 8192
+            ubatch: 2048
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
@@ -2433,7 +2433,7 @@ roles:
               8070: 4
               8080: 1
               8180: 1
-            ubatch: 8192
+            ubatch: 2048
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
@@ -2632,7 +2632,7 @@ roles:
               8070: 4
               8080: 1
               8180: 1
-            ubatch: 8192
+            ubatch: 2048
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
@@ -2831,7 +2831,7 @@ roles:
               8070: 4
               8080: 1
               8180: 1
-            ubatch: 8192
+            ubatch: 2048
             kv_type_k: q8_0
             kv_type_v: q8_0
             kv_hadamard: false
