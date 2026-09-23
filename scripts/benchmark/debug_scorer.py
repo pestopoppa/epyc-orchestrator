@@ -29,6 +29,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -471,7 +472,7 @@ def _score_stdin_program(code: str, test_code: str, preamble: str, timeout: int)
             for inp, expected_out in cases:
                 try:
                     result = subprocess.run(
-                        ["python3", str(sol_file)],
+                        [sys.executable, str(sol_file)],
                         input=inp,
                         capture_output=True,
                         text=True,
@@ -609,7 +610,7 @@ def _score_code_execution(answer: str, expected: str, config: dict[str, Any]) ->
             solution_path = workdir / "solution.py"
             solution_path.write_text(full_code, encoding="utf-8")
             process = subprocess.Popen(
-                ["python3", str(solution_path)],
+                [sys.executable, str(solution_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
