@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import copy
 import hashlib
+import json
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -49,7 +50,8 @@ def test_split_gguf_requires_every_declared_shard(use, flag):
     assert shards[-1] not in {row["path"] for row in rows}
 
 
-def _context(tmp_path: Path, monkeypatch=None, *, roles=("frontdoor",), mode="full", artifacts=()):
+def _context(tmp_path: Path, monkeypatch=None, *, roles=("frontdoor",), mode="full",
+             artifacts=(), backend_scope="all"):
     # A lean registry is itself a fixed point of the compiler.  Keeping two pinned
     # byte copies exercises the master->lean drift guard without reaching another repo.
     lean = ROOT / "orchestration/model_registry.yaml"
@@ -91,7 +93,8 @@ def _context(tmp_path: Path, monkeypatch=None, *, roles=("frontdoor",), mode="fu
     sources = tuple(SourcePin(name, str(path), hashlib.sha256(path.read_bytes()).hexdigest(),
                               "test-revision") for name, path in paths.items())
     return ExportContext("test-export", "2026-09-09T00:00:00Z", mode, sources,
-                         tuple(artifacts), (), tuple(roles), _loaded_builder_identity())
+                         tuple(artifacts), (), tuple(roles), _loaded_builder_identity(),
+                         (), backend_scope)
 
 
 def test_export_uses_actual_builder_without_runtime_side_effects(tmp_path: Path, monkeypatch):
@@ -125,7 +128,15 @@ def test_known_artifacts_make_row_ready_and_alias_deduplicates(tmp_path: Path, m
     rows = [item for item in second["targets"] if item["primary_role"] == "frontdoor"]
     assert len(rows) == 1
     assert rows[0]["status"] == "ready"
-    assert rows[0]["obligations"] == ["frontdoor", "worker_summarize"]
+    # The obligations list is a DERIVED lineup fact: frontdoor's shared_with set
+    # grows whenever the registry compiles new co-served roles, so pinning it to a
+    # literal made this test a snapshot of the lineup rather than of the behaviour
+    # it is named for. Assert the invariants instead: every requested role appears,
+    # and the list is deduplicated and ordered.
+    obligations = rows[0]["obligations"]
+    assert {"frontdoor", "worker_summarize"} <= set(obligations)
+    assert len(obligations) == len(set(obligations)), obligations
+    assert obligations == sorted(obligations), obligations
     assert rows[0]["optional_seed"] is False
 
 
@@ -339,3 +350,96 @@ def test_actual_both_mode_full_and_quarter_launches_have_distinct_recipe_bytes(
         for row in frontdoors
     }
     assert len(recipe_digests) == 3
+
+
+def test_unscoped_export_is_byte_identical_to_the_pre_scope_shape(tmp_path: Path, monkeypatch):
+    """The regression that matters: default `all` changes nothing for existing callers."""
+    context = _context(tmp_path, monkeypatch)
+    assert context.backend_scope == "all"
+    assert "backend_scope" not in context.to_dict()
+    export = export_production_enrollment(context)
+    assert "backend_scope" not in export["context"]
+    unsigned = {key: item for key, item in export.items() if key != "export_sha256"}
+    assert export["export_sha256"] == hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert {row.get("backend") for row in export["targets"]} - {None} > {"cpu"}
+
+
+def test_scoped_export_omits_every_out_of_scope_target_and_records_the_scope(
+        tmp_path: Path, monkeypatch):
+    full = export_production_enrollment(_context(tmp_path / "a", monkeypatch))
+    cpu = export_production_enrollment(
+        _context(tmp_path / "b", monkeypatch, backend_scope="cpu"))
+    assert {row.get("backend") for row in cpu["targets"]} == {"cpu"}
+    assert cpu["context"]["backend_scope"] == "cpu"  # sealed under export_sha256
+    full_ids = {row["target_id"] for row in full["targets"]}
+    cpu_ids = {row["target_id"] for row in cpu["targets"]}
+    assert cpu_ids < full_ids
+    # Omission, not annotation: the dropped rows leave no reconstitutable residue.
+    dropped = full_ids - cpu_ids
+    assert dropped and not any(row["target_id"] in dropped for row in cpu["targets"])
+    assert json.dumps(cpu["targets"]).count("ROCm") == 0
+    assert cpu["disposition"] == {
+        status: sum(row["status"] == status for row in cpu["targets"])
+        for status in ("ready", "waiting_artifact", "unsupported")}
+
+
+def test_scope_is_covered_by_the_export_digest(tmp_path: Path, monkeypatch):
+    cpu = export_production_enrollment(
+        _context(tmp_path, monkeypatch, backend_scope="cpu"))
+    tampered = copy.deepcopy(cpu)
+    tampered["context"].pop("backend_scope")
+    unsigned = {key: item for key, item in tampered.items() if key != "export_sha256"}
+    assert cpu["export_sha256"] != hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def test_gpu_scope_keeps_only_gpu_targets(tmp_path: Path, monkeypatch):
+    gpu = export_production_enrollment(
+        _context(tmp_path, monkeypatch, backend_scope="gpu"))
+    assert gpu["targets"]
+    assert {row.get("backend") for row in gpu["targets"]} == {"gpu"}
+
+
+def test_unresolved_requested_role_is_dropped_by_a_scoped_export(tmp_path: Path, monkeypatch):
+    """A role with no backend at all cannot be in a single-backend export."""
+    scoped = export_production_enrollment(
+        _context(tmp_path / "a", monkeypatch, roles=("frontdoor", "does_not_exist"),
+                 backend_scope="cpu"))
+    assert not any(row["target_id"] == "does_not_exist" for row in scoped["targets"])
+    unscoped = export_production_enrollment(
+        _context(tmp_path / "b", monkeypatch, roles=("frontdoor", "does_not_exist")))
+    assert any(row["target_id"] == "does_not_exist" for row in unscoped["targets"])
+
+
+@pytest.mark.parametrize("scope", ["CPU", "none", "", "both", 1])
+def test_unsupported_backend_scope_refuses(tmp_path: Path, scope):
+    context = _context(tmp_path)
+    raw = context.to_dict()
+    raw["backend_scope"] = scope
+    with pytest.raises(EnrollmentExportError):
+        ExportContext.from_dict(raw)
+
+
+def test_scoped_context_roundtrips_through_json(tmp_path: Path):
+    context = _context(tmp_path, backend_scope="gpu")
+    assert ExportContext.from_dict(json.loads(json.dumps(context.to_dict()))) == context
+
+
+def test_cli_backend_flag_reaches_the_context(tmp_path: Path, monkeypatch):
+    seen = {}
+
+    def capture(**kwargs):
+        seen.update(kwargs)
+        raise EnrollmentExportError("stop before export")
+
+    monkeypatch.setattr(enrollment, "capture_current_context", capture)
+    assert enrollment.main([
+        "--master-registry", str(ROOT / "orchestration/model_registry.yaml"),
+        "--revision", "test", "--instance-mode", "full", "--backend", "cpu"]) == 2
+    assert seen["backend_scope"] == "cpu"
+    seen.clear()
+    assert enrollment.main([
+        "--master-registry", str(ROOT / "orchestration/model_registry.yaml"),
+        "--revision", "test", "--instance-mode", "full"]) == 2
+    assert seen["backend_scope"] == "all"

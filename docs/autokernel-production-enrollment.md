@@ -31,6 +31,18 @@ launcher-only tenant and `--seed-role` adds an optional seed; neither can remove
 shadow production obligations. Whisper and Qwen TTS obligations are retained with
 `speech_instrument_unsupported` because this serving instrument cannot measure them.
 
+`--backend {cpu,gpu,all}` scopes the export to one backend; it defaults to `all`, which
+is the historical shape, and an unscoped export is byte-identical to one produced before
+the flag existed. A scoped export omits every out-of-scope target *entirely* rather than
+flagging it, so a later reader cannot reconstitute a target the campaign was never
+allowed to touch — a CPU-scoped enrollment is structurally unable to name the GPU, and a
+CPU campaign declaring `resources.gpu_ids: []` therefore resolves instead of being
+refused by `campaign.py`'s "GPU/both targets require non-empty resources.gpu_ids". The
+scope is recorded as `context.backend_scope` in the export body, hence sealed by
+`export_sha256` and by the `--out` bundle: a short roster always carries the reason it is
+short. Omission covers the aux speech rows and unresolved `--role` requests too, so a
+scoped export contains exactly one backend.
+
 Artifact pins are an optional JSON array of `{use,path,sha256}` objects. The exporter
 does not hash model files, binaries, or DSOs. Missing pins yield `waiting_artifact` per
 target. Pins are declarations by default; `--verify-artifacts` explicitly hashes each

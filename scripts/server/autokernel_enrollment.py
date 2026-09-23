@@ -25,6 +25,9 @@ import yaml
 
 EXPORT_SCHEMA = "autokernel-production-enrollment/v1"
 CONTEXT_SCHEMA = "autokernel-production-export-context/v1"
+#: Backend scopes an export may declare.  "all" is the default and the
+#: historical shape; a scoped export omits every out-of-scope target.
+BACKEND_SCOPES = ("cpu", "gpu", "all")
 RECIPE_ARTIFACT_SCHEMA = "autokernel-production-launch-recipe/v1"
 _SAFE_ENV_EXACT = frozenset({"LD_LIBRARY_PATH", "PATH", "HSA_OVERRIDE_GFX_VERSION"})
 _SAFE_ENV_PREFIXES = ("GGML_", "OMP_", "KMP_")
@@ -156,15 +159,26 @@ class ExportContext:
     requested_roles: tuple[str, ...]
     loaded_builder_sha256: str
     seed_roles: tuple[str, ...] = ()
+    #: Which backends this export is allowed to describe.  ``all`` is the historical
+    #: behaviour (every selected target); ``cpu``/``gpu`` omit every out-of-scope
+    #: target from the export entirely, so a reader cannot reconstitute one.  The
+    #: scope travels inside the context, hence under ``export_sha256``: a short
+    #: roster must always carry the reason it is short.
+    backend_scope: str = "all"
 
     @classmethod
     def from_dict(cls, value: Any) -> "ExportContext":
-        if not isinstance(value, Mapping) or set(value) != {
+        # ``backend_scope`` is additive and omitted when it is the default, so an
+        # unscoped export stays byte-identical to every export produced before it.
+        if not isinstance(value, Mapping) or set(value) - {"backend_scope"} != {
             "schema", "export_id", "created_at", "instance_mode", "sources",
             "artifacts", "base_environment", "requested_roles", "seed_roles",
             "loaded_builder_sha256",
         } or value["schema"] != CONTEXT_SCHEMA:
             raise EnrollmentExportError("malformed or unsupported export context")
+        backend_scope = _text(value.get("backend_scope", "all"), "backend_scope")
+        if backend_scope not in BACKEND_SCOPES:
+            raise EnrollmentExportError("backend_scope must be cpu, gpu, or all")
         mode = _text(value["instance_mode"], "instance_mode")
         if mode not in {"full", "quarter", "both"}:
             raise EnrollmentExportError("instance_mode must be full, quarter, or both")
@@ -205,17 +219,21 @@ class ExportContext:
             raise EnrollmentExportError("artifact use/path pairs must be unique")
         return cls(_text(value["export_id"], "export_id"), value["created_at"], mode,
                    sources, artifacts, tuple(sorted(env.items())), requested,
-                   _sha(value["loaded_builder_sha256"], "loaded_builder_sha256"), seed_roles)
+                   _sha(value["loaded_builder_sha256"], "loaded_builder_sha256"), seed_roles,
+                   backend_scope)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"schema": CONTEXT_SCHEMA, "export_id": self.export_id,
-                "created_at": self.created_at, "instance_mode": self.instance_mode,
-                "sources": [item.to_dict() for item in self.sources],
-                "artifacts": [item.to_dict() for item in self.artifacts],
-                "base_environment": dict(self.base_environment),
-                "requested_roles": list(self.requested_roles),
-                "loaded_builder_sha256": self.loaded_builder_sha256,
-                "seed_roles": list(self.seed_roles)}
+        row = {"schema": CONTEXT_SCHEMA, "export_id": self.export_id,
+               "created_at": self.created_at, "instance_mode": self.instance_mode,
+               "sources": [item.to_dict() for item in self.sources],
+               "artifacts": [item.to_dict() for item in self.artifacts],
+               "base_environment": dict(self.base_environment),
+               "requested_roles": list(self.requested_roles),
+               "loaded_builder_sha256": self.loaded_builder_sha256,
+               "seed_roles": list(self.seed_roles)}
+        if self.backend_scope != "all":
+            row["backend_scope"] = self.backend_scope
+        return row
 
 
 def _loaded_builder_identity() -> str:
@@ -265,7 +283,8 @@ def capture_current_context(*, master_registry: Path | str, revision: str,
                             requested_roles: Sequence[str] = (),
                             seed_roles: Sequence[str] = (),
                             base_environment: Mapping[str, str] | None = None,
-                            export_id: str = "production-current") -> ExportContext:
+                            export_id: str = "production-current",
+                            backend_scope: str = "all") -> ExportContext:
     """Capture source bytes from the exact modules loaded by this process.
 
     Artifact digests remain caller-supplied declarations; this helper never hashes models,
@@ -292,7 +311,8 @@ def capture_current_context(*, master_registry: Path | str, revision: str,
                  for name, path in paths.items())
     raw = ExportContext(export_id, datetime.now(timezone.utc).isoformat(), instance_mode,
                         pins, tuple(artifacts), tuple(sorted((base_environment or {}).items())),
-                        tuple(requested_roles), _loaded_builder_identity(), tuple(seed_roles))
+                        tuple(requested_roles), _loaded_builder_identity(), tuple(seed_roles),
+                        backend_scope)
     return ExportContext.from_dict(raw.to_dict())
 
 
@@ -542,13 +562,25 @@ def export_production_enrollment(context: ExportContext | Mapping[str, Any], *,
 
     targets: list[dict[str, Any]] = []
     seen_instances: set[tuple[str, int]] = set()
+
+    def in_scope(row: Mapping[str, Any]) -> bool:
+        """A scoped export carries only targets of that backend, and nothing else.
+
+        Omission, not annotation: a campaign that cannot name a resource cannot
+        reach it.  ``context.backend_scope`` (sealed under ``export_sha256``) is
+        what tells the reader the roster is deliberately short.
+        """
+        return context.backend_scope == "all" or row.get("backend") == context.backend_scope
+
     for requested_role in requested:
         matches = by_role.get(requested_role, [])
         if not matches:
-            targets.append({"target_id": requested_role, "primary_role": requested_role,
-                            "aliases": [], "obligations": [requested_role],
-                            "optional_seed": requested_role in context.seed_roles,
-                            "status": "unsupported", "reasons": ["role_not_in_selected_fleet"]})
+            row = {"target_id": requested_role, "primary_role": requested_role,
+                   "aliases": [], "obligations": [requested_role],
+                   "optional_seed": requested_role in context.seed_roles,
+                   "status": "unsupported", "reasons": ["role_not_in_selected_fleet"]}
+            if in_scope(row):
+                targets.append(row)
             continue
         for entry in matches:
             primary = str(entry["roles"][0])
@@ -645,16 +677,19 @@ def export_production_enrollment(context: ExportContext | Mapping[str, Any], *,
                 "source_revision_kinds": {pin.name: pin.revision_kind
                                           for pin in context.sources},
             }
-            targets.append(target)
+            if in_scope(target):
+                targets.append(target)
 
     for name in ("whisper", "tts"):
         service = AUX_SERVICES.get(name)
         if service is not None:
-            targets.append({"target_id": f"speech:{name}", "primary_role": name,
-                            "aliases": [], "obligations": [name], "optional_seed": False,
-                            "status": "unsupported", "reasons": ["speech_instrument_unsupported"],
-                            "backend": service.backend, "argv": list(service.argv),
-                            "environment": dict(service.env)})
+            row = {"target_id": f"speech:{name}", "primary_role": name,
+                   "aliases": [], "obligations": [name], "optional_seed": False,
+                   "status": "unsupported", "reasons": ["speech_instrument_unsupported"],
+                   "backend": service.backend, "argv": list(service.argv),
+                   "environment": dict(service.env)}
+            if in_scope(row):
+                targets.append(row)
 
     body = {"schema": EXPORT_SCHEMA, "context": context.to_dict(), "targets": targets,
             "disposition": {status: sum(row["status"] == status for row in targets)
@@ -843,6 +878,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--master-registry", type=Path, required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--instance-mode", choices=("full", "quarter", "both"), required=True)
+    parser.add_argument("--backend", choices=BACKEND_SCOPES, default="all",
+                        help="restrict the export to one backend; out-of-scope targets "
+                             "are omitted entirely and the scope is sealed in the export")
     parser.add_argument("--role", action="append", default=[])
     parser.add_argument("--seed-role", action="append", default=[])
     parser.add_argument("--artifact-pins", type=Path)
@@ -859,7 +897,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         context = capture_current_context(
             master_registry=args.master_registry, revision=args.revision,
             instance_mode=args.instance_mode, artifacts=artifacts,
-            requested_roles=args.role, seed_roles=args.seed_role)
+            requested_roles=args.role, seed_roles=args.seed_role,
+            backend_scope=args.backend)
         body = export_production_enrollment(context, verify_artifacts=args.verify_artifacts)
         encoded = json.dumps(body, indent=2, sort_keys=True) + "\n"
         if args.out is None:
@@ -876,7 +915,8 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["ArtifactPin", "CONTEXT_SCHEMA", "EXPORT_SCHEMA", "RECIPE_ARTIFACT_SCHEMA",
+__all__ = ["ArtifactPin", "BACKEND_SCOPES", "CONTEXT_SCHEMA", "EXPORT_SCHEMA",
+           "RECIPE_ARTIFACT_SCHEMA",
            "EnrollmentExportError",
            "ExportContext", "SourcePin", "capture_current_context",
            "export_production_enrollment", "seal_export_bundle", "main"]
