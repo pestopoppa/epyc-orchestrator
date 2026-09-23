@@ -5,26 +5,15 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
-import subprocess
 import sys
 from types import SimpleNamespace
 
 import pytest
 
+# NIB2-75 (2026-09-23): tests that needed the retired E8 sealed bundles were removed per OP-19.
 
 ROOT = Path(__file__).resolve().parents[2]
 PATH = ROOT / "scripts/benchmark/final_c1_retry.py"
-REAL_ORIGINAL_RECEIPT = Path(
-    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
-    "ratify_e8_final_c1_retry_amendment_20260728.json"
-)
-REAL_ORIGINAL_RATIFIER = Path(
-    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
-    "ratify_e8_final_c1_retry_amendment_20260728.sh"
-)
-REAL_ORIGINAL_RECEIPT_SHA256 = (
-    "51aef2bd0431c8df5050f7985422d9712fc2d1494cfed1d7a3b1a54e5cab121e"
-)
 SPEC = importlib.util.spec_from_file_location("e8_final_c1_retry_test", PATH)
 assert SPEC is not None and SPEC.loader is not None
 RUNNER = importlib.util.module_from_spec(SPEC)
@@ -251,50 +240,6 @@ def _write_receipt(path: Path, receipt: dict | None = None) -> Path:
     path.write_text(json.dumps(receipt or _receipt()) + "\n", encoding="utf-8")
     RUNNER.CANONICAL_RECEIPT = path
     return path
-
-
-@pytest.mark.skipif(not RUNNER.SOURCE.is_dir(), reason="sealed failed race evidence unavailable")
-def test_exact_failed_race_source_is_the_only_admitted_source() -> None:
-    validated = RUNNER.validate_failed_source()
-    assert len(validated["hashes"]) == 806
-    assert RUNNER.canonical_hash(validated["hashes"]) == RUNNER.SOURCE_TREE_SHA256
-    assert sorted(set(range(500)) - set(validated["journal"])) == [97, 279]
-
-
-@pytest.mark.skipif(
-    not REAL_ORIGINAL_RECEIPT.is_file() or not RUNNER.SOURCE.is_dir(),
-    reason="real durable receipt or sealed failed-race evidence unavailable",
-)
-def test_real_durable_receipt_builds_read_only_plan_and_cli_plan(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(RUNNER, "ORIGINAL_RECEIPT", REAL_ORIGINAL_RECEIPT)
-    monkeypatch.setattr(RUNNER, "ORIGINAL_RATIFIER", REAL_ORIGINAL_RATIFIER)
-    monkeypatch.setattr(
-        RUNNER, "ORIGINAL_RECEIPT_SHA256", REAL_ORIGINAL_RECEIPT_SHA256
-    )
-
-    plan = RUNNER.build_plan(RUNNER.SOURCE, REAL_ORIGINAL_RECEIPT)
-    assert plan["execution_authorized"] is False
-    assert plan["amendment_receipt"]["schema"] == RUNNER.ORIGINAL_RECEIPT_SCHEMA
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(PATH),
-            "--plan",
-            "--amendment-receipt",
-            str(REAL_ORIGINAL_RECEIPT),
-        ],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    cli_plan = json.loads(result.stdout)
-    assert cli_plan["execution_authorized"] is False
-    assert cli_plan["amendment_receipt"]["sha256"] == REAL_ORIGINAL_RECEIPT_SHA256
 
 
 @pytest.mark.parametrize("receipt_name", ["ORIGINAL_RECEIPT", "SUPERSEDING_RECEIPT"])

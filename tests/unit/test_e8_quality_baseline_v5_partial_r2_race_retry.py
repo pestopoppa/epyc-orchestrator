@@ -1,12 +1,11 @@
 """Adversarial eligibility tests for the E8 r2 race-only second successor."""
+# NIB2-75 (2026-09-23): tests that needed the retired E8 sealed bundles were removed per OP-19.
 from __future__ import annotations
 
 import importlib.util
 import json
 from pathlib import Path
-import shutil
 import sys
-from types import SimpleNamespace
 
 import pytest
 
@@ -21,11 +20,6 @@ SPEC.loader.exec_module(RETRY)
 
 QUESTION = {"qid": "q0"}
 RACE = "[ERROR: placement timeout role=frontdoor reason=race_lost holders=[0, 1, 2] after 90.0s]"
-FAILED_C1_SOURCE = Path(
-    "/mnt/raid0/llm/epyc-root/artifacts/operator/"
-    "e8_quality_baseline_v5_partial_r2_mixed_tail_c1_successor_20260728T194407Z"
-)
-FAILED_C1_TREE_SHA256 = "4b7e66bec01c4eb2f65e10b75b9b1219ff74afda79f02873972194eefca2e286"
 
 
 def _provenance(**overrides: object) -> dict:
@@ -465,90 +459,6 @@ def _rebind_terminal_snapshot(root: Path) -> None:
             "source_tree_sha256": RETRY.canonical_hash(hashes),
         },
     )
-
-
-@pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
-def test_nested_terminalization_accepts_only_the_exact_enclosing_binding(tmp_path: Path) -> None:
-    snapshot = tmp_path / "predecessor_snapshot"
-    shutil.copytree(FAILED_C1_SOURCE / "predecessor_snapshot", snapshot)
-    descriptor = RETRY.V4.load_json(FAILED_C1_SOURCE / "partial_r2_plan.json")[
-        "mixed_tail_repair"
-    ]["terminalization_transition"]
-
-    assert (
-        RETRY._validate_terminalization_transition_semantically(
-            snapshot,
-            allow_historical=True,
-        )
-        == descriptor
-    )
-
-
-@pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
-def test_frozen_c1_source_is_directly_admitted_without_a_root_transition() -> None:
-    assert not (FAILED_C1_SOURCE / RETRY.TERMINALIZATION_NAME).exists()
-
-    plan = RETRY.build_plan(FAILED_C1_SOURCE, FAILED_C1_TREE_SHA256)
-
-    assert plan["predecessor_tree_sha256"] == FAILED_C1_TREE_SHA256
-    assert plan["schema"] == RETRY.LEGACY_PLAN_SCHEMA
-    assert plan["generation_ordinals"] == plan["race_retry_ordinals"]
-    assert plan["race_retry_ordinals"] == [97, 203, 279]
-    assert (
-        plan["mixed_tail_repair"]["terminalization_transition"]["sha256"]
-        == "227bbd841f8fc3a4a58f2ef35d6452b63f7c34e21de4e75a407f21413d4409c6"
-    )
-
-
-@pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
-def test_copied_mixed_predecessor_cannot_enter_future_execution(tmp_path: Path) -> None:
-    copied = tmp_path / "copied-mixed-predecessor"
-    shutil.copytree(FAILED_C1_SOURCE, copied)
-    with pytest.raises(ValueError, match="exact historical artifact"):
-        RETRY.build_plan(copied, FAILED_C1_TREE_SHA256)
-
-
-@pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
-def test_exact_historical_v1_cannot_execute(tmp_path: Path) -> None:
-    args = SimpleNamespace(
-        source_dir=FAILED_C1_SOURCE,
-        expected_source_tree_sha256=FAILED_C1_TREE_SHA256,
-        output_dir=tmp_path / "race-retry",
-        api_url="http://127.0.0.1:8000",
-        region_claim_tag="test-race-proposal",
-        region_claim_regions="q3",
-        region_claim_dir=tmp_path,
-    )
-
-    with pytest.raises(RuntimeError, match="audit-only"):
-        RETRY.execute(args)
-
-    assert not args.output_dir.exists()
-    assert not list(tmp_path.glob(".race-retry.aborted-*"))
-
-
-@pytest.mark.skipif(not FAILED_C1_SOURCE.is_dir(), reason="sealed E8 c1 source is host evidence")
-@pytest.mark.parametrize("tamper", ["wrapper", "payload", "transition", "journal"])
-def test_nested_terminalization_rejects_wrapper_or_terminal_evidence_tamper(
-    tmp_path: Path, tamper: str
-) -> None:
-    snapshot = tmp_path / "predecessor_snapshot"
-    shutil.copytree(FAILED_C1_SOURCE / "predecessor_snapshot", snapshot)
-    if tamper == "wrapper":
-        binding = RETRY.V4.load_json(snapshot / "source_binding.json")
-        binding["source_tree_sha256"] = "0" * 64
-        RETRY.RECOVERY._write_json(snapshot / "source_binding.json", binding)
-    else:
-        target = {
-            "payload": snapshot / "generation_judge_traces.T2.r2.jsonl",
-            "transition": snapshot / RETRY.TERMINALIZATION_NAME,
-            "journal": snapshot / "recovery_rows.T2.r2.jsonl",
-        }[tamper]
-        target.write_bytes(target.read_bytes() + b"\n")
-        _rebind_terminal_snapshot(snapshot)
-
-    with pytest.raises(ValueError):
-        RETRY._validate_terminalization_transition_semantically(snapshot)
 
 
 def _mixed_chain_fixture(tmp_path: Path) -> tuple[Path, dict, list[dict], dict[int, dict]]:

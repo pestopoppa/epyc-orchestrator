@@ -1,4 +1,5 @@
 """Focused contract tests for the separate E8 recovered-r2 validator context."""
+# NIB2-75 (2026-09-23): tests that needed the retired E8 sealed bundles were removed per OP-19.
 
 from __future__ import annotations
 
@@ -26,21 +27,6 @@ assert finalizer_spec is not None and finalizer_spec.loader is not None
 finalizer = importlib.util.module_from_spec(finalizer_spec)
 sys.modules[finalizer_spec.name] = finalizer
 finalizer_spec.loader.exec_module(finalizer)
-
-# These tests replay the real preserved composite staging source byte-for-byte
-# (its tree hash is pinned in the validator), so a synthetic copy cannot stand in.
-# That staging bundle is historical E8 campaign evidence on the host and is no
-# longer present, so the dependency is declared explicitly.
-REAL_COMPOSITE_SOURCE = validator.COMPOSITE_SOURCE_DIR
-requires_real_composite_source = pytest.mark.skipif(
-    not REAL_COMPOSITE_SOURCE.is_dir(),
-    reason=(
-        "env-dependent historical evidence: preserved composite staging source "
-        f"{REAL_COMPOSITE_SOURCE} absent from host; owner: E8 quality-baseline "
-        "campaign owner (NIB2-69 triage 2026-09-15)"
-    ),
-)
-
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -1244,112 +1230,6 @@ def test_recovery_r2_context_rejects_source_watcher_and_claim_drift(tmp_path: Pa
         _validate(root, context)
 
 
-@requires_real_composite_source
-def test_finalizer_plan_rejects_the_unsealed_preserved_staging_source() -> None:
-    source = Path(
-        "/mnt/raid0/llm/epyc-root/artifacts/operator/"
-        ".e8_quality_baseline_v5_partial_resume_promptfix_20260728.staging-b0d7ce62d6e04509a1cec7849aa68832"
-    )
-    with pytest.raises(ValueError, match="published non-staging"):
-        finalizer.build_plan(source)
-    plan = finalizer.validate_legacy_composite_source(source)
-    assert plan["banked"] == {"tiers": [1], "t2_r1": True}
-    assert plan["fresh_collection"] == [{"tier": 2, "repetition": 3}]
-
-
-@requires_real_composite_source
-def test_real_source_tail_is_rebound_to_the_new_bundle_without_regeneration(tmp_path: Path) -> None:
-    source = Path(
-        "/mnt/raid0/llm/epyc-root/artifacts/operator/"
-        ".e8_quality_baseline_v5_partial_resume_promptfix_20260728.staging-"
-        "b0d7ce62d6e04509a1cec7849aa68832"
-    )
-    plan = finalizer.validate_legacy_composite_source(source)
-    staging = tmp_path / "staging"
-    destination = tmp_path / "published"
-    finalizer._copy_composite_source(source, staging, plan)
-    tail = finalizer._canonical_t2r1_tail(staging, destination)
-    attempts = finalizer.V4.load_jsonl(staging / "generation_tail_attempts.T2.r1.jsonl")
-
-    assert tail["retry_count"] == 2
-    assert [row["ordinal"] for row in attempts] == [98, 99]
-    assert [row["retry_sidecar_path"] for row in attempts] == [
-        str(destination / "eval_sidecars/question_results.e8-v5-tail-t2-r1-o98.jsonl"),
-        str(destination / "eval_sidecars/question_results.e8-v5-tail-t2-r1-o99.jsonl"),
-    ]
-    assert [row["retry_judge_trace_path"] for row in attempts] == [
-        str(destination / "generation_tail_judge_traces/T2.r1.o98.jsonl"),
-        str(destination / "generation_tail_judge_traces/T2.r1.o99.jsonl"),
-    ]
-    for ordinal in (98, 99):
-        assert (
-            staging / f"eval_sidecars/question_results.e8-v5-tail-t2-r1-o{ordinal}.jsonl"
-        ).read_bytes() == (
-            source / f"eval_sidecars/question_results.e8-v5-tail-t2-r1-o{ordinal}.jsonl"
-        ).read_bytes()
-        assert (staging / f"generation_tail_judge_traces/T2.r1.o{ordinal}.jsonl").read_bytes() == (
-            source / f"generation_tail_judge_traces/T2.r1.o{ordinal}.jsonl"
-        ).read_bytes()
-
-
-@requires_real_composite_source
-def test_real_source_tail_rejects_broadened_ordinals(tmp_path: Path) -> None:
-    source = Path(
-        "/mnt/raid0/llm/epyc-root/artifacts/operator/"
-        ".e8_quality_baseline_v5_partial_resume_promptfix_20260728.staging-"
-        "b0d7ce62d6e04509a1cec7849aa68832"
-    )
-    staging = tmp_path / "staging"
-    finalizer._copy_composite_source(
-        source,
-        staging,
-        finalizer.validate_legacy_composite_source(source),
-    )
-    plan_path = staging / "partial_resume_plan.json"
-    plan = json.loads(plan_path.read_text())
-    plan["generation_tail"]["targets"][1]["ordinal"] = 100
-    _write_json(plan_path, plan)
-
-    with pytest.raises(ValueError, match="tail targets"):
-        finalizer._canonical_t2r1_tail(staging, tmp_path / "published")
-
-
-@requires_real_composite_source
-def test_layered_context_is_limited_to_the_exact_composite_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source_plan = finalizer.validate_legacy_composite_source(
-        validator.COMPOSITE_SOURCE_DIR
-    )
-    assert validator.canonical_hash(source_plan["source_sha256"]) == (
-        validator.COMPOSITE_SOURCE_TREE_SHA256
-    )
-    source_plan_path = tmp_path / "recovery_finalizer_source_plan.json"
-    _write_json(source_plan_path, source_plan)
-    context = {
-        "context": {
-            "composite_source_plan_path": str(source_plan_path),
-            "composite_source_plan_sha256": _sha(source_plan_path),
-        }
-    }
-    with pytest.raises(ValueError, match="published terminal copy"):
-        validator.validate_composite_context(context, evidence_root=tmp_path)
-    recycled_source = tmp_path / "recycled-source"
-    monkeypatch.setattr(validator, "COMPOSITE_SOURCE_DIR", recycled_source)
-    source_plan["source"] = str(recycled_source)
-    for name, entry in source_plan["t2_r1_repair_history"].items():
-        entry["path"] = str(recycled_source / name)
-    _write_json(source_plan_path, source_plan)
-    context["context"]["composite_source_plan_sha256"] = _sha(source_plan_path)
-    with pytest.raises(ValueError, match="published terminal copy"):
-        validator.validate_composite_context(context, evidence_root=tmp_path)
-    source_plan["source_sha256"] = {}
-    _write_json(source_plan_path, source_plan)
-    context["context"]["composite_source_plan_sha256"] = _sha(source_plan_path)
-    with pytest.raises(ValueError, match="published terminal copy"):
-        validator.validate_composite_context(context, evidence_root=tmp_path)
-
-
 def test_composite_context_requires_both_recovery_layers() -> None:
     partial = {"partial": {"plan_sha256": validator.COMPOSITE_PARTIAL_RESUME_PLAN_SHA256}}
     ordinary_partial = {"partial": {"plan_sha256": "0" * 64}}
@@ -1376,97 +1256,6 @@ def test_composite_context_requires_both_recovery_layers() -> None:
     }
     with pytest.raises(ValueError, match="incomplete"):
         validator.composite_context_state(None, incomplete)
-
-
-@requires_real_composite_source
-def test_four_monitor_segments_pin_the_source_resume_gap_and_order(tmp_path: Path) -> None:
-    source = Path(
-        "/mnt/raid0/llm/epyc-root/artifacts/operator/"
-        ".e8_quality_baseline_v5_partial_resume_promptfix_20260728.staging-"
-        "b0d7ce62d6e04509a1cec7849aa68832"
-    )
-    historical = finalizer.V4.load_jsonl(source / "historical_runtime_watch.jsonl")
-    source_resume = finalizer.V4.load_jsonl(source / "resume_runtime_watch.jsonl")
-    recovery = [dict(source_resume[0]), dict(source_resume[1])]
-    recovery[0]["active_load"] = {"tier": 2, "repetition": 2}
-    recovery[1]["active_load"] = None
-    final_resume = [dict(source_resume[index]) for index in range(2)]
-    for index, row in enumerate(final_resume):
-        row["started_at"] = f"2026-07-28T00:00:{index * 5:02d}Z"
-        row["active_load"] = {"tier": 2, "repetition": 3}
-    paths = {
-        "historical": tmp_path / "historical_runtime_watch.jsonl",
-        "source_resume": tmp_path / "source_resume_runtime_watch.jsonl",
-        "recovery_r2": tmp_path / "recovery_runtime_watch.jsonl",
-        "resume": tmp_path / "resume_runtime_watch.jsonl",
-    }
-    for name, rows in (
-        ("historical", historical),
-        ("source_resume", source_resume),
-        ("recovery_r2", recovery),
-        ("resume", final_resume),
-    ):
-        if name == "historical":
-            paths[name].write_bytes((source / "historical_runtime_watch.jsonl").read_bytes())
-        elif name == "source_resume":
-            paths[name].write_bytes((source / "resume_runtime_watch.jsonl").read_bytes())
-        else:
-            _write_jsonl(paths[name], rows)
-    recovery_gap_count, recovery_max_gap = validator._monitor_gap_stats(recovery)
-    final_gap_count, final_max_gap = validator._monitor_gap_stats(final_resume)
-    starts = 0
-    segments = []
-    for name, rows, maximum, gap_count, binding in (
-        (
-            "historical",
-            historical,
-            validator.HISTORICAL_MAX_GAP_S,
-            validator.HISTORICAL_EXPECTED_GAP_COUNT,
-            validator.HISTORICAL_BINDING_SHA256,
-        ),
-        (
-            "source_resume",
-            source_resume,
-            7.0,
-            1,
-            validator.SOURCE_RESUME_BINDING_SHA256,
-        ),
-        (
-            "recovery_r2",
-            recovery,
-            7.0,
-            recovery_gap_count,
-            validator._monitor_binding_sha256(recovery[0]),
-        ),
-        (
-            "resume",
-            final_resume,
-            7.0,
-            final_gap_count,
-            validator._monitor_binding_sha256(final_resume[0]),
-        ),
-    ):
-        segment = {
-            "source": name,
-            "source_path": str(paths[name]),
-            "source_sha256": _sha(paths[name]),
-            "binding_sha256": binding,
-            "sample_indexes": list(range(starts, starts + len(rows))),
-            "max_gap_s": maximum,
-            "observed_gap_count_over_7s": gap_count,
-            "observed_max_gap_s": validator._monitor_gap_stats(rows)[1],
-        }
-        if name == "source_resume":
-            segment["source_sha256"] = validator.SOURCE_RESUME_WATCHER_SHA256
-            segment["observed_max_gap_s"] = validator.SOURCE_RESUME_MAX_GAP_S
-            segment["pending_human_amendment"] = validator.source_resume_pending_amendment()
-        segments.append(segment)
-        starts += len(rows)
-    samples = [*historical, *source_resume, *recovery, *final_resume]
-    validator.validate_segmented_monitor(samples, segments, evidence_root=tmp_path)
-    segments[1]["observed_max_gap_s"] = 7.0
-    with pytest.raises(ValueError, match="source-resume"):
-        validator.validate_segmented_monitor(samples, segments, evidence_root=tmp_path)
 
 
 def test_install_recovered_r2_replaces_only_hash_bound_partial_source_files(
