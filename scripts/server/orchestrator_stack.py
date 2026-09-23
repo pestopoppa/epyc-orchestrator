@@ -50,14 +50,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 # resolve regardless of the caller's PATH or active interpreter. System
 # Python in a fresh devcontainer typically lacks PyYAML — this guard
 # means `python3 scripts/server/orchestrator_stack.py ...` always works.
+#
+# The re-exec MUST stay confined to the __main__ entry path.  os.execv replaces
+# the running process with `orchestrator_stack.py <caller's argv[1:]>`, so doing
+# it at import time hijacks every *importer*: the importing tool vanishes and the
+# replacement parses the importer's flags against this module's subparsers.  That
+# is what broke `autokernel_enrollment.py --master-registry ...`, which imports
+# this module only to pin `__file__` and STACK_PRIORS_PATH.
 _PROJECT_VENV_PY = Path(__file__).resolve().parents[2] / ".venv/bin/python"
-if (
-    _PROJECT_VENV_PY.exists()
-    and Path(sys.executable).resolve() != _PROJECT_VENV_PY.resolve()
-    and os.environ.get("ORCHESTRATOR_STACK_REEXEC") != "1"
-):
-    os.environ["ORCHESTRATOR_STACK_REEXEC"] = "1"
-    os.execv(str(_PROJECT_VENV_PY), [str(_PROJECT_VENV_PY), __file__, *sys.argv[1:]])
+
+
+def _reexec_under_project_venv() -> None:
+    """Re-exec this SCRIPT under the project venv.  Entry-point use only."""
+    if (
+        _PROJECT_VENV_PY.exists()
+        and Path(sys.executable).resolve() != _PROJECT_VENV_PY.resolve()
+        and os.environ.get("ORCHESTRATOR_STACK_REEXEC") != "1"
+    ):
+        os.environ["ORCHESTRATOR_STACK_REEXEC"] = "1"
+        os.execv(str(_PROJECT_VENV_PY), [str(_PROJECT_VENV_PY), __file__, *sys.argv[1:]])
+
+
+if __name__ == "__main__":
+    # Runs BEFORE the heavy third-party imports below, exactly as the old
+    # module-level guard did — system Python may lack PyYAML.
+    _reexec_under_project_venv()
 
 from scripts.server import stack_processes as _stack_processes
 from scripts.server.stack_env import (
