@@ -2,7 +2,7 @@
 # AUTO-GENERATED — MASTER-COMPILED RUNTIME VIEW.
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
-# registry at /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
+# registry at /workspace/repos/epyc-inference-research/orchestration/model_registry.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-09-22T14:47:19+00:00
-# Cache key:   48c4da7c0ebe501a...
+# Compiled at: 2026-09-23T17:16:14+00:00
+# Cache key:   33b98acbc7e49666...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -521,6 +521,56 @@ dflash_drafters:
     format: safetensors
     status: downloaded
 deprecated_models:
+- model: gemma-4-26B-A4B-it (all quants + both MTP assistant heads)
+  path_was: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-{ORIG-Q8_0,ORIG-Q4_K_M,Q4_K_M,Q4_K_M-current,assistant-Q8_0,assistant-v6-Q8_0}.gguf
+  size_gb: 70
+  reason: 'RETIRED 2026-09-22 in the operator-directed lineup change and DELETED 2026-09-23 on explicit operator confirmation. worker_general / worker_math / worker_explore / toolrunner all moved onto frontdoor''s
+    Qwen3.6-35B-A3B-MTP-Q8_0 process via server_mode.frontdoor.shared_with, so ports :8072/:8082/:8182 were vacated. The seven *_local catalogue rows were marked deprecated FIRST and the registry validated
+    at 0 errors before a byte was removed. NOT retained as a rollback anchor: the operator''s call was that a re-download is acceptable if the 35B ever disappoints on worker traffic. NOTE the 35B swap has
+    NO measured quality on the worker battery -- recorded null in the lineup package -- so this deletion trades an untested fallback for disk.'
+  deleted: 2026-09-23
+- model: Qwen3-Next-80B-A3B-Instruct (Q4_K_M and i1-IQ2_M)
+  path_was: /mnt/raid0/llm/models/{lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/,Qwen3-Next-80B-A3B-Instruct.i1-IQ2_M.gguf}
+  size_gb: 69
+  reason: 'RETIRED 2026-09-22 and DELETED 2026-09-23 on explicit operator confirmation. ingest_long_context moved onto architect_general''s Qwen3.8-27B GPU server at :8083 (n_ctx 196608), vacating :8085/:8185/:8285.
+    The role kept its NAME but lost its REASON: Next-80B held it for O(n) SSM scaling, whereas the 27B is the fleet''s KV-densest dense model. Recorded so nobody reads the surviving role name as continuity
+    of capability.'
+  deleted: 2026-09-23
+- model: Qwen3.5-122B-A10B (MTP UD-Q4_K_M 3-shard + UD-IQ2_M, and the unsloth Q4_K_M copy)
+  path_was: /mnt/raid0/llm/models/{Qwen3.5-122B-A10B-MTP-GGUF/,unsloth/Qwen3.5-122B-A10B-GGUF/}
+  size_gb: 180
+  reason: 'RETIRED 2026-09-22 and DELETED 2026-09-23 on explicit operator confirmation. architect_critic moved to Qwen3.8-Flash-Next UD-IQ4_XS on :8074. READ THIS BEFORE ASSUMING A ROLLBACK EXISTS: the
+    UD-Q4_K_M 3-shard set (72.89 GiB) was the DECLARED ROLLBACK ANCHOR for this role -- roles.qwen35_122b_q4km said so in its own deprecation text -- and it is gone. The assistant''s deletion overview failed
+    to surface that before the operator confirmed; the operator''s subsequent ruling was that no rollback path is needed and a re-download is acceptable. Flash-Next holds the role with NO quality evidence
+    (SSU-F2 open, stack-change gate skipped with --allow-known-gaps), so until that closes the role is unmeasured AND unbacked. The unsloth Q4_K_M copy was a second, never-deployed download of the same
+    weights.'
+  deleted: 2026-09-23
+- model: GLM-5.3-Flash-UD-Q4_K_XL (unsloth, 6 shards)
+  path_was: /mnt/raid0/llm/models/unsloth/GLM-5.3-Flash-GGUF/UD-Q4_K_XL/
+  size_gb: 186
+  blind_score:
+    pct: null
+    note: never admitted; INF-69 candidate c463f601b was not accepted, T2/T4 closed unrun
+  reason: 'Operator-directed 2026-09-22: retired in favour of DeepSeek-V4.1-Flash (INF-77). Never in the lineup, no registry role. glm5next port source survives as pushed fork branches experimental/glm53-text-mtp-20260908
+    (f8e2668b6), ak/champion-glm53-candidate-20260909 (c463f601b), experimental/glm53-mtp-longprefill-fix-20260909 (7c78663de); its 28 AutoKernel CPU keeps are ported onto v10 as experimental/glm53-keeps-on-v10-20260922
+    pending INF-77 DS41-K1. Cited evidence is tracked in epyc-root commit 68919e5c (glm53-evidence-20260922 under its autokernel artifacts dir).'
+  deleted: 2026-09-22
+- model: GLM-5.3-Flash-DFlash2-bf16.gguf
+  path_was: /mnt/raid0/llm/models/GLM-5.3-Flash-DFlash2-bf16.gguf
+  size_gb: 2.2
+  blind_score:
+    pct: null
+    note: drafter; target deleted
+  reason: DFlash2 block drafter for GLM-5.3-Flash; deleted with its target 2026-09-22 (operator-directed).
+  deleted: 2026-09-22
+- model: GLM-5.3-Flash-DFlash2-Q8_0.gguf
+  path_was: /mnt/raid0/llm/models/GLM-5.3-Flash-DFlash2-Q8_0.gguf
+  size_gb: 1.2
+  blind_score:
+    pct: null
+    note: drafter; target deleted
+  reason: DFlash2 block drafter for GLM-5.3-Flash; deleted with its target 2026-09-22 (operator-directed).
+  deleted: 2026-09-22
 - model: Meta-Llama-3-70B-Instruct-Q4_K_M
   path_was: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Meta-Llama-3-70B-Instruct-GGUF/
   size_gb: 40
@@ -2218,6 +2268,29 @@ roles:
       speedup: 1.55x
       measurement_scope: -c 8192, -np 1, IQ4_XS-uniform, build 10241 — NOT the served shape
       quality_score: null
+      general_suite_quality:
+        suite_mmlu_pro:
+          accuracy: 0.755
+          n: 200
+          truncated: 0
+          max_tokens: 8192
+        suite_gpqa:
+          accuracy: 0.6513
+          n: 195
+          truncated: 0
+          max_tokens: 16384
+        measured_on: 2026-09-23
+        kernel: production-consolidated-v10 (ffc1bac82, build 10303)
+        instrument_class: serving
+        scope: 'Live :8074 IN ITS DEPLOYED CONFIGURATION (-t 96, -c 262144, -np 1, f16/f16, --spec-draft-n-max 4, unsloth UD-IQ4_XS 3-shard). NOT a llama-bench arm and NOT the recipe''s measured shape --
+          the served process does not run its own recipe (SSU-F11: threads 48 and the recipe env block are declared and never read). So these are never comparable to optimized_tps above, which was taken
+          at -t 48 on build 10241 with the THP shim.'
+        cap_convergence: 'THE TOKEN CAP IS PART OF THE CLAIM, and these are the CONVERGED figures: the cap was raised per suite until truncation reached zero, so pooled == untruncated and nothing is scored
+          wrong merely for being cut off. At the promotion gate''s conventional 64-token cap this same model on these same 200 items scores 0.5650 with 46 truncated, which reads as a regression against
+          the retired Qwen3.5-122B''s 0.6450 and is not one: that model truncated 0/200 at the same cap because it answers with a letter while this one derives in the visible channel. NEVER quote a capped
+          figure against an uncapped one. See promotion_gates.yaml gates.quality.truncation_audit.'
+        incumbent_comparison: Qwen3.5-122B (retired) recorded mmlu_pro 0.6450 / gpqa 0.5692 at max_tokens 64 with 0 truncated. Those are its GATE numbers and were never re-run at a raised cap, so the comparison
+          is like-for-like only in that both sides are untruncated; treat the incumbent's as a lower bound of unknown tightness.
       measurement_category: OBSERVATION
       measurement_date: 2026-09-08
       contention_note: 'This role''s single full instance on 0-95 holds ALL FOUR CPU region locks; while it runs it serializes the entire CPU NUMA topology (stack_numa.py:274-276). That is inherent and

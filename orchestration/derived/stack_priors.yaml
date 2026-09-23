@@ -48,47 +48,47 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-09-22T14:48:23Z'
+compiled_at: '2026-09-23T17:17:54Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 9ba361d784e3865b74a40a0cc8514fea874191b8a502ee9805030722da40c4d3
-    repo_commit: a909b7f6
+    sha256: 82cd7b96ffb3ce4e5edc07ccb449c65a54c197449797b9a8d8a25d961eed6f2b
+    repo_commit: c3f2cbc2
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 71eb59813d71245414a728aa7fae7292c80fe3c8dadbae78b9fa035c2a46c69f
-    repo_commit: a909b7f6
+    sha256: 0ac0fb4ab1239fa28c29308f7442f1c8075446113619aa379e7cd896b3c2c285
+    repo_commit: c3f2cbc2
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
-    sha256: a0b8e6e76d5b0ca782e136c852b713cc2b035c1b0ff8af774a95dfef895edcfc
-    repo_commit: a909b7f6
+    sha256: 0a5849e2702ac029973a96e9a7427067c7a6f5deb1e7060c60586b3a98d91c75
+    repo_commit: c3f2cbc2
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 8a9e4eade957c71b9694160668f982deff31960d3ec5ad0f2d8fc50369b3c703
-    repo_commit: a909b7f6
+    repo_commit: c3f2cbc2
   launch_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/launch_manifest.yaml
-    sha256: 6a56d67cd44e8d7e41096a5160cd9de6e0eceb8da070c59d9f72c921ddb6c7f1
-    repo_commit: a909b7f6
+    sha256: 152ba470240c206d4dfc501399e252fbba9edf87534529b5e2cf311bba8e82a3
+    repo_commit: c3f2cbc2
   stack_topology:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
     sha256: f802ef5b1636bec903344f800ce6ecbb7e97af20018dec678080b3af538dfbea
-    repo_commit: a909b7f6
+    repo_commit: c3f2cbc2
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: b1772cd8db253d5c4b98adc06e5e26fe540d603460d154862714b85250c061bd
-    repo_commit: a909b7f6
+    sha256: 5dc115aaa59aa780e6702694cb2668a74ef64dc81a1cb9d2bc9027e977c8f1fe
+    repo_commit: c3f2cbc2
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 4a7ca842a87b6ffec022f4f6433d755751cac32b9102747d88f3f4f2e4cb24de
-    repo_commit: a909b7f6
+    repo_commit: c3f2cbc2
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: a909b7f6
+    repo_commit: c3f2cbc2
 roles:
   architect_critic:
     role: architect_critic
@@ -230,6 +230,29 @@ roles:
           speedup: 1.55x
           measurement_scope: -c 8192, -np 1, IQ4_XS-uniform, build 10241 — NOT the served shape
           quality_score: null
+          general_suite_quality:
+            suite_mmlu_pro:
+              accuracy: 0.755
+              n: 200
+              truncated: 0
+              max_tokens: 8192
+            suite_gpqa:
+              accuracy: 0.6513
+              n: 195
+              truncated: 0
+              max_tokens: 16384
+            measured_on: 2026-09-23
+            kernel: production-consolidated-v10 (ffc1bac82, build 10303)
+            instrument_class: serving
+            scope: 'Live :8074 IN ITS DEPLOYED CONFIGURATION (-t 96, -c 262144, -np 1, f16/f16, --spec-draft-n-max 4, unsloth UD-IQ4_XS 3-shard). NOT a llama-bench arm and NOT the recipe''s measured shape
+              -- the served process does not run its own recipe (SSU-F11: threads 48 and the recipe env block are declared and never read). So these are never comparable to optimized_tps above, which was
+              taken at -t 48 on build 10241 with the THP shim.'
+            cap_convergence: 'THE TOKEN CAP IS PART OF THE CLAIM, and these are the CONVERGED figures: the cap was raised per suite until truncation reached zero, so pooled == untruncated and nothing is
+              scored wrong merely for being cut off. At the promotion gate''s conventional 64-token cap this same model on these same 200 items scores 0.5650 with 46 truncated, which reads as a regression
+              against the retired Qwen3.5-122B''s 0.6450 and is not one: that model truncated 0/200 at the same cap because it answers with a letter while this one derives in the visible channel. NEVER
+              quote a capped figure against an uncapped one. See promotion_gates.yaml gates.quality.truncation_audit.'
+            incumbent_comparison: Qwen3.5-122B (retired) recorded mmlu_pro 0.6450 / gpqa 0.5692 at max_tokens 64 with 0 truncated. Those are its GATE numbers and were never re-run at a raised cap, so the
+              comparison is like-for-like only in that both sides are untruncated; treat the incumbent's as a lower bound of unknown tightness.
           measurement_category: OBSERVATION
           measurement_date: '2026-09-08'
           contention_note: 'This role''s single full instance on 0-95 holds ALL FOUR CPU region locks; while it runs it serializes the entire CPU NUMA topology (stack_numa.py:274-276). That is inherent
@@ -1527,6 +1550,29 @@ roles:
           speedup: 1.55x
           measurement_scope: -c 8192, -np 1, IQ4_XS-uniform, build 10241 — NOT the served shape
           quality_score: null
+          general_suite_quality:
+            suite_mmlu_pro:
+              accuracy: 0.755
+              n: 200
+              truncated: 0
+              max_tokens: 8192
+            suite_gpqa:
+              accuracy: 0.6513
+              n: 195
+              truncated: 0
+              max_tokens: 16384
+            measured_on: 2026-09-23
+            kernel: production-consolidated-v10 (ffc1bac82, build 10303)
+            instrument_class: serving
+            scope: 'Live :8074 IN ITS DEPLOYED CONFIGURATION (-t 96, -c 262144, -np 1, f16/f16, --spec-draft-n-max 4, unsloth UD-IQ4_XS 3-shard). NOT a llama-bench arm and NOT the recipe''s measured shape
+              -- the served process does not run its own recipe (SSU-F11: threads 48 and the recipe env block are declared and never read). So these are never comparable to optimized_tps above, which was
+              taken at -t 48 on build 10241 with the THP shim.'
+            cap_convergence: 'THE TOKEN CAP IS PART OF THE CLAIM, and these are the CONVERGED figures: the cap was raised per suite until truncation reached zero, so pooled == untruncated and nothing is
+              scored wrong merely for being cut off. At the promotion gate''s conventional 64-token cap this same model on these same 200 items scores 0.5650 with 46 truncated, which reads as a regression
+              against the retired Qwen3.5-122B''s 0.6450 and is not one: that model truncated 0/200 at the same cap because it answers with a letter while this one derives in the visible channel. NEVER
+              quote a capped figure against an uncapped one. See promotion_gates.yaml gates.quality.truncation_audit.'
+            incumbent_comparison: Qwen3.5-122B (retired) recorded mmlu_pro 0.6450 / gpqa 0.5692 at max_tokens 64 with 0 truncated. Those are its GATE numbers and were never re-run at a raised cap, so the
+              comparison is like-for-like only in that both sides are untruncated; treat the incumbent's as a lower bound of unknown tightness.
           measurement_category: OBSERVATION
           measurement_date: '2026-09-08'
           contention_note: 'This role''s single full instance on 0-95 holds ALL FOUR CPU region locks; while it runs it serializes the entire CPU NUMA topology (stack_numa.py:274-276). That is inherent
