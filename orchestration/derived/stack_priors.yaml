@@ -48,52 +48,52 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-09-24T14:51:24Z'
-status: compiled_with_gaps
+compiled_at: '2026-09-24T17:50:51Z'
+status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: orchestration/model_registry.yaml
     sha256: 82cd7b96ffb3ce4e5edc07ccb449c65a54c197449797b9a8d8a25d961eed6f2b
-    repo_commit: a269ecf2
+    repo_commit: 64837d58
   descriptors:
     path: orchestration/model_descriptors.yaml
-    sha256: 181acf7a38a3b9aba41bd083082bfdccee1d4a9de56a2f620870bb35fb449a76
-    repo_commit: a269ecf2
+    sha256: 290469fc4f3e8911406f763c4b8d9d442e77c4c2dfb87c55d18dc6bab25da0f6
+    repo_commit: 64837d58
   stack_manifest:
     path: scripts/server/stack_manifest.py
     sha256: 0a5849e2702ac029973a96e9a7427067c7a6f5deb1e7060c60586b3a98d91c75
-    repo_commit: a269ecf2
+    repo_commit: 64837d58
   stack_numa:
     path: scripts/server/stack_numa.py
     sha256: 8a9e4eade957c71b9694160668f982deff31960d3ec5ad0f2d8fc50369b3c703
-    repo_commit: a269ecf2
+    repo_commit: 64837d58
   launch_manifest:
     path: orchestration/launch_manifest.yaml
     sha256: 5e215c3ce062655b3f7ce17a41fc9644422bbf114a78d813bbff3e199bbaebd6
-    repo_commit: a269ecf2
+    repo_commit: 64837d58
   stack_topology:
     path: orchestration/stack_topology.yaml
     sha256: f802ef5b1636bec903344f800ce6ecbb7e97af20018dec678080b3af538dfbea
-    repo_commit: a269ecf2
+    repo_commit: 64837d58
   orchestrator_stack:
     path: scripts/server/orchestrator_stack.py
-    sha256: 245a7a314af6555fb6e3629fc79fa418b0ba3efd6c7235f9881e4dfbb1a84ca2
-    repo_commit: a269ecf2
+    sha256: 80be29efbc6d309b093a0c1a77cf7892b02fbb637c531549783ae1b6ba792a99
+    repo_commit: 64837d58
   stack_paths:
     path: scripts/server/stack_paths.py
     sha256: 4a7ca842a87b6ffec022f4f6433d755751cac32b9102747d88f3f4f2e4cb24de
-    repo_commit: a269ecf2
+    repo_commit: 64837d58
   stack_runtime:
     path: scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: a269ecf2
+    repo_commit: 64837d58
 roles:
   architect_critic:
     role: architect_critic
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: qwen3.8-flash-next-ud-iq4_xs
     display_name: Qwen3.8-Flash-Next-UD-IQ4_XS
     serving:
@@ -180,9 +180,13 @@ roles:
     priors:
       throughput_tps: 52.7
       quality_overall: null
-      quality_by_axis: {}
+      quality_by_axis:
+        local:
+          mmlu_pro: 0.755
+          gpqa: 0.6513
       quality_for_role: null
-      quality_advisories: []
+      quality_advisories:
+      - No whole-suite quality prior; domain evidence only (gpqa, mmlu_pro). quality_overall is null BY DESIGN — read the per-axis evidence instead of expecting a scalar.
       memory_cost: 1.0
     acceleration:
       spec_type: draft-mtp
@@ -264,9 +268,7 @@ roles:
       - date: '2026-09-14'
         protocol: server_mode throughput
         value_tps: 52.7
-    known_gaps:
-    - Missing quality evidence entirely (no suite_vector, no public benchmarks)
-    - Missing quality suite_vector evidence
+    known_gaps: []
   architect_general:
     role: architect_general
     deployment_status: live_stack
@@ -1465,7 +1467,7 @@ roles:
   qwen38_flash_next_ud_iq4xs_local:
     role: qwen38_flash_next_ud_iq4xs_local
     deployment_status: benchmark_or_candidate
-    status: compiled_with_gaps
+    status: compiled
     model_id: qwen3.8-flash-next-ud-iq4_xs
     display_name: Qwen3.8-Flash-Next-UD-IQ4_XS
     serving:
@@ -1500,9 +1502,13 @@ roles:
     priors:
       throughput_tps: 52.7
       quality_overall: null
-      quality_by_axis: {}
+      quality_by_axis:
+        local:
+          mmlu_pro: 0.755
+          gpqa: 0.6513
       quality_for_role: null
-      quality_advisories: []
+      quality_advisories:
+      - No whole-suite quality prior; domain evidence only (gpqa, mmlu_pro). quality_overall is null BY DESIGN — read the per-axis evidence instead of expecting a scalar.
       memory_cost: 1.0
     acceleration:
       spec_type: draft-mtp
@@ -1584,9 +1590,7 @@ roles:
       - date: '2026-09-14'
         protocol: server_mode throughput
         value_tps: 52.7
-    known_gaps:
-    - Missing quality evidence entirely (no suite_vector, no public benchmarks)
-    - Missing quality suite_vector evidence
+    known_gaps: []
   toolrunner:
     role: toolrunner
     deployment_status: live_stack
@@ -3177,10 +3181,4 @@ roles:
         protocol: server_mode throughput
         value_tps: 112.2
     known_gaps: []
-known_global_gaps:
-  architect_critic:
-  - Missing quality evidence entirely (no suite_vector, no public benchmarks)
-  - Missing quality suite_vector evidence
-  qwen38_flash_next_ud_iq4xs_local:
-  - Missing quality evidence entirely (no suite_vector, no public benchmarks)
-  - Missing quality suite_vector evidence
+known_global_gaps: {}

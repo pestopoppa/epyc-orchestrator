@@ -9,13 +9,13 @@ uv run python scripts/registry/stack_change_pipeline.py update
 Source: `orchestration/derived/stack_priors.yaml`
 
 Source fingerprints:
-- orchestration/derived/stack_priors.yaml: `d7771606501e617debbb0389958117ee3cde032b7391c90a64e38b3be2e88be0`
+- orchestration/derived/stack_priors.yaml: `f12bfb8bda6086d0d6183c9fc9db3d671fe1b1570f19125ad42eec0d11b8e5b9`
 - orchestration/model_registry.yaml: `82cd7b96ffb3ce4e5edc07ccb449c65a54c197449797b9a8d8a25d961eed6f2b`
-- orchestration/model_descriptors.yaml: `181acf7a38a3b9aba41bd083082bfdccee1d4a9de56a2f620870bb35fb449a76`
+- orchestration/model_descriptors.yaml: `290469fc4f3e8911406f763c4b8d9d442e77c4c2dfb87c55d18dc6bab25da0f6`
 
 | Role | Port | Model | Tier | Acceleration | Requirements | Throughput | Description |
 |---|---:|---|---|---|---|---:|---|
-| architect_critic | 8074 | Qwen3.8-Flash-Next-UD-IQ4_XS | hot | draft-mtp (lookup=false, draft_max=4) | draft=mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf | 52.7 | live_stack; binding=server_mode.direct; status=compiled_with_gaps |
+| architect_critic | 8074 | Qwen3.8-Flash-Next-UD-IQ4_XS | hot | draft-mtp (lookup=false, draft_max=4) | draft=mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf | 52.7 | live_stack; binding=server_mode.direct; status=compiled |
 | architect_general | 8083 | Qwen3.8-27B-Q8_0 | hot | draft-mtp (lookup=false, draft_max=8) | embedded_nextn=Qwen3.8-27B-Q8_0.gguf | 47.79 | live_stack; binding=server_mode.direct; status=compiled |
 | coder_escalation | 8083 | Qwen3.8-27B-Q8_0 | hot | draft-mtp (lookup=false, draft_max=8) | embedded_nextn=Qwen3.8-27B-Q8_0.gguf | 47.79 | live_stack; binding=stack_manifest.alias->server_mode.direct; status=compiled |
 | frontdoor | 8070, 8080, 8180 | Qwen3.6-35B-A3B-MTP-Q8_0 | hot | draft-mtp (lookup=false, draft_max=4) | embedded_nextn=Qwen3.6-35B-A3B-MTP-Q8_0.gguf | 40.22 | live_stack; binding=server_mode.direct; status=compiled |
