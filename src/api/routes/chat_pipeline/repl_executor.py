@@ -15,6 +15,7 @@ graph (src.graph), replacing the manual for-loop. Bug fixes included:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -34,6 +35,7 @@ from src.repl_environment import REPLEnvironment
 from src.session.lease import HeldSessionLease, SessionLeaseManager
 from src.session.models import Checkpoint
 from src.session.protocol import normalize_checkpoint_for_repl_restore
+from src.structured_output.repair import parse_with_repair, primitives_completer
 
 from src.api.routes.chat_review import (
     _architect_verdict,
@@ -659,21 +661,55 @@ async def _execute_repl_body(
         ),
     )
 
-    # Up to 2 attempts: initial run + one retry-with-error if schema validation fails.
-    # Shared REPLEnvironment via task_deps preserves agent state across retries;
-    # repl_executions budget naturally bounds total work.
+    # Up to 2 attempts: initial run + one retry-with-error if schema validation
+    # (and the TD-21.1 repair turn below) both fail. Shared REPLEnvironment via
+    # task_deps preserves agent state across retries; repl_executions budget
+    # naturally bounds total work.
+    #
+    # TD-21.1 (typed-decision-plane.md): before paying for a full graph
+    # re-run (turns=0, role reset, the whole run_task graph re-entered), spend
+    # ONE constrained repair turn on the model's own FINAL text via the
+    # shared src/structured_output/repair.py helper. fish_json alone often
+    # recovers a value wrapped in stray prose/fences with ZERO extra calls;
+    # only a genuine miss spends the one extraction turn. Only if that repair
+    # also fails do we fall back to the pre-existing retry-from-zero path.
+    # `_schema_valid`/`_schema_invalid_reason` are carried past the loop so
+    # the final response can be flagged instead of silently served as valid
+    # (see the terminal check right before the ChatResponse is built).
     _max_validation_attempts = 2 if _schema else 1
     graph_result = None
+    _schema_valid: bool | None = None
+    _schema_invalid_reason: str | None = None
     for _attempt in range(_max_validation_attempts):
         graph_result = await run_task(task_state, task_deps, start_role=initial_role)
         if not _schema or not graph_result.answer:
             break
         _ok, _err, _ = _validate_final_answer(graph_result.answer, _schema)
+        if not _ok:
+            _producing_role = (
+                str(graph_result.role_history[-1])
+                if graph_result.role_history
+                else str(initial_role)
+            )
+            _repair = parse_with_repair(
+                graph_result.answer,
+                schema=_schema,
+                complete=primitives_completer(primitives, _producing_role),
+                site="repl_final",
+            )
+            if _repair.status in ("parsed", "repaired"):
+                graph_result.answer = json.dumps(_repair.value)
+                _ok, _err = True, None
+            else:
+                _err = _repair.reason or _err
         if _ok:
+            _schema_valid = True
             break
+        _schema_valid = False
+        _schema_invalid_reason = _err or "(unknown)"
         if _attempt + 1 < _max_validation_attempts:
             _failure_msg = _format_validation_failure_message(
-                _schema, _err or "(unknown)", graph_result.answer
+                _schema, _schema_invalid_reason, graph_result.answer
             )
             task_state.context = f"{combined_context}\n\n{_failure_msg}"
             task_state.turns = 0
@@ -932,6 +968,26 @@ async def _execute_repl_body(
         if hasattr(e, "category")
     ]
 
+    # TD-21.1 terminal fix: retries (plus the repair turn above) are exhausted
+    # and the FINAL() value STILL does not validate against request.output_schema.
+    # Before this fix the invalid value was returned as ChatResponse with no
+    # signal at all (error_code/error_detail both None => HTTP 200, caller has
+    # no way to tell the answer never validated). Now it is flagged the same
+    # way every other structured-validation failure in this pipeline is
+    # flagged (see chat.py's plan_review_drop, error_code=422): the answer
+    # text is unchanged (still the model's best/last attempt, useful to a
+    # caller doing its own recovery) but error_code=422 + error_detail carry
+    # the schema-validation failure so the HTTP layer (chat.py's `_finalize`/
+    # `response.error_code` branch) returns a non-200 status instead of a
+    # silent success.
+    _schema_error_code = 422 if (_schema and _schema_valid is False) else None
+    _schema_error_detail = (
+        f"FINAL() value failed output_schema validation after retry and repair: "
+        f"{_schema_invalid_reason}"
+        if _schema_error_code
+        else None
+    )
+
     return ChatResponse(
         answer=answer,
         turns=turns,
@@ -946,6 +1002,8 @@ async def _execute_repl_body(
         mode="repl",
         tokens_generated=primitives.total_tokens_generated,
         formalization_applied=formalization_applied,
+        error_code=_schema_error_code,
+        error_detail=_schema_error_detail,
         tools_used=tools_used,
         tools_called=tools_called,
         tool_timings=tool_timings,

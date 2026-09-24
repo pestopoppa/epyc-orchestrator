@@ -5,6 +5,7 @@ Focuses on: REPL session management, escalation handling, generation monitoring,
 two-stage summarization integration, long-context exploration.
 """
 
+import json
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -1467,3 +1468,294 @@ class TestSessionLease:
             assert store.leases.get(session.id).is_live(time.time())
         finally:
             store.close()
+
+
+# ── TD-21.1: FINAL() schema-validation repair (typed-decision-plane.md) ───
+#
+# Before this conversion, a schema-invalid FINAL() value paid for an entire
+# graph re-run (turns=0, role reset, run_task re-entered) up to 2 attempts,
+# and if BOTH attempts still failed the invalid value was returned as a
+# normal ChatResponse with no signal at all (error_code/error_detail both
+# None => HTTP 200). These tests prove: (a) a repairable failure is fixed by
+# ONE constrained turn with NO graph re-run; (b) an unrepairable failure
+# falls back to the pre-existing retry-from-zero path; (c) once both are
+# exhausted the response is flagged (error_code=422) instead of silently
+# served as valid; (d) STRUCTURED_OUTPUT_REPAIR_COUNTS increments per site.
+
+
+def _enable_final_schema_validation(monkeypatch):
+    monkeypatch.setattr(
+        "src.features.features",
+        lambda: SimpleNamespace(final_schema_validation=True),
+    )
+
+
+_SCHEMA_ANSWER_STRING = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+
+
+def _schema_repl_repl_class():
+    """A REPLEnvironment double with the attributes _execute_repl touches."""
+    mock_repl = MagicMock()
+    mock_repl.artifacts = {}
+    mock_repl._tool_invocations = 0
+    mock_repl.tool_registry = None
+    mock_repl.log_exploration_completed = MagicMock()
+    return mock_repl
+
+
+class TestFinalSchemaValidationRepair:
+    """TD-21.1 conversion of repl_executor.py's FINAL() schema-validation path."""
+
+    @pytest.mark.asyncio
+    async def test_fished_directly_needs_zero_extra_calls(
+        self, basic_routing, mock_primitives, mock_state, monkeypatch
+    ):
+        """A FINAL() value with stray prose around valid JSON is recovered by
+        ``fish_json`` alone (parse_with_repair status "parsed") -- zero extra
+        completion calls, and the graph is NOT re-run."""
+        _enable_final_schema_validation(monkeypatch)
+        from src.structured_output.repair import (
+            STRUCTURED_OUTPUT_REPAIR_COUNTS,
+            reset_counts_for_tests,
+        )
+
+        reset_counts_for_tests()
+        request = ChatRequest(
+            prompt="answer please",
+            context="",
+            real_mode=True,
+            mock_mode=False,
+            max_turns=5,
+            output_schema=_SCHEMA_ANSWER_STRING,
+        )
+        run_count = {"n": 0}
+
+        async def _fake_run_task(task_state, task_deps, start_role=None):
+            run_count["n"] += 1
+            return TaskResult(
+                answer='Sure, here you go:\n```json\n{"answer": "42"}\n```\nHope that helps!',
+                success=True,
+                turns=1,
+                role_history=["worker_general"],
+            )
+
+        with patch(
+            "src.api.routes.chat_pipeline.repl_executor.REPLEnvironment",
+            return_value=_schema_repl_repl_class(),
+        ):
+            with patch(
+                "src.api.routes.chat_pipeline.repl_executor.run_task",
+                side_effect=_fake_run_task,
+            ):
+                response = await _execute_repl(
+                    request=request,
+                    routing=basic_routing,
+                    primitives=mock_primitives,
+                    state=mock_state,
+                    start_time=time.perf_counter(),
+                    initial_role=Role.WORKER_GENERAL,
+                )
+
+        assert run_count["n"] == 1  # the graph was NOT re-run
+        assert json.loads(response.answer) == {"answer": "42"}
+        assert response.error_code is None
+        mock_primitives.llm_call.assert_not_called()
+        assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get(("repl_final", "parsed")) == 1
+
+    @pytest.mark.asyncio
+    async def test_repairable_final_is_repaired_without_graph_rerun(
+        self, basic_routing, mock_primitives, mock_state, monkeypatch
+    ):
+        """(a) An invalid-but-repairable FINAL value is fixed by ONE
+        constrained extraction turn -- the graph is NOT re-run."""
+        _enable_final_schema_validation(monkeypatch)
+        from src.structured_output.repair import (
+            STRUCTURED_OUTPUT_REPAIR_COUNTS,
+            reset_counts_for_tests,
+        )
+
+        reset_counts_for_tests()
+        request = ChatRequest(
+            prompt="answer please",
+            context="",
+            real_mode=True,
+            mock_mode=False,
+            max_turns=5,
+            output_schema=_SCHEMA_ANSWER_STRING,
+        )
+        run_count = {"n": 0}
+
+        async def _fake_run_task(task_state, task_deps, start_role=None):
+            run_count["n"] += 1
+            return TaskResult(
+                answer="The answer is fourty-two, all done.",
+                success=True,
+                turns=1,
+                role_history=["worker_general"],
+            )
+
+        mock_primitives.llm_call.return_value = json.dumps({"answer": "42"})
+
+        with patch(
+            "src.api.routes.chat_pipeline.repl_executor.REPLEnvironment",
+            return_value=_schema_repl_repl_class(),
+        ):
+            with patch(
+                "src.api.routes.chat_pipeline.repl_executor.run_task",
+                side_effect=_fake_run_task,
+            ):
+                response = await _execute_repl(
+                    request=request,
+                    routing=basic_routing,
+                    primitives=mock_primitives,
+                    state=mock_state,
+                    start_time=time.perf_counter(),
+                    initial_role=Role.WORKER_GENERAL,
+                )
+
+        assert run_count["n"] == 1  # the graph was NOT re-run
+        assert json.loads(response.answer) == {"answer": "42"}
+        assert response.error_code is None
+        assert response.error_detail is None
+        mock_primitives.llm_call.assert_called_once()
+        assert mock_primitives.llm_call.call_args.kwargs.get("role") == "worker_general"
+        assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get(("repl_final", "repaired")) == 1
+
+    @pytest.mark.asyncio
+    async def test_unrepairable_final_falls_back_to_retry_path(
+        self, basic_routing, mock_primitives, mock_state, monkeypatch
+    ):
+        """(b) When the repair turn ALSO fails, the pre-existing
+        retry-from-zero path (turns=0, role reset, run_task re-entered)
+        still runs and can still recover a valid answer on the second pass."""
+        _enable_final_schema_validation(monkeypatch)
+        from src.structured_output.repair import (
+            STRUCTURED_OUTPUT_REPAIR_COUNTS,
+            reset_counts_for_tests,
+        )
+
+        reset_counts_for_tests()
+        request = ChatRequest(
+            prompt="answer please",
+            context="",
+            real_mode=True,
+            mock_mode=False,
+            max_turns=5,
+            output_schema=_SCHEMA_ANSWER_STRING,
+        )
+        run_count = {"n": 0}
+
+        async def _fake_run_task(task_state, task_deps, start_role=None):
+            run_count["n"] += 1
+            if run_count["n"] == 1:
+                return TaskResult(
+                    answer="totally unparseable nonsense with no braces at all",
+                    success=True,
+                    turns=1,
+                    role_history=["worker_general"],
+                )
+            # Second pass (after the retry-from-zero reset) succeeds.
+            return TaskResult(
+                answer=json.dumps({"answer": "42"}),
+                success=True,
+                turns=1,
+                role_history=["worker_general"],
+            )
+
+        # The repair extraction turn ALSO returns unparseable text -> repair fails.
+        mock_primitives.llm_call.return_value = "still no JSON here either"
+
+        with patch(
+            "src.api.routes.chat_pipeline.repl_executor.REPLEnvironment",
+            return_value=_schema_repl_repl_class(),
+        ):
+            with patch(
+                "src.api.routes.chat_pipeline.repl_executor.run_task",
+                side_effect=_fake_run_task,
+            ):
+                response = await _execute_repl(
+                    request=request,
+                    routing=basic_routing,
+                    primitives=mock_primitives,
+                    state=mock_state,
+                    start_time=time.perf_counter(),
+                    initial_role=Role.WORKER_GENERAL,
+                )
+
+        assert run_count["n"] == 2  # the retry-from-zero path DID re-run the graph
+        assert json.loads(response.answer) == {"answer": "42"}
+        assert response.error_code is None
+        assert mock_primitives.llm_call.call_count == 1  # one repair attempt, then fallback
+        assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get(("repl_final", "failed")) == 1
+
+    @pytest.mark.asyncio
+    async def test_exhausted_retries_flag_response_as_invalid(
+        self, basic_routing, mock_primitives, mock_state, monkeypatch
+    ):
+        """(c) When BOTH attempts (each preceded by a failed repair turn) are
+        exhausted, the terminal defect is fixed: the response no longer comes
+        back as a silent 200 with the invalid value -- it carries
+        error_code=422 and an error_detail naming the schema failure, per the
+        same convention chat.py already uses for other validation drops."""
+        _enable_final_schema_validation(monkeypatch)
+        from src.structured_output.repair import (
+            STRUCTURED_OUTPUT_REPAIR_COUNTS,
+            reset_counts_for_tests,
+        )
+
+        reset_counts_for_tests()
+        request = ChatRequest(
+            prompt="answer please",
+            context="",
+            real_mode=True,
+            mock_mode=False,
+            max_turns=5,
+            output_schema=_SCHEMA_ANSWER_STRING,
+        )
+        run_count = {"n": 0}
+
+        async def _fake_run_task(task_state, task_deps, start_role=None):
+            run_count["n"] += 1
+            return TaskResult(
+                answer=f"still gibberish, attempt {run_count['n']}",
+                success=True,
+                turns=1,
+                role_history=["worker_general"],
+            )
+
+        mock_primitives.llm_call.return_value = "still no JSON here either"
+
+        with patch(
+            "src.api.routes.chat_pipeline.repl_executor.REPLEnvironment",
+            return_value=_schema_repl_repl_class(),
+        ):
+            with patch(
+                "src.api.routes.chat_pipeline.repl_executor.run_task",
+                side_effect=_fake_run_task,
+            ):
+                response = await _execute_repl(
+                    request=request,
+                    routing=basic_routing,
+                    primitives=mock_primitives,
+                    state=mock_state,
+                    start_time=time.perf_counter(),
+                    initial_role=Role.WORKER_GENERAL,
+                )
+
+        assert run_count["n"] == 2  # both attempts used
+        # (d) one failed repair call recorded per attempt.
+        assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get(("repl_final", "failed")) == 2
+        assert mock_primitives.llm_call.call_count == 2
+        # The terminal defect: invalid output is FLAGGED, not silently served as valid.
+        assert response.error_code == 422
+        assert response.error_detail is not None
+        assert "schema" in response.error_detail.lower()
+        # The answer text itself is left as the model's last attempt (still
+        # visible to a caller doing its own recovery), unchanged in shape --
+        # what changed is that the caller can now tell it never validated.
+        assert response.answer == "still gibberish, attempt 2"

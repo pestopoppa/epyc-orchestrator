@@ -413,8 +413,17 @@ class TestBatchLlmQueryEnabled:
         assert "Return only a JSON value" in call_prompts[0]
         assert "return the answer" in call_prompts[0]
 
-    def test_batch_llm_query_schema_retries_invalid_response(self):
-        """Schema mode retries failed child JSON and preserves ordering."""
+    def test_batch_llm_query_schema_repairs_invalid_response_without_full_recall(self):
+        """TD-21.22: an invalid-but-recoverable child reply is fixed by ONE
+        repair turn (fish, then one constrained extraction call back to the
+        role via ``llm_batch``) rather than the old full re-call retry loop.
+        ``attempts`` stays at 1 because the full-recall loop never runs."""
+        from src.structured_output.repair import (
+            STRUCTURED_OUTPUT_REPAIR_COUNTS,
+            reset_counts_for_tests,
+        )
+
+        reset_counts_for_tests()
         os.environ["REPL_COMBINED_OPS"] = "1"
         repl, llm = _make_repl_with_llm(use_toon=False)
         schema = {
@@ -432,14 +441,16 @@ class TestBatchLlmQueryEnabled:
 
         assert parsed["results"][0]["valid"] is True
         assert parsed["results"][0]["response"] == {"answer": 7}
-        assert parsed["results"][0]["attempts"] == 2
+        # The full re-call retry loop never ran -- repair recovered it first.
+        assert parsed["results"][0]["attempts"] == 1
         assert llm.llm_batch.call_count == 2
-        retry_prompt = llm.llm_batch.call_args_list[1].args[0][0]
-        assert "previous response failed schema validation" in retry_prompt
-        assert "not json" in retry_prompt
+        extraction_prompt = llm.llm_batch.call_args_list[1].args[0][0]
+        assert "not json" in extraction_prompt
+        assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get(("repl_combined_ops", "repaired")) == 1
 
     def test_batch_llm_query_schema_reports_exhausted_retry(self):
-        """Schema mode reports invalid entries instead of silently returning junk."""
+        """Schema mode reports invalid entries instead of silently returning
+        junk, after BOTH the repair turn and the full re-call retry loop miss."""
         os.environ["REPL_COMBINED_OPS"] = "1"
         repl, llm = _make_repl_with_llm(use_toon=False)
         schema = {
@@ -449,6 +460,7 @@ class TestBatchLlmQueryEnabled:
         }
         llm.llm_batch.side_effect = [
             ["not json"],
+            ["still not json"],
             ['{"answer": "wrong"}'],
         ]
 
@@ -460,6 +472,7 @@ class TestBatchLlmQueryEnabled:
         assert parsed["results"][0]["raw_response"] == '{"answer": "wrong"}'
         assert "not of type" in parsed["results"][0]["error"]
         assert parsed["results"][0]["attempts"] == 2
+        assert llm.llm_batch.call_count == 3
 
     def test_batch_llm_query_schema_rejects_non_dict_schema(self):
         """Schema argument must be a JSON Schema dict."""

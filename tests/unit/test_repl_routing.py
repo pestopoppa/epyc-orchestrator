@@ -428,8 +428,19 @@ class TestDelegate:
         assert "return the answer" in prompt
         assert repl.artifacts["_delegations"][0]["schema_valid"] is True
 
-    def test_delegate_schema_retries_invalid_response(self):
-        """Schema mode retries failed single delegate responses."""
+    def test_delegate_schema_repairs_invalid_response_without_full_recall(self):
+        """TD-21.22: an invalid-but-recoverable reply is fixed by ONE repair
+        turn (fish, then one constrained extraction call to the SAME target
+        role) rather than the old full re-call retry loop. ``attempts``/
+        ``schema_retry_count`` stay at their no-retry values because the
+        full-recall loop never runs; the repair turn is a distinct call
+        counted separately via STRUCTURED_OUTPUT_REPAIR_COUNTS."""
+        from src.structured_output.repair import (
+            STRUCTURED_OUTPUT_REPAIR_COUNTS,
+            reset_counts_for_tests,
+        )
+
+        reset_counts_for_tests()
         mock_llm = Mock()
         mock_llm.llm_call = Mock(side_effect=["not json", '{"answer": 7}'])
         schema = {
@@ -444,17 +455,28 @@ class TestDelegate:
 
         assert parsed["valid"] is True
         assert parsed["response"] == {"answer": 7}
-        assert parsed["attempts"] == 2
+        # The full re-call retry loop never ran -- repair recovered it first.
+        assert parsed["attempts"] == 1
         assert mock_llm.llm_call.call_count == 2
-        retry_prompt = mock_llm.llm_call.call_args_list[1].args[0]
-        assert "previous response failed schema validation" in retry_prompt
-        assert "not json" in retry_prompt
-        assert repl.artifacts["_delegations"][0]["schema_retry_count"] == 1
+        extraction_prompt = mock_llm.llm_call.call_args_list[1].args[0]
+        assert "not json" in extraction_prompt
+        assert repl.artifacts["_delegations"][0]["schema_retry_count"] == 0
+        assert repl.artifacts["_delegations"][0]["schema_valid"] is True
+        assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get(("repl_delegate", "repaired")) == 1
+
+        # TD-21.22 wire-schema check: BOTH llm_call invocations (the initial
+        # delegate call and the repair extraction turn) carry json_schema on
+        # the wire now that TD-21.0 lets it constrain both lanes.
+        first_call_kwargs = mock_llm.llm_call.call_args_list[0].kwargs
+        assert first_call_kwargs.get("json_schema") == schema
 
     def test_delegate_schema_reports_exhausted_retry(self):
-        """Schema mode reports invalid output instead of silently accepting it."""
+        """Schema mode reports invalid output instead of silently accepting
+        it, after BOTH the repair turn and the full re-call retry loop miss."""
         mock_llm = Mock()
-        mock_llm.llm_call = Mock(side_effect=["not json", '{"answer": "wrong"}'])
+        mock_llm.llm_call = Mock(
+            side_effect=["not json", "still not json", '{"answer": "wrong"}']
+        )
         schema = {
             "type": "object",
             "properties": {"answer": {"type": "integer"}},
@@ -470,6 +492,7 @@ class TestDelegate:
         assert parsed["raw_response"] == '{"answer": "wrong"}'
         assert "not of type" in parsed["error"]
         assert parsed["attempts"] == 2
+        assert mock_llm.llm_call.call_count == 3
         assert repl.artifacts["_delegations"][0]["schema_valid"] is False
 
     def test_delegate_schema_rejects_non_dict_schema(self):

@@ -11,6 +11,7 @@ import logging
 from src.constants import TASK_IR_OBJECTIVE_LEN
 from src.delegation_reports import load_report
 from src.graph.helpers import _validate_final_answer
+from src.structured_output.repair import parse_with_repair, primitives_completer
 from src.task_ir import canonicalize_task_ir
 from src.roles import Role
 
@@ -592,10 +593,15 @@ class _RoutingMixin:
         retry_count = 0
 
         try:
+            # TD-21.22 (typed-decision-plane.md): forward the schema on the
+            # wire now that TD-21.0 landed (json_schema constrains BOTH the
+            # /completion and /v1 lanes), instead of relying only on the
+            # prose preamble above to get the model to comply.
             result = self.llm_primitives.llm_call(
                 query_prompt,
                 role=target_role,
                 persona=persona or None,
+                json_schema=schema,
             )
 
             parsed = None
@@ -603,6 +609,23 @@ class _RoutingMixin:
             err = None
             if schema is not None:
                 ok, err, parsed = _validate_final_answer(result, schema)
+                if not ok:
+                    # TD-21.22 residual: one repair turn (fish, then at most
+                    # one constrained extraction call to the same server)
+                    # before paying for a full re-call. With the schema now
+                    # on the wire above, this residual should rarely fire.
+                    repair = parse_with_repair(
+                        result,
+                        schema=schema,
+                        complete=primitives_completer(self.llm_primitives, target_role),
+                        site="repl_delegate",
+                    )
+                    if repair.status in ("parsed", "repaired"):
+                        parsed = repair.value
+                        result = json.dumps(parsed)
+                        ok, err = True, None
+                    else:
+                        err = repair.reason or err
                 while not ok and attempts <= retry_budget:
                     retry_count += 1
                     attempts += 1
@@ -616,6 +639,7 @@ class _RoutingMixin:
                         retry_prompt,
                         role=target_role,
                         persona=persona or None,
+                        json_schema=schema,
                     )
                     ok, err, parsed = _validate_final_answer(result, schema)
 

@@ -17,6 +17,7 @@ import os
 import re
 
 from src.graph.helpers import _validate_final_answer
+from src.structured_output.repair import parse_with_repair
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,30 @@ def _render_child_schema_retry_prompt(
         f"Rejected response: {rejected_trunc}\n\n"
         f"Original task:\n{original_prompt}"
     )
+
+
+def _batch_repair_completer(llm_primitives, role: str, persona: str | None):
+    """A ``parse_with_repair`` ``CompleteFn`` over ``llm_batch`` (one item).
+
+    TD-21.22 residual: ``llm_batch`` (unlike ``llm_call``) has no
+    ``json_schema`` parameter at all -- threading wire-schema support through
+    it would touch ``_real_batch``/``_mock_batch``/``_worker_pool_batch`` and
+    every other ``llm_batch`` caller, which is out of scope for this
+    conversion (see the commit message / handoff for the follow-on). The
+    schema is instead embedded as text via the same
+    ``_render_child_schema_preamble`` idiom already used for the first
+    attempt at this site.
+    """
+
+    def complete(messages, schema):
+        rendered = "\n\n".join(
+            f"[{m.get('role', 'user')}]\n{m.get('content', '')}" for m in messages
+        )
+        prompt = f"{_render_child_schema_preamble(schema)}\n\n{rendered}"
+        results = llm_primitives.llm_batch([prompt], role=role, persona=persona)
+        return results[0] if results else ""
+
+    return complete
 
 
 class _CombinedOpsMixin:
@@ -395,6 +420,23 @@ class _CombinedOpsMixin:
             attempts = 1
             current_raw = raw_result
             ok, err, parsed = _validate_final_answer(current_raw, schema)
+
+            if not ok:
+                # TD-21.22 residual: one repair turn (fish, then at most one
+                # constrained extraction call back to the same role) before
+                # paying for a full re-call, multiplied across the batch.
+                repair = parse_with_repair(
+                    current_raw,
+                    schema=schema,
+                    complete=_batch_repair_completer(self.llm_primitives, role, persona),
+                    site="repl_combined_ops",
+                )
+                if repair.status in ("parsed", "repaired"):
+                    parsed = repair.value
+                    current_raw = json.dumps(parsed)
+                    ok, err = True, None
+                else:
+                    err = repair.reason or err
 
             while not ok and attempts <= retry_budget:
                 retry_count += 1
