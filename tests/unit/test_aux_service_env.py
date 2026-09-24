@@ -210,3 +210,85 @@ def test_aux_services_do_not_inherit_the_llama_omp_recipe() -> None:
     for key in ("OMP_PROC_BIND", "OMP_PLACES", "OMP_WAIT_POLICY", "KMP_BLOCKTIME", "GGML_IQK"):
         if key not in base:
             assert key not in env, f"aux service inherited llama-server tuning: {key}"
+
+
+# ── 2026-09-24 GPU-residency change set: whisper on CPU, pinned to a declared cpuset ──
+def test_whisper_is_declared_cpu_resident_with_a_pinned_cpuset() -> None:
+    whisper = AUX_SERVICES["whisper"]
+    assert "-ng" in whisper.argv
+    assert whisper.env.get("HIP_VISIBLE_DEVICES") == "-1"
+    assert whisper.cpuset, "a CPU whisper must declare its measured-safe cpuset"
+    assert whisper.backend == "stt" and whisper.verify_ggml_linkage
+
+
+def test_declared_cpuset_is_used_verbatim(monkeypatch) -> None:
+    from scripts.server import orchestrator_stack as oss
+
+    monkeypatch.setattr(oss, "enforce_placement", lambda placement, **_kw: None)
+    svc = AUX_SERVICES["whisper"]._replace(cpuset="96-111")
+    assert oss._aux_spawn_prefix(svc, bench_force=False) == ["taskset", "-c", "96-111"]
+
+
+def test_declared_cpuset_is_never_repinned_by_the_bench_guard(monkeypatch) -> None:
+    from scripts.server import orchestrator_stack as oss
+
+    monkeypatch.setattr(oss, "enforce_placement", lambda placement, **_kw: "0-7")
+    svc = AUX_SERVICES["whisper"]._replace(cpuset="96-111")
+    assert oss._aux_spawn_prefix(svc, bench_force=False) is None
+
+
+@pytest.mark.parametrize("bad", ["@WHISPER_CPUSET@", "96-111;rm", "a-b", "96-"])
+def test_malformed_cpuset_fails_only_that_launch(monkeypatch, bad: str) -> None:
+    from scripts.server import orchestrator_stack as oss
+
+    monkeypatch.setattr(oss, "enforce_placement", lambda placement, **_kw: None)
+    svc = AUX_SERVICES["whisper"]._replace(cpuset=bad)
+    assert oss._aux_spawn_prefix(svc, bench_force=False) is None
+
+
+def test_undeclared_cpuset_keeps_the_bench_guarded_default(monkeypatch) -> None:
+    from scripts.server import orchestrator_stack as oss
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        oss,
+        "_bench_guarded_numa_prefix",
+        lambda role, inst, **kw: calls.append((role, inst)) or [],
+    )
+    svc = AUX_SERVICES["whisper"]._replace(cpuset=None)
+    assert oss._aux_spawn_prefix(svc, bench_force=False) == []
+    assert calls == [(None, 0)]
+
+
+# ── 2026-09-24: TTS on CPU (shim-controlled threads) + declared layouts are measured-safe ──
+def test_tts_is_declared_cpu_resident_with_shim_and_cpuset() -> None:
+    tts = AUX_SERVICES["tts"]
+    assert tts.env.get("GGML_BACKEND") == "CPU"
+    assert tts.env.get("HIP_VISIBLE_DEVICES") == "-1"
+    assert tts.env.get("LD_PRELOAD", "").endswith("/nprocs_shim.so")
+    assert int(tts.env["SHIM_NPROCS"]) // 2 == 16
+    assert tts.cpuset == "24-39"
+
+
+def test_declared_speech_layouts_are_measured_safe() -> None:
+    # Recompute-and-diff gate for the restated (threads, cpuset) facts: the manifest may
+    # only declare what scripts/voice/speech_layouts.yaml records as measured-safe.
+    from scripts.voice.check_speech_layout import check
+
+    assert check() == []
+
+
+def test_missing_ld_preload_fails_only_that_launch(tmp_path, monkeypatch) -> None:
+    from scripts.server import orchestrator_stack as oss
+
+    svc = AUX_SERVICES["tts"]._replace(
+        env={**AUX_SERVICES["tts"].env, "LD_PRELOAD": str(tmp_path / "absent.so")}
+    )
+    monkeypatch.setitem(oss.AUX_SERVICES, "tts", svc)
+    monkeypatch.setattr(oss, "enforce_placement", lambda placement, **_kw: None)
+    monkeypatch.setattr(oss, "_resolve_aux_launch", lambda s: (["/bin/true"], [], None))
+    monkeypatch.setattr(oss, "_verify_aux_ggml_linkage", lambda *a, **k: True)
+    popen = []
+    monkeypatch.setattr(oss.subprocess, "Popen", lambda *a, **k: popen.append(a) or None)
+    assert oss.start_aux_service("tts") is None
+    assert popen == []

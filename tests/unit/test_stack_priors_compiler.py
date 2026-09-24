@@ -1743,3 +1743,42 @@ def test_compile_projects_ctx_model_max_and_policy_hints(tmp_path: Path) -> None
     assert policy["tap_safe_non_stream"] is False
     assert policy["high_cost"] is False
     assert policy["model_mem_gb"] == 37.0
+
+
+# ── stack-change-kvu (2026-09-24): kv_unified is a DECLARED boolean ──────────
+@pytest.mark.parametrize(
+    ("server_cfg", "role_cfg", "expected"),
+    [
+        # serving_shape is the canonical home and outranks a flat copy.
+        ({"serving_shape": {"kv_unified": True}, "kv_unified": False}, None, True),
+        # False is a declaration, not an absence.
+        ({"serving_shape": {"kv_unified": False}}, None, False),
+        # Role-local serving block works too.
+        (None, {"serving": {"kv_unified": True}}, True),
+        # Undeclared -> None (launcher emits nothing).
+        ({"serving_shape": {"n_ctx": 196608}}, {}, None),
+        # A non-bool is not coerced (1 is not True here).
+        ({"serving_shape": {"kv_unified": 1}}, None, None),
+    ],
+)
+def test_runtime_flag_bool_prior_resolves_kv_unified(server_cfg, role_cfg, expected) -> None:
+    from src.registry.stack_priors import _runtime_flag_bool_prior
+
+    assert (
+        _runtime_flag_bool_prior(server_cfg, role_cfg, key="kv_unified") is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("server_cfg", "expected"),
+    [
+        ({"serving_shape": {"draft_kv_quant": {"k": "q8_0", "v": "q8_0"}}}, ("q8_0", "q8_0")),
+        ({"serving_shape": {"draft_kv_quant": {"k": "q8_0"}}}, None),
+        ({"serving_shape": {"kv_quant": {"k": "q8_0", "v": "q8_0"}}}, None),
+        (None, None),
+    ],
+)
+def test_draft_kv_types_prior_reads_only_serving_shape(server_cfg, expected) -> None:
+    from src.registry.stack_priors import _draft_kv_types_prior
+
+    assert _draft_kv_types_prior(server_cfg, None) == expected

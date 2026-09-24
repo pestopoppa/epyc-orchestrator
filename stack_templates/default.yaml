@@ -137,7 +137,9 @@ roles:
         # drafting at 24 against a measured-4 artifact. Now 8 = the measured optimum for
         # Qwen3.8-27B (sweep: n6 55.22 / n8 55.46 / n12 51.14 t/s; curve turns over past 8).
         # Keep in step with speculative_decoding_policy.draft_max in the MASTER registry.
-        draft_max: 8
+        # 2026-09-24: 8 -> 4 with the master (production shape np 4 + unified KV; depth 4 is
+        # equal-or-faster there: np_context_kvu_study_20260924/q38_27b_q8_depth).
+        draft_max: 4
         p_split: 0
 
   architect_critic:

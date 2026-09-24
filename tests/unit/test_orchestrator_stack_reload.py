@@ -1598,6 +1598,65 @@ def test_runtime_attestation_ignores_kv_hadamard_declared_false() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("declared", "extra", "expect_warning"),
+    [
+        # Declared unified, launched with -kvu: clean.
+        (True, ["-np", "2", "--kv-unified"], False),
+        (True, ["-np", "2", "-kvu"], False),
+        # THE 2026-09-24 DEFECT: declared unified, launched with an explicit -np and
+        # no -kvu. llama-server resolves split KV (server.cpp:145-150). Must warn.
+        (True, ["-np", "2"], True),
+        # Last flag wins: a trailing negation defeats an earlier -kvu.
+        (True, ["-np", "2", "-kvu", "--no-kv-unified"], True),
+        # No -np at all = auto slots = unified by the kernel's own default.
+        (True, [], False),
+        # Declared split: explicit -np with no flag IS split; -kvu is drift.
+        (False, ["-np", "2"], False),
+        (False, ["-np", "2", "--no-kv-unified"], False),
+        (False, ["-np", "2", "--kv-unified"], True),
+    ],
+)
+def test_runtime_attestation_checks_kv_unified_as_resolved_by_the_server(
+    declared: bool, extra: list[str], expect_warning: bool
+) -> None:
+    warnings = stack_commands._runtime_attestation_warnings(
+        "architect_general",
+        _attestation_info(),
+        _ATTEST_BASE_CMDLINE + extra,
+        _attest_contract(cache={"kv_unified": declared}),
+    )
+    kvu = [w for w in warnings if "kv_unified" in w]
+    assert bool(kvu) is expect_warning, warnings
+
+
+def test_runtime_attestation_checks_declared_draft_kv_types() -> None:
+    contract = _attest_contract(cache={"draft_kv_type_k": "q8_0", "draft_kv_type_v": "q8_0"})
+    clean = stack_commands._runtime_attestation_warnings(
+        "architect_general",
+        _attestation_info(),
+        _ATTEST_BASE_CMDLINE + ["-ctkd", "q8_0", "-ctvd", "q8_0"],
+        contract,
+    )
+    assert clean == []
+    drift = stack_commands._runtime_attestation_warnings(
+        "architect_general", _attestation_info(), _ATTEST_BASE_CMDLINE, contract
+    )
+    assert len([w for w in drift if "draft_kv_type" in w]) == 2, drift
+
+
+def test_runtime_attestation_ignores_undeclared_kv_unified() -> None:
+    assert (
+        stack_commands._runtime_attestation_warnings(
+            "architect_general",
+            _attestation_info(),
+            _ATTEST_BASE_CMDLINE + ["-np", "2"],
+            _attest_contract(cache={"kv_unified": None}),
+        )
+        == []
+    )
+
+
 def test_runtime_attestation_accepts_embedded_nextn_without_md() -> None:
     info = stack_commands.ProcessInfo(
         role="frontdoor",

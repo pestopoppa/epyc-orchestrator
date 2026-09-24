@@ -911,6 +911,92 @@ def test_resolve_binary_for_role_defaults_to_llama_server() -> None:
     assert oss._resolve_binary_for_role("architect_general") == oss.LLAMA_SERVER
 
 
+@pytest.mark.parametrize(
+    ("declared", "expected_tail"),
+    [
+        (True, ["--kv-unified"]),
+        (False, ["--no-kv-unified"]),
+        (None, []),
+    ],
+)
+def test_append_runtime_kv_args_emits_declared_kv_unified_both_ways(
+    declared: bool | None, expected_tail: list[str]
+) -> None:
+    # A declared fact is emitted explicitly in BOTH directions; an undeclared one
+    # emits nothing (every CPU role keeps its current cmdline byte-for-byte).
+    cmd: list[str] = []
+    oss._append_runtime_kv_args(
+        cmd, {"kv_type_k": "q8_0", "kv_type_v": "q8_0", "kv_unified": declared}
+    )
+    assert cmd == ["-ctk", "q8_0", "-ctv", "q8_0", *expected_tail]
+
+
+def test_append_runtime_kv_args_emits_declared_draft_kv_types() -> None:
+    cmd: list[str] = []
+    oss._append_runtime_kv_args(
+        cmd,
+        {
+            "kv_type_k": "q8_0",
+            "kv_type_v": "q8_0",
+            "draft_kv_type_k": "q8_0",
+            "draft_kv_type_v": "q8_0",
+            "kv_unified": True,
+        },
+    )
+    assert cmd == ["-ctk", "q8_0", "-ctv", "q8_0", "-ctkd", "q8_0", "-ctvd", "q8_0", "--kv-unified"]
+
+
+def test_append_runtime_kv_args_omits_half_declared_draft_kv_types() -> None:
+    cmd: list[str] = []
+    oss._append_runtime_kv_args(cmd, {"draft_kv_type_k": "q8_0", "draft_kv_type_v": None})
+    assert cmd == []
+
+
+def test_build_role_command_emits_declared_kv_unified_with_explicit_np(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    # End-to-end over the DATA path, at the :8083 shape: -np 2 stays, and -kvu
+    # is added so ONE request may use the whole -c pool.
+    priors = _write_launch_prior(
+        tmp_path,
+        "architect_general",
+        requirements={},
+        runtime={
+            "binary_path": "/prior/llama-server",
+            "cache": {
+                "context_tokens": 196608,
+                "slots": 2,
+                "ubatch": 2048,
+                "kv_type_k": "q8_0",
+                "kv_type_v": "q8_0",
+                "kv_unified": True,
+            },
+            "flags": {
+                "flash_attn": True,
+                "jinja": True,
+                "reasoning": None,
+                "override_kv": [],
+                "spec": {"enabled": False},
+            },
+        },
+    )
+    monkeypatch.setattr(oss, "STACK_PRIORS_PATH", priors)
+    role = SimpleNamespace(
+        name="architect_general",
+        model=SimpleNamespace(full_path="/fallback/27b.gguf"),
+        acceleration=SimpleNamespace(type="none", experts=None, draft_role=None),
+    )
+
+    cmd = oss._build_role_command(role, port=9083, prepare_runtime_dirs=False)
+
+    assert _flag_value(cmd, "-np") == "2"
+    assert _flag_value(cmd, "-c") == "196608"
+    assert cmd.count("--kv-unified") == 1
+    assert "--no-kv-unified" not in cmd
+    assert stack_commands._live_kv_unified(cmd) is True
+
+
 def test_append_kv_quant_args_emits_q8_for_frontdoor() -> None:
     cmd: list[str] = []
     oss._append_kv_quant_args(cmd, "frontdoor")

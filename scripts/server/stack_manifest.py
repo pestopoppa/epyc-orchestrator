@@ -314,6 +314,14 @@ class AuxService(NamedTuple):
     # bytes for a request it cannot satisfy, which every status-code check
     # passes. Absent -> not checked.
     smoke: dict[str, Any] | None = None
+    # OPTIONAL declared CPU placement (a `taskset -c` cpu list). Needed by any
+    # CPU-resident ggml service whose threadpool is layout-sensitive: whisper.cpp
+    # HANGS on some (threads, cpuset) pairs (epyc-inference-research
+    # artifacts/speech_cpu_realtime_20260924/README.md, "Layout collapse"), so it
+    # must run on a MEASURED-SAFE pair, never on whatever the bench guard picks.
+    # Validated at LAUNCH (orchestrator_stack.start_aux_service), not at import:
+    # a bad value must fail that one service, not every importer of this module.
+    cpuset: str | None = None
 
 
 _AUX_LD_MODES = ("prepend", "replace")
@@ -358,6 +366,7 @@ def _aux_service(entry: dict[str, Any]) -> AuxService:
         health_path=str(entry.get("health_path", "/health")),
         health_timeout=int(entry.get("health_timeout", 60)),
         smoke=entry.get("smoke") if isinstance(entry.get("smoke"), dict) else None,
+        cpuset=str(entry["cpuset"]).strip() if entry.get("cpuset") not in (None, "") else None,
     )
 
 

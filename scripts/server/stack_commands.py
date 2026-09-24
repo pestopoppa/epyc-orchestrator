@@ -559,6 +559,19 @@ _RUNTIME_FIELD_CHECKS: dict[str, tuple[str, tuple[str, ...], str]] = {
     "runtime.cache.no_mmap": ("dedicated", (), ""),
     "runtime.cache.mlock": ("dedicated", (), ""),
     "runtime.cache.slot_save_path": ("dedicated", (), ""),
+    # Unified KV pool: a BOOLEAN whose live truth depends on TWO flags (-kvu and
+    # -np), so it cannot be a token check -- see the dedicated block below.
+    "runtime.cache.kv_unified": ("dedicated", (), ""),
+    "runtime.cache.draft_kv_type_k": (
+        "int_or_token_flag",
+        ("-ctkd", "--spec-draft-type-k", "--cache-type-k-draft"),
+        "",
+    ),
+    "runtime.cache.draft_kv_type_v": (
+        "int_or_token_flag",
+        ("-ctvd", "--spec-draft-type-v", "--cache-type-v-draft"),
+        "",
+    ),
     # --kv-hadamard was removed in the v6 binary (it would crash), so the launcher's
     # emission site is commented out. A role declaring it true would therefore get a
     # silent no-op, which is exactly the kind of unkept declaration worth reporting.
@@ -849,6 +862,24 @@ def _derived_runtime_field_warnings(
     return warnings
 
 
+_KV_UNIFIED_ON_FLAGS: frozenset[str] = frozenset({"-kvu", "--kv-unified"})
+_KV_UNIFIED_OFF_FLAGS: frozenset[str] = frozenset({"-no-kvu", "--no-kv-unified"})
+
+
+def _live_kv_unified(cmdline: list[str]) -> bool:
+    """What llama-server resolved ``kv_unified`` to for this cmdline.
+
+    Last explicit flag wins (argparse semantics). With neither flag, the server
+    default applies: unified iff ``-np``/``--parallel`` is absent (auto slots).
+    """
+    for token in reversed(cmdline):
+        if token in _KV_UNIFIED_ON_FLAGS:
+            return True
+        if token in _KV_UNIFIED_OFF_FLAGS:
+            return False
+    return _last_cmdline_flag_value(cmdline, "-np", "--parallel") is None
+
+
 def _runtime_attestation_warnings(
     name: str,
     info: ProcessInfo,
@@ -961,6 +992,19 @@ def _runtime_attestation_warnings(
         actual = flag_name in cmdline
         if actual != expected:
             warnings.append(_runtime_value_warning(name, info, key, expected, actual))
+
+    # kv_unified: the LIVE value is whatever llama-server resolved, which is the last
+    # -kvu/--kv-unified/-no-kvu/--no-kv-unified on the cmdline, else "auto" -- and
+    # auto means unified ONLY when -np is absent (tools/server/server.cpp:145-150).
+    # Checking flag presence alone would pass a process that runs split KV while its
+    # declaration says unified, which is the exact defect this field was added for.
+    expected_kvu = cache.get("kv_unified")
+    if isinstance(expected_kvu, bool):
+        actual_kvu = _live_kv_unified(cmdline)
+        if actual_kvu != expected_kvu:
+            warnings.append(_runtime_value_warning(
+                name, info, "kv_unified", expected_kvu, actual_kvu
+            ))
 
     slot_save_path = cache.get("slot_save_path")
     if isinstance(slot_save_path, str) and slot_save_path:

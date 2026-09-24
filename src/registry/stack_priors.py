@@ -1547,6 +1547,44 @@ def _runtime_flag_int_prior(
     return None
 
 
+def _runtime_flag_bool_prior(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+    *,
+    key: str,
+) -> bool | None:
+    """Resolve an optional BOOLEAN launcher fact from registry serving metadata.
+
+    The boolean twin of ``_runtime_flag_int_prior``, with the same search order
+    (``serving_shape`` first, then the row itself, then the role-local ``server`` /
+    ``serving`` / ``launch`` sub-mappings). ``False`` is a DECLARED value, not an
+    absent one: it compiles to an explicit negative flag, so a fact the operator
+    pinned never silently reverts to whatever the kernel's default happens to be.
+    Returns ``None`` when undeclared, and the launcher then emits nothing.
+
+    Origin (2026-09-24, stack-change-kvu): llama-server enables a unified KV pool
+    ONLY when ``-np`` is left on auto (``tools/server/server.cpp:145-150``); the
+    launcher always passes ``-np``, so ``:8083`` ran split KV while the master
+    registry asserted "KV IS UNIFIED". A default is not a declaration.
+    """
+    for cfg in (server_cfg, role_cfg):
+        if not isinstance(cfg, dict):
+            continue
+        for source in (
+            cfg.get("serving_shape"),
+            cfg,
+            cfg.get("server"),
+            cfg.get("serving"),
+            cfg.get("launch"),
+        ):
+            if not isinstance(source, dict):
+                continue
+            value = source.get(key)
+            if isinstance(value, bool):
+                return value
+    return None
+
+
 # Registry spellings for GPU offload depth, in precedence order. Two are in live
 # use with different value types; see _n_gpu_layers_prior.
 _N_GPU_LAYERS_KEYS: tuple[str, ...] = ("n_gpu_layers", "ngl", "gpu_layers")
@@ -1682,6 +1720,24 @@ def _kv_types_prior(
         value_type = candidate.get("v") or candidate.get("type_v") or candidate.get("kv_type_v")
         if isinstance(key_type, str) and isinstance(value_type, str):
             return key_type, value_type
+    return None
+
+
+def _draft_kv_types_prior(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+) -> tuple[str, str] | None:
+    """Resolve the speculative draft context's KV types (``-ctkd``/``-ctvd``).
+
+    Only ``serving_shape.draft_kv_quant`` is read: this is a GPU-capacity lever
+    (SSU-F3 fix #1), not a legacy flat key with history to honour.
+    """
+    for cfg in (server_cfg, role_cfg):
+        candidate = _nested_mapping(cfg, "serving_shape", "draft_kv_quant")
+        if isinstance(candidate, dict):
+            k, v = candidate.get("k"), candidate.get("v")
+            if isinstance(k, str) and k and isinstance(v, str) and v:
+                return k, v
     return None
 
 
@@ -2290,6 +2346,21 @@ def _launch_runtime_record(
             "kv_type_k": kv_types[0] if kv_types else None,
             "kv_type_v": kv_types[1] if kv_types else None,
             "kv_hadamard": bool(primary_role in _V2_ROLES and LLAMA_SERVER_V2.exists()),
+            # Unified KV pool (llama-server -kvu / --no-kv-unified). None when
+            # undeclared -> the launcher emits nothing and the kernel default
+            # applies (split KV whenever -np is explicit, which it always is).
+            # Declared as `server_mode.<role>.serving_shape.kv_unified`: with it,
+            # ONE request may use the whole -c pool; without it each slot is
+            # hard-capped at -c / -np. See _runtime_flag_bool_prior.
+            "kv_unified": _runtime_flag_bool_prior(server_cfg, role_cfg, key="kv_unified")
+            if mode == "default"
+            else None,
+            # Speculative DRAFT-context KV types (llama-server -ctkd/-ctvd). -ctk/-ctv
+            # do NOT reach the draft context: common_base_params_to_speculative copies
+            # speculative.draft.cache_type_{k,v}, which default to F16. Declared as
+            # `serving_shape.draft_kv_quant: {k, v}`; None when undeclared.
+            "draft_kv_type_k": (_draft_kv_types_prior(server_cfg, role_cfg) or (None, None))[0],
+            "draft_kv_type_v": (_draft_kv_types_prior(server_cfg, role_cfg) or (None, None))[1],
             # 2026-06-26 v6 cutover: no_mmap is no longer hardcoded to worker_pool+explore.
             # It now flows through from the role's config (server_mode then roles block),
             # defaulting to False when absent — so non-worker quarter roles (N12 private

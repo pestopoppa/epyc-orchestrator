@@ -773,19 +773,41 @@ aux_services:
     #   WAV ONLY — whisper.cpp's --convert needs ffmpeg, which is NOT installed on
     #           this host. faster-whisper accepted arbitrary containers. Do not set
     #           --convert until ffmpeg exists.
-    description: whisper.cpp STT (large-v3-turbo, HIP/gfx90a)
+    #
+    # 2026-09-24 GPU-RESIDENCY CHANGE SET: :9000 MOVES TO THE CPU (operator-directed),
+    # freeing ~2.2 GB of MI210 VRAM for architect_general's 4 slots. Same frozen
+    # production-speech-v1 binary and tree (`backend: stt`, linkage check unchanged);
+    # `-ng` + HIP_VISIBLE_DEVICES=-1 keep it off the GPU. Evidence and hazards:
+    # epyc-inference-research artifacts/speech_cpu_realtime_20260924/README.md.
+    #   * `-t` and `cpuset` are ONE measured pair. whisper.cpp HANGS (>60-300 s per
+    #     encode) on some layouts -- 20@0-19, 28@0-27, 24@0-31, 32@0-31, 32@24-55 --
+    #     and is healthy on others. 24@0-23 (with TTS 16@24-39) is healthy 3/3 solo and
+    #     real-time concurrently with TTS, frontdoor IDLE (STT RTF 0.20/0.24). Change
+    #     it only via scripts/voice/check_speech_layout.py, which enforces that rule.
+    #   * ⚠ A GENERATING CPU frontdoor collapses both speech servers (STT RTF 1.5-2.9,
+    #     TTS RTF 7.8-9.4): every core in 0-95 is in the frontdoor's -t 96 set. Voice
+    #     turns must reason on the GPU (architect_general) — voice-pipeline requirement.
+    #   * cpuset is honoured exactly: the bench guard may refuse it, never re-pin it
+    #     (orchestrator_stack._aux_spawn_prefix).
+    #   * Latency: ~2 s per utterance of any length on CPU (30 s window padding) vs
+    #     0.12 s on the GPU.
+    description: whisper.cpp STT (large-v3-turbo, CPU; HIP hidden)
     backend: stt
     argv: ["whisper-server",
            "-m", "{llm_root}/models/whisper-ggml/ggml-large-v3-turbo.bin",
            "--host", "127.0.0.1",
            "--port", "9000",
            "--inference-path", "/v1/audio/transcriptions",
-           "-t", "8"]
+           "-t", "24",
+           "-ng"]
+    cpuset: "0-23"
+    env:
+      HIP_VISIBLE_DEVICES: "-1"
     cwd: "{llm_root}/whisper.cpp"
     verify_ggml_linkage: true
     health_path: /health
     health_timeout: 90
-    model_label: whisper.cpp large-v3-turbo (HIP gfx90a, ggml 0.18.0)
+    model_label: whisper.cpp large-v3-turbo (CPU -ng, ggml 0.18.0)
     log: whisper.log
 
   - name: tts
@@ -793,7 +815,21 @@ aux_services:
     optional: true
     # 2026-08-02 W4: first registration. No TTS process has ever run under stack
     # management; 9002 was verified free before being claimed.
-    description: qwentts.cpp TTS server (Qwen3-TTS 12Hz 0.6B, HIP/gfx90a)
+    #
+    # 2026-09-24 GPU-RESIDENCY CHANGE SET: :9002 RUNS ON THE CPU (operator decision).
+    # It was declared on the MI210 but could never fit there (2.62 GiB vs <1 GiB free).
+    # Same frozen production-speech-v1 binary; GGML_BACKEND=CPU + HIP_VISIBLE_DEVICES=-1
+    # keep it off the GPU. 16 threads @ cores 24-39, measured real-time concurrently with
+    # STT 24@0-23, frontdoor idle: RTF 0.59-0.61, first packet 91/311 ms
+    # (epyc-inference-research artifacts/speech_cpu_realtime_20260924/README.md).
+    #   * THREAD COUNT: the binary has no flag (src/backend.h: hardware_concurrency()/2,
+    #     affinity-blind -> 96 threads). scripts/voice/nprocs_shim.c, built OUT of the
+    #     frozen tree by scripts/voice/build_nprocs_shim.sh, is LD_PRELOADed with
+    #     SHIM_NPROCS=32 -> 16 threads. The launcher refuses to start the service if the
+    #     preload file is missing (glibc would otherwise ignore it with a warning and run
+    #     96 spinning threads on 16 cores). Serving proof: the log says `CPU threads: 16`.
+    #   * Same frontdoor-contention caveat as whisper above.
+    description: qwentts.cpp TTS server (Qwen3-TTS 12Hz 0.6B, CPU; HIP hidden)
     backend: tts
     argv: ["tts-server",
            "--model", "{llm_root}/models/Qwen3-TTS-qwentts/qwen-talker-0.6b-base-Q8_0.gguf",
@@ -801,11 +837,17 @@ aux_services:
            "--alias", "qwen3-tts-12hz-0.6b",
            "--host", "127.0.0.1",
            "--port", "9002"]
+    cpuset: "24-39"
+    env:
+      GGML_BACKEND: "CPU"
+      HIP_VISIBLE_DEVICES: "-1"
+      SHIM_NPROCS: "32"
+      LD_PRELOAD: "/mnt/raid0/llm/cache/shims/nprocs_shim.so"
     cwd: "{llm_root}/qwentts.cpp"
     verify_ggml_linkage: true
     health_path: /health
     health_timeout: 90
-    model_label: Qwen3-TTS-12Hz-0.6B Talker Q8_0 + 12hz codec (HIP gfx90a, ggml 0.17.0)
+    model_label: Qwen3-TTS-12Hz-0.6B Talker Q8_0 + 12hz codec (CPU 16t, ggml 0.17.0)
     # Prove it can SYNTHESISE, not just answer /health. This server returns
     # HTTP 200 with ZERO audio bytes for a request it cannot satisfy (an unknown
     # `voice`, a codec that failed to load), so a status-code check passes while

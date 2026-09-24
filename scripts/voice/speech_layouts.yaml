@@ -1,0 +1,32 @@
+# Measured CPU layouts for the speech aux services (whisper.cpp STT :9000, qwentts.cpp TTS :9002).
+#
+# ACCEPTANCE RULE (operator, 2026-09-24): a layout may be declared in
+# orchestration/launch_manifest.yaml aux_services only if it was measured SAFE with the
+# CPU frontdoor IDLE: solo (STT: healthy 3/3 in the encoder matrix) or, when both speech
+# servers are declared, as a CONCURRENT pair. tests/unit/test_aux_service_env.py enforces it.
+#
+# FRONTDOOR-CONTENTION CAVEAT (measured, not a rule of this file): every core in 0-95 is in
+# the CPU frontdoor's -t 96 set. With a frontdoor generation running, STT RTF went to 1.5-2.9,
+# TTS RTF to 7.8-9.4 and the frontdoor to 0.3-7.4 tok/s. Voice turns must therefore reason on
+# the GPU (architect_general); that routing is the voice pipeline's requirement.
+#
+# Evidence: epyc-inference-research artifacts/speech_cpu_realtime_20260924/
+#   (README.md; raw/whisper_bench_encoder_matrix.txt; raw/concurrent*.stdout)
+stt_solo_ok:            # whisper-server -t N under taskset -c CPUSET, healthy 3/3, frontdoor idle
+  - {threads: 8,  cpuset: "0-7"}
+  - {threads: 8,  cpuset: "0-11"}
+  - {threads: 16, cpuset: "0-15"}
+  - {threads: 16, cpuset: "0-23"}
+  - {threads: 24, cpuset: "0-23"}
+  - {threads: 32, cpuset: "0-39"}
+  - {threads: 16, cpuset: "96-111"}   # SMT siblings (option C)
+stt_known_bad:          # encode hangs >60-300 s — never declare
+  - {threads: 20, cpuset: "0-19"}
+  - {threads: 28, cpuset: "0-27"}
+  - {threads: 24, cpuset: "0-31"}
+  - {threads: 32, cpuset: "0-31"}
+  - {threads: 32, cpuset: "24-55"}
+concurrent_ok:          # STT and TTS resident AND serving together, frontdoor idle
+  - name: main40
+    stt: {threads: 24, cpuset: "0-23"}      # RTF 0.199 (11 s) / 0.243 (86.5 s)
+    tts: {threads: 16, cpuset: "24-39"}     # RTF 0.593/0.606, first packet 91/311 ms

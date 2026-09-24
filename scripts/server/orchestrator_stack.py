@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -539,6 +540,20 @@ def _append_runtime_kv_args(cmd: list[str], cache: dict[str, Any]) -> None:
     kv_type_v = cache.get("kv_type_v")
     if isinstance(kv_type_k, str) and isinstance(kv_type_v, str):
         cmd.extend(["-ctk", kv_type_k, "-ctv", kv_type_v])
+    # Unified KV pool. Emitted in BOTH directions when declared, never when not:
+    # llama-server's own default is "unified only if -np is auto"
+    # (tools/server/server.cpp:145-150), and this launcher always passes -np, so an
+    # undeclared role gets split KV -- which is what :8083 silently ran while the
+    # registry asserted the opposite (stack-change-kvu, 2026-09-24).
+    draft_k = cache.get("draft_kv_type_k")
+    draft_v = cache.get("draft_kv_type_v")
+    if isinstance(draft_k, str) and draft_k and isinstance(draft_v, str) and draft_v:
+        cmd.extend(["-ctkd", draft_k, "-ctvd", draft_v])
+    kv_unified = cache.get("kv_unified")
+    if kv_unified is True:
+        cmd.append("--kv-unified")
+    elif kv_unified is False:
+        cmd.append("--no-kv-unified")
     if cache.get("kv_hadamard") is True:
         # 2026-06-26 v6 cutover: --kv-hadamard removed in v6 (no role sets kv_hadamard true today)
         # cmd.append("--kv-hadamard")
@@ -2629,6 +2644,37 @@ def _run_aux_smoke(service) -> str | None:
     return None
 
 
+_AUX_CPUSET_RE = re.compile(r"\d+(-\d+)?(,\d+(-\d+)?)*")
+
+
+def _aux_spawn_prefix(service: Any, *, bench_force: bool) -> list[str] | None:
+    """Spawn prefix for one aux service; None means "refuse this launch".
+
+    Undeclared placement (every service but a CPU-pinned one): SS-BENCH-GATE-b
+    as before -- default affinity, or a non-overlapping subset under a live bench.
+
+    Declared `cpuset`: that exact list, or nothing. The bench guard may REFUSE it
+    (overlap with a live bench's claim; `--allow-during-bench` bypasses), but it
+    may never RE-PIN it: the declared list is a measured-safe layout, and
+    whisper.cpp hangs on unmeasured ones (speech_cpu_realtime_20260924).
+    """
+    label = f"aux service {service.name}"
+    cpuset = getattr(service, "cpuset", None)
+    if not cpuset:
+        return _bench_guarded_numa_prefix(None, 0, bench_force=bench_force, label=label)
+    if not _AUX_CPUSET_RE.fullmatch(cpuset):
+        print(f"    [FAIL] {service.name}: declared cpuset {cpuset!r} is not a cpu list")
+        return None
+    pinned = enforce_placement(cpuset, force=bench_force, label=label)
+    if pinned is not None and pinned != cpuset:
+        print(
+            f"    [FAIL] {service.name}: bench guard wanted to re-pin the declared "
+            f"cpuset {cpuset} to {pinned}; refusing (declared layouts are measured-safe)"
+        )
+        return None
+    return ["taskset", "-c", cpuset]
+
+
 def start_aux_service(name: str, bench_force: bool = False) -> ProcessInfo | None:
     """Start one declared auxiliary service. Returns None on any failure."""
     service = AUX_SERVICES.get(name)
@@ -2640,12 +2686,9 @@ def start_aux_service(name: str, bench_force: bool = False) -> ProcessInfo | Non
     label = service.description or service.name
     print(f"  Starting {service.name} ({label}) on port {service.port}")
 
-    # SS-BENCH-GATE-b: aux services spawn without an explicit placement
-    # (default affinity = every core). Under a live bench, pin to a
-    # non-overlapping subset of host cores (refuse only when none exists).
-    spawn_prefix = _bench_guarded_numa_prefix(
-        None, 0, bench_force=bench_force, label=f"aux service {service.name}"
-    )
+    spawn_prefix = _aux_spawn_prefix(service, bench_force=bench_force)
+    if spawn_prefix is None:
+        return None
 
     try:
         argv, ld_paths, tree = _resolve_aux_launch(service)
@@ -2662,6 +2705,17 @@ def start_aux_service(name: str, bench_force: bool = False) -> ProcessInfo | Non
         return None
 
     env = _build_aux_env(service, ld_paths)
+    # A missing LD_PRELOAD object is NOT fatal to the dynamic loader: glibc prints a
+    # warning and runs the binary without it. For the CPU TTS that silently means
+    # 96 spinning threads on a 16-core cpuset instead of 16 (see nprocs_shim.c), so
+    # a declared preload that does not exist fails THIS service's launch.
+    for preload in (service.env.get("LD_PRELOAD") or "").replace(":", " ").split():
+        if not Path(preload).is_file():
+            print(
+                f"    [FAIL] {service.name}: declared LD_PRELOAD {preload} does not exist "
+                f"(build it: scripts/voice/build_nprocs_shim.sh)"
+            )
+            return None
     if ld_paths:
         verb = ":=" if service.ld_library_path_mode == "replace" else "+="
         print(f"    LD_LIBRARY_PATH {verb} {ld_paths}")
