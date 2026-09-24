@@ -62,6 +62,17 @@ for _p in (str(ORCH_ROOT), str(SCRIPT_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# TD-21.24: shared fish-then-repair helper (src/structured_output/repair.py).
+# CompleteFn is imported lazily via TYPE_CHECKING-free duck typing (a callable
+# matching repair.CompleteFn's signature); imported here only for the type hint.
+from src.structured_output.repair import (  # noqa: E402
+    CompleteFn,
+    RepairResult,
+    fish_json,
+    http_chat_completer,
+    parse_with_repair,
+)
+
 RUNNER_VERSION = "reviewer-policy-arm-ab-v1"
 
 # Env flag gating real inference. Default OFF => dry-run, no model touched.
@@ -86,8 +97,19 @@ CANONICAL_DECISIONS = (
     DEC_REJECT_TO_EMPTY,
     DEC_ABSTAIN,
 )
-# Reviewer default when a raw response cannot be parsed (mirrors review_service:
-# default to request_changes on failure — the conservative, non-approving verdict).
+# TD-21.24: a reviewer verdict that survives fish + one repair turn UNPARSED is a
+# TYPED failure, never a default — a silent default here would bias the very A/B
+# measurement this script exists to produce. Mirrors the string literal
+# src.trace.review_ledger.PARSE_FAILURE_DECISIONS already matches and
+# src/proactive_delegation/review_service.py's PARSE_FAILURE_SENTINEL (TD-21.6/7)
+# — local constant, not an import, per this module's own convention of never
+# importing the FROZEN serving-path review_service module.
+PARSE_FAILURE_SENTINEL = "parse_failure"
+
+# Retained for the (out-of-scope-for-TD-21.24) gold-key normalization call site
+# below: gold labels come from the corpus, not from a live reviewer, so an
+# unrecognized gold token defaulting is not the "silent default written into
+# the A/B result" TD-21.24 is about. DO NOT use this for reviewer verdict text.
 DEFAULT_DECISION = DEC_REQUEST_CHANGES
 
 _DECISION_ALIASES = {
@@ -329,32 +351,142 @@ def normalize_decision(value: Any) -> str:
     return _DECISION_ALIASES.get(key, DEFAULT_DECISION)
 
 
-def extract_decision(raw: str) -> str:
-    """Extract a canonical reviewer decision from a raw reviewer response.
+def _decision_alias(value: Any) -> str | None:
+    """Map a raw decision token to a canonical label, or ``None`` if unknown.
+
+    Unlike :func:`normalize_decision` (kept for gold-key normalization only),
+    this NEVER defaults — an unrecognized token is a genuine miss for the
+    reviewer-verdict extraction path (TD-21.24).
+    """
+    key = str(value or "").strip().lower()
+    if key in CANONICAL_DECISIONS:
+        return key
+    return _DECISION_ALIASES.get(key)
+
+
+def extract_decision(raw: str) -> str | None:
+    """Deterministic (fish-only) extraction of a canonical reviewer decision.
 
     Accepts the abbreviated JSON verdict the reviewer emits (``{"d": "approve"}``
     or ``{"decision": "changes"}``) and, failing that, a bare/leading decision
-    token. Unparseable input yields :data:`DEFAULT_DECISION` (the conservative
-    non-approving verdict, mirroring review_service's failure default).
+    token. Uses ``src.structured_output.repair.fish_json`` (fenced-block aware,
+    string-aware balanced-brace matching, LAST top-level candidate) in place of
+    the old ``find("{")``/``rfind("}")`` first-to-last slice — TD-21.24's
+    "adopt TD-1 on the extract side".
+
+    Returns ``None`` on a miss. TD-21.24: this used to fall back to
+    :data:`DEFAULT_DECISION` ("request_changes") silently, biasing the very A/B
+    measurement this script exists to produce. A caller that needs a value
+    should go through :func:`resolve_reviewer_decision`, which spends ONE
+    repair turn against the reviewer's own server before it, too, gives up
+    typed (:data:`PARSE_FAILURE_SENTINEL`, never a default).
     """
     text = (raw or "").strip()
     if not text:
-        return DEFAULT_DECISION
-    # Try a JSON object with an abbreviated 'd' or full 'decision' key.
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            obj = json.loads(text[start : end + 1])
-            if isinstance(obj, dict):
-                token = obj.get("d", obj.get("decision"))
-                if token is not None:
-                    return normalize_decision(token)
-        except json.JSONDecodeError:
-            pass
-    # Bare token fallback: first non-empty line's leading word.
+        return None
+    obj = fish_json(text, kind="object")
+    if isinstance(obj, dict):
+        token = obj.get("d", obj.get("decision"))
+        if token is not None:
+            # A JSON verdict object IS present and DOES carry a decision key:
+            # its value is authoritative. An unrecognized value here is a
+            # genuine miss, not a cue to fall through to the bare-token scan
+            # below (matches the original control flow, minus the default).
+            return _decision_alias(token)
+    # No JSON verdict object (or no d/decision key in it): bare token fallback,
+    # the first non-empty line's leading word.
     first = text.splitlines()[0].strip().lower()
-    return normalize_decision(first.split()[0] if first.split() else first)
+    token = first.split()[0] if first.split() else first
+    return _decision_alias(token)
+
+
+# TD-21.24: schema + instruction for the ONE repair turn against the reviewer's
+# OWN role server (never :8000/v1 -- HS-OD-1, that lane refuses response_format).
+_DECISION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"decision": {"type": "string", "enum": list(CANONICAL_DECISIONS)}},
+    "required": ["decision"],
+    "additionalProperties": False,
+}
+
+_DECISION_REPAIR_INSTRUCTION = (
+    "Convert the reviewer reply given as the user message into exactly one "
+    "JSON object {\"decision\": <one of approve|request_changes|escalate|"
+    "reject|request_evidence|reject_to_empty|abstain>}. Copy the reviewer's "
+    "own verdict faithfully -- do not invent or judge a verdict that is not "
+    "already present in the reply."
+)
+
+
+def _role_server_base_url(role: str) -> str | None:
+    """Resolve a role's OWN llama-server base URL from ``get_config().server_urls``.
+
+    Mirrors the idiom at ``scripts/autopilot/eval_tower.py:_eval_resource_lane``
+    / ``scripts/autopilot/controller_io.py``: role -> URL, stripping a leading
+    ``full:`` prefix and taking the first entry of a comma-separated list.
+    Deliberately never :8000/v1 (the orchestrator API's own
+    ``/v1/chat/completions`` refuses ``response_format``, HS-OD-1) — this reads
+    the role's OWN server entry, not the orchestrator's. Returns ``None`` (never
+    raises) when the role is unconfigured or ``src.config`` is unavailable, so a
+    repair-transport failure degrades to a typed failure, not an exception.
+    """
+    try:
+        from src.config import get_config
+
+        configured = get_config().server_urls.as_dict().get(role, "")
+    except Exception:  # noqa: BLE001
+        return None
+    url = str(configured or "").split(",", 1)[0].removeprefix("full:").strip()
+    return url or None
+
+
+def resolve_reviewer_decision(
+    raw: str,
+    *,
+    role: str,
+    site: str = "reviewer_policy_arm_ab.verdict",
+    complete: CompleteFn | None = None,
+) -> tuple[str, RepairResult | None]:
+    """Fish the reviewer's verdict; on a miss, ONE repair turn; else typed failure.
+
+    TD-21.24. Returns ``(decision, repair_result)``:
+
+      * fish alone resolves it -> ``(canonical_decision, None)``, 0 repair calls.
+      * fish misses, repair resolves it -> ``(canonical_decision, RepairResult)``,
+        ``repair_result.status == "repaired"``, 1 call.
+      * fish misses and repair is exhausted (or the role has no known server) ->
+        ``(PARSE_FAILURE_SENTINEL, RepairResult)`` with ``status == "failed"``.
+
+    NEVER returns :data:`DEFAULT_DECISION` on a miss — that silent default is
+    exactly the bias TD-21.24 closes. ``complete`` is caller-injected for tests
+    (see ``http_chat_completer``); production callers omit it and this function
+    resolves the reviewer role's own server via :func:`_role_server_base_url`.
+    """
+    fished = extract_decision(raw)
+    if fished is not None:
+        return fished, None
+
+    completer = complete
+    if completer is None:
+        base_url = _role_server_base_url(role)
+        if base_url is None:
+            return PARSE_FAILURE_SENTINEL, RepairResult(
+                None, "failed", f"no server_urls entry for role {role!r}", site, 0
+            )
+        completer = http_chat_completer(base_url)
+
+    result = parse_with_repair(
+        raw,
+        schema=_DECISION_SCHEMA,
+        complete=completer,
+        instruction=_DECISION_REPAIR_INSTRUCTION,
+        site=site,
+    )
+    if result.status in ("parsed", "repaired") and isinstance(result.value, dict):
+        mapped = _decision_alias(result.value.get("decision"))
+        if mapped is not None:
+            return mapped, result
+    return PARSE_FAILURE_SENTINEL, result
 
 
 @dataclass(frozen=True)
@@ -375,8 +507,26 @@ class PolicyOutcome:
 
 
 def decision_distribution(outcomes: list[PolicyOutcome]) -> dict[str, int]:
-    """Count of each canonical decision label a policy produced."""
+    """Count of each canonical decision label a policy produced.
+
+    TD-21.24: may also include :data:`PARSE_FAILURE_SENTINEL` — a typed parse
+    failure is a distinct bucket here, never folded into a real decision label.
+    """
     return dict(Counter(o.decision for o in outcomes))
+
+
+def parse_failure_stats(outcomes: list[PolicyOutcome]) -> tuple[int, float | None]:
+    """(count, rate) of :data:`PARSE_FAILURE_SENTINEL` outcomes for one policy.
+
+    TD-21.24: the per-arm parse-failure-rate-beside-every-accuracy convention
+    (mirrors ``eval_tower.py``'s ``parse_failure_rate``, orch ``940e0553``).
+    ``rate`` is ``None`` on an empty outcome list (unmeasured, never 0.0).
+    """
+    n = len(outcomes)
+    if not n:
+        return 0, None
+    count = sum(1 for o in outcomes if o.decision == PARSE_FAILURE_SENTINEL)
+    return count, round(count / n, 6)
 
 
 def policy_throughput(outcomes: list[PolicyOutcome]) -> dict[str, Any]:
@@ -484,13 +634,26 @@ def compute_policy_comparison(
     shared = sorted(set(base_by_qid) & set(cand_by_qid))
     n = len(shared)
 
-    base_labels = [base_by_qid[q].decision for q in shared]
-    cand_labels = [cand_by_qid[q].decision for q in shared]
+    # TD-21.24: a PARSE_FAILURE_SENTINEL on either arm is EXCLUDED from paired
+    # agreement/kappa — two independent parse failures on the same question are
+    # not a genuine decision agreement, and counting them as one would bias
+    # kappa exactly the way the old silent DEFAULT_DECISION biased the
+    # distribution. Excluded, never dropped silently: the count rides along.
+    scored_qids = [
+        q
+        for q in shared
+        if base_by_qid[q].decision != PARSE_FAILURE_SENTINEL
+        and cand_by_qid[q].decision != PARSE_FAILURE_SENTINEL
+    ]
+    base_labels = [base_by_qid[q].decision for q in scored_qids]
+    cand_labels = [cand_by_qid[q].decision for q in scored_qids]
     agree_n, agree_rate = agreement_rate(base_labels, cand_labels)
     kappa = cohen_kappa(base_labels, cand_labels)
 
     base_shared = [base_by_qid[q] for q in shared]
     cand_shared = [cand_by_qid[q] for q in shared]
+    base_pf_count, base_pf_rate = parse_failure_stats(base_shared)
+    cand_pf_count, cand_pf_rate = parse_failure_stats(cand_shared)
     base_tp = policy_throughput(base_shared)
     cand_tp = policy_throughput(cand_shared)
     base_tps = base_tp["tokens_per_second"]
@@ -509,11 +672,19 @@ def compute_policy_comparison(
         "test_profile": test_profile,
         "shared_qids": n,
         "decision_agreement": {
+            "scored_qids": len(scored_qids),
+            "excluded_parse_failure_qids": n - len(scored_qids),
             "agree": agree_n,
             "rate": agree_rate,
             "cohen_kappa": kappa,
             "baseline_distribution": decision_distribution(base_shared),
             "candidate_distribution": decision_distribution(cand_shared),
+            # TD-21.24: parse-failure rate beside the verdict counts (mirrors
+            # eval_tower.py's per-arm parse_failure_rate, orch 940e0553).
+            "baseline_parse_failure_count": base_pf_count,
+            "baseline_parse_failure_rate": base_pf_rate,
+            "candidate_parse_failure_count": cand_pf_count,
+            "candidate_parse_failure_rate": cand_pf_rate,
         },
         "throughput": {
             "baseline": base_tp,
@@ -732,9 +903,18 @@ def execute_paired_policy_ab(
         outs: list[PolicyOutcome] = []
         for item in corpus.items:
             raw, tokens_out, latency_ms = probe(policy, item, reviewer_role)
-            decision = extract_decision(raw)
+            # TD-21.24: fish, then ONE repair turn against the REVIEWER'S OWN
+            # server (never :8000/v1); an exhausted repair is a typed
+            # PARSE_FAILURE_SENTINEL, never DEFAULT_DECISION.
+            decision, _repair_result = resolve_reviewer_decision(
+                raw, role=(policy.role or reviewer_role)
+            )
             gold = item.get(gold_key)
-            correct = None if gold is None else (decision == normalize_decision(gold))
+            correct = (
+                None
+                if gold is None or decision == PARSE_FAILURE_SENTINEL
+                else (decision == normalize_decision(gold))
+            )
             outs.append(
                 PolicyOutcome(
                     qid=item["qid"],

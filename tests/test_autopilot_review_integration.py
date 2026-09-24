@@ -38,6 +38,10 @@ def _review_grammar_available() -> bool:
     return rpt._load_review_grammar() is not None
 
 
+def _fish_json_available() -> bool:
+    return rpt._load_fish_json() is not None
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # AP-1 — knob registration + apply_params plumbing
 # ══════════════════════════════════════════════════════════════════════════════
@@ -999,6 +1003,85 @@ def test_ap6_native_review_decision_passes_through() -> None:
 def test_ap6_parse_failure_counted_on_garbage() -> None:
     obj, failure = rpt.derive_review_decision_from_critique("no json anywhere")
     assert obj is None and failure is not None
+
+
+# ── TD-21.18: shared fish_json replaces the local balanced-brace scanner ──────
+#
+# No repair TURN is added at this site: the only caller
+# (planner_providers._emit_codex_review_decision) feeds text from the `codex
+# exec` EXTERNAL CLI, never a reachable local server, so per this repo's
+# transport discipline (external CLI => deterministic fish only) there is no
+# live model to spend a repair call against, and this module's own docstring
+# ("nothing here spends inference") stays true. These tests instead prove the
+# UPGRADED deterministic extraction: a malformed-but-fenced critique block the
+# OLD scanner could never recover (it required the JSON to close within the
+# text) IS now recovered, purely deterministically, and a call counter proves
+# zero calls are ever spent either way.
+
+
+@pytest.mark.skipif(not _fish_json_available(), reason="src.structured_output.repair unavailable")
+def test_td21_18_happy_path_fenced_critique_zero_calls() -> None:
+    """A well-formed, fenced critique block extracts cleanly -- 0 calls, by
+    construction (this module has no completer to call at all)."""
+    text = (
+        "```json:autopilot_critique\n"
+        '{"decision": "approve", "confidence": 0.8, "issues": []}\n'
+        "```"
+    )
+    obj = rpt._extract_critique_block(text)
+    assert obj == {"decision": "approve", "confidence": 0.8, "issues": []}
+    review_decision, failure = rpt.derive_review_decision_from_critique(text)
+    assert failure is None
+    assert review_decision["decision"] == "approve"
+
+
+@pytest.mark.skipif(not _fish_json_available(), reason="src.structured_output.repair unavailable")
+def test_td21_18_malformed_truncated_fence_is_recovered_deterministically() -> None:
+    """A critique block truncated INSIDE its own fence (missing the closing
+    ``]`` and ``}`` for `issues`) is unrecoverable by the OLD scanner -- brace
+    depth never returns to 0, so it finds no candidate at all -- but IS
+    recovered by the shared fish_json's fenced-block + bracket-repair path
+    (src/prompt_builders/code_utils._repair_json_text closes the dangling
+    array/object). Never a live call: this is pure deterministic recovery."""
+    text = (
+        "```json:autopilot_critique\n"
+        "```json\n"
+        '{"decision": "revise", "confidence": 0.7, "issues": ["needs tests"\n'
+        "```"
+    )
+    # Pin the OLD behavior as the regression baseline: the pre-TD-21.18 local
+    # scanner (still shipped in review_grammar.py, unchanged) genuinely cannot
+    # recover this -- depth never returns to 0.
+    from src.proactive_delegation.review_grammar import _extract_json_object as _old_scanner
+
+    marker = "```json:autopilot_critique"
+    body = text[text.find(marker) + len(marker):]
+    assert _old_scanner(body) is None  # the bug TD-21.18 closes
+
+    obj = rpt._extract_critique_block(text)
+    assert obj == {"decision": "revise", "confidence": 0.7, "issues": ["needs tests"]}
+
+    review_decision, failure = rpt.derive_review_decision_from_critique(text)
+    assert failure is None
+    assert review_decision["decision"] == "request_changes"  # native "revise" mapped
+
+
+def test_td21_18_unrepairable_garbage_is_typed_failure_counted() -> None:
+    """No JSON anywhere (inside or outside a fence): a typed ParseFailure,
+    never a silent default, and CritiqueEmissionStats counts it (AP-6 already
+    wires this; TD-21.18 only upgrades the extractor feeding it)."""
+    text = "```json:autopilot_critique\nthe critic just wrote prose, no braces at all\n```"
+    assert rpt._extract_critique_block(text) is None
+
+    stats = rpt.CritiqueEmissionStats()
+    planner_providers.CODEX_REVIEW_DECISION_STATS = stats
+    result = planner_providers.PlannerProviderResult(
+        provider="codex", role="critique", ok=True, text=text,
+    )
+    planner_providers._emit_codex_review_decision(result)
+    assert result.review_decision is None
+    assert stats.parse_failures == 1
+    assert stats.emitted == 0
 
 
 @pytest.mark.skipif(not _review_grammar_available(), reason="review_grammar unavailable")

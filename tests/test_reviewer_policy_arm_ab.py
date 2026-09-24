@@ -42,6 +42,22 @@ ps = runner._RPAB._load_paired_stats()
 PairedComparisonMismatchError = ps.PairedComparisonMismatchError
 
 
+@pytest.fixture(autouse=True)
+def _no_live_completer(monkeypatch):
+    """TD-21.24: this suite must NEVER reach a live server. Guard the ONLY two
+    seams that could build a real transport (the shared repair.py completer
+    factory, and this module's own role->URL resolver) so a test that forgets
+    to inject `complete=` fails LOUDLY instead of dialing out."""
+
+    def _forbidden_http_chat_completer(*args, **kwargs):
+        raise AssertionError(
+            "test attempted to build a live http_chat_completer; inject complete= instead"
+        )
+
+    monkeypatch.setattr(runner, "http_chat_completer", _forbidden_http_chat_completer)
+    monkeypatch.setattr(runner, "_role_server_base_url", lambda role: "http://forbidden.invalid:1")
+
+
 # --------------------------------------------------------------------------- #
 # Sampling-policy spec parsing + knob coercion/validation
 # --------------------------------------------------------------------------- #
@@ -149,8 +165,104 @@ def test_extract_decision_from_json_and_bare_token():
     assert runner.extract_decision('{"decision": "changes"}') == "request_changes"
     assert runner.extract_decision("prefix {\"d\":\"escalate\"} suffix") == "escalate"
     assert runner.extract_decision("approve — looks good") == "approve"
-    assert runner.extract_decision("") == "request_changes"  # empty -> default
-    assert runner.extract_decision("total gibberish here") == "request_changes"
+
+
+def test_extract_decision_returns_none_on_a_miss_never_the_old_default():
+    """TD-21.24: fish returns None on a miss now, NEVER DEFAULT_DECISION — the
+    silent default was exactly the bias this handoff item closes. A miss here
+    is a candidate for one repair turn (resolve_reviewer_decision), not a
+    conservative-looking answer fabricated out of nothing."""
+    assert runner.extract_decision("") is None
+    assert runner.extract_decision("total gibberish here") is None
+    assert runner.extract_decision('{"d": "not_a_real_decision"}') is None
+    assert runner.extract_decision("") != runner.DEFAULT_DECISION
+    assert runner.extract_decision("total gibberish here") != runner.DEFAULT_DECISION
+
+
+# --------------------------------------------------------------------------- #
+# TD-21.24: fish -> ONE repair turn (reviewer's OWN server) -> typed failure
+# --------------------------------------------------------------------------- #
+def test_resolve_reviewer_decision_happy_path_zero_repair_calls():
+    def _boom(messages, schema):
+        raise AssertionError("happy path must not spend a repair call")
+
+    decision, result = runner.resolve_reviewer_decision(
+        '{"d": "approve"}', role="reviewer_general", complete=_boom
+    )
+    assert decision == "approve"
+    assert result is None  # 0 repair calls, matches CompleteFn's contract
+
+
+def test_resolve_reviewer_decision_malformed_is_repaired():
+    def _complete(messages, schema):
+        assert schema["properties"]["decision"]["enum"]  # closed enum on the wire
+        return '{"decision": "escalate"}'
+
+    decision, result = runner.resolve_reviewer_decision(
+        "the reviewer rambled without any JSON object at all, verdict: needs escalation",
+        role="reviewer_general",
+        complete=_complete,
+    )
+    assert decision == "escalate"
+    assert result is not None
+    assert result.status == "repaired"
+    assert result.repair_calls == 1
+
+
+def test_resolve_reviewer_decision_unrepairable_is_typed_failure_not_default():
+    def _complete(messages, schema):
+        return "still no valid json here either"
+
+    decision, result = runner.resolve_reviewer_decision(
+        "complete noise, no verdict anywhere", role="reviewer_general", complete=_complete
+    )
+    assert decision == runner.PARSE_FAILURE_SENTINEL
+    assert decision != runner.DEFAULT_DECISION
+    assert result is not None
+    assert result.status == "failed"
+
+
+def test_resolve_reviewer_decision_transport_failure_is_typed_failure():
+    def _complete(messages, schema):
+        raise TimeoutError("server unreachable")
+
+    decision, result = runner.resolve_reviewer_decision(
+        "garbled reviewer text", role="reviewer_general", complete=_complete
+    )
+    assert decision == runner.PARSE_FAILURE_SENTINEL
+    assert result.status == "failed"
+
+
+def test_resolve_reviewer_decision_unknown_role_server_is_typed_failure_zero_calls(monkeypatch):
+    monkeypatch.setattr(runner, "_role_server_base_url", lambda role: None)
+    decision, result = runner.resolve_reviewer_decision(
+        "garbled reviewer text", role="nonexistent_role"
+    )
+    assert decision == runner.PARSE_FAILURE_SENTINEL
+    assert result is not None
+    assert result.status == "failed"
+    assert result.repair_calls == 0  # no completer was ever built
+
+
+# --------------------------------------------------------------------------- #
+# TD-21.24: parse-failure counting, surfaced beside the verdict counts
+# --------------------------------------------------------------------------- #
+def test_parse_failure_stats_counts_and_rate():
+    outs = [
+        PolicyOutcome(qid="q0", suite="s", decision="approve", tokens_out=1, latency_ms=1.0),
+        PolicyOutcome(qid="q1", suite="s", decision=runner.PARSE_FAILURE_SENTINEL,
+                      tokens_out=1, latency_ms=1.0),
+        PolicyOutcome(qid="q2", suite="s", decision="reject", tokens_out=1, latency_ms=1.0),
+        PolicyOutcome(qid="q3", suite="s", decision=runner.PARSE_FAILURE_SENTINEL,
+                      tokens_out=1, latency_ms=1.0),
+    ]
+    count, rate = runner.parse_failure_stats(outs)
+    assert count == 2
+    assert rate == pytest.approx(0.5)
+
+
+def test_parse_failure_stats_empty_is_unmeasured_not_zero():
+    assert runner.parse_failure_stats([]) == (0, None)
 
 
 # --------------------------------------------------------------------------- #
@@ -310,6 +422,65 @@ def test_compute_policy_comparison_without_gold_skips_accuracy():
     assert "accuracy_vs_gold" not in r
     assert r["decision_agreement"]["agree"] == 0  # approve != reject
     assert r["throughput"]["candidate_over_baseline_tps"] == pytest.approx(2.0)
+
+
+def test_compute_policy_comparison_excludes_parse_failures_from_agreement():
+    """TD-21.24: a PARSE_FAILURE_SENTINEL on either arm is excluded from the
+    paired agreement/kappa (two independent parse failures on the same
+    question are not a genuine decision agreement) but IS counted and rated
+    per policy, beside the verdict counts."""
+    base = [
+        PolicyOutcome(qid="q0", suite="s", decision="approve", tokens_out=10, latency_ms=100.0),
+        PolicyOutcome(qid="q1", suite="s", decision=runner.PARSE_FAILURE_SENTINEL,
+                      tokens_out=5, latency_ms=50.0),
+        PolicyOutcome(qid="q2", suite="s", decision="reject", tokens_out=10, latency_ms=100.0),
+    ]
+    cand = [
+        PolicyOutcome(qid="q0", suite="s", decision="approve", tokens_out=10, latency_ms=100.0),
+        PolicyOutcome(qid="q1", suite="s", decision=runner.PARSE_FAILURE_SENTINEL,
+                      tokens_out=5, latency_ms=50.0),
+        PolicyOutcome(qid="q2", suite="s", decision="approve", tokens_out=10, latency_ms=100.0),
+    ]
+    profile = runner.build_scoring_profile(
+        decision_scheme="canonical_v1", seed=1, gold_key="gold_decision",
+        dataset_sha256="sha256:pf",
+    )
+    r = runner.compute_policy_comparison(
+        base, cand, baseline_label="cold", candidate_label="warm",
+        dataset_sha256="sha256:pf", test_profile=profile, model="m", quant="q",
+    )
+    da = r["decision_agreement"]
+    assert r["shared_qids"] == 3
+    assert da["scored_qids"] == 2  # q1 excluded on both arms
+    assert da["excluded_parse_failure_qids"] == 1
+    assert da["agree"] == 1  # only q0 agrees among the 2 scored qids (q2 differs)
+    assert da["rate"] == pytest.approx(0.5)
+    assert da["baseline_distribution"][runner.PARSE_FAILURE_SENTINEL] == 1
+    assert da["candidate_distribution"][runner.PARSE_FAILURE_SENTINEL] == 1
+    assert da["baseline_parse_failure_count"] == 1
+    assert da["baseline_parse_failure_rate"] == pytest.approx(1 / 3)
+    assert da["candidate_parse_failure_count"] == 1
+    assert da["candidate_parse_failure_rate"] == pytest.approx(1 / 3)
+
+
+def test_compute_policy_comparison_zero_parse_failures_reports_zero_rate():
+    base, cand = _synthetic_pair()
+    profile = runner.build_scoring_profile(
+        decision_scheme="canonical_v1", seed=42, gold_key="gold_decision",
+        dataset_sha256="sha256:abc",
+    )
+    r = runner.compute_policy_comparison(
+        base, cand, baseline_label="cold", candidate_label="warm",
+        dataset_sha256="sha256:abc", test_profile=profile,
+        model="gemma-4-26B-A4B-it", quant="Q4_K_M",
+    )
+    da = r["decision_agreement"]
+    assert da["scored_qids"] == 5
+    assert da["excluded_parse_failure_qids"] == 0
+    assert da["baseline_parse_failure_count"] == 0
+    assert da["baseline_parse_failure_rate"] == pytest.approx(0.0)
+    assert da["candidate_parse_failure_count"] == 0
+    assert da["candidate_parse_failure_rate"] == pytest.approx(0.0)
 
 
 def test_comparison_gate_refuses_empty_identity():

@@ -58,6 +58,24 @@ def _load_knob_specs() -> dict[str, Any]:
     return dict(REVIEW_PLANE_KNOB_SPECS)
 
 
+def _load_fish_json():
+    """TD-21.18: the shared deterministic extractor (src/structured_output/repair.py).
+
+    Same dual-import defensiveness as ``_load_review_grammar``/``_load_knob_specs``
+    above (bare-name autopilot-dir load vs. package/pytest load); returns ``None``
+    (never raises) so a missing dependency degrades to a counted parse failure,
+    never an exception out of a passive dogfooding path.
+    """
+    try:
+        from src.structured_output.repair import fish_json as _fj
+    except Exception:  # noqa: BLE001
+        try:
+            from repair import fish_json as _fj  # type: ignore
+        except Exception:  # noqa: BLE001
+            return None
+    return _fj
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # AP-4 — reviewer-calibration Pareto axes
 # ══════════════════════════════════════════════════════════════════════════════
@@ -239,53 +257,32 @@ class CritiqueEmissionStats:
 def _extract_critique_block(text: str) -> dict[str, Any] | None:
     """Best-effort extraction of the ```json:autopilot_critique payload.
 
-    Self-contained (does NOT import planner_coordinator — that would be a circular
-    import, planner_coordinator -> planner_providers -> here). Falls back to the
-    first balanced JSON object in the text.
+    TD-21.18: extraction is now ``src.structured_output.repair.fish_json`` (the
+    shared TD-1 extractor) instead of the old local balanced-brace scanner —
+    fenced ```json blocks are tried FIRST, the LAST top-level balanced object
+    wins over the first, and truncated-but-fenced JSON (missing closing
+    brackets) is recovered via the shared tolerant repair, none of which the
+    old first-``{``-to-matching-``}`` scan could do. Self-contained (does NOT
+    import planner_coordinator — that would be a circular import,
+    planner_coordinator -> planner_providers -> here).
+
+    Deliberately NO repair TURN here (no live model call): the only caller
+    (``planner_providers._emit_codex_review_decision``) feeds this text from
+    the ``codex exec`` EXTERNAL CLI, never a reachable local server — an
+    external CLI gets deterministic fish only, per this repo's transport
+    discipline, and this module's own docstring guarantees it never spends
+    inference. A miss returns ``None``; the caller (``derive_review_decision_
+    from_critique``) turns that into a typed ``ParseFailure``, counted via
+    ``CritiqueEmissionStats.parse_failures`` — never a silent default.
     """
     marker = "```json:autopilot_critique"
     idx = text.find(marker)
     body = text[idx + len(marker) :] if idx != -1 else text
-    rg = _load_review_grammar()
-    if rg is not None:
-        candidate = rg._extract_json_object(body)
-    else:
-        candidate = _fallback_extract_json_object(body)
-    if candidate is None:
+    fish = _load_fish_json()
+    if fish is None:
         return None
-    try:
-        obj = json.loads(candidate)
-    except json.JSONDecodeError:
-        return None
-    return obj if isinstance(obj, dict) else None
-
-
-def _fallback_extract_json_object(text: str) -> str | None:
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    in_string = False
-    escaped = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return None
+    candidate = fish(body, kind="object")
+    return candidate if isinstance(candidate, dict) else None
 
 
 def _critique_to_review_decision_dict(critique: dict[str, Any]) -> dict[str, Any] | None:
