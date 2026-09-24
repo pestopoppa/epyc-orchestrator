@@ -8,9 +8,9 @@ RA-7 / RA-9 of the Architect->Reviewer control plane (H2). Pure, dependency-ligh
     load-bearing ReviewDecision core (decision enum + confidence + tripwire/blocking
     channel + optional advisory). The decision enum is sourced from
     ``orchestration/review_decision.schema.json`` so the grammar cannot drift.
-  * ``rubric_grading_response_schema(rubric)`` / ``rubric_grading_gbnf(rubric)`` —
-    a schema/grammar for grading a candidate against a ReviewRubric (per-item scores
-    keyed by the rubric's item ids + an overall decision).
+    ``review_decision_response_schema()`` is now wired: ``review_service.py``
+    passes it as ``llm_call(json_schema=...)`` on both ``review_candidate()``'s
+    first call and its TD-21.7 repair turn (2026-09-24).
   * ``parse_review_decision(text)`` — extract JSON from possibly-noisy model text,
     validate it against the full review_decision schema, and return a structured
     ``(obj | None, ParseFailure | None)``. The failure object is the accounting hook
@@ -33,7 +33,6 @@ from typing import Any
 # orchestration/ lives at the repo root: .../src/proactive_delegation/<this> -> parents[2]
 _ORCH_DIR = Path(__file__).resolve().parents[2] / "orchestration"
 _REVIEW_DECISION_SCHEMA = _ORCH_DIR / "review_decision.schema.json"
-_REVIEW_RUBRIC_SCHEMA = _ORCH_DIR / "review_rubric.schema.json"
 
 
 # ── Schema access ─────────────────────────────────────────────────────
@@ -94,35 +93,6 @@ def review_decision_response_schema() -> dict[str, Any]:
                     "feedback": {"type": "string"},
                 },
             },
-        },
-    }
-
-
-def rubric_grading_response_schema(rubric: dict[str, Any]) -> dict[str, Any]:
-    """json_schema for grading a candidate against a ReviewRubric.
-
-    The per-item `item` field is constrained to the rubric's own item ids, and the
-    overall `decision` to the ReviewDecision enum — both sourced from artifacts.
-    """
-    item_ids = [item["id"] for item in rubric.get("items", []) if "id" in item]
-    item_schema: dict[str, Any] = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["item", "score"],
-        "properties": {
-            "item": ({"type": "string", "enum": item_ids} if item_ids else {"type": "string"}),
-            "score": {"type": "number", "minimum": 0, "maximum": 1},
-            "note": {"type": "string"},
-        },
-    }
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["grades", "decision"],
-        "properties": {
-            "grades": {"type": "array", "minItems": 1, "items": item_schema},
-            "decision": {"type": "string", "enum": list(_decision_enum())},
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         },
     }
 
@@ -206,30 +176,6 @@ def review_decision_gbnf() -> str:
         ),
         _GBNF_PRIMITIVES,
     ]
-    return "\n".join(rules) + "\n"
-
-
-def rubric_grading_gbnf(rubric: dict[str, Any]) -> str:
-    """GBNF grammar for a rubric-grading emission.
-
-    Emits ``{"grades": [ {"item": <item-id-enum>, "score": <number>} , ... ],
-    "decision": <enum>}``. The item enum is sourced from the rubric's item ids.
-    """
-    item_ids = [item["id"] for item in rubric.get("items", []) if "id" in item]
-    item_value_rule = "item-id" if item_ids else "string"
-    rules = [
-        _object_rule(
-            "root",
-            [_Field("grades", "grades"), _Field("decision", "decision")],
-        ),
-        # one-or-more grade objects separated by commas
-        'grades ::= "[" ws grade ( ws "," ws grade )* ws "]"',
-        _object_rule("grade", [_Field("item", item_value_rule), _Field("score", "number")]),
-        _enum_rule("decision", _decision_enum()),
-    ]
-    if item_ids:
-        rules.append(_enum_rule("item-id", item_ids))
-    rules.append(_GBNF_PRIMITIVES)
     return "\n".join(rules) + "\n"
 
 

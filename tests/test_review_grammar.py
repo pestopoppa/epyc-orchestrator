@@ -14,8 +14,6 @@ from src.proactive_delegation.review_grammar import (
     parse_review_decision,
     review_decision_gbnf,
     review_decision_response_schema,
-    rubric_grading_gbnf,
-    rubric_grading_response_schema,
 )
 
 DECISION_ENUM = [
@@ -55,19 +53,6 @@ class TestResponseSchemas:
         errors = list(Draft202012Validator(load_review_decision_schema()).iter_errors(obj))
         assert errors == [], errors
 
-    def test_rubric_grading_schema_constrains_item_ids(self):
-        rubric = {"items": [{"id": "R1"}, {"id": "R2"}]}
-        schema = rubric_grading_response_schema(rubric)
-        item_schema = schema["properties"]["grades"]["items"]["properties"]["item"]
-        assert item_schema["enum"] == ["R1", "R2"]
-        assert set(schema["properties"]["decision"]["enum"]) == set(DECISION_ENUM)
-
-    def test_rubric_grading_schema_empty_items(self):
-        schema = rubric_grading_response_schema({"items": []})
-        item_schema = schema["properties"]["grades"]["items"]["properties"]["item"]
-        assert item_schema == {"type": "string"}
-
-
 # ── GBNF grammars ─────────────────────────────────────────────────────
 
 
@@ -87,18 +72,6 @@ class TestGBNF:
         g = review_decision_gbnf()
         # blocking object hard-codes the tripwire key
         assert '"\\"tripwire\\""' in g
-
-    def test_rubric_gbnf_enumerates_item_ids(self):
-        g = rubric_grading_gbnf({"items": [{"id": "R1"}, {"id": "R2"}]})
-        assert "item-id ::=" in g
-        assert '"\\"R1\\""' in g
-        assert '"\\"R2\\""' in g
-
-    def test_rubric_gbnf_no_item_enum_when_empty(self):
-        g = rubric_grading_gbnf({"items": []})
-        assert "item-id ::=" not in g
-        assert "grades ::=" in g
-
 
 # ── parse_review_decision + failure accounting ────────────────────────
 

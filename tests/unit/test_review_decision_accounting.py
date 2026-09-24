@@ -46,10 +46,27 @@ class StubPrimitives:
         self.calls: list[dict] = []
 
     def llm_call(self, prompt, role=None, n_tokens=None, **kwargs):
-        self.calls.append({"prompt": prompt, "role": role, "n_tokens": n_tokens})
+        self.calls.append({"prompt": prompt, "role": role, "n_tokens": n_tokens, **kwargs})
         if isinstance(self.response, Exception):
             raise self.response
         return self.response
+
+
+class SequencedPrimitives:
+    """llm_call pops responses off a queue: [0] is the FIRST (constrained) call,
+    subsequent entries are ``parse_with_repair``'s repair turn(s). Records every
+    call's kwargs (including ``json_schema``) so TD-21.6/21.7 tests can assert
+    the schema actually reached the wire, not just that parsing tolerates noise."""
+
+    def __init__(self, responses: list[str]):
+        self.responses = list(responses)
+        self.calls: list[dict] = []
+
+    def llm_call(self, prompt, role=None, n_tokens=None, **kwargs):
+        self.calls.append({"prompt": prompt, "role": role, "n_tokens": n_tokens, **kwargs})
+        if not self.responses:
+            raise AssertionError("SequencedPrimitives ran out of canned responses")
+        return self.responses.pop(0)
 
 
 class UsageResponse:
@@ -163,12 +180,17 @@ class TestTokenAccounting:
 class TestParseFailureCounting:
     def test_review_unparseable_counts_parse_failure(self, capturing_service):
         svc, events = capturing_service("this is not json at all")
-        svc.review(spec={}, subtask={"id": "S1", "action": "a"}, output="o")
+        r = svc.review(spec={}, subtask={"id": "S1", "action": "a"}, output="o")
+        # TD-21.6: a terminal (repair-exhausted) parse failure withholds as
+        # REQUEST_EVIDENCE -- never the old silent "request_changes" default,
+        # which was indistinguishable from a genuine reviewer verdict.
+        assert r.decision == ReviewDecision.REQUEST_EVIDENCE
         assert svc.parse_failure_count == 1
         assert svc.model_call_failures == 0
         detail = _detail(events[0])
         assert detail["parse_ok"] is False
-        assert detail["parse_failure"] == "unparseable_response"
+        assert detail["parse_failure"]  # a concrete reason string, never blank
+        assert detail["repaired"] is False
 
     def test_review_model_call_failure_counts_separately(self, capturing_service):
         svc, events = capturing_service(TimeoutError("boom"))
@@ -192,10 +214,15 @@ class TestParseFailureCounting:
             task_type="code",
             plan_steps=[{"id": "S1", "actor": "coder", "action": "x"}],
         )
-        assert res is not None  # return value unchanged (normalized to 'ok')
+        assert res is not None  # non-blocking contract preserved
+        # TD-21.6: a terminal failure is the PARSE_FAILURE_SENTINEL, never the old
+        # silent "ok" default (which was indistinguishable from genuine approval).
+        assert res.decision == "parse_failure"
+        assert res.patches == []
         assert svc.parse_failure_count == 1
         assert svc.model_call_failures == 0
         assert _detail(events[0])["parse_ok"] is False
+        assert _detail(events[0])["decision"] == "parse_failure"
 
     def test_review_plan_model_call_failure_counts_separately(self, capturing_service):
         svc, events = capturing_service(RuntimeError("down"))
@@ -234,10 +261,15 @@ class TestParseFailureCounting:
     def test_review_plan_rubric_unparseable_counts_parse_failure(self, capturing_service):
         svc, events = capturing_service("garbage")
         res = svc.review_plan_rubric("o", "code", [{"id": "S1", "actor": "coder", "action": "x"}])
-        # The legacy fallback dict's decision is preserved (request_changes).
-        assert res["decision"] == "request_changes"
+        # TD-21.6: PARSE_FAILURE_SENTINEL, never the old silent "approve" default,
+        # and the rubric axes are unknown (None) rather than defaulting True.
+        assert res["decision"] == "parse_failure"
+        assert res["phase_coverage"] is None
+        assert res["order"] is None
+        assert res["executor_alignment"] is None
         assert svc.parse_failure_count == 1
         assert _detail(events[0])["parse_ok"] is False
+        assert _detail(events[0])["per_item_grades"] is None
 
     def test_review_plan_rubric_model_call_failure_counts_separately(self, capturing_service):
         svc, events = capturing_service(RuntimeError("down"))
@@ -258,16 +290,131 @@ class TestParseFailureCounting:
         svc, _ = capturing_service("nonsense")
         out = svc.generate_taskir("objective here")
         assert "plan" in out  # parse-failure fallback still returns a task
+        # TD-21.6: the fallback is now explicitly TYPED, never a silent empty-plan
+        # (the old bug: a genuine JSON-parse failure fell through _parse_review_
+        # response's sentinel into an empty steps[] returned as if valid).
+        assert out["parse_failed"] is True
+        assert out["plan"]["steps"]  # the safe single-step fallback, not empty
         assert svc.parse_failure_count == 0
         assert svc.model_call_failures == 0
 
     def test_parse_fallback_marker_never_leaks_into_decision(self, capturing_service):
-        """The fallback's marker key must not surface as a reviewer field."""
+        """A terminal parse failure withholds -- REQUEST_EVIDENCE, never a
+        default verdict -- and never leaks an internal marker key."""
         svc, events = capturing_service("not json")
         r = svc.review(spec={}, subtask={"id": "S1", "action": "a"}, output="o")
-        assert r.feedback == "Parse error"
+        assert r.decision == ReviewDecision.REQUEST_EVIDENCE
+        assert r.feedback.startswith("parse_failure:")
         detail = _detail(events[0])
         assert "_parse_fallback" not in detail
+
+
+# ═══ TD-21.6/21.7: schema on the wire + repair recovers a malformed reply ═════
+
+
+class TestSchemaOnWireAndRepair:
+    """Two failure modes TD-21.6/21.7 close, proven per call site:
+
+      1. the FIRST ``llm_call`` now carries ``json_schema`` (was silently
+         unconstrained before TD-21.0/TD-21.6/21.7);
+      2. a malformed-but-recoverable reply is REPAIRED (one extra constrained
+         turn) instead of immediately becoming a parse failure -- exercised with
+         ``SequencedPrimitives`` so the second call's response is the "fixed"
+         emission a real repair turn would produce.
+    """
+
+    def test_review_forwards_json_schema_on_first_call(self):
+        prims = SequencedPrimitives(['{"d":"approve","s":0.9,"f":"ok"}'])
+        svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
+        svc.review(spec={}, subtask={"id": "S1", "action": "a"}, output="o")
+        assert prims.calls[0]["json_schema"]["properties"]["d"]["enum"] == [
+            "approve", "changes", "request_changes", "escalate", "reject",
+        ]
+
+    def test_review_plan_forwards_json_schema_on_first_call(self):
+        prims = SequencedPrimitives(['{"d":"ok","s":0.9,"f":"good"}'])
+        svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
+        svc.review_plan(
+            objective="o", task_type="code",
+            plan_steps=[{"id": "S1", "actor": "coder", "action": "x"}],
+        )
+        assert prims.calls[0]["json_schema"]["properties"]["d"]["enum"] == [
+            "ok", "reorder", "drop", "add", "reroute",
+        ]
+
+    def test_review_plan_rubric_forwards_json_schema_on_first_call(self):
+        prims = SequencedPrimitives(['{"decision":"approve","confidence":0.7}'])
+        svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
+        svc.review_plan_rubric("o", "code", [{"id": "S1", "actor": "coder", "action": "x"}])
+        assert prims.calls[0]["json_schema"]["required"] == ["decision"]
+
+    def test_generate_taskir_forwards_json_schema_on_first_call(self):
+        prims = SequencedPrimitives(['{"steps":[{"id":"S1","actor":"coder","action":"x"}]}'])
+        svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
+        svc.generate_taskir("build a thing")
+        assert prims.calls[0]["json_schema"]["required"] == ["steps"]
+
+    def test_review_candidate_forwards_json_schema_on_first_call(self):
+        prims = SequencedPrimitives(
+            ['{"decision":"approve","confidence":0.8,"blocking":{"tripwire":false}}']
+        )
+        svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
+        svc.review_candidate({"task_ref": "T", "outputs": []})
+        assert prims.calls[0]["json_schema"]["required"] == ["decision", "confidence", "blocking"]
+
+    def test_review_recovers_malformed_response_via_repair(self):
+        prims = SequencedPrimitives(["not json at all", '{"d":"approve","s":0.8,"f":"fixed"}'])
+        svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
+        r = svc.review(spec={}, subtask={"id": "S1", "action": "a"}, output="o")
+        assert r.decision == ReviewDecision.APPROVE
+        assert r.score == 0.8
+        assert svc.parse_failure_count == 0  # recovered -- not a terminal failure
+        assert len(prims.calls) == 2  # initial + exactly ONE repair turn
+
+    def test_review_plan_recovers_malformed_response_via_repair(self):
+        prims = SequencedPrimitives(["garbage", '{"d":"reroute","s":0.7,"f":"ok","p":[]}'])
+        svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
+        res = svc.review_plan(
+            objective="o", task_type="code",
+            plan_steps=[{"id": "S1", "actor": "coder", "action": "x"}],
+        )
+        assert res.decision == "reroute"
+        assert svc.parse_failure_count == 0
+        assert len(prims.calls) == 2
+
+    def test_review_plan_rubric_recovers_malformed_response_via_repair(self):
+        prims = SequencedPrimitives(
+            [
+                "garbage",
+                '{"decision":"approve","confidence":0.7,"phase_coverage":true,'
+                '"order":true,"executor_alignment":true}',
+            ]
+        )
+        svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
+        res = svc.review_plan_rubric("o", "code", [{"id": "S1", "actor": "coder", "action": "x"}])
+        assert res["decision"] == "approve"
+        assert res["phase_coverage"] is True
+        assert svc.parse_failure_count == 0
+
+    def test_generate_taskir_recovers_via_repair(self):
+        prims = SequencedPrimitives(
+            ["not json", '{"steps":[{"id":"S1","actor":"coder","action":"do x","out":["f.py"]}]}']
+        )
+        svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
+        out = svc.generate_taskir("build a thing")
+        assert out["plan"]["steps"][0]["actor"] == "coder"
+        assert out.get("repaired") is True
+        assert "parse_failed" not in out
+
+    def test_review_candidate_recovers_malformed_response_via_repair(self):
+        prims = SequencedPrimitives(
+            ["nonsense", '{"decision":"approve","confidence":0.7,"blocking":{"tripwire":false}}']
+        )
+        svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
+        r = svc.review_candidate({"task_ref": "T", "outputs": []})
+        assert r.decision == ReviewDecision.APPROVE
+        assert svc.parse_failure_count == 0
+        assert len(prims.calls) == 2
 
 
 # ═══ RD-12: decision artifact (telemetry block, schema-valid) ═════════════════

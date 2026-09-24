@@ -320,7 +320,12 @@ class TestReviewPlan:
         )
         assert result is None
 
-    def test_normalizes_invalid_decision(self, mock_primitives):
+    def test_invalid_decision_is_a_terminal_parse_failure(self, mock_primitives):
+        """TD-21.6: an out-of-enum `d` is a SCHEMA failure (caught by
+        parse_with_repair's full-schema validation, not just JSON-decodability).
+        The stub always returns the same invalid payload, so the repair turn also
+        fails -- terminal failure -> PARSE_FAILURE_SENTINEL, never the old silent
+        "ok" normalization (which was indistinguishable from genuine approval)."""
         mock_primitives.llm_call.return_value = '{"d":"invalid_decision","s":0.5,"f":"hmm"}'
         service = ArchitectReviewService(mock_primitives)
         result = service.review_plan(
@@ -329,7 +334,8 @@ class TestReviewPlan:
             plan_steps=[{"id": "S1", "actor": "coder", "action": "Code"}],
         )
         assert result is not None
-        assert result.decision == "ok"  # Normalized to ok
+        assert result.decision == "parse_failure"
+        assert result.patches == []
 
 
 # ─── Apply Plan Review Tests ─────────────────────────────────────────────

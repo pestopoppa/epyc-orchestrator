@@ -212,19 +212,39 @@ def test_rubric_version_from_ref():
 
 
 def test_grade_result_to_ledger_row_from_real_grade_candidate(tmp_path):
-    from src.proactive_delegation.rubric_review import grade_candidate
-
-    def grader(_prompt: str) -> str:
-        return json.dumps({"grades": [{"item": "R1", "score": 1}], "decision": "x"})
-
-    result = grade_candidate(RUBRIC, "candidate text", grader)
+    """``grade_result_to_ledger_row`` is duck-typed (it never imports
+    ``src.proactive_delegation`` -- see its docstring) so this exercises the
+    mapping against a GradeResult-*shaped* mapping directly, matching exactly
+    what ``rubric_review.grade_candidate`` used to produce for this rubric/grader
+    pair (one graded item R1, one conservatively-ungraded item R2 -> graded=False,
+    binary=0). ``rubric_review.py`` (RD-2's two-turn rubric engine) was archived
+    2026-09-24 (TD-21 rubric-engine decision: no runtime caller ever wired it in
+    the ~2 months since it landed, and no active handoff names a live-imminent
+    one) -- this test's coverage of the LEDGER'S mapping is independent of that
+    engine's own code and stays exactly as tested.
+    """
+    result = {
+        "rubric_id": "code-fix",
+        "rubric_version": "1.2.0",
+        "rubric_ref": "code-fix@1.2.0",
+        "S": 0.6,
+        "decision": "x",
+        "confidence": 0.6,
+        "per_item": GRADES,
+        "passes": [],
+        "k_used": 1,
+        "near_edge": False,
+        "flakiness": 0.0,
+        "rubric": RUBRIC,
+        "bands": {"approve_at": 0.85, "reject_at": 0.5, "edge_margin": 0.05, "binarize_at": 0.5},
+    }
     row = grade_result_to_ledger_row(
         result, decision_id="g1", reviewer_model_quant="m/q", gold_label="pass"
     )
     assert row.rubric_version == "1.2.0"
     assert row.domain == "code"
-    assert row.decision == result.decision
-    assert row.confidence == result.confidence
+    assert row.decision == result["decision"]
+    assert row.confidence == result["confidence"]
     assert row.gold_label == "pass"
     conn = ensure_schema(tmp_path / "events.sqlite")
     try:
@@ -233,13 +253,13 @@ def test_grade_result_to_ledger_row_from_real_grade_candidate(tmp_path):
     finally:
         conn.close()
     assert stored["rubric"] == RUBRIC
-    assert stored["per_item_grades"] == [g.to_dict() for g in result.per_item]
+    assert stored["per_item_grades"] == GRADES
     assert [g["item"] for g in stored["per_item_grades"]] == ["R1", "R2"]
     assert stored["per_item_grades"][1]["graded"] is False
-    # the to_dict() mapping maps identically
-    assert grade_result_to_ledger_row(result.to_dict(), decision_id="g1").per_item_grades == [
-        g.to_dict() for g in result.per_item
-    ]
+    # a plain dict maps identically to a to_dict()-shaped mapping (duck typing)
+    assert (
+        grade_result_to_ledger_row(result, decision_id="g1").per_item_grades == GRADES
+    )
     with pytest.raises(TypeError):
         grade_result_to_ledger_row(42, decision_id="g2")
 

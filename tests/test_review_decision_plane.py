@@ -483,10 +483,15 @@ class TestPlanReviewSpecifics:
         assert res["score"] == 0.6
         assert any(e.status == "approve" for e in events)
 
-    def test_plan_rubric_invalid_decision_normalized(self):
+    def test_plan_rubric_invalid_decision_is_a_terminal_parse_failure(self):
+        """TD-21.6: an out-of-enum `decision` is a SCHEMA failure. The stub
+        returns the same invalid payload for the repair turn too, so this is a
+        terminal failure -> PARSE_FAILURE_SENTINEL + axes=None, never the old
+        silent "approve" normalization."""
         svc = _service('{"decision":"nonsense","confidence":0.5}')
         res = svc.review_plan_rubric("o", "code", [{"id": "S1", "actor": "coder", "action": "x"}])
-        assert res["decision"] == "approve"
+        assert res["decision"] == "parse_failure"
+        assert res["phase_coverage"] is None
 
     def test_reject_to_empty_fallback(self):
         f = ArchitectReviewService.plan_review_reject_to_empty_fallback

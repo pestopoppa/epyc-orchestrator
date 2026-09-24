@@ -585,8 +585,12 @@ class TestArchitectReviewService:
 
         review = service.review(spec, subtask, output)
 
-        # Should default to request_changes on parse error
-        assert review.decision == ReviewDecision.REQUEST_CHANGES
+        # TD-21.6: a terminal (repair-exhausted -- the stubbed model returns the
+        # same unparseable text on the repair turn too) parse failure withholds
+        # as REQUEST_EVIDENCE -- never a default verdict indistinguishable from a
+        # genuine reviewer decision (the old behavior this test used to lock in).
+        assert review.decision == ReviewDecision.REQUEST_EVIDENCE
+        assert review.feedback.startswith("parse_failure:")
 
     def test_review_quick_mode(self):
         """Test quick review mode."""

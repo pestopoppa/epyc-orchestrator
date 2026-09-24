@@ -22,13 +22,17 @@ from typing import Any, Callable, TYPE_CHECKING
 
 from src.config import get_config
 from src.config import _registry_timeout
-from src.proactive_delegation.review_grammar import parse_review_decision
+from src.proactive_delegation.review_grammar import (
+    parse_review_decision,
+    review_decision_response_schema,
+)
 from src.proactive_delegation.types import (
     ArchitectReview,
     PlanReviewResult,
     ReviewDecision,
     SubtaskResult,
 )
+from src.structured_output.repair import parse_with_repair, primitives_completer
 
 # CP1: the RD-3 mechanical verifier-precedence + reject-admissibility constants now
 # live in the deterministic reducer (policy_reducer), which SUBSUMES this precedence.
@@ -99,16 +103,117 @@ PLAN_RUBRIC_AXES: tuple[str, ...] = ("phase_coverage", "order", "executor_alignm
 # Must track ``src.trace.review_ledger.REVIEW_DECISION_SCHEMA_VERSION``.
 REVIEW_DECISION_SCHEMA_VERSION = "1.0.0"
 
-# RD-12 parse-failure fallback marker. ``_parse_review_response`` returns THIS
-# sentinel object when no JSON object could be extracted from the reviewer's
-# emission; ``_parse_review_response_checked`` turns that into a distinct
-# ``parse_failed`` flag so a fallback is COUNTED (never dropped, never
-# double-counted) instead of masquerading as a real verdict.
-_PARSE_FALLBACK = {
-    "_parse_fallback": True,
-    "decision": "request_changes",
-    "feedback": "Parse error",
+# TD-21.6: json_schema payloads for the abbreviated review-plane verdicts. Each is
+# passed BOTH as the wire constraint on the first ``llm_call`` (TD-21.0 landed:
+# json_schema now reaches the model on both the /completion and /v1 lanes) AND as
+# the ``parse_with_repair`` validation/extraction target on a miss -- one schema,
+# two uses, so the repair turn can never drift from what the model was asked for.
+# ``additionalProperties`` is stated explicitly here (parse_with_repair's
+# ``_closed_schema`` would default it anyway, TD-21.30(d)) so the wire payload and
+# the validator are visibly the same closed shape.
+REVIEW_ABBREV_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["d"],
+    "properties": {
+        # "request_changes" (the canonical ReviewDecision spelling) is included
+        # alongside the prompt's abbreviated "changes": the pre-TD-21.6 parser
+        # accepted ANY valid ReviewDecision literal here (decision =
+        # ReviewDecision(decision_str) after only mapping "changes"), so a model
+        # (or a caller's canned/replayed response) that emits the unabbreviated
+        # word must not be schema-rejected into a spurious repair turn.
+        "d": {
+            "type": "string",
+            "enum": ["approve", "changes", "request_changes", "escalate", "reject"],
+        },
+        "s": {"type": "number", "minimum": 0, "maximum": 1},
+        "f": {"type": "string"},
+        "c": {"type": "array", "items": {"type": "string"}},
+    },
 }
+
+_PLAN_REVIEW_PATCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "step": {"type": "string"},
+        "op": {"type": "string", "enum": ["reroute", "drop", "add", "reorder"]},
+        "v": {"type": "string"},
+    },
+}
+
+REVIEW_PLAN_ABBREV_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["d"],
+    "properties": {
+        "d": {"type": "string", "enum": ["ok", "reorder", "drop", "add", "reroute"]},
+        "s": {"type": "number", "minimum": 0, "maximum": 1},
+        "f": {"type": "string"},
+        "p": {"type": "array", "items": _PLAN_REVIEW_PATCH_SCHEMA},
+    },
+}
+
+PLAN_RUBRIC_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["decision"],
+    "properties": {
+        "decision": {
+            "type": "string",
+            "enum": ["approve", "request_changes", "reject_to_empty", "escalate"],
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "phase_coverage": {"type": "boolean"},
+        "order": {"type": "boolean"},
+        "executor_alignment": {"type": "boolean"},
+        "advisory": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "score": {"type": "number", "minimum": 0, "maximum": 1},
+                "feedback": {"type": "string"},
+            },
+        },
+    },
+}
+
+_TASKIR_STEP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "id": {"type": "string"},
+        "actor": {"type": "string"},
+        "action": {"type": "string"},
+        "out": {"type": "array", "items": {"type": "string"}},
+        "outputs": {"type": "array", "items": {"type": "string"}},
+        "in": {"type": "array", "items": {"type": "string"}},
+        "inputs": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+TASKIR_STEPS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["steps"],
+    "properties": {
+        # minItems=1: an empty steps[] is schema-VALID JSON but a useless plan --
+        # TD-21.6 closes this the same way as the other sites: a repair turn is
+        # tried, and if that ALSO comes back empty it is the terminal-failure path
+        # (single-step fallback + parse_failed=True), never a silently-accepted
+        # empty plan.
+        "steps": {"type": "array", "minItems": 1, "items": _TASKIR_STEP_SCHEMA},
+    },
+}
+
+# TD-21.6: the sentinel decision value review_plan()/review_plan_rubric() return on
+# a terminal (fished-invalid, repair-exhausted) parse failure. Deliberately IDENTICAL
+# to an entry in ``src.trace.review_ledger.PARSE_FAILURE_DECISIONS`` so the offline
+# ledger materializer (``scripts/analysis/reviewer_events_to_ledger.py``, which reads
+# ``detail["decision"]`` verbatim into the ledger row) correctly buckets this as a
+# parse failure instead of silently counting a fabricated "ok"/"approve" as a real
+# verdict.
+PARSE_FAILURE_SENTINEL = "parse_failure"
 
 
 def _pairing_task_key(value: Any | None) -> str | None:
@@ -644,20 +749,27 @@ Rules:
         parse_ok = True
         model_call_failed = False
         parse_failure: str | None = None
+        repaired = False
         tokens: dict[str, int] = {"tokens_in": 0, "tokens_out": 0, "chars_out": 0}
         try:
-            # Call architect with strict token limit
+            # Call architect with strict token limit. TD-21.6/TD-21.0: schema on the
+            # wire constrains the reviewer at generation time, not only at parse time.
             response = self.primitives.llm_call(
                 prompt,
                 role=self.architect_role,
                 n_tokens=self.max_review_tokens,
+                json_schema=REVIEW_ABBREV_SCHEMA,
             )
         except Exception as e:
             logger.warning(f"Architect review call failed: {e}", exc_info=True)
             model_call_failed = True
             parse_ok = False
             self._model_call_failures += 1
-            # Default to request_changes on failure
+            # Default to request_changes on a MODEL-CALL exception -- unchanged.
+            # This is a distinct, already-labeled failure mode (model_call_failures)
+            # from the silent-default-VERDICT bug TD-21.6 targets, which lives
+            # specifically in the PARSE path below (there is genuinely no reviewer
+            # emission to interpret here, only an exception).
             review = ArchitectReview(
                 subtask_id=subtask_id,
                 decision=ReviewDecision.REQUEST_CHANGES,
@@ -665,43 +777,68 @@ Rules:
                 score=0.3,
             )
         else:
-            try:
-                # Parse abbreviated JSON response (RD-12: fallback is counted, not silent)
-                review_data, parse_failed = self._parse_review_response_checked(response)
+            tokens = self._response_tokens(response, prompt)
+            # TD-21.6: fish -> validate -> ONE repair turn on a miss. Never a
+            # default verdict: a terminal failure withholds as REQUEST_EVIDENCE
+            # (RD-6's existing admissibility-safe pattern from review_candidate) --
+            # a value this method's own prompt NEVER offers the model, so its
+            # presence is unambiguous evidence of a parse failure to any
+            # downstream branch, unlike the old "request_changes" default, which
+            # was indistinguishable from a genuine reviewer verdict.
+            outcome = parse_with_repair(
+                response,
+                schema=REVIEW_ABBREV_SCHEMA,
+                complete=primitives_completer(
+                    self.primitives, self.architect_role, n_tokens=self.max_review_tokens
+                ),
+                site="review_service.review",
+            )
+            if outcome.status in ("parsed", "repaired"):
+                try:
+                    review_data = outcome.value
+                    # Map abbreviated keys to full names
+                    decision_str = review_data.get("d", review_data.get("decision", "changes"))
+                    # Normalize decision string
+                    if decision_str == "changes":
+                        decision_str = "request_changes"
+                    decision = ReviewDecision(decision_str)
 
-                # Map abbreviated keys to full names
-                decision_str = review_data.get("d", review_data.get("decision", "changes"))
-                # Normalize decision string
-                if decision_str == "changes":
-                    decision_str = "request_changes"
-                decision = ReviewDecision(decision_str)
-
-                review = ArchitectReview(
-                    subtask_id=subtask_id,
-                    decision=decision,
-                    feedback=review_data.get("f", review_data.get("feedback", "")),
-                    score=float(review_data.get("s", review_data.get("score", 0.5))),
-                    suggested_changes=review_data.get(
-                        "c", review_data.get("suggested_changes", [])
-                    ),
-                    approved_output=output if decision == ReviewDecision.APPROVE else None,
-                )
-                tokens = self._response_tokens(response, prompt)
-                if parse_failed:
+                    review = ArchitectReview(
+                        subtask_id=subtask_id,
+                        decision=decision,
+                        feedback=review_data.get("f", review_data.get("feedback", "")),
+                        score=float(review_data.get("s", review_data.get("score", 0.5))),
+                        suggested_changes=review_data.get(
+                            "c", review_data.get("suggested_changes", [])
+                        ),
+                        approved_output=output if decision == ReviewDecision.APPROVE else None,
+                    )
+                    repaired = outcome.status == "repaired"
+                except Exception as e:
+                    # Defense in depth only (the schema already constrains `d` to
+                    # valid ReviewDecision values) -- never let an unexpected
+                    # mapping error fall through to a default verdict either.
+                    logger.warning(f"Architect review mapping failed: {e}", exc_info=True)
                     parse_ok = False
-                    parse_failure = "unparseable_response"
+                    parse_failure = f"post_repair_mapping_error: {e}"[:200]
                     self._parse_failure_count += 1
-            except Exception as e:
-                logger.warning(f"Architect review failed: {e}", exc_info=True)
+                    review = ArchitectReview(
+                        subtask_id=subtask_id,
+                        decision=ReviewDecision.REQUEST_EVIDENCE,
+                        feedback=f"parse_failure:{parse_failure}",
+                        score=0.0,
+                        confidence=0.0,
+                    )
+            else:
                 parse_ok = False
-                parse_failure = str(e)[:200]
+                parse_failure = outcome.reason or "unparseable_response"
                 self._parse_failure_count += 1
-                # Default to request_changes on failure
                 review = ArchitectReview(
                     subtask_id=subtask_id,
-                    decision=ReviewDecision.REQUEST_CHANGES,
-                    feedback=f"Review failed: {e}",
-                    score=0.3,
+                    decision=ReviewDecision.REQUEST_EVIDENCE,
+                    feedback=f"parse_failure:{parse_failure}",
+                    score=0.0,
+                    confidence=0.0,
                 )
 
         # TM-3: always-on shadow emission (side effect only; return is unchanged).
@@ -721,6 +858,7 @@ Rules:
                 "quick_mode": quick_mode,
                 "parse_ok": parse_ok,
                 "parse_failure": parse_failure,
+                "repaired": repaired,
                 "model_call_failed": model_call_failed,
                 "executor_model_id": executor_model_id or subtask.get("role"),
                 "latency_ms": latency_ms,
@@ -770,11 +908,13 @@ Rules:
         start = time.perf_counter()
         parse_ok = True
         parse_failure: str | None = None
+        repaired = False
         try:
             response = self.primitives.llm_call(
                 prompt,
                 role=self.architect_role,
                 n_tokens=self.max_plan_review_tokens,
+                json_schema=REVIEW_PLAN_ABBREV_SCHEMA,
             )
         except Exception as e:
             logger.warning(f"Plan review failed: {e}", exc_info=True)
@@ -789,6 +929,7 @@ Rules:
                     "phase": "plan",
                     "error": str(e),
                     "parse_ok": False,
+                    "repaired": False,
                     "model_call_failed": True,
                     "executor_model_id": executor_model_id or _plan_executors(plan_steps),
                     "latency_ms": latency_ms,
@@ -799,24 +940,47 @@ Rules:
             )
             return None  # Non-blocking -- proceed without review
 
-        # Parse abbreviated JSON response (RD-12: fallback is counted, not silent)
-        review_data, parse_failed = self._parse_review_response_checked(response)
-
-        decision = review_data.get("d", review_data.get("decision", "ok"))
-        # Normalize valid decisions
-        valid_decisions = {"ok", "reorder", "drop", "add", "reroute"}
-        if decision not in valid_decisions:
-            decision = "ok"
-        if parse_failed:
+        # TD-21.6: fish -> validate -> ONE repair turn on a miss.
+        outcome = parse_with_repair(
+            response,
+            schema=REVIEW_PLAN_ABBREV_SCHEMA,
+            complete=primitives_completer(
+                self.primitives, self.architect_role, n_tokens=self.max_plan_review_tokens
+            ),
+            site="review_service.review_plan",
+        )
+        if outcome.status in ("parsed", "repaired"):
+            review_data = outcome.value
+            repaired = outcome.status == "repaired"
+            decision = review_data.get("d", review_data.get("decision", "ok"))
+            # Normalize valid decisions (defense in depth: the schema already
+            # constrains `d` to this set)
+            valid_decisions = {"ok", "reorder", "drop", "add", "reroute"}
+            if decision not in valid_decisions:
+                decision = "ok"
+            score = float(review_data.get("s", review_data.get("score", 0.5)))
+            feedback = review_data.get("f", review_data.get("feedback", ""))
+            patches = review_data.get("p", review_data.get("patches", []))
+        else:
+            # TD-21.6: terminal failure -- never a default "ok". PARSE_FAILURE_SENTINEL
+            # ("parse_failure") is the literal string src.trace.review_ledger's
+            # PARSE_FAILURE_DECISIONS matches, so the offline ledger materializer
+            # correctly buckets this row instead of miscounting a fabricated approval.
+            # Non-blocking contract preserved: patches=[] means _apply_plan_review
+            # no-ops and execution proceeds through the normal no-plan/default route.
             parse_ok = False
-            parse_failure = "unparseable_response"
+            parse_failure = outcome.reason or "unparseable_response"
             self._parse_failure_count += 1
+            decision = PARSE_FAILURE_SENTINEL
+            score = 0.0
+            feedback = f"parse_failure:{parse_failure}"
+            patches = []
 
         result = PlanReviewResult(
             decision=decision,
-            score=float(review_data.get("s", review_data.get("score", 0.5))),
-            feedback=review_data.get("f", review_data.get("feedback", "")),
-            patches=review_data.get("p", review_data.get("patches", [])),
+            score=score,
+            feedback=feedback,
+            patches=patches,
             raw_response=response[:200],
         )
         latency_ms = (time.perf_counter() - start) * 1000.0
@@ -832,6 +996,7 @@ Rules:
                 "patches": len(result.patches),
                 "parse_ok": parse_ok,
                 "parse_failure": parse_failure,
+                "repaired": repaired,
                 "model_call_failed": False,
                 "executor_model_id": executor_model_id or _plan_executors(plan_steps),
                 "latency_ms": latency_ms,
@@ -843,43 +1008,29 @@ Rules:
         return result
 
     def generate_taskir(self, objective: str) -> dict[str, Any]:
-        """Have architect generate minimal TaskIR for an objective."""
+        """Have architect generate minimal TaskIR for an objective.
+
+        TD-21.6: schema on the wire (``TASKIR_STEPS_SCHEMA``, ``minItems: 1`` so an
+        empty ``steps[]`` is a schema miss, not a silently-accepted empty plan) plus
+        ONE ``parse_with_repair`` turn on a miss. A model-call exception AND a
+        terminal (repair-exhausted) parse failure now return the SAME explicit
+        single-step fallback plan, marked ``parse_failed=True`` + ``error=<reason>``
+        so it is distinguishable from a genuine TaskIR -- never a silent default.
+        Before this fix, a genuine JSON-parse failure (as opposed to an `llm_call`
+        exception) fell through ``_parse_review_response``'s sentinel into an
+        EMPTY ``steps[]`` returned as if it were a valid plan; that path is closed.
+
+        No production caller consumes this method today (dead since RD-2/H2); the
+        review-plane counters (``parse_failure_count`` / ``model_call_failures``)
+        are therefore NOT touched here -- unchanged from the pre-existing design
+        ("TaskIR generation is not a review decision", see
+        ``test_generate_taskir_does_not_touch_counters``).
+        """
         prompt = self.TASKIR_GENERATION_PROMPT.format(
             objective=objective[:300],  # Truncate long objectives
         )
 
-        try:
-            response = self.primitives.llm_call(
-                prompt,
-                role=self.architect_role,
-                n_tokens=self.max_taskir_tokens,
-            )
-
-            taskir_data = self._parse_review_response(response)
-
-            # Normalize abbreviated format to full TaskIR
-            steps = taskir_data.get("steps", [])
-            normalized_steps = []
-            for i, step in enumerate(steps):
-                normalized_steps.append(
-                    {
-                        "id": step.get("id", f"S{i + 1}"),
-                        "actor": step.get("actor", "worker"),
-                        "action": step.get("action", ""),
-                        "outputs": step.get("out", step.get("outputs", [])),
-                        "inputs": step.get("in", step.get("inputs", [])),
-                    }
-                )
-
-            return {
-                "task_id": f"arch-{uuid.uuid4().hex[:8]}",
-                "objective": objective,
-                "plan": {"steps": normalized_steps},
-            }
-
-        except Exception as e:
-            logger.warning(f"TaskIR generation failed: {e}", exc_info=True)
-            # Return single-step fallback
+        def _fallback(reason: str) -> dict[str, Any]:
             return {
                 "task_id": f"arch-{uuid.uuid4().hex[:8]}",
                 "objective": objective,
@@ -893,10 +1044,65 @@ Rules:
                         }
                     ]
                 },
+                "parse_failed": True,
+                "error": reason,
             }
 
+        try:
+            response = self.primitives.llm_call(
+                prompt,
+                role=self.architect_role,
+                n_tokens=self.max_taskir_tokens,
+                json_schema=TASKIR_STEPS_SCHEMA,
+            )
+        except Exception as e:
+            logger.warning(f"TaskIR generation failed: {e}", exc_info=True)
+            return _fallback(f"model_call_failed: {e}"[:200])
+
+        outcome = parse_with_repair(
+            response,
+            schema=TASKIR_STEPS_SCHEMA,
+            complete=primitives_completer(
+                self.primitives, self.architect_role, n_tokens=self.max_taskir_tokens
+            ),
+            site="review_service.generate_taskir",
+        )
+        if outcome.status not in ("parsed", "repaired"):
+            return _fallback(outcome.reason or "unparseable_response")
+
+        taskir_data = outcome.value
+        # Normalize abbreviated format to full TaskIR
+        steps = taskir_data.get("steps", [])
+        normalized_steps = []
+        for i, step in enumerate(steps):
+            normalized_steps.append(
+                {
+                    "id": step.get("id", f"S{i + 1}"),
+                    "actor": step.get("actor", "worker"),
+                    "action": step.get("action", ""),
+                    "outputs": step.get("out", step.get("outputs", [])),
+                    "inputs": step.get("in", step.get("inputs", [])),
+                }
+            )
+
+        result = {
+            "task_id": f"arch-{uuid.uuid4().hex[:8]}",
+            "objective": objective,
+            "plan": {"steps": normalized_steps},
+        }
+        if outcome.status == "repaired":
+            result["repaired"] = True
+        return result
+
     def _parse_review_response(self, response: str) -> dict[str, Any]:
-        """Parse JSON from architect response."""
+        """Parse JSON from architect response.
+
+        TD-21.6: no longer the primary path for review()/review_plan()/
+        review_plan_rubric()/generate_taskir() -- those now route through
+        ``parse_with_repair`` (schema validation + ONE repair turn, never a
+        silent default). Kept as a standalone JSON-fishing utility, still
+        exercised directly by ``TestArchitectReviewServiceHelpers``.
+        """
         # Try to extract JSON from response
         response = response.strip()
 
@@ -925,20 +1131,13 @@ Rules:
                     pass
 
             logger.warning(f"Could not parse review response: {response[:200]}")
-            # RD-12: return the MARKED fallback so callers can distinguish a parse
-            # failure from a real verdict (see _parse_review_response_checked).
-            return dict(_PARSE_FALLBACK)
-
-    def _parse_review_response_checked(self, response: str) -> tuple[dict[str, Any], bool]:
-        """Parse a reviewer emission, returning ``(data, parse_failed)``.
-
-        ``parse_failed=True`` exactly when the fallback verdict was substituted
-        because no JSON object could be extracted. RD-12 callers use this form so a
-        fallback is counted distinctly (``parse_failure_count``) and flagged in the
-        trace row (``parse_ok=False``) instead of masquerading as a real verdict.
-        """
-        data = self._parse_review_response(response)
-        return data, bool(data.get("_parse_fallback"))
+            # Marked fallback so a direct caller of this legacy helper can still
+            # distinguish a parse failure from a real verdict.
+            return {
+                "_parse_fallback": True,
+                "decision": "request_changes",
+                "feedback": "Parse error",
+            }
 
     # ══════════════════════════════════════════════════════════════════════════
     # Decision plane (SHADOW-ONLY): RD-3 / RD-5 / RD-6 / RD-8 / RD-9.
@@ -1007,6 +1206,16 @@ Rules:
         recorded and withheld as REQUEST_EVIDENCE — never a reject (admissibility).
         RD-12: a failed parse is counted distinctly (``parse_failure_count``) and the
         trace detail carries ``phase="review"`` + ``executor_model_id``.
+
+        TD-21.7: the wire call now carries ``review_decision_response_schema()`` —
+        ``review_grammar.py`` has shipped this json_schema payload since RA-7; only
+        the ``llm_call`` kwarg was ever missing (X4). The existing balanced-brace
+        fish + strict Draft202012 validation + typed ``ParseFailure`` stays the
+        FIRST parse attempt (unchanged, still against the FULL
+        ``review_decision.schema.json``); on a miss, ONE ``parse_with_repair`` turn
+        (against the same compact schema) is tried before withholding — the
+        pre-existing REQUEST_EVIDENCE backstop is now the residual, not the
+        default outcome of every miss.
         """
         for banned in ("author_self_assessment", "author_confidence_assertion", "quality_labels"):
             if isinstance(sanitized_view, dict) and banned in sanitized_view:
@@ -1022,13 +1231,18 @@ Rules:
         prompt = self.FRAMING_NEUTRAL_REVIEW_PROMPT.format(
             objective=objective, outputs=outputs, acceptance_checks=checks
         )
+        compact_schema = review_decision_response_schema()
 
         start = time.perf_counter()
         response: Any = ""
         model_call_failed = False
+        repaired = False
         try:
             response = self.primitives.llm_call(
-                prompt, role=self.architect_role, n_tokens=self.max_review_tokens
+                prompt,
+                role=self.architect_role,
+                n_tokens=self.max_review_tokens,
+                json_schema=compact_schema,
             )
         except Exception as exc:
             logger.warning("review_candidate model call failed: %s", exc)
@@ -1038,6 +1252,22 @@ Rules:
 
         text = response if isinstance(response, str) else str(getattr(response, "text", "") or "")
         obj, failure = parse_review_decision(text)
+        if obj is None and not model_call_failed and text:
+            # TD-21.7: ONE repair turn against the compact schema before
+            # withholding. Skipped when there is genuinely no text to repair
+            # (model-call failure) — nothing for the repair turn to copy.
+            outcome = parse_with_repair(
+                text,
+                schema=compact_schema,
+                complete=primitives_completer(
+                    self.primitives, self.architect_role, n_tokens=self.max_review_tokens
+                ),
+                site="review_service.review_candidate",
+            )
+            if outcome.status in ("parsed", "repaired"):
+                obj = outcome.value
+                repaired = outcome.status == "repaired"
+                failure = None
         if obj is None:
             # Admissibility: a parse failure must NOT become a reject — withhold.
             review = ArchitectReview(
@@ -1074,6 +1304,7 @@ Rules:
                 "tripwire": review.tripwire,
                 "parse_ok": parse_ok,
                 "parse_failure": failure.to_dict() if failure else None,
+                "repaired": repaired,
                 "model_call_failed": model_call_failed,
                 "executor_model_id": executor_model_id,
                 "latency_ms": latency_ms,
@@ -1434,8 +1665,14 @@ Rules:
         Returns a structured dict (NOT ``PlanReviewResult``) so it is additive to the
         legacy ``review_plan()`` path. Prose quality is deliberately ignored;
         over-specification is penalized like gaps. Shadow-only; emits a trace event.
-        RD-12: an unparseable emission is counted distinctly + flagged
-        ``parse_ok=False``; the returned dict is unchanged.
+
+        TD-21.6: schema on the wire + ONE ``parse_with_repair`` turn on a miss. A
+        terminal failure -- either a model-call exception or a repair-exhausted
+        parse -- now returns ``decision=PARSE_FAILURE_SENTINEL`` ("parse_failure",
+        the literal string ``src.trace.review_ledger.PARSE_FAILURE_DECISIONS``
+        matches) with the phase_coverage/order/executor_alignment axes left
+        ``None`` (unknown), instead of the old silent "approve" + axes-default-True
+        that was indistinguishable from a genuine reviewer verdict.
         """
         steps = self._render_plan_steps(plan_steps)
         prompt = self.PLAN_REVIEW_RUBRIC_PROMPT.format(
@@ -1445,9 +1682,13 @@ Rules:
         start = time.perf_counter()
         response: Any = ""
         model_call_failed = False
+        repaired = False
         try:
             response = self.primitives.llm_call(
-                prompt, role=self.architect_role, n_tokens=self.max_plan_review_tokens
+                prompt,
+                role=self.architect_role,
+                n_tokens=self.max_plan_review_tokens,
+                json_schema=PLAN_RUBRIC_SCHEMA,
             )
         except Exception as exc:
             logger.warning("review_plan_rubric model call failed: %s", exc)
@@ -1455,30 +1696,62 @@ Rules:
             model_call_failed = True
             self._model_call_failures += 1
 
-        if response:
-            data, parse_failed = self._parse_review_response_checked(response)
+        parse_failed = False
+        parse_failure_reason: str | None = None
+        data: dict[str, Any] = {}
+        if model_call_failed:
+            parse_failed = True  # no response was ever produced -- no verdict to trust
+        elif response:
+            outcome = parse_with_repair(
+                response,
+                schema=PLAN_RUBRIC_SCHEMA,
+                complete=primitives_completer(
+                    self.primitives, self.architect_role, n_tokens=self.max_plan_review_tokens
+                ),
+                site="review_service.review_plan_rubric",
+            )
+            if outcome.status in ("parsed", "repaired"):
+                data = outcome.value
+                repaired = outcome.status == "repaired"
+            else:
+                parse_failed = True
+                parse_failure_reason = outcome.reason or "unparseable_response"
         else:
-            data, parse_failed = {}, True
+            parse_failed = True
+
         if parse_failed and not model_call_failed:
             self._parse_failure_count += 1
-        decision = data.get("decision", data.get("d", "approve"))
-        valid = {"approve", "request_changes", "reject_to_empty", "escalate"}
-        if decision not in valid:
-            decision = "approve"
-        advisory = data.get("advisory") or {}
-        result = {
-            "decision": decision,
-            "confidence": float(data.get("confidence", 0.5) or 0.5),
-            "phase_coverage": bool(data.get("phase_coverage", True)),
-            "order": bool(data.get("order", True)),
-            "executor_alignment": bool(data.get("executor_alignment", True)),
-            "score": float(advisory.get("score", data.get("s", 0.5)) or 0.5),
-            "feedback": str(advisory.get("feedback", data.get("f", ""))),
-        }
+
+        if parse_failed:
+            result = {
+                "decision": PARSE_FAILURE_SENTINEL,
+                "confidence": 0.0,
+                "phase_coverage": None,
+                "order": None,
+                "executor_alignment": None,
+                "score": 0.0,
+                "feedback": f"parse_failure:{parse_failure_reason or 'model_call_failed'}",
+            }
+        else:
+            decision = data.get("decision", data.get("d", "approve"))
+            valid = {"approve", "request_changes", "reject_to_empty", "escalate"}
+            if decision not in valid:
+                decision = "approve"
+            advisory = data.get("advisory") or {}
+            result = {
+                "decision": decision,
+                "confidence": float(data.get("confidence", 0.5) or 0.5),
+                "phase_coverage": bool(data.get("phase_coverage", True)),
+                "order": bool(data.get("order", True)),
+                "executor_alignment": bool(data.get("executor_alignment", True)),
+                "score": float(advisory.get("score", data.get("s", 0.5)) or 0.5),
+                "feedback": str(advisory.get("feedback", data.get("f", ""))),
+            }
         latency_ms = (time.perf_counter() - start) * 1000.0
-        parse_ok = not parse_failed and not model_call_failed
+        parse_ok = not parse_failed
         # RC-9: persistable rubric + per-item snapshots. Grades only when the
-        # emission parsed — the axis values above default to True otherwise.
+        # emission parsed — the axis values above are None (never a silent
+        # default) otherwise.
         rubric_snapshot = {
             "rubric_id": "plan_rubric",
             "template_sha256": hashlib.sha256(
@@ -1502,9 +1775,10 @@ Rules:
                 "rubric": rubric_snapshot,
                 "per_item_grades": per_item_grades,
                 "parse_ok": parse_ok,
-                "parse_failure": "unparseable_response"
+                "parse_failure": (parse_failure_reason or "unparseable_response")
                 if (parse_failed and not model_call_failed)
                 else None,
+                "repaired": repaired,
                 "model_call_failed": model_call_failed,
                 "executor_model_id": executor_model_id or _plan_executors(plan_steps),
                 "latency_ms": latency_ms,

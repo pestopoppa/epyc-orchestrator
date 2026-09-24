@@ -107,8 +107,27 @@ class LiveServerPrimitives:
         self.usage_log: list[dict[str, Any]] = []
 
     def llm_call(
-        self, prompt: str, role: str | None = None, n_tokens: int | None = None, **_: Any
+        self,
+        prompt: str,
+        role: str | None = None,
+        n_tokens: int | None = None,
+        json_schema: dict[str, Any] | None = None,
+        grammar: str | None = None,
+        seed: int | None = None,
+        **_: Any,
     ) -> str:
+        """TD-21.8: forward the constraint kwargs onto the wire.
+
+        Before this fix, ``json_schema``/``grammar``/``seed`` were swallowed by
+        ``**_``, so TD-21.6/TD-21.7's schema-on-the-wire conversions were
+        unobservable through this replay harness (X3/TD-21.8 in the audit) — the
+        reviewer model was never actually constrained, only the post-hoc parse
+        path was exercised. Wire shape mirrors the production ``/v1`` payload
+        builder (``src.backends.llama_server.LlamaServerBackend._apply_schema_constraint``
+        confirmed against the frozen tree's ``oaicompat_chat_params_parse``):
+        ``json_schema`` -> OpenAI ``response_format``, ``grammar`` -> a raw
+        top-level GBNF string, ``seed`` -> a raw top-level int.
+        """
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -116,6 +135,15 @@ class LiveServerPrimitives:
         }
         if n_tokens is not None:
             payload["max_tokens"] = int(n_tokens)
+        if json_schema:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "schema": json_schema},
+            }
+        if grammar:
+            payload["grammar"] = grammar
+        if seed is not None:
+            payload["seed"] = seed
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
