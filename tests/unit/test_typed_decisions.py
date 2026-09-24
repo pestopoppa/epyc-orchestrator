@@ -180,6 +180,161 @@ class TestJsonRun:
         assert primitives.calls[0]["n_tokens"] == 777
 
 
+class TestDefaultNTokens:
+    """TD-1d.2 window-diag (2026-09-24): the JSON arm's live re-bench against
+    the real ``decision_set_v1`` catalogue (24 questions: 8 noul, 8 choice,
+    8 score) ended ``completion_reason: length`` at the old flat budget
+    (``_default_n_tokens(24) == 1600``), 0 decisions, 2x ``no_json`` -- the
+    model never emitted a balanced JSON object in either attempt.
+
+    Offline measurement (Qwen3-family tokenizer as a proxy for frontdoor's
+    Qwen3.6 tokenizer -- same BPE vocab family) of the MINIMAL valid answer
+    for that exact catalogue: 2273 chars / 999 tokens compact (no
+    whitespace), 4089 chars / 1621 tokens pretty-printed (2-space indent,
+    a formatting choice models commonly make even under schema-constrained
+    decoding). The pretty-printed minimal answer ALONE (1621 tokens) already
+    exceeded the old 1600-token TOTAL budget, before any preamble/formatting
+    variance -- the old heuristic could not have succeeded regardless of
+    model behavior. These two measured counts are hardcoded here (not
+    re-tokenized at test time) so the regression does not depend on a
+    tokenizer file being present in every environment that runs this suite.
+    """
+
+    _DECISION_SET_V1_MEASURED_COMPACT_TOKENS = 999
+    _DECISION_SET_V1_MEASURED_PRETTY_TOKENS = 1621
+    _OLD_FLAT_BUDGET = 1600  # _TOKENS_PER_QUESTION(64) * 24 + _TOKENS_OVERHEAD(64)
+
+    def test_decision_set_v1_budget_clears_measured_pretty_json_with_margin(self):
+        from src.typed_decisions.runner import _default_n_tokens
+
+        n_tokens = _default_n_tokens(QUESTIONS_DECISION_SET_V1)
+
+        assert n_tokens > self._OLD_FLAT_BUDGET
+        assert n_tokens > self._DECISION_SET_V1_MEASURED_PRETTY_TOKENS
+        # Comfortable margin left over for preamble/formatting variance, not
+        # just enough to fit the minimal pretty-printed answer exactly.
+        assert (
+            n_tokens - self._DECISION_SET_V1_MEASURED_PRETTY_TOKENS
+        ) >= self._DECISION_SET_V1_MEASURED_PRETTY_TOKENS * 0.2
+
+    def test_budget_scales_with_label_count_not_just_question_count(self):
+        # An all-noul (2-label) catalogue needs less than an equal-sized
+        # all-choice (4-label) catalogue -- the flat per-question heuristic
+        # this replaces was blind to that difference.
+        from src.typed_decisions.runner import _default_n_tokens
+
+        noul_only = tuple(
+            Question(id=f"n{i}", kind=QuestionKind.NOUL, text="t") for i in range(8)
+        )
+        choice_only = tuple(
+            Question(
+                id=f"c{i}", kind=QuestionKind.CHOICE, text="t",
+                options=("a", "b", "c", "d"),
+            )
+            for i in range(8)
+        )
+        assert _default_n_tokens(choice_only) > _default_n_tokens(noul_only)
+
+    def test_never_below_min_floor(self):
+        from src.typed_decisions.runner import _MIN_N_TOKENS, _default_n_tokens
+
+        one_question = (Question(id="n1", kind=QuestionKind.NOUL, text="t"),)
+        assert _default_n_tokens(one_question) >= _MIN_N_TOKENS
+
+
+QUESTIONS_DECISION_SET_V1 = tuple(
+    Question(
+        id=item["id"],
+        kind=item["kind"],
+        text=item["text"],
+        options=tuple(item.get("options", ())),
+        levels=tuple(item.get("levels", ())),
+    )
+    for item in [
+        {"id": "n01", "kind": "noul", "text": "Item B is divisible by 3."},
+        {"id": "n02", "kind": "noul", "text": "Item D is a prime number."},
+        {"id": "n03", "kind": "noul", "text": "Item F is a prime number."},
+        {"id": "n04", "kind": "noul", "text": "Item A is a fish."},
+        {"id": "n05", "kind": "noul", "text": "Item G is a bird."},
+        {"id": "n06", "kind": "noul", "text": "Item E is a reptile."},
+        {"id": "n07", "kind": "noul", "text": "The shipping region of Item C is vermont."},
+        {"id": "n08", "kind": "noul", "text": "Item H is divisible by 3."},
+        {
+            "id": "c01", "kind": "choice", "text": "What is the animal type of Item A?",
+            "options": ["fish", "bird", "mammal", "reptile"],
+        },
+        {
+            "id": "c02", "kind": "choice", "text": "What is the animal type of Item C?",
+            "options": ["fish", "bird", "mammal", "reptile"],
+        },
+        {
+            "id": "c03", "kind": "choice", "text": "What is the animal type of Item E?",
+            "options": ["fish", "bird", "mammal", "reptile"],
+        },
+        {
+            "id": "c04", "kind": "choice", "text": "What is the animal type of Item G?",
+            "options": ["fish", "bird", "mammal", "reptile"],
+        },
+        {
+            "id": "c05", "kind": "choice", "text": "What is the shipping region of Item A?",
+            "options": ["oregon", "vermont", "arizona", "alaska"],
+        },
+        {
+            "id": "c06", "kind": "choice", "text": "What is the shipping region of Item C?",
+            "options": ["oregon", "vermont", "arizona", "alaska"],
+        },
+        {
+            "id": "c07", "kind": "choice", "text": "What is the shipping region of Item E?",
+            "options": ["oregon", "vermont", "arizona", "alaska"],
+        },
+        {
+            "id": "c08", "kind": "choice", "text": "What is the shipping region of Item G?",
+            "options": ["oregon", "vermont", "arizona", "alaska"],
+        },
+        {
+            "id": "s01", "kind": "score",
+            "text": "Using the number priority rules, what is the priority of Item B?",
+            "levels": [0, 1, 2, 3],
+        },
+        {
+            "id": "s02", "kind": "score",
+            "text": "Using the number priority rules, what is the priority of Item D?",
+            "levels": [0, 1, 2, 3],
+        },
+        {
+            "id": "s03", "kind": "score",
+            "text": "Using the number priority rules, what is the priority of Item F?",
+            "levels": [0, 1, 2, 3],
+        },
+        {
+            "id": "s04", "kind": "score",
+            "text": "Using the number priority rules, what is the priority of Item H?",
+            "levels": [0, 1, 2, 3],
+        },
+        {
+            "id": "s05", "kind": "score",
+            "text": "Using the animal priority table, what is the priority of Item A?",
+            "levels": [0, 1, 2, 3],
+        },
+        {
+            "id": "s06", "kind": "score",
+            "text": "Using the animal priority table, what is the priority of Item C?",
+            "levels": [0, 1, 2, 3],
+        },
+        {
+            "id": "s07", "kind": "score",
+            "text": "Using the animal priority table, what is the priority of Item E?",
+            "levels": [0, 1, 2, 3],
+        },
+        {
+            "id": "s08", "kind": "score",
+            "text": "Using the animal priority table, what is the priority of Item G?",
+            "levels": [0, 1, 2, 3],
+        },
+    ]
+)
+
+
 # ── 2. Corrective retry recovers ──────────────────────────────────────────
 
 
