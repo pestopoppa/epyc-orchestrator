@@ -438,6 +438,9 @@ class _CombinedOpsMixin:
                     schema=schema,
                     complete=_batch_repair_completer(self.llm_primitives, role, persona),
                     site="repl_combined_ops",
+                    # TD-21.34: same caller-schema fabrication risk as
+                    # `repl_final`/`repl_delegate`.
+                    require_evidence=True,
                 )
                 if repair.status in ("parsed", "repaired"):
                     parsed = repair.value

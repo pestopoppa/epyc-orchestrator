@@ -134,6 +134,11 @@ class ETDAgent:
             instruction=_ENVIRONMENTS_REPAIR_INSTRUCTION,
             site="env_synth.etd_agent.discover",
             kind="array",
+            # TD-21.34: the instruction already says "never invent an
+            # environment that is not already present" -- name/description/
+            # search_queries are all facts the discovery step must have
+            # actually surfaced. No enum/classification field in this schema.
+            require_evidence=True,
         )
         if result.status not in ("parsed", "repaired"):
             log.warning("ETD LLM output not usable (%s): %s", result.status, result.reason)

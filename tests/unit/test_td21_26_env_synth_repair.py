@@ -110,8 +110,16 @@ class TestTaskSynthesizerRepairRecoversWithoutFromZeroRegeneration:
         async def llm(system, user):
             calls.append(user)
             if len(calls) == 1:
-                # First (generation) call: unusable prose, no JSON at all.
-                return "I think a good task would be to compute something."
+                # First (generation) call: unusable prose, no JSON at all --
+                # but it already states everything the repair turn must copy
+                # (TD-21.34 require_evidence: prompt/reference/hint/topic
+                # must come from THIS reply; only verifier.type is exempt).
+                return (
+                    "I think a good task would be to have the model use the "
+                    "tools: 'Using the tools, compute the answer.' The "
+                    "correct answer is 42, and this is an arithmetic "
+                    "exercise, but I can't format this as JSON right now."
+                )
             # Second (repair) call: the injected LLM is asked to re-express
             # its own reply into the schema.
             return _VALID_TASK_JSON
@@ -172,7 +180,13 @@ class TestEtdAgentHappyPathAndRepair:
         async def llm(system, user):
             calls["n"] += 1
             if calls["n"] == 1:
-                return "Sure, here are some environments I found for you."
+                # TD-21.34 require_evidence: name/description must come from
+                # THIS reply for the repair turn to copy faithfully.
+                return (
+                    "Sure, I found an environment called MathEnv that's "
+                    "great for math problems, but I can't format this as "
+                    "JSON right now."
+                )
             return json.dumps([{"name": "MathEnv", "description": "math", "search_queries": ["m"]}])
 
         agent = self._agent(llm, tmp_path)

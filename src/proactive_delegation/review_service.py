@@ -792,6 +792,15 @@ Rules:
                     self.primitives, self.architect_role, n_tokens=self.max_review_tokens
                 ),
                 site="review_service.review",
+                # TD-21.34: `s`(core)/`f`(eedback)/`c`(hanges) must come from
+                # what the reviewer already said in its (malformed) reply --
+                # a fabricated score is the same class of bug as an invented
+                # `tier`. `d`(ecision) is exempt: the abbreviated enum tokens
+                # ("request_changes", etc.) are a classification the reviewer
+                # rarely spells out verbatim even when it clearly reached
+                # that verdict in prose.
+                require_evidence=True,
+                evidence_exempt={"d"},
             )
             if outcome.status in ("parsed", "repaired"):
                 try:
@@ -948,6 +957,13 @@ Rules:
                 self.primitives, self.architect_role, n_tokens=self.max_plan_review_tokens
             ),
             site="review_service.review_plan",
+            # TD-21.34: same reasoning as `review_service.review` -- `s`/`f`
+            # must be copied from the reviewer's own (malformed) reply, `d`
+            # is exempt (classification), and `p[].op` is exempt for the
+            # same reason (`reroute`/`drop`/`add`/`reorder` is a
+            # classification of the patch, not a copied fact).
+            require_evidence=True,
+            evidence_exempt={"d", "op"},
         )
         if outcome.status in ("parsed", "repaired"):
             review_data = outcome.value
@@ -1066,6 +1082,11 @@ Rules:
                 self.primitives, self.architect_role, n_tokens=self.max_taskir_tokens
             ),
             site="review_service.generate_taskir",
+            # TD-21.34: unlike `proactive_stage.py`'s plan-step schema, `actor`
+            # here has NO enum constraint and no closest-match instruction --
+            # it must be a literal actor the objective/reply already names, so
+            # no exemption.
+            require_evidence=True,
         )
         if outcome.status not in ("parsed", "repaired"):
             return _fallback(outcome.reason or "unparseable_response")
@@ -1263,6 +1284,14 @@ Rules:
                     self.primitives, self.architect_role, n_tokens=self.max_review_tokens
                 ),
                 site="review_service.review_candidate",
+                # TD-21.34: `confidence` is REQUIRED by `compact_schema`, so a
+                # malformed reply with no stated confidence is exactly the
+                # grammar-forces-a-required-field fabrication risk; `advisory.
+                # score`/`feedback`/`blocking.blocking_issues[].summary` must
+                # likewise come from the reviewer's own reply. `decision` is
+                # exempt (classification, same as `review()`'s `d`).
+                require_evidence=True,
+                evidence_exempt={"decision"},
             )
             if outcome.status in ("parsed", "repaired"):
                 obj = outcome.value
@@ -1709,6 +1738,13 @@ Rules:
                     self.primitives, self.architect_role, n_tokens=self.max_plan_review_tokens
                 ),
                 site="review_service.review_plan_rubric",
+                # TD-21.34: `confidence` is REQUIRED (same fabrication risk as
+                # `review_candidate`'s); `advisory.score`/`advisory.feedback`
+                # must come from the reviewer's own reply.
+                # `phase_coverage`/`order`/`executor_alignment` are booleans
+                # (auto-exempt already). `decision` is exempt (classification).
+                require_evidence=True,
+                evidence_exempt={"decision"},
             )
             if outcome.status in ("parsed", "repaired"):
                 data = outcome.value

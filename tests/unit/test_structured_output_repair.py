@@ -19,6 +19,7 @@ from src.structured_output.repair import (
     fish_json,
     http_chat_completer,
     parse_with_repair,
+    parse_with_repair_async,
     primitives_completer,
     reset_counts_for_tests,
 )
@@ -569,6 +570,162 @@ class TestRequireEvidence:
             schema=ACTION_LIKE_SCHEMA,
             complete=complete,
             site="test.evidence.default_off",
+        )
+        assert result.status == "repaired"
+        assert result.value == {"type": "deep_eval", "tier": 2}
+
+
+# --------------------------------------------------------------------------- evidence_exempt
+#
+# TD-21.34: a mixed schema pairs literal facts the model must copy (an
+# invented one is the exact fabrication `require_evidence` targets) with
+# CLASSIFICATION leaves the model legitimately maps prose onto (an `enum`
+# the raw text rarely spells verbatim -- unlike `const`, `enum` is NOT
+# auto-exempt). `evidence_exempt` lets a site turn `require_evidence` on for
+# the whole schema while still naming the classification keys out.
+
+MIXED_DECISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "mode": {"type": "string", "enum": ["direct", "investigate"]},
+        "brief": {"type": "string"},
+    },
+    "required": ["mode", "brief"],
+    "additionalProperties": False,
+}
+
+
+class TestEvidenceExempt:
+    def test_exempt_key_skips_evidence_even_when_absent_from_reply(self):
+        # "investigate" never appears in the raw text -- only `evidence_exempt`
+        # keeps the classification leaf from failing the check.
+        def complete(messages, schema):
+            return json.dumps({"mode": "investigate", "brief": "check the disk usage report"})
+
+        result = parse_with_repair(
+            "please check the disk usage report",
+            schema=MIXED_DECISION_SCHEMA,
+            complete=complete,
+            site="test.evidence_exempt.mode",
+            require_evidence=True,
+            evidence_exempt={"mode"},
+        )
+        assert result.status == "repaired"
+        assert result.value == {"mode": "investigate", "brief": "check the disk usage report"}
+
+    def test_non_exempt_sibling_still_evidence_checked(self):
+        # `mode` is exempt but `brief` is invented wholesale -- the guard must
+        # still catch the non-exempt leaf.
+        def complete(messages, schema):
+            return json.dumps({"mode": "investigate", "brief": "a wholly invented brief"})
+
+        result = parse_with_repair(
+            "please check the disk usage report",
+            schema=MIXED_DECISION_SCHEMA,
+            complete=complete,
+            site="test.evidence_exempt.sibling",
+            require_evidence=True,
+            evidence_exempt={"mode"},
+        )
+        assert result.status == "failed"
+        assert result.value is None
+        assert "brief" in result.reason
+
+    def test_dotted_path_exempts_only_that_position(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "verifier": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "reference": {"type": "string"},
+                    },
+                },
+            },
+            "required": ["verifier"],
+        }
+
+        def complete(messages, schema):
+            return json.dumps({"verifier": {"type": "exact_match", "reference": "42"}})
+
+        # "exact_match" is nowhere in the raw text but "verifier.type" is
+        # exempt; "42" (the reference) IS in the raw text so the sibling
+        # leaf is evidenced.
+        result = parse_with_repair(
+            "the tool should return 42",
+            schema=schema,
+            complete=complete,
+            site="test.evidence_exempt.dotted",
+            require_evidence=True,
+            evidence_exempt={"verifier.type"},
+        )
+        assert result.status == "repaired"
+        assert result.value == {"verifier": {"type": "exact_match", "reference": "42"}}
+
+
+# --------------------------------------------------------------------------- require_evidence (async)
+#
+# TD-21.34: `parse_with_repair_async` originally had no `require_evidence`/
+# `evidence_exempt` parameters at all -- an async call site (env_synth's
+# `etd_agent.py` / `task_synthesizer.py`) could not get the evidence guard.
+# Mirrors `TestRequireEvidence` exactly, over the async twin.
+
+
+class TestRequireEvidenceAsync:
+    async def test_invented_number_fails_even_though_schema_valid(self):
+        async def complete(messages, schema):
+            return json.dumps({"type": "deep_eval", "tier": 2})
+
+        result = await parse_with_repair_async(
+            "The architect's quality has plateaued; time for another evaluation round.",
+            schema=ACTION_LIKE_SCHEMA,
+            complete=complete,
+            site="test.evidence.async.invented",
+            require_evidence=True,
+        )
+        assert result.status == "failed"
+        assert result.value is None
+        assert "tier" in result.reason
+
+    async def test_value_present_in_text_is_repaired(self):
+        async def complete(messages, schema):
+            return json.dumps({"type": "deep_eval", "tier": 1})
+
+        result = await parse_with_repair_async(
+            "The architect's quality has plateaued; run a deep_eval at tier 1.",
+            schema=ACTION_LIKE_SCHEMA,
+            complete=complete,
+            site="test.evidence.async.present",
+            require_evidence=True,
+        )
+        assert result.status == "repaired"
+        assert result.value == {"type": "deep_eval", "tier": 1}
+
+    async def test_evidence_exempt_key_honoured_async(self):
+        async def complete(messages, schema):
+            return json.dumps({"mode": "investigate", "brief": "check the disk usage report"})
+
+        result = await parse_with_repair_async(
+            "please check the disk usage report",
+            schema=MIXED_DECISION_SCHEMA,
+            complete=complete,
+            site="test.evidence.async.exempt",
+            require_evidence=True,
+            evidence_exempt={"mode"},
+        )
+        assert result.status == "repaired"
+        assert result.value == {"mode": "investigate", "brief": "check the disk usage report"}
+
+    async def test_default_false_keeps_prior_behavior_byte_identical_async(self):
+        async def complete(messages, schema):
+            return json.dumps({"type": "deep_eval", "tier": 2})
+
+        result = await parse_with_repair_async(
+            "The architect's quality has plateaued; time for another evaluation round.",
+            schema=ACTION_LIKE_SCHEMA,
+            complete=complete,
+            site="test.evidence.async.default_off",
         )
         assert result.status == "repaired"
         assert result.value == {"type": "deep_eval", "tier": 2}

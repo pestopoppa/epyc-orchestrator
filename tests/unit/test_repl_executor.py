@@ -1593,7 +1593,10 @@ class TestFinalSchemaValidationRepair:
         async def _fake_run_task(task_state, task_deps, start_role=None):
             run_count["n"] += 1
             return TaskResult(
-                answer="The answer is fourty-two, all done.",
+                # TD-21.34 require_evidence: "42" must be literally present
+                # in the raw answer for the repair turn's copy to be
+                # evidence-checkable (a spelled-out "forty-two" would not be).
+                answer="The answer is 42, all done.",
                 success=True,
                 turns=1,
                 role_history=["worker_general"],

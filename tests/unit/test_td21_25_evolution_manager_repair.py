@@ -156,7 +156,8 @@ class TestRepairWhenLocalModelReachable:
         monkeypatch.setattr(em_mod, "http_chat_completer", fake)
         manager = CapturingManager(
             "Well, I looked at the trials and honestly there isn't a clean "
-            "JSON array here, just some prose about what happened.",
+            "JSON array here, but trial 7 showed a high confidence result "
+            "that applies to all species.",
             use_local_model=True,
             local_model_url="http://localhost:8082",
         )

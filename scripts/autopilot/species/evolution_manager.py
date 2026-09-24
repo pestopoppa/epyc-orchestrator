@@ -434,6 +434,12 @@ class EvolutionManager:
             instruction=_INSIGHTS_REPAIR_INSTRUCTION,
             site="evolution_manager.insight_distillation",
             kind="array",
+            # TD-21.34: the instruction already says "never invent an insight
+            # or a trial id that is not already present" -- evidence_trial_ids
+            # in particular is exactly the numeric-fabrication risk this
+            # program targets. No enum/classification field in this schema to
+            # exempt.
+            require_evidence=True,
         )
 
     def _extract_insights(self, response: str) -> list[dict[str, Any]]:

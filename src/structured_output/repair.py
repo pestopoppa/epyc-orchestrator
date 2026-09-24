@@ -62,7 +62,7 @@ import re
 import threading
 import urllib.error
 import urllib.request
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -338,13 +338,17 @@ def _evidence_failures(
     raw: str,
     *,
     path: str = "",
+    evidence_exempt: Collection[str] = (),
 ) -> list[str]:
     """Return the dotted/bracketed paths of every leaf in `value` that is a
     number or a string of at most `_MAX_EVIDENCE_LEAF_CHARS` characters and
     does NOT appear in `raw` -- empty when every such leaf is evidenced (or
-    exempt: `const`-pinned, boolean, `None`, or a longer string)."""
+    exempt: `const`-pinned, boolean, `None`, a longer string, or named in
+    `evidence_exempt` -- see `parse_with_repair`'s docstring)."""
     normalized_raw = _normalize_for_evidence(raw)
-    return _evidence_failures_normalized(value, schema, normalized_raw, path=path)
+    return _evidence_failures_normalized(
+        value, schema, normalized_raw, path=path, evidence_exempt=evidence_exempt
+    )
 
 
 def _evidence_failures_normalized(
@@ -353,6 +357,7 @@ def _evidence_failures_normalized(
     normalized_raw: str,
     *,
     path: str,
+    evidence_exempt: Collection[str] = (),
 ) -> list[str]:
     if isinstance(schema, Mapping) and ("oneOf" in schema or "anyOf" in schema):
         schema = _select_evidence_branch(schema, value)
@@ -362,10 +367,15 @@ def _evidence_failures_normalized(
         properties = properties if isinstance(properties, Mapping) else {}
         failures: list[str] = []
         for key, sub_value in value.items():
-            sub_schema = properties.get(key) if isinstance(properties.get(key), Mapping) else {}
             sub_path = f"{path}.{key}" if path else str(key)
+            if key in evidence_exempt or sub_path in evidence_exempt:
+                continue
+            sub_schema = properties.get(key) if isinstance(properties.get(key), Mapping) else {}
             failures.extend(
-                _evidence_failures_normalized(sub_value, sub_schema, normalized_raw, path=sub_path)
+                _evidence_failures_normalized(
+                    sub_value, sub_schema, normalized_raw, path=sub_path,
+                    evidence_exempt=evidence_exempt,
+                )
             )
         return failures
 
@@ -376,7 +386,8 @@ def _evidence_failures_normalized(
         for index, item in enumerate(value):
             failures.extend(
                 _evidence_failures_normalized(
-                    item, items_schema, normalized_raw, path=f"{path}[{index}]"
+                    item, items_schema, normalized_raw, path=f"{path}[{index}]",
+                    evidence_exempt=evidence_exempt,
                 )
             )
         return failures
@@ -512,6 +523,7 @@ def parse_with_repair(
     kind: Kind | None = None,
     tail_chars: int = SCHEMA_REPAIR_TAIL_CHARS,
     require_evidence: bool = False,
+    evidence_exempt: Collection[str] = (),
 ) -> RepairResult:
     """Fish first; repair with at most two constrained turns on a miss.
 
@@ -550,6 +562,22 @@ def parse_with_repair(
     are exempt -- a faithful paraphrase is legitimate re-expression, not
     invention. A failure -> `"failed"`, reason names the unevidenced
     field(s), never a fabricated value.
+
+    `evidence_exempt` (default empty, only meaningful with `require_evidence
+    =True`): property names -- a bare key (matched at ANY nesting depth,
+    e.g. `"mode"`) or a dotted/bracketed path (matched exactly, e.g.
+    `"verifier.type"`) -- whose ENTIRE subtree is exempt from the evidence
+    check regardless of type or length. For a schema that mixes literal
+    facts the model must copy (numbers, ids, short extracted strings) with
+    CLASSIFICATIONS the model legitimately maps prose onto (an `enum` the
+    reply rarely spells verbatim -- a review `decision`, a `delegate_to`
+    role name, a plan step's `actor`) turning on `require_evidence` for the
+    whole schema would spuriously fail the classification leaves (`enum`,
+    unlike `const`, is NOT auto-exempt: the model chose that value, it did
+    not copy it). Name those keys here instead of leaving the whole site
+    off. Small and call-site-specific by design -- see the TD-21.34 call
+    sites in `chat_delegation_decision.py` / `proactive_stage.py` /
+    `review_service.py` for the mixed-schema idiom in practice.
     """
     working_schema = _closed_schema(schema)
     validator = _build_validator(working_schema, site=site)
@@ -584,7 +612,9 @@ def parse_with_repair(
     )
     if extracted is not None and validator.is_valid(extracted):
         if require_evidence:
-            unevidenced = _evidence_failures(extracted, working_schema, raw)
+            unevidenced = _evidence_failures(
+                extracted, working_schema, raw, evidence_exempt=evidence_exempt
+            )
             if unevidenced:
                 reason = (
                     "repaired value has unevidenced field(s) not present in the "
@@ -667,14 +697,19 @@ async def parse_with_repair_async(
     site: str,
     kind: Kind | None = None,
     tail_chars: int = SCHEMA_REPAIR_TAIL_CHARS,
+    require_evidence: bool = False,
+    evidence_exempt: Collection[str] = (),
 ) -> RepairResult:
     """Async twin of :func:`parse_with_repair` (TD-21.26) for call sites whose
     injected model callable is itself a coroutine function -- e.g. the
     env_synth species's ``LLMCall = Callable[[str, str], Awaitable[str]]``.
     Identical fish-then-repair semantics and identical telemetry
     (``STRUCTURED_OUTPUT_REPAIR_COUNTS``); see :func:`parse_with_repair` for
-    the full contract. Kept as a literal parallel implementation rather than
-    a wrapper so neither path pays an event-loop indirection for the other.
+    the full contract, INCLUDING ``require_evidence``/``evidence_exempt``
+    (TD-21.34: this twin originally lacked both -- every async call site
+    that needs the evidence guard was unable to get it). Kept as a literal
+    parallel implementation rather than a wrapper so neither path pays an
+    event-loop indirection for the other.
     """
     working_schema = _closed_schema(schema)
     validator = _build_validator(working_schema, site=site)
@@ -708,6 +743,18 @@ async def parse_with_repair_async(
         site=site, tail_chars=tail_chars,
     )
     if extracted is not None and validator.is_valid(extracted):
+        if require_evidence:
+            unevidenced = _evidence_failures(
+                extracted, working_schema, raw, evidence_exempt=evidence_exempt
+            )
+            if unevidenced:
+                reason = (
+                    "repaired value has unevidenced field(s) not present in the "
+                    f"raw reply: {', '.join(unevidenced)}"
+                )
+                result = RepairResult(None, "failed", reason, site, calls)
+                _record(site, result.status, repair_calls=calls, reason=reason)
+                return result
         result = RepairResult(extracted, "repaired", "", site, calls)
         _record(site, result.status, repair_calls=calls)
         return result

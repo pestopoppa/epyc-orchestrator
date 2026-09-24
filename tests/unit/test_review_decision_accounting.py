@@ -363,7 +363,10 @@ class TestSchemaOnWireAndRepair:
         assert prims.calls[0]["json_schema"]["required"] == ["decision", "confidence", "blocking"]
 
     def test_review_recovers_malformed_response_via_repair(self):
-        prims = SequencedPrimitives(["not json at all", '{"d":"approve","s":0.8,"f":"fixed"}'])
+        prims = SequencedPrimitives([
+            "not json at all, but score 0.8, feedback: fixed",
+            '{"d":"approve","s":0.8,"f":"fixed"}',
+        ])
         svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
         r = svc.review(spec={}, subtask={"id": "S1", "action": "a"}, output="o")
         assert r.decision == ReviewDecision.APPROVE
@@ -372,7 +375,10 @@ class TestSchemaOnWireAndRepair:
         assert len(prims.calls) == 2  # initial + exactly ONE repair turn
 
     def test_review_plan_recovers_malformed_response_via_repair(self):
-        prims = SequencedPrimitives(["garbage", '{"d":"reroute","s":0.7,"f":"ok","p":[]}'])
+        prims = SequencedPrimitives([
+            "garbage but score 0.7, ok",
+            '{"d":"reroute","s":0.7,"f":"ok","p":[]}',
+        ])
         svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
         res = svc.review_plan(
             objective="o", task_type="code",
@@ -385,7 +391,7 @@ class TestSchemaOnWireAndRepair:
     def test_review_plan_rubric_recovers_malformed_response_via_repair(self):
         prims = SequencedPrimitives(
             [
-                "garbage",
+                "garbage but confidence 0.7",
                 '{"decision":"approve","confidence":0.7,"phase_coverage":true,'
                 '"order":true,"executor_alignment":true}',
             ]
@@ -398,7 +404,10 @@ class TestSchemaOnWireAndRepair:
 
     def test_generate_taskir_recovers_via_repair(self):
         prims = SequencedPrimitives(
-            ["not json", '{"steps":[{"id":"S1","actor":"coder","action":"do x","out":["f.py"]}]}']
+            [
+                "not json: step S1, actor coder, do x, output f.py",
+                '{"steps":[{"id":"S1","actor":"coder","action":"do x","out":["f.py"]}]}',
+            ]
         )
         svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
         out = svc.generate_taskir("build a thing")
@@ -408,7 +417,10 @@ class TestSchemaOnWireAndRepair:
 
     def test_review_candidate_recovers_malformed_response_via_repair(self):
         prims = SequencedPrimitives(
-            ["nonsense", '{"decision":"approve","confidence":0.7,"blocking":{"tripwire":false}}']
+            [
+                "nonsense but confidence 0.7",
+                '{"decision":"approve","confidence":0.7,"blocking":{"tripwire":false}}',
+            ]
         )
         svc = ArchitectReviewService(prims, trace_sink=lambda ev: None)
         r = svc.review_candidate({"task_ref": "T", "outputs": []})

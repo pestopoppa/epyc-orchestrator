@@ -442,7 +442,9 @@ class TestDelegate:
 
         reset_counts_for_tests()
         mock_llm = Mock()
-        mock_llm.llm_call = Mock(side_effect=["not json", '{"answer": 7}'])
+        # TD-21.34 require_evidence: "7" must be literally present in the
+        # raw reply for the repair turn's copy to be evidence-checkable.
+        mock_llm.llm_call = Mock(side_effect=["not json, but the answer is 7", '{"answer": 7}'])
         schema = {
             "type": "object",
             "properties": {"answer": {"type": "integer"}},

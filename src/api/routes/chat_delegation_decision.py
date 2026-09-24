@@ -394,6 +394,17 @@ def resolve_architect_decision(
         complete=complete,
         instruction=_DECISION_REPAIR_INSTRUCTION,
         site=site,
+        # TD-21.34: `answer`/`brief` are content the architect must have
+        # already produced -- an invented one would serve fabricated prose
+        # (or a fabricated investigation brief) as if the model had said it.
+        # `mode`/`delegate_to`/`delegate_mode` are exempt: they are
+        # CLASSIFICATIONS this schema's `enum`s ask the model to map its own
+        # free-form decision onto, and the raw reply essentially never
+        # spells "investigate" or a role name like "coder_escalation"
+        # verbatim, so evidence-checking them would spuriously fail every
+        # legitimate repair.
+        require_evidence=True,
+        evidence_exempt={"mode", "delegate_to", "delegate_mode"},
     )
     if result.status in ("parsed", "repaired"):
         value = result.value
@@ -646,6 +657,12 @@ def _apply_decision_guards(
                             complete=primitives_completer(primitives, architect_role),
                             instruction=_MCQ_LETTER_REPAIR_INSTRUCTION,
                             site="chat_delegation_decision.mcq_misroute_letter",
+                            # TD-21.34: the instruction already says "never guess a
+                            # letter the reply does not itself support" -- the
+                            # letter is an extracted fact (which letter the reply
+                            # gave), not a classification, so require_evidence
+                            # enforces the same contract the docstring promises.
+                            require_evidence=True,
                         )
                         if letter_result.status in ("parsed", "repaired"):
                             decision = {

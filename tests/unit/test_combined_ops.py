@@ -431,7 +431,7 @@ class TestBatchLlmQueryEnabled:
             "required": ["answer"],
         }
         llm.llm_batch.side_effect = [
-            ["not json"],
+            ["not json, but the answer is 7"],
             ['{"answer": 7}'],
         ]
 
@@ -470,7 +470,7 @@ class TestBatchLlmQueryEnabled:
             "required": ["answer"],
         }
         llm.llm_batch.side_effect = [
-            ["not json"],
+            ["not json, but the answer is 7"],
             ['{"answer": 7}'],
         ]
 

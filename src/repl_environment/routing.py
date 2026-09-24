@@ -619,6 +619,10 @@ class _RoutingMixin:
                         schema=schema,
                         complete=primitives_completer(self.llm_primitives, target_role),
                         site="repl_delegate",
+                        # TD-21.34: `schema` is the tool caller's own structured
+                        # answer contract for this delegate -- same fabrication
+                        # risk as `repl_final`.
+                        require_evidence=True,
                     )
                     if repair.status in ("parsed", "repaired"):
                         parsed = repair.value

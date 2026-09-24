@@ -696,6 +696,11 @@ async def _execute_repl_body(
                 schema=_schema,
                 complete=primitives_completer(primitives, _producing_role),
                 site="repl_final",
+                # TD-21.34: `_schema` is the CALLER's own output_schema for the
+                # FINAL answer -- a missing required number/short string must
+                # not be invented to satisfy the grammar (the exact live-smoke
+                # failure mode this program hardens against).
+                require_evidence=True,
             )
             if _repair.status in ("parsed", "repaired"):
                 graph_result.answer = json.dumps(_repair.value)

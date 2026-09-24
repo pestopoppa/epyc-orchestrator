@@ -115,7 +115,7 @@ class TestVLStructuredRepair:
         calls = _install_fake_urlopen(
             monkeypatch,
             [
-                _chat_reply("The invoice shows a total of forty two dollars from Acme."),
+                _chat_reply("The invoice shows a total of 42 dollars from Acme."),
                 _chat_reply('{"total": 42, "vendor": "Acme"}'),
             ],
         )

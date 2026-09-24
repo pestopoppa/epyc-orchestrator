@@ -464,6 +464,10 @@ class VLStructuredAnalyzer(VLDescribeAnalyzer):
                 complete=complete,
                 instruction=_STRUCTURED_EXTRACTION_REPAIR_INSTRUCTION,
                 site="vision.vl_structured",
+                # TD-21.34: totals/dates/names extracted from the image
+                # description must come from that description -- the
+                # canonical "VL structured extraction" evidence case.
+                require_evidence=True,
             )
             if repair_result.status in ("parsed", "repaired"):
                 result.data["structured"] = repair_result.value

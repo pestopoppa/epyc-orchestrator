@@ -295,6 +295,15 @@ class TaskSynthesizer:
             instruction=_TASK_REPAIR_INSTRUCTION,
             site="env_synth.task_synthesizer",
             kind="object",
+            # TD-21.34: the instruction already says "never invent a task,
+            # verifier, or hint that is not already present" -- prompt/
+            # reference/pattern/allowlist/min_tokens/ground_truth_hint are all
+            # facts that must come from the reply. `verifier.type` is exempt:
+            # it is a 3-way classification (VerifierType: regex/exact_match/
+            # f1) the model maps its own verifier design onto, which the
+            # reply's prose essentially never spells verbatim.
+            require_evidence=True,
+            evidence_exempt={"verifier.type"},
         )
         if result.status not in ("parsed", "repaired"):
             log.warning(

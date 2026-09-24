@@ -159,6 +159,14 @@ async def _decompose_plan_steps(
             complete=complete,
             instruction=_PLAN_STEPS_REPAIR_INSTRUCTION,
             site=_PLAN_STEPS_REPAIR_SITE,
+            # TD-21.34: `id`/`action`/`depends_on`/`outputs` must come from the
+            # architect's own (malformed) decomposition -- an invented step id
+            # or dependency would drive real parallel dispatch. `actor` is
+            # exempt: the instruction explicitly allows a semantic
+            # closest-match onto {worker, coder, architect} when the reply
+            # names something else, so it is a classification, not a copy.
+            require_evidence=True,
+            evidence_exempt={"actor"},
         )
 
     if _should_inline_plan_call_for_test(primitives):

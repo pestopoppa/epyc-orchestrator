@@ -77,7 +77,9 @@ class TestDecomposePlanStepsRepair:
             ]
         )
         primitives = _primitives(repaired)
-        raw = "Step one: explore the codebase. Step two: write the patch after that."
+        # TD-21.34 require_evidence: id/action/depends_on must be literally
+        # present in the raw text (actor is exempt -- semantic mapping).
+        raw = "S1: explore the codebase. S2: write the patch after that (depends on S1)."
 
         steps = await _decompose_plan_steps(raw, primitives=primitives, task_id="t2")
 
@@ -177,7 +179,10 @@ class TestExecuteProactiveRepairIntegration:
         )
         primitives.llm_call = MagicMock(
             side_effect=[
-                "The architect rambled without emitting any JSON plan at all.",
+                # TD-21.34 require_evidence: id/action/depends_on must be
+                # literally present for the repair turn to copy faithfully.
+                "The architect rambled about s1 (first step) and s2 "
+                "(second step, depends on s1) without emitting valid JSON.",
                 repaired_plan,
             ]
         )
