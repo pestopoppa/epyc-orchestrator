@@ -24,6 +24,7 @@ from src.api.services.memrl import failure_disposition_meta, score_completed_tas
 from src.api.structured_logging import task_extra
 from src.features import features
 from src.llm_primitives import LLMPrimitives
+from src.structured_output.repair import RepairResult, parse_with_repair, primitives_completer
 from src.task_ir import canonicalize_task_ir
 
 log = logging.getLogger(__name__)
@@ -75,6 +76,109 @@ def _parse_plan_steps(raw: str) -> list[dict]:
         valid_steps.append(step)
 
     return valid_steps
+
+
+#: TD-21.20: the architect's own prompt contract already promises exactly
+#: these three actors (`_TASK_DECOMPOSITION_FALLBACK` in
+#: `src/prompt_builders/builder.py`: "actor: 'worker' for
+#: exploration/summarization, 'coder' for code, 'architect' for design") --
+#: this is "the code's existing valid set", not an invented one.
+_PLAN_STEP_ACTORS: tuple[str, ...] = ("worker", "coder", "architect")
+
+_PLAN_STEPS_REPAIR_SCHEMA: dict = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "action": {"type": "string"},
+            "actor": {"type": "string", "enum": list(_PLAN_STEP_ACTORS)},
+            "depends_on": {"type": "array", "items": {"type": "string"}},
+            "outputs": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["id", "action"],
+        "additionalProperties": False,
+    },
+}
+
+_PLAN_STEPS_REPAIR_INSTRUCTION = (
+    "The reply, given as the user message, is an architect's attempt to decompose a "
+    "task into parallel-executable steps as a JSON array. Re-express the steps it "
+    "already gives -- the same ids, actions, dependencies and outputs, never invented "
+    "or improved -- as a JSON array matching the schema. `actor` must be exactly one "
+    "of worker, coder, or architect; if a step names something else, pick whichever "
+    "of those three its own wording is closest to. If the reply contains no "
+    "extractable steps at all, return an empty array []."
+)
+
+_PLAN_STEPS_REPAIR_SITE = "chat_pipeline.proactive_stage.plan_steps"
+
+
+def _finalize_plan_step(step: dict) -> dict | None:
+    """Apply the same defaults `_parse_plan_steps` applies, to a step that
+    came back from the repair turn instead of the fish. `None` when the step
+    is not even a dict with the two truly required fields -- defensive only;
+    the repair schema's `required`/`additionalProperties: False` already
+    make this unreachable for a `"repaired"` result."""
+    if not isinstance(step, dict) or "id" not in step or "action" not in step:
+        return None
+    step = dict(step)
+    step.setdefault("actor", "worker")
+    step.setdefault("depends_on", [])
+    step.setdefault("outputs", [])
+    return step
+
+
+async def _decompose_plan_steps(
+    raw: str,
+    *,
+    primitives: LLMPrimitives,
+    task_id: str,
+) -> list[dict]:
+    """TD-21.20: fish first via the unchanged `_parse_plan_steps` (byte-
+    identical happy path, 0 repair calls); on a miss, ONE repair turn back to
+    the SAME `architect_general` role instead of the old silent `[]`
+    fall-through. Every outcome is counted under
+    `STRUCTURED_OUTPUT_REPAIR_COUNTS` (site `_PLAN_STEPS_REPAIR_SITE`); a
+    terminal repair failure is ALSO logged explicitly here (not left to the
+    caller's generic "plan has 0 steps" fallback log), since that log alone
+    cannot distinguish "architect declined to decompose" from "the plan was
+    lost to formatting drift" -- exactly the audit's complaint about today's
+    silent `[]`.
+    """
+    steps = _parse_plan_steps(raw)
+    if steps:
+        return steps
+
+    complete = primitives_completer(primitives, "architect_general")
+
+    def _repair() -> RepairResult:
+        return parse_with_repair(
+            raw,
+            schema=_PLAN_STEPS_REPAIR_SCHEMA,
+            complete=complete,
+            instruction=_PLAN_STEPS_REPAIR_INSTRUCTION,
+            site=_PLAN_STEPS_REPAIR_SITE,
+        )
+
+    if _should_inline_plan_call_for_test(primitives):
+        result = _repair()
+    else:
+        # Keep the extra model I/O off the event loop, same as the primary
+        # plan call above.
+        result = await asyncio.to_thread(_repair)
+
+    if result.status not in ("parsed", "repaired"):
+        log.warning(
+            "Proactive delegation: plan-step repair failed (status=%s, reason=%r); "
+            "falling through to standard pipeline",
+            result.status,
+            result.reason,
+            extra=task_extra(task_id=task_id, stage="execute", mode="proactive"),
+        )
+        return []
+
+    return [s for s in (_finalize_plan_step(item) for item in result.value) if s is not None]
 
 
 async def _execute_proactive(
@@ -152,7 +256,7 @@ async def _execute_proactive(
         )
         return None
 
-    steps = _parse_plan_steps(plan_json_str)
+    steps = await _decompose_plan_steps(plan_json_str, primitives=primitives, task_id=routing.task_id)
     if not steps or len(steps) < 2:
         log.info(
             "Proactive delegation: plan has %d steps (need >= 2), falling through",

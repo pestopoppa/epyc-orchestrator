@@ -17,6 +17,7 @@ from typing import Any
 
 from PIL import Image
 
+from src.structured_output.repair import http_chat_completer, parse_with_repair
 from src.vision.analyzers.base import Analyzer, AnalyzerResult
 from src.vision.config import (
     LLAMA_MTMD_CLI,
@@ -52,6 +53,7 @@ class VLDescribeAnalyzer(Analyzer):
         threads: int = DEFAULT_VL_THREADS,
         backend: str | None = None,
         server_port: int = VL_SERVER_PORT,
+        response_schema: dict[str, Any] | None = None,
         **config: Any,
     ):
         """Initialize VL description analyzer.
@@ -64,6 +66,16 @@ class VLDescribeAnalyzer(Analyzer):
             threads: Number of threads for inference.
             backend: "auto", "server", or "cli" (default: env/auto).
             server_port: llama-server port for OpenAI-compatible VL inference.
+            response_schema: TD-21.19. When set, put a `response_format
+                json_schema` on the `_analyze_with_server` wire payload so the
+                model's reply is shape-constrained. `None` (the default, used
+                by `VLDescribeAnalyzer`/`VLOCRAnalyzer`) means the extraction
+                is genuinely free-form prose -- no schema is sent, matching
+                today's behaviour byte-for-byte. `VLStructuredAnalyzer` sets
+                this to an open (`additionalProperties: True`) object schema:
+                the top-level SHAPE (a JSON object) is the only thing this
+                site can honestly promise, since the fields themselves are
+                caller-open ("date, total, items... as applicable").
             **config: Additional configuration.
         """
         super().__init__(**config)
@@ -79,6 +91,7 @@ class VLDescribeAnalyzer(Analyzer):
                 f"{', '.join(sorted(_VALID_VL_BACKENDS))}"
             )
         self.server_port = server_port
+        self.response_schema = response_schema
 
     @property
     def name(self) -> str:
@@ -180,6 +193,15 @@ class VLDescribeAnalyzer(Analyzer):
                 "temperature": 0.0,
                 "stream": False,
             }
+            if self.response_schema is not None:
+                # TD-21.19: put the shape on the wire when the caller has one
+                # to send; genuinely free-form callers (VLDescribeAnalyzer,
+                # VLOCRAnalyzer) leave response_schema None and this payload
+                # is byte-identical to before.
+                payload["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {"name": "vl_structured_extraction", "schema": self.response_schema},
+                }
             request = urllib.request.Request(
                 f"http://127.0.0.1:{self.server_port}/v1/chat/completions",
                 data=json.dumps(payload).encode("utf-8"),
@@ -364,6 +386,29 @@ class VLOCRAnalyzer(VLDescribeAnalyzer):
         return "vl_ocr"
 
 
+#: TD-21.19: the only SHAPE this site can honestly promise is "a JSON
+#: object" -- the fields themselves are genuinely open ("date, total,
+#: items, names, addresses, etc. as applicable" in the prompt below), so
+#: `additionalProperties` is explicitly `True` (not left unset -- see
+#: `src/structured_output/repair.py::_closed_schema`, which would otherwise
+#: default an object schema to `additionalProperties: False` and forbid
+#: every field this analyzer exists to extract).
+_STRUCTURED_EXTRACTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": True,
+}
+
+_STRUCTURED_EXTRACTION_REPAIR_INSTRUCTION = (
+    "The reply, given as the user message, is a model's attempt to describe an "
+    "image as structured JSON (fields like date, total, items, names, "
+    "addresses, etc., as applicable). Re-express whatever fields and values "
+    "it already gives -- verbatim, not judged or improved -- as one valid "
+    "JSON object. If the reply contains no extractable structured content at "
+    "all, return an empty JSON object {}. Never invent a field or value the "
+    "reply does not itself contain."
+)
+
+
 class VLStructuredAnalyzer(VLDescribeAnalyzer):
     """Extract structured data from images (forms, receipts, tables).
 
@@ -383,6 +428,7 @@ class VLStructuredAnalyzer(VLDescribeAnalyzer):
             "Include fields like: date, total, items, names, addresses, etc. as applicable. "
             f"{schema_hint}"
         )
+        config.setdefault("response_schema", _STRUCTURED_EXTRACTION_SCHEMA)
         super().__init__(prompt=prompt, max_tokens=1024, **config)
 
     @property
@@ -390,27 +436,45 @@ class VLStructuredAnalyzer(VLDescribeAnalyzer):
         return "vl_structured"
 
     def analyze(self, image: Image.Image, path: Path | None = None) -> AnalyzerResult:
-        """Extract structured data from image."""
+        """Extract structured data from image.
+
+        TD-21.19: fish first (shared ``fish_json`` -- fenced ```json block,
+        then the last top-level balanced object, string-aware); on a miss,
+        ONE repair turn back to the SAME VL server asking it to re-express
+        its own reply as JSON, never inventing content. Only on a repair
+        miss does this analyzer report failure: today's behaviour silently
+        kept ``result.success = True`` with ``structured = None`` on ANY
+        parse failure, so a genuine "nothing in the image" and a "the model's
+        JSON had a stray comma" were indistinguishable downstream
+        (`src/vision/pipeline.py:213` reads ``struct_result.success`` to
+        decide whether to populate ``structured_data`` or record an error).
+        A terminal parse failure now flips ``success`` to ``False`` with a
+        descriptive ``error`` -- the exact same signal every other analyzer
+        in this pipeline already uses for a real failure, so no new
+        downstream plumbing is needed.
+        """
         result = super().analyze(image, path)
 
         if result.success and result.data.get("description"):
-            # Try to parse as JSON
-            import json
-
-            try:
-                # Find JSON in the response
-                text = result.data["description"]
-                # Look for JSON block
-                if "```json" in text:
-                    text = text.split("```json")[1].split("```")[0]
-                elif "```" in text:
-                    text = text.split("```")[1].split("```")[0]
-
-                structured = json.loads(text.strip())
-                result.data["structured"] = structured
-            except json.JSONDecodeError:
-                # Return raw text if JSON parsing fails
+            text = result.data["description"]
+            complete = http_chat_completer(f"http://127.0.0.1:{self.server_port}/v1")
+            repair_result = parse_with_repair(
+                text,
+                schema=self.response_schema or _STRUCTURED_EXTRACTION_SCHEMA,
+                complete=complete,
+                instruction=_STRUCTURED_EXTRACTION_REPAIR_INSTRUCTION,
+                site="vision.vl_structured",
+            )
+            if repair_result.status in ("parsed", "repaired"):
+                result.data["structured"] = repair_result.value
+            else:
+                # Terminal failure (transport error on the repair turn, or
+                # the repair turn's own reply still did not validate as a
+                # JSON object). Honest signal: this analyzer did NOT produce
+                # a structured result, so it must not report success.
+                result.success = False
                 result.data["structured"] = None
-                result.data["parse_error"] = "Failed to parse JSON from response"
+                result.data["parse_error"] = repair_result.reason or "Failed to parse JSON from response"
+                result.error = f"VL structured extraction unparseable: {repair_result.reason}"
 
         return result
