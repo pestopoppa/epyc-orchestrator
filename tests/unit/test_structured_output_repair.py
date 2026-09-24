@@ -3,11 +3,14 @@
 Covers: `fish_json` extraction edge cases, the `parse_with_repair` state
 machine (parsed / declined / repaired / failed paths, TD-21.30(b) partial
 objects, never-fabricates-a-value), the `http_chat_completer` wire payload
-shape, and the (site, status) telemetry counter.
+shape, the (site, status) telemetry counter, and (TD-21.35) the wire-schema
+`required`-relaxation that stops the extraction grammar from FORCING a value
+for a field the raw reply never stated.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +19,7 @@ import pytest
 from src.structured_output.repair import (
     STRUCTURED_OUTPUT_REPAIR_COUNTS,
     RepairResult,
+    _relax_required_for_wire,
     fish_json,
     http_chat_completer,
     parse_with_repair,
@@ -728,4 +732,255 @@ class TestRequireEvidenceAsync:
             site="test.evidence.async.default_off",
         )
         assert result.status == "repaired"
-        assert result.value == {"type": "deep_eval", "tier": 2}
+
+
+# --------------------------------------------------------------------------- TD-21.35: relax_required wire schema
+#
+# 2026-09-24 live-smoke finding (see the module-level TD-21.35 comment above
+# `_relax_required_for_wire`): a `required` field FORCES the grammar to fill
+# a value even when the raw reply never states one -- a `deep_eval` draft
+# with no stated tier repaired to a fabricated `tier=2`. This stops the
+# invention at the grammar instead of only catching it after the fact
+# (`require_evidence`, above). `required` is dropped at every object level
+# for the WIRE schema (what `complete()` receives), except for a key pinned
+# by `const`/single-value `enum` (an `oneOf`/`anyOf` discriminator) -- the
+# RESULT is still validated against the original, unrelaxed schema.
+
+NESTED_UNION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "outer": {
+            "type": "object",
+            "properties": {
+                "kind": {"const": "widget"},
+                "size": {"type": "integer"},
+            },
+            "required": ["kind", "size"],
+            "additionalProperties": False,
+        },
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "score": {"type": "number"}},
+                "required": ["id", "score"],
+                "additionalProperties": False,
+            },
+        },
+        "choice": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {"type": {"const": "a"}, "value": {"type": "string"}},
+                    "required": ["type", "value"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {"type": {"enum": ["b"]}, "count": {"type": "integer"}},
+                    "required": ["type", "count"],
+                    "additionalProperties": False,
+                },
+            ]
+        },
+    },
+    "required": ["outer", "items"],
+}
+
+
+class TestRelaxRequiredForWireUnit:
+    """Direct unit coverage of `_relax_required_for_wire` -- nested objects,
+    array `items`, and `oneOf` branches, with `const`/single-`enum`
+    discriminators kept and every other key dropped."""
+
+    def test_top_level_required_dropped(self):
+        relaxed = _relax_required_for_wire(NESTED_UNION_SCHEMA)
+        assert "required" not in relaxed
+
+    def test_nested_object_required_dropped_but_const_kept(self):
+        relaxed = _relax_required_for_wire(NESTED_UNION_SCHEMA)
+        outer = relaxed["properties"]["outer"]
+        assert outer["required"] == ["kind"]  # `size` dropped, `kind` (const) kept
+
+    def test_array_items_required_dropped(self):
+        relaxed = _relax_required_for_wire(NESTED_UNION_SCHEMA)
+        item_schema = relaxed["properties"]["items"]["items"]
+        assert "required" not in item_schema
+
+    def test_oneof_branches_keep_only_their_discriminator(self):
+        relaxed = _relax_required_for_wire(NESTED_UNION_SCHEMA)
+        branch_a, branch_b = relaxed["properties"]["choice"]["oneOf"]
+        assert branch_a["required"] == ["type"]  # `value` dropped
+        assert branch_b["required"] == ["type"]  # single-enum discriminator kept, `count` dropped
+
+    def test_non_required_content_untouched(self):
+        relaxed = _relax_required_for_wire(NESTED_UNION_SCHEMA)
+        assert relaxed["properties"]["outer"]["properties"]["size"] == {"type": "integer"}
+        assert relaxed["additionalProperties"] is False
+        assert relaxed["properties"]["choice"]["oneOf"][1]["properties"]["type"] == {"enum": ["b"]}
+
+    def test_does_not_mutate_input(self):
+        original = copy.deepcopy(NESTED_UNION_SCHEMA)
+        _relax_required_for_wire(NESTED_UNION_SCHEMA)
+        assert NESTED_UNION_SCHEMA == original
+
+    def test_all_non_discriminator_required_schema_loses_required_entirely(self):
+        relaxed = _relax_required_for_wire(SIMPLE_SCHEMA)
+        assert "required" not in relaxed
+
+    def test_action_like_schema_keeps_type_const_required(self):
+        relaxed = _relax_required_for_wire(ACTION_LIKE_SCHEMA)
+        assert relaxed["oneOf"][0]["required"] == ["type"]
+
+    def test_required_with_no_sibling_properties_is_dropped(self):
+        relaxed = _relax_required_for_wire({"type": "object", "required": ["x"]})
+        assert "required" not in relaxed
+
+    def test_non_mapping_and_scalar_schemas_pass_through(self):
+        assert _relax_required_for_wire(True) is True
+        assert _relax_required_for_wire({"type": "string"}) == {"type": "string"}
+
+
+class TestRelaxRequiredIntegration:
+    """`parse_with_repair` end to end: the schema handed to `complete()` is
+    relaxed (const discriminators survive); the RESULT is still validated
+    against the ORIGINAL schema, so an omitted required field fails honestly
+    instead of being invented."""
+
+    def test_wire_schema_seen_by_complete_has_no_required_except_discriminator(self):
+        captured = {}
+
+        def complete(messages, schema):
+            captured["schema"] = schema
+            return json.dumps({"type": "deep_eval"})
+
+        parse_with_repair(
+            "run a deep_eval",
+            schema=ACTION_LIKE_SCHEMA,
+            complete=complete,
+            site="test.relax.wire_shape",
+        )
+        wire_branch = captured["schema"]["oneOf"][0]
+        assert wire_branch["required"] == ["type"]
+
+    def test_omitted_required_field_fails_instead_of_being_invented(self):
+        # SIMPLE_SCHEMA requires both `name` and `count`, neither a
+        # discriminator -- the wire schema forces neither, so a model that
+        # only supplies `name` produces a value invalid against the
+        # ORIGINAL schema: `"failed"`, never an invented `count`.
+        def complete(messages, schema):
+            assert "required" not in schema  # both were relaxed away on the wire
+            return json.dumps({"name": "widget"})
+
+        result = parse_with_repair(
+            "widget, no count given anywhere in the text",
+            schema=SIMPLE_SCHEMA,
+            complete=complete,
+            site="test.relax.omitted",
+        )
+        assert result.status == "failed"
+        assert result.value is None
+        assert "count" in result.reason  # names the missing field, not a fabricated value
+
+    def test_supplied_required_field_still_repairs(self):
+        def complete(messages, schema):
+            return json.dumps({"name": "widget", "count": 3})
+
+        result = parse_with_repair(
+            "widget, count three",
+            schema=SIMPLE_SCHEMA,
+            complete=complete,
+            site="test.relax.supplied",
+        )
+        assert result.status == "repaired"
+        assert result.value == {"name": "widget", "count": 3}
+
+    def test_relax_required_false_keeps_required_on_the_wire(self):
+        captured = {}
+
+        def complete(messages, schema):
+            captured["schema"] = schema
+            return json.dumps({"name": "widget", "count": 1})
+
+        parse_with_repair(
+            "widget",
+            schema=SIMPLE_SCHEMA,
+            complete=complete,
+            site="test.relax.opt_out",
+            relax_required=False,
+        )
+        # `relax_required=False` -- unlike the default -- sends `required`
+        # on the wire exactly as the caller declared it (`_closed_schema`
+        # still copies the dict for TD-21.30(d), but strips nothing else).
+        assert captured["schema"]["required"] == ["name", "count"]
+
+    def test_decline_probe_schema_is_never_relaxed(self):
+        # `relax_required` only ever touches the EXTRACTION turn's schema;
+        # the decline probe's own fixed schema (`explicitly_declines`,
+        # `reason`) must stay exactly as `parse_with_repair` always sends it.
+        schemas_seen = []
+
+        def complete(messages, schema):
+            schemas_seen.append(schema)
+            if schema.get("properties", {}).get("explicitly_declines"):
+                return json.dumps({"explicitly_declines": False, "reason": ""})
+            return json.dumps({"mechanism_id": "widen-alignment"})
+
+        parse_with_repair(
+            "I propose renaming the buffer to widen alignment.",
+            schema=DECLINE_SCHEMA,
+            complete=complete,
+            decline_question="Does the report explicitly decline to propose anything?",
+            site="test.relax.decline_untouched",
+        )
+        decline_schema_sent = schemas_seen[0]
+        assert decline_schema_sent["required"] == ["explicitly_declines", "reason"]
+
+
+class TestRelaxRequiredAsyncIntegration:
+    """Async twin of `TestRelaxRequiredIntegration` -- same wire relaxation,
+    same original-schema validation, over `parse_with_repair_async`."""
+
+    async def test_wire_schema_has_no_required_except_discriminator_async(self):
+        captured = {}
+
+        async def complete(messages, schema):
+            captured["schema"] = schema
+            return json.dumps({"type": "deep_eval"})
+
+        await parse_with_repair_async(
+            "run a deep_eval",
+            schema=ACTION_LIKE_SCHEMA,
+            complete=complete,
+            site="test.relax.wire_shape.async",
+        )
+        wire_branch = captured["schema"]["oneOf"][0]
+        assert wire_branch["required"] == ["type"]
+
+    async def test_omitted_required_field_fails_instead_of_being_invented_async(self):
+        async def complete(messages, schema):
+            return json.dumps({"name": "widget"})
+
+        result = await parse_with_repair_async(
+            "widget, no count given anywhere in the text",
+            schema=SIMPLE_SCHEMA,
+            complete=complete,
+            site="test.relax.omitted.async",
+        )
+        assert result.status == "failed"
+        assert result.value is None
+        assert "count" in result.reason
+
+    async def test_supplied_required_field_still_repairs_async(self):
+        async def complete(messages, schema):
+            return json.dumps({"name": "widget", "count": 3})
+
+        result = await parse_with_repair_async(
+            "widget, count three",
+            schema=SIMPLE_SCHEMA,
+            complete=complete,
+            site="test.relax.supplied.async",
+        )
+        assert result.status == "repaired"
+        assert result.value == {"name": "widget", "count": 3}

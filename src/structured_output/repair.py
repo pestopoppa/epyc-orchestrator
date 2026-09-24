@@ -48,6 +48,23 @@ This module also closes three residuals the reference left open
       multi-model local endpoint would 400 on it. ``http_chat_completer``
       takes an optional ``model`` and includes it on the wire when given.
 
+TD-21.35 (2026-09-24): a ``required`` field in a JSON-schema-to-GBNF grammar
+does not mean "the caller wants this" -- it means "the grammar FORCES a
+value, real or not". Live, this forced a ``deep_eval`` draft with no stated
+tier to repair to a fabricated ``tier=2``. ``require_evidence`` above catches
+that AFTER the fact; ``parse_with_repair``'s ``relax_required`` (default
+``True``) stops it at the source by sending a WIRE schema with ``required``
+stripped at every object level for the extraction turn only -- except a
+``const``/single-``enum`` discriminator key, which stays required so a
+``oneOf``/``anyOf`` union stays disambiguable. The RESULT is still validated
+against the caller's original, unrelaxed schema, so an omitted required
+field now fails honestly (``"failed"``, reason names the field) instead of
+being invented. See ``_relax_required_for_wire`` for the full mechanism and
+why this is orthogonal to the three abstain-signalling designs refuted
+above (those are about a judgment channel winning over a real answer; this
+never touches branch selection or a judgment property, only whether an
+ordinary data field is forced).
+
 Public API: ``fish_json``, ``parse_with_repair``, ``parse_with_repair_async``
 (TD-21.26, for an injected coroutine-function completer), ``RepairResult``,
 ``http_chat_completer``, ``primitives_completer``,
@@ -67,7 +84,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError
+from jsonschema.exceptions import SchemaError, best_match
 
 from src.prompt_builders.code_utils import _repair_json_text
 
@@ -262,6 +279,123 @@ def _build_validator(schema: Mapping[str, Any], *, site: str) -> Draft202012Vali
         _log.error("structured_output_repair site=%s invalid_schema=%r", site, exc)
         return None
     return Draft202012Validator(schema)
+
+
+def _validation_failure_reason(validator: Draft202012Validator, value: Any) -> str:
+    """TD-21.35: name what actually failed, instead of the flat generic
+    string this used to be. Most relevant with `relax_required=True`: a
+    missing required field no longer gets invented by the grammar, so THIS
+    is now the path that turns that honest omission into a typed `"failed"`
+    -- `jsonschema`'s own "'count' is a required property" (or a type-error
+    message for any other validation failure) tells the caller exactly what
+    to look at instead of a bare "failed schema validation"."""
+    error = best_match(validator.iter_errors(value))
+    if error is None:  # defensive -- `is_valid` already returned False
+        return "extraction result failed schema validation"
+    return f"extraction result failed schema validation: {error.message}"
+
+
+# --------------------------------------------------------------------------- TD-21.35: wire-schema relaxation
+#
+# `required` in a JSON-schema-to-GBNF grammar does not mean "the caller
+# wants this field" -- it means "the grammar FORCES the model to emit a
+# value for this key, real or not" (llama.cpp
+# common/json-schema-to-grammar.cpp:873-880 builds an empty `required` set
+# when the schema has none, and `_build_object_rule` at :640-731 buckets
+# every property NOT in that set as optional; :659-663 is the bucketing
+# itself). Live, 2026-09-24: a `deep_eval` draft that named no tier forced a
+# `tier` grammar slot, so the model filled `tier=2` whole cloth -- a
+# schema-VALID, fully invented value `require_evidence` then has to catch
+# after the fact. This relaxation stops the invention at the source for the
+# REPAIR/EXTRACTION turn only: the WIRE schema sent as `response_format`
+# drops `required` at every object level so the grammar can no longer force
+# an unstated field, while `parse_with_repair` still validates the result
+# against the ORIGINAL (unrelaxed) schema -- a field the model still omits
+# now fails validation honestly (`"failed"`, reason names the field) instead
+# of being invented to satisfy the grammar.
+#
+# EXCEPTION: a key whose own property schema is a `const` (or a
+# single-value `enum`, which is equivalent) is a DISCRIMINATOR, not caller
+# data -- e.g. an autopilot action union's `type: {"const": "deep_eval"}`
+# (`scripts/autopilot/controller_io.py:_action_type_json_schema`). Relaxing
+# a discriminator's `required` would let the grammar accept an object that
+# satisfies no branch unambiguously (or none at all when every branch's
+# `type` is optional), so any key detected as `const`/single-`enum`-pinned
+# stays in `required` on the wire -- relaxation only ever removes a forced
+# slot for a value the model could otherwise invent, never a slot the
+# caller already pinned to one legal value.
+#
+# This is orthogonal to the three abstain-signalling designs refuted in
+# `epyc-inference-research:scripts/kernel_rnd/autokernel/loop/actors.py`
+# (optional `abstain` property filled in BESIDE a real answer; an `anyOf`
+# judgment branch winning over a real answer; an in-band marker
+# over-abstaining) -- those are about a SEPARATE judgment channel (does the
+# model decline?) riding inside or beside the answer schema and winning when
+# it should not. This relaxation touches neither `oneOf`/`anyOf` branch
+# selection nor any judgment property; it only changes whether an ordinary
+# DATA field inside whichever branch/object already applies is forced to
+# carry a value. A discriminator branch is still selected exactly as before
+# (its `type` const is still required), and nothing here adds, removes, or
+# reweights a branch.
+
+
+def _is_wire_discriminator(prop_schema: Any) -> bool:
+    """True for a property schema that pins the property to exactly one
+    legal value -- a `const`, or a single-element `enum` (the model has no
+    choice either way, so keeping it `required` on the wire forces nothing
+    the caller didn't already pin). Used to decide which `required` entries
+    survive relaxation; see the TD-21.35 block above."""
+    if not isinstance(prop_schema, Mapping):
+        return False
+    if "const" in prop_schema:
+        return True
+    enum = prop_schema.get("enum")
+    return isinstance(enum, list) and len(enum) == 1
+
+
+def _relax_required_for_wire(schema: Any) -> Any:
+    """TD-21.35: return a copy of `schema` with `required` dropped at every
+    object level, recursively through `properties`, `oneOf`/`anyOf`/`allOf`
+    branches, `items` (list or single-schema form), and `$defs`/
+    `definitions` -- EXCEPT a key detected as a discriminator by
+    `_is_wire_discriminator`, which stays required so a `oneOf`/`anyOf`
+    union stays disambiguable. Everything else (`type`, `enum`, `const`,
+    numeric bounds, `additionalProperties`, property ORDER) passes through
+    unchanged -- this only ever touches `required`. Never mutates its input;
+    always returns a new structure. This is the schema sent to `complete()`
+    for the extraction/repair turn ONLY -- `parse_with_repair` validates the
+    result against the original, unrelaxed schema regardless."""
+    if isinstance(schema, list):
+        return [_relax_required_for_wire(item) for item in schema]
+    if not isinstance(schema, Mapping):
+        return schema
+
+    relaxed: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "required":
+            continue  # rebuilt below, once `properties` is known
+        if key in ("properties", "$defs", "definitions") and isinstance(value, Mapping):
+            relaxed[key] = {k: _relax_required_for_wire(v) for k, v in value.items()}
+        elif key in ("oneOf", "anyOf", "allOf") and isinstance(value, list):
+            relaxed[key] = [_relax_required_for_wire(v) for v in value]
+        elif key == "items":
+            relaxed[key] = _relax_required_for_wire(value)
+        elif key == "additionalProperties" and isinstance(value, Mapping):
+            relaxed[key] = _relax_required_for_wire(value)
+        else:
+            relaxed[key] = value
+
+    required = schema.get("required")
+    properties = schema.get("properties")
+    if isinstance(required, list) and isinstance(properties, Mapping):
+        kept = [key for key in required if _is_wire_discriminator(properties.get(key))]
+        if kept:
+            relaxed["required"] = kept
+    # A `required` list with no sibling `properties` map has nothing to check
+    # a discriminator against -- dropped entirely (nothing here could pin a
+    # value the grammar can point at).
+
+    return relaxed
 
 
 # --------------------------------------------------------------------------- evidence check
@@ -494,14 +628,21 @@ def _extraction_turn(
     instruction: str | None,
     site: str,
     tail_chars: int,
+    relax_required: bool = True,
 ) -> tuple[Any, str | None]:
-    """ONE constrained extraction turn. Returns (value_or_None, error_or_None)."""
+    """ONE constrained extraction turn. Returns (value_or_None, error_or_None).
+
+    TD-21.35: the schema sent on the wire (as `response_format`, so it
+    becomes the GBNF grammar) is `_relax_required_for_wire(schema)` unless
+    `relax_required=False` -- `schema` itself (what the RESULT still gets
+    validated against, by the caller) is never mutated."""
+    wire_schema = _relax_required_for_wire(schema) if relax_required else schema
     messages = [
         {"role": "system", "content": instruction or _DEFAULT_EXTRACT_INSTRUCTION},
         {"role": "user", "content": raw[-tail_chars:]},
     ]
     try:
-        content = complete(messages, schema)
+        content = complete(messages, wire_schema)
     except Exception as exc:  # noqa: BLE001 - transport is caller-defined
         msg = f"transport_error: {type(exc).__name__}: {exc}"
         _log.info("structured_output_repair site=%s stage=extraction %s", site, msg)
@@ -524,6 +665,7 @@ def parse_with_repair(
     tail_chars: int = SCHEMA_REPAIR_TAIL_CHARS,
     require_evidence: bool = False,
     evidence_exempt: Collection[str] = (),
+    relax_required: bool = True,
 ) -> RepairResult:
     """Fish first; repair with at most two constrained turns on a miss.
 
@@ -578,6 +720,27 @@ def parse_with_repair(
     off. Small and call-site-specific by design -- see the TD-21.34 call
     sites in `chat_delegation_decision.py` / `proactive_stage.py` /
     `review_service.py` for the mixed-schema idiom in practice.
+
+    `relax_required` (default `True`, TD-21.35): the schema sent on the wire
+    for the EXTRACTION turn only (never the decline probe, never what the
+    result is validated against) has `required` dropped at every object
+    level, so the grammar can no longer FORCE a value for a field the raw
+    reply never mentioned -- the root cause the `require_evidence` backstop
+    above was catching after the fact (see `_relax_required_for_wire`'s
+    docstring for the full mechanism and the `const`-discriminator
+    exception). Validation is still against the ORIGINAL, unrelaxed schema,
+    so a field the model still omits now fails validation honestly
+    (`"failed"`, naming the field) rather than being invented -- the
+    contract callers see (`"parsed"`/`"repaired"`/`"declined"`/`"failed"`,
+    `value` typed or `None`) is unchanged; only what the grammar can force
+    during the extraction turn changes. Set `False` only for a site whose
+    instruction legitimately asks the model to DERIVE a required field
+    (rather than copy one already present in `raw`) and that depends on the
+    grammar forcing it to actually try -- as of TD-21.35 no audited call
+    site does this (every schema-required field across the ~30 sites is
+    copied/classified from the reply, never derived from nothing); this
+    parameter exists so a future site with that shape has an explicit,
+    documented way to opt out instead of silently losing the force.
     """
     working_schema = _closed_schema(schema)
     validator = _build_validator(working_schema, site=site)
@@ -608,7 +771,7 @@ def parse_with_repair(
     calls += 1
     extracted, err = _extraction_turn(
         raw, schema=working_schema, complete=complete, instruction=instruction,
-        site=site, tail_chars=tail_chars,
+        site=site, tail_chars=tail_chars, relax_required=relax_required,
     )
     if extracted is not None and validator.is_valid(extracted):
         if require_evidence:
@@ -627,7 +790,10 @@ def parse_with_repair(
         _record(site, result.status, repair_calls=calls)
         return result
 
-    reason = err or "extraction result failed schema validation"
+    if extracted is not None:
+        reason = _validation_failure_reason(validator, extracted)
+    else:
+        reason = err or "extraction result failed schema validation"
     result = RepairResult(None, "failed", reason, site, calls)
     _record(site, result.status, repair_calls=calls, reason=reason)
     return result
@@ -669,14 +835,17 @@ async def _extraction_turn_async(
     instruction: str | None,
     site: str,
     tail_chars: int,
+    relax_required: bool = True,
 ) -> tuple[Any, str | None]:
-    """Async twin of ``_extraction_turn`` -- see its docstring for semantics."""
+    """Async twin of ``_extraction_turn`` -- see its docstring for semantics,
+    including the TD-21.35 wire-schema relaxation."""
+    wire_schema = _relax_required_for_wire(schema) if relax_required else schema
     messages = [
         {"role": "system", "content": instruction or _DEFAULT_EXTRACT_INSTRUCTION},
         {"role": "user", "content": raw[-tail_chars:]},
     ]
     try:
-        content = await complete(messages, schema)
+        content = await complete(messages, wire_schema)
     except Exception as exc:  # noqa: BLE001 - transport is caller-defined
         msg = f"transport_error: {type(exc).__name__}: {exc}"
         _log.info("structured_output_repair site=%s stage=extraction %s", site, msg)
@@ -699,6 +868,7 @@ async def parse_with_repair_async(
     tail_chars: int = SCHEMA_REPAIR_TAIL_CHARS,
     require_evidence: bool = False,
     evidence_exempt: Collection[str] = (),
+    relax_required: bool = True,
 ) -> RepairResult:
     """Async twin of :func:`parse_with_repair` (TD-21.26) for call sites whose
     injected model callable is itself a coroutine function -- e.g. the
@@ -707,9 +877,11 @@ async def parse_with_repair_async(
     (``STRUCTURED_OUTPUT_REPAIR_COUNTS``); see :func:`parse_with_repair` for
     the full contract, INCLUDING ``require_evidence``/``evidence_exempt``
     (TD-21.34: this twin originally lacked both -- every async call site
-    that needs the evidence guard was unable to get it). Kept as a literal
-    parallel implementation rather than a wrapper so neither path pays an
-    event-loop indirection for the other.
+    that needs the evidence guard was unable to get it) and ``relax_required``
+    (TD-21.35: same wire-schema relaxation for the extraction turn, same
+    default ``True``, same `const`-discriminator exception). Kept as a
+    literal parallel implementation rather than a wrapper so neither path
+    pays an event-loop indirection for the other.
     """
     working_schema = _closed_schema(schema)
     validator = _build_validator(working_schema, site=site)
@@ -740,7 +912,7 @@ async def parse_with_repair_async(
     calls += 1
     extracted, err = await _extraction_turn_async(
         raw, schema=working_schema, complete=complete, instruction=instruction,
-        site=site, tail_chars=tail_chars,
+        site=site, tail_chars=tail_chars, relax_required=relax_required,
     )
     if extracted is not None and validator.is_valid(extracted):
         if require_evidence:
@@ -759,7 +931,10 @@ async def parse_with_repair_async(
         _record(site, result.status, repair_calls=calls)
         return result
 
-    reason = err or "extraction result failed schema validation"
+    if extracted is not None:
+        reason = _validation_failure_reason(validator, extracted)
+    else:
+        reason = err or "extraction result failed schema validation"
     result = RepairResult(None, "failed", reason, site, calls)
     _record(site, result.status, repair_calls=calls, reason=reason)
     return result
