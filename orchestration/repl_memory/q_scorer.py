@@ -1159,7 +1159,7 @@ class ScoringConfig:
     # axis and cost_penalty_lambda below is demoted at the same moment. The
     # ratification script is the only intended writer of a non-zero default
     # here; do not hand-edit this default outside that flow.
-    cost_lambda_duration: float = 0.0
+    cost_lambda_duration: float = 0.20
 
     # Cost-aware reward (xRouter-style correctness-gated cost penalty).
     # reward_final = quality_reward - lambda * max(0, cost_ratio - 1.0)
@@ -1168,7 +1168,7 @@ class ScoringConfig:
     # RTG-09: paired with cost_lambda_duration above -- demoted to 0.05 only
     # at the same ratified instrument-era boundary that flips duration on.
     # Unchanged (0.15) until then.
-    cost_penalty_lambda: float = 0.15
+    cost_penalty_lambda: float = 0.05
 
     # Per-role optimized tokens/second from generated stack priors at config
     # construction time, with fallback tables for degraded/offline scripts. Used

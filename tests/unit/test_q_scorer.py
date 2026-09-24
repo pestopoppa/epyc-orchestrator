@@ -188,18 +188,17 @@ def _write_stack_priors(path: Path, roles: dict[str, dict[str, Any]]) -> Path:
 
 class TestScoringConfigDefaults:
     def test_cost_penalty_lambda_default(self):
+        """Demoted to a secondary signal at era E18 (RTG-09 ratified 2026-09-24)."""
         cfg = ScoringConfig()
-        assert cfg.cost_penalty_lambda == 0.15
+        assert cfg.cost_penalty_lambda == 0.05
 
-    def test_cost_lambda_duration_default_is_off(self):
-        """RTG-09 (2026-09-24): DEFAULT-OFF. Flipping compute_reward's output
-        distribution is a routing_reward instrument-era boundary (rewards
-        feed Q-updates continuously) and requires operator ratification via
-        scripts/operator/ratify_rtg09_duration_reward_20260924.sh -- see
-        tests/unit/test_q_reward_duration.py for the full contract, including
-        the byte-identical-output proof."""
+    def test_cost_lambda_duration_default_is_ratified(self):
+        """RTG-09 ratified 2026-09-24 (era E18-routing-reward-duration-axis in
+        orchestration/instrument_eras.yaml): wall-clock duration is the primary
+        speed axis at 0.20, above the demoted tokens/sec term."""
         cfg = ScoringConfig()
-        assert cfg.cost_lambda_duration == 0.0
+        assert cfg.cost_lambda_duration == 0.20
+        assert cfg.cost_lambda_duration > cfg.cost_penalty_lambda
 
     def test_baseline_tps_has_all_production_roles(self):
         """Every currently-live q_scorer role has a baseline t/s entry, and
@@ -901,6 +900,10 @@ def _latency_only_config(**overrides) -> ScoringConfig:
             "architect_general": 4.3,
         },
     )
+    # Isolate the tokens/sec formula: its weight is pinned to the value these tests'
+    # arithmetic is written in (0.15), and the E18 duration axis is off here.
+    overrides.setdefault("cost_penalty_lambda", 0.15)
+    overrides.setdefault("cost_lambda_duration", 0.0)
     return ScoringConfig(cost_lambda_quality_gap=0.0, cost_lambda_memory=0.0, **overrides)
 
 

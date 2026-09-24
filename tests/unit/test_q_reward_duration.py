@@ -5,7 +5,7 @@ speed axis that prices orchestration/tool overhead, not just tokens/sec (which
 is gameable through tool calls and blind to it -- DAR handoff measured median
 wall/model-compute overhead 1.60x, p90 9.09x over 19,433 tasks).
 
-DEFAULT-OFF (coordinator review, 2026-09-24): a change to compute_reward's
+LANDED DEFAULT-OFF, RATIFIED 2026-09-24 as era E18-routing-reward-duration-axis: a change to compute_reward's
 output distribution is a routing_reward instrument-era boundary
 (orchestration/instrument_eras.yaml, human-amendment-only) because rewards
 feed Q-updates continuously, so the behaviour flip and the era boundary must
@@ -24,6 +24,8 @@ axis's own "silent miss" defect).
 """
 
 from __future__ import annotations
+
+import pytest
 
 import logging
 
@@ -201,26 +203,21 @@ def test_degenerate_baseline_p90_equals_p50_falls_back_to_ratio():
 # DEFAULT-OFF contract (coordinator review, 2026-09-24)
 # ---------------------------------------------------------------------------
 
-def test_scoring_config_defaults_are_off():
-    """The production default must be inert: duration weight 0.0, tokens/sec
-    weight unchanged at its pre-RTG-09 value (0.15). Flipping these is the
-    ratification script's job, not this dataclass's default."""
+def test_scoring_config_defaults_are_ratified():
+    """Era E18 (RTG-09 ratified 2026-09-24): duration primary at 0.20,
+    tokens/sec demoted to 0.05."""
     cfg = ScoringConfig()
-    assert cfg.cost_lambda_duration == 0.0
-    assert cfg.cost_penalty_lambda == 0.15
+    assert cfg.cost_lambda_duration == 0.20
+    assert cfg.cost_penalty_lambda == 0.05
 
 
-def test_default_config_reward_is_byte_identical_with_and_without_duration():
-    """With the production default config, compute_reward must return the
-    EXACT SAME value whether or not a caller passes task_duration_s -- i.e.
-    the reward formula is byte-identical to the pre-RTG-09 (tokens/sec-only)
-    function for every input, because the new dimension is default-off.
-
-    This is the literal contract the coordinator asked for: rewards feed
-    Q-updates continuously, so nothing may change compute_reward's output
-    distribution before the operator ratifies the instrument-era boundary.
+def test_pre_e18_config_reward_is_byte_identical_with_and_without_duration():
+    """With the pre-E18 weights (duration 0.0, tokens/sec 0.15) compute_reward
+    returns the EXACT SAME value whether or not a caller passes
+    task_duration_s -- the axis is fully inert when its weight is 0, so the
+    pre-boundary reward stays reproducible for replay/rescore across E18.
     """
-    cfg = ScoringConfig()
+    cfg = ScoringConfig(cost_lambda_duration=0.0, cost_penalty_lambda=0.15)
     cases = [
         # (outcome, data)
         ("success", {
@@ -254,3 +251,17 @@ def test_default_config_reward_is_byte_identical_with_and_without_duration():
             task_duration_s=None,
         )
         assert r_without == r_with_none_explicit
+
+
+def test_ratified_defaults_price_a_slow_task():
+    """At the ratified defaults a correct task slower than its role's p90 loses
+    the full duration weight; one at or under p50 loses nothing on this axis."""
+    cfg = ScoringConfig()
+    role = next(iter(cfg.baseline_duration_by_role))
+    base = cfg.baseline_duration_by_role[role]
+    data = {"producer_role": role}
+    fast = compute_reward(_Entry("success", data), [], [], None, data, config=cfg,
+                          task_duration_s=base["p50_s"])
+    slow = compute_reward(_Entry("success", data), [], [], None, data, config=cfg,
+                          task_duration_s=base["p90_s"] * 10)
+    assert fast - slow == pytest.approx(cfg.cost_lambda_duration)
