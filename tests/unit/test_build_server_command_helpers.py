@@ -168,9 +168,39 @@ def _assert_detached_popen(popen) -> None:
 
 
 def test_descriptor_active_roles_are_canonical_launch_roles() -> None:
+    """Canonical launch roles are the HOSTS; aliases compile through their host.
+
+    2026-09-22 lineup cutover (860b0b2d): worker_general stopped being its own
+    CPU server and became an alias on frontdoor's :8070 process
+    (``server_mode.frontdoor.shared_with``). It therefore must NOT appear as a
+    canonical launch role any more — ``write_model_descriptors()`` expands the
+    alias from the registry on its own. The alias set is recomputed from the
+    master declaration rather than restated, so the next alias move lands here
+    without an edit.
+    """
+    from scripts.server import stack_manifest
+
     active_roles = stack_commands._descriptor_active_roles()
 
-    assert "worker_general" in active_roles
+    # worker_general resolves to its host through master's shared_with binding,
+    # and that host IS a canonical launch role.
+    host, _row, binding = stack_manifest.master_server_row("worker_general")
+    assert binding == "shared_with"
+    assert host == "frontdoor"
+    assert host in active_roles
+    assert "worker_general" not in active_roles
+
+    # No alias of a live host may be a canonical launch role (a second launch
+    # record for one process is the defect the alias binding removes).
+    aliases = {
+        alias
+        for name, cfg in stack_manifest.MASTER_SERVER_MODE.items()
+        if name in active_roles and isinstance(cfg.get("shared_with"), list)
+        for alias in cfg["shared_with"]
+    }
+    assert "worker_general" in aliases  # non-vacuous
+    assert not (aliases & active_roles)
+
     assert "architect_general" in active_roles
     assert "worker_explore" not in active_roles
     assert "architect_coding" not in active_roles  # stack-change-guard: allow legacy retired-role coverage
@@ -412,20 +442,50 @@ def test_build_worker_general_command_engages_mtp_path() -> None:
     assert cmd[cmd.index("--reasoning") + 1] == "off"
 
 
-def test_build_worker_general_command_matches_stack_prior_launch_witness() -> None:
-    role_record = _stack_prior_role("worker_general")
-    launch = role_record["serving"]["launch"]
-    requirements = launch["requirements"]
-    runtime = launch["runtime"]
+def test_worker_general_launch_witness_is_its_host_primary_role_command() -> None:
+    """Renamed from ``test_build_worker_general_command_matches_stack_prior_launch_witness``.
 
-    cmd = oss._build_worker_general_command(
-        port=8072,
-        model_path=requirements["model_path"],
-        binary_override=runtime["binary_path"],
+    Since the 2026-09-22 lineup cutover (860b0b2d) worker_general launches NOTHING:
+    it is an alias on frontdoor's :8070 process, has no role_launch_meta entry, and
+    its compiled prior is an ALIAS record (every entry ``alias: true``, the host in
+    ``primary_roles``, spec disabled because aliases inherit the host's NEXTN draft
+    rather than launching their own — see ``src/registry/stack_priors.py``). The
+    command that actually serves worker_general is the host's
+    ``_build_role_command``, so THAT is what must match the compiled witness.
+
+    The old ``-md == draft_model_path`` assertion was also stale on its own terms:
+    Qwen3.6-35B-A3B-MTP is a NEXTN self-draft (draft path == model path), and the
+    launcher deliberately suppresses same-realpath ``-md`` while keeping
+    ``--spec-type``/``--spec-draft-n-max``.
+    """
+    alias_launch = _stack_prior_role("worker_general")["serving"]["launch"]
+    entries = alias_launch["entries"]
+    assert entries and all(entry["alias"] is True for entry in entries)
+    (host,) = alias_launch["primary_roles"]
+    assert {entry["primary_role"] for entry in entries} == {host}
+    assert alias_launch["runtime"]["flags"]["spec"]["enabled"] is False
+
+    host_launch = _stack_prior_role(host)["serving"]["launch"]
+    requirements = host_launch["requirements"]
+    runtime = host_launch["runtime"]
+    # The alias serves the host's model — one process, one GGUF.
+    assert alias_launch["requirements"]["model_path"] == requirements["model_path"]
+    primary_entry = next(
+        entry for entry in host_launch["entries"] if entry["numa_instance"] == 0
+    )
+    assert primary_entry["alias"] is False
+    assert primary_entry["port"] in {entry["port"] for entry in entries}
+
+    role_config = oss.RegistryLoader().get_role(host)
+    cmd = oss._build_role_command(
+        role_config, primary_entry["port"], 0, prepare_runtime_dirs=False
     )
 
     assert _flag_value(cmd, "-m") == requirements["model_path"]
-    assert _flag_value(cmd, "-md") == requirements["draft_model_path"]
+    if runtime["flags"]["spec"]["draft_model_path"] == requirements["model_path"]:
+        assert "-md" not in cmd  # NEXTN self-draft: same-file -md suppressed
+    else:
+        assert _flag_value(cmd, "-md") == runtime["flags"]["spec"]["draft_model_path"]
     assert _command_runtime_signature(cmd) == _stack_prior_runtime_signature(runtime)
 
 
@@ -598,28 +658,42 @@ def test_build_worker_general_command_falls_back_to_llama_server_without_priors(
     assert cmd[0] == str(oss.LLAMA_SERVER)
 
 
-def test_build_worker_general_command_uses_numa_thread_count_for_port() -> None:
-    """Quarter instances must get the per-instance thread count from NUMA_CONFIG, not 96.
+def test_worker_lane_host_command_uses_numa_thread_count_per_instance() -> None:
+    """Sub-full instances must get the per-instance thread count from NUMA_CONFIG.
+
+    Renamed from ``test_build_worker_general_command_uses_numa_thread_count_for_port``.
+    Since the 2026-09-22 lineup cutover (860b0b2d) worker_general is an ALIAS on
+    frontdoor's process: its own numa_config was deleted and the worker lane's full
+    and halves are frontdoor's instances, launched by ``_build_role_command``. The
+    witness moves to the role that actually launches them.
 
     Post-da1aed6 the thread count is resolved by ``numa_instance`` *index* (not by
     port): the start loop / dispatcher pass the index of the instance being
     launched, and _resolve_thread_count picks instances[numa_instance].threads.
-    This is what makes gemma4 quarters get -t 48 (idx 1..4) while the full
-    instance (idx 0) gets -t 96.
+    That is what gives the halves their own -t while the full instance keeps the
+    full machine's — the over-subscription the launcher bug once applied to every
+    sub-full instance.
     """
-    instances = oss.NUMA_CONFIG["worker_general"]["instances"]
-    for idx, inst in enumerate(instances):
-        port, expected_threads = inst[1], inst[2]
-        cmd = oss._build_worker_general_command(
-            port=port, model_path="/m/gemma4.gguf", binary_override=None,
-            numa_instance=idx,
-        )
+    from scripts.server import stack_manifest
+
+    host, _row, _binding = stack_manifest.master_server_row("worker_general")
+    assert host == "frontdoor"
+    cfg = oss.NUMA_CONFIG[host]
+    instances = cfg["instances"]
+    role_config = SimpleNamespace(
+        name=host,
+        model=SimpleNamespace(full_path=f"/models/{host}.gguf", name=host),
+        acceleration=SimpleNamespace(type="none", draft_role=None, experts=None, k=None),
+    )
+    for idx, (_cpus, port, expected_threads) in enumerate(instances):
+        cmd = oss._build_role_command(role_config, port, idx, prepare_runtime_dirs=False)
         assert cmd[cmd.index("-t") + 1] == str(expected_threads), (
-            f"instance {idx} (port {port}) expected -t {expected_threads}"
+            f"{host} instance {idx} (port {port}) expected -t {expected_threads}"
         )
-    # Full instance (idx 0) is -t 96 — the over-subscription the launcher bug
-    # wrongly applied to quarters too (now fixed by forwarding numa_instance).
-    assert instances[0][2] == 96
+    # Non-vacuous: the sub-full instances really do differ from the full, so a
+    # builder that ignored numa_instance would fail above.
+    full_threads = instances[cfg["full_instance_idx"]][2]
+    assert any(inst[2] != full_threads for inst in instances)
 
 
 def test_build_worker_general_command_unknown_port_uses_fallback_96() -> None:
@@ -843,16 +917,25 @@ def test_append_kv_quant_args_emits_q8_for_frontdoor() -> None:
     assert cmd == ["-ctk", "q8_0", "-ctv", "q8_0"]
 
 
-def test_append_kv_quant_args_emits_q4_f16_for_architect_critic() -> None:
-    """2026-08-01 W1 cutover — retargeted from architect_general.
+def test_append_kv_quant_args_emits_declared_pair_for_architect_critic() -> None:
+    """Renamed from ``test_append_kv_quant_args_emits_q4_f16_for_architect_critic``.
 
-    The (q4_0, f16) KV pair belongs to the Qwen3.5-122B UD-Q4_K_M, and it moved
-    WITH the model when the 122B vacated architect_general for the new
-    architect_critic role on :8074. Same expectation, new owner.
+    History: the (q4_0, f16) pair belonged to the Qwen3.5-122B UD-Q4_K_M and moved
+    WITH it to architect_critic on 2026-08-01. The 2026-09-22 lineup cutover
+    (860b0b2d) RETIRED the 122B; architect_critic is now Qwen3.8-Flash-Next
+    UD-IQ4_XS and master declares ``server_mode.architect_critic.serving_shape
+    .kv_quant = f16/f16``. The KV pair follows the model, so the expectation is
+    read from the role's OWN declaration (not an alias's) instead of restated.
     """
+    from scripts.server import stack_manifest
+
+    declared, source = stack_manifest.master_declared("architect_critic", "kv_quant")
+    assert source == "architect_critic/direct.serving_shape"
+    assert isinstance(declared, dict) and declared.get("k") and declared.get("v")
+
     cmd: list[str] = []
     oss._append_kv_quant_args(cmd, "architect_critic")
-    assert cmd == ["-ctk", "q4_0", "-ctv", "f16"]
+    assert cmd == ["-ctk", str(declared["k"]), "-ctv", str(declared["v"])]
 
 
 def test_append_kv_quant_args_emits_q8_for_architect_general() -> None:
@@ -1094,7 +1177,17 @@ def test_eval_batch_frontdoor_command_uses_declared_serving_shape() -> None:
     # 2026-07-31 HALF FLEET: 18070 sits on NUMA_HALF_A, which is 48 physical cores.
     # The prior value 96 pinned the 2x SMT oversubscription that 982adb0c removed.
     assert _flag_value(cmd, "-t") == "48"
-    assert _flag_value(cmd, "-ub") == "8192"
+    # K4 (3cb53971): -ub is emitted without -b, so llama.cpp clamps it to the
+    # n_batch default; the declared 8192 was never real and the manifest default
+    # became 2048. The lane reuses frontdoor's runtime priors, falling back to
+    # DEFAULT_UBATCH_TOKENS — both are read here rather than restated.
+    from scripts.server.stack_manifest import DEFAULT_UBATCH_TOKENS
+
+    frontdoor_ubatch = _stack_prior_role("frontdoor")["serving"]["launch"]["runtime"][
+        "cache"
+    ]["ubatch"]
+    assert frontdoor_ubatch == DEFAULT_UBATCH_TOKENS
+    assert _flag_value(cmd, "-ub") == str(frontdoor_ubatch)
     assert _flag_value(cmd, "-ctk") == "q8_0"
     assert _flag_value(cmd, "-ctv") == "q8_0"
     # CORRECT AS WRITTEN — do not "fix" this to ngram-mod,draft-mtp. Master reversed
@@ -1302,16 +1395,46 @@ def test_every_instance_interleaves_over_only_the_nodes_it_spans() -> None:
     cost frontdoor and ingest_long_context ~2x. It would have failed the fix rather
     than the bug, so it is replaced rather than adjusted.
     """
-    full_prefix = oss._numa_prefix("worker_general", 0)
-    half_a_prefix = oss._numa_prefix("worker_general", 1)
-    half_b_prefix = oss._numa_prefix("worker_general", 2)
+    # 2026-09-22 lineup cutover (860b0b2d): worker_general's own numa_config was
+    # deleted (it is now an alias on frontdoor's :8070 process), so the witness is
+    # retargeted to EVERY declared instance. The expected node set is recomputed
+    # from each instance's cpuset through the host-fact NPS4 map, not restated.
+    from scripts.server import stack_numa
 
-    assert full_prefix[:3] == ["numactl", "--interleave=all", "--"]
-    assert half_a_prefix[:3] == ["numactl", "--interleave=0,1", "--"]
-    assert half_b_prefix[:3] == ["numactl", "--interleave=2,3", "--"]
-    # A half must never interleave over all four nodes — that is the original defect.
-    assert "--interleave=all" not in half_a_prefix
-    assert "--interleave=all" not in half_b_prefix
+    all_nodes = sorted(stack_numa._NPS4_NODES)
+    checked_sub_full: set[tuple[str, int]] = set()
+    for role, cfg in oss.NUMA_CONFIG.items():
+        for idx, (cpus, port, _threads) in enumerate(cfg["instances"]):
+            prefix = oss._numa_prefix(role, idx)
+            policies = [p for p in prefix if p.startswith("--interleave=")]
+            if not policies:
+                continue
+            spanned = stack_numa._nodes_touched(cpus)
+            value = policies[0].split("=", 1)[1]
+            interleaved = all_nodes if value == "all" else sorted(
+                int(n) for n in value.split(",")
+            )
+            assert interleaved == spanned, (
+                f"{role}[{idx}] :{port} interleaves over {interleaved} but its cpuset "
+                f"{cpus!r} spans NPS4 nodes {spanned}"
+            )
+            assert prefix[:3] == ["numactl", policies[0], "--"]
+            if spanned != all_nodes:
+                # A sub-full instance must never interleave over all four nodes —
+                # that is the original defect.
+                assert value != "all"
+                checked_sub_full.add((role, idx))
+
+    # The shape that motivated this test: the worker lane's host, frontdoor, runs
+    # a full + halves. Non-vacuous: every one of its sub-full instances was checked.
+    frontdoor = oss.NUMA_CONFIG["frontdoor"]
+    frontdoor_sub_full = {
+        ("frontdoor", idx)
+        for idx in range(len(frontdoor["instances"]))
+        if idx != frontdoor["full_instance_idx"]
+    }
+    assert frontdoor_sub_full
+    assert frontdoor_sub_full <= checked_sub_full
 
 
 def test_role_level_numa_policy_still_applies_to_all_instances() -> None:
@@ -1461,28 +1584,62 @@ def test_worker_general_np_fallback_is_the_declared_one() -> None:
     ) == str(DECLARED_SLOTS["worker_general"])
 
 
-def test_worker_general_np_differs_between_the_full_and_a_half() -> None:
+def test_worker_lane_host_np_differs_between_the_full_and_a_half() -> None:
     """The per-INSTANCE claim: one role, one record, two different `-np`.
 
-    This is what a per-role slot count could not express. :8072 is the 96-core
-    full (16 slots, 16384 tokens each); :8082 is a 48-core half (4 slots, 65536
-    each). Both resolve from the same `serving_shape.slots_by_shape` joined
-    against the `cpu_shape` stack_topology.yaml declares for each instance.
+    Renamed from ``test_worker_general_np_differs_between_the_full_and_a_half``.
+    Since the 2026-09-22 lineup cutover (860b0b2d) worker_general is an ALIAS on
+    frontdoor's process and has no instances of its own (its :8072/:8082/:8182
+    numa_config was deleted), so the worker lane's full and halves are
+    frontdoor's. The witness moves to the role that actually launches them.
+
+    This is what a per-role slot count could not express: one role whose full
+    instance and half instances take different slot counts, both resolved from the
+    same `serving_shape.slots_by_shape` joined against the `cpu_shape`
+    stack_topology.yaml declares for each instance.
     """
+    from scripts.server import stack_manifest
+    from scripts.server.stack_manifest import DECLARED_SLOTS
+
+    host, _row, _binding = stack_manifest.master_server_row("worker_general")
+    assert host == "frontdoor"
+    cfg = oss.NUMA_CONFIG[host]
+    full_idx = cfg["full_instance_idx"]
+    half_idx = next(
+        idx
+        for idx in range(len(cfg["instances"]))
+        if stack_manifest.instance_shape_class(host, idx) == "half"
+    )
+    role_config = SimpleNamespace(
+        name=host,
+        model=SimpleNamespace(full_path=f"/models/{host}.gguf", name=host),
+        acceleration=SimpleNamespace(type="none", draft_role=None, experts=None, k=None),
+    )
     full = _np_without_priors(
-        oss._build_worker_general_command, 8072, "/models/w.gguf", None, 0
+        oss._build_role_command,
+        role_config,
+        cfg["instances"][full_idx][1],
+        full_idx,
+        prepare_runtime_dirs=False,
     )
     half = _np_without_priors(
-        oss._build_worker_general_command, 8082, "/models/w.gguf", None, 1
+        oss._build_role_command,
+        role_config,
+        cfg["instances"][half_idx][1],
+        half_idx,
+        prepare_runtime_dirs=False,
     )
-    from scripts.server.stack_manifest import DECLARED_SLOTS
+    by_shape, _source = stack_manifest.slots_by_shape_for(host)
 
     # Derived, not restated. The claim is per-INSTANCE differentiation: the full
     # carries the role's compat scalar (the parity guard pins them equal) and a half
     # is strictly narrower. Pinning literals here made a ratified slot change fail
     # this test instead of the registry — which is the defect the docstring warns of.
-    assert full == str(DECLARED_SLOTS["worker_general"])
+    assert full == str(DECLARED_SLOTS[host]) == str(by_shape["full"])
+    assert half == str(by_shape["half"])
     assert int(half) < int(full)
+    # The alias's compat scalar is its host's — one process, one declaration.
+    assert DECLARED_SLOTS["worker_general"] == DECLARED_SLOTS[host]
 
 
 def test_serial_roles_no_longer_shrinks_the_launched_slot_count() -> None:
