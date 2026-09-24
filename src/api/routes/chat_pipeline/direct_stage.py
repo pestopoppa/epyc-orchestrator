@@ -184,6 +184,7 @@ def _execute_direct(
                 skip_suffix=True,
                 stop_sequences=stop_seqs,
                 json_schema=request.output_schema,
+                n_probs=request.n_probs,
             )
             answer = answer.strip()
         except Exception as e2:

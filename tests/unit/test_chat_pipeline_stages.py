@@ -1572,6 +1572,53 @@ class TestExecuteDirect:
         assert result.answer == "Retry success"
         assert mock_primitives.llm_call.call_count == 2
 
+    def test_direct_retry_forwards_n_probs(self, mock_primitives, mock_state):
+        """TD audit X5: the retry call must forward n_probs like the primary call.
+
+        Before this fix, the retry branch (direct_stage.py, second llm_call
+        in _execute_direct's except block) omitted n_probs entirely, so
+        probability telemetry silently vanished on any retried call
+        (confidence fell back to the binary proxy) even though the caller
+        asked for it.
+        """
+        request = ChatRequest(prompt="Retry test", real_mode=True, n_probs=5)
+        routing = RoutingResult(
+            task_id="direct-005",
+            task_ir={},
+            use_mock=False,
+            routing_decision=["frontdoor"],
+            routing_strategy="deterministic",
+        )
+        start_time = time.perf_counter()
+
+        mock_primitives.llm_call.side_effect = [
+            RuntimeError("First fail"),
+            "Retry success",
+        ]
+
+        with patch("src.api.routes.chat_pipeline.direct_stage._truncate_looped_answer") as mock_trunc:
+            mock_trunc.return_value = "Retry success"
+            with patch("src.api.routes.chat_pipeline.direct_stage._should_formalize") as mock_fmt:
+                mock_fmt.return_value = (False, None)
+                with patch("src.api.routes.chat_pipeline.stages.features") as mock_features:
+                    mock_features.return_value.generation_monitor = False
+                    with patch("src.api.routes.chat_pipeline.direct_stage._should_review") as mock_review:
+                        mock_review.return_value = False
+                        with patch("src.api.routes.chat_pipeline.direct_stage.score_completed_task"):
+                            result = _execute_direct(
+                                request,
+                                routing,
+                                mock_primitives,
+                                mock_state,
+                                start_time,
+                                initial_role="frontdoor",
+                            )
+
+        assert result.answer == "Retry success"
+        assert mock_primitives.llm_call.call_count == 2
+        retry_call = mock_primitives.llm_call.call_args_list[1]
+        assert retry_call.kwargs["n_probs"] == 5
+
     def test_direct_both_calls_fail(self, mock_primitives, mock_state):
         """Direct call returns error message when both calls fail."""
         request = ChatRequest(prompt="Double fail", real_mode=True)

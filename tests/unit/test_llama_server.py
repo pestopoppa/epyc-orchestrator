@@ -891,3 +891,223 @@ class TestChatCompletionsLogprobs:
         assert "logprobs" not in captured
         assert "top_logprobs" not in captured
         assert result.completion_probabilities == []
+
+
+class TestChatCompletionsSchemaForwarding:
+    """TD-21.0: json_schema/grammar must reach the /v1 wire.
+
+    Before this fix, ``_infer_chat_completions`` and
+    ``_infer_stream_text_chat_completions`` built the OAI payload with no
+    schema field at all, so a caller's ``json_schema``/``grammar`` was
+    silently dropped on the /v1 lane (audit finding X1 / TD-1d.1) even
+    though ``_build_payload`` (the native /completion lane) has forwarded
+    both since HS-4. See ``_apply_schema_constraint``.
+    """
+
+    def _backend(self, use_chat_completions=True):
+        config = ServerConfig(base_url="http://test:8080", use_chat_completions=use_chat_completions)
+        return LlamaServerBackend(config=config)
+
+    def _chat_response(self):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1},
+            "timings": {"prompt_ms": 5.0, "predicted_ms": 5.0, "predicted_per_second": 30.0},
+        }
+        mock_response.raise_for_status = Mock()
+        return mock_response
+
+    def test_json_schema_becomes_response_format_non_streaming(self, role_config):
+        backend = self._backend()
+        schema = {"type": "object", "properties": {"a": {"type": "string"}}}
+        request = InferenceRequest(role="frontdoor", prompt="hi", n_tokens=16, json_schema=schema)
+        captured = {}
+
+        def _post(_path, json=None, timeout=None):
+            captured.update(json or {})
+            return self._chat_response()
+
+        with patch.object(backend.client, "post", side_effect=_post):
+            result = backend.infer(role_config, request)
+
+        assert result.success is True
+        assert captured["response_format"] == {
+            "type": "json_schema",
+            "json_schema": {"name": "response", "schema": schema},
+        }
+        assert "json_schema" not in captured  # never sent as a bare top-level key
+
+    def test_json_schema_becomes_response_format_streaming(self, role_config):
+        backend = self._backend()
+        schema = {"type": "object", "properties": {"a": {"type": "string"}}}
+        request = InferenceRequest(role="frontdoor", prompt="hi", n_tokens=16, json_schema=schema)
+        captured = {}
+
+        class _StreamResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"{}"}}]}'
+                yield 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}'
+                yield "data: [DONE]"
+
+        def _stream(_method, _path, json, timeout):
+            captured.update(json)
+            return _StreamResponse()
+
+        with patch.object(backend.client, "stream", side_effect=_stream):
+            result = backend.infer_stream_text(role_config, request)
+
+        assert result.success is True
+        assert captured["response_format"] == {
+            "type": "json_schema",
+            "json_schema": {"name": "response", "schema": schema},
+        }
+        assert "json_schema" not in captured
+
+    def test_grammar_forwarded_non_streaming(self, role_config):
+        backend = self._backend()
+        request = InferenceRequest(
+            role="frontdoor", prompt="hi", n_tokens=16, grammar='root ::= "yes" | "no"'
+        )
+        captured = {}
+
+        def _post(_path, json=None, timeout=None):
+            captured.update(json or {})
+            return self._chat_response()
+
+        with patch.object(backend.client, "post", side_effect=_post):
+            result = backend.infer(role_config, request)
+
+        assert result.success is True
+        assert captured["grammar"] == 'root ::= "yes" | "no"'
+        assert "response_format" not in captured
+
+    def test_grammar_forwarded_streaming(self, role_config):
+        backend = self._backend()
+        request = InferenceRequest(
+            role="frontdoor", prompt="hi", n_tokens=16, grammar='root ::= "yes" | "no"'
+        )
+        captured = {}
+
+        class _StreamResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"yes"}}]}'
+                yield 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}'
+                yield "data: [DONE]"
+
+        def _stream(_method, _path, json, timeout):
+            captured.update(json)
+            return _StreamResponse()
+
+        with patch.object(backend.client, "stream", side_effect=_stream):
+            result = backend.infer_stream_text(role_config, request)
+
+        assert result.success is True
+        assert captured["grammar"] == 'root ::= "yes" | "no"'
+
+    def test_json_schema_and_grammar_both_forwarded_independently(self, role_config):
+        """Mirrors ``_build_payload``: no client-side precedence, the server decides."""
+        backend = self._backend()
+        schema = {"type": "object"}
+        request = InferenceRequest(
+            role="frontdoor",
+            prompt="hi",
+            n_tokens=16,
+            json_schema=schema,
+            grammar='root ::= "x"',
+        )
+        captured = {}
+
+        def _post(_path, json=None, timeout=None):
+            captured.update(json or {})
+            return self._chat_response()
+
+        with patch.object(backend.client, "post", side_effect=_post):
+            result = backend.infer(role_config, request)
+
+        assert result.success is True
+        assert captured["response_format"]["json_schema"]["schema"] == schema
+        assert captured["grammar"] == 'root ::= "x"'
+
+    def test_no_schema_leaves_v1_payload_byte_identical_to_before(self, role_config):
+        """No json_schema/grammar on the request -> no new keys on the wire.
+
+        Uses a role with no registry chat_template_kwargs override (unlike
+        frontdoor) so the captured payload is a fixed, fully known set of
+        keys — the same set built before this change (TD-21.0) existed.
+        """
+        backend = self._backend()
+        request = InferenceRequest(role="worker_general", prompt="hi", n_tokens=16)
+        captured = {}
+
+        def _post(_path, json=None, timeout=None):
+            captured.update(json or {})
+            return self._chat_response()
+
+        with (
+            patch.object(backend.client, "post", side_effect=_post),
+            patch(
+                "src.registry.registry_loader.chat_template_kwargs_for_role",
+                return_value=None,
+            ),
+        ):
+            result = backend.infer(role_config, request)
+
+        assert result.success is True
+        assert "response_format" not in captured
+        assert "json_schema" not in captured
+        assert "grammar" not in captured
+        assert captured == {
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 16,
+            "stream": False,
+            "temperature": 0.0,
+            "top_k": 40,
+            "top_p": 0.95,
+            "repeat_penalty": 1.1,
+            "seed": 42,
+        }
+
+    def test_completion_lane_json_schema_and_grammar_unchanged(self, role_config):
+        """/completion (``_build_payload``) forwarding is untouched by this change."""
+        backend = LlamaServerBackend(base_url="http://test:8080")  # use_chat_completions=False
+        schema = {"type": "object"}
+        request = InferenceRequest(
+            role="test", prompt="Hello", json_schema=schema, grammar='root ::= "x"'
+        )
+
+        payload = backend._build_payload(role_config, request)
+
+        assert payload["json_schema"] == schema
+        assert payload["grammar"] == 'root ::= "x"'
+        assert "response_format" not in payload
+
+    def test_completion_lane_no_schema_unchanged(self, role_config):
+        """/completion payload with no schema/grammar carries neither key (pre-existing behaviour)."""
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="test", prompt="Hello", n_tokens=128)
+
+        payload = backend._build_payload(role_config, request)
+
+        assert "json_schema" not in payload
+        assert "grammar" not in payload
+        assert "response_format" not in payload

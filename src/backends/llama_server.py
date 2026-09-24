@@ -630,6 +630,7 @@ class LlamaServerBackend(ModelBackend):
             payload["top_logprobs"] = max(1, min(int(_n_probs), 20))
         if request.stop_sequences:
             payload["stop"] = request.stop_sequences
+        self._apply_schema_constraint(payload, request)
 
         # J12: per-role chat-template kwargs (e.g. enable_thinking=False for
         # Qwen3.6 frontdoor / Qwen3.5 architect — load-bearing per
@@ -1195,6 +1196,55 @@ class LlamaServerBackend(ModelBackend):
         seed = getattr(request, "seed", None)
         payload["seed"] = seed if isinstance(seed, int) else _DETERMINISTIC_SAMPLING_SEED
 
+    def _apply_schema_constraint(
+        self,
+        payload: dict[str, Any],
+        request: InferenceRequest,
+    ) -> None:
+        """Forward json_schema/grammar onto the /v1/chat/completions wire (TD-21.0).
+
+        Before this method existed, ``_infer_chat_completions`` and
+        ``_infer_stream_text_chat_completions`` built their payloads with no
+        schema field at all, so every /v1-lane role (frontdoor, worker*,
+        toolrunner, architect_critic) silently ignored a caller's
+        ``json_schema``/``grammar`` even though ``_build_payload`` (the native
+        /completion lane, below) has forwarded both since HS-4. Confirmed
+        against the frozen production tree
+        (tools/server/server-common.cpp:939-953,1146-1154 +
+        tools/server/server-schema.cpp:258-288): llama-server's OAI-compat
+        chat endpoint accepts a JSON-schema constraint only via the OpenAI
+        ``response_format`` envelope (a raw top-level ``json_schema`` key is
+        also read, but is redundant with response_format and not needed
+        here); a raw top-level ``grammar`` string is copied through
+        unchanged to the same GBNF-constrained sampling path used by
+        /completion.
+
+        Mirrors ``_build_payload``: json_schema and grammar are forwarded
+        independently, with no client-side precedence logic — if a caller
+        sets both, both land on the wire and the server decides. Two
+        relevant server behaviors observed in the frozen tree: (1) if a
+        request carries a raw top-level ``json_schema`` key *and* a raw
+        top-level ``grammar`` key, ``oaicompat_chat_params_parse`` throws
+        "Cannot use both json_schema and grammar" (server-common.cpp:935-937)
+        — not triggered here since we always wrap json_schema in
+        response_format, never as a raw top-level key; (2) with
+        ``response_format`` + ``grammar`` both present, that specific guard
+        does not fire, and downstream chat-format handlers resolve the two
+        inconsistently across model families (some let the schema-derived
+        grammar win, e.g. common/chat.cpp:2844-2847; others pass the raw
+        grammar straight through regardless of schema, e.g.
+        common/chat.cpp:2667) — precedence in that dual-set case is
+        model-format-dependent on the server side, not something this
+        client layer can normalize.
+        """
+        if request.json_schema:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "schema": request.json_schema},
+            }
+        if request.grammar:
+            payload["grammar"] = request.grammar
+
     def _build_payload(
         self,
         role_config: RoleConfig,
@@ -1402,6 +1452,7 @@ class LlamaServerBackend(ModelBackend):
         self._apply_deterministic_sampling(payload, role_config, request)
         if request.stop_sequences:
             payload["stop"] = request.stop_sequences
+        self._apply_schema_constraint(payload, request)
 
         ctk = request.extra.get("chat_template_kwargs") if getattr(request, "extra", None) else None
         if not ctk:
