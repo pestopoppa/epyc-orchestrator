@@ -610,26 +610,20 @@ async def _maybe_batch_edit_turn(
 
 
 def _best_effort_last_inference_meta(primitives: Any) -> dict[str, Any]:
-    """Read this turn's inference meta -- CANNOT be fully migrated to the per-call-safe
-    `get_last_inference_meta()` getter (TD-21.33).
+    """Read the calling THREAD's/context's own last-inference meta.
 
-    The call this reads about (a few lines up in `_execute_turn`) is made via
-    `await asyncio.to_thread(llm_call_fn, ...)`. `asyncio.to_thread` copies the CALLING
-    context (`contextvars.copy_context()`) and runs the callable in that COPY, in a new
-    thread; any `.set()` made inside the child thread's copy (deep inside
-    `_set_last_inference_meta`) is invisible to the PARENT once the `await` returns --
-    `get_last_inference_meta()` here would silently and ALWAYS return `None` in production,
-    which is worse than today's racy-but-usually-populated plain-attribute read. (The
-    `_use_inline_calls_in_tests()` branch calls `llm_call_fn` inline, same thread, same
-    context -- there the getter WOULD be correct, which is exactly why it is tried first
-    below rather than skipped outright.)
+    Prefers the per-call-safe `get_last_inference_meta()` getter (TD-21.21/33) and falls
+    back to the plain, possibly-shared `_last_inference_meta` attribute only for test
+    doubles that predate the getter (e.g. hand-rolled fakes in older tests) -- identical
+    to those doubles' pre-TD-21.33 behavior, never worse.
 
-    So: prefer the getter (correct and race-free whenever it is non-None -- i.e. whenever
-    this code happens to run in the same context as the call), and fall back to the plain
-    attribute otherwise -- IDENTICAL to pre-TD-21.33 behavior in the fallback case, never
-    worse. A real fix needs the meta captured INSIDE the thread and returned alongside
-    `code`, the same restructuring `src/api/routes/chat.py`'s edit-transaction path already
-    does; that is a larger, call-signature-changing edit than this migration's scope.
+    This function is context-agnostic: it reports whatever the CURRENT thread/context sees.
+    Callers that cross an `asyncio.to_thread` boundary between the call and the read MUST
+    NOT call this directly from the parent side (a real `LLMPrimitives`'s ContextVar `.set()`
+    made in the child thread's copied context is invisible to the parent once the `await`
+    returns, so a parent-side call here would silently and always miss it in production and
+    fall through to the racy shared attribute). Use `_call_llm_capturing_meta` below instead,
+    which invokes this from INSIDE the same thread as the call (TD-21.33a).
     """
     getter = getattr(primitives, "get_last_inference_meta", None)
     if callable(getter):
@@ -637,6 +631,45 @@ def _best_effort_last_inference_meta(primitives: Any) -> dict[str, Any]:
         if meta:
             return dict(meta)
     return dict(getattr(primitives, "_last_inference_meta", {}) or {})
+
+
+async def _call_llm_capturing_meta(
+    llm_call_fn: Any, primitives: Any, *args: Any, **kwargs: Any
+) -> tuple[str, dict[str, Any]]:
+    """Call `llm_call_fn` and return `(result, this_calls_inference_meta)`.
+
+    TD-21.33a: the real fix for the "documented residual race" TD-21.33 left in
+    `_execute_turn` -- the model call runs via `await asyncio.to_thread(llm_call_fn, ...)`,
+    and `asyncio.to_thread` copies the CALLING context (`contextvars.copy_context()`) into a
+    new worker thread; a `.set()` made inside that thread (deep inside
+    `_set_last_inference_meta`) is invisible to the PARENT once the `await` returns. Reading
+    `get_last_inference_meta()` (or the plain `_last_inference_meta` attribute, which is
+    shared across concurrent requests against the same `LLMPrimitives` instance -- the
+    TD-21.21 hazard) back in the parent after the hop is therefore either always-None or
+    racy, never both correct and race-free.
+
+    The fix, mirroring `src/api/routes/chat.py`'s edit-transaction path: capture the meta
+    INSIDE the same thread the call ran in, immediately after the call returns, and hand it
+    back to the parent as part of the result -- never re-derived from ambient state after the
+    hop. Whichever thread actually executes `_run` (the calling thread when
+    `_use_inline_calls_in_tests()` is set or `llm_call_fn` is a `unittest.mock` double, a
+    fresh worker thread otherwise), the getter read happens in *that* thread's own (copied)
+    context, so it observes THIS call's `.set()` and never a concurrent call's -- closing the
+    shared-attribute race, not just the None-in-production gap.
+
+    For a test double without `get_last_inference_meta()` at all, `_best_effort_last_inference_meta`
+    falls back to the plain attribute exactly as before -- unchanged behavior for those doubles.
+    """
+
+    def _run() -> tuple[str, dict[str, Any]]:
+        result = llm_call_fn(*args, **kwargs)
+        return result, _best_effort_last_inference_meta(primitives)
+
+    # Unit tests often inject MagicMock llm_call; using to_thread on mocked
+    # callables can deadlock event-loop teardown in pytest-asyncio.
+    if _use_inline_calls_in_tests() or type(llm_call_fn).__module__.startswith("unittest.mock"):
+        return _run()
+    return await asyncio.to_thread(_run)
 
 
 async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bool, dict]:
@@ -915,27 +948,21 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             llm_kwargs.get("n_tokens", "default"),
             state.tool_required,
         )
+    _turn_call_meta: dict[str, Any] = {}
     try:
         llm_call_fn = deps.primitives.llm_call
-        # Unit tests often inject MagicMock llm_call; using to_thread on mocked
-        # callables can deadlock event-loop teardown in pytest-asyncio.
-        if _use_inline_calls_in_tests() or type(llm_call_fn).__module__.startswith("unittest.mock"):
-            code = llm_call_fn(
-                prompt,
-                role=str(role),
-                stop_sequences=["\n```\n"],
-                skip_suffix=True,
-                **llm_kwargs,
-            )
-        else:
-            code = await asyncio.to_thread(
-                llm_call_fn,
-                prompt,
-                role=str(role),
-                stop_sequences=["\n```\n"],
-                skip_suffix=True,
-                **llm_kwargs,
-            )
+        # TD-21.33a: capture this call's inference meta INSIDE the same thread the call
+        # ran in (see `_call_llm_capturing_meta`) instead of reading ambient state back in
+        # the parent after the `to_thread` hop.
+        code, _turn_call_meta = await _call_llm_capturing_meta(
+            llm_call_fn,
+            deps.primitives,
+            prompt,
+            role=str(role),
+            stop_sequences=["\n```\n"],
+            skip_suffix=True,
+            **llm_kwargs,
+        )
     except (InferenceError, ConnectionError, TimeoutError, OSError) as e:
         if str(role) == str(Role.FRONTDOOR) and _frontdoor_trace_enabled():
             elapsed_ms = (asyncio.get_event_loop().time() - llm_started) * 1000
@@ -966,23 +993,18 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
     if str(role) == str(Role.FRONTDOOR) and _frontdoor_trace_enabled():
         elapsed_ms = (asyncio.get_event_loop().time() - llm_started) * 1000
-        infer_meta = {}
-        try:
-            infer_meta = _best_effort_last_inference_meta(deps.primitives)
-        except Exception:
-            infer_meta = {}
         log.warning(
             "Frontdoor REPL turn end: task_id=%s turn=%d elapsed_ms=%.1f raw_chars=%d infer_meta=%s",
             state.task_id or "unknown",
             state.turns,
             elapsed_ms,
             len(code),
-            infer_meta or "{}",
+            _turn_call_meta or "{}",
         )
 
     # Track aggregate completion tokens (Fast-RLM budget control)
     try:
-        _meta = _best_effort_last_inference_meta(deps.primitives)
+        _meta = _turn_call_meta
         _completion_tokens = int(_meta.get("tokens", 0))
         _prompt_tokens = int(_meta.get("prompt_tokens", 0))
         if _completion_tokens > 0:
@@ -1027,16 +1049,14 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             )
             _retry_prompt = prompt + _conciseness_nudge
             try:
-                if _use_inline_calls_in_tests() or type(deps.primitives.llm_call).__module__.startswith("unittest.mock"):
-                    code = deps.primitives.llm_call(
-                        _retry_prompt, role=str(role), stop_sequences=["\n```\n"],
-                        skip_suffix=True, **llm_kwargs,
-                    )
-                else:
-                    code = await asyncio.to_thread(
-                        deps.primitives.llm_call, _retry_prompt, role=str(role),
-                        stop_sequences=["\n```\n"], skip_suffix=True, **llm_kwargs,
-                    )
+                # TD-21.33a: same in-thread meta capture as the primary call above, so a
+                # future reader of `_turn_call_meta` after the retry sees THIS retry's meta,
+                # never the pre-retry call's (or nothing, or another request's).
+                code, _turn_call_meta = await _call_llm_capturing_meta(
+                    deps.primitives.llm_call, deps.primitives,
+                    _retry_prompt, role=str(role), stop_sequences=["\n```\n"],
+                    skip_suffix=True, **llm_kwargs,
+                )
                 raw_llm_output = code
             except Exception as e:
                 log.warning("Reasoning length alarm retry failed: %s", e)
