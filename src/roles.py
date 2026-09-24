@@ -47,6 +47,15 @@ class FailoverReason(str, Enum):
     CIRCUIT_OPEN = "circuit_open"
     TIMEOUT = "timeout"
     CONNECTION_ERROR = "connection_error"
+    # A contention-gate/admission-control denial: the backend is up and
+    # healthy, just momentarily over its concurrency budget (e.g. another
+    # session's job holding the GPU lane). Distinct from CONNECTION_ERROR,
+    # which implies the backend itself is unreachable/down — conflating the
+    # two makes a live-but-busy backend look dead in health-tracker logs and
+    # metrics (TD-21 window-diag 2026-09-24, INC candidate: coder_escalation
+    # → frontdoor fallback logged as connection_error while :8083 was
+    # healthy and simply contended).
+    ADMISSION_DENIED = "admission_denied"
     OOM = "oom"
 
 

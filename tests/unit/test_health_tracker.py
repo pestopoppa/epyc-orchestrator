@@ -246,3 +246,63 @@ class TestGetStatusSnapshot:
         # status1 should not be affected by later changes
         assert status1[URL_A]["failure_count"] == 1
         assert status2[URL_A]["failure_count"] == 2
+
+
+class TestClassifyFailure:
+    """Tests for BackendHealthTracker.classify_failure.
+
+    TD-21 window-diag (2026-09-24): a coder_escalation admission/placement-
+    gate denial (backend up, momentarily over its concurrency budget — e.g.
+    another session's job holding the GPU lane) was logged as
+    ``Model fallback: coder_escalation -> frontdoor (reason: connection_error)``
+    even though :8083's own /health was OK. classify_failure's string-match
+    fallback had no keyword for admission/contention denials, so it hit the
+    catch-all "connection_error" default and made a live-but-busy backend
+    look dead. This class locks in the fix: a contention-gate denial (via
+    its structured `failure_provenance`, or the plain admission-queue-full
+    RuntimeError string) classifies as "admission_denied", not
+    "connection_error".
+    """
+
+    def test_contention_denied_classifies_as_admission_denied(self):
+        from src.scheduling.contention_gate import ContentionDenied
+
+        tracker = BackendHealthTracker()
+        exc = ContentionDenied(
+            "placement timeout role=coder_escalation reason=placement_gate_timeout "
+            "holders=frozenset() after 5.0s",
+            role="coder_escalation",
+            failure_class="admission_denied",
+            code="placement_gate_timeout",
+        )
+        assert tracker.classify_failure(exc) == "admission_denied"
+
+    def test_contention_denied_admission_timeout_classifies_as_admission_denied(self):
+        from src.scheduling.contention_gate import ContentionDenied
+
+        tracker = BackendHealthTracker()
+        exc = ContentionDenied(
+            "placement timeout role=coder_escalation reason=race_lost after 5.0s",
+            role="coder_escalation",
+            failure_class="admission_timeout",
+            code="race_lost",
+        )
+        assert tracker.classify_failure(exc) == "admission_denied"
+
+    def test_plain_admission_queue_full_classifies_as_admission_denied(self):
+        tracker = BackendHealthTracker()
+        exc = RuntimeError("[ERROR: admission] Backend queue full for http://localhost:8083")
+        assert tracker.classify_failure(exc) == "admission_denied"
+
+    def test_generic_runtime_error_still_defaults_to_connection_error(self):
+        # Byte-identity guard: an error that is neither a ContentionDenied
+        # nor an admission-queue message keeps the pre-existing default.
+        tracker = BackendHealthTracker()
+        assert tracker.classify_failure(RuntimeError("something went wrong")) == "connection_error"
+
+    def test_circuit_open_and_timeout_still_classify_first(self):
+        tracker = BackendHealthTracker()
+        assert tracker.classify_failure(
+            RuntimeError("Backend unavailable (circuit open): http://x")
+        ) == "circuit_open"
+        assert tracker.classify_failure(RuntimeError("request timed out")) == "timeout"
