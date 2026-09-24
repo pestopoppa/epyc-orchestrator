@@ -28,6 +28,7 @@ from src.graph.helpers import (
     _check_budget_exceeded,
     _classify_error,
     _execute_turn,
+    _is_infra_failure,
     _log_escalation,
     _make_end_result,
     _record_failure,
@@ -178,6 +179,8 @@ async def frontdoor_node(state: dict[str, Any], config: RunnableConfig) -> dict[
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
+        if _is_infra_failure(artifacts):
+            return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error
         task_state.last_output = output
@@ -273,6 +276,8 @@ async def worker_node(state: dict[str, Any], config: RunnableConfig) -> dict[str
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
+        if _is_infra_failure(artifacts):
+            return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error
         task_state.last_output = output
@@ -374,6 +379,8 @@ async def coder_node(state: dict[str, Any], config: RunnableConfig) -> dict[str,
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
+        if _is_infra_failure(artifacts):
+            return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error
         task_state.last_output = output
@@ -463,6 +470,8 @@ async def coder_escalation_node(state: dict[str, Any], config: RunnableConfig) -
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
+        if _is_infra_failure(artifacts):
+            return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error
         task_state.last_output = output
@@ -550,6 +559,8 @@ async def ingest_node(state: dict[str, Any], config: RunnableConfig) -> dict[str
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
+        if _is_infra_failure(artifacts):
+            return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error
         task_state.last_output = output
@@ -639,6 +650,8 @@ async def architect_node(state: dict[str, Any], config: RunnableConfig) -> dict[
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
+        if _is_infra_failure(artifacts):
+            return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error
         task_state.last_output = output

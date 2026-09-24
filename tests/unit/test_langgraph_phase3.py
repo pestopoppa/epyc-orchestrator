@@ -261,6 +261,88 @@ class TestDualRunParity:
         assert "Max turns" in lg_result.get("_result", {}).get("answer", "")
 
 
+class TestInfraFailureShortCircuit:
+    """`_execute_turn` tags `artifacts["_infra_failure"]` when the raw LLM
+    call returned the orchestrator's own in-band `[ERROR: ...]` backend
+    sentinel (a placement/admission timeout, circuit-open, dead connection,
+    ...) instead of genuine model output -- see
+    `src/graph/helpers.py::_backend_infra_sentinel`. EVERY node, in BOTH
+    backends, must end the turn immediately on that signal: no retry, no
+    escalation, and the sentinel text preserved verbatim (never rewrapped as
+    `[FAILED: ...]`) so `_annotate_error` can classify the correct HTTP
+    status. This is checked BEFORE `_should_escalate`/`_should_retry` are
+    even consulted -- asserted here by never having patched them (a
+    regression that fell through to the ordinary error path would raise
+    `AttributeError`/`TypeError` calling the real, un-mocked decision
+    functions against a `MagicMock` error-category)."""
+
+    _SENTINEL = "[ERROR: placement timeout role=frontdoor reason=race_lost holders=[] after 60.0s]"
+
+    @pytest.mark.parametrize("node_name,pg_class,role,flag_name,_esc_target", NODE_PARAMS, ids=NODE_IDS)
+    @pytest.mark.asyncio
+    async def test_langgraph_backend_ends_verbatim_no_escalation(
+        self, node_name, pg_class, role, flag_name, _esc_target
+    ):
+        from src.graph.langgraph.nodes import (
+            frontdoor_node, worker_node, coder_node,
+            coder_escalation_node, ingest_node, architect_node,
+        )
+        from src.graph.langgraph.state import task_state_to_lg
+
+        lg_funcs = {
+            "frontdoor": frontdoor_node, "worker": worker_node,
+            "coder": coder_node, "coder_escalation": coder_escalation_node,
+            "ingest": ingest_node, "architect": architect_node,
+        }
+        lg_func = lg_funcs[node_name]
+
+        mock_turn = AsyncMock(
+            return_value=("", self._SENTINEL, False, {"_infra_failure": True})
+        )
+
+        state = _make_state(current_role=role, role_history=[node_name])
+        state_dict = task_state_to_lg(state)
+        deps = _make_deps()
+        deps.repl.artifacts = {}
+        config = {"configurable": {"deps": deps}}
+
+        with patch("src.graph.langgraph.nodes._execute_turn", mock_turn):
+            lg_result = await lg_func(state_dict, config)
+
+        assert lg_result["next_node"] == "__end__"
+        assert lg_result["_result"]["success"] is False
+        assert lg_result["_result"]["answer"] == self._SENTINEL
+        assert lg_result["escalation_count"] == 0
+        assert lg_result["consecutive_failures"] == 0
+
+    @pytest.mark.parametrize("node_name,pg_class,role,flag_name,_esc_target", NODE_PARAMS, ids=NODE_IDS)
+    @pytest.mark.asyncio
+    async def test_pydantic_graph_backend_ends_verbatim_no_escalation(
+        self, node_name, pg_class, role, flag_name, _esc_target
+    ):
+        from src.graph import nodes as nodes_mod
+
+        node_cls = getattr(nodes_mod, pg_class)
+        node = node_cls()
+        ctx = _make_ctx(current_role=role, role_history=[node_name])
+        ctx.deps.repl.artifacts = {}
+
+        mock_turn = AsyncMock(
+            return_value=("", self._SENTINEL, False, {"_infra_failure": True})
+        )
+        mock_features = MagicMock()
+        setattr(mock_features, flag_name, False)
+
+        with patch("src.graph.nodes._get_features", return_value=mock_features), \
+             patch("src.graph.nodes._execute_turn", mock_turn):
+            result = await node.run(ctx)
+
+        assert result.data.success is False
+        assert result.data.answer == self._SENTINEL
+        assert ctx.state.escalation_count == 0
+        assert ctx.state.consecutive_failures == 0
+
+
 # ---------------------------------------------------------------------------
 # 3. _run_via_langgraph helper tests
 # ---------------------------------------------------------------------------
