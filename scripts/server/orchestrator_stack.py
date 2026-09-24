@@ -2189,7 +2189,12 @@ PRODUCTION_FEATURE_WAVE_OVERRIDES: dict[str, bool] = {
     # value is validated against the caller's JSON Schema, repaired once on
     # failure, and the response is flagged 422 when still invalid after
     # exhausting the repair attempt.
-    "final_schema_validation": True,
+    # OP-51 SUSPENDED 2026-09-24 (operator): the first live smoke returned HTTP 500
+    # ("repeated no-progress nudges") for a REPL /chat request with an output_schema
+    # that returned the correct value with the flag off. Cause under diagnosis
+    # (schema preamble vs a coder_escalation connection_error). Re-enable after a
+    # fix and a with/without A/B.
+    "final_schema_validation": False,
 }
 
 LANGGRAPH_PHASE3_LIVE_ENV_VARS: tuple[str, ...] = (
