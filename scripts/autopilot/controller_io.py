@@ -30,6 +30,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.structured_output.repair import (
+    CompleteFn,
+    RepairResult,
+    http_chat_completer,
+    parse_with_repair,
+)
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 log = logging.getLogger("autopilot")
@@ -813,6 +820,251 @@ def extract_rationale(text: str) -> dict[str, Any]:
     if not isinstance(rubric, dict):
         rubric = {}
     return {"falsifier": falsifier, "rubric_scores": rubric}
+
+
+# --------------------------------------------------------------------------- TD-21.2/.3 repair
+#
+# Fish first (the functions above, unchanged); on a miss, ONE constrained
+# completion turn back to the local orchestrator's own OpenAI-compatible
+# endpoint (`AUTOPILOT_LOCAL_PLANNER_URL`, default 127.0.0.1:8000 — the same
+# endpoint `LocalPlannerProvider` already drafts against), via the shared
+# `src.structured_output.repair` helper (TD-21.0 already made this endpoint
+# honour `response_format json_schema` on both lanes). The repair turn is
+# available regardless of which provider (Claude CLI, Codex CLI, or a local
+# HTTP provider) produced the unparseable draft: its only job is to
+# re-express a reply that already exists, against the orchestrator's own
+# always-on control-plane API, not to reproduce the draft provider's
+# reasoning. `planner_coordinator.py` is expected to inject a fake/raising
+# completer in tests so no test ever reaches this real endpoint.
+
+_ACTION_REPAIR_URL_ENV = "AUTOPILOT_LOCAL_PLANNER_URL"
+_ACTION_REPAIR_DEFAULT_URL = "http://127.0.0.1:8000/v1/chat/completions"
+_ACTION_REPAIR_MODEL_ENV = "AUTOPILOT_LOCAL_PLANNER_MODEL"
+_ACTION_REPAIR_ROLE_ENV = "AUTOPILOT_LOCAL_PLANNER_ROLE"
+
+_ACTION_REPAIR_SITE = "autopilot.controller_io.extract_action"
+_RATIONALE_REPAIR_SITE = "autopilot.controller_io.extract_rationale"
+
+_ACTION_REPAIR_INSTRUCTION = (
+    "The reply given as the user message is an AutoPilot controller response "
+    "that failed to parse as its intended fenced next-action JSON object. "
+    "Extract ONLY the action the reply intends to take next -- ignore any "
+    "rationale, falsifier, or rubric commentary elsewhere in the reply -- as "
+    "exactly one JSON object matching the given schema. Copy the reply's own "
+    "field values faithfully; do not invent an action it did not already "
+    "propose."
+)
+
+_RATIONALE_REPAIR_INSTRUCTION = (
+    "The reply given as the user message is the payload of an AutoPilot "
+    "controller's rationale sidecar that failed to parse. Convert it into "
+    "exactly one JSON object with `falsifier` (string) and `rubric_scores` "
+    "(object) matching the given schema, copying the reply's own wording and "
+    "values faithfully -- do not invent a falsifier or scores it did not "
+    "already give."
+)
+
+
+def _local_planner_base_url() -> str:
+    """Base URL for the repair completer: `AUTOPILOT_LOCAL_PLANNER_URL`
+    (same env var `LocalPlannerProvider` reads), defaulting to the
+    orchestrator's own :8000 OpenAI-compatible endpoint.
+    `http_chat_completer` appends `/chat/completions` itself, so a URL that
+    already ends with it (the default, and its usual override) has that
+    suffix stripped here."""
+    url = (os.environ.get(_ACTION_REPAIR_URL_ENV) or _ACTION_REPAIR_DEFAULT_URL).rstrip("/")
+    suffix = "/chat/completions"
+    if url.endswith(suffix):
+        url = url[: -len(suffix)]
+    return url
+
+
+def action_repair_completer() -> CompleteFn:
+    """Build the `CompleteFn` for the TD-21.2/.3 repair turn. Constructing
+    this never makes a network call by itself -- only invoking the returned
+    function does -- so callers (and their tests) can freely build one and
+    only invoke it (or substitute a fake) when a repair is actually
+    attempted."""
+    model = (
+        os.environ.get(_ACTION_REPAIR_MODEL_ENV)
+        or os.environ.get(_ACTION_REPAIR_ROLE_ENV)
+        or None
+    )
+    return http_chat_completer(_local_planner_base_url(), model=model)
+
+
+def _action_type_json_schema(action_type: str, spec: dict[str, Any]) -> dict[str, Any]:
+    """One `oneOf` branch of `autopilot_action_schema()`, derived from the
+    SAME `_ACTION_SCHEMAS` entry `_validate_action_schema` already enforces
+    downstream -- allowed keys become the closed property set, `required`
+    keys become JSON Schema `required`, and `enums` become per-property
+    `enum` constraints. Nothing here is invented beyond that existing
+    contract; field TYPES beyond an enum's own value types are intentionally
+    left unconstrained (`_ACTION_SCHEMAS` does not declare them either)."""
+    allowed = sorted(spec.get("allowed", {"type"}) | {"type"})
+    required = sorted({"type"} | set(spec.get("required", set())))
+    enums = spec.get("enums", {})
+    properties: dict[str, Any] = {"type": {"const": action_type}}
+    for key in allowed:
+        if key == "type":
+            continue
+        properties[key] = {"enum": sorted(enums[key], key=str)} if key in enums else {}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+def autopilot_action_schema() -> dict[str, Any]:
+    """JSON schema for the fenced ``json:autopilot_actions`` object (TD-21.2).
+
+    A `oneOf` over every `_ACTION_SCHEMAS` entry, so adding a new action type
+    only requires editing `_ACTION_SCHEMAS`; this schema updates with it.
+    `additionalProperties: True` at the TOP level is deliberate: with no
+    top-level `properties`, `additionalProperties: False` here would forbid
+    every property on the instance rather than deferring to the `oneOf`
+    branches, which each already close themselves. Does not encode the
+    deeper single-variable / semantic constraints in
+    `validate_single_variable` (file naming, single-flag limits, numeric
+    ranges) -- those already run on both a fished AND a repaired action via
+    the existing `_draft_unusable_reason` path in `planner_coordinator.py`,
+    so repeating them here would duplicate, not extend, the safety net.
+    """
+    return {
+        "type": "object",
+        "additionalProperties": True,
+        "oneOf": [
+            _action_type_json_schema(action_type, spec)
+            for action_type, spec in _ACTION_SCHEMAS.items()
+        ],
+    }
+
+
+def autopilot_rationale_schema() -> dict[str, Any]:
+    """JSON schema for the fenced ``json:autopilot_rationale`` sidecar
+    (TD-21.3). Matches exactly the two keys `extract_rationale` reads --
+    `falsifier` (string) and `rubric_scores` (an open-ended object of rubric
+    axis -> score, deliberately left unconstrained since the axis set is
+    caller-defined) -- nothing here is invented beyond that existing
+    contract."""
+    return {
+        "type": "object",
+        "properties": {
+            "falsifier": {"type": "string"},
+            "rubric_scores": {"type": "object"},
+        },
+        "required": [],
+        "additionalProperties": False,
+    }
+
+
+def extract_action_with_repair(
+    text: str,
+    *,
+    complete: CompleteFn,
+    site: str = _ACTION_REPAIR_SITE,
+) -> RepairResult:
+    """TD-21.2: `extract_action` first (unchanged, 0 calls on a clean draft);
+    on a miss, ONE constrained completion turn against `autopilot_action_schema()`.
+
+    Persisted-state semantics (before/after this conversion):
+    BEFORE, a fish miss on the ACTION block made the draft "unusable" ->
+    `planner_coordinator._mark_failure` opened the provider's circuit-breaker
+    counter, ONE fallback provider was re-prompted FROM ZERO (a full new
+    draft call), and if both providers missed, `autopilot.py`'s deterministic
+    `seed_batch` action was the one dispatched and journaled.
+    AFTER, a malformed-but-repairable ACTION block is recovered via one
+    constrained completion and the REPAIRED action is what
+    `planner_coordinator` treats as usable -- no fallback provider call, no
+    `_mark_failure`, no seed_batch substitution for that draft. The caller is
+    responsible for persisting `RepairResult.status` alongside the action
+    (see `planner_coordinator.PlannerDecision.action_parse_status`) so a
+    repaired record is distinguishable from a clean parse in the journal.
+    An UNREPAIRABLE block still returns `status="failed"`, `value=None` --
+    the exact same typed non-result `extract_action` returning `None` gave
+    before; the existing fallback/seed_batch path is UNCHANGED for that case.
+    Old journal rows are NOT backfilled with a parse_status -- readers must
+    treat a missing field as "parsed" (the only state that existed before).
+    """
+    fast = extract_action(text)
+    if fast is not None:
+        return RepairResult(fast, "parsed", "", site, 0)
+
+    result = parse_with_repair(
+        text,
+        schema=autopilot_action_schema(),
+        complete=complete,
+        instruction=_ACTION_REPAIR_INSTRUCTION,
+        site=site,
+        kind="any",
+    )
+    if result.value is None:
+        return result
+    unwrapped = _unwrap_action(result.value)
+    if unwrapped is None:
+        # The repaired value validated against the oneOf action schema (so it
+        # has a `type` const) but somehow doesn't satisfy `_unwrap_action`'s
+        # own narrower contract -- treat as a failure rather than dispatch
+        # something no other extract_action() caller would accept.
+        return RepairResult(None, "failed", "repaired value missing usable type", site, result.repair_calls)
+    return RepairResult(unwrapped, result.status, result.reason, site, result.repair_calls)
+
+
+def extract_rationale_with_repair(
+    text: str,
+    *,
+    complete: CompleteFn,
+    site: str = _RATIONALE_REPAIR_SITE,
+) -> RepairResult:
+    """TD-21.3: same repair shape as TD-21.2, scoped to the
+    ``json:autopilot_rationale`` sidecar.
+
+    A rationale block that is simply ABSENT is not a parse failure --
+    `extract_rationale`'s own docstring is explicit that omission is a
+    legitimate, soft outcome ("rationale capture is observability, not a
+    gate") -- so repair is attempted only when the marker IS present but the
+    payload fails to parse/validate; an absent marker still returns
+    `status="parsed"` with the existing empty default, unchanged from before
+    this conversion.
+
+    Persisted-state semantics: BEFORE, a malformed (but present) rationale
+    block silently persisted `{"falsifier": "", "rubric_scores": {}}` with no
+    signal that anything was lost. AFTER, the malformed block is repaired via
+    one constrained completion and the repaired object is what gets
+    persisted, `status="repaired"`; only a block that fails BOTH fishing and
+    the repair turn falls back to the same empty default as before (now
+    flagged `status="failed"` rather than being silently indistinguishable
+    from a genuine omission). Old journal rows are NOT backfilled.
+    """
+    empty: dict[str, Any] = {"falsifier": "", "rubric_scores": {}}
+    marker = "```json:autopilot_rationale"
+    if marker not in text:
+        return RepairResult(empty, "parsed", "", site, 0)
+
+    start = text.index(marker) + len(marker)
+    end = text.find("```", start)
+    payload = text[start:end] if end != -1 else text[start:]
+
+    result = parse_with_repair(
+        payload,
+        schema=autopilot_rationale_schema(),
+        complete=complete,
+        instruction=_RATIONALE_REPAIR_INSTRUCTION,
+        site=site,
+    )
+    if result.value is None:
+        return RepairResult(dict(empty), result.status, result.reason, site, result.repair_calls)
+    falsifier = result.value.get("falsifier", "")
+    rubric = result.value.get("rubric_scores", {})
+    if not isinstance(falsifier, str):
+        falsifier = str(falsifier)
+    if not isinstance(rubric, dict):
+        rubric = {}
+    return RepairResult(
+        {"falsifier": falsifier, "rubric_scores": rubric}, result.status, result.reason, site, result.repair_calls
+    )
 
 
 def _validate_action_schema(action: dict[str, Any]) -> str | None:

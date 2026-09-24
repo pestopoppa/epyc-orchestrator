@@ -19,8 +19,9 @@ from controller_io import (
     _append_planner_archive,
     _loads_json_payload,
     _open_planner_tap,
-    extract_action,
-    extract_rationale,
+    action_repair_completer,
+    extract_action_with_repair,
+    extract_rationale_with_repair,
     validate_single_variable,
 )
 from planner_providers import (
@@ -150,6 +151,18 @@ class PlannerDecision:
     # observability only; dispatch semantics stay derived from action/critique.
     provider_trace: list[dict[str, Any]] = field(default_factory=list)
     deterministic_block_reason: str = ""
+    # TD-21.2/.3: outcome of `extract_action_with_repair` / `extract_rationale_with_repair`
+    # for the draft that ultimately supplied `action`/`rationale` -- "parsed" (fished
+    # clean, 0 repair calls), "repaired" (recovered via one constrained completion),
+    # or "failed" (unrepairable; action/rationale carries the same pre-repair default
+    # as before this conversion). Persisted into planner_archive.jsonl by
+    # `_archive_decision` so a repaired record is distinguishable from a clean parse.
+    # Old journal rows predate this field entirely -- readers must treat a MISSING
+    # field as "parsed", the only state that existed before TD-21.2/.3 landed.
+    action_parse_status: str = "parsed"
+    action_repair_calls: int = 0
+    rationale_parse_status: str = "parsed"
+    rationale_repair_calls: int = 0
 
 
 ProviderFactory = Callable[[str], PlannerProvider]
@@ -339,7 +352,16 @@ def plan_with_providers(
     any_response_ok = bool(draft.ok)
     provider_trace: list[dict[str, Any]] = []
 
-    action = extract_action(draft.text)
+    # TD-21.2/.3: the completer is only BUILT here (no network call yet -- it
+    # only fires if `extract_action`/`extract_rationale` misses and a repair
+    # turn is actually attempted). Built once per planning cycle and reused
+    # across the primary draft, the fallback draft, and the rationale sidecar.
+    repair_complete = action_repair_completer()
+
+    draft_action_repair = extract_action_with_repair(draft.text, complete=repair_complete)
+    action = draft_action_repair.value
+    action_parse_status = draft_action_repair.status
+    action_repair_calls = draft_action_repair.repair_calls
     deterministic_block_reason = ""
     draft_unusable = _draft_unusable_reason(
         draft,
@@ -355,6 +377,8 @@ def plan_with_providers(
             result=draft,
             action=action,
             unusable_reason=draft_unusable,
+            parse_status=action_parse_status,
+            repair_calls=action_repair_calls,
         )
     )
     if draft_unusable:
@@ -376,7 +400,8 @@ def plan_with_providers(
                 cwd=cwd,
             )
             any_response_ok = any_response_ok or bool(fallback.ok)
-            fallback_action = extract_action(fallback.text)
+            fallback_action_repair = extract_action_with_repair(fallback.text, complete=repair_complete)
+            fallback_action = fallback_action_repair.value
             fallback_unusable = _draft_unusable_reason(
                 fallback,
                 fallback_action,
@@ -391,6 +416,8 @@ def plan_with_providers(
                     result=fallback,
                     action=fallback_action,
                     unusable_reason=fallback_unusable,
+                    parse_status=fallback_action_repair.status,
+                    repair_calls=fallback_action_repair.repair_calls,
                 )
             )
             if not fallback_unusable:
@@ -401,6 +428,8 @@ def plan_with_providers(
                 _mark_success(planner_state, fallback.provider)
                 draft = fallback
                 action = fallback_action
+                action_parse_status = fallback_action_repair.status
+                action_repair_calls = fallback_action_repair.repair_calls
                 deterministic_block_reason = ""
             else:
                 _mark_failure(planner_state, fallback.provider, settings)
@@ -411,7 +440,10 @@ def plan_with_providers(
     else:
         _mark_success(planner_state, draft.provider)
 
-    rationale = extract_rationale(draft.text)
+    rationale_repair = extract_rationale_with_repair(draft.text, complete=repair_complete)
+    rationale = rationale_repair.value
+    rationale_parse_status = rationale_repair.status
+    rationale_repair_calls = rationale_repair.repair_calls
     canonical_text = draft.text
     critique: PlannerCritique | None = None
     degraded = False
@@ -444,6 +476,10 @@ def plan_with_providers(
             providers_unavailable=providers_unavailable,
             provider_trace=provider_trace,
             deterministic_block_reason=deterministic_block_reason,
+            action_parse_status=action_parse_status,
+            action_repair_calls=action_repair_calls,
+            rationale_parse_status=rationale_parse_status,
+            rationale_repair_calls=rationale_repair_calls,
         )
         _archive_decision(decision, planner_state)
         return decision
@@ -646,6 +682,10 @@ def plan_with_providers(
         predicted_objectives=peaf.extract_predicted_objectives(canonical_text),
         draft_action=draft_action,
         provider_trace=provider_trace,
+        action_parse_status=action_parse_status,
+        action_repair_calls=action_repair_calls,
+        rationale_parse_status=rationale_parse_status,
+        rationale_repair_calls=rationale_repair_calls,
     )
     block_reason = _final_action_block_reason(
         decision.action,
@@ -1525,6 +1565,15 @@ def _archive_decision(
             "deterministic_block_reason": decision.deterministic_block_reason,
             "provider_trace": decision.provider_trace,
             "planner_state": planner_state,
+            # TD-21.2/.3: "parsed" (fished clean) / "repaired" (recovered via one
+            # constrained completion) / "failed" (unrepairable; action/rationale
+            # carries the same pre-repair default as before this conversion).
+            # Absent on every row written before this field existed -- readers
+            # must treat a missing key as "parsed", not backfill it.
+            "action_parse_status": decision.action_parse_status,
+            "action_repair_calls": decision.action_repair_calls,
+            "rationale_parse_status": decision.rationale_parse_status,
+            "rationale_repair_calls": decision.rationale_repair_calls,
         }
     )
 
@@ -1540,6 +1589,8 @@ def _draft_provider_event(
     result: PlannerProviderResult,
     action: dict[str, Any] | None,
     unusable_reason: str,
+    parse_status: str = "",
+    repair_calls: int = 0,
 ) -> dict[str, Any]:
     return {
         "stage": stage,
@@ -1551,6 +1602,10 @@ def _draft_provider_event(
         "parse_ok": action is not None,
         "action_type": (action or {}).get("type", ""),
         "unusable_reason": unusable_reason,
+        # TD-21.2: "parsed" / "repaired" / "failed" from extract_action_with_repair;
+        # "" for callers (none today) that don't pass one.
+        "parse_status": parse_status,
+        "repair_calls": repair_calls,
     }
 
 

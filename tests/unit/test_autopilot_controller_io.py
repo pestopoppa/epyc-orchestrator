@@ -6,6 +6,7 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
@@ -559,3 +560,150 @@ def test_invoke_controller_rejects_disallowed_tool_use(monkeypatch) -> None:
         "running",
         "disallowed_tool_use",
     ]
+
+
+# ----- TD-21.2/.3: repair-aware extraction -----
+
+import json as _json  # noqa: E402
+
+from src.structured_output.repair import (  # noqa: E402
+    STRUCTURED_OUTPUT_REPAIR_COUNTS,
+    reset_counts_for_tests,
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_repair_counts():
+    reset_counts_for_tests()
+    yield
+    reset_counts_for_tests()
+
+
+def _never_called_complete(messages, schema):
+    raise AssertionError("repair completer must not be invoked on a clean fish")
+
+
+def test_autopilot_action_schema_covers_every_known_action_type():
+    schema = controller_io.autopilot_action_schema()
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is True
+    branches = schema["oneOf"]
+    assert len(branches) == len(controller_io._ACTION_SCHEMAS)
+    by_type = {b["properties"]["type"]["const"]: b for b in branches}
+    seed_batch = by_type["seed_batch"]
+    assert seed_batch["required"] == ["type"]
+    assert set(seed_batch["properties"]) == {"type", "n_questions", "suites"}
+    assert seed_batch["additionalProperties"] is False
+    prompt_mutation = by_type["prompt_mutation"]
+    assert prompt_mutation["required"] == ["file", "type"]
+    assert set(prompt_mutation["properties"]["mutation"]["enum"]) == {
+        "targeted_fix",
+        "compress",
+        "few_shot_evolution",
+    }
+
+
+def test_autopilot_rationale_schema_shape():
+    schema = controller_io.autopilot_rationale_schema()
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["falsifier"] == {"type": "string"}
+    assert schema["properties"]["rubric_scores"] == {"type": "object"}
+
+
+def test_action_repair_base_url_strips_chat_completions_suffix(monkeypatch):
+    monkeypatch.delenv("AUTOPILOT_LOCAL_PLANNER_URL", raising=False)
+    assert controller_io._local_planner_base_url() == "http://127.0.0.1:8000/v1"
+    monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_URL", "http://10.0.0.5:9001/chat/completions")
+    assert controller_io._local_planner_base_url() == "http://10.0.0.5:9001"
+
+
+def test_extract_action_with_repair_clean_parse_never_calls_completer():
+    text = """```json:autopilot_actions
+{"type": "seed_batch", "n_questions": 10}
+```"""
+    result = controller_io.extract_action_with_repair(text, complete=_never_called_complete, site="t.a1")
+    assert result.status == "parsed"
+    assert result.value == {"type": "seed_batch", "n_questions": 10}
+    assert result.repair_calls == 0
+
+
+def test_extract_action_with_repair_recovers_malformed_block_no_fallback_needed():
+    # The fence is missing its closing marker entirely -- extract_action()'s
+    # deterministic fish has nothing usable to find here.
+    text = "I will run a seed batch of 10 questions next, type seed_batch."
+    calls = []
+
+    def fake_complete(messages, schema):
+        calls.append(schema)
+        return _json.dumps({"type": "seed_batch", "n_questions": 10})
+
+    result = controller_io.extract_action_with_repair(text, complete=fake_complete, site="t.a2")
+    assert result.status == "repaired"
+    assert result.value == {"type": "seed_batch", "n_questions": 10}
+    assert result.repair_calls == 1
+    assert len(calls) == 1
+    assert STRUCTURED_OUTPUT_REPAIR_COUNTS[("t.a2", "repaired")] == 1
+
+
+def test_extract_action_with_repair_unrepairable_matches_pre_repair_failure_shape():
+    text = "no action here at all, just prose"
+
+    def fake_complete(messages, schema):
+        return "still not json"
+
+    result = controller_io.extract_action_with_repair(text, complete=fake_complete, site="t.a3")
+    assert result.status == "failed"
+    assert result.value is None  # never a fabricated action
+    assert STRUCTURED_OUTPUT_REPAIR_COUNTS[("t.a3", "failed")] == 1
+
+
+def test_extract_action_with_repair_transport_failure_is_typed_failed():
+    def raising_complete(messages, schema):
+        raise ConnectionError("no local planner")
+
+    result = controller_io.extract_action_with_repair(
+        "prose only, no action", complete=raising_complete, site="t.a4"
+    )
+    assert result.status == "failed"
+    assert result.value is None
+    assert "transport_error" in result.reason
+
+
+def test_extract_rationale_with_repair_absent_marker_never_calls_completer():
+    text = "```json:autopilot_actions\n{\"type\": \"seed_batch\"}\n```"
+    result = controller_io.extract_rationale_with_repair(
+        text, complete=_never_called_complete, site="t.r1"
+    )
+    assert result.status == "parsed"
+    assert result.value == {"falsifier": "", "rubric_scores": {}}
+    assert result.repair_calls == 0
+
+
+def test_extract_rationale_with_repair_recovers_malformed_block():
+    text = (
+        "```json:autopilot_rationale\n"
+        '{"falsifier": "x", "rubric_scores": {"info_gain": 4},\n'  # trailing comma / no close
+        "```\n"
+    )
+
+    def fake_complete(messages, schema):
+        return _json.dumps({"falsifier": "x", "rubric_scores": {"info_gain": 4}})
+
+    result = controller_io.extract_rationale_with_repair(text, complete=fake_complete, site="t.r2")
+    assert result.status == "repaired"
+    assert result.value == {"falsifier": "x", "rubric_scores": {"info_gain": 4}}
+    assert result.repair_calls == 1
+
+
+def test_extract_rationale_with_repair_unrepairable_falls_back_to_empty_default():
+    text = "```json:autopilot_rationale\nnot json at all\n```"
+
+    def fake_complete(messages, schema):
+        return "still garbage"
+
+    result = controller_io.extract_rationale_with_repair(text, complete=fake_complete, site="t.r3")
+    assert result.status == "failed"
+    # Same empty-default SHAPE the pre-repair extract_rationale() always
+    # returned on a malformed block -- the caller can distinguish via .status.
+    assert result.value == {"falsifier": "", "rubric_scores": {}}

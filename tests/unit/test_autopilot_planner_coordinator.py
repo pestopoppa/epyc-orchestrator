@@ -34,10 +34,25 @@ REPL_NUMERIC_ACTION = {
 }
 
 
+def _unreachable_repair_complete(messages: Any, schema: Any) -> str:
+    """Default TD-21.2/.3 repair completer for this test module: raises
+    immediately instead of ever reaching a real server. `action_repair_completer()`
+    (unpatched) would build an `http_chat_completer` pointed at the live
+    orchestrator API (127.0.0.1:8000 by default) -- this repo's tests must
+    NEVER make a live model/network request, so every test in this module
+    gets this safe default via the autouse fixture below. Tests that want to
+    exercise the "repaired" path monkeypatch `planner_coordinator.action_repair_completer`
+    themselves to return a fake that returns canned JSON instead."""
+    raise ConnectionError("no local planner reachable in unit tests")
+
+
 @pytest.fixture(autouse=True)
 def _no_planner_archive(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(planner_coordinator, "_append_planner_archive", lambda _record: None)
     monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "0")
+    monkeypatch.setattr(
+        planner_coordinator, "action_repair_completer", lambda: _unreachable_repair_complete
+    )
 
 
 class FakeProvider:
@@ -502,7 +517,13 @@ def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch)
         "parse_ok": True,
         "action_type": "numeric_trial",
         "unusable_reason": "",
+        "parse_status": "parsed",
+        "repair_calls": 0,
     }
+    assert records[-1]["action_parse_status"] == "parsed"
+    assert records[-1]["action_repair_calls"] == 0
+    assert records[-1]["rationale_parse_status"] == "parsed"
+    assert records[-1]["rationale_repair_calls"] == 0
     assert records[-1]["provider_trace"][1]["stage"] == "critique_primary"
     assert records[-1]["provider_trace"][1]["parse_ok"] is True
     assert records[-1]["provider_trace"][1]["critique_decision"] == "approve"
@@ -2305,3 +2326,162 @@ def test_local_briefed_aliases_are_classified_as_local_model() -> None:
     assert planner_coordinator._model_of("local_brief_frontdoor") == "local"
     assert planner_coordinator._model_of("local_ingest_frontdoor") == "local"
     assert planner_coordinator._model_of("local_brief_worker") == "local"
+
+
+# ----- TD-21.2/.3/.17: repair-aware draft-action extraction -----
+
+
+def test_recovered_parse_repairs_action_without_fallback_or_circuit_trip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TD-21.17: a malformed-but-repairable ACTION block must NOT trip the
+    per-provider circuit breaker and must NOT trigger a from-zero fallback
+    re-prompt. `mode="fallback"` deliberately leaves the fallback provider
+    ELIGIBLE (`allow_fallback=True`) so this proves it is skipped because the
+    repaired action makes the draft usable, not because fallback was
+    unavailable."""
+    import json
+
+    draft_text = "I will run a seed batch of 10 questions next, type seed_batch."
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=draft_text)],
+    )
+    codex = FakeProvider("codex", [])  # must never be invoked
+
+    def fake_complete(messages, schema):
+        return json.dumps({"type": "seed_batch", "n_questions": 10})
+
+    monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: fake_complete)
+
+    planner_state: dict[str, Any] = {}
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=planner_state,
+        settings=PlannerSettings(mode="fallback"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.action == {"type": "seed_batch", "n_questions": 10}
+    assert decision.action_parse_status == "repaired"
+    assert decision.action_repair_calls == 1
+    assert len(codex.calls) == 0  # no fallback re-prompt from zero
+    assert planner_state["claude"]["failures"] == 0  # success, not a circuit-breaker failure
+    assert planner_coordinator._circuit_is_open(planner_state, "claude") is False
+
+
+def test_unrepairable_action_still_falls_back_and_trips_circuit_breaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Contrast case: when repair ALSO fails, behavior is unchanged from
+    before this conversion -- fallback IS invoked and the circuit breaker
+    DOES accumulate failures."""
+    draft_text = "no usable action in this reply at all"
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=draft_text)],
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "seed_batch", "n_questions": 10}),
+            )
+        ],
+    )
+
+    def failing_complete(messages, schema):
+        return "still not json"
+
+    monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: failing_complete)
+
+    planner_state: dict[str, Any] = {}
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=planner_state,
+        settings=PlannerSettings(mode="fallback"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.action == {"type": "seed_batch", "n_questions": 10}
+    assert decision.draft_provider == "codex"
+    assert len(codex.calls) == 1  # fallback WAS invoked
+    assert planner_state["claude"]["failures"] == 1  # circuit breaker DID accumulate
+
+
+def test_rationale_repair_recovers_malformed_sidecar(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    draft_text = (
+        "```json:autopilot_actions\n"
+        f"{json.dumps(MEMRL_NUMERIC_ACTION)}\n"
+        "```\n\n"
+        "```json:autopilot_rationale\n"
+        '{"falsifier": "x", "rubric_scores": {"info_gain": 4}\n'  # missing closing brace
+        "```\n"
+    )
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=draft_text)],
+    )
+    codex = FakeProvider("codex", [])
+
+    def fake_complete(messages, schema):
+        return json.dumps({"falsifier": "x", "rubric_scores": {"info_gain": 4}})
+
+    monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: fake_complete)
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(mode="single"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    # The action fence parses clean (0 repair calls); only the rationale
+    # sidecar needed the repair turn.
+    assert decision.action == MEMRL_NUMERIC_ACTION
+    assert decision.action_parse_status == "parsed"
+    assert decision.rationale == {"falsifier": "x", "rubric_scores": {"info_gain": 4}}
+    assert decision.rationale_parse_status == "repaired"
+    assert decision.rationale_repair_calls == 1
+
+
+def test_rationale_repair_unrepairable_persists_empty_default_flagged_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    draft_text = (
+        "```json:autopilot_actions\n"
+        f"{json.dumps(MEMRL_NUMERIC_ACTION)}\n"
+        "```\n\n"
+        "```json:autopilot_rationale\nnot json at all\n```\n"
+    )
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=draft_text)],
+    )
+    codex = FakeProvider("codex", [])
+
+    def failing_complete(messages, schema):
+        return "still garbage"
+
+    monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: failing_complete)
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(mode="single"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.rationale == {"falsifier": "", "rubric_scores": {}}
+    assert decision.rationale_parse_status == "failed"
