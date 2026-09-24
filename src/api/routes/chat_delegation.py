@@ -53,6 +53,7 @@ from .chat_delegation_decision import (
     _extract_toon_decision,
     _parse_architect_decision,
     _strip_think,
+    resolve_architect_decision,
 )
 from .chat_delegation_reports import (
     _build_compact_specialist_prompt,
@@ -884,7 +885,12 @@ def _architect_delegated_answer_inner(
             return "[ERROR: Architect delegation failed]", stats
 
         phase_a_ms = (time.perf_counter() - phase_start) * 1000
-        decision = _parse_architect_decision(arch_response)
+        # TD-21.4: fish first (unchanged behaviour on a clean parse); repair
+        # on a miss instead of ever serving unparsed prose to the user or
+        # silently clamping an unrecognized delegate_to/delegate_mode.
+        decision = resolve_architect_decision(
+            arch_response, primitives=primitives, architect_role=architect_role,
+        )
         decision_answer = str(decision.get("answer", "") or "").strip()
         if decision["mode"] == "direct" and decision_answer.startswith("[ERROR:"):
             stats["break_reason"] = _classify_failure_reason(RuntimeError(decision_answer))

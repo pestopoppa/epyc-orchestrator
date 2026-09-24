@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from src.llm_primitives import LLMPrimitives
 
 from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
+from src.structured_output.repair import parse_with_repair, primitives_completer
 
 from .chat_delegation_config import (
     _delegation_config,
@@ -107,7 +108,7 @@ def _extract_toon_decision(text: str) -> str | None:
 
 
 
-def _parse_architect_decision(response: str) -> dict:
+def _parse_architect_decision(response: str, *, strict: bool = False) -> dict | None:
     """Parse architect's TOON-encoded decision.
 
     Handles:
@@ -120,10 +121,23 @@ def _parse_architect_decision(response: str) -> dict:
 
     Args:
         response: Raw architect response text.
+        strict: TD-21.4. When ``False`` (the default, used by every existing
+            call site and preserved byte-for-byte), every branch below always
+            returns a dict -- the long-D|-answer "best effort" keep-as-is, the
+            invalid-role/mode clamp, and the bare-text fallback all still fire
+            exactly as before. When ``True`` (used only by
+            :func:`resolve_architect_decision`), those same three low-confidence
+            branches return ``None`` instead of guessing, so the caller can
+            tell "cleanly parsed" apart from "guessed" and spend a repair turn
+            only on the latter. Every OTHER branch (clean D|<=50 chars, clean
+            D| with a successful MCQ-letter rescue, I|/JSON with an
+            already-valid delegate_to/delegate_mode) returns the identical
+            dict regardless of ``strict`` -- the happy path never changes.
 
     Returns:
         Dict with keys: mode ("direct"/"investigate"), answer, brief,
-        delegate_to, delegate_mode ("react"/"repl").
+        delegate_to, delegate_mode ("react"/"repl"); or ``None`` when
+        ``strict=True`` and the response did not parse with confidence.
     """
     text = response.strip()
 
@@ -180,7 +194,13 @@ def _parse_architect_decision(response: str) -> dict:
                         rescue = last_toon[-1]
                 if rescue:
                     raw_answer = rescue.group(1).upper()
-                # else: keep raw_answer as-is (best effort)
+                elif strict:
+                    # TD-21.4: no MCQ rescue found and the "answer" is long
+                    # enough to plausibly be un-rescued reasoning/prose, not
+                    # a genuine short answer -- let the caller repair it
+                    # instead of guessing.
+                    return None
+                # else: keep raw_answer as-is (best effort, strict=False)
         return {
             "mode": "direct",
             "answer": raw_answer,
@@ -202,10 +222,16 @@ def _parse_architect_decision(response: str) -> dict:
         delegate_to = _normalize_delegate_role(fields.get("to", "coder_escalation"))
         delegate_mode = fields.get("mode", "react")
 
-        # Clamp to valid role
+        # TD-21.4: an unrecognized role/mode is a parse failure, not a value
+        # to silently substitute a default for -- let the caller repair it.
+        if strict and delegate_to not in _valid_delegate_roles():
+            return None
+        if strict and delegate_mode not in ("react", "repl"):
+            return None
+        # Clamp to valid role (strict=False only -- legacy best-effort path)
         if delegate_to not in _valid_delegate_roles():
             delegate_to = "coder_escalation"
-        # Clamp to valid mode
+        # Clamp to valid mode (strict=False only -- legacy best-effort path)
         if delegate_mode not in ("react", "repl"):
             delegate_mode = "react"
 
@@ -232,9 +258,14 @@ def _parse_architect_decision(response: str) -> dict:
                 delegate_to = _normalize_delegate_role(
                     obj.get("delegate_to", obj.get("to", "coder_escalation"))
                 )
+                delegate_mode = obj.get("delegate_mode", obj.get("mode_detail", "react"))
+                # TD-21.4: same "repair, don't clamp" rule as the I| branch.
+                if strict and delegate_to not in _valid_delegate_roles():
+                    return None
+                if strict and delegate_mode not in ("react", "repl"):
+                    return None
                 if delegate_to not in _valid_delegate_roles():
                     delegate_to = "coder_escalation"
-                delegate_mode = obj.get("delegate_mode", obj.get("mode_detail", "react"))
                 if delegate_mode not in ("react", "repl"):
                     delegate_mode = "react"
                 return {
@@ -254,10 +285,155 @@ def _parse_architect_decision(response: str) -> dict:
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
 
-    # ── Bare text fallback — treat as direct answer ──
+    # ── Bare text fallback — treat as direct answer (strict=False only) ──
+    # TD-21.4: this is the worst of the silent defaults -- unrecognized
+    # prose wrapped as a direct answer with no failure mode at all. When
+    # strict, tell the caller so it can repair instead.
+    if strict:
+        return None
     return {
         "mode": "direct",
         "answer": text,
+        "brief": "",
+        "delegate_to": "",
+        "delegate_mode": "react",
+    }
+
+
+# TD-21.4: architect answers that plausibly ARE a genuine short answer (an
+# MCQ letter, a short factual value) rather than un-rescued reasoning. This
+# is the exact same threshold `_parse_architect_decision` already uses above
+# (`len(raw_answer) > 50` marks a D| answer as "suspiciously long" reasoning
+# rather than a real answer) -- reused here, not invented, so the failure
+# path applies the identical judgment the parser already makes today.
+_PLAUSIBLE_DIRECT_ANSWER_MAX_CHARS = 50
+
+_DECISION_REPAIR_INSTRUCTION = (
+    "Convert the architect's reply, given as the user message, into the "
+    "routing decision it made. mode 'direct' means it gave (or was trying "
+    "to give) a final answer to the question -- put that answer, copied "
+    "verbatim, in `answer`. mode 'investigate' means it wants a specialist "
+    "to do further work -- put the task description in `brief`, the "
+    "specialist role it named in `delegate_to`, and the execution mode it "
+    "named (or 'react' if none) in `delegate_mode`. Use an empty string for "
+    "any field that does not apply to the mode you chose. Never invent an "
+    "answer, brief, or role that is not already present in the reply."
+)
+
+
+def _decision_repair_schema() -> dict:
+    """TD-21.4 repair-turn schema. `delegate_to`/`delegate_mode` enums are
+    derived from the SAME live allow-lists `_parse_architect_decision` already
+    clamps against (`_valid_delegate_roles()`, and the `("react", "repl")`
+    literal checked throughout this module) -- never invented values. Computed
+    fresh per call since `_valid_delegate_roles()` reads the live stack
+    registry and can change between calls."""
+    delegate_roles = sorted(_valid_delegate_roles())
+    return {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "enum": ["direct", "investigate"]},
+            "answer": {"type": "string"},
+            "brief": {"type": "string"},
+            "delegate_to": {"type": "string", "enum": ["", *delegate_roles]},
+            "delegate_mode": {"type": "string", "enum": ["react", "repl"]},
+        },
+        "required": ["mode", "answer", "brief", "delegate_to", "delegate_mode"],
+        "additionalProperties": False,
+    }
+
+
+def resolve_architect_decision(
+    response: str,
+    *,
+    primitives: "LLMPrimitives",
+    architect_role: str,
+    site: str = "chat_delegation.architect_decision",
+) -> dict:
+    """TD-21.4: parse the architect's TOON/JSON control decision, repairing
+    on a miss instead of ever serving unparsed prose as a user-visible answer
+    or silently clamping an unrecognized role/mode.
+
+    1. ``_parse_architect_decision(response, strict=True)`` -- the exact same
+       fish the module always used (``~8`` stacked regexes plus the JSON
+       branch), just refusing to guess. When this parses cleanly, its dict is
+       returned UNCHANGED -- the happy path costs zero extra calls and is
+       byte-identical to the pre-TD-21.4 behaviour.
+    2. On a miss: ONE constrained extraction turn via
+       ``parse_with_repair`` against ``_decision_repair_schema()``, on the
+       SAME ``architect_role`` (no new server/role dependency; already on the
+       ``/completion`` lane per the audit). A schema-invalid role or mode
+       cannot come back from this turn: json-schema ``enum`` -- not a Python
+       clamp -- is what makes an unrecognized value impossible to receive as
+       "repaired".
+    3. On repair failure: a typed failure the caller must handle explicitly.
+       This function does not invent one on its own -- it maps the failure to
+       whichever of TWO existing, already-wired sentinels the call sites
+       understand, chosen by whether the raw text is plausibly a short direct
+       answer:
+         - short (``<= 50`` chars, the same threshold `_parse_architect_decision`
+           already uses to judge a D| answer "not suspiciously long"): treat
+           it AS a direct answer, verbatim -- no worse than what the pre-fix
+           code already did for genuinely short unprefixed answers.
+         - otherwise (long prose, i.e. exactly the case that used to leak to
+           the user unexamined): return the existing ``"[ERROR: ...]"``
+           answer sentinel, which `_architect_delegated_answer_inner`
+           (`chat_delegation.py`) ALREADY special-cases
+           (``decision_answer.startswith("[ERROR:")``) to end the loop and
+           surface/escalate the failure -- no new plumbing needed downstream.
+    """
+    strict = _parse_architect_decision(response, strict=True)
+    if strict is not None:
+        return strict
+
+    schema = _decision_repair_schema()
+    complete = primitives_completer(primitives, architect_role)
+    result = parse_with_repair(
+        response,
+        schema=schema,
+        complete=complete,
+        instruction=_DECISION_REPAIR_INSTRUCTION,
+        site=site,
+    )
+    if result.status in ("parsed", "repaired"):
+        value = result.value
+        mode = value["mode"]
+        if mode == "investigate":
+            return {
+                "mode": "investigate",
+                "answer": "",
+                "brief": value.get("brief", ""),
+                "delegate_to": value.get("delegate_to") or "coder_escalation",
+                "delegate_mode": value.get("delegate_mode") or "react",
+            }
+        return {
+            "mode": "direct",
+            "answer": value.get("answer", ""),
+            "brief": "",
+            "delegate_to": "",
+            "delegate_mode": "react",
+        }
+
+    # Repair failed (transport error, or the extraction turn itself did not
+    # validate). `decline_question` is never passed above, so `"declined"`
+    # cannot occur here.
+    raw = response.strip()
+    if raw and len(raw) <= _PLAUSIBLE_DIRECT_ANSWER_MAX_CHARS:
+        return {
+            "mode": "direct",
+            "answer": raw,
+            "brief": "",
+            "delegate_to": "",
+            "delegate_mode": "react",
+        }
+    log.warning(
+        "[architect-parse] TD-21.4 repair failed (site=%s, reason=%r); "
+        "surfacing as an error instead of serving unparsed prose",
+        site, result.reason,
+    )
+    return {
+        "mode": "direct",
+        "answer": f"[ERROR: architect decision unparseable: {result.reason}]",
         "brief": "",
         "delegate_to": "",
         "delegate_mode": "react",
@@ -382,6 +558,23 @@ def _classify_failure_reason(exc: Exception) -> str:
     return "pre_delegation_architect_error"
 
 
+# TD-21.5: the MCQ-misroute re-prompt's letter recovery. A closed set of
+# exactly 4 values -- schema `enum`, not a regex, is what makes an
+# off-set value structurally impossible to receive as "repaired".
+_MCQ_LETTER_REPAIR_SCHEMA: dict = {
+    "type": "object",
+    "properties": {"letter": {"type": "string", "enum": ["A", "B", "C", "D"]}},
+    "required": ["letter"],
+    "additionalProperties": False,
+}
+
+_MCQ_LETTER_REPAIR_INSTRUCTION = (
+    "The reply, given as the user message, was asked to answer a "
+    "multiple-choice question with exactly one letter A-D. Read the reply "
+    "and report which letter it gave (or clearly meant to give) in "
+    "`letter`. Never guess a letter the reply does not itself support."
+)
+
 
 def _apply_decision_guards(
     decision: dict,
@@ -432,15 +625,47 @@ def _apply_decision_guards(
                     decision = _parse_architect_decision(forced_decision)
                     log.info("MCQ misroute recovered: architect answered D|%s", decision["answer"])
                 else:
-                    # Last resort: extract any single letter A-D.
-                    # Strip D|/I| prefix first to avoid matching the
-                    # protocol marker as an MCQ letter.
+                    # Cheap fish first (unchanged): extract any single
+                    # letter A-D. Strip D|/I| prefix first to avoid matching
+                    # the protocol marker as an MCQ letter.
                     _cleaned = re.sub(r"^[DI]\|", "", forced_stripped).strip()
                     letter_match = re.search(r"\b([A-D])\b", _cleaned)
                     if letter_match:
                         decision = {"mode": "direct", "answer": letter_match.group(1),
                                     "brief": "", "delegate_to": "", "delegate_mode": "react"}
                         log.info("MCQ misroute recovered (letter extract): D|%s", decision["answer"])
+                    else:
+                        # TD-21.5: the fish missed -- one native-enum repair
+                        # turn on the SAME closed set (A-D), same
+                        # architect_role, instead of leaving the previous
+                        # mis-routed "investigate" decision silently in place
+                        # with no attempt at all.
+                        letter_result = parse_with_repair(
+                            forced_stripped,
+                            schema=_MCQ_LETTER_REPAIR_SCHEMA,
+                            complete=primitives_completer(primitives, architect_role),
+                            instruction=_MCQ_LETTER_REPAIR_INSTRUCTION,
+                            site="chat_delegation_decision.mcq_misroute_letter",
+                        )
+                        if letter_result.status in ("parsed", "repaired"):
+                            decision = {
+                                "mode": "direct",
+                                "answer": letter_result.value["letter"],
+                                "brief": "", "delegate_to": "", "delegate_mode": "react",
+                            }
+                            log.info(
+                                "MCQ misroute recovered (repair): D|%s", decision["answer"]
+                            )
+                        else:
+                            # On a miss, keep the previous decision as-is.
+                            # It is already a schema-valid "investigate"
+                            # decision (not fabricated prose or a clamped
+                            # role) -- falling back to it is a safe no-op,
+                            # unlike TD-21.4's bare-text fallback.
+                            log.warning(
+                                "MCQ misroute letter repair failed (reason=%r); "
+                                "keeping prior decision", letter_result.reason,
+                            )
             except Exception as exc:
                 log.warning("MCQ misroute re-prompt failed: %s", exc)
 
