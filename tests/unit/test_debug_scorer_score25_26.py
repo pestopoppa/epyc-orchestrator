@@ -25,6 +25,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "benchmark"))
 
+import debug_scorer  # noqa: E402
 from debug_scorer import (  # noqa: E402
     ScoringUnavailableError,
     score_answer,
@@ -185,8 +186,19 @@ def test_structural_incorrect_fen_case_sensitive() -> None:
 
 def test_structural_edge_no_solution_marker_is_false() -> None:
     # Model ignored the required "solution =" format ⇒ task failure ⇒ False
-    # (NOT a scorer-unavailability error).
-    assert _st("the answer is " + GOLD_MATH_LIST, GOLD_MATH_LIST) is False
+    # (NOT a scorer-unavailability error) AT THE PRE-EQ-1/E19 default
+    # (debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS=False). Forced explicitly so
+    # this golden fixture stays byte-for-byte regardless of the module's
+    # shipped default once EQ-1/E19 (TD-21.11..21.14,
+    # scripts/operator/ratify_eq1_answer_parse_exclusion_20260924.sh, epyc-
+    # root repo) is ratified — at that point the SAME input instead raises
+    # AnswerParseError (see test_debug_scorer_td21_parse_exclusion.py for the
+    # flag-aware behavior at both settings).
+    debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS = False
+    try:
+        assert _st("the answer is " + GOLD_MATH_LIST, GOLD_MATH_LIST) is False
+    finally:
+        debug_scorer.reset_parse_failure_stats()
 
 
 def test_structural_edge_last_marker_wins() -> None:
