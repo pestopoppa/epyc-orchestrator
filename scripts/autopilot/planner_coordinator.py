@@ -30,6 +30,7 @@ from planner_providers import (
     get_planner_provider,
 )
 from src.autopilot_core.action_identity import action_signature
+from src.structured_output.repair import CompleteFn, parse_with_repair
 
 log = logging.getLogger("autopilot")
 
@@ -118,6 +119,25 @@ class PlannerCritique:
     raw_text: str = ""
     provider: str = ""
     parse_error: str = ""
+    # TD-21.16: outcome of `extract_critique_with_repair` for the critic reply
+    # that produced this object -- "parsed" (fished clean via `extract_critique`,
+    # 0 repair calls), "repaired" (recovered via one constrained completion turn;
+    # `decision`/`confidence`/`issues` are then exactly what the critic's own
+    # reply stated, never invented -- see `require_evidence` on that turn), or
+    # "failed" (unrepairable; this object carries the exact same fail-closed/
+    # fail-open default `extract_critique` already produced before this
+    # conversion). "" (the default) means no JSON-repair attempt was ever made
+    # for this object at all -- the critic invoke failed outright before any
+    # text existed to parse, or this is one of the synthetic placeholders built
+    # directly (e.g. "critic circuit open"). Old `planner_archive.jsonl` rows
+    # predate this field and are NOT backfilled: unlike TD-21.2/.3's action/
+    # rationale fields (where "parsed" WAS the only state that ever existed
+    # pre-repair), a missing critique already had non-parsed shapes
+    # ("unavailable", the untouched "approve" default) before this field
+    # existed, so treating a missing key as "parsed" would misrepresent
+    # history -- readers must treat it as unknown, not "parsed".
+    parse_status: str = ""
+    repair_calls: int = 0
 
 
 @dataclass
@@ -551,7 +571,17 @@ def plan_with_providers(
                     cwd=cwd,
                 )
                 if critique_result.ok:
-                    critique = extract_critique(critique_result.text)
+                    # TD-21.16: `extract_critique` fish first (unchanged, 0 calls
+                    # on a clean verdict); on a miss, ONE constrained repair turn
+                    # via the SAME `repair_complete` the draft ACTION/RATIONALE
+                    # already use, before ever spending the fallback-critic call
+                    # below. A RECOVERED verdict's `parse_error` is empty, so it
+                    # falls straight into the `else` branch below exactly like a
+                    # clean parse -- no `_mark_failure`, no fallback-critic call,
+                    # no circuit-breaker trip for a parse that was recoverable.
+                    critique = extract_critique_with_repair(
+                        critique_result.text, complete=repair_complete
+                    )
                     critique.provider = critique_result.provider
                     provider_trace.append(
                         _critique_provider_event(
@@ -561,19 +591,21 @@ def plan_with_providers(
                         )
                     )
                     if critique.parse_error:
-                        # The critic invoke "succeeded" (nonzero text) but the text
-                        # is NOT a valid critique block — e.g. Codex emitted prose
-                        # or an error message instead of the json:autopilot_critique
-                        # fence. This is a FAILED REVIEW, not a rejection of the draft.
-                        # Mark failure (feeds circuit breaker) and degrade. In binding
-                        # (draft_critique) mode flag the verdict "unavailable" and KEEP
-                        # the trusted-primary draft: the dispatch gate then proceeds for
-                        # low/medium-risk actions and pauses only for HIGH-risk ones.
-                        # We deliberately do NOT force a `reject` → seed_batch fallback:
-                        # a critic *failure* must not discard a good primary draft, and
-                        # the stale-seed substitution is what re-triggered the
-                        # critic_reject_loop halt @708. A genuine parsed `reject` (no
-                        # parse_error) still routes to the safe fallback below. (2026-06-10)
+                        # The critic invoke "succeeded" (nonzero text) and the TD-21.16
+                        # repair turn above ALSO could not recover a valid verdict --
+                        # e.g. Codex emitted prose or an error message instead of the
+                        # json:autopilot_critique fence, and no evidence-checked repair
+                        # was possible. This is an UNRECOVERABLE FAILED REVIEW, not a
+                        # rejection of the draft. Mark failure (feeds circuit breaker)
+                        # and degrade. In binding (draft_critique) mode flag the verdict
+                        # "unavailable" and KEEP the trusted-primary draft: the dispatch
+                        # gate then proceeds for low/medium-risk actions and pauses only
+                        # for HIGH-risk ones. We deliberately do NOT force a `reject` →
+                        # seed_batch fallback: a critic *failure* must not discard a good
+                        # primary draft, and the stale-seed substitution is what
+                        # re-triggered the critic_reject_loop halt @708. A genuine parsed
+                        # `reject` (no parse_error) still routes to the safe fallback
+                        # below. (2026-06-10; repair turn added 2026-09-24)
                         _mark_failure(planner_state, critique_result.provider, settings)
                         fallback_critique = _try_fallback_critic(
                             provider_factory=provider_factory,
@@ -585,6 +617,7 @@ def plan_with_providers(
                             planner_state=planner_state,
                             settings=settings,
                             provider_trace=provider_trace,
+                            complete=repair_complete,
                         )
                         if fallback_critique and not fallback_critique.parse_error:
                             critique = fallback_critique
@@ -606,6 +639,10 @@ def plan_with_providers(
                                 critique.decision = "unavailable"
                             # keep draft action/rationale/canonical_text (no _reconcile)
                     else:
+                        # Reached by BOTH a clean fish AND a TD-21.16 REPAIRED verdict
+                        # (`critique.parse_status` distinguishes the two in the archive/
+                        # provider_trace) -- a recovered parse is treated as a successful
+                        # review, never a failure.
                         _mark_success(planner_state, critique_result.provider)
                         action, rationale, canonical_text = _reconcile(
                             action,
@@ -642,6 +679,7 @@ def plan_with_providers(
                         planner_state=planner_state,
                         settings=settings,
                         provider_trace=provider_trace,
+                        complete=repair_complete,
                     )
                     if fallback_critique and not fallback_critique.parse_error:
                         critique = fallback_critique
@@ -917,6 +955,7 @@ def _try_fallback_critic(
     planner_state: dict[str, Any],
     settings: PlannerSettings,
     provider_trace: list[dict[str, Any]] | None = None,
+    complete: CompleteFn,
 ) -> PlannerCritique | None:
     if not fallback_name or fallback_name == _normalize_provider(failed_provider):
         return None
@@ -952,7 +991,12 @@ def _try_fallback_critic(
             ),
         )
 
-    fallback_critique = extract_critique(fallback_result.text)
+    # TD-21.16: same repair-before-failure shape as the primary critique call
+    # above -- a malformed-but-repairable fallback verdict recovers via ONE
+    # constrained completion turn and its `parse_error` comes back empty, so
+    # it falls straight to `_mark_success` below like a clean parse; only an
+    # UNREPAIRABLE fallback verdict still degrades to "unavailable".
+    fallback_critique = extract_critique_with_repair(fallback_result.text, complete=complete)
     fallback_critique.provider = fallback_result.provider
     if provider_trace is not None:
         provider_trace.append(
@@ -1046,6 +1090,140 @@ def extract_critique(text: str) -> PlannerCritique:
         revised_action=revised_action,
         revised_rationale=revised_rationale,
         raw_text=raw,
+        parse_status="parsed",
+    )
+
+
+# --------------------------------------------------------------------------- TD-21.16 critic-verdict repair
+#
+# Same shape as TD-21.2/.3 in `controller_io.py`: fish first (`extract_critique`,
+# unchanged); on a miss, ONE constrained completion turn back to a real
+# llama-server via the SAME `action_repair_completer()` idiom (never the
+# orchestrator's own :8000 `/v1`, which refuses `response_format` -- see
+# `controller_io.py`'s TD-21.2/.3 comment block for why). The repair turn is
+# available regardless of which provider (Claude CLI, Codex CLI, or a local
+# HTTP provider) produced the unparseable critique: its only job is to
+# re-express a reply that already exists, not to render a fresh review.
+
+_CRITIC_REPAIR_SITE = "autopilot.planner_coordinator.extract_critique"
+
+_CRITIC_REPAIR_INSTRUCTION = (
+    "The reply given as the user message is an AutoPilot critic response that "
+    "failed to parse as its intended fenced json:autopilot_critique verdict. "
+    "Extract ONLY the verdict the reply intends -- `decision` (approve, "
+    "revise, or reject), `confidence`, `issues`, and any "
+    "`revised_action`/`revised_rationale` it proposes -- as exactly one JSON "
+    "object matching the given schema. Copy the reply's own field values "
+    "faithfully; do not invent a decision, confidence, issue, or revision it "
+    "did not already give."
+)
+
+
+def autopilot_critique_schema() -> dict[str, Any]:
+    """JSON schema for the fenced ``json:autopilot_critique`` verdict
+    (TD-21.16), derived from exactly what `extract_critique` consumes after
+    `_extract_json_payload`: a required `decision` enum (the same
+    ``{approve, revise, reject}`` set `extract_critique` enforces), an
+    optional `confidence` in ``[0, 1]``, an optional `issues` array of
+    strings, and the two optional revision objects a `revise` verdict may
+    carry. `additionalProperties: False` closes the object so a repair turn
+    cannot smuggle in a field `extract_critique` would silently ignore
+    anyway."""
+    return {
+        "type": "object",
+        "properties": {
+            "decision": {"enum": ["approve", "revise", "reject"]},
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "issues": {"type": "array", "items": {"type": "string"}},
+            "revised_action": {"type": "object"},
+            "revised_rationale": {"type": "object"},
+        },
+        "required": ["decision"],
+        "additionalProperties": False,
+    }
+
+
+def extract_critique_with_repair(
+    text: str,
+    *,
+    complete: CompleteFn,
+    site: str = _CRITIC_REPAIR_SITE,
+) -> PlannerCritique:
+    """TD-21.16: `extract_critique` first (unchanged, 0 calls on a clean
+    verdict); on a miss, ONE constrained completion turn against
+    `autopilot_critique_schema()` before the caller's existing
+    fallback-critic-provider / circuit-breaker path.
+
+    Persisted-state / dispatch semantics (before/after this conversion):
+    BEFORE, ANY unparseable critic reply (missing/garbled fence, missing or
+    invalid `decision`) was a FAILED REVIEW: `_mark_failure` opened the
+    critic provider's circuit-breaker counter and `_try_fallback_critic`
+    re-prompted a full fallback critic call from zero -- one extra critic
+    call per iteration (the handoff's "fallback provider" cost).
+    AFTER, a malformed-but-repairable verdict is recovered via one
+    constrained completion turn against the same local server the draft
+    ACTION/RATIONALE repairs already use (`action_repair_completer()`); the
+    recovered verdict's `parse_error` is empty, so the caller's existing
+    `if critique.parse_error:` branch treats it EXACTLY like a clean parse --
+    no `_mark_failure`, no fallback-critic call, no circuit-breaker trip. An
+    UNREPAIRABLE verdict is unchanged from before: this function returns the
+    SAME `PlannerCritique` `extract_critique` already produced (its
+    `parse_error` names the ORIGINAL fish failure, not the repair attempt's),
+    so the caller's fallback-critic-provider / circuit-breaker path fires
+    exactly as it did pre-conversion -- an unrecoverable verdict is still a
+    typed failure (`parse_status="failed"`), never a default verdict.
+
+    `require_evidence=True` (same live-smoke finding TD-21.2/.3 apply):
+    `confidence` is a number and `issues` are short strings -- the exact
+    invented-leaf class the evidence check targets. `decision` is itself a
+    short string too (not `const`-exempt, unlike an action's `type`
+    discriminator), so it is ALSO evidence-checked: a repair cannot invent an
+    approve/revise/reject the critic's own reply never stated in any form,
+    which is the one field this conversion must never fabricate.
+    """
+    parsed = extract_critique(text)
+    if not parsed.parse_error:
+        return parsed
+
+    result = parse_with_repair(
+        text,
+        schema=autopilot_critique_schema(),
+        complete=complete,
+        instruction=_CRITIC_REPAIR_INSTRUCTION,
+        site=site,
+        require_evidence=True,
+    )
+    if result.value is None:
+        parsed.parse_status = "failed"
+        parsed.repair_calls = result.repair_calls
+        return parsed
+
+    data = result.value
+    decision = str(data.get("decision", "")).strip().lower()
+    try:
+        confidence = float(data.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    issues_raw = data.get("issues", [])
+    if isinstance(issues_raw, list):
+        issues = [str(i) for i in issues_raw if str(i).strip()]
+    else:
+        issues = []
+    revised_action = data.get("revised_action")
+    revised_action = revised_action if isinstance(revised_action, dict) else None
+    revised_rationale = data.get("revised_rationale")
+    revised_rationale = revised_rationale if isinstance(revised_rationale, dict) else None
+
+    return PlannerCritique(
+        decision=decision,
+        confidence=confidence,
+        issues=issues,
+        revised_action=revised_action,
+        revised_rationale=revised_rationale,
+        raw_text=text or "",
+        parse_status="repaired",
+        repair_calls=result.repair_calls,
     )
 
 
@@ -1574,6 +1752,19 @@ def _archive_decision(
             "action_repair_calls": decision.action_repair_calls,
             "rationale_parse_status": decision.rationale_parse_status,
             "rationale_repair_calls": decision.rationale_repair_calls,
+            # TD-21.16: same "parsed"/"repaired"/"failed" vocabulary as the
+            # action/rationale fields above, from `extract_critique_with_repair`
+            # -- "" when no critique JSON was ever attempted (no critique object
+            # at all, or the critic invoke failed outright before any text
+            # existed to parse). UNLIKE the action/rationale fields, a missing
+            # key on a row written before this field existed must NOT be read
+            # as "parsed": pre-TD-21.16, an unparseable critique already had
+            # other persisted shapes (`critique_decision="unavailable"`, or the
+            # untouched "approve" dataclass default in shadow mode) — "parsed"
+            # was never the only prior state, so absence here means unknown,
+            # not "parsed". No backfill.
+            "critic_parse_status": critique.parse_status if critique else "",
+            "critic_repair_calls": critique.repair_calls if critique else 0,
         }
     )
 
@@ -1627,6 +1818,12 @@ def _critique_provider_event(
         "critique_decision": critique.decision if critique else "",
         "critique_confidence": critique.confidence if critique else 0.0,
         "parse_error": _clip(parse_error),
+        # TD-21.16: "parsed" / "repaired" / "failed" from
+        # `extract_critique_with_repair`; "" for a critique built without ever
+        # attempting JSON repair (e.g. the invoke itself failed, or this is a
+        # synthetic "critic circuit open" placeholder).
+        "parse_status": critique.parse_status if critique else "",
+        "repair_calls": critique.repair_calls if critique else 0,
     }
 
 

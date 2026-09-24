@@ -2485,3 +2485,221 @@ def test_rationale_repair_unrepairable_persists_empty_default_flagged_failed(
 
     assert decision.rationale == {"falsifier": "", "rubric_scores": {}}
     assert decision.rationale_parse_status == "failed"
+
+
+# ----- TD-21.16: repair-aware critic-verdict extraction -----
+
+
+def test_recovered_critic_verdict_repairs_without_fallback_or_circuit_trip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed-but-repairable critic verdict must NOT trip the critic's
+    per-provider circuit breaker and must NOT spend a fallback-critic call.
+    `codex` (critic) and `claude` (draft) each queue exactly ONE response --
+    an unexpected second call to either raises IndexError, proving no
+    fallback/re-review was attempted."""
+    import json
+
+    original = {"type": "structural_experiment", "flags": {"a": True}}
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=True, text=_action_text(original)
+            )
+        ],
+    )
+    malformed = (
+        "The draft looks fine overall. My decision is to approve it. "
+        "confidence 0.8. No real issues here."
+    )
+    codex = FakeProvider(
+        "codex",
+        [PlannerProviderResult(provider="codex", role="critique", ok=True, text=malformed)],
+    )
+
+    complete_calls: list[Any] = []
+
+    def fake_complete(messages, schema):
+        complete_calls.append((messages, schema))
+        return json.dumps({"decision": "approve", "confidence": 0.8, "issues": []})
+
+    monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: fake_complete)
+
+    planner_state: dict[str, Any] = {}
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=planner_state,
+        settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert decision.critique.confidence == 0.8
+    assert decision.critique.parse_error == ""
+    assert decision.critique.parse_status == "repaired"
+    assert decision.critique.repair_calls == 1
+    assert len(complete_calls) == 1  # exactly one repair turn
+    assert len(codex.calls) == 1  # no fallback re-review from the critic
+    assert planner_state["codex"]["failures"] == 0  # success, not a circuit-breaker failure
+    assert planner_coordinator._circuit_is_open(planner_state, "codex") is False
+    assert decision.degraded is False
+
+
+def test_unrepairable_critic_verdict_is_typed_failure_and_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Contrast case: when the TD-21.16 repair turn ALSO fails, the existing
+    fallback-critic-provider / circuit-breaker path fires exactly as it did
+    before this conversion (the default codex-critic fallback is `claude`,
+    same model as the draft provider here, so `_critic_fallback_provider_name`
+    is disabled -- same precondition as every pre-existing fail-closed test in
+    this module). The unrecoverable verdict is a typed failure
+    (`parse_status="failed"`), never a default verdict, and is counted in the
+    shared `STRUCTURED_OUTPUT_REPAIR_COUNTS` telemetry."""
+    from src.structured_output.repair import STRUCTURED_OUTPUT_REPAIR_COUNTS
+
+    original = {"type": "structural_experiment", "flags": {"a": True}}
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=True, text=_action_text(original)
+            )
+        ],
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=True,
+                text="Unable to read /mnt/raid0/llm/tmp/tmpXXXX.txt: file not found",
+            )
+        ],
+    )
+
+    def failing_complete(messages, schema):
+        return "still not json"
+
+    monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: failing_complete)
+
+    key = (planner_coordinator._CRITIC_REPAIR_SITE, "failed")
+    before = STRUCTURED_OUTPUT_REPAIR_COUNTS.get(key, 0)
+
+    state: dict[str, Any] = {}
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.action is not None
+    assert decision.action["type"] == "structural_experiment"  # trusted draft KEPT
+    assert decision.critique is not None
+    assert decision.critique.decision == "unavailable"
+    assert decision.critique.parse_status == "failed"
+    assert decision.critique.repair_calls == 1
+    assert decision.degraded is True
+    assert state.get("codex", {}).get("failures", 0) >= 1  # circuit breaker DID accumulate
+    assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get(key, 0) == before + 1  # counted
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == "critic_unavailable"
+
+
+def test_clean_critic_verdict_never_invokes_repair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Happy path: a clean, cleanly-fenced critic verdict costs 0 repair
+    calls and never touches the repair completer at all."""
+
+    def boom(messages, schema):
+        raise AssertionError("repair completer must not be called on a clean verdict")
+
+    monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: boom)
+
+    original = MEMRL_NUMERIC_ACTION
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=True, text=_action_text(original)
+            )
+        ],
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.9, "issues": []}),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert decision.critique.parse_status == "parsed"
+    assert decision.critique.repair_calls == 0
+
+
+def test_external_cli_critic_trailing_noise_recovered_by_fish_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An external-CLI critic (codex) commonly appends trailing bracket noise
+    after its closing fence. The shared deterministic `fish_json` balancer
+    already recovers this WITHOUT a repair turn (0 calls) -- proving the
+    TD-21.16 conversion does not spend a completion turn recovering noise the
+    existing fish step already handles, regardless of which CLI/transport
+    produced the critique."""
+
+    def boom(messages, schema):
+        raise AssertionError("repair completer must not be called: fish alone recovers this")
+
+    monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: boom)
+
+    original = {"type": "structural_experiment", "flags": {"a": True}}
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=True, text=_action_text(original)
+            )
+        ],
+    )
+    noisy = (
+        "```json:autopilot_critique\n"
+        '{"decision": "reject", "confidence": 0.95, "issues": ["bad draft"]}\n'
+        "}\n"
+        "```"
+    )
+    codex = FakeProvider(
+        "codex",
+        [PlannerProviderResult(provider="codex", role="critique", ok=True, text=noisy)],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.critique is not None
+    assert decision.critique.decision == "reject"
+    assert decision.critique.parse_status == "parsed"
+    assert decision.critique.repair_calls == 0
+    assert len(codex.calls) == 1
