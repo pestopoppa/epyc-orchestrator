@@ -194,10 +194,20 @@ def test_structural_edge_no_solution_marker_is_false() -> None:
     # root repo) is ratified — at that point the SAME input instead raises
     # AnswerParseError (see test_debug_scorer_td21_parse_exclusion.py for the
     # flag-aware behavior at both settings).
+    #
+    # Restore the PRIOR value (not a hardcoded False) in `finally`: this
+    # module does a plain `import debug_scorer`, the same `sys.modules`
+    # entry every other test file in this process sees (including the B7
+    # golden-corpus pin) — leaving the flag forced to False here leaked into
+    # and silently masked a real classification defect in
+    # `test_b7_golden_corpus_pin.py` when both files ran in the same pytest
+    # invocation (2026-09-24, TD-21.14 EQ-1/E19 post-ratification review).
+    _prior_flag = debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS
     debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS = False
     try:
         assert _st("the answer is " + GOLD_MATH_LIST, GOLD_MATH_LIST) is False
     finally:
+        debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS = _prior_flag
         debug_scorer.reset_parse_failure_stats()
 
 

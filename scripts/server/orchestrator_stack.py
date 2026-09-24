@@ -2189,12 +2189,10 @@ PRODUCTION_FEATURE_WAVE_OVERRIDES: dict[str, bool] = {
     # value is validated against the caller's JSON Schema, repaired once on
     # failure, and the response is flagged 422 when still invalid after
     # exhausting the repair attempt.
-    # OP-51 SUSPENDED 2026-09-24 (operator): the first live smoke returned HTTP 500
-    # ("repeated no-progress nudges") for a REPL /chat request with an output_schema
-    # that returned the correct value with the flag off. Cause under diagnosis
-    # (schema preamble vs a coder_escalation connection_error). Re-enable after a
-    # fix and a with/without A/B.
-    "final_schema_validation": False,
+    # OP-51 RE-ENABLED 2026-09-24 after an on/off A/B (15:35Z, region free): 3/3 on ->
+    # HTTP 200 schema-valid {"result": 51}; 3/3 off -> HTTP 200 bare "51". The suspended
+    # 13:41Z failures were a held CPU region (AutoKernel calibration), not this flag.
+    "final_schema_validation": True,
 }
 
 LANGGRAPH_PHASE3_LIVE_ENV_VARS: tuple[str, ...] = (
@@ -2738,12 +2736,10 @@ def start_document_formalizer(bench_force: bool = False) -> ProcessInfo | None:
 
 
 def start_sd_server(bench_force: bool = False) -> ProcessInfo | None:
-    """Start the sd-server diffusion inference service (stable-diffusion.cpp native).
+    """Start the stack-managed image service (legacy role name: sd_server).
 
-    Replaced the ComfyUI-GGUF + PyTorch path 2026-05-07 — sd.cpp's native ggml
-    backend keeps Q8_0 weights packed and uses native quantized GEMM kernels,
-    skipping ComfyUI-GGUF's per-layer dequant-to-BF16 step. Measured ~1.74x
-    wall-clock and ~3.43x sampler s/iter speedup at 512 sq / 4 steps.
+    The manifest selects Qwen-Image-2.1's isolated CPU Diffusers runner while
+    preserving the existing role name and sdapi-compatible client contract.
     """
     return start_aux_service("sd_server", bench_force=bench_force)
 

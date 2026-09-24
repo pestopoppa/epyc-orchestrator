@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 from pydantic_graph import GraphRunContext
 
+from src.autopilot_core.measurement_guards import inband_error_text as _inband_error_text
 from src.escalation import ErrorCategory
 from src.exceptions import ContextOverflowError, InferenceError
 from src.graph.error_classifier import classify_error as _classify_error_impl
@@ -80,6 +81,7 @@ from src.graph.observability import (  # noqa: F401
 )
 from src.graph.decision_gates import (  # noqa: F401
     _check_approval_gate,
+    _is_infra_failure,
     _make_end_result,
     _should_escalate,
     _should_retry,
@@ -359,6 +361,31 @@ def _is_comment_only(code: str) -> bool:
         if stripped and not stripped.startswith("#"):
             return False
     return True
+
+
+def _backend_infra_sentinel(raw_output: str) -> str | None:
+    """Return ``raw_output`` when it IS an in-band backend/infra sentinel, else None.
+
+    ``llm_call`` (``src.llm_primitives.primitives._llm_call_impl``) turns EVERY
+    exception the backend call raises -- a placement/admission timeout
+    (``ContentionDenied``, e.g. ``[ERROR: placement timeout role=... reason=
+    race_lost holders=[] after 60.0s]``), a contention-gate denial, a
+    circuit-open refusal, a queue-full rejection, a dead connection -- into a
+    same-shaped ``f"[ERROR: {e}]"`` STRING return rather than raising. A REPL
+    turn's raw LLM output IS that string exactly when the backend denied the
+    call before generation ever started: the model never saw the prompt, so
+    there is no "turn" to grade at all, and treating the string as a
+    comment-only/unparseable model turn (and nudging toward "write executable
+    code") mis-scores a host-resource denial as a model failure.
+
+    Reuses the ONE canonical anchor (``INBAND_ERROR_PREFIX`` /
+    ``inband_error_text``, ``src/autopilot_core/measurement_guards.py``)
+    instead of a second copy of the prefix literal -- anchored to
+    start-of-answer (after stripping leading whitespace) so a model
+    legitimately discussing ``"[ERROR:"`` mid-answer is never mistaken for
+    this.
+    """
+    return _inband_error_text(raw_output)
 
 
 def _no_executable_code_nudge(state: TaskState, *, comment_ratio: float | None = None) -> str:
@@ -1057,6 +1084,35 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     # before any extraction/rescue can alter it. Flag-gated default-off (no-op in production).
     _bep_turn_trace(state.turns, role, raw_llm_output, prompt=prompt,
                     repeat_count=getattr(state, "repl_noprogress_count", None))
+
+    # Backend/infra denial masquerading as model output (INC-20260924-repl-
+    # backend-error-masking): `llm_call` never raises for a placement/admission
+    # timeout, a circuit-open breaker, or a dead backend connection -- it
+    # returns the `[ERROR: ...]` sentinel as ordinary text (see
+    # `_backend_infra_sentinel`). The model was never called, so this MUST end
+    # the turn as an infrastructure failure here, before any of the "did the
+    # model write code" heuristics below (comment-only nudge, prose rescue,
+    # FINAL extraction) get a chance to read it as a turn the model produced.
+    # No retry, no escalation to a different role: the denial is a fact about
+    # a HOST resource (the CPU/GPU region another request holds), not a
+    # capability gap a bigger model can out-think -- escalating just re-queues
+    # the same 60s wait against the same held region (observed: escalation to
+    # coder_escalation under GPU contention hit the identical wall). The
+    # sentinel is returned verbatim as `error` (already `[ERROR: ...]`-prefixed)
+    # so `_annotate_error` (`chat_pipeline/stages.py`) maps it to the correct
+    # HTTP status (504 timeout, 503 unavailable, 429 admission, 502 backend)
+    # instead of it being wrapped as `[FAILED: ...]` and read back as a generic
+    # 500 -- see `_is_infra_failure` at each call site in `graph/nodes.py` /
+    # `graph/langgraph/nodes.py`.
+    _infra_sentinel = _backend_infra_sentinel(raw_llm_output)
+    if _infra_sentinel is not None:
+        log.warning(
+            "REPL turn %d (role=%s) received an in-band backend/infra sentinel "
+            "instead of model output -- ending as infra failure, no nudge: %s",
+            state.turns, role, _infra_sentinel[:300],
+        )
+        _record_session_turn(state, role=str(role), error=_infra_sentinel)
+        return "", _infra_sentinel, False, {"_infra_failure": True}
 
     # Reasoning length alarm (short-m@k Action 9): if <think> exceeds
     # 1.5× band budget, retry once with a conciseness nudge.

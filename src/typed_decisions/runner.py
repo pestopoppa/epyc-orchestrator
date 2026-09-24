@@ -46,6 +46,7 @@ from src.typed_decisions.confidence import (
     normalize_probabilities,
     score_confidence,
 )
+from src.typed_decisions.schema import _labels as _schema_labels
 from src.typed_decisions.schema import build_response_schema
 from src.typed_decisions.types import (
     Decision,
@@ -68,7 +69,30 @@ _DECODE_SEED = 0
 # Output budget when the caller does not pin n_tokens: one answer object per
 # question plus room for the JSON envelope; never below the role floor.
 _MIN_N_TOKENS = 256
-_TOKENS_PER_QUESTION = 64
+# Per-answer-object structural tokens (quoted question id, value key/value,
+# the "probabilities" key, the "confidence" key/value, and the surrounding
+# braces/colons/commas) — everything in an answer entry EXCEPT its
+# probability-label entries, which scale with the question's candidate count
+# (2 for noul, len(options) for choice, len(levels) for score) and are
+# costed separately below.
+_TOKENS_PER_QUESTION_BASE = 30
+# Tokens per probability-label entry ("<label>": <number>,) — quoted label
+# (a candidate string can be multiple subword tokens), colon, a decimal
+# probability, and a comma.
+_TOKENS_PER_LABEL = 9
+# Safety multiplier over the structural estimate. TD-1d.2 window-diag
+# (2026-09-24): the old flat `64 tokens/question` heuristic undershot a real
+# 24-question decision_set_v1 catalogue -- the MINIMAL valid answer for that
+# exact catalogue measured ~999 tokens compact / ~1621 tokens pretty-printed
+# (Qwen3-family tokenizer, offline proxy for frontdoor's Qwen3.6 tokenizer;
+# see tests/unit/test_typed_decisions_runner.py), against the old 1600-token
+# TOTAL budget -- i.e. pretty-printed JSON alone (a formatting choice models
+# commonly make even under schema-constrained decoding) already exceeded the
+# whole budget with zero margin for anything else. 1.6x covers
+# pretty-printing whitespace, longer-than-minimal numeric/label formatting,
+# and a bounded amount of preamble before the constrained JSON.
+_TOKENS_SAFETY_MULTIPLIER = 1.6
+# Flat top-level envelope overhead ({"answers": {...}}) plus rounding slack.
 _TOKENS_OVERHEAD = 64
 
 _CORRECTION_HEADER = "CORRECTION"
@@ -173,7 +197,7 @@ def run_typed_decisions(
     prompt = _build_prompt(state, catalogue, schema)
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     if n_tokens is None:
-        n_tokens = _default_n_tokens(len(catalogue))
+        n_tokens = _default_n_tokens(catalogue)
 
     validator = Draft202012Validator(schema)
     attempts = 1 + max(0, int(max_retries))
@@ -248,8 +272,24 @@ def _validated_catalogue(questions: Sequence[Question]) -> list[Question]:
     return catalogue
 
 
-def _default_n_tokens(question_count: int) -> int:
-    return max(_MIN_N_TOKENS, _TOKENS_PER_QUESTION * question_count + _TOKENS_OVERHEAD)
+def _default_n_tokens(questions: Sequence[Question]) -> int:
+    """Schema-shape-aware output budget for the JSON arm's one-pass answer.
+
+    Scales with each question's actual candidate-label count (schema.py's
+    ``_labels``: 2 for noul, ``len(options)`` for choice, ``len(levels)`` for
+    score) rather than a flat per-question constant -- a catalogue skewed
+    toward 4-way choice/score questions needs a materially bigger
+    "probabilities" object per answer than one that is all noul. See the
+    module-level constants' docstrings for the calibration evidence.
+    """
+    structural = sum(
+        _TOKENS_PER_QUESTION_BASE + _TOKENS_PER_LABEL * len(_schema_labels(question))
+        for question in questions
+    )
+    return max(
+        _MIN_N_TOKENS,
+        int(structural * _TOKENS_SAFETY_MULTIPLIER) + _TOKENS_OVERHEAD,
+    )
 
 
 def _build_prompt(state: str, questions: Sequence[Question], schema: dict[str, Any]) -> str:

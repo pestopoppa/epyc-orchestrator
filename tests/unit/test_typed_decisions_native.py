@@ -2022,3 +2022,145 @@ class TestNativeParallelWithRealPrimitives:
         assert by_id["noul"].value is True
         for _prims, backend in pool_and_backends:
             backend.infer.assert_called_once()
+
+
+# ── Wire-level: real LLMPrimitives, mocked HTTP, no fake primitives double ──
+
+
+class TestPostSamplingProbsOnTheWire:
+    """TD-1d.2 window-diag (2026-09-24): after 71be6ed3 (which threads
+    ``post_sampling_probs=True`` through ``LLMPrimitives.llm_call`` ->
+    ``InferenceRequest`` -> both backend payload builders), the LIVE re-bench
+    is unchanged -- native:full 1/15 ``native_unknown_candidate``, id_only
+    0/16 -- as if the flag never reached the server.
+
+    Every existing ``post_sampling_probs`` test (``test_llama_server.py``'s
+    ``test_build_payload_forwards_post_sampling_probs`` and
+    ``test_post_sampling_probs_translates_to_openai_chat_params``,
+    ``test_typed_decisions_native.py``'s
+    ``test_captured_kwargs_carry_cue_grammar_and_probability_capture``)
+    starts from an already-built ``InferenceRequest`` or a ``_FakePrimitives``
+    double that just records kwargs -- none of them drives the REAL upper
+    stack bench.py actually uses: ``run_typed_decisions_native`` ->
+    ``LLMPrimitives.llm_call`` -> ``_llm_call_impl`` -> ``_real_call`` ->
+    ``_real_call_impl`` -> ``_call_caching_backend`` (constructs the
+    ``InferenceRequest``) -> ``CachingBackend`` -> ``LlamaServerBackend``. A
+    drop anywhere in THAT stack -- a kwarg the primitives-level `llm_call`
+    signature doesn't forward, a caching/admission wrapper that rebuilds the
+    request without every field -- would be invisible to those tests and
+    would reproduce exactly the live symptom. This test drives the real
+    stack (only the httpx transport is mocked, matching bench's own
+    ``_live_primitives()`` construction: ``LLMPrimitives(mock_mode=False,
+    server_urls=..., num_slots=...)``, no ``registry=``) and asserts the
+    flag is on the wire.
+    """
+
+    def _live_primitives(self, monkeypatch):
+        """Mirror ``src/typed_decisions/bench.py::_live_primitives`` exactly,
+        against a fake server URL, with the shared ``heavy_model.lock`` file
+        (a REAL, production-shared resource -- role=frontdoor is a heavy
+        role) replaced by a no-op so this test never touches it."""
+        import contextlib
+
+        from src.llm_primitives import LLMPrimitives
+
+        # frontdoor routes through /v1/chat/completions in production (J12);
+        # force the same routing here rather than depending on whatever
+        # generated stack-priors artifact (or lack of one) this process sees.
+        monkeypatch.setenv("ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES", "frontdoor")
+
+        @contextlib.contextmanager
+        def _noop_lock(*_args, **_kwargs):
+            yield
+
+        monkeypatch.setattr(
+            "src.runtime.inference_lock.inference_lock", _noop_lock
+        )
+
+        primitives = LLMPrimitives(
+            mock_mode=False,
+            server_urls={"frontdoor": "http://test-native-wire:8080"},
+            num_slots=2,
+        )
+        assert primitives._backends.get("frontdoor") is not None, (
+            "test setup: no CachingBackend built for frontdoor -- fix the "
+            "fixture, not the assertion below"
+        )
+        return primitives
+
+    def _chat_response(self, *, n_filler_rows: int):
+        """A /v1/chat/completions response in the post_sampling_probs=True
+        shape (``prob``/``top_probs``, not ``logprob``/``top_logprobs``) --
+        ``n_filler_rows`` opaque cue-token rows followed by the real "true"
+        answer row, matching native.py's cue+answer generated-token layout
+        (mirrors this file's ``_build_meta`` helper, but wire-shaped).
+        """
+        from unittest.mock import Mock
+
+        filler = [
+            {"id": _CUE_TOKEN, "token": "", "prob": 0.0, "top_probs": []}
+            for _ in range(n_filler_rows)
+        ]
+        answer = {
+            "id": _DEFAULT_IDS["true"],
+            "token": "true",
+            "prob": 0.9,
+            "top_probs": [
+                {"id": _DEFAULT_IDS["true"], "token": "true", "prob": 0.9},
+                {"id": _DEFAULT_IDS["false"], "token": "false", "prob": 0.1},
+            ],
+        }
+        response = Mock()
+        response.status_code = 200
+        response.raise_for_status = Mock()
+        response.json.return_value = {
+            "choices": [
+                {
+                    "message": {"content": "true"},
+                    "finish_reason": "stop",
+                    "logprobs": {"content": [*filler, answer]},
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": len(filler) + 1},
+            "timings": {"prompt_ms": 5.0, "predicted_ms": 5.0, "predicted_per_second": 30.0},
+        }
+        return response
+
+    def test_post_sampling_probs_reaches_the_wire_through_the_real_stack(
+        self, monkeypatch
+    ):
+        primitives = self._live_primitives(monkeypatch)
+        backend = primitives._backends["frontdoor"].backend
+        captured: dict[str, Any] = {}
+
+        tokenizer = _FakeTokenizer()
+
+        def _post(_path, json=None, timeout=None):
+            captured.update(json or {})
+            # The answer token is always the LAST of the request's own
+            # max_tokens budget (native.py sizes n_tokens exactly to its
+            # forced cue+answer sequence) -- read it back from the just-
+            # captured request rather than recomputing the cue length by a
+            # second, easily-mismatched route.
+            max_tokens = int((json or {}).get("max_tokens") or 1)
+            return self._chat_response(n_filler_rows=max(0, max_tokens - 1))
+
+        monkeypatch.setattr(backend.client, "post", _post)
+
+        result = run_typed_decisions_native(
+            primitives,
+            state=STATE,
+            questions=[NOUL],
+            role="frontdoor",
+            tokenize_fn=tokenizer,
+        )
+
+        assert captured, "backend.client.post was never called -- fix the fixture, not this assert"
+        assert captured.get("post_sampling_probs") is True, (
+            "post_sampling_probs did not reach the /v1/chat/completions wire "
+            f"through the real LLMPrimitives.llm_call stack; captured payload "
+            f"keys={sorted(captured)}"
+        )
+        # Full round trip resolves too -- not just "the key is present somewhere".
+        assert result.failures == (), result.failures
+        assert _by_id(result)["noul"].value is True

@@ -212,8 +212,26 @@ class BackendHealthTracker:
 
         Returns:
             FailoverReason value string: "circuit_open", "timeout",
-            "connection_error", or "oom".
+            "connection_error", "oom", or "admission_denied".
         """
+        # Structural check first: src/scheduling/contention_gate.py's
+        # ContentionDenied carries a closed `failure_provenance` record
+        # explicitly so callers do NOT have to string-classify its message
+        # (see its docstring). A contention/admission-gate denial means the
+        # backend is up and healthy but momentarily over its concurrency
+        # budget (e.g. another session's job holding the GPU lane) — that is
+        # NOT the same fact as "connection_error" (backend unreachable/down),
+        # and the string fallback below used to default it there, which made
+        # a live-but-busy backend look dead in fallback logs (TD-21
+        # window-diag 2026-09-24: coder_escalation -> frontdoor fallback
+        # logged as connection_error while :8083's own /health was OK).
+        provenance = getattr(error, "failure_provenance", None)
+        if isinstance(provenance, dict) and provenance.get("class") in (
+            "admission_denied",
+            "admission_timeout",
+        ):
+            return "admission_denied"
+
         msg = str(error).lower()
         if "circuit open" in msg or "unavailable" in msg:
             return "circuit_open"
@@ -223,6 +241,8 @@ class BackendHealthTracker:
             return "oom"
         if any(kw in msg for kw in ("connection", "refused", "unreachable", "502", "503")):
             return "connection_error"
+        if "admission" in msg and ("queue full" in msg or "denied" in msg):
+            return "admission_denied"
         return "connection_error"  # default to infrastructure issue
 
     def reset(self) -> None:
