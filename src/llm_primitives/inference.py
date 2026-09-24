@@ -1322,7 +1322,10 @@ class InferenceMixin:
 
             req_elapsed_ms = (time.perf_counter() - req_started) * 1000
             transport = "stream" if can_stream else "batch"
-            self._set_last_inference_meta({
+            # Keep a LOCAL handle on this call's dict: the plain attribute is shared by
+            # concurrent calls on this instance (asyncio.to_thread), so the follow-up
+            # writes below must not re-read it (TD-21.33c).
+            call_meta: dict[str, Any] = {
                 "role": role,
                 "transport": transport,
                 "elapsed_ms": req_elapsed_ms,
@@ -1336,9 +1339,10 @@ class InferenceMixin:
                 "completion_probabilities": list(
                     getattr(result, "completion_probabilities", []) or []
                 ),
-            })
+            }
+            self._set_last_inference_meta(call_meta)
             if getattr(request, "chat_payload", None) is not None:
-                self._last_inference_meta["tool_calls"] = list(
+                call_meta["tool_calls"] = list(
                     getattr(result, "tool_calls", None) or []
                 )
             if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
@@ -1372,13 +1376,13 @@ class InferenceMixin:
                 get_shared_pool_admission().report_pool_exhausted(backend_url)
             _raise_if_context_overflow(result, role, backend_url)
             if max_tokens_clamp is not None:
-                self._last_inference_meta["max_tokens_clamped"] = dict(max_tokens_clamp)
+                call_meta["max_tokens_clamped"] = dict(max_tokens_clamp)
                 reason = str(getattr(result, "completion_reason", "") or "")
                 if reason in {"length", "limit", "context_limit"} or (
                     getattr(result, "tokens_generated", 0) >= max_tokens_clamp["to"]
                 ):
                     result.completion_reason = "context_limit"
-                    self._last_inference_meta["completion_reason"] = "context_limit"
+                    call_meta["completion_reason"] = "context_limit"
             pool_success = True
 
             # Record success/failure for circuit breaker.

@@ -1015,6 +1015,44 @@ class TestMaxTokensClamp:
         assert meta["completion_reason"] == "context_limit"
         assert meta["max_tokens_clamped"]["from"] == 32768
 
+    def test_clamp_annotation_lands_on_this_calls_meta_not_a_concurrent_one(self, fresh_pool):
+        """TD-21.33c: a concurrent call on the SAME primitives (asyncio.to_thread) can replace the
+        shared `_last_inference_meta` attribute between this call's set and its follow-up writes;
+        the clamp annotation must land on this call's own dict (the per-call getter), never on
+        the other call's."""
+        from src.llm_primitives import LLMPrimitives
+
+        set_context_limit_resolver(ContextLimitResolver(
+            live=False, registry_facts=lambda: {8083: {"context_tokens": 196608, "slots": 2}},
+            role_urls=lambda: {}))
+        tracker = MagicMock()
+        tracker.is_available.return_value = True
+        prims = LLMPrimitives(mock_mode=False, server_urls={"architect_general": "http://localhost:8083"},
+                              health_tracker=tracker)
+
+        def infer(role_config, request):
+            r = _ok_result("cut")
+            r.completion_reason = "limit"
+            r.tokens_generated = request.n_tokens
+            return r
+
+        backend = MagicMock(spec=[])
+        backend.infer = MagicMock(side_effect=infer)
+        prims._backends["architect_general"] = backend
+        foreign = {"role": "other_request"}
+        real_set = prims._set_last_inference_meta
+
+        def set_then_interleave(meta):
+            real_set(meta)
+            prims._last_inference_meta = foreign  # another thread's call lands right here
+
+        prims._set_last_inference_meta = set_then_interleave
+        assert prims._real_call("x" * 270_000, "architect_general", n_tokens=32768) == "cut"
+        assert foreign == {"role": "other_request"}
+        mine = prims.get_last_inference_meta()
+        assert mine["completion_reason"] == "context_limit"
+        assert mine["max_tokens_clamped"]["from"] == 32768
+
 
 class TestModelsAdvertiseContextLength:
     def test_models_list_and_get_carry_context_length(self, monkeypatch):
