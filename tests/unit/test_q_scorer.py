@@ -188,16 +188,18 @@ def _write_stack_priors(path: Path, roles: dict[str, dict[str, Any]]) -> Path:
 
 class TestScoringConfigDefaults:
     def test_cost_penalty_lambda_default(self):
-        # RTG-09 (2026-09-24): demoted from 0.15 to 0.05 -- tokens/sec is now
-        # the SECONDARY speed signal; cost_lambda_duration (wall-clock) is
-        # primary. See test_cost_lambda_duration_is_primary_over_tokens_per_sec.
         cfg = ScoringConfig()
-        assert cfg.cost_penalty_lambda == 0.05
+        assert cfg.cost_penalty_lambda == 0.15
 
-    def test_cost_lambda_duration_is_primary_over_tokens_per_sec(self):
-        """RTG-09: wall-clock duration must outweigh the demoted tokens/sec term."""
+    def test_cost_lambda_duration_default_is_off(self):
+        """RTG-09 (2026-09-24): DEFAULT-OFF. Flipping compute_reward's output
+        distribution is a routing_reward instrument-era boundary (rewards
+        feed Q-updates continuously) and requires operator ratification via
+        scripts/operator/ratify_rtg09_duration_reward_20260924.sh -- see
+        tests/unit/test_q_reward_duration.py for the full contract, including
+        the byte-identical-output proof."""
         cfg = ScoringConfig()
-        assert cfg.cost_lambda_duration > cfg.cost_penalty_lambda
+        assert cfg.cost_lambda_duration == 0.0
 
     def test_baseline_tps_has_all_production_roles(self):
         """Every currently-live q_scorer role has a baseline t/s entry, and
@@ -891,16 +893,7 @@ class TestComputeRewardNoCost:
 
 
 def _latency_only_config(**overrides) -> ScoringConfig:
-    """Config with quality-gap and memory penalties zeroed (isolate latency tests).
-
-    Pins cost_penalty_lambda=0.15 explicitly (rather than inheriting whatever
-    ScoringConfig's default happens to be) so these tests describe the
-    tokens/sec formula's mechanics with clean round numbers, independent of
-    the RTG-09 production-default demotion covered by
-    TestScoringConfigDefaults.test_cost_penalty_lambda_default. These tests
-    also never pass task_duration_s, so the RTG-09 duration dimension stays
-    inert (warn-only) throughout this class.
-    """
+    """Config with quality-gap and memory penalties zeroed (isolate latency tests)."""
     overrides.setdefault(
         "baseline_tps_by_role",
         {
@@ -908,7 +901,6 @@ def _latency_only_config(**overrides) -> ScoringConfig:
             "architect_general": 4.3,
         },
     )
-    overrides.setdefault("cost_penalty_lambda", 0.15)
     return ScoringConfig(cost_lambda_quality_gap=0.0, cost_lambda_memory=0.0, **overrides)
 
 

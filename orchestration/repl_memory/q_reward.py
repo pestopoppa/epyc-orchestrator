@@ -123,19 +123,29 @@ def compute_reward(
       - Plan review bonus: +0.1 if approved, -0.2 if corrected
 
     Cost penalty (xRouter-style, correctness-gated), two speed dimensions:
-      - PRIMARY (RTG-09): wall-clock task duration, `task_duration_s` (the
-        caller-supplied task_completed.timestamp - task_started.timestamp).
-        Graded 0..cost_lambda_duration between the role's measured p50 (no
-        penalty) and p90 (full weight), saturating beyond p90. This axis sees
-        orchestration/tool overhead that tokens/sec cannot.
-      - SECONDARY (demoted 2026-09-24): tokens/sec-derived latency,
+      - Wall-clock task duration, `task_duration_s` (the caller-supplied
+        task_completed.timestamp - task_started.timestamp). RTG-09,
+        DEFAULT-OFF (`config.cost_lambda_duration == 0.0`): flipping this on
+        is a routing_reward instrument-era change (rewards feed Q-updates
+        continuously) and requires operator ratification --
+        scripts/operator/ratify_rtg09_duration_reward_20260924.sh. Once
+        ratified this becomes the PRIMARY speed axis: graded
+        0..cost_lambda_duration between the role's measured p50 (no penalty)
+        and p90 (full weight), saturating beyond p90. Sees orchestration/tool
+        overhead that tokens/sec cannot.
+      - tokens/sec-derived latency (unchanged default, 0.15; demoted to 0.05
+        only at the same ratified boundary that turns duration on):
         cost_ratio = actual_elapsed / expected_elapsed,
         penalty = cost_penalty_lambda * max(0, cost_ratio - 1.0).
       - Both are only applied when quality reward > 0 (correct answers).
-      - `task_duration_s=None` (caller did not wire it) or a role with no
-        `baseline_duration_by_role` entry SKIPS the duration dimension only
-        (warned once, never silent, never defaulted to a fabricated penalty)
-        -- the other dimensions are independent and still apply.
+      - While `cost_lambda_duration > 0`: `task_duration_s=None` (caller did
+        not wire it) or a role with no `baseline_duration_by_role` entry
+        SKIPS the duration dimension only (warned once, never silent, never
+        defaulted to a fabricated penalty) -- the other dimensions are
+        independent and still apply. While `cost_lambda_duration == 0` (the
+        default), the whole dimension -- warnings included -- is inert, so an
+        unratified duration axis produces zero reward delta and zero log
+        noise for every input.
 
     Returns the final reward clamped to [-1, 1].
     """
@@ -176,6 +186,24 @@ def compute_reward(
 
     # Cost penalty: only penalize correct answers that were slower than expected.
     # Incorrect answers already receive low/zero reward — no cost signal needed.
+    #
+    # RTG-09 NOTE on `task_duration_s` and this guard: Dimension 0 (below)
+    # lives inside this `if cost_metrics` block too, even though its own
+    # arithmetic only needs `task_duration_s` and `role`, neither of which is
+    # cost_metrics-shaped data. This is DELIBERATE, not a coupling bug: `role`
+    # (the key every per-role baseline in this function is keyed by,
+    # including baseline_duration_by_role) is read a few lines below FROM
+    # cost_metrics ("producer_role" / "final_answer_role") -- there is no
+    # other source for it. Without cost_metrics there is no resolvable role,
+    # and without a role the duration baseline lookup cannot proceed
+    # regardless of where the `if` sits. So a task with a real
+    # `task_duration_s` but no `cost_metrics` correctly loses the duration
+    # axis for the same reason it already loses the tokens/sec, quality-gap,
+    # and memory-tier axes: none of them have anywhere to look up a role.
+    # Every real caller (q_scorer._score_task, replay/engine.py,
+    # rescore_rewards_from_progress.py) passes `cost_metrics` as the same
+    # TASK_COMPLETED `data` dict it derives duration from, so this is not
+    # observed to happen in practice either.
     if cost_metrics and reward > 0:
         tokens_gen = cost_metrics.get("tokens_generated", 0)
         # cost_metrics is the TASK_COMPLETED entry's data dict, which carries the
@@ -204,19 +232,30 @@ def compute_reward(
             # src/api/models/requests.py).
             _warn_unpriced_role(role)
 
-        # Dimension 0 (RTG-09): wall-clock task-duration penalty -- the
-        # PRIMARY speed axis. Wall-clock, not tokens/sec: tokens/sec is
-        # gameable through tool calls and blind to orchestration/tool
-        # overhead (DAR handoff: median wall/model-compute overhead 1.60x,
-        # p90 9.09x over 19,433 tasks; worker_vision spends ~0.4s of model
-        # compute inside ~11.9s of wall clock).
+        # Dimension 0 (RTG-09): wall-clock task-duration penalty. Intended as
+        # the PRIMARY speed axis once ratified -- wall-clock, not tokens/sec:
+        # tokens/sec is gameable through tool calls and blind to
+        # orchestration/tool overhead (DAR handoff: median wall/model-compute
+        # overhead 1.60x, p90 9.09x over 19,433 tasks; worker_vision spends
+        # ~0.4s of model compute inside ~11.9s of wall clock).
         #
-        # Graded, not a single ratio threshold: 0 penalty at the role's
-        # measured p50, scaling linearly to full `cost_lambda_duration`
-        # weight at p90, saturating (never exceeding full weight) beyond it.
-        # This is deliberately continuous -- CJ-8/L665's broader point is that
-        # a success/failure-shaped reward wastes the graded signal the
-        # underlying measurement actually carries.
+        # DEFAULT-OFF via `config.cost_lambda_duration == 0.0`. A change to
+        # compute_reward's output distribution is a routing_reward
+        # instrument-era boundary (orchestration/instrument_eras.yaml,
+        # human-amendment-only) because rewards feed Q-updates continuously,
+        # so the behaviour flip and the era boundary must land together, by
+        # operator ratification (scripts/operator/ratify_rtg09_duration_reward_20260924.sh).
+        # The whole dimension -- including its own-missing-data warnings --
+        # is gated on the lambda being non-zero: an inert axis (lambda==0)
+        # must produce ZERO reward delta AND zero log noise, not warn about
+        # coverage gaps for a dimension nobody has turned on yet.
+        #
+        # Once ratified (lambda > 0), graded, not a single ratio threshold: 0
+        # penalty at the role's measured p50, scaling linearly to full
+        # `cost_lambda_duration` weight at p90, saturating (never exceeding
+        # full weight) beyond it. This is deliberately continuous -- CJ-8/
+        # L665's broader point is that a success/failure-shaped reward wastes
+        # the graded signal the underlying measurement actually carries.
         #
         # Two independent "missing" cases, both SKIP (never fabricate a
         # penalty) and both warn at most once so the skip is never silent --
@@ -224,29 +263,30 @@ def compute_reward(
         #   (a) caller never supplied task_duration_s at all;
         #   (b) role has no baseline_duration_by_role entry (coverage gap,
         #       or a role too new/rare to have cleared MIN_N_PER_ROLE).
-        if task_duration_s is None:
-            _warn_missing_duration_arg()
-        else:
-            duration_baseline = config.baseline_duration_by_role.get(role) if role else None
-            if duration_baseline is None:
-                if role:
-                    _warn_unpriced_role_duration(role)
+        if config.cost_lambda_duration > 0:
+            if task_duration_s is None:
+                _warn_missing_duration_arg()
             else:
-                p50 = duration_baseline.get("p50_s", 0.0)
-                p90 = duration_baseline.get("p90_s", 0.0)
-                if p90 > p50 > 0:
-                    duration_frac = (task_duration_s - p50) / (p90 - p50)
-                elif p50 > 0:
-                    # Degenerate baseline (p90 <= p50, e.g. a low-n role with
-                    # identical quantiles) -- fall back to a plain ratio past
-                    # p50 rather than divide by zero or skip outright.
-                    duration_frac = (task_duration_s / p50) - 1.0
+                duration_baseline = config.baseline_duration_by_role.get(role) if role else None
+                if duration_baseline is None:
+                    if role:
+                        _warn_unpriced_role_duration(role)
                 else:
-                    duration_frac = 0.0
-                duration_penalty = config.cost_lambda_duration * max(
-                    0.0, min(1.0, duration_frac)
-                )
-                reward -= duration_penalty
+                    p50 = duration_baseline.get("p50_s", 0.0)
+                    p90 = duration_baseline.get("p90_s", 0.0)
+                    if p90 > p50 > 0:
+                        duration_frac = (task_duration_s - p50) / (p90 - p50)
+                    elif p50 > 0:
+                        # Degenerate baseline (p90 <= p50, e.g. a low-n role with
+                        # identical quantiles) -- fall back to a plain ratio past
+                        # p50 rather than divide by zero or skip outright.
+                        duration_frac = (task_duration_s / p50) - 1.0
+                    else:
+                        duration_frac = 0.0
+                    duration_penalty = config.cost_lambda_duration * max(
+                        0.0, min(1.0, duration_frac)
+                    )
+                    reward -= duration_penalty
 
         # Prefer generation_ms (clean generation time excluding prompt eval)
         # over elapsed_seconds (polluted by prompt processing time)
@@ -256,10 +296,10 @@ def compute_reward(
         else:
             elapsed = cost_metrics.get("elapsed_seconds", 0)
 
-        # Dimension 1: Latency penalty (tokens/sec). DEMOTED to a SECONDARY
-        # signal 2026-09-24 (RTG-09) -- see module docstring / Dimension 0
-        # above. Still useful as a within-role compute-efficiency signal, just
-        # no longer the axis the reward leans on for task-execution speed.
+        # Dimension 1: Latency penalty (tokens/sec). RTG-09: paired with
+        # Dimension 0 above -- demoted to a secondary signal only at the same
+        # ratified instrument-era boundary that turns cost_lambda_duration on.
+        # Unchanged until then.
         if baseline_tps > 0 and tokens_gen > 0 and elapsed > 0:
             expected_elapsed = tokens_gen / baseline_tps
             cost_ratio = elapsed / expected_elapsed  # >1 = slower than expected

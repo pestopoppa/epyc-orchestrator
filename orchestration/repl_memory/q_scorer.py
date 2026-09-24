@@ -1140,22 +1140,35 @@ class ScoringConfig:
     judge_model_path: Optional[Path] = None
     judge_binary: Optional[Path] = None
 
-    # RTG-09 (2026-09-24): wall-clock task duration is now the PRIMARY speed
-    # axis; tokens/sec below is DEMOTED to a secondary signal. Tokens/sec is
-    # gameable through tool calls and blind to orchestration/tool overhead --
-    # the DAR handoff measured median wall/model-compute overhead 1.60x, p90
-    # 9.09x across 19,433 tasks, with worker_vision spending ~0.4s of model
-    # compute inside ~11.9s of wall clock (a tokens/sec term scores that as
-    # fast). See `cost_lambda_duration` and `baseline_duration_by_role` below.
-    cost_lambda_duration: float = 0.20
+    # RTG-09 (2026-09-24): wall-clock task duration as a new, GRADED speed
+    # dimension -- see Dimension 0 in q_reward.py and `baseline_duration_by_role`
+    # below. DEFAULT-OFF (0.0): flipping this on changes compute_reward's
+    # output distribution, which is a routing_reward instrument-era boundary
+    # (orchestration/instrument_eras.yaml, human-amendment-only) because
+    # rewards feed Q-updates continuously. The behaviour flip and the era
+    # boundary must land together, by operator ratification --
+    # scripts/operator/ratify_rtg09_duration_reward_20260924.sh (in the
+    # epyc-root worktree) flips this to 0.20 and appends the era row in the
+    # same apply. Until that ratification runs, this field being 0.0 makes
+    # compute_reward byte-identical to pre-RTG-09 for every input (see
+    # test_duration_default_off_reward_is_byte_identical_to_pre_change in
+    # tests/unit/test_q_reward_duration.py). Tokens/sec is gameable through
+    # tool calls and blind to orchestration/tool overhead -- the DAR handoff
+    # measured median wall/model-compute overhead 1.60x, p90 9.09x across
+    # 19,433 tasks -- so once ratified this DOES become the primary speed
+    # axis and cost_penalty_lambda below is demoted at the same moment. The
+    # ratification script is the only intended writer of a non-zero default
+    # here; do not hand-edit this default outside that flow.
+    cost_lambda_duration: float = 0.0
 
     # Cost-aware reward (xRouter-style correctness-gated cost penalty).
     # reward_final = quality_reward - lambda * max(0, cost_ratio - 1.0)
     # where cost_ratio = actual_elapsed / expected_elapsed.
     # Only applied when answer is correct (incorrect = 0.0, no cost term).
-    # DEMOTED 2026-09-24 (RTG-09) from 0.15 to 0.05 -- secondary signal now
-    # that `cost_lambda_duration` carries the primary speed axis.
-    cost_penalty_lambda: float = 0.05
+    # RTG-09: paired with cost_lambda_duration above -- demoted to 0.05 only
+    # at the same ratified instrument-era boundary that flips duration on.
+    # Unchanged (0.15) until then.
+    cost_penalty_lambda: float = 0.15
 
     # Per-role optimized tokens/second from generated stack priors at config
     # construction time, with fallback tables for degraded/offline scripts. Used
