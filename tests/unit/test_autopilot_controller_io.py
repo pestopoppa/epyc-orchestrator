@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -611,11 +613,87 @@ def test_autopilot_rationale_schema_shape():
     assert schema["properties"]["rubric_scores"] == {"type": "object"}
 
 
-def test_action_repair_base_url_strips_chat_completions_suffix(monkeypatch):
-    monkeypatch.delenv("AUTOPILOT_LOCAL_PLANNER_URL", raising=False)
-    assert controller_io._local_planner_base_url() == "http://127.0.0.1:8000/v1"
+def test_action_repair_base_url_explicit_env_override_skips_role_resolution(monkeypatch):
+    # Setting the explicit URL override must short-circuit BEFORE any config
+    # lookup happens -- role resolution touching _get_orchestrator_config at
+    # all here would be a bug.
+    def _must_not_be_called():
+        raise AssertionError("role resolution must not run when URL is explicit")
+
+    monkeypatch.setattr(controller_io, "_get_orchestrator_config", _must_not_be_called)
     monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_URL", "http://10.0.0.5:9001/chat/completions")
     assert controller_io._local_planner_base_url() == "http://10.0.0.5:9001"
+
+
+def test_resolve_role_server_base_url_strips_full_prefix_and_takes_first_instance():
+    fake_server_urls = SimpleNamespace(
+        as_dict=lambda: {
+            "frontdoor": "full:http://localhost:8070,http://localhost:8080,http://localhost:8180"
+        }
+    )
+    fake_config = SimpleNamespace(server_urls=fake_server_urls)
+    with patch.object(controller_io, "_get_orchestrator_config", lambda: fake_config):
+        assert controller_io._resolve_role_server_base_url("frontdoor") == "http://localhost:8070/v1"
+
+
+def test_resolve_role_server_base_url_falls_back_to_default_role():
+    fake_server_urls = SimpleNamespace(as_dict=lambda: {"frontdoor": "http://localhost:8070"})
+    fake_config = SimpleNamespace(server_urls=fake_server_urls)
+    with patch.object(controller_io, "_get_orchestrator_config", lambda: fake_config):
+        assert (
+            controller_io._resolve_role_server_base_url("some_unconfigured_role")
+            == "http://localhost:8070/v1"
+        )
+
+
+def test_resolve_role_server_base_url_raises_when_nothing_resolves():
+    fake_server_urls = SimpleNamespace(as_dict=lambda: {})
+    fake_config = SimpleNamespace(server_urls=fake_server_urls)
+    with patch.object(controller_io, "_get_orchestrator_config", lambda: fake_config):
+        with pytest.raises(RuntimeError):
+            controller_io._resolve_role_server_base_url("frontdoor")
+
+
+def test_local_planner_base_url_resolves_a_llama_server_role_not_the_orchestrator_api(
+    monkeypatch,
+):
+    """The point of this fix: the default target must be a llama-server role
+    URL, never the orchestrator's own :8000 API (HS-OD-1 refuses
+    response_format there -- src/api/models/openai.py)."""
+    monkeypatch.delenv("AUTOPILOT_LOCAL_PLANNER_URL", raising=False)
+    monkeypatch.delenv("AUTOPILOT_LOCAL_PLANNER_ROLE", raising=False)
+    fake_server_urls = SimpleNamespace(as_dict=lambda: {"frontdoor": "http://localhost:8070"})
+    fake_config = SimpleNamespace(server_urls=fake_server_urls)
+    with patch.object(controller_io, "_get_orchestrator_config", lambda: fake_config):
+        url = controller_io._local_planner_base_url()
+    assert url == "http://localhost:8070/v1"
+    assert ":8000" not in url
+
+
+def test_local_planner_base_url_honors_role_env_override(monkeypatch):
+    monkeypatch.delenv("AUTOPILOT_LOCAL_PLANNER_URL", raising=False)
+    monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_ROLE", "worker_general")
+    fake_server_urls = SimpleNamespace(
+        as_dict=lambda: {
+            "frontdoor": "http://localhost:8070",
+            "worker_general": "http://localhost:8072",
+        }
+    )
+    fake_config = SimpleNamespace(server_urls=fake_server_urls)
+    with patch.object(controller_io, "_get_orchestrator_config", lambda: fake_config):
+        assert controller_io._local_planner_base_url() == "http://localhost:8072/v1"
+
+
+def test_action_repair_completer_defers_resolution_failure_to_invocation(monkeypatch):
+    monkeypatch.delenv("AUTOPILOT_LOCAL_PLANNER_URL", raising=False)
+
+    def _raise_config():
+        raise RuntimeError("config unavailable in this context")
+
+    with patch.object(controller_io, "_get_orchestrator_config", _raise_config):
+        complete = controller_io.action_repair_completer()  # must not raise here
+        with pytest.raises(RuntimeError):
+            complete([{"role": "user", "content": "x"}], {"type": "object"})
 
 
 def test_extract_action_with_repair_clean_parse_never_calls_completer():

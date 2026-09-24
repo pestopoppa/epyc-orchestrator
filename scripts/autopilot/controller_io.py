@@ -825,22 +825,31 @@ def extract_rationale(text: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- TD-21.2/.3 repair
 #
 # Fish first (the functions above, unchanged); on a miss, ONE constrained
-# completion turn back to the local orchestrator's own OpenAI-compatible
-# endpoint (`AUTOPILOT_LOCAL_PLANNER_URL`, default 127.0.0.1:8000 — the same
-# endpoint `LocalPlannerProvider` already drafts against), via the shared
-# `src.structured_output.repair` helper (TD-21.0 already made this endpoint
-# honour `response_format json_schema` on both lanes). The repair turn is
-# available regardless of which provider (Claude CLI, Codex CLI, or a local
-# HTTP provider) produced the unparseable draft: its only job is to
-# re-express a reply that already exists, against the orchestrator's own
-# always-on control-plane API, not to reproduce the draft provider's
-# reasoning. `planner_coordinator.py` is expected to inject a fake/raising
-# completer in tests so no test ever reaches this real endpoint.
+# completion turn back to a llama-server directly, via the shared
+# `src.structured_output.repair` helper.
+#
+# NOT the orchestrator's own :8000 `/v1/chat/completions` -- that seam
+# REFUSES `response_format` by design (HS-OD-1,
+# `src/api/models/openai.py:_UNHONOURED_SEMANTIC_FIELDS["response_format"]`
+# -> 422 "JSON mode is not implemented on this seam"; a first draft of this
+# module pointed here and every repair attempt would have 422'd, landing as
+# a typed "failed" with zero benefit -- caught in review, 2026-09-24). A
+# llama-server's OWN `/v1` DOES honour `response_format json_schema`
+# (verified live, e.g. the AutoKernel reference on :8083 and :8070 today),
+# so the repair turn targets one directly, resolved via the orchestrator's
+# own role->server config (`_resolve_role_server_base_url`, same source
+# `src/api/routes/health.py:_first_backend_url` and
+# `src/llm_primitives/backend.py:_normalise_role_urls` already read) --
+# never a hardcoded port. The repair turn is available regardless of which
+# provider (Claude CLI, Codex CLI, or a local HTTP provider) produced the
+# unparseable draft: its only job is to re-express a reply that already
+# exists, not to reproduce the draft provider's reasoning.
+# `planner_coordinator.py` is expected to inject a fake/raising completer in
+# tests so no test ever reaches a real server.
 
 _ACTION_REPAIR_URL_ENV = "AUTOPILOT_LOCAL_PLANNER_URL"
-_ACTION_REPAIR_DEFAULT_URL = "http://127.0.0.1:8000/v1/chat/completions"
-_ACTION_REPAIR_MODEL_ENV = "AUTOPILOT_LOCAL_PLANNER_MODEL"
 _ACTION_REPAIR_ROLE_ENV = "AUTOPILOT_LOCAL_PLANNER_ROLE"
+_ACTION_REPAIR_DEFAULT_ROLE = "frontdoor"
 
 _ACTION_REPAIR_SITE = "autopilot.controller_io.extract_action"
 _RATIONALE_REPAIR_SITE = "autopilot.controller_io.extract_rationale"
@@ -865,32 +874,88 @@ _RATIONALE_REPAIR_INSTRUCTION = (
 )
 
 
+def _get_orchestrator_config() -> Any:
+    """Indirection point so tests can substitute a fake config without
+    touching the real (`lru_cache`d) `src.config.get_config()`. Deferred
+    import: `planner_coordinator.py` already does the same
+    (`_current_chat_review_thresholds`) so this module's import does not pull
+    in the full orchestrator config stack eagerly."""
+    from src.config import get_config
+
+    return get_config()
+
+
+def _resolve_role_server_base_url(role: str) -> str:
+    """Resolve `role` to a llama-server base URL via `get_config().server_urls`
+    -- the SAME role->server resolution `src/api/routes/health.py`
+    (`_first_backend_url`) and `src/llm_primitives/backend.py`
+    (`_normalise_role_urls`) already read -- never a hardcoded port. A role's
+    configured value may be a `full:`-prefixed, comma-separated
+    multi-instance string (`src/config/models.py:_stack_prior_server_urls`);
+    this takes the FIRST concrete endpoint, exactly like
+    `health.py:_first_backend_url`, and appends `/v1` since llama-server's
+    OpenAI-compatible route lives at `/v1/chat/completions`
+    (`src/backends/llama_server.py` calls it the same way) -- the bare
+    host:port `get_config()` returns is not itself the base
+    `http_chat_completer` needs. Falls back to `_ACTION_REPAIR_DEFAULT_ROLE`
+    if `role` is not a configured key; raises if neither resolves (caught by
+    `action_repair_completer`, never by this function's caller directly)."""
+    urls = _get_orchestrator_config().server_urls.as_dict()
+    raw = urls.get(role) or urls.get(_ACTION_REPAIR_DEFAULT_ROLE)
+    if not raw:
+        raise RuntimeError(
+            f"no server URL resolved for role {role!r} or fallback role "
+            f"{_ACTION_REPAIR_DEFAULT_ROLE!r} in ServerURLsConfig"
+        )
+    if raw.startswith("full:"):
+        raw = raw[len("full:") :]
+    base = raw.split(",")[0].rstrip("/")
+    return f"{base}/v1"
+
+
 def _local_planner_base_url() -> str:
-    """Base URL for the repair completer: `AUTOPILOT_LOCAL_PLANNER_URL`
-    (same env var `LocalPlannerProvider` reads), defaulting to the
-    orchestrator's own :8000 OpenAI-compatible endpoint.
-    `http_chat_completer` appends `/chat/completions` itself, so a URL that
-    already ends with it (the default, and its usual override) has that
-    suffix stripped here."""
-    url = (os.environ.get(_ACTION_REPAIR_URL_ENV) or _ACTION_REPAIR_DEFAULT_URL).rstrip("/")
-    suffix = "/chat/completions"
-    if url.endswith(suffix):
-        url = url[: -len(suffix)]
-    return url
+    """Base URL for the TD-21.2/.3 repair completer.
+
+    `AUTOPILOT_LOCAL_PLANNER_URL`, when set, is an explicit full override --
+    used verbatim (with a trailing `/chat/completions` stripped, since
+    `http_chat_completer` appends it) and role resolution is skipped
+    entirely; this is for an operator pointing somewhere config resolution
+    cannot reach (e.g. a server outside the registry). Otherwise resolves
+    `AUTOPILOT_LOCAL_PLANNER_ROLE` (default `frontdoor`, the same env var and
+    default `LocalPlannerProvider` already uses) to a llama-server base URL
+    via `_resolve_role_server_base_url`."""
+    explicit = os.environ.get(_ACTION_REPAIR_URL_ENV)
+    if explicit:
+        url = explicit.rstrip("/")
+        suffix = "/chat/completions"
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
+        return url
+    role = os.environ.get(_ACTION_REPAIR_ROLE_ENV) or _ACTION_REPAIR_DEFAULT_ROLE
+    return _resolve_role_server_base_url(role)
 
 
 def action_repair_completer() -> CompleteFn:
     """Build the `CompleteFn` for the TD-21.2/.3 repair turn. Constructing
-    this never makes a network call by itself -- only invoking the returned
-    function does -- so callers (and their tests) can freely build one and
-    only invoke it (or substitute a fake) when a repair is actually
-    attempted."""
-    model = (
-        os.environ.get(_ACTION_REPAIR_MODEL_ENV)
-        or os.environ.get(_ACTION_REPAIR_ROLE_ENV)
-        or None
-    )
-    return http_chat_completer(_local_planner_base_url(), model=model)
+    this never makes a network call AND never raises by itself -- a base-URL
+    resolution failure is deferred into the returned function, so it surfaces
+    as a normal transport-style exception at the ONE point
+    (`parse_with_repair`'s per-turn try/except) that already turns any
+    `complete()` exception into a typed "failed" result, rather than crashing
+    the whole planning cycle. llama-server serves one model per process and
+    does not need a `model` field on `/v1/chat/completions`, so none is sent
+    (unlike the orchestrator's own multi-model `/v1` compat layer, which
+    TD-21.30(e) in `src/structured_output/repair.py` was written for)."""
+    try:
+        base_url = _local_planner_base_url()
+    except Exception as exc:  # noqa: BLE001 - deferred to the repair turn's own try/except
+        message = f"could not resolve a TD-21.2/.3 repair completer base URL: {exc}"
+
+        def _unresolvable(messages: Any, schema: Any) -> str:
+            raise RuntimeError(message)
+
+        return _unresolvable
+    return http_chat_completer(base_url)
 
 
 def _action_type_json_schema(action_type: str, spec: dict[str, Any]) -> dict[str, Any]:
