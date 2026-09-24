@@ -514,11 +514,9 @@ def primitives_completer(
     entry should expect (and may need to fence out) a thinking preamble in
     `content`.
 
-    Per TD-21.0: on a `/v1`-lane role (`frontdoor`/`worker*`/
-    `architect_critic`), `json_schema` is currently DROPPED by the payload
-    builder (`src/backends/llama_server.py:607-616`) until that prerequisite
-    lands -- this adapter still passes it unconditionally; it does not work
-    around the drop, per instruction.
+    Since TD-21.0 (orch `b284ede3`, 2026-09-24) `json_schema` reaches the wire on
+    BOTH lanes: as `json_schema` on `/completion` and as an OpenAI
+    `response_format` on `/v1/chat/completions`.
     """
 
     def complete(messages: Sequence[Mapping[str, Any]], schema: Mapping[str, Any]) -> str:
