@@ -519,7 +519,7 @@ Both pipelines have been profiled on the EPYC 9655. The document pipeline's head
 Two feature landings extend the pipeline beyond the original March documentation. Both are additive and gated, so the baseline born-digital fast path and OCR fallback above remain unchanged when the feature flags are off.
 
 <details>
-<summary>ODL Phase 2 structured output and ERNIE-Image-Turbo image generation</summary>
+<summary>ODL Phase 2 structured output and local image generation</summary>
 
 ### ODL Phase 2: Structured Output (commit `18c4f9d7`, 2026-05-06)
 
@@ -530,13 +530,15 @@ Phase 2 of the OpenDataLoader integration adds a normalized structured-JSON bran
 - `src/services/figure_analyzer.py` — `build_figure_prompt_with_context()` helper folds heading breadcrumb + `semantic_type` + caption + `surrounding_text` into the VL prompt when a `FigureContext` is supplied; returns the base prompt unchanged when `None`.
 - `src/services/document_chunker.py` — `chunk_by_odl_headings()` uses the ODL heading tree directly instead of regex header detection.
 
-### ERNIE-Image-Turbo Image Generation (commit `c10ffb29`, 2026-04)
+### Image Generation (Qwen-Image-2.1 production backend, 2026-09-24)
 
-Image *generation* (distinct from the vision-analysis pipeline above) is wired through `sd-server` running ERNIE-Image-Turbo, replacing the prior ComfyUI path with a +2.54× CPU speedup. The frontdoor TaskIR exposes `kind="image"` for create/draw/render intents.
+Image *generation* (distinct from the vision-analysis pipeline above) is served by the local Qwen-Image-2.1 Diffusers service on port 8190. It retains the historical `sd-server` role and `/sdapi/v1/txt2img` API shape so existing `image_generate` callers continue to work. The service is CPU-only and runs in an isolated environment; ERNIE-Image-Turbo files and its launcher are retained for rollback, but ERNIE is no longer the active backend. No generation-quality comparison is implied by this production cutover.
 
-- `src/services/sd_server_client.py` — sd-server HTTP client (replaces `comfyui_client.py` for the ERNIE path).
+- `src/services/qwen_image_server.py` — local Qwen-Image-2.1 service with sdapi-compatible endpoints and optional reference-image conditioning.
+- `scripts/diffusion/start_qwen_image_server.sh` — offline, CPU-only launcher for the service.
+- `src/services/sd_server_client.py` — HTTP client for the compatibility API.
 - `src/services/image_generator.py` — single-image generation entry point with CLI.
-- `src/models/image.py` — data models with recommended dimensions per the ERNIE-Image-Turbo model card.
+- `src/models/image.py` — request/response models, including optional reference image paths.
 
 </details>
 
@@ -550,7 +552,8 @@ Image *generation* (distinct from the vision-analysis pipeline above) is wired t
 - `src/services/figure_analyzer.py` - VL figure descriptions (incl. ODL context-aware prompt builder)
 - `src/services/document_chunker.py` - Markdown- and ODL-heading-aware chunking
 - `src/services/archive_extractor.py` - Multi-document archives
-- `src/services/sd_server_client.py` - ERNIE-Image-Turbo image-generation client
+- `src/services/qwen_image_server.py` - Qwen-Image-2.1 image-generation service
+- `src/services/sd_server_client.py` - sdapi-compatible image-generation client
 - `src/services/image_generator.py` - Image generation entry point
 - `src/models/odl_structured.py` - ODL structured-document models
 - `src/models/image.py` - Image generation request/response models

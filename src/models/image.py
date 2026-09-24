@@ -1,4 +1,4 @@
-"""Data models for image generation via ComfyUI / ERNIE-Image-Turbo.
+"""Data models for image generation via the local Qwen-Image-2.1 service.
 
 Mirrors the shape of src/models/document.py — frozen dataclasses with
 explicit error fields and serialization helpers.
@@ -14,12 +14,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 
-# Recommended dimensions per the ERNIE-Image-Turbo model card.
+# Recommended aspect-ratio sizes from the Qwen-Image-2.1 model card.
 RECOMMENDED_SIZES = [
-    (1024, 1024),
-    (848, 1264), (1264, 848),
-    (768, 1376), (1376, 768),
-    (896, 1200), (1200, 896),
+    (2048, 2048),
+    (2400, 1792), (1792, 2400),
+    (2528, 1696), (1696, 2528),
+    (2752, 1536), (1536, 2752),
 ]
 
 EnhancePolicy = Literal["auto", True, False]
@@ -77,24 +77,22 @@ def _contains_term(prompt: str, term: str) -> bool:
 class ImageGenerateRequest:
     """A single image-generation request.
 
-    `enhance` controls the prompt-enhancer LLM policy (Ministral3, ~3B params,
-    purpose-built for T2I prompt expansion):
-      - "auto" (default): on for text-heavy surfaces and simple short prompts;
-        off for compositional/spatial prompts and already-rich prompts.
-      - True: always run the enhancer.
-      - False: never run it; pass the user prompt through verbatim.
+    `enhance` is retained for API compatibility with the former ERNIE stack.
+    The policy is recorded in metadata but Qwen currently receives the prompt
+    unchanged; no prompt enhancer is executed.
     """
 
     prompt: str
     width: int = 1024
     height: int = 1024
     seed: int | None = None
-    steps: int = 8
+    steps: int = 40
     cfg: float = 1.0
     sampler: str = "euler"
     scheduler: str = "simple"
     enhance: EnhancePolicy = "auto"
     batch_size: int = 1
+    reference_images: tuple[str, ...] = ()
 
     def enhance_auto_reason(self) -> str:
         """Return the deterministic reason used by the auto enhancer policy."""

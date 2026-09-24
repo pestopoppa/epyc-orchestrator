@@ -97,7 +97,7 @@ port_map:
   embedder_bge_m3: 8098
   orchestrator: 8000
   document_formalizer: 9001
-  sd_server: 8190          # ERNIE-Image-Turbo via stable-diffusion.cpp native (replaced ComfyUI 2026-05-07; ~1.7-3.4× CPU speedup)
+  sd_server: 8190          # Qwen-Image-2.1 compatibility service (CPU-only Diffusers)
   whisper: 9000            # whisper.cpp STT (transcription service, not llama-server)
   tts: 9002                # qwentts.cpp TTS (registered 2026-08-02, W4)
 
@@ -740,24 +740,19 @@ aux_services:
   - name: sd_server
     port: 8190
     optional: false
-    description: ERNIE-Image-Turbo diffusion via stable-diffusion.cpp native ggml
-    # "native ggml" in the description makes this look like the obvious next
-    # verify_ggml_linkage candidate. It is not, for a measured reason: sd-server
-    # links ggml STATICALLY. `ldd /mnt/raid0/llm/stable-diffusion.cpp/build/bin/
-    # sd-server` (2026-08-12) reports only libgomp/libstdc++/libm/libgcc_s/libc and
-    # carries no RUNPATH — there is no shared ggml for LD_LIBRARY_PATH to redirect,
-    # so this service has zero exposure to the wrong-tree failure and the check would
-    # be structurally vacuous. argv[0] is `bash` besides, and there is no `backend`
-    # for the checker to resolve a tree from.
-    argv: ["bash", "{project_root}/scripts/diffusion/start_sd_server.sh"]
+    description: Qwen-Image-2.1 Diffusers image generation (CPU-only, sdapi-compatible)
+    # Keep the historical role and HTTP path so image_generate callers remain
+    # stable; implementation is now an isolated Diffusers process, not sd.cpp.
+    argv: ["bash", "{project_root}/scripts/diffusion/start_qwen_image_server.sh"]
     cwd: "{project_root}"
     env:
-      SD_SERVER_PORT: "8190"
-    # sd-server has no /health endpoint; /sdapi/v1/samplers is the readiness proxy.
+      QWEN_IMAGE_PORT: "8190"
+      QWEN_CPU_THREADS: "96"
+    # Preserve the sdapi-compatible readiness probe for existing callers.
     health_path: /sdapi/v1/samplers
-    health_timeout: 120
-    model_label: ernie-image-turbo-Q8_0.gguf + ministral-3-3b + flux2-vae (sd.cpp ggml native)
-    log: sd_server.log
+    health_timeout: 300
+    model_label: Qwen-Image-2.1 BF16 Diffusers (CPU only)
+    log: qwen_image_server.log
 
   - name: whisper
     port: 9000

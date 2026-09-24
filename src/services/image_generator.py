@@ -1,25 +1,18 @@
-"""High-level image-generation orchestration (sd-server backend).
+"""High-level image-generation orchestration (Qwen-Image-2.1 backend).
 
-Replaces the prior ComfyUI workflow-construction path 2026-05-07.
-sd-server's sdapi/v1/txt2img is a single HTTP request returning the
-image as base64, so this module collapses to a thin wrapper around
-SDServerClient.
+Replaces the prior ERNIE sd-server implementation while preserving the
+historical sdapi/v1/txt2img request/response contract.
 
 Public interface preserved: `ImageGenerator.generate(request) -> ImageGenerateResult`
 so the Hermes plugin and any existing callers don't need to change.
 
-The Ministral3 prompt-enhancer chain that ComfyUI's workflow JSON ran
-in-graph is NOT yet wired through sd-server (sd.cpp does not currently
-expose the enhancer LLM as a separate generation step). The `enhance`
-parameter is accepted for interface compatibility but is a no-op here;
-the user's prompt is sent through verbatim. This is acceptable for
-already-rich prompts (>= ~50 words); for short prompts a future revision
-should call the Ministral3 GGUF directly via llama-cli to expand them
-before submitting to sd-server.
+The old Ministral3 enhancer setting is retained for request compatibility,
+but Qwen receives the user's prompt verbatim; enhancer metadata records that
+it was not run.
 
 CLI invocation:
     python -m src.services.image_generator --prompt "..." \
-        --width 1024 --height 1024 --steps 8
+        --width 1024 --height 1024 --steps 40
 """
 
 from __future__ import annotations
@@ -47,21 +40,21 @@ LOG = logging.getLogger(__name__)
 
 
 class ImageGenerator:
-    """Build an sd-server txt2img request, submit it, save the result."""
+    """Submit a Qwen-compatible txt2img request and save the result."""
 
     def __init__(self, client: SDServerClient | None = None):
         self.client = client or SDServerClient()
 
     async def generate(self, request: ImageGenerateRequest) -> ImageGenerateResult:
         seed = request.seed if request.seed is not None else random.randint(0, 2**31 - 1)
-        # NOTE: sd-server's prompt-enhancer integration is not yet exposed;
+        # NOTE: prompt enhancement is not integrated with the Qwen service;
         # `enhance` is recorded but does not modify the request.
         use_enhancer = request.resolve_enhance()
         enhance_reason = request.enhance_auto_reason()
         if use_enhancer:
             LOG.info(
-                "ImageGenerator: enhance policy resolved True but sd-server backend "
-                "does not run the Ministral3 enhancer in-graph; passing prompt verbatim"
+                "ImageGenerator: enhance policy resolved True but Qwen backend "
+                "does not run an enhancer; passing prompt verbatim"
             )
         enhance_metadata = {
             "enhance_policy": request.enhance,
@@ -83,6 +76,7 @@ class ImageGenerator:
                 batch_size=request.batch_size,
                 sampler_name=request.sampler if request.sampler else None,
                 scheduler=request.scheduler if request.scheduler else None,
+                reference_images=request.reference_images,
             )
         except SDServerError as exc:
             return ImageGenerateResult(
@@ -112,7 +106,7 @@ class ImageGenerator:
                 elapsed_sec=time.monotonic() - started,
                 enhancer_used=False,
                 metadata=enhance_metadata,
-                error="No images in sd-server response",
+                error="No images in Qwen image service response",
             )
 
         first_b64 = images_b64[0]
@@ -124,8 +118,8 @@ class ImageGenerator:
         elapsed = time.monotonic() - started
 
         out_dir = output_dir_for_today()
-        # sd-server has no native prompt_id; mint one from seed+timestamp.
-        prompt_id = f"sd-{int(time.time())}-{seed}"
+        # The compatibility service has no native prompt_id; mint one.
+        prompt_id = f"qwen-{int(time.time())}-{seed}"
         out_path = out_dir / f"{prompt_id}.png"
         out_path.write_bytes(image_bytes)
 
@@ -139,9 +133,9 @@ class ImageGenerator:
             steps=request.steps,
             elapsed_sec=elapsed,
             enhanced_prompt=None,
-            enhancer_used=False,  # sd-server backend does not run the enhancer chain
+            enhancer_used=False,  # Qwen image service does not run an enhancer
             metadata={
-                "backend": "sd_server",
+                "backend": "qwen_image_2_1",
                 "sd_server_info": resp.get("info", "")[:500] if isinstance(resp.get("info"), str) else None,
                 "image_count": len(images_b64),
                 **enhance_metadata,
@@ -154,12 +148,12 @@ def _cli_main() -> int:
     import argparse
     import json
 
-    parser = argparse.ArgumentParser(description="Generate one image via sd-server (ERNIE-Image-Turbo).")
+    parser = argparse.ArgumentParser(description="Generate one image via Qwen-Image-2.1.")
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--height", type=int, default=1024)
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--steps", type=int, default=8)
+    parser.add_argument("--steps", type=int, default=40)
     parser.add_argument("--cfg", type=float, default=1.0)
     parser.add_argument("--enhance", choices=["auto", "true", "false"], default="auto")
     args = parser.parse_args()

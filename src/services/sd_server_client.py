@@ -1,16 +1,14 @@
-"""Async HTTP client for sd-server (stable-diffusion.cpp native).
+"""Async HTTP client for the image service's sd-webui-compatible API.
 
-Replaces comfyui_client.py for the ERNIE-Image-Turbo path. sd-server's
-sdapi/v1/txt2img is synchronous (blocks the HTTP connection until the
-image is ready), so the client interface is simpler than ComfyUI's
-queue/poll pattern. Health probe uses /sdapi/v1/samplers (sd-server has
-no dedicated /health endpoint).
+The service keeps the historical sdapi/v1 endpoint contract while Qwen runs
+inside an isolated Diffusers process. Requests are synchronous, matching the
+former stable-diffusion.cpp path. Health uses /sdapi/v1/samplers.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Sequence
 
 import httpx
 
@@ -25,7 +23,7 @@ DEFAULT_INFERENCE_TIMEOUT = 60 * 60.0
 
 
 class SDServerError(Exception):
-    """Error from sd-server."""
+    """Error from the image service's legacy-compatible HTTP API."""
 
     def __init__(self, message: str, status_code: int | None = None):
         super().__init__(message)
@@ -33,11 +31,11 @@ class SDServerError(Exception):
 
 
 class SDServerUnavailable(SDServerError):
-    """sd-server is not reachable."""
+    """The image service is not reachable."""
 
 
 class SDServerClient:
-    """Async HTTP client for sd-server's sdapi/v1/txt2img endpoint.
+    """Async HTTP client for the image service's sdapi/v1/txt2img endpoint.
 
     Usage:
         client = SDServerClient()
@@ -87,13 +85,14 @@ class SDServerClient:
         *,
         width: int = 1024,
         height: int = 1024,
-        steps: int = 8,
+        steps: int = 40,
         cfg_scale: float = 1.0,
         seed: int = -1,
         batch_size: int = 1,
         negative_prompt: str = "",
         sampler_name: str | None = None,
         scheduler: str | None = None,
+        reference_images: Sequence[str] | None = None,
         extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """POST /sdapi/v1/txt2img and return the parsed JSON response.
@@ -121,6 +120,8 @@ class SDServerClient:
             body["sampler_name"] = sampler_name
         if scheduler is not None:
             body["scheduler"] = scheduler
+        if reference_images:
+            body["reference_images"] = list(reference_images)
         if extra:
             body.update(extra)
 
@@ -129,12 +130,12 @@ class SDServerClient:
             resp = await client.post("/sdapi/v1/txt2img", json=body)
         except httpx.RequestError as exc:
             raise SDServerUnavailable(
-                f"Could not reach sd-server at {self.base_url}: {exc}"
+                f"Could not reach image service at {self.base_url}: {exc}"
             ) from exc
 
         if resp.status_code >= 400:
             raise SDServerError(
-                f"sd-server txt2img returned HTTP {resp.status_code}: {resp.text[:500]}",
+                f"image service txt2img returned HTTP {resp.status_code}: {resp.text[:500]}",
                 status_code=resp.status_code,
             )
         return resp.json()

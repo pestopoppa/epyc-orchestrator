@@ -2738,12 +2738,10 @@ def start_document_formalizer(bench_force: bool = False) -> ProcessInfo | None:
 
 
 def start_sd_server(bench_force: bool = False) -> ProcessInfo | None:
-    """Start the sd-server diffusion inference service (stable-diffusion.cpp native).
+    """Start the stack-managed image service (legacy role name: sd_server).
 
-    Replaced the ComfyUI-GGUF + PyTorch path 2026-05-07 — sd.cpp's native ggml
-    backend keeps Q8_0 weights packed and uses native quantized GEMM kernels,
-    skipping ComfyUI-GGUF's per-layer dequant-to-BF16 step. Measured ~1.74x
-    wall-clock and ~3.43x sampler s/iter speedup at 512 sq / 4 steps.
+    The manifest selects Qwen-Image-2.1's isolated CPU Diffusers runner while
+    preserving the existing role name and sdapi-compatible client contract.
     """
     return start_aux_service("sd_server", bench_force=bench_force)
 
