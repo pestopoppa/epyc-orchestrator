@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from math import isfinite
 import re
-from typing import Literal, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 from src.bradley_terry import BTResult, bradley_terry_from_scores
 
@@ -72,6 +72,32 @@ DEFAULT_RUBRIC_CRITERIA: tuple[RubricCriterion, ...] = (
     *(RubricCriterion(name) for name in MINDDR_PROCESS_DIMENSIONS),
     *(RubricCriterion(name) for name in DRACO_CONTENT_DIMENSIONS),
 )
+
+# TD-21.15 (`scripts/autopilot/eval_tower.py::_rubric_scores_for_answer`,
+# gated by `debug_scorer.CONSTRAIN_JUDGE_OUTPUT`). Every dimension is
+# OPTIONAL (none listed in `required` beyond the outer `scores` key) because
+# a live judge reply legitimately covers a subset of the 8 dimensions and
+# `_scores_from_rubric_payload` already merges per-dimension over the
+# deterministic fallback — requiring all 8 here would force the schema to
+# reject exactly the partial-but-usable replies today's lenient fisher
+# accepts. `additionalProperties: False` on both levels keeps a judge from
+# smuggling in an undeclared dimension name that would silently never
+# aggregate (TD-21.30(d)'s closed-schema convention).
+RUBRIC_JUDGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "scores": {
+            "type": "object",
+            "properties": {
+                criterion.name: {"type": "number", "minimum": 0, "maximum": 1}
+                for criterion in DEFAULT_RUBRIC_CRITERIA
+            },
+            "additionalProperties": False,
+        },
+    },
+    "required": ["scores"],
+    "additionalProperties": False,
+}
 
 
 def aggregate_rubric_score(

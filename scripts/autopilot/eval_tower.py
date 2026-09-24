@@ -3091,10 +3091,12 @@ from seeding_scoring import (  # noqa: E402
 )
 from rubric_scoring import (  # noqa: E402
     MINDDR_PROCESS_DIMENSIONS,
+    RUBRIC_JUDGE_SCHEMA,
     aggregate_rubric_score,
     build_rubric_judge_prompt,
     deterministic_rubric_fallback,
 )
+from src.structured_output.repair import parse_with_repair  # noqa: E402
 from src.autopilot_core.instrument_era_guard import (  # noqa: E402
     active_eval_quality_era,
     designed_core_activation_guard,
@@ -3916,10 +3918,15 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _parse_rubric_judge_scores(text: str) -> dict[str, float]:
-    parsed = _extract_json_object(text)
-    if not parsed:
-        return {}
+def _scores_from_rubric_payload(parsed: Mapping[str, Any]) -> dict[str, float]:
+    """Validate/clamp a parsed ``{"scores": {dim: value}}`` payload.
+
+    Factored out of ``_parse_rubric_judge_scores`` (TD-21.15) so the
+    ``CONSTRAIN_JUDGE_OUTPUT`` repair path (``_rubric_scores_for_answer``),
+    which already has a schema-validated dict from ``parse_with_repair``, can
+    reuse the exact same per-dimension range check instead of round-tripping
+    back through JSON text.
+    """
     raw_scores = parsed.get("scores")
     if not isinstance(raw_scores, dict):
         return {}
@@ -3949,6 +3956,13 @@ def _parse_rubric_judge_scores(text: str) -> dict[str, float]:
             ", ".join(sorted(rejected)),
         )
     return scores
+
+
+def _parse_rubric_judge_scores(text: str) -> dict[str, float]:
+    parsed = _extract_json_object(text)
+    if not parsed:
+        return {}
+    return _scores_from_rubric_payload(parsed)
 
 
 def _derive_question_confidence(
@@ -4435,6 +4449,16 @@ class EvalTower:
             answer=answer,
             expected_contains=q.get("expected_contains") or (),
         )
+        # TD-21.15: ONE flag (`debug_scorer.CONSTRAIN_JUDGE_OUTPUT`) read via
+        # the same module-identity-safe loader `seeding_scoring` already uses
+        # for the judge role precedence (`_llm_judge_verifier_identity`
+        # above), so this file never carries its own copy of the flag to
+        # drift from debug_scorer's.
+        scorer_for_judge = _load_orchestrator_debug_scorer()
+        constrain_judge_output = bool(
+            getattr(scorer_for_judge, "CONSTRAIN_JUDGE_OUTPUT", False)
+        )
+        arm_key = str(q.get("_eval_batch_id") or "") or None
         judge_scores: list[dict[str, float]] = []
         for role in judge_roles:
             independent, family_status = check_cross_family_status(generator_model, role)
@@ -4465,13 +4489,83 @@ class EvalTower:
                 batch_id=str(q.get("_eval_batch_id") or "") or None,
                 watcher=getattr(self, "watcher", None),
                 eval_fence=_eval_fence_request_flag(),
+                # Byte-identical wire when the flag is off (``output_schema``
+                # is omitted entirely, matching legacy payload shape per
+                # `call_orchestrator_forced`'s own docstring); TD-21.15 only
+                # adds it when constraining is ON.
+                output_schema=RUBRIC_JUDGE_SCHEMA if constrain_judge_output else None,
             )
             if resp.get("error"):
                 log.warning("rubric judge %s failed: %s", role, resp.get("error"))
                 continue
-            parsed = _parse_rubric_judge_scores(str(resp.get("answer", "")))
+            raw_answer = str(resp.get("answer", ""))
+            parsed = _parse_rubric_judge_scores(raw_answer)
             if parsed:
+                scorer_for_judge._record_judge_parse_outcome("rubric_judge", "parsed", arm_key)
                 judge_scores.append(parsed)
+                continue
+            # Unparseable on the lenient fish. ALWAYS counted (observability
+            # independent of the flag); the repair turn itself is an extra
+            # network call, so it is only spent when the flag says to.
+            if not constrain_judge_output:
+                scorer_for_judge._record_judge_parse_outcome(
+                    "rubric_judge", "unparseable", arm_key
+                )
+                continue
+
+            def _rubric_repair_complete(
+                messages: "Sequence[Mapping[str, Any]]",
+                schema: "Mapping[str, Any]",
+                *,
+                _role: str = role,
+            ) -> str:
+                repair_prompt = "\n\n".join(
+                    f"[{m.get('role', 'user')}]\n{m.get('content', '')}" for m in messages
+                )
+                repair_resp = call_orchestrator_forced(
+                    prompt=repair_prompt,
+                    force_role=_role,
+                    force_mode="direct",
+                    url=self.url,
+                    timeout=_rubric_judge_timeout_s(self.timeout),
+                    client=client,
+                    allow_delegation=False,
+                    scoring_method="rubric_judge_repair",
+                    request_priority="background",
+                    workload_class="eval_batch",
+                    batch_id=str(q.get("_eval_batch_id") or "") or None,
+                    watcher=getattr(self, "watcher", None),
+                    eval_fence=_eval_fence_request_flag(),
+                    output_schema=dict(schema),
+                )
+                if repair_resp.get("error"):
+                    raise RuntimeError(str(repair_resp.get("error")))
+                return str(repair_resp.get("answer", ""))
+
+            repair = parse_with_repair(
+                raw_answer,
+                schema=RUBRIC_JUDGE_SCHEMA,
+                complete=_rubric_repair_complete,
+                site="rubric_judge",
+                instruction=(
+                    "Convert the reply given as the user message into the "
+                    "rubric `scores` JSON object it was asked to produce. "
+                    "Copy the reply's own numbers faithfully; do not invent "
+                    "or re-judge anything."
+                ),
+            )
+            repaired_scores = (
+                _scores_from_rubric_payload(repair.value)
+                if repair.status in ("parsed", "repaired") and isinstance(repair.value, dict)
+                else {}
+            )
+            if repaired_scores:
+                scorer_for_judge._record_judge_parse_outcome("rubric_judge", "repaired", arm_key)
+                judge_scores.append(repaired_scores)
+            else:
+                scorer_for_judge._record_judge_parse_outcome(
+                    "rubric_judge", "unparseable", arm_key
+                )
 
         if not judge_scores:
             return fallback, "heuristic_fallback"
@@ -5722,6 +5816,34 @@ class EvalTower:
         # entry per (arm_key, scoring_method) pair forever.
         _scorer_for_stats.reset_parse_failure_stats(arm_key=_parse_failure_arm_key or None)
 
+        # TD-21.9/21.10/21.15: judge-parse-outcome rollup, ALWAYS on
+        # (independent of `CONSTRAIN_JUDGE_OUTPUT`) — same arm-key recovery
+        # and same lifetime-bounding as `parse_failure_*` just above, but a
+        # separate counter (`judge_parse_stats`): these count a JUDGE reply
+        # failing its OWN shape, not the model-under-test's answer.
+        judge_parse_by_site = dict(
+            sorted(
+                (
+                    (site, dict(sorted(outcomes.items())))
+                    for site, outcomes in _scorer_for_stats.judge_parse_stats(
+                        arm_key=_parse_failure_arm_key or None
+                    ).items()
+                )
+            )
+        )
+        judge_parse_unparseable_count = sum(
+            outcomes.get("unparseable", 0) for outcomes in judge_parse_by_site.values()
+        )
+        judge_parse_total_count = sum(
+            sum(outcomes.values()) for outcomes in judge_parse_by_site.values()
+        )
+        judge_parse_unparseable_rate = (
+            (judge_parse_unparseable_count / judge_parse_total_count)
+            if judge_parse_total_count
+            else None
+        )
+        _scorer_for_stats.reset_judge_parse_stats(arm_key=_parse_failure_arm_key or None)
+
         # Quality: fraction correct over the scored quality denominator
         # (scored + task_failed rows, scaled to 0-3). Infrastructure/scoring
         # failures are reliability evidence, not wrong-answer evidence — they
@@ -6107,6 +6229,18 @@ class EvalTower:
                 "parse_failure_count": parse_failure_count,
                 "parse_failure_by_method": parse_failure_by_method,
                 "parse_failure_rate": parse_failure_rate,
+                # TD-21.9/21.10/21.15: judge-parse-outcome rollup, ALWAYS on
+                # (zero score effect, independent of `CONSTRAIN_JUDGE_OUTPUT`)
+                # — the observability this flag needs before ratification.
+                # `judge_parse_by_site` is `{site: {outcome: count}}` for
+                # `llm_judge_boolean` (TD-21.9/21.10) and `rubric_judge`
+                # (TD-21.15); `judge_parse_unparseable_rate` is None (not
+                # 0.0) when no judge call was observed this trial, same
+                # honesty convention as `parse_failure_rate` above.
+                "judge_parse_by_site": judge_parse_by_site,
+                "judge_parse_unparseable_count": judge_parse_unparseable_count,
+                "judge_parse_total_count": judge_parse_total_count,
+                "judge_parse_unparseable_rate": judge_parse_unparseable_rate,
                 # False ⇒ `quality` above is a PLACEHOLDER, not a measurement.
                 # A batch that is ENTIRELY task_failed still has
                 # quality_measured=True (0.0 is a real measurement there —

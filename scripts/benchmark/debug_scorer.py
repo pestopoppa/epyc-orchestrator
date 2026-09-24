@@ -140,6 +140,69 @@ class AnswerParseError(ScoringUnavailableError):
 # path — see the proposed row text in the TD-21.11..21.14 commit message).
 EXCLUDE_UNPARSEABLE_ANSWERS = False
 
+
+# TD-21.9/21.10/21.15 (judge OUTPUT SHAPE; NOT YET RATIFIED — see the proposed
+# "E19" era text in the ratification script). TD-21.32 (handoff): judge
+# OUTPUT SHAPE (this flag) is orthogonal to judge BINDING (WHICH model —
+# CJ-11, `canonical-judge-suite-revamp.md`, `src/llm.py:61-64`). This flag
+# touches neither role resolution nor endpoint precedence — every site below
+# still resolves the judge via the SAME existing seam
+# (`scoring_config["judge_role"]` > `LLM_JUDGE_ROLE` env >
+# `architect_general`, `_llm_judge_force_role`) and only constrains + parses
+# whatever judge that seam already points at. Rebinding the judge later
+# (CJ-11/CJ-13/CJ-14) changes nothing here.
+#
+# Flipping this to True changes THREE sites:
+#
+#   TD-21.9 (`_score_llm_judge`/`_parse_judge_boolean_verdict`, orchestrator
+#   `/chat` branch): the wire is UNCHANGED — `output_schema={"type":
+#   "boolean"}` was already sent unconditionally before this flag existed —
+#   but the verdict is now parsed STRICTLY (exact `"true"`/`"false"` after
+#   stripping) instead of `.lower().startswith("true")`, which is a
+#   prefix-match artifact (e.g. a truncated `"tru"` or a judge that prefaces
+#   its verdict with "truely not equivalent" both score `True` today). A
+#   verdict that still isn't exactly `"true"`/`"false"` under this flag is a
+#   SCORER-side failure and raises `ScoringUnavailableError` DIRECTLY — never
+#   `AnswerParseError`. `AnswerParseError` (TD-21.11..21.14) is reserved for
+#   the MODEL's own answer failing to fit its own required shape; here the
+#   scoring INSTRUMENT (the judge) produced unusable output, the same class
+#   of defect this module already raises `ScoringUnavailableError` for on an
+#   unreachable judge or a malformed backend envelope a few lines below.
+#   Already routes through `score_answer_or_error`'s EXCLUDED/
+#   `scoring_failed` path with no further change — same as every other
+#   `ScoringUnavailableError` in this module, and unconditional on
+#   `EXCLUDE_UNPARSEABLE_ANSWERS` (that flag governs the DIFFERENT,
+#   model-side `AnswerParseError` boundary only).
+#
+#   TD-21.10 (`request_llm_judge_text`, raw llama-server override branch):
+#   this branch sends NO schema at all today (the defect the handoff names) —
+#   flipping this flag sends the SAME `output_schema` as an OpenAI
+#   `response_format` envelope on `/v1/chat/completions`, matching the
+#   protocol this branch already speaks. Strict parsing then applies
+#   identically to both branches.
+#
+#   TD-21.15 (`scripts/autopilot/eval_tower.py::_rubric_scores_for_answer`,
+#   read via this SAME flag through `_load_orchestrator_debug_scorer()` so
+#   ONE flag governs both files, never two copies to drift): sends
+#   `rubric_scoring.RUBRIC_JUDGE_SCHEMA` as `output_schema` on the rubric
+#   judge's `call_orchestrator_forced` turn; a reply the existing lenient
+#   fisher (`_parse_rubric_judge_scores`) cannot parse at all then gets ONE
+#   `parse_with_repair` extraction turn back to the SAME judge role before
+#   that judge is dropped. The `deterministic_rubric_fallback`/
+#   `rubric_source="heuristic_fallback"` path taken when EVERY configured
+#   judge is still unparseable is UNCHANGED by this flag either way: it is
+#   already clearly marked (`rubric_source`) and already counted per-arm by
+#   the pre-existing SCORE-08 `rubric_source_counts` rollup, so converting it
+#   to `scoring_failed` would be a second, larger denominator change riding
+#   on a flag meant to fix judge-output PARSING, not judge-fallback policy.
+#
+# Judge-parse-outcome counters (`judge_parse_stats`, below) are ALWAYS on,
+# independent of this flag — the observability this flag needs before
+# ratification, mirroring `_PARSE_FAILURE_COUNTS`/EQ-1's own precedent.
+#
+# Default OFF: every site above is byte-identical to pre-flag behaviour.
+CONSTRAIN_JUDGE_OUTPUT = False
+
 _PARSE_FAILURE_LOCK = threading.Lock()
 # Keyed by (arm_key, scoring_method), NOT scoring_method alone. `arm_key` is
 # whatever the caller put in `scoring_config["_eval_batch_id"]` (eval_tower.py
@@ -200,6 +263,47 @@ def reset_parse_failure_stats(arm_key: Any = None) -> None:
     with _PARSE_FAILURE_LOCK:
         for key in [k for k in _PARSE_FAILURE_COUNTS if k[0] == arm_key]:
             del _PARSE_FAILURE_COUNTS[key]
+
+
+# TD-21.9/21.10/21.15: judge-parse-outcome counters. Distinct from
+# `_PARSE_FAILURE_COUNTS` above — those count a MODEL-side answer failing to
+# fit ITS OWN required shape (TD-21.11..21.14); these count a JUDGE reply
+# failing to fit the shape the SCORER asked the judge for. ALWAYS recorded,
+# independent of `CONSTRAIN_JUDGE_OUTPUT`, so the rate is observable before
+# that flag is ratified — the same observability contract
+# `_record_parse_failure` gave EQ-1. Keyed by (arm_key, site, outcome):
+# `site` is `"llm_judge_boolean"` (TD-21.9/21.10) or `"rubric_judge"`
+# (TD-21.15); `outcome` is one of `"parsed"`, `"repaired"`, `"unparseable"`
+# (`"repaired"` is only ever recorded when `CONSTRAIN_JUDGE_OUTPUT` is True —
+# it is the one outcome that requires the extra repair turn the flag gates).
+_JUDGE_PARSE_LOCK = threading.Lock()
+_JUDGE_PARSE_COUNTS: dict[tuple[Any, str, str], int] = {}
+
+
+def _record_judge_parse_outcome(site: str, outcome: str, arm_key: Any = None) -> None:
+    with _JUDGE_PARSE_LOCK:
+        key = (arm_key, site, outcome)
+        _JUDGE_PARSE_COUNTS[key] = _JUDGE_PARSE_COUNTS.get(key, 0) + 1
+
+
+def judge_parse_stats(arm_key: Any = None) -> dict[str, dict[str, int]]:
+    """Per-site outcome counts of judge parse attempts for one ``arm_key``
+    (``None`` — the default — is its own bucket, not "all arms"), shaped
+    ``{site: {outcome: count}}``."""
+    with _JUDGE_PARSE_LOCK:
+        stats: dict[str, dict[str, int]] = {}
+        for (key, site, outcome), count in _JUDGE_PARSE_COUNTS.items():
+            if key != arm_key:
+                continue
+            stats.setdefault(site, {})[outcome] = count
+        return stats
+
+
+def reset_judge_parse_stats(arm_key: Any = None) -> None:
+    """Zero the judge-parse-outcome counters for one ``arm_key``."""
+    with _JUDGE_PARSE_LOCK:
+        for key in [k for k in _JUDGE_PARSE_COUNTS if k[0] == arm_key]:
+            del _JUDGE_PARSE_COUNTS[key]
 
 
 def _unparseable_answer(
@@ -1276,10 +1380,56 @@ def _score_llm_judge(answer: str, expected: str, config: dict[str, Any]) -> bool
         "Return only the JSON boolean true or false."
     )
 
-    verdict = request_llm_judge_text(
+    verdict_raw = request_llm_judge_text(
         judge_prompt, config, max_tokens=8, output_schema={"type": "boolean"}
-    ).lower()
-    return verdict.startswith("true")
+    )
+    return _parse_judge_boolean_verdict(verdict_raw, config)
+
+
+def _parse_judge_boolean_verdict(verdict_raw: str, config: dict[str, Any]) -> bool:
+    """Parse the boolean judge verdict from ``_score_llm_judge`` (TD-21.9/21.10).
+
+    The wire already asks for a JSON boolean via ``output_schema={"type":
+    "boolean"}`` (TD-21.9's orchestrator branch) / ``response_format``
+    (TD-21.10's raw llama-server branch, gated the same as here). The STRICT
+    check below (exact ``"true"``/``"false"`` after stripping) always runs and
+    is always counted via ``_record_judge_parse_outcome`` — so the rate a
+    strict parse would see is observable regardless of the flag, matching the
+    always-on counters elsewhere in this module.
+
+    ``CONSTRAIN_JUDGE_OUTPUT=False`` (default): unchanged prefix-match
+    behaviour (``.lower().startswith("true")``), byte-identical to every
+    prior release.
+
+    ``CONSTRAIN_JUDGE_OUTPUT=True``: the prefix-match artifact is removed —
+    only an exact ``"true"``/``"false"`` is accepted. Anything else is a
+    SCORER-side failure (the judge, not the model under test, produced
+    unusable output despite the boolean schema) and raises
+    ``ScoringUnavailableError`` directly. This is deliberately NOT
+    ``AnswerParseError``: that subclass is reserved for a MODEL's own answer
+    failing to fit its own required shape (TD-21.11..21.14); a judge failure
+    is scorer-infrastructure unavailability, the same class this module
+    already raises ``ScoringUnavailableError`` for on an unreachable judge or
+    malformed envelope, and is therefore unconditional on
+    ``EXCLUDE_UNPARSEABLE_ANSWERS`` (a different, model-side flag).
+    """
+    arm_key = (config or {}).get("_eval_batch_id")
+    verdict = verdict_raw.strip()
+    lowered = verdict.lower()
+    strictly_parseable = lowered in ("true", "false")
+    _record_judge_parse_outcome(
+        "llm_judge_boolean",
+        "parsed" if strictly_parseable else "unparseable",
+        arm_key,
+    )
+    if not CONSTRAIN_JUDGE_OUTPUT:
+        return lowered.startswith("true")
+    if strictly_parseable:
+        return lowered == "true"
+    raise ScoringUnavailableError(
+        f"llm_judge_unparseable_verdict: judge replied {verdict_raw[:80]!r}, "
+        "neither exactly 'true' nor 'false' despite a boolean output_schema"
+    )
 
 
 def request_llm_judge_text(
@@ -1364,13 +1514,25 @@ def request_llm_judge_text(
         else:
             # Explicit judge_url / judge_host+judge_port override: a direct
             # llama-server target — keep the raw OpenAI-compatible protocol.
+            raw_body: dict[str, Any] = {
+                "messages": [{"role": "user", "content": judge_prompt}],
+                "max_tokens": int(max_tokens),
+                "temperature": 0.0,
+            }
+            # TD-21.10: this branch sent NO schema at all before this flag —
+            # the orchestrator branch above already constrained its reply,
+            # so a raw-endpoint judge was the one unconstrained lane. Forward
+            # the same `output_schema` as an OpenAI `response_format`
+            # envelope, matching the protocol this endpoint already speaks
+            # (mirrors `LLMPrimitives`'s own `/v1` json_schema forwarding).
+            if CONSTRAIN_JUDGE_OUTPUT and output_schema is not None:
+                raw_body["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {"name": "llm_judge_verdict", "schema": output_schema},
+                }
             resp = httpx.post(
                 f"{judge_url}/v1/chat/completions",
-                json={
-                    "messages": [{"role": "user", "content": judge_prompt}],
-                    "max_tokens": int(max_tokens),
-                    "temperature": 0.0,
-                },
+                json=raw_body,
                 timeout=timeout,
             )
             resp.raise_for_status()
