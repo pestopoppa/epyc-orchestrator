@@ -515,9 +515,19 @@ def _score_native_batch(
         )
         or ""
     )
-    # Read the instance-level meta BEFORE anything else: it is overwritten by
-    # any other llm_call on this primitives object (module docstring).
-    meta = getattr(primitives, "_last_inference_meta", None)
+    # TD-21.33b: this read is in the SAME synchronous call as its own
+    # `llm_call` above — no thread/task boundary crossed — so the per-call-safe
+    # getter applies cleanly (module docstring's concurrency caveat is about
+    # the plain attribute, which this bypasses). Runtime `isinstance` (not a
+    # `TYPE_CHECKING` import) so a hand-rolled test double that predates the
+    # getter keeps its pre-existing exact behavior.
+    from src.llm_primitives import LLMPrimitives
+
+    meta = (
+        primitives.get_last_inference_meta()
+        if isinstance(primitives, LLMPrimitives)
+        else getattr(primitives, "_last_inference_meta", None)
+    )
     elapsed_ms = (time.perf_counter() - started) * 1000.0
 
     if raw_text.strip().startswith("[ERROR:"):
@@ -1553,10 +1563,24 @@ def native_diagnostics(result: DecisionResult, primitives_snapshot: Any) -> dict
 
 
 def _snapshot_rows(primitives_snapshot: Any) -> list[Mapping[str, Any]]:
-    """Extract the captured rows from any supported snapshot shape."""
+    """Extract the captured rows from any supported snapshot shape.
+
+    TD-21.33b: ``native_diagnostics`` (this helper's only caller) has no
+    production call site today — every caller is a test that reads the
+    snapshot in the SAME synchronous call as the run it diagnoses — so the
+    per-call-safe getter applies cleanly, with a runtime ``isinstance`` guard
+    so a bare-mapping snapshot or a hand-rolled test double that predates the
+    getter keeps its pre-existing exact behavior.
+    """
     meta: Any = primitives_snapshot
     if not isinstance(meta, Mapping):
-        meta = getattr(primitives_snapshot, "_last_inference_meta", None)
+        from src.llm_primitives import LLMPrimitives
+
+        meta = (
+            primitives_snapshot.get_last_inference_meta()
+            if isinstance(primitives_snapshot, LLMPrimitives)
+            else getattr(primitives_snapshot, "_last_inference_meta", None)
+        )
     elif isinstance(meta.get("meta"), Mapping):
         meta = meta["meta"]
     return _rows_from_meta(meta)
