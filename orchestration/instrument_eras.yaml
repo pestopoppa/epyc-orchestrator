@@ -471,6 +471,91 @@ eras:
       comparison or policy training that spans this boundary — re-derive under the
       duration-aware scorer, or replay via scripts/analysis/rescore_rewards_from_progress.py.
 
+  - id: E19-eval-answer-parse-failure-excluded-quality
+    from: "2026-09-24T11:59:11Z"
+    scope: eval_quality
+    note: >
+      TD-21.11..21.14 answer-parse-failure-exclusion boundary (operator ratification
+      2026-09-24, handoffs/active/typed-decision-plane.md; artifacts/audits/
+      td-json-consumer-audit-20260924.md J-03/J-05/J-06/J-07). debug_scorer.py's
+      multiple_choice / f1_list / structural_exact_match / exact_match scorers flip
+      EXCLUDE_UNPARSEABLE_ANSWERS 0->1: a model-side answer that cannot be parsed into
+      the scoring method's required shape now raises AnswerParseError, which
+      seeding_scoring.score_answer_or_error converts to an EXCLUDED scoring_failed row
+      (the same path an unreachable judge or a malformed gold already uses) instead of
+      scoring it False/WRONG. Before this boundary such rows were IN the quality
+      denominator scored wrong; after, they are OUT. Rows carry no separate policy key
+      of their own (unlike E17's quality_denominator_policy) — era-label by timestamp,
+      or by details.parse_failure_count/parse_failure_rate being present and nonzero on
+      arms scored after this boundary (added in the SAME implementation below).
+
+      TENSION WITH E17 (deliberate, flagged at 2026-09-24 review, not resolved by this
+      note): this boundary runs the OPPOSITE direction from
+      E17-eval-task-failed-scores-zero-quality, which pulled a failure class
+      (task_failed) INTO the denominator specifically so a config that fails more could
+      not shrink its own denominator instead of being penalized. This boundary pulls a
+      DIFFERENT failure class (unparseable model output) OUT of the denominator — the
+      same shape of leniency E17 forbids for agent/config failures, applied here to a
+      parsing failure instead. The two are independent: E17 governs rows that already
+      carry a structural error; a model-side parse failure carries none today, so
+      nothing routed it through disposition classification before TD-21.11..21.14
+      existed. GUARD AGAINST GAMING (why this is ratifiable despite the tension):
+      debug_scorer.parse_failure_stats() counts every parse failure UNCONDITIONALLY —
+      independent of this flag — and EvalTower._aggregate reports parse_failure_count /
+      parse_failure_by_method / parse_failure_rate in details beside quality/accuracy on
+      EVERY trial, bucketed per eval_batch_id so concurrent arms never mix counts. A
+      model/config that games this exclusion by producing more unparseable output
+      instead of more wrong answers is visible in the SAME report as its inflated
+      quality number, never silently — per the 2026-07-20 standing rule
+      (architect-model-selection-bench.md), a nonzero parse_failure_rate makes that
+      arm's quality a prior, not standalone evidence.
+
+      JUDGE OUTPUT SHAPE (TD-21.9/21.10/21.15, bundled into this SAME boundary at the
+      SAME 2026-09-24 review — a second era row was rejected as unnecessary fragmentation
+      of one review's sign-off): debug_scorer.py's CONSTRAIN_JUDGE_OUTPUT flips 0->1
+      alongside EXCLUDE_UNPARSEABLE_ANSWERS above. TD-21.32: this changes judge OUTPUT
+      SHAPE only, never judge BINDING — every site still resolves the judge via the
+      existing LLM_JUDGE_ROLE/_llm_judge_force_role seam untouched by this flag, so a
+      later CJ-11 rebinding changes nothing here. Three sites move from a free-text
+      fish to a schema-constrained, strictly-parsed request: (a) the boolean equivalence
+      judge's orchestrator /chat branch keeps its existing output_schema={"type":
+      "boolean"} wire payload but replaces the .lower().startswith(true) prefix-match
+      parse (a "truely not equivalent" reply scored True before) with an exact
+      true/false parse — an unparseable verdict now raises ScoringUnavailableError
+      directly (a SCORER-side failure, NOT the model-side AnswerParseError above) and
+      routes through the SAME scoring_failed/EXCLUDED path; (b) the raw llama-server
+      override branch, which sent NO schema at all before this flag, now forwards the
+      same schema as an OpenAI response_format envelope; (c) the autopilot rubric
+      judge's {"scores": {dim: [0,1]}} reply (eval_tower.py's
+      _rubric_scores_for_answer) is requested under rubric_scoring.RUBRIC_JUDGE_SCHEMA,
+      and a reply the existing lenient fisher cannot parse at all now gets ONE
+      parse_with_repair extraction turn back to the SAME judge role before that judge's
+      contribution is dropped — recovering some replies the old fisher missed and
+      shifting some rows from rubric_source="heuristic_fallback" to "judge". The
+      heuristic-fallback path taken when EVERY configured rubric judge is still
+      unparseable is UNCHANGED by this flag: it was already clearly marked
+      (rubric_source) and already counted per-arm by the pre-existing SCORE-08
+      rubric_source_counts rollup, so this boundary does not touch that policy.
+      ALWAYS-ON GUARD (same contract as the parse_failure_stats guard above, live
+      whether or not this flag is set): debug_scorer.judge_parse_stats() counts every
+      judge parse outcome (parsed / repaired / unparseable) per site, and
+      EvalTower._aggregate reports judge_parse_by_site / judge_parse_unparseable_count /
+      judge_parse_total_count / judge_parse_unparseable_rate beside quality/accuracy on
+      every trial.
+
+      Implementation: epyc-orchestrator af8a4a1b + 940e0553 +
+      ec412724 (EQ-1) + 62ab94ed (judge output shape).
+      RECONCILIATION: pre-boundary quality UNDERSTATES any arm/suite with a nonzero
+      parse-failure rate relative to post-boundary (an unparseable row was counted wrong
+      pre-boundary; it is excluded post-boundary) — treat pre-boundary quality as a
+      prior only for suites/arms with a nonzero parse_failure_stats() count at scoring
+      time, or re-score from stored answers. Separately, pre-boundary rubric-judge scores
+      UNDERSTATE the judge-scored (vs heuristic-fallback) share of any arm/suite with a
+      nonzero judge_parse_by_site["rubric_judge"]["unparseable"] count relative to
+      post-boundary (a reply the repair turn would have recovered instead fell back to
+      the deterministic heuristic pre-boundary) — treat pre-boundary rubric_source_counts
+      as a prior under the same condition, or re-score from stored judge replies.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.

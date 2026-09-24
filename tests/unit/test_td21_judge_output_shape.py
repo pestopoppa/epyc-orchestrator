@@ -72,9 +72,9 @@ def test_judge_shipped_default_matches_ratification_state():
     anchor-based single-occurrence replace on this sentinel and its paired
     assertion, so this test is never stale after a real ratification run —
     only after a hand-edit that skips the script.
-    #CJO1_RATIFICATION_TEST_SENTINEL: CONSTRAIN_JUDGE_OUTPUT ships False
+    #CJO1_RATIFICATION_TEST_SENTINEL: CONSTRAIN_JUDGE_OUTPUT ships True (ratified — see instrument_eras.yaml E19)
     """
-    assert _JUDGE_SHIPPED_DEFAULT_ON_IMPORT is False
+    assert _JUDGE_SHIPPED_DEFAULT_ON_IMPORT is True
 
 
 @pytest.fixture(autouse=True)

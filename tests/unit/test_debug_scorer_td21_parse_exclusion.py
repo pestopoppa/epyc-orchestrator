@@ -92,9 +92,9 @@ def test_shipped_default_matches_ratification_state():
     part of --apply (see its EQ1_RATIFICATION_TEST_SENTINEL), so this
     assertion is never stale after a real ratification run — only after a
     hand-edit that skips the script.
-    #EQ1_RATIFICATION_TEST_SENTINEL: EXCLUDE_UNPARSEABLE_ANSWERS ships False
+    #EQ1_RATIFICATION_TEST_SENTINEL: EXCLUDE_UNPARSEABLE_ANSWERS ships True (ratified — see instrument_eras.yaml E19)
     """
-    assert _SHIPPED_DEFAULT_ON_IMPORT is False
+    assert _SHIPPED_DEFAULT_ON_IMPORT is True
 
 
 # ── multiple_choice (TD-21.11) ─────────────────────────────────────────────

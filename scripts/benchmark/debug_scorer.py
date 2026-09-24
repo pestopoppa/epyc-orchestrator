@@ -138,7 +138,7 @@ class AnswerParseError(ScoringUnavailableError):
 # ONE-LINE FLIP to ratify: set this to True (only after the EQ-1 row is
 # added to `orchestration/instrument_eras.yaml` by the operator/human-only
 # path — see the proposed row text in the TD-21.11..21.14 commit message).
-EXCLUDE_UNPARSEABLE_ANSWERS = False
+EXCLUDE_UNPARSEABLE_ANSWERS = True
 
 
 # TD-21.9/21.10/21.15 (judge OUTPUT SHAPE; NOT YET RATIFIED — see the proposed
@@ -201,7 +201,7 @@ EXCLUDE_UNPARSEABLE_ANSWERS = False
 # ratification, mirroring `_PARSE_FAILURE_COUNTS`/EQ-1's own precedent.
 #
 # Default OFF: every site above is byte-identical to pre-flag behaviour.
-CONSTRAIN_JUDGE_OUTPUT = False
+CONSTRAIN_JUDGE_OUTPUT = True
 
 _PARSE_FAILURE_LOCK = threading.Lock()
 # Keyed by (arm_key, scoring_method), NOT scoring_method alone. `arm_key` is
