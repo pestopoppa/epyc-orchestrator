@@ -138,7 +138,20 @@ class AnswerParseError(ScoringUnavailableError):
 # ONE-LINE FLIP to ratify: set this to True (only after the EQ-1 row is
 # added to `orchestration/instrument_eras.yaml` by the operator/human-only
 # path — see the proposed row text in the TD-21.11..21.14 commit message).
-EXCLUDE_UNPARSEABLE_ANSWERS = False  # SUSPENDED 2026-09-24 (operator): E19 classification excluded WRONG answers lacking a structured marker as unparseable; re-enable after fix/e19-wrong-not-unparseable lands
+#
+# RE-ENABLED 2026-09-24 (operator, on fix/e19-wrong-not-unparseable): was
+# SUSPENDED to False (commit fcbb705f) because the TD-21.12/21.14
+# classification treated "no structured marker AND the raw last-line/
+# line-split fallback doesn't match" as a parse failure, excluding WRONG
+# answers (e.g. "Final answer: 999" vs 25) from the quality denominator
+# instead of scoring them wrong. `_score_exact_match` and `_score_f1_list`
+# below are corrected: a candidate extracted by ANY means — including the
+# raw-last-line / line-split fallback — that simply disagrees with gold is
+# now always WRONG, never excluded; only a genuinely empty extraction
+# (nothing at all, not even fallback content) raises `AnswerParseError`.
+# `tests/unit/test_b7_golden_corpus_pin.py` (the 5 *_cot_wrongfinal /
+# cotwrong sentinel/audit cases) is the regression proof.
+EXCLUDE_UNPARSEABLE_ANSWERS = True
 
 
 # TD-21.9/21.10/21.15 (judge OUTPUT SHAPE; NOT YET RATIFIED — see the proposed
@@ -399,15 +412,20 @@ def _score_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bo
         boxed = _extract_boxed_answer(answer)
         if boxed is not None:
             extracted = boxed
-    # TD-21.14: did a real extraction pattern (<answer>/####/\boxed{}) match,
-    # or are we about to fall back to a blind guess at the last line? Only
-    # the latter is a candidate model-side parse failure — a structured
-    # extraction that simply mismatches gold is a genuine wrong answer.
-    structured_extraction = extracted is not None
     if extracted is None:
         # Last resort: try to find the expected value anywhere in the last line
         last_line = answer.strip().split("\n")[-1]
         extracted = last_line.strip()
+    # TD-21.14 (corrected 2026-09-24): a candidate was extracted the moment
+    # `extracted` is non-empty — whether via a structured <answer>/####/
+    # \boxed{} marker OR the raw-last-line fallback. A candidate that simply
+    # doesn't match gold is a genuine WRONG answer, never a parse failure:
+    # the fallback still picked SOMETHING comparable out of the model's own
+    # output. Only when `extracted` is empty (the model's answer was
+    # empty/whitespace-only, so even the blind last-line guess found
+    # nothing) is there truly no candidate to compare — that is the one
+    # real model-side parse failure this site can detect.
+    candidate_found = bool(extracted)
 
     if normalize:
         extracted = extracted.strip().lower().rstrip(".")
@@ -480,16 +498,18 @@ def _score_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bo
 
     if matched:
         return True
-    if structured_extraction:
+    if candidate_found:
+        # A candidate was extracted (structured marker or the raw-last-line
+        # fallback) and it simply disagrees with gold: a genuine wrong
+        # answer, never excluded.
         return False
-    # TD-21.14: none of <answer>/####/\boxed{} matched, so `extracted` was
-    # only ever a blind guess at the final line — and even that guess, plus
-    # the OCR-prose fallbacks above, found nothing comparable to gold. This
-    # is a model-side parse failure, not a confirmed wrong structured answer.
+    # TD-21.14: the model's answer was empty/whitespace-only, so even the
+    # blind last-line guess found nothing to compare. This is a real
+    # model-side parse failure.
     return _unparseable_answer(
         "exact_match",
-        "no <answer>/#### /\\boxed{} pattern matched the model's answer; "
-        "the raw final line was compared as a last resort and did not match",
+        "the model's answer was empty/whitespace-only; no <answer>/#### "
+        "/\\boxed{} marker and no last-line candidate could be extracted",
         config=config,
     )
 
@@ -1758,18 +1778,24 @@ def _score_f1_list(answer: str, expected: str, config: dict[str, Any]) -> bool:
     pred_items, used_fallback = _extract_list_items_with_fallback(answer)
     f1 = _f1_list_score(pred_items, gold_items, threshold=threshold)
     passed = f1 >= threshold
-    if passed or not used_fallback or not pred_items:
+    if passed or not used_fallback:
         return passed
-    # TD-21.12: no bullet/numbered/comma list structure was recognised at
-    # all — the crude one-per-line catch-all fired and STILL missed
-    # threshold. That is a model-side parse failure (the model didn't
-    # answer in the required list shape), distinct from a cleanly
-    # extracted list that is simply the wrong items.
+    # TD-21.12 (corrected 2026-09-24): the crude one-per-line catch-all fired
+    # (no bullet/numbered/comma list structure was recognised). If it still
+    # produced candidate item(s), the model DID answer with something
+    # comparable — a low F1 against gold is a genuine wrong answer, never
+    # excluded, exactly like a cleanly extracted list that is simply the
+    # wrong items. Only when the fallback found NOTHING at all (an
+    # empty/whitespace-only answer, so `pred_items` is itself empty) is
+    # there truly no candidate to compare — that is the real model-side
+    # parse failure.
+    if pred_items:
+        return False
     return _unparseable_answer(
         "f1_list",
-        f"no bullet/numbered/comma list structure recognized; the raw "
-        f"line-split fallback produced {len(pred_items)} candidate "
-        f"item(s) with f1={f1:.3f} (threshold={threshold})",
+        "no bullet/numbered/comma list structure recognized, and the raw "
+        "line-split fallback produced no candidate items at all "
+        f"(empty/whitespace-only answer; threshold={threshold})",
         config=config,
     )
 

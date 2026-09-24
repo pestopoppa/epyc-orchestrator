@@ -27,6 +27,7 @@ neither pin scores the other's cases.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -42,9 +43,49 @@ CODE_EXEC_TMP = Path("/mnt/raid0/llm/tmp")
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "benchmark"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
+import debug_scorer  # noqa: E402
 from debug_scorer import score_answer  # noqa: E402
 import eval_tower  # noqa: E402
 from rubric_scoring import aggregate_rubric_score  # noqa: E402
+
+DEBUG_SCORER_SRC = REPO_ROOT / "scripts" / "benchmark" / "debug_scorer.py"
+
+
+def _shipped_exclude_unparseable_default() -> bool:
+    """Re-derive the SHIPPED ``EXCLUDE_UNPARSEABLE_ANSWERS`` default straight
+    from source, independent of whatever this pytest process's shared
+    ``debug_scorer`` module instance currently holds.
+
+    2026-09-24 post-mortem: this file does a plain ``import debug_scorer``,
+    the same ``sys.modules`` entry every other test file in the process
+    shares. A test elsewhere that flips
+    ``debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS`` and fails to restore it in
+    ``finally`` (``test_debug_scorer_score25_26.py::
+    test_structural_edge_no_solution_marker_is_false`` did exactly this)
+    silently changes what THIS pin scores against — the golden corpus then
+    passes against the wrong semantics instead of failing loudly. Reading
+    the assignment straight out of the source file makes that leak
+    impossible to hide: whatever the module attribute says at test time is
+    checked against the byte the file actually ships.
+    """
+    match = re.search(
+        r"^EXCLUDE_UNPARSEABLE_ANSWERS\s*=\s*(True|False)\s*$",
+        DEBUG_SCORER_SRC.read_text(),
+        re.MULTILINE,
+    )
+    assert match, "could not find EXCLUDE_UNPARSEABLE_ANSWERS default in debug_scorer.py"
+    return match.group(1) == "True"
+
+
+def test_golden_pin_sees_the_modules_real_exclude_unparseable_flag() -> None:
+    """Guard against the exact leak this comment/test pair was added for
+    (see ``_shipped_exclude_unparseable_default``): if any other test file
+    in this process left ``debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS`` at a
+    value other than the shipped default, the golden-corpus pin below would
+    silently score against the WRONG semantics instead of failing. Assert
+    the live value matches source before any golden-corpus row is scored.
+    """
+    assert debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS == _shipped_exclude_unparseable_default()
 
 
 def _load_jsonl(path: Path) -> list[dict]:
