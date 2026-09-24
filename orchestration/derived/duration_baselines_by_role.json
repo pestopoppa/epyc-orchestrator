@@ -1,0 +1,83 @@
+{
+  "protocol_id": "RTG09-DURATION-BASELINE-v1",
+  "generated_at_utc": "2026-09-24T08:47:20.038185+00:00",
+  "method": "wall_clock_s = task_completed.timestamp - task_started.timestamp, matched by task_id; role = producer_role or final_answer_role; p50/p90 over matched, positive-duration, valid-role pairs.",
+  "source_window": {
+    "log_dir": "/mnt/raid0/llm/epyc-orchestrator/logs/progress",
+    "first_file": "2026-02-27.jsonl",
+    "last_file": "2026-09-23.jsonl",
+    "n_files": 117
+  },
+  "n_pairs_total": 137256,
+  "n_pairs_unmatched_no_start": 44,
+  "n_pairs_excluded_nonpositive_duration": 0,
+  "n_pairs_excluded_invalid_role": 2164,
+  "n_malformed_lines_skipped": 0,
+  "min_n_per_role": 30,
+  "roles": {
+    "architect_coding": {
+      "n": 5870,
+      "p50_s": 25.683,
+      "p90_s": 86.198,
+      "mean_s": 37.444
+    },
+    "architect_critic": {
+      "n": 56,
+      "p50_s": 3.506,
+      "p90_s": 18.454,
+      "mean_s": 8.308
+    },
+    "architect_general": {
+      "n": 14543,
+      "p50_s": 13.445,
+      "p90_s": 91.663,
+      "mean_s": 32.261
+    },
+    "coder_escalation": {
+      "n": 13039,
+      "p50_s": 9.13,
+      "p90_s": 75.396,
+      "mean_s": 24.96
+    },
+    "frontdoor": {
+      "n": 56905,
+      "p50_s": 27.59,
+      "p90_s": 116.145,
+      "mean_s": 46.22
+    },
+    "ingest_long_context": {
+      "n": 9291,
+      "p50_s": 10.869,
+      "p90_s": 121.839,
+      "mean_s": 42.19
+    },
+    "vision_escalation": {
+      "n": 48,
+      "p50_s": 20.149,
+      "p90_s": 49.42,
+      "mean_s": 25.532
+    },
+    "worker_general": {
+      "n": 25928,
+      "p50_s": 16.225,
+      "p90_s": 55.121,
+      "mean_s": 23.298
+    },
+    "worker_math": {
+      "n": 3009,
+      "p50_s": 35.752,
+      "p90_s": 75.735,
+      "mean_s": 42.346
+    },
+    "worker_vision": {
+      "n": 6388,
+      "p50_s": 15.694,
+      "p90_s": 48.336,
+      "mean_s": 22.163
+    }
+  },
+  "excluded_low_n_roles": {
+    "toolrunner": 13,
+    "worker_explore": 2
+  }
+}

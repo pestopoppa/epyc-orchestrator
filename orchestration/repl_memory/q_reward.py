@@ -27,6 +27,19 @@ logger = logging.getLogger(__name__)
 _KNOWN_UNPRICED_ROLES = frozenset({"architect_coding", "mock", "plan_review"})
 _warned_unpriced_roles: set[str] = set()
 
+# RTG-09: same "absence must be visible, never silent" contract as
+# _warned_unpriced_roles above, tracked separately because a role can be
+# priced on tokens/sec (baseline_tps_by_role) while still missing a duration
+# baseline (baseline_duration_by_role) -- the two artifacts have independent
+# provenance and independent coverage.
+_warned_unpriced_duration_roles: set[str] = set()
+# Fires at most once per process: the caller did not supply task_duration_s at
+# all (as opposed to the role having no baseline). Distinct from the per-role
+# warning above because this is a CALLER defect (a call site with no
+# task_started/task_completed pairing wired up), not a coverage gap in the
+# derived baseline artifact.
+_warned_missing_duration_arg = False
+
 
 def _warn_unpriced_role(role: str) -> None:
     """Warn once per distinct role that has no baseline_tps entry.
@@ -46,6 +59,51 @@ def _warn_unpriced_role(role: str) -> None:
     )
 
 
+def _warn_unpriced_role_duration(role: str) -> None:
+    """Warn once per distinct role that has no baseline_duration entry.
+
+    Mirrors `_warn_unpriced_role`: the duration DIMENSION is skipped for this
+    role (never defaulted to zero penalty by fabricating a baseline), but the
+    skip must be visible so a genuinely new/unregistered role does not quietly
+    escape the primary speed axis the same way the pre-2026-07-21 role-key bug
+    let every role escape the whole cost/speed half of the reward.
+    """
+    if role in _KNOWN_UNPRICED_ROLES or role in _warned_unpriced_duration_roles:
+        return
+    _warned_unpriced_duration_roles.add(role)
+    logger.warning(
+        "Reward DURATION penalty SKIPPED: role %r has no baseline_duration_by_role "
+        "entry, so the primary speed axis does not price this task (tokens/sec "
+        "secondary term, if priced, still applies). Run "
+        "scripts/analysis/derive_duration_baselines.py to refresh coverage or "
+        "register the role there.",
+        role[:80],
+    )
+
+
+def _warn_missing_duration_arg() -> None:
+    """Warn once (process-lifetime) that a caller never supplied task_duration_s.
+
+    compute_reward cannot derive wall-clock duration itself -- it has no
+    access to the task_started event, only whatever the caller passes. A
+    caller that never wires task_duration_s silently loses the entire primary
+    speed axis for every task it scores, which is exactly the shape of defect
+    this reward has already suffered once (the role-key miss). Surfaced here
+    so a new/unwired call site is diagnosable from the log instead of being a
+    quiet, permanent zero on this dimension.
+    """
+    global _warned_missing_duration_arg
+    if _warned_missing_duration_arg:
+        return
+    _warned_missing_duration_arg = True
+    logger.warning(
+        "Reward DURATION penalty SKIPPED: caller did not pass task_duration_s to "
+        "compute_reward, so the primary wall-clock speed axis is inert for this "
+        "call site. Wire task_started -> task_completed elapsed time through, or "
+        "this task scores with no duration signal at all."
+    )
+
+
 def compute_reward(
     task_outcome: ProgressEntry,
     gate_results: List[ProgressEntry],
@@ -54,6 +112,7 @@ def compute_reward(
     cost_metrics: Optional[Dict[str, Any]],
     *,
     config: "ScoringConfig",
+    task_duration_s: Optional[float] = None,
 ) -> float:
     """Compute reward from task outcome with optional cost penalty.
 
@@ -63,11 +122,20 @@ def compute_reward(
       - Penalty for escalations: -0.15 per escalation
       - Plan review bonus: +0.1 if approved, -0.2 if corrected
 
-    Cost penalty (xRouter-style, correctness-gated):
-      - Only applied when quality reward > 0 (correct answers)
-      - cost_ratio = actual_elapsed / expected_elapsed
-      - penalty = lambda * max(0, cost_ratio - 1.0)
-      - No penalty if running at or above expected speed
+    Cost penalty (xRouter-style, correctness-gated), two speed dimensions:
+      - PRIMARY (RTG-09): wall-clock task duration, `task_duration_s` (the
+        caller-supplied task_completed.timestamp - task_started.timestamp).
+        Graded 0..cost_lambda_duration between the role's measured p50 (no
+        penalty) and p90 (full weight), saturating beyond p90. This axis sees
+        orchestration/tool overhead that tokens/sec cannot.
+      - SECONDARY (demoted 2026-09-24): tokens/sec-derived latency,
+        cost_ratio = actual_elapsed / expected_elapsed,
+        penalty = cost_penalty_lambda * max(0, cost_ratio - 1.0).
+      - Both are only applied when quality reward > 0 (correct answers).
+      - `task_duration_s=None` (caller did not wire it) or a role with no
+        `baseline_duration_by_role` entry SKIPS the duration dimension only
+        (warned once, never silent, never defaulted to a fabricated penalty)
+        -- the other dimensions are independent and still apply.
 
     Returns the final reward clamped to [-1, 1].
     """
@@ -136,6 +204,50 @@ def compute_reward(
             # src/api/models/requests.py).
             _warn_unpriced_role(role)
 
+        # Dimension 0 (RTG-09): wall-clock task-duration penalty -- the
+        # PRIMARY speed axis. Wall-clock, not tokens/sec: tokens/sec is
+        # gameable through tool calls and blind to orchestration/tool
+        # overhead (DAR handoff: median wall/model-compute overhead 1.60x,
+        # p90 9.09x over 19,433 tasks; worker_vision spends ~0.4s of model
+        # compute inside ~11.9s of wall clock).
+        #
+        # Graded, not a single ratio threshold: 0 penalty at the role's
+        # measured p50, scaling linearly to full `cost_lambda_duration`
+        # weight at p90, saturating (never exceeding full weight) beyond it.
+        # This is deliberately continuous -- CJ-8/L665's broader point is that
+        # a success/failure-shaped reward wastes the graded signal the
+        # underlying measurement actually carries.
+        #
+        # Two independent "missing" cases, both SKIP (never fabricate a
+        # penalty) and both warn at most once so the skip is never silent --
+        # the exact defect shape the role-key bug already taught this file:
+        #   (a) caller never supplied task_duration_s at all;
+        #   (b) role has no baseline_duration_by_role entry (coverage gap,
+        #       or a role too new/rare to have cleared MIN_N_PER_ROLE).
+        if task_duration_s is None:
+            _warn_missing_duration_arg()
+        else:
+            duration_baseline = config.baseline_duration_by_role.get(role) if role else None
+            if duration_baseline is None:
+                if role:
+                    _warn_unpriced_role_duration(role)
+            else:
+                p50 = duration_baseline.get("p50_s", 0.0)
+                p90 = duration_baseline.get("p90_s", 0.0)
+                if p90 > p50 > 0:
+                    duration_frac = (task_duration_s - p50) / (p90 - p50)
+                elif p50 > 0:
+                    # Degenerate baseline (p90 <= p50, e.g. a low-n role with
+                    # identical quantiles) -- fall back to a plain ratio past
+                    # p50 rather than divide by zero or skip outright.
+                    duration_frac = (task_duration_s / p50) - 1.0
+                else:
+                    duration_frac = 0.0
+                duration_penalty = config.cost_lambda_duration * max(
+                    0.0, min(1.0, duration_frac)
+                )
+                reward -= duration_penalty
+
         # Prefer generation_ms (clean generation time excluding prompt eval)
         # over elapsed_seconds (polluted by prompt processing time)
         gen_ms = cost_metrics.get("generation_ms", 0)
@@ -144,7 +256,10 @@ def compute_reward(
         else:
             elapsed = cost_metrics.get("elapsed_seconds", 0)
 
-        # Dimension 1: Latency penalty (existing)
+        # Dimension 1: Latency penalty (tokens/sec). DEMOTED to a SECONDARY
+        # signal 2026-09-24 (RTG-09) -- see module docstring / Dimension 0
+        # above. Still useful as a within-role compute-efficiency signal, just
+        # no longer the axis the reward leans on for task-execution speed.
         if baseline_tps > 0 and tokens_gen > 0 and elapsed > 0:
             expected_elapsed = tokens_gen / baseline_tps
             cost_ratio = elapsed / expected_elapsed  # >1 = slower than expected

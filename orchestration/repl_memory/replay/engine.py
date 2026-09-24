@@ -257,6 +257,17 @@ class ReplayEngine:
 
         routing_match = (candidate_action == trajectory.routing_decision)
 
+        # RTG-09: wall-clock task duration for the reward's primary speed axis.
+        # Trajectory already carries both endpoints (extracted from the same
+        # task_started/task_completed pairing q_scorer._score_task uses); None
+        # when either timestamp is missing so compute_reward treats it as an
+        # explicit missing case rather than defaulting silently.
+        task_duration_s: Optional[float] = None
+        if trajectory.started_at and trajectory.completed_at:
+            task_duration_s = (trajectory.completed_at - trajectory.started_at).total_seconds()
+            if task_duration_s < 0:
+                task_duration_s = None
+
         # Compute reward using the candidate's scoring config
         reward = scorer._compute_reward(
             task_outcome=trajectory.outcome_entry or _make_fake_outcome(trajectory.outcome),
@@ -264,6 +275,7 @@ class ReplayEngine:
             escalations=trajectory.escalation_entries,
             plan_reviews=trajectory.plan_review_entries if trajectory.plan_review_entries else None,
             cost_metrics=trajectory.cost_metrics or None,
+            task_duration_s=task_duration_s,
         )
 
         cost_metrics = trajectory.cost_metrics or {}

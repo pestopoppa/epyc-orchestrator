@@ -126,17 +126,6 @@ def rescore(log_dir: Path, out_path: Path | None):
                 data_prefix = {
                     k: v for k, v in data.items() if k not in _ROLE_KEYS_ADDED_BY_FIX
                 }
-                try:
-                    reward_pre = compute_reward(
-                        _Entry(outcome, data_prefix), [], [], None,
-                        data_prefix, config=config,
-                    )
-                    reward_post = compute_reward(
-                        _Entry(outcome, data), [], [], None, data, config=config,
-                    )
-                except Exception:  # malformed row — count it, never silently drop
-                    skipped += 1
-                    continue
 
                 completed = _parse_ts(event.get("timestamp"))
                 started = starts.get(task_id)
@@ -145,6 +134,24 @@ def rescore(log_dir: Path, out_path: Path | None):
                     if started and completed
                     else None
                 )
+
+                try:
+                    # RTG-09: both sides get the same task_duration_s (this
+                    # script isolates the role-key fix, not the duration axis
+                    # added afterward -- passing it identically on both sides
+                    # keeps that isolation while giving this replay compute_reward's
+                    # current signature and its now-primary speed dimension).
+                    reward_pre = compute_reward(
+                        _Entry(outcome, data_prefix), [], [], None,
+                        data_prefix, config=config, task_duration_s=wall,
+                    )
+                    reward_post = compute_reward(
+                        _Entry(outcome, data), [], [], None, data, config=config,
+                        task_duration_s=wall,
+                    )
+                except Exception:  # malformed row — count it, never silently drop
+                    skipped += 1
+                    continue
                 gen_s = (data.get("generation_ms") or 0) / 1000.0
                 pe_s = (data.get("prompt_eval_ms") or 0) / 1000.0
                 model_s = gen_s + pe_s

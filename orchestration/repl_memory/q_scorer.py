@@ -82,6 +82,53 @@ DEFAULT_MODEL_DESCRIPTOR_PATH = (
 DEFAULT_STACK_PRIORS_PATH = (
     Path(__file__).resolve().parents[2] / "orchestration" / "derived" / "stack_priors.yaml"
 )
+# RTG-09: per-role wall-clock task-duration baselines (p50/p90), derived from
+# retained progress logs by scripts/analysis/derive_duration_baselines.py
+# under protocol id RTG09-DURATION-BASELINE-v1. Measured, not declared -- a
+# different provenance from stack_priors.yaml above (which reflects the
+# CURRENT stack's declared/benchmarked specs), so it is loaded independently
+# rather than folded into descriptor_q_scorer_priors_by_role().
+DEFAULT_DURATION_BASELINES_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "orchestration"
+    / "derived"
+    / "duration_baselines_by_role.json"
+)
+
+
+def load_duration_baselines_by_role(
+    path: Path = DEFAULT_DURATION_BASELINES_PATH,
+) -> Tuple[Dict[str, Dict[str, float]], Optional[str]]:
+    """Load per-role wall-clock duration baselines for the reward's speed axis.
+
+    Returns (baselines, degraded_reason). On any failure to load, returns
+    ({}, reason) -- an EMPTY dict, never a fabricated number. `q_reward.py`'s
+    "role not in config.baseline_duration_by_role" guard already treats an
+    absent role honestly (SKIPS the duration dimension and warns once), so a
+    wholesale-empty dict degrades to "duration dimension never fires,
+    surfaced via ScoringConfig.duration_baseline_degraded_reason" rather than
+    silently pricing every role at some default duration.
+    """
+    import json
+
+    if not path.exists():
+        return {}, f"duration baselines artifact missing: {path}"
+    try:
+        doc = json.loads(path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        return {}, f"duration baselines artifact unreadable: {exc}"
+    roles = doc.get("roles") if isinstance(doc, dict) else None
+    if not isinstance(roles, dict):
+        return {}, "duration baselines artifact malformed: no 'roles' object"
+    out: Dict[str, Dict[str, float]] = {}
+    for role, stats in roles.items():
+        if not isinstance(stats, dict):
+            continue
+        p50 = stats.get("p50_s")
+        p90 = stats.get("p90_s")
+        if isinstance(p50, (int, float)) and isinstance(p90, (int, float)):
+            out[str(role)] = {"p50_s": float(p50), "p90_s": float(p90)}
+    return out, None
 
 FALLBACK_BASELINE_TPS_BY_ROLE: Dict[str, float] = {
     "frontdoor": 12.7,
@@ -1093,11 +1140,22 @@ class ScoringConfig:
     judge_model_path: Optional[Path] = None
     judge_binary: Optional[Path] = None
 
+    # RTG-09 (2026-09-24): wall-clock task duration is now the PRIMARY speed
+    # axis; tokens/sec below is DEMOTED to a secondary signal. Tokens/sec is
+    # gameable through tool calls and blind to orchestration/tool overhead --
+    # the DAR handoff measured median wall/model-compute overhead 1.60x, p90
+    # 9.09x across 19,433 tasks, with worker_vision spending ~0.4s of model
+    # compute inside ~11.9s of wall clock (a tokens/sec term scores that as
+    # fast). See `cost_lambda_duration` and `baseline_duration_by_role` below.
+    cost_lambda_duration: float = 0.20
+
     # Cost-aware reward (xRouter-style correctness-gated cost penalty).
     # reward_final = quality_reward - lambda * max(0, cost_ratio - 1.0)
     # where cost_ratio = actual_elapsed / expected_elapsed.
     # Only applied when answer is correct (incorrect = 0.0, no cost term).
-    cost_penalty_lambda: float = 0.15
+    # DEMOTED 2026-09-24 (RTG-09) from 0.15 to 0.05 -- secondary signal now
+    # that `cost_lambda_duration` carries the primary speed axis.
+    cost_penalty_lambda: float = 0.05
 
     # Per-role optimized tokens/second from generated stack priors at config
     # construction time, with fallback tables for degraded/offline scripts. Used
@@ -1108,6 +1166,18 @@ class ScoringConfig:
     )
     baseline_tps_source_by_role: Dict[str, str] = field(
         default_factory=lambda: descriptor_q_scorer_priors_by_role().baseline_tps_source_by_role
+    )
+
+    # RTG-09: per-role wall-clock task-duration baselines {"p50_s", "p90_s"},
+    # measured from retained progress logs (see `load_duration_baselines_by_role`
+    # docstring). A role absent here means the duration dimension is SKIPPED for
+    # it in q_reward.py, never defaulted -- the same "absence, not fabrication"
+    # contract baseline_quality_by_role already follows.
+    baseline_duration_by_role: Dict[str, Dict[str, float]] = field(
+        default_factory=lambda: load_duration_baselines_by_role()[0]
+    )
+    duration_baseline_degraded_reason: Optional[str] = field(
+        default_factory=lambda: load_duration_baselines_by_role()[1]
     )
 
     # Per-role quality baselines from generated stack priors, with legacy
@@ -1317,6 +1387,22 @@ class QScorer:
                 "reward": None,
             }
 
+        # RTG-09: wall-clock task duration for the reward's primary speed axis,
+        # derived exactly as the DAR handoff specifies -- task_completed.timestamp
+        # minus task_started.timestamp, matched by task_id (the two events this
+        # trajectory already carries). None when TASK_STARTED was never recorded
+        # for this task_id; compute_reward treats that as an explicit missing
+        # case (warns once, skips only the duration dimension) rather than
+        # silently defaulting.
+        task_duration_s: Optional[float] = None
+        if task_started and task_started.timestamp and task_outcome.timestamp:
+            task_duration_s = (
+                task_outcome.timestamp - task_started.timestamp
+            ).total_seconds()
+            if task_duration_s < 0:
+                # Clock skew / out-of-order replay -- not a real duration.
+                task_duration_s = None
+
         # Compute reward (pass completion data as optional cost/telemetry metrics)
         reward = self._compute_reward(
             task_outcome,
@@ -1324,6 +1410,7 @@ class QScorer:
             escalations,
             plan_reviews,
             cost_metrics=(task_outcome.data if task_outcome and task_outcome.data else None),
+            task_duration_s=task_duration_s,
         )
         # Delegation credit assignment to avoid over-crediting envelope roles.
         reward = self._apply_delegation_credit(reward, routing_decision, task_outcome)
@@ -1445,11 +1532,12 @@ class QScorer:
         escalations: List[ProgressEntry],
         plan_reviews: List[ProgressEntry] | None = None,
         cost_metrics: Optional[Dict[str, Any]] = None,
+        task_duration_s: Optional[float] = None,
     ) -> float:
         """Compute reward — delegates to q_reward.compute_reward (Task-G refactor)."""
         return _compute_reward_impl(
             task_outcome, gate_results, escalations, plan_reviews, cost_metrics,
-            config=self.config,
+            config=self.config, task_duration_s=task_duration_s,
         )
 
     def _compute_contrastive_adjustment(
