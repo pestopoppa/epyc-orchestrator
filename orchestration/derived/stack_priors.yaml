@@ -48,7 +48,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-09-24T14:28:25Z'
+compiled_at: '2026-09-24T14:51:24Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: docs/reference/stack-truth-precedence.md
@@ -56,39 +56,39 @@ source_artifacts:
   registry:
     path: orchestration/model_registry.yaml
     sha256: 82cd7b96ffb3ce4e5edc07ccb449c65a54c197449797b9a8d8a25d961eed6f2b
-    repo_commit: 6b26f3ae
+    repo_commit: a269ecf2
   descriptors:
     path: orchestration/model_descriptors.yaml
-    sha256: 592f28f5ea2453de2a51eace1ffe7c87f56438ac5d10af19181be359c48ca7dd
-    repo_commit: 6b26f3ae
+    sha256: 181acf7a38a3b9aba41bd083082bfdccee1d4a9de56a2f620870bb35fb449a76
+    repo_commit: a269ecf2
   stack_manifest:
     path: scripts/server/stack_manifest.py
     sha256: 0a5849e2702ac029973a96e9a7427067c7a6f5deb1e7060c60586b3a98d91c75
-    repo_commit: 6b26f3ae
+    repo_commit: a269ecf2
   stack_numa:
     path: scripts/server/stack_numa.py
     sha256: 8a9e4eade957c71b9694160668f982deff31960d3ec5ad0f2d8fc50369b3c703
-    repo_commit: 6b26f3ae
+    repo_commit: a269ecf2
   launch_manifest:
     path: orchestration/launch_manifest.yaml
-    sha256: 0b918378cf0992d8bbe58241f2ae7dbd1ed030b782dc0f6abd3949ba065e12ee
-    repo_commit: 6b26f3ae
+    sha256: 5e215c3ce062655b3f7ce17a41fc9644422bbf114a78d813bbff3e199bbaebd6
+    repo_commit: a269ecf2
   stack_topology:
     path: orchestration/stack_topology.yaml
     sha256: f802ef5b1636bec903344f800ce6ecbb7e97af20018dec678080b3af538dfbea
-    repo_commit: 6b26f3ae
+    repo_commit: a269ecf2
   orchestrator_stack:
     path: scripts/server/orchestrator_stack.py
-    sha256: ee9e86b559b1bf22ab318811b11c0ca9e5b66b0b126ed9c14ac78e76f193c42f
-    repo_commit: 6b26f3ae
+    sha256: 245a7a314af6555fb6e3629fc79fa418b0ba3efd6c7235f9881e4dfbb1a84ca2
+    repo_commit: a269ecf2
   stack_paths:
     path: scripts/server/stack_paths.py
     sha256: 4a7ca842a87b6ffec022f4f6433d755751cac32b9102747d88f3f4f2e4cb24de
-    repo_commit: 6b26f3ae
+    repo_commit: a269ecf2
   stack_runtime:
     path: scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: 6b26f3ae
+    repo_commit: a269ecf2
 roles:
   architect_critic:
     role: architect_critic
