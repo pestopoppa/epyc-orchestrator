@@ -243,3 +243,17 @@ class AdmissionController:
                 "waiting_background": int(waiting.get("background", 0)),
             }
         return status
+
+
+# Shared (unified) KV pool admission lives in src/scheduling/kv_pool_admission.py
+# (importable without pulling in the FastAPI app); re-exported here because it
+# is admission control.
+from src.scheduling.kv_pool_admission import (  # noqa: E402,F401
+    DEFAULT_KV_POOL_MAX_QUEUED,
+    DEFAULT_KV_POOL_WAIT_S,
+    KV_POOL_MAX_QUEUED_ENV,
+    KV_POOL_WAIT_ENV,
+    KVPoolQueueFull,
+    SharedKVPoolAdmission,
+    get_shared_pool_admission,
+)

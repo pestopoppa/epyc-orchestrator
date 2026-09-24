@@ -345,6 +345,11 @@ class OpenAIModelInfo(BaseModel):
     object: str = "model"
     created: int = Field(default_factory=lambda: int(time.time()))
     owned_by: str = "orchestrator"
+    # The role's REAL per-request context (prompt + generation), read from the
+    # serving llama-server's /props (registry fallback). `max_model_len` is the
+    # vLLM spelling of the same number. Omitted when unknown.
+    context_length: int | None = None
+    max_model_len: int | None = None
 
 
 class OpenAIModelsResponse(BaseModel):

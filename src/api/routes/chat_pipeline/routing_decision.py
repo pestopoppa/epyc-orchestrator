@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 
 from src.api.models import ChatRequest
 from src.api.routes.chat_routing import _classify_and_route
 from src.api.routes.chat_utils import LONG_CONTEXT_CONFIG, role_timeout_for
 from src.api.structured_logging import task_extra
+from src.backends.context_limits import (
+    CONSERVATIVE_CHARS_PER_TOKEN,
+    ROUGH_CHARS_PER_TOKEN,
+    context_overflow_roles,
+    get_context_limit_resolver,
+)
 from src.features import features
 from src.roles import Role
 
@@ -167,6 +174,88 @@ def assess_factual_risk(prompt: str, role: str, task_id: str) -> tuple[float, st
         return 0.0, ""
 
 
+def _ceil_div(chars: int, chars_per_token: float) -> int:
+    return int(math.ceil(max(0, chars) / chars_per_token))
+
+
+def _long_context_threshold_tokens() -> int:
+    """Specialist-routing threshold in tokens.
+
+    ``threshold_tokens`` wins when configured; otherwise the character knob is
+    converted at ROUGH_CHARS_PER_TOKEN (20,000 chars → 5,000 tokens).
+    """
+    explicit = LONG_CONTEXT_CONFIG.get("threshold_tokens")
+    if isinstance(explicit, int) and not isinstance(explicit, bool) and explicit > 0:
+        return explicit
+    chars = max(1, int(LONG_CONTEXT_CONFIG.get("threshold_chars", 20_000)))
+    return max(1, int(chars // ROUGH_CHARS_PER_TOKEN))
+
+
+# Decode budget reserved for a request that states no max_tokens (the
+# chat-completions backend path uses the same default).
+DEFAULT_ROUTING_DECODE_RESERVE_TOKENS = 4096
+
+
+def _needs_long_context(effective_chars: int, max_tokens: int | None) -> tuple[bool, str]:
+    """(route to the long-context role?, human-readable reason for the log)."""
+    prompt_tokens = _ceil_div(effective_chars, CONSERVATIVE_CHARS_PER_TOKEN)
+    decode = max_tokens if isinstance(max_tokens, int) and max_tokens > 0 else DEFAULT_ROUTING_DECODE_RESERVE_TOKENS
+    needed = prompt_tokens + decode
+    frontdoor = str(Role.FRONTDOOR)
+    try:
+        limit = get_context_limit_resolver().limit_for_role(frontdoor)
+    except Exception:
+        log.debug("Frontdoor context limit lookup failed", exc_info=True)
+        limit = None
+    if limit is not None:
+        fits = limit.fits(prompt_tokens, decode)
+        return (not fits), (
+            f"~{prompt_tokens} prompt + {decode} decode = {needed} tokens "
+            f"{'fits' if fits else 'does not fit'} {frontdoor} per-request n_ctx "
+            f"{limit.per_request_n_ctx} ({limit.source})"
+        )
+    threshold = _long_context_threshold_tokens()
+    rough = _ceil_div(effective_chars, ROUGH_CHARS_PER_TOKEN)
+    return rough > threshold, (
+        f"{frontdoor} context limit unknown; conservative fallback: ~{rough} tokens "
+        f"({effective_chars} chars) {'>' if rough > threshold else '<='} {threshold}-token threshold"
+    )
+
+
+def _long_context_target(effective_chars: int) -> str:
+    """ingest_long_context, unless its live per-request context cannot hold the
+    request and a configured larger-context role can (context_overflow_roles)."""
+    default_role = str(Role.INGEST_LONG_CONTEXT)
+    needed = _ceil_div(effective_chars, CONSERVATIVE_CHARS_PER_TOKEN)
+    try:
+        resolver = get_context_limit_resolver()
+        limit = resolver.limit_for_role(default_role)
+        if limit is None or limit.fits(needed):
+            return default_role
+        alternative = resolver.larger_context_role(
+            needed, candidates=context_overflow_roles(), exclude={default_role}
+        )
+    except Exception:
+        log.debug("Long-context capacity check failed; keeping %s", default_role, exc_info=True)
+        return default_role
+    if alternative is not None:
+        alt_role, alt_limit = alternative
+        log.warning(
+            "Long-context request ~%d tokens exceeds %s per-request n_ctx %d (%s); "
+            "routing to %s (n_ctx %d)",
+            needed, default_role, limit.per_request_n_ctx, limit.source,
+            alt_role, alt_limit.per_request_n_ctx,
+        )
+        return alt_role
+    log.warning(
+        "Long-context request ~%d tokens exceeds %s per-request n_ctx %d (%s) and no "
+        "larger-context role is configured; the server will refuse it and the caller "
+        "gets a typed ContextOverflowError",
+        needed, default_role, limit.per_request_n_ctx, limit.source,
+    )
+    return default_role
+
+
 def select_initial_route(
     request: ChatRequest,
     state,
@@ -192,19 +281,23 @@ def select_initial_route(
     # long-context prefill to a latency-oriented worker and can outlive the
     # request budget.  Preserve explicit/forced and image routing above, but
     # keep ordinary oversized text on the role provisioned for it.
+    #
+    # 2026-09-24 (operator decision): route by the LIVE per-request limit. A
+    # request goes to the long-context role only when its prompt + reserved
+    # decode budget will not fit the frontdoor's live per-request n_ctx
+    # (ContextLimitResolver: /props, registry fallback). Only when that limit
+    # is unknown does the old conservative threshold (the autopilot knob
+    # `chat.long_context_threshold_chars`, in tokens) decide.
     long_context_enabled = bool(LONG_CONTEXT_CONFIG.get("enabled", True))
-    long_context_threshold = max(
-        1,
-        int(LONG_CONTEXT_CONFIG.get("threshold_chars", 20_000)),
-    )
     effective_chars = len(request.prompt or "") + len(request.context or "")
-    if long_context_enabled and effective_chars > long_context_threshold:
-        log.info(
-            "Long-context routing guard: %d chars > %d → ingest_long_context",
-            effective_chars,
-            long_context_threshold,
-        )
-        return [str(Role.INGEST_LONG_CONTEXT)], "long_context_guard", skill_context
+    if long_context_enabled:
+        use_long, detail = _needs_long_context(effective_chars, request.max_tokens)
+        if use_long:
+            target = _long_context_target(effective_chars)
+            log.info("Long-context routing guard → %s: %s", target, detail)
+            return [target], "long_context_guard", skill_context
+        if effective_chars > 0:
+            log.debug("Long-context routing guard: stays on normal routing: %s", detail)
     # Below this point the request has NO image data and NO forced/explicit
     # role (those returned above). The learned/hybrid router and the rules
     # classifier can still emit a vision-only role for a text prompt, which a

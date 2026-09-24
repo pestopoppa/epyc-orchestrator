@@ -170,6 +170,12 @@ class InferenceResult:
     # not report one (early-stop, transport failure, usage-less stream) — it is
     # never estimated here, so a consumer can tell measured from unknown.
     prompt_tokens: int | None = None
+    # Set (to ContextOverflowInfo.to_dict()) when llama-server refused or
+    # aborted the request for lack of KV context — HTTP 400
+    # exceed_context_size_error or "Context size has been exceeded.". The
+    # inference layer raises src.exceptions.ContextOverflowError from it
+    # instead of a generic failure (src/backends/context_overflow.py).
+    context_overflow: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -197,6 +203,7 @@ class InferenceResult:
             "stream_chunks": self.stream_chunks,
             "completion_reason": self.completion_reason,
             "completion_probabilities": self.completion_probabilities,
+            "context_overflow": self.context_overflow,
         }
 
 

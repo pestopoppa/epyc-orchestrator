@@ -28,6 +28,11 @@ from typing import Any, Iterator
 
 import httpx
 
+from src.backends.context_overflow import (
+    ContextOverflowInfo,
+    classify_error_body,
+    classify_error_payload,
+)
 from src.model_server import InferenceRequest, InferenceResult, ModelBackend
 from src.registry_loader import RoleConfig
 
@@ -122,6 +127,62 @@ def _response_text(response: Any) -> str:
     except Exception:
         return ""
     return text.strip() if isinstance(text, str) else ""
+
+
+def _overflow_from_error_response(response: Any) -> ContextOverflowInfo | None:
+    """Classify an HTTP >= 400 llama-server response as a context overflow.
+
+    Streaming responses have an unread body; read it first (bounded: the server
+    sends a small JSON error object, server-context.cpp:4362-4365).
+    """
+    try:
+        status = int(response.status_code)
+    except Exception:
+        return None
+    if status < 400:
+        return None
+    try:
+        response.read()
+    except Exception:
+        pass
+    return classify_error_body(_response_text(response), status)
+
+
+def _context_overflow_result(
+    role_config: Any,
+    info: ContextOverflowInfo,
+    elapsed: float,
+    *,
+    partial_output: str = "",
+) -> InferenceResult:
+    """A failed InferenceResult that carries the overflow for the inference layer.
+
+    ``output`` stays empty on purpose: a request the server aborted mid-way has
+    its slot cleared (server-context.cpp:3776-3782), so partial text is not an
+    answer and must never be returned as one. Its length is kept in the message.
+    """
+    logger.warning(
+        "llama-server context overflow role=%s kind=%s status=%s n_prompt=%s n_ctx=%s "
+        "partial_chars=%d: %s",
+        getattr(role_config, "name", "?"), info.kind, info.http_status,
+        info.n_prompt_tokens, info.n_ctx, len(partial_output), info.message,
+    )
+    return InferenceResult(
+        role=getattr(role_config, "name", ""),
+        output="",
+        tokens_generated=0,
+        generation_speed=0.0,
+        elapsed_time=elapsed,
+        success=False,
+        error_message=f"context overflow ({info.kind}): {info.message}",
+        partial=False,
+        degraded=True,
+        failure_stage="context",
+        failure_reason="context_overflow",
+        completion_reason="context_overflow",
+        prompt_tokens=info.n_prompt_tokens,
+        context_overflow=info.to_dict(),
+    )
 
 
 def _server_cfg():
@@ -374,6 +435,9 @@ class LlamaServerBackend(ModelBackend):
                 "llama POST /completion done role=%s elapsed_ms=%.0f status=%d",
                 role_config.name, http_elapsed_ms, response.status_code,
             )
+            overflow = _overflow_from_error_response(response)
+            if overflow is not None:
+                return _context_overflow_result(role_config, overflow, time.time() - start_time)
             response.raise_for_status()
             result_data = response.json()
 
@@ -388,6 +452,18 @@ class LlamaServerBackend(ModelBackend):
                 or result_data.get("finish_reason")
                 or ("stop" if result_data.get("stop") else "")
             )
+            if result_data.get("truncated") is True:
+                # server-context.cpp:1929-1936: with context shift disabled the
+                # server stops generation when the slot's n_ctx is full and
+                # marks the result truncated. Never let that pass as a clean
+                # stop — the answer was cut by the context limit.
+                logger.warning(
+                    "llama /completion truncated by context limit role=%s "
+                    "tokens_evaluated=%s tokens_predicted=%s",
+                    role_config.name, result_data.get("tokens_evaluated"),
+                    result_data.get("tokens_predicted"),
+                )
+                completion_reason = "context_limit"
 
             # Extract clean timing data from llama.cpp timings object
             timings = result_data.get("timings", {})
@@ -523,6 +599,9 @@ class LlamaServerBackend(ModelBackend):
             # Convert it to a structured degraded result, matching the
             # /v1/chat/completions path (failure_stage/reason: transport/http_status).
             elapsed = time.time() - start_time
+            overflow = _overflow_from_error_response(e.response)
+            if overflow is not None:
+                return _context_overflow_result(role_config, overflow, elapsed)
             return InferenceResult(
                 role=role_config.name,
                 output="",
@@ -690,6 +769,9 @@ class LlamaServerBackend(ModelBackend):
                 "llama POST /v1/chat/completions done role=%s elapsed_ms=%.0f status=%d",
                 role_config.name, http_elapsed_ms, response.status_code,
             )
+            overflow = _overflow_from_error_response(response)
+            if overflow is not None:
+                return _context_overflow_result(role_config, overflow, time.time() - start_time)
             response.raise_for_status()
             data = response.json()
 
@@ -719,6 +801,16 @@ class LlamaServerBackend(ModelBackend):
             usage = data.get("usage", {}) or {}
             prompt_tokens = int(usage.get("prompt_tokens", 0))
             tokens_generated = int(usage.get("completion_tokens", 0))
+            if completion_reason == "length" and 0 < tokens_generated < int(payload["max_tokens"]):
+                # The OpenAI shim has no `truncated` field, but a length stop
+                # BELOW max_tokens can only be the slot's n_ctx running out
+                # (ctx shift off → stop at n_ctx - 1, server-context.cpp:1929-1936).
+                # Measured: split KV -np 2 -c 4096 → 271 + 1777 = 2048 = n_ctx/np.
+                logger.warning(
+                    "chat_completions truncated by context limit role=%s prompt=%d completion=%d max_tokens=%s",
+                    role_config.name, prompt_tokens, tokens_generated, payload["max_tokens"],
+                )
+                completion_reason = "context_limit"
 
             # llama-server's OpenAI shim doesn't always emit timings; estimate
             timings = data.get("timings", {}) or {}
@@ -774,6 +866,9 @@ class LlamaServerBackend(ModelBackend):
             )
         except httpx.HTTPStatusError as e:
             elapsed = time.time() - start_time
+            overflow = _overflow_from_error_response(e.response)
+            if overflow is not None:
+                return _context_overflow_result(role_config, overflow, elapsed)
             return InferenceResult(
                 role=role_config.name, output="", tokens_generated=0,
                 generation_speed=0.0, elapsed_time=elapsed, success=False,
@@ -953,6 +1048,11 @@ class LlamaServerBackend(ModelBackend):
                 json=payload,
                 timeout=_stream_timeout,
             ) as response:
+                # The FIRST error of a stream is sent as a plain (non-SSE)
+                # error response with its own status (server-context.cpp:4506-4519).
+                overflow = _overflow_from_error_response(response)
+                if overflow is not None:
+                    return _context_overflow_result(role_config, overflow, time.time() - start_time)
                 response.raise_for_status()
 
                 timings: dict[str, Any] = {}
@@ -974,6 +1074,33 @@ class LlamaServerBackend(ModelBackend):
                         data = _json.loads(line_str[6:])
                     except _json.JSONDecodeError:
                         continue
+
+                    if isinstance(data, dict) and "error" in data:
+                        # A LATER error arrives in-band as `data: {"error": ...}`
+                        # (server-context.cpp:4540-4550) — e.g. every in-flight
+                        # request when a unified KV pool runs dry. Ignoring it
+                        # used to return the partial text (or "") as a success.
+                        overflow = classify_error_payload(data)
+                        if overflow is not None:
+                            return _context_overflow_result(
+                                role_config, overflow, time.time() - start_time,
+                                partial_output="".join(chunks),
+                            )
+                        err = data.get("error")
+                        err_msg = err.get("message") if isinstance(err, dict) else str(err)
+                        return InferenceResult(
+                            role=role_config.name,
+                            output="",
+                            tokens_generated=0,
+                            generation_speed=0.0,
+                            elapsed_time=time.time() - start_time,
+                            success=False,
+                            error_message=f"llama-server stream error: {err_msg}",
+                            degraded=True,
+                            failure_stage="stream",
+                            failure_reason="server_error",
+                            completion_reason="server_error",
+                        )
 
                     content = data.get("content", "")
                     if content:
@@ -1012,6 +1139,13 @@ class LlamaServerBackend(ModelBackend):
                             or data.get("finish_reason")
                             or "stop"
                         )
+                        if data.get("truncated") is True:
+                            logger.warning(
+                                "llama STREAM /completion truncated by context limit role=%s "
+                                "tokens_evaluated=%s tokens_predicted=%s",
+                                role_config.name, prompt_tokens, tokens_generated,
+                            )
+                            completion_reason = "context_limit"
                         break
 
             http_elapsed_ms = (time.perf_counter() - http_start) * 1000
@@ -1105,6 +1239,26 @@ class LlamaServerBackend(ModelBackend):
                     "empty_generation" if empty_generation else completion_reason
                 ),
                 prompt_tokens=int(prompt_tokens) if prompt_tokens else None,
+            )
+
+        except httpx.HTTPStatusError as e:
+            # Was uncaught here (HTTPStatusError is not a RequestError), so a
+            # non-overflow 4xx/5xx escaped infer_stream_text as a raw exception.
+            elapsed = time.time() - start_time
+            return InferenceResult(
+                role=role_config.name,
+                output="",
+                tokens_generated=0,
+                generation_speed=0.0,
+                elapsed_time=elapsed,
+                success=False,
+                error_message=(
+                    f"llama-server HTTP {e.response.status_code}"
+                    + (f": {_response_text(e.response)[:200]}" if _response_text(e.response) else "")
+                ),
+                failure_stage="transport",
+                failure_reason="http_status",
+                completion_reason="http_error",
             )
 
         except httpx.ReadTimeout:
@@ -1501,6 +1655,9 @@ class LlamaServerBackend(ModelBackend):
                 "POST", "/v1/chat/completions",
                 json=payload, timeout=_stream_timeout,
             ) as response:
+                overflow = _overflow_from_error_response(response)
+                if overflow is not None:
+                    return _context_overflow_result(role_config, overflow, time.time() - start_time)
                 response.raise_for_status()
                 try:
                     for line in response.iter_lines():
@@ -1512,6 +1669,25 @@ class LlamaServerBackend(ModelBackend):
                                 break
                             try:
                                 evt = _json.loads(data)
+                                if isinstance(evt, dict) and "error" in evt:
+                                    # In-band stream error (server-context.cpp:4540-4550).
+                                    overflow = classify_error_payload(evt)
+                                    if overflow is not None:
+                                        return _context_overflow_result(
+                                            role_config, overflow, time.time() - start_time,
+                                            partial_output="".join(chunks),
+                                        )
+                                    err = evt.get("error")
+                                    err_msg = err.get("message") if isinstance(err, dict) else str(err)
+                                    return InferenceResult(
+                                        role=role_config.name, output="", tokens_generated=0,
+                                        generation_speed=0.0,
+                                        elapsed_time=time.time() - start_time, success=False,
+                                        error_message=f"chat_completions stream error: {err_msg}",
+                                        degraded=True, failure_stage="stream",
+                                        failure_reason="server_error",
+                                        completion_reason="server_error",
+                                    )
                                 choices = evt.get("choices") or []
                                 if choices:
                                     delta = choices[0].get("delta") or {}

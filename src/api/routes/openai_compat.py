@@ -6,6 +6,7 @@ clients to use our orchestrator backend for inference.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
@@ -43,6 +44,7 @@ from src.registry.stack_priors import (
     stack_prior_serving,
 )
 from src.repl_environment import REPLEnvironment
+from src.exceptions import ContextOverflowError
 from src.scheduling.contention_gate import ContentionDenied
 from src.roles import Role
 
@@ -766,10 +768,30 @@ def available_roles() -> list[str]:
     return list(dict.fromkeys([*COMPATIBILITY_MODEL_ALIASES, *role_ids]))
 
 
-@router.get("/models", response_model=OpenAIModelsResponse)
+def _model_info(role: str) -> OpenAIModelInfo:
+    """Model entry carrying the role's live per-request context length.
+
+    Clients (opencode) size compaction from this instead of a hand-edited
+    config limit that silently diverges from the server's -c/-np/--kv-unified.
+    """
+    context_length = None
+    try:
+        from src.backends.context_limits import get_context_limit_resolver
+
+        limit = get_context_limit_resolver().limit_for_role(role)
+        if limit is not None:
+            context_length = int(limit.per_request_n_ctx)
+    except Exception:
+        logger.debug("context_length lookup failed for %s", role, exc_info=True)
+    return OpenAIModelInfo(id=role, context_length=context_length, max_model_len=context_length)
+
+
+@router.get("/models", response_model=OpenAIModelsResponse, response_model_exclude_none=True)
 async def list_models() -> OpenAIModelsResponse:
-    """List available models (roles) in OpenAI format."""
-    return OpenAIModelsResponse(data=[OpenAIModelInfo(id=role) for role in available_roles()])
+    """List available models (roles) in OpenAI format, with context_length."""
+    roles = available_roles()
+    infos = await asyncio.to_thread(lambda: [_model_info(role) for role in roles])
+    return OpenAIModelsResponse(data=infos)
 
 
 @router.post("/chat/completions", response_model=None)
@@ -955,6 +977,14 @@ async def openai_chat_completions(
                             )
                             yield "data: [DONE]\n\n"
                             return
+                        except ContextOverflowError as e:
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=str(e), error_type="context_overflow",
+                                status_code=503 if e.retryable else 413,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
                         except Exception as e:
                             logger.exception(
                                 "Streaming client-tool call failed for role %s (chat %s)",
@@ -987,6 +1017,14 @@ async def openai_chat_completions(
                             )
                             yield "data: [DONE]\n\n"
                             return
+                        except ContextOverflowError as e:
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=str(e), error_type="context_overflow",
+                                status_code=503 if e.retryable else 413,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
                         except Exception as e:
                             logger.exception(
                                 "Streaming vision request failed for role %s (chat %s)",
@@ -1013,6 +1051,14 @@ async def openai_chat_completions(
                                 chat_id=chat_id, created=created, model=request.model,
                                 message=str(e), error_type="contention_denied",
                                 status_code=503,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
+                        except ContextOverflowError as e:
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=str(e), error_type="context_overflow",
+                                status_code=503 if e.retryable else 413,
                             )
                             yield "data: [DONE]\n\n"
                             return
@@ -1101,6 +1147,14 @@ async def openai_chat_completions(
                                     chat_id=chat_id, created=created, model=request.model,
                                     message=str(e), error_type="contention_denied",
                                     status_code=503,
+                                )
+                                yield "data: [DONE]\n\n"
+                                return
+                            except ContextOverflowError as e:
+                                yield _sse_error_event(
+                                    chat_id=chat_id, created=created, model=request.model,
+                                    message=str(e), error_type="context_overflow",
+                                    status_code=503 if e.retryable else 413,
                                 )
                                 yield "data: [DONE]\n\n"
                                 return
@@ -1340,6 +1394,10 @@ async def openai_chat_completions(
                 # lines above for uninitialised primitives, which the old blanket
                 # `except Exception` swallowed into a 200.
                 raise
+            except ContextOverflowError:
+                # Dedicated app-level handler: 413 (too large for the role) or
+                # 503 + Retry-After (shared KV pool stayed exhausted).
+                raise
             except ContentionDenied:
                 # Has a dedicated app-level handler (503 + Retry-After +
                 # failure_provenance). Swallowing it here turned a documented
@@ -1406,10 +1464,10 @@ async def openai_chat_completions(
         )
 
 
-@router.get("/models/{model_id}")
+@router.get("/models/{model_id}", response_model=OpenAIModelInfo, response_model_exclude_none=True)
 async def get_model(model_id: str) -> OpenAIModelInfo:
     """Get info for a specific model."""
     if model_id not in available_roles():
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
-    return OpenAIModelInfo(id=model_id)
+    return await asyncio.to_thread(_model_info, model_id)
