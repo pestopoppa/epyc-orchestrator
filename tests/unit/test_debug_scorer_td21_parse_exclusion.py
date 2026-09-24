@@ -42,6 +42,16 @@ from debug_scorer import (  # noqa: E402
     score_answer,
 )
 
+# Captured at IMPORT time, before any fixture below (or any other test file
+# sharing this process) can mutate the module attribute. The autouse fixture
+# forces `EXCLUDE_UNPARSEABLE_ANSWERS = False` before every test in this file
+# runs, INCLUDING the shipped-default check below — reading
+# `debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS` from inside a test body would be
+# vacuous (it would only ever see what the fixture just set, never the
+# module's real top-level default). This constant is the one place that
+# actually observes the shipped value.
+_SHIPPED_DEFAULT_ON_IMPORT = debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS
+
 # ── seeding_scoring, loaded the way test_seeding_scoring.py loads it: a
 # private module identity so its own ScoringUnavailableError/AnswerParseError
 # classes are self-consistent with the debug_scorer copy IT dynamically
@@ -65,9 +75,26 @@ def _reset_flag_and_stats():
     debug_scorer.reset_parse_failure_stats()
 
 
-def test_flag_default_is_off():
-    # The one-line flip a ratified EQ-1 era would make; must ship False.
-    assert debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS is False
+def test_shipped_default_matches_ratification_state():
+    """Pins the flag's SHIPPED value to whatever the EQ-1/E19 ratification
+    state actually is.
+
+    Pre-ratification (today): `EXCLUDE_UNPARSEABLE_ANSWERS` ships False —
+    live scores are byte-identical to pre-TD-21.11..21.14. This is the
+    "default-off contract" test the operator flagged in review: it WILL need
+    updating the moment `scripts/operator/ratify_eq1_answer_parse_exclusion_
+    20260924.sh --apply` flips the flag, exactly like RTG-09's
+    `test_default_config_reward_is_byte_identical_with_and_without_duration`
+    needed renaming/updating into `test_pre_e18_config_reward_is_byte_
+    identical_with_and_without_duration` (pinning the PRE-boundary values
+    explicitly) plus a new `test_scoring_config_defaults_are_ratified` once
+    E18 landed. The ratification script performs the matching update here as
+    part of --apply (see its EQ1_RATIFICATION_TEST_SENTINEL), so this
+    assertion is never stale after a real ratification run — only after a
+    hand-edit that skips the script.
+    #EQ1_RATIFICATION_TEST_SENTINEL: EXCLUDE_UNPARSEABLE_ANSWERS ships False
+    """
+    assert _SHIPPED_DEFAULT_ON_IMPORT is False
 
 
 # ── multiple_choice (TD-21.11) ─────────────────────────────────────────────
@@ -303,7 +330,16 @@ def test_score_answer_or_error_excludes_parse_failure_when_flag_on():
     assert "answer_parse_failed[multiple_choice]" in reason
 
 
-# ── _is_valid_json: fish_json extraction fix (TD-21.14, not exclusion) ─────
+# ── _is_valid_json: NOT converted, and NOT switched to fish_json ───────────
+#
+# 2026-09-24 main-session review: an earlier draft of this commit swapped
+# _is_valid_json's extraction over to the shared `fish_json` helper
+# (src/structured_output/repair.py). fish_json REPAIRS trailing commas and
+# stray closers and tolerates a fenced block, which would make this IFEval
+# `json_valid` oracle accept text that is not actually valid JSON — an
+# ungated live-score change to a real correctness check, with no era
+# boundary covering it. Reverted before landing; this section now pins the
+# oracle's byte-identical, pre-TD-21 behavior instead.
 
 
 def test_is_valid_json_still_accepts_a_single_clean_object():
@@ -314,36 +350,87 @@ def test_is_valid_json_rejects_pure_prose():
     assert debug_scorer._is_valid_json("there is no json here at all") is False
 
 
-def test_is_valid_json_fish_json_finds_last_balanced_object_legacy_slice_missed():
-    # The pre-TD-21.14 find("{")/rfind("}") slice spans from the FIRST "{" to
-    # the LAST "}", producing '{"a": 1} some text {"b": 2}' here — not valid
-    # JSON, so the legacy implementation returned False. fish_json's
-    # balanced-bracket scan instead finds the LAST well-formed top-level
-    # object ({"b": 2}) and this is now True. This does not change
-    # json_valid's classification as a real oracle (see docstring) — it only
-    # fixes a false negative in how the JSON is located.
-    text = '{"a": 1} some text {"b": 2}'
-    assert debug_scorer._is_valid_json(text) is True
+def test_is_valid_json_rejects_trailing_comma_object():
+    # fish_json would REPAIR this and return a parsed value (accepting it as
+    # "valid JSON"). The oracle must not: a trailing comma is not valid JSON,
+    # and json_valid's callers rely on that being a hard fail.
+    assert debug_scorer._is_valid_json('{"a": 1,}') is False
 
 
-def test_json_valid_verifier_end_to_end_via_score_answer():
+def test_is_valid_json_rejects_multiple_blobs_legacy_slice_still_fails():
+    # Documents the pre-existing (unchanged) false negative: the naive
+    # find("{")/rfind("}") slice spans from the FIRST "{" to the LAST "}",
+    # producing invalid JSON here. This stays False — no fish_json swap.
+    assert debug_scorer._is_valid_json('{"a": 1} some text {"b": 2}') is False
+
+
+def test_json_valid_verifier_end_to_end_via_score_answer_still_naive():
     result = score_answer(
-        answer='noisy prefix {"a": 1} middle {"ok": true} trailing',
+        answer='noisy prefix {"a": 1,} trailing',
         expected="",
         scoring_method="programmatic",
         scoring_config={"verifier": "json_valid"},
     )
-    assert result is True
+    assert result is False
+
+
+# ── arm-keyed parse-failure counting: concurrent arms don't mix counts ─────
+
+
+def test_parse_failure_stats_bucketed_by_arm_key_does_not_mix():
+    debug_scorer.reset_parse_failure_stats(arm_key="arm-a")
+    debug_scorer.reset_parse_failure_stats(arm_key="arm-b")
+    try:
+        score_answer(
+            "no letter here", "B", "multiple_choice", {"_eval_batch_id": "arm-a"}
+        )
+        score_answer(
+            "no letter here", "B", "multiple_choice", {"_eval_batch_id": "arm-a"}
+        )
+        score_answer(
+            "no letter here", "B", "multiple_choice", {"_eval_batch_id": "arm-b"}
+        )
+        assert debug_scorer.parse_failure_stats(arm_key="arm-a") == {"multiple_choice": 2}
+        assert debug_scorer.parse_failure_stats(arm_key="arm-b") == {"multiple_choice": 1}
+        # The unscoped (arm_key=None) bucket — used by callers that never set
+        # _eval_batch_id, e.g. the seeding harness — is untouched by either.
+        assert "multiple_choice" not in debug_scorer.parse_failure_stats(arm_key=None) or (
+            debug_scorer.parse_failure_stats(arm_key=None).get("multiple_choice", 0) == 0
+        )
+    finally:
+        debug_scorer.reset_parse_failure_stats(arm_key="arm-a")
+        debug_scorer.reset_parse_failure_stats(arm_key="arm-b")
+
+
+def test_reset_parse_failure_stats_only_clears_its_own_arm_key():
+    debug_scorer.reset_parse_failure_stats(arm_key="arm-c")
+    debug_scorer.reset_parse_failure_stats(arm_key="arm-d")
+    score_answer("no letter here", "B", "multiple_choice", {"_eval_batch_id": "arm-c"})
+    score_answer("no letter here", "B", "multiple_choice", {"_eval_batch_id": "arm-d"})
+    debug_scorer.reset_parse_failure_stats(arm_key="arm-c")
+    assert debug_scorer.parse_failure_stats(arm_key="arm-c") == {}
+    assert debug_scorer.parse_failure_stats(arm_key="arm-d") == {"multiple_choice": 1}
+    debug_scorer.reset_parse_failure_stats(arm_key="arm-d")
 
 
 def test_score_answer_or_error_unaffected_when_flag_off():
     """Default OFF: the seeding exclusion path is not exercised by a parse
     failure at all — the row keeps scoring `False`, exactly as before."""
-    verdict, reason = _SS.score_answer_or_error(
-        answer="I refuse to pick a letter.",
-        expected="B",
-        scoring_method="multiple_choice",
-        scoring_config={},
-    )
+    scorer_mod = _SS._load_orchestrator_debug_scorer()
+    try:
+        verdict, reason = _SS.score_answer_or_error(
+            answer="I refuse to pick a letter.",
+            expected="B",
+            scoring_method="multiple_choice",
+            scoring_config={},
+        )
+    finally:
+        # This still counts (unconditionally) via `_record_parse_failure` in
+        # the module-global `arm_key=None` bucket — clear it so it cannot
+        # leak into another test file that reads that same shared
+        # dynamically-loaded debug_scorer instance (`_load_orchestrator_
+        # debug_scorer` caches by a fixed sys.modules key, shared across
+        # every seeding_scoring instance and eval_tower.py in this process).
+        scorer_mod.reset_parse_failure_stats()
     assert verdict is False
     assert reason is None

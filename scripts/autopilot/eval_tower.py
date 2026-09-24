@@ -3232,6 +3232,14 @@ class QuestionResult:
     external_restart: bool = False
     retry_count: int = 0
     eval_partition: str = "core"
+    # TD-21.11..21.14: the `_eval_batch` call this row came from (a fresh
+    # `uuid4` per batch — see `_eval_batch_id()`). "" for rows built off that
+    # path (recovery/replay, `_failed_question_result`). Lets `_aggregate`
+    # recover the SAME key `_score_generation` stamped into
+    # `scoring_config["_eval_batch_id"]` before scoring, so it can read the
+    # arm-scoped parse-failure-rate counters debug_scorer keeps by that key
+    # without threading a new parameter through every `_aggregate` call site.
+    eval_batch_id: str = ""
     rubric_scores: dict[str, float] = field(default_factory=dict)
     # SCORE-08 (audit 2026-07-20): provenance of the rubric scores for this
     # question — "judge" when at least one cross-family model judge produced
@@ -4878,6 +4886,7 @@ class EvalTower:
             external_restart=bool(meta.get("external_restart", False)),
             retry_count=int(meta.get("retry_count", 0)),
             eval_partition=outcome.eval_partition,
+            eval_batch_id=eval_batch_id,
             rubric_scores=rubric_scores,
             rubric_source=rubric_source,
             rubric_threshold_source=rubric_threshold_source,
@@ -5671,6 +5680,48 @@ class EvalTower:
             reason = str(getattr(r, "infra_reason", "") or "") or "unclassified"
             infra_failed_reasons[reason] = infra_failed_reasons.get(reason, 0) + 1
 
+        # TD-21.11..21.14 (2026-07-20 standing rule, architect-model-
+        # selection-bench.md: "report a per-arm parse-failure rate next to
+        # every accuracy number; any cross-arm difference is a scoring bug
+        # until proven otherwise"). debug_scorer counts a model-side parse
+        # failure (an answer that doesn't fit the required shape) even while
+        # EXCLUDE_UNPARSEABLE_ANSWERS stays False and `quality` below is
+        # unaffected — this is that count, surfaced beside quality.
+        #
+        # Bucketed by `eval_batch_id`, NOT a bare global read: this trial's
+        # rows all carry the SAME `eval_batch_id` (a fresh uuid4 per
+        # `_eval_batch` call, stamped onto every dispatched question and
+        # forwarded into `scoring_config["_eval_batch_id"]` before scoring —
+        # see `_score_generation`), so recovering it from `results` and
+        # reading `parse_failure_stats(arm_key=...)` with that exact key is
+        # what keeps two arms scoring CONCURRENTLY in this process from
+        # mixing counts: debug_scorer's counters are keyed by this value, not
+        # by thread identity (its own module-level comment explains why a
+        # contextvar/thread-local would NOT be safe here — the scoring pool
+        # is a plain ThreadPoolExecutor, which does not propagate context to
+        # worker threads). Recovery/replay rows with no `eval_batch_id`
+        # (`_failed_question_result`, rebuilt JSONL rows) fall into the
+        # `arm_key=""` bucket, matching debug_scorer's own default-bucket
+        # semantics for callers that never set one.
+        _parse_failure_arm_key = next(
+            (getattr(r, "eval_batch_id", "") for r in results if getattr(r, "eval_batch_id", "")),
+            "",
+        )
+        _scorer_for_stats = _load_orchestrator_debug_scorer()
+        parse_failure_by_method = dict(
+            sorted(
+                _scorer_for_stats.parse_failure_stats(
+                    arm_key=_parse_failure_arm_key or None
+                ).items()
+            )
+        )
+        parse_failure_count = sum(parse_failure_by_method.values())
+        parse_failure_rate = (parse_failure_count / n_scored) if n_scored else None
+        # Bound the counter dict's lifetime to this arm: once read, clear its
+        # bucket so a long-running autopilot process does not accumulate one
+        # entry per (arm_key, scoring_method) pair forever.
+        _scorer_for_stats.reset_parse_failure_stats(arm_key=_parse_failure_arm_key or None)
+
         # Quality: fraction correct over the scored quality denominator
         # (scored + task_failed rows, scaled to 0-3). Infrastructure/scoring
         # failures are reliability evidence, not wrong-answer evidence — they
@@ -6044,6 +6095,18 @@ class EvalTower:
                 # failures rather than a genuinely wrong model answer.
                 "task_failed": task_failed_count,
                 "quality_denominator_policy": QUALITY_DENOMINATOR_POLICY,
+                # TD-21.11..21.14 (2026-07-20 standing rule): the per-arm
+                # parse-failure rate reported beside `quality`/`accuracy`.
+                # Additive keys — absent under a pre-TD-21.11 details dict
+                # (or any reader still constructing one by hand), so callers
+                # must use `.get(...)`, never a bare `[...]`, exactly like
+                # every other optional field in this dict. Counted whether or
+                # not EXCLUDE_UNPARSEABLE_ANSWERS is on; `parse_failure_rate`
+                # is None (not 0.0) when n_scored is 0, same honesty
+                # convention as `quality_measured` above.
+                "parse_failure_count": parse_failure_count,
+                "parse_failure_by_method": parse_failure_by_method,
+                "parse_failure_rate": parse_failure_rate,
                 # False ⇒ `quality` above is a PLACEHOLDER, not a measurement.
                 # A batch that is ENTIRELY task_failed still has
                 # quality_measured=True (0.0 is a real measurement there —

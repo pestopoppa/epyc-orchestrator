@@ -141,10 +141,27 @@ class AnswerParseError(ScoringUnavailableError):
 EXCLUDE_UNPARSEABLE_ANSWERS = False
 
 _PARSE_FAILURE_LOCK = threading.Lock()
-_PARSE_FAILURE_COUNTS: dict[str, int] = {}
+# Keyed by (arm_key, scoring_method), NOT scoring_method alone. `arm_key` is
+# whatever the caller put in `scoring_config["_eval_batch_id"]` (eval_tower.py
+# stamps a fresh `uuid4` per `_eval_batch` call onto every question dispatched
+# in that batch; the seeding harness leaves it unset). Keying by arm_key —
+# rather than a bare global counter, and rather than a thread-local/contextvar
+# — is what makes two arms scoring CONCURRENTLY in the same process safe:
+# eval_tower's scoring pool is a `ThreadPoolExecutor`
+# (`scripts/autopilot/eval_tower.py::_eval_batch`), and a plain
+# `ThreadPoolExecutor.submit` does NOT propagate the caller's contextvars into
+# worker threads, so a contextvar- or threading.local-based scope would
+# silently fall back to one shared bucket across arms whenever scoring runs
+# off the main thread — exactly the mixing this must prevent. The key travels
+# WITH the data (through `scoring_config`, already threaded to every scorer
+# call), so it survives any thread hop intact. `arm_key=None` (no
+# `_eval_batch_id` set — the seeding harness's own call sites, and any
+# standalone script) is its own bucket, matching the single-arm-per-process
+# usage those callers already have.
+_PARSE_FAILURE_COUNTS: dict[tuple[Any, str], int] = {}
 
 
-def _record_parse_failure(scoring_method: str) -> None:
+def _record_parse_failure(scoring_method: str, arm_key: Any = None) -> None:
     """Count one model-side parse failure, independent of the exclusion flag.
 
     The ONLY always-on signal for the standing per-arm parse-failure-rate
@@ -155,41 +172,52 @@ def _record_parse_failure(scoring_method: str) -> None:
     False and live scores are unaffected — which is precisely the evidence
     an operator needs before ratifying the flag.
 
-    Coarse by design: a process-lifetime count per scoring method, meant to
-    be read with ``reset_parse_failure_stats()`` bracketing ONE arm's
-    sequential batch — this codebase's standard usage (CLAUDE.md: "load
-    sequentially", "no concurrent inference"). Genuinely concurrent
-    multi-arm scoring inside a single process would interleave these counts;
-    that is not a pattern this project's harnesses use today, but a caller
-    doing that must not rely on this counter.
+    Bucketed by ``arm_key`` (see the module-level comment above
+    ``_PARSE_FAILURE_COUNTS``) so concurrent arms/trials in one process never
+    mix counts.
     """
     with _PARSE_FAILURE_LOCK:
-        _PARSE_FAILURE_COUNTS[scoring_method] = _PARSE_FAILURE_COUNTS.get(scoring_method, 0) + 1
+        key = (arm_key, scoring_method)
+        _PARSE_FAILURE_COUNTS[key] = _PARSE_FAILURE_COUNTS.get(key, 0) + 1
 
 
-def parse_failure_stats() -> dict[str, int]:
-    """Per-scoring-method count of model-side parse failures since the last reset."""
+def parse_failure_stats(arm_key: Any = None) -> dict[str, int]:
+    """Per-scoring-method count of model-side parse failures for one ``arm_key``
+    (``None`` — the default — is its own bucket, not "all arms")."""
     with _PARSE_FAILURE_LOCK:
-        return dict(_PARSE_FAILURE_COUNTS)
+        return {
+            method: count
+            for (key, method), count in _PARSE_FAILURE_COUNTS.items()
+            if key == arm_key
+        }
 
 
-def reset_parse_failure_stats() -> None:
-    """Zero the parse-failure counters. Call once per reporting scope (an arm/batch)."""
+def reset_parse_failure_stats(arm_key: Any = None) -> None:
+    """Zero the parse-failure counters for one ``arm_key``. Call once per
+    reporting scope (an arm/batch) to bound the dict's lifetime — a
+    long-running process (autopilot) would otherwise accumulate one entry
+    per distinct arm_key forever."""
     with _PARSE_FAILURE_LOCK:
-        _PARSE_FAILURE_COUNTS.clear()
+        for key in [k for k in _PARSE_FAILURE_COUNTS if k[0] == arm_key]:
+            del _PARSE_FAILURE_COUNTS[key]
 
 
-def _unparseable_answer(scoring_method: str, detail: str) -> bool:
+def _unparseable_answer(
+    scoring_method: str, detail: str, config: dict[str, Any] | None = None
+) -> bool:
     """A model-side parse failure at one of the TD-21.11..21.14 sites.
 
     Always records the failure via ``_record_parse_failure`` so the rate is
-    visible regardless of the flag. When ``EXCLUDE_UNPARSEABLE_ANSWERS`` is
-    True, raises ``AnswerParseError`` so the row is routed through
+    visible regardless of the flag, bucketed by ``config["_eval_batch_id"]``
+    when the caller set one (see the module-level comment above
+    ``_PARSE_FAILURE_COUNTS``). When ``EXCLUDE_UNPARSEABLE_ANSWERS`` is True,
+    raises ``AnswerParseError`` so the row is routed through
     ``score_answer_or_error``'s existing EXCLUDED/``scoring_failed`` path
     instead of being scored wrong. Default False: returns ``False``,
     identical to every prior release.
     """
-    _record_parse_failure(scoring_method)
+    arm_key = (config or {}).get("_eval_batch_id")
+    _record_parse_failure(scoring_method, arm_key)
     if EXCLUDE_UNPARSEABLE_ANSWERS:
         raise AnswerParseError(f"answer_parse_failed[{scoring_method}]: {detail}")
     return False
@@ -358,6 +386,7 @@ def _score_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bo
         "exact_match",
         "no <answer>/#### /\\boxed{} pattern matched the model's answer; "
         "the raw final line was compared as a last resort and did not match",
+        config=config,
     )
 
 
@@ -428,6 +457,7 @@ def _score_multiple_choice(answer: str, expected: str, config: dict[str, Any]) -
         "multiple_choice",
         f"no option letter or matching choice text found in the model's "
         f"answer (labels={labels[0]}-{labels[-1]}, choices={len(choices)})",
+        config=config,
     )
 
 
@@ -1578,6 +1608,7 @@ def _score_f1_list(answer: str, expected: str, config: dict[str, Any]) -> bool:
         f"no bullet/numbered/comma list structure recognized; the raw "
         f"line-split fallback produced {len(pred_items)} candidate "
         f"item(s) with f1={f1:.3f} (threshold={threshold})",
+        config=config,
     )
 
 
@@ -1624,6 +1655,7 @@ def _score_structural_exact_match(answer: str, expected: str, config: dict[str, 
         return _unparseable_answer(
             "structural_exact_match",
             "no 'solution = ' marker found in the model's answer",
+            config=config,
         )
     predicted = _canonicalize_structural(_parse_leading_structural_value(tail))
     return predicted == gold_canon
@@ -1763,18 +1795,16 @@ def _is_valid_json(text: str) -> bool:
     J-08's "real oracle" reasoning applies here too, even though J-08 itself
     only lists the sibling ``_score_programmatic`` verifiers explicitly).
 
-    What DOES change here: extraction now tries the shared ``fish_json``
-    helper (``src/structured_output/repair.py``, TD-21) instead of a naive
-    ``find("{")``/``rfind("}")`` slice, which mis-extracts whenever the text
-    contains more than one brace pair or nested braces (it always used the
-    FIRST open and the LAST close, spanning everything in between). This is
-    a strict extraction-accuracy fix — never gated behind
-    ``EXCLUDE_UNPARSEABLE_ANSWERS``, since it does not touch exclusion
-    semantics — but it can flip a small number of previously-False
-    ``json_valid`` verdicts to True on inputs with multiple/nested JSON
-    blobs. Falls back to the legacy slice if the helper import is
-    unavailable (e.g. a standalone unit-test context with no ``src`` on
-    ``sys.path``), so this never raises.
+    Deliberately NOT switched to the shared ``fish_json`` extractor
+    (``src/structured_output/repair.py``): ``fish_json`` REPAIRS trailing
+    commas and stray closers and prefers a fenced block over a bare one,
+    so it would make this oracle accept text that is not actually valid
+    JSON — an ungated live-score change to a real correctness check, with
+    no era boundary covering it (a 2026-09-24 main-session review caught
+    this before it landed; see the TD-21.11..21.14 commit history). Stays
+    the original naive ``find("{")``/``rfind("}")`` slice, which can
+    mis-extract on multiple/nested JSON blobs, but never accepts malformed
+    JSON as valid — the property this verifier's callers depend on.
     """
     # Try the whole text
     try:
@@ -1783,14 +1813,7 @@ def _is_valid_json(text: str) -> bool:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    try:
-        from src.structured_output.repair import fish_json
-
-        return fish_json(text, kind="any") is not None
-    except ImportError:
-        pass
-
-    # Legacy fallback: find/rfind slice (pre-TD-21.14 behavior).
+    # Try to find JSON in the text
     for start_char, end_char in [("{", "}"), ("[", "]")]:
         start = text.find(start_char)
         end = text.rfind(end_char)
