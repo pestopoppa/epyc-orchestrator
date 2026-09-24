@@ -58,6 +58,7 @@ from src.autopilot_core.measurement_guards import (
     NON_QUALITY_DISPOSITIONS,
 )
 from src.classifiers.role_taxonomy import VALID_TRINITY_ROLES
+from src.roles import Role
 
 from .embedder import TaskEmbedder
 from .episodic_store import EpisodicStore, outcome_from_reward
@@ -234,6 +235,11 @@ def _baseline_quality_by_role(priors: dict | None = None) -> Dict[str, float]:
     for role, record in (priors.get("roles") or {}).items():
         if not isinstance(record, dict):
             continue
+        if role in _NON_SCORING_HOST_ALIASES:
+            # Host-only alias (e.g. "worker"): never a q_scorer scoring role,
+            # see _NON_SCORING_HOST_ALIASES. Its measurement is carried by its
+            # named members already.
+            continue
 
         # PREFERRED: the role-facing figure the priors compiler already chose —
         # the role-relevant capability axis when it can rank the fleet, else the
@@ -302,6 +308,28 @@ STACK_PRIOR_SCORER_ROLE_ALIASES: Dict[str, Tuple[str, ...]] = {
     # serving/cost priors compiled under worker_general.
     "worker_general": ("worker_explore",),
 }
+
+# 2026-09-24: host-only aliases that must NEVER surface as their own scoring
+# role. "worker" is declared in the registry/launch manifest purely so a
+# legacy URL/topology lookup still resolves (server_mode.worker: alias_of
+# frontdoor, shared_with: [worker_general, worker_math, worker_explore,
+# toolrunner, worker_summarize, ...]) -- it compiles into
+# orchestration/derived/stack_priors.yaml with deployment_status: live_stack
+# because it genuinely is part of the live serving topology, but it duplicates
+# information already carried by its named members and is not a `Role`. The
+# registry-path loader (SERVER_MODE_TPS_ROLE_ALIASES / REGISTRY_MEMORY_ROLE_
+# ALIASES above) already gets this right: it reads server_mode.worker only to
+# PROJECT onto worker_explore/worker_general/worker_math/toolrunner, and never
+# keeps "worker" itself as an output key. Derived generically (not just
+# hardcoded to "worker") so any future non-Role host key in that same alias
+# table is caught the same way: a key of SERVER_MODE_TPS_ROLE_ALIASES that is
+# not itself a canonical `Role` is a host name, never a scoring role.
+_NON_SCORING_HOST_ALIASES: frozenset[str] = frozenset(
+    server_key
+    for server_key in SERVER_MODE_TPS_ROLE_ALIASES
+    if Role.from_string(server_key) is None
+)
+
 PRIOR_SOURCE_STACK_PRIORS = "stack_priors"
 PRIOR_SOURCE_MODEL_DESCRIPTORS = "model_descriptors"
 PRIOR_SOURCE_REGISTRY = "registry"
@@ -518,6 +546,11 @@ def stack_prior_q_scorer_priors_by_role(
         )
 
     for role, record in live_role_records.items():
+        if role in _NON_SCORING_HOST_ALIASES:
+            # A host-only alias (e.g. "worker"): live in the serving topology,
+            # but not a `Role` and not a scoring target in its own right. Its
+            # measurements are already carried by its named members.
+            continue
         priors = record.get("priors", {})
         if not isinstance(priors, dict):
             continue
@@ -592,6 +625,8 @@ def _live_stack_q_scorer_roles(stack_priors_path: Path) -> set[str]:
     live_role_records = _load_valid_stack_prior_role_records(stack_priors_path)
     live_roles: set[str] = set()
     for role in live_role_records:
+        if role in _NON_SCORING_HOST_ALIASES:
+            continue
         live_roles.add(role)
         live_roles.update(STACK_PRIOR_SCORER_ROLE_ALIASES.get(role, ()))
     return live_roles

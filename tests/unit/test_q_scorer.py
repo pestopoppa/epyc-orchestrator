@@ -59,6 +59,8 @@ from orchestration.repl_memory.q_scorer import (
     ScoringConfig,
     QScorer,
     _coerce_tps,
+    _live_stack_q_scorer_roles,
+    _NON_SCORING_HOST_ALIASES,
     _performance_tps,
     descriptor_q_scorer_priors_by_role,
     require_live_q_scorer_stack_priors,
@@ -190,53 +192,91 @@ class TestScoringConfigDefaults:
         assert cfg.cost_penalty_lambda == 0.15
 
     def test_baseline_tps_has_all_production_roles(self):
+        """Every currently-live q_scorer role has a baseline t/s entry, and
+        nothing else.
+
+        DERIVED from the loader's own live-role resolution
+        (`_live_stack_q_scorer_roles` over the compiled
+        `orchestration/derived/stack_priors.yaml`), not a hand-kept literal
+        set. A hardcoded set here has already gone stale twice — the
+        2026-08-01 W1 cutover and the 2026-09-22 lineup cutover — and a third
+        repin would just be the same defect again.
+
+        `"worker"` is asserted ABSENT on purpose (session friction audit
+        2026-09-24): the registry/launch manifest still declare it
+        (`server_mode.worker: alias_of frontdoor`, part of
+        `server_mode.frontdoor.shared_with`) purely so a legacy URL/topology
+        lookup keyed on the old physical "worker" host still resolves, so it
+        genuinely compiles `deployment_status: live_stack` into the artifact —
+        but it is not a `Role` and duplicates the measurements already carried
+        by worker_general/worker_math/worker_explore/toolrunner/
+        worker_summarize. The registry-path loader
+        (`SERVER_MODE_TPS_ROLE_ALIASES`) already treats it this way: it reads
+        `server_mode.worker` only to PROJECT onto its four named members and
+        never keeps "worker" itself as an output key.
+        `_NON_SCORING_HOST_ALIASES` in q_scorer.py gives the stack-priors path
+        the same treatment.
+        """
         cfg = ScoringConfig()
-        expected_roles = {
-            "frontdoor",
-            "coder_escalation",
-            "architect_general",
-            # 2026-08-01 W1 cutover: NEW production role — the Qwen3.5-122B
-            # UD-Q4_K_M that architect_general vacated, on CPU :8074.
-            "architect_critic",
-            "ingest_long_context",
-            "worker_explore",
-            "worker_general",
-            "worker_math",
-            "worker_summarize",
-            "toolrunner",
-            "worker_vision",
-            "vision_escalation",
-        }
+        expected_roles = _live_stack_q_scorer_roles(DEFAULT_STACK_PRIORS_PATH)
+        assert expected_roles, (
+            "compiled stack priors have no live q_scorer roles; test would be vacuous"
+        )
         assert set(cfg.baseline_tps_by_role.keys()) == expected_roles
+        assert "worker" not in cfg.baseline_tps_by_role, (
+            "'worker' is a host-only registry/launch-manifest alias for the "
+            "shared frontdoor process, not a Role or a q_scorer scoring role "
+            "— see _NON_SCORING_HOST_ALIASES"
+        )
 
     def test_baseline_tps_loads_current_registry_values(self):
-        cfg = ScoringConfig()
+        """Every live role's baseline t/s is a direct projection of the
+        compiled stack-priors artifact's own `throughput_tps`.
 
-        # Every literal below is read off the regenerated
-        # orchestration/derived/stack_priors.yaml (roles.<role>.priors.throughput_tps)
-        # as of the 2026-08-01 W1 cutover. Old values are recorded inline so a
-        # future drift is diffable rather than mysterious.
-        assert cfg.baseline_tps_by_role["frontdoor"] == pytest.approx(40.22)  # was 24.3
-        # coder_escalation now rides architect_general's :8083 GPU 27B (was 24.3,
-        # frontdoor's 35B); the two MUST agree — same model, same process.
-        assert cfg.baseline_tps_by_role["coder_escalation"] == pytest.approx(47.79)
-        # architect_general: Qwen3.6-27B on MI210 (was 12.19, the CPU 122B).
-        assert cfg.baseline_tps_by_role["architect_general"] == pytest.approx(47.79)
-        # architect_critic: the CPU 122B's own measured throughput, moved with it.
-        assert cfg.baseline_tps_by_role["architect_critic"] == pytest.approx(24.0)
-        assert cfg.baseline_tps_by_role["ingest_long_context"] == pytest.approx(20.8)
-        # worker_* fleet: 38.46 -> 56.86 (registry re-baseline, not W1).
-        assert cfg.baseline_tps_by_role["worker_explore"] == pytest.approx(56.86)
-        assert cfg.baseline_tps_by_role["worker_general"] == pytest.approx(56.86)
-        assert cfg.baseline_tps_by_role["worker_math"] == pytest.approx(56.86)
-        # worker_summarize is frontdoor's ONLY alias now, so it tracks frontdoor.
-        assert cfg.baseline_tps_by_role["worker_summarize"] == pytest.approx(40.22)
-        assert cfg.baseline_tps_by_role["toolrunner"] == pytest.approx(56.86)
-        # Both VL roles are one MI210 process (Qwen3-VL-30B-A3B); was 21.32 on the
-        # CPU Qwen2.5-VL-7B.
-        assert cfg.baseline_tps_by_role["worker_vision"] == pytest.approx(112.2)
-        assert cfg.baseline_tps_by_role["vision_escalation"] == pytest.approx(112.2)
+        DERIVED from `orchestration/derived/stack_priors.yaml`, never
+        re-pinned as literals — pinning is exactly what rotted this test at
+        the 2026-08-01 W1 cutover and again at the 2026-09-22 lineup change,
+        where architect_critic's role-server binding moved off the CPU 122B
+        (24.0 t/s) onto the Qwen3.8-Flash-Next-UD-IQ4_XS/MTP process (52.7
+        t/s) that inherited the role.
+
+        STACK_PRIOR_SCORER_ROLE_ALIASES is applied the same way the loader
+        applies it: an aliased role (worker_explore) never keeps its OWN
+        record's figure once its host role (worker_general) compiles —
+        the alias always reads the host's value.
+        """
+        import yaml
+
+        cfg = ScoringConfig()
+        compiled = yaml.safe_load(DEFAULT_STACK_PRIORS_PATH.read_text()) or {}
+        records = compiled.get("roles") or {}
+        assert records, (
+            "compiled stack priors have no roles block; test would be vacuous"
+        )
+
+        live_roles = _live_stack_q_scorer_roles(DEFAULT_STACK_PRIORS_PATH)
+        assert live_roles, "no live q_scorer roles resolved; test would be vacuous"
+
+        expected: dict[str, float] = {}
+        for role, record in records.items():
+            if role not in live_roles:
+                continue
+            tps = _compiled_tps_prior(role, record)
+            if tps is not None:
+                expected[role] = tps
+
+        for canonical_role, aliases in STACK_PRIOR_SCORER_ROLE_ALIASES.items():
+            if canonical_role not in expected:
+                continue
+            for alias in aliases:
+                expected[alias] = expected[canonical_role]
+
+        assert expected, "no live role carried a throughput_tps prior; test would be vacuous"
+        for role, tps in expected.items():
+            assert cfg.baseline_tps_by_role[role] == pytest.approx(tps), role
+
         assert _RETIRED_ARCHITECT_ROLE not in cfg.baseline_tps_by_role
+        assert "worker" not in cfg.baseline_tps_by_role
 
     def test_default_config_exposes_stack_prior_sources(self):
         cfg = ScoringConfig()
@@ -963,7 +1003,9 @@ class TestComputeRewardWithCost:
 # ===== Multi-dimensional cost model tests =====
 
 
-def _compiled_quality_prior(record: dict[str, Any]) -> tuple[float | None, str | None]:
+def _compiled_quality_prior(
+    role: str, record: dict[str, Any]
+) -> tuple[float | None, str | None]:
     """Re-derive q_scorer's quality projection for ONE compiled priors record.
 
     Mirrors the loader's two layers in orchestration/repl_memory/q_scorer.py:
@@ -973,15 +1015,20 @@ def _compiled_quality_prior(record: dict[str, Any]) -> tuple[float | None, str |
       table keyed by model_path basename, else the role is OMITTED. Its
       docstring states the contract this test enforces: "A role whose model
       has no measured entry is OMITTED rather than defaulted. Falling back to
-      a number would reinstate exactly the defect this replaced."
+      a number would reinstate exactly the defect this replaced." It also
+      skips `_NON_SCORING_HOST_ALIASES` (e.g. "worker") entirely — a host-only
+      registry/launch-manifest alias, not a `Role`.
     * `stack_prior_q_scorer_priors_by_role()` then overrides live_stack
       records with a numeric `quality_for_role.value` or `quality_overall`,
       stamping PRIOR_SOURCE_STACK_PRIORS. Anything else that survives does so
       through the degraded-fallback base layer (PRIOR_SOURCE_DEGRADED_FALLBACK).
+      Same host-alias skip applies here.
 
     Returns (expected_value, expected_source); expected_source is None when
     the role must be ABSENT — never defaulted to a number.
     """
+    if role in _NON_SCORING_HOST_ALIASES:
+        return None, None
     if not isinstance(record, dict):
         return None, None
     priors = record.get("priors") or {}
@@ -1013,6 +1060,23 @@ def _compiled_quality_prior(record: dict[str, Any]) -> tuple[float | None, str |
     return None, None
 
 
+def _compiled_tps_prior(role: str, record: dict[str, Any]) -> float | None:
+    """Re-derive q_scorer's throughput projection for ONE compiled priors record.
+
+    Mirrors `stack_prior_q_scorer_priors_by_role()`: a live role's own
+    `priors.throughput_tps`, skipping `_NON_SCORING_HOST_ALIASES` (e.g.
+    "worker") the same way the loader does.
+    """
+    if role in _NON_SCORING_HOST_ALIASES:
+        return None
+    if not isinstance(record, dict):
+        return None
+    priors = record.get("priors") or {}
+    if not isinstance(priors, dict):
+        return None
+    return _coerce_tps(priors.get("throughput_tps"))
+
+
 class TestMultiDimensionalCost:
     """Test quality-gap and memory-tier cost dimensions."""
 
@@ -1039,6 +1103,11 @@ class TestMultiDimensionalCost:
         which are NOT a quality_overall baseline), so it is correctly absent.
         A future model swap therefore cannot rot this test the way the old
         hardcoded "architect_general in baseline_quality_by_role" did.
+
+        STACK_PRIOR_SCORER_ROLE_ALIASES is applied as a final pass, matching
+        `stack_prior_q_scorer_priors_by_role()`: worker_explore is aliased
+        onto worker_general and never keeps its own record's figure once
+        worker_general compiles — asserted explicitly below too.
         """
         import yaml
 
@@ -1056,7 +1125,7 @@ class TestMultiDimensionalCost:
 
         expected: dict[str, tuple[float, str]] = {}
         for role, record in records.items():
-            quality, source = _compiled_quality_prior(record)
+            quality, source = _compiled_quality_prior(role, record)
             if quality is None:
                 assert role not in cfg.baseline_quality_by_role, (
                     f"compiled role {role!r} has no measured quality "
@@ -1066,6 +1135,12 @@ class TestMultiDimensionalCost:
                 )
                 continue
             expected[role] = (quality, source)
+
+        for canonical_role, aliases in STACK_PRIOR_SCORER_ROLE_ALIASES.items():
+            if canonical_role not in expected:
+                continue
+            for alias in aliases:
+                expected[alias] = expected[canonical_role]
 
         # Every derived expectation is projected, with the loader's source.
         for role, (quality, source) in expected.items():
