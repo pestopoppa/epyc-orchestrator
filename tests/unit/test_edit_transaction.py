@@ -11,7 +11,15 @@ from src.edit_transaction import (
     parse_edit_response, apply_edit_transaction, assemble_context, build_edit_prompt,
     run_edit_transaction, edit_transaction_enabled, _safe_join,
     EditScopeError, DEFAULT_MAX_BYTES,
+    EDIT_TRANSACTION_OUTCOME_COUNTS, reset_outcome_counts_for_tests,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_edit_transaction_outcome_counts():
+    reset_outcome_counts_for_tests()
+    yield
+    reset_outcome_counts_for_tests()
 
 
 # ── parsing ────────────────────────────────────────────────────────────
@@ -431,3 +439,184 @@ def test_self_check_no_pycache_side_effect(tmp_path):
     assert res.ok
     assert not (tmp_path / "__pycache__").exists()
     assert list(tmp_path.rglob("*.pyc")) == []
+
+
+# ── TD-21.21: unclosed trailing block, gated on finish_reason ──────────
+def test_parse_missing_end_natural_stop_is_recovered():
+    # The model finished the file and simply forgot the closing marker -- a NATURAL stop
+    # ("eos"/"stop"/"word") is safe to close deterministically: nothing is invented, only the
+    # missing structural newline+delimiter is supplied.
+    text = "<<<FILE: calc.py>>>\ndef add(a, b):\n    return a + b\n"
+    files, deletes = parse_edit_response(text, finish_reason="stop")
+    assert files == {"calc.py": "def add(a, b):\n    return a + b"}
+    assert deletes == []
+    assert EDIT_TRANSACTION_OUTCOME_COUNTS["recovered_unclosed_trailing_file"] == 1
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "eos", "word"])
+def test_parse_missing_end_recovered_for_every_natural_stop_value(finish_reason):
+    text = "<<<FILE: calc.py>>>\nVALUE = 1\n"
+    files, _ = parse_edit_response(text, finish_reason=finish_reason)
+    assert files == {"calc.py": "VALUE = 1"}
+
+
+@pytest.mark.parametrize("finish_reason", ["length", "limit"])
+def test_parse_missing_end_length_cutoff_never_written(finish_reason):
+    # A length/limit cutoff can land anywhere -- mid-token, mid-line -- so the incomplete file must
+    # NEVER be written, exactly like before TD-21.21, but now the drop carries a specific reason.
+    text = "<<<FILE: huge.py>>>\ndef partial(\n    x, y"
+    files, deletes = parse_edit_response(text, finish_reason=finish_reason)
+    assert files == {}
+    assert deletes == []
+    assert EDIT_TRANSACTION_OUTCOME_COUNTS["truncated_trailing_file_dropped"] == 1
+
+
+def test_parse_missing_end_unknown_reason_stays_failclosed_like_before():
+    # No finish_reason wired (the pre-TD-21.21 default for every existing caller) -- identical
+    # behavior to before: the unclosed trailing block is dropped, not guessed at.
+    text = "<<<FILE: calc.py>>>\nVALUE = 1\n"
+    files, deletes = parse_edit_response(text)
+    assert files == {}
+    assert deletes == []
+    assert EDIT_TRANSACTION_OUTCOME_COUNTS["unclosed_trailing_file_ambiguous"] == 1
+
+
+def test_parse_happy_path_is_counted_clean_regardless_of_finish_reason():
+    text = "<<<FILE: calc.py>>>\nVALUE = 1\n<<<END>>>"
+    files, _ = parse_edit_response(text, finish_reason="length")
+    assert files == {"calc.py": "VALUE = 1"}
+    assert EDIT_TRANSACTION_OUTCOME_COUNTS["clean"] == 1
+    assert "truncated_trailing_file_dropped" not in EDIT_TRANSACTION_OUTCOME_COUNTS
+
+
+def test_parse_multi_file_only_last_is_open_earlier_ones_still_written():
+    # A max-context generation covering several files: the first is fully closed and must be kept
+    # even when the LAST file was cut off.
+    text = (
+        "<<<FILE: a.py>>>\nA = 1\n<<<END>>>\n"
+        "<<<FILE: b.py>>>\nB = 2 (unterminated"
+    )
+    files, _ = parse_edit_response(text, finish_reason="length")
+    assert files == {"a.py": "A = 1"}
+    assert EDIT_TRANSACTION_OUTCOME_COUNTS["truncated_trailing_file_dropped"] == 1
+
+
+def test_parse_content_containing_delimiter_lookalike_survives():
+    # File content containing '<<<' that does NOT form a real header/END sequence (git conflict
+    # markers, template placeholders, ASCII banners...) must round-trip byte-for-byte inside a
+    # properly closed block -- this is also the concrete reason a GBNF grammar excluding '<<<END>>>'
+    # from body content would be unsafe (see the module-level comment in src/edit_transaction.py).
+    body = 'MARKER = "<<< not a real delimiter >>>"\nCONFLICT = "<<<<<<< HEAD"'
+    text = f"<<<FILE: banner.py>>>\n{body}\n<<<END>>>"
+    files, _ = parse_edit_response(text, finish_reason="stop")
+    assert files == {"banner.py": body}
+    assert EDIT_TRANSACTION_OUTCOME_COUNTS["clean"] == 1
+
+
+def test_parse_decoy_header_inside_closed_block_is_not_mistaken_for_unclosed():
+    # A closed file whose OWN content contains the literal '<<<FILE: ...>>>' text (e.g. this very
+    # module's EDIT_INSTRUCTIONS / _FILE_RE source) must not be misread as a second, unclosed,
+    # trailing file -- the decoy header lives INSIDE the closed span, not after it.
+    text = (
+        "<<<FILE: real.py>>>\n"
+        'print("<<<FILE: fake.py>>>")\n'
+        'print("end of real file")\n'
+        "<<<END>>>"
+    )
+    files, _ = parse_edit_response(text, finish_reason="stop")
+    assert files == {"real.py": 'print("<<<FILE: fake.py>>>")\nprint("end of real file")'}
+    assert "fake.py" not in files
+    assert EDIT_TRANSACTION_OUTCOME_COUNTS["clean"] == 1
+
+
+def test_parse_delete_after_open_header_is_ambiguous_not_recovered():
+    # The protocol moving on to a DELETE after an open FILE header is a different anomaly than a
+    # trailing cutoff -- do not guess.
+    text = "<<<FILE: partial.py>>>\nX = 1\n<<<DELETE: other.py>>>"
+    files, deletes = parse_edit_response(text, finish_reason="stop")
+    assert files == {}
+    assert deletes == ["other.py"]
+    assert EDIT_TRANSACTION_OUTCOME_COUNTS["unclosed_trailing_file_ambiguous"] == 1
+
+
+def test_run_edit_transaction_recovers_missing_end_on_natural_stop(tmp_path):
+    (tmp_path / "calc.py").write_text("VALUE = 1\n")
+
+    def stub(_prompt):
+        return "<<<FILE: calc.py>>>\nVALUE = 2\n"  # no <<<END>>>
+
+    res, raw = run_edit_transaction(
+        stub, "Set value", tmp_path, ["calc.py"], get_finish_reason=lambda: "stop",
+    )
+    assert raw
+    assert res.ok
+    assert res.parse_outcome == "recovered_unclosed_trailing_file"
+    assert (tmp_path / "calc.py").read_text() == "VALUE = 2"
+
+
+def test_run_edit_transaction_never_writes_a_length_truncated_file(tmp_path):
+    (tmp_path / "calc.py").write_text("VALUE = 1\n")
+
+    def stub(_prompt):
+        return "<<<FILE: calc.py>>>\nVALUE = 2 + (unterminated"  # cut mid-expression
+
+    res, raw = run_edit_transaction(
+        stub, "Set value", tmp_path, ["calc.py"], get_finish_reason=lambda: "length",
+    )
+    assert raw
+    assert not res.ok  # fail-closed: nothing valid to write
+    assert res.parse_outcome == "truncated_trailing_file_dropped"
+    assert (tmp_path / "calc.py").read_text() == "VALUE = 1\n"  # untouched
+
+
+def test_run_edit_transaction_default_get_finish_reason_is_failclosed(tmp_path):
+    # No get_finish_reason wired at all (matches every caller before TD-21.21) -- identical
+    # behavior to before: an unclosed trailing block is dropped, not guessed at.
+    (tmp_path / "calc.py").write_text("VALUE = 1\n")
+
+    def stub(_prompt):
+        return "<<<FILE: calc.py>>>\nVALUE = 2\n"
+
+    res, raw = run_edit_transaction(stub, "Set value", tmp_path, ["calc.py"])
+    assert not res.ok
+    assert res.parse_outcome == "unclosed_trailing_file_ambiguous"
+    assert (tmp_path / "calc.py").read_text() == "VALUE = 1\n"
+
+
+def test_run_edit_transaction_rerun_path_also_reports_finish_reason(tmp_path):
+    # The review-driven rerun (:401 in the handoff) is the SECOND llm_call/parse pair; it must be
+    # wired to get_finish_reason too, not just the initial call.
+    (tmp_path / "calc.py").write_text("VALUE = 1\n")
+    calls = {"n": 0}
+    reasons = {"n": 0}
+
+    def stub(_prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "<<<FILE: calc.py>>>\nVALUE = 2\n<<<END>>>"
+        return "<<<FILE: calc.py>>>\nVALUE = 3\n"  # rerun forgets the END too
+
+    def review(_context):
+        return {
+            "blocking_issues": ["must be 3"],
+            "confidence": 0.9,
+        }, {}
+
+    def get_finish_reason():
+        reasons["n"] += 1
+        return "stop"
+
+    res, raw = run_edit_transaction(
+        stub,
+        "Set value",
+        tmp_path,
+        ["calc.py"],
+        review_before_commit=review,
+        enable_review_before_commit=True,
+        get_finish_reason=get_finish_reason,
+    )
+    assert raw
+    assert res.ok
+    assert res.parse_outcome == "recovered_unclosed_trailing_file"
+    assert reasons["n"] == 2  # once for the initial parse, once for the rerun's parse
+    assert (tmp_path / "calc.py").read_text() == "VALUE = 3"

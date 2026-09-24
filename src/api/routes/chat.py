@@ -1059,6 +1059,14 @@ async def _handle_chat(
 
                     review_before_commit_gate = _targeted_review_gate
 
+            def _edit_finish_reason() -> str:
+                # TD-21.21: same side-channel idiom as graph/helpers.py:941 and
+                # chat_delegation.py:470 -- reads the stop reason of the most recent
+                # `_edit_llm_call` invocation so `run_edit_transaction` can tell a genuine
+                # length cutoff from a model that simply forgot the closing `<<<END>>>`.
+                meta = getattr(primitives, "_last_inference_meta", None) or {}
+                return str(meta.get("completion_reason") or "")
+
             edit_res, _raw = await asyncio.to_thread(
                 run_edit_transaction,
                 _edit_llm_call,
@@ -1068,6 +1076,7 @@ async def _handle_chat(
                 review_before_commit=review_before_commit,
                 enable_review_before_commit=review_enabled,
                 review_before_commit_gate=review_before_commit_gate,
+                get_finish_reason=_edit_finish_reason,
             )
             answer = (
                 edit_res.summary + (": " + ", ".join(edit_res.written) if edit_res.written else "")
