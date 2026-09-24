@@ -84,6 +84,117 @@ class _JudgeResponseError(ValueError):
         self.detail = detail
 
 
+class AnswerParseError(ScoringUnavailableError):
+    """A MODEL-SIDE answer could not be parsed into the required shape.
+
+    TD-21.11..21.14 (``handoffs/active/typed-decision-plane.md``): distinct
+    from ``ScoringUnavailableError``'s original scope (a missing dependency,
+    an unreachable judge, or an unparseable GOLD/expected value) — here the
+    scoring INSTRUMENT works fine, but the model's own answer does not fit
+    the shape it needs (no option letter, no recognisable list, no
+    ``solution =`` marker, no extractable final answer). Subclassing
+    ``ScoringUnavailableError`` means every existing
+    ``except ScoringUnavailableError`` catch — notably
+    ``seeding_scoring.score_answer_or_error`` — already routes it through
+    the EXCLUDED / ``scoring_failed`` path with no changes there: that is
+    what "route through the existing exclusion path" means operationally.
+
+    Raised ONLY when ``EXCLUDE_UNPARSEABLE_ANSWERS`` is True. This is an
+    eval-quality-denominator semantics change (a row that used to be
+    ``False``/WRONG/IN the denominator becomes EXCLUDED/OUT of it), so it is
+    gated behind that default-OFF flag pending an operator-ratified
+    ``eval_quality`` era row (see the flag's own docstring, and the
+    TD-21.11..21.14 commit message, for the proposed era text). Default
+    OFF: every site below instead calls ``_record_parse_failure`` and
+    returns ``False`` — today's scoring behaviour, unchanged byte-for-byte.
+    """
+
+
+# TD-21.11..21.14 / proposed era "EQ-1" (eval_quality; NOT YET RATIFIED —
+# instrument_eras.yaml is human-only and this commit does not touch it).
+#
+# Flipping this to True changes live eval-quality numbers: a model-side
+# parse failure at one of the four sites below (multiple_choice,
+# f1_list, structural_exact_match, exact_match's last-resort fallback)
+# currently scores `False` — WRONG, IN the quality denominator. With this
+# flag True it instead raises `AnswerParseError`, which
+# `seeding_scoring.score_answer_or_error` turns into an EXCLUDED
+# `scoring_failed` row (OUT of the quality denominator) via the same path
+# already used for an unreachable judge or a malformed gold
+# (`artifacts/audits/td-json-consumer-audit-20260924.md` J-03/J-05/J-06/J-07).
+#
+# This is deliberately independent of E17-eval-task-failed-scores-zero-quality
+# (ETR-1, `orchestration/instrument_eras.yaml`): E17 governs rows that already
+# carry a structural `error` (an agent/config-caused `task_failed` row scores
+# 0 but STAYS IN the denominator). A model-side parse failure carries no
+# `error` at all today — nothing currently routes it through disposition
+# classification — so this flag is a NEW boundary, not a re-application of
+# E17's. It also runs the opposite direction from E17's own fix (which
+# pulled a class of failure INTO the denominator to stop a broken config
+# from shrinking its own denominator); before ratifying, confirm this
+# doesn't reopen that same hole for a model that produces unparseable output
+# instead of an error.
+#
+# ONE-LINE FLIP to ratify: set this to True (only after the EQ-1 row is
+# added to `orchestration/instrument_eras.yaml` by the operator/human-only
+# path — see the proposed row text in the TD-21.11..21.14 commit message).
+EXCLUDE_UNPARSEABLE_ANSWERS = False
+
+_PARSE_FAILURE_LOCK = threading.Lock()
+_PARSE_FAILURE_COUNTS: dict[str, int] = {}
+
+
+def _record_parse_failure(scoring_method: str) -> None:
+    """Count one model-side parse failure, independent of the exclusion flag.
+
+    The ONLY always-on signal for the standing per-arm parse-failure-rate
+    rule (2026-07-20, ``architect-model-selection-bench.md``: "report a
+    per-arm parse-failure rate next to every accuracy number; any cross-arm
+    difference is a scoring bug until proven otherwise"). This lets the rate
+    be measured and reported even while ``EXCLUDE_UNPARSEABLE_ANSWERS`` stays
+    False and live scores are unaffected — which is precisely the evidence
+    an operator needs before ratifying the flag.
+
+    Coarse by design: a process-lifetime count per scoring method, meant to
+    be read with ``reset_parse_failure_stats()`` bracketing ONE arm's
+    sequential batch — this codebase's standard usage (CLAUDE.md: "load
+    sequentially", "no concurrent inference"). Genuinely concurrent
+    multi-arm scoring inside a single process would interleave these counts;
+    that is not a pattern this project's harnesses use today, but a caller
+    doing that must not rely on this counter.
+    """
+    with _PARSE_FAILURE_LOCK:
+        _PARSE_FAILURE_COUNTS[scoring_method] = _PARSE_FAILURE_COUNTS.get(scoring_method, 0) + 1
+
+
+def parse_failure_stats() -> dict[str, int]:
+    """Per-scoring-method count of model-side parse failures since the last reset."""
+    with _PARSE_FAILURE_LOCK:
+        return dict(_PARSE_FAILURE_COUNTS)
+
+
+def reset_parse_failure_stats() -> None:
+    """Zero the parse-failure counters. Call once per reporting scope (an arm/batch)."""
+    with _PARSE_FAILURE_LOCK:
+        _PARSE_FAILURE_COUNTS.clear()
+
+
+def _unparseable_answer(scoring_method: str, detail: str) -> bool:
+    """A model-side parse failure at one of the TD-21.11..21.14 sites.
+
+    Always records the failure via ``_record_parse_failure`` so the rate is
+    visible regardless of the flag. When ``EXCLUDE_UNPARSEABLE_ANSWERS`` is
+    True, raises ``AnswerParseError`` so the row is routed through
+    ``score_answer_or_error``'s existing EXCLUDED/``scoring_failed`` path
+    instead of being scored wrong. Default False: returns ``False``,
+    identical to every prior release.
+    """
+    _record_parse_failure(scoring_method)
+    if EXCLUDE_UNPARSEABLE_ANSWERS:
+        raise AnswerParseError(f"answer_parse_failed[{scoring_method}]: {detail}")
+    return False
+
+
 def score_answer(
     answer: str,
     expected: Any,
@@ -156,6 +267,11 @@ def _score_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bo
         boxed = _extract_boxed_answer(answer)
         if boxed is not None:
             extracted = boxed
+    # TD-21.14: did a real extraction pattern (<answer>/####/\boxed{}) match,
+    # or are we about to fall back to a blind guess at the last line? Only
+    # the latter is a candidate model-side parse failure — a structured
+    # extraction that simply mismatches gold is a genuine wrong answer.
+    structured_extraction = extracted is not None
     if extracted is None:
         # Last resort: try to find the expected value anywhere in the last line
         last_line = answer.strip().split("\n")[-1]
@@ -201,15 +317,14 @@ def _score_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bo
     ext_num = _to_number(extracted)
     exp_num = _to_number(expected_norm)
     if ext_num is not None and exp_num is not None:
-        return abs(ext_num - exp_num) < 1e-6
-
-    if extracted == expected_norm:
-        return True
+        matched = abs(ext_num - exp_num) < 1e-6
+    else:
+        matched = extracted == expected_norm
 
     # Fallback: vision models wrap OCR results in prose like
     #   'The text in the image is "iRaeenlc".' or 'The image contains the text: iRaeenlc'
     # Try extracting quoted text or text after colon from the full answer.
-    if normalize:
+    if not matched and normalize:
         answer_lower = _final_answer_region(answer).lower()
         # Check quoted: "answer" or 'answer'
         for q in ('"', "'", "\u201c"):
@@ -220,15 +335,30 @@ def _score_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bo
                 if end > idx:
                     candidate = answer_lower[idx + 1 : end].strip().rstrip(".")
                     if candidate == expected_norm:
-                        return True
+                        matched = True
+                        break
         # Check after colon on last meaningful line
-        for line in reversed(_final_answer_region(answer).split("\n")):
-            if ":" in line:
-                candidate = line.split(":", 1)[1].strip().lower().rstrip(".")
-                if candidate == expected_norm:
-                    return True
+        if not matched:
+            for line in reversed(_final_answer_region(answer).split("\n")):
+                if ":" in line:
+                    candidate = line.split(":", 1)[1].strip().lower().rstrip(".")
+                    if candidate == expected_norm:
+                        matched = True
+                        break
 
-    return False
+    if matched:
+        return True
+    if structured_extraction:
+        return False
+    # TD-21.14: none of <answer>/####/\boxed{} matched, so `extracted` was
+    # only ever a blind guess at the final line — and even that guess, plus
+    # the OCR-prose fallbacks above, found nothing comparable to gold. This
+    # is a model-side parse failure, not a confirmed wrong structured answer.
+    return _unparseable_answer(
+        "exact_match",
+        "no <answer>/#### /\\boxed{} pattern matched the model's answer; "
+        "the raw final line was compared as a last resort and did not match",
+    )
 
 
 def _score_multiple_choice(answer: str, expected: str, config: dict[str, Any]) -> bool:
@@ -290,7 +420,15 @@ def _score_multiple_choice(answer: str, expected: str, config: dict[str, Any]) -
     if parsed_index is not None and expected_index is not None:
         return parsed_index == expected_index
 
-    return False
+    # TD-21.11: no option letter or matching choice text was found anywhere
+    # in the model's answer — the model failed to produce a comparable
+    # verdict, distinct from parsing a letter/text that simply mismatches
+    # gold (both branches above already returned in that case).
+    return _unparseable_answer(
+        "multiple_choice",
+        f"no option letter or matching choice text found in the model's "
+        f"answer (labels={labels[0]}-{labels[-1]}, choices={len(choices)})",
+    )
 
 
 #: Historical letter range. Rows that do not declare ``choice_labels`` keep it,
@@ -1425,9 +1563,22 @@ def _score_f1_list(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """
     threshold = config.get("threshold", 0.5)
     gold_items = _parse_gold_list(expected)
-    pred_items = _extract_list_items(answer)
+    pred_items, used_fallback = _extract_list_items_with_fallback(answer)
     f1 = _f1_list_score(pred_items, gold_items, threshold=threshold)
-    return f1 >= threshold
+    passed = f1 >= threshold
+    if passed or not used_fallback or not pred_items:
+        return passed
+    # TD-21.12: no bullet/numbered/comma list structure was recognised at
+    # all — the crude one-per-line catch-all fired and STILL missed
+    # threshold. That is a model-side parse failure (the model didn't
+    # answer in the required list shape), distinct from a cleanly
+    # extracted list that is simply the wrong items.
+    return _unparseable_answer(
+        "f1_list",
+        f"no bullet/numbered/comma list structure recognized; the raw "
+        f"line-split fallback produced {len(pred_items)} candidate "
+        f"item(s) with f1={f1:.3f} (threshold={threshold})",
+    )
 
 
 def _score_structural_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bool:
@@ -1445,7 +1596,11 @@ def _score_structural_exact_match(answer: str, expected: str, config: dict[str, 
          marker (the suite's final-answer anchor — the B7 last-occurrence
          convention; models echo the format instruction earlier, so the real
          answer is last). No marker ⇒ the model did not follow the required
-         output format ⇒ False (a task failure, not scorer-unavailability).
+         output format ⇒ a model-side parse failure (TD-21.13): ``False``
+         today (``EXCLUDE_UNPARSEABLE_ANSWERS`` default OFF, unchanged from
+         the original "task failure, not scorer-unavailability" call), or
+         routed through the ``AnswerParseError``/EXCLUDED path once that
+         flag is ratified on. See ``_unparseable_answer``.
       2. Parse a leading JSON / Python-literal value (balanced-bracket scan for
          containers, quoted-string scan, scalar fallback — never raises).
       3. Recursively canonicalize BOTH sides: dict keys sorted; list order
@@ -1466,7 +1621,10 @@ def _score_structural_exact_match(answer: str, expected: str, config: dict[str, 
     gold_canon = _coerce_structural_gold(expected)
     tail = _extract_solution_tail(answer)
     if tail is None:
-        return False
+        return _unparseable_answer(
+            "structural_exact_match",
+            "no 'solution = ' marker found in the model's answer",
+        )
     predicted = _canonicalize_structural(_parse_leading_structural_value(tail))
     return predicted == gold_canon
 
@@ -1593,7 +1751,31 @@ def _extract_code_block(text: str, language: str = "python") -> str | None:
 
 
 def _is_valid_json(text: str) -> bool:
-    """Check if text contains valid JSON."""
+    """Check if text contains valid JSON.
+
+    TD-21.14: this is IFEval's ``json_valid`` programmatic verifier (used
+    only via ``_score_programmatic``'s ``verifiers["json_valid"]``). NOT
+    converted to the ``AnswerParseError``/exclusion path: unlike the other
+    TD-21.11..21.14 sites, this IS the correctness check being measured — a
+    prompt that instructs "respond in valid JSON" and gets prose back has
+    genuinely failed the task, so ``False`` is a real, correctly-scored
+    verdict, not scorer-unavailability (`td-json-consumer-audit-20260924.md`
+    J-08's "real oracle" reasoning applies here too, even though J-08 itself
+    only lists the sibling ``_score_programmatic`` verifiers explicitly).
+
+    What DOES change here: extraction now tries the shared ``fish_json``
+    helper (``src/structured_output/repair.py``, TD-21) instead of a naive
+    ``find("{")``/``rfind("}")`` slice, which mis-extracts whenever the text
+    contains more than one brace pair or nested braces (it always used the
+    FIRST open and the LAST close, spanning everything in between). This is
+    a strict extraction-accuracy fix — never gated behind
+    ``EXCLUDE_UNPARSEABLE_ANSWERS``, since it does not touch exclusion
+    semantics — but it can flip a small number of previously-False
+    ``json_valid`` verdicts to True on inputs with multiple/nested JSON
+    blobs. Falls back to the legacy slice if the helper import is
+    unavailable (e.g. a standalone unit-test context with no ``src`` on
+    ``sys.path``), so this never raises.
+    """
     # Try the whole text
     try:
         json.loads(text)
@@ -1601,7 +1783,14 @@ def _is_valid_json(text: str) -> bool:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Try to find JSON in the text
+    try:
+        from src.structured_output.repair import fish_json
+
+        return fish_json(text, kind="any") is not None
+    except ImportError:
+        pass
+
+    # Legacy fallback: find/rfind slice (pre-TD-21.14 behavior).
     for start_char, end_char in [("{", "}"), ("[", "]")]:
         start = text.find(start_char)
         end = text.rfind(end_char)
@@ -1646,6 +1835,35 @@ def _parse_gold_list(expected: str) -> list[str]:
     return [str(x) for x in parsed]
 
 
+def _extract_list_items_with_fallback(response: str) -> tuple[list[str], bool]:
+    """Like ``_extract_list_items``, plus whether the raw one-per-line
+    catch-all fired (``True``) rather than a recognised list structure or a
+    clean abstention (``False``).
+
+    TD-21.12: that flag distinguishes a model that answered in an
+    unstructured-but-real way (heuristically split, genuinely scoreable)
+    from one whose reply carries no list structure at all — the case
+    ``_score_f1_list`` treats as a model-side parse failure when the
+    resulting F1 also misses threshold.
+    """
+    if _F1_LIST_ABSTENTION_RE.fullmatch(response.strip()):
+        return [], False
+    bullets = _F1_LIST_BULLET_RE.findall(response)
+    if bullets:
+        return [b.strip() for b in bullets if b.strip()], False
+    numbered = _F1_LIST_NUMBERED_RE.findall(response)
+    if numbered:
+        return [n.strip() for n in numbered if n.strip()], False
+    lines = [ln.strip() for ln in response.strip().split("\n") if ln.strip()]
+    candidates: list[str] = []
+    for line in lines:
+        if "," in line and len(line) < 200:
+            candidates.extend(p.strip() for p in line.split(",") if p.strip())
+    if candidates:
+        return candidates, False
+    return lines, True
+
+
 def _extract_list_items(response: str) -> list[str]:
     """Parse a model response into a list of answer items.
 
@@ -1653,22 +1871,7 @@ def _extract_list_items(response: str) -> list[str]:
     an explicit abstention ⇒ empty list; else a bullet list, else a numbered
     list, else comma-separated (short lines), else one item per line.
     """
-    if _F1_LIST_ABSTENTION_RE.fullmatch(response.strip()):
-        return []
-    bullets = _F1_LIST_BULLET_RE.findall(response)
-    if bullets:
-        return [b.strip() for b in bullets if b.strip()]
-    numbered = _F1_LIST_NUMBERED_RE.findall(response)
-    if numbered:
-        return [n.strip() for n in numbered if n.strip()]
-    lines = [ln.strip() for ln in response.strip().split("\n") if ln.strip()]
-    candidates: list[str] = []
-    for line in lines:
-        if "," in line and len(line) < 200:
-            candidates.extend(p.strip() for p in line.split(",") if p.strip())
-    if candidates:
-        return candidates
-    return lines
+    return _extract_list_items_with_fallback(response)[0]
 
 
 def _token_f1_score(prediction: str, ground_truth: str) -> float:
