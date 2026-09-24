@@ -2182,6 +2182,14 @@ PRODUCTION_FEATURE_WAVE_OVERRIDES: dict[str, bool] = {
     "unified_streaming": False,
     # Weights have been absent since the 2026-05-25 memory reset.
     "routing_classifier": False,
+    # OP-51 operator 2026-09-24: enable REPL /chat output_schema validation
+    # (TD-21.1 FINAL() repair + 422-on-exhaustion, orch d7202dc9, evidence-
+    # guarded since 2ffc3f51). Before: /chat force_mode=repl with an
+    # output_schema returned the bare, unvalidated FINAL() value. After: the
+    # value is validated against the caller's JSON Schema, repaired once on
+    # failure, and the response is flagged 422 when still invalid after
+    # exhausting the repair attempt.
+    "final_schema_validation": True,
 }
 
 LANGGRAPH_PHASE3_LIVE_ENV_VARS: tuple[str, ...] = (
