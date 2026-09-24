@@ -33,8 +33,9 @@ TD-1d — cue styles (speed at parity):
     The TD-1c replay restored conditioning at the cost of ~300+ grammar-forced
     cue tokens for a 24-question catalogue (523 generated tokens, 2.08x vs
     JSON). ``CueStyle`` selects how much of that cue is replayed: ``FULL`` is
-    the TD-1c layout and remains the default; ``SHORT`` replays
-    ``Q <id>: <first six words>``; ``ID_ONLY`` replays ``<id>: `` alone. The
+    the TD-1c layout; ``SHORT`` replays ``Q <id>: <first six words>``;
+    ``ID_ONLY`` replays ``<id>: `` alone and is the default since TD-6 (cue
+    sweep: 11.98x at 15/16 agreement, ``bench-cue-sweep-worker.json``). The
     numbered catalogue rendered by ``build_native_prompt`` is byte-identical
     across styles — the prompt carries the grounding, the cue only re-conditions
     the answer position — so a sweep varies exactly one thing: which cue tokens
@@ -168,6 +169,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -199,6 +201,7 @@ __all__ = [
     "build_native_prompt",
     "native_diagnostics",
     "run_typed_decisions_native",
+    "run_typed_decisions_native_parallel",
 ]
 
 logger = logging.getLogger(__name__)
@@ -1015,6 +1018,290 @@ def _candidate_labels(question: Question) -> list[str]:
     if question.kind is QuestionKind.SCORE:
         return [str(level) for level in question.levels]
     return ["true", "false"]
+
+
+# ── TD-1d option (b): per-question reads against one cached prefix ────────
+#
+# PARKED, UNWIRED (TD-21.33b, landed 2026-09-24 from 2026-09-22 shared-clone
+# WIP — see handoffs/active/typed-decision-plane.md TD-1d.4). Not called from
+# any production path. TD-1d.0's 2026-09-18 re-measurement found this shape a
+# LOSER on the frozen stack (native_pq3 2.67x, slower than id_only-serial's
+# 9.60x; the exclusive `heavy_model` lock serializes concurrent `llm_call`s
+# end to end today, so the fan-out buys nothing over that lock). It is kept,
+# still exercised by unit tests against fake primitives, as the harness for
+# any FUTURE runtime choice that removes that serialization (a real
+# multi-slot readout, or a lock policy change) — re-litigate against TD-1d.0
+# before adopting it anywhere.
+
+
+def run_typed_decisions_native_parallel(
+    primitives_pool: Sequence[Any],
+    *,
+    state: str,
+    questions: Sequence[Question],
+    role: str,
+    n_probs: int | None = None,
+    cue_style: CueStyle | str = CueStyle.ID_ONLY,
+    tokenize_fn: TokenizeFn | None = None,
+    pin_slots: bool = False,
+    warm_prefix: bool = False,
+) -> DecisionResult:
+    """Answer the catalogue with ONE constrained read per question, fanned out.
+
+    The TD-1c serial layout pays one forward pass per grammar-forced cue
+    token. This shape moves every cue into the PROMPT instead: each question
+    gets its own request whose prompt is the byte-identical catalogue prefix
+    (``build_native_prompt`` over the native-capable questions) followed by
+    that question's cue, a grammar that admits exactly one answer token, and
+    ``n_tokens=1``. The shared prefix is prefilled once per server slot and
+    then hit from the prompt cache; the cue tokens are prefilled (one batched
+    pass) rather than decoded (one pass each). The requests are issued
+    concurrently, one worker per entry in ``primitives_pool``.
+
+    Args:
+        primitives_pool: Independent primitives objects, one per worker. They
+            must NOT share instance state: ``_last_inference_meta`` is
+            instance-level (module docstring), so each worker reads its own
+            object's meta right after its own call. ``len(pool)`` is the
+            fan-out width; a pool of one is the same shape run serially.
+        state, questions, role, n_probs, cue_style, tokenize_fn: As for
+            ``run_typed_decisions_native``. ``n_probs`` defaults to the same
+            per-batch value the serial runner would use.
+        pin_slots: When true, worker ``i`` passes ``slot_id=i`` on every call
+            so all of its reads share one server slot's prompt cache (the
+            seam must accept a ``slot_id`` keyword; ``LLMPrimitives.llm_call``
+            does not, so this is for direct-backend seams). Measured
+            2026-09-18: llama-server's automatic slot choice repeatedly placed
+            reads on a slot whose cache missed the shared prefix
+            (``cache_n=0``, a full ~1.1k-token prefill per read), while a
+            slot holding the prefix served the read in ~45 ms.
+        warm_prefix: When true, every worker first sends the bare prefix
+            (``n_tokens=1``, no grammar) on its own slot, INSIDE the timed
+            window, before its reads. Load-bearing on hybrid/recurrent
+            models (``qwen35moe`` has SSM layers): llama-server can only
+            restore a slot's cache at a saved checkpoint, and the checkpoint
+            written after a read sits past the shared prefix, so back-to-back
+            reads on the same slot reuse nothing (measured ``cache_n=0``, ~450
+            ms each). A prefix-only request leaves a checkpoint exactly at
+            the prefix end; reads then reuse it (measured ``cache_n=1105``,
+            ~128 ms each). The warm costs ~56 ms when the checkpoint already
+            exists and a full prefill when it does not, so the arm is
+            self-healing after another prompt evicted its slot.
+
+    Returns:
+        ``DecisionResult`` with ``mode="native_parallel"``. ``elapsed_ms`` is
+        the wall time of the whole fan-out (first request issued to last
+        response sliced). ``raw_text`` joins the per-question emitted tokens in
+        catalogue order. Failures follow the serial contract exactly, plus
+        ``transport_error`` per failed request. The first pool entry receives
+        the layout side channel (``_last_native_layout``) with one position
+        per question and ``per_request`` meta snapshots (slot id, prompt /
+        cache token counts) for residency and cache-hit auditing.
+    """
+    pool = list(primitives_pool)
+    if not pool:
+        raise ValueError("run_typed_decisions_native_parallel requires a non-empty primitives pool")
+    catalogue = _validated_catalogue(questions)
+    style = _normalize_cue_style(cue_style)
+    tokenize = tokenize_fn if tokenize_fn is not None else _resolve_tokenize_fn(pool[0], role)
+    own_tokenizer = (
+        tokenize if tokenize_fn is None and isinstance(tokenize, _HttpTokenizer) else None
+    )
+    try:
+        if tokenize is None:
+            native_questions: list[_NativeQuestion] = []
+            tokenizer_failures = [
+                ParseFailure(
+                    REASON_NATIVE_TOKENIZER_UNAVAILABLE,
+                    f"question {question.id!r}: no tokenizer could be resolved from the "
+                    "primitives object; ask this question in JSON mode",
+                )
+                for question in catalogue
+            ]
+        else:
+            native_questions, tokenizer_failures = _tokenize_catalogue(
+                catalogue, tokenize, cue_style=style
+            )
+    finally:
+        if own_tokenizer is not None:
+            own_tokenizer.close()
+
+    prefix = build_native_prompt(state, [native.question for native in native_questions])
+    prompt_sha256 = hashlib.sha256(prefix.encode("utf-8")).hexdigest()
+    if not native_questions:
+        return DecisionResult(
+            decisions=(),
+            failures=tuple(tokenizer_failures),
+            raw_text="",
+            mode="native_parallel",
+            elapsed_ms=0.0,
+            prompt_sha256=prompt_sha256,
+        )
+
+    if n_probs is None:
+        n_probs = min(
+            _MAX_N_PROBS,
+            max(native.alternatives for native in native_questions) + _N_PROBS_BUFFER,
+        )
+    else:
+        n_probs = int(n_probs)
+        if n_probs < 1:
+            raise ValueError(f"n_probs must be >= 1, got {n_probs}")
+        n_probs = min(_MAX_N_PROBS, n_probs)
+
+    # One request per question: the cue is prompt text here, so the answer
+    # row is row 0 — the layout copy carries no cue tokens on purpose.
+    jobs: list[tuple[int, _NativeQuestion, str, str]] = []
+    for index, native in enumerate(native_questions):
+        answer_only = _NativeQuestion(question=native.question, candidates=native.candidates)
+        alternatives = " | ".join(
+            f"<[{token_id}]>" for candidate in native.candidates for token_id in candidate.token_ids
+        )
+        grammar = f"root ::= {alternatives}\n"
+        prompt = prefix + _cue_text(native.question, style)
+        jobs.append((index, answer_only, prompt, grammar))
+
+    outcomes: dict[int, tuple[str, Any]] = {}
+    per_request: dict[int, dict[str, Any]] = {}
+    warm_requests: dict[int, dict[str, Any]] = {}
+
+    def worker(
+        worker_index: int, assigned: Sequence[tuple[int, _NativeQuestion, str, str]]
+    ) -> None:
+        # TD-21.33b: each worker owns exactly one `pool[worker_index]` object
+        # (never shared across threads per this function's contract above),
+        # and every meta read below happens in THIS thread, immediately after
+        # THIS thread's own call — no thread/task boundary is crossed between
+        # the write and the read, so the per-call-safe getter applies
+        # cleanly. A plain `threading.Thread` (unlike `asyncio.to_thread`)
+        # starts with its own empty context, so `get_last_inference_meta()`
+        # is additionally immune to any OTHER worker's concurrent call even
+        # if a caller violated the "independent objects" contract and passed
+        # the same primitives instance twice — the plain attribute this
+        # replaces would not be. Runtime `isinstance` (not a `TYPE_CHECKING`
+        # import) so a hand-rolled test double that predates the getter keeps
+        # its pre-existing exact behavior.
+        from src.llm_primitives import LLMPrimitives
+
+        primitives = pool[worker_index]
+        is_real_primitives = isinstance(primitives, LLMPrimitives)
+        extra: dict[str, Any] = {"slot_id": worker_index} if pin_slots else {}
+        if warm_prefix:
+            started_warm = time.perf_counter()
+            primitives.llm_call(
+                prefix,
+                role=role,
+                n_tokens=1,
+                temperature=0.0,
+                seed=_DECODE_SEED,
+                **extra,
+            )
+            warm_meta = (
+                primitives.get_last_inference_meta()
+                if is_real_primitives
+                else getattr(primitives, "_last_inference_meta", None)
+            )
+            snapshot = {
+                "worker": worker_index,
+                "call_ms": (time.perf_counter() - started_warm) * 1000.0,
+            }
+            if isinstance(warm_meta, Mapping):
+                for key in ("id_slot", "prompt_n", "cache_n", "prompt_ms"):
+                    if key in warm_meta:
+                        snapshot[key] = warm_meta[key]
+            warm_requests[worker_index] = snapshot
+        for index, _native, prompt, grammar in assigned:
+            started_call = time.perf_counter()
+            raw = str(
+                primitives.llm_call(
+                    prompt,
+                    role=role,
+                    n_tokens=1,
+                    grammar=grammar,
+                    temperature=0.0,
+                    seed=_DECODE_SEED,
+                    n_probs=n_probs,
+                    **extra,
+                )
+                or ""
+            )
+            meta = (
+                primitives.get_last_inference_meta()
+                if is_real_primitives
+                else getattr(primitives, "_last_inference_meta", None)
+            )
+            outcomes[index] = (raw, meta)
+            snapshot = {
+                "worker": worker_index,
+                "call_ms": (time.perf_counter() - started_call) * 1000.0,
+            }
+            if isinstance(meta, Mapping):
+                for key in ("id_slot", "prompt_n", "cache_n", "tokens", "prompt_ms", "gen_ms"):
+                    if key in meta:
+                        snapshot[key] = meta[key]
+            per_request[index] = snapshot
+
+    assignments: list[list[tuple[int, _NativeQuestion, str, str]]] = [[] for _ in pool]
+    for job in jobs:
+        assignments[job[0] % len(pool)].append(job)
+    threads = [
+        threading.Thread(target=worker, args=(worker_index, assigned), daemon=True)
+        for worker_index, assigned in enumerate(assignments)
+        if assigned
+    ]
+    started = time.perf_counter()
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    decisions: list[Decision] = []
+    position_failures: list[ParseFailure] = []
+    raw_parts: list[str] = []
+    for index, answer_only, _prompt, _grammar in jobs:
+        raw, meta = outcomes.get(index, ("", None))
+        raw_parts.append(raw)
+        if raw.strip().startswith("[ERROR:") or index not in outcomes:
+            position_failures.append(
+                ParseFailure(
+                    REASON_TRANSPORT_ERROR,
+                    f"question {answer_only.question.id!r}: {raw.strip() or 'no response'}",
+                )
+            )
+            continue
+        got, failed = _decisions_from_rows(meta, [answer_only])
+        decisions.extend(got)
+        position_failures.extend(failed)
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+
+    _record_native_layout(
+        pool[0],
+        {
+            **_native_layout(
+                [job[1] for job in jobs],
+                prompt=prefix,
+                prompt_sha256=prompt_sha256,
+                n_probs=n_probs,
+                n_tokens=len(jobs),
+                cue_style=style,
+                excluded=tokenizer_failures,
+            ),
+            "shape": "per_question_parallel",
+            "workers": len(pool),
+            "pin_slots": pin_slots,
+            "warm_prefix": warm_prefix,
+            "warm_requests": [warm_requests.get(worker_index) for worker_index in range(len(pool))],
+            "per_request": [per_request.get(index) for index, *_ in jobs],
+        },
+    )
+    return DecisionResult(
+        decisions=tuple(decisions),
+        failures=tuple(tokenizer_failures + position_failures),
+        raw_text="".join(raw_parts),
+        mode="native_parallel",
+        elapsed_ms=elapsed_ms,
+        prompt_sha256=prompt_sha256,
+    )
 
 
 # ── completion_probabilities slicing ──────────────────────────────────────

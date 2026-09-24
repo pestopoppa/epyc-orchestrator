@@ -53,10 +53,13 @@ from src.typed_decisions.native import (
     REASON_NATIVE_TOKENIZER_UNAVAILABLE,
     REASON_NATIVE_UNKNOWN_CANDIDATE,
     REASON_NATIVE_UNSUPPORTED_CANDIDATES,
+    REASON_TRANSPORT_ERROR,
     CueStyle,
     _cue_text,
+    _DECODE_SEED,
     build_native_prompt,
     native_diagnostics,
+    run_typed_decisions_native_parallel,
 )
 
 ROLE = "worker"
@@ -1668,3 +1671,310 @@ class TestRunnerDispatch:
                 tokenize_fn=_FakeTokenizer(),
                 cue_style="medium",
             )
+
+
+# ── TD-1d option (b): run_typed_decisions_native_parallel (TD-21.33b) ──────
+
+
+def _parallel_meta(row: Mapping[str, Any]) -> dict[str, Any]:
+    """A one-row meta: the parallel shape's cue lives in the PROMPT, so the
+    answer is always row 0 (no cue filler rows, unlike ``_build_meta``)."""
+    return {"completion_probabilities": [row]}
+
+
+class TestNativeParallel:
+    """``run_typed_decisions_native_parallel`` (parked TD-1d.4 harness, landed
+    unwired 2026-09-24 — TD-1d.0 is not settled and the 2026-09-18
+    re-measurement found this shape a loser on the frozen stack; it is kept as
+    a harness for a future runtime choice, not called from production)."""
+
+    def test_empty_pool_raises(self):
+        with pytest.raises(ValueError, match="non-empty primitives pool"):
+            run_typed_decisions_native_parallel(
+                [],
+                state=STATE,
+                questions=QUESTIONS,
+                role=ROLE,
+                tokenize_fn=_FakeTokenizer(),
+            )
+
+    def test_no_native_eligible_questions_makes_no_calls(self):
+        tokenizer = _FakeTokenizer()
+        pool = [_FakePrimitives(""), _FakePrimitives("")]
+
+        result = run_typed_decisions_native_parallel(
+            pool,
+            state=STATE,
+            questions=[MULTI_TOKEN],
+            role=ROLE,
+            tokenize_fn=tokenizer,
+        )
+
+        assert result.mode == "native_parallel"
+        assert result.decisions == ()
+        assert result.elapsed_ms == 0.0
+        assert len(result.failures) == 1
+        assert result.failures[0].reason == REASON_NATIVE_UNSUPPORTED_CANDIDATES
+        assert pool[0].calls == []
+        assert pool[1].calls == []
+
+    def test_one_worker_per_question_resolves_every_decision(self):
+        """Pool width == catalogue width: each worker answers exactly one
+        question, proving the per-question fan-out end to end against fakes."""
+        tokenizer = _FakeTokenizer()
+        rows = _main_answer_rows()
+        pool = [
+            _FakePrimitives("blue", meta=_parallel_meta(rows[0])),
+            _FakePrimitives("2", meta=_parallel_meta(rows[1])),
+            _FakePrimitives("true", meta=_parallel_meta(rows[2])),
+        ]
+
+        result = run_typed_decisions_native_parallel(
+            pool,
+            state=STATE,
+            questions=QUESTIONS,
+            role=ROLE,
+            tokenize_fn=tokenizer,
+        )
+
+        assert result.mode == "native_parallel"
+        assert result.failures == ()
+        by_id = _by_id(result)
+        assert by_id["choice"].value == "blue"
+        assert by_id["score"].value == 2
+        assert by_id["noul"].value is True
+        assert result.raw_text == "blue2true"  # catalogue order: choice, score, noul
+        # Each worker made exactly one call, none pinned to a slot, no warm call.
+        for worker in pool:
+            assert len(worker.calls) == 1
+            call = worker.calls[0]
+            assert call["n_tokens"] == 1
+            assert "slot_id" not in call
+            assert call["prompt"].startswith(build_native_prompt(STATE, [q for q in QUESTIONS]))
+
+    def test_round_robin_assignment_across_fewer_workers_than_questions(self):
+        """2 workers, 3 questions: jobs 0/2 -> worker 0, job 1 -> worker 1."""
+        tokenizer = _FakeTokenizer()
+        rows = _main_answer_rows()
+        worker0 = _FakePrimitives(["blue", "true"], meta=_parallel_meta(rows[0]))
+        worker1 = _FakePrimitives("2", meta=_parallel_meta(rows[1]))
+        pool = [worker0, worker1]
+
+        # worker0's meta is fixed at construction (fake limitation): it
+        # correctly answers whichever of its two assigned questions the
+        # decision-row happens to describe, so pin the assertions to worker1
+        # (unambiguous) and to the call COUNT on worker0 (its fan-out width).
+        run_typed_decisions_native_parallel(
+            pool,
+            state=STATE,
+            questions=QUESTIONS,
+            role=ROLE,
+            tokenize_fn=tokenizer,
+        )
+
+        assert len(worker0.calls) == 2  # jobs 0 ("choice") and 2 ("noul")
+        assert len(worker1.calls) == 1  # job 1 ("score")
+
+    def test_pin_slots_passes_slot_id_per_worker(self):
+        tokenizer = _FakeTokenizer()
+        rows = _main_answer_rows()
+        pool = [
+            _FakePrimitives("blue", meta=_parallel_meta(rows[0])),
+            _FakePrimitives("2", meta=_parallel_meta(rows[1])),
+            _FakePrimitives("true", meta=_parallel_meta(rows[2])),
+        ]
+
+        run_typed_decisions_native_parallel(
+            pool,
+            state=STATE,
+            questions=QUESTIONS,
+            role=ROLE,
+            tokenize_fn=tokenizer,
+            pin_slots=True,
+        )
+
+        for worker_index, worker in enumerate(pool):
+            assert worker.calls[0]["slot_id"] == worker_index
+
+    def test_warm_prefix_issues_one_unconstrained_call_before_the_read(self):
+        tokenizer = _FakeTokenizer()
+        rows = _main_answer_rows()
+        pool = [
+            _FakePrimitives(["ignored", "blue"], meta=_parallel_meta(rows[0])),
+            _FakePrimitives(["ignored", "2"], meta=_parallel_meta(rows[1])),
+            _FakePrimitives(["ignored", "true"], meta=_parallel_meta(rows[2])),
+        ]
+
+        result = run_typed_decisions_native_parallel(
+            pool,
+            state=STATE,
+            questions=QUESTIONS,
+            role=ROLE,
+            tokenize_fn=tokenizer,
+            warm_prefix=True,
+        )
+
+        assert result.failures == ()
+        for worker in pool:
+            assert len(worker.calls) == 2
+            warm_call, read_call = worker.calls
+            assert warm_call["n_tokens"] == 1
+            assert "grammar" not in warm_call
+            assert "grammar" in read_call
+        layout = pool[0]._last_native_layout
+        assert layout["shape"] == "per_question_parallel"
+        assert layout["workers"] == 3
+        assert layout["warm_prefix"] is True
+        assert len(layout["warm_requests"]) == 3
+        assert all(entry is not None for entry in layout["warm_requests"])
+
+    def test_transport_error_fails_only_its_own_question(self):
+        tokenizer = _FakeTokenizer()
+        rows = _main_answer_rows()
+        pool = [
+            _FakePrimitives("blue", meta=_parallel_meta(rows[0])),
+            _FakePrimitives("[ERROR: connection refused]", meta=_parallel_meta(rows[1])),
+            _FakePrimitives("true", meta=_parallel_meta(rows[2])),
+        ]
+
+        result = run_typed_decisions_native_parallel(
+            pool,
+            state=STATE,
+            questions=QUESTIONS,
+            role=ROLE,
+            tokenize_fn=tokenizer,
+        )
+
+        by_id = _by_id(result)
+        assert by_id["choice"].value == "blue"
+        assert by_id["noul"].value is True
+        assert "score" not in by_id
+        assert len(result.failures) == 1
+        assert result.failures[0].reason == REASON_TRANSPORT_ERROR
+        assert "score" in result.failures[0].detail
+
+    def test_layout_side_channel_records_per_request_snapshots(self):
+        tokenizer = _FakeTokenizer()
+        rows = _main_answer_rows()
+        pool = [
+            _FakePrimitives("blue", meta=_parallel_meta(rows[0])),
+            _FakePrimitives("2", meta=_parallel_meta(rows[1])),
+            _FakePrimitives("true", meta=_parallel_meta(rows[2])),
+        ]
+
+        run_typed_decisions_native_parallel(
+            pool,
+            state=STATE,
+            questions=QUESTIONS,
+            role=ROLE,
+            tokenize_fn=tokenizer,
+        )
+
+        layout = pool[0]._last_native_layout
+        assert layout["shape"] == "per_question_parallel"
+        assert layout["workers"] == 3
+        assert layout["pin_slots"] is False
+        assert layout["warm_prefix"] is False
+        assert len(layout["per_request"]) == 3
+        assert all(entry is not None and "call_ms" in entry for entry in layout["per_request"])
+
+    def test_default_cue_style_matches_the_serial_default(self):
+        """TD-6: id_only is the production default for BOTH runners — the
+        parked WIP's diff had drifted this back to ``full`` pre-TD-6; this
+        pins the corrected default so a future edit cannot silently reopen it.
+        """
+        import inspect
+
+        default = inspect.signature(run_typed_decisions_native_parallel).parameters[
+            "cue_style"
+        ].default
+        assert default is CueStyle.ID_ONLY
+
+
+class TestNativeParallelWithRealPrimitives:
+    """Threading correctness (TD-21.33b): each worker's meta read must observe
+    only ITS OWN call, never a concurrent worker's — proven against the real
+    ``LLMPrimitives.get_last_inference_meta()`` context-var machinery, not the
+    fakes above (which cannot exercise a real race)."""
+
+    @staticmethod
+    def _primitives_with_backend(role: str, output: str, row: Mapping[str, Any]):
+        from unittest.mock import Mock
+
+        from src.llm_primitives import LLMPrimitives
+        from src.model_server import InferenceResult
+
+        prims = LLMPrimitives(
+            mock_mode=False, server_urls={role: "http://localhost:0"}
+        )
+        backend = Mock(spec=[])
+        backend.infer = Mock(
+            return_value=InferenceResult(
+                role=role,
+                output=output,
+                tokens_generated=1,
+                generation_speed=1.0,
+                elapsed_time=0.001,
+                success=True,
+                prompt_eval_ms=0.1,
+                generation_ms=0.1,
+                http_overhead_ms=0.0,
+                completion_reason="stop",
+                completion_probabilities=[row],
+            )
+        )
+        prims._backends[role] = backend
+        return prims, backend
+
+    def test_each_worker_observes_only_its_own_call(self):
+        tokenizer = _FakeTokenizer()
+        rows = _main_answer_rows()
+        pool_and_backends = [
+            self._primitives_with_backend(ROLE, "blue", rows[0]),
+            self._primitives_with_backend(ROLE, "2", rows[1]),
+            self._primitives_with_backend(ROLE, "true", rows[2]),
+        ]
+        pool = [prims for prims, _backend in pool_and_backends]
+
+        # Warm the lazy `from src.inference_lock import ...`-style imports
+        # `_real_call` performs on its FIRST invocation, serially, before the
+        # threaded fan-out below: CPython's import lock serializes concurrent
+        # imports of the SAME module, but a module whose own import triggers
+        # a nested import of a module already mid-import elsewhere raises
+        # ImportError ("partially initialized module") rather than blocking —
+        # a first-import ordering hazard orthogonal to the getter migration
+        # this test exists to prove, so it is neutralized here rather than
+        # left to flake on interpreter/test-order state.
+        pool[0].llm_call("warm", role=ROLE, n_tokens=1, temperature=0.0, seed=_DECODE_SEED)
+        for prims, backend in pool_and_backends:
+            backend.infer.reset_mock()
+
+        result = run_typed_decisions_native_parallel(
+            pool,
+            state=STATE,
+            questions=QUESTIONS,
+            role=ROLE,
+            tokenize_fn=tokenizer,
+        )
+
+        assert result.failures == ()
+        by_id = _by_id(result)
+        # Each decision matches ONLY its own worker's backend output -- if the
+        # per-call-safe getter's read inside `worker()` ever observed a
+        # DIFFERENT thread's meta (the exact race this migration closes), a
+        # question would resolve to a sibling worker's answer instead, or the
+        # slicing would fail closed. `get_last_inference_meta()` itself is NOT
+        # asserted here from this (main) thread: it is a ContextVar scoped to
+        # the thread that set it, so reading it back from the thread that
+        # DIDN'T make the call (as a test easily could, by mistake) would
+        # prove nothing -- exactly the context-propagation edge TD-21.33's
+        # `_best_effort_last_inference_meta` docstring calls out. The
+        # implementation itself captures each meta INSIDE its own worker
+        # thread, immediately after its own call (see `outcomes[index]` in
+        # `run_typed_decisions_native_parallel`), which is the only place the
+        # read is valid -- these decisions are that capture's output.
+        assert by_id["choice"].value == "blue"
+        assert by_id["score"].value == 2
+        assert by_id["noul"].value is True
+        for _prims, backend in pool_and_backends:
+            backend.infer.assert_called_once()
