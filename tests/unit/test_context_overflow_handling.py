@@ -636,10 +636,49 @@ class TestRoutingAndCompaction:
         state.hybrid_router = None
         return select_initial_route(ChatRequest(prompt=prompt, real_mode=True), state, {}, False, {})
 
-    def test_threshold_is_tokens_and_equivalent_to_the_char_knob(self):
+    def test_fallback_threshold_when_frontdoor_limit_unknown(self):
+        # No frontdoor limit known → the conservative char-knob threshold (5000 tokens) decides.
         set_context_limit_resolver(_resolver({"ingest_long_context": 196608}))
         assert self._route("x" * 20_001)[:2] == (["ingest_long_context"], "long_context_guard")
         assert self._route("x" * 20_000)[1] != "long_context_guard"
+
+    def test_routes_by_live_frontdoor_limit_not_5k_tokens(self):
+        # frontdoor 65536 per request (262144 / -np 4), ingest 196608 (unified).
+        r = ContextLimitResolver(
+            live=False,
+            registry_facts=lambda: {9000: {"context_tokens": 262144, "slots": 4},
+                                    9001: {"context_tokens": 196608, "slots": 2, "kv_unified": True}},
+            role_urls=lambda: {"frontdoor": ["http://localhost:9000"],
+                               "ingest_long_context": ["http://localhost:9001"]})
+        set_context_limit_resolver(r)
+        # 60,000 chars ≈ 20,000 conservative tokens + 4096 reserve: fits 65536 → stays off the guard
+        assert self._route("x" * 60_000)[1] != "long_context_guard"
+        # 180,000 chars ≈ 60,000 + 4096 = 64,096 < 65536 still fits
+        assert self._route("x" * 180_000)[1] != "long_context_guard"
+        # 186,000 chars ≈ 62,000 + 4096 = 66,096 ≥ 65536 → long-context role
+        assert self._route("x" * 186_000)[:2] == (["ingest_long_context"], "long_context_guard")
+
+    def test_reserved_decode_counts(self):
+        from src.api.models import ChatRequest
+        from src.api.routes.chat_pipeline.routing_decision import select_initial_route
+
+        set_context_limit_resolver(ContextLimitResolver(
+            live=False, registry_facts=lambda: {9000: {"context_tokens": 262144, "slots": 4}},
+            role_urls=lambda: {"frontdoor": ["http://localhost:9000"]}))
+        state = MagicMock()
+        state.hybrid_router = None
+        small = ChatRequest(prompt="x" * 150_000, real_mode=True, max_tokens=1000)
+        big = ChatRequest(prompt="x" * 150_000, real_mode=True, max_tokens=20_000)
+        assert select_initial_route(small, state, {}, False, {})[1] != "long_context_guard"
+        assert select_initial_route(big, state, {}, False, {})[1] == "long_context_guard"
+
+    def test_default_reroute_target_is_only_ingest_long_context(self, monkeypatch):
+        from src.backends.context_limits import context_overflow_roles
+
+        monkeypatch.delenv("ORCHESTRATOR_CONTEXT_OVERFLOW_ROLES", raising=False)
+        assert context_overflow_roles() == ["ingest_long_context"]
+        monkeypatch.setenv("ORCHESTRATOR_CONTEXT_OVERFLOW_ROLES", "ingest_long_context, architect_critic")
+        assert context_overflow_roles() == ["ingest_long_context", "architect_critic"]
 
     def test_request_beyond_ingest_limit_goes_to_configured_larger_role(self, monkeypatch):
         monkeypatch.setenv("ORCHESTRATOR_CONTEXT_OVERFLOW_ROLES", "ingest_long_context,architect_critic")

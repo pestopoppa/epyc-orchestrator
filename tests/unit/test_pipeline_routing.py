@@ -115,7 +115,10 @@ class TestRouteRequest:
         state.hybrid_router.route.assert_not_called()
 
     def test_long_prompt_bypasses_learned_router_for_ingest(self):
-        request = ChatRequest(prompt="x" * 20_001, real_mode=True)
+        # 2026-09-24: the guard routes by the frontdoor's per-request n_ctx
+        # (65536 from the compiled stack priors in this suite), not 20k chars:
+        # ~66,667 prompt tokens + the 4096 decode reserve cannot fit it.
+        request = ChatRequest(prompt="x" * 200_000, real_mode=True)
         state = MagicMock()
         state.hybrid_router = MagicMock()
         state.failure_graph = None
