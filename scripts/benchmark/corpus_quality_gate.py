@@ -623,6 +623,33 @@ def run_corpus_preflight(
     }
 
 
+#: TD-21.28: the judge is `claude -p` (an external CLI, no HTTP endpoint, no
+#: `response_format` support), so the shared `src.structured_output.repair`
+#: fish-then-repair idiom (TD-21.H) cannot reach it -- per the TD-21
+#: dispatch's HARD RULES, "apply deterministic fish improvements only and
+#: say so". This is that: `fish_json` (fence-aware, string-aware balanced-
+#: bracket fallback) in place of the old single-shot fence regex, plus
+#: full-schema validation of the 8 required numeric fields in place of the
+#: bare `json.loads` + a `KeyError` catch. On a miss, the pair is still
+#: dropped (nothing else is possible without a reachable backend) but now
+#: COUNTED here and surfaced into the persisted `_judge.json` artifact by
+#: `main()` below, closing "the gate's denominator moves without anyone
+#: seeing it".
+JUDGE_PARSE_COUNTS: dict[str, int] = {"parsed": 0, "failed": 0}
+
+_JUDGE_CRITERIA = ("correctness", "completeness", "quality", "originality")
+
+_JUDGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        f"{side}_{criterion}": {"type": "number"}
+        for side in ("a", "b")
+        for criterion in _JUDGE_CRITERIA
+    },
+    "required": [f"{side}_{criterion}" for side in ("a", "b") for criterion in _JUDGE_CRITERIA],
+}
+
+
 def judge_pair(
     prompt_id: str,
     task_prompt: str,
@@ -631,6 +658,10 @@ def judge_pair(
 ) -> JudgeResult | None:
     """Use Claude to judge output quality. Randomizes A/B assignment."""
     import random
+
+    from jsonschema import Draft202012Validator
+
+    from src.structured_output.repair import fish_json
 
     # Randomize which is A vs B to avoid position bias
     corpus_is_a = random.random() < 0.5
@@ -656,18 +687,19 @@ def judge_pair(
         )
         if result.returncode != 0:
             log.warning("Claude judge failed for %s: %s", prompt_id, result.stderr[:200])
+            JUDGE_PARSE_COUNTS["failed"] += 1
             return None
 
-        # Parse JSON from response
         response = result.stdout.strip()
-        # Try to extract JSON if wrapped in markdown
-        if "```" in response:
-            import re
-            match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response, re.DOTALL)
-            if match:
-                response = match.group(1)
-
-        scores = json.loads(response)
+        scores = fish_json(response, kind="object")
+        if scores is None or not Draft202012Validator(_JUDGE_SCHEMA).is_valid(scores):
+            log.warning(
+                "Failed to parse judge response for %s: not a schema-valid judged-pair object",
+                prompt_id,
+            )
+            JUDGE_PARSE_COUNTS["failed"] += 1
+            return None
+        JUDGE_PARSE_COUNTS["parsed"] += 1
 
         # Map back: which was baseline vs corpus?
         if corpus_is_a:
@@ -685,11 +717,9 @@ def judge_pair(
             delta=corpus_avg - baseline_avg,
             raw_scores=scores,
         )
-    except (json.JSONDecodeError, KeyError) as e:
-        log.warning("Failed to parse judge response for %s: %s", prompt_id, e)
-        return None
     except subprocess.TimeoutExpired:
         log.warning("Claude judge timed out for %s", prompt_id)
+        JUDGE_PARSE_COUNTS["failed"] += 1
         return None
 
 
@@ -887,6 +917,9 @@ def main():
     for model_key in args.models:
         results = all_results.get(model_key, [])
         judge_results = []
+        # TD-21.28: snapshot the shared counter so a per-model delta is
+        # attributable even when several models are judged in one run.
+        parse_failures_before = JUDGE_PARSE_COUNTS["failed"]
 
         for r in results:
             prompt_text = next((p["prompt"] for p in PROMPTS if p["id"] == r["prompt_id"]), "")
@@ -906,6 +939,14 @@ def main():
                     jr.baseline_score, jr.corpus_score, jr.delta,
                     "PASS" if jr.delta >= gate_threshold else "FAIL",
                 )
+
+        judge_parse_failures = JUDGE_PARSE_COUNTS["failed"] - parse_failures_before
+        if judge_parse_failures:
+            log.warning(
+                "  %s: %d/%d judged pairs dropped for an unparseable/schema-invalid "
+                "judge response (see JUDGE_PARSE_COUNTS)",
+                model_key.upper(), judge_parse_failures, len(results),
+            )
 
         if judge_results:
             avg_delta = sum(j.delta for j in judge_results) / len(judge_results)
@@ -930,6 +971,12 @@ def main():
                 "avg_corpus": avg_corpus,
                 "avg_delta": avg_delta,
                 "gate_pass": model_pass,
+                # TD-21.28: the gate's denominator, explicit -- previously a
+                # dropped pair silently shrank `per_prompt`/`avg_*` with no
+                # trace in the persisted artifact.
+                "pairs_total": len(results),
+                "pairs_judged": len(judge_results),
+                "judge_parse_failures": judge_parse_failures,
                 "per_prompt": [
                     {
                         "prompt_id": j.prompt_id,
@@ -940,6 +987,26 @@ def main():
                     }
                     for j in judge_results
                 ],
+            }
+        elif results:
+            # TD-21.28: every pair for this model was dropped -- previously
+            # this model was simply ABSENT from the persisted artifact,
+            # indistinguishable from "not in args.models". Now it is a
+            # visible, zero-confidence row instead of a silent omission.
+            log.warning(
+                "  %s: all %d judged pairs dropped -- no gate verdict possible",
+                model_key.upper(), len(results),
+            )
+            gate_pass = False
+            all_judge_results[model_key] = {
+                "avg_baseline": None,
+                "avg_corpus": None,
+                "avg_delta": None,
+                "gate_pass": False,
+                "pairs_total": len(results),
+                "pairs_judged": 0,
+                "judge_parse_failures": judge_parse_failures,
+                "per_prompt": [],
             }
 
     # Save judge results

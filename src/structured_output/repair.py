@@ -48,7 +48,8 @@ This module also closes three residuals the reference left open
       multi-model local endpoint would 400 on it. ``http_chat_completer``
       takes an optional ``model`` and includes it on the wire when given.
 
-Public API: ``fish_json``, ``parse_with_repair``, ``RepairResult``,
+Public API: ``fish_json``, ``parse_with_repair``, ``parse_with_repair_async``
+(TD-21.26, for an injected coroutine-function completer), ``RepairResult``,
 ``http_chat_completer``, ``primitives_completer``,
 ``STRUCTURED_OUTPUT_REPAIR_COUNTS``.
 """
@@ -61,7 +62,7 @@ import re
 import threading
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -81,6 +82,12 @@ Status = Literal["parsed", "repaired", "declined", "failed"]
 #: return a sentinel -- ``parse_with_repair`` turns any exception into a typed
 #: ``"failed"`` result and records the exception's summary as the reason.
 CompleteFn = Callable[[Sequence[Mapping[str, Any]], Mapping[str, Any]], str]
+
+#: TD-21.26: the async twin of ``CompleteFn`` for call sites whose injected
+#: model callable is itself a coroutine function (e.g. the env_synth
+#: species's ``LLMCall = Callable[[str, str], Awaitable[str]]``). Same
+#: contract: raise on transport failure, never return a sentinel.
+AsyncCompleteFn = Callable[[Sequence[Mapping[str, Any]], Mapping[str, Any]], Awaitable[str]]
 
 SCHEMA_REPAIR_TIMEOUT_S = 300
 SCHEMA_REPAIR_TAIL_CHARS = 16000
@@ -421,6 +428,121 @@ def parse_with_repair(
 
     calls += 1
     extracted, err = _extraction_turn(
+        raw, schema=working_schema, complete=complete, instruction=instruction,
+        site=site, tail_chars=tail_chars,
+    )
+    if extracted is not None and validator.is_valid(extracted):
+        result = RepairResult(extracted, "repaired", "", site, calls)
+        _record(site, result.status, repair_calls=calls)
+        return result
+
+    reason = err or "extraction result failed schema validation"
+    result = RepairResult(None, "failed", reason, site, calls)
+    _record(site, result.status, repair_calls=calls, reason=reason)
+    return result
+
+
+# --------------------------------------------------------------------------- async repair turns (TD-21.26)
+
+
+async def _decline_probe_async(
+    raw: str, *, question: str, complete: AsyncCompleteFn, site: str, tail_chars: int
+) -> tuple[bool | None, str]:
+    """Async twin of ``_decline_probe`` -- see its docstring for semantics."""
+    messages = [
+        {"role": "system", "content": _DECLINE_INSTRUCTION_TEMPLATE.format(question=question)},
+        {"role": "user", "content": raw[-tail_chars:]},
+    ]
+    try:
+        content = await complete(messages, _DECLINE_SCHEMA)
+    except Exception as exc:  # noqa: BLE001 - transport is caller-defined
+        _log.info("structured_output_repair site=%s stage=decline transport_error=%r", site, exc)
+        return None, ""
+    value = fish_json(content, kind="object")
+    if value is None or not _DECLINE_VALIDATOR.is_valid(value):
+        return None, ""
+    declined = value.get("explicitly_declines")
+    reason = str(value.get("reason") or "")
+    if declined is True:
+        return True, reason
+    if declined is False:
+        return False, reason
+    return None, ""
+
+
+async def _extraction_turn_async(
+    raw: str,
+    *,
+    schema: Mapping[str, Any],
+    complete: AsyncCompleteFn,
+    instruction: str | None,
+    site: str,
+    tail_chars: int,
+) -> tuple[Any, str | None]:
+    """Async twin of ``_extraction_turn`` -- see its docstring for semantics."""
+    messages = [
+        {"role": "system", "content": instruction or _DEFAULT_EXTRACT_INSTRUCTION},
+        {"role": "user", "content": raw[-tail_chars:]},
+    ]
+    try:
+        content = await complete(messages, schema)
+    except Exception as exc:  # noqa: BLE001 - transport is caller-defined
+        msg = f"transport_error: {type(exc).__name__}: {exc}"
+        _log.info("structured_output_repair site=%s stage=extraction %s", site, msg)
+        return None, msg
+    value = fish_json(content, kind="any")
+    if value is None:
+        return None, "extraction reply carried no parseable JSON"
+    return value, None
+
+
+async def parse_with_repair_async(
+    raw: str,
+    *,
+    schema: Mapping[str, Any],
+    complete: AsyncCompleteFn,
+    decline_question: str | None = None,
+    instruction: str | None = None,
+    site: str,
+    kind: Kind | None = None,
+    tail_chars: int = SCHEMA_REPAIR_TAIL_CHARS,
+) -> RepairResult:
+    """Async twin of :func:`parse_with_repair` (TD-21.26) for call sites whose
+    injected model callable is itself a coroutine function -- e.g. the
+    env_synth species's ``LLMCall = Callable[[str, str], Awaitable[str]]``.
+    Identical fish-then-repair semantics and identical telemetry
+    (``STRUCTURED_OUTPUT_REPAIR_COUNTS``); see :func:`parse_with_repair` for
+    the full contract. Kept as a literal parallel implementation rather than
+    a wrapper so neither path pays an event-loop indirection for the other.
+    """
+    working_schema = _closed_schema(schema)
+    validator = _build_validator(working_schema, site=site)
+    if validator is None:
+        result = RepairResult(None, "failed", "schema itself is not a valid JSON Schema", site, 0)
+        _record(site, result.status, reason=result.reason)
+        return result
+
+    effective_kind: Kind = kind or ("array" if working_schema.get("type") == "array" else "object")
+
+    fished = fish_json(raw, kind=effective_kind)
+    if fished is not None and validator.is_valid(fished):
+        result = RepairResult(fished, "parsed", "", site, 0)
+        _record(site, result.status)
+        return result
+
+    calls = 0
+    if decline_question:
+        calls += 1
+        declined, decline_reason = await _decline_probe_async(
+            raw, question=decline_question, complete=complete, site=site, tail_chars=tail_chars
+        )
+        if declined is True:
+            result = RepairResult(None, "declined", decline_reason, site, calls)
+            _record(site, result.status, repair_calls=calls, reason=decline_reason)
+            return result
+
+    calls += 1
+    extracted, err = await _extraction_turn_async(
         raw, schema=working_schema, complete=complete, instruction=instruction,
         site=site, tail_chars=tail_chars,
     )

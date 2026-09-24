@@ -189,5 +189,9 @@ def test_distill_skips_multitrial_insight_without_evidence_ids() -> None:
         "ungrounded_insights_skipped": 1,
         "trials_analyzed": 2,
         "entries_filtered": 0,
+        # TD-21.25: dropped-evidence-id counter (see TRIAL_ID_COERCION_COUNTS)
+        # -- 0 here since this insight's evidence_trial_ids key is absent
+        # entirely, never a malformed token.
+        "evidence_ids_dropped": 0,
     }
     assert store.rows == []

@@ -2262,6 +2262,50 @@ def suite_special_casing_reason(
     return None
 
 
+# --------------------------------------------------------------------------- TD-21.27: mutation extraction
+#
+# The mutation backend is the Claude CLI (`claude -p`, `_invoke_claude`
+# below) -- an external process with no HTTP endpoint and no
+# `response_format` support, so the shared `src.structured_output.repair`
+# fish-then-repair idiom (TD-21.H) cannot reach it (per the TD-21 dispatch's
+# HARD RULES: "apply deterministic fish improvements only and say so"). What
+# follows is that deterministic-fish-only improvement, shared by both
+# `_extract_mutation` (prompt bodies) and `_extract_code_mutation` (Python
+# source) so a fenced-code mention inside the reply's own PROSE can never be
+# mis-captured as the payload on either path -- the exact bug class
+# `_extract_mutation` already guarded against alone before this change.
+
+#: (site, status) -> count. "parsed" = a fenced/heuristic block was found;
+#: "failed" = extraction found nothing and the mutation became a no-op.
+#: TD-21.28's counter is `STRUCTURED_OUTPUT_REPAIR_COUNTS` (JSON-shaped);
+#: this one is deliberately separate since extraction here is fenced TEXT,
+#: not JSON, and there is no repair-turn dimension to key on.
+MUTATION_EXTRACTION_COUNTS: dict[tuple[str, str], int] = {}
+
+
+def _record_mutation_extraction(site: str, status: str) -> None:
+    key = (site, status)
+    MUTATION_EXTRACTION_COUNTS[key] = MUTATION_EXTRACTION_COUNTS.get(key, 0) + 1
+
+
+_FENCE_BLOCK_RE = re.compile(
+    r"^[ \t]*`{3,}[ \t]*([\w:.\-]*)[ \t]*\r?\n(.*?)(?:\r?\n[ \t]*`{3,}|\Z)",
+    re.DOTALL | re.MULTILINE,
+)
+
+
+def _fenced_blocks(text: str) -> list[tuple[str, str]]:
+    """Line-anchored fenced blocks as ``(tag.lower(), body)``.
+
+    Only fences whose opening backticks begin a line count as delimiters --
+    an inline fenced-code mention inside prose (e.g. a sentence quoting
+    ``result.index(...)``) can never be mis-captured as the payload. Shared
+    by the prompt- and code-mutation extractors so both apply the identical
+    rule instead of two near-copies with different edge-case coverage.
+    """
+    return [(tag.strip().lower(), body) for tag, body in _FENCE_BLOCK_RE.findall(text)]
+
+
 class PromptForge:
     """Species 2: LLM-guided prompt mutation and optimization."""
 
@@ -2391,7 +2435,7 @@ class PromptForge:
         )
 
         result = self._invoke_claude(prompt)
-        mutated_content = self._extract_mutation(result, original)
+        mutated_content, extracted_ok = self._extract_mutation(result, original)
 
         mutation = PromptMutation(
             file=target_file,
@@ -2400,6 +2444,16 @@ class PromptForge:
             original_content=original,
             mutated_content=mutated_content,
         )
+        if not extracted_ok:
+            # TD-21.27: extraction found nothing usable in the Claude CLI
+            # reply -- an explicit, counted failure (`safety_valid=False`
+            # reuses the EXISTING gate `_action_prompt_mutation` already
+            # checks before `apply_mutation`/eval) instead of a mutation
+            # that silently costs an eval round and a wasted commit
+            # checkpoint for a no-op nobody can see happened.
+            mutation.safety_valid = False
+            mutation.safety_reason = "mutation_extraction_failed: no usable fenced block in reply"
+            return mutation
         integrity_reason = _prompt_integrity_reason(target_file, mutated_content)
         if integrity_reason:
             mutation.safety_valid = False
@@ -2693,28 +2747,30 @@ class PromptForge:
 
         return "\n".join(lines)
 
-    def _extract_mutation(self, result: str, original: str) -> str:
+    def _extract_mutation(self, result: str, original: str) -> tuple[str, bool]:
         """Extract mutated prompt from Claude's response.
 
         Only fences whose opening backticks begin a line are treated as block
-        delimiters. This prevents an inline fenced-code mention inside the
-        reply's *prose* (e.g. a sentence quoting ``result.index(...)``) from
-        being mis-captured as the payload — a bug that overwrote a prompt file
-        with the model's prose and committed it.
+        delimiters (`_fenced_blocks`). This prevents an inline fenced-code
+        mention inside the reply's *prose* (e.g. a sentence quoting
+        ``result.index(...)``) from being mis-captured as the payload — a bug
+        that overwrote a prompt file with the model's prose and committed it.
+
+        TD-21.27: returns ``(content, ok)``. ``ok=False`` means extraction
+        found nothing usable — ``content`` is still ``original`` (the Claude
+        CLI backend is unreachable for a repair turn, so a safe no-op is the
+        only sound fallback), but the caller now gets an explicit signal
+        instead of an indistinguishable "successful no-op mutation", so it
+        can skip the mutation entirely (see ``propose_mutation``) rather than
+        spend an eval cycle and a git commit around it.
         """
-        # Line-anchored fenced blocks: the opening backticks (with optional
-        # language tag) must start a line; the body runs to the next line that
-        # starts with a fence, or end-of-string.
-        fence = re.compile(
-            r"^[ \t]*`{3,}[ \t]*([\w:.\-]*)[ \t]*\r?\n(.*?)(?:\r?\n[ \t]*`{3,}|\Z)",
-            re.DOTALL | re.MULTILINE,
-        )
-        blocks = [(tag.strip().lower(), body) for tag, body in fence.findall(result)]
+        blocks = _fenced_blocks(result)
 
         # Prefer an explicitly prose/markdown-tagged block.
         for tag, body in blocks:
             if tag in ("markdown", "md", "text"):
-                return body.strip()
+                _record_mutation_extraction("prompt_forge.mutation_extraction", "parsed")
+                return body.strip(), True
 
         # Fallback: the largest block that is not a json/actions or object block.
         candidates = [
@@ -2725,10 +2781,12 @@ class PromptForge:
             and len(body.strip()) > 100
         ]
         if candidates:
-            return max(candidates, key=lambda b: len(b.strip())).strip()
+            _record_mutation_extraction("prompt_forge.mutation_extraction", "parsed")
+            return max(candidates, key=lambda b: len(b.strip())).strip(), True
 
         log.warning("Could not extract mutation from response, returning original")
-        return original
+        _record_mutation_extraction("prompt_forge.mutation_extraction", "failed")
+        return original, False
 
     # ── git operations ───────────────────────────────────────────
 
@@ -2939,7 +2997,7 @@ class PromptForge:
         )
 
         result = self._invoke_claude(prompt)
-        mutated_content = self._extract_code_mutation(result, original)
+        mutated_content, extracted_ok = self._extract_code_mutation(result, original)
 
         mutation = CodeMutation(
             file=target_file,
@@ -2948,6 +3006,19 @@ class PromptForge:
             original_content=original,
             mutated_content=mutated_content,
         )
+        if not extracted_ok:
+            # TD-21.27: same explicit, counted failure as the prompt-mutation
+            # path. `_action_code_mutation` checks `syntax_valid` BEFORE
+            # `safety_valid` -- syntax_valid=True here is not a claim that
+            # anything was screened, it is what routes this rejection
+            # through the transfer_safety gate (which DOES surface
+            # `safety_reason` as `gate_detail`) instead of the generic,
+            # reason-less syntax_validation gate, since mutated_content is
+            # still the untouched, already-valid original.
+            mutation.syntax_valid = True
+            mutation.safety_valid = False
+            mutation.safety_reason = "mutation_extraction_failed: no usable fenced block in reply"
+            return mutation
         self._attach_transfer_safety(
             mutation,
             original_content=original,
@@ -3447,27 +3518,45 @@ class PromptForge:
             evidence_trial_count=evidence_count,
         )
 
-    def _extract_code_mutation(self, result: str, original: str) -> str:
-        """Extract mutated Python code from Claude's response."""
-        if "```python" in result:
-            start = result.index("```python") + len("```python")
-            end = result.index("```", start)
-            return result[start:end].strip()
+    def _extract_code_mutation(self, result: str, original: str) -> tuple[str, bool]:
+        """Extract mutated Python code from Claude's response.
 
-        if "```" in result:
-            blocks = result.split("```")
-            for i in range(1, len(blocks), 2):
-                block = blocks[i]
-                if block.strip().startswith(("json", "{")):
-                    continue
-                if len(block.strip()) > 100:
-                    lines = block.strip().split("\n")
-                    if lines[0].strip() in ("python", "py"):
-                        return "\n".join(lines[1:]).strip()
-                    return block.strip()
+        TD-21.27: rebuilt on the SAME line-anchored ``_fenced_blocks`` helper
+        `_extract_mutation` already uses, closing the same bug class here —
+        the old ``result.split("```")`` treated ANY triple-backtick anywhere
+        in the reply's prose as a delimiter, with no line-anchoring at all.
+        Returns ``(content, ok)``; see `_extract_mutation` for the ``ok``
+        contract (extraction failure never repairs via the Claude CLI
+        backend, only fishes better and reports the miss explicitly).
+        """
+        blocks = _fenced_blocks(result)
+
+        for tag, body in blocks:
+            if tag in ("python", "py"):
+                _record_mutation_extraction("prompt_forge.code_mutation_extraction", "parsed")
+                return body.strip(), True
+
+        candidates = [
+            body
+            for tag, body in blocks
+            if not tag.startswith("json")
+            and not body.lstrip().startswith(("json", "{"))
+            and len(body.strip()) > 100
+        ]
+        if candidates:
+            chosen = max(candidates, key=lambda b: len(b.strip())).strip()
+            # Byte-identical to the pre-TD-21.27 behaviour for a bare fence
+            # whose language tag landed as the body's first LINE rather than
+            # on the opening delimiter (some replies fence that way).
+            lines = chosen.split("\n")
+            if lines and lines[0].strip() in ("python", "py"):
+                chosen = "\n".join(lines[1:]).strip()
+            _record_mutation_extraction("prompt_forge.code_mutation_extraction", "parsed")
+            return chosen, True
 
         log.warning("Could not extract code mutation from response, returning original")
-        return original
+        _record_mutation_extraction("prompt_forge.code_mutation_extraction", "failed")
+        return original, False
 
     def _git_commit_file(self, path: Path, message: str) -> None:
         """Git add + commit exactly one file (no sweep of other staged changes)."""

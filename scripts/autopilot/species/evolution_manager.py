@@ -31,6 +31,16 @@ log = logging.getLogger("autopilot.evolution_manager")
 ORCH_ROOT = Path(__file__).resolve().parents[3]
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
+# TD-21.25: shared fish-then-repair helper (`src/structured_output/repair.py`,
+# TD-21.H). Needs ORCH_ROOT on sys.path -- distinct from _AUTOPILOT_DIR above.
+if str(ORCH_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(ORCH_ROOT))
+from src.structured_output.repair import (  # noqa: E402
+    RepairResult,
+    http_chat_completer,
+    parse_with_repair,
+)
+
 DISTILL_PROMPT_TEMPLATE = """\
 You are analyzing experiment results from an LLM orchestration optimization system.
 
@@ -69,6 +79,63 @@ Set evidence_trial_ids to one or more trial numbers shown above that directly
 support the insight. Do not cite invented or unrelated trials; insights without
 valid evidence_trial_ids are discarded.
 """
+
+
+# TD-21.25: the insight-list shape `distill()` already requires downstream --
+# `description`/`insight` are used directly (`insight.get(..., "")`);
+# `species`/`confidence`/`evidence_trial_ids` are read defensively by
+# `_insight_evidence_trial_ids`/`_coerce_trial_ids` under several aliases, so
+# they stay OPTIONAL here rather than invented as hard requirements. Derived
+# from `DISTILL_PROMPT_TEMPLATE`'s own output-format block above, not invented.
+_INSIGHTS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "description": {"type": "string"},
+            "insight": {"type": "string"},
+            "species": {"type": "string"},
+            "confidence": {"type": "string"},
+            # No type constraint: `_coerce_trial_ids` deliberately accepts an
+            # int, float, string (bare, comma/space-separated, or JSON-
+            # encoded), dict, or list/tuple/set here -- schema-typing this
+            # to "array" would reject shapes the consumer already tolerates
+            # and turn a coercible reply into a spurious validation failure.
+            "evidence_trial_ids": {},
+        },
+        "required": ["description", "insight"],
+    },
+}
+
+_INSIGHTS_REPAIR_INSTRUCTION = (
+    "Convert the reply, given as the user message, into the JSON array of "
+    "distilled insight objects it was asked to produce -- each with "
+    "description, insight, species, confidence, and evidence_trial_ids. "
+    "Copy the reply's own wording, trial numbers, and judgments faithfully; "
+    "never invent an insight or a trial id that is not already present."
+)
+
+
+def _unreachable_completer(
+    _messages: Any, _schema: Any
+) -> str:  # pragma: no cover - exercised via the raise, not a return
+    """TD-21.25: distillation ran over the Claude CLI (`use_local_model=False`),
+    which the structured-output repair idiom cannot reach (no HTTP endpoint,
+    no `response_format` support) -- see the HARD RULES in the TD-21 dispatch.
+    `parse_with_repair` never calls this on a clean fish; when it does (a
+    miss), the raise becomes a typed `"failed"` RepairResult with this exact
+    reason instead of a silently-returned `[]`."""
+    raise RuntimeError(
+        "evolution_manager distillation backend is the Claude CLI "
+        "(use_local_model=False); the structured-output repair turn has no "
+        "local server to reach, so only deterministic fishing was attempted"
+    )
+
+
+#: TD-21.25: `_coerce_trial_ids` used to silently drop unparseable evidence
+#: id tokens (e.g. "trial-abc" in a comma list). Counted here instead so a
+#: weakened-grounding round is visible rather than merely quieter.
+TRIAL_ID_COERCION_COUNTS: dict[str, int] = {"parsed": 0, "dropped": 0}
 
 
 _CORRUPTED_DEFICIENCIES = {
@@ -170,16 +237,33 @@ class EvolutionManager:
         if not response:
             return {"status": "failed", "reason": "LLM invocation failed"}
 
-        # Parse insights from response
-        insights = self._extract_insights(response)
+        # TD-21.25: fish first (parse_with_repair kind="array"); on a miss,
+        # one repair turn against the local model when distillation is
+        # running against one (use_local_model=True), else a typed failure --
+        # the Claude CLI path has no server for a repair turn to reach.
+        extraction = self._extract_insights_result(response)
+        insights = list(extraction.value) if extraction.status in ("parsed", "repaired") else []
         if not insights:
-            return {"status": "failed", "reason": "no insights extracted"}
+            if extraction.status == "failed":
+                reason = f"insight extraction failed: {extraction.reason}"
+            else:
+                # Status is "parsed"/"repaired" but the array itself is
+                # empty -- a genuine zero-insight round, distinguishable
+                # (via insight_parse_status below) from an extraction miss.
+                reason = "LLM returned zero insights"
+            return {
+                "status": "failed",
+                "reason": reason,
+                "insight_parse_status": extraction.status,
+                "insight_repair_calls": extraction.repair_calls,
+            }
 
         # Store each insight in StrategyStore. Evidence is per-insight, not
         # batch-level: a broad distillation response may mix unrelated claims,
         # so only grounded claims should enter retrievable strategy memory.
         stored = 0
         ungrounded_skipped = 0
+        evidence_ids_dropped_before = TRIAL_ID_COERCION_COUNTS["dropped"]
         valid_evidence_trial_ids = {
             int(e.trial_id)
             for e in entries
@@ -229,6 +313,8 @@ class EvolutionManager:
             except Exception as e:
                 log.warning("Failed to store insight: %s", e)
 
+        evidence_ids_dropped = TRIAL_ID_COERCION_COUNTS["dropped"] - evidence_ids_dropped_before
+
         if stored == 0:
             return {
                 "status": "skipped",
@@ -238,6 +324,7 @@ class EvolutionManager:
                 "ungrounded_insights_skipped": ungrounded_skipped,
                 "trials_analyzed": len(entries),
                 "entries_filtered": filtered_count,
+                "evidence_ids_dropped": evidence_ids_dropped,
             }
 
         log.info(
@@ -251,6 +338,7 @@ class EvolutionManager:
             "ungrounded_insights_skipped": ungrounded_skipped,
             "trials_analyzed": len(entries),
             "entries_filtered": filtered_count,
+            "evidence_ids_dropped": evidence_ids_dropped,
         }
 
     def _invoke_llm(self, prompt: str) -> str:
@@ -315,39 +403,49 @@ class EvolutionManager:
             log.error("Local model invocation failed: %s", e)
             return ""
 
+    def _extract_insights_result(self, response: str) -> RepairResult:
+        """TD-21.25: fish the insight-list JSON, full-schema-validate it, and
+        -- on a miss -- spend ONE repair turn where the backend is reachable.
+
+        ``fish_json`` (via ``parse_with_repair``) already subsumes the old
+        three-branch marker/fenced/whole-response fishing above (the
+        ``json:insights`` marker parses as a normal fence once the ``:insights``
+        suffix is treated as free text ahead of the JSON payload; string-aware
+        balanced-bracket fishing recovers it regardless -- see
+        ``test_evolution_manager_scrub.py`` for the byte-identical happy path).
+
+        The repair turn is only attempted when distillation itself is running
+        against the local model (``use_local_model=True``): that is the SAME
+        server/role the generation call already used, resolved through
+        ``self.local_model_url`` (never a hardcoded port). When distillation
+        used the Claude CLI, the repair idiom has no local server to reach --
+        ``_unreachable_completer`` turns that into a typed ``"failed"`` result
+        with an explicit reason instead of a silent ``[]``.
+        """
+        complete = (
+            http_chat_completer(f"{self.local_model_url}/v1", model="explore")
+            if self.use_local_model
+            else _unreachable_completer
+        )
+        return parse_with_repair(
+            response,
+            schema=_INSIGHTS_SCHEMA,
+            complete=complete,
+            instruction=_INSIGHTS_REPAIR_INSTRUCTION,
+            site="evolution_manager.insight_distillation",
+            kind="array",
+        )
+
     def _extract_insights(self, response: str) -> list[dict[str, Any]]:
-        """Extract insight objects from LLM response."""
-        # Look for JSON block with insights marker
-        marker = "```json:insights"
-        if marker in response:
-            start = response.index(marker) + len(marker)
-            end = response.index("```", start)
-            try:
-                return json.loads(response[start:end].strip())
-            except json.JSONDecodeError:
-                pass
+        """Extract insight objects from LLM response.
 
-        # Fallback: look for any JSON array
-        if "```json" in response:
-            start = response.index("```json") + len("```json")
-            end = response.index("```", start)
-            try:
-                data = json.loads(response[start:end].strip())
-                if isinstance(data, list):
-                    return data
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-        # Last resort: try to parse the whole response as JSON
-        try:
-            data = json.loads(response)
-            if isinstance(data, list):
-                return data
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        log.warning("Could not extract insights from response")
-        return []
+        Back-compat wrapper over :meth:`_extract_insights_result` -- collapses
+        a typed failure back to ``[]`` for any caller that only wants the
+        list. ``distill()`` itself calls the richer method directly so it can
+        report *why* extraction failed rather than merely that it did.
+        """
+        result = self._extract_insights_result(response)
+        return list(result.value) if result.status in ("parsed", "repaired") else []
 
     @staticmethod
     def _coerce_trial_ids(raw: Any) -> list[int]:
@@ -357,7 +455,13 @@ class EvolutionManager:
         if isinstance(raw, int):
             return [raw]
         if isinstance(raw, float):
-            return [int(raw)] if raw.is_integer() else []
+            if raw.is_integer():
+                return [int(raw)]
+            # TD-21.25: a non-integer trial id token is dropped, not
+            # truncated -- count it so the round's grounding loss is visible.
+            TRIAL_ID_COERCION_COUNTS["dropped"] += 1
+            log.info("evolution_manager: dropped non-integer evidence trial id %r", raw)
+            return []
         if isinstance(raw, str):
             try:
                 decoded = json.loads(raw)
@@ -367,7 +471,16 @@ class EvolutionManager:
                     try:
                         ids.append(int(part))
                     except ValueError:
+                        # TD-21.25: previously a silent drop -- an insight
+                        # could be persisted with fewer evidence ids than the
+                        # model actually cited, weakening its grounding with
+                        # no visible signal. Counted, not just logged.
+                        TRIAL_ID_COERCION_COUNTS["dropped"] += 1
+                        log.info(
+                            "evolution_manager: dropped unparseable evidence trial id token %r", part
+                        )
                         continue
+                TRIAL_ID_COERCION_COUNTS["parsed"] += len(ids)
                 return ids
             return EvolutionManager._coerce_trial_ids(decoded)
         if isinstance(raw, dict):

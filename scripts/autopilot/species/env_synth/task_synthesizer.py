@@ -34,8 +34,68 @@ from scripts.autopilot.species.env_synth.verifier_builder import (
     VerifierSpec,
     VerifierType,
 )
+from src.structured_output.repair import (
+    AsyncCompleteFn,
+    RepairResult,
+    fish_json,
+    parse_with_repair_async,
+)
 
 log = logging.getLogger("autopilot.env_synth.task_synthesizer")
+
+# TD-21.26: the synthesized-task shape `_build_task` already requires
+# downstream -- `prompt` is the only hard requirement (an empty prompt is
+# rejected outright); `verifier`/`ground_truth_hint`/`metadata` are read
+# defensively (`payload.get(...) or {}`/`""`) and, for the boundary-task
+# path, the caller's OWN trusted verifier/hint override whatever the model
+# proposes there anyway. Derived from `_parse`'s own field reads below, not
+# invented -- nested `verifier` field validity is `_build_verifier`'s job,
+# not the fish/repair schema's.
+_TASK_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "prompt": {"type": "string"},
+        "verifier": {"type": "object"},
+        "ground_truth_hint": {"type": "string"},
+        "metadata": {"type": "object"},
+    },
+    "required": ["prompt"],
+}
+
+_TASK_REPAIR_INSTRUCTION = (
+    "Convert the reply, given as the user message, into ONE JSON object "
+    "with exactly these keys: prompt (the task statement), verifier (an "
+    "object with a type field plus whichever of reference/pattern/"
+    "allowlist/case_sensitive/min_tokens that type needs), "
+    "ground_truth_hint (a string), and metadata (an object). Copy the "
+    "reply's own wording and values faithfully -- never invent a task, "
+    "verifier, or hint that is not already present in the reply. Respond "
+    "with the JSON object only, no commentary and no markdown fence."
+)
+
+
+def _llm_as_complete(llm: "LLMCall") -> AsyncCompleteFn:
+    """TD-21.26: adapt the species' injected ``llm(system, user) -> str``
+    callable into the shared repair module's ``AsyncCompleteFn`` shape
+    (``complete(messages, schema) -> str``).
+
+    ``LLMCall`` has no schema/``response_format`` parameter at all -- unlike
+    ``http_chat_completer``, this transport cannot ask the server to
+    constrain decoding, so the schema is carried entirely in the system
+    message text (``_TASK_REPAIR_INSTRUCTION`` / the ETD equivalent) and
+    enforced only client-side by ``parse_with_repair_async``'s validator.
+    That is strictly better than the pre-TD-21.26 behaviour (a bare
+    ``json.loads`` with a from-zero regeneration on any miss), not a
+    regression: an off-schema repair reply is still a typed ``"failed"``,
+    never smuggled through as valid.
+    """
+
+    async def complete(messages: Any, _schema: Any) -> str:
+        system = next((m.get("content", "") for m in messages if m.get("role") == "system"), "")
+        user = next((m.get("content", "") for m in messages if m.get("role") == "user"), "")
+        return await llm(system, user)
+
+    return complete
 
 
 class DifficultyBand(str, Enum):
@@ -109,11 +169,17 @@ class TaskSynthesizer:
             "Generate the JSON task."
         )
 
+        complete = _llm_as_complete(self.llm)
         for attempt in range(self.max_retries + 1):
             try:
                 raw = await self.llm(system, user)
-                task = self._parse(
+                # TD-21.26: fish (tolerant) then, on a miss, ONE repair turn
+                # against the SAME injected model before falling back to a
+                # from-zero regeneration -- the retry-from-zero cost DS41
+                # measured on every non-JSON reply.
+                task = await self._parse_with_repair(
                     raw,
+                    complete=complete,
                     environment_id=environment_id,
                     tool_set=[t.tool_id for t in tools],
                     band=band,
@@ -165,11 +231,13 @@ class TaskSynthesizer:
             f"Boundary contract: {json.dumps(boundary.to_dict(), sort_keys=True)}\n"
             f"Tools available:\n{tool_section}\n\nGenerate the JSON task."
         )
+        complete = _llm_as_complete(self.llm)
         for attempt in range(self.max_retries + 1):
             try:
                 raw = await self.llm(system, user)
-                task = self._parse(
+                task = await self._parse_with_repair(
                     raw,
+                    complete=complete,
                     environment_id=environment_id,
                     tool_set=[tool.tool_id for tool in tools],
                     band=band,
@@ -191,6 +259,51 @@ class TaskSynthesizer:
 
     # ── parsing ────────────────────────────────────────────────────
 
+    async def _parse_with_repair(
+        self,
+        raw: str,
+        *,
+        complete: AsyncCompleteFn,
+        environment_id: str,
+        tool_set: list[str],
+        band: DifficultyBand,
+        seed: Optional[int],
+        trusted_verifier: Optional[VerifierSpec] = None,
+        trusted_ground_truth_hint: Optional[str] = None,
+        boundary: Optional[HypothesisBoundaryContract] = None,
+    ) -> Optional[SynthesizedTask]:
+        """TD-21.26: fish first (byte-identical happy path, 0 repair calls);
+        on a miss, ONE repair turn against the caller's own injected ``llm``
+        before the outer loop resorts to a from-zero regeneration."""
+        kwargs = dict(
+            environment_id=environment_id,
+            tool_set=tool_set,
+            band=band,
+            seed=seed,
+            trusted_verifier=trusted_verifier,
+            trusted_ground_truth_hint=trusted_ground_truth_hint,
+            boundary=boundary,
+        )
+        task = self._parse(raw, **kwargs)
+        if task is not None:
+            return task
+
+        result: RepairResult = await parse_with_repair_async(
+            raw,
+            schema=_TASK_SCHEMA,
+            complete=complete,
+            instruction=_TASK_REPAIR_INSTRUCTION,
+            site="env_synth.task_synthesizer",
+            kind="object",
+        )
+        if result.status not in ("parsed", "repaired"):
+            log.warning(
+                "task synthesizer: repair turn did not recover a valid task (%s): %s",
+                result.status, result.reason,
+            )
+            return None
+        return self._build_task(result.value, **kwargs)
+
     def _parse(
         self,
         raw: str,
@@ -203,12 +316,41 @@ class TaskSynthesizer:
         trusted_ground_truth_hint: Optional[str] = None,
         boundary: Optional[HypothesisBoundaryContract] = None,
     ) -> Optional[SynthesizedTask]:
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
+        """TD-21.26: deterministic fish (fence-aware + string-aware balanced-
+        bracket fallback, kind="object" so only a dict counts) in place of the
+        old bare ``json.loads`` -- a fenced or trailing-prose reply now parses
+        without needing a repair turn or a from-zero regeneration at all."""
+        payload = fish_json(raw, kind="object")
+        if payload is None:
             log.warning("task synthesizer: non-JSON LLM output")
             return None
+        return self._build_task(
+            payload,
+            environment_id=environment_id,
+            tool_set=tool_set,
+            band=band,
+            seed=seed,
+            trusted_verifier=trusted_verifier,
+            trusted_ground_truth_hint=trusted_ground_truth_hint,
+            boundary=boundary,
+        )
 
+    def _build_task(
+        self,
+        payload: dict[str, Any],
+        *,
+        environment_id: str,
+        tool_set: list[str],
+        band: DifficultyBand,
+        seed: Optional[int],
+        trusted_verifier: Optional[VerifierSpec] = None,
+        trusted_ground_truth_hint: Optional[str] = None,
+        boundary: Optional[HypothesisBoundaryContract] = None,
+    ) -> Optional[SynthesizedTask]:
+        """Build a ``SynthesizedTask`` from an already-parsed payload dict --
+        shared by the fish path (``_parse``) and the TD-21.26 repair path
+        (``_parse_with_repair``) so verifier-building/validation is identical
+        either way."""
         prompt = (payload.get("prompt") or "").strip()
         if not prompt:
             return None

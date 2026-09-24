@@ -6,20 +6,24 @@ so consumers write ``from src.structured_output import parse_with_repair``.
 
 from src.structured_output.repair import (
     STRUCTURED_OUTPUT_REPAIR_COUNTS,
+    AsyncCompleteFn,
     CompleteFn,
     RepairResult,
     fish_json,
     http_chat_completer,
     parse_with_repair,
+    parse_with_repair_async,
     primitives_completer,
 )
 
 __all__ = [
     "STRUCTURED_OUTPUT_REPAIR_COUNTS",
+    "AsyncCompleteFn",
     "CompleteFn",
     "RepairResult",
     "fish_json",
     "http_chat_completer",
     "parse_with_repair",
+    "parse_with_repair_async",
     "primitives_completer",
 ]

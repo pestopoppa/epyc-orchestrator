@@ -13,7 +13,6 @@ probe. Tests use fakes for all four.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -23,8 +22,48 @@ from scripts.autopilot.species.env_synth.mcp_tool_registry import (
     MCPToolEntry,
     MCPToolRegistry,
 )
+from src.structured_output.repair import AsyncCompleteFn, parse_with_repair_async
 
 log = logging.getLogger("autopilot.env_synth.etd_agent")
+
+# TD-21.26: the candidate-environment shape `discover` already reads
+# downstream -- every field is accessed defensively (`cand.get(..., "")`),
+# and an empty `name` is simply skipped per-candidate rather than failing
+# the whole batch, so nothing here is required. Derived from the loop body
+# below, not invented.
+_ENVIRONMENTS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "search_queries": {"type": "array"},
+        },
+    },
+}
+
+_ENVIRONMENTS_REPAIR_INSTRUCTION = (
+    "Convert the reply, given as the user message, into the JSON array of "
+    "candidate environments it was asked to produce -- each with name, "
+    "description, and search_queries. Copy the reply's own wording "
+    "faithfully; never invent an environment that is not already present "
+    "in the reply. Respond with the JSON array only, no commentary and no "
+    "markdown fence."
+)
+
+
+def _llm_as_complete(llm: "LLMCall") -> AsyncCompleteFn:
+    """TD-21.26: see the identical helper in ``task_synthesizer.py`` --
+    ``LLMCall`` has no schema parameter, so the schema is carried in the
+    system-message instruction text and enforced only client-side."""
+
+    async def complete(messages: Any, _schema: Any) -> str:
+        system = next((m.get("content", "") for m in messages if m.get("role") == "system"), "")
+        user = next((m.get("content", "") for m in messages if m.get("role") == "user"), "")
+        return await llm(system, user)
+
+    return complete
 
 
 # Pluggable I/O contracts.
@@ -82,13 +121,24 @@ class ETDAgent:
         user = f"Theme: {theme}\nGap descriptor: {gap_descriptor}\n"
 
         raw = await self.llm(system, user)
-        try:
-            candidates = json.loads(raw)
-            if not isinstance(candidates, list):
-                raise ValueError("expected a JSON list of environments")
-        except (json.JSONDecodeError, ValueError) as e:
-            log.warning("ETD LLM output not usable: %s", e)
+        # TD-21.26: fish (fence-aware, kind="array") + full-schema validation
+        # in place of the old bare `json.loads`; on a miss, ONE repair turn
+        # against the SAME injected `llm` before giving up -- previously any
+        # non-JSON or non-list reply silently became `[]` with no recovery
+        # attempt and no counter (`STRUCTURED_OUTPUT_REPAIR_COUNTS` now
+        # tracks this site: "env_synth.etd_agent.discover").
+        result = await parse_with_repair_async(
+            raw,
+            schema=_ENVIRONMENTS_SCHEMA,
+            complete=_llm_as_complete(self.llm),
+            instruction=_ENVIRONMENTS_REPAIR_INSTRUCTION,
+            site="env_synth.etd_agent.discover",
+            kind="array",
+        )
+        if result.status not in ("parsed", "repaired"):
+            log.warning("ETD LLM output not usable (%s): %s", result.status, result.reason)
             return []
+        candidates = result.value
 
         discoveries: list[EnvironmentDiscovery] = []
         for cand in candidates[:max_environments]:
