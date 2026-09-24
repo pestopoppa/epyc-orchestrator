@@ -1162,19 +1162,32 @@ class InferenceMixin:
             if admitted and admission:
                 admission.release(backend_url)
 
-    def _real_batch(self, prompts: list[str], role: str) -> list[str]:
+    def _real_batch(
+        self,
+        prompts: list[str],
+        role: str,
+        json_schema: dict | None = None,
+        grammar: str | None = None,
+    ) -> list[str]:
         """Make real inference calls in parallel.
 
         Args:
             prompts: List of prompts.
             role: The role determining which model to use.
+            json_schema: Optional JSON schema constraining every prompt in
+                this batch (TD-21.22a: per-batch, not per-prompt — mirrors
+                how ``combined_ops._batch_llm_query`` builds one batch under
+                one schema). Omitted (None) reproduces the pre-TD-21.22a
+                call shape byte-for-byte.
+            grammar: Optional GBNF grammar, applied to the whole batch the
+                same way as json_schema.
 
         Returns:
             List of model responses in order.
         """
         # Use worker pool for worker roles if configured
         if self.use_worker_pool and role.startswith("worker"):
-            return self._worker_pool_batch(prompts, role)
+            return self._worker_pool_batch(prompts, role, json_schema=json_schema, grammar=grammar)
 
         # Check if we have a backend for this role
         backend = self._backends.get(role)
@@ -1186,11 +1199,20 @@ class InferenceMixin:
         role_limit = getattr(self, "_get_role_limit", lambda _r: self.config.batch_parallelism)(
             role
         )
+        # Only forward the constraint kwargs when set, so a caller that omits
+        # them (every caller before TD-21.22a) reaches _real_call with the
+        # exact same argument list as before.
+        extra: dict[str, Any] = {}
+        if json_schema is not None:
+            extra["json_schema"] = json_schema
+        if grammar is not None:
+            extra["grammar"] = grammar
+
         if role_limit <= 1:
             results = []
             for prompt in prompts:
                 try:
-                    results.append(self._real_call(prompt, role))
+                    results.append(self._real_call(prompt, role, **extra))
                 except Exception as e:
                     results.append(f"[ERROR: {e}]")
             return results
@@ -1202,7 +1224,7 @@ class InferenceMixin:
             future_to_idx = {}
             for i, prompt in enumerate(prompts):
                 ctx = contextvars.copy_context()
-                future = executor.submit(ctx.run, self._real_call, prompt, role)
+                future = executor.submit(ctx.run, self._real_call, prompt, role, **extra)
                 future_to_idx[future] = i
 
             # Collect results in order
@@ -1215,7 +1237,13 @@ class InferenceMixin:
 
         return [r if r is not None else "" for r in results]
 
-    def _worker_pool_batch(self, prompts: list[str], role: str) -> list[str]:
+    def _worker_pool_batch(
+        self,
+        prompts: list[str],
+        role: str,
+        json_schema: dict | None = None,
+        grammar: str | None = None,
+    ) -> list[str]:
         """Execute batch using the heterogeneous worker pool.
 
         Routes to appropriate worker type based on role.
@@ -1223,6 +1251,10 @@ class InferenceMixin:
         Args:
             prompts: List of prompts.
             role: Worker role (determines task type routing).
+            json_schema: Optional JSON schema constraining the whole batch
+                (forwarded to ``WorkerPoolManager.batch``'s ``/completion``
+                payload). Omitted reproduces the prior call byte-for-byte.
+            grammar: Optional GBNF grammar for the whole batch.
 
         Returns:
             List of model responses in order.
@@ -1235,6 +1267,12 @@ class InferenceMixin:
             suffix = role.split("_", 1)[1]
             task_type = self.WORKER_TASK_ROUTING.get(suffix, suffix)
 
+        extra: dict[str, Any] = {}
+        if json_schema is not None:
+            extra["json_schema"] = json_schema
+        if grammar is not None:
+            extra["grammar"] = grammar
+
         try:
             # Run async batch in sync context
             try:
@@ -1242,7 +1280,7 @@ class InferenceMixin:
             except RuntimeError:
                 loop = None
             timeout_s = self._remaining_deadline_s()
-            batch_coro = self.worker_pool.batch(prompts, task_type=task_type)
+            batch_coro = self.worker_pool.batch(prompts, task_type=task_type, **extra)
             if timeout_s is not None:
                 timeout_s = max(1.0, timeout_s)
                 batch_coro = asyncio.wait_for(batch_coro, timeout=timeout_s)
@@ -1262,18 +1300,32 @@ class InferenceMixin:
             logging.getLogger(__name__).warning(
                 f"Worker pool batch failed, falling back to standard: {e}"
             )
-            return self._fallback_batch(prompts, role)
+            return self._fallback_batch(prompts, role, **extra)
 
-    def _fallback_batch(self, prompts: list[str], role: str) -> list[str]:
+    def _fallback_batch(
+        self,
+        prompts: list[str],
+        role: str,
+        json_schema: dict | None = None,
+        grammar: str | None = None,
+    ) -> list[str]:
         """Fallback batch implementation using ThreadPoolExecutor.
 
         Used when worker pool is unavailable or fails.
         """
+        extra: dict[str, Any] = {}
+        if json_schema is not None:
+            extra["json_schema"] = json_schema
+        if grammar is not None:
+            extra["grammar"] = grammar
+
         results: list[str | None] = [None] * len(prompts)
 
         with ThreadPoolExecutor(max_workers=self.config.batch_parallelism) as executor:
             future_to_idx = {
-                executor.submit(contextvars.copy_context().run, self._real_call, prompt, role): i
+                executor.submit(
+                    contextvars.copy_context().run, self._real_call, prompt, role, **extra
+                ): i
                 for i, prompt in enumerate(prompts)
             }
 

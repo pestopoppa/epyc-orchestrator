@@ -62,14 +62,12 @@ def _render_child_schema_retry_prompt(
 def _batch_repair_completer(llm_primitives, role: str, persona: str | None):
     """A ``parse_with_repair`` ``CompleteFn`` over ``llm_batch`` (one item).
 
-    TD-21.22 residual: ``llm_batch`` (unlike ``llm_call``) has no
-    ``json_schema`` parameter at all -- threading wire-schema support through
-    it would touch ``_real_batch``/``_mock_batch``/``_worker_pool_batch`` and
-    every other ``llm_batch`` caller, which is out of scope for this
-    conversion (see the commit message / handoff for the follow-on). The
-    schema is instead embedded as text via the same
-    ``_render_child_schema_preamble`` idiom already used for the first
-    attempt at this site.
+    TD-21.22a: ``llm_batch`` now takes a ``json_schema`` parameter
+    (threaded through ``_real_batch``/``_mock_batch``/``_worker_pool_batch``
+    down to the same ``InferenceRequest.json_schema`` field ``llm_call``
+    uses), so the repair/extraction turn gets the wire constraint too --
+    the text preamble below stays as the belt-and-suspenders prompt framing
+    ``_delegate_single`` (routing.py) also keeps alongside the wire schema.
     """
 
     def complete(messages, schema):
@@ -77,7 +75,9 @@ def _batch_repair_completer(llm_primitives, role: str, persona: str | None):
             f"[{m.get('role', 'user')}]\n{m.get('content', '')}" for m in messages
         )
         prompt = f"{_render_child_schema_preamble(schema)}\n\n{rendered}"
-        results = llm_primitives.llm_batch([prompt], role=role, persona=persona)
+        results = llm_primitives.llm_batch(
+            [prompt], role=role, persona=persona, json_schema=schema,
+        )
         return results[0] if results else ""
 
     return complete
@@ -407,7 +407,15 @@ class _CombinedOpsMixin:
             if schema is not None
             else prompts
         )
-        raw_results = self.llm_primitives.llm_batch(query_prompts, role=role, persona=persona)
+        # TD-21.22a: the schema now also reaches the wire (json_schema=),
+        # not just the prose preamble baked into query_prompts above -- one
+        # schema constrains every prompt in THIS batch (per-batch, matching
+        # how this call already builds one shared schema over the whole
+        # prompt list; a caller needing per-prompt schemas would need one
+        # llm_batch call per schema, or llm_call per prompt).
+        raw_results = self.llm_primitives.llm_batch(
+            query_prompts, role=role, persona=persona, json_schema=schema,
+        )
         result_entries = []
         retry_count = 0
         validation_failures = 0
@@ -448,7 +456,7 @@ class _CombinedOpsMixin:
                     current_raw,
                 )
                 retry_result = self.llm_primitives.llm_batch(
-                    [retry_prompt], role=role, persona=persona,
+                    [retry_prompt], role=role, persona=persona, json_schema=schema,
                 )
                 current_raw = retry_result[0] if retry_result else ""
                 ok, err, parsed = _validate_final_answer(current_raw, schema)

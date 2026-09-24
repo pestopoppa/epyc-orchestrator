@@ -441,6 +441,65 @@ class TestWorkerPoolHTTP:
 
         await pool_manager.stop_all()
 
+    @pytest.mark.asyncio
+    async def test_http_call_forwards_json_schema_and_grammar(self, pool_manager):
+        """TD-21.22a: json_schema/grammar reach the /completion payload when set,
+        the same top-level keys LlamaServerBackend._build_payload uses."""
+        await pool_manager.initialize()
+
+        worker = pool_manager._workers["explore"]
+        worker._healthy = True
+
+        with patch.object(pool_manager._http_session, "post") as mock_post:
+            mock_response = AsyncMock()
+            mock_response.status = 200
+            mock_response.json = AsyncMock(return_value={"content": "test response"})
+            mock_post.return_value.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_post.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            schema = {"type": "object", "properties": {"a": {"type": "integer"}}}
+            result = await pool_manager._http_call(
+                worker,
+                "test prompt",
+                temperature=0.2,
+                max_tokens=100,
+                json_schema=schema,
+                grammar='root ::= "x"',
+            )
+
+            assert result == "test response"
+            sent_payload = mock_post.call_args.kwargs["json"]
+            assert sent_payload["json_schema"] == schema
+            assert sent_payload["grammar"] == 'root ::= "x"'
+
+        await pool_manager.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_http_call_omits_schema_when_not_provided(self, pool_manager):
+        """Default None must not add json_schema/grammar keys to the payload --
+        byte-identical to the pre-TD-21.22a payload."""
+        await pool_manager.initialize()
+
+        worker = pool_manager._workers["explore"]
+        worker._healthy = True
+
+        with patch.object(pool_manager._http_session, "post") as mock_post:
+            mock_response = AsyncMock()
+            mock_response.status = 200
+            mock_response.json = AsyncMock(return_value={"content": "test response"})
+            mock_post.return_value.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_post.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            await pool_manager._http_call(
+                worker, "test prompt", temperature=0.2, max_tokens=100
+            )
+
+            sent_payload = mock_post.call_args.kwargs["json"]
+            assert "json_schema" not in sent_payload
+            assert "grammar" not in sent_payload
+
+        await pool_manager.stop_all()
+
 
 # =============================================================================
 # Integration Tests (No real servers)
@@ -511,5 +570,48 @@ class TestWorkerPoolIntegration:
             assert results[0] == "response_for_a"
             assert results[1] == "response_for_b"
             assert results[2] == "response_for_c"
+
+        await pool_manager.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_batch_forwards_json_schema_to_http_call(self, pool_manager):
+        """TD-21.22a: one schema constrains every prompt in the batch."""
+        await pool_manager.initialize()
+
+        for worker in pool_manager._workers.values():
+            worker._healthy = True
+
+        with patch.object(pool_manager, "_http_call", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = "response"
+
+            schema = {"type": "object"}
+            await pool_manager.batch(
+                ["p1", "p2"], task_type="explore", json_schema=schema, grammar="g",
+            )
+
+            assert mock_call.call_count == 2
+            for call in mock_call.call_args_list:
+                assert call.kwargs["json_schema"] == schema
+                assert call.kwargs["grammar"] == "g"
+
+        await pool_manager.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_batch_omits_schema_kwargs_when_not_provided(self, pool_manager):
+        """Default None must reach _http_call exactly as before TD-21.22a
+        (no json_schema/grammar keyword at all, not even as None) -- a
+        fixed-arity test double for _http_call must not break."""
+        await pool_manager.initialize()
+
+        for worker in pool_manager._workers.values():
+            worker._healthy = True
+
+        async def fixed_arity_http_call(worker, prompt, temperature, max_tokens):
+            return f"response_for_{prompt}"
+
+        with patch.object(pool_manager, "_http_call", side_effect=fixed_arity_http_call):
+            results = await pool_manager.batch(["p1", "p2"], task_type="explore")
+
+        assert results == ["response_for_p1", "response_for_p2"]
 
         await pool_manager.stop_all()

@@ -854,6 +854,145 @@ class TestRealBatch:
         assert all(r == "Mocked response" for r in results)
         assert mock_call.call_count == 2
 
+    def test_real_batch_forwards_json_schema_and_grammar(self, mock_backend):
+        """TD-21.22a: json_schema/grammar reach the same InferenceRequest
+        fields llm_call uses, for every prompt in the batch (ThreadPoolExecutor
+        path -- role_limit > 1, the default)."""
+        prims = LLMPrimitives(mock_mode=False)
+        prims._backends["worker"] = mock_backend
+
+        captured = []
+
+        def mock_infer(role_config, request):
+            captured.append(request)
+            return InferenceResult(
+                role="worker",
+                output="ok",
+                tokens_generated=1,
+                generation_speed=10.0,
+                elapsed_time=0.01,
+                success=True,
+            )
+
+        mock_backend.infer.side_effect = mock_infer
+
+        schema = {"type": "object", "properties": {"a": {"type": "integer"}}}
+        grammar = 'root ::= "x"'
+        results = prims._real_batch(["p1", "p2"], "worker", json_schema=schema, grammar=grammar)
+
+        assert results == ["ok", "ok"]
+        assert len(captured) == 2
+        assert all(r.json_schema == schema for r in captured)
+        assert all(r.grammar == grammar for r in captured)
+
+    def test_real_batch_omits_schema_when_not_provided(self, mock_backend):
+        """Default None must reproduce the pre-TD-21.22a request byte-for-byte:
+        InferenceRequest.json_schema/grammar stay None, same as before this
+        parameter existed."""
+        prims = LLMPrimitives(mock_mode=False)
+        prims._backends["worker"] = mock_backend
+
+        captured = []
+
+        def mock_infer(role_config, request):
+            captured.append(request)
+            return InferenceResult(
+                role="worker",
+                output="ok",
+                tokens_generated=1,
+                generation_speed=10.0,
+                elapsed_time=0.01,
+                success=True,
+            )
+
+        mock_backend.infer.side_effect = mock_infer
+
+        prims._real_batch(["p1", "p2"], "worker")
+
+        assert len(captured) == 2
+        assert all(r.json_schema is None for r in captured)
+        assert all(r.grammar is None for r in captured)
+
+    def test_real_batch_sequential_path_forwards_json_schema(self, mock_backend):
+        """Same proof for the role_limit<=1 sequential branch of _real_batch."""
+        prims = LLMPrimitives(mock_mode=False)
+        prims._backends["worker"] = mock_backend
+        prims._get_role_limit = lambda _role: 1  # force the sequential branch
+
+        captured = []
+
+        def mock_infer(role_config, request):
+            captured.append(request)
+            return InferenceResult(
+                role="worker",
+                output="ok",
+                tokens_generated=1,
+                generation_speed=10.0,
+                elapsed_time=0.01,
+                success=True,
+            )
+
+        mock_backend.infer.side_effect = mock_infer
+
+        schema = {"type": "object"}
+        prims._real_batch(["p1"], "worker", json_schema=schema)
+
+        assert len(captured) == 1
+        assert captured[0].json_schema == schema
+
+
+class TestFallbackBatch:
+    """Tests for _fallback_batch() forwarding (TD-21.22a)."""
+
+    def test_fallback_batch_forwards_json_schema(self, mock_backend):
+        prims = LLMPrimitives(mock_mode=False)
+        prims._backends["worker"] = mock_backend
+
+        captured = []
+
+        def mock_infer(role_config, request):
+            captured.append(request)
+            return InferenceResult(
+                role="worker",
+                output="ok",
+                tokens_generated=1,
+                generation_speed=10.0,
+                elapsed_time=0.01,
+                success=True,
+            )
+
+        mock_backend.infer.side_effect = mock_infer
+
+        schema = {"type": "object"}
+        results = prims._fallback_batch(["p1", "p2"], "worker", json_schema=schema)
+
+        assert results == ["ok", "ok"]
+        assert all(r.json_schema == schema for r in captured)
+
+    def test_fallback_batch_omits_schema_when_not_provided(self, mock_backend):
+        prims = LLMPrimitives(mock_mode=False)
+        prims._backends["worker"] = mock_backend
+
+        captured = []
+
+        def mock_infer(role_config, request):
+            captured.append(request)
+            return InferenceResult(
+                role="worker",
+                output="ok",
+                tokens_generated=1,
+                generation_speed=10.0,
+                elapsed_time=0.01,
+                success=True,
+            )
+
+        mock_backend.infer.side_effect = mock_infer
+
+        prims._fallback_batch(["p1"], "worker")
+
+        assert captured[0].json_schema is None
+        assert captured[0].grammar is None
+
 
 class TestWorkerPoolBatch:
     """Tests for _worker_pool_batch() method."""
@@ -908,3 +1047,62 @@ class TestWorkerPoolBatch:
 
         assert results == ["Fallback 1", "Fallback 2"]
         mock_fallback.assert_called_once_with(["P1", "P2"], "worker_code")
+
+    def test_worker_pool_batch_forwards_json_schema(self):
+        """TD-21.22a: json_schema/grammar reach WorkerPoolManager.batch when set."""
+        mock_pool = Mock()
+        mock_batch = object()
+        mock_pool.batch = Mock(return_value=mock_batch)
+
+        prims = LLMPrimitives(
+            mock_mode=False,
+            worker_pool=mock_pool,
+            use_worker_pool=True,
+        )
+
+        mock_loop = Mock()
+        mock_loop.is_running.return_value = False
+
+        schema = {"type": "object"}
+        with (
+            patch("asyncio.get_event_loop", return_value=mock_loop),
+            patch("asyncio.run") as mock_run,
+        ):
+            mock_run.return_value = ["Result 1", "Result 2"]
+            results = prims._worker_pool_batch(
+                ["Explore this", "Analyze that"],
+                "worker_explore",
+                json_schema=schema,
+                grammar="g",
+            )
+
+        assert len(results) == 2
+        mock_pool.batch.assert_called_once_with(
+            ["Explore this", "Analyze that"],
+            task_type="worker_general",
+            json_schema=schema,
+            grammar="g",
+        )
+
+    def test_worker_pool_batch_fallback_forwards_json_schema(self, mock_model_server):
+        """The worker-pool-unavailable fallback also carries the constraint."""
+        mock_pool = Mock()
+        mock_pool.batch.side_effect = RuntimeError("Pool unavailable")
+
+        prims = LLMPrimitives(
+            mock_mode=False,
+            worker_pool=mock_pool,
+            use_worker_pool=True,
+            model_server=mock_model_server,
+        )
+
+        schema = {"type": "object"}
+        with patch.object(
+            prims, "_fallback_batch", return_value=["Fallback 1", "Fallback 2"]
+        ) as mock_fallback:
+            results = prims._worker_pool_batch(
+                ["P1", "P2"], "worker_code", json_schema=schema,
+            )
+
+        assert results == ["Fallback 1", "Fallback 2"]
+        mock_fallback.assert_called_once_with(["P1", "P2"], "worker_code", json_schema=schema)

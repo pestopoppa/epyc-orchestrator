@@ -340,6 +340,7 @@ class TestBatchLlmQueryEnabled:
         assert parsed["results"][1]["response"] == "Translation of doc B"
         llm.llm_batch.assert_called_once_with(
             ["summarize doc A", "translate doc B"], role="worker", persona=None,
+            json_schema=None,
         )
 
     def test_batch_llm_query_caps_at_5(self):
@@ -386,7 +387,7 @@ class TestBatchLlmQueryEnabled:
         assert parsed["persona"] == "analyst"
         assert parsed["role"] == "coder"
         llm.llm_batch.assert_called_once_with(
-            ["prompt"], role="coder", persona="analyst",
+            ["prompt"], role="coder", persona="analyst", json_schema=None,
         )
 
     def test_batch_llm_query_schema_validates_response(self):
@@ -412,6 +413,43 @@ class TestBatchLlmQueryEnabled:
         call_prompts = llm.llm_batch.call_args.args[0]
         assert "Return only a JSON value" in call_prompts[0]
         assert "return the answer" in call_prompts[0]
+        # TD-21.22a: the schema now ALSO reaches the wire via json_schema=,
+        # not just the prose preamble asserted above.
+        assert llm.llm_batch.call_args.kwargs["json_schema"] == schema
+
+    def test_batch_llm_query_repair_completer_forwards_json_schema(self):
+        """TD-21.22a: the repair/extraction turn's own llm_batch call also
+        carries json_schema=, not just the retained prose preamble."""
+        from src.structured_output.repair import reset_counts_for_tests
+
+        reset_counts_for_tests()
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl, llm = _make_repl_with_llm(use_toon=False)
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "integer"}},
+            "required": ["answer"],
+        }
+        llm.llm_batch.side_effect = [
+            ["not json"],
+            ['{"answer": 7}'],
+        ]
+
+        result = repl._batch_llm_query(["return the answer"], schema=schema)
+        parsed = json.loads(result)
+
+        assert parsed["results"][0]["valid"] is True
+        assert llm.llm_batch.call_count == 2
+        # Call 0: the initial batch carries the schema verbatim.
+        assert llm.llm_batch.call_args_list[0].kwargs["json_schema"] == schema
+        # Call 1: the repair completer's own llm_batch call also carries a
+        # wire schema (parse_with_repair closes it with
+        # additionalProperties=False before the extraction turn, so it is
+        # the same shape, not byte-identical to the original).
+        repair_schema = llm.llm_batch.call_args_list[1].kwargs["json_schema"]
+        assert repair_schema is not None
+        assert repair_schema["type"] == "object"
+        assert repair_schema["properties"] == schema["properties"]
 
     def test_batch_llm_query_schema_repairs_invalid_response_without_full_recall(self):
         """TD-21.22: an invalid-but-recoverable child reply is fixed by ONE

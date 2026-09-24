@@ -174,6 +174,50 @@ class TestLLMBatchMockMode:
 
         assert prims.total_batch_calls == initial_count + 1
 
+    def test_llm_batch_accepts_json_schema_in_mock_mode(self):
+        """TD-21.22a: llm_batch takes json_schema/grammar even in mock mode
+        (accepted, matching _mock_call's existing convention of not modeling
+        schema-constrained decoding -- must not raise)."""
+        prims = LLMPrimitives(mock_mode=True)
+
+        results = prims.llm_batch(
+            ["P1", "P2"],
+            role="worker",
+            json_schema={"type": "object"},
+            grammar='root ::= "x"',
+        )
+
+        assert len(results) == 2
+
+
+class TestLLMBatchSchemaForwarding:
+    """TD-21.22a: llm_batch()'s json_schema/grammar reach _real_batch, and
+    are omitted (not just None) when the caller doesn't pass them."""
+
+    def test_llm_batch_forwards_schema_to_real_batch(self):
+        prims = LLMPrimitives(mock_mode=False, model_server=object())
+
+        with patch.object(prims, "_real_batch", return_value=["ok"]) as mock_real_batch:
+            schema = {"type": "object"}
+            prims.llm_batch(["p1"], role="worker", json_schema=schema, grammar="g")
+
+        mock_real_batch.assert_called_once_with(
+            ["p1"], "worker", json_schema=schema, grammar="g"
+        )
+
+    def test_llm_batch_forwards_none_schema_to_real_batch(self):
+        """Omitted json_schema/grammar reach _real_batch as explicit None --
+        _real_batch's own conditional forwarding (see test_inference_mixin.py)
+        is what keeps the outgoing backend request byte-identical."""
+        prims = LLMPrimitives(mock_mode=False, model_server=object())
+
+        with patch.object(prims, "_real_batch", return_value=["ok"]) as mock_real_batch:
+            prims.llm_batch(["p1"], role="worker")
+
+        mock_real_batch.assert_called_once_with(
+            ["p1"], "worker", json_schema=None, grammar=None
+        )
+
 
 class TestTokenEstimation:
     """Tests for token estimation methods."""

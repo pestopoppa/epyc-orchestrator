@@ -27,12 +27,22 @@ class MockMixin:
         prompt_preview = prompt[:50].replace("\n", " ")
         return f"{self.config.mock_response_prefix} Response for role='{role}': {prompt_preview}..."
 
-    def _mock_batch(self, prompts: list[str], role: str) -> list[str]:
+    def _mock_batch(
+        self,
+        prompts: list[str],
+        role: str,
+        json_schema: dict | None = None,
+        grammar: str | None = None,
+    ) -> list[str]:
         """Generate mock responses for batch testing.
 
         Args:
             prompts: List of prompts.
             role: The role being called.
+            json_schema: Accepted for signature parity with ``_real_batch``
+                (TD-21.22a); unused, matching ``_mock_call``'s existing
+                convention of not modeling schema-constrained decoding.
+            grammar: Accepted for parity; unused (see json_schema above).
 
         Returns:
             List of mock responses.

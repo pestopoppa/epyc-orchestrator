@@ -976,6 +976,8 @@ class LLMPrimitives(
         prompts: list[str],
         role: str = "worker",
         persona: str | None = None,
+        json_schema: dict | None = None,
+        grammar: str | None = None,
     ) -> list[str]:
         """Call multiple sub-LMs in parallel.
 
@@ -983,6 +985,16 @@ class LLMPrimitives(
             prompts: List of prompts to send to sub-LMs.
             role: Role determining which model to use.
             persona: Optional persona name for system prompt injection.
+            json_schema: Optional JSON schema constraining EVERY prompt in
+                this batch (TD-21.22a). One schema per call, not per-prompt —
+                matches how ``combined_ops._batch_llm_query`` builds a batch
+                (one schema shared by the whole list of prompts); a batch
+                that genuinely needs per-prompt schemas should call
+                ``llm_call`` per prompt instead. Threaded down to the same
+                ``InferenceRequest.json_schema`` field ``llm_call`` uses.
+                Default None reproduces the pre-TD-21.22a call exactly.
+            grammar: Optional GBNF grammar, applied to the whole batch the
+                same way as json_schema.
 
         Returns:
             List of responses in the same order as prompts.
@@ -1006,9 +1018,9 @@ class LLMPrimitives(
         _tokens_before = self.total_tokens_generated  # double-count guard (see call())
         try:
             if self.mock_mode:
-                results = self._mock_batch(prompts, role)
+                results = self._mock_batch(prompts, role, json_schema=json_schema, grammar=grammar)
             else:
-                results = self._real_batch(prompts, role)
+                results = self._real_batch(prompts, role, json_schema=json_schema, grammar=grammar)
 
             # Cap each output
             capped_results = []
@@ -1052,6 +1064,8 @@ class LLMPrimitives(
         prompts: list[str],
         role: str = "worker",
         persona: str | None = None,
+        json_schema: dict | None = None,
+        grammar: str | None = None,
     ) -> list[str]:
         """Call multiple sub-LMs in parallel using asyncio.
 
@@ -1062,6 +1076,11 @@ class LLMPrimitives(
             prompts: List of prompts to send to sub-LMs.
             role: Role determining which model to use.
             persona: Optional persona name for system prompt injection.
+            json_schema: Optional JSON schema constraining every prompt in
+                this batch (TD-21.22a; see ``llm_batch`` for the per-batch
+                vs per-prompt rationale). Default None reproduces the
+                pre-TD-21.22a call exactly.
+            grammar: Optional GBNF grammar for the whole batch.
 
         Returns:
             List of responses in the same order as prompts.
@@ -1082,18 +1101,26 @@ class LLMPrimitives(
             persona=persona,
         )
 
+        # Only forward the constraint kwargs when set, so a caller that omits
+        # them reaches _real_call with the exact pre-TD-21.22a argument list.
+        _extra: dict[str, Any] = {}
+        if json_schema is not None:
+            _extra["json_schema"] = json_schema
+        if grammar is not None:
+            _extra["grammar"] = grammar
+
         _tokens_before = self.total_tokens_generated  # double-count guard (see call())
         try:
             if self.mock_mode:
                 # Mock mode: simulate async calls
-                results = self._mock_batch(prompts, role)
+                results = self._mock_batch(prompts, role, json_schema=json_schema, grammar=grammar)
             else:
                 role_limit = self._get_role_limit(role)
                 if role_limit <= 1:
                     results = []
                     for prompt in prompts:
                         results.append(
-                            await asyncio.to_thread(self._real_call, prompt, role)
+                            await asyncio.to_thread(self._real_call, prompt, role, **_extra)
                         )
                 else:
                     # Real mode: run calls in parallel using asyncio
@@ -1101,7 +1128,9 @@ class LLMPrimitives(
                     tasks = [
                         loop.run_in_executor(
                             None,
-                            self._bind_current_context(self._real_call, prompt, role),
+                            self._bind_current_context(
+                                self._real_call, prompt, role, **_extra
+                            ),
                         )
                         for prompt in prompts
                     ]

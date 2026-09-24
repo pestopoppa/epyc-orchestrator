@@ -704,6 +704,8 @@ class WorkerPoolManager:
         task_type: str = "explore",
         temperature: float = 0.2,
         max_tokens: int = 2048,
+        json_schema: dict | None = None,
+        grammar: str | None = None,
     ) -> str:
         """Make a single call to a worker.
 
@@ -712,6 +714,9 @@ class WorkerPoolManager:
             task_type: Task type for routing.
             temperature: Sampling temperature.
             max_tokens: Maximum tokens to generate.
+            json_schema: Optional JSON schema constraining the response
+                (forwarded to llama-server's ``/completion`` payload).
+            grammar: Optional GBNF grammar constraining the response.
 
         Returns:
             Model response text.
@@ -721,8 +726,17 @@ class WorkerPoolManager:
         workers = await self._select_workers(task_type, parallelism=1)
         worker = self._get_round_robin(workers)
 
+        # Only forward the constraint kwargs when set, so a caller that omits
+        # them reaches _http_call with the exact pre-TD-21.22a argument list
+        # (a test double/side_effect fixed at 4 positional args must not break).
+        extra: dict = {}
+        if json_schema is not None:
+            extra["json_schema"] = json_schema
+        if grammar is not None:
+            extra["grammar"] = grammar
+
         async with self._semaphore:
-            result = await self._http_call(worker, prompt, temperature, max_tokens)
+            result = await self._http_call(worker, prompt, temperature, max_tokens, **extra)
             worker.last_used = datetime.now()
             worker.request_count += 1
 
@@ -738,6 +752,8 @@ class WorkerPoolManager:
         task_type: str = "explore",
         temperature: float = 0.2,
         max_tokens: int = 2048,
+        json_schema: dict | None = None,
+        grammar: str | None = None,
     ) -> list[str]:
         """Execute batch in parallel across pool.
 
@@ -746,6 +762,12 @@ class WorkerPoolManager:
             task_type: Task type for routing.
             temperature: Sampling temperature.
             max_tokens: Maximum tokens to generate.
+            json_schema: Optional JSON schema constraining every prompt in
+                this batch (TD-21.22a: one schema for the whole batch, not
+                per-prompt — forwarded verbatim to each worker's
+                ``/completion`` payload). Omitted reproduces the prior
+                call byte-for-byte.
+            grammar: Optional GBNF grammar for the whole batch.
 
         Returns:
             List of responses in order.
@@ -754,10 +776,18 @@ class WorkerPoolManager:
 
         workers = await self._select_workers(task_type, parallelism=len(prompts))
 
+        # See call() above: forward only when set, to keep the omitted-schema
+        # call shape identical to before TD-21.22a.
+        extra: dict = {}
+        if json_schema is not None:
+            extra["json_schema"] = json_schema
+        if grammar is not None:
+            extra["grammar"] = grammar
+
         async def _call_with_worker(prompt: str, idx: int) -> tuple[int, str]:
             worker = workers[idx % len(workers)]
             async with self._semaphore:
-                result = await self._http_call(worker, prompt, temperature, max_tokens)
+                result = await self._http_call(worker, prompt, temperature, max_tokens, **extra)
                 worker.last_used = datetime.now()
                 worker.request_count += 1
                 return idx, result
@@ -791,6 +821,8 @@ class WorkerPoolManager:
         prompt: str,
         temperature: float,
         max_tokens: int,
+        json_schema: dict | None = None,
+        grammar: str | None = None,
     ) -> str:
         """Make HTTP call to worker.
 
@@ -799,6 +831,10 @@ class WorkerPoolManager:
             prompt: Prompt text.
             temperature: Sampling temperature.
             max_tokens: Max tokens.
+            json_schema: Optional JSON schema forwarded as a top-level
+                ``json_schema`` key on the ``/completion`` payload (mirrors
+                ``LlamaServerBackend._build_payload``, `src/backends/llama_server.py`).
+            grammar: Optional GBNF grammar forwarded as a top-level ``grammar`` key.
 
         Returns:
             Response text.
@@ -822,6 +858,10 @@ class WorkerPoolManager:
             "n_predict": max_tokens,
             "stream": False,
         }
+        if json_schema:
+            payload["json_schema"] = json_schema
+        if grammar:
+            payload["grammar"] = grammar
 
         try:
             async with self._http_session.post(url, json=payload) as resp:
