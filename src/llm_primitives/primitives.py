@@ -825,7 +825,10 @@ class LLMPrimitives(
             log_entry.elapsed_seconds = time.perf_counter() - start_time
             self.call_log.append(log_entry)
 
-        meta = getattr(self, "_last_inference_meta", None) or {}
+        # TD-21.33: `self._real_call` above and this read are in the SAME synchronous method
+        # call (no thread/task boundary crossed) -- the per-call-safe getter applies cleanly,
+        # and `self` is always a real `LLMPrimitives`, so no duck-typed fallback is needed here.
+        meta = self.get_last_inference_meta() or {}
         tool_calls = [tc for tc in (meta.get("tool_calls") or []) if isinstance(tc, dict)]
         log_entry.result = (content or json.dumps(tool_calls))[:500]
         return {

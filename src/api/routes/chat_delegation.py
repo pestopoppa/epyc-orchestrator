@@ -467,7 +467,20 @@ def _run_specialist_loop(
             finally:
                 primitives._early_stop_check = None
             llm_elapsed_ms = (time.perf_counter() - llm_started) * 1000
-            infer_meta_last = dict(getattr(primitives, "_last_inference_meta", {}) or {})
+            # TD-21.33: `primitives.llm_call` above and this read are in the SAME synchronous
+            # call (no thread/task boundary crossed), so the per-call-safe ContextVar getter
+            # applies cleanly -- unlike `_last_inference_meta`, a concurrent request against
+            # this same (possibly shared) instance can never clobber it between the two lines.
+            # Runtime `isinstance` (not the `TYPE_CHECKING`-only import above) so a test double
+            # that is not a real `LLMPrimitives` keeps its pre-existing exact behavior.
+            from src.llm_primitives import LLMPrimitives as _LLMPrimitivesRT
+
+            _meta_val = (
+                primitives.get_last_inference_meta()
+                if isinstance(primitives, _LLMPrimitivesRT)
+                else getattr(primitives, "_last_inference_meta", None)
+            )
+            infer_meta_last = dict(_meta_val or {})
             if infer_meta_last:
                 infer_meta_last["llm_elapsed_ms"] = round(llm_elapsed_ms, 1)
             raw_deleg_output = code

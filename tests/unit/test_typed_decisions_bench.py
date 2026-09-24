@@ -19,7 +19,13 @@ from typing import Any
 
 import pytest
 
-from src.typed_decisions.bench import BenchmarkError, _build_parser, main, run_mode_benchmark
+from src.typed_decisions.bench import (
+    BenchmarkError,
+    _build_parser,
+    _meta_snapshot,
+    main,
+    run_mode_benchmark,
+)
 from src.typed_decisions.native import CueStyle, _cue_text
 from src.typed_decisions.types import Question, QuestionKind
 
@@ -410,3 +416,41 @@ class TestBenchCli:
         assert captured["cue_styles"] == ("full", "short")
         assert captured["role"] == "worker"
         assert json.loads(out.read_text(encoding="utf-8")) == {"ok": True}
+
+
+# ── TD-21.33: _meta_snapshot's real-LLMPrimitives branch ───────────────────
+class TestMetaSnapshotRealPrimitives:
+    """`_meta_snapshot` prefers the per-call-safe `get_last_inference_meta()`
+    getter for a REAL `LLMPrimitives`, falling back to the plain attribute for
+    the hand-rolled `_BenchPrimitives` test double used elsewhere in this file.
+    No live requests; a fake backend only.
+    """
+
+    def test_real_primitives_uses_the_per_call_safe_getter(self):
+        from unittest.mock import Mock
+
+        from src.llm_primitives import LLMPrimitives
+        from src.model_server import InferenceResult
+
+        prims = LLMPrimitives(mock_mode=False, server_urls={ROLE: "http://localhost:9301"})
+        backend = Mock(spec=[])
+        backend.infer = Mock(return_value=InferenceResult(
+            role=ROLE, output="ignored", tokens_generated=3, generation_speed=1.0,
+            elapsed_time=0.001, success=True, prompt_eval_ms=1.0, generation_ms=2.0,
+            http_overhead_ms=0.0, completion_reason="limit",
+        ))
+        prims._backends[ROLE] = backend
+
+        prims._real_call("a prompt", ROLE, n_tokens=8)
+
+        meta = _meta_snapshot(prims)
+        assert meta is not None
+        assert meta["completion_reason"] == "limit"
+        assert meta["tokens"] == 3
+
+    def test_non_llmprimitives_double_falls_back_to_the_plain_attribute(self):
+        class _Bare:
+            def __init__(self) -> None:
+                self._last_inference_meta = {"completion_reason": "eos"}
+
+        assert _meta_snapshot(_Bare()) == {"completion_reason": "eos"}

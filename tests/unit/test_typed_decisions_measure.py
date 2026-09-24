@@ -21,6 +21,7 @@ import pytest
 
 from src.typed_decisions.measure import (
     MeasurementError,
+    _last_inference_meta,
     main,
     run_calibration_study,
     run_contamination_study,
@@ -1117,3 +1118,49 @@ class TestCli:
         )
 
         assert code == 2
+
+
+# ── TD-21.33: _last_inference_meta's real-LLMPrimitives branch ────────────
+class TestLastInferenceMetaRealPrimitives:
+    """`_last_inference_meta` (used by this module's own fanout records and by
+    `judge_redundancy.py`/`tool_args_pilot.py`) prefers the per-call-safe
+    `get_last_inference_meta()` getter for a REAL `LLMPrimitives`, falling back
+    to the plain attribute for `_FakePrimitives`-shaped test doubles (covered
+    by every other test in this file). No live requests; a fake backend only.
+    """
+
+    def test_real_primitives_uses_the_per_call_safe_getter(self):
+        from unittest.mock import Mock
+
+        from src.llm_primitives import LLMPrimitives
+        from src.model_server import InferenceResult
+
+        prims = LLMPrimitives(mock_mode=False, server_urls={ROLE: "http://localhost:9201"})
+        backend = Mock(spec=[])
+        backend.infer = Mock(return_value=InferenceResult(
+            role=ROLE, output="ignored", tokens_generated=7, generation_speed=1.0,
+            elapsed_time=0.001, success=True, prompt_eval_ms=1.0, generation_ms=2.0,
+            http_overhead_ms=0.0, completion_reason="stop",
+        ))
+        prims._backends[ROLE] = backend
+
+        prims._real_call("a prompt", ROLE, n_tokens=8)
+
+        meta = _last_inference_meta(prims)
+        assert meta is not None
+        assert meta["completion_reason"] == "stop"
+        assert meta["tokens"] == 7
+
+    def test_non_llmprimitives_double_falls_back_to_the_plain_attribute(self):
+        class _Bare:
+            def __init__(self) -> None:
+                self._last_inference_meta = {"completion_reason": "length"}
+
+        meta = _last_inference_meta(_Bare())
+        assert meta == {"completion_reason": "length"}
+
+    def test_missing_meta_returns_none(self):
+        class _Bare:
+            pass
+
+        assert _last_inference_meta(_Bare()) is None

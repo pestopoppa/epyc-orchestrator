@@ -16,8 +16,20 @@ def llm_completion_meta(primitives: Any) -> dict[str, Any]:
 
 
 def llm_completion_probabilities(primitives: Any) -> list[dict[str, Any]]:
-    """Return last-call llama.cpp probability rows when explicitly requested."""
-    meta = getattr(primitives, "_last_inference_meta", {}) or {}
+    """Return last-call llama.cpp probability rows when explicitly requested.
+
+    TD-21.33: every call site (`direct_stage.py`'s `_execute_direct`) reads this at the end of
+    the SAME synchronous function that made the call, so the per-call-safe getter applies
+    cleanly. Runtime `isinstance` (not a `TYPE_CHECKING` import) so a test double that is not a
+    real `LLMPrimitives` keeps its pre-existing exact behavior.
+    """
+    from src.llm_primitives import LLMPrimitives
+
+    meta = (
+        primitives.get_last_inference_meta()
+        if isinstance(primitives, LLMPrimitives)
+        else getattr(primitives, "_last_inference_meta", None)
+    ) or {}
     rows = meta.get("completion_probabilities") or []
     if not isinstance(rows, list):
         return []

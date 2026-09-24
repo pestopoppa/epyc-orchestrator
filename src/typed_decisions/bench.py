@@ -225,7 +225,18 @@ def _cue_styles(
 
 
 def _meta_snapshot(primitives: Any) -> dict[str, Any] | None:
-    meta = getattr(primitives, "_last_inference_meta", None)
+    """Both call sites read this immediately after their own `run_typed_decisions*` call, in
+    the SAME synchronous `for` loop iteration (no thread/task boundary crossed) -- TD-21.33: the
+    per-call-safe getter applies cleanly. Runtime `isinstance` (not a `TYPE_CHECKING` import) so
+    the hand-rolled `_BenchPrimitives` test double keeps its pre-existing exact behavior.
+    """
+    from src.llm_primitives import LLMPrimitives
+
+    meta = (
+        primitives.get_last_inference_meta()
+        if isinstance(primitives, LLMPrimitives)
+        else getattr(primitives, "_last_inference_meta", None)
+    )
     if not isinstance(meta, Mapping):
         return None
     return {str(key): value for key, value in meta.items()}

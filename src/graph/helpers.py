@@ -609,6 +609,36 @@ async def _maybe_batch_edit_turn(
     return "", None, False, {"_nudge": nudge}
 
 
+def _best_effort_last_inference_meta(primitives: Any) -> dict[str, Any]:
+    """Read this turn's inference meta -- CANNOT be fully migrated to the per-call-safe
+    `get_last_inference_meta()` getter (TD-21.33).
+
+    The call this reads about (a few lines up in `_execute_turn`) is made via
+    `await asyncio.to_thread(llm_call_fn, ...)`. `asyncio.to_thread` copies the CALLING
+    context (`contextvars.copy_context()`) and runs the callable in that COPY, in a new
+    thread; any `.set()` made inside the child thread's copy (deep inside
+    `_set_last_inference_meta`) is invisible to the PARENT once the `await` returns --
+    `get_last_inference_meta()` here would silently and ALWAYS return `None` in production,
+    which is worse than today's racy-but-usually-populated plain-attribute read. (The
+    `_use_inline_calls_in_tests()` branch calls `llm_call_fn` inline, same thread, same
+    context -- there the getter WOULD be correct, which is exactly why it is tried first
+    below rather than skipped outright.)
+
+    So: prefer the getter (correct and race-free whenever it is non-None -- i.e. whenever
+    this code happens to run in the same context as the call), and fall back to the plain
+    attribute otherwise -- IDENTICAL to pre-TD-21.33 behavior in the fallback case, never
+    worse. A real fix needs the meta captured INSIDE the thread and returned alongside
+    `code`, the same restructuring `src/api/routes/chat.py`'s edit-transaction path already
+    does; that is a larger, call-signature-changing edit than this migration's scope.
+    """
+    getter = getattr(primitives, "get_last_inference_meta", None)
+    if callable(getter):
+        meta = getter()
+        if meta:
+            return dict(meta)
+    return dict(getattr(primitives, "_last_inference_meta", {}) or {})
+
+
 async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bool, dict]:
     """Execute one LLM → REPL turn.
 
@@ -938,7 +968,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         elapsed_ms = (asyncio.get_event_loop().time() - llm_started) * 1000
         infer_meta = {}
         try:
-            infer_meta = dict(getattr(deps.primitives, "_last_inference_meta", {}) or {})
+            infer_meta = _best_effort_last_inference_meta(deps.primitives)
         except Exception:
             infer_meta = {}
         log.warning(
@@ -952,7 +982,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
     # Track aggregate completion tokens (Fast-RLM budget control)
     try:
-        _meta = getattr(deps.primitives, "_last_inference_meta", None) or {}
+        _meta = _best_effort_last_inference_meta(deps.primitives)
         _completion_tokens = int(_meta.get("tokens", 0))
         _prompt_tokens = int(_meta.get("prompt_tokens", 0))
         if _completion_tokens > 0:

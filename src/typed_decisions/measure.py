@@ -842,7 +842,24 @@ def _fanout_run_record(
 
 
 def _last_inference_meta(primitives: Any) -> dict[str, Any] | None:
-    meta = getattr(primitives, "_last_inference_meta", None)
+    """Every call site (this module's batched/sequential/pooled-parallel fanout records,
+    `judge_redundancy.py`, `tool_args_pilot.py`) reads this immediately after its OWN
+    `run_typed_decisions*` call on the SAME `primitives`/pooled-`instance` object, in the SAME
+    synchronous call (no thread/task boundary crossed within the reading function) -- TD-21.33:
+    the per-call-safe getter applies cleanly. The pooled-parallel arm additionally never shares
+    one instance across concurrent workers at all (see `_require_primitives`'s "a shared object
+    would race" check above), so it was never racy even on the plain attribute; migrating it is
+    for uniformity, not correctness. Runtime `isinstance` (not a `TYPE_CHECKING` import) so the
+    hand-rolled `_FakePrimitives`/similar test doubles that predate `get_last_inference_meta`
+    keep their pre-existing exact behavior.
+    """
+    from src.llm_primitives import LLMPrimitives
+
+    meta = (
+        primitives.get_last_inference_meta()
+        if isinstance(primitives, LLMPrimitives)
+        else getattr(primitives, "_last_inference_meta", None)
+    )
     if not isinstance(meta, Mapping):
         return None
     return {str(key): value for key, value in meta.items()}
