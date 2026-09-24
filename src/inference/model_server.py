@@ -108,6 +108,12 @@ class InferenceRequest:
     json_schema: dict[str, Any] | None = None  # Constrain output to JSON schema
     grammar: str | None = None  # GBNF grammar for constrained generation
     n_probs: int | None = None  # Optional llama.cpp completion_probabilities top-k capture
+    # TD-1d.2: when True, ``n_probs``'s top-k is taken AFTER the full sampler
+    # chain (grammar mask included) instead of the default pre-sampling raw
+    # logits — see src/typed_decisions/native.py module docstring
+    # ("Probability semantics") for why grammar-constrained callers need
+    # this. False everywhere except native.py's explicit opt-in.
+    post_sampling_probs: bool = False
     max_tokens: int | None = field(default=None, repr=False)
     # HS-4 P0.1: structured OpenAI chat payload (messages, tools, tool_choice) for
     # the /v1 client-executed tool mode. When set, llama-server backends send it

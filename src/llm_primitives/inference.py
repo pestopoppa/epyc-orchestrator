@@ -380,6 +380,7 @@ class InferenceMixin:
         top_p: float | None = None,
         top_k: int | None = None,
         n_probs: int | None = None,
+        post_sampling_probs: bool = False,
     ) -> str:
         """Make a real inference call via CachingBackend or legacy ModelServer.
 
@@ -395,6 +396,8 @@ class InferenceMixin:
             top_p: Optional explicit nucleus sampling override.
             top_k: Optional explicit top-k sampling override.
             n_probs: Optional llama.cpp top-k token probability capture.
+            post_sampling_probs: When True, the n_probs top-k is captured
+                AFTER the full sampler chain (grammar mask included).
 
         Returns:
             Model response.
@@ -487,6 +490,7 @@ class InferenceMixin:
                     top_p=top_p,
                     top_k=top_k,
                     n_probs=n_probs,
+                    post_sampling_probs=post_sampling_probs,
                 )
         return self._real_call_impl(
             prompt,
@@ -500,6 +504,7 @@ class InferenceMixin:
             top_p=top_p,
             top_k=top_k,
             n_probs=n_probs,
+            post_sampling_probs=post_sampling_probs,
         )
 
     def _real_call_impl(
@@ -515,6 +520,7 @@ class InferenceMixin:
         top_p: float | None = None,
         top_k: int | None = None,
         n_probs: int | None = None,
+        post_sampling_probs: bool = False,
     ) -> str:
         """Internal real call implementation (no concurrency gating)."""
         # Content-addressable cache check
@@ -559,6 +565,7 @@ class InferenceMixin:
                 top_p=top_p,
                 top_k=top_k,
                 n_probs=n_probs,
+                post_sampling_probs=post_sampling_probs,
             )
         except RuntimeError as primary_error:
             # Model fallback: try same-tier alternatives on infrastructure failure
@@ -598,6 +605,7 @@ class InferenceMixin:
                         top_p=top_p,
                         top_k=top_k,
                         n_probs=n_probs,
+                        post_sampling_probs=post_sampling_probs,
                     )
                     break
                 except RuntimeError:
@@ -625,6 +633,7 @@ class InferenceMixin:
         top_p: float | None = None,
         top_k: int | None = None,
         n_probs: int | None = None,
+        post_sampling_probs: bool = False,
     ) -> str:
         """Execute a single inference call against one role's backend."""
         # Try CachingBackend first (RadixAttention)
@@ -643,6 +652,7 @@ class InferenceMixin:
                 top_p=top_p,
                 top_k=top_k,
                 n_probs=n_probs,
+                post_sampling_probs=post_sampling_probs,
             )
 
         # Fall back to legacy ModelServer
@@ -678,6 +688,7 @@ class InferenceMixin:
             json_schema=json_schema,
             grammar=grammar,
             n_probs=n_probs,
+            post_sampling_probs=post_sampling_probs,
         )
         req_started = time.perf_counter()
         from src.inference_lock import inference_lock
@@ -763,6 +774,7 @@ class InferenceMixin:
         top_p: float | None = None,
         top_k: int | None = None,
         n_probs: int | None = None,
+        post_sampling_probs: bool = False,
     ) -> str:
         """Call a CachingBackend with RadixAttention prefix caching.
 
@@ -774,6 +786,9 @@ class InferenceMixin:
             stop_sequences: Optional stop sequences to halt generation.
             json_schema: Optional JSON schema to constrain output structure.
             grammar: Optional GBNF grammar for constrained generation.
+            post_sampling_probs: When True, the n_probs top-k is captured
+                AFTER the full sampler chain (grammar mask included) instead
+                of the default pre-sampling raw logits (TD-1d.2).
 
         Returns:
             Model response.
@@ -804,6 +819,7 @@ class InferenceMixin:
             json_schema=json_schema,
             grammar=grammar,
             n_probs=n_probs,
+            post_sampling_probs=post_sampling_probs,
             # HS-4 P0.1: only passed when set, so the default request is
             # constructed exactly as before.
             **({"chat_payload": chat_payload} if chat_payload is not None else {}),

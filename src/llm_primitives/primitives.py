@@ -676,6 +676,7 @@ class LLMPrimitives(
         top_p: float | None = None,
         top_k: int | None = None,
         n_probs: int | None = None,
+        post_sampling_probs: bool = False,
     ) -> str:
         """Call a sub-LM with optional context slice.
 
@@ -698,6 +699,11 @@ class LLMPrimitives(
             top_p: Optional explicit nucleus sampling override.
             top_k: Optional explicit top-k sampling override.
             n_probs: Optional llama.cpp top-k token probability capture.
+            post_sampling_probs: When True and n_probs is set, the captured
+                top-k comes from AFTER the full sampler chain (grammar mask
+                included) instead of the default pre-sampling raw logits —
+                see typed_decisions/native.py for why grammar-constrained
+                callers need this (TD-1d.2).
 
         Returns:
             Sub-LM response (capped at output_cap chars).
@@ -718,7 +724,7 @@ class LLMPrimitives(
         )
 
         try:
-            sampling_kwargs: dict[str, float | int] = {}
+            sampling_kwargs: dict[str, float | int | bool] = {}
             if temperature is not None:
                 sampling_kwargs["temperature"] = temperature
             if seed is not None:
@@ -729,6 +735,8 @@ class LLMPrimitives(
                 sampling_kwargs["top_k"] = top_k
             if n_probs is not None:
                 sampling_kwargs["n_probs"] = n_probs
+            if post_sampling_probs:
+                sampling_kwargs["post_sampling_probs"] = True
             return self._llm_call_impl(
                 prompt, context_slice, role, n_tokens, skip_suffix, stop_sequences,
                 persona, json_schema, grammar, **sampling_kwargs,
@@ -853,6 +861,7 @@ class LLMPrimitives(
         top_p: float | None = None,
         top_k: int | None = None,
         n_probs: int | None = None,
+        post_sampling_probs: bool = False,
     ) -> str:
         """Internal implementation of llm_call (after recursion check)."""
         start_time = time.perf_counter()
@@ -907,7 +916,7 @@ class LLMPrimitives(
                 result = self._mock_call(full_prompt, role)
             else:
                 role_for_call = self._resolve_depth_override_role(role)
-                sampling_kwargs: dict[str, float | int] = {}
+                sampling_kwargs: dict[str, float | int | bool] = {}
                 if temperature is not None:
                     sampling_kwargs["temperature"] = temperature
                 if seed is not None:
@@ -918,6 +927,8 @@ class LLMPrimitives(
                     sampling_kwargs["top_k"] = top_k
                 if n_probs is not None:
                     sampling_kwargs["n_probs"] = n_probs
+                if post_sampling_probs:
+                    sampling_kwargs["post_sampling_probs"] = True
                 result = self._real_call(
                     full_prompt, role_for_call, n_tokens, stop_sequences,
                     json_schema=json_schema, grammar=grammar,

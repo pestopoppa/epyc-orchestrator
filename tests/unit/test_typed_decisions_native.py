@@ -441,6 +441,45 @@ class TestNativeSlicing:
         }
         assert decision.token_logprob == pytest.approx(math.log(0.7))
 
+    def test_post_sampling_probs_id_bearing_v1_shaped_row_covers_the_candidate(self):
+        """TD-1d.2: the /v1 lane's ``logprobs.content`` row is id-bearing too
+        (verified against ``tools/server/server-task.cpp`` at the frozen
+        commit: both ``/completion`` and ``/v1/chat/completions`` build their
+        row from the identical ``probs_vector_to_json``), so this is NOT the
+        idless-row case — it is the id-bearing case, but with
+        ``post_sampling_probs=True``'s guarantee that the top-k can only ever
+        contain still-legal (grammar-masked) candidates. Contrast with
+        ``test_no_candidate_token_in_the_capture_is_failure_not_uniform``,
+        which pins the OLD (``post_sampling_probs=false``) raw-logit failure
+        mode on an otherwise-identical id-bearing row.
+        """
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        answer_rows = _main_answer_rows()
+        answer_rows[0] = {
+            "id": _DEFAULT_IDS["blue"],
+            "token": "blue",
+            "prob": 0.7,
+            "top_probs": [
+                {"id": _DEFAULT_IDS["red"], "token": "red", "prob": 0.2},
+                {"id": _DEFAULT_IDS["blue"], "token": "blue", "prob": 0.7},
+                {"id": _DEFAULT_IDS["green"], "token": "green", "prob": 0.1},
+            ],
+        }
+        primitives = _FakePrimitives("", meta=_build_meta(QUESTIONS, answer_rows, tokenizer))
+
+        result = _run(primitives, QUESTIONS, tokenize_fn=tokenizer)
+
+        decisions = _by_id(result)
+        assert "choice" in decisions
+        choice = decisions["choice"]
+        assert choice.value == "blue"
+        assert dict(choice.probabilities) == {
+            "red": pytest.approx(0.2),
+            "blue": pytest.approx(0.7),
+            "green": pytest.approx(0.1),
+        }
+        assert sum(choice.probabilities.values()) == pytest.approx(1.0)
+
 
 # ── 2. Call contract: cue/answer grammar, n_probs, n_tokens, determinism ──
 
@@ -459,6 +498,11 @@ class TestNativeCallContract:
         assert call["n_tokens"] == 6
         # score/noul contribute the most alternatives: 8 + buffer 4.
         assert call["n_probs"] == 12
+        # TD-1d.2: without this, the server's n_probs top-k is the raw
+        # pre-grammar distribution, which frequently omits a heavily
+        # grammar-narrowed position's declared candidates entirely — see
+        # the module docstring's "Probability semantics" section.
+        assert call["post_sampling_probs"] is True
         assert call["temperature"] == 0.0
         assert call["seed"] == 0
         assert "json_schema" not in call

@@ -42,9 +42,10 @@ TD-1d — cue styles (speed at parity):
     are replayed. The tokenizer bind, the exact-token grammar terminals, the
     probability slicing and every fail-closed contract are unchanged.
 
-Probability semantics (investigated 2026-09-17 against the frozen v9 tree):
-    ``post_sampling_probs=false`` (the default; ``src/backends/llama_server.py``
-    does not set it) captures the PRE-sampler distribution:
+Probability semantics (investigated 2026-09-17 against the frozen v9 tree;
+revised 2026-09-24, TD-1d.2, against the frozen v10 tree):
+    ``post_sampling_probs=false`` was the default through TD-1d (this module
+    never set it) and captures the PRE-sampler distribution:
     ``server-context.cpp`` sets ``need_pre_sample_logits = n_probs > 0 &&
     !post_sampling_probs`` and therefore disables backend sampling, so
     ``get_token_probabilities`` (``server-common.cpp``) softmaxes the raw
@@ -52,11 +53,45 @@ Probability semantics (investigated 2026-09-17 against the frozen v9 tree):
     applied in the CPU sampler chain to a COPY, so ``top_logprobs`` never
     reflect it. Consequences: (a) the slice is raw model mass, and mass that
     landed outside the declared candidates is invisible in the runner's
-    renormalized distribution; (b) the emitted token is the greedy argmax over
-    the grammar-masked candidates, which coincides with the argmax of the raw
-    candidate slice. ``native_diagnostics`` exists to expose (a) live: it
-    reports the raw top-k rows, the sliced raw mass, the mass outside the
-    candidate set, and the argmax per question.
+    renormalized distribution — for a heavily grammar-narrowed position (e.g.
+    a boolean or a 1-5 score digit against a 100k+-token vocabulary) this can
+    mean NONE of the declared candidates appear in the raw top-k at all, even
+    though (b) the emitted token is always the greedy argmax over the
+    grammar-masked candidates. Confirmed live 2026-09-24 (TD-1d.2): the /v1
+    lane's native:full/native:id_only arms got ``native_unknown_candidate``
+    ("none of the declared candidate tokens appears in the captured top
+    probabilities") on 15/16 and 16/16 supported positions respectively —
+    ``_match_row_label`` (reads the row's OWN ``id``/``token``) matched every
+    one of them, so the row's own emission was never in doubt; only the
+    *coverage* of its sibling ``top_logprobs`` list was the problem. Reading
+    ``tools/server/server-task.cpp``/``server-context.cpp`` at the exact
+    frozen commit confirmed both ``/completion`` and ``/v1/chat/completions``
+    build ``completion_probabilities``/``logprobs.content`` from the IDENTICAL
+    ``completion_token_output::probs_vector_to_json`` — same shape, ``id``
+    always present on both row and entries on this server — so this was never
+    a ``/v1``-specific shape bug; it is the pre-existing raw-mass coverage gap
+    biting harder on this workload than it did on 2026-09-17.
+
+    This module now sets ``post_sampling_probs=True`` (threaded through
+    ``LLMPrimitives.llm_call`` → ``InferenceRequest.post_sampling_probs`` →
+    both backend payload builders in ``src/backends/llama_server.py``,
+    opt-in and False everywhere else) so the server's top-k comes from
+    ``populate_token_probs``'s ``post_sampling=true`` branch:
+    ``common_sampler_get_candidates(slot.smpl.get(), true)``, i.e. candidates
+    AFTER the full sampler chain including the grammar mask. Illegal tokens
+    carry probability 0 there and the loop breaks on the first zero, so the
+    reported top-k can only ever contain still-legal candidates — the
+    coverage gap is closed by construction, not papered over by rescuing a
+    single unconfirmed weight (a genuinely-uncovered capture still fails
+    closed via ``REASON_NATIVE_UNKNOWN_CANDIDATE``, unchanged; see
+    ``test_no_candidate_token_in_the_capture_is_failure_not_uniform``, which
+    pins that fail-closed behavior and must never be "fixed" by fabricating a
+    weight-of-one distribution for an uncorroborated token). ``prob``
+    (linear, not log) replaces ``logprob`` in this mode — already-supported,
+    pinned in ``test_post_sampling_top_probs_shape_is_accepted``.
+    ``native_diagnostics`` still exposes the captured top-k live for
+    debugging: it reports the raw top-k rows, the sliced mass, the mass
+    outside the candidate set, and the argmax per question.
 
 Natural noul surface forms:
     ``true``/``false`` are the JSON labels but not always the model's natural
@@ -512,6 +547,16 @@ def _score_native_batch(
             temperature=0.0,
             seed=_DECODE_SEED,
             n_probs=n_probs,
+            # TD-1d.2: without this, the server's n_probs top-k is the
+            # PRE-grammar raw-vocab distribution (module docstring,
+            # "Probability semantics"), so a heavily grammar-narrowed
+            # position's declared candidates are frequently absent from it
+            # even though the grammar-forced sampled token IS one of them —
+            # observed live as native_unknown_candidate on nearly every
+            # answered position. post_sampling_probs=True captures the top-k
+            # AFTER the full sampler chain (grammar mask included), so it
+            # can only ever contain still-legal candidates.
+            post_sampling_probs=True,
         )
         or ""
     )
@@ -1231,6 +1276,9 @@ def run_typed_decisions_native_parallel(
                     temperature=0.0,
                     seed=_DECODE_SEED,
                     n_probs=n_probs,
+                    # TD-1d.2: same fix as the single-call path — see the
+                    # module docstring's "Probability semantics" section.
+                    post_sampling_probs=True,
                     **extra,
                 )
                 or ""

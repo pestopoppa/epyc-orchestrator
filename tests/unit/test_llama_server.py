@@ -261,6 +261,25 @@ class TestLlamaServerBackend:
 
         assert payload["n_probs"] == 7
 
+    def test_build_payload_forwards_post_sampling_probs(self, role_config):
+        """TD-1d.2: opt-in only — absent unless the request explicitly sets it."""
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        role_config.name = "worker_general"
+
+        with patch("src.features.features", return_value=Mock(logit_probe=False)):
+            on = backend._build_payload(
+                role_config,
+                InferenceRequest(
+                    role="worker_general", prompt="Hello", n_probs=7, post_sampling_probs=True
+                ),
+            )
+            off = backend._build_payload(
+                role_config, InferenceRequest(role="worker_general", prompt="Hello", n_probs=7)
+            )
+
+        assert on["post_sampling_probs"] is True
+        assert "post_sampling_probs" not in off
+
     def test_infer_success(self, role_config):
         """Test successful inference with mocked HTTP response."""
         backend = LlamaServerBackend(base_url="http://test:8080")
@@ -875,6 +894,25 @@ class TestChatCompletionsLogprobs:
         assert result.completion_probabilities == [
             {"token": "4", "logprob": -0.05, "top_logprobs": []}
         ]
+
+    def test_post_sampling_probs_translates_to_openai_chat_params(self, role_config):
+        """TD-1d.2: forwarded on the /v1 lane the same way as /completion."""
+        backend = self._backend()
+        request = InferenceRequest(
+            role="frontdoor", prompt="2+2?", n_tokens=16, n_probs=5, post_sampling_probs=True
+        )
+        captured = {}
+
+        def _post(_path, json=None, timeout=None):
+            captured.update(json or {})
+            return self._chat_response(
+                logprobs={"content": [{"token": "4", "prob": 0.95, "top_probs": []}]}
+            )
+
+        with patch.object(backend.client, "post", side_effect=_post):
+            backend.infer(role_config, request)
+
+        assert captured["post_sampling_probs"] is True
 
     def test_no_n_probs_leaves_payload_and_result_clean(self, role_config):
         backend = self._backend()

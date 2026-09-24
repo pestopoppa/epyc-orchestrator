@@ -628,6 +628,20 @@ class LlamaServerBackend(ModelBackend):
         if _n_probs and _n_probs > 0:
             payload["logprobs"] = True
             payload["top_logprobs"] = max(1, min(int(_n_probs), 20))
+            # TD-1d.2: post_sampling_probs=false (server default) reports the
+            # PRE-sampling raw-vocab top-k (tools/server/server-context.cpp
+            # populate_token_probs, post_sampling=false branch reads
+            # get_token_probabilities BEFORE the grammar mask is applied),
+            # so a grammar-narrowed position's declared candidates are often
+            # absent from it even though the grammar-forced sampled token IS
+            # one of them. post_sampling_probs=true switches to
+            # common_sampler_get_candidates(..., post_sampling=true) — the
+            # candidates AFTER the full sampler chain (grammar included) —
+            # guaranteeing every still-legal candidate is what populates the
+            # top-k. Same server-side field name on both endpoints; the
+            # v9 /completion payload sets it below in _build_payload.
+            if getattr(request, "post_sampling_probs", False):
+                payload["post_sampling_probs"] = True
         if request.stop_sequences:
             payload["stop"] = request.stop_sequences
         self._apply_schema_constraint(payload, request)
@@ -1284,6 +1298,11 @@ class LlamaServerBackend(ModelBackend):
 
         if request.n_probs is not None and int(request.n_probs) > 0:
             payload["n_probs"] = min(128, int(request.n_probs))
+            # TD-1d.2: see the matching comment in _infer_chat_completions —
+            # same server-side field, same pre- vs post-grammar-mask tradeoff,
+            # on the /completion lane.
+            if getattr(request, "post_sampling_probs", False):
+                payload["post_sampling_probs"] = True
 
         # Prefix cache slot routing (id_slot=-1 means auto-assign)
         if request.slot_id is not None:
