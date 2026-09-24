@@ -570,6 +570,27 @@ def _quality(
                 # compiles to quality_overall=null. Null is the honest value
                 # when no whole-suite measurement exists.
 
+    # performance.general_suite_quality: converged, locally measured general-knowledge
+    # suites (e.g. mmlu_pro, gpqa) recorded deliberately OUTSIDE quality_score, whose
+    # meaning on some roles is a role-purpose suite (architect_critic: the critic
+    # suite). They compile as per-AXIS evidence and NEVER as `overall`, so they
+    # cannot masquerade as the role-purpose figure. An entry counts only when its
+    # truncation is explicitly zero: a capped score is not the model's score
+    # (promotion_gates.yaml gates.quality.truncation_audit).
+    if isinstance(performance, dict):
+        general = performance.get("general_suite_quality")
+        if isinstance(general, dict):
+            for key, entry in general.items():
+                if not (isinstance(key, str) and key.startswith("suite_")):
+                    continue
+                if not isinstance(entry, dict) or entry.get("truncated") != 0:
+                    continue
+                accuracy = entry.get("accuracy")
+                if isinstance(accuracy, (int, float)) and not isinstance(accuracy, bool):
+                    suite_key = key.removeprefix("suite_")
+                    if suite_key != "overall":
+                        suite_vector.setdefault(suite_key, float(accuracy))
+
     overall_basis: str | None = None
     if "overall" in suite_vector:
         overall_basis = "registry performance quality_pct/quality_score"
