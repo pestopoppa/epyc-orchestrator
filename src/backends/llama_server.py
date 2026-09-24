@@ -801,6 +801,16 @@ class LlamaServerBackend(ModelBackend):
             usage = data.get("usage", {}) or {}
             prompt_tokens = int(usage.get("prompt_tokens", 0))
             tokens_generated = int(usage.get("completion_tokens", 0))
+            if completion_reason == "length" and 0 < tokens_generated < int(payload["max_tokens"]):
+                # The OpenAI shim has no `truncated` field, but a length stop
+                # BELOW max_tokens can only be the slot's n_ctx running out
+                # (ctx shift off → stop at n_ctx - 1, server-context.cpp:1929-1936).
+                # Measured: split KV -np 2 -c 4096 → 271 + 1777 = 2048 = n_ctx/np.
+                logger.warning(
+                    "chat_completions truncated by context limit role=%s prompt=%d completion=%d max_tokens=%s",
+                    role_config.name, prompt_tokens, tokens_generated, payload["max_tokens"],
+                )
+                completion_reason = "context_limit"
 
             # llama-server's OpenAI shim doesn't always emit timings; estimate
             timings = data.get("timings", {}) or {}
@@ -1129,6 +1139,13 @@ class LlamaServerBackend(ModelBackend):
                             or data.get("finish_reason")
                             or "stop"
                         )
+                        if data.get("truncated") is True:
+                            logger.warning(
+                                "llama STREAM /completion truncated by context limit role=%s "
+                                "tokens_evaluated=%s tokens_predicted=%s",
+                                role_config.name, prompt_tokens, tokens_generated,
+                            )
+                            completion_reason = "context_limit"
                         break
 
             http_elapsed_ms = (time.perf_counter() - http_start) * 1000

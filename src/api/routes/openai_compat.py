@@ -6,6 +6,7 @@ clients to use our orchestrator backend for inference.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
@@ -767,10 +768,30 @@ def available_roles() -> list[str]:
     return list(dict.fromkeys([*COMPATIBILITY_MODEL_ALIASES, *role_ids]))
 
 
-@router.get("/models", response_model=OpenAIModelsResponse)
+def _model_info(role: str) -> OpenAIModelInfo:
+    """Model entry carrying the role's live per-request context length.
+
+    Clients (opencode) size compaction from this instead of a hand-edited
+    config limit that silently diverges from the server's -c/-np/--kv-unified.
+    """
+    context_length = None
+    try:
+        from src.backends.context_limits import get_context_limit_resolver
+
+        limit = get_context_limit_resolver().limit_for_role(role)
+        if limit is not None:
+            context_length = int(limit.per_request_n_ctx)
+    except Exception:
+        logger.debug("context_length lookup failed for %s", role, exc_info=True)
+    return OpenAIModelInfo(id=role, context_length=context_length, max_model_len=context_length)
+
+
+@router.get("/models", response_model=OpenAIModelsResponse, response_model_exclude_none=True)
 async def list_models() -> OpenAIModelsResponse:
-    """List available models (roles) in OpenAI format."""
-    return OpenAIModelsResponse(data=[OpenAIModelInfo(id=role) for role in available_roles()])
+    """List available models (roles) in OpenAI format, with context_length."""
+    roles = available_roles()
+    infos = await asyncio.to_thread(lambda: [_model_info(role) for role in roles])
+    return OpenAIModelsResponse(data=infos)
 
 
 @router.post("/chat/completions", response_model=None)
@@ -1443,10 +1464,10 @@ async def openai_chat_completions(
         )
 
 
-@router.get("/models/{model_id}")
+@router.get("/models/{model_id}", response_model=OpenAIModelInfo, response_model_exclude_none=True)
 async def get_model(model_id: str) -> OpenAIModelInfo:
     """Get info for a specific model."""
     if model_id not in available_roles():
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
-    return OpenAIModelInfo(id=model_id)
+    return await asyncio.to_thread(_model_info, model_id)

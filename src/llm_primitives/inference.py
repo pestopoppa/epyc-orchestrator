@@ -107,12 +107,42 @@ def _raise_if_context_overflow(result: Any, role: str, backend_url: str) -> None
     raise context_overflow_error_from_info(overflow, role=role, backend_url=backend_url)
 
 
-def _shared_pool_reservation_tokens(prompt: str, n_tokens: int) -> int:
-    """Tokens a request may occupy in a shared KV pool: prompt + generation budget."""
+# Generation budget assumed for a request that sets no max_tokens (the
+# chat-completions path uses the same default).
+DEFAULT_GENERATION_BUDGET_TOKENS = 4096
+# Headroom kept below n_ctx when clamping max_tokens (template/special tokens
+# the character estimate cannot see).
+MAX_TOKENS_CLAMP_MARGIN = 64
+# Below this, clamping would leave no useful answer; leave the request as is
+# and let the server be the judge (400 → reroute / typed error).
+MIN_CLAMPED_MAX_TOKENS = 256
+
+
+def _clamp_max_tokens(prompt: str, n_tokens: int, limit: Any) -> tuple[int, dict[str, Any] | None]:
+    """Clamp ``n_tokens`` so prompt + generation fits the role's per-request n_ctx.
+
+    llama-server never checks max_tokens: with context shift off it stops at
+    n_ctx - 1 and marks the result truncated (server-context.cpp:1929-1936).
+    vLLM refuses such a request, TGI's max_total_tokens budgets it; we clamp and
+    annotate. Unbounded (<= 0) budgets are left alone.
+    """
+    if limit is None or not n_tokens or n_tokens <= 0:
+        return n_tokens, None
     from src.backends.context_limits import estimate_tokens_conservative
 
-    generation = n_tokens if n_tokens and n_tokens > 0 else 4096
-    return estimate_tokens_conservative(prompt) + int(generation)
+    prompt_est = estimate_tokens_conservative(prompt)
+    room = int(limit.per_request_n_ctx) - prompt_est - MAX_TOKENS_CLAMP_MARGIN
+    if prompt_est + n_tokens < int(limit.per_request_n_ctx) - MAX_TOKENS_CLAMP_MARGIN:
+        return n_tokens, None
+    if room < MIN_CLAMPED_MAX_TOKENS:
+        return n_tokens, None
+    return room, {
+        "from": int(n_tokens),
+        "to": int(room),
+        "n_ctx": int(limit.per_request_n_ctx),
+        "prompt_tokens_est": int(prompt_est),
+        "source": getattr(limit, "source", ""),
+    }
 
 
 def _sampling_cache_key(
@@ -890,6 +920,29 @@ class InferenceMixin:
             if (request.parent_request_id or request.task_id)
             else uuid.uuid4().hex
         )
+        # Clamp max_tokens to the role's real per-request context before
+        # dispatch, so a prompt that fits but whose budget does not comes back
+        # as an explicit context_limit, not a silent finish_reason=length.
+        max_tokens_clamp = None
+        try:
+            from src.backends.context_limits import get_context_limit_resolver
+
+            _clamp_limit = get_context_limit_resolver().limit_for_role(
+                role, (self.server_urls or {}).get(role) if self.server_urls else None
+            )
+            clamped, max_tokens_clamp = _clamp_max_tokens(prompt, n_tokens, _clamp_limit)
+        except Exception:
+            clamped, max_tokens_clamp = n_tokens, None
+        if max_tokens_clamp is not None:
+            log.warning(
+                "max_tokens clamped for role=%s: %d -> %d (per-request n_ctx %d, ~%d prompt tokens, %s)",
+                role, max_tokens_clamp["from"], max_tokens_clamp["to"], max_tokens_clamp["n_ctx"],
+                max_tokens_clamp["prompt_tokens_est"], max_tokens_clamp["source"],
+            )
+            n_tokens = clamped
+            request.n_tokens = clamped
+            if hasattr(request, "max_tokens"):
+                request.max_tokens = clamped
         wants_probabilities = n_probs is not None and int(n_probs) > 0
         # Probability capture and structured chat payloads (tool calls arrive
         # whole) both need the batch response, never the text stream.
@@ -930,6 +983,7 @@ class InferenceMixin:
         # layer does not know yet). Inert unless the server is known unified.
         pool_admission = None
         pool_ticket = None
+        pool_success = False
         if backend_url and "," not in (self.server_urls.get(role, "") or ""):
             try:
                 from src.backends.context_limits import get_context_limit_resolver
@@ -940,15 +994,37 @@ class InferenceMixin:
             if pool_limit is not None and pool_limit.shared_pool:
                 from src.scheduling.kv_pool_admission import get_shared_pool_admission
 
+                from src.backends.context_limits import estimate_tokens_conservative
+                from src.scheduling.kv_pool_admission import KVPoolQueueFull
+
                 pool_admission = get_shared_pool_admission()
-                pool_tokens_needed = _shared_pool_reservation_tokens(prompt, n_tokens)
-                pool_ticket = pool_admission.acquire(
-                    backend_url,
-                    pool_tokens_needed,
-                    pool_limit.pool_tokens,
-                    deadline_s=deadline_s,
-                    cancel_check=cancel_check,
+                pool_prompt_tokens = estimate_tokens_conservative(prompt)
+                pool_new_tokens = n_tokens if n_tokens and n_tokens > 0 else DEFAULT_GENERATION_BUDGET_TOKENS
+                pool_tokens_needed = pool_admission.reservation_tokens(
+                    backend_url, pool_prompt_tokens, pool_new_tokens
                 )
+                try:
+                    pool_ticket = pool_admission.acquire(
+                        backend_url,
+                        pool_prompt_tokens,
+                        pool_limit.pool_tokens,
+                        max_new_tokens=pool_new_tokens,
+                        deadline_s=deadline_s,
+                        cancel_check=cancel_check,
+                    )
+                except KVPoolQueueFull as queue_full:
+                    if admitted and admission:
+                        admission.release(backend_url)
+                    raise ContextOverflowError(
+                        f"context overflow (shared KV pool admission queue full) on role {role} "
+                        f"({backend_url}): {queue_full.queued} requests already queued "
+                        f"(limit {queue_full.limit}); retry later — never dispatched",
+                        kind=ContextOverflowError.POOL_EXHAUSTED,
+                        role=role,
+                        backend_url=backend_url,
+                        n_ctx=pool_limit.per_request_n_ctx,
+                        source="admission",
+                    ) from queue_full
                 if pool_ticket is None:
                     if admitted and admission:
                         admission.release(backend_url)
@@ -1285,7 +1361,25 @@ class InferenceMixin:
             # load), not a sick backend: raise the typed error BEFORE the
             # circuit-breaker bookkeeping so it never counts toward opening
             # the circuit on a healthy server.
+            _overflow = getattr(result, "context_overflow", None)
+            if (
+                isinstance(_overflow, dict)
+                and _overflow.get("kind") == ContextOverflowError.POOL_EXHAUSTED
+                and backend_url
+            ):
+                from src.scheduling.kv_pool_admission import get_shared_pool_admission
+
+                get_shared_pool_admission().report_pool_exhausted(backend_url)
             _raise_if_context_overflow(result, role, backend_url)
+            if max_tokens_clamp is not None:
+                self._last_inference_meta["max_tokens_clamped"] = dict(max_tokens_clamp)
+                reason = str(getattr(result, "completion_reason", "") or "")
+                if reason in {"length", "limit", "context_limit"} or (
+                    getattr(result, "tokens_generated", 0) >= max_tokens_clamp["to"]
+                ):
+                    result.completion_reason = "context_limit"
+                    self._last_inference_meta["completion_reason"] = "context_limit"
+            pool_success = True
 
             # Record success/failure for circuit breaker.
             # Partial results (read_timeout with salvaged output) count as
@@ -1319,7 +1413,7 @@ class InferenceMixin:
         finally:
             reset_lifecycle_context(lifecycle_token)
             if pool_admission is not None:
-                pool_admission.release(backend_url, pool_ticket)
+                pool_admission.release(backend_url, pool_ticket, success=pool_success)
             if admitted and admission:
                 admission.release(backend_url)
 

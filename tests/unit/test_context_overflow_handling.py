@@ -56,6 +56,16 @@ BODY_POOL_500 = '{"error":{"code":500,"message":"Context size has been exceeded.
 SSE_POOL = f"data: {BODY_POOL_500}"
 
 
+@pytest.fixture(autouse=True)
+def fresh_pool(monkeypatch):
+    """A fresh process-wide SharedKVPoolAdmission (ratio/queue state is global)."""
+    import src.scheduling.kv_pool_admission as kpa
+
+    pool = kpa.SharedKVPoolAdmission(occupancy=lambda url: None)
+    monkeypatch.setattr(kpa, "_shared_pool_admission", pool)
+    return pool
+
+
 # ── Detection ────────────────────────────────────────────────────────────
 
 
@@ -733,3 +743,335 @@ class TestApiMapping:
         r = client.post("/v1/chat/completions", json=self._body(stream=True))
         assert r.status_code == 200
         assert '"type": "context_overflow"' in r.text or '"type":"context_overflow"' in r.text
+
+
+# ═══ Serving-engine audit follow-ups (T2, T3, T5, T6, T7) ═══════════════════
+
+
+# /slots bodies in the frozen server's shape (server-context.cpp:699-722, metrics-only).
+def _slot(i, *, processing, n_prompt, n_remain=-1, n_ctx=196608):
+    return {"id": i, "n_ctx": n_ctx, "speculative": True, "is_processing": processing,
+            "id_task": 10 + i, "n_prompt_tokens": n_prompt, "n_prompt_tokens_processed": n_prompt,
+            "n_prompt_tokens_cache": 0, "params": {},
+            "next_token": [{"has_next_token": processing, "has_new_line": False,
+                            "n_remain": n_remain, "n_decoded": 0}]}
+
+
+class TestSlotsOccupancy:
+    def test_frozen_source_exposes_the_fields_we_read(self):
+        src = FROZEN_TREE / "tools/server/server-context.cpp"
+        if not src.exists():
+            pytest.skip("frozen llama.cpp tree not present on this host")
+        text = src.read_text(errors="replace")
+        for key in ('{"is_processing", is_processing()}', 'res["n_prompt_tokens"]', '{"n_remain",       n_remaining}',
+                    '{"n_ctx",         n_ctx}', 'res["next_token"] = {'):
+            assert key in text, key
+        # metrics-only by default: /slots does not detokenize prompts (cheap to poll)
+        assert "slot.to_json(slots_debug == 0)" in text
+
+    def test_parse_and_project(self):
+        from src.backends.context_limits import parse_slots
+
+        occ = parse_slots("u", [_slot(0, processing=True, n_prompt=100_000, n_remain=20_000),
+                                _slot(1, processing=False, n_prompt=80_000)])
+        assert occ.processing == 1
+        assert occ.used_tokens == 100_000            # idle slot's warm prefix is purgeable → free
+        assert occ.projected_tokens(1.0) == 120_000
+        assert occ.projected_tokens(0.5) == 110_000
+        assert parse_slots("u", {"error": "x"}) is None
+
+    def test_resolver_occupancy_cached_and_degrades(self):
+        calls = []
+        now = [0.0]
+
+        def fetch(url, timeout):
+            calls.append(url)
+            if len(calls) >= 2:
+                raise httpx.HTTPStatusError("501", request=None, response=None)
+            return [_slot(0, processing=True, n_prompt=5)]
+
+        r = ContextLimitResolver(live=True, fetch_slots=fetch, fetch_props=lambda u, t: None,
+                                 registry_facts=lambda: {}, role_urls=lambda: {}, clock=lambda: now[0])
+        assert r.pool_occupancy("http://h:8083").used_tokens == 5
+        assert r.pool_occupancy("http://h:8083").used_tokens == 5 and len(calls) == 1
+        now[0] = 2.0
+        assert r.pool_occupancy("http://h:8083") is None  # /slots unavailable → caller degrades
+        assert ContextLimitResolver(live=False).pool_occupancy("http://h:8083") is None
+
+    def test_admission_counts_traffic_it_did_not_admit(self):
+        from src.backends.context_limits import parse_slots
+        from src.scheduling.kv_pool_admission import SharedKVPoolAdmission
+
+        external = parse_slots("u", [_slot(0, processing=True, n_prompt=150_000)])  # opencode → :8083
+        pool = SharedKVPoolAdmission(occupancy=lambda url: external)
+        assert pool.acquire("u", 60_000, 196608, timeout_s=0.05, poll_s=0.01) is None
+        assert pool.acquire("u", 40_000, 196608, timeout_s=0) is not None
+
+    def test_admission_degrades_to_own_tickets_without_slots(self):
+        from src.scheduling.kv_pool_admission import SharedKVPoolAdmission
+
+        pool = SharedKVPoolAdmission(occupancy=lambda url: None)
+        assert pool.acquire("u", 180_000, 196608, timeout_s=0) is not None
+        assert pool.acquire("u", 60_000, 196608, timeout_s=0.05, poll_s=0.01) is None
+
+    def test_occupancy_read_error_degrades(self):
+        from src.scheduling.kv_pool_admission import SharedKVPoolAdmission
+
+        def boom(url):
+            raise RuntimeError("down")
+
+        pool = SharedKVPoolAdmission(occupancy=boom)
+        assert pool.acquire("u", 10, 100, timeout_s=0) is not None
+
+
+class TestAdaptiveDecodeReservation:
+    def test_ratio_decays_on_success_and_resets_on_exhaustion(self, monkeypatch):
+        from src.scheduling.kv_pool_admission import SharedKVPoolAdmission
+
+        monkeypatch.setenv("ORCHESTRATOR_KV_POOL_NEW_TOKEN_RATIO_DECAY", "0.25")
+        monkeypatch.setenv("ORCHESTRATOR_KV_POOL_NEW_TOKEN_RATIO_MIN", "0.3")
+        pool = SharedKVPoolAdmission(occupancy=lambda url: None)
+        assert pool.new_token_ratio("u") == 1.0
+        for _ in range(5):
+            pool.release("u", pool.acquire("u", 10, 1000, timeout_s=0), success=True)
+        assert pool.new_token_ratio("u") == pytest.approx(0.3)
+        pool.release("u", pool.acquire("u", 10, 1000, timeout_s=0), success=False)
+        assert pool.new_token_ratio("u") == pytest.approx(0.3)  # failures do not decay
+        pool.report_pool_exhausted("u")
+        assert pool.new_token_ratio("u") == 1.0
+
+    def test_thinking_call_no_longer_over_serialises(self, monkeypatch):
+        from src.scheduling.kv_pool_admission import SharedKVPoolAdmission
+
+        # 120k prompt + max_tokens 32768 on a 196608 pool, then a 60k request.
+        full = SharedKVPoolAdmission(occupancy=lambda url: None)
+        full.acquire("u", 120_000, 196608, max_new_tokens=32768, timeout_s=0)
+        assert full.acquire("u", 60_000, 196608, timeout_s=0.05, poll_s=0.01) is None
+
+        monkeypatch.setenv("ORCHESTRATOR_KV_POOL_NEW_TOKEN_RATIO", "0.3")
+        adaptive = SharedKVPoolAdmission(occupancy=lambda url: None)
+        t = adaptive.acquire("u", 120_000, 196608, max_new_tokens=32768, timeout_s=0)
+        assert adaptive.in_flight_tokens("u") == 120_000 + 9831
+        assert t is not None and adaptive.acquire("u", 60_000, 196608, timeout_s=0) is not None
+
+    def test_server_pool_exhaustion_resets_ratio_via_inference(self, fresh_pool, monkeypatch):
+        from src.llm_primitives import LLMPrimitives
+
+        monkeypatch.setenv("ORCHESTRATOR_CTX_POOL_BACKOFF_S", "0")
+        monkeypatch.setenv("ORCHESTRATOR_KV_POOL_NEW_TOKEN_RATIO_DECAY", "0.5")
+        set_context_limit_resolver(ContextLimitResolver(
+            live=False, registry_facts=lambda: {8083: {"context_tokens": 196608, "slots": 2, "kv_unified": True}},
+            role_urls=lambda: {}))
+        tracker = MagicMock()
+        tracker.is_available.return_value = True
+        prims = LLMPrimitives(mock_mode=False, server_urls={"architect_general": "http://localhost:8083"},
+                              health_tracker=tracker)
+        backend = MagicMock(spec=[])
+        backend.infer = MagicMock(side_effect=[_ok_result(), _overflow_result("pool_exhausted"), _ok_result("again")])
+        prims._backends["architect_general"] = backend
+        prims._real_call("x" * 100, "architect_general", n_tokens=100)
+        assert fresh_pool.new_token_ratio("http://localhost:8083") == pytest.approx(0.5)
+        assert prims._real_call("x" * 100, "architect_general", n_tokens=100) == "again"
+        # reset to 1.0 on exhaustion, then decayed once by the successful retry
+        assert fresh_pool.new_token_ratio("http://localhost:8083") == pytest.approx(0.5)
+        assert fresh_pool.in_flight_tokens("http://localhost:8083") == 0
+
+
+class TestBoundedQueue:
+    def test_queue_full_is_immediate(self):
+        import threading
+        import time as _time
+
+        from src.scheduling.kv_pool_admission import KVPoolQueueFull, SharedKVPoolAdmission
+
+        pool = SharedKVPoolAdmission(occupancy=lambda url: None)
+        held = pool.acquire("u", 190_000, 196608, timeout_s=0)
+        th = threading.Thread(target=lambda: pool.acquire("u", 100_000, 196608, timeout_s=1, poll_s=0.01))
+        th.start()
+        for _ in range(200):
+            if pool.queued("u") == 1:
+                break
+            _time.sleep(0.005)
+        t0 = _time.perf_counter()
+        with pytest.raises(KVPoolQueueFull):
+            pool.acquire("u", 10, 196608, timeout_s=5, max_queued=1)
+        assert _time.perf_counter() - t0 < 0.5
+        pool.release("u", held)
+        th.join(timeout=5)
+
+    def test_env_bound_and_unbounded(self, monkeypatch):
+        from src.scheduling.kv_pool_admission import KVPoolQueueFull, SharedKVPoolAdmission
+
+        pool = SharedKVPoolAdmission(occupancy=lambda url: None)
+        pool.acquire("u", 190_000, 196608, timeout_s=0)
+        monkeypatch.setenv("ORCHESTRATOR_KV_POOL_MAX_QUEUED", "0")  # unbounded
+        assert pool.acquire("u", 100_000, 196608, timeout_s=0.02, poll_s=0.01) is None
+        # an admitted-at-once request is never refused by the bound when nobody waits
+        monkeypatch.setenv("ORCHESTRATOR_KV_POOL_MAX_QUEUED", "1")
+        assert pool.acquire("v", 10, 100, timeout_s=0) is not None
+        with pytest.raises(KVPoolQueueFull):
+            pool._queue["u"] = [999]  # one waiter already queued
+            pool.acquire("u", 1, 196608, timeout_s=0)
+        pool._queue.pop("u")
+
+    def test_queue_full_surfaces_as_retryable_typed_error(self, fresh_pool, monkeypatch):
+        from src.llm_primitives import LLMPrimitives
+
+        monkeypatch.setenv("ORCHESTRATOR_KV_POOL_MAX_QUEUED", "1")
+        set_context_limit_resolver(ContextLimitResolver(
+            live=False, registry_facts=lambda: {8083: {"context_tokens": 196608, "slots": 2, "kv_unified": True}},
+            role_urls=lambda: {}))
+        fresh_pool._queue["http://localhost:8083"] = [12345]  # someone is already waiting
+        tracker = MagicMock()
+        tracker.is_available.return_value = True
+        prims = LLMPrimitives(mock_mode=False, server_urls={"architect_general": "http://localhost:8083"},
+                              health_tracker=tracker)
+        backend = MagicMock(spec=[])
+        backend.infer = MagicMock(side_effect=AssertionError("must not dispatch"))
+        prims._backends["architect_general"] = backend
+        with pytest.raises(ContextOverflowError) as ei:
+            prims._real_call("hi", "architect_general", n_tokens=10)
+        assert ei.value.retryable and ei.value.source == "admission"
+        assert "queue full" in str(ei.value)
+
+
+class TestMaxTokensClamp:
+    def test_clamp_arithmetic(self):
+        from src.llm_primitives.inference import _clamp_max_tokens
+
+        lim = ContextLimit("u", 98304, 2, False, "live_props")
+        prompt = "x" * 270_000  # ~90000 conservative tokens
+        n, note = _clamp_max_tokens(prompt, 32768, lim)
+        assert note is not None and n == 98304 - 90000 - 64 and note["from"] == 32768
+        assert _clamp_max_tokens("x" * 300, 32768, lim) == (32768, None)       # fits
+        assert _clamp_max_tokens(prompt, -1, lim) == (-1, None)                 # unbounded untouched
+        assert _clamp_max_tokens("x" * 294_000, 4096, lim)[1] is None           # no useful room left
+        assert _clamp_max_tokens(prompt, 32768, None) == (32768, None)          # limit unknown
+
+    def test_inference_clamps_before_dispatch_and_annotates(self, fresh_pool):
+        from src.llm_primitives import LLMPrimitives
+
+        set_context_limit_resolver(ContextLimitResolver(
+            live=False, registry_facts=lambda: {8083: {"context_tokens": 196608, "slots": 2}},
+            role_urls=lambda: {}))
+        tracker = MagicMock()
+        tracker.is_available.return_value = True
+        prims = LLMPrimitives(mock_mode=False, server_urls={"architect_general": "http://localhost:8083"},
+                              health_tracker=tracker)
+        seen = {}
+
+        def infer(role_config, request):
+            seen["n_tokens"] = request.n_tokens
+            r = _ok_result("cut")
+            r.completion_reason = "limit"
+            r.tokens_generated = request.n_tokens
+            return r
+
+        backend = MagicMock(spec=[])
+        backend.infer = MagicMock(side_effect=infer)
+        prims._backends["architect_general"] = backend
+        assert prims._real_call("x" * 270_000, "architect_general", n_tokens=32768) == "cut"
+        assert seen["n_tokens"] == 98304 - 90000 - 64
+        meta = prims._last_inference_meta
+        assert meta["completion_reason"] == "context_limit"
+        assert meta["max_tokens_clamped"]["from"] == 32768
+
+
+class TestModelsAdvertiseContextLength:
+    def test_models_list_and_get_carry_context_length(self, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        import src.api.routes.openai_compat as oc
+        from src.api import app
+
+        monkeypatch.setattr(oc, "available_roles", lambda: ["architect_general", "mystery_role"])
+        set_context_limit_resolver(ContextLimitResolver(
+            live=False, registry_facts=lambda: {8083: {"context_tokens": 196608, "slots": 2, "kv_unified": True}},
+            role_urls=lambda: {"architect_general": ["http://localhost:8083"]}))
+        with TestClient(app, raise_server_exceptions=False) as c:
+            data = {m["id"]: m for m in c.get("/v1/models").json()["data"]}
+            one = c.get("/v1/models/architect_general").json()
+        assert data["architect_general"]["context_length"] == 196608
+        assert data["architect_general"]["max_model_len"] == 196608
+        assert "context_length" not in data["mystery_role"]  # unknown → omitted, never invented
+        assert one["context_length"] == 196608
+
+
+# ═══ Measured 2026-09-24: spec-decode sub-batch failure + split-KV truncation ═══
+
+SPEC_SUBBATCH_MSG = "got exception: speculative batch index 8 is not inside the current sub-batch [0, 8)"
+BODY_SPEC_500 = json.dumps({"error": {"code": 500, "message": SPEC_SUBBATCH_MSG, "type": "server_error"}},
+                           separators=(",", ":"))
+STUDY = Path("/mnt/raid0/llm/epyc-inference-research/artifacts/np_context_kvu_study_20260924/q38_27b_q8")
+
+
+class TestSpecSubBatchAndTruncation:
+    def test_exact_measured_string_is_pool_exhausted(self):
+        info = classify_error_body(BODY_SPEC_500, 500)
+        assert info is not None and info.kind == ContextOverflowError.POOL_EXHAUSTED
+        assert classify_sse_line("data: " + BODY_SPEC_500).kind == ContextOverflowError.POOL_EXHAUSTED
+        assert context_overflow_error_from_info(info).retryable
+
+    def test_loose_match_needs_both_fragments(self):
+        assert classify_error_payload({"error": {"message": "speculative batch index 3 bad"}}) is None
+        assert classify_error_payload({"error": {"message": "sub-batch mismatch"}}) is None
+        assert classify_error_payload({"error": {"message": "Speculative batch index 12 is not inside the "
+                                                            "current sub-batch [4, 12)"}}).kind == "pool_exhausted"
+
+    def test_string_matches_frozen_source_and_the_measured_log(self):
+        src = FROZEN_TREE / "tools/server/server-context.cpp"
+        if not src.exists():
+            pytest.skip("frozen llama.cpp tree not present on this host")
+        text = src.read_text(errors="replace")
+        assert '"speculative batch index %d is not inside the current sub-batch [%d, %d)"' in text
+        assert 'send_error(slot, std::string("got exception: ") + e.what(), ERROR_TYPE_SERVER);' in text
+        log = STUDY / "unified/np2_L2048/server.stderr"
+        if log.exists():
+            assert f"error: {SPEC_SUBBATCH_MSG}" in log.read_text(errors="replace")
+
+    def test_backend_turns_spec_subbatch_500_into_pool_overflow(self, role_config):
+        backend = _backend(lambda req: httpx.Response(500, text=BODY_SPEC_500), chat=True)
+        result = backend.infer(role_config, _req())
+        assert result.context_overflow["kind"] == "pool_exhausted"
+        assert result.success is False and result.output == ""
+
+    def test_spec_subbatch_gets_the_pool_recovery_path(self):
+        exc = context_overflow_error_from_info(classify_error_body(BODY_SPEC_500, 500), role="architect_general")
+        calls = []
+        out = recover_context_overflow(exc, prompt="x" * 300, role="architect_general",
+                                       call=lambda r: calls.append(r) or "ok", sleep=lambda s: None,
+                                       resolver=_resolver({"architect_general": 4096}),
+                                       max_pool_retries=1, backoff_s=0.0, reroute_candidates=[])
+        assert out == "ok" and calls == ["architect_general"]
+
+    def test_split_kv_chat_length_stop_below_max_tokens_is_context_limit(self, role_config):
+        # Measured split -np 2 -c 4096: prompt 271 + completion 1777 = 2048 = n_ctx/np, finish_reason length.
+        body = json.dumps({"choices": [{"message": {"content": "partial"}, "finish_reason": "length"}],
+                           "usage": {"prompt_tokens": 271, "completion_tokens": 1777}})
+        backend = _backend(lambda req: httpx.Response(200, text=body), chat=True)
+        result = backend.infer(role_config, InferenceRequest(role="architect_general", prompt="q", n_tokens=4096))
+        assert result.completion_reason == "context_limit"
+
+    def test_length_stop_at_max_tokens_is_still_length(self, role_config):
+        body = json.dumps({"choices": [{"message": {"content": "x"}, "finish_reason": "length"}],
+                           "usage": {"prompt_tokens": 10, "completion_tokens": 64}})
+        backend = _backend(lambda req: httpx.Response(200, text=body), chat=True)
+        assert backend.infer(role_config, _req()).completion_reason == "length"
+
+    def test_completion_stream_truncated_is_context_limit(self, role_config):
+        sse = ('data: {"content":"par","stop":false}\n\n'
+               'data: {"content":"","stop":true,"stop_type":"limit","truncated":true,'
+               '"tokens_predicted":1777,"tokens_evaluated":271,"timings":{}}\n\n')
+        backend = _backend(lambda req: httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"}))
+        result = backend.infer_stream_text(role_config, _req())
+        assert result.completion_reason == "context_limit" and result.output == "par"
+
+    def test_measured_split_run_shape(self):
+        pq = STUDY / "split/np2_L2048/pq.jsonl"
+        if not pq.exists():
+            pytest.skip("study artifacts not present")
+        rows = [json.loads(line) for line in pq.read_text().splitlines() if line.strip()]
+        # The shape our chat-path rule keys on: a length stop with completion far below any max_tokens
+        # budget, because prompt + completion reached n_ctx/np (2048; the server logged n_tokens = 2047).
+        assert rows and all(r["finish_reason"] == "length" and r["completion_tokens"] < 4096
+                            and 2040 <= r["prompt_tokens"] + r["completion_tokens"] <= 2048 for r in rows)

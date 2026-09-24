@@ -43,6 +43,7 @@ TTL_ENV = "ORCHESTRATOR_CONTEXT_LIMITS_TTL_S"
 DEFAULT_TTL_S = 60.0
 FAILURE_TTL_S = 10.0
 DEFAULT_PROPS_TIMEOUT_S = 1.0
+DEFAULT_OCCUPANCY_TTL_S = 1.5
 
 # Token estimation without a tokenizer round-trip. 4 chars/token is the
 # codebase-wide rough ratio (chat_utils._estimate_tokens, LlamaTokenizer's
@@ -250,6 +251,80 @@ def limit_from_registry(url: str, facts: dict[str, Any] | None) -> ContextLimit 
     )
 
 
+@dataclass(frozen=True)
+class SlotState:
+    """One slot as ``GET /slots`` reports it (server-context.cpp:699-722)."""
+
+    slot_id: int
+    n_ctx: int | None
+    is_processing: bool
+    n_prompt_tokens: int  # prompt.tokens.size(): prompt + tokens generated so far
+    n_remain: int | None  # remaining decode budget; None/-1 = unbounded
+
+
+@dataclass(frozen=True)
+class PoolOccupancy:
+    """The server's REAL KV occupancy, including load the orchestrator never
+    admitted (opencode straight to :8083, scripts, other processes)."""
+
+    url: str
+    slots: tuple[SlotState, ...]
+    source: str = "live_slots"
+
+    @property
+    def processing(self) -> int:
+        return sum(1 for s in self.slots if s.is_processing)
+
+    @property
+    def used_tokens(self) -> int:
+        """Cells held by in-flight requests right now. Idle slots' cached
+        prefixes are purgeable (and restorable from --cache-ram), so free."""
+        return sum(s.n_prompt_tokens for s in self.slots if s.is_processing)
+
+    def projected_tokens(self, new_token_ratio: float = 1.0) -> int:
+        """In-flight cells plus the (ratio-weighted) decode they may still add."""
+        total = 0
+        for s in self.slots:
+            if not s.is_processing:
+                continue
+            remain = s.n_remain if isinstance(s.n_remain, int) and s.n_remain > 0 else 0
+            total += s.n_prompt_tokens + int(math.ceil(remain * max(0.0, new_token_ratio)))
+        return total
+
+
+def parse_slots(url: str, body: Any) -> PoolOccupancy | None:
+    """Build a PoolOccupancy from a ``GET /slots`` body (a JSON array)."""
+    if not isinstance(body, list):
+        return None
+    slots: list[SlotState] = []
+    for i, raw in enumerate(body):
+        if not isinstance(raw, dict):
+            continue
+        nxt = raw.get("next_token")
+        if isinstance(nxt, list):
+            nxt = nxt[0] if nxt and isinstance(nxt[0], dict) else {}
+        n_remain = nxt.get("n_remain") if isinstance(nxt, dict) else None
+        n_remain = n_remain if isinstance(n_remain, int) and not isinstance(n_remain, bool) else None
+        n_prompt = raw.get("n_prompt_tokens")
+        n_prompt = n_prompt if isinstance(n_prompt, int) and n_prompt > 0 else 0
+        slots.append(SlotState(
+            slot_id=raw.get("id") if isinstance(raw.get("id"), int) else i,
+            n_ctx=_positive_int(raw.get("n_ctx")),
+            is_processing=bool(raw.get("is_processing")),
+            n_prompt_tokens=n_prompt,
+            n_remain=n_remain,
+        ))
+    return PoolOccupancy(url=url, slots=tuple(slots))
+
+
+def _default_fetch_slots(url: str, timeout_s: float) -> Any:
+    import httpx
+
+    resp = httpx.get(f"{url.rstrip('/')}/slots", timeout=timeout_s)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def _default_fetch(url: str, timeout_s: float) -> dict[str, Any] | None:
     import httpx
 
@@ -268,6 +343,8 @@ class ContextLimitResolver:
         ttl_s: float | None = None,
         props_timeout_s: float = DEFAULT_PROPS_TIMEOUT_S,
         fetch_props: Callable[[str, float], dict[str, Any] | None] | None = None,
+        fetch_slots: Callable[[str, float], Any] | None = None,
+        occupancy_ttl_s: float = DEFAULT_OCCUPANCY_TTL_S,
         registry_facts: Callable[[], dict[int, dict[str, Any]]] | None = None,
         role_urls: Callable[[], dict[str, list[str]]] | None = None,
         live: bool | None = None,
@@ -281,6 +358,9 @@ class ContextLimitResolver:
         self._ttl_s = max(0.0, ttl_s)
         self._props_timeout_s = props_timeout_s
         self._fetch = fetch_props or _default_fetch
+        self._fetch_slots = fetch_slots or _default_fetch_slots
+        self._occupancy_ttl_s = max(0.0, occupancy_ttl_s)
+        self._occupancy_cache: dict[str, tuple[float, PoolOccupancy | None]] = {}
         self._registry_facts_fn = registry_facts or registry_facts_by_port
         self._role_urls_fn = role_urls or registry_role_urls
         self._live = live
@@ -350,6 +430,28 @@ class ContextLimitResolver:
             self._cache[url] = (now + ttl, limit)
         return limit
 
+    def pool_occupancy(self, url: str) -> PoolOccupancy | None:
+        """Live ``/slots`` occupancy for ``url``, cached ``occupancy_ttl_s``
+        (default 1.5 s). None when live reads are off or /slots is unavailable
+        (``--no-slots``, down, timeout) — callers then fall back to their own
+        accounting. A failure is cached as briefly as a success."""
+        url = (split_urls(url) or [""])[0]
+        if not url or not self.live_enabled():
+            return None
+        now = self._clock()
+        with self._lock:
+            cached = self._occupancy_cache.get(url)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+        try:
+            occ = parse_slots(url, self._fetch_slots(url, self._props_timeout_s))
+        except Exception as exc:
+            log.debug("context limits: GET %s/slots failed: %s", url, exc)
+            occ = None
+        with self._lock:
+            self._occupancy_cache[url] = (now + self._occupancy_ttl_s, occ)
+        return occ
+
     def limit_for_role(self, role: str, urls: list[str] | str | None = None) -> ContextLimit | None:
         """The binding (smallest) per-request limit across the role's instances.
 
@@ -386,6 +488,7 @@ class ContextLimitResolver:
         with self._lock:
             if url is None:
                 self._cache.clear()
+                self._occupancy_cache.clear()
                 self._registry_cache = None
                 self._role_url_cache = None
             else:

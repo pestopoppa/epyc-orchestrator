@@ -42,6 +42,16 @@ _TOO_LARGE_FRAGMENTS = (
     "is larger than the max context size",
 )
 _POOL_FRAGMENTS = ("context size has been exceeded",)
+# MTP/draft speculative decoding under a FULL KV pool: once llama_decode starts
+# halving the batch ("failed to find free space in the KV cache, retrying with
+# smaller batch size"), post_decode meets a draft index outside the shrunken
+# view and throws (server-context.cpp:4003-4009, upstream issue 24840); the
+# slot fails with "got exception: speculative batch index 8 is not inside the
+# current sub-batch [0, 8)" (:2798-2799, server_error/500) instead of the clean
+# "Context size has been exceeded.". Measured 2026-09-24 on the v10 27B with
+# --kv-unified -np 2, draft n_max 8 (np_context_kvu_study_20260924). Same cause,
+# same recovery → pool_exhausted. Matched loosely: both fragments required.
+_SPEC_SUBBATCH_FRAGMENTS = ("speculative batch index", "sub-batch")
 
 _TOKENS_RE = re.compile(r"\((\d+)\s+tokens\)")
 
@@ -88,6 +98,8 @@ def _classify_message(message: str, error_type: str) -> str | None:
     if any(fragment in low for fragment in _TOO_LARGE_FRAGMENTS):
         return ContextOverflowError.REQUEST_TOO_LARGE
     if any(fragment in low for fragment in _POOL_FRAGMENTS):
+        return ContextOverflowError.POOL_EXHAUSTED
+    if all(fragment in low for fragment in _SPEC_SUBBATCH_FRAGMENTS):
         return ContextOverflowError.POOL_EXHAUSTED
     return None
 
