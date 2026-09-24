@@ -724,6 +724,52 @@ def auto_wrap_final(code: str) -> str:
     return code
 
 
+# `FINAL(OK)` — the whole code is one call whose argument is one bare identifier.
+_BARE_NAME_FINAL_RE = re.compile(r"^FINAL\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;?$")
+
+# Template placeholders the root prompt itself uses (`FINAL(answer)`, `FINAL(result)`,
+# `FINAL(solution)`). An undefined one of these is a model that forgot to assign
+# its answer, not a one-word answer — leave that NameError alone.
+_BARE_NAME_FINAL_PLACEHOLDERS = frozenset(
+    {"answer", "result", "solution", "your_answer", "final_answer", "output", "response"}
+)
+
+
+def rescue_bare_name_final(code: str, error: str | None) -> str | None:
+    """Return a quoted ``FINAL("word")`` retry for an unquoted one-word answer.
+
+    Models asked for a one-word reply routinely emit ``FINAL(OK)`` / ``FINAL(yes)``
+    instead of ``FINAL("OK")``, and a bare ``OK`` reply is auto-wrapped by
+    :func:`auto_wrap_final` into the same shape. Executed, that is
+    ``NameError: name 'OK' is not defined`` — no final answer and no output — so
+    the turn yields nothing, and a caller that does not feed errors back (the
+    ``/v1/chat/completions`` REPL loop) returned ``""`` with ``finish_reason=stop``.
+
+    Fires only when the WHOLE code is that single call AND execution failed with a
+    NameError for exactly that identifier, so a name the REPL does define (a
+    variable from an earlier turn) still resolves normally and is never rewritten.
+
+    Returns:
+        Replacement code to execute, or None when the rescue does not apply.
+    """
+    if not error or not error.startswith("NameError"):
+        return None
+    lines = [
+        ln.strip() for ln in code.split("\n") if ln.strip() and not ln.strip().startswith("#")
+    ]
+    if len(lines) != 1:
+        return None
+    m = _BARE_NAME_FINAL_RE.match(lines[0])
+    if m is None:
+        return None
+    name = m.group(1)
+    if name.lower() in _BARE_NAME_FINAL_PLACEHOLDERS:
+        return None
+    if f"name '{name}' is not defined" not in error:
+        return None
+    return f'FINAL("{name}")'
+
+
 # Error classification utilities
 def classify_error(error_message: str, gate_name: str = "") -> ErrorCategory:
     """Classify an error message into an ErrorCategory.
