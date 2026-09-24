@@ -85,17 +85,44 @@ class TestModelFeatures:
         assert v_measured[1] == 1.0 and v_masked[1] == 0.0  # ...but different mask
 
     def test_extract_from_stack_priors(self, tmp_path: Path):
+        """`_stack_prior_model_features` reads its own given file, not a fallback.
+
+        2026-09-24: this fixture was missing `deployment_status: live_stack` on
+        both role blocks. `live_stack_role_records()` (src/registry/stack_priors.py)
+        filters every record to that status, so with it absent
+        `_stack_prior_model_features` silently returned `{}` for BOTH roles and
+        `extract_model_features` fell through to the DEGRADED-fallback registry
+        path (`registry_path` was also left at its DEFAULT_REGISTRY_PATH default)
+        — this test was actually asserting on the real, live production registry
+        the whole time, not on the synthetic priors it wrote. It read as passing
+        only because production frontdoor's descriptor happened to already be
+        35B/moe/Q8_0; worker_general's fixture literal (26B, the RETIRED
+        gemma-4-26B-A4B) diverged from real degraded-fallback output once the
+        2026-09-22 lineup cutover made worker_general an alias on frontdoor's
+        35B process, and the test failed for a reason that had nothing to do
+        with the code path its name and docstring claim to cover.
+
+        Fixed at the fixture: declare `deployment_status: live_stack` so
+        `_stack_prior_model_features` actually resolves from THIS file, and
+        point `registry_path` at a nonexistent file so a future regression of
+        the same kind (silently falling through to the real registry) fails
+        loudly instead of passing by coincidence. The params_b/quant literals
+        below are the test's own synthetic input, not a claim about production,
+        so they need no re-derivation.
+        """
         stack_priors = tmp_path / "stack_priors.yaml"
         stack_priors.write_text(
             """
 roles:
   frontdoor:
+    deployment_status: live_stack
     model:
       arch: moe-a3b
       params_b: 35
       active_b: 3
       quant: Q8_0
   worker_general:
+    deployment_status: live_stack
     model:
       arch: moe-a4b
       params_b: 26
@@ -110,7 +137,11 @@ roles:
             memory_cost_by_role={"frontdoor": 1.0, "worker_general": 1.0},
         )
 
-        features = extract_model_features(cfg, stack_priors_path=stack_priors)
+        features = extract_model_features(
+            cfg,
+            stack_priors_path=stack_priors,
+            registry_path=tmp_path / "unused_registry.yaml",
+        )
 
         assert features["frontdoor"].param_count_log == pytest.approx(np.log2(35))
         assert features["frontdoor"].is_moe == 1.0
@@ -121,13 +152,46 @@ roles:
     def test_extract_model_features_uses_degraded_fallback_when_priors_missing(
         self, tmp_path: Path
     ):
+        """The DEGRADED-fallback path (no live stack priors) reads model specs
+        off the registry descriptor compile.
+
+        2026-09-24: this test left `registry_path` at its DEFAULT_REGISTRY_PATH
+        default, so it was really asserting on the real production registry —
+        the same defect as `test_extract_from_stack_priors` above, just via the
+        opposite parameter. It passed only while production worker_general's
+        descriptor still matched the hardcoded 26B/Q4_K_M gemma literal, and
+        broke, for an unrelated reason, when the 2026-09-22 cutover moved
+        worker_general onto frontdoor's 35B alias. Fixed the same way
+        `test_extract_model_features_degraded_fallback_uses_registry_descriptors`
+        below already does it: a synthetic, self-contained registry fixture, so
+        the expected params/quant are the test's own input and cannot rot with
+        a future lineup change.
+        """
+        registry = tmp_path / "model_registry.yaml"
+        registry.write_text(
+            """
+roles:
+  worker_general:
+    model:
+      name: TestWorker-26B-A4B-Q4_K_M
+      quant: Q4_K_M
+      size_gb: 26
+      architecture: custom_moe
+server_mode: {}
+""",
+            encoding="utf-8",
+        )
         cfg = ScoringConfig(
             baseline_tps_by_role={"worker_general": 60.7},
             baseline_quality_by_role={"worker_general": 0.745},
             memory_cost_by_role={"worker_general": 1.0},
         )
 
-        features = extract_model_features(cfg, stack_priors_path=tmp_path / "missing.yaml")
+        features = extract_model_features(
+            cfg,
+            stack_priors_path=tmp_path / "missing.yaml",
+            registry_path=registry,
+        )
 
         assert features["worker_general"].param_count_log == pytest.approx(np.log2(26))
         assert features["worker_general"].is_moe == 1.0

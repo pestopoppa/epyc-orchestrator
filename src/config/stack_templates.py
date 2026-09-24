@@ -29,6 +29,7 @@ from src.registry.stack_priors import (
     stack_prior_serving,
     stack_prior_serving_ports,
 )
+from src.roles import Role
 
 logger = logging.getLogger(__name__)
 
@@ -344,6 +345,21 @@ def _validate_stack_prior_parity(
             )
 
     for role_name, record in live_records.items():
+        if Role.from_string(role_name) is None:
+            # Host-only registry/launch-manifest alias (e.g. "worker"): kept in
+            # server_mode.<primary>.shared_with purely so a legacy URL/topology
+            # lookup against an old physical host name still resolves (2026-09-22
+            # lineup cutover — see orchestration/model_registry.yaml server_mode.worker
+            # and its shared_with comment). It genuinely compiles
+            # deployment_status: live_stack because it IS part of the live serving
+            # topology, but it is not a `Role` and was never meant to carry its own
+            # stack-template entry — its ports are already reconciled through its
+            # primary role's (e.g. frontdoor's) own template entry. The scoring path
+            # (orchestration/repl_memory/q_scorer.py `_NON_SCORING_HOST_ALIASES`)
+            # excludes it the same way, derived the same way: any live-stack role
+            # name that is not a canonical `Role` is a host alias, never a
+            # deployable template role.
+            continue
         prior_ports = _stack_prior_record_ports(record)
         if not prior_ports:
             warnings.append(

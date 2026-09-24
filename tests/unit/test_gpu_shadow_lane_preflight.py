@@ -182,12 +182,35 @@ class TestParsers:
         assert "vision_escalation" not in overlaps
 
     def test_static_smt_overlap_folds_in_full_instances(self):
-        # P1-2: sibling fold surfaces the 0-95 full instances as co-tenants.
+        """P1-2: sibling fold surfaces every declared full-host (0-95) instance as
+        a co-tenant of the 184-191 lane, even though their masks are DISJOINT
+        from it before folding.
+
+        Derived 2026-09-24 (2026-09-22 lineup cutover): the old form hardcoded
+        `architect_general[8083]` / `worker_general[8072]`. worker_general has
+        had no NUMA_CONFIG instance of its own since that cutover — it folded
+        into frontdoor's :8070 process (stack_templates/default.yaml) — and
+        architect_general's own instance moved onto the lane's own cpuset
+        (184-191 itself), so it now overlaps trivially without exercising the
+        fold at all. The mechanism this test targets — a mask DISJOINT from the
+        lane becoming a co-tenant only after the SMT-sibling fold — is exercised
+        today by whichever roles hold the genuine full-host 0-95 mask. Derive
+        them from NUMA_CONFIG rather than repin literals a second time.
+        """
+        full_host = _expand("0-95")
+        full_instances = [
+            (role, port) for role, port, cpus in _numa_instances() if cpus == full_host
+        ]
+        assert full_instances, (
+            "no declared instance owns the full 0-95 mask — check the topology"
+        )
+
         overlaps = probe.static_smt_overlap_roles("184-191")
-        assert "architect_general" in overlaps
-        assert 8083 in overlaps["architect_general"]
-        assert "worker_general" in overlaps
-        assert 8072 in overlaps["worker_general"]
+        for role, port in full_instances:
+            assert role in overlaps, (
+                f"{role} (full 0-95 instance) should fold into the lane overlap"
+            )
+            assert port in overlaps[role]
 
     def test_parse_rocm_meminfo_card0(self):
         payload = {
