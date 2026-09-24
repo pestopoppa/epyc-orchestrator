@@ -620,3 +620,94 @@ def test_run_edit_transaction_rerun_path_also_reports_finish_reason(tmp_path):
     assert res.parse_outcome == "recovered_unclosed_trailing_file"
     assert reasons["n"] == 2  # once for the initial parse, once for the rerun's parse
     assert (tmp_path / "calc.py").read_text() == "VALUE = 3"
+
+
+# ── TD-21.21 coordinator fix: get_finish_reason must survive a SHARED, concurrent primitives ──
+def test_run_edit_transaction_finish_reason_not_clobbered_by_concurrent_call(tmp_path):
+    """`_init_primitives` (src/api/routes/chat_pipeline/routing.py:487) reuses ONE shared
+    LLMPrimitives instance across concurrent requests in the same worker. Before the coordinator
+    fix, `get_finish_reason` read the plain `primitives._last_inference_meta` attribute, which a
+    concurrent request against the SAME instance can overwrite between this call finishing and
+    this code reading it back. This test forces exactly that interleaving with two REAL
+    `LLMPrimitives._real_call` invocations (fake backends, no network) on ONE shared instance:
+    THIS call's own reason is "length" (truncated -- must never be written); the OTHER,
+    concurrent call's reason is "stop". The two are ordered with threading.Event so the other
+    call's write provably lands on the shared plain attribute AFTER this call's own backend
+    response, and BEFORE this call reads back its finish reason -- the exact race window.
+    `get_last_inference_meta()` (a contextvars.ContextVar, isolated per asyncio.to_thread
+    context) must still report THIS call's own "length", so the trailing file is NOT written.
+
+    The target is a `.txt` file, deliberately NOT `.py`: `apply_edit_transaction`'s
+    `compile()` self-check only runs on `.py` targets, so a `.py` target would mask a
+    misclassification behind that unrelated safety net (confirmed manually: swapping this
+    test's `get_finish_reason` back to the pre-fix `getattr(primitives, "_last_inference_meta",
+    {})` idiom DOES misclassify this race as `"recovered_unclosed_trailing_file"` and, on a
+    `.txt` target, WRITES the truncated content -- exactly the corruption this fix exists to
+    prevent). The `.txt` target exercises the finish-reason gating alone.
+    """
+    import asyncio
+    import threading
+    from unittest.mock import Mock
+
+    from src.llm_primitives import LLMPrimitives
+    from src.model_server import InferenceResult
+
+    (tmp_path / "notes.txt").write_text("original\n")
+
+    prims = LLMPrimitives(
+        mock_mode=False,
+        server_urls={"role_a": "http://localhost:9001", "role_b": "http://localhost:9002"},
+    )
+    backend_a = Mock(spec=[])
+    backend_a.infer = Mock(return_value=InferenceResult(
+        role="role_a", output="ignored", tokens_generated=1, generation_speed=1.0,
+        elapsed_time=0.001, success=True, prompt_eval_ms=0.1, generation_ms=0.1,
+        http_overhead_ms=0.0, completion_reason="length",
+    ))
+    backend_b = Mock(spec=[])
+    backend_b.infer = Mock(return_value=InferenceResult(
+        role="role_b", output="ignored", tokens_generated=1, generation_speed=1.0,
+        elapsed_time=0.001, success=True, prompt_eval_ms=0.1, generation_ms=0.1,
+        http_overhead_ms=0.0, completion_reason="stop",
+    ))
+    prims._backends["role_a"] = backend_a
+    prims._backends["role_b"] = backend_b
+
+    a_backend_done = threading.Event()
+    b_backend_done = threading.Event()
+
+    def get_finish_reason() -> str:
+        meta = prims.get_last_inference_meta() or {}
+        return str(meta.get("completion_reason") or "")
+
+    def call_a_llm(_prompt: str) -> str:
+        prims._real_call("edit prompt", "role_a", n_tokens=8)  # sets THIS context's meta: length
+        a_backend_done.set()
+        assert b_backend_done.wait(timeout=5), "concurrent call B never completed"
+        # THIS call's own trailing file is genuinely truncated -- no <<<END>>>.
+        return "<<<FILE: notes.txt>>>\nthis got cut off mid-sen"
+
+    def call_b_other_request() -> None:
+        assert a_backend_done.wait(timeout=5), "call A's backend response never landed"
+        # Clobbers the SHARED plain `_last_inference_meta` attribute to "stop" -- AFTER A's own
+        # backend responded, BEFORE A reads its finish reason back.
+        prims._real_call("unrelated concurrent prompt", "role_b", n_tokens=8)
+        b_backend_done.set()
+
+    async def _run():
+        return await asyncio.gather(
+            asyncio.to_thread(
+                run_edit_transaction, call_a_llm, "Set value", tmp_path, ["notes.txt"],
+                get_finish_reason=get_finish_reason,
+            ),
+            asyncio.to_thread(call_b_other_request),
+        )
+
+    (res, raw), _ = asyncio.run(_run())
+
+    # Sanity: the race actually happened -- the shared plain attribute WAS clobbered by B.
+    assert prims._last_inference_meta["completion_reason"] == "stop"
+    assert raw
+    assert not res.ok  # fail-closed: A's own reason was "length", never "stop"
+    assert res.parse_outcome == "truncated_trailing_file_dropped"
+    assert (tmp_path / "notes.txt").read_text() == "original\n"  # untouched, not corrupted

@@ -1060,11 +1060,19 @@ async def _handle_chat(
                     review_before_commit_gate = _targeted_review_gate
 
             def _edit_finish_reason() -> str:
-                # TD-21.21: same side-channel idiom as graph/helpers.py:941 and
-                # chat_delegation.py:470 -- reads the stop reason of the most recent
-                # `_edit_llm_call` invocation so `run_edit_transaction` can tell a genuine
-                # length cutoff from a model that simply forgot the closing `<<<END>>>`.
-                meta = getattr(primitives, "_last_inference_meta", None) or {}
+                # TD-21.21 (coordinator review of 56e33d49): reading the plain
+                # `primitives._last_inference_meta` attribute here was UNSAFE --
+                # `_init_primitives` (chat_pipeline/routing.py:487) reuses one shared
+                # `state._real_primitives` instance across concurrent requests in the same
+                # worker, so that attribute can hold ANOTHER request's finish reason, and a
+                # truncated edit misread as a natural stop would WRITE a truncated file. Use
+                # `get_last_inference_meta()` instead: a `contextvars.ContextVar` that
+                # `asyncio.to_thread`/`asyncio.Task` isolate per call-context, so a concurrent
+                # request's write against the SAME primitives instance can never be observed
+                # here (see `src/llm_primitives/primitives.py` `_last_inference_meta_ctx`).
+                # `None` (no call made yet in THIS context) maps to "" -- unknown,
+                # fail-closed -- never to a stale or borrowed value.
+                meta = primitives.get_last_inference_meta() or {}
                 return str(meta.get("completion_reason") or "")
 
             edit_res, _raw = await asyncio.to_thread(

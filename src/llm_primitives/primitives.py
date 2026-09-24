@@ -213,6 +213,21 @@ class LLMPrimitives(
         self._chat_payload_ctx: contextvars.ContextVar[dict[str, Any] | None] = (
             contextvars.ContextVar("llm_primitives_chat_payload", default=None)
         )
+        # TD-21.21 concurrency fix (coordinator review of 56e33d49): `_last_inference_meta`
+        # below is a PLAIN instance attribute, reassigned by every `llm_call`/`chat_completion_call`
+        # against this (often SHARED -- see `_init_primitives` reuse of `state._real_primitives`)
+        # instance, so a concurrent request's call can overwrite it between one call finishing and
+        # its own caller reading it back -- there is no way to tell whose data is in it. This
+        # ContextVar is the per-call-safe counterpart, set at the SAME points `_last_inference_meta`
+        # is (see `src/llm_primitives/inference.py`): `asyncio.to_thread`/`asyncio.Task` each copy
+        # the calling context once at creation (`contextvars.copy_context()`), so two concurrent
+        # calls against the SAME primitives instance mutate two independent copies and can never
+        # observe each other's value here, unlike the plain attribute. Read via
+        # `get_last_inference_meta()`. Not a replacement for `_last_inference_meta` -- existing
+        # consumers of the plain attribute are unchanged; this is additive.
+        self._last_inference_meta_ctx: contextvars.ContextVar[dict[str, Any] | None] = (
+            contextvars.ContextVar("llm_primitives_last_inference_meta", default=None)
+        )
         # HS-4 P0.2: typed /v1 request keys stamped onto the inference trace.
         # Instance-level (not a contextvar) because /v1 builds one primitives
         # object per request and its streaming body runs in a different context
@@ -348,6 +363,18 @@ class LLMPrimitives(
         from src.scheduling.placement_policy import coerce_batch_placement_mode
 
         return coerce_batch_placement_mode(self._batch_placement_mode_ctx.get()).value
+
+    def get_last_inference_meta(self) -> dict[str, Any] | None:
+        """Per-call-safe counterpart of the plain `_last_inference_meta` attribute (TD-21.21).
+
+        Returns the metadata dict (role, completion_reason, tokens, timings, ...) of the most
+        recent `llm_call`/`chat_completion_call` made from THIS context (this asyncio Task or
+        `asyncio.to_thread` offload and anything called synchronously from it) -- never a
+        concurrent call's data, even when this primitives instance is shared across requests.
+        `None` when no call has been made yet in this context, which callers that need the
+        finish reason should treat as unknown (fail-closed), never as a stale value.
+        """
+        return self._last_inference_meta_ctx.get()
 
     def get_max_queue_wait_ms(self) -> int | None:
         """Get request-local cross-role contention gate budget, if set.

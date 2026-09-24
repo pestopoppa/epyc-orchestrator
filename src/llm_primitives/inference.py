@@ -333,6 +333,23 @@ def _request_trace_keys(owner: Any) -> dict[str, Any]:
 class InferenceMixin:
     """Mixin for real inference methods."""
 
+    def _set_last_inference_meta(self, meta: dict[str, Any]) -> None:
+        """Record this call's metadata on BOTH channels (TD-21.21 coordinator fix).
+
+        `self._last_inference_meta` is the long-standing plain attribute every existing
+        consumer (`graph/helpers.py`, `typed_decisions/*`, `chat_pipeline/telemetry.py`,
+        `chat_delegation.py`, ...) already reads -- kept unchanged so none of them regress.
+        `self._last_inference_meta_ctx` is the per-call-safe `contextvars.ContextVar`
+        counterpart (`src/llm_primitives/primitives.py`): a concurrent call against this same
+        (often SHARED) primitives instance runs in its OWN copied context
+        (`asyncio.to_thread`/`asyncio.Task` each `contextvars.copy_context()` at creation), so
+        it can only ever mutate its OWN copy of this var, never this one. Every site that used
+        to write `self._last_inference_meta = {...}` directly now goes through this one method
+        so a future call site cannot add a 6th assignment that forgets the ContextVar half.
+        """
+        self._last_inference_meta = meta
+        self._last_inference_meta_ctx.set(meta)
+
     def _real_call(
         self,
         prompt: str,
@@ -663,13 +680,13 @@ class InferenceMixin:
                 result = self.model_server.infer(role, request)
         except Exception as exc:
             req_elapsed_ms = (time.perf_counter() - req_started) * 1000
-            self._last_inference_meta = {
+            self._set_last_inference_meta({
                 "role": role,
                 "transport": "model_server",
                 "elapsed_ms": req_elapsed_ms,
                 "completion_reason": "exception",
                 "error": str(exc),
-            }
+            })
             if "lock timeout" in str(exc).lower() or "cancelled" in str(exc).lower():
                 log.warning(
                     "Inference aborted before model call (role=%s, transport=model_server, elapsed_ms=%.1f): %s",
@@ -680,7 +697,7 @@ class InferenceMixin:
             raise
 
         req_elapsed_ms = (time.perf_counter() - req_started) * 1000
-        self._last_inference_meta = {
+        self._set_last_inference_meta({
             "role": role,
             "transport": "model_server",
             "elapsed_ms": req_elapsed_ms,
@@ -692,7 +709,7 @@ class InferenceMixin:
             "gen_ms": result.generation_ms,
             "overhead_ms": result.http_overhead_ms,
             "completion_probabilities": list(getattr(result, "completion_probabilities", []) or []),
-        }
+        })
         if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
             log.warning(
                 "Frontdoor inference telemetry: transport=model_server elapsed_ms=%.1f "
@@ -1074,13 +1091,13 @@ class InferenceMixin:
             except Exception as exc:
                 req_elapsed_ms = (time.perf_counter() - req_started) * 1000
                 transport = "stream" if can_stream else "batch"
-                self._last_inference_meta = {
+                self._set_last_inference_meta({
                     "role": role,
                     "transport": transport,
                     "elapsed_ms": req_elapsed_ms,
                     "completion_reason": "exception",
                     "error": str(exc),
-                }
+                })
                 if "lock timeout" in str(exc).lower() or "cancelled" in str(exc).lower():
                     log.warning(
                         "Inference aborted before backend response (role=%s, transport=%s, elapsed_ms=%.1f): %s",
@@ -1093,7 +1110,7 @@ class InferenceMixin:
 
             req_elapsed_ms = (time.perf_counter() - req_started) * 1000
             transport = "stream" if can_stream else "batch"
-            self._last_inference_meta = {
+            self._set_last_inference_meta({
                 "role": role,
                 "transport": transport,
                 "elapsed_ms": req_elapsed_ms,
@@ -1107,7 +1124,7 @@ class InferenceMixin:
                 "completion_probabilities": list(
                     getattr(result, "completion_probabilities", []) or []
                 ),
-            }
+            })
             if getattr(request, "chat_payload", None) is not None:
                 self._last_inference_meta["tool_calls"] = list(
                     getattr(result, "tool_calls", None) or []
