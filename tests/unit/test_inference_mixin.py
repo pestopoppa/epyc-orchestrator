@@ -1237,3 +1237,114 @@ class TestWorkerPoolBatch:
 
         assert results == ["Fallback 1", "Fallback 2"]
         mock_fallback.assert_called_once_with(["P1", "P2"], "worker_code", n_tokens=500)
+
+
+class TestRequestIsGrammarConstrained:
+    """Unit tests for _request_is_grammar_constrained (TD-1d.2)."""
+
+    def test_json_schema_present(self):
+        from src.llm_primitives.inference import _request_is_grammar_constrained
+
+        request = InferenceRequest(role="coder", prompt="p", json_schema={"type": "object"})
+        assert _request_is_grammar_constrained(request) is True
+
+    def test_grammar_present(self):
+        from src.llm_primitives.inference import _request_is_grammar_constrained
+
+        request = InferenceRequest(role="coder", prompt="p", grammar='root ::= "x"')
+        assert _request_is_grammar_constrained(request) is True
+
+    def test_neither_present(self):
+        from src.llm_primitives.inference import _request_is_grammar_constrained
+
+        request = InferenceRequest(role="coder", prompt="p")
+        assert _request_is_grammar_constrained(request) is False
+
+
+class TestStreamingRepetitionGuardSchemaExemption:
+    """TD-1d.2: the streaming repetition guard (`_detect_streaming_repetition`)
+    must not abort a schema/grammar-constrained response for the structural
+    repetition the grammar itself produces on purpose (one near-identical
+    JSON object per typed-decision question). An unconstrained genuine
+    degenerate loop must still be aborted.
+
+    Repro: `python -m src.typed_decisions.bench` through `LLMPrimitives` on
+    frontdoor hit "Repetition loop detected after 300 chunks, aborting
+    generation" on a legitimate 24-question JSON-schema response, producing
+    a truncated, unparseable object and 0/24 recovered decisions.
+    """
+
+    _REPEATING_BLOCK = (
+        '{"noul": false, "probabilities": {"true": 0.0, "false": 1.0}, '
+        '"confidence": 1.0}\n'
+    )
+
+    @staticmethod
+    def _make_streaming_backend(chunks):
+        """A backend whose infer_stream_text mirrors the real llama_server
+        backend's StopIteration handling: on_chunk may raise StopIteration
+        to end the stream early, and the result reflects only what was
+        delivered before that (src/backends/llama_server.py:970-980)."""
+
+        def infer_stream_text(role_config, request, on_chunk=None):
+            delivered: list[str] = []
+            for chunk in chunks:
+                delivered.append(chunk)
+                if on_chunk is not None:
+                    try:
+                        on_chunk(chunk)
+                    except StopIteration:
+                        break
+            return InferenceResult(
+                role=request.role,
+                output="".join(delivered),
+                tokens_generated=len(delivered),
+                generation_speed=1.0,
+                elapsed_time=0.1,
+                success=True,
+            )
+
+        backend = Mock(spec=["infer_stream_text", "infer"])
+        backend.infer_stream_text = Mock(side_effect=infer_stream_text)
+        return backend
+
+    def test_schema_constrained_repetitive_stream_is_not_aborted(self, monkeypatch):
+        monkeypatch.setenv("INFERENCE_TAP_FILE", "/dev/null")
+        monkeypatch.setenv("INFERENCE_TAP_STREAM_MODE", "force")
+
+        # 60 chunks of the same structural block — well past the 50-chunk
+        # check interval and the 3-repeat trigger — exactly the shape a
+        # 24-question typed-decision JSON response produces.
+        chunks = [self._REPEATING_BLOCK] * 60
+        backend = self._make_streaming_backend(chunks)
+        prims = LLMPrimitives(
+            mock_mode=False, server_urls={"coder": "http://localhost:9999"}
+        )
+
+        result = prims._call_caching_backend(
+            backend,
+            "Answer every question as JSON",
+            "coder",
+            json_schema={"type": "object"},
+        )
+
+        assert result == "".join(chunks)
+        assert result.count(self._REPEATING_BLOCK) == 60
+
+    def test_unconstrained_repetitive_stream_is_still_aborted(self, monkeypatch):
+        monkeypatch.setenv("INFERENCE_TAP_FILE", "/dev/null")
+        monkeypatch.setenv("INFERENCE_TAP_STREAM_MODE", "force")
+
+        chunks = [self._REPEATING_BLOCK] * 60
+        backend = self._make_streaming_backend(chunks)
+        prims = LLMPrimitives(
+            mock_mode=False, server_urls={"coder": "http://localhost:9999"}
+        )
+
+        result = prims._call_caching_backend(
+            backend, "Free-form generation", "coder"
+        )
+
+        # The guard must have fired before all 60 chunks were delivered.
+        assert result.count(self._REPEATING_BLOCK) < 60
+        assert result.count(self._REPEATING_BLOCK) > 0

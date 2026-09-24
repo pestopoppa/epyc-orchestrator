@@ -28,6 +28,23 @@ def _is_frontdoor_role(role: str) -> bool:
     return norm == "frontdoor" or norm.endswith(".frontdoor")
 
 
+def _request_is_grammar_constrained(request: Any) -> bool:
+    """Whether *request* already bounds output shape via json_schema/grammar.
+
+    The streaming repetition guard (`_detect_streaming_repetition`) exists to
+    catch degenerate free-form loops (the same paragraph repeated forever).
+    A schema- or grammar-constrained response is a different shape: TD-1's
+    per-question JSON answers are legitimately near-identical objects
+    (``{"noul": false, "probabilities": {...}, "confidence": 1.0}`` repeated
+    once per question), and the grammar/schema already bounds the output —
+    there is no unbounded-loop risk for the guard to protect against. See
+    TD-1d.2 (handoffs/active/typed-decision-plane.md): the guard aborted a
+    24-question schema-constrained JSON response after 300 chunks, producing
+    a truncated, unparseable object with zero decisions recovered.
+    """
+    return bool(getattr(request, "json_schema", None)) or bool(getattr(request, "grammar", None))
+
+
 def _detect_streaming_repetition(text: str, min_block: int = 60, min_repeats: int = 3) -> bool:
     """Detect paragraph-level repetition in streaming text.
 
@@ -1003,6 +1020,12 @@ class InferenceMixin:
                                 _acc: list[str] = []
                                 _chunk_count = 0
                                 _REP_CHECK_INTERVAL = 50  # check every ~50 chunks
+                                # Schema/grammar-constrained requests bound
+                                # their own output shape; structural repeats
+                                # (one near-identical object per question)
+                                # are expected, not a degenerate loop. See
+                                # _request_is_grammar_constrained docstring.
+                                _rep_guard_active = not _request_is_grammar_constrained(request)
 
                                 _cancel = self.get_request_cancel_check()
 
@@ -1019,7 +1042,7 @@ class InferenceMixin:
                                     if _stop_check is not None and _stop_check("".join(_acc)):
                                         raise StopIteration
                                     # Repetition guard: check periodically
-                                    if _chunk_count % _REP_CHECK_INTERVAL == 0:
+                                    if _rep_guard_active and _chunk_count % _REP_CHECK_INTERVAL == 0:
                                         if _detect_streaming_repetition("".join(_acc)):
                                             log.warning(
                                                 "Repetition loop detected after %d chunks, "
