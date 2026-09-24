@@ -210,6 +210,63 @@ def test_run_instability_derates_discriminability():
     assert g["discriminability_index"] == pytest.approx(0.0)
 
 
+def test_error_rows_excluded_from_brittleness_flip():
+    # A qid that errored in run A (no model answer at all) and was answered
+    # correctly in run B is ONE genuine observation, not a flip between two
+    # model behaviors -- an absent answer must not read as a contradictory one.
+    run_a = make_rows("errflip", 10, 0, "rA", qid_prefix="errflip", errors=10)
+    run_b = make_rows("errflip", 10, 10, "rB", qid_prefix="errflip")
+    br = esd.compute_brittleness(run_a + run_b)
+    assert br["measured"] is False  # every qid has exactly 1 non-error observation
+    assert br["n_multirun_qids"] == 0
+    assert br["flip_rate"] is None
+    assert br["n_error_excluded"] == 10
+
+
+def test_error_dominated_run_excluded_from_run_spread():
+    # RTG-16 regression: a totally-errored run (backend circuit-open + harness
+    # no-progress-nudge cascade) pooled against a clean run on the SAME qids
+    # must not be read as suite/scorer run-instability -- it is an
+    # infrastructure outage in one data-collection window, not a second
+    # independent measurement of the suite. Scaled-down mirror of
+    # real_suite_v1_eval_20260706T192007Z (50/50 error) vs
+    # real_suite_v1_eval_20260707T013009Z (35/50 correct, 3 error).
+    outage_run = make_rows("rsv1", 10, 0, "outage", qid_prefix="rsv1", errors=10)
+    clean_run = make_rows("rsv1", 10, 7, "clean", qid_prefix="rsv1", errors=1)
+    g = analyze(outage_run + clean_run)
+    assert g["per_run"]["outage"]["error_dominated"] is True
+    assert g["per_run"]["outage"]["pass_rate_excl_errors"] is None
+    assert g["per_run"]["clean"]["error_dominated"] is False
+    assert g["error_dominated_runs"] == ["outage"]
+    # Only one run has a scored pass rate -> spread cannot be computed from
+    # noise, so it must not fire run_unstable / brittle-by-outage.
+    assert g["run_spread"] == pytest.approx(0.0)
+    assert g["run_unstable"] is False
+    assert "error_dominated_runs_excluded" in g["flags"]
+    assert g["run_stability_unmeasurable"] is True
+    assert "run_stability_unmeasurable" in g["flags"]
+    # The outage run contributes ZERO non-error observations, so no qid has a
+    # second genuine data point to compare against -- brittleness/flip_rate
+    # cannot be measured at all (not "measured and stable", which would
+    # understate what actually happened: there is no second observation).
+    assert g["brittleness"]["measured"] is False
+    assert g["brittleness"]["n_multirun_qids"] == 0
+    assert g["brittleness"]["flip_rate"] is None
+    assert g["brittleness"]["n_error_excluded"] == 11  # 10 outage + 1 clean error
+    assert "brittleness_unmeasured" in g["flags"]
+
+
+def test_error_dominated_gate_is_configurable():
+    outage_run = make_rows("g", 10, 0, "outage", qid_prefix="g", errors=6)  # 60% errors
+    clean_run = make_rows("g", 10, 5, "clean", qid_prefix="g")
+    strict_cfg = esd.AuditConfig(error_dominated_gate=0.9)
+    g = esd.analyze_group("g", outage_run + clean_run, strict_cfg)
+    # 60% error rate is below a 0.9 gate -> not excluded, run-spread computed
+    # over both (error-inclusive) runs as before.
+    assert g["error_dominated_runs"] == []
+    assert g["per_run"]["outage"]["error_dominated"] is False
+
+
 def test_brittleness_unmeasured_single_run():
     br = esd.compute_brittleness(make_rows("solo", 20, 10, "r1"))
     assert br["measured"] is False

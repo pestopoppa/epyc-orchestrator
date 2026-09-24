@@ -102,6 +102,7 @@ class AuditConfig:
     min_n: int = 5  # n_unique below this -> tiny-n / underpowered
     quantum_gate: float = 0.15  # effective quantum (1/n) above this -> underpowered
     run_spread_gate: float = 0.30  # max-min per-run pass-rate above this -> run-unstable
+    error_dominated_gate: float = 0.5  # run error_rate >= this -> excluded from run-spread/flip
 
 
 # ---------------------------------------------------------------------------
@@ -265,12 +266,34 @@ def load_rows(paths: list[Path]) -> tuple[list[dict[str, Any]], list[str]]:
 def compute_brittleness(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Per-question outcome variance across runs/seeds.
 
-    A qid seen in >1 run contributes; ``flip_rate`` is the fraction of such qids
-    whose 0/1 outcome was not constant across runs, ``mean_qid_variance`` the
-    mean population variance of those per-qid outcome vectors.
+    A qid seen with a genuine (non-error) verdict in >1 run contributes;
+    ``flip_rate`` is the fraction of such qids whose 0/1 outcome was not
+    constant across runs, ``mean_qid_variance`` the mean population variance
+    of those per-qid outcome vectors.
+
+    ``error=True`` rows are excluded from the outcome vectors before flips are
+    counted. An errored request never got a model answer at all (backend
+    circuit-open, harness no-progress-nudge escalation, timeout, ...), so it
+    carries no signal about the *model's* behavior; pooling it in as an
+    implicit 0 makes an infrastructure outage in one run look like a
+    disagreement with a clean run in another, inflating ``flip_rate`` for a
+    reason that has nothing to do with scorer or model nondeterminism. Root
+    cause of the RTG-16 "0/50 vs 35/50 on the same 50 qids" instability:
+    ``real_suite_v1_eval_20260706T192007Z`` has ``error=True`` on 50/50 rows
+    (12 backend-circuit-open + 38 harness no-progress-nudge, at
+    ``eval_concurrency=3``) — a total-outage run, not a second independent
+    measurement of the suite. ``pass_rate``/MDE accounting is untouched by
+    this (an errored task still scores 0 there, per the ETR-1 era
+    ``task_failed`` convention) — only the cross-run *flip* diagnostic, whose
+    job is specifically to detect scorer/model noise, is corrected to stop
+    reading an absent observation as a contradictory one.
     """
     by_qid: dict[str, list[int]] = defaultdict(list)
+    n_error_excluded = 0
     for r in rows:
+        if r.get("error"):
+            n_error_excluded += 1
+            continue
         by_qid[r["qid"]].append(1 if r["correct"] else 0)
     multirun = {q: outs for q, outs in by_qid.items() if len(outs) > 1}
     if not multirun:
@@ -280,6 +303,7 @@ def compute_brittleness(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "flip_rate": None,
             "mean_qid_variance": None,
             "max_qid_variance": None,
+            "n_error_excluded": n_error_excluded,
         }
     variances = []
     flips = 0
@@ -295,18 +319,41 @@ def compute_brittleness(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "flip_rate": flips / len(multirun),
         "mean_qid_variance": sum(variances) / len(variances),
         "max_qid_variance": max(variances),
+        "n_error_excluded": n_error_excluded,
     }
 
 
-def _per_run(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _per_run(rows: list[dict[str, Any]], error_dominated_gate: float) -> dict[str, dict[str, Any]]:
+    """Per-run counters, including an error-excluded pass rate.
+
+    ``pass_rate`` is the raw, error-inclusive rate (unchanged, still used for
+    the group-level accounting). ``pass_rate_excl_errors`` is ``None`` when
+    every row in the run errored (no signal at all); ``error_dominated`` marks
+    a run whose error rate meets ``error_dominated_gate`` — such a run is
+    excluded from the run-spread / run-instability comparison in
+    ``analyze_group`` (see its docstring) because it measures backend/harness
+    availability, not suite discriminability.
+    """
     out: dict[str, dict[str, Any]] = {}
     by_run: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
         by_run[r["run_id"]].append(r)
     for run_id, rr in by_run.items():
         n = len(rr)
+        errs = sum(1 for r in rr if r["error"])
         c = sum(1 for r in rr if r["correct"])
-        out[run_id] = {"n": n, "correct": c, "pass_rate": (c / n) if n else 0.0}
+        n_scored = n - errs
+        error_rate = (errs / n) if n else 0.0
+        out[run_id] = {
+            "n": n,
+            "correct": c,
+            "errors": errs,
+            "n_scored": n_scored,
+            "error_rate": error_rate,
+            "pass_rate": (c / n) if n else 0.0,
+            "pass_rate_excl_errors": (c / n_scored) if n_scored else None,
+            "error_dominated": error_rate >= error_dominated_gate,
+        }
     return out
 
 
@@ -320,9 +367,22 @@ def analyze_group(name: str, rows: list[dict[str, Any]], cfg: AuditConfig) -> di
     p = (correct / n) if n else 0.0
     ci_lo, ci_hi = wilson_interval(correct, n, z=DEFAULT_WILSON_Z)
 
-    per_run = _per_run(rows)
-    run_rates = [v["pass_rate"] for v in per_run.values()]
+    per_run = _per_run(rows, cfg.error_dominated_gate)
+    # Run-spread / run-instability is a diagnostic for scorer/model noise
+    # across runs, so it must be computed only over runs that actually
+    # produced a scored answer for at least one question. A run whose error
+    # rate meets error_dominated_gate (e.g. a total backend outage) is
+    # excluded here — it is reported separately via error_dominated_runs so
+    # it is never silently dropped, only kept out of the noise comparison it
+    # cannot speak to. See compute_brittleness docstring / RTG-16.
+    scored_runs = {
+        rid: v for rid, v in per_run.items()
+        if v["pass_rate_excl_errors"] is not None and not v["error_dominated"]
+    }
+    error_dominated_runs = sorted(rid for rid, v in per_run.items() if v["error_dominated"])
+    run_rates = [v["pass_rate_excl_errors"] for v in scored_runs.values()]
     run_spread = (max(run_rates) - min(run_rates)) if len(run_rates) > 1 else 0.0
+    run_stability_unmeasurable = len(per_run) > 1 and len(scored_runs) < 2
 
     # Per-arm sample size for a baseline-vs-candidate comparison = the count of
     # distinct questions the suite offers (each run reuses the same question set).
@@ -369,6 +429,10 @@ def analyze_group(name: str, rows: list[dict[str, Any]], cfg: AuditConfig) -> di
         flags.append("brittle")
     if not brittle["measured"]:
         flags.append("brittleness_unmeasured")
+    if error_dominated_runs:
+        flags.append("error_dominated_runs_excluded")
+    if run_stability_unmeasurable:
+        flags.append("run_stability_unmeasurable")
 
     return {
         "group": name,
@@ -387,6 +451,8 @@ def analyze_group(name: str, rows: list[dict[str, Any]], cfg: AuditConfig) -> di
         "mde_target_effect": cfg.target_effect,
         "n_per_arm": n_per_arm,
         "run_spread": run_spread,
+        "error_dominated_runs": error_dominated_runs,
+        "run_stability_unmeasurable": run_stability_unmeasurable,
         "brittleness": brittle,
         "per_run": per_run,
         "saturated": saturated,
@@ -496,7 +562,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"target_effect={cfg['target_effect']}, "
         f"saturation>={cfg['saturation_high']}, floor<={cfg['saturation_low']}, "
         f"min_n={cfg['min_n']}, quantum_gate={cfg['quantum_gate']}, "
-        f"run_spread_gate={cfg['run_spread_gate']}."
+        f"run_spread_gate={cfg['run_spread_gate']}, "
+        f"error_dominated_gate={cfg['error_dominated_gate']}."
     )
     lines.append("")
     lines.append(
@@ -555,6 +622,15 @@ def render_markdown(report: dict[str, Any]) -> str:
                 why.append(f"MDE {_fmt(g['mde'])} cannot resolve {cfg['target_effect']}")
             if g["run_unstable"]:
                 why.append(f"run-unstable (spread {g['run_spread']:.2f})")
+            if g["error_dominated_runs"]:
+                why.append(
+                    "error-dominated run(s) excluded from run-spread/flip: "
+                    + ", ".join(g["error_dominated_runs"])
+                )
+            if g["run_stability_unmeasurable"]:
+                why.append(
+                    "run stability unmeasurable (fewer than 2 runs with any scored answer)"
+                )
             lines.append(f"- **{g['group']}**: {'; '.join(why)}")
         lines.append("")
 
@@ -584,6 +660,7 @@ def _build_config(args: argparse.Namespace) -> AuditConfig:
         min_n=args.min_n,
         quantum_gate=args.quantum_gate,
         run_spread_gate=args.run_spread_gate,
+        error_dominated_gate=args.error_dominated_gate,
     )
 
 
@@ -608,6 +685,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--min-n", type=int, default=AuditConfig.min_n)
     ap.add_argument("--quantum-gate", type=float, default=AuditConfig.quantum_gate)
     ap.add_argument("--run-spread-gate", type=float, default=AuditConfig.run_spread_gate)
+    ap.add_argument(
+        "--error-dominated-gate",
+        type=float,
+        default=AuditConfig.error_dominated_gate,
+        help="run error_rate >= this excludes it from run-spread/flip (default: 0.5)",
+    )
     ap.add_argument("--json", action="store_true", help="also print the JSON report to stdout")
     ap.add_argument(
         "--out-dir",
