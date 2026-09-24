@@ -48,6 +48,7 @@ from src.graph.helpers import (  # noqa: F401 — re-exported for backward compa
     _extract_final_from_raw,
     _extract_prose_answer,
     _is_comment_only,
+    _is_infra_failure,
     _log_escalation,
     _make_end_result,
     _maybe_compact_context,
@@ -226,6 +227,8 @@ class FrontdoorNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
+            if _is_infra_failure(artifacts):
+                return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error
             state.last_output = output
@@ -347,6 +350,8 @@ class WorkerNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
+            if _is_infra_failure(artifacts):
+                return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error
             state.last_output = output
@@ -465,6 +470,8 @@ class CoderNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
+            if _is_infra_failure(artifacts):
+                return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error
             state.last_output = output
@@ -570,6 +577,8 @@ class CoderEscalationNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
+            if _is_infra_failure(artifacts):
+                return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error
             state.last_output = output
@@ -674,6 +683,8 @@ class IngestNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
+            if _is_infra_failure(artifacts):
+                return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error
             state.last_output = output
@@ -780,6 +791,8 @@ class ArchitectNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
+            if _is_infra_failure(artifacts):
+                return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error
             state.last_output = output

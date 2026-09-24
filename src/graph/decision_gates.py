@@ -24,6 +24,26 @@ log = logging.getLogger(__name__)
 Ctx = GraphRunContext[TaskState, TaskDeps]
 
 
+def _is_infra_failure(artifacts: dict) -> bool:
+    """True when this turn's ``error`` is an in-band backend/infra sentinel.
+
+    ``_execute_turn`` (``graph/helpers.py::_backend_infra_sentinel``) tags
+    ``artifacts["_infra_failure"]`` when the raw LLM-call output IS the
+    orchestrator's own ``[ERROR: ...]`` string (a placement/admission timeout,
+    a circuit-open refusal, a dead connection, ...) rather than genuine model
+    text -- the backend denied the call before generation started. Every
+    caller MUST check this FIRST, before ``_classify_error``/``_should_retry``/
+    ``_should_escalate``, and end the turn immediately with ``error`` passed
+    through VERBATIM (never wrapped as ``[FAILED: ...]``, which would erase
+    the ``[ERROR: ...]`` prefix ``_annotate_error`` classifies into the right
+    HTTP status). No retry, no escalation: the denial is a resource-contention
+    fact about the host, not a capability gap a different role fixes by being
+    "smarter" -- escalating just re-queues the same wait against the same
+    held region.
+    """
+    return bool(artifacts.get("_infra_failure"))
+
+
 def _should_escalate(
     ctx: Ctx,
     error_category: ErrorCategory,

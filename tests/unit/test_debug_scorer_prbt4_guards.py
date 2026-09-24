@@ -20,7 +20,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "benchmark"))
 
 import pytest  # noqa: E402
 
-from debug_scorer import ScoringUnavailableError, score_answer  # noqa: E402
+import debug_scorer  # noqa: E402
+from debug_scorer import AnswerParseError, ScoringUnavailableError, score_answer  # noqa: E402
 
 TEN = [f"option {i}" for i in range(10)]
 MMLU_PRO_CFG = {"choices": TEN, "choice_labels": "ABCDEFGHIJ"}
@@ -57,7 +58,26 @@ def test_undeclared_rows_keep_the_historical_a_to_h_parse() -> None:
 
 
 def test_the_pronoun_i_is_not_a_vote_for_option_i() -> None:
-    assert _mc("I don't know", "I", MMLU_PRO_CFG) is False
+    # "I don't know" carries no option letter at all under any extraction
+    # strategy (the pronoun-guard excludes bare "I" from the loose
+    # standalone-letter match) — genuinely no candidate, not a comparable
+    # wrong letter. TD-21.11/EQ-1: with EXCLUDE_UNPARSEABLE_ANSWERS off it
+    # scores False (pre-EQ-1 behavior, byte-identical); with the shipped
+    # default (True) it is a real model-side parse failure and raises
+    # AnswerParseError, exactly like every other "nothing extracted" case
+    # in tests/unit/test_debug_scorer_td21_parse_exclusion.py. Pin both
+    # explicitly rather than relying on whatever another test file in this
+    # process happened to leave the flag at.
+    _prior_flag = debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS
+    try:
+        debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS = False
+        assert _mc("I don't know", "I", MMLU_PRO_CFG) is False
+        debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS = True
+        with pytest.raises(AnswerParseError):
+            _mc("I don't know", "I", MMLU_PRO_CFG)
+    finally:
+        debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS = _prior_flag
+        debug_scorer.reset_parse_failure_stats()
     assert _mc("I think it is B", "B", MMLU_PRO_CFG) is True
     assert _mc("I believe\nI", "I", MMLU_PRO_CFG) is True
 

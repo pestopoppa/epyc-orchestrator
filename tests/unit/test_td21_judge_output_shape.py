@@ -376,7 +376,10 @@ def test_rubric_flag_on_sends_schema_and_repairs_on_miss(monkeypatch):
 
     assert len(calls) == 2
     assert calls[0]["output_schema"] == RUBRIC_JUDGE_SCHEMA
-    assert calls[1]["output_schema"] == RUBRIC_JUDGE_SCHEMA
+    # The repair turn sends the TD-21.35 relaxed WIRE schema (required dropped, validated
+    # against the original afterwards); the judge turn above keeps the full schema.
+    from src.structured_output.repair import _relax_required_for_wire
+    assert calls[1]["output_schema"] == _relax_required_for_wire(RUBRIC_JUDGE_SCHEMA)
     assert calls[1]["scoring_method"] == "rubric_judge_repair"
     assert source == "judge"
     assert scores["factual_accuracy"] == 0.6

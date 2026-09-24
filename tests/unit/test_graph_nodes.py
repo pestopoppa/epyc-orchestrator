@@ -332,6 +332,75 @@ class TestFrontdoorNode:
         assert "repeated no-progress nudges" in result.output.answer
 
 
+class TestBackendInfraSentinel:
+    """`llm_call` never raises for a placement/admission timeout, a circuit-
+    open breaker, or a dead backend connection -- it returns the orchestrator's
+    own `[ERROR: ...]` sentinel as ordinary text (see
+    `src/llm_primitives/primitives.py::_llm_call_impl`). The REPL turn loop
+    must recognize that string is NOT model output and end the turn as an
+    infrastructure failure immediately: no comment-only nudge, no retry, no
+    escalation -- and the original sentinel text must survive verbatim (not
+    rewrapped as `[FAILED: ...]`) so `_annotate_error`
+    (`chat_pipeline/stages.py`) can classify the correct HTTP status."""
+
+    _SENTINEL = (
+        "[ERROR: placement timeout role=frontdoor reason=race_lost "
+        "holders=[] after 60.0s]"
+    )
+
+    @pytest.mark.asyncio
+    async def test_placement_timeout_ends_after_one_turn_no_escalation(self):
+        state = make_state(current_role=Role.FRONTDOOR)
+        deps = make_deps(
+            llm_responses=[self._SENTINEL],
+            # Budget deliberately allows retries/escalation so a still-firing
+            # escalation path (the defect under test) would be observable.
+            config=GraphConfig(max_retries=2, max_escalations=2, max_turns=10),
+        )
+
+        result = await orchestration_graph.run(FrontdoorNode(), state=state, deps=deps)
+
+        assert isinstance(result.output, TaskResult)
+        assert result.output.success is False
+        # Verbatim -- NOT "[FAILED: ...]" and NOT a comment-only nudge.
+        assert result.output.answer == self._SENTINEL
+        assert result.output.turns == 1
+        # No escalation to coder_escalation (or anywhere else) was attempted.
+        assert result.output.role_history == ["frontdoor"]
+
+    @pytest.mark.asyncio
+    async def test_genuine_comment_only_output_still_nudges(self):
+        """Regression: real model prose/comment output (no [ERROR: prefix)
+        must still hit the existing comment-only nudge -- the new sentinel
+        check must not swallow ordinary model turns."""
+        state = make_state(
+            current_role=Role.FRONTDOOR,
+            consecutive_nudges=MAX_CONSECUTIVE_NUDGES - 1,
+        )
+        deps = make_deps(
+            llm_responses=["# I am still thinking about this and have not decided"],
+            config=GraphConfig(max_retries=0, max_escalations=0, max_turns=10),
+        )
+
+        result = await orchestration_graph.run(FrontdoorNode(), state=state, deps=deps)
+
+        assert result.output.success is False
+        assert "repeated no-progress nudges" in result.output.answer
+
+    @pytest.mark.asyncio
+    async def test_direct_mode_unchanged(self):
+        """Sanity: the sentinel-detection helper only touches REPL turns --
+        it must not be reachable from (nor alter) the direct-answer path,
+        which already classifies `[ERROR: ...]` correctly on its own."""
+        from src.graph.helpers import _backend_infra_sentinel
+
+        assert _backend_infra_sentinel(self._SENTINEL) == self._SENTINEL
+        assert _backend_infra_sentinel("FINAL('42')") is None
+        assert _backend_infra_sentinel("  [ERROR: circuit open]") == "[ERROR: circuit open]"
+        # A model legitimately discussing the string mid-answer is not infra.
+        assert _backend_infra_sentinel("The log showed [ERROR: foo] once.") is None
+
+
 class TestCoderNode:
     @pytest.mark.asyncio
     async def test_success(self):
