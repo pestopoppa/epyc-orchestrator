@@ -93,8 +93,10 @@ def test_shipped_default_matches_ratification_state():
     assertion is never stale after a real ratification run — only after a
     hand-edit that skips the script.
     #EQ1_RATIFICATION_TEST_SENTINEL: EXCLUDE_UNPARSEABLE_ANSWERS ships True (ratified — see instrument_eras.yaml E19)
+    SUSPENDED 2026-09-24 by the operator pending fix/e19-wrong-not-unparseable (the E19
+    classification excluded wrong answers lacking a structured marker); flip back with the fix.
     """
-    assert _SHIPPED_DEFAULT_ON_IMPORT is True
+    assert _SHIPPED_DEFAULT_ON_IMPORT is False
 
 
 # ── multiple_choice (TD-21.11) ─────────────────────────────────────────────

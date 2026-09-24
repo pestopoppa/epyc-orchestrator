@@ -138,7 +138,7 @@ class AnswerParseError(ScoringUnavailableError):
 # ONE-LINE FLIP to ratify: set this to True (only after the EQ-1 row is
 # added to `orchestration/instrument_eras.yaml` by the operator/human-only
 # path — see the proposed row text in the TD-21.11..21.14 commit message).
-EXCLUDE_UNPARSEABLE_ANSWERS = True
+EXCLUDE_UNPARSEABLE_ANSWERS = False  # SUSPENDED 2026-09-24 (operator): E19 classification excluded WRONG answers lacking a structured marker as unparseable; re-enable after fix/e19-wrong-not-unparseable lands
 
 
 # TD-21.9/21.10/21.15 (judge OUTPUT SHAPE; NOT YET RATIFIED — see the proposed
