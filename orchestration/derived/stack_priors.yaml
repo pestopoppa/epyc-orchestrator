@@ -48,47 +48,47 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-09-24T09:15:12Z'
+compiled_at: '2026-09-24T14:28:25Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
-precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+precedence_spec: docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
-    path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
+    path: orchestration/model_registry.yaml
     sha256: 82cd7b96ffb3ce4e5edc07ccb449c65a54c197449797b9a8d8a25d961eed6f2b
-    repo_commit: 86471b1f
+    repo_commit: 6b26f3ae
   descriptors:
-    path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 80e9ab1cdcd7b6b5cfe5c9208b6b7510297df06b98b389e6bd76d8d28ba1fdc6
-    repo_commit: 86471b1f
+    path: orchestration/model_descriptors.yaml
+    sha256: 592f28f5ea2453de2a51eace1ffe7c87f56438ac5d10af19181be359c48ca7dd
+    repo_commit: 6b26f3ae
   stack_manifest:
-    path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
+    path: scripts/server/stack_manifest.py
     sha256: 0a5849e2702ac029973a96e9a7427067c7a6f5deb1e7060c60586b3a98d91c75
-    repo_commit: 86471b1f
+    repo_commit: 6b26f3ae
   stack_numa:
-    path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
+    path: scripts/server/stack_numa.py
     sha256: 8a9e4eade957c71b9694160668f982deff31960d3ec5ad0f2d8fc50369b3c703
-    repo_commit: 86471b1f
+    repo_commit: 6b26f3ae
   launch_manifest:
-    path: /mnt/raid0/llm/epyc-orchestrator/orchestration/launch_manifest.yaml
+    path: orchestration/launch_manifest.yaml
     sha256: 0b918378cf0992d8bbe58241f2ae7dbd1ed030b782dc0f6abd3949ba065e12ee
-    repo_commit: 86471b1f
+    repo_commit: 6b26f3ae
   stack_topology:
-    path: /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
+    path: orchestration/stack_topology.yaml
     sha256: f802ef5b1636bec903344f800ce6ecbb7e97af20018dec678080b3af538dfbea
-    repo_commit: 86471b1f
+    repo_commit: 6b26f3ae
   orchestrator_stack:
-    path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 8703b0603af9f8c615ac44dcac2767f239db9644b82dd428382a7be4f21ef017
-    repo_commit: 86471b1f
+    path: scripts/server/orchestrator_stack.py
+    sha256: ee9e86b559b1bf22ab318811b11c0ca9e5b66b0b126ed9c14ac78e76f193c42f
+    repo_commit: 6b26f3ae
   stack_paths:
-    path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
+    path: scripts/server/stack_paths.py
     sha256: 4a7ca842a87b6ffec022f4f6433d755751cac32b9102747d88f3f4f2e4cb24de
-    repo_commit: 86471b1f
+    repo_commit: 6b26f3ae
   stack_runtime:
-    path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
+    path: scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: 86471b1f
+    repo_commit: 6b26f3ae
 roles:
   architect_critic:
     role: architect_critic
@@ -217,7 +217,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - architect_critic
       alias_overrides: []
@@ -402,7 +402,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - architect_general
       - coder_escalation
@@ -625,7 +625,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - architect_general
       - coder_escalation
@@ -894,7 +894,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - frontdoor
       - worker
@@ -1061,7 +1061,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - architect_general
       - coder_escalation
@@ -1261,7 +1261,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - frontdoor
       - worker
@@ -1374,7 +1374,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - architect_general
       - coder_escalation
@@ -1537,7 +1537,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - architect_critic
       alias_overrides: []
@@ -1754,7 +1754,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - frontdoor
       - worker
@@ -1935,7 +1935,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - worker_vision
       alias_overrides: []
@@ -2151,7 +2151,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - frontdoor
       - worker
@@ -2350,7 +2350,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - frontdoor
       - worker
@@ -2549,7 +2549,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - frontdoor
       - worker
@@ -2748,7 +2748,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - frontdoor
       - worker
@@ -2947,7 +2947,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - frontdoor
       - worker
@@ -3128,7 +3128,7 @@ roles:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+        spec: docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - worker_vision
       alias_overrides: []

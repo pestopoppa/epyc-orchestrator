@@ -1186,9 +1186,47 @@ def _descriptor_for_role(
     return descriptor
 
 
+def portable_source_path(path: Path) -> str:
+    """Spell a pinned source path so the pin means the same thing in every checkout.
+
+    A file inside THIS checkout is recorded repo-relative
+    (``orchestration/model_registry.yaml``); anything outside it (the research
+    master registry, a test's tmp tree) stays absolute.
+
+    WHY: the generated artifacts used to record ``str(path)`` — the absolute path
+    of whichever checkout compiled them. Every git worktree shares one set of
+    committed artifacts, so a worktree then (a) saw its descriptors as STALE for
+    nothing but the path spelling of ``source_registries.lean.path`` and (b) had
+    its guard hash-check the PRIMARY clone's files, not its own — so the gate's
+    verdict in a worktree depended on another session's uncommitted edits in a
+    different working tree (measured 2026-09-24: two ``source_artifacts`` hash
+    mismatches in a fresh worktree, both caused by uncommitted edits in the
+    shared clone). The sha256 is the identity; the path only says WHICH file of
+    the checkout under test to hash. Resolve with
+    :func:`resolve_portable_source_path`.
+    """
+    try:
+        return path.resolve().relative_to(_REPO_ROOT.resolve()).as_posix()
+    except (ValueError, OSError):
+        return str(path)
+
+
+def resolve_portable_source_path(raw: str, repo_root: Path = _REPO_ROOT) -> Path:
+    """Inverse of :func:`portable_source_path`: relative means relative to ``repo_root``.
+
+    ``repo_root`` defaults to the checkout whose code is running — the same root
+    :func:`portable_source_path` relativised against — so a gate run in a
+    worktree verifies that worktree's files.
+    """
+    path = Path(raw)
+    if path.is_absolute():
+        return path
+    return (repo_root / path).resolve()
+
+
 def _source_metadata(path: Path) -> dict[str, Any]:
     return {
-        "path": str(path),
+        "path": portable_source_path(path),
         "repo_commit": _repo_commit(path),
         "sha256": _sha256(path),
     }
