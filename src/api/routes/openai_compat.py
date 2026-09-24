@@ -43,6 +43,7 @@ from src.registry.stack_priors import (
     stack_prior_serving,
 )
 from src.repl_environment import REPLEnvironment
+from src.exceptions import ContextOverflowError
 from src.scheduling.contention_gate import ContentionDenied
 from src.roles import Role
 
@@ -955,6 +956,14 @@ async def openai_chat_completions(
                             )
                             yield "data: [DONE]\n\n"
                             return
+                        except ContextOverflowError as e:
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=str(e), error_type="context_overflow",
+                                status_code=503 if e.retryable else 413,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
                         except Exception as e:
                             logger.exception(
                                 "Streaming client-tool call failed for role %s (chat %s)",
@@ -987,6 +996,14 @@ async def openai_chat_completions(
                             )
                             yield "data: [DONE]\n\n"
                             return
+                        except ContextOverflowError as e:
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=str(e), error_type="context_overflow",
+                                status_code=503 if e.retryable else 413,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
                         except Exception as e:
                             logger.exception(
                                 "Streaming vision request failed for role %s (chat %s)",
@@ -1013,6 +1030,14 @@ async def openai_chat_completions(
                                 chat_id=chat_id, created=created, model=request.model,
                                 message=str(e), error_type="contention_denied",
                                 status_code=503,
+                            )
+                            yield "data: [DONE]\n\n"
+                            return
+                        except ContextOverflowError as e:
+                            yield _sse_error_event(
+                                chat_id=chat_id, created=created, model=request.model,
+                                message=str(e), error_type="context_overflow",
+                                status_code=503 if e.retryable else 413,
                             )
                             yield "data: [DONE]\n\n"
                             return
@@ -1101,6 +1126,14 @@ async def openai_chat_completions(
                                     chat_id=chat_id, created=created, model=request.model,
                                     message=str(e), error_type="contention_denied",
                                     status_code=503,
+                                )
+                                yield "data: [DONE]\n\n"
+                                return
+                            except ContextOverflowError as e:
+                                yield _sse_error_event(
+                                    chat_id=chat_id, created=created, model=request.model,
+                                    message=str(e), error_type="context_overflow",
+                                    status_code=503 if e.retryable else 413,
                                 )
                                 yield "data: [DONE]\n\n"
                                 return
@@ -1339,6 +1372,10 @@ async def openai_chat_completions(
                 # Already carries its own status — including the 503 raised a few
                 # lines above for uninitialised primitives, which the old blanket
                 # `except Exception` swallowed into a 200.
+                raise
+            except ContextOverflowError:
+                # Dedicated app-level handler: 413 (too large for the role) or
+                # 503 + Retry-After (shared KV pool stayed exhausted).
                 raise
             except ContentionDenied:
                 # Has a dedicated app-level handler (503 + Retry-After +

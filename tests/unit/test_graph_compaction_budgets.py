@@ -361,6 +361,20 @@ class TestBudgetPressureWarnings:
 class TestMaybeCompactContext:
     """Tests for _maybe_compact_context async function."""
 
+    @pytest.fixture(autouse=True)
+    def _no_context_limit_sources(self):
+        # These tests exercise the trigger arithmetic against the 32768
+        # fallback limit. Since 2026-09-24 the limit resolves from the live
+        # server / compiled stack priors first (e.g. "worker" is 65536 per
+        # request), so pin a resolver that knows nothing.
+        from src.backends.context_limits import ContextLimitResolver, set_context_limit_resolver
+
+        set_context_limit_resolver(
+            ContextLimitResolver(live=False, registry_facts=lambda: {}, role_urls=lambda: {})
+        )
+        yield
+        set_context_limit_resolver(None)
+
     @pytest.mark.asyncio
     async def test_skips_when_compaction_disabled(self):
         from src.graph.compaction import _maybe_compact_context

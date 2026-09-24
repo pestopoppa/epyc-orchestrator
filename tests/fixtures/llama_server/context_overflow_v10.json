@@ -1,0 +1,39 @@
+{
+  "provenance": {
+    "tree": "/mnt/raid0/llm/llama.cpp",
+    "commit": "ffc1bac82eeca6f9099e1ccd9ba49703c460a115",
+    "kernel": "production-consolidated-v10 (llama-server --version 10303)",
+    "method": "rendered by hand from the frozen source (no server was run): error objects are nlohmann::ordered_json (server-common.h:16) dumped compact (safe_json_to_str, server-common.cpp:1308-1310); fields from format_error_response (server-common.cpp:49-58) plus n_prompt_tokens/n_ctx for exceed_context_size_error (server-task.cpp:1531-1538); HTTP status = error.code (server-context.cpp:4362-4365); first stream error sent non-streamed (:4506-4519); later stream errors in-band via format_oai_sse (:4540-4550, server-common.cpp:1350-1366)",
+    "source_format_strings": {
+      "request_too_large": "request (%d tokens) exceeds the available context size (%d tokens), try increasing it",
+      "input_too_large": "input (%d tokens) is larger than the max context size (%d tokens). skipping",
+      "pool_exhausted": "Context size has been exceeded."
+    }
+  },
+  "cases": [
+    {
+      "name": "split_kv_request_too_large_http_400",
+      "http_status": 400,
+      "body": "{\"error\":{\"code\":400,\"message\":\"request (120000 tokens) exceeds the available context size (98304 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":120000,\"n_ctx\":98304}}",
+      "expect": {"kind": "request_too_large", "n_prompt_tokens": 120000, "n_ctx": 98304}
+    },
+    {
+      "name": "no_cache_prompt_input_too_large_http_400",
+      "http_status": 400,
+      "body": "{\"error\":{\"code\":400,\"message\":\"input (70000 tokens) is larger than the max context size (65536 tokens). skipping\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":70000,\"n_ctx\":65536}}",
+      "expect": {"kind": "request_too_large", "n_prompt_tokens": 70000, "n_ctx": 65536}
+    },
+    {
+      "name": "unified_kv_pool_exhausted_http_500_first_error",
+      "http_status": 500,
+      "body": "{\"error\":{\"code\":500,\"message\":\"Context size has been exceeded.\",\"type\":\"server_error\"}}",
+      "expect": {"kind": "pool_exhausted", "n_prompt_tokens": null, "n_ctx": null}
+    },
+    {
+      "name": "unified_kv_pool_exhausted_in_band_sse",
+      "http_status": 200,
+      "sse_line": "data: {\"error\":{\"code\":500,\"message\":\"Context size has been exceeded.\",\"type\":\"server_error\"}}",
+      "expect": {"kind": "pool_exhausted", "n_prompt_tokens": null, "n_ctx": null}
+    }
+  ]
+}

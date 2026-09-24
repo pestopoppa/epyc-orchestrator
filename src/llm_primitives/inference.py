@@ -11,6 +11,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from src.exceptions import ContextOverflowError
 from src.scheduling import gate_observation
 
 from .types import LLMResult
@@ -94,6 +95,24 @@ def _extract_port(url: str) -> int | None:
         return parsed.port
     except Exception:
         return None
+
+
+def _raise_if_context_overflow(result: Any, role: str, backend_url: str) -> None:
+    """Turn a backend result that carries a context overflow into the typed error."""
+    overflow = getattr(result, "context_overflow", None)
+    if not isinstance(overflow, dict) or not overflow:
+        return
+    from src.backends.context_overflow import context_overflow_error_from_info
+
+    raise context_overflow_error_from_info(overflow, role=role, backend_url=backend_url)
+
+
+def _shared_pool_reservation_tokens(prompt: str, n_tokens: int) -> int:
+    """Tokens a request may occupy in a shared KV pool: prompt + generation budget."""
+    from src.backends.context_limits import estimate_tokens_conservative
+
+    generation = n_tokens if n_tokens and n_tokens > 0 else 4096
+    return estimate_tokens_conservative(prompt) + int(generation)
 
 
 def _sampling_cache_key(
@@ -552,10 +571,11 @@ class InferenceMixin:
                 return cached
 
         result = None
-        try:
-            result = self._real_call_single(
+
+        def _call_on(target_role: str) -> str:
+            return self._real_call_single(
                 prompt,
-                role,
+                target_role,
                 n_tokens,
                 stop_sequences,
                 json_schema=json_schema,
@@ -566,6 +586,36 @@ class InferenceMixin:
                 top_k=top_k,
                 n_probs=n_probs,
                 post_sampling_probs=post_sampling_probs,
+            )
+
+        try:
+            result = _call_on(role)
+        except ContextOverflowError as overflow:
+            # MUST precede `except RuntimeError` (ContextOverflowError is one):
+            # same-tier model fallback is the wrong remedy for a request that
+            # does not fit, and it would mask the typed error.
+            from src.backends.context_limits import context_overflow_roles
+
+            from .context_recovery import recover_context_overflow
+
+            server_urls = getattr(self, "server_urls", None) or {}
+            backends = getattr(self, "_backends", None) or {}
+            # Only reroute to roles this primitives instance can actually call.
+            reroute_candidates = [
+                r for r in context_overflow_roles()
+                if r in backends or getattr(self, "model_server", None) is not None
+            ]
+            result = recover_context_overflow(
+                overflow,
+                prompt=prompt,
+                role=role,
+                call=_call_on,
+                reroute_candidates=reroute_candidates,
+                urls_for_role=(lambda r: server_urls.get(r)) if server_urls else None,
+                deadline_s=self.get_request_deadline_s()
+                if hasattr(self, "get_request_deadline_s") else None,
+                cancel_check=self.get_request_cancel_check()
+                if hasattr(self, "get_request_cancel_check") else None,
             )
         except RuntimeError as primary_error:
             # Model fallback: try same-tier alternatives on infrastructure failure
@@ -725,6 +775,7 @@ class InferenceMixin:
             raise
 
         req_elapsed_ms = (time.perf_counter() - req_started) * 1000
+        _raise_if_context_overflow(result, role, (self.server_urls or {}).get(role, "") if hasattr(self, "server_urls") else "")
         self._set_last_inference_meta({
             "role": role,
             "transport": "model_server",
@@ -867,6 +918,52 @@ class InferenceMixin:
             ):
                 raise RuntimeError(f"[ERROR: admission] Backend queue full for {backend_url}")
             admitted = True
+
+        # Shared (unified) KV pool — the PRIMARY overflow defence: never
+        # oversubscribe it. Request slots are not the binding limit there,
+        # tokens are, and llama-server fails EVERY in-flight request when the
+        # pool runs dry. A request whose reservation (prompt + generation
+        # budget) cannot fit alongside the in-flight ones is QUEUED (FCFS,
+        # bounded by its own deadline/cancellation) and never dispatched until
+        # it fits. Server-side exhaustion retry is only the fallback.
+        # Single-URL roles only (a fleet dispatches below, to an endpoint this
+        # layer does not know yet). Inert unless the server is known unified.
+        pool_admission = None
+        pool_ticket = None
+        if backend_url and "," not in (self.server_urls.get(role, "") or ""):
+            try:
+                from src.backends.context_limits import get_context_limit_resolver
+
+                pool_limit = get_context_limit_resolver().limit_for_url(backend_url)
+            except Exception:
+                pool_limit = None
+            if pool_limit is not None and pool_limit.shared_pool:
+                from src.scheduling.kv_pool_admission import get_shared_pool_admission
+
+                pool_admission = get_shared_pool_admission()
+                pool_tokens_needed = _shared_pool_reservation_tokens(prompt, n_tokens)
+                pool_ticket = pool_admission.acquire(
+                    backend_url,
+                    pool_tokens_needed,
+                    pool_limit.pool_tokens,
+                    deadline_s=deadline_s,
+                    cancel_check=cancel_check,
+                )
+                if pool_ticket is None:
+                    if admitted and admission:
+                        admission.release(backend_url)
+                    raise ContextOverflowError(
+                        f"context overflow (shared KV pool busy) on role {role} ({backend_url}): "
+                        f"queued {pool_tokens_needed} tokens behind "
+                        f"{pool_admission.in_flight_tokens(backend_url)} reserved "
+                        f"(pool {pool_limit.pool_tokens}) and the request's wait budget "
+                        f"ended before it fit; it was never dispatched",
+                        kind=ContextOverflowError.POOL_EXHAUSTED,
+                        role=role,
+                        backend_url=backend_url,
+                        n_ctx=pool_limit.per_request_n_ctx,
+                        source="admission",
+                    )
 
         # WP-12 fleet layer: a fleet-shared backend records health per
         # DISPATCHED endpoint itself (one circuit per fleet port). The
@@ -1184,6 +1281,12 @@ class InferenceMixin:
                     result.http_overhead_ms,
                 )
 
+            # A context overflow is a property of the REQUEST (or of concurrent
+            # load), not a sick backend: raise the typed error BEFORE the
+            # circuit-breaker bookkeeping so it never counts toward opening
+            # the circuit on a healthy server.
+            _raise_if_context_overflow(result, role, backend_url)
+
             # Record success/failure for circuit breaker.
             # Partial results (read_timeout with salvaged output) count as
             # degraded — not a full success for health tracking, but not a
@@ -1215,6 +1318,8 @@ class InferenceMixin:
             return result.output
         finally:
             reset_lifecycle_context(lifecycle_token)
+            if pool_admission is not None:
+                pool_admission.release(backend_url, pool_ticket)
             if admitted and admission:
                 admission.release(backend_url)
 

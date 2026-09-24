@@ -1130,6 +1130,10 @@ class ConcurrencyAwareBackend:
         url = self._endpoint_url_for_idx(idx)
         if not url:
             return
+        if isinstance(getattr(result, "context_overflow", None), dict):
+            # Request-sized (or load-induced) KV exhaustion is not endpoint
+            # ill-health; counting it would open the circuit on a healthy server.
+            return
         success = bool(getattr(result, "success", True))
         partial = bool(getattr(result, "partial", False))
         if success and not partial:

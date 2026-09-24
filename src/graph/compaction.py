@@ -47,18 +47,59 @@ def _estimate_context_tokens(ctx: Any, text: str) -> int:
     return len(text) // 4
 
 
+# Used only when neither the live server nor the registry can say. Logged every
+# time it is used — it is a degraded answer, not a limit.
+UNKNOWN_CONTEXT_FALLBACK_TOKENS = 32768
+
+
 def _get_model_max_context(ctx: Any) -> int:
-    """Get model max context from registry or use a safe default."""
+    """The current role's REAL per-request context, in tokens.
+
+    Order: an explicit registry role ``n_ctx`` (test doubles and future
+    registries) → the live server's ``/props`` per-slot n_ctx → the compiled
+    stack priors (``-c``/``-np``/``kv_unified``) via ContextLimitResolver → a
+    logged 32768 fallback.
+
+    Before 2026-09-24 this called ``registry.get_role_config()``, which the
+    RegistryLoader does not have (it has ``get_role``, whose RoleConfig carries
+    no n_ctx); the AttributeError was swallowed and EVERY role silently
+    compacted against 32768 regardless of its real limit.
+    """
+    role = ""
+    primitives = None
     try:
         primitives = ctx.deps.primitives
-        if primitives is not None and hasattr(primitives, "registry") and primitives.registry:
-            role = str(ctx.state.current_role)
-            role_cfg = primitives.registry.get_role_config(role)
-            if role_cfg and hasattr(role_cfg, "n_ctx"):
-                return int(role_cfg.n_ctx)
+        role = str(ctx.state.current_role)
     except Exception:
         pass
-    return 32768
+    try:
+        registry = getattr(primitives, "registry", None) if primitives is not None else None
+        getter = getattr(registry, "get_role_config", None) if registry else None
+        if callable(getter):
+            role_cfg = getter(role)
+            n_ctx = getattr(role_cfg, "n_ctx", None) if role_cfg else None
+            if isinstance(n_ctx, int) and not isinstance(n_ctx, bool) and n_ctx > 0:
+                return n_ctx
+    except Exception:
+        pass
+    if role and primitives is not None:
+        try:
+            from src.backends.context_limits import get_context_limit_resolver
+
+            server_urls = getattr(primitives, "server_urls", None)
+            urls = server_urls.get(role) if isinstance(server_urls, dict) else None
+            limit = get_context_limit_resolver().limit_for_role(role, urls)
+            if limit is not None:
+                return int(limit.per_request_n_ctx)
+        except Exception:
+            log.debug("context limit lookup failed for role %s", role, exc_info=True)
+    log.warning(
+        "Compaction: no live or registry context limit for role %r; using the "
+        "%d-token fallback",
+        role or "?",
+        UNKNOWN_CONTEXT_FALLBACK_TOKENS,
+    )
+    return UNKNOWN_CONTEXT_FALLBACK_TOKENS
 
 
 def _context_externalization_path(state: TaskState) -> Path:
@@ -92,11 +133,16 @@ def _context_externalization_path(state: TaskState) -> Path:
     return Path(tempfile.gettempdir()) / f"session_{task_id}_ctx_{state.compaction_count}.md"
 
 
-async def _maybe_compact_context(ctx: Any) -> None:
-    """Compact old context via context externalization."""
+async def _maybe_compact_context(ctx: Any, *, force: bool = False) -> None:
+    """Compact old context via context externalization.
+
+    ``force=True`` is the context-overflow path: the server has already refused
+    this role's prompt as too large (ContextOverflowError), so compaction runs
+    regardless of the feature flag, turn count and trigger thresholds.
+    """
     from src.features import features as _get_features
 
-    if not _get_features().session_compaction:
+    if not force and not _get_features().session_compaction:
         return
 
     state = ctx.state
@@ -116,7 +162,7 @@ async def _maybe_compact_context(ctx: Any) -> None:
         min_turns_before_compaction = 5
         chat_cfg = None
 
-    if state.turns < max(1, int(min_turns_before_compaction)):
+    if not force and state.turns < max(1, int(min_turns_before_compaction)):
         return
 
     model_max_ctx = _get_model_max_context(ctx)
@@ -127,7 +173,7 @@ async def _maybe_compact_context(ctx: Any) -> None:
         trigger_ratio = 0.75
     trigger_threshold = int(model_max_ctx * trigger_ratio)
 
-    should_compact = context_tokens >= trigger_threshold or len(state.context) > 12000
+    should_compact = force or context_tokens >= trigger_threshold or len(state.context) > 12000
 
     if (
         not should_compact

@@ -22,7 +22,7 @@ from typing import Any
 from pydantic_graph import GraphRunContext
 
 from src.escalation import ErrorCategory
-from src.exceptions import InferenceError
+from src.exceptions import ContextOverflowError, InferenceError
 from src.graph.error_classifier import classify_error as _classify_error_impl
 from src.graph.escalation_helpers import detect_role_cycle as _detect_role_cycle_impl
 from src.graph.repl_tap import tap_write_repl_exec as _tap_write_repl_exec_impl
@@ -963,6 +963,31 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             skip_suffix=True,
             **llm_kwargs,
         )
+    except ContextOverflowError as e:
+        # The inference layer already did what it can without the graph
+        # (bounded pool backoff, reroute to a larger-context role). What only
+        # the graph can do is shrink the conversation it owns: force a
+        # compaction now so the next turn's prompt is rebuilt from the
+        # externalised context. Never retried here and never swallowed — the
+        # turn fails with an explicit context-overflow error.
+        before_chars = len(state.context or "")
+        compacted = False
+        if e.kind == ContextOverflowError.REQUEST_TOO_LARGE or e.source == "server":
+            try:
+                await _maybe_compact_context(ctx, force=True)
+                compacted = len(state.context or "") < before_chars
+            except Exception as compact_exc:  # pragma: no cover - defensive
+                log.warning("Forced compaction after context overflow failed: %s", compact_exc)
+        log.warning(
+            "Context overflow on turn %d (role=%s kind=%s n_prompt=%s n_ctx=%s): %s",
+            state.turns, role, e.kind, e.n_prompt_tokens, e.n_ctx,
+            "context compacted for the next turn" if compacted else "no context left to compact",
+        )
+        msg = f"LLM call failed: {e}" + (
+            " [context compacted; retry the turn]" if compacted else ""
+        )
+        _record_session_turn(state, role=str(role), error=msg)
+        return "", msg, False, {}
     except (InferenceError, ConnectionError, TimeoutError, OSError) as e:
         if str(role) == str(Role.FRONTDOOR) and _frontdoor_trace_enabled():
             elapsed_ms = (asyncio.get_event_loop().time() - llm_started) * 1000

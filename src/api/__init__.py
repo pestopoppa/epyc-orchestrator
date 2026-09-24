@@ -406,6 +406,33 @@ def create_app() -> FastAPI:
             headers={"Retry-After": "5"},
         )
 
+    from src.exceptions import ContextOverflowError
+
+    @app.exception_handler(ContextOverflowError)
+    async def _context_overflow_handler(request: Request, exc: ContextOverflowError):
+        # A request that cannot fit the role's per-request KV context is the
+        # CALLER's to shrink (413); a shared pool that stayed exhausted through
+        # the bounded retries is back-pressure (503 + Retry-After). Either way
+        # an explicit typed error — never a truncated or empty answer.
+        status = 503 if exc.retryable else 413
+        headers = {"Retry-After": "10"} if exc.retryable else None
+        logger.warning(
+            "Context overflow for %s %s: kind=%s role=%s n_prompt=%s n_ctx=%s",
+            request.method, request.url.path, exc.kind, exc.role,
+            exc.n_prompt_tokens, exc.n_ctx,
+        )
+        return JSONResponse(
+            status_code=status,
+            content={
+                "error": "context_overflow",
+                "detail": str(exc),
+                "error_code": status,
+                "error_detail": str(exc),
+                "context_overflow": exc.to_dict(),
+            },
+            headers=headers,
+        )
+
     @app.exception_handler(ResponseValidationError)
     async def _response_validation_error_handler(request: Request, exc: ResponseValidationError):
         logger.exception(

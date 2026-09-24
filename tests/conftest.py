@@ -174,6 +174,37 @@ def _disable_kb_rag_query_length_log():
             os.environ[LOG_ENV] = previous
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _disable_live_context_limit_reads():
+    """Keep the suite off the live stack's ``GET /props`` (context limits).
+
+    ``ContextLimitResolver`` reads each role's per-request n_ctx from the live
+    llama-server; unit tests must resolve from the registry (or from an injected
+    resolver) instead of whatever happens to be serving on this host.
+    """
+    from src.backends.context_limits import LIVE_ENV
+
+    previous = os.environ.get(LIVE_ENV)
+    os.environ[LIVE_ENV] = "off"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(LIVE_ENV, None)
+        else:
+            os.environ[LIVE_ENV] = previous
+
+
+@pytest.fixture(autouse=True)
+def _reset_context_limit_resolver():
+    """Drop the process-wide context-limit cache between tests."""
+    from src.backends.context_limits import set_context_limit_resolver
+
+    set_context_limit_resolver(None)
+    yield
+    set_context_limit_resolver(None)
+
+
 @pytest.fixture(autouse=True)
 def _reset_config_between_tests():
     """Ensure config cache is clean between tests.
