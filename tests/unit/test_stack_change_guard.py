@@ -3221,3 +3221,58 @@ def test_explicit_launch_numa_mode_bypasses_realized_fleet_probe(
 
     assert not both_errors
     assert set(full["frontdoor"]["ports"]) < set(both["frontdoor"]["ports"])
+
+
+# ── Portable source pins (2026-09-24) ────────────────────────────────────────
+# The compiled artifacts used to record the ABSOLUTE path of whichever checkout
+# compiled them. Every worktree shares the committed artifacts, so a gate run in
+# a worktree hash-checked the PRIMARY clone's files (and failed on another
+# session's uncommitted edits there) and saw its descriptors as stale for path
+# spelling alone. These tests pin the fix: in-repo pins are repo-relative, and a
+# relative pin resolves against the checkout running the guard.
+
+
+def test_in_repo_source_pins_are_repo_relative_and_external_ones_absolute(tmp_path: Path) -> None:
+    from src.registry.model_descriptors import (
+        portable_source_path,
+        resolve_portable_source_path,
+    )
+
+    in_repo = stack_change_guard.REPO_ROOT / "orchestration" / "launch_manifest.yaml"
+    assert portable_source_path(in_repo) == "orchestration/launch_manifest.yaml"
+    assert resolve_portable_source_path("orchestration/launch_manifest.yaml") == in_repo.resolve()
+
+    external = tmp_path / "model_registry.yaml"
+    external.write_text("roles: {}\n", encoding="utf-8")
+    assert portable_source_path(external) == str(external)
+    assert resolve_portable_source_path(str(external)) == external
+
+
+def test_relative_source_pin_resolves_against_guard_checkout_not_priors_dir(tmp_path: Path) -> None:
+    priors_path = tmp_path / "orchestration" / "derived" / "stack_priors.yaml"
+    resolved = stack_change_guard._source_path(
+        priors_path, {"path": "scripts/server/stack_numa.py"}
+    )
+    assert resolved == (stack_change_guard.REPO_ROOT / "scripts/server/stack_numa.py").resolve()
+    assert resolved is not None and resolved.is_file()
+
+
+def test_shipped_priors_and_descriptors_carry_no_checkout_absolute_pins() -> None:
+    root = stack_change_guard.REPO_ROOT
+    priors = yaml.safe_load(
+        (root / "orchestration" / "derived" / "stack_priors.yaml").read_text(encoding="utf-8")
+    )
+    descriptors = yaml.safe_load(
+        (root / "orchestration" / "model_descriptors.yaml").read_text(encoding="utf-8")
+    )
+    pins = dict(priors["source_artifacts"])
+    pins.update({f"descriptors.{k}": v for k, v in descriptors["source_registries"].items()})
+    for label, pin in pins.items():
+        path = Path(pin["path"])
+        if path.is_absolute():
+            # Only files OUTSIDE this repository may be pinned absolutely.
+            assert not str(path.resolve()).startswith(str(root.resolve()) + os.sep), label
+            assert "epyc-orchestrator" not in path.parts, label
+        else:
+            assert (root / path).is_file(), label
+    assert not Path(priors["precedence_spec"]).is_absolute()
