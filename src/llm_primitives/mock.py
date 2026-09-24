@@ -33,6 +33,7 @@ class MockMixin:
         role: str,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        n_tokens: int | None = None,
     ) -> list[str]:
         """Generate mock responses for batch testing.
 
@@ -43,6 +44,9 @@ class MockMixin:
                 (TD-21.22a); unused, matching ``_mock_call``'s existing
                 convention of not modeling schema-constrained decoding.
             grammar: Accepted for parity; unused (see json_schema above).
+            n_tokens: Accepted for signature parity (batch/n_tokens
+                follow-up); unused, matching ``_mock_call``'s existing
+                convention of not forwarding n_tokens either.
 
         Returns:
             List of mock responses.

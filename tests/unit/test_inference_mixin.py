@@ -940,6 +940,60 @@ class TestRealBatch:
         assert len(captured) == 1
         assert captured[0].json_schema == schema
 
+    def test_real_batch_forwards_n_tokens(self, mock_backend):
+        """Batch/n_tokens follow-up: n_tokens reaches the same
+        InferenceRequest.n_tokens field llm_call uses, for every prompt.
+        `src/api/routes/chat_summarization.py:233` and
+        `src/repl_environment/context.py:143` both pass n_tokens to
+        llm_batch, which raised TypeError before this parameter existed."""
+        prims = LLMPrimitives(mock_mode=False)
+        prims._backends["worker"] = mock_backend
+
+        captured = []
+
+        def mock_infer(role_config, request):
+            captured.append(request)
+            return InferenceResult(
+                role="worker",
+                output="ok",
+                tokens_generated=1,
+                generation_speed=10.0,
+                elapsed_time=0.01,
+                success=True,
+            )
+
+        mock_backend.infer.side_effect = mock_infer
+
+        results = prims._real_batch(["p1", "p2"], "worker", n_tokens=500)
+
+        assert results == ["ok", "ok"]
+        assert all(r.n_tokens == 500 for r in captured)
+
+    def test_real_batch_omits_n_tokens_when_not_provided(self, mock_backend):
+        """Default None must reproduce the pre-existing request byte-for-byte
+        (InferenceRequest.n_tokens stays at its own default, -1)."""
+        prims = LLMPrimitives(mock_mode=False)
+        prims._backends["worker"] = mock_backend
+
+        captured = []
+
+        def mock_infer(role_config, request):
+            captured.append(request)
+            return InferenceResult(
+                role="worker",
+                output="ok",
+                tokens_generated=1,
+                generation_speed=10.0,
+                elapsed_time=0.01,
+                success=True,
+            )
+
+        mock_backend.infer.side_effect = mock_infer
+
+        prims._real_batch(["p1"], "worker")
+
+        assert captured[0].n_tokens == -1
+
 
 class TestFallbackBatch:
     """Tests for _fallback_batch() forwarding (TD-21.22a)."""
@@ -992,6 +1046,29 @@ class TestFallbackBatch:
 
         assert captured[0].json_schema is None
         assert captured[0].grammar is None
+
+    def test_fallback_batch_forwards_n_tokens(self, mock_backend):
+        prims = LLMPrimitives(mock_mode=False)
+        prims._backends["worker"] = mock_backend
+
+        captured = []
+
+        def mock_infer(role_config, request):
+            captured.append(request)
+            return InferenceResult(
+                role="worker",
+                output="ok",
+                tokens_generated=1,
+                generation_speed=10.0,
+                elapsed_time=0.01,
+                success=True,
+            )
+
+        mock_backend.infer.side_effect = mock_infer
+
+        prims._fallback_batch(["p1"], "worker", n_tokens=500)
+
+        assert captured[0].n_tokens == 500
 
 
 class TestWorkerPoolBatch:
@@ -1106,3 +1183,57 @@ class TestWorkerPoolBatch:
 
         assert results == ["Fallback 1", "Fallback 2"]
         mock_fallback.assert_called_once_with(["P1", "P2"], "worker_code", json_schema=schema)
+
+    def test_worker_pool_batch_forwards_n_tokens_as_max_tokens(self):
+        """n_tokens reaches WorkerPoolManager.batch as its own max_tokens
+        parameter (batch/n_tokens follow-up to TD-21.22a)."""
+        mock_pool = Mock()
+        mock_batch = object()
+        mock_pool.batch = Mock(return_value=mock_batch)
+
+        prims = LLMPrimitives(
+            mock_mode=False,
+            worker_pool=mock_pool,
+            use_worker_pool=True,
+        )
+
+        mock_loop = Mock()
+        mock_loop.is_running.return_value = False
+
+        with (
+            patch("asyncio.get_event_loop", return_value=mock_loop),
+            patch("asyncio.run") as mock_run,
+        ):
+            mock_run.return_value = ["Result 1", "Result 2"]
+            results = prims._worker_pool_batch(
+                ["Explore this", "Analyze that"], "worker_explore", n_tokens=500,
+            )
+
+        assert len(results) == 2
+        mock_pool.batch.assert_called_once_with(
+            ["Explore this", "Analyze that"],
+            task_type="worker_general",
+            max_tokens=500,
+        )
+
+    def test_worker_pool_batch_fallback_forwards_n_tokens(self, mock_model_server):
+        """The worker-pool-unavailable fallback carries n_tokens under ITS
+        own parameter name (n_tokens, not max_tokens) since it goes to
+        _real_call, not WorkerPoolManager.batch."""
+        mock_pool = Mock()
+        mock_pool.batch.side_effect = RuntimeError("Pool unavailable")
+
+        prims = LLMPrimitives(
+            mock_mode=False,
+            worker_pool=mock_pool,
+            use_worker_pool=True,
+            model_server=mock_model_server,
+        )
+
+        with patch.object(
+            prims, "_fallback_batch", return_value=["Fallback 1", "Fallback 2"]
+        ) as mock_fallback:
+            results = prims._worker_pool_batch(["P1", "P2"], "worker_code", n_tokens=500)
+
+        assert results == ["Fallback 1", "Fallback 2"]
+        mock_fallback.assert_called_once_with(["P1", "P2"], "worker_code", n_tokens=500)

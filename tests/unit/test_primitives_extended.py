@@ -189,6 +189,16 @@ class TestLLMBatchMockMode:
 
         assert len(results) == 2
 
+    def test_llm_batch_accepts_n_tokens_in_mock_mode(self):
+        """Batch/n_tokens follow-up: llm_batch takes n_tokens even in mock
+        mode (accepted, ignored -- matching _mock_call's existing
+        convention -- must not raise)."""
+        prims = LLMPrimitives(mock_mode=True)
+
+        results = prims.llm_batch(["P1", "P2"], role="worker", n_tokens=500)
+
+        assert len(results) == 2
+
 
 class TestLLMBatchSchemaForwarding:
     """TD-21.22a: llm_batch()'s json_schema/grammar reach _real_batch, and
@@ -202,20 +212,35 @@ class TestLLMBatchSchemaForwarding:
             prims.llm_batch(["p1"], role="worker", json_schema=schema, grammar="g")
 
         mock_real_batch.assert_called_once_with(
-            ["p1"], "worker", json_schema=schema, grammar="g"
+            ["p1"], "worker", json_schema=schema, grammar="g", n_tokens=None,
         )
 
     def test_llm_batch_forwards_none_schema_to_real_batch(self):
-        """Omitted json_schema/grammar reach _real_batch as explicit None --
-        _real_batch's own conditional forwarding (see test_inference_mixin.py)
-        is what keeps the outgoing backend request byte-identical."""
+        """Omitted json_schema/grammar/n_tokens reach _real_batch as explicit
+        None -- _real_batch's own conditional forwarding (see
+        test_inference_mixin.py) is what keeps the outgoing backend request
+        byte-identical."""
         prims = LLMPrimitives(mock_mode=False, model_server=object())
 
         with patch.object(prims, "_real_batch", return_value=["ok"]) as mock_real_batch:
             prims.llm_batch(["p1"], role="worker")
 
         mock_real_batch.assert_called_once_with(
-            ["p1"], "worker", json_schema=None, grammar=None
+            ["p1"], "worker", json_schema=None, grammar=None, n_tokens=None,
+        )
+
+    def test_llm_batch_forwards_n_tokens_to_real_batch(self):
+        """Batch/n_tokens follow-up: n_tokens reaches _real_batch. Two
+        production call sites (chat_summarization.py, context.py) already
+        pass n_tokens to llm_batch, which raised TypeError before this
+        parameter existed -- MagicMock-based tests never caught it."""
+        prims = LLMPrimitives(mock_mode=False, model_server=object())
+
+        with patch.object(prims, "_real_batch", return_value=["ok"]) as mock_real_batch:
+            prims.llm_batch(["p1"], role="worker", n_tokens=500)
+
+        mock_real_batch.assert_called_once_with(
+            ["p1"], "worker", json_schema=None, grammar=None, n_tokens=500,
         )
 
 

@@ -1185,6 +1185,7 @@ class InferenceMixin:
         role: str,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        n_tokens: int | None = None,
     ) -> list[str]:
         """Make real inference calls in parallel.
 
@@ -1198,13 +1199,18 @@ class InferenceMixin:
                 call shape byte-for-byte.
             grammar: Optional GBNF grammar, applied to the whole batch the
                 same way as json_schema.
+            n_tokens: Optional max-tokens cap applied to every prompt in this
+                batch (batch/n_tokens follow-up to TD-21.22a). Omitted (None)
+                reproduces the pre-existing call shape.
 
         Returns:
             List of model responses in order.
         """
         # Use worker pool for worker roles if configured
         if self.use_worker_pool and role.startswith("worker"):
-            return self._worker_pool_batch(prompts, role, json_schema=json_schema, grammar=grammar)
+            return self._worker_pool_batch(
+                prompts, role, json_schema=json_schema, grammar=grammar, n_tokens=n_tokens,
+            )
 
         # Check if we have a backend for this role
         backend = self._backends.get(role)
@@ -1224,6 +1230,8 @@ class InferenceMixin:
             extra["json_schema"] = json_schema
         if grammar is not None:
             extra["grammar"] = grammar
+        if n_tokens is not None:
+            extra["n_tokens"] = n_tokens
 
         if role_limit <= 1:
             results = []
@@ -1260,6 +1268,7 @@ class InferenceMixin:
         role: str,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        n_tokens: int | None = None,
     ) -> list[str]:
         """Execute batch using the heterogeneous worker pool.
 
@@ -1272,6 +1281,11 @@ class InferenceMixin:
                 (forwarded to ``WorkerPoolManager.batch``'s ``/completion``
                 payload). Omitted reproduces the prior call byte-for-byte.
             grammar: Optional GBNF grammar for the whole batch.
+            n_tokens: Optional max-tokens cap for the whole batch. Forwarded
+                to ``WorkerPoolManager.batch`` as ``max_tokens`` (its own
+                parameter name); the ``_fallback_batch``/``_real_call`` side
+                keeps the ``n_tokens`` name throughout. Omitted reproduces
+                the prior call byte-for-byte.
 
         Returns:
             List of model responses in order.
@@ -1284,11 +1298,24 @@ class InferenceMixin:
             suffix = role.split("_", 1)[1]
             task_type = self.WORKER_TASK_ROUTING.get(suffix, suffix)
 
+        # extra: kwargs for the _fallback_batch/_real_call side (n_tokens).
+        # worker_pool_extra: kwargs for WorkerPoolManager.batch, which names
+        # its token cap max_tokens, not n_tokens.
         extra: dict[str, Any] = {}
         if json_schema is not None:
             extra["json_schema"] = json_schema
         if grammar is not None:
             extra["grammar"] = grammar
+        if n_tokens is not None:
+            extra["n_tokens"] = n_tokens
+
+        worker_pool_extra: dict[str, Any] = {}
+        if json_schema is not None:
+            worker_pool_extra["json_schema"] = json_schema
+        if grammar is not None:
+            worker_pool_extra["grammar"] = grammar
+        if n_tokens is not None:
+            worker_pool_extra["max_tokens"] = n_tokens
 
         try:
             # Run async batch in sync context
@@ -1297,7 +1324,7 @@ class InferenceMixin:
             except RuntimeError:
                 loop = None
             timeout_s = self._remaining_deadline_s()
-            batch_coro = self.worker_pool.batch(prompts, task_type=task_type, **extra)
+            batch_coro = self.worker_pool.batch(prompts, task_type=task_type, **worker_pool_extra)
             if timeout_s is not None:
                 timeout_s = max(1.0, timeout_s)
                 batch_coro = asyncio.wait_for(batch_coro, timeout=timeout_s)
@@ -1325,6 +1352,7 @@ class InferenceMixin:
         role: str,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        n_tokens: int | None = None,
     ) -> list[str]:
         """Fallback batch implementation using ThreadPoolExecutor.
 
@@ -1335,6 +1363,8 @@ class InferenceMixin:
             extra["json_schema"] = json_schema
         if grammar is not None:
             extra["grammar"] = grammar
+        if n_tokens is not None:
+            extra["n_tokens"] = n_tokens
 
         results: list[str | None] = [None] * len(prompts)
 

@@ -1005,6 +1005,7 @@ class LLMPrimitives(
         persona: str | None = None,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        n_tokens: int | None = None,
     ) -> list[str]:
         """Call multiple sub-LMs in parallel.
 
@@ -1022,6 +1023,18 @@ class LLMPrimitives(
                 Default None reproduces the pre-TD-21.22a call exactly.
             grammar: Optional GBNF grammar, applied to the whole batch the
                 same way as json_schema.
+            n_tokens: Optional max-tokens cap applied to EVERY prompt in this
+                batch (same per-batch semantics as json_schema/grammar above;
+                ``llm_call`` has always had this parameter — two production
+                callers, `src/api/routes/chat_summarization.py` and
+                `src/repl_environment/context.py`, already passed it to
+                ``llm_batch`` under the assumption it existed, which raised
+                ``TypeError`` against the real class (MagicMock-based tests
+                never caught it) and silently degraded to a
+                slower/less-parallel fallback path. Threaded down to the same
+                ``InferenceRequest.n_tokens``/``max_tokens`` fields
+                ``llm_call`` uses. Default None (unlimited, timeout-bounded)
+                reproduces the pre-existing call shape.
 
         Returns:
             List of responses in the same order as prompts.
@@ -1045,9 +1058,13 @@ class LLMPrimitives(
         _tokens_before = self.total_tokens_generated  # double-count guard (see call())
         try:
             if self.mock_mode:
-                results = self._mock_batch(prompts, role, json_schema=json_schema, grammar=grammar)
+                results = self._mock_batch(
+                    prompts, role, json_schema=json_schema, grammar=grammar, n_tokens=n_tokens,
+                )
             else:
-                results = self._real_batch(prompts, role, json_schema=json_schema, grammar=grammar)
+                results = self._real_batch(
+                    prompts, role, json_schema=json_schema, grammar=grammar, n_tokens=n_tokens,
+                )
 
             # Cap each output
             capped_results = []
@@ -1093,6 +1110,7 @@ class LLMPrimitives(
         persona: str | None = None,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        n_tokens: int | None = None,
     ) -> list[str]:
         """Call multiple sub-LMs in parallel using asyncio.
 
@@ -1108,6 +1126,9 @@ class LLMPrimitives(
                 vs per-prompt rationale). Default None reproduces the
                 pre-TD-21.22a call exactly.
             grammar: Optional GBNF grammar for the whole batch.
+            n_tokens: Optional max-tokens cap for the whole batch (see
+                ``llm_batch``'s docstring for why this exists). Default None
+                reproduces the pre-existing call shape.
 
         Returns:
             List of responses in the same order as prompts.
@@ -1135,12 +1156,16 @@ class LLMPrimitives(
             _extra["json_schema"] = json_schema
         if grammar is not None:
             _extra["grammar"] = grammar
+        if n_tokens is not None:
+            _extra["n_tokens"] = n_tokens
 
         _tokens_before = self.total_tokens_generated  # double-count guard (see call())
         try:
             if self.mock_mode:
                 # Mock mode: simulate async calls
-                results = self._mock_batch(prompts, role, json_schema=json_schema, grammar=grammar)
+                results = self._mock_batch(
+                    prompts, role, json_schema=json_schema, grammar=grammar, n_tokens=n_tokens,
+                )
             else:
                 role_limit = self._get_role_limit(role)
                 if role_limit <= 1:

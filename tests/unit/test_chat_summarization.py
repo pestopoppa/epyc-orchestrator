@@ -394,6 +394,94 @@ class TestTwoStagePipelineExecution:
             assert stats["worker_failure_count"] == 0
 
     @pytest.mark.asyncio
+    async def test_run_two_stage_batch_real_primitives_no_typeerror_fallback(self):
+        """Regression for the batch/n_tokens bug: `llm_batch(worker_prompts,
+        role=worker_role, n_tokens=500)` (line ~233) used to raise TypeError
+        against the REAL LLMPrimitives class -- llm_batch had no n_tokens
+        parameter -- and silently degrade to the sequential
+        _worker_digest_with_fallback path below. Every other test in this
+        class uses a MagicMock, which accepts any kwarg and never caught it.
+        With the fix, the call reaches _real_batch directly: no fallback,
+        no worker_fallback/worker_failure counters incremented."""
+        from src.llm_primitives import LLMPrimitives
+
+        primitives = LLMPrimitives(mock_mode=False)
+
+        with (
+            patch.object(
+                primitives, "_real_batch", return_value=["Digest 1", "Digest 2"]
+            ) as mock_real_batch,
+            patch.object(primitives, "_real_call", return_value="Comprehensive summary"),
+            patch("httpx.AsyncClient") as mock_client_class,
+        ):
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.status_code = 500  # degraded role selection (same as basic test)
+            mock_client.get.return_value = mock_response
+            mock_client_class.return_value = mock_client
+
+            mock_state = MagicMock()
+            mock_state.progress_logger = None
+
+            answer, stats = await _run_two_stage_summarization(
+                prompt="Summarize this document",
+                context="A" * 20000,
+                primitives=primitives,
+                state=mock_state,
+                task_id="test-real-batch-ok",
+            )
+
+        assert answer == "Comprehensive summary"
+        mock_real_batch.assert_called_once()
+        assert mock_real_batch.call_args.kwargs["n_tokens"] == 500
+        assert stats["worker_fallback_count"] == 0
+        assert stats["worker_failure_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_run_two_stage_batch_genuine_failure_falls_back_and_logs(self):
+        """A genuine (non-TypeError) llm_batch failure must still trigger the
+        existing sequential-fallback path, AND be logged -- this site already
+        logged (`log.warning(...)`, unlike context.py's analogous site), so
+        this locks that behavior in against the real LLMPrimitives class."""
+        from src.llm_primitives import LLMPrimitives
+
+        primitives = LLMPrimitives(mock_mode=False)
+
+        with (
+            patch.object(
+                primitives, "llm_batch", side_effect=RuntimeError("backend genuinely down")
+            ),
+            patch.object(primitives, "_real_call", return_value="sequential digest"),
+            patch("httpx.AsyncClient") as mock_client_class,
+            patch("src.api.routes.chat_summarization.log") as mock_log,
+        ):
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.status_code = 500
+            mock_client.get.return_value = mock_response
+            mock_client_class.return_value = mock_client
+
+            mock_state = MagicMock()
+            mock_state.progress_logger = None
+
+            answer, stats = await _run_two_stage_summarization(
+                prompt="Summarize this document",
+                context="A" * 20000,
+                primitives=primitives,
+                state=mock_state,
+                task_id="test-real-batch-fail",
+            )
+
+        assert mock_log.warning.called
+        logged_args = mock_log.warning.call_args.args
+        logged_msg = logged_args[0] % logged_args[1:] if len(logged_args) > 1 else logged_args[0]
+        assert "backend genuinely down" in logged_msg
+        assert stats["worker_failure_count"] == 0
+        assert answer  # sequential fallback via _real_call still produced output
+
+    @pytest.mark.asyncio
     async def test_run_two_stage_worker_unavailable_falls_back_to_main_role_once(self):
         """Transient worker outages retry a chunk once through the synthesis role."""
         mock_primitives = MagicMock()

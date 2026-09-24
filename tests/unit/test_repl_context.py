@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for REPL context management tools (_ContextMixin)."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.repl_environment import REPLConfig, REPLEnvironment
 
@@ -180,3 +180,60 @@ artifacts["f"] = mark_finding(
         # Should get NameError because list_tools is not in globals when tool_registry is None
         assert result.error is not None
         assert "NameError" in result.error
+
+
+class TestSummarizeChunksRealPrimitives:
+    """Batch/n_tokens follow-up: `_summarize_chunks` calls
+    `self.llm_primitives.llm_batch(prompts, role=role, n_tokens=512)`
+    (context.py:143) -- with a MagicMock this always worked, but against the
+    REAL LLMPrimitives class llm_batch had no n_tokens parameter at all, so
+    this raised TypeError on every real call and was silently swallowed with
+    NO logging (unlike chat_summarization.py's analogous site)."""
+
+    def test_summarize_chunks_real_primitives_no_typeerror_fallback(self):
+        """With the fix, the batch call reaches _real_batch directly (no
+        TypeError -> silent error-dict fallback)."""
+        from src.llm_primitives import LLMPrimitives
+
+        primitives = LLMPrimitives(mock_mode=False)
+        repl = REPLEnvironment(
+            context="A" * 20000, llm_primitives=primitives, role="worker_general",
+        )
+
+        with patch.object(
+            primitives, "_real_batch", return_value=["Digest 1", "Digest 2"]
+        ) as mock_real_batch:
+            results = repl._summarize_chunks(n_chunks=2)
+
+        assert len(results) == 2
+        assert all("error" not in r for r in results)
+        assert results[0]["summary"] == "Digest 1"
+        assert results[1]["summary"] == "Digest 2"
+        mock_real_batch.assert_called_once()
+        assert mock_real_batch.call_args.kwargs["n_tokens"] == 512
+
+    def test_summarize_chunks_genuine_failure_now_logs_a_warning(self):
+        """A genuine llm_batch failure must still be reported as an error
+        dict (unchanged), but must now ALSO be logged -- previously this
+        except block swallowed the exception with no logging at all."""
+        from src.llm_primitives import LLMPrimitives
+
+        primitives = LLMPrimitives(mock_mode=False)
+        repl = REPLEnvironment(
+            context="A" * 20000, llm_primitives=primitives, role="worker_general",
+        )
+
+        with (
+            patch.object(
+                primitives, "llm_batch", side_effect=RuntimeError("backend genuinely down"),
+            ),
+            patch("src.repl_environment.context.log") as mock_log,
+        ):
+            results = repl._summarize_chunks(n_chunks=2)
+
+        assert results == [{"error": "Batch call failed: backend genuinely down"}]
+        assert mock_log.warning.called
+        logged_args = mock_log.warning.call_args.args
+        logged_msg = logged_args[0] % logged_args[1:] if len(logged_args) > 1 else logged_args[0]
+        assert "backend genuinely down" in logged_msg
+        assert "worker_general" in logged_msg

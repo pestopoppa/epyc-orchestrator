@@ -7,10 +7,12 @@ tracked LLM calls, and tool/script invocation.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from src.repl_environment.types import FinalSignal
 
+log = logging.getLogger(__name__)
 
 _MISSING = object()
 
@@ -144,6 +146,16 @@ class _ContextMixin:
                 n_tokens=512,
             )
         except Exception as e:
+            # This previously swallowed the exception with no logging at all
+            # (not even a fallback to sequential calls, unlike
+            # chat_summarization.py's analogous site) -- a real batch
+            # failure was invisible outside the returned error dict.
+            log.warning(
+                "summarize_chunks: llm_batch failed for role=%s (%d chunks): %s",
+                role,
+                len(prompts),
+                e,
+            )
             return [{"error": f"Batch call failed: {e}"}]
 
         results = []
