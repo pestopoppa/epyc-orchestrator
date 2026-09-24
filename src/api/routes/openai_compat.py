@@ -37,6 +37,7 @@ from src.prompt_builders import (
     build_root_lm_prompt,
     extract_code_from_response,
     auto_wrap_final,
+    rescue_bare_name_final,
 )
 from src.registry.stack_priors import (
     live_stack_role_records,
@@ -794,6 +795,24 @@ async def list_models() -> OpenAIModelsResponse:
     return OpenAIModelsResponse(data=infos)
 
 
+def _execute_repl_turn(repl: REPLEnvironment, code: str) -> Any:
+    """Execute one /v1 REPL turn, rescuing an unquoted one-word ``FINAL(OK)``.
+
+    This loop never feeds ``last_error`` back into the next root prompt, so a
+    ``FINAL(OK)`` NameError replayed identically every turn and the request
+    returned ``""`` with ``finish_reason=stop`` (bare "OK"/"yes"/"Done" replies
+    were dropped while "hello" — emitted quoted — survived). See
+    :func:`rescue_bare_name_final` for the exact, narrow trigger.
+    """
+    result = repl.execute(code)
+    if not result.is_final:
+        rescued = rescue_bare_name_final(code, result.error)
+        if rescued is not None:
+            logger.info("Bare-name FINAL rescue: %r -> %r", code.strip(), rescued)
+            result = repl.execute(rescued)
+    return result
+
+
 @router.post("/chat/completions", response_model=None)
 async def openai_chat_completions(
     request: OpenAIChatRequest,
@@ -1176,7 +1195,7 @@ async def openai_chat_completions(
                                 return
 
                             # Execute in REPL
-                            result = repl.execute(code)
+                            result = _execute_repl_turn(repl, code)
 
                             if result.is_final:
                                 response_text = result.final_answer or ""
@@ -1379,7 +1398,7 @@ async def openai_chat_completions(
                         code = extract_code_from_response(code)
                         code = auto_wrap_final(code)
 
-                        result = repl.execute(code)
+                        result = _execute_repl_turn(repl, code)
 
                         if result.is_final:
                             response_text = result.final_answer or ""

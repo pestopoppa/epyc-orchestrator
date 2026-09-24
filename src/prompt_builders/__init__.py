@@ -65,6 +65,7 @@ from src.prompt_builders.code_utils import (
     auto_wrap_final,
     classify_error,
     extract_code_from_response,
+    rescue_bare_name_final,
     translate_openai_tool_calls,
 )
 
@@ -110,6 +111,7 @@ __all__ = [
     # Code utils
     "extract_code_from_response",
     "auto_wrap_final",
+    "rescue_bare_name_final",
     "classify_error",
     "translate_openai_tool_calls",
     # Formatting

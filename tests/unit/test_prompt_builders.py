@@ -22,6 +22,7 @@ from src.prompt_builders import (
     classify_error,
     detect_format_constraints,
     extract_code_from_response,
+    rescue_bare_name_final,
 )
 
 
@@ -386,6 +387,34 @@ class TestAutoWrapFinal:
         # The triple quotes should be escaped or the code should use the other style
         # Structural: Should contain the original code
         assert "some text" in result
+
+
+# ── rescue_bare_name_final ────────────────────────────────────────────────
+
+
+class TestRescueBareNameFinal:
+    """Unquoted one-word FINAL(OK) -> FINAL("OK"), and nothing broader."""
+
+    def test_rescues_exact_nameerror(self):
+        err = "NameError: name 'OK' is not defined"
+        assert rescue_bare_name_final("FINAL(OK)", err) == 'FINAL("OK")'
+        assert rescue_bare_name_final("  FINAL( yes ) ;\n", "NameError: name 'yes' is not defined") == 'FINAL("yes")'
+
+    def test_needs_nameerror_for_that_exact_name(self):
+        assert rescue_bare_name_final("FINAL(OK)", None) is None
+        assert rescue_bare_name_final("FINAL(OK)", "TypeError: boom") is None
+        assert rescue_bare_name_final("FINAL(OK)", "NameError: name 'other' is not defined") is None
+
+    def test_only_a_whole_single_line_call(self):
+        err = "NameError: name 'OK' is not defined"
+        assert rescue_bare_name_final("x = 1\nFINAL(OK)", err) is None
+        assert rescue_bare_name_final("FINAL(OK.upper())", err) is None
+        assert rescue_bare_name_final("print(OK)", err) is None
+
+    def test_placeholders_are_not_rescued(self):
+        for name in ("answer", "result", "solution", "your_answer", "Answer"):
+            err = f"NameError: name '{name}' is not defined"
+            assert rescue_bare_name_final(f"FINAL({name})", err) is None
 
 
 # ── classify_error ────────────────────────────────────────────────────────
