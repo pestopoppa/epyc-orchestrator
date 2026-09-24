@@ -158,9 +158,21 @@ def _repo_commit(path: Path) -> str | None:
     return None
 
 
+def _portable_path(path: Path) -> str:
+    """Repo-relative for files in this checkout, absolute otherwise.
+
+    Every checkout-derived path this compiler writes goes through here, so the
+    committed artifact is byte-identical whichever worktree compiled it (see
+    model_descriptors.portable_source_path for the defect this removes).
+    """
+    from src.registry.model_descriptors import portable_source_path
+
+    return portable_source_path(path)
+
+
 def _source_metadata(path: Path) -> dict[str, Any]:
     return {
-        "path": str(path),
+        "path": _portable_path(path),
         "sha256": _sha256(path),
         "repo_commit": _repo_commit(path),
     }
@@ -2739,7 +2751,7 @@ def _role_record(
             "precedence": {
                 "serving": "server_mode/stack_manifest outrank roles metadata",
                 "memory_cost": memory_source,
-                "spec": str(PRECEDENCE_SPEC),
+                "spec": _portable_path(PRECEDENCE_SPEC),
             },
             "descriptor_server_roles": _descriptor_server_roles(descriptor),
             "alias_overrides": copy.deepcopy(
@@ -2817,7 +2829,7 @@ def compile_stack_priors(
         "coverage_scope": "descriptor_role_bindings"
         if active_roles is None
         else "explicit_active_roles",
-        "precedence_spec": str(PRECEDENCE_SPEC),
+        "precedence_spec": _portable_path(PRECEDENCE_SPEC),
         "source_artifacts": {
             "registry": _source_metadata(registry_path),
             "descriptors": _source_metadata(descriptor_path),

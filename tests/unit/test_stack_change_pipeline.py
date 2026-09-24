@@ -178,69 +178,57 @@ def _config(tmp_path: Path, *, mode: str) -> StackChangePipelineConfig:
 
 
 def test_update_merges_shared_alias_mismatch_into_runtime_descriptor(tmp_path: Path) -> None:
+    """An alias that declares a DIFFERENT model merges into its host's descriptor.
+
+    Re-fixtured for the 2026-09-22 lineup cutover (860b0b2d). The old fixture made
+    worker_general the PRIMARY of a gemma4 ``server_mode.worker`` row on :8072.
+    The guard's launch view is built from the REAL launch manifest, where
+    worker_general is now an alias on frontdoor's :8070, so it resolved the role to
+    a frontdoor host the tmp registry did not declare and correctly reported
+    COULD-NOT-CHECK on the requirement comparison. The fixture now mirrors the
+    current shape: frontdoor hosts the worker lane via ``shared_with``;
+    worker_general declares the host's model, while worker_math declares a
+    different one (the conflict under test). Expected ids come from the compiler's
+    own identity helper, not literals.
+    """
+    from src.registry.model_descriptors import _model_id_from_configs
+
     config = _config(tmp_path, mode="update")
-    _write_yaml(
-        config.lean_registry,
-        {
-            "process_layout": {
-                "hot_resident": ["worker_general", "worker_math"],
-                "warm_mmap": [],
-            },
-            "server_mode": {
-                "worker": {
-                    "url": "http://localhost:8072",
-                    "port": 8072,
-                    "tier": "hot",
-                    "slots": 1,
-                    "model": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
-                    "model_role": "worker_general",
-                    "shared_with": ["worker_math"],
-                    "memory_gb": 16,
-                    "throughput": 60.7,
-                    "benchmark_score": "90%",
-                    "runtime_requirements": {
-                        "binary_dir": "/mnt/raid0/llm/ik_llama.cpp/build/bin",
-                        "ld_library_path": [
-                            "/mnt/raid0/llm/ik_llama.cpp/build/src",
-                            "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src",
-                            "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd",
-                        ],
-                    },
-                    "numa_instances": 4,
-                    "numa_ports": [8082, 8182, 8282, 8382],
-                }
-            },
-            "roles": {
-                "worker_general": {
-                    "model": {
-                        "name": "gemma-4-26B-A4B-it-Q4_K_M",
-                        "quant": "Q4_K_M",
-                        "architecture": "gemma4",
-                        "size_gb": 16,
-                        "ctx_max": 16384,
-                    },
-                    "performance": {"quality_pct": 90, "baseline_tps": 44.7},
-                    "acceleration": {"type": "speculative_decoding", "spec_type": "mtp"},
-                    "memory": {"pinned": True, "residency": "hot"},
-                },
-                "worker_math": {
-                    "model": {
-                        "name": "Qwen2.5-Math-7B-Instruct",
-                        "quant": "Q4_K_M",
-                        "architecture": "dense",
-                        "size_gb": 4.4,
-                        "ctx_max": 32768,
-                    },
-                    "performance": {"quality_pct": 88, "baseline_tps": 12.4},
-                    "acceleration": {"type": "none", "lookup": False},
-                    "memory": {"pinned": True, "residency": "hot"},
-                }
-            },
+    registry = yaml.safe_load(config.lean_registry.read_text(encoding="utf-8"))
+    host_cfg = registry["server_mode"]["frontdoor"]
+    host_cfg["shared_with"] = ["worker_general", "worker_math"]
+    registry["process_layout"]["hot_resident"] = ["frontdoor", "worker_general", "worker_math"]
+    host_role_cfg = registry["roles"]["frontdoor"]
+    # The base fixture spells the server GGUF `Qwen_Qwen3.6-...` but the role model
+    # `Qwen3.6-...`; a direct binding never compares the two, but a shared_with
+    # alias does (Role-server conflict). Spell them consistently, as the real
+    # master does (server `Qwen3.6-35B-A3B-MTP-Q8_0.gguf` / role
+    # `Qwen3.6-35B-A3B-MTP-Q8_0`), so the only model conflict is worker_math's.
+    host_gguf = f"{host_role_cfg['model']['name']}.gguf"
+    host_cfg["model"] = host_gguf
+    host_cfg["model_path"] = f"/models/{host_gguf}"
+    registry["roles"]["worker_general"] = {
+        # Same model as the host: an alias, not a conflict.
+        "model": dict(host_role_cfg["model"]),
+        "performance": {"quality_pct": 90, "baseline_tps": 44.7},
+        "acceleration": {"type": "none", "lookup": False},
+        "memory": {"pinned": True, "residency": "hot"},
+    }
+    registry["roles"]["worker_math"] = {
+        "model": {
+            "name": "Qwen2.5-Math-7B-Instruct",
+            "quant": "Q4_K_M",
+            "architecture": "dense",
+            "size_gb": 4.4,
+            "ctx_max": 32768,
         },
-    )
-    conflict_config = StackChangePipelineConfig(
-        **{**config.__dict__, "roles": {"worker_general", "worker_math"}}
-    )
+        "performance": {"quality_pct": 88, "baseline_tps": 12.4},
+        "acceleration": {"type": "none", "lookup": False},
+        "memory": {"pinned": True, "residency": "hot"},
+    }
+    _write_yaml(config.lean_registry, registry)
+    roles = {"frontdoor", "worker_general", "worker_math"}
+    conflict_config = StackChangePipelineConfig(**{**config.__dict__, "roles": roles})
     _write_yaml(
         conflict_config.procedure,
         {
@@ -248,7 +236,7 @@ def test_update_merges_shared_alias_mismatch_into_runtime_descriptor(tmp_path: P
                 {
                     "name": "role",
                     "type": "string",
-                    "validation": {"enum": ["worker_general", "worker_math"]},
+                    "validation": {"enum": sorted(roles)},
                 }
             ]
         },
@@ -261,7 +249,7 @@ def test_update_merges_shared_alias_mismatch_into_runtime_descriptor(tmp_path: P
                     "properties": {
                         "roles": {
                             "items": {
-                                "enum": ["worker_general", "worker_math", "admin"],
+                                "enum": [*sorted(roles), "admin"],
                             }
                         }
                     }
@@ -272,18 +260,19 @@ def test_update_merges_shared_alias_mismatch_into_runtime_descriptor(tmp_path: P
 
     report = run_stack_change_pipeline(conflict_config)
 
-    assert report.ok
+    assert report.ok, [(step.name, step.errors) for step in report.steps if step.errors]
+    host_model_id = _model_id_from_configs(host_role_cfg)
+    math_model_id = _model_id_from_configs(registry["roles"]["worker_math"])
+    assert host_model_id and math_model_id and host_model_id != math_model_id
     descriptors = yaml.safe_load(conflict_config.descriptors.read_text(encoding="utf-8"))
-    assert [model["model_id"] for model in descriptors["models"]] == [
-        "gemma4-26b-a4b-q4_k_m"
-    ]
+    assert [model["model_id"] for model in descriptors["models"]] == [host_model_id]
     model = descriptors["models"][0]
-    assert model["role_bindings"]["roles"] == ["worker_general", "worker_math"]
+    assert model["role_bindings"]["roles"] == sorted(roles)
     assert model["role_bindings"]["alias_overrides"] == [
         {
             "role": "worker_math",
-            "served_by": "worker_general",
-            "ignored_model_id": "qwen2.5-math-7b-q4_k_m",
+            "served_by": "frontdoor",
+            "ignored_model_id": math_model_id,
             "reason": "server_mode.shared_with runtime takes precedence",
         }
     ]

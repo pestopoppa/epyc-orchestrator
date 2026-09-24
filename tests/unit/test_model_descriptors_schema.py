@@ -124,7 +124,22 @@ def test_vision_descriptors_expose_projector_requirements() -> None:
 
 
 def test_shared_runtime_aliases_do_not_emit_role_server_conflicts() -> None:
+    """Shared-runtime aliases bind to their HOST's descriptor, with no conflict gaps.
+
+    2026-09-22 lineup cutover (860b0b2d): the gemma4-26B-A4B worker this test used
+    to pin was RETIRED and the worker lane (worker_general / worker_math /
+    toolrunner / ...) became aliases on frontdoor's :8070 process. The host, its
+    model_id, the alias set and the expected alias overrides are all recomputed from
+    the lean registry the descriptors compile from (``server_mode.<host>
+    .shared_with``) through the compiler's own binding/identity helpers, instead of
+    restating a model_id that the next lineup change would retire again.
+    """
+    from src.registry.model_descriptors import _model_id_from_configs, _server_for_role
+
     descriptors = _load_yaml(DESCRIPTOR_PATH)
+    registry = _load_yaml(REGISTRY_PATH)
+    server_mode = registry["server_mode"]
+    roles = registry["roles"]
 
     conflicts = [
         model
@@ -133,16 +148,54 @@ def test_shared_runtime_aliases_do_not_emit_role_server_conflicts() -> None:
     ]
 
     assert conflicts == []
-    worker = next(
-        model
-        for model in descriptors["models"]
-        if model["model_id"] == "gemma4-26b-a4b-it-orig-q4_k_m"
-    )
+
+    by_model_id = {model["model_id"]: model for model in descriptors["models"]}
+    worker_lane_host, _cfg, binding = _server_for_role("worker_general", server_mode)
+    assert binding == "shared_with"
+    checked_hosts: set[str] = set()
+    for host, host_cfg in server_mode.items():
+        shared = host_cfg.get("shared_with") if isinstance(host_cfg, dict) else None
+        if not isinstance(shared, list):
+            continue
+        # Only roles the compiler actually binds through THIS host's shared_with
+        # (a role with its own server_mode row binds directly, not as an alias).
+        aliases = {
+            alias
+            for alias in shared
+            if _server_for_role(alias, server_mode)[0::2] == (host, "shared_with")
+        }
+        if not aliases:
+            continue
+        host_model_id = _model_id_from_configs(host_cfg)
+        assert host_model_id in by_model_id, (host, host_model_id)
+        descriptor = by_model_id[host_model_id]
+        bound = set(descriptor["role_bindings"]["roles"])
+        assert aliases <= bound, (host, sorted(aliases - bound))
+        assert not any(
+            "ignored non-live role model metadata" in gap for gap in descriptor["known_gaps"]
+        ), host
+        # An alias that declares a DIFFERENT model is recorded as an override
+        # (the shared runtime wins); one declaring the host's model is not.
+        expected_ignored = set()
+        for alias in aliases:
+            alias_cfg = roles.get(alias)
+            alias_model_id = (
+                _model_id_from_configs(alias_cfg) if isinstance(alias_cfg, dict) else None
+            )
+            if alias_model_id and alias_model_id != host_model_id:
+                expected_ignored.add(alias_model_id)
+        alias_overrides = [
+            override
+            for override in descriptor["role_bindings"].get("alias_overrides") or []
+            if override.get("role") in aliases
+        ]
+        assert {o.get("ignored_model_id") for o in alias_overrides} == expected_ignored, host
+        checked_hosts.add(host)
+
+    # Non-vacuous: the worker lane's host was among the hosts checked, and the
+    # worker roles the old fixture named are bound to it.
+    assert worker_lane_host in checked_hosts
+    worker_lane = by_model_id[_model_id_from_configs(server_mode[worker_lane_host])]
     assert {"worker_general", "worker_math", "toolrunner"} <= set(
-        worker["role_bindings"]["roles"]
+        worker_lane["role_bindings"]["roles"]
     )
-    assert not any("ignored non-live role model metadata" in gap for gap in worker["known_gaps"])
-    alias_overrides = worker["role_bindings"].get("alias_overrides") or []
-    ignored_models = {override.get("ignored_model_id") for override in alias_overrides}
-    assert "qwen2.5-math-7b-q4_k_m" in ignored_models
-    assert "qwen3-coder-30b-a3b-q4_k_m" in ignored_models

@@ -275,51 +275,106 @@ def _swapped_frontdoor_registry(path: Path, *, throughput: float = 18.5) -> Path
     )
 
 
-def _swapped_worker_registry(path: Path, *, throughput: float = 66.2) -> Path:
+# 2026-09-22 lineup cutover (epyc-orchestrator 860b0b2d): the dedicated worker
+# pool on :8072 (quarters 8082/8182/8282/8382) is RETIRED. worker_general and
+# its worker_math / toolrunner aliases now ride frontdoor's :8070 process — the
+# computed launch manifest (orchestration/launch_manifest.yaml, read by
+# scripts/server/stack_manifest.py at import, NOT by this tmp repo) declares
+# PORT_MAP worker_general/worker_math/toolrunner -> 8070 with frontdoor as the
+# primary of that server, and role_launch_meta no longer has a worker_general
+# entry. Both the compiler and the guard resolve these roles to that host.
+#
+# These builders used to declare `server_mode.worker` as its OWN process on
+# :8072. That world no longer exists on the launch surface, so the guard
+# resolved worker_general to its manifest host (frontdoor), found no frontdoor
+# row in this simulated registry, and reported COULD-NOT-CHECK for the
+# requirement comparison (and, where the fixture DID declare a frontdoor row with
+# a different model, a model_path mismatch). The simulated world now matches the
+# launch surface: ONE :8070 process whose `server_mode.frontdoor` row is the
+# host and whose shared_with names the worker lane. The model data is still the
+# gemma4 fixture data — only the topology had to move — so the swap assertions
+# keep biting on the Q4_K_M -> Q8_0 change.
+#
+# frontdoor is an ACTIVE role in these scenarios on purpose: WP-13 validates a
+# shared process's runtime once, on the host's own row
+# (stack_change_guard.py `if target_launch_runtime and not host_role`). With the
+# host outside the evaluated role set, a runtime drift on :8070 would be
+# observable nowhere and the requirement-drift scenario would pass vacuously.
+WORKER_LANE_ROLES = {"frontdoor", "worker_general", "worker_math", "toolrunner"}
+
+
+def _worker_lane_registry(
+    path: Path,
+    *,
+    model: str,
+    quant: str,
+    size_gb: float,
+    memory_gb: float,
+    throughput: float,
+    baseline_tps: float,
+    benchmark_score: str,
+    model_path: str | None = None,
+    binary_dir: str = "/mnt/raid0/llm/llama.cpp/build/bin",
+    ld_library_path: list[str] | None = None,
+) -> Path:
+    if ld_library_path is None:
+        ld_library_path = [
+            "/mnt/raid0/llm/llama.cpp/build/src",
+            "/mnt/raid0/llm/llama.cpp/build/ggml/src",
+            "/mnt/raid0/llm/llama.cpp/build/examples/mtmd",
+        ]
+    host: dict[str, Any] = {
+        "url": "http://localhost:8070",
+        "port": 8070,
+        "tier": "hot",
+        "slots": 1,
+        "model": f"{model}.gguf",
+    }
+    if model_path is not None:
+        host["model_path"] = model_path
+    host.update(
+        {
+            "model_role": "frontdoor",
+            "shared_with": ["worker_general", "worker_math", "toolrunner"],
+            "memory_gb": memory_gb,
+            "throughput": throughput,
+            "benchmark_score": benchmark_score,
+            # 2026-06-26 v6 cutover: canonical llama.cpp (v6); ik_llama.cpp deprecated.
+            "runtime_requirements": {
+                "binary_dir": binary_dir,
+                "ld_library_path": ld_library_path,
+            },
+        }
+    )
+
+    def lane_role() -> dict[str, Any]:
+        # frontdoor and worker_general describe the SAME resident model: one
+        # process, one GGUF. Built fresh per role so the YAML carries no anchors.
+        return {
+            "model": {
+                "name": model,
+                "quant": quant,
+                "architecture": "gemma4",
+                "size_gb": size_gb,
+                "ctx_max": 16384,
+            },
+            "performance": {"quality_pct": 90, "baseline_tps": baseline_tps},
+            # 2026-06-26 v6 cutover: MTP spec token is now 'draft-mtp'.
+            "acceleration": {"type": "speculative_decoding", "spec_type": "draft-mtp"},
+            "memory": {"pinned": True, "residency": "hot"},
+        }
+
     return _write_yaml(
         path,
         {
-            "server_mode": {
-                "worker": {
-                    "url": "http://localhost:8072",
-                    "port": 8072,
-                    "tier": "hot",
-                    "slots": 1,
-                    "model": "gemma-4-26B-A4B-it-Q8_0.gguf",
-                    "model_path": "/models/gemma-4-26B-A4B-it-Q8_0.gguf",
-                    "model_role": "worker_general",
-                    "shared_with": ["worker_math", "toolrunner"],
-                    "memory_gb": 30,
-                    "throughput": throughput,
-                    "benchmark_score": "92%",
-                    # 2026-06-26 v6 cutover: worker consolidated onto canonical
-                    # llama.cpp (v6); ik_llama.cpp deprecated.
-                    "runtime_requirements": {
-                        "binary_dir": "/mnt/raid0/llm/llama.cpp/build/bin",
-                        "ld_library_path": [
-                            "/mnt/raid0/llm/llama.cpp/build/src",
-                            "/mnt/raid0/llm/llama.cpp/build/ggml/src",
-                            "/mnt/raid0/llm/llama.cpp/build/examples/mtmd",
-                        ],
-                    },
-                    "numa_instances": 4,
-                    "numa_ports": [8082, 8182, 8282, 8382],
-                }
-            },
+            "server_mode": {"frontdoor": host},
             "roles": {
-                "worker_general": {
-                    "model": {
-                        "name": "gemma-4-26B-A4B-it-Q8_0",
-                        "quant": "Q8_0",
-                        "architecture": "gemma4",
-                        "size_gb": 30,
-                        "ctx_max": 16384,
-                    },
-                    "performance": {"quality_pct": 90, "baseline_tps": throughput},
-                    # 2026-06-26 v6 cutover: MTP spec token is now 'draft-mtp'.
-                    "acceleration": {"type": "speculative_decoding", "spec_type": "draft-mtp"},
-                    "memory": {"pinned": True, "residency": "hot"},
-                },
+                "frontdoor": lane_role(),
+                "worker_general": lane_role(),
+                # worker_math / toolrunner keep their stale standalone model
+                # metadata on purpose: the descriptor compile must record them
+                # as alias_overrides of the one resident model, not as
+                # role-server conflicts.
                 "worker_math": {
                     "model": {
                         "name": "Qwen2.5-Math-7B-Instruct",
@@ -346,6 +401,40 @@ def _swapped_worker_registry(path: Path, *, throughput: float = 66.2) -> Path:
                 },
             },
         },
+    )
+
+
+def _swapped_worker_registry(path: Path, *, throughput: float = 66.2) -> Path:
+    return _worker_lane_registry(
+        path,
+        model="gemma-4-26B-A4B-it-Q8_0",
+        quant="Q8_0",
+        size_gb=30,
+        memory_gb=30,
+        throughput=throughput,
+        baseline_tps=throughput,
+        benchmark_score="92%",
+        model_path="/models/gemma-4-26B-A4B-it-Q8_0.gguf",
+    )
+
+
+def _worker_alias_registry(
+    path: Path,
+    *,
+    binary_dir: str = "/mnt/raid0/llm/llama.cpp/build/bin",
+    ld_library_path: list[str] | None = None,
+) -> Path:
+    return _worker_lane_registry(
+        path,
+        model="gemma-4-26B-A4B-it-Q4_K_M",
+        quant="Q4_K_M",
+        size_gb=16,
+        memory_gb=16,
+        throughput=60.7,
+        baseline_tps=44.7,
+        benchmark_score="90%",
+        binary_dir=binary_dir,
+        ld_library_path=ld_library_path,
     )
 
 
@@ -448,6 +537,25 @@ def _swapped_vision_registry(path: Path) -> Path:
     )
 
 
+# 2026-09-22 lineup cutover (epyc-orchestrator 860b0b2d): ingest_long_context's
+# three dedicated CPU instances on :8085/:8185/:8285 are RETIRED. The role is an
+# ALIAS on architect_general's :8083 process — launch manifest PORT_MAP
+# ingest_long_context -> 8083, its role_launch_meta entry removed, and the real
+# master's `server_mode.architect_general.shared_with` names it. The launch view
+# is the REAL repo's (scripts/server/stack_manifest.py loads
+# orchestration/launch_manifest.yaml at import), so this builder's old
+# standalone :8085 row made the guard resolve the role to its manifest host,
+# find no architect_general row here, and report COULD-NOT-CHECK for the
+# model_path comparison. The simulated registry now declares the host row and the
+# alias rides it; the model data is still the Qwen3-Next fixture data, so the
+# Q4_K_M -> Q8_0 swap assertions are unchanged.
+#
+# architect_general is an ACTIVE role in the scenario: an alias launches nothing,
+# so the process-level consumers (dashboard port labels, the host's runtime row)
+# only exist through the host's record. See INGEST_PROCESS_ROLES.
+INGEST_PROCESS_ROLES = {"architect_general", "ingest_long_context"}
+
+
 def _ingest_registry(
     path: Path,
     *,
@@ -460,18 +568,44 @@ def _ingest_registry(
     benchmark_date: str = "2026-05-04",
 ) -> Path:
     gguf = f"{model}.gguf"
+
+    def process_role() -> dict[str, Any]:
+        # architect_general and ingest_long_context describe the SAME resident
+        # model: one process, one GGUF. Built fresh per role (no YAML anchors).
+        return {
+            "model": {
+                "name": model,
+                "quant": quant,
+                "architecture": "qwen3next",
+                "size_gb": memory_gb,
+                "ctx_max": ctx_max,
+            },
+            "performance": {
+                "quality_pct": quality_pct,
+                "baseline_tps": throughput,
+                "long_context_quality": f"{quality_pct:g}%",
+                "benchmark_date": benchmark_date,
+            },
+            "acceleration": {"type": "none", "lookup": False},
+            "memory": {"pinned": True, "residency": "hot"},
+        }
+
+    ingest_role = process_role()
+    ingest_role["alias_of"] = "architect_general"
+    ingest_role["model"]["shared_gguf_with"] = "architect_general"
     return _write_yaml(
         path,
         {
             "server_mode": {
-                "ingest_long_context": {
-                    "url": "http://localhost:8085",
-                    "port": 8085,
+                "architect_general": {
+                    "url": "http://localhost:8083",
+                    "port": 8083,
                     "tier": "hot",
                     "slots": 1,
                     "model": gguf,
                     "model_path": f"/models/{gguf}",
-                    "model_role": "ingest_long_context",
+                    "model_role": "architect_general",
+                    "shared_with": ["ingest_long_context"],
                     "memory_gb": memory_gb,
                     "throughput": throughput,
                     "benchmark_score": f"{quality_pct:g}%",
@@ -479,23 +613,8 @@ def _ingest_registry(
                 }
             },
             "roles": {
-                "ingest_long_context": {
-                    "model": {
-                        "name": model,
-                        "quant": quant,
-                        "architecture": "qwen3next",
-                        "size_gb": memory_gb,
-                        "ctx_max": ctx_max,
-                    },
-                    "performance": {
-                        "quality_pct": quality_pct,
-                        "baseline_tps": throughput,
-                        "long_context_quality": f"{quality_pct:g}%",
-                        "benchmark_date": benchmark_date,
-                    },
-                    "acceleration": {"type": "none", "lookup": False},
-                    "memory": {"pinned": True, "residency": "hot"},
-                }
+                "architect_general": process_role(),
+                "ingest_long_context": ingest_role,
             },
         },
     )
@@ -511,86 +630,6 @@ def _swapped_ingest_registry(path: Path) -> Path:
         quant="Q8_0",
         ctx_max=262144,
         benchmark_date="2026-06-13",
-    )
-
-
-def _worker_alias_registry(
-    path: Path,
-    *,
-    # 2026-06-26 v6 cutover: worker consolidated onto canonical llama.cpp (v6);
-    # ik_llama.cpp deprecated. Default runtime points at the canonical build tree.
-    binary_dir: str = "/mnt/raid0/llm/llama.cpp/build/bin",
-    ld_library_path: list[str] | None = None,
-) -> Path:
-    if ld_library_path is None:
-        ld_library_path = [
-            "/mnt/raid0/llm/llama.cpp/build/src",
-            "/mnt/raid0/llm/llama.cpp/build/ggml/src",
-            "/mnt/raid0/llm/llama.cpp/build/examples/mtmd",
-        ]
-    return _write_yaml(
-        path,
-        {
-            "server_mode": {
-                "worker": {
-                    "url": "http://localhost:8072",
-                    "port": 8072,
-                    "tier": "hot",
-                    "slots": 1,
-                    "model": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
-                    "model_role": "worker_general",
-                    "shared_with": ["worker_math", "toolrunner"],
-                    "memory_gb": 16,
-                    "throughput": 60.7,
-                    "benchmark_score": "90%",
-                    "runtime_requirements": {
-                        "binary_dir": binary_dir,
-                        "ld_library_path": ld_library_path,
-                    },
-                    "numa_instances": 4,
-                    "numa_ports": [8082, 8182, 8282, 8382],
-                }
-            },
-            "roles": {
-                "worker_general": {
-                    "model": {
-                        "name": "gemma-4-26B-A4B-it-Q4_K_M",
-                        "quant": "Q4_K_M",
-                        "architecture": "gemma4",
-                        "size_gb": 16,
-                        "ctx_max": 16384,
-                    },
-                    "performance": {"quality_pct": 90, "baseline_tps": 44.7},
-                    # 2026-06-26 v6 cutover: MTP spec token is now 'draft-mtp'.
-                    "acceleration": {"type": "speculative_decoding", "spec_type": "draft-mtp"},
-                    "memory": {"pinned": True, "residency": "hot"},
-                },
-                "worker_math": {
-                    "model": {
-                        "name": "Qwen2.5-Math-7B-Instruct",
-                        "quant": "Q4_K_M",
-                        "architecture": "dense",
-                        "size_gb": 4.4,
-                        "ctx_max": 32768,
-                    },
-                    "performance": {"quality_pct": 88, "baseline_tps": 12.4},
-                    "acceleration": {"type": "none", "lookup": False},
-                    "memory": {"pinned": True, "residency": "hot"},
-                },
-                "toolrunner": {
-                    "model": {
-                        "name": "Qwen3-Coder-30B-A3B-Instruct",
-                        "quant": "Q4_K_M",
-                        "architecture": "qwen3coder",
-                        "size_gb": 16,
-                        "ctx_max": 32768,
-                    },
-                    "performance": {"quality_pct": 84, "baseline_tps": 39.1},
-                    "acceleration": {"type": "none", "lookup": False},
-                    "memory": {"pinned": True, "residency": "hot"},
-                },
-            },
-        },
     )
 
 
@@ -677,10 +716,18 @@ def _assert_text_stack_primary_port_consumers(
         "_sentinel_after": {"serving": {"ports": [expected_port + 1]}},
     }
     ordered_roles = _ordered_live_role_ids(sentinel_records)
+    # `_ordered_live_role_ids` pins frontdoor FIRST regardless of port (it is the
+    # default /v1/models entry); every other role is ordered by primary port. Since
+    # the 2026-09-22 cutover the worker lane shares frontdoor's :8070, so the
+    # port-order bracket applies to the non-frontdoor roles only.
+    port_ordered_roles = expected_roles - {"frontdoor"}
+    if "frontdoor" in expected_roles:
+        assert ordered_roles[0] == "frontdoor"
+    assert port_ordered_roles
     assert ordered_roles.index("_sentinel_before") < min(
-        ordered_roles.index(role) for role in expected_roles
+        ordered_roles.index(role) for role in port_ordered_roles
     )
-    assert max(ordered_roles.index(role) for role in expected_roles) < ordered_roles.index(
+    assert max(ordered_roles.index(role) for role in port_ordered_roles) < ordered_roles.index(
         "_sentinel_after"
     )
 
@@ -1006,7 +1053,7 @@ def test_simulated_worker_swap_updates_generated_consumers_with_approval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    roles = {"worker_general", "worker_math", "toolrunner"}
+    roles = WORKER_LANE_ROLES
     config = _config(tmp_path, mode="update", roles=roles)
     _worker_alias_registry(config.lean_registry)
     assert run_stack_change_pipeline(config).ok
@@ -1256,7 +1303,7 @@ def test_simulated_ingest_swap_updates_generated_consumers_with_approval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    roles = {"ingest_long_context"}
+    roles = INGEST_PROCESS_ROLES
     config = _config(tmp_path, mode="update", roles=roles)
     _ingest_registry(config.lean_registry)
     assert run_stack_change_pipeline(config).ok
@@ -1291,14 +1338,20 @@ def test_simulated_ingest_swap_updates_generated_consumers_with_approval(
     assert role["priors"]["throughput_tps"] == 14.2
     assert role["priors"]["quality_overall"] == pytest.approx(0.963)
     assert role["model"]["ctx_max"] == 262144
-    # 32768 -> 262144 (2026-08-02, operator-ratified). This simulated registry
-    # declares no `serving_shape` of its own, so the context comes from the
-    # AMBIENT launcher table — which is now DERIVED from the real master's
-    # `server_mode.ingest_long_context.serving_shape.n_ctx`. The fixture is
-    # exercising the model/descriptor swap, not the serving shape, so it tracks
-    # the ambient value rather than pinning a literal that has moved.
-    assert role["serving"]["effective_context_tokens"] == 262144
-    assert role["serving"]["launch"]["runtime"]["cache"]["context_tokens"] == 262144
+    # This simulated registry declares no `serving_shape` of its own, so the
+    # context comes from the AMBIENT launcher table (derived from the real
+    # master's serving_shape.n_ctx). Since the 2026-09-22 cutover (860b0b2d) the
+    # role is an alias and has NO launch context of its own — it inherits its
+    # host's, architect_general's (196608 at the time of writing; it was the
+    # role's own 262144 before). The fixture exercises the model/descriptor swap,
+    # not the serving shape, so it tracks the ambient HOST value rather than
+    # pinning a literal that has moved twice.
+    from scripts.server.stack_manifest import LAUNCH_CONTEXT_TOKENS
+
+    assert "ingest_long_context" not in LAUNCH_CONTEXT_TOKENS
+    host_context = LAUNCH_CONTEXT_TOKENS["architect_general"]
+    assert role["serving"]["effective_context_tokens"] == host_context
+    assert role["serving"]["launch"]["runtime"]["cache"]["context_tokens"] == host_context
 
     operator_summary = config.operator_summary.read_text(encoding="utf-8")
     assert "Source: `orchestration/derived/stack_priors.yaml`" in operator_summary
@@ -1317,12 +1370,17 @@ def test_simulated_ingest_swap_updates_generated_consumers_with_approval(
 
     expected_port = _primary_port_for_roles(priors, roles)
     assert _stack_prior_backend_urls(config.stack_priors) == {
-        "ingest_long_context": f"http://localhost:{expected_port}"
+        # One :8083 process, grouped under the sorted role set on that port.
+        "architect_general/ingest_long_context": f"http://localhost:{expected_port}"
     }
     port_hints = _stack_prior_port_hints(config.stack_priors)
-    assert port_hints[expected_port].split(".", 1)[0] == "ingest_long_context"
-    if expected_port == 8085:
-        assert not ({8185, 8285, 8385, 8485} & set(port_hints))
+    # The dashboard labels a port by the process that LAUNCHES it; an alias
+    # (launch.primary_roles excludes it) never claims a port label.
+    assert port_hints[expected_port].split(".", 1)[0] == "architect_general"
+    assert "ingest_long_context" not in {label.split(".", 1)[0] for label in port_hints.values()}
+    # The alias rides :8083; none of its retired dedicated ports may resurface.
+    assert expected_port == 8083
+    assert not ({8085, 8185, 8285, 8385, 8485} & set(port_hints))
 
     q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
     assert q_priors.baseline_tps_by_role["ingest_long_context"] == 14.2
@@ -1369,7 +1427,7 @@ def test_simulated_ingest_swap_updates_generated_consumers_with_approval(
 def test_simulated_shared_runtime_aliases_compile_as_one_runtime_descriptor(
     tmp_path: Path,
 ) -> None:
-    roles = {"worker_general", "worker_math", "toolrunner"}
+    roles = WORKER_LANE_ROLES
     config = _config(tmp_path, mode="update", roles=roles)
     _worker_alias_registry(config.lean_registry)
 
@@ -1381,7 +1439,12 @@ def test_simulated_shared_runtime_aliases_compile_as_one_runtime_descriptor(
         "gemma4-26b-a4b-q4_k_m"
     ]
     model = descriptors["models"][0]
-    assert model["role_bindings"]["roles"] == ["toolrunner", "worker_general", "worker_math"]
+    assert model["role_bindings"]["roles"] == [
+        "frontdoor",
+        "toolrunner",
+        "worker_general",
+        "worker_math",
+    ]
     assert not any(gap.startswith("Role-server conflict:") for gap in model["known_gaps"])
     assert not any("ignored non-live role model metadata" in gap for gap in model["known_gaps"])
     alias_overrides = model["role_bindings"]["alias_overrides"]
@@ -1389,11 +1452,32 @@ def test_simulated_shared_runtime_aliases_compile_as_one_runtime_descriptor(
     assert ignored_models == {"qwen2.5-math-7b-q4_k_m", "qwen3-coder-30b-a3b-q4_k_m"}
 
     priors = yaml.safe_load(config.stack_priors.read_text(encoding="utf-8"))
-    primary_runtime = priors["roles"]["worker_general"]["serving"]["launch"]["runtime"]
-    primary_requirements = priors["roles"]["worker_general"]["serving"]["launch"]["requirements"]
-    for alias in ("worker_math", "toolrunner"):
+    # One :8070 process: every alias compiles the HOST's runtime and launch
+    # requirements (worker_general included, since the 2026-09-22 cutover).
+    primary_runtime = priors["roles"]["frontdoor"]["serving"]["launch"]["runtime"]
+    primary_requirements = priors["roles"]["frontdoor"]["serving"]["launch"]["requirements"]
+    assert primary_requirements["model_path"].endswith("gemma-4-26B-A4B-it-Q4_K_M.gguf")
+    # The host launches the process and owns its NEXTN/MTP draft; aliases ride
+    # it and compile a DISABLED spec block by contract (stack_priors.py
+    # `_spec_type_has_mtp(spec_type_prior) and role == primary_role`), so their
+    # records match the launch manifest, which nulls the draft for aliases. The
+    # old :8072 worker_pool host hid this: worker_pool mode stamps spec onto every
+    # role on the pool. Everything else in the runtime must be the host's.
+    primary_spec = primary_runtime["flags"]["spec"]
+    assert primary_spec["enabled"] is True
+    assert primary_spec["type"] == "draft-mtp"
+
+    def without_spec(runtime: dict[str, Any]) -> dict[str, Any]:
+        stripped = json.loads(json.dumps(runtime))
+        stripped["flags"].pop("spec")
+        return stripped
+
+    for alias in ("worker_general", "worker_math", "toolrunner"):
+        alias_runtime = priors["roles"][alias]["serving"]["launch"]["runtime"]
         assert priors["roles"][alias]["serving"]["binding"] == "server_mode.shared_with"
-        assert priors["roles"][alias]["serving"]["launch"]["runtime"] == primary_runtime
+        assert without_spec(alias_runtime) == without_spec(primary_runtime)
+        assert alias_runtime["flags"]["spec"]["enabled"] is False
+        assert alias_runtime["flags"]["spec"]["draft_model_path"] is None
         assert priors["roles"][alias]["serving"]["launch"]["requirements"] == primary_requirements
 
 
@@ -1425,7 +1509,7 @@ def test_simulated_retired_role_enum_is_removed_by_update(tmp_path: Path) -> Non
 
 
 def test_simulated_runtime_requirement_drift_fails_until_regenerated(tmp_path: Path) -> None:
-    roles = {"worker_general", "worker_math", "toolrunner"}
+    roles = WORKER_LANE_ROLES
     config = _config(tmp_path, mode="update", roles=roles)
     _worker_alias_registry(config.lean_registry)
     assert run_stack_change_pipeline(config).ok
@@ -1471,28 +1555,26 @@ def test_simulated_context_kv_and_acceleration_drift_are_rejected(
         config.lean_registry,
         {
             "server_mode": {
+                # 2026-09-22 lineup cutover (860b0b2d): the :8072 worker pool is
+                # RETIRED and worker_general is an alias on frontdoor's :8070
+                # process (launch manifest PORT_MAP worker_general -> 8070). Its
+                # own `server_mode.worker` row serving a DIFFERENT model (gemma4)
+                # is no longer expressible: the guard resolves worker_general to
+                # its manifest host and requires the alias's compiled launch
+                # requirements to EQUAL frontdoor's, so that form failed with a
+                # model_path mismatch before any drift detector ran.
                 "frontdoor": {
                     "url": "http://localhost:8070",
                     "port": 8070,
                     "tier": "hot",
                     "model_role": "frontdoor",
-                    "model": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+                    # GGUF name canonicalises to the same model_id as the role
+                    # metadata (`Qwen_` publisher prefix dropped), so the shared
+                    # alias is not reported as a role/server model conflict.
+                    "model": "Qwen3.6-35B-A3B-Q8_0.gguf",
+                    "shared_with": ["worker_general"],
                     "throughput": 24.3,
                     "memory_gb": 37,
-                },
-                "worker": {
-                    "url": "http://localhost:8072",
-                    "port": 8072,
-                    "tier": "hot",
-                    "model_role": "worker_general",
-                    "model": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
-                    "throughput": 60.7,
-                    "memory_gb": 16,
-                    # 2026-06-26 v6 cutover: worker on canonical llama.cpp (v6); ik deprecated.
-                    "runtime_requirements": {
-                        "binary_dir": "/mnt/raid0/llm/llama.cpp/build/bin",
-                        "ld_library_path": ["/mnt/raid0/llm/llama.cpp/build/src"],
-                    },
                 },
                 # 2026-07-31 vision unification: ONE :8086 process, two role
                 # names. vision_escalation's own :8087 server_mode entry (its own
@@ -1523,13 +1605,18 @@ def test_simulated_context_kv_and_acceleration_drift_are_rejected(
                 "frontdoor": {
                     "model": {"name": "Qwen3.6-35B-A3B-Q8_0", "ctx_max": 131072},
                     "performance": {"quality_pct": 93, "baseline_tps": 24.3},
+                    # The :8070 process owns the MTP self-draft (v6 token
+                    # 'draft-mtp'); its aliases inherit it and compile none.
+                    "acceleration": {"type": "speculative_decoding", "spec_type": "draft-mtp"},
                     "memory": {"residency": "hot"},
                 },
                 "worker_general": {
-                    "model": {"name": "gemma-4-26B-A4B-it-Q4_K_M", "ctx_max": 16384},
-                    "performance": {"quality_pct": 90, "baseline_tps": 60.7},
-                    # 2026-06-26 v6 cutover: MTP spec token is now 'draft-mtp'.
-                    "acceleration": {"type": "speculative_decoding", "spec_type": "draft-mtp"},
+                    "model": {
+                        "name": "Qwen3.6-35B-A3B-Q8_0",
+                        "ctx_max": 131072,
+                        "shared_gguf_with": "frontdoor",
+                    },
+                    "performance": {"quality_pct": 93, "baseline_tps": 24.3},
                     "memory": {"residency": "hot"},
                 },
                 "worker_vision": {
@@ -1575,9 +1662,18 @@ def test_simulated_context_kv_and_acceleration_drift_are_rejected(
     assert run_stack_change_pipeline(config).ok
     payload = yaml.safe_load(config.stack_priors.read_text(encoding="utf-8"))
     payload["roles"]["frontdoor"]["serving"]["launch"]["runtime"]["cache"]["kv_type_k"] = "f16"
-    payload["roles"]["worker_general"]["serving"]["launch"]["runtime"]["flags"]["spec"][
+    # Acceleration drift. This corruption used to be written onto worker_general's
+    # own :8072 runtime; since 860b0b2d worker_general is an alias on :8070 and
+    # WP-13 validates the shared process's RUNTIME once, on the host's row, so
+    # the spec flag goes on frontdoor — same detector, the row that owns it.
+    assert payload["roles"]["frontdoor"]["serving"]["launch"]["runtime"]["flags"]["spec"][
+        "enabled"
+    ] is True
+    payload["roles"]["frontdoor"]["serving"]["launch"]["runtime"]["flags"]["spec"][
         "enabled"
     ] = False
+    # Context drift stays on the ALIAS: an alias's declared context IS judged
+    # against its host's launch context.
     payload["roles"]["worker_general"]["serving"]["effective_context_tokens"] = 8192
     payload["roles"]["architect_general"]["serving"]["launch"]["runtime"]["flags"][
         "override_kv"

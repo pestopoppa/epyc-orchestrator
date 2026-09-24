@@ -1020,10 +1020,14 @@ def _source_path(priors_path: Path, source: dict[str, Any]) -> Path | None:
     raw = source.get("path")
     if not isinstance(raw, str) or not raw:
         return None
-    path = Path(raw)
-    if path.is_absolute():
-        return path
-    return (priors_path.parent / path).resolve()
+    # A relative pin is relative to the checkout running this guard — the same
+    # root the compiler relativised against (model_descriptors.
+    # portable_source_path). Resolving it anywhere else would re-create the
+    # defect that fix removed: a worktree's gate hashing another tree's files.
+    # (`priors_path` stays in the signature for callers; it is no longer the anchor.)
+    from src.registry.model_descriptors import resolve_portable_source_path
+
+    return resolve_portable_source_path(raw, REPO_ROOT)
 
 
 def _port_from_endpoint(endpoint: Any) -> int | None:

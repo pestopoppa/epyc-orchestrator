@@ -168,38 +168,50 @@ def test_realized_stack_numa_mode_from_state_derives_quarter_and_ignores_dead() 
 def test_runtime_facts_resolve_worker_logical_alias_to_physical_topology(
     tmp_path: Path,
 ) -> None:
-    full = ProcessInfo(
-        role="worker_explore",
-        pid=201,
-        port=8072,
-        started_at="2026-08-07T00:00:00Z",
-        model_path="/models/worker.gguf",
-        log_file="/logs/worker-8072.log",
-    )
-    half0 = ProcessInfo(
-        role="worker_explore",
-        pid=202,
-        port=8082,
-        started_at="2026-08-07T00:00:00Z",
-        model_path="/models/worker.gguf",
-        log_file="/logs/worker-8082.log",
-    )
-    half1 = ProcessInfo(
-        role="worker_explore",
-        pid=203,
-        port=8182,
-        started_at="2026-08-07T00:00:00Z",
-        model_path="/models/worker.gguf",
-        log_file="/logs/worker-8182.log",
-    )
+    """A logical alias resolves to its HOST's physical topology, per instance.
+
+    2026-09-22 lineup cutover (860b0b2d): worker_general / worker_explore stopped
+    being their own CPU fleet (:8072/:8082/:8182, numa_config deleted) and became
+    aliases on frontdoor's process, whose full + halves carry the worker lane. The
+    fixture is therefore built from the CURRENT declarations — the host comes from
+    master's shared_with binding and the ports from the host's NUMA_CONFIG — not
+    restated. The invariant is unchanged: a process whose ProcessInfo.role is a
+    logical alias with no topology of its own (the launcher's worker rows) must
+    still get ``numa_instance``/``topology_role`` from the physical owner of its
+    port; dropping them degrades config to plain round-robin URLs.
+    """
+    from scripts.server.stack_manifest import master_server_row
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    host, _row, binding = master_server_row("worker_explore")
+    assert binding == "shared_with"
+    assert master_server_row("worker_general")[0] == host
+    # The aliases own no topology of their own — resolution MUST go via the host.
+    assert "worker_general" not in NUMA_CONFIG
+    assert "worker_explore" not in NUMA_CONFIG
+    host_ports = [int(inst[1]) for inst in NUMA_CONFIG[host]["instances"]]
+    assert len(host_ports) > 1  # non-vacuous: per-instance resolution is exercised
+
+    infos = {
+        port: ProcessInfo(
+            # The primary instance's ProcessInfo carries a logical alias as its
+            # role (the hard case); the sub-full instances carry the host's.
+            role="worker_explore" if idx == 0 else host,
+            pid=201 + idx,
+            port=port,
+            started_at="2026-08-07T00:00:00Z",
+            model_path="/models/worker.gguf",
+            log_file=f"/logs/worker-{port}.log",
+        )
+        for idx, port in enumerate(host_ports)
+    }
+    state: dict[str, ProcessInfo] = {f"server_{port}": info for port, info in infos.items()}
+    # Role-keyed alias rows the launcher writes (state[alias] = same ProcessInfo).
+    state["worker_general"] = infos[host_ports[0]]
+    state["worker_explore"] = infos[host_ports[0]]
+
     manifest = build_runtime_facts_manifest(
-        state={
-            "server_8072": full,
-            "server_8082": half0,
-            "server_8182": half1,
-            "worker_general": full,
-            "worker_explore": full,
-        },
+        state=state,
         launch_contracts={},
         stack_priors_path=_write_yaml(
             tmp_path / "stack_priors.yaml",
@@ -207,14 +219,15 @@ def test_runtime_facts_resolve_worker_logical_alias_to_physical_topology(
         ),
         tmp_dir=tmp_path,
         source="unit-test",
-        pid_alive=_alive_only({201, 202, 203}),
+        pid_alive=_alive_only({info.pid for info in infos.values()}),
     )
 
     by_port = {row["port"]: row for row in manifest["runtime_stack"]["selected_servers"]}
-    assert by_port[8072]["numa_instance"] == 0
-    assert by_port[8072]["topology_role"] == "worker_general"
-    assert by_port[8082]["numa_instance"] == 1
-    assert by_port[8182]["numa_instance"] == 2
+    primary = by_port[host_ports[0]]
+    assert {"worker_general", "worker_explore"} <= set(primary["roles"])
+    for idx, port in enumerate(host_ports):
+        assert by_port[port]["numa_instance"] == idx, port
+        assert by_port[port]["topology_role"] == host, port
 
 
 def test_write_runtime_facts_manifest_writes_valid_json_and_handles_missing_inputs(
