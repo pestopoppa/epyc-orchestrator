@@ -264,6 +264,137 @@ def _build_validator(schema: Mapping[str, Any], *, site: str) -> Draft202012Vali
     return Draft202012Validator(schema)
 
 
+# --------------------------------------------------------------------------- evidence check
+#
+# `require_evidence` (parse_with_repair): a schema-VALID repaired value can
+# still be fabricated -- a required field forces a fill even when the raw
+# reply never states one. This walks the repaired value against the schema
+# in parallel (resolving which oneOf/anyOf branch matched so per-property
+# `const`s are visible) and flags any number/short-string leaf that does not
+# literally appear in the raw reply.
+
+_MAX_EVIDENCE_LEAF_CHARS = 40
+
+
+def _normalize_for_evidence(text: str) -> str:
+    """Case-insensitive, whitespace-normalised form used on BOTH sides of an
+    evidence comparison."""
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _select_evidence_branch(schema: Mapping[str, Any], value: Any) -> Mapping[str, Any]:
+    """Resolve which `oneOf`/`anyOf` alternative `value` validated against,
+    so `_evidence_failures` can see that branch's per-property `const`s. The
+    caller already proved `value` is valid against the WHOLE schema before
+    calling this; if (defensively) no single alternative matches on its own,
+    the original schema is returned and every leaf is evidence-checked --
+    fails safe toward MORE scrutiny, never less."""
+    branches = schema.get("oneOf") or schema.get("anyOf")
+    if not isinstance(branches, list):
+        return schema
+    for branch in branches:
+        if not isinstance(branch, Mapping):
+            continue
+        try:
+            if Draft202012Validator(branch).is_valid(value):
+                return branch
+        except SchemaError:
+            continue
+    return schema
+
+
+#: Boundaries for a "standalone" number token. A plain `\w` boundary alone
+#: would wrongly reject a number immediately followed by a sentence-ending
+#: period ("tier 1." -- "1" IS standalone there), so only a digit run
+#: separated by a `.` from more digits counts as "embedded" (blocks "10"
+#: matching inside "10.5" or "2" inside "2.5"); a bare trailing/leading `.`
+#: with no adjoining digit is a normal sentence boundary, not a decimal.
+_NUM_LEFT_BOUNDARY = r"(?<!\w)(?<!\d\.)"
+_NUM_RIGHT_BOUNDARY = r"(?!\w)(?!\.\d)"
+
+
+def _number_has_evidence(value: float, normalized_raw: str) -> bool:
+    """`value` must appear as a standalone token (not embedded in a longer
+    number or identifier, and not merely the integer/fraction half of a
+    different decimal number) in the normalised raw reply."""
+    candidates = {str(value)}
+    if isinstance(value, float) and value.is_integer():
+        candidates.add(str(int(value)))
+    elif isinstance(value, int):
+        candidates.add(str(float(value)))
+    alternation = "|".join(re.escape(c) for c in candidates)
+    pattern = f"{_NUM_LEFT_BOUNDARY}(?:{alternation}){_NUM_RIGHT_BOUNDARY}"
+    return re.search(pattern, normalized_raw) is not None
+
+
+def _string_has_evidence(value: str, normalized_raw: str) -> bool:
+    needle = _normalize_for_evidence(value)
+    return (not needle) or (needle in normalized_raw)
+
+
+def _evidence_failures(
+    value: Any,
+    schema: Any,
+    raw: str,
+    *,
+    path: str = "",
+) -> list[str]:
+    """Return the dotted/bracketed paths of every leaf in `value` that is a
+    number or a string of at most `_MAX_EVIDENCE_LEAF_CHARS` characters and
+    does NOT appear in `raw` -- empty when every such leaf is evidenced (or
+    exempt: `const`-pinned, boolean, `None`, or a longer string)."""
+    normalized_raw = _normalize_for_evidence(raw)
+    return _evidence_failures_normalized(value, schema, normalized_raw, path=path)
+
+
+def _evidence_failures_normalized(
+    value: Any,
+    schema: Any,
+    normalized_raw: str,
+    *,
+    path: str,
+) -> list[str]:
+    if isinstance(schema, Mapping) and ("oneOf" in schema or "anyOf" in schema):
+        schema = _select_evidence_branch(schema, value)
+
+    if isinstance(value, dict):
+        properties = schema.get("properties") if isinstance(schema, Mapping) else None
+        properties = properties if isinstance(properties, Mapping) else {}
+        failures: list[str] = []
+        for key, sub_value in value.items():
+            sub_schema = properties.get(key) if isinstance(properties.get(key), Mapping) else {}
+            sub_path = f"{path}.{key}" if path else str(key)
+            failures.extend(
+                _evidence_failures_normalized(sub_value, sub_schema, normalized_raw, path=sub_path)
+            )
+        return failures
+
+    if isinstance(value, list):
+        items_schema = schema.get("items") if isinstance(schema, Mapping) else None
+        items_schema = items_schema if isinstance(items_schema, Mapping) else {}
+        failures = []
+        for index, item in enumerate(value):
+            failures.extend(
+                _evidence_failures_normalized(
+                    item, items_schema, normalized_raw, path=f"{path}[{index}]"
+                )
+            )
+        return failures
+
+    # Scalar leaf.
+    if isinstance(schema, Mapping) and "const" in schema:
+        return []  # caller-pinned; not something the model could invent
+    if value is None or isinstance(value, bool):
+        return []
+    if isinstance(value, (int, float)):
+        return [] if _number_has_evidence(value, normalized_raw) else [path or "<root>"]
+    if isinstance(value, str):
+        if len(value) > _MAX_EVIDENCE_LEAF_CHARS:
+            return []  # a longer string may be a legitimate paraphrase
+        return [] if _string_has_evidence(value, normalized_raw) else [path or "<root>"]
+    return []
+
+
 # --------------------------------------------------------------------------- result
 
 
@@ -380,6 +511,7 @@ def parse_with_repair(
     site: str,
     kind: Kind | None = None,
     tail_chars: int = SCHEMA_REPAIR_TAIL_CHARS,
+    require_evidence: bool = False,
 ) -> RepairResult:
     """Fish first; repair with at most two constrained turns on a miss.
 
@@ -393,12 +525,31 @@ def parse_with_repair(
        parse failure to recover from).
     3. Else: ONE constrained extraction turn, temperature-0 by convention of
        the injected `complete`, asking the model to copy -- never invent or
-       judge -- the reply's own content into the schema. Valid -> `"repaired"`.
+       judge -- the reply's own content into the schema. Valid -> `"repaired"`,
+       UNLESS `require_evidence` rejects it (see below).
     4. Otherwise -> `"failed"` with a reason; value is always `None`.
 
     `complete` is caller-injected (see `http_chat_completer` /
     `primitives_completer`) and must raise on transport failure; this
     function never lets that exception escape to its own caller.
+
+    `require_evidence` (default `False`, so every already-landed conversion
+    is byte-identical): a schema-VALID repaired value can still be a
+    fabrication -- a grammar that forces a required field forces the model
+    to fill it even when the raw reply never states one (observed live,
+    2026-09-24: a `deep_eval` draft with no stated tier repaired to
+    `tier=2`, invented whole). When `True`, a REPAIRED value (never a
+    cleanly FISHED one -- that came out of `raw` by construction) must pass
+    `_evidence_failures`: every scalar leaf that is a number, or a string of
+    at most `_MAX_EVIDENCE_LEAF_CHARS` characters, must appear in `raw`
+    (case-insensitive, whitespace-normalised; a number as a standalone
+    token), except a leaf whose schema position pins it via `const` (e.g. an
+    action-type discriminator -- the caller already chose it, it is not
+    something the model could invent) and booleans (a yes/no judgement is
+    not evidence-checkable the same way a copied fact is). Longer strings
+    are exempt -- a faithful paraphrase is legitimate re-expression, not
+    invention. A failure -> `"failed"`, reason names the unevidenced
+    field(s), never a fabricated value.
     """
     working_schema = _closed_schema(schema)
     validator = _build_validator(working_schema, site=site)
@@ -432,6 +583,16 @@ def parse_with_repair(
         site=site, tail_chars=tail_chars,
     )
     if extracted is not None and validator.is_valid(extracted):
+        if require_evidence:
+            unevidenced = _evidence_failures(extracted, working_schema, raw)
+            if unevidenced:
+                reason = (
+                    "repaired value has unevidenced field(s) not present in the "
+                    f"raw reply: {', '.join(unevidenced)}"
+                )
+                result = RepairResult(None, "failed", reason, site, calls)
+                _record(site, result.status, repair_calls=calls, reason=reason)
+                return result
         result = RepairResult(extracted, "repaired", "", site, calls)
         _record(site, result.status, repair_calls=calls)
         return result

@@ -754,7 +754,18 @@ def extract_action(text: str) -> dict[str, Any] | None:
     marker = "```json:autopilot_actions"
     if marker in text:
         start = text.index(marker) + len(marker)
-        end = text.index("```", start)
+        try:
+            end = text.index("```", start)
+        except ValueError:
+            # A truncated generation opened the fence but never closed it --
+            # not a JSONDecodeError (there is no JSON to even attempt), but
+            # the same "nothing usable here" outcome every other malformed
+            # shape in this function returns None for, not a crash. Found
+            # live 2026-09-24 alongside the require_evidence fix: a
+            # truncated ACTION block is exactly the shape that motivated
+            # both.
+            log.warning("autopilot_actions block has no closing fence")
+            return None
         try:
             data = _loads_json_payload(text[start:end])
             return _unwrap_action(data)
@@ -765,13 +776,17 @@ def extract_action(text: str) -> dict[str, Any] | None:
     # Fallback: look for any JSON block
     if "```json" in text:
         start = text.index("```json") + len("```json")
-        end = text.index("```", start)
         try:
-            data = _loads_json_payload(text[start:end])
-            if isinstance(data, dict) and "type" in data:
-                return data
-        except (json.JSONDecodeError, ValueError):
-            pass
+            end = text.index("```", start)
+        except ValueError:
+            end = None
+        if end is not None:
+            try:
+                data = _loads_json_payload(text[start:end])
+                if isinstance(data, dict) and "type" in data:
+                    return data
+            except (json.JSONDecodeError, ValueError):
+                pass
 
     leading = _loads_leading_action(text)
     if leading is not None:
@@ -1052,6 +1067,16 @@ def extract_action_with_repair(
     before; the existing fallback/seed_batch path is UNCHANGED for that case.
     Old journal rows are NOT backfilled with a parse_status -- readers must
     treat a missing field as "parsed" (the only state that existed before).
+
+    `require_evidence=True` (2026-09-24, live-smoke finding): a grammar that
+    forces a required field forces the model to fill it even when the draft
+    never states one -- observed live, a `deep_eval` draft with no stated
+    tier repaired to a fabricated `tier=2` that would have driven a real
+    action. Action fields are operational parameters and MUST come from the
+    draft, never be invented to satisfy the schema; see
+    `src.structured_output.repair.parse_with_repair`'s `require_evidence`
+    docstring for the exact leaf-evidence rule (numbers/short strings must
+    appear in the raw text; the `type` discriminator is `const`-exempt).
     """
     fast = extract_action(text)
     if fast is not None:
@@ -1064,6 +1089,7 @@ def extract_action_with_repair(
         instruction=_ACTION_REPAIR_INSTRUCTION,
         site=site,
         kind="any",
+        require_evidence=True,
     )
     if result.value is None:
         return result
@@ -1102,6 +1128,14 @@ def extract_rationale_with_repair(
     the repair turn falls back to the same empty default as before (now
     flagged `status="failed"` rather than being silently indistinguishable
     from a genuine omission). Old journal rows are NOT backfilled.
+
+    `require_evidence=True` (2026-09-24, same live-smoke finding as
+    `extract_action_with_repair`): `rubric_scores` values are numbers, so
+    they are exactly the invented-leaf risk the evidence check targets;
+    `falsifier` is ordinarily well over the short-string evidence threshold
+    and so is exempt in practice anyway (a paraphrase there is legitimate),
+    but turning the check on costs nothing and closes the same class of gap
+    should a future short falsifier ever occur.
     """
     empty: dict[str, Any] = {"falsifier": "", "rubric_scores": {}}
     marker = "```json:autopilot_rationale"
@@ -1118,6 +1152,7 @@ def extract_rationale_with_repair(
         complete=complete,
         instruction=_RATIONALE_REPAIR_INSTRUCTION,
         site=site,
+        require_evidence=True,
     )
     if result.value is None:
         return RepairResult(dict(empty), result.status, result.reason, site, result.repair_calls)

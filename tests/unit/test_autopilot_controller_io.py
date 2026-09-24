@@ -101,6 +101,19 @@ def test_extract_action_returns_none_on_invalid_json() -> None:
     assert controller_io.extract_action(text) is None
 
 
+def test_extract_action_returns_none_on_marker_with_no_closing_fence() -> None:
+    # A truncated generation: the marker opens but the fence never closes.
+    # Pre-fix this raised an uncaught ValueError from `text.index("```", start)`
+    # instead of returning None like every other malformed shape here.
+    text = '```json:autopilot_actions\n{"type": "deep_eval", "reason": "quality plateaued'
+    assert controller_io.extract_action(text) is None
+
+
+def test_extract_action_returns_none_on_generic_fence_with_no_closing_fence() -> None:
+    text = '```json\n{"type": "deep_eval"'
+    assert controller_io.extract_action(text) is None
+
+
 # ----- extract_rationale -----
 
 
@@ -722,6 +735,41 @@ def test_extract_action_with_repair_recovers_malformed_block_no_fallback_needed(
     assert result.repair_calls == 1
     assert len(calls) == 1
     assert STRUCTURED_OUTPUT_REPAIR_COUNTS[("t.a2", "repaired")] == 1
+
+
+def test_extract_action_with_repair_never_invents_a_tier_the_draft_never_states():
+    """Reproduces the 2026-09-24 live smoke exactly: draft prose plus a
+    truncated deep_eval action with no stated tier repaired, pre-fix, to a
+    fabricated tier=2 that would have driven a real autopilot action.
+    require_evidence=True (now on by default inside extract_action_with_repair)
+    must reject this instead of dispatching an invented value."""
+    text = (
+        "The architect's quality has plateaued over the last several trials; "
+        'it is time for another evaluation round. ```json:autopilot_actions\n'
+        '{"type": "deep_eval", "reason": "architect quality plateaued'
+    )  # truncated mid-string, exactly like the live draft; no tier anywhere
+
+    def fake_complete(messages, schema):
+        return _json.dumps({"type": "deep_eval", "tier": 2})
+
+    result = controller_io.extract_action_with_repair(text, complete=fake_complete, site="t.notier")
+    assert result.status == "failed"
+    assert result.value is None  # never a fabricated tier
+    assert "tier" in result.reason
+
+
+def test_extract_action_with_repair_accepts_a_stated_tier():
+    text = (
+        "The architect's quality has plateaued; run a deep_eval at tier 1 to "
+        "confirm before any structural change."
+    )
+
+    def fake_complete(messages, schema):
+        return _json.dumps({"type": "deep_eval", "tier": 1})
+
+    result = controller_io.extract_action_with_repair(text, complete=fake_complete, site="t.withtier")
+    assert result.status == "repaired"
+    assert result.value == {"type": "deep_eval", "tier": 1}
 
 
 def test_extract_action_with_repair_unrepairable_matches_pre_repair_failure_shape():

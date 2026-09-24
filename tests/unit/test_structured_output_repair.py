@@ -423,3 +423,152 @@ class TestParseWithRepairUsesInjectedCompleter:
         )
         assert result.status == "repaired"
         assert result.value == {"name": "widget", "count": 5}
+
+
+# --------------------------------------------------------------------------- require_evidence
+#
+# 2026-09-24 live-smoke finding: a grammar that forces a required field
+# forces the model to fill it even when the raw reply never states one -- a
+# `deep_eval` draft with no stated tier repaired to a fabricated `tier=2`
+# that would have driven a real autopilot action. `require_evidence` closes
+# that gap for a REPAIRED (never a cleanly fished) value.
+
+
+ACTION_LIKE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": True,
+    "oneOf": [
+        {
+            "type": "object",
+            "properties": {
+                "type": {"const": "deep_eval"},
+                "tier": {"enum": [0, 1, 2, 3]},
+            },
+            "required": ["type"],
+            "additionalProperties": False,
+        }
+    ],
+}
+
+
+class TestRequireEvidence:
+    def test_invented_number_fails_even_though_schema_valid(self):
+        def complete(messages, schema):
+            return json.dumps({"type": "deep_eval", "tier": 2})
+
+        result = parse_with_repair(
+            "The architect's quality has plateaued; time for another evaluation round.",
+            schema=ACTION_LIKE_SCHEMA,
+            complete=complete,
+            site="test.evidence.invented",
+            require_evidence=True,
+        )
+        assert result.status == "failed"
+        assert result.value is None  # never a fabricated tier
+        assert "tier" in result.reason
+
+    def test_value_present_in_text_is_repaired(self):
+        def complete(messages, schema):
+            return json.dumps({"type": "deep_eval", "tier": 1})
+
+        result = parse_with_repair(
+            "The architect's quality has plateaued; run a deep_eval at tier 1.",
+            schema=ACTION_LIKE_SCHEMA,
+            complete=complete,
+            site="test.evidence.present",
+            require_evidence=True,
+        )
+        assert result.status == "repaired"
+        assert result.value == {"type": "deep_eval", "tier": 1}
+
+    def test_const_discriminator_is_exempt_from_evidence(self):
+        # "deep_eval" never appears verbatim in the raw text -- only its
+        # const-pinned schema position (the `type` field) exempts it.
+        def complete(messages, schema):
+            return json.dumps({"type": "deep_eval", "tier": 1})
+
+        result = parse_with_repair(
+            "run another eval round at tier 1, quality has plateaued",
+            schema=ACTION_LIKE_SCHEMA,
+            complete=complete,
+            site="test.evidence.const",
+            require_evidence=True,
+        )
+        assert result.status == "repaired"
+        assert result.value == {"type": "deep_eval", "tier": 1}
+
+    def test_long_string_is_exempt_from_evidence(self):
+        schema = {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        }
+        long_value = "a paraphrased summary well over forty characters long"
+        assert len(long_value) > 40
+
+        def complete(messages, schema):
+            return json.dumps({"summary": long_value})
+
+        result = parse_with_repair(
+            "totally unrelated raw text carrying none of that wording",
+            schema=schema,
+            complete=complete,
+            site="test.evidence.longstring",
+            require_evidence=True,
+        )
+        assert result.status == "repaired"
+        assert result.value == {"summary": long_value}
+
+    def test_boolean_is_exempt_from_evidence(self):
+        schema = {
+            "type": "object",
+            "properties": {"flagged": {"type": "boolean"}},
+            "required": ["flagged"],
+        }
+
+        def complete(messages, schema):
+            return json.dumps({"flagged": True})
+
+        result = parse_with_repair(
+            "no boolean mentioned anywhere in this text at all",
+            schema=schema,
+            complete=complete,
+            site="test.evidence.bool",
+            require_evidence=True,
+        )
+        assert result.status == "repaired"
+        assert result.value == {"flagged": True}
+
+    def test_short_string_without_evidence_fails(self):
+        schema = {
+            "type": "object",
+            "properties": {"surface": {"type": "string"}},
+            "required": ["surface"],
+        }
+
+        def complete(messages, schema):
+            return json.dumps({"surface": "memrl_retrieval"})
+
+        result = parse_with_repair(
+            "run a numeric trial next on some surface",
+            schema=schema,
+            complete=complete,
+            site="test.evidence.shortstring",
+            require_evidence=True,
+        )
+        assert result.status == "failed"
+        assert result.value is None
+        assert "surface" in result.reason
+
+    def test_default_false_keeps_prior_behavior_byte_identical(self):
+        def complete(messages, schema):
+            return json.dumps({"type": "deep_eval", "tier": 2})
+
+        result = parse_with_repair(
+            "The architect's quality has plateaued; time for another evaluation round.",
+            schema=ACTION_LIKE_SCHEMA,
+            complete=complete,
+            site="test.evidence.default_off",
+        )
+        assert result.status == "repaired"
+        assert result.value == {"type": "deep_eval", "tier": 2}
