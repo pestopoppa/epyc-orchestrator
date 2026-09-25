@@ -103,10 +103,10 @@ ACK_CONTEXT_BUNDLE = "context_pulls"
 EDIT_MODE_NONE = "none"
 EDIT_MODE_DIRECT = "direct"
 #: The REPL is the orchestrator's agentic tool loop (R1). `--mode auto` sends no
-#: force_mode and lets the orchestrator choose. NB operator ruling 2026-09-24 (INF-78):
-#: the architect (27B, :8083) stays out of REPL mode for now -- `--role
-#: architect_general` with the default mode puts it there, so prefer `--role auto`
-#: (frontdoor REPL, which may escalate/consult the architect) until that is reviewed.
+#: force_mode and lets the orchestrator choose. Operator ruling 2026-09-25 (INF-78 scoped
+#: exception, amending 2026-09-24): the architect (27B, :8083) MAY run REPL for task-scoped
+#: requests, which this CLI always sends (`task_root`), so `--role architect_general` with
+#: the default mode is allowed here; unscoped architect traffic stays direct/delegated.
 FORCE_MODE = "repl"
 AUTO_MODE = "auto"
 #: Attribution. NB `resolve_timeout` lets only `eval_batch` EXTEND past the role SLA

@@ -317,6 +317,26 @@ class Role(str, Enum):
         return self.tier == Tier.D
 
 
+# ── INF-78: architect REPL scoped exception ──────────────────────────────────
+#
+# Operator ruling 2026-09-24: the architect (27B, :8083) stays out of REPL mode.
+# Operator ruling 2026-09-25 (INF-78 scoped exception): the architect MAY run in REPL
+# mode for task-scoped requests (`task_root` set, i.e. AutoKernel planner/author calls
+# confined to a lane worktree). Every other architect request stays direct/delegated.
+# The server enforces nothing new for unscoped requests (the 2026-09-24 ruling was and
+# stays a caller-side contract); `architect_repl_allowed` is the single predicate
+# callers and the server's log check consult.
+ARCHITECT_REPL_ROLES = frozenset({"architect_general", "architect_critic"})
+
+
+def architect_repl_allowed(role: object, *, task_root: object = None) -> bool:
+    """True unless `role` is an architect role running REPL without a task scope."""
+    name = str(getattr(role, "value", role) or "")
+    if name not in ARCHITECT_REPL_ROLES:
+        return True
+    return task_root is not None
+
+
 # ── RD-1: Reviewer role binding ───────────────────────────────────────────────
 #
 # Historically the reviewer WAS the architect: the strings "reviewer" /

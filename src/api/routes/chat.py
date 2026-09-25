@@ -63,7 +63,7 @@ from src.escalation import (
     EscalationContext,
     EscalationAction,
 )
-from src.roles import Role
+from src.roles import Role, architect_repl_allowed
 from src.sse_utils import (
     create_sse_response,
     token_event,
@@ -956,6 +956,16 @@ async def _handle_chat(
             execution_mode = forced_mode
         else:
             execution_mode = _select_mode(request.prompt, request.context or "", state)
+
+        # INF-78 scoped exception (operator 2026-09-25): the architect may run REPL only
+        # for task-scoped requests. Unscoped architect REPL keeps today's behaviour (the
+        # 2026-09-24 ruling is caller-side) but is logged so a violation is visible.
+        if execution_mode == "repl" and not architect_repl_allowed(
+                initial_role, task_root=getattr(request, "task_root", None)):
+            log.warning(
+                "architect REPL without task_root (role=%s): outside the INF-78 scoped "
+                "exception; operator ruling 2026-09-24 keeps the architect out of REPL",
+                initial_role)
 
         # Stage 7.5: Vision multimodal handler
         # Text-only paths (_execute_direct, _execute_repl) discard image data.

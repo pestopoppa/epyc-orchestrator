@@ -377,6 +377,13 @@ DEFAULT_MODES = ["direct", "repl"]
 
 ARCHITECT_ROLES = {role for role in DEFAULT_ROLES if role.startswith("architect_")} or {"architect_general"}
 ARCHITECT_MODES = {"direct", "delegated"}
+# INF-78 scoped exception (operator 2026-09-25): REPL is allowed for the architect only
+# on task-scoped requests (task_root set). Seeding requests are never task-scoped.
+ARCHITECT_MODES_TASK_SCOPED = ARCHITECT_MODES | {"repl"}
+
+
+def architect_modes(task_scoped: bool = False) -> set[str]:
+    return set(ARCHITECT_MODES_TASK_SCOPED if task_scoped else ARCHITECT_MODES)
 
 VISION_ROLES = {"worker_vision", "vision_escalation"}
 VISION_MODES: dict[str, set[str]] = {
