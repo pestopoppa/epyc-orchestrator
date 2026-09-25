@@ -210,6 +210,12 @@ async def _execute_proactive(
     """
     if not (features().parallel_execution and request.real_mode):
         return None
+    # INF-78 (OAB-8 finding): a task_root-scoped request is ONE agentic call in a given
+    # worktree (the AutoKernel planner/author/critic). The proactive delegator is not
+    # scope-aware and would replace that call — and its forced mode — with its own
+    # architect decomposition, so the caller's REPL loop (and OAB-8's scouts) never ran.
+    if getattr(request, "task_root", None) is not None:
+        return None
 
     from src.proactive_delegation import classify_task_complexity, TaskComplexity
 

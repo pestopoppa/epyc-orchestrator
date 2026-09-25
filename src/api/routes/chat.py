@@ -22,7 +22,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 log = logging.getLogger(__name__)
 
@@ -717,6 +717,45 @@ def _log_cheap_first_counter(
         log.debug("Cheap-first progress telemetry failed", exc_info=True)
 
 
+async def _run_scout_stage(
+    request: ChatRequest,
+    primitives: Any,
+    initial_role: Any,
+    cancel_event: threading.Event | None,
+    request_deadline_s: float,
+    holder: dict[str, Any],
+) -> ChatRequest:
+    """INF-78 OAB-8: run the scouts and return the request the planner turn will see.
+
+    The original request object is never mutated (a copy carries the augmented prompt), and
+    every scout has returned before this does, so none can outlive the reply (R2)."""
+    from src.api.routes.chat_pipeline.scout_stage import augment_prompt, run_scouts
+
+    spec = request.scouts
+    role = str(spec.role or request.force_role or initial_role)
+    try:
+        stage = await run_scouts(
+            spec,
+            scope=task_root_mod.request_scope(),
+            role=role,
+            primitives=primitives,
+            cancel_event=cancel_event,
+            request_deadline_s=request_deadline_s,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- scouts degrade to none; the planner still runs
+        log.warning("scout stage failed for %s: %s", request.request_id, exc)
+        holder["report"] = {"schema": "epyc.orchestrator.scouts.v1", "enabled": True,
+                            "role": role, "error": f"{type(exc).__name__}: {exc}"[:500],
+                            "launched": 0, "completed": 0, "scouts": []}
+        return request
+    holder["report"] = stage.report
+    if not stage.block:
+        return request
+    return request.model_copy(update={"prompt": augment_prompt(request.prompt, stage.block)})
+
+
 async def _handle_chat(
     request: ChatRequest,
     state: AppState,
@@ -736,6 +775,7 @@ async def _handle_chat(
         4. _init_primitives()   → LLMPrimitives (backend setup)
         5. _plan_review_gate()  → optional routing adjustment
         6. _execute_vision()    → ChatResponse | None (vision early return)
+        6.8 _run_scout_stage()  → INF-78 OAB-8 read-only scouts (only when request.scouts)
         7. Mode selection       → "direct" / "react" / "repl" / "delegated"
         8. Mode handler         → ChatResponse
         9. _annotate_error()    → set error_code/error_detail on failures
@@ -814,7 +854,12 @@ async def _handle_chat(
                 pass
             return resp
 
+        # INF-78 OAB-8: the scout stage's provenance, stamped on every finalized response.
+        scout_holder: dict[str, Any] = {}
+
         def _finalize(resp: ChatResponse) -> ChatResponse:
+            if scout_holder.get("report") is not None:
+                resp.scouts = scout_holder["report"]
             return _annotate_error(
                 _attach_routing_telemetry(_attach_budget_diagnostics(resp, primitives))
             )
@@ -883,6 +928,15 @@ async def _handle_chat(
 
         # Stage 7: Mode selection
         initial_role = routing.routing_decision[0] if routing.routing_decision else Role.FRONTDOOR
+
+        # Stage 6.8 (INF-78 OAB-8): orchestrator-run read-only scouts, concurrently, BEFORE
+        # the planner turn; their labelled summaries head the planner's root context. Off
+        # unless the request enables them — the default path never enters this branch.
+        if request.scouts is not None and request.scouts.enabled and request.real_mode:
+            request = await _run_scout_stage(
+                request, primitives, initial_role, cancel_event, request_deadline_s,
+                scout_holder,
+            )
 
         vision_roles = _vision_roles()
         forced_mode = request.force_mode if request.force_mode in ("direct", "react", "repl", "delegated", "edit") else None
@@ -1219,10 +1273,11 @@ async def chat_stream(
         or request.read_roots
         or request.quiescent_after
         or request.edit_mode != task_root_mod.EDIT_MODE_NONE
+        or (request.scouts is not None and request.scouts.enabled)
     ):
         raise HTTPException(
             status_code=422,
-            detail="task scope / quiescent_after not supported on /chat/stream",
+            detail="task scope / quiescent_after / scouts not supported on /chat/stream",
         )
     # Unified streaming path — reuses pipeline stages from _handle_chat()
     if features().unified_streaming:
