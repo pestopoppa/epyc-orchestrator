@@ -140,6 +140,17 @@ def test_extract_rationale_missing_block_returns_defaults() -> None:
     assert out == {"falsifier": "", "rubric_scores": {}}
 
 
+def test_extract_rationale_preserves_explicit_vidya_claim_ids() -> None:
+    text = ('```json:autopilot_rationale\n'
+            '{"falsifier":"x","rubric_scores":{},"vidya_claim_ids":["claim-a"]}\n'
+            '```')
+    assert controller_io.extract_rationale(text)["vidya_claim_ids"] == ["claim-a"]
+    result = controller_io.extract_rationale_with_repair(
+        text, complete=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("clean rationale must not be repaired")))
+    assert result.value["vidya_claim_ids"] == ["claim-a"]
+
+
 def test_extract_rationale_malformed_json_returns_defaults() -> None:
     text = """```json:autopilot_rationale
 {not valid

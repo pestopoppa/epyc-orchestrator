@@ -317,6 +317,7 @@ def plan_with_providers(
     allowed_action_types: Iterable[str] | None = None,
     action_feedback_state: dict[str, Any] | None = None,
     trial_id: int | None = None,
+    vidya_kvq_context: dict[str, Any] | None = None,
 ) -> PlannerDecision:
     """Draft a canonical planner action with optional secondary critique."""
     # One deterministic, unmistakable banner per live planning cycle. Tests and
@@ -501,7 +502,8 @@ def plan_with_providers(
             rationale_parse_status=rationale_parse_status,
             rationale_repair_calls=rationale_repair_calls,
         )
-        _archive_decision(decision, planner_state)
+        _archive_decision(decision, planner_state, trial_id=trial_id,
+                          vidya_kvq_context=vidya_kvq_context)
         return decision
 
     if _should_critique(settings, action, stagnation_signal):
@@ -743,7 +745,8 @@ def plan_with_providers(
             if not decision.fallback_reason
             else f"{decision.fallback_reason}; {guard_reason}"
         )
-    _archive_decision(decision, planner_state)
+    _archive_decision(decision, planner_state, trial_id=trial_id,
+                      vidya_kvq_context=vidya_kvq_context)
     return decision
 
 
@@ -1723,12 +1726,40 @@ def _mark_failure(
 def _archive_decision(
     decision: PlannerDecision,
     planner_state: dict[str, Any],
+    *,
+    trial_id: int | None = None,
+    vidya_kvq_context: dict[str, Any] | None = None,
 ) -> None:
     critique = decision.critique
+    context = vidya_kvq_context or {}
+    exposed = context.get("claim_ids") if context.get("status") == "available" else []
+    exposed = [cid for cid in exposed if isinstance(cid, str)] if isinstance(exposed, list) else []
+    declared = decision.rationale.get("vidya_claim_ids", [])
+    declared = [cid for cid in declared if isinstance(cid, str)] if isinstance(declared, list) else []
+    # A substituted action cannot inherit its draft's evidence declaration.
+    if decision.action is None or (
+        decision.draft_action != decision.action
+        and not (critique and critique.revised_rationale)
+    ):
+        declared = []
+    relied_on = sorted(set(declared) & set(exposed))
     _append_planner_archive(
         {
             "ts": time.time(),
             "type": "planner_coordinator",
+            "trial_id": trial_id,
+            "vidya_kvq": {
+                "schema": "epyc.vidya.kvq_planner_receipt.v1",
+                "status": context.get("status", "unavailable"),
+                "reason": context.get("reason", "context not supplied"),
+                "as_of": context.get("as_of"),
+                "run": context.get("run"),
+                "frontier": context.get("frontier"),
+                "state_hash": context.get("state_hash"),
+                "exposed_claim_ids": exposed,
+                "declared_reliance_claim_ids": relied_on,
+                "reliance_status": "planner_declared" if relied_on else "not_declared",
+            },
             "mode": decision.mode,
             "draft_provider": decision.draft_provider,
             "critic_provider": decision.critic_provider,

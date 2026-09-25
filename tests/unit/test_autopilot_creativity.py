@@ -1439,6 +1439,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             operator_outbox_feedback="outbox",
             operator_hypotheses_block="operator-hypotheses",
             vidya_settled_ground_block="settled-ground",
+            vidya_kvq_evidence_block="kvq-evidence",
             feature_flags_block="flags",
             last_invalid_feedback="invalid",
             plot_paths="plots",

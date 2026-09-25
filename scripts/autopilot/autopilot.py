@@ -146,6 +146,7 @@ from operator_hypotheses import (
     record_resolution_from_rationale as _record_operator_hypothesis_resolution,
 )
 from vidya_planner_bridge import build_settled_ground_block as _build_vidya_settled_ground_block
+from vidya_planner_bridge import build_kvq_context as _build_vidya_kvq_context
 from state_lock import (
     OPERATOR_PAUSE_OWNER,
     PAUSE_COLLISION_FIELD,
@@ -6060,6 +6061,14 @@ briefly in reasoning and still emit the closest valid AutoPilot action block.
 ### Settled Experimental Ground (Vidya read-only; advisory for proposal selection)
 {vidya_settled_ground_block}
 
+### KV Quant Benchmark Evidence (Vidya read-only; bench observations, not serving or promotion warrant)
+{vidya_kvq_evidence_block}
+
+If the chosen action uses a KV-quant claim above, list its exact claim ID in
+`vidya_claim_ids` in `autopilot_rationale`. Use an empty list when the evidence
+did not influence the action. A claim shown in this prompt is not automatically
+support for your action.
+
 ### Experiment Journal (bounded recent entries)
 {journal_summary}
 
@@ -6189,6 +6198,7 @@ operator hypothesis is a first-class result; record it:
 
 ```json:autopilot_rationale
 {{"falsifier": "<one-line predicted outcome whose absence invalidates this hypothesis>",
+ "vidya_claim_ids": [],
  "rubric_scores": {{"info_gain": <1-5>, "coherence": <1-5>, "usefulness": <1-5>,
    "synthesis_note": "<optional one-line on fusion / cleaner model>"}},
  "operator_hypothesis": {{"id": "<id from Operator Hypotheses, ONLY if resolved>",
@@ -9248,6 +9258,7 @@ def _run_loop_inner(
             )
             outcome_progress_pressure_text = _build_outcome_progress_pressure()
 
+            vidya_kvq_context = _build_vidya_kvq_context()
             prompt = (
                 CONTROLLER_PROMPT_TEMPLATE.format(
                     constitution=constitution_text,
@@ -9288,6 +9299,7 @@ def _run_loop_inner(
                     operator_outbox_feedback=_build_operator_outbox_feedback(),
                     operator_hypotheses_block=_build_operator_hypotheses_block(blacklist),
                     vidya_settled_ground_block=_build_vidya_settled_ground_block(),
+                    vidya_kvq_evidence_block=vidya_kvq_context["text"],
                     feature_flags_block=_build_feature_flags_block(
                         lab,
                         denylisted_flags=_PLANNER_DENYLISTED_FEATURE_FLAGS,
@@ -9321,6 +9333,7 @@ def _run_loop_inner(
                 allowed_action_types=selectable_action_types,
                 action_feedback_state=state,
                 trial_id=trial_counter,
+                vidya_kvq_context=vidya_kvq_context,
             )
             phase.set(
                 "planner_parse",

@@ -806,8 +806,9 @@ def extract_rationale(text: str) -> dict[str, Any]:
          "coherence": 5, "usefulness": 3, "synthesis_note": "..."}}
         ```
 
-    Returns a dict with two keys — `falsifier` (str) and `rubric_scores` (dict)
-    — defaulting both to empty when the block is missing or malformed. The
+    Returns `falsifier` (str), `rubric_scores` (dict), and an optional
+    `vidya_claim_ids` list when explicitly supplied. The first two default to
+    empty when the block is missing or malformed. The
     contract is intentionally soft: rationale capture is observability, not a
     gate, so a missing block must not abort the trial.
     """
@@ -834,7 +835,11 @@ def extract_rationale(text: str) -> dict[str, Any]:
         falsifier = str(falsifier)
     if not isinstance(rubric, dict):
         rubric = {}
-    return {"falsifier": falsifier, "rubric_scores": rubric}
+    result = {"falsifier": falsifier, "rubric_scores": rubric}
+    claim_ids = data.get("vidya_claim_ids")
+    if isinstance(claim_ids, list) and all(isinstance(cid, str) for cid in claim_ids):
+        result["vidya_claim_ids"] = claim_ids
+    return result
 
 
 # --------------------------------------------------------------------------- TD-21.2/.3 repair
@@ -1024,16 +1029,15 @@ def autopilot_action_schema() -> dict[str, Any]:
 
 def autopilot_rationale_schema() -> dict[str, Any]:
     """JSON schema for the fenced ``json:autopilot_rationale`` sidecar
-    (TD-21.3). Matches exactly the two keys `extract_rationale` reads --
-    `falsifier` (string) and `rubric_scores` (an open-ended object of rubric
-    axis -> score, deliberately left unconstrained since the axis set is
-    caller-defined) -- nothing here is invented beyond that existing
-    contract."""
+    (TD-21.3). The optional `vidya_claim_ids` lists claims the planner says
+    influenced its action; the archive validates IDs against the evidence
+    actually shown. Rubric axes remain caller-defined."""
     return {
         "type": "object",
         "properties": {
             "falsifier": {"type": "string"},
             "rubric_scores": {"type": "object"},
+            "vidya_claim_ids": {"type": "array", "items": {"type": "string"}},
         },
         "required": [],
         "additionalProperties": False,
@@ -1162,9 +1166,11 @@ def extract_rationale_with_repair(
         falsifier = str(falsifier)
     if not isinstance(rubric, dict):
         rubric = {}
-    return RepairResult(
-        {"falsifier": falsifier, "rubric_scores": rubric}, result.status, result.reason, site, result.repair_calls
-    )
+    rationale = {"falsifier": falsifier, "rubric_scores": rubric}
+    claim_ids = result.value.get("vidya_claim_ids")
+    if isinstance(claim_ids, list) and all(isinstance(cid, str) for cid in claim_ids):
+        rationale["vidya_claim_ids"] = claim_ids
+    return RepairResult(rationale, result.status, result.reason, site, result.repair_calls)
 
 
 def _validate_action_schema(action: dict[str, Any]) -> str | None:

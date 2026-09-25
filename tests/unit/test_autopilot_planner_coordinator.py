@@ -495,6 +495,9 @@ def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch)
         "prompt",
         session_id=None,
         planner_state={},
+        trial_id=33,
+        vidya_kvq_context={"status": "unavailable", "reason": "no ingested ledger",
+                           "claim_ids": [], "run": None, "frontier": None},
         settings=PlannerSettings(
             primary="claude",
             critic="codex",
@@ -505,6 +508,8 @@ def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch)
     )
 
     assert decision.provider_trace == records[-1]["provider_trace"]
+    assert records[-1]["trial_id"] == 33
+    assert records[-1]["vidya_kvq"]["status"] == "unavailable"
     assert records[-1]["draft_action"] == MEMRL_NUMERIC_ACTION
     assert records[-1]["final_action"] == decision.action
     assert records[-1]["provider_trace"][0] == {
@@ -527,6 +532,39 @@ def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch)
     assert records[-1]["provider_trace"][1]["stage"] == "critique_primary"
     assert records[-1]["provider_trace"][1]["parse_ok"] is True
     assert records[-1]["provider_trace"][1]["critique_decision"] == "approve"
+
+
+def test_vidya_receipt_separates_exposure_from_declared_reliance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(planner_coordinator, "_append_planner_archive", records.append)
+    context = {"status": "available", "reason": "", "run": "run-1",
+               "frontier": 42, "state_hash": "fold-hash",
+               "claim_ids": ["claim-a", "claim-b"]}
+    decision = planner_coordinator.PlannerDecision(
+        action=MEMRL_NUMERIC_ACTION, rationale={"vidya_claim_ids": ["claim-b", "foreign"]},
+        session_id=None, canonical_text="", draft_text="", draft_provider="claude",
+        mode="single", draft_action=MEMRL_NUMERIC_ACTION,
+    )
+    planner_coordinator._archive_decision(decision, {}, trial_id=17,
+                                          vidya_kvq_context=context)
+    receipt = records[-1]["vidya_kvq"]
+    assert records[-1]["trial_id"] == 17
+    assert receipt["exposed_claim_ids"] == ["claim-a", "claim-b"]
+    assert receipt["declared_reliance_claim_ids"] == ["claim-b"]
+    assert receipt["reliance_status"] == "planner_declared"
+    assert receipt["run"] == "run-1" and receipt["frontier"] == 42
+
+    decision.action = None
+    planner_coordinator._archive_decision(decision, {}, trial_id=18,
+                                          vidya_kvq_context=context)
+    assert records[-1]["vidya_kvq"]["declared_reliance_claim_ids"] == []
+
+    decision.action = {"type": "seed_batch"}
+    planner_coordinator._archive_decision(decision, {}, trial_id=19,
+                                          vidya_kvq_context=context)
+    assert records[-1]["vidya_kvq"]["declared_reliance_claim_ids"] == []
 
 
 def test_empty_numeric_planner_action_is_deterministically_blocked() -> None:
