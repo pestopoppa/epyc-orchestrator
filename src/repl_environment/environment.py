@@ -1412,6 +1412,9 @@ class REPLEnvironment(
             result = self._execute_structured(code, start_time)
             if self._context_bundle is not None:
                 result.output = self._bundle_cap_output(result.output or "")
+                if result.error:
+                    # exception text reaches the root prompt too: same private cap copy
+                    result.error = self._bundle_cap_output(result.error)
             return result
 
         # Sanitize Unicode characters that models copy from question text
@@ -1499,10 +1502,12 @@ class REPLEnvironment(
             except Exception as e:
                 hint = self._tool_hint_if_relevant(code, e)
                 return ExecutionResult(
-                    # INF-78 OAB-7: the print cap holds on the error path too.
+                    # INF-78 OAB-7: the print cap holds on the error path too -- for the
+                    # printed output AND the exception text (`raise ValueError(context[...])`
+                    # would otherwise carry a pulled value into the root prompt uncapped).
                     output=self._bundle_cap_output(stdout_capture.getvalue()),
                     is_final=False,
-                    error=f"{type(e).__name__}: {e}{hint}",
+                    error=self._bundle_cap_output(f"{type(e).__name__}: {e}{hint}"),
                     elapsed_seconds=time.perf_counter() - start_time,
                 )
 

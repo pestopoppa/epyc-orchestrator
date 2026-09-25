@@ -349,6 +349,28 @@ def test_print_cap_holds_on_the_error_path():
     assert bundle.accounting()["turns"][-1]["capped"] is True
 
 
+def test_exception_text_is_capped_like_printed_output():
+    """Exception text reaches the root prompt too: with a bundle it goes through the same
+    attach-time cap copy as printed output (a mutated bundle cannot lift it)."""
+    repl, bundle = _repl_with_bundle(print_cap_bytes=300)
+    bundle.print_cap_bytes = 65536                      # what an escape would do
+    r = repl.execute("raise ValueError(context['big'])")
+    assert r.error.startswith("ValueError: row 0: filler")
+    assert "[print cap: showed 300 of" in r.error
+    assert len(r.error.split("\n[print cap")[0].encode()) <= 300
+    assert SENTINEL not in r.error
+    assert bundle.accounting()["turns"][-1]["capped"] is True
+    r = repl.execute("raise KeyError('short')")         # a small error is untouched
+    assert r.error == "KeyError: 'short'"
+
+
+def test_unbundled_exception_text_is_unchanged():
+    repl = REPLEnvironment(context="plain context string")
+    big = "z" * 20000
+    r = repl.execute(f"raise ValueError('{big}')")
+    assert r.error == f"ValueError: {big}"
+
+
 def test_restore_and_reset_keep_the_bundle_bound():
     """Review F5: a checkpoint restore or reset() rebuilds the globals; ``context`` must
     stay the bundle view, not fall back to the root prompt string."""
