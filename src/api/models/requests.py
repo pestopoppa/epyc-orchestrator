@@ -338,6 +338,35 @@ class ChatRequest(BaseModel):
             "response echoes what was suppressed in `quiescence`."
         ),
     )
+    # ── INF-78 OAB-7: the context bundle as a REPL variable ─────────────────────
+    context_bundle: dict | None = Field(
+        default=None,
+        description=(
+            "INF-78 OAB-7. Structured context the REPL exposes as the variable `context` "
+            "instead of inlining it in the prompt (the RLM pattern): "
+            "{schema?: 'epyc.orchestrator.context_bundle.v1', sections: [{name, text, "
+            "kind?: 'text'|'json', inline?: bool, description?: str}, ...], manifest?: {...}}. "
+            "The root prompt gets an index of the sections (names, sizes); the model pulls "
+            "with context.index()/get()/grep()/json()/[name], pulls land in REPL variables, "
+            "and only what it prints reaches the root prompt, capped per turn at "
+            "context_print_cap_bytes. Requires force_mode='repl'. The response echoes the "
+            "pull accounting in `context_pulls`. Absent: production behaviour, unchanged."
+        ),
+    )
+    context_print_cap_bytes: int = Field(
+        default=4096,
+        ge=256,
+        le=65536,
+        description="INF-78 OAB-7. Per-turn cap (UTF-8 bytes) on printed REPL output while a "
+        "context_bundle is attached. Requires context_bundle when set.",
+    )
+    context_pull_budget_bytes: int | None = Field(
+        default=None,
+        ge=1,
+        description="INF-78 OAB-7 / OAB-12. Optional cap on the bytes the model may pull from "
+        "the context_bundle over the whole call (a pull past it raises in the REPL). "
+        "Requires context_bundle.",
+    )
     output_schema: dict | None = Field(
         default=None,
         description="Optional JSON Schema for the agent's FINAL() value. "
@@ -345,6 +374,28 @@ class ChatRequest(BaseModel):
         "the schema in its initial prompt and must call FINAL(json.dumps(value)). "
         "Validation failure injects a retry-with-error message into the next turn.",
     )
+
+    @model_validator(mode="after")
+    def _validate_context_bundle(self):
+        """INF-78 OAB-7: a bundle is validated at the door (422), and only the REPL reads it."""
+        if self.context_bundle is None:
+            if "context_print_cap_bytes" in self.model_fields_set:
+                raise ValueError("context_print_cap_bytes requires context_bundle")
+            if self.context_pull_budget_bytes is not None:
+                raise ValueError("context_pull_budget_bytes requires context_bundle")
+            return self
+        if self.force_mode != "repl":
+            # Every other path (direct, react, delegated, edit, the proactive and
+            # cheap-first stages) would drop the bundle without a word.
+            raise ValueError("context_bundle requires force_mode='repl'")
+        from src.repl_environment.context_bundle import ContextBundle
+
+        ContextBundle.from_payload(
+            self.context_bundle,
+            print_cap_bytes=self.context_print_cap_bytes,
+            pull_budget_bytes=self.context_pull_budget_bytes,
+        )
+        return self
 
     @model_validator(mode="after")
     def _validate_task_scope(self):

@@ -12,7 +12,8 @@ Contract::
     python -I scripts/autokernel_actor_cli.py --root <lane worktree> [--read-only]
         [--schema <file>] [--url http://127.0.0.1:8000] [--role auto|<role>]
         [--mode repl|auto] [--max-turns N] [--timeout-s S] [--provenance-out <file>]
-        [--request-id ID]
+        [--request-id ID] [--context-bundle <file> [--context-print-cap-bytes N]
+        [--context-pull-budget-bytes N]]
 
     stdin   the prompt, UTF-8, verbatim
     stdout  exactly one JSON object (the reply), or nothing
@@ -20,10 +21,18 @@ Contract::
     exit    0  one JSON object that validates against --schema (any object when no
                schema is given) was printed
             1  everything else: orchestrator down, HTTP error, timeout, no object in
-               the answer, a schema-invalid object, or a server-flagged schema failure.
+               the answer, a schema-invalid object, a server-flagged schema failure, or
+               a --context-bundle the server did not attach (no `context_pulls` echo).
                An object is STILL printed when one could be fished from the answer, so
                the loop's salvage path can take a complete reply from a non-zero exit.
             2  usage error (argparse)
+
+``--context-bundle`` (INF-78 OAB-7) names a JSON file holding a
+``epyc.orchestrator.context_bundle.v1`` payload: it is sent as ``ChatRequest.context_bundle``
+and the REPL exposes it as the variable ``context`` while the prompt on stdin carries only
+the instructions and an index. The server's pull accounting (``context_pulls``) is copied
+into the sidecar whole; a server that does not echo it never attached the bundle, and the
+call fails (exit 1) instead of passing off an index-only prompt as a bundled one.
 
 ``--provenance-out`` receives a small JSON sidecar (``epyc.autokernel.orchestrator_call.v1``)
 on EVERY outcome that reaches the request stage: the request fields sent (never the
@@ -80,7 +89,13 @@ FIELDS: dict[str, str] = {
     "task_root": "task_root",             # str: the lane worktree
     "edit_mode": "edit_mode",             # "none" | "direct"
     "quiescent_after": "quiescent_after",  # bool: no trailing async work after reply (R2)
+    # --- OAB-7 (new) ---
+    "context_bundle": "context_bundle",            # dict: the bundle payload
+    "context_print_cap_bytes": "context_print_cap_bytes",
+    "context_pull_budget_bytes": "context_pull_budget_bytes",
 }
+#: ChatResponse key through which the server acknowledges (and accounts for) a bundle.
+ACK_CONTEXT_BUNDLE = "context_pulls"
 EDIT_MODE_NONE = "none"
 EDIT_MODE_DIRECT = "direct"
 #: The REPL is the orchestrator's agentic tool loop (R1). `--mode auto` sends no
@@ -103,7 +118,8 @@ RESPONSE_KEYS = ("routed_to", "role_history", "routing_strategy", "turns", "mode
                  "tokens_generated", "tokens_used", "tools_used", "tools_called",
                  "tool_output_tokens", "compaction_triggered", "compaction_tokens_saved",
                  "tool_results_cleared", "elapsed_seconds", "prompt_eval_ms", "generation_ms",
-                 "predicted_tps", "error_code", "error_detail", ACK_TASK_ROOT, "edit_mode")
+                 "predicted_tps", "error_code", "error_detail", ACK_TASK_ROOT, "edit_mode",
+                 ACK_CONTEXT_BUNDLE)
 ERROR_DETAIL_CHARS = 2000
 #: Extra seconds the client waits past the server's own budget before giving up.
 CLIENT_SLACK_S = 30
@@ -211,7 +227,9 @@ def schema_valid(value: Any, schema: Mapping[str, Any]) -> bool:
 
 def build_request(prompt: str, *, root: str, read_only: bool, schema: Mapping[str, Any] | None,
                   role: str, max_turns: int, timeout_s: int, request_id: str,
-                  mode: str = FORCE_MODE) -> dict[str, Any]:
+                  mode: str = FORCE_MODE, context_bundle: Mapping[str, Any] | None = None,
+                  print_cap_bytes: int | None = None,
+                  pull_budget_bytes: int | None = None) -> dict[str, Any]:
     body: dict[str, Any] = {
         FIELDS["prompt"]: prompt,
         FIELDS["real_mode"]: True,
@@ -230,6 +248,12 @@ def build_request(prompt: str, *, root: str, read_only: bool, schema: Mapping[st
         body[FIELDS["force_role"]] = role
     if mode != AUTO_MODE:
         body[FIELDS["force_mode"]] = mode
+    if context_bundle is not None:
+        body[FIELDS["context_bundle"]] = dict(context_bundle)
+        if print_cap_bytes is not None:
+            body[FIELDS["context_print_cap_bytes"]] = int(print_cap_bytes)
+        if pull_budget_bytes is not None:
+            body[FIELDS["context_pull_budget_bytes"]] = int(pull_budget_bytes)
     return body
 
 
@@ -308,6 +332,13 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                         help="server-side budget (ChatRequest.timeout_s, le=3600)")
     parser.add_argument("--provenance-out", type=Path)
     parser.add_argument("--request-id")
+    parser.add_argument("--context-bundle", type=Path,
+                        help="INF-78 OAB-7: JSON file with the context bundle payload; the "
+                             "REPL exposes it as `context` (requires --mode repl)")
+    parser.add_argument("--context-print-cap-bytes", type=int,
+                        help="per-turn cap on printed REPL output with a bundle (server default 4096)")
+    parser.add_argument("--context-pull-budget-bytes", type=int,
+                        help="cap on bytes pulled from the bundle over the whole call")
     return parser.parse_args(argv)
 
 
@@ -346,12 +377,36 @@ def main(argv: list[str] | None = None, *, stdin=None, stdout=None, stderr=None)
             return finish(1, None, error=f"unreadable --schema {args.schema}: {exc}")
         if not isinstance(schema, dict):
             return finish(1, None, error=f"--schema {args.schema} is not a JSON object")
+    bundle = None
+    bundle_ref = None
+    if args.context_bundle is not None:
+        try:
+            raw_bundle = args.context_bundle.read_bytes()
+            bundle = json.loads(raw_bundle.decode("utf-8"))
+        except (OSError, ValueError) as exc:
+            return finish(1, None, error=f"unreadable --context-bundle {args.context_bundle}: {exc}")
+        if not isinstance(bundle, dict) or not isinstance(bundle.get("sections"), (list, dict)):
+            return finish(1, None, error=f"--context-bundle {args.context_bundle} is not a bundle "
+                                         "object with sections")
+        if args.mode != FORCE_MODE:
+            return finish(1, None, error="--context-bundle requires --mode repl")
+        sections = bundle["sections"]
+        bundle_ref = {"path": str(args.context_bundle),
+                      "sha256": hashlib.sha256(raw_bundle).hexdigest(),
+                      "bytes": len(raw_bundle), "sections": len(sections),
+                      "print_cap_bytes": args.context_print_cap_bytes,
+                      "pull_budget_bytes": args.context_pull_budget_bytes}
+    elif args.context_print_cap_bytes is not None or args.context_pull_budget_bytes is not None:
+        return finish(1, None, error="--context-print-cap-bytes / --context-pull-budget-bytes "
+                                     "need --context-bundle")
     prompt = stdin.read()
     if not prompt.strip():
         return finish(1, None, error="empty prompt on stdin")
     body = build_request(prompt, root=args.root, read_only=args.read_only, schema=schema,
                          role=args.role, max_turns=args.max_turns, timeout_s=args.timeout_s,
-                         request_id=request_id, mode=args.mode)
+                         request_id=request_id, mode=args.mode, context_bundle=bundle,
+                         print_cap_bytes=args.context_print_cap_bytes,
+                         pull_budget_bytes=args.context_pull_budget_bytes)
     sidecar["request"] = {
         "fields_sent": sorted(body),
         "task_root": args.root,
@@ -366,6 +421,7 @@ def main(argv: list[str] | None = None, *, stdin=None, stdout=None, stderr=None)
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         "schema_sha256": (hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest()
                           if schema is not None else None),
+        "context_bundle": bundle_ref,
     }
     try:
         status, resp = post_chat(args.url, body, timeout_s=args.timeout_s + CLIENT_SLACK_S)
@@ -383,6 +439,13 @@ def main(argv: list[str] | None = None, *, stdin=None, stdout=None, stderr=None)
     reply = extract_last_object(answer if isinstance(answer, str) else json.dumps(answer))
     error_code = resp.get("error_code")
     valid = None if reply is None else (schema_valid(reply, schema) if schema is not None else True)
+    if bundle is not None:
+        sidecar["context_bundle_acknowledged"] = isinstance(resp.get(ACK_CONTEXT_BUNDLE), dict)
+        if status == 200 and not error_code and not sidecar["context_bundle_acknowledged"]:
+            return finish(1, reply, valid=valid,
+                          error="server did not attach the context bundle (no context_pulls "
+                                "echo: a pre-OAB-7 build, or the request was served outside "
+                                "the REPL); the model saw only the index")
     if status != 200 or error_code:
         detail = str(resp.get("error_detail") or "")[:300]
         return finish(1, reply, valid=valid,

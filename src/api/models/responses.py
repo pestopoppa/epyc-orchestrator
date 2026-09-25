@@ -126,6 +126,18 @@ class ChatResponse(BaseModel):
         ),
         **_omit_when_none(),
     )
+    context_pulls: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "INF-78 OAB-7 / OAB-12 echo, present only when the request carried "
+            "context_bundle AND the REPL attached it: schema "
+            "'epyc.orchestrator.context_pulls.v1' -- the bundle digest and sizes, the print "
+            "cap and pull budget, totals (pull_calls, bytes_pulled, unique_bytes, printed vs "
+            "shown bytes, state_preview_bytes), per-section offered/pulled/unique bytes and "
+            "coverage, and per-turn pull records."
+        ),
+        **_omit_when_none(),
+    )
     quiescence: dict[str, Any] | None = Field(
         default=None,
         description=(

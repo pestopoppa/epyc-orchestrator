@@ -50,6 +50,9 @@ class _ContextMixin:
         Returns:
             Number of characters in the context string.
         """
+        bundle = getattr(self, "_context_bundle", None)
+        if bundle is not None:  # INF-78 OAB-7: the bundle's size (metadata, not a pull)
+            return bundle.total_chars
         return len(self.context)
 
     def _chunk_context(self, n_chunks: int = 4, overlap: int = 200) -> list[dict]:
@@ -63,7 +66,8 @@ class _ContextMixin:
             List of dicts with index, start, end, text, char_count.
         """
         self._exploration_calls += 1
-        text = self.context
+        bundle = getattr(self, "_context_bundle", None)
+        text = bundle.full_text() if bundle is not None else self.context
         total = len(text)
         if total == 0:
             return []
@@ -82,6 +86,8 @@ class _ContextMixin:
                     end = ws
 
             chunk_text = text[start:end]
+            if bundle is not None:  # INF-78 OAB-7: every chunk is a counted pull
+                bundle.span_pull(start, end, op="chunk_context")
             chunks.append(
                 {
                     "index": i,

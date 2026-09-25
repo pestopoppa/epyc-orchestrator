@@ -133,6 +133,14 @@ class _FileExplorationMixin:
                 return f"[ERROR: {type(e).__name__}: {e}]"
 
         # Read from context
+        bundle = getattr(self, "_context_bundle", None)
+        if bundle is not None:
+            # INF-78 OAB-7: `context` is the request's bundle; count the pull, keep it out
+            # of the research tracker (whose summaries render into the root prompt).
+            try:
+                return bundle.page(n, offset, op="peek")
+            except Exception as e:  # ContextPullBudgetExceeded
+                return f"[ERROR: {e}]"
         result = self._page_text(self.context, n, offset)
         event = {"n": n}
         if offset:
@@ -167,6 +175,17 @@ class _FileExplorationMixin:
 
         # Determine source text
         source_name = "context"
+        bundle = getattr(self, "_context_bundle", None)
+        if file_path is None and bundle is not None:
+            # INF-78 OAB-7: grep the request's bundle, counted (see _peek).
+            try:
+                hits = bundle.grep(pattern, k=self.config.max_grep_results, op="grep_legacy")
+            except Exception as e:  # bad regex already handled above; budget exhaustion
+                return [f"[ERROR: {e}]"]
+            lines = [h["text"] for h in hits]
+            if len(hits) >= self.config.max_grep_results:
+                lines.append(f"[... truncated at {self.config.max_grep_results} results]")
+            return lines
         if file_path is not None:
             is_valid, error = self._validate_file_path(file_path)
             if not is_valid:

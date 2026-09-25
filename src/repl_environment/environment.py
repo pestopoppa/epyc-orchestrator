@@ -252,6 +252,10 @@ class REPLEnvironment(
         self._features = _get_features()
         self._deferred_tool_results = bool(self._features.deferred_tool_results)
 
+        # INF-78 OAB-7: a request-carried context bundle (attach_context_bundle). None ==
+        # the historical string `context`, unchanged.
+        self._context_bundle = None
+
         # Build restricted globals
         self._globals = self._build_globals()
         # Snapshot built-in/injected globals so get_state() can highlight
@@ -637,6 +641,52 @@ class REPLEnvironment(
         self._active_tool_chain_id = None
         self._active_tool_chain_index = 0
         self._active_tool_chain_meta = None
+
+    # ------------------------------------------------------------------
+    # INF-78 OAB-7: the context bundle as the REPL variable `context`
+    # ------------------------------------------------------------------
+    def attach_context_bundle(self, bundle: Any) -> None:
+        """Bind a request's ``ContextBundle`` to the REPL name ``context``.
+
+        ``self.context`` (the root prompt text) stays a string for the internals that
+        read it; the MODEL's ``context`` becomes the counted bundle view, and the
+        no-``file_path`` forms of ``peek``/``grep``/``context_len``/``chunk_context``
+        read the bundle (counted) instead of the root prompt the model already has.
+        From here on every turn's printed output is capped at the bundle's
+        ``print_cap_bytes`` -- the only route from a pulled value into the root prompt.
+        """
+        from src.repl_environment.context_bundle import repl_view
+
+        if hasattr(self, "_restricted_executor"):
+            # The RestrictedPython executor keeps its own globals (the string context);
+            # a bundle bound here would be silently absent there. /chat never builds it.
+            raise ValueError("context bundles are not supported under RestrictedPython execution")
+        self._context_bundle = bundle
+        self._globals["context"] = repl_view(bundle)
+
+    @property
+    def context_bundle(self) -> Any:
+        """The attached ``ContextBundle``, or None."""
+        return self._context_bundle
+
+    @property
+    def bundle_output_preview_chars(self) -> int | None:
+        """Output-preview size the graph must allow so a capped turn is not re-truncated
+        (None without a bundle: the graph keeps its own preview)."""
+        bundle = self._context_bundle
+        return None if bundle is None else int(bundle.output_preview_chars)
+
+    def _bundle_begin_turn(self) -> None:
+        if self._context_bundle is not None:
+            self._context_bundle.begin_turn(self._execution_count)
+
+    def _bundle_cap_output(self, output: str) -> str:
+        """Cap one turn's printed output at the bundle's per-turn byte cap (no-op
+        without a bundle). Runs BEFORE ``_spill_output``, so a capped turn never spills
+        or asks the worker for a summary."""
+        if self._context_bundle is None:
+            return output
+        return self._context_bundle.cap_output(output)
 
     def _spill_output(self, output: str) -> str:
         """Write full output to file when it exceeds output_cap, return summary.
@@ -1097,7 +1147,7 @@ class REPLEnvironment(
             except Exception as e:
                 hint = self._tool_hint_if_relevant(code, e)
                 return ExecutionResult(
-                    output=stdout_capture.getvalue(),
+                    output=self._bundle_cap_output(stdout_capture.getvalue()),
                     is_final=False,
                     error=f"{type(e).__name__}: {e}{hint}",
                     elapsed_seconds=time.perf_counter() - start_time,
@@ -1330,10 +1380,14 @@ class REPLEnvironment(
 
         self._execution_count += 1
         start_time = time.perf_counter()
+        self._bundle_begin_turn()
 
         # Structured mode: React-style one-tool-per-turn execution
         if self._structured_mode:
-            return self._execute_structured(code, start_time)
+            result = self._execute_structured(code, start_time)
+            if self._context_bundle is not None:
+                result.output = self._bundle_cap_output(result.output or "")
+            return result
 
         # Sanitize Unicode characters that models copy from question text
         code = sanitize_code_unicode(code)
@@ -1387,6 +1441,9 @@ class REPLEnvironment(
 
                 output = redact_if_enabled(output)
 
+                # INF-78 OAB-7: per-turn print cap while a context bundle is attached.
+                output = self._bundle_cap_output(output)
+
                 # Spill large output to file with summary
                 output = self._spill_output(output)
 
@@ -1397,7 +1454,7 @@ class REPLEnvironment(
                 )
 
             except FinalSignal as e:
-                output = stdout_capture.getvalue()
+                output = self._bundle_cap_output(stdout_capture.getvalue())
                 return ExecutionResult(
                     output=output,
                     is_final=True,

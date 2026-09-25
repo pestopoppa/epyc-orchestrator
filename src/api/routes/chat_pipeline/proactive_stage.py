@@ -210,6 +210,13 @@ async def _execute_proactive(
     """
     if not (features().parallel_execution and request.real_mode):
         return None
+    # INF-78 (OAB-1/OAB-7): a task_root-scoped or context_bundle request asked for the
+    # agentic REPL loop in ITS worktree over ITS bundle. This stage runs before mode
+    # selection and ignores force_mode, so a prompt classified COMPLEX (a 35-75k-char
+    # planner prompt easily is) would be answered by architect decomposition instead,
+    # with the bundle silently dropped.
+    if getattr(request, "task_root", None) or getattr(request, "context_bundle", None) is not None:
+        return None
 
     from src.proactive_delegation import classify_task_complexity, TaskComplexity
 

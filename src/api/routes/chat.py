@@ -1224,6 +1224,11 @@ async def chat_stream(
             status_code=422,
             detail="task scope / quiescent_after not supported on /chat/stream",
         )
+    # INF-78 OAB-7: the streaming paths never attach a context bundle either.
+    if request.context_bundle is not None:
+        raise HTTPException(
+            status_code=422, detail="context_bundle not supported on /chat/stream"
+        )
     # Unified streaming path — reuses pipeline stages from _handle_chat()
     if features().unified_streaming:
         from src.api.routes.chat_pipeline.stream_adapter import generate_stream

@@ -656,6 +656,12 @@ def auto_wrap_final(code: str) -> str:
         "llm_call(",  # Delegating to sub-LM
         "llm_batch(",  # Batch delegation
         "artifacts[",  # Storing intermediate results
+        # INF-78 OAB-7: pulls from a request's context bundle (`context.grep(` is
+        # already caught by "grep(")
+        "context.get(",
+        "context.json(",
+        "context.index(",
+        "context[",
     ]
     for pattern in exploration_patterns:
         if pattern in code:
@@ -717,6 +723,10 @@ def auto_wrap_final(code: str) -> str:
             "if ",
             "try:",
             "with ",
+            # INF-78 OAB-7: FINAL(print(x)) is FINAL(None) -- the call ended with the
+            # answer "None". A one-line print is output for the next turn (the RLM
+            # pull-and-print move), never an answer.
+            "print(",
         ]
         if not any(first_line.startswith(p) for p in non_final_patterns):
             return f"FINAL({first_line})"
