@@ -662,7 +662,12 @@ async def _execute_repl_body(
         else None
     )
     if _schema:
-        combined_context = f"{_render_schema_preamble(_schema)}\n\n{combined_context}"
+        _schema_preamble = _render_schema_preamble(_schema)
+        combined_context = f"{_schema_preamble}\n\n{combined_context}"
+        # The turn prompt is rebuilt from TaskState.PROMPT every turn
+        # (graph/helpers._execute_turn); TaskState.context is never rendered into
+        # it, so a preamble placed only there never reached the model.
+        root_prompt = f"{root_prompt}\n\n{_schema_preamble}"
 
     task_state = TaskState(
         task_id=task_id,
@@ -753,6 +758,9 @@ async def _execute_repl_body(
                 _schema, _schema_invalid_reason, graph_result.answer
             )
             task_state.context = f"{combined_context}\n\n{_failure_msg}"
+            # ...and the retry must SEE why the last FINAL failed (TaskState.prompt is
+            # what the next turn renders; see the preamble note above).
+            task_state.prompt = f"{root_prompt}\n\n{_failure_msg}"
             task_state.turns = 0
             task_state.current_role = initial_role
             task_state.role_history = [str(initial_role)]
