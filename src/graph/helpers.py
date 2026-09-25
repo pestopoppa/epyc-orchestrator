@@ -806,6 +806,12 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
         builder = PromptBuilder(PromptConfig(style=PromptStyle.MINIMAL))
         _prompt_cfg = builder.config
+        # INF-78 OAB-7: with a context bundle attached, the REPL's per-turn print cap is
+        # THE bound on printed output reaching this prompt; widen the preview to it so a
+        # capped turn is not re-truncated (and spilled) at the 1500-char default.
+        _bundle_preview = getattr(deps.repl, "bundle_output_preview_chars", None)
+        if isinstance(_bundle_preview, int) and _bundle_preview > _prompt_cfg.max_output_preview:
+            _prompt_cfg.max_output_preview = _bundle_preview
 
         # Tool output compression (Phase 2 native): compress before spill
         _output_for_prompt = state.last_output

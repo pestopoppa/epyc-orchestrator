@@ -69,8 +69,17 @@ class _StateMixin:
         if deferred_mode and "_tool_outputs" in artifact_keys:
             artifact_keys = [k for k in artifact_keys if k != "_tool_outputs"]
 
+        bundle = getattr(self, "_context_bundle", None)
+        if bundle is not None:
+            # INF-78 OAB-7: `context` is the request's bundle, not a string.
+            context_line = (
+                f"context: bundle ({len(bundle.sections)} sections, {bundle.total_chars} chars; "
+                "context.index() lists them; nothing from it is in this prompt until you print it)"
+            )
+        else:
+            context_line = f"context: str ({len(self.context)} chars)"
         state_lines = [
-            f"context: str ({len(self.context)} chars)",
+            context_line,
             f"artifacts: {artifact_keys if artifact_keys else '{}'}",
         ]
 
@@ -96,6 +105,10 @@ class _StateMixin:
                 preview = preview[:80] + "..."
             user_vars.append(f"  {key} ({type_name}) = {preview}")
 
+        if bundle is not None:
+            # INF-78 OAB-7: a variable's repr preview is the second route (after print)
+            # from a pulled value into the root prompt; count exactly what is shown.
+            bundle.note_state_preview(sum(len(v.encode("utf-8")) for v in user_vars[:20]))
         if user_vars:
             state_lines.append("")
             state_lines.append("## Available Variables (from previous turns)")

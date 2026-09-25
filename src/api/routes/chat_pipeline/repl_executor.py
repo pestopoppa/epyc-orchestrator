@@ -370,9 +370,24 @@ async def _execute_repl_body(
     routing_strategy = routing.routing_strategy
     formalization_applied = routing.formalization_applied
 
+    # INF-78 OAB-7: a request-carried context bundle becomes the REPL variable `context`;
+    # the ROOT prompt carries the caller's prompt plus the bundle's index only. The
+    # ChatRequest validator already refused a malformed bundle (422).
+    context_bundle = None
+    root_prompt = request.prompt
+    if getattr(request, "context_bundle", None) is not None:
+        from src.repl_environment.context_bundle import ContextBundle
+
+        context_bundle = ContextBundle.from_payload(
+            request.context_bundle,
+            print_cap_bytes=request.context_print_cap_bytes,
+            pull_budget_bytes=request.context_pull_budget_bytes,
+        )
+        root_prompt = f"{request.prompt}\n\n{context_bundle.render_root_block()}"
+
     # Create REPL environment — use DocumentREPLEnvironment when document
     # preprocessing produced structured results (sections, figures, etc.)
-    combined_context = request.prompt
+    combined_context = root_prompt
     if request.context:
         combined_context += f"\n\nContext:\n{request.context}"
 
@@ -427,6 +442,16 @@ async def _execute_repl_body(
             retriever=state.hybrid_router.retriever if state.hybrid_router else None,
             hybrid_router=state.hybrid_router,
             tool_context=_tool_context,
+        )
+    if context_bundle is not None:
+        repl.attach_context_bundle(context_bundle)
+        log.info(
+            "Context bundle attached: %d sections, %d bytes (%d in the prompt), print cap %d B",
+            len(context_bundle.sections),
+            context_bundle.total_bytes,
+            sum(s.nbytes for s in context_bundle.sections if s.inline),
+            context_bundle.print_cap_bytes,
+            extra=task_extra(task_id=task_id, stage="execute", mode="repl_context_bundle"),
         )
 
     # Phase 3: cross-request globals restore (opt-in via session_id).
@@ -506,8 +531,9 @@ async def _execute_repl_body(
                 extra=task_extra(task_id=task_id, stage="execute", mode="repl_restore"),
             )
 
-    # Check for two-stage summarization opportunity
-    if request.real_mode and _should_use_two_stage(
+    # Check for two-stage summarization opportunity (never for a bundle: its REPL is the
+    # point, and two-stage would answer without it)
+    if context_bundle is None and request.real_mode and _should_use_two_stage(
         prompt=request.prompt,
         context=request.context,
     ):
@@ -636,11 +662,16 @@ async def _execute_repl_body(
         else None
     )
     if _schema:
-        combined_context = f"{_render_schema_preamble(_schema)}\n\n{combined_context}"
+        _schema_preamble = _render_schema_preamble(_schema)
+        combined_context = f"{_schema_preamble}\n\n{combined_context}"
+        # The turn prompt is rebuilt from TaskState.PROMPT every turn
+        # (graph/helpers._execute_turn); TaskState.context is never rendered into
+        # it, so a preamble placed only there never reached the model.
+        root_prompt = f"{root_prompt}\n\n{_schema_preamble}"
 
     task_state = TaskState(
         task_id=task_id,
-        prompt=request.prompt,
+        prompt=root_prompt,
         context=combined_context,
         task_ir=routing.task_ir,
         task_type=str(routing.task_ir.get("task_type", "chat")),
@@ -727,6 +758,9 @@ async def _execute_repl_body(
                 _schema, _schema_invalid_reason, graph_result.answer
             )
             task_state.context = f"{combined_context}\n\n{_failure_msg}"
+            # ...and the retry must SEE why the last FINAL failed (TaskState.prompt is
+            # what the next turn renders; see the preamble note above).
+            task_state.prompt = f"{root_prompt}\n\n{_failure_msg}"
             task_state.turns = 0
             task_state.current_role = initial_role
             task_state.role_history = [str(initial_role)]
@@ -996,6 +1030,25 @@ async def _execute_repl_body(
     # `response.error_code` branch) returns a non-200 status instead of a
     # silent success.
     _schema_error_code = 422 if (_schema and _schema_valid is False) else None
+
+    # INF-78 OAB-7 / OAB-12: exact pull accounting for the bundle (echo + one log line).
+    context_pulls = None
+    if context_bundle is not None:
+        context_pulls = context_bundle.accounting()
+        _pt = context_pulls["totals"]
+        log.info(
+            "Context bundle pulls: %d calls, %d/%d bytes pulled/offered (%d unique), "
+            "%d printed -> %d shown, %d capped turns, %d refused",
+            _pt["pull_calls"],
+            _pt["bytes_pulled"],
+            context_pulls["offered"]["bytes"],
+            _pt["unique_bytes"],
+            _pt["printed_bytes"],
+            _pt["shown_bytes"],
+            _pt["turns_capped"],
+            _pt["refused"],
+            extra=task_extra(task_id=task_id, stage="execute", mode="repl_context_bundle"),
+        )
     _schema_error_detail = (
         f"FINAL() value failed output_schema validation after retry and repair: "
         f"{_schema_invalid_reason}"
@@ -1051,4 +1104,6 @@ async def _execute_repl_body(
         web_research_results=web_research_results,
         # Scratchpad insights (Search-R1 Step 5)
         scratchpad_insights=scratchpad_insights,
+        # INF-78 OAB-7: bundle pull accounting (None without a bundle)
+        context_pulls=context_pulls,
     )
