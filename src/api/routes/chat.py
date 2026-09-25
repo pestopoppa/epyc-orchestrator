@@ -1208,6 +1208,22 @@ async def chat_stream(
     Note: Uses sse-starlette when available (via feature flag), otherwise
     falls back to manual SSE formatting for backward compatibility.
     """
+    # INF-78 review fix F2: neither streaming path below installs a task scope or a
+    # quiescence carrier (compare /chat's `begin_request_scope` / `quiescence.begin` in the
+    # `try` block above) — a caller that sends task_root/read_roots/quiescent_after/edit_mode
+    # here would have them silently ignored, so the model would run with the FULL, unscoped
+    # filesystem surface while the caller believes it is confined. Refuse explicitly instead
+    # of streaming an unscoped run under a scoped-looking request.
+    if (
+        request.task_root is not None
+        or request.read_roots
+        or request.quiescent_after
+        or request.edit_mode != task_root_mod.EDIT_MODE_NONE
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="task scope / quiescent_after not supported on /chat/stream",
+        )
     # Unified streaming path — reuses pipeline stages from _handle_chat()
     if features().unified_streaming:
         from src.api.routes.chat_pipeline.stream_adapter import generate_stream

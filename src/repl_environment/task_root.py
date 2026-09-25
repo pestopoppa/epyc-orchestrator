@@ -112,13 +112,40 @@ def _allowed_prefixes() -> list[str]:
     return out
 
 
+# F6 (review fix, INF-78): the frozen production kernel trees and the kernel/model stores are
+# never a scope directory, but not symmetrically:
+#   - as task_root (writable_root=True): NEVER. A scope's write root must never resolve into a
+#     frozen tree, the kernel store, or the model store — there is no legitimate case for a
+#     scoped agent run to write a kernel binary or a model file, and the frozen trees are
+#     "NEVER modified, rebased, built, or committed to unless the operator EXPLICITLY
+#     authorizes it" (CLAUDE.md) — a task_root is exactly a write scope.
+#   - as read_roots (writable_root=False): the three FROZEN kernel SOURCE trees plus
+#     kernels/ are denied outright — inspecting a frozen tree or the serving kernel store goes
+#     through the sanctioned verify_*/agent-file surfaces, not an ad-hoc scoped read_root, and
+#     read access here would let a scoped run grep the actual frozen patches/binaries a task_root
+#     run has no reason to see. models/ is the one exception: it is ALLOWED as a read_root,
+#     because a scoped run (e.g. an AutoKernel candidate comparing tokenizer/config against a
+#     reference model) legitimately needs to READ a GGUF/tokenizer under models/ — it just may
+#     never be pointed there as its WRITE root (task_root), which stays denied above.
+_FROZEN_KERNEL_TREES = (
+    "/mnt/raid0/llm/llama.cpp",
+    "/mnt/raid0/llm/whisper.cpp",
+    "/mnt/raid0/llm/qwentts.cpp",
+)
+_DENY_AS_TASK_ROOT = _FROZEN_KERNEL_TREES + ("/mnt/raid0/llm/kernels", "/mnt/raid0/llm/models")
+_DENY_AS_READ_ROOT = _FROZEN_KERNEL_TREES + ("/mnt/raid0/llm/kernels",)
+
+
 def validate_scope_dir(path: str, *, field: str = "task_root", writable_root: bool = True) -> str:
     """Validate a caller-supplied scope directory and return its realpath.
 
     Rules: absolute; an existing directory; strictly below the llm root or /tmp (never one of
     those roots itself). A ``task_root`` (``writable_root``) additionally may not contain the
     orchestrator's own project root, so a scoped request can never be pointed at the control
-    plane. Raises ``ValueError`` (pydantic turns it into a 422).
+    plane. Neither a ``task_root`` nor a ``read_roots`` entry may resolve into a frozen
+    production kernel tree or the kernel store; a ``task_root`` additionally may not resolve
+    into the model store (``read_roots`` may — see ``_DENY_AS_READ_ROOT`` above). Raises
+    ``ValueError`` (pydantic turns it into a 422).
     """
     if not isinstance(path, str) or not path.strip():
         raise ValueError(f"{field} must be a non-empty absolute path")
@@ -136,6 +163,14 @@ def validate_scope_dir(path: str, *, field: str = "task_root", writable_root: bo
         if project == resolved or project.startswith(resolved.rstrip("/") + "/"):
             raise ValueError(
                 f"{field} {resolved!r} contains the orchestrator project root {project!r}"
+            )
+    for denied in (_DENY_AS_TASK_ROOT if writable_root else _DENY_AS_READ_ROOT):
+        d = os.path.realpath(denied)
+        if (resolved == d or resolved.startswith(d.rstrip("/") + "/")
+                or d.startswith(resolved.rstrip("/") + "/")):
+            raise ValueError(
+                f"{field} {resolved!r} is a frozen production kernel tree or model/kernel "
+                f"store ({d!r}); never a {'task_root' if writable_root else 'read_root'}"
             )
     return resolved
 
@@ -265,32 +300,87 @@ def check_shell_scope(parts: list[str], cwd: str) -> str | None:
     def _refuse(why: str) -> str:
         return f"{SCOPE_DENY_PREFIX}: run_shell {base} refused — {why}"
 
+    def _short_cluster_has(a: str, letter: str) -> bool:
+        """True for a short-option cluster (``-xyz``, never ``--long``) containing ``letter``."""
+        return a.startswith("-") and not a.startswith("--") and letter in a[1:]
+
+    # F1(d): generic — any command's ``--output``/``--out`` flag writes a file, and the
+    # per-argument confinement loop below only catches an EXISTING path, so a target that does
+    # not exist yet (the normal case for an output file) would sail through unchecked.
+    if any(
+        a in {"--output", "--out"} or a.startswith("--output=") or a.startswith("--out=")
+        for a in args
+    ):
+        return _refuse("--output/--out writes a file")
+
     if base.startswith(_rules.PYTHON_EXECUTABLE_PREFIXES):
         return _refuse("arbitrary code execution is not available in a scoped request")
     if base == "sed":
-        if any(a.startswith("--in-place") or (a.startswith("-") and not a.startswith("--")
-                                               and "i" in a[1:]) for a in args):
+        if any(a.startswith("--in-place") or _short_cluster_has(a, "i") for a in args):
             return _refuse("in-place editing writes files; use file_write_safe")
         program = _script_program(base, args)
         if program is not None and _sed_does_io(program):
             return _refuse("program performs file or command I/O")
-        if any(a in {"-f", "--file"} or a.startswith("--file=") for a in args):
+        # F1(b): a short cluster such as ``-nf`` bundles ``-f`` with other flags; the exact
+        # ``-f``/``--file`` match above misses it.
+        if any(a in {"-f", "--file"} or a.startswith("--file=") or _short_cluster_has(a, "f")
+               for a in args):
             return _refuse("-f program files cannot be inspected")
     if base in {"awk", "gawk", "mawk", "nawk"}:
         program = _script_program(base, args)
         if program is not None and _AWK_IO_RE.search(program):
             return _refuse("program performs file or command I/O")
-        if any(a in {"-f", "--file"} or a.startswith("--file=") for a in args):
+        if any(a in {"-f", "--file"} or a.startswith("--file=") or _short_cluster_has(a, "f")
+               for a in args):
             return _refuse("-f program files cannot be inspected")
     if base == "find" and any(a in _FIND_WRITE_ACTIONS for a in args):
         return _refuse("-delete/-exec/-fprint actions can write or run commands")
-    if base == "sort" and any(a == "-o" or a.startswith("--output") or
-                              (a.startswith("-o") and not a.startswith("--")) for a in args):
+    # F1(a): ``-ro`` (or any other short cluster containing ``o``) bundles ``-o`` with other
+    # flags; the previous ``a.startswith("-o")`` check missed a cluster where ``o`` is not the
+    # first letter, e.g. ``sort -ro out.txt kernel.c``.
+    if base == "sort" and any(a == "-o" or a.startswith("--output") or _short_cluster_has(a, "o")
+                              for a in args):
         return _refuse("-o/--output writes a file")
     if base == "uniq" and len([a for a in args if not a.startswith("-")]) >= 2:
         return _refuse("a second positional is an output file")
     if base == "date" and any(a in {"-s"} or a.startswith("--set") for a in args):
         return _refuse("setting the clock is not a read")
+    # F4: dereferencing a symlink can walk outside the scope's read set even though the link
+    # itself resolves inside it (the confinement loop below realpaths each ARGUMENT, not
+    # every path find/du/ls/grep may descend into while following links).
+    if base in {"find", "du", "ls"} and any(
+        a in {"-L", "-H"} or a.startswith("--dereference") or
+        _short_cluster_has(a, "L") or _short_cluster_has(a, "H")
+        for a in args
+    ):
+        return _refuse("dereferencing symlinks can walk outside the scope")
+    if base == "grep" and any(
+        a == "-R" or a.startswith("--dereference-recursive") or _short_cluster_has(a, "R")
+        for a in args
+    ):
+        return _refuse("dereferencing symlinks can walk outside the scope")
+    if base == "git":
+        # F1(c): any arg starting with --output or -o writes a file (the generic F1(d) check
+        # above only catches the exact --output/--out spellings; git also takes forms like
+        # ``-oFILE``). ``git branch`` mutates refs. In a lane worktree ``.git`` is a gitdir
+        # POINTER file, not a real repo — ``git branch``'s ref writes land in the SHARED clone
+        # every lane worktree points at, not in the scoped task_root.
+        if any(a.startswith("--output") or (a.startswith("-o") and not a.startswith("--"))
+               for a in args):
+            return _refuse("--output/-o writes a file")
+        subcommand = next((a for a in args if not a.startswith("-")), None)
+        if subcommand == "branch":
+            idx = args.index("branch")
+            rest = args[idx + 1:]
+            non_flag = [a for a in rest if not a.startswith("-")]
+            _branch_write_flags = {"-d", "-D", "-m", "-M", "-c", "-C", "-u"}
+            if non_flag or any(
+                a in _branch_write_flags or a.startswith("--set-upstream") for a in rest
+            ):
+                return _refuse(
+                    "git branch can create/delete/rename/set-upstream a branch in the "
+                    "SHARED clone (a lane worktree's .git is a gitdir pointer)"
+                )
 
     # Confinement of reads: every argument that names an existing location must resolve
     # inside the scope's read set. Flag values (--foo=/path) count too.

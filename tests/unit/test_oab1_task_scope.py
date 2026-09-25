@@ -95,6 +95,38 @@ def test_scope_root_validation_rejects_missing_and_project_ancestor(roots):
             TR.validate_scope_dir(project)
 
 
+@pytest.mark.parametrize("frozen", [
+    "/mnt/raid0/llm/llama.cpp",
+    "/mnt/raid0/llm/whisper.cpp",
+    "/mnt/raid0/llm/qwentts.cpp",
+    "/mnt/raid0/llm/llama.cpp/src",
+    "/mnt/raid0/llm/kernels",
+])
+def test_frozen_kernel_trees_denied_as_task_root_and_read_root(frozen):
+    """F6: a frozen production kernel tree (or a subdirectory of one) or the kernel store is
+    never a scope directory, neither as task_root nor as read_roots."""
+    if not os.path.isdir(frozen):
+        pytest.skip(f"{frozen} not present on this host")
+    with pytest.raises(ValueError):
+        TR.validate_scope_dir(frozen)
+    with pytest.raises(ValueError):
+        TR.validate_scope_dir(frozen, field="read_roots", writable_root=False)
+
+
+def test_models_store_denied_as_task_root_allowed_as_read_root():
+    """F6: models/ is the one asymmetric case — a scoped run may legitimately READ a
+    GGUF/tokenizer under models/ (read_roots), but a task_root (write scope) must never
+    resolve into the model store."""
+    models = "/mnt/raid0/llm/models"
+    if not os.path.isdir(models):
+        pytest.skip(f"{models} not present on this host")
+    with pytest.raises(ValueError):
+        TR.validate_scope_dir(models)
+    assert TR.validate_scope_dir(models, field="read_roots", writable_root=False) == (
+        os.path.realpath(models)
+    )
+
+
 def test_begin_rejects_unknown_edit_mode(roots):
     with pytest.raises(ValueError):
         TR.begin_request_scope(str(roots.a), "patch-queue")
@@ -171,10 +203,16 @@ def test_shell_writers_refused_in_both_modes(roots):
                 "find . -delete",
                 "find . -exec cat {} ;",
                 "sort -o out.txt kernel.c",
+                "sort -ro /tmp/x f",
+                "sed -nf s.sed f",
                 "uniq kernel.c out.txt",
                 "python3 -c print(1)",
                 f"cat {roots.outside / 'secret.txt'}",
                 f"grep -r SECRET {roots.outside}",
+                "git diff --output=/tmp/x",
+                "git log --output=/tmp/x",
+                "git branch foo",
+                "git branch -D foo",
             ):
                 out = _ExternalAccessMixin._run_shell(env, cmd)
                 assert out.startswith(f"[ERROR: {TR.SCOPE_DENY_PREFIX}"), (mode, cmd, out)
@@ -190,6 +228,31 @@ def test_shell_reads_inside_scope_run_in_task_root(roots):
     assert _ExternalAccessMixin._run_shell(env, "cat kernel.c") == "int a;\n"
     assert _ExternalAccessMixin._run_shell(env, f"cat {roots.ref / 'notes.md'}") == "reference\n"
     assert _ExternalAccessMixin._run_shell(env, "awk '/int/ {print}' kernel.c") == "int a;\n"
+
+
+def test_shell_dereference_flags_refused(roots):
+    """F4: -L/-H/--dereference* (find/du/ls) and -R/--dereference-recursive (grep) can walk a
+    symlink outside the scope's read set even though the link itself resolves inside it; -r on
+    grep is fine (it does not follow symlinks encountered while recursing)."""
+    from src.repl_environment.external_access import _ExternalAccessMixin
+
+    env = SimpleNamespace(_exploration_calls=0, _exploration_log=MagicMock())
+    TR.begin_request_scope(str(roots.a), "none")
+    for cmd in (
+        "find -L .",
+        "find -H .",
+        "find --dereference .",
+        "du -L .",
+        "du -sL .",
+        "ls -L .",
+        "ls -alL .",
+        "grep -R SECRET .",
+        "grep --dereference-recursive SECRET .",
+    ):
+        out = _ExternalAccessMixin._run_shell(env, cmd)
+        assert out.startswith(f"[ERROR: {TR.SCOPE_DENY_PREFIX}"), (cmd, out)
+    # -r (lowercase) stays allowed.
+    assert "int a;" in _ExternalAccessMixin._run_shell(env, "grep -r int .")
 
 
 # ── acceptance: reads confined to task_root + read_roots ────────────────────

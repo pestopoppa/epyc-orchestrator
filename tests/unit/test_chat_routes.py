@@ -817,6 +817,32 @@ class TestChatStreamEndpoint:
             body = "".join(chunks)
             assert "[DONE]" in body
 
+    @pytest.mark.asyncio
+    async def test_stream_rejects_task_scope_and_quiescence(self, mock_state, tmp_path):
+        """INF-78 review fix F2: /chat/stream installs no task scope and no quiescence
+        carrier, so a request carrying any of task_root/read_roots/quiescent_after/edit_mode
+        must be refused (422) rather than silently run unscoped."""
+        from fastapi import HTTPException
+
+        with patch("src.api.routes.chat.features") as mock_features:
+            mock_features.return_value.unified_streaming = False
+            mock_state.progress_logger = None
+
+            for kwargs in (
+                {"task_root": str(tmp_path)},
+                {"task_root": str(tmp_path), "read_roots": [str(tmp_path)]},
+                {"task_root": str(tmp_path), "edit_mode": "direct"},
+                {"quiescent_after": True},
+            ):
+                with pytest.raises(HTTPException) as exc_info:
+                    await chat_stream(
+                        ChatRequest(prompt="scoped stream", mock_mode=True,
+                                    real_mode=False, **kwargs),
+                        mock_state,
+                    )
+                assert exc_info.value.status_code == 422
+                assert "task scope" in exc_info.value.detail
+
 
 class TestPlanReviewDrop:
     """Plan-review drop discards scaffolding and continues normal execution."""

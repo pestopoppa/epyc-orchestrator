@@ -125,13 +125,22 @@ class _FileMutationMixin:
             if _scope is not None:
                 from src.repl_environment.task_root import resolve_task_path as _rtp
 
-                _scope_denial = _scope.write_denial(_rtp(path))
+                _resolved = _rtp(path)
+                _scope_denial = _scope.write_denial(_resolved)
                 if _scope_denial is not None:
                     self._exploration_log.add_event(
                         "file_write_safe", {"path": path, "size": len(content)}, "refused"
                     )
                     return f"[ERROR: {_scope_denial}]"
                 backup = False
+                # TOCTOU (review fix, INF-78 F3): reuse the ALREADY-resolved, ALREADY-checked
+                # path for the write below. A second resolve_task_path() call here would
+                # re-realpath the raw `path` a second time — if a symlink component changed
+                # between the two calls (or the model's `path` argument contains one under
+                # attacker control), the checked path and the written path could diverge. There
+                # is exactly one resolve under a scope, and the write target is that resolve's
+                # own output.
+                path = _resolved
 
             # Validate path
             is_valid, error = self._validate_file_path(path)
@@ -142,11 +151,13 @@ class _FileMutationMixin:
             # task-root. _validate_file_path only validated the resolved path; the write itself
             # used the raw `path` (relative to the process cwd), so model edits never landed in
             # the scratch repo (BEP-2 baseline could not edit files). Default-off parity: when no
-            # task-root is active, task_root_active() is False and `path` is unchanged.
-            from src.repl_environment.task_root import resolve_task_path, task_root_active
+            # task-root is active, task_root_active() is False and `path` is unchanged. A scoped
+            # request already resolved `path` above (F3 fix) and must not resolve it again here.
+            if _scope is None:
+                from src.repl_environment.task_root import resolve_task_path, task_root_active
 
-            if task_root_active():
-                path = resolve_task_path(path)
+                if task_root_active():
+                    path = resolve_task_path(path)
 
             # Create backup if file exists and backup requested
             if backup and os.path.exists(path):
