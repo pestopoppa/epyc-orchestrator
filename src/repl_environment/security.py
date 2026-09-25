@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import ast
+import re
+
+#: A ``str.format`` replacement field whose field name reaches a dunder, e.g.
+#: ``{0.get.__closure__[0]}``: format-string field access is attribute access that no
+#: ast.Attribute node ever shows.
+_DUNDER_FORMAT_FIELD = re.compile(r"\{[^{}]*__[^{}]*\}")
 
 
 class ASTSecurityVisitor(ast.NodeVisitor):
@@ -80,8 +86,27 @@ class ASTSecurityVisitor(ast.NodeVisitor):
             "__reduce_ex__",
             "__getstate__",
             "__setstate__",
+            # Non-dunder introspection that walks from a function or generator to
+            # live objects: closure cells (``fn.__closure__[0].cell_contents``) and
+            # frames (``gen.gi_frame.f_globals``, ``tb.tb_frame.f_back.f_locals``).
+            "cell_contents",
+            "f_globals",
+            "f_back",
+            "f_locals",
+            "gi_frame",
+            "tb_frame",
+            "cr_frame",
         }
     )
+
+    # Attribute getters by NAME STRING: ``operator.attrgetter('get.__closure__')(x)``
+    # walks a dotted path at runtime, so no ast.Attribute node shows the dunder
+    # (``string.Formatter().get_field`` is the same primitive). Referencing them at
+    # all (call, alias, or import) is refused.
+    FORBIDDEN_GETTERS = frozenset({"attrgetter", "methodcaller", "get_field"})
+
+    # String-format entry points whose templates can perform attribute access.
+    FORMAT_ATTRS = frozenset({"format", "format_map", "vformat"})
 
     # Dunders that customize how an object is SERIALIZED. Defining one lets a
     # value smuggle a callable + args into a pickle stream, to be invoked at
@@ -102,6 +127,32 @@ class ASTSecurityVisitor(ast.NodeVisitor):
 
     def __init__(self):
         self.violations: list[str] = []
+        # A dunder-reaching format template is only dangerous if something formats it,
+        # and the template may be bound to a name first (``s = '{0.__class__}'`` ...
+        # ``s.format(x)``), so both halves are tracked and flagged when both occur.
+        self._format_used = False
+        self._dunder_templates: list[str] = []
+        self._format_flagged = False
+
+    def _flag_dunder_format(self) -> None:
+        if self._format_used and self._dunder_templates and not self._format_flagged:
+            self._format_flagged = True
+            self.violations.append(
+                f"str.format template reaching a dunder: {self._dunder_templates[0][:80]!r}"
+            )
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        """Track string constants whose format fields reach a dunder."""
+        if isinstance(node.value, str) and _DUNDER_FORMAT_FIELD.search(node.value):
+            self._dunder_templates.append(node.value)
+            self._flag_dunder_format()
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        """Reject bare references to name-string attribute getters."""
+        if node.id in self.FORBIDDEN_GETTERS:
+            self.violations.append(f"{node.id}")
+        self.generic_visit(node)
 
     def _check_method_def(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         if node.name in self.FORBIDDEN_METHOD_DEFS:
@@ -181,6 +232,9 @@ class ASTSecurityVisitor(ast.NodeVisitor):
             module = node.module.split(".")[0]
             if module in self.FORBIDDEN_MODULES:
                 self.violations.append(f"from {node.module} import ...")
+        for alias in node.names:
+            if alias.name in self.FORBIDDEN_GETTERS:
+                self.violations.append(f"from {node.module} import {alias.name}")
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -218,6 +272,11 @@ class ASTSecurityVisitor(ast.NodeVisitor):
         """Check attribute access for forbidden dunder attributes."""
         if node.attr in self.FORBIDDEN_ATTRS:
             self.violations.append(f".{node.attr}")
+        if node.attr in self.FORBIDDEN_GETTERS:
+            self.violations.append(f".{node.attr}")
+        if node.attr in self.FORMAT_ATTRS:
+            self._format_used = True
+            self._flag_dunder_format()
         self.generic_visit(node)
 
     def _visit_subscript_forbidden_attrs(self, node: ast.Subscript) -> None:

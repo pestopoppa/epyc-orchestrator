@@ -256,6 +256,142 @@ def test_unbundled_repl_is_unchanged():
     assert repl.get_state().startswith("context: str (20 chars)")
 
 
+# ─────────────────────────────────── pre-reload review fixes (F2 / F4 / F5 / F12 / F13)
+
+#: The two escapes the review proved against the closure-based view: both reach the live
+#: ContextBundle (read without accounting, or mutate its caps).
+PROVEN_ESCAPES = [
+    "s = '{0.get.__closure__[0].cell_contents._sections[2].text}'.format(type(context))\n"
+    "print(len(s))",
+    "import operator\n"
+    "b = operator.attrgetter('get.__closure__')(type(context))[0].cell_contents\n"
+    "b.print_cap_bytes = 65536",
+]
+
+
+@pytest.mark.parametrize("code", PROVEN_ESCAPES)
+def test_proven_closure_escapes_are_refused(code):
+    repl, bundle = _repl_with_bundle(print_cap_bytes=300)
+    r = repl.execute(code)
+    assert (r.error or "").startswith("Dangerous operation not allowed"), r.error
+    assert r.output == "" and bundle.print_cap_bytes == 300
+    assert bundle.accounting()["totals"]["bytes_pulled"] == 0
+
+
+@pytest.mark.parametrize("code, why", [
+    ("f.__closure__[0].cell_contents", "cell_contents"),
+    ("c = cells[0].cell_contents", "cell_contents"),
+    ("g = (i for i in []); g.gi_frame.f_globals", "gi_frame"),
+    ("tb.tb_frame.f_back.f_locals", "tb_frame"),
+    ("co.cr_frame", "cr_frame"),
+    ("import operator\noperator.methodcaller('get', 'x')(obj)", "methodcaller"),
+    ("from operator import attrgetter", "attrgetter"),
+    ("import operator as op\nag = op.attrgetter", "attrgetter"),
+    ("import string\nstring.Formatter().get_field('0.__class__', [1], {})", "get_field"),
+    ("'{0.__class__}'.format(1)", "format"),
+    ("'{x.__init__.__globals__}'.format_map({'x': 1})", "format"),
+    ("t = '{0.get.__closure__}'\nprint(t.format(obj))", "format"),
+    ("print(str.format('{0[__x]}', {}))", "format"),
+    ("import string\nstring.Formatter().vformat('{0.__dict__}', [1], {})", "format"),
+])
+def test_ast_checker_refuses_introspection_routes(code, why):
+    import ast as _ast
+
+    from src.repl_environment.security import ASTSecurityVisitor
+
+    visitor = ASTSecurityVisitor()
+    visitor.visit(_ast.parse(code))
+    assert any(why in v for v in visitor.violations), visitor.violations
+
+
+@pytest.mark.parametrize("code", [
+    "print('{} + {} = {}'.format(1, 2, 3))",
+    "print('{name}: {v:.2f}'.format(name='x', v=1.5))",
+    "print('{0[a]} {0[b]}'.format({'a': 1, 'b': 2}))",
+    "print('{a}'.format_map({'a': 1}))",
+    "import operator\nprint(operator.add(1, 2), sorted([(1, 'b'), (0, 'a')], key=operator.itemgetter(0)))",
+    "from operator import itemgetter\nprint(itemgetter(1)([5, 6]))",
+    "x = 3\nprint(f'{x} {x!r} {x:>4}')",
+    "print('__main__', '%s' % 'dunder __init__ in text')",
+    "import functools\nprint(functools.reduce(lambda a, b: a + b, [1, 2, 3]))",
+    "def g():\n    yield 1\nprint(list(g()))",
+    "import re\nprint(re.findall(r'__\\w+__', 'a __init__ b'))",
+    "n = len(context.get('big', max_chars=50))\nprint('{} chars'.format(n))",
+])
+def test_normal_repl_code_still_passes(code):
+    repl, _ = _repl_with_bundle()
+    r = repl.execute(code)
+    assert r.error is None, r.error
+    assert r.output.strip()
+
+
+def test_a_mutated_bundle_cannot_lift_the_print_cap():
+    """The REPL caps from ITS copy of print_cap_bytes: even if code reached the live
+    bundle and raised its cap, the next turn is still capped at the attach-time value,
+    and the graph's preview size does not grow either."""
+    repl, bundle = _repl_with_bundle(print_cap_bytes=300)
+    bundle.print_cap_bytes = 65536                      # what an escape would do
+    r = repl.execute("print(context['big'])")
+    assert "[print cap: showed 300 of" in r.output
+    assert repl.bundle_output_preview_chars == 300 + 400
+    acc = bundle.accounting()["turns"][-1]
+    assert acc["capped"] is True and acc["shown_bytes"] == 300
+
+
+def test_print_cap_holds_on_the_error_path():
+    """Review F4: output printed before an exception is capped too."""
+    repl, bundle = _repl_with_bundle(print_cap_bytes=300)
+    r = repl.execute("print(context['big'])\nraise ValueError('boom')")
+    assert r.error and r.error.startswith("ValueError: boom")
+    assert "[print cap: showed 300 of" in r.output
+    assert len(r.output.split("\n[print cap")[0].encode()) <= 300
+    assert SENTINEL not in r.output
+    assert bundle.accounting()["turns"][-1]["capped"] is True
+
+
+def test_restore_and_reset_keep_the_bundle_bound():
+    """Review F5: a checkpoint restore or reset() rebuilds the globals; ``context`` must
+    stay the bundle view, not fall back to the root prompt string."""
+    repl, _ = _repl_with_bundle(print_cap_bytes=300)
+    repl.execute("keep = 41")
+    ckpt = repl.checkpoint()
+    repl.restore(ckpt)
+    r = repl.execute("print(keep + 1, len(context))")
+    assert r.error is None and r.output.split()[:2] == ["42", "4"]
+    r = repl.execute("print(context['big'])")
+    assert "[print cap: showed 300 of" in r.output
+    repl.reset()
+    r = repl.execute("print(sorted(context.keys()))")
+    assert r.error is None and "'big'" in r.output and "root prompt" not in r.output
+    assert repl.context == "root prompt text"           # the internals' string is intact
+
+
+def test_unbundled_restore_and_reset_are_unchanged():
+    repl = REPLEnvironment(context="plain context string")
+    repl.restore(repl.checkpoint())
+    assert repl._globals["context"] == "plain context string"
+    repl.reset()
+    assert repl._globals["context"] == "plain context string"
+
+
+def test_lone_surrogates_and_deep_json_do_not_crash():
+    """Review F12 / F13: a lone surrogate is sized (not a UnicodeEncodeError) and an
+    absurdly nested json section is a ValueError (not a RecursionError)."""
+    from src.repl_environment.context_bundle import cap_printed_output
+
+    bundle = ContextBundle.from_payload(
+        {"sections": [{"name": "odd", "text": "a\ud800b" * 10}]}, print_cap_bytes=256)
+    assert bundle.total_bytes == 10 * 5
+    shown, raw, shown_b, capped = cap_printed_output("x\udfff" * 200, 256)
+    assert capped and raw == 800 and shown_b <= 256 and "[print cap" in shown
+    deep = "[" * 200_000 + "]" * 200_000
+    with pytest.raises(ValueError, match="nested too deeply"):
+        ContextBundle.from_payload({"sections": [{"name": "j", "kind": "json", "text": deep}]})
+    fenced = "## x\n```json\n" + deep + "\n```"
+    with pytest.raises(ValueError, match="nested too deeply"):
+        ContextBundle.from_payload({"sections": [{"name": "j", "kind": "json", "text": fenced}]})
+
+
 # ─────────────────────────────────────────────────────────────── request contract
 
 

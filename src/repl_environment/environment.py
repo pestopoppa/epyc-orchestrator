@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import io
+import logging
 import os
 import signal
 import threading
@@ -44,6 +45,8 @@ from src.repl_environment.procedure_tools import _ProcedureToolsMixin
 from src.repl_environment.context import _ContextMixin
 from src.repl_environment.state import _StateMixin
 from src.research_context import ResearchContext
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from orchestration.repl_memory.progress_logger import ProgressLogger
@@ -255,6 +258,10 @@ class REPLEnvironment(
         # INF-78 OAB-7: a request-carried context bundle (attach_context_bundle). None ==
         # the historical string `context`, unchanged.
         self._context_bundle = None
+        # The bundle's print cap and preview size, COPIED at attach time so code that
+        # reaches (and mutates) the bundle object cannot lift the cap.
+        self._bundle_print_cap_bytes: int | None = None
+        self._bundle_preview_chars: int | None = None
 
         # Build restricted globals
         self._globals = self._build_globals()
@@ -398,8 +405,10 @@ class REPLEnvironment(
         globals_dict = {
             "__builtins__": safe_builtins,
             "__name__": "__main__",  # Needed for class definitions in exec()
-            # Context variables
-            "context": self.context,
+            # Context variables. With a context bundle attached, `context` is its counted
+            # view -- also after a checkpoint restore or reset() rebuilds these globals.
+            "context": (self.context if getattr(self, "_context_bundle", None) is None
+                        else self._bundle_view()),
             "artifacts": self.artifacts,
             # Safe modules (pre-loaded to match _strip_import_lines behavior)
             "json": _json,
@@ -654,15 +663,24 @@ class REPLEnvironment(
         read the bundle (counted) instead of the root prompt the model already has.
         From here on every turn's printed output is capped at the bundle's
         ``print_cap_bytes`` -- the only route from a pulled value into the root prompt.
+        The cap is copied here, into this environment, and applied from the copy.
         """
-        from src.repl_environment.context_bundle import repl_view
+        from src.repl_environment.context_bundle import CAP_MARKER_MAX_CHARS
 
         if hasattr(self, "_restricted_executor"):
             # The RestrictedPython executor keeps its own globals (the string context);
             # a bundle bound here would be silently absent there. /chat never builds it.
             raise ValueError("context bundles are not supported under RestrictedPython execution")
+        cap = int(bundle.print_cap_bytes)
+        self._bundle_print_cap_bytes = cap
+        self._bundle_preview_chars = cap + CAP_MARKER_MAX_CHARS
         self._context_bundle = bundle
-        self._globals["context"] = repl_view(bundle)
+        self._globals["context"] = self._bundle_view()
+
+    def _bundle_view(self) -> Any:
+        from src.repl_environment.context_bundle import repl_view
+
+        return repl_view(self._context_bundle)
 
     @property
     def context_bundle(self) -> Any:
@@ -673,8 +691,7 @@ class REPLEnvironment(
     def bundle_output_preview_chars(self) -> int | None:
         """Output-preview size the graph must allow so a capped turn is not re-truncated
         (None without a bundle: the graph keeps its own preview)."""
-        bundle = self._context_bundle
-        return None if bundle is None else int(bundle.output_preview_chars)
+        return None if self._context_bundle is None else self._bundle_preview_chars
 
     def _bundle_begin_turn(self) -> None:
         if self._context_bundle is not None:
@@ -686,7 +703,15 @@ class REPLEnvironment(
         or asks the worker for a summary."""
         if self._context_bundle is None:
             return output
-        return self._context_bundle.cap_output(output)
+        from src.repl_environment.context_bundle import cap_printed_output
+
+        shown, raw_bytes, shown_bytes, capped = cap_printed_output(
+            output, self._bundle_print_cap_bytes)
+        try:
+            self._context_bundle.record_printed(raw_bytes, shown_bytes, capped)
+        except Exception as exc:  # noqa: BLE001 -- accounting never un-caps a turn
+            _log.warning("context bundle: print accounting failed: %s", exc)
+        return shown
 
     def _spill_output(self, output: str) -> str:
         """Write full output to file when it exceeds output_cap, return summary.
@@ -1474,7 +1499,8 @@ class REPLEnvironment(
             except Exception as e:
                 hint = self._tool_hint_if_relevant(code, e)
                 return ExecutionResult(
-                    output=stdout_capture.getvalue(),
+                    # INF-78 OAB-7: the print cap holds on the error path too.
+                    output=self._bundle_cap_output(stdout_capture.getvalue()),
                     is_final=False,
                     error=f"{type(e).__name__}: {e}{hint}",
                     elapsed_seconds=time.perf_counter() - start_time,

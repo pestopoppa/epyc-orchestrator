@@ -254,6 +254,115 @@ def test_a_scout_cannot_write_and_cannot_read_outside(lane):
     assert "Unrecognised reply" in fed_back
 
 
+def test_grep_is_a_literal_search_and_cannot_backtrack(lane):
+    """Review F1: a model-authored pattern is never compiled as a regex (a backtracking
+    regex holds the GIL and freezes the event loop)."""
+    (lane.root / "ggml" / "src" / "slow.c").write_text(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbb\n"
+        "int x = a.b(c) + [q]*;\n")
+    reader = S.ScopedReader(lane.scope)
+    started = time.monotonic()
+    text, ok = reader.grep(r"(\w+\s?)*\(", "ggml/src")
+    assert time.monotonic() - started < 0.5
+    assert ok and text.startswith("GREP: no match")      # not a regex: no literal hit
+    text, ok = reader.grep("a.b(c)", "ggml/src")          # metacharacters match literally
+    assert ok and "slow.c:2:" in text
+    text, ok = reader.grep("a.c", "ggml/src")             # '.' is not a wildcard
+    assert ok and text.startswith("GREP: no match")
+    text, ok = reader.grep("[q]*", "ggml/src")            # an invalid-looking regex is text
+    assert ok and "slow.c:2:" in text
+
+
+def test_tree_walks_stop_when_the_scout_is_stopped(lane):
+    reader = S.ScopedReader(lane.scope, should_stop=lambda: True)
+    text, ok = reader.grep("ggml", ".")
+    assert ok and "GREP stopped" in text and "quants.c" not in text
+    assert reader.definitions("ggml_vec_dot_q4_K_q8_K") == []
+    calls = []
+
+    def stop_after_one():
+        calls.append(1)
+        return len(calls) > 1
+
+    reader = S.ScopedReader(lane.scope, should_stop=stop_after_one)
+    assert len(list(reader._walk(lane.root))) == 1, "checked between files"
+
+
+def test_read_past_eof_or_on_an_empty_file_does_not_kill_the_scout(lane):
+    """Review F6: READ past EOF (or on an empty file) answered, never an IndexError."""
+    (lane.root / "two.c").write_text("int a;\nint b;\n")
+    (lane.root / "empty.c").write_text("")
+    reader = S.ScopedReader(lane.scope)
+    text, ok = reader.read("two.c", 50, 60)
+    assert ok and text == "== two.c: only 2 lines"
+    text, ok = reader.read("empty.c", 1, 10)
+    assert ok and text == "== empty.c: only 0 lines"
+    text, ok = reader.read("two.c", 2, 60)                # a straddling read still clips
+    assert ok and text.endswith("2: int b;")
+    text, located = reader.seed(S.ScoutTarget(file="empty.c"))
+    assert located == "empty.c" and "only 0 lines" in text
+    text, located = reader.seed(S.ScoutTarget(file="two.c"))
+    assert located == "two.c" and "1: int a;" in text
+    # and end to end: a scout whose model reads past EOF still finishes
+    transport = ScriptedTransport({"T-e": ["READ two.c 50 60\nREAD empty.c 1 5", _summary("e")]})
+    stage = asyncio.run(S.run_scouts(_spec([{"file": "empty.c", "label": "T-e"}]),
+                                     scope=lane.scope, role="frontdoor", url="http://x",
+                                     transport=transport, resolver=FakeResolver()))
+    assert stage.report["scouts"][0]["status"] == "ok"
+    fed_back = "\n".join(m["content"] for _, msgs in transport.calls for m in msgs)
+    assert "== two.c: only 2 lines" in fed_back
+
+
+def test_the_slots_read_runs_off_the_event_loop(lane):
+    """Review F3: resolve_cap's synchronous /slots read happens in a worker thread."""
+    seen = {}
+
+    class ThreadRecordingResolver(FakeResolver):
+        def pool_occupancy(self, url):
+            seen["thread"] = threading.get_ident()
+            return super().pool_occupancy(url)
+
+    async def go():
+        seen["loop_thread"] = threading.get_ident()
+        return await S.run_scouts(_spec([{"symbol": "helper", "label": "T-1"}]),
+                                  scope=lane.scope, role="frontdoor", url="http://x",
+                                  transport=ScriptedTransport({"T-1": [_summary("t")]}),
+                                  resolver=ThreadRecordingResolver())
+
+    stage = asyncio.run(go())
+    assert stage.report["completed"] == 1
+    assert seen["thread"] != seen["loop_thread"]
+
+
+def test_a_stuck_scout_thread_is_abandoned_after_a_bounded_wait(lane, monkeypatch):
+    """Review F7: the post-stop wait is bounded; a thread that ignores the stop flag is
+    logged and abandoned instead of holding the request open."""
+    monkeypatch.setattr(S, "CONNECT_TIMEOUT_S", 0.0)
+    monkeypatch.setattr(S, "ABANDON_WAIT_S", 0.2)
+    release = threading.Event()
+
+    def stuck(should_stop):
+        release.wait(30)                   # ignores should_stop, like a blocked socket read
+        return S.CompletionResult("late", None, None, "cancelled", cancelled=True)
+
+    transport = ScriptedTransport({"T-1": [stuck]})
+
+    async def go():
+        started = time.monotonic()
+        stage = await S.run_scouts(_spec([{"symbol": "helper", "label": "T-1"}], budget_s=0.2),
+                                   scope=lane.scope, role="frontdoor", url="http://x",
+                                   transport=transport, resolver=FakeResolver())
+        elapsed = time.monotonic() - started
+        release.set()                      # let the executor shut down cleanly
+        return stage, elapsed
+
+    stage, elapsed = asyncio.run(go())
+    # budget 0.2 + first wait slack 5.0 + abandon 0.2; never the stuck call's 30 s
+    assert elapsed < 10
+    row = stage.report["scouts"][0]
+    assert row["status"] == "timeout" and "abandoned" in (row["error"] or "")
+
+
 def test_request_validation_scouts_need_task_root(lane):
     with pytest.raises(ValidationError, match="scouts require task_root"):
         ChatRequest(prompt="p", scouts={"enabled": True, "targets": [{"symbol": "f"}]})
@@ -286,9 +395,9 @@ def test_scouts_run_concurrently(lane):
     assert rep["launched"] == 3 and rep["completed"] == 3 and rep["max_concurrency"] == 3
     assert rep["max_inflight_calls"] == 3, "three model calls were in flight at once"
     assert transport.peak == 3
-    rows = rep["scouts"]
-    latest_start = max(r["started_s"] for r in rows)
-    earliest_end = min(r["ended_s"] for r in rows)
+    # the RAW timestamps: the provenance rows round to 3 decimals, which can tie
+    latest_start = max(r.started_s for r in stage.results)
+    earliest_end = min(r.ended_s for r in stage.results)
     assert latest_start < earliest_end, "all scout intervals overlap"
     assert rep["cap"]["cap"] == 3 and rep["cap"]["source"] == "live_slots"
 

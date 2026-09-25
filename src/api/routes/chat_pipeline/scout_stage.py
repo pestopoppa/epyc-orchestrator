@@ -16,7 +16,7 @@ What a scout is
 ---------------
 A bounded, read-only *direct-completion* loop, not a REPL session: the model never executes
 code. Each reply is one to three line commands the ORCHESTRATOR executes itself —
-``READ <path> <first> <last>`` / ``GREP <regex> <path>`` — or the final ``SUMMARY``. No write
+``READ <path> <first> <last>`` / ``GREP <text> <path>`` — or the final ``SUMMARY``. No write
 command exists, and every path is confined to the request's task scope
 (``task_root`` + ``read_roots``, ``TaskScope.read_denial``), so read-only is structural. That
 also makes the stage role-agnostic: it can run on the frontdoor or on the architect (:8083)
@@ -26,6 +26,12 @@ without putting the architect into REPL mode (operator ruling 2026-09-24,
 Tool output uses the seat's caps (R4, ``actor_tools_mcp``): read <= 200 lines at <= 400
 chars/line, grep <= 80 hits. Each scout also has a PULL budget in bytes (OAB-12's shape):
 once it is spent, reads are refused and the scout is told to summarise.
+
+GREP is a LITERAL substring search, never a regex: the pattern is model-authored, and a
+backtracking regex runs in C holding the GIL, which freezes the uvicorn worker's event loop
+(``(\\w+\\s?)*\\(`` on a 25-char line took 1.7 s). The file walks behind GREP and the seeding
+lookup check the scout's stop flag (stage budget, request deadline, disconnect) between
+files, so a stopped scout stops reading.
 
 Concurrency and admission
 -------------------------
@@ -91,6 +97,8 @@ SUMMARY_CHARS_PER_TOKEN = 4
 PREVIEW_CHARS = 160
 CONNECT_TIMEOUT_S = 10.0
 PER_CALL_TIMEOUT_S = 180.0
+#: How long the stage waits for stopped scout threads before abandoning them.
+ABANDON_WAIT_S = CONNECT_TIMEOUT_S + 5.0
 #: Fraction of the request's remaining budget the scouts may spend at most.
 REQUEST_BUDGET_FRACTION = 0.4
 
@@ -289,11 +297,13 @@ def normalize_symbol(symbol: str) -> str:
 class ScopedReader:
     """Read/grep confined to one request's task scope. There is no write method."""
 
-    def __init__(self, scope: Any):
+    def __init__(self, scope: Any, should_stop: Callable[[], bool] | None = None):
         if scope is None:
             raise ValueError("scouts require a task scope (ChatRequest.task_root)")
         self.scope = scope
         self.root = Path(scope.root)
+        #: Checked between files by every tree walk; the stage points it at its stop flag.
+        self.should_stop: Callable[[], bool] = should_stop or (lambda: False)
 
     def resolve(self, path: str) -> tuple[Path | None, str | None]:
         raw = (path or "").strip().strip("'\"`")
@@ -331,6 +341,9 @@ class ScopedReader:
         except (OSError, ValueError) as exc:
             return f"READ failed: {exc}", False
         first = max(1, int(first))
+        if first > len(lines):
+            # past EOF, or an empty file: a clear answer, not an IndexError that kills the scout
+            return f"== {self.display(resolved)}: only {len(lines)} lines", True
         last = max(first, min(int(last), first + READ_MAX_LINES - 1, len(lines)))
         body = "\n".join(f"{n}: {_clip(lines[n - 1])}" for n in range(first, last + 1))
         head = f"== {self.display(resolved)} lines {first}-{last} of {len(lines)}"
@@ -350,6 +363,8 @@ class ScopedReader:
                 p = Path(dirpath) / name
                 if p.suffix not in SOURCE_SUFFIXES:
                     continue
+                if self.should_stop():
+                    return
                 seen += 1
                 if seen > GREP_MAX_FILES:
                     return
@@ -359,10 +374,9 @@ class ScopedReader:
         resolved, denial = self.resolve(path or ".")
         if resolved is None:
             return f"GREP refused: {denial}", False
-        try:
-            rx = re.compile(pattern)
-        except re.error:
-            rx = re.compile(re.escape(pattern))
+        # LITERAL substring search: a model-authored regex can backtrack for seconds holding
+        # the GIL (see the module docstring), so the pattern is always escaped.
+        rx = re.compile(re.escape(pattern))
         hits: list[str] = []
         for p in self._walk(resolved):
             if self.scope.read_denial(os.path.realpath(p)):
@@ -378,6 +392,8 @@ class ScopedReader:
                     hits.append(f"{self.display(p)}:{n}: {_clip(line)}")
                     if len(hits) >= GREP_MAX_HITS:
                         return "\n".join(hits) + f"\n[… stopped at {GREP_MAX_HITS} hits]", True
+        if self.should_stop():
+            return "\n".join(hits + ["[… GREP stopped: the scout was stopped]"]), True
         return ("\n".join(hits) if hits else f"GREP: no match for {pattern!r} under {path}"), True
 
     # -- seeding ------------------------------------------------------------------------
@@ -473,7 +489,7 @@ is {root} and report what the planner needs to propose a change.
 
 Every reply must be either up to {ncmd} command lines, each one of
   READ <path> <first_line> <last_line>      (at most {nread} lines per READ)
-  GREP <python-regex> <path-or-directory>   (at most {ngrep} hits)
+  GREP <literal-text> <path-or-directory>   (at most {ngrep} hits; exact substring, NOT a regex)
 or the word SUMMARY on its own line followed by your findings.
 Paths are relative to the tree root. You have at most {turns} replies in total and the last
 one must be the SUMMARY. Keep the SUMMARY under about {words} words and cover:
@@ -815,8 +831,10 @@ async def run_scouts(
         for r in results:
             r.status, r.skip_reason = "skipped", "no task scope"
         return _finish(report, results, t0, clock, "", role, 0)
-    cap = resolve_cap(url or "", max_scouts=config.max_scouts, n_targets=len(wanted),
-                      reserve_slots=config.reserve_slots, resolver=resolver)
+    # resolve_cap does a synchronous /slots HTTP read: keep it off the event loop.
+    cap = await asyncio.to_thread(resolve_cap, url or "", max_scouts=config.max_scouts,
+                                  n_targets=len(wanted), reserve_slots=config.reserve_slots,
+                                  resolver=resolver)
     report["cap"] = cap
     budget = float(config.budget_s)
     if request_deadline_s is not None:
@@ -839,6 +857,8 @@ async def run_scouts(
     def should_stop() -> bool:
         return (stop.is_set() or (cancel_event is not None and cancel_event.is_set())
                 or clock() >= deadline)
+
+    reader.should_stop = should_stop
 
     active = 0
     peak = 0
@@ -884,7 +904,12 @@ async def run_scouts(
         done, pending = await asyncio.wait(tasks, timeout=budget + CONNECT_TIMEOUT_S + 5.0)
         if pending:
             stop.set()
-            await asyncio.wait(pending)
+            # Bounded: a thread stuck in a blocking read is logged and abandoned rather than
+            # holding the request open indefinitely (its read timeout still ends it).
+            _, still = await asyncio.wait(pending, timeout=ABANDON_WAIT_S)
+            if still:
+                log.warning("scouts: %d scout thread(s) did not return %.0fs after stop; "
+                            "abandoning them", len(still), ABANDON_WAIT_S)
     except asyncio.CancelledError:
         # The request itself was cancelled: stop the scouts and still wait for every thread
         # to return before propagating, so no decode continues after the handler unwinds.
@@ -894,6 +919,9 @@ async def run_scouts(
     finally:
         stop.set()
     for i, task in enumerate(tasks):
+        if not task.done():
+            results[i].status, results[i].error = "timeout", "scout thread abandoned after stop"
+            continue
         try:
             results[i] = task.result()
         except Exception as exc:  # noqa: BLE001

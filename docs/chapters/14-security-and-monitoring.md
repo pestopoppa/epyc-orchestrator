@@ -48,7 +48,7 @@ FORBIDDEN_CALLS = frozenset({
 })
 ```
 
-**20 Forbidden Dunder Attributes:**
+**26 Forbidden Attributes (dunders plus closure-cell/frame introspection):**
 ```python
 FORBIDDEN_ATTRS = frozenset({
     "__class__", "__bases__", "__subclasses__", "__mro__",
@@ -56,10 +56,13 @@ FORBIDDEN_ATTRS = frozenset({
     "__builtins__", "__closure__", "__func__", "__self__",
     "__module__", "__qualname__", "__annotations__",
     "__reduce__", "__reduce_ex__", "__getstate__", "__setstate__",
+    # closure-cell and frame introspection (non-dunder routes to live objects)
+    "cell_contents", "f_globals", "f_back", "f_locals",
+    "gi_frame", "tb_frame", "cr_frame",
 })
 ```
 
-The `ASTSecurityVisitor` checks for direct calls (`eval(...)`), attribute access (`obj.__class__`), attribute calls (`obj.__class__()`), and subscript bypass attempts (`obj['__class__']`).
+The `ASTSecurityVisitor` checks for direct calls (`eval(...)`), attribute access (`obj.__class__`), attribute calls (`obj.__class__()`), and subscript bypass attempts (`obj['__class__']`). It also refuses the attribute-by-name-string getters `operator.attrgetter`, `operator.methodcaller` and `string.Formatter.get_field` (any reference, alias or import), and a `str.format`/`format_map`/`vformat` call in code that also carries a string constant whose `{...}` field reaches a dunder (`'{0.__class__}'.format(x)` performs attribute access no `ast.Attribute` node shows). This is hardening, not a sandbox guarantee: CPython introspection has more routes than a static checker can enumerate. In particular the INF-78 context-bundle pull accounting counts cooperative access and is not enforced against adversarial code; the per-turn print cap is enforced independently (the REPL applies its own attach-time copy).
 
 ### Two-Layer Permission Model
 
@@ -114,6 +117,9 @@ FORBIDDEN_ATTRS = frozenset({
     "__builtins__", "__closure__", "__func__", "__self__",
     "__module__", "__qualname__", "__annotations__",
     "__reduce__", "__reduce_ex__", "__getstate__", "__setstate__",
+    # closure-cell and frame introspection (non-dunder routes to live objects)
+    "cell_contents", "f_globals", "f_back", "f_locals",
+    "gi_frame", "tb_frame", "cr_frame",
 })
 ```
 

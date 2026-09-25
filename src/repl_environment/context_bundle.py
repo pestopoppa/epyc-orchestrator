@@ -25,10 +25,18 @@ span pull covered, and bytes printed vs shown. opencode could only report which 
 were read, after the fact, by parsing tool parts. ``accounting()`` is echoed on the
 ChatResponse as ``context_pulls`` (schema ``epyc.orchestrator.context_pulls.v1``).
 
-The model-facing object (``repl_view``) holds NO attribute that reaches the data: its
-methods are closures over the bundle, and the REPL's AST checker refuses
-``__closure__``/``__globals__``/``__self__``/``__dict__``, so the only route to the
-text is the counted API.
+ENFORCEMENT SCOPE. The accounting counts COOPERATIVE access; it is not enforced against
+adversarial code. The model-facing object (``repl_view``) holds no plain attribute that
+reaches the data -- its methods are closures over the bundle -- and the REPL's AST checker
+refuses the known routes through them (``__closure__``/``cell_contents``/``__globals__``/
+``__self__``/``__dict__``, frame attributes, ``operator.attrgetter``/``methodcaller``,
+dunder fields in ``str.format`` templates). That is hardening, not a sandbox: CPython
+introspection has more routes than a static checker can enumerate, and code that reaches
+the live bundle can read around the accounting or mutate it. What does NOT depend on the
+bundle's integrity is the per-turn print cap: ``REPLEnvironment`` copies
+``print_cap_bytes`` (and the output-preview size derived from it) into its own private
+field when the bundle is attached and applies it through the module-level
+``cap_printed_output``, so a mutated bundle cannot lift the cap.
 """
 
 from __future__ import annotations
@@ -75,7 +83,29 @@ class ContextPullBudgetExceeded(RuntimeError):
 
 
 def _nbytes(text: str) -> int:
-    return len(text.encode("utf-8"))
+    # surrogatepass: a lone surrogate (e.g. from a JSON "\ud800" escape) is sized, not a crash
+    return len(text.encode("utf-8", errors="surrogatepass"))
+
+
+def cap_printed_output(output: str, cap_bytes: int) -> tuple[str, int, int, bool]:
+    """Cap one turn's printed output at ``cap_bytes`` (UTF-8), with a marker.
+
+    Returns ``(shown, printed_bytes, shown_bytes, capped)``. A plain function over an
+    explicit cap, so the REPL can apply the cap it copied at attach time without trusting
+    the bundle object (see *Enforcement scope* in the module docstring)."""
+    raw = output or ""
+    raw_bytes = _nbytes(raw)
+    cap = int(cap_bytes)
+    if raw_bytes <= cap:
+        return raw, raw_bytes, raw_bytes, False
+    head = raw.encode("utf-8", errors="surrogatepass")[:cap].decode("utf-8", errors="ignore")
+    shown_bytes = _nbytes(head)
+    shown = head + (
+        f"\n[print cap: showed {shown_bytes} of {raw_bytes} bytes this turn; the rest "
+        "is NOT in your context. Keep values in variables and print only what you "
+        "need: slice them, or context.get(name, max_chars=..., offset=...).]"
+    )
+    return shown, raw_bytes, shown_bytes, True
 
 
 def _dump(value: Any) -> str:
@@ -89,6 +119,8 @@ def _parse_json_text(name: str, text: str) -> Any:
         return json.loads(text)
     except (json.JSONDecodeError, ValueError):
         pass
+    except RecursionError as exc:
+        raise ValueError(f"context_bundle section {name!r}: JSON nested too deeply") from exc
     match = _JSON_FENCE.search(text)
     if match is None:
         raise ValueError(
@@ -99,6 +131,8 @@ def _parse_json_text(name: str, text: str) -> Any:
         return json.loads(match.group(1))
     except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"context_bundle section {name!r}: its ```json block does not parse: {exc}") from exc
+    except RecursionError as exc:
+        raise ValueError(f"context_bundle section {name!r}: its ```json block is nested too deeply") from exc
 
 
 @dataclass(frozen=True)
@@ -489,20 +523,15 @@ class ContextBundle:
                 self._turns_dropped += 1
 
     def cap_output(self, output: str) -> str:
-        """Cap one turn's printed output at ``print_cap_bytes`` (UTF-8), with a marker."""
-        raw = output or ""
-        raw_bytes = _nbytes(raw)
-        capped = raw_bytes > self.print_cap_bytes
-        if capped:
-            head = raw.encode("utf-8")[: self.print_cap_bytes].decode("utf-8", errors="ignore")
-            shown_bytes = _nbytes(head)
-            shown = head + (
-                f"\n[print cap: showed {shown_bytes} of {raw_bytes} bytes this turn; the rest "
-                "is NOT in your context. Keep values in variables and print only what you "
-                "need: slice them, or context.get(name, max_chars=..., offset=...).]"
-            )
-        else:
-            shown, shown_bytes = raw, raw_bytes
+        """Cap one turn's printed output at ``print_cap_bytes`` (UTF-8), with a marker,
+        and record it. The REPL does not call this: it caps with its own copy of the cap
+        (``cap_printed_output``) and reports through ``record_printed``."""
+        shown, raw_bytes, shown_bytes, capped = cap_printed_output(output, self.print_cap_bytes)
+        self.record_printed(raw_bytes, shown_bytes, capped)
+        return shown
+
+    def record_printed(self, raw_bytes: int, shown_bytes: int, capped: bool) -> None:
+        """Account one turn's printed vs shown bytes (the cap was applied by the caller)."""
         with self._lock:
             rec = self._current_turn()
             rec["printed_bytes"] += raw_bytes
@@ -512,7 +541,6 @@ class ContextBundle:
             self._shown_bytes += shown_bytes
             if capped:
                 self._turns_capped += 1
-        return shown
 
     def note_state_preview(self, nbytes: int) -> None:
         """Bytes of user-variable ``repr`` previews the REPL state block shows next turn."""
@@ -760,8 +788,9 @@ class ContextBundle:
 def repl_view(bundle: ContextBundle) -> Any:
     """The object bound to ``context`` in the REPL: the counted API and nothing else.
 
-    Methods are closures over ``bundle``; the instance has no ``__dict__`` and no
-    attribute that reaches the sections (see the module docstring)."""
+    Methods are closures over ``bundle``; the instance has no ``__dict__`` and no plain
+    attribute that reaches the sections. Accounting counts cooperative access; it is not
+    enforced against adversarial code (see *Enforcement scope* in the module docstring)."""
 
     def index(self) -> list[dict[str, Any]]:
         return bundle.index()
@@ -825,5 +854,6 @@ __all__ = [
     "MIN_PRINT_CAP_BYTES",
     "PULLS_SCHEMA",
     "Section",
+    "cap_printed_output",
     "repl_view",
 ]
