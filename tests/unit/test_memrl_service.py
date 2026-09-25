@@ -43,7 +43,7 @@ class StubQScorer:
         """Stub external result scoring."""
         return {"memories_created": 1, "memories_updated": 0}
 
-    def score_pending_tasks(self) -> dict:
+    def score_pending_tasks(self, should_stop=None, skip_task=None) -> dict:
         """Stub pending task scoring."""
         return {"tasks_processed": 5, "skipped": False}
 

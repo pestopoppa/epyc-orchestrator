@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -1263,9 +1263,19 @@ class QScorer:
         self.staged_scorer = staged_scorer
         self._last_score_time: Optional[datetime] = None
 
-    def score_pending_tasks(self) -> Dict[str, Any]:
+    def score_pending_tasks(
+        self,
+        should_stop: Optional[Callable[[], bool]] = None,
+        skip_task: Optional[Callable[[str], bool]] = None,
+    ) -> Dict[str, Any]:
         """
         Score all pending tasks from progress logs.
+
+        Args:
+            should_stop: Optional predicate checked before each task; True ends the batch
+                early (INF-78 OAB-3: a quiescent_after request took the post-reply hold).
+            skip_task: Optional predicate; True drops a task id from the backlog before the
+                batch is sliced (tasks whose scoring a quiescent request suppressed).
 
         Returns:
             Summary of scoring results
@@ -1282,6 +1292,8 @@ class QScorer:
 
         # Find unscored tasks
         unscored_task_ids = self.reader.get_unscored_tasks()
+        if skip_task is not None:
+            unscored_task_ids = [t for t in unscored_task_ids if not skip_task(t)]
 
         if not unscored_task_ids:
             return {"tasks_processed": 0, "message": "No pending tasks to score"}
@@ -1295,6 +1307,9 @@ class QScorer:
         }
 
         for task_id in unscored_task_ids[: self.config.batch_size]:
+            if should_stop is not None and should_stop():
+                results["stopped_early"] = True
+                break
             try:
                 task_result = self._score_task(task_id)
                 results["tasks_processed"] += 1

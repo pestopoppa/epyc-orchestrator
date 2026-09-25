@@ -693,6 +693,12 @@ class _ContextMixin:
         Returns:
             Script result.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('SCRIPT')
+        if _scope_denial is not None:
+            raise PermissionError(_scope_denial)
         if self.script_registry is None:
             raise RuntimeError("No script registry configured")
 

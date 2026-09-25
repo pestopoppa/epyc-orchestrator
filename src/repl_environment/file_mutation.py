@@ -47,6 +47,12 @@ class _FileMutationMixin:
         Returns:
             Confirmation message.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('log_append')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         import os as _os
         from datetime import datetime
@@ -109,6 +115,24 @@ class _FileMutationMixin:
         from pathlib import Path as P
 
         try:
+            # INF-78 OAB-1: a task_root-scoped request writes ONLY inside its task_root and only
+            # with edit_mode="direct" (no approval queue: the caller's git worktree is the
+            # review surface, so no .bak files are left in it either). edit_mode="none" and any
+            # path outside task_root (read_roots included) are refused before anything else.
+            from src.repl_environment.task_root import request_scope as _request_scope
+
+            _scope = _request_scope()
+            if _scope is not None:
+                from src.repl_environment.task_root import resolve_task_path as _rtp
+
+                _scope_denial = _scope.write_denial(_rtp(path))
+                if _scope_denial is not None:
+                    self._exploration_log.add_event(
+                        "file_write_safe", {"path": path, "size": len(content)}, "refused"
+                    )
+                    return f"[ERROR: {_scope_denial}]"
+                backup = False
+
             # Validate path
             is_valid, error = self._validate_file_path(path)
             if not is_valid:
@@ -161,6 +185,12 @@ class _FileMutationMixin:
         Returns:
             Path to the generated patch file.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('prepare_patch')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         import subprocess
         from datetime import datetime
@@ -209,6 +239,12 @@ class _FileMutationMixin:
         Returns:
             List of patches with metadata.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('list_patches')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         import json
 
@@ -257,6 +293,12 @@ class _FileMutationMixin:
         Returns:
             Application status.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('apply_approved_patch')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         import shutil
         import subprocess
@@ -315,6 +357,12 @@ class _FileMutationMixin:
         Returns:
             Rejection status.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('reject_patch')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         import shutil
         from datetime import datetime

@@ -23,7 +23,13 @@ def _solution_file_path(state: TaskState) -> str:
     """
     task_id = state.task_id or "scratch"
     safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in task_id)[:80]
-    from src.repl_environment.task_root import get_task_root, task_root_active
+    from src.repl_environment.task_root import get_task_root, request_scope, task_root_active
+    if request_scope() is not None:
+        # INF-78 OAB-1: a per-request task_root is the CALLER's git worktree (one AutoKernel
+        # lane per candidate); the orchestrator never drops its own artifact into it — every
+        # REPL turn persists here, which would dirty the candidate (and edit_mode='none' may not
+        # write at all). The model edits task files by their own paths, not via this anchor.
+        return f"/mnt/raid0/llm/tmp/{safe_id}_solution.py"
     if task_root_active():
         return str(get_task_root() / f"{safe_id}_solution.py")
     return f"/mnt/raid0/llm/tmp/{safe_id}_solution.py"

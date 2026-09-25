@@ -300,6 +300,12 @@ def score_completed_task(
     enabled = getattr(state, "q_scorer_enabled", False)
     if scorer is None or enabled is not True:
         return
+    # INF-78 OAB-3 (R2): a quiescent_after request starts no trailing scoring, and its task
+    # is excluded from the idle backlog so it is not scored later either. No-op otherwise.
+    from src.runtime import quiescence
+
+    if quiescence.suppress_scoring(task_id):
+        return
     _get_score_pool().submit(_do_score, state, task_id)
 
 
@@ -348,6 +354,10 @@ def score_completed_task_with_mode(
     scorer = getattr(state, "q_scorer", None)
     enabled = getattr(state, "q_scorer_enabled", False)
     if scorer is None or enabled is not True:
+        return
+    from src.runtime import quiescence
+
+    if quiescence.suppress_scoring(task_id):
         return
     _get_score_pool().submit(_do_score, state, task_id, mode)
 
@@ -431,12 +441,26 @@ async def background_cleanup(state: "AppState") -> None:
             if not _background_scoring_enabled():
                 continue
 
+            # INF-78 OAB-3 (R2): stay quiet while any quiescent_after request (served by ANY
+            # worker) holds the post-reply window; the file-based hold is cross-process.
+            from src.runtime import quiescence
+
+            if quiescence.quiet_active():
+                continue
+
             # Only run when idle and Q-scorer is available
             # Note: Don't call ensure_memrl_initialized() here - only init on real use
             if state.active_requests == 0 and state.q_scorer and state.q_scorer_enabled:
                 # Score a small batch of pending tasks (run in thread to avoid
-                # blocking the event loop — this does DB reads + embeddings)
-                results = await asyncio.to_thread(state.q_scorer.score_pending_tasks)
+                # blocking the event loop — this does DB reads + embeddings).
+                # should_stop ends an in-flight batch between tasks when a quiescent request
+                # arrives; skip_task keeps its suppressed tasks out of the backlog for good.
+                quiescence.prune_exclusions()
+                results = await asyncio.to_thread(
+                    state.q_scorer.score_pending_tasks,
+                    should_stop=quiescence.quiet_active,
+                    skip_task=quiescence.is_excluded,
+                )
 
                 if results and not results.get("skipped"):
                     tasks_processed = results.get("tasks_processed", 0)

@@ -16,7 +16,7 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -25,7 +25,11 @@ class QScorerProtocol(Protocol):
 
     def _score_task(self, task_id: str, mode_context: str | None = None) -> Any: ...
     def score_external_result(self, **kwargs: Any) -> dict: ...
-    def score_pending_tasks(self) -> dict: ...
+    def score_pending_tasks(
+        self,
+        should_stop: Callable[[], bool] | None = None,
+        skip_task: Callable[[str], bool] | None = None,
+    ) -> dict: ...
 
 
 @runtime_checkable

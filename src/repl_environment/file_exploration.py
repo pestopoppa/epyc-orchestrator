@@ -251,7 +251,12 @@ class _FileExplorationMixin:
 
         try:
             entries = []
-            for entry in os.scandir(path):
+            # List the directory that was VALIDATED: a relative path resolves under the task
+            # root when one is active (BEP env / INF-78 request scope); inactive, this is
+            # os.path.realpath(path) — the same directory the raw path named.
+            from src.repl_environment.task_root import resolve_task_path
+
+            for entry in os.scandir(resolve_task_path(path)):
                 entry_info = {
                     "name": entry.name,
                     "type": "dir" if entry.is_dir() else "file",

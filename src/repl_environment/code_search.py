@@ -229,6 +229,12 @@ class _CodeSearchMixin:
         Returns:
             JSON with matching doc passages and metadata.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('doc_search')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         # AP-54: the docs index covers project docs and handoffs; refused while
         # the eval knowledge fence is armed (no-op otherwise).
         from src.repl_environment.knowledge_fence import check_tool_call

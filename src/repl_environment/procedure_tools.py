@@ -50,6 +50,12 @@ class _ProcedureToolsMixin:
         Returns:
             JSON string with execution result.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('run_procedure')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         import json
 
@@ -146,6 +152,12 @@ class _ProcedureToolsMixin:
         Returns:
             Checkpoint ID that can be used for restore.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('checkpoint_create')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         return self._run_procedure("checkpoint_create", name=name)
 
@@ -158,6 +170,12 @@ class _ProcedureToolsMixin:
         Returns:
             Restoration status.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('checkpoint_restore')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         import json
 
@@ -233,6 +251,12 @@ class _ProcedureToolsMixin:
         Returns:
             Success/failure status.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('registry_update')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         return self._run_procedure("update_registry", key_path=key_path, value=value)
 
@@ -252,6 +276,12 @@ class _ProcedureToolsMixin:
         Returns:
             JSON with benchmark results.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('benchmark_run')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         return self._run_procedure(
             "benchmark_model",
@@ -321,6 +351,12 @@ class _ProcedureToolsMixin:
         Returns:
             JSON with gate results.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('gate_run')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         return self._run_procedure(
             "gate_runner",

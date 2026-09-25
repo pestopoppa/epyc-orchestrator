@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import ClassVar, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,17 @@ class ChatRequest(BaseModel):
     real_mode: bool = Field(
         default=False, description="Enable real inference with RadixAttention caching"
     )
-    max_turns: int = Field(default=15, ge=1, le=50, description="Maximum orchestration turns")
+    # INF-78 OAB-1 / R3: 50 stays the ceiling for ordinary traffic; a task_root-scoped agentic
+    # caller (the AutoKernel planner/author, ~60 steps) may declare up to MAX_TURNS_SCOPED.
+    # Enforced in _validate_task_scope below.
+    MAX_TURNS_UNSCOPED: ClassVar[int] = 50
+    MAX_TURNS_SCOPED: ClassVar[int] = 100
+    max_turns: int = Field(
+        default=15,
+        ge=1,
+        le=100,
+        description="Maximum orchestration turns (<=50; <=100 only when task_root is set)",
+    )
     max_tokens: int | None = Field(
         default=None,
         ge=1,
@@ -290,6 +300,44 @@ class ChatRequest(BaseModel):
             "unchanged. Older API builds ignore the field (extra='ignore')."
         ),
     )
+    # ── INF-78 OAB-1: per-request task scope ─────────────────────────────────
+    task_root: str | None = Field(
+        default=None,
+        description=(
+            "INF-78 OAB-1. Absolute path of an existing directory strictly below the llm "
+            "root or /tmp (never containing the orchestrator project root) that scopes THIS "
+            "request: model file tools resolve relative paths under it, reads are confined to "
+            "it plus read_roots, run_shell runs in it, code_search greps it. Per request "
+            "(ContextVar), never process-wide; overrides ORCHESTRATOR_EDIT_ROOT. Absent: "
+            "production behaviour, unchanged."
+        ),
+    )
+    edit_mode: Literal["none", "direct"] = Field(
+        default="none",
+        description=(
+            "INF-78 OAB-1. 'none' (default): the request cannot write any file. 'direct': "
+            "file_write_safe writes inside task_root immediately (no approval queue, no .bak "
+            "files); every other write surface stays refused. 'direct' requires task_root."
+        ),
+    )
+    read_roots: list[str] | None = Field(
+        default=None,
+        description=(
+            "INF-78 OAB-1. Extra existing directories (absolute, strictly below the llm root "
+            "or /tmp) the request may READ in addition to task_root. Never writable. "
+            "Requires task_root."
+        ),
+    )
+    quiescent_after: bool = Field(
+        default=False,
+        description=(
+            "INF-78 OAB-3 (R2). True: the orchestrator starts NO fire-and-forget work for "
+            "this request (MemRL q-scoring, architect prewarm, typed-decision shadow, KV "
+            "migration), and the idle-time scoring loop stays quiet for a window after the "
+            "reply, so nothing orchestrator-owned accrues CPU after /chat returns. The "
+            "response echoes what was suppressed in `quiescence`."
+        ),
+    )
     output_schema: dict | None = Field(
         default=None,
         description="Optional JSON Schema for the agent's FINAL() value. "
@@ -297,6 +345,30 @@ class ChatRequest(BaseModel):
         "the schema in its initial prompt and must call FINAL(json.dumps(value)). "
         "Validation failure injects a retry-with-error message into the next turn.",
     )
+
+    @model_validator(mode="after")
+    def _validate_task_scope(self):
+        """INF-78 OAB-1: task_root / edit_mode / read_roots / max_turns coherence."""
+        if self.task_root is None:
+            if self.edit_mode != "none":
+                raise ValueError("edit_mode='direct' requires task_root")
+            if self.read_roots:
+                raise ValueError("read_roots requires task_root")
+            if self.max_turns > self.MAX_TURNS_UNSCOPED:
+                raise ValueError(
+                    f"max_turns > {self.MAX_TURNS_UNSCOPED} requires task_root "
+                    f"(scoped ceiling {self.MAX_TURNS_SCOPED})"
+                )
+            return self
+        from src.repl_environment.task_root import validate_scope_dir
+
+        self.task_root = validate_scope_dir(self.task_root)
+        if self.read_roots:
+            self.read_roots = [
+                validate_scope_dir(r, field="read_roots", writable_root=False)
+                for r in self.read_roots
+            ]
+        return self
 
 
 class RewardRequest(BaseModel):

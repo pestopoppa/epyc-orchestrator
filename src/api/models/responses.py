@@ -118,6 +118,24 @@ class ChatResponse(BaseModel):
         ),
         **_omit_when_none(),
     )
+    task_scope: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "INF-78 OAB-1 echo, present only when the request carried task_root: "
+            "task_root, edit_mode, read_roots as the server resolved them (realpaths)."
+        ),
+        **_omit_when_none(),
+    )
+    quiescence: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "INF-78 OAB-3 echo, present only when the request carried quiescent_after=true: "
+            "suppressed (labels of fire-and-forget work NOT started: memrl_q_scoring, "
+            "architect_prewarm, typed_decisions_shadow, kv_migration, kv_reverse_migration), "
+            "suppressed_count, hold_after_s (the idle-scoring hold after the reply)."
+        ),
+        **_omit_when_none(),
+    )
     contention_gate: dict[str, Any] | None = Field(
         default=None,
         description=(

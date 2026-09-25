@@ -38,6 +38,7 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
+from src.runtime.quiescence import suppress as _quiescence_suppress
 from src.scheduling import gate_observation
 
 if TYPE_CHECKING:
@@ -484,7 +485,9 @@ class ConcurrencyAwareBackend:
                             migrate_target = i
                             break
 
-                    if migrate_target is not None:
+                    # INF-78 OAB-3 (R2): a quiescent_after request starts no KV-migration
+                    # thread (it outlives the reply); it just takes full without migrating.
+                    if migrate_target is not None and not _quiescence_suppress("kv_migration"):
                         old_session = self._full_last_session
                         self._migrations += 1
                         self._set_session_state(
@@ -770,7 +773,12 @@ class ConcurrencyAwareBackend:
         # to full when load drops, cooldown elapsed, session is warm, and the
         # per-session migration cap hasn't been exceeded. Spawned as a daemon
         # thread so the dispatcher's finally-block stays fast.
-        if not is_full and self._reverse_migration_enabled():
+        if (
+            not is_full
+            and self._reverse_migration_enabled()
+            # INF-78 OAB-3 (R2): quiescent_after → no reverse-migration thread at request end.
+            and not _quiescence_suppress("kv_reverse_migration")
+        ):
             self._maybe_spawn_reverse_migration(idx)
 
     @staticmethod
@@ -1661,6 +1669,9 @@ class ConcurrencyAwareBackend:
                     # Find an idle quarter in preference order (disjoint first)
                     for q_idx in self._quarter_preference_order:
                         if not self._quarter_active[q_idx]:
+                            # INF-78 OAB-3 (R2): quiescent_after → no migration thread.
+                            if _quiescence_suppress("kv_migration"):
+                                break
                             migrate_old_session = old_session
                             migrate_target_quarter = q_idx
                             # Reserve the quarter so concurrent dispatch doesn't grab it

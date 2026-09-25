@@ -516,6 +516,21 @@ class REPLEnvironment(
         )
 
         resolved = resolve_task_path(path)
+        from src.repl_environment.task_root import request_scope
+
+        scope = request_scope()
+        if scope is not None:
+            # INF-78 OAB-1: a task_root-scoped request reads ONLY its root plus the explicit
+            # read_roots (writes are gated separately in _file_write_safe).
+            denial = scope.read_denial(resolved)
+            if denial is not None:
+                return False, denial
+            from src.repl_environment.knowledge_fence import check_path
+
+            fence_denial = check_path(resolved)
+            if fence_denial is not None:
+                return False, fence_denial
+            return True, None
         if task_root_active():
             # ISOLATION (BEP/DCP A/B): the model may touch ONLY the scratch task-root. The prior
             # code APPENDED the scratch root to the global allowed set (llm_root + /tmp), but the

@@ -538,6 +538,14 @@ class ToolRegistry:
         from src.repl_environment import knowledge_fence as _fence
 
         _fence_denial = _fence.check_tool_call(tool_name, kwargs)
+        _denial_key = "eval_fence"
+        if _fence_denial is None:
+            # INF-78 OAB-1: a task_root-scoped /chat request runs only read-only tools, with
+            # path arguments confined to task_root + read_roots. No-op without a scope.
+            from src.repl_environment.task_root import check_registry_tool_scope
+
+            _fence_denial = check_registry_tool_scope(tool_name, kwargs, tool.side_effects)
+            _denial_key = "task_scope"
         if _fence_denial is not None:
             elapsed = (time.perf_counter() - start) * 1000
             self._record_invocation(
@@ -560,9 +568,9 @@ class ToolRegistry:
                     status="error",
                     output=_fence_denial,
                     side_effects_declared=tool.side_effects,
-                    metadata={"elapsed_ms": elapsed, "eval_fence": "denied"},
+                    metadata={"elapsed_ms": elapsed, _denial_key: "denied"},
                 )
-            return {"success": False, "error": _fence_denial, "eval_fence": "denied"}
+            return {"success": False, "error": _fence_denial, _denial_key: "denied"}
 
         # Check approval requirement for destructive tools
         if use_structured and tool.destructive and _get_features().side_effect_tracking:

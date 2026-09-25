@@ -558,7 +558,11 @@ def _plan_review_gate(
     # (chat.py and stream_adapter.py) where the pre-review decision and the
     # primitives coexist. It submits and returns; it never mutates routing,
     # never raises, and is skipped entirely — no import, no call — when off.
-    if features().typed_decisions_shadow:
+    from src.runtime import quiescence as _quiescence
+
+    # INF-78 OAB-3 (R2): the shadow runs on a daemon executor after the reply; a
+    # quiescent_after request skips it (suppress() is only consulted when the flag is on).
+    if features().typed_decisions_shadow and not _quiescence.suppress("typed_decisions_shadow"):
         from src.typed_decisions.shadow import submit_route_shadow
 
         submit_route_shadow(

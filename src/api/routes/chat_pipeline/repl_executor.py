@@ -603,6 +603,11 @@ async def _execute_repl_body(
     max_turns = (
         LONG_CONTEXT_CONFIG["max_turns"] if use_long_context_exploration else request.max_turns
     )
+    if getattr(request, "task_root", None):
+        # INF-78 OAB-1 / R3: a task_root-scoped agentic caller declares its own turn budget
+        # (up to ChatRequest.MAX_TURNS_SCOPED). Its 35-75k-char prompt always crosses the
+        # long-context threshold, whose 8-turn cap would otherwise silently replace it.
+        max_turns = request.max_turns
 
     # ── Run orchestration graph ──────────────────────────────────────
     # The graph replaces the manual for-loop with typed node transitions.
@@ -680,8 +685,13 @@ async def _execute_repl_body(
     graph_result = None
     _schema_valid: bool | None = None
     _schema_invalid_reason: str | None = None
+    # Each schema retry re-enters the graph with task_state.turns reset to 0 (a fresh turn
+    # budget), so graph_result.turns only counts the LAST attempt. Sum them for the reported
+    # `turns` (INF-78 OAB-2 found retried calls undercounted).
+    _turns_all_attempts = 0
     for _attempt in range(_max_validation_attempts):
         graph_result = await run_task(task_state, task_deps, start_role=initial_role)
+        _turns_all_attempts += int(getattr(graph_result, "turns", 0) or 0)
         if not _schema or not graph_result.answer:
             break
         _ok, _err, _ = _validate_final_answer(graph_result.answer, _schema)
@@ -722,7 +732,7 @@ async def _execute_repl_body(
             task_state.role_history = [str(initial_role)]
 
     answer = graph_result.answer
-    turns = graph_result.turns
+    turns = max(int(graph_result.turns or 0), _turns_all_attempts)
     role_history = graph_result.role_history or [str(initial_role)]
     current_role = role_history[-1] if role_history else str(initial_role)
     delegation_events = graph_result.delegation_events

@@ -218,6 +218,13 @@ def _maybe_prewarm_architect(state: "TaskState") -> None:
         if complexity != TaskComplexity.COMPLEX:
             return
 
+        # INF-78 OAB-3 (R2): a quiescent_after request starts no fire-and-forget prewarm
+        # (it would prefill the architect after the reply). No-op otherwise.
+        from src.runtime import quiescence
+
+        if quiescence.suppress("architect_prewarm"):
+            return
+
         from src.services.escalation_prewarmer import get_shared_prewarmer
 
         prewarmer = get_shared_prewarmer()
@@ -564,6 +571,13 @@ async def _maybe_batch_edit_turn(
     from src.features import features as _get_features
 
     if not _get_features().batch_edit_mode:
+        return None
+    from src.repl_environment.task_root import request_scope as _request_scope
+
+    _scope = _request_scope()
+    if _scope is not None and not _scope.can_write:
+        # INF-78 OAB-1: edit_mode='none' — a patchset may not be applied; the REPL path (whose
+        # write tools refuse) handles the turn.
         return None
     state = ctx.state
     turn = getattr(state, "turns", None)

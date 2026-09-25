@@ -541,6 +541,12 @@ class _CombinedOpsMixin:
         Returns:
             Structured file list in JSON or TOON format.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('workspace_scan')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         if not _feature_enabled():
             return "[ERROR: Combined ops disabled. Set REPL_COMBINED_OPS=1 to enable.]"
 

@@ -202,6 +202,15 @@ class _DocumentToolsMixin:
             return f"[ERROR: {error}]"
 
         if output_path:
+            # INF-78 OAB-1: output_path is a WRITE; a task_root-scoped request gates it like
+            # file_write_safe (no-op without a request scope).
+            from src.repl_environment.task_root import request_scope, resolve_task_path
+
+            _scope = request_scope()
+            if _scope is not None:
+                _scope_denial = _scope.write_denial(resolve_task_path(output_path))
+                if _scope_denial is not None:
+                    return f"[ERROR: {_scope_denial}]"
             is_valid, error = self._validate_file_path(output_path)
             if not is_valid:
                 return f"[ERROR: {error}]"

@@ -687,14 +687,20 @@ def resolve_timeout(request: ChatRequest, routing_decision: list) -> int:
     circuit breaker, and the breaker then served in-band ``[ERROR: ...]`` text
     as answers plus a silent role fallback. Honoring the eval batch's
     self-declared budget lets the long-but-legitimate call finish instead of
-    being force-failed. Only self-declared ``eval_batch`` requests can lengthen
-    their budget; all other traffic keeps the exact DOWN-only ``min`` clamp.
+    being force-failed. Only self-declared ``eval_batch`` requests and
+    ``task_root``-scoped agentic requests (INF-78 OAB-1, R3) can lengthen their
+    budget; all other traffic keeps the exact DOWN-only ``min`` clamp.
     """
     role_str = str(routing_decision[0]) if routing_decision else str(Role.FRONTDOOR)
     timeout_s = role_timeout_for(role_str)
     if request.timeout_s is not None:
-        if str(getattr(request, "workload_class", "") or "") == "eval_batch":
-            # Self-declared eval budget: may EXTEND beyond the role SLA.
+        if (
+            str(getattr(request, "workload_class", "") or "") == "eval_batch"
+            # INF-78 OAB-1 / R3: a task_root-scoped agentic call (the AutoKernel planner /
+            # author, ~30-45 min for ~60 steps) self-declares its budget the same way.
+            or getattr(request, "task_root", None)
+        ):
+            # Self-declared eval / scoped-agent budget: may EXTEND beyond the role SLA.
             timeout_s = max(1, int(request.timeout_s))
         else:
             # Interactive / all other traffic: DOWN-only clamp (unchanged).

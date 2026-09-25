@@ -210,6 +210,13 @@ class _ExternalAccessMixin:
             fence_denial = check_shell(parts, str(_shell_cwd))
             if fence_denial is not None:
                 return f"[ERROR: {fence_denial}]"
+            # INF-78 OAB-1: task_root-scoped request — no shell writers, reads confined to
+            # task_root + read_roots (no-op without a request scope).
+            from src.repl_environment.task_root import check_shell_scope
+
+            scope_denial = check_shell_scope(parts, str(_shell_cwd))
+            if scope_denial is not None:
+                return f"[ERROR: {scope_denial}]"
             # AP-54: an ARMED eval request runs the command under kernel
             # enforcement (Landlock) when available; otherwise, and in
             # production, the launch is unchanged.
@@ -265,6 +272,12 @@ class _ExternalAccessMixin:
         Returns:
             Combined stdout + stderr output.
         """
+        # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
+        from src.repl_environment.task_root import scope_refusal as _scope_refusal
+
+        _scope_denial = _scope_refusal('run_python_code')
+        if _scope_denial is not None:
+            return f"[ERROR: {_scope_denial}]"
         from src.repl_environment.unicode_sanitizer import sanitize_code_unicode
 
         code = sanitize_code_unicode(code)

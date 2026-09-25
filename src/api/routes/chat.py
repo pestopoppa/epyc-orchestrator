@@ -35,6 +35,8 @@ from src.api.state import AppState
 from src.config import get_config
 from src.constants import TASK_IR_OBJECTIVE_LEN
 from src.repl_environment import knowledge_fence
+from src.repl_environment import task_root as task_root_mod
+from src.runtime import quiescence
 from src.scheduling import contention_gate_capture, gate_observation
 from src.delegation_reports import load_report
 from src.task_ir import canonicalize_task_ir
@@ -278,12 +280,34 @@ async def chat(
     fence_carrier = knowledge_fence.begin(request.eval_fence)
     if fence_carrier is None and request.workload_class == "eval_batch":
         _note_unfenced_eval_request(request)
+    # INF-78 OAB-1: per-request task scope (ContextVar — concurrent requests never share it).
+    # task_root was validated by ChatRequest; None installs nothing (production unchanged).
+    # INF-78 OAB-3 (R2): suppress fire-and-forget work for this request; False is a no-op.
+    # Both are installed INSIDE the try so the finally always clears them (and decrements
+    # the active-request count) even if installation fails.
+    task_scope = None
+    quiescence_carrier = None
     try:
+        try:
+            task_scope = task_root_mod.begin_request_scope(
+                request.task_root, request.edit_mode, request.read_roots
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        quiescence_carrier = quiescence.begin(
+            request.quiescent_after,
+            request_id=request.request_id or "",
+            budget_s=request.timeout_s,
+        )
         with prompt_dir_override(prompt_dir):
             response = await _handle_chat(request, state, cancel_event=cancel_event)
         response.contention_gate = gate_observation.snapshot()
         if fence_carrier is not None:
             response.eval_fence = fence_carrier.snapshot()
+        if task_scope is not None:
+            response.task_scope = task_scope.snapshot()
+        if quiescence_carrier is not None:
+            response.quiescence = quiescence_carrier.snapshot()
         # SC19 — persist the echoed verdict for the vidya belief kernel. Opt-in via
         # ORCHESTRATOR_CONTENTION_GATE_CAPTURE, never raises; the JSONL capture is the
         # durable bytes the adapter projects from. Both exits below (error JSONResponse
@@ -313,6 +337,9 @@ async def chat(
         # this request's gate verdict to the next caller on the same context.
         gate_observation.clear()
         knowledge_fence.clear()
+        task_root_mod.clear_request_scope()
+        quiescence.finish(quiescence_carrier)
+        quiescence.clear()
         if cancel_event.is_set() and handler_outcome == "failed":
             handler_outcome = "disconnected"
         emit_lifecycle_transition(
@@ -997,6 +1024,13 @@ async def _handle_chat(
             from src.repl_environment.task_root import task_root_active, get_task_root
             from src.chat_completions_roles import chat_completions_roles
 
+            _et_scope = task_root_mod.request_scope()
+            if _et_scope is not None and not _et_scope.can_write:
+                # INF-78 OAB-1: a task_root-scoped request with edit_mode='none' cannot write.
+                raise HTTPException(
+                    status_code=412,
+                    detail="force_mode='edit' requires edit_mode='direct' on a task_root-scoped request",
+                )
             if not edit_transaction_enabled() or not task_root_active():
                 missing = []
                 if not edit_transaction_enabled():
