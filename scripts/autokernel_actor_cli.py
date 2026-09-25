@@ -14,6 +14,8 @@ Contract::
         [--mode repl|auto] [--max-turns N] [--timeout-s S] [--provenance-out <file>]
         [--request-id ID] [--context-bundle <file> [--context-print-cap-bytes N]
         [--context-pull-budget-bytes N]]
+        [--scout-targets <file>] [--scouts-max N] [--scout-role ROLE]
+        [--scout-max-turns N] [--scout-budget-s S]
 
     stdin   the prompt, UTF-8, verbatim
     stdout  exactly one JSON object (the reply), or nothing
@@ -93,6 +95,8 @@ FIELDS: dict[str, str] = {
     "context_bundle": "context_bundle",            # dict: the bundle payload
     "context_print_cap_bytes": "context_print_cap_bytes",
     "context_pull_budget_bytes": "context_pull_budget_bytes",
+    # --- OAB-8 (new) ---
+    "scouts": "scouts",                   # {"enabled", "targets", "max", ...}: server-run scouts
 }
 #: ChatResponse key through which the server acknowledges (and accounts for) a bundle.
 ACK_CONTEXT_BUNDLE = "context_pulls"
@@ -119,7 +123,13 @@ RESPONSE_KEYS = ("routed_to", "role_history", "routing_strategy", "turns", "mode
                  "tool_output_tokens", "compaction_triggered", "compaction_tokens_saved",
                  "tool_results_cleared", "elapsed_seconds", "prompt_eval_ms", "generation_ms",
                  "predicted_tps", "error_code", "error_detail", ACK_TASK_ROOT, "edit_mode",
-                 ACK_CONTEXT_BUNDLE)
+                 ACK_CONTEXT_BUNDLE,
+                 # OAB-8: scout provenance (bounded server-side: previews + digests, never
+                 # the full summaries).
+                 "scouts")
+#: OAB-8: most targets forwarded (the server caps `scouts.targets` at 16).
+MAX_SCOUT_TARGETS = 16
+SCOUT_TARGET_KEYS = ("symbol", "file", "share", "label", "dso")
 ERROR_DETAIL_CHARS = 2000
 #: Extra seconds the client waits past the server's own budget before giving up.
 CLIENT_SLACK_S = 30
@@ -225,11 +235,44 @@ def schema_valid(value: Any, schema: Mapping[str, Any]) -> bool:
 # --------------------------------------------------------------------------- request
 
 
+def load_scout_targets(path: Path) -> list[dict[str, Any]]:
+    """`--scout-targets`: a JSON list of targets, or an object with a `targets` list.
+    Each target keeps only SCOUT_TARGET_KEYS and needs a symbol or a file; the list is
+    truncated to MAX_SCOUT_TARGETS. Raises ValueError on a malformed file."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    items = data.get("targets") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        raise ValueError("scout targets must be a JSON list or {\"targets\": [...]}")
+    targets = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        target = {k: item[k] for k in SCOUT_TARGET_KEYS if item.get(k) not in (None, "")}
+        if target.get("symbol") or target.get("file"):
+            targets.append(target)
+    return targets[:MAX_SCOUT_TARGETS]
+
+
+def build_scouts(targets: list[dict[str, Any]], *, max_scouts: int | None = None,
+                 role: str | None = None, max_turns: int | None = None,
+                 budget_s: float | None = None) -> dict[str, Any] | None:
+    """The `scouts` request field, or None when there is nothing to scout (default off)."""
+    if not targets:
+        return None
+    scouts: dict[str, Any] = {"enabled": True, "targets": targets}
+    for key, value in (("max", max_scouts), ("role", role), ("max_turns", max_turns),
+                       ("budget_s", budget_s)):
+        if value is not None:
+            scouts[key] = value
+    return scouts
+
+
 def build_request(prompt: str, *, root: str, read_only: bool, schema: Mapping[str, Any] | None,
                   role: str, max_turns: int, timeout_s: int, request_id: str,
                   mode: str = FORCE_MODE, context_bundle: Mapping[str, Any] | None = None,
                   print_cap_bytes: int | None = None,
-                  pull_budget_bytes: int | None = None) -> dict[str, Any]:
+                  pull_budget_bytes: int | None = None,
+                  scouts: Mapping[str, Any] | None = None) -> dict[str, Any]:
     body: dict[str, Any] = {
         FIELDS["prompt"]: prompt,
         FIELDS["real_mode"]: True,
@@ -254,6 +297,8 @@ def build_request(prompt: str, *, root: str, read_only: bool, schema: Mapping[st
             body[FIELDS["context_print_cap_bytes"]] = int(print_cap_bytes)
         if pull_budget_bytes is not None:
             body[FIELDS["context_pull_budget_bytes"]] = int(pull_budget_bytes)
+    if scouts:
+        body[FIELDS["scouts"]] = dict(scouts)
     return body
 
 
@@ -339,6 +384,13 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                         help="per-turn cap on printed REPL output with a bundle (server default 4096)")
     parser.add_argument("--context-pull-budget-bytes", type=int,
                         help="cap on bytes pulled from the bundle over the whole call")
+    # OAB-8: orchestrator-run read-only scouts before the planner turn (default off).
+    parser.add_argument("--scout-targets", type=Path,
+                        help="JSON list of {symbol,file,share,label,dso} targets; enables scouts")
+    parser.add_argument("--scouts-max", type=int, help="most scouts (server default 4, le=8)")
+    parser.add_argument("--scout-role", help="role whose server runs the scouts")
+    parser.add_argument("--scout-max-turns", type=int)
+    parser.add_argument("--scout-budget-s", type=float)
     return parser.parse_args(argv)
 
 
@@ -402,11 +454,19 @@ def main(argv: list[str] | None = None, *, stdin=None, stdout=None, stderr=None)
     prompt = stdin.read()
     if not prompt.strip():
         return finish(1, None, error="empty prompt on stdin")
+    scouts = None
+    if args.scout_targets is not None:
+        try:
+            scouts = build_scouts(load_scout_targets(args.scout_targets),
+                                  max_scouts=args.scouts_max, role=args.scout_role,
+                                  max_turns=args.scout_max_turns, budget_s=args.scout_budget_s)
+        except (OSError, ValueError) as exc:
+            return finish(1, None, error=f"unreadable --scout-targets {args.scout_targets}: {exc}")
     body = build_request(prompt, root=args.root, read_only=args.read_only, schema=schema,
                          role=args.role, max_turns=args.max_turns, timeout_s=args.timeout_s,
                          request_id=request_id, mode=args.mode, context_bundle=bundle,
                          print_cap_bytes=args.context_print_cap_bytes,
-                         pull_budget_bytes=args.context_pull_budget_bytes)
+                         pull_budget_bytes=args.context_pull_budget_bytes, scouts=scouts)
     sidecar["request"] = {
         "fields_sent": sorted(body),
         "task_root": args.root,
@@ -422,6 +482,12 @@ def main(argv: list[str] | None = None, *, stdin=None, stdout=None, stderr=None)
         "schema_sha256": (hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest()
                           if schema is not None else None),
         "context_bundle": bundle_ref,
+        "scouts": (None if scouts is None else {
+            "targets": len(scouts["targets"]),
+            "targets_sha256": hashlib.sha256(
+                json.dumps(scouts["targets"], sort_keys=True).encode()).hexdigest(),
+            **{k: v for k, v in scouts.items() if k not in ("targets", "enabled")},
+        }),
     }
     try:
         status, resp = post_chat(args.url, body, timeout_s=args.timeout_s + CLIENT_SLACK_S)

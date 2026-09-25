@@ -24,6 +24,7 @@ Module layout:
     vision_stage.py      -- Stage 6: vision preprocessing
     delegation_stage.py  -- Stage 7: architect delegation
     proactive_stage.py   -- Stage 7.5: proactive parallel delegation
+    scout_stage.py       -- Stage 6.8: INF-78 OAB-8 read-only scouts before the planner turn
     direct_stage.py      -- Stage 9: direct LLM call
     repl_executor.py     -- Stage 10: REPL orchestration loop
     stream_adapter.py    -- SSE streaming adapter (unified_streaming flag)

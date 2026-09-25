@@ -65,6 +65,51 @@ def _normalize_role_field(value: str | None, field_name: str) -> str | None:
     return ""
 
 
+class ScoutTargetSpec(BaseModel):
+    """INF-78 OAB-8: one scout target — a profile hotspot and/or a candidate source file."""
+
+    symbol: str | None = Field(default=None, max_length=512,
+                               description="Profile symbol (perf/nsys name); normalised for a definition grep")
+    file: str | None = Field(default=None, max_length=1024,
+                             description="Candidate source file, relative to task_root or absolute inside the scope")
+    share: float | None = Field(default=None, ge=0.0, le=1.0,
+                                description="Profile share as a fraction (sampled_period_fraction)")
+    label: str | None = Field(default=None, max_length=200)
+    dso: str | None = Field(default=None, max_length=512)
+
+    @model_validator(mode="after")
+    def _needs_symbol_or_file(self):
+        if not (self.symbol or self.file):
+            raise ValueError("a scout target needs a symbol or a file")
+        return self
+
+
+class ScoutsSpec(BaseModel):
+    """INF-78 OAB-8: orchestrator-run read-only scouts before the planner turn.
+
+    Absent or ``enabled=false``: nothing runs and the request is unchanged."""
+
+    enabled: bool = Field(default=False)
+    targets: list[ScoutTargetSpec] = Field(default_factory=list, max_length=16)
+    max: int = Field(default=4, ge=1, le=8,
+                     description="Most scouts to run; the live /slots cap may run fewer")
+    role: str | None = Field(default=None, max_length=64,
+                             description="Role whose server the scouts use; default: force_role, "
+                                         "else the routed role")
+    max_turns: int = Field(default=8, ge=1, le=12)
+    summary_tokens: int = Field(default=1500, ge=128, le=4096)
+    budget_s: float = Field(default=240.0, ge=5.0, le=900.0,
+                            description="Wall budget for the whole scout stage")
+    reserve_slots: int = Field(default=1, ge=1, le=8,
+                               description="Server slots always left free (>=1)")
+    enable_thinking: bool = Field(default=False)
+
+    @field_validator("role")
+    @classmethod
+    def _normalize_scout_role(cls, value: str | None) -> str | None:
+        return _normalize_role_field(value, "scouts.role") or None
+
+
 class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
 
@@ -367,6 +412,16 @@ class ChatRequest(BaseModel):
         "the context_bundle over the whole call (a pull past it raises in the REPL). "
         "Requires context_bundle.",
     )
+    scouts: ScoutsSpec | None = Field(
+        default=None,
+        description=(
+            "INF-78 OAB-8. When enabled, the orchestrator runs one read-only scout per target "
+            "(profile hotspot / candidate file) concurrently BEFORE the planner turn, capped by "
+            "the target server's free /slots minus reserve_slots, and prepends their labelled, "
+            "sized summaries to the prompt. Requires task_root (scouts read only inside the "
+            "task scope). The response echoes provenance in `scouts`. Absent: unchanged."
+        ),
+    )
     output_schema: dict | None = Field(
         default=None,
         description="Optional JSON Schema for the agent's FINAL() value. "
@@ -401,6 +456,8 @@ class ChatRequest(BaseModel):
     def _validate_task_scope(self):
         """INF-78 OAB-1: task_root / edit_mode / read_roots / max_turns coherence."""
         if self.task_root is None:
+            if self.scouts is not None and self.scouts.enabled:
+                raise ValueError("scouts require task_root (scouts read only inside the task scope)")
             if self.edit_mode != "none":
                 raise ValueError("edit_mode='direct' requires task_root")
             if self.read_roots:

@@ -297,3 +297,55 @@ def test_mini_validator_covers_the_loop_schemas():
     assert cli._mini_valid({"paths": ["a.cpp"]}, {"type": "object", "properties": {
         "paths": {"type": "array", "items": {"type": "string"}}}, "required": ["paths"]})
     assert not cli._mini_valid(True, {"type": "integer"})
+
+
+# --------------------------------------------------------------------------- OAB-8 scouts
+
+
+def test_no_scouts_field_unless_targets_are_given(tmp_path):
+    body = cli.build_request("P", root="/lane", read_only=True, schema=None, role="auto",
+                             max_turns=50, timeout_s=600, request_id="r1")
+    assert "scouts" not in body, "default off: the pre-OAB-8 request is unchanged"
+    assert cli.build_scouts([]) is None
+    with MockChat(body=chat_response('{"ok": true}')) as mock:
+        run_main(["--root", str(tmp_path), "--read-only", "--url", mock.url])
+    assert "scouts" not in mock.requests[0]["body"]
+
+
+def test_scout_targets_file_becomes_the_scouts_field_and_is_echoed(tmp_path):
+    targets = tmp_path / "targets.json"
+    targets.write_text(json.dumps({"targets": [
+        {"symbol": "ggml_vec_dot_q4_K_q8_K", "dso": "libggml-cpu.so", "share": 0.31,
+         "extra": "dropped"},
+        {"file": "ggml/src/ggml-cpu/ops.cpp"},
+        {"share": 0.2},                                   # neither symbol nor file: dropped
+    ] + [{"symbol": f"s{i}"} for i in range(20)]}))
+    sidecar = tmp_path / "prov.json"
+    scouts_echo = {"schema": "epyc.orchestrator.scouts.v1", "launched": 2, "completed": 2,
+                   "max_concurrency": 2, "scouts": [{"status": "ok", "wall_s": 12.0}]}
+    with MockChat(body=chat_response('{"ok": true}', scouts=scouts_echo)) as mock:
+        code, _, err = run_main(["--root", str(tmp_path), "--read-only", "--url", mock.url,
+                                 "--scout-targets", str(targets), "--scouts-max", "3",
+                                 "--scout-role", "architect_general", "--scout-max-turns", "6",
+                                 "--provenance-out", str(sidecar)])
+    assert code == 0, err
+    sent = mock.requests[0]["body"]["scouts"]
+    assert sent["enabled"] is True and sent["max"] == 3 and sent["max_turns"] == 6
+    assert sent["role"] == "architect_general" and "budget_s" not in sent
+    assert sent["targets"][0] == {"symbol": "ggml_vec_dot_q4_K_q8_K", "dso": "libggml-cpu.so",
+                                  "share": 0.31}
+    assert sent["targets"][1] == {"file": "ggml/src/ggml-cpu/ops.cpp"}
+    assert len(sent["targets"]) == cli.MAX_SCOUT_TARGETS
+    prov = json.loads(sidecar.read_text())
+    assert prov["request"]["scouts"]["targets"] == cli.MAX_SCOUT_TARGETS
+    assert prov["request"]["scouts"]["max"] == 3
+    assert prov["response"]["scouts"] == scouts_echo, "scout provenance reaches the sidecar"
+
+
+def test_malformed_scout_targets_fail_before_any_request(tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"targets": "nope"}')
+    with MockChat(body=chat_response('{"ok": true}')) as mock:
+        code, out, err = run_main(["--root", str(tmp_path), "--url", mock.url,
+                                   "--scout-targets", str(bad)])
+    assert code == 1 and out == "" and "scout-targets" in err and not mock.requests

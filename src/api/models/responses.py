@@ -148,6 +148,18 @@ class ChatResponse(BaseModel):
         ),
         **_omit_when_none(),
     )
+    scouts: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "INF-78 OAB-8 provenance, present only when the request enabled scouts "
+            "(schema epyc.orchestrator.scouts.v1): role, url, transport, requested/launched/"
+            "completed/failed/skipped, max_concurrency, wall_s, cap (live /slots decision), "
+            "token and turn totals, block_chars/block_sha256 of what the planner saw, and one "
+            "row per scout (target, status, wall_s, started_s/ended_s, turns, tokens, reads, "
+            "summary_chars/sha256/preview, evidence_refs, error). Never the full summaries."
+        ),
+        **_omit_when_none(),
+    )
     contention_gate: dict[str, Any] | None = Field(
         default=None,
         description=(
