@@ -135,22 +135,60 @@ VISION_DEFAULT_MODEL = "Qwen3-VL-30B-A3B-Instruct"
 VISION_DEFAULT_QUANT = "Q4_K_M"
 VISION_DEFAULT_ROLE = "vision_escalation"
 
-# Default probe anchor (the classic handoff example): ingest_long_context's node0
-# HALF instance (48t, cores 0-47,96-143 — region set {q0,q1}). Quarters do not
-# exist in production (retired 2026-07-30); the topology is the FULL 96t shape
-# plus two 48t HALVES per role. Disjoint (node1-half) candidates must admit while
-# overlapping (node0-half/full) candidates must queue.
-DEFAULT_ANCHOR_ROLE = "ingest_long_context"
-DEFAULT_ANCHOR_IDX = 1  # ingest node0 HALF (0-47,96-143); idx 0 = full 0-95
-DEFAULT_PROBE_ROLES = (
-    "frontdoor",
-    "ingest_long_context",
-    "worker_general",
-    # NOTE: vision_escalation deliberately absent — it serves on GPU (ROCm0) and
-    # has no CPU-region instance in build_instance_regions (2026-08-23 ground
-    # truth); its within-role re-bench section below is keyed by (model, quant),
-    # not by a CPU instance.
-)
+def derive_default_probe_targets(
+    server_mode: dict[str, Any] | None = None,
+    numa_config: dict[str, Any] | None = None,
+) -> tuple[tuple[str, int], tuple[str, ...]]:
+    """Derive ``((anchor_role, anchor_idx), probe_roles)`` from the live lineup.
+
+    Probe roles are the registry ``server_mode`` HOST rows (no ``alias_of``) that
+    run on the CPU (no ``device``) and have a ``NUMA_CONFIG`` entry, in registry
+    order. Only a host owns CPU instances. GPU hosts (``device: ROCm0``) have no
+    CPU-region instance in ``build_instance_regions`` and are left out, as
+    vision_escalation always was.
+
+    The anchor is the first probe role with a FULL instance plus siblings, held on
+    its first non-full sibling (a 48t HALF). That keeps the classic bracket:
+    the other half is disjoint, and the full instance and any full-machine role
+    overlap.
+
+    Until 2026-09-26 these were literals naming ingest_long_context (anchor, idx
+    1) and worker_general. The operator-signed 2026-09-22 lineup cutover
+    (orchestrator 860b0b2d) made both aliases with no NUMA instances of their
+    own. The anchor then resolved to EMPTY regions, so the default seam plan
+    checked nothing.
+    """
+    if server_mode is None:
+        from src.registry.registry_loader import load_server_mode
+
+        server_mode = load_server_mode()
+    if numa_config is None:
+        from scripts.server.stack_numa import NUMA_CONFIG
+
+        numa_config = NUMA_CONFIG
+
+    from src.registry.registry_loader import serving_host_rows
+
+    probe_roles = tuple(
+        host
+        for host in serving_host_rows(server_mode)
+        if not server_mode[host].get("device") and host in numa_config
+    )
+    for role in probe_roles:
+        cfg = numa_config[role]
+        instances = list(cfg.get("instances") or [])
+        full_idx = cfg.get("full_instance_idx")
+        if full_idx is None or len(instances) < 2:
+            continue
+        sibling = next(i for i in range(len(instances)) if i != full_idx)
+        return (role, sibling), probe_roles
+    raise RuntimeError(
+        "no CPU host role in the registry has a full + sibling NUMA fleet to anchor "
+        f"the admit-overlap probe on (CPU hosts: {list(probe_roles)})"
+    )
+
+
+(DEFAULT_ANCHOR_ROLE, DEFAULT_ANCHOR_IDX), DEFAULT_PROBE_ROLES = derive_default_probe_targets()
 
 # J5 within-role vision priors (within-role-placement-state-machine.md, J5 -t48
 # re-bench table). Keyed by the canonical region-set-pair label so a "full" shape

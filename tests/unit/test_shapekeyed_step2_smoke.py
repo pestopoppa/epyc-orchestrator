@@ -31,6 +31,10 @@ SYNTH_REGIONS: dict[tuple[str, int], frozenset[str]] = {
     ("vision_escalation", 3): frozenset({"q0"}),                  # overlap -> QUEUE
     ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),   # overlap -> QUEUE
 }
+# The SYNTH anchor is passed EXPLICITLY. The module defaults are derived from the
+# LIVE lineup (registry server_mode + NUMA_CONFIG) since 2026-09-26, so they name
+# roles this synthetic topology does not contain.
+SYNTH_ANCHOR = ("ingest_long_context", 1)
 
 
 def _plan(expectation: str = sk.DEFAULT_EXPECTATION) -> sk.Step2SmokePlan:
@@ -41,6 +45,7 @@ def _plan(expectation: str = sk.DEFAULT_EXPECTATION) -> sk.Step2SmokePlan:
     return sk.build_step2_smoke_plan(
         SYNTH_REGIONS,
         topology_hash="test-topo",
+        anchor=SYNTH_ANCHOR,
         probe_roles=("frontdoor", "ingest_long_context", "vision_escalation", "worker_general"),
         expectation=expectation,
     )
@@ -298,7 +303,11 @@ def test_drive_admit_overlap_probes_one_sided_signal_fails_closed() -> None:
         ("vision_escalation", 0): frozenset({"q2", "q3"}),
     }
     plan = sk.build_step2_smoke_plan(
-        full_anchor_regions, topology_hash="test-topo", expectation=sk.EXPECTATION_SEAM
+        full_anchor_regions,
+        topology_hash="test-topo",
+        anchor=SYNTH_ANCHOR,
+        probe_roles=("frontdoor", "ingest_long_context", "worker_general"),
+        expectation=sk.EXPECTATION_SEAM,
     )
     assert len(plan.probes) > 0
     assert all(p.expected_decision == sk.DECISION_QUEUE for p in plan.probes)
@@ -705,7 +714,7 @@ def test_expectation_defaults_to_replacement() -> None:
     assert args.expectation == sk.EXPECTATION_REPLACEMENT
     # ... and plan-build default agree (replacement is the STANDING expectation).
     assert sk.DEFAULT_EXPECTATION == sk.EXPECTATION_REPLACEMENT
-    plan = sk.build_step2_smoke_plan(SYNTH_REGIONS, topology_hash="test-topo")
+    plan = sk.build_step2_smoke_plan(SYNTH_REGIONS, topology_hash="test-topo", anchor=SYNTH_ANCHOR)
     assert plan.expectation == sk.EXPECTATION_REPLACEMENT
     assert all(p.expected_decision == sk.DECISION_ADMIT for p in plan.probes)
 
@@ -729,3 +738,26 @@ def test_main_dry_run_prints_the_expectation_mode(monkeypatch, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["expectation"] == sk.EXPECTATION_SEAM
     assert payload["n_queue_expected"] >= 1
+
+
+def test_default_anchor_and_probes_are_live_cpu_hosts() -> None:
+    """The defaults must name live CPU host fleets, so the seam bracket has teeth.
+
+    They pinned ingest_long_context / worker_general until the operator-signed
+    2026-09-22 cutover (orchestrator 860b0b2d) made both aliases with no NUMA
+    instances of their own. The anchor then resolved to EMPTY regions, and the
+    default plan checked nothing.
+    """
+    from src.registry.registry_loader import load_server_mode, serving_host_rows
+
+    hosts = set(serving_host_rows(load_server_mode()))
+    assert sk.DEFAULT_PROBE_ROLES, "no default probe roles derived"
+    assert set(sk.DEFAULT_PROBE_ROLES) <= hosts, sk.DEFAULT_PROBE_ROLES
+    assert sk.DEFAULT_ANCHOR_ROLE in sk.DEFAULT_PROBE_ROLES
+
+    regions = sk.load_instance_regions()
+    anchor_regions = regions.get((sk.DEFAULT_ANCHOR_ROLE, sk.DEFAULT_ANCHOR_IDX))
+    assert anchor_regions, "default anchor resolves to no CPU regions"
+    plan = sk.build_step2_smoke_plan(regions, expectation=sk.EXPECTATION_SEAM)
+    decisions = {p.expected_decision for p in plan.probes}
+    assert decisions == {sk.DECISION_ADMIT, sk.DECISION_QUEUE}, decisions
