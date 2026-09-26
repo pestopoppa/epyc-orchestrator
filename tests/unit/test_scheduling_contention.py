@@ -87,16 +87,48 @@ unknown_pairs:
 
 
 def test_load_real_matrix(real_matrix_path: Path) -> None:
-    """The committed matrix should parse cleanly."""
+    """The committed matrix should parse cleanly and COVER the live lineup.
+
+    Lineup-independence (2026-09-26): this used to pin the v6 refresh's shape
+    (15 measured pairs, 0 unknown, an ingest_long_context row). The
+    operator-signed 2026-09-22 cutover (orchestrator 860b0b2d) made
+    ingest_long_context an alias of architect_general, and the OP-54 re-bench
+    (0a564a1f, topology 4893e37e) regenerated the matrix over the physical
+    fleets that remain. The expectation is now DERIVED from the same enumerator
+    the bench uses (scripts/server/contention_matrix._enumerate_full_pairs over
+    NUMA_CONFIG): every cross-role pair of the live lineup is either measured or
+    explicitly declared unknown — never silently missing, never both."""
+    import importlib as _il
+
+    sys.path.insert(0, str(ROOT / "scripts" / "server"))
+    cm = _il.import_module("contention_matrix")
+    from scripts.server.stack_numa import NUMA_CONFIG
+
     m = contention.load_contention_matrix(real_matrix_path)
     assert m.version == 1
     assert m.host == "Beelzebub"
     assert m.default_floor == 0.85
-    # v6 full/primary refresh measured every cross-role pair in this layer.
-    assert len(m.pairs) == 15
-    assert len(m.unknown_pairs) == 0
+
+    expected = {tuple(sorted(p)) for p in cm._enumerate_full_pairs(NUMA_CONFIG)}
+    measured = set(m.pairs)
+    unknown = {tuple(sorted(p)) for p in m.unknown_pairs}
+    assert len(expected) >= 2, expected  # non-vacuity: a real multi-fleet lineup
+    assert measured, "matrix measures no pair at all"
+    assert not measured & unknown, measured & unknown
+    assert measured | unknown == expected, {
+        "missing": sorted(expected - measured - unknown),
+        "stale": sorted((measured | unknown) - expected),
+    }
     assert m.get_pair("architect_general", "worker_vision") is not None
-    assert m.get_pair("ingest_long_context", "worker_vision") is not None
+    # ingest_long_context serves on its registry host's process; that host's
+    # pair with worker_vision is the row that now carries its contention.
+    import yaml
+
+    mode = yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )["server_mode"]
+    ingest_host = mode["ingest_long_context"].get("alias_of") or "ingest_long_context"
+    assert m.get_pair(ingest_host, "worker_vision") is not None
 
 
 def test_real_matrix_declares_current_nway_role_classes(real_matrix_path: Path) -> None:

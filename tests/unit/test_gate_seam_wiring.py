@@ -63,6 +63,36 @@ def dual_flags_on(monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
 
 
+def _pin_cpu_devices(monkeypatch) -> None:
+    """Declare every role CPU-resident for the device axis, hermetically.
+
+    The two END-TO-END cases below run the REAL seam_admit, which resolves each
+    placement's device from the LIVE compiled stack_priors. After the
+    operator-signed 2026-09-22 lineup cutover (orchestrator 860b0b2d)
+    ingest_long_context — this file's declared cross-role holder, keyed in the
+    fixture matrix — is an alias of the GPU architect_general, so it resolved to
+    GPU, claimed no CPU region, and the overlap case read ALLOW. These cases are
+    about the gate's wiring over a CPU region overlap, so the device axis is
+    DECLARED here exactly as the fixture declares the ratios (see HERMETICITY
+    above); the device axis itself is covered by test_contention_device_model.py
+    and test_scheduling_contention_gate.py.
+    """
+    from src.scheduling.device_model import DeviceClass, RoleDevice
+
+    def _cpu(role: str, **_kw) -> RoleDevice:
+        return RoleDevice(
+            role=role,
+            device_class=DeviceClass.CPU,
+            device=None,
+            source="unit",
+            corroborated=True,
+            accounting_key=role,
+        )
+
+    monkeypatch.setattr("src.scheduling.device_model.resolve_role_device", _cpu)
+    monkeypatch.setattr(contention, "resolve_role_device", _cpu)
+
+
 # A scenario where the LEGACY verdict is ALLOW: frontdoor + worker_general is
 # allow pairwise (1.82) AND n_way in the declared matrix. We then have the seam
 # return a tighter verdict and assert the gate honors it only under the right
@@ -187,9 +217,12 @@ def test_gate_real_seam_unlocks_disjoint_placement(matrix, dual_flags_on, monkey
 
     Hermetic: monkeypatch the runtime region helpers seam_admit consults so the
     test doesn't depend on a live NUMA_CONFIG, but the genuine seam_admit logic
-    runs (overlap test + nway delegation)."""
+    runs (overlap test + nway delegation). Devices are pinned CPU
+    (`_pin_cpu_devices`) so the disjointness is a real CPU-region fact."""
     import src.runtime.cpu_region_lock as crl
     import src.runtime.instance_topology as it
+
+    _pin_cpu_devices(monkeypatch)
 
     regions = {
         ("frontdoor", 0): frozenset({"q0", "q1"}),
@@ -215,9 +248,13 @@ def test_gate_real_seam_unlocks_disjoint_placement(matrix, dual_flags_on, monkey
 
 def test_gate_real_seam_overlap_still_queues(matrix, dual_flags_on, monkeypatch) -> None:
     """Real seam, but candidate OVERLAPS the held region → seam QUEUEs (physical
-    conflict, fail-closed) → gate QUEUEs. Confirms the override stays safe."""
+    conflict, fail-closed) → gate QUEUEs. Confirms the override stays safe.
+    Devices are pinned CPU (`_pin_cpu_devices`): a GPU holder claims no CPU
+    region, so without the pin there is no overlap to queue on."""
     import src.runtime.cpu_region_lock as crl
     import src.runtime.instance_topology as it
+
+    _pin_cpu_devices(monkeypatch)
 
     regions = {
         ("frontdoor", 1): frozenset({"q0"}),   # candidate idx 1 → q0 (OVERLAPS)

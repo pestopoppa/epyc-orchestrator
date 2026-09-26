@@ -31,6 +31,56 @@ from src.api.routes.dashboard import (
 )
 from src.scheduling.contention import ContentionMatrix, InstancePair, Pair, SameRole
 
+ROOT = Path(__file__).resolve().parents[2]
+
+# Lineup-independence (2026-09-26). The stack_numa_mode filter and the
+# `launch_selected` overlay read the LIVE NUMA_CONFIG for the role's
+# `full_instance_idx` / instance count. The mode tests below used to name
+# `worker_general` as "the multi-instance role"; the operator-signed 2026-09-22
+# lineup cutover (orchestrator 860b0b2d) made it an ALIAS of frontdoor's fleet
+# and deleted its NUMA_CONFIG entry, so the filter passed every instance through
+# and the mode assertions failed. The role is now DERIVED: the fleet that hosts
+# worker_general per orchestration/model_registry.yaml server_mode. (The 1 full
+# + 4 quarters region maps those tests install stay SYNTHETIC — no live role
+# carries quarters since the 2026-07-30 retirement; only the mode lookup is live.)
+
+
+def _registry_server_mode() -> dict:
+    import yaml
+
+    return yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )["server_mode"]
+
+
+def _host_fleet_of(role: str) -> str:
+    """The server_mode row that physically hosts ``role`` (shared_with/alias_of)."""
+    for host, row in _registry_server_mode().items():
+        if row.get("alias_of"):
+            continue
+        if host == role or role in (row.get("shared_with") or []):
+            return host
+    raise AssertionError(f"registry declares no host fleet for {role!r}")
+
+
+def _mode_filtered_roles() -> tuple[list[str], list[str]]:
+    """(multi, single): NUMA_CONFIG roles the mode filter splits by full_instance_idx,
+    and roles it passes through whole (no full idx or a single instance)."""
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    multi, single = [], []
+    for role, cfg in NUMA_CONFIG.items():
+        instances = cfg.get("instances") or []
+        if isinstance(cfg.get("full_instance_idx"), int) and len(instances) > 1:
+            multi.append(role)
+        else:
+            single.append(role)
+    return sorted(multi), sorted(single)
+
+
+# The multi-instance fleet the mode/grid tests render (was: worker_general).
+_HOST = _host_fleet_of("worker_general")
+
 
 @pytest.fixture(autouse=True)
 def _neutralize_realized_and_manifest_numa(monkeypatch):
@@ -373,29 +423,33 @@ def test_pytest_lock_root_is_explicitly_invalid_for_production(monkeypatch) -> N
 
 class TestRegionLocksSnapshot:
     def test_instance_regions_filter_tracks_stack_numa_mode(self) -> None:
-        topology = {
-            ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
-            ("worker_general", 1): frozenset({"q0"}),
-            ("worker_general", 2): frozenset({"q1"}),
-            ("frontdoor", 0): frozenset({"q0", "q1"}),
-            ("frontdoor", 1): frozenset({"q0"}),
-            ("worker_vision", 0): frozenset({"q1"}),
-        }
+        """Run the filter over the LIVE topology: a multi-instance role keeps only
+        its full in "full" mode and only its siblings in "quarter" mode; a
+        single-instance role passes through in both. Roles are derived from
+        NUMA_CONFIG (the same config the filter reads), never restated."""
+        from scripts.server.stack_numa import NUMA_CONFIG
+        from src.runtime.instance_topology import build_instance_regions
+
+        multi, single = _mode_filtered_roles()
+        # Non-vacuity: both branches of the filter must be exercised.
+        assert multi and single, (multi, single)
+        assert _HOST in multi
+
+        topology = build_instance_regions(NUMA_CONFIG)
+        keys = set(topology)
+        full_idx = {r: NUMA_CONFIG[r]["full_instance_idx"] for r in multi}
+        passthrough = {k for k in keys if k[0] not in full_idx}
+        expected_full = {k for k in keys if k[0] in full_idx and k[1] == full_idx[k[0]]}
+        expected_quarter = {k for k in keys if k[0] in full_idx and k[1] != full_idx[k[0]]}
+        assert passthrough and expected_full and expected_quarter
 
         full = _filter_instance_regions_for_mode(topology, "full")
-        assert set(full) == {
-            ("worker_general", 0),
-            ("frontdoor", 0),
-            ("worker_vision", 0),
-        }
+        assert set(full) == expected_full | passthrough
 
         quarter = _filter_instance_regions_for_mode(topology, "quarter")
-        assert set(quarter) == {
-            ("worker_general", 1),
-            ("worker_general", 2),
-            ("frontdoor", 1),
-            ("worker_vision", 0),
-        }
+        assert set(quarter) == expected_quarter | passthrough
+
+        assert _filter_instance_regions_for_mode(topology, "both") == topology
 
     @pytest.mark.asyncio
     async def test_shared_occupancy_is_canonical_when_proc_role_disagrees(
@@ -516,7 +570,7 @@ class TestRegionLocksSnapshot:
     ) -> None:
         monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
         for region in ("q0", "q1", "q2", "q3"):
-            (tmp_path / f"cpu_region.worker_general.{region}.lock").write_text("")
+            (tmp_path / f"cpu_region.{_HOST}.{region}.lock").write_text("")
 
         monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
         monkeypatch.setattr(
@@ -525,11 +579,11 @@ class TestRegionLocksSnapshot:
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {
-                ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
-                ("worker_general", 1): frozenset({"q0"}),
-                ("worker_general", 2): frozenset({"q1"}),
-                ("worker_general", 3): frozenset({"q2"}),
-                ("worker_general", 4): frozenset({"q3"}),
+                (_HOST, 0): frozenset({"q0", "q1", "q2", "q3"}),
+                (_HOST, 1): frozenset({"q0"}),
+                (_HOST, 2): frozenset({"q1"}),
+                (_HOST, 3): frozenset({"q2"}),
+                (_HOST, 4): frozenset({"q3"}),
             },
         )
         monkeypatch.setattr(
@@ -539,7 +593,7 @@ class TestRegionLocksSnapshot:
                 (),
                 {
                     "same_role": {
-                        "worker_general": SameRole(role="worker_general", verdict="allow"),
+                        _HOST: SameRole(role=_HOST, verdict="allow"),
                     },
                 },
             )(),
@@ -547,7 +601,7 @@ class TestRegionLocksSnapshot:
 
         payload = json.loads((await region_locks_snapshot()).body)
 
-        worker = payload["by_role"]["worker_general"]
+        worker = payload["by_role"][_HOST]
         assert payload["stack_numa_mode"] == "full"
         assert [inst["shape"] for inst in worker["instances"]] == [
             "full",
@@ -570,7 +624,7 @@ class TestRegionLocksSnapshot:
         assert payload["display_matrix"]["row_kind"] == "role"
         assert payload["display_matrix"]["role_count"] == 1
         worker_display = next(
-            row for row in payload["display_matrix"]["rows"] if row["role"] == "worker_general"
+            row for row in payload["display_matrix"]["rows"] if row["role"] == _HOST
         )
         # The grid renders one column per DEPLOYABLE SHAPE (bc1da61f: quarters
         # were retired as a deployable shape on 2026-07-30, so a column per
@@ -604,11 +658,11 @@ class TestRegionLocksSnapshot:
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {
-                ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
-                ("worker_general", 1): frozenset({"q0"}),
-                ("worker_general", 2): frozenset({"q1"}),
-                ("worker_general", 3): frozenset({"q2"}),
-                ("worker_general", 4): frozenset({"q3"}),
+                (_HOST, 0): frozenset({"q0", "q1", "q2", "q3"}),
+                (_HOST, 1): frozenset({"q0"}),
+                (_HOST, 2): frozenset({"q1"}),
+                (_HOST, 3): frozenset({"q2"}),
+                (_HOST, 4): frozenset({"q3"}),
             },
         )
         monkeypatch.setattr(
@@ -618,7 +672,7 @@ class TestRegionLocksSnapshot:
                 (),
                 {
                     "same_role": {
-                        "worker_general": SameRole(role="worker_general", verdict="allow"),
+                        _HOST: SameRole(role=_HOST, verdict="allow"),
                     },
                 },
             )(),
@@ -627,7 +681,7 @@ class TestRegionLocksSnapshot:
         payload = json.loads((await region_locks_snapshot()).body)
 
         worker_display = next(
-            row for row in payload["display_matrix"]["rows"] if row["role"] == "worker_general"
+            row for row in payload["display_matrix"]["rows"] if row["role"] == _HOST
         )
         columns = [col["key"] for col in payload["display_matrix"]["columns"]]
         assert columns == ["full", "half0", "half1"]
@@ -644,7 +698,7 @@ class TestRegionLocksSnapshot:
         # "configured quarters stay visible" — the property this test is named
         # for — is now enforced at the layer that still models quarters: the
         # unselected quarter instances are present with launch_selected False.
-        worker = payload["by_role"]["worker_general"]
+        worker = payload["by_role"][_HOST]
         unselected = [i for i in worker["instances"] if not i["launch_selected"]]
         assert [i["shape"] for i in unselected] == ["q0", "q1", "q2", "q3"]
         # The rendered FREE cell is the launch-SELECTED full in this mode, so it
@@ -660,7 +714,7 @@ class TestRegionLocksSnapshot:
     @pytest.mark.asyncio
     async def test_region_lock_grid_shapes_follow_quarter_mode(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
-        (tmp_path / "cpu_region.worker_general.q0.lock").write_text("")
+        (tmp_path / f"cpu_region.{_HOST}.q0.lock").write_text("")
 
         monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
         monkeypatch.setattr(
@@ -669,11 +723,11 @@ class TestRegionLocksSnapshot:
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {
-                ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
-                ("worker_general", 1): frozenset({"q0"}),
-                ("worker_general", 2): frozenset({"q1"}),
-                ("worker_general", 3): frozenset({"q2"}),
-                ("worker_general", 4): frozenset({"q3"}),
+                (_HOST, 0): frozenset({"q0", "q1", "q2", "q3"}),
+                (_HOST, 1): frozenset({"q0"}),
+                (_HOST, 2): frozenset({"q1"}),
+                (_HOST, 3): frozenset({"q2"}),
+                (_HOST, 4): frozenset({"q3"}),
             },
         )
         monkeypatch.setattr(
@@ -683,8 +737,8 @@ class TestRegionLocksSnapshot:
                 (),
                 {
                     "same_role": {
-                        "worker_general": SameRole(
-                            role="worker_general",
+                        _HOST: SameRole(
+                            role=_HOST,
                             verdict="allow",
                             instance_pairs=(InstancePair(a="q0", b="q1"),),
                         ),
@@ -695,7 +749,7 @@ class TestRegionLocksSnapshot:
 
         payload = json.loads((await region_locks_snapshot()).body)
 
-        worker = payload["by_role"]["worker_general"]
+        worker = payload["by_role"][_HOST]
         assert payload["stack_numa_mode"] == "quarter"
         # Visible shapes follow the role's CONFIGURED quarter instances (all four),
         # plus the inactive full instance. The matrix's co-placement pairs are

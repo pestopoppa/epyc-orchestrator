@@ -357,15 +357,57 @@ def test_dispatcher_legacy_path_when_flag_off(monkeypatch: pytest.MonkeyPatch) -
 
 # ── DISPATCH-A: placement_policy governs the full (all-region) candidate ──────
 
-# worker_general topology: full (idx 0) = "0-95" = ALL regions; the four
-# quarters each occupy exactly one region. A request routed to idx 0 acquires
-# every region lock (+ every global cross-role mutex) — the DISPATCH-A amplifier.
+# Lineup-independence (2026-09-26). The DISPATCH-A cases below used to pin
+# worker_general as its own fleet (NUMA_CONFIG["worker_general"], full :8072,
+# quarters :8082..:8382). The operator-signed 2026-09-22 lineup cutover
+# (orchestrator 860b0b2d) made worker_general an ALIAS of frontdoor's :8070
+# fleet and deleted its NUMA_CONFIG entry (KeyError). The fleet is now DERIVED:
+# worker_general's host from orchestration/model_registry.yaml server_mode, its
+# aligned idx-0 full port from NUMA_CONFIG. The dispatch identity (role /
+# topology_role) is that host, exactly as the fleet layer builds it.
+
+
+def _registry_server_mode() -> dict:
+    import yaml
+
+    return yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )["server_mode"]
+
+
+def _host_fleet_of(role: str) -> str:
+    """The server_mode row that physically hosts ``role`` (shared_with/alias_of)."""
+    for host, row in _registry_server_mode().items():
+        if row.get("alias_of"):
+            continue
+        if host == role or role in (row.get("shared_with") or []):
+            return host
+    raise AssertionError(f"registry declares no host fleet for {role!r}")
+
+
+def _full_port(role: str) -> int:
+    import scripts.server.stack_numa as _stack_numa
+
+    return int(_stack_numa.NUMA_CONFIG[role]["instances"][0][1])
+
+
+WG_HOST = _host_fleet_of("worker_general")
+WG_HOST_FULL = _full_port(WG_HOST)
+# SYNTHETIC quarter endpoints: no live fleet carries four quarters since the
+# 2026-07-30 retirement. They dispatch at positional topology idxs 1..4, which
+# _WORKER_GENERAL_REGIONS below maps to one region each.
+_SYNTH_QUARTER_PORTS = [WG_HOST_FULL + 11000 + i for i in range(4)]
+
+# The host fleet's topology, SYNTHETIC 1 full + 4 quarters shape: full (idx 0)
+# = "0-95" = ALL regions; the four quarters each occupy exactly one region. A
+# request routed to idx 0 acquires every region lock (+ every global cross-role
+# mutex) — the DISPATCH-A amplifier. Installed via get_instance_regions mocks.
 _WORKER_GENERAL_REGIONS = {
-    ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),  # full = 0-95
-    ("worker_general", 1): frozenset({"q0"}),
-    ("worker_general", 2): frozenset({"q1"}),
-    ("worker_general", 3): frozenset({"q2"}),
-    ("worker_general", 4): frozenset({"q3"}),
+    (WG_HOST, 0): frozenset({"q0", "q1", "q2", "q3"}),  # full = 0-95
+    (WG_HOST, 1): frozenset({"q0"}),
+    (WG_HOST, 2): frozenset({"q1"}),
+    (WG_HOST, 3): frozenset({"q2"}),
+    (WG_HOST, 4): frozenset({"q3"}),
 }
 
 
@@ -390,34 +432,39 @@ class _HeldLockCtx:
 def test_full_disabled_places_four_concurrent_on_four_quarters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DISPATCH-A (a): worker_general is FULL_DISABLED (its full is not even in
-    the live serving stack). Four concurrent same-role requests must occupy four
-    DISTINCT quarters; the all-region idx-0 lock is NEVER attempted (big
-    instance stays idle) — the design-contract acceptance."""
+    """DISPATCH-A (a): a FULL_DISABLED fleet (its full is not in the serving
+    stack). Four concurrent same-role requests must occupy four DISTINCT
+    quarters; the all-region idx-0 lock is NEVER attempted (big instance stays
+    idle) — the design-contract acceptance.
+
+    SYNTHETIC policy + shape on the LIVE host of worker_general (WG_HOST): no
+    live fleet is full_disabled or carries four quarters, so both are injected
+    (policy via NUMA_CONFIG[WG_HOST], regions via get_instance_regions)."""
     from src.scheduling.placement_policy import (
         RolePlacementPolicy,
         get_placement_policy,
     )
 
-    # 2026-07-23 lineup restoration: worker_general's LIVE policy reverted to
-    # burst_prefer_split (operator-directed full redeploy). This test keeps
+    # The live host policy is burst_prefer_split (see
+    # test_worker_general_live_policy_is_burst_prefer_split). This test keeps
     # pinning the DISPATCH-A fix for the FULL_DISABLED policy itself, so the
-    # policy is monkeypatched onto the role rather than read from live config.
+    # policy is monkeypatched onto the host rather than read from live config.
     import scripts.server.stack_numa as _stack_numa
 
     monkeypatch.setitem(
-        _stack_numa.NUMA_CONFIG["worker_general"], "placement_policy", "full_disabled"
+        _stack_numa.NUMA_CONFIG[WG_HOST], "placement_policy", "full_disabled"
     )
-    assert get_placement_policy("worker_general") is RolePlacementPolicy.FULL_DISABLED
+    assert get_placement_policy(WG_HOST) is RolePlacementPolicy.FULL_DISABLED
 
     monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
     monkeypatch.setenv("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "1")
-    full = _StubBackend("http://localhost:8072")
-    quarters = [_StubBackend(f"http://localhost:{p}") for p in (8082, 8182, 8282, 8382)]
+    full = _StubBackend(f"http://localhost:{WG_HOST_FULL}")
+    quarters = [_StubBackend(f"http://localhost:{p}") for p in _SYNTH_QUARTER_PORTS]
     backend = ca_mod.ConcurrencyAwareBackend(
         full_backend=full, quarter_backends=quarters,
-        role="worker_general", full_port=8072,  # aligned idx-0 port
+        role=WG_HOST, full_port=WG_HOST_FULL,  # aligned idx-0 port
     )
+    assert backend._full_slot_aligned is True  # full is a real candidate the policy must drop
 
     held: set[int] = set()
     attempted: list[int] = []
@@ -431,13 +478,13 @@ def test_full_disabled_places_four_concurrent_on_four_quarters(
     monkeypatch.setattr("src.runtime.cpu_region_lock.cpu_region_lock_for_instance", _mock_lock)
     monkeypatch.setattr(
         "src.runtime.cpu_region_lock.active_region_holders",
-        lambda: {"worker_general": sorted(held)},
+        lambda: {WG_HOST: sorted(held)},
     )
     monkeypatch.setattr(
         "src.runtime.cpu_region_lock.held_regions_by_role",
         lambda *args, **kwargs: {
-            "worker_general": frozenset().union(
-                *(_WORKER_GENERAL_REGIONS[("worker_general", idx)] for idx in held)
+            WG_HOST: frozenset().union(
+                *(_WORKER_GENERAL_REGIONS[(WG_HOST, idx)] for idx in held)
             )
             if held
             else frozenset(),
@@ -460,19 +507,19 @@ def test_full_disabled_places_four_concurrent_on_four_quarters(
 
 
 def test_worker_general_live_policy_is_burst_prefer_split() -> None:
-    """2026-07-23 lineup restoration pin (operator-directed): worker_general's
-    full (8072) is redeployed, so the live policy is BURST_PREFER_SPLIT —
-    solo gets the full for peak throughput, bursts spread on split instances. A
-    revert to full_disabled must be a deliberate config change, not drift."""
+    """Live-policy pin: worker_general dispatches on its registry host fleet
+    (frontdoor's since the 2026-09-22 cutover), and the dispatcher resolves the
+    policy by that TOPOLOGY role, so the host's live policy is what worker_general
+    gets: BURST_PREFER_SPLIT — solo gets the full for peak throughput, bursts
+    spread on split instances. A revert to full_disabled must be a deliberate
+    config change, not drift."""
     from src.scheduling.placement_policy import (
         RolePlacementPolicy,
         get_placement_policy,
     )
 
-    assert (
-        get_placement_policy("worker_general")
-        is RolePlacementPolicy.BURST_PREFER_SPLIT
-    )
+    assert "worker_general" in (_registry_server_mode()[WG_HOST].get("shared_with") or [])
+    assert get_placement_policy(WG_HOST) is RolePlacementPolicy.BURST_PREFER_SPLIT
 
 
 def test_burst_prefer_split_solo_request_goes_full(
@@ -601,7 +648,7 @@ def test_full_slot_port_mismatch_skips_full_candidate(
 
 
 class _AttributionLockModel:
-    """Faithful worker_general lock layer: tracks held physical regions and
+    """Faithful host-fleet (WG_HOST) lock layer: tracks held physical regions and
     reproduces BOTH the attribution over-report (active_region_holders) and the
     exact region view (held_regions_by_role)."""
 
@@ -615,12 +662,12 @@ class _AttributionLockModel:
         idxs = sorted(
             idx
             for (role, idx), regions in self.regions_map.items()
-            if role == "worker_general" and any(r in self.owner for r in regions)
+            if role == WG_HOST and any(r in self.owner for r in regions)
         )
-        return {"worker_general": idxs} if idxs else {}
+        return {WG_HOST: idxs} if idxs else {}
 
     def held_regions_by_role(self, *a, **k) -> dict[str, frozenset[str]]:
-        return {"worker_general": frozenset(self.owner)} if self.owner else {}
+        return {WG_HOST: frozenset(self.owner)} if self.owner else {}
 
     def lock(self, role, instance_idx, timeout_s=None, deadline_s=None):
         regions = self.regions_map.get((role, instance_idx), frozenset())
@@ -649,20 +696,21 @@ class _AttributionLockModel:
 def test_full_disabled_four_concurrent_spread_despite_attribution_over_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DISPATCH-A residual pin: 4 concurrent worker_general (FULL_DISABLED)
+    """DISPATCH-A residual pin: 4 concurrent same-fleet (FULL_DISABLED)
     dispatches must occupy 4 DISTINCT quarters even though the attribution view
     reports the phantom full (idx 0) as a holder the moment one quarter is held.
     Pre-fix, the placement filter expanded [0, ...] to the whole-machine union
-    and QUEUED every disjoint quarter → serialization onto one quarter."""
+    and QUEUED every disjoint quarter → serialization onto one quarter.
+
+    Runs on worker_general's LIVE host fleet with a SYNTHETIC full_disabled
+    policy and 1 full + 4 quarters shape (see the note in
+    test_full_disabled_places_four_concurrent_on_four_quarters)."""
     from types import SimpleNamespace
 
-    # 2026-07-23 lineup restoration: live worker_general policy is now
-    # burst_prefer_split; pin FULL_DISABLED synthetically (see the note in
-    # test_full_disabled_places_four_concurrent_on_four_quarters).
     import scripts.server.stack_numa as _stack_numa
 
     monkeypatch.setitem(
-        _stack_numa.NUMA_CONFIG["worker_general"], "placement_policy", "full_disabled"
+        _stack_numa.NUMA_CONFIG[WG_HOST], "placement_policy", "full_disabled"
     )
 
     monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
@@ -671,11 +719,11 @@ def test_full_disabled_four_concurrent_spread_despite_attribution_over_report(
     monkeypatch.delenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", raising=False)
     monkeypatch.delenv("ORCHESTRATOR_SHAPE_AWARE_CONTENTION", raising=False)
 
-    full = _StubBackend("http://localhost:8072")
-    quarters = [_StubBackend(f"http://localhost:{p}") for p in (8082, 8182, 8282, 8382)]
+    full = _StubBackend(f"http://localhost:{WG_HOST_FULL}")
+    quarters = [_StubBackend(f"http://localhost:{p}") for p in _SYNTH_QUARTER_PORTS]
     backend = ca_mod.ConcurrencyAwareBackend(
         full_backend=full, quarter_backends=quarters,
-        role="worker_general", full_port=8072,  # aligned; FULL_DISABLED drops full anyway
+        role=WG_HOST, full_port=WG_HOST_FULL,  # aligned; FULL_DISABLED drops full anyway
     )
 
     model = _AttributionLockModel(dict(_WORKER_GENERAL_REGIONS))

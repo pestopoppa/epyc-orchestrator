@@ -20,6 +20,57 @@ ca_mod = importlib.import_module("src.backends.concurrency_aware")
 stack_numa = importlib.import_module("stack_numa")
 
 
+# Lineup-independence (2026-09-26). These tests used to name worker_general and
+# ingest_long_context as multi-instance NUMA_CONFIG roles. The operator-signed
+# 2026-09-22 lineup cutover (orchestrator 860b0b2d) made worker_general an ALIAS
+# of frontdoor's :8070 fleet and ingest_long_context an alias of
+# architect_general (single-instance, GPU) and deleted both NUMA_CONFIG entries
+# (KeyError at test time). The roles are now DERIVED: an alias's topology is its
+# registry host's (orchestration/model_registry.yaml server_mode), and "the real
+# multi-instance roles" are whatever NUMA_CONFIG declares with >= 2 instances.
+
+
+def _registry_server_mode() -> dict:
+    import yaml
+
+    return yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )["server_mode"]
+
+
+def _host_fleet_of(role: str) -> str:
+    """The server_mode row that physically hosts ``role`` (shared_with/alias_of)."""
+    for host, row in _registry_server_mode().items():
+        if row.get("alias_of"):
+            continue
+        if host == role or role in (row.get("shared_with") or []):
+            return host
+    raise AssertionError(f"registry declares no host fleet for {role!r}")
+
+
+def _multi_instance_roles() -> list[str]:
+    """Real NUMA_CONFIG roles with a full AND at least one sibling instance."""
+    return sorted(
+        role
+        for role, cfg in stack_numa.NUMA_CONFIG.items()
+        if len(cfg.get("instances") or []) >= 2
+    )
+
+
+def _aliases_on_multi_instance_hosts() -> list[tuple[str, str]]:
+    """(alias, host) for every registry-bound role whose host fleet has siblings."""
+    multi = set(_multi_instance_roles())
+    out: list[tuple[str, str]] = []
+    for host, row in _registry_server_mode().items():
+        if row.get("alias_of") or host not in multi:
+            continue
+        bound = list(row.get("shared_with") or [])
+        bound += [k for k, v in _registry_server_mode().items() if v.get("alias_of") == host]
+        # `worker` is a server_mode ROW name, not a role with a backend.
+        out += [(alias, host) for alias in dict.fromkeys(bound) if alias not in (host, "worker")]
+    return out
+
+
 class _StubBackend:
     """Minimal backend stub for ConcurrencyAwareBackend construction."""
 
@@ -127,18 +178,32 @@ def test_frontdoor_quarter_preference_prefers_disjoint_NUMA() -> None:
     _assert_preference_follows_topology("frontdoor", cab._quarter_preference_order)
 
 
-def test_ingest_quarter_preference_matches_frontdoor_pattern() -> None:
-    """ingest_long_context shares frontdoor's instance shape — same rule, same
-    derivation, so the two roles must agree whenever their cpu-sets do."""
-    cab = _make_concurrency_aware("ingest_long_context")
-    _assert_preference_follows_topology(
-        "ingest_long_context", cab._quarter_preference_order
-    )
-    assert _quarter_buckets("ingest_long_context") == _quarter_buckets("frontdoor")
-    assert (
-        cab._quarter_preference_order
-        == _make_concurrency_aware("frontdoor")._quarter_preference_order
-    )
+def test_alias_quarter_preference_matches_host_pattern() -> None:
+    """A role that shares a host fleet's instance shape follows the same rule and
+    the same derivation, so it must agree with the host.
+
+    Was ``test_ingest_quarter_preference_matches_frontdoor_pattern``: ingest used
+    to run its own frontdoor-shaped fleet. Since 2026-09-22 it is an alias of the
+    single-instance GPU architect_general (no sibling to order), so the property
+    is now checked for every registry alias bound onto a MULTI-instance host,
+    built the way the fleet layer builds it (topology_role = host)."""
+    pairs = _aliases_on_multi_instance_hosts()
+    assert pairs, "no registry alias on a multi-instance host — case is vacuous"
+    assert ("worker_general", _host_fleet_of("worker_general")) in pairs
+    for alias, host in pairs:
+        instances = stack_numa.NUMA_CONFIG[host]["instances"]
+        cab = ca_mod.ConcurrencyAwareBackend(
+            full_backend=_StubBackend(f"http://localhost:{instances[0][1]}"),
+            quarter_backends=[_StubBackend(f"http://localhost:{i[1]}") for i in instances[1:]],
+            role=alias,
+            full_port=instances[0][1],
+            topology_role=host,
+        )
+        _assert_preference_follows_topology(host, cab._quarter_preference_order)
+        assert (
+            cab._quarter_preference_order
+            == _make_concurrency_aware(host)._quarter_preference_order
+        ), alias
 
 
 def test_quarter_preference_full_on_NODE1_synthetic(monkeypatch) -> None:
@@ -166,18 +231,21 @@ def test_quarter_preference_full_on_NODE1_synthetic(monkeypatch) -> None:
 
 
 def test_worker_general_quarter_preference_full_on_FULL_SOCKET() -> None:
-    """worker_general's full spans the whole 0-95 socket, so EVERY sibling
-    instance overlaps it: no quarter is disjoint and the preference is plain
-    numerical order over the instances the topology actually declares."""
-    disjoint, overlapping = _quarter_buckets("worker_general")
+    """worker_general's host fleet (registry server_mode; frontdoor's since the
+    2026-09-22 cutover) has a full spanning the whole 0-95 socket, so EVERY
+    sibling instance overlaps it: no quarter is disjoint and the preference is
+    plain numerical order over the instances the topology actually declares."""
+    host = _host_fleet_of("worker_general")
+    disjoint, overlapping = _quarter_buckets(host)
+    assert overlapping, f"{host} declares no sibling instances — case is vacuous"
     assert disjoint == [], (
-        "worker_general's full no longer covers every sibling — this test's "
+        f"{host}'s full no longer covers every sibling — this test's "
         "premise (all-overlap) is gone; re-derive it from the new topology."
     )
-    cab = _make_concurrency_aware("worker_general")
+    cab = _make_concurrency_aware(host)
     pref = cab._quarter_preference_order
     assert pref == overlapping == list(range(len(overlapping)))
-    _assert_preference_follows_topology("worker_general", pref)
+    _assert_preference_follows_topology(host, pref)
 
 
 def test_quarter_preference_fallback_when_numa_config_missing() -> None:
@@ -234,7 +302,9 @@ def test_quarter_preference_disjoint_quarters_in_numerical_order(monkeypatch) ->
     assert positions == sorted(positions)
     assert [q for q in pref if q in disjoint] == sorted(disjoint)
 
-    for real_role in ("frontdoor", "ingest_long_context", "worker_general"):
+    real_roles = _multi_instance_roles()
+    assert real_roles, "no real multi-instance role left to check"
+    for real_role in real_roles:
         real_disjoint, _ = _quarter_buckets(real_role)
         real_pref = _make_concurrency_aware(real_role)._quarter_preference_order
         assert [q for q in real_pref if q in real_disjoint] == sorted(real_disjoint)

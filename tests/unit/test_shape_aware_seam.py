@@ -34,6 +34,43 @@ from src.scheduling.contention import (
     shape_aware_contention_enabled,
 )
 
+
+
+def _live_cpu_cross_role() -> str:
+    """A live CPU fleet that is NOT bound onto frontdoor's process.
+
+    Lineup-independence (2026-09-26): the cross-role cases below used
+    ingest_long_context as "the heavy CPU role beside frontdoor". The
+    operator-signed 2026-09-22 cutover (orchestrator 860b0b2d) made it an alias
+    of the GPU architect_general, so seam_admit's device axis now (correctly)
+    resolves it to GPU — a GPU placement claims no CPU region, so the overlap
+    case read ALLOW. The role is derived instead: the first NUMA_CONFIG fleet
+    outside frontdoor's registry binding whose device resolves to CPU. Its
+    region sets below stay SYNTHETIC; only its identity (and CPU device) is live.
+    """
+    from pathlib import Path
+
+    import yaml
+    from scripts.server.stack_numa import NUMA_CONFIG
+    from src.scheduling.device_model import DeviceClass, resolve_role_device
+
+    root = Path(__file__).resolve().parents[2]
+    mode = yaml.safe_load(
+        (root / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )["server_mode"]
+    fd_fleet = {"frontdoor", *(mode["frontdoor"].get("shared_with") or [])}
+    fd_fleet |= {k for k, v in mode.items() if v.get("alias_of") == "frontdoor"}
+    for role in sorted(NUMA_CONFIG):
+        if role in fd_fleet or role == "eval_batch_frontdoor":
+            continue
+        if resolve_role_device(role).device_class is DeviceClass.CPU:
+            return role
+    raise AssertionError("no live CPU fleet outside frontdoor's — cross-role cases are vacuous")
+
+
+# Heavy cross-role CPU partner (was ingest_long_context).
+XR = _live_cpu_cross_role()
+
 # frontdoor: full(0)={q0,q1}; q0(1)={q0}; q1(2)={q1}; q2(3)={q2}; q3(4)={q3}
 _FD_REGIONS = {
     ("frontdoor", 0): frozenset({"q0", "q1"}),
@@ -41,8 +78,8 @@ _FD_REGIONS = {
     ("frontdoor", 2): frozenset({"q1"}),
     ("frontdoor", 3): frozenset({"q2"}),
     ("frontdoor", 4): frozenset({"q3"}),
-    ("ingest_long_context", 0): frozenset({"q0", "q1"}),
-    ("ingest_long_context", 3): frozenset({"q2"}),
+    (XR, 0): frozenset({"q0", "q1"}),
+    (XR, 3): frozenset({"q2"}),
     ("eval_batch_frontdoor", 0): frozenset({"q0", "q1"}),
     ("worker_general", 2): frozenset({"q2", "q3"}),
 }
@@ -228,12 +265,10 @@ def test_seam_same_role_block_foreground_degraded_allow(shape_aware_on) -> None:
 
 
 def test_seam_cross_role_disjoint_allows(shape_aware_on) -> None:
-    m = _matrix(
-        n_way=[(("frontdoor", "ingest_long_context"), 1.7, "allow")], heavy=("ingest_long_context",)
-    )
+    m = _matrix(n_way=[(("frontdoor", XR), 1.7, "allow")], heavy=(XR,))
     out = seam_admit(
-        "ingest_long_context",
-        3,  # ingest q2
+        XR,
+        3,  # partner q2
         {"frontdoor": frozenset({"q0"})},
         traffic_class=TrafficClass.BACKGROUND,
         instance_regions=_FD_REGIONS,
@@ -261,12 +296,16 @@ def test_seam_aux_frontdoor_allows_disjoint_worker_half(shape_aware_on) -> None:
 
 
 def test_seam_cross_role_overlap_queues(shape_aware_on) -> None:
-    m = _matrix(
-        n_way=[(("frontdoor", "ingest_long_context"), 9.9, "allow")], heavy=("ingest_long_context",)
-    )
+    from src.scheduling.device_model import DeviceClass, resolve_role_device
+
+    # Non-vacuity: both sides must be CPU placements, or a GPU side would claim
+    # no region and the "overlap" would be physically empty.
+    assert resolve_role_device(XR).device_class is DeviceClass.CPU
+    assert resolve_role_device("frontdoor").device_class is DeviceClass.CPU
+    m = _matrix(n_way=[(("frontdoor", XR), 9.9, "allow")], heavy=(XR,))
     out = seam_admit(
-        "ingest_long_context",
-        0,  # ingest {q0,q1} overlaps frontdoor q0
+        XR,
+        0,  # partner {q0,q1} overlaps frontdoor q0
         {"frontdoor": frozenset({"q0"})},
         traffic_class=TrafficClass.BACKGROUND,
         instance_regions=_FD_REGIONS,
@@ -279,11 +318,11 @@ def test_seam_combines_same_and_cross_worst(shape_aware_on) -> None:
     """Same-role allow + cross-role measured block → worst = QUEUE."""
     m = _matrix(
         same_role=[("frontdoor", "allow")],
-        n_way=[(("frontdoor", "ingest_long_context"), 0.5, "block")],
-        heavy=("ingest_long_context",),
+        n_way=[(("frontdoor", XR), 0.5, "block")],
+        heavy=(XR,),
     )
-    # active: frontdoor q0 (same-role) + ingest q1 (cross-role). candidate frontdoor q2.
-    active = {"frontdoor": frozenset({"q0"}), "ingest_long_context": frozenset({"q1"})}
+    # active: frontdoor q0 (same-role) + partner q1 (cross-role). candidate frontdoor q2.
+    active = {"frontdoor": frozenset({"q0"}), XR: frozenset({"q1"})}
     out = seam_admit(
         "frontdoor",
         3,

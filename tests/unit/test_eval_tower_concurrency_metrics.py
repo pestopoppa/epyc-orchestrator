@@ -23,6 +23,33 @@ from eval_tower import EvalTower, QuestionResult  # noqa: E402
 from safety_gate import Baseline, SafetyGate  # noqa: E402
 
 
+# Lineup-independence (2026-09-26). The resource-lane tests below used to
+# restate the lineup: a 2-slot :8083 GPU process and worker_general as a
+# SEPARATE full CPU process. The operator-signed 2026-09-22 cutover (orchestrator
+# 860b0b2d) made worker_general an alias of frontdoor's :8070 fleet, and OP-54
+# (0a564a1f, 2026-09-24) raised :8083 to -np 4. Both facts are now DERIVED from
+# orchestration/model_registry.yaml server_mode, the same declarations
+# _eval_resource_lanes() collapses roles with.
+
+
+def _server_mode() -> dict:
+    import yaml
+
+    return yaml.safe_load(
+        (REPO_ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )["server_mode"]
+
+
+def _host_fleet_of(role: str) -> str:
+    """The server_mode row that physically hosts ``role`` (shared_with/alias_of)."""
+    for host, row in _server_mode().items():
+        if row.get("alias_of"):
+            continue
+        if host == role or role in (row.get("shared_with") or []):
+            return host
+    raise AssertionError(f"registry declares no host fleet for {role!r}")
+
+
 def test_eval_concurrency_env_override_still_wins(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "5")
     monkeypatch.setattr(
@@ -271,13 +298,19 @@ def test_eval_batch_fails_remaining_questions_after_no_progress_timeout(monkeypa
     monkeypatch.setenv("AUTOPILOT_EVAL_NO_PROGRESS_TIMEOUT_S", "0.05")
     monkeypatch.setenv("AUTOPILOT_EVAL_ORPHAN_DRAIN_TIMEOUT_S", "0.01")
     tower = EvalTower(timeout=1)
+    # Hung lanes block on an Event released only AFTER _eval_batch returns (the
+    # pools shut down with wait=False). A fixed time.sleep(0.2) was a load race:
+    # on a busy host the timeout bookkeeping outlasted 0.2s, the "stuck" future
+    # finished before the drain wait, and the orphan-contamination mark this test
+    # pins was (correctly) never applied. Same pattern as the serial sibling.
+    release = threading.Event()
 
     # workers>1 pipelines generation + scoring on separate pools: a hung
     # GENERATION lane is what this test exercises, so the fake replaces
     # _generate_question and hands scoring a ready ``final_result``.
     def fake_generate(q: dict, client: object) -> "eval_tower._GenOutcome":
         if q["id"] != "fast":
-            time.sleep(0.2)
+            release.wait(5.0)
         return eval_tower._GenOutcome(
             gen_ended_at_s=time.time(),
             final_result=QuestionResult(
@@ -291,11 +324,14 @@ def test_eval_batch_fails_remaining_questions_after_no_progress_timeout(monkeypa
 
     monkeypatch.setattr(tower, "_generate_question", fake_generate)
 
-    results = tower._eval_batch(
-        [{"id": "fast"}, {"id": "stuck"}, {"id": "queued"}],
-        client=object(),  # type: ignore[arg-type]
-        label="T1",
-    )
+    try:
+        results = tower._eval_batch(
+            [{"id": "fast"}, {"id": "stuck"}, {"id": "queued"}],
+            client=object(),  # type: ignore[arg-type]
+            label="T1",
+        )
+    finally:
+        release.set()
 
     assert [r.question_id for r in results] == ["fast", "stuck", "queued"]
     assert results[0].error is None
@@ -498,28 +534,71 @@ def test_eval_resource_lanes_collapse_gpu_alias_and_use_native_width(monkeypatch
         ]
     )
 
-    assert lanes[0].capacity == 4
+    mode = _server_mode()
+    fd = mode["frontdoor"]
+    assert lanes[0].capacity == min(int(fd["slots"]), int(fd["serving_shape"]["slots_by_shape"]["full"]))
     assert lanes[0].units == 1
     assert lanes[0].device == "cpu-native-batch"
-    assert lanes[1].key == lanes[2].key == "http://localhost:8083"
-    assert capacities["http://localhost:8083"] == 2
+    # coder_escalation is bound onto architect_general's GPU process, so both
+    # collapse to ONE lane whose width is that process's declared slot count.
+    gpu_host = _host_fleet_of("coder_escalation")
+    assert gpu_host == "architect_general"  # non-vacuity: the alias collapse under test
+    gpu_url = str(mode[gpu_host]["url"])
+    gpu_slots = max(int(r.get("slots") or 1) for r in mode.values() if r.get("url") == gpu_url)
+    assert lanes[1].key == lanes[2].key == gpu_url
+    assert lanes[1].device == lanes[2].device == "gpu"
+    assert capacities[gpu_url] == gpu_slots
 
 
 def test_eval_resource_lanes_group_overlapping_full_cpu_process_cohorts(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    mode = _server_mode()
+    # A second, physically distinct full CPU serving process (was worker_general,
+    # now an alias of frontdoor's fleet): a non-alias, non-GPU registry row with
+    # its own URL and a declared full shape.
+    fd_url = mode["frontdoor"]["url"]
+    others = [
+        name
+        for name, row in mode.items()
+        if name != "frontdoor"
+        and not row.get("alias_of")
+        and not (row.get("device") or row.get("vram_gib") or row.get("vram_mb"))
+        and row.get("url") and row.get("url") != fd_url
+        and int(((row.get("serving_shape") or {}).get("slots_by_shape") or {}).get("full", 0) or 0) > 0
+    ]
+    assert others, "no second full CPU process in the registry — re-derive this case"
+    second = others[0]
+    wg_host = _host_fleet_of("worker_general")
+
     lanes, capacities = eval_tower._eval_resource_lanes(
         [
             {"force_role": "frontdoor"},
+            {"force_role": second},
             {"force_role": "worker_general"},
         ]
     )
 
-    assert lanes[0].key == lanes[1].key == "cpu:regions"
-    assert capacities["cpu:regions"] == 4
+    # Every full CPU process overlaps the same four regions -> one shared lane,
+    # distinct cohorts per PHYSICAL process.
+    assert lanes[0].key == lanes[1].key == lanes[2].key == "cpu:regions"
+    fd = mode["frontdoor"]
+    assert capacities["cpu:regions"] == min(
+        int(fd["slots"]), int(fd["serving_shape"]["slots_by_shape"]["full"])
+    )
     assert lanes[0].units == 1
-    assert lanes[1].units == 1
     assert lanes[0].cohort == "cpu:full:frontdoor"
-    assert lanes[1].cohort == "cpu:full:worker_general"
+    assert lanes[1].cohort == f"cpu:full:{second}"
+    assert lanes[1].cohort != lanes[0].cohort
+    # A certified native-batch process consumes one unit; an uncertified one
+    # consumes the whole lane (exclusive).
+    assert lanes[1].device in {"cpu-native-batch", "cpu-placement"}
+    if lanes[1].device == "cpu-native-batch":
+        assert lanes[1].units == 1
+    else:
+        assert lanes[1].units == capacities["cpu:regions"]
+    # An alias bound onto frontdoor's fleet batches in its host's cohort.
+    assert lanes[2].cohort == f"cpu:full:{wg_host}"
+    assert lanes[2].units == 1
 
 
 def test_router_owned_eval_uses_mixed_split_backlog_lane(monkeypatch) -> None:

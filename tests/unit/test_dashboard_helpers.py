@@ -26,6 +26,45 @@ from src.api.routes import (
 )
 from scripts.autopilot import optimization_brief as optimization_brief_module
 
+ROOT = Path(__file__).resolve().parents[2]
+
+# Lineup-independence (2026-09-26). Several port-hint / listener tests used to
+# restate the gemma `worker` server's ports (8072 full, 8082/8182 quarters) as
+# worker_general's. The operator-signed 2026-09-22 lineup cutover (orchestrator
+# 860b0b2d) made worker_general an ALIAS of frontdoor's :8070 fleet and deleted
+# its NUMA_CONFIG entry, so those ports resolve to nothing. The fleet is now
+# DERIVED: worker_general's host from orchestration/model_registry.yaml
+# server_mode, its full/sibling ports from NUMA_CONFIG.
+
+
+def _registry_server_mode() -> dict:
+    import yaml
+
+    return yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )["server_mode"]
+
+
+def _host_fleet_of(role: str) -> str:
+    """The server_mode row that physically hosts ``role`` (shared_with/alias_of)."""
+    for host, row in _registry_server_mode().items():
+        if row.get("alias_of"):
+            continue
+        if host == role or role in (row.get("shared_with") or []):
+            return host
+    raise AssertionError(f"registry declares no host fleet for {role!r}")
+
+
+def _full_and_sibling_ports(role: str) -> tuple[int, list[int]]:
+    """(idx-0 full port, sibling ports in instance order) from NUMA_CONFIG."""
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    instances = NUMA_CONFIG[role]["instances"]
+    return int(instances[0][1]), [int(inst[1]) for inst in instances[1:]]
+
+
+_WG_HOST = _host_fleet_of("worker_general")
+
 
 @pytest.fixture(autouse=True)
 def _neutralize_realized_numa_probe(monkeypatch):
@@ -98,15 +137,24 @@ def test_role_color_unknown_falls_back_to_gray() -> None:
 
 
 def test_port_hints_follow_current_both_mode_priors() -> None:
-    # Public compatibility hints are built from generated stack_priors. Since
-    # the 2026-07-23 lineup restoration (95dffc88) the priors describe the
-    # big+quarters BOTH-mode lineup: big instances AND quarter replicas are
-    # all loaded, so both appear in the hints.
-    assert dashboard_topology._PORT_HINTS[8070] == "frontdoor"
-    assert dashboard_topology._PORT_HINTS[8072] == "worker_general"
-    assert dashboard_topology._PORT_HINTS[8080] == "frontdoor.q0"
-    assert dashboard_topology._PORT_HINTS[8182] == "worker_general.q1"
-    assert dashboard_topology._PORT_HINTS[8082] == "worker_general.q0"
+    # Public compatibility hints are built from generated stack_priors, which
+    # describe the BOTH-mode lineup: the big (idx-0) instance AND its sibling
+    # replicas are all loaded, so both appear in the hints. Ports are derived
+    # from NUMA_CONFIG for frontdoor and for worker_general's registry host
+    # (the same fleet since the 2026-09-22 cutover).
+    for role in dict.fromkeys(("frontdoor", _WG_HOST)):
+        full_port, siblings = _full_and_sibling_ports(role)
+        assert len(siblings) >= 2, (role, siblings)  # non-vacuous sibling labelling
+        assert dashboard_topology._PORT_HINTS[full_port] == role
+        for k, port in enumerate(siblings):
+            assert dashboard_topology._PORT_HINTS[port] == f"{role}.q{k}"
+    # An alias bound onto a host fleet has no server of its own, so it must never
+    # surface as a port hint (the retired gemma worker ports were exactly that).
+    aliases = set(_registry_server_mode()[_WG_HOST].get("shared_with") or [])
+    assert "worker_general" in aliases
+    assert not {
+        hint.split(".")[0] for hint in dashboard_topology._PORT_HINTS.values()
+    } & aliases
 
 
 def test_active_stack_numa_mode_defaults_to_both(monkeypatch) -> None:
@@ -416,7 +464,10 @@ def test_port_hint_labels_known_numa_ports_independent_of_expected_mode(monkeypa
 
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
     assert dashboard_topology._port_hint(8080) == "frontdoor.q0"
-    assert dashboard_topology._port_hint(8182) == "worker_general.q1"
+    # Second sibling of worker_general's host fleet (was the gemma 8182 quarter).
+    _full, host_siblings = _full_and_sibling_ports(_WG_HOST)
+    assert len(host_siblings) >= 2
+    assert dashboard_topology._port_hint(host_siblings[1]) == f"{_WG_HOST}.q1"
 
 
 def test_port_hint_uses_runtime_selected_servers_when_env_unset(monkeypatch) -> None:
@@ -563,11 +614,23 @@ def test_topology_parity_smoke_for_expected_listener_ports(monkeypatch) -> None:
                 return port
         raise AssertionError(f"expected stack service missing for base role {base}")
 
+    # A second, physically distinct LLM fleet (was worker_general, now an alias
+    # of frontdoor's fleet): the first non-alias registry server_mode row other
+    # than frontdoor that the expected stack actually serves.
+    expected_bases = {
+        dashboard_topology.base_role(str(s.get("role") or "")) for s in expected_by_port.values()
+    }
+    second_fleet = next(
+        host
+        for host, row in _registry_server_mode().items()
+        if not row.get("alias_of") and host != "frontdoor" and host in expected_bases
+    )
     listener_ports = {
         port_for_base_role("frontdoor"),
-        port_for_base_role("worker_general"),
+        port_for_base_role(second_fleet),
         port_for_base_role("embedder"),
     }
+    assert len(listener_ports) == 3, listener_ports
     scan_inputs: list[list[int]] = []
 
     def fake_scan_known_ports(ports):
@@ -933,9 +996,13 @@ def test_discover_llama_ports_labels_live_quarters_as_configured_instances(
     monkeypatch, tmp_path
 ) -> None:
     _isolate_llama_attribution_plane(monkeypatch, tmp_path)
+    # Second sibling of worker_general's host fleet (was the gemma 8182 quarter).
+    _full, host_siblings = _full_and_sibling_ports(_WG_HOST)
+    assert len(host_siblings) >= 2
+    host_q1 = host_siblings[1]
     fake_ps = (
         "1234 /opt/llama-server --port 8080 -m /m/frontdoor-quarter.gguf\n"
-        "5678 /opt/llama-server --port 8182 -m /m/worker-quarter.gguf\n"
+        f"5678 /opt/llama-server --port {host_q1} -m /m/worker-quarter.gguf\n"
     )
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
     monkeypatch.setattr(
@@ -946,7 +1013,7 @@ def test_discover_llama_ports_labels_live_quarters_as_configured_instances(
     ports = dashboard_topology._discover_llama_ports()
 
     assert ports[8080] == "frontdoor.q0"
-    assert ports[8182] == "worker_general.q1"
+    assert ports[host_q1] == f"{_WG_HOST}.q1"
     assert all(not role.startswith("extern_") for role in ports.values())
 
 
