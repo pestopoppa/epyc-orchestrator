@@ -4,15 +4,21 @@ Cherry-picked from Hermes Agent ``agent/context_compressor.py`` and
 OpenGauss ``_sanitize_tool_pairs()`` / ``_align_boundary_forward()``.
 
 Provides:
-  - Protected-zone compression (first N + last M turns preserved, middle
-    summarized via auxiliary LLM).
+  - Protected-zone compression (first N + last M turns preserved; old tool
+    outputs in the middle zone are stubbed/summarized deterministically).
   - Orphaned tool-pair sanitization (prevent API rejections from orphaned
     tool_call / tool_result messages after compression).
   - Type-aware tool output summarization (REPL=summarize, file reads=stub,
     errors=keep verbatim).
 
-Integration: called from ``src/graph/helpers.py`` as an alternative
-compaction strategy when ``features().context_compression`` is enabled.
+Integration: the ONLY caller is the OpenAI-compatible ``/v1`` history fold,
+``src/api/routes/openai_compat.py::_compressed_history_dicts``, which runs
+``ContextCompressor().compress()`` on request history longer than 8 messages
+and fails open to the unfolded history on any compressor error. Nothing in
+``src/graph/`` calls this module (graph-side compaction lives in
+``src/graph/compaction.py``), and no caller runs the optional LLM
+summarization pass that ``CompactionResult`` / ``compute_summary_budget``
+leave room for — only the cheap deterministic pass executes.
 
 Guarded by ``features().context_compression``.
 """
@@ -285,8 +291,9 @@ class ContextCompressor:
           3. Sanitize tool pairs to fix orphans
           4. Return result for optional LLM summarization of remaining middle
 
-        The caller (helpers.py) is responsible for the LLM summarization step
-        if further compression is needed.
+        A caller wanting further compression would be responsible for the LLM
+        summarization step; the only current caller (``openai_compat.py``
+        ``/v1`` history folding) does not perform one.
 
         Args:
             messages: Chat message list.

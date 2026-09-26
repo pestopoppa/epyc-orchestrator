@@ -469,10 +469,20 @@ _ESCALATION_MAP: dict[Role, Role] = {
     # Frontdoor escalates to coder
     Role.FRONTDOOR: Role.CODER_ESCALATION,
     # 2026-08-01 W1 CUTOVER: coder_escalation is now an ALIAS on architect_general's
-    # :8083 process — same model, same server. Escalating one to the other was a
-    # null hop that burned a rung of the ladder without changing anything. Both now
-    # escalate to architect_critic (122B, :8074), which is a genuinely different
-    # model on genuinely different hardware.
+    # :8083 process — same model, same server (Qwen3.8-27B Q8 on the MI210 since
+    # 2026-08-20). Escalating one to the other was a null hop that burned a rung of
+    # the ladder without changing anything. Both now escalate to architect_critic
+    # (Qwen3.8-Flash-Next UD-IQ4_XS on the full CPU instance, :8074, since the
+    # 2026-09-22 lineup cutover; the 122B before that), which is a genuinely
+    # different model on genuinely different hardware.
+    #
+    # SCOPE NOTE: this map drives Role.escalates_to()/get_escalation_chain() —
+    # i.e. EscalationPolicy (src/orchestration/escalation.py), the proactive
+    # delegator and the REPL's advertised escalation chain. The pydantic-graph
+    # does NOT follow it to the critic: src/graph/nodes.py hard-wires
+    # CoderEscalationNode -> ArchitectNode (terminal), has no critic node, and
+    # _ROLE_TO_NODE has no ARCHITECT_CRITIC entry (select_start_node falls back
+    # to FrontdoorNode). So in-graph escalation never reaches ARCHITECT_CRITIC.
     Role.CODER_ESCALATION: Role.ARCHITECT_CRITIC,
     Role.THINKING_REASONING: Role.ARCHITECT_CRITIC,
     # Ingest escalates to architect

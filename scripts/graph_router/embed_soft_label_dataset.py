@@ -80,10 +80,12 @@ SUITE_TO_TASK_TYPE = {
 
 VISION_SUITES = {"vl"}
 
-# BGE-large max context is 512 tokens. Servers run -c 2048 -np 4 => 512
-# tokens/slot. Cap prompt chars at ~1400 (worst-case ~2.7 chars/token => ~512
-# tokens) so dense-tokenizing prompts (code, tables) stay in-bounds. The embed
-# call also falls back to per-item on batch failure, substituting a zero vector
+# BGE-large max context is 512 tokens. The cap below was sized for embedder
+# servers at -c 2048 -np 4 (=> 512 tokens/slot): ~1400 chars at worst-case ~2.7
+# chars/token => ~512 tokens. The live pool (8090-8095) runs -c 512 -np 4, i.e.
+# only 256 tokens/slot (verified 2026-09-26 via /props n_ctx=256), so a
+# dense-tokenizing prompt (code, tables) near the cap can exceed its slot. The
+# embed call falls back to per-item on batch failure, substituting a zero vector
 # for any single prompt that still exceeds the limit. CLS uses the leading gist.
 _MAX_PROMPT_CHARS = 1400
 
