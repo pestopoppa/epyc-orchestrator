@@ -801,6 +801,18 @@ class LlamaServerBackend(ModelBackend):
             usage = data.get("usage", {}) or {}
             prompt_tokens = int(usage.get("prompt_tokens", 0))
             tokens_generated = int(usage.get("completion_tokens", 0))
+            # KV-reuse count: usage.prompt_tokens_details.cached_tokens (the
+            # server's n_prompt_tokens_cache), else timings.cache_n — the same
+            # quantity on both fields; None when the server reported neither.
+            _details = usage.get("prompt_tokens_details")
+            _cached_raw = _details.get("cached_tokens") if isinstance(_details, dict) else None
+            if _cached_raw is None:
+                _cached_raw = (data.get("timings") or {}).get("cache_n")
+            cached_prompt_tokens = (
+                int(_cached_raw)
+                if isinstance(_cached_raw, (int, float)) and not isinstance(_cached_raw, bool)
+                else None
+            )
             if completion_reason == "length" and 0 < tokens_generated < int(payload["max_tokens"]):
                 # The OpenAI shim has no `truncated` field, but a length stop
                 # BELOW max_tokens can only be the slot's n_ctx running out
@@ -863,6 +875,7 @@ class LlamaServerBackend(ModelBackend):
                 completion_probabilities=chat_logprob_rows,
                 tool_calls=tool_calls,
                 prompt_tokens=int(prompt_tokens) if prompt_tokens else None,
+                cached_prompt_tokens=cached_prompt_tokens,
             )
         except httpx.HTTPStatusError as e:
             elapsed = time.time() - start_time

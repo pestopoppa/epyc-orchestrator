@@ -12,6 +12,8 @@ existed (origin/main 09bdb998). Each case records two things:
 
 Regenerate ONLY when a default-mode change is intended:
 ``HS4_REGEN_GOLDEN=1 pytest tests/unit/test_openai_compat_default_golden.py``.
+The ``*_include_usage`` cases were added by HS-4 P0.4; the pre-existing cases
+were not regenerated.
 """
 
 from __future__ import annotations
@@ -101,6 +103,26 @@ CASES: dict[str, dict[str, Any]] = {
         "tools": _TOOLS,
         "x_show_routing": True,
         "stream": True,
+    },
+    # HS-4 P0.4 (added cases, captured after the fact): stream_options.include_usage
+    # appends one usage chunk; every chunk before it is identical to the cases above.
+    "direct_stream_tools_include_usage": {
+        "model": "frontdoor",
+        "messages": _HISTORY,
+        "tools": _TOOLS,
+        "tool_choice": {"type": "function", "function": {"name": "read_file"}},
+        "x_disable_repl": True,
+        "x_show_routing": True,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    "repl_stream_tools_include_usage": {
+        "model": "orchestrator",
+        "messages": _HISTORY,
+        "tools": _TOOLS,
+        "x_show_routing": True,
+        "stream": True,
+        "stream_options": {"include_usage": True},
     },
 }
 

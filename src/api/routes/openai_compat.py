@@ -531,8 +531,11 @@ def _run_client_tool_completion(
     *,
     role: str | Role,
     sampling_kwargs: dict[str, Any],
-) -> tuple[str, list[dict[str, Any]], str]:
-    """One backend chat-completions call; returns (content, tool_calls, finish_reason).
+) -> tuple[str, list[dict[str, Any]], str, OpenAIUsage]:
+    """One backend chat-completions call.
+
+    Returns (content, tool_calls, finish_reason, usage); ``usage`` carries the
+    backend's own token counts (see ``_client_usage``).
 
     Routing: ``role`` is the SAME resolved role the default mode would use
     (x_force_role > x_force_model > x_orchestrator_role > model alias). No REPL, no
@@ -557,7 +560,69 @@ def _run_client_tool_completion(
         finish_reason = str(result.get("finish_reason") or "stop")
         if finish_reason not in _CLIENT_FINISH_REASONS:
             finish_reason = "stop"
-    return content, tool_calls, finish_reason
+    return content, tool_calls, finish_reason, _client_usage(result.get("usage"))
+
+
+def _token_count(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _client_usage(backend_usage: Any) -> OpenAIUsage:
+    """HS-4 P0.4: OpenAI ``usage`` from the backend's OWN counts.
+
+    ``prompt_tokens`` / ``completion_tokens`` / ``cached_tokens`` are what
+    llama-server reported for this call (the same numbers the inference tap
+    records as ``server_terminal``). A count the server did not report is 0 —
+    never re-tokenized or estimated, so a consumer gating on ``>= 1`` refuses
+    an unmeasured turn instead of accepting a guess.
+    """
+    usage = backend_usage if isinstance(backend_usage, dict) else {}
+    prompt_tokens = _token_count(usage.get("prompt_tokens"))
+    completion_tokens = _token_count(usage.get("completion_tokens"))
+    cached_tokens = _token_count(usage.get("cached_tokens"))
+    if prompt_tokens is None or completion_tokens is None:
+        logger.warning(
+            "client tool mode: backend reported no %s token count; usage reports 0",
+            "prompt" if prompt_tokens is None else "completion",
+        )
+    prompt_tokens = prompt_tokens or 0
+    completion_tokens = completion_tokens or 0
+    return OpenAIUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=(
+            {"cached_tokens": cached_tokens} if cached_tokens is not None else None
+        ),
+    )
+
+
+def _default_usage(
+    prompt: str, total_tokens: int, response_text: str, primitives: Any
+) -> OpenAIUsage:
+    """Usage for the default (REPL / direct) path.
+
+    ``completion_tokens`` is the backend's decode count summed over every call
+    of the request (``total_tokens_generated``). ``prompt_tokens`` is the
+    server-reported prompt-token sum when the backends reported one, else the
+    long-standing chars/4 estimate of the last user message (mock mode, a
+    backend that reports no usage).
+    """
+    measured = _token_count(getattr(primitives, "total_prompt_tokens_reported", None))
+    prompt_tokens = measured if measured else len(prompt) // 4
+    completion_tokens = total_tokens or len(response_text) // 4
+    return OpenAIUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+
+
+def _stream_include_usage(request: OpenAIChatRequest) -> bool:
+    options = request.stream_options
+    return isinstance(options, dict) and options.get("include_usage") is True
 
 
 def _apply_client_tool_contract_metadata(
@@ -931,6 +996,7 @@ async def openai_chat_completions(
             response_text = ""
             finish_reason = "stop"
             client_tool_calls: list[dict[str, Any]] = []
+            client_usage: OpenAIUsage | None = None
 
             if not use_real_mode:
                 # Mock mode fallback
@@ -982,7 +1048,7 @@ async def openai_chat_completions(
                         # arrive whole); content and tool-call deltas are then
                         # replayed in OpenAI chunk format below.
                         try:
-                            response_text, client_tool_calls, finish_reason = (
+                            response_text, client_tool_calls, finish_reason, client_usage = (
                                 _run_client_tool_completion(
                                     primitives, request, client_messages,
                                     role=role, sampling_kwargs=sampling_kwargs,
@@ -1288,6 +1354,24 @@ async def openai_chat_completions(
                 _apply_request_key_metadata(meta, request_keys)
                 final_chunk["x_orchestrator_metadata"] = meta
             yield f"data: {json.dumps(final_chunk)}\n\n"
+            # stream_options.include_usage (OpenAI spec; @ai-sdk/openai-compatible
+            # sends it by default from OpenCode): one extra chunk, empty choices,
+            # carrying usage — after the finish_reason chunk, before [DONE].
+            if _stream_include_usage(request):
+                stream_usage = (
+                    client_usage
+                    if client_usage is not None
+                    else _default_usage(prompt, total_tokens, response_text, primitives)
+                )
+                usage_chunk = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": request.model,
+                    "choices": [],
+                    "usage": stream_usage.model_dump(),
+                }
+                yield f"data: {json.dumps(usage_chunk)}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(
@@ -1304,6 +1388,7 @@ async def openai_chat_completions(
         total_tokens = 0
         finish_reason = "stop"
         client_tool_calls: list[dict[str, Any]] = []
+        client_usage: OpenAIUsage | None = None
 
         if not use_real_mode:
             # Mock mode fallback
@@ -1322,7 +1407,7 @@ async def openai_chat_completions(
                 combined_context = _combined_prompt_with_context(prompt, context)
 
                 if client_mode:
-                    response_text, client_tool_calls, finish_reason = (
+                    response_text, client_tool_calls, finish_reason, client_usage = (
                         _run_client_tool_completion(
                             primitives, request, client_messages,
                             role=role, sampling_kwargs=sampling_kwargs,
@@ -1474,10 +1559,10 @@ async def openai_chat_completions(
                     finish_reason=finish_reason,
                 )
             ],
-            usage=OpenAIUsage(
-                prompt_tokens=len(prompt) // 4,
-                completion_tokens=total_tokens or len(response_text) // 4,
-                total_tokens=(len(prompt) // 4) + (total_tokens or len(response_text) // 4),
+            usage=(
+                client_usage
+                if client_usage is not None
+                else _default_usage(prompt, total_tokens, response_text, primitives)
             ),
             x_orchestrator_metadata=response_meta,
         )

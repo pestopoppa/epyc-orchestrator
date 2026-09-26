@@ -701,7 +701,13 @@ def test_primitives_chat_completion_call_binds_payload_and_returns_tool_calls():
         messages, role="frontdoor", tools=[READ_TOOL], tool_choice="auto", n_tokens=64, seed=3
     )
 
-    assert out == {"content": "", "tool_calls": [MODEL_TOOL_CALL], "finish_reason": "tool_calls"}
+    assert out == {
+        "content": "",
+        "tool_calls": [MODEL_TOOL_CALL],
+        "finish_reason": "tool_calls",
+        # The fake backend reports no prompt/cached count: None, never estimated.
+        "usage": {"prompt_tokens": None, "completion_tokens": 5, "cached_tokens": None},
+    }
     assert backend.stream_calls == 0
     sent = backend.requests[0]
     assert sent.chat_payload == {"messages": messages, "tools": [READ_TOOL], "tool_choice": "auto"}
@@ -736,6 +742,198 @@ def test_primitives_chat_completion_call_refuses_mock_mode():
         LLMPrimitives(mock_mode=True).chat_completion_call(
             [{"role": "user", "content": "x"}], role="frontdoor"
         )
+
+
+# ── HS-4 P0.4: token usage carries the backend's own numbers ─────────────────
+# The live acceptance run (2026-09-26) exported OpenCode messages with input/
+# output tokens = 0 while the tap measured prompt_tokens=7386: the client-mode
+# stream had no usage chunk and the non-stream usage was a chars/4 estimate.
+
+BACKEND_PROMPT, BACKEND_COMPLETION, BACKEND_CACHED = 7386, 19, 7168
+EXPECTED_USAGE = {
+    "prompt_tokens": BACKEND_PROMPT,
+    "completion_tokens": BACKEND_COMPLETION,
+    "total_tokens": BACKEND_PROMPT + BACKEND_COMPLETION,
+    "prompt_tokens_details": {"cached_tokens": BACKEND_CACHED},
+}
+
+
+class _UsageBackend(_FakeBackend):
+    """Returns the server usage the way ``_infer_chat_completions`` parses it."""
+
+    def infer(self, role_config, request):
+        from src.model_server import InferenceResult
+
+        self.requests.append(request)
+        return InferenceResult(
+            role="frontdoor",
+            output="",
+            tokens_generated=BACKEND_COMPLETION,
+            generation_speed=10.0,
+            elapsed_time=0.1,
+            success=True,
+            completion_reason="tool_calls",
+            tool_calls=list(self.tool_calls),
+            prompt_tokens=BACKEND_PROMPT,
+            cached_prompt_tokens=BACKEND_CACHED,
+        )
+
+
+def _server_response(usage: dict[str, Any], timings: dict[str, Any] | None = None) -> Mock:
+    response = Mock()
+    response.status_code = 200
+    response.raise_for_status = Mock()
+    response.json.return_value = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": None, "tool_calls": [MODEL_TOOL_CALL]},
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": usage,
+        "timings": timings or {"prompt_ms": 5.0, "predicted_ms": 5.0},
+    }
+    return response
+
+
+@pytest.mark.parametrize(
+    ("usage", "timings", "expected_cached"),
+    [
+        # llama-server v10: usage.prompt_tokens_details.cached_tokens
+        (
+            {
+                "prompt_tokens": BACKEND_PROMPT,
+                "completion_tokens": BACKEND_COMPLETION,
+                "prompt_tokens_details": {"cached_tokens": BACKEND_CACHED},
+            },
+            None,
+            BACKEND_CACHED,
+        ),
+        # older servers: only timings.cache_n
+        (
+            {"prompt_tokens": BACKEND_PROMPT, "completion_tokens": BACKEND_COMPLETION},
+            {"prompt_ms": 5.0, "predicted_ms": 5.0, "cache_n": 42},
+            42,
+        ),
+        # neither reported: unknown, not 0 and not estimated
+        ({"prompt_tokens": BACKEND_PROMPT, "completion_tokens": BACKEND_COMPLETION}, None, None),
+    ],
+)
+def test_backend_parses_server_usage_including_cached_tokens(
+    role_config, usage, timings, expected_cached
+):
+    from src.model_server import InferenceRequest
+
+    backend = _backend(True)
+    request = InferenceRequest(
+        role="frontdoor",
+        prompt="x",
+        n_tokens=64,
+        chat_payload={"messages": [{"role": "user", "content": "x"}], "tools": [READ_TOOL]},
+    )
+    with patch.object(
+        backend.client, "post", return_value=_server_response(usage, timings)
+    ), patch("src.registry.registry_loader.chat_template_kwargs_for_role", return_value=None):
+        result = backend.infer(role_config, request)
+
+    assert result.prompt_tokens == BACKEND_PROMPT
+    assert result.tokens_generated == BACKEND_COMPLETION
+    assert result.cached_prompt_tokens == expected_cached
+
+
+def test_primitives_chat_completion_call_returns_backend_usage():
+    primitives = _real_primitives(_UsageBackend([MODEL_TOOL_CALL]))
+
+    out = primitives.chat_completion_call([{"role": "user", "content": "x"}], role="frontdoor")
+
+    assert out["usage"] == {
+        "prompt_tokens": BACKEND_PROMPT,
+        "completion_tokens": BACKEND_COMPLETION,
+        "cached_tokens": BACKEND_CACHED,
+    }
+    assert primitives.total_prompt_tokens_reported == BACKEND_PROMPT
+
+
+def _install_real(monkeypatch, backend) -> Any:
+    """Route → real LLMPrimitives → fake backend (no live server)."""
+    primitives = _real_primitives(backend)
+    import src.llm_primitives as llm_primitives_module
+
+    monkeypatch.setattr(llm_primitives_module, "LLMPrimitives", lambda **_kw: primitives)
+    return primitives
+
+
+def test_nonstream_client_mode_usage_is_the_backends(client, monkeypatch):
+    _install_real(monkeypatch, _UsageBackend([MODEL_TOOL_CALL]))
+
+    r = client.post("/v1/chat/completions", json=_body())
+
+    assert r.status_code == 200, r.text
+    assert r.json()["choices"][0]["finish_reason"] == "tool_calls"
+    assert r.json()["usage"] == EXPECTED_USAGE
+
+
+def test_stream_client_mode_include_usage_emits_final_usage_chunk(client, monkeypatch):
+    _install_real(monkeypatch, _UsageBackend([MODEL_TOOL_CALL]))
+
+    r = client.post(
+        "/v1/chat/completions",
+        json=_body(stream=True, stream_options={"include_usage": True}),
+    )
+
+    assert r.status_code == 200, r.text
+    events = _sse_events(r.text)
+    # OpenAI shape: finish_reason chunk, then ONE chunk with empty choices + usage.
+    assert events[-1]["choices"] == []
+    assert events[-1]["usage"] == EXPECTED_USAGE
+    assert events[-1]["object"] == "chat.completion.chunk"
+    assert events[-1]["id"] == events[0]["id"]
+    assert events[-2]["choices"][0]["finish_reason"] == "tool_calls"
+    assert all("usage" not in e for e in events[:-1])
+
+
+@pytest.mark.parametrize("stream_options", [None, {"include_usage": False}, {}])
+def test_stream_without_include_usage_has_no_usage_chunk(client, monkeypatch, stream_options):
+    _install_real(monkeypatch, _UsageBackend([MODEL_TOOL_CALL]))
+    body = _body(stream=True)
+    if stream_options is not None:
+        body["stream_options"] = stream_options
+
+    events = _sse_events(client.post("/v1/chat/completions", json=body).text)
+
+    assert all("usage" not in e for e in events)
+    assert events[-1]["choices"][0]["finish_reason"] == "tool_calls"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_unreported_prompt_count_is_zero_not_an_estimate(client, monkeypatch, stream):
+    result = _tool_result(content="ok")
+    result["usage"] = {"prompt_tokens": None, "completion_tokens": 4, "cached_tokens": None}
+    _install(monkeypatch, result=result)
+
+    r = client.post(
+        "/v1/chat/completions",
+        json=_body(stream=stream, stream_options={"include_usage": True}),
+    )
+
+    usage = _sse_events(r.text)[-1]["usage"] if stream else r.json()["usage"]
+    assert usage == {"prompt_tokens": 0, "completion_tokens": 4, "total_tokens": 4}
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_default_mode_usage_uses_server_reported_prompt_tokens(client, monkeypatch, stream):
+    primitives = _default_mode_primitives(monkeypatch)
+    primitives.total_tokens_generated = 9
+    primitives.total_prompt_tokens_reported = 321
+
+    r = client.post(
+        "/v1/chat/completions",
+        json=_default_body(stream=stream, stream_options={"include_usage": True}),
+    )
+
+    assert r.status_code == 200, r.text
+    usage = _sse_events(r.text)[-1]["usage"] if stream else r.json()["usage"]
+    assert usage == {"prompt_tokens": 321, "completion_tokens": 9, "total_tokens": 330}
 
 
 def test_trace_keys_setter_drops_none_and_copies():

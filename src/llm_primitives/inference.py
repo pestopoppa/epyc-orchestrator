@@ -1345,6 +1345,12 @@ class InferenceMixin:
                 call_meta["tool_calls"] = list(
                     getattr(result, "tool_calls", None) or []
                 )
+                # HS-4 P0.4: the server's own usage numbers for the /v1 client
+                # response (None = not reported; never estimated).
+                call_meta["prompt_tokens"] = getattr(result, "prompt_tokens", None)
+                call_meta["cached_prompt_tokens"] = getattr(
+                    result, "cached_prompt_tokens", None
+                )
             if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
                 log.warning(
                     "Frontdoor inference telemetry: transport=%s elapsed_ms=%.1f "
@@ -1411,6 +1417,14 @@ class InferenceMixin:
             self.total_prompt_eval_ms += result.prompt_eval_ms
             self.total_generation_ms += result.generation_ms
             self.total_http_overhead_ms += result.http_overhead_ms
+            # Server-reported prompt tokens (same provenance as the tap's
+            # server_terminal count) — summed so /v1 can report measured usage
+            # instead of a chars/4 estimate. Calls that reported none add 0.
+            _reported_prompt = getattr(result, "prompt_tokens", None)
+            if isinstance(_reported_prompt, int) and _reported_prompt > 0:
+                self.total_prompt_tokens_reported = (
+                    getattr(self, "total_prompt_tokens_reported", 0) + _reported_prompt
+                )
             if result.predicted_per_second > 0:
                 self._last_predicted_tps = result.predicted_per_second
             return result.output

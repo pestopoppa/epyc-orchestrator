@@ -65,6 +65,7 @@ class StatsMixin:
         self.total_calls = 0
         self.total_batch_calls = 0
         self.total_tokens_generated = 0
+        self.total_prompt_tokens_reported = 0
         self.total_prompt_eval_ms = 0.0
         self.total_generation_ms = 0.0
         self._last_predicted_tps = 0.0
@@ -82,6 +83,7 @@ class StatsMixin:
         self.total_calls = 0
         self.total_batch_calls = 0
         self.total_tokens_generated = 0
+        self.total_prompt_tokens_reported = 0
         self.total_prompt_eval_ms = 0.0
         self.total_generation_ms = 0.0
         self.total_http_overhead_ms = 0.0

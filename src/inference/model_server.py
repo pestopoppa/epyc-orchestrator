@@ -170,6 +170,10 @@ class InferenceResult:
     # not report one (early-stop, transport failure, usage-less stream) — it is
     # never estimated here, so a consumer can tell measured from unknown.
     prompt_tokens: int | None = None
+    # HS-4 P0.4: of ``prompt_tokens``, how many the server reused from its KV
+    # cache (``usage.prompt_tokens_details.cached_tokens`` / ``timings.cache_n``)
+    # on the chat-completions path. None = not reported; never estimated.
+    cached_prompt_tokens: int | None = None
     # Set (to ContextOverflowInfo.to_dict()) when llama-server refused or
     # aborted the request for lack of KV context — HTTP 400
     # exceed_context_size_error or "Context size has been exceeded.". The

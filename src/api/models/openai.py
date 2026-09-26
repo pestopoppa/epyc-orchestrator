@@ -4,7 +4,7 @@ import time
 import uuid
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_serializer, model_validator
 
 
 class OpenAIMessage(BaseModel):
@@ -43,7 +43,8 @@ class OpenAIMessage(BaseModel):
 # on purpose: an explicit no-op (n=1, penalty 0.0, response_format {"type":"text"},
 # empty stop list) is accepted so SDK clients that spell out defaults keep
 # working; only a request whose semantics we would silently change is refused.
-# Fields with no output effect (user, metadata, stream_options) stay ignored.
+# Fields with no output effect (user, metadata) stay ignored. stream_options is
+# a typed field: include_usage adds the final usage chunk to a stream.
 _UNHONOURED_SEMANTIC_FIELDS: dict = {
     "response_format": (
         lambda v: v is not None and not (isinstance(v, dict) and v.get("type") == "text"),
@@ -122,6 +123,13 @@ class OpenAIChatRequest(BaseModel):
         "accepted as an alias (422 if both are sent).",
     )
     stream: bool = Field(default=False, description="Enable streaming")
+    stream_options: dict[str, Any] | None = Field(
+        default=None,
+        description="OpenAI stream options. {'include_usage': true} appends one final chunk "
+        "(empty choices) carrying `usage` before [DONE]. Client tool mode reports the "
+        "backend's own prompt/completion/cached token counts. Other keys are ignored; "
+        "ignored when stream is false (non-stream responses always carry usage).",
+    )
     tools: list[dict[str, Any]] | None = Field(
         default=None,
         description="OpenAI native tool definitions. Forwarded to the backend verbatim ONLY with "
@@ -323,6 +331,16 @@ class OpenAIUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    # {"cached_tokens": N} — present only when the backend reported a KV-cache
+    # reuse count (client tool mode); omitted from the JSON otherwise.
+    prompt_tokens_details: dict[str, int] | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_details(self, handler) -> dict[str, Any]:
+        data = handler(self)
+        if isinstance(data, dict) and data.get("prompt_tokens_details") is None:
+            data.pop("prompt_tokens_details", None)
+        return data
 
 
 class OpenAIChatResponse(BaseModel):

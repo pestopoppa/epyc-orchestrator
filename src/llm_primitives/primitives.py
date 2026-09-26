@@ -144,6 +144,8 @@ class LLMPrimitives(
         self.total_calls = 0
         self.total_batch_calls = 0
         self.total_tokens_generated = 0
+        # Sum of server-REPORTED prompt tokens (never estimated; see inference.py).
+        self.total_prompt_tokens_reported = 0
         # Clean timing accumulators from llama.cpp timings
         self.total_prompt_eval_ms = 0.0
         self.total_generation_ms = 0.0
@@ -781,7 +783,10 @@ class LLMPrimitives(
         ``llm_call`` (role system-prompt suffix, persona, RAG injection) —
         the client owns the conversation — nor the content cache.
 
-        Returns ``{"content", "tool_calls", "finish_reason"}``. Backend
+        Returns ``{"content", "tool_calls", "finish_reason", "usage"}``;
+        ``usage`` holds the backend's own ``prompt_tokens`` /
+        ``completion_tokens`` / ``cached_tokens`` (None when the server did
+        not report one — never re-tokenized or estimated). Backend
         failures RAISE (no in-band ``[ERROR: ...]`` string). The
         ``output_cap`` truncation of ``_llm_call_impl`` is not applied here;
         ``n_tokens`` (the request's ``max_tokens``) bounds the output.
@@ -839,10 +844,19 @@ class LLMPrimitives(
         meta = self.get_last_inference_meta() or {}
         tool_calls = [tc for tc in (meta.get("tool_calls") or []) if isinstance(tc, dict)]
         log_entry.result = (content or json.dumps(tool_calls))[:500]
+
+        def _count(value: Any) -> int | None:
+            return value if isinstance(value, int) and not isinstance(value, bool) else None
+
         return {
             "content": content or "",
             "tool_calls": tool_calls,
             "finish_reason": str(meta.get("completion_reason") or "stop"),
+            "usage": {
+                "prompt_tokens": _count(meta.get("prompt_tokens")),
+                "completion_tokens": _count(meta.get("tokens")),
+                "cached_tokens": _count(meta.get("cached_prompt_tokens")),
+            },
         }
 
     def _llm_call_impl(
