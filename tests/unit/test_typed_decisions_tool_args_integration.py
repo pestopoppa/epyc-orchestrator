@@ -531,6 +531,10 @@ class _FakeRegistry:
     def __init__(self, tool: _Tool):
         self._tools = {tool.name: tool}
         self.invocations: list[dict] = []
+        self.allowed = True
+
+    def can_use_tool(self, role, tool_name, context=None):
+        return self.allowed and tool_name in self._tools
 
     def invoke(
         self,
@@ -543,6 +547,8 @@ class _FakeRegistry:
         context=None,
         **kwargs,
     ):
+        if not self.can_use_tool(role, tool_name, context=context):
+            raise PermissionError("tool denied")
         self.invocations.append({"tool_name": tool_name, "role": role, "kwargs": dict(kwargs)})
         return "tool-result"
 
@@ -593,7 +599,16 @@ def test_call_site_is_wired_and_inert_when_off(monkeypatch, disabled):
     ]
 
 
-def test_call_site_uses_typed_arguments_when_on(enabled):
+def test_call_site_uses_typed_arguments_when_on(enabled, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    import src.config
+
+    monkeypatch.setattr(
+        src.config,
+        "get_config",
+        lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
+    )
     schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
     mapping = tool_schema_to_questions("deploy", schema)
     primitives = _FakePrimitives(
@@ -608,3 +623,109 @@ def test_call_site_uses_typed_arguments_when_on(enabled):
     assert registry.invocations == [
         {"tool_name": "deploy", "role": "worker", "kwargs": {"mode": "safe", "dry_run": True}}
     ]
+    rows = (tmp_path / "typed_decisions" / "decision_receipts.jsonl").read_text().splitlines()
+    receipt = json.loads(rows[0])
+    assert len(rows) == 1
+    assert receipt["schema_version"] == "decision_receipt.v1"
+    assert receipt["selected_id"] == "deploy"
+    assert receipt["validation_result"] == "accepted"
+    assert receipt["authorization_result"] == "allowed"
+    assert receipt["fallback"] is None
+    assert receipt["observed_downstream_outcome"]["status"] == "returned"
+
+
+def test_call_site_rechecks_task_revision_and_uses_incumbent(enabled, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    import src.config
+
+    monkeypatch.setattr(
+        src.config,
+        "get_config",
+        lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
+    )
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    repl = _make_repl(_FakePrimitives(), registry)
+
+    def _mutating_choice(tool_name):
+        repl.context = "changed after selection"
+        return {"mode": "safe", "dry_run": True}
+
+    monkeypatch.setattr(repl, "_typed_tool_arguments", _mutating_choice)
+    assert repl._dispatch_tool("deploy", mode="fast", dry_run=False) == "tool-result"
+    assert registry.invocations[0]["kwargs"] == {"mode": "fast", "dry_run": False}
+    receipt = json.loads(
+        (tmp_path / "typed_decisions" / "decision_receipts.jsonl").read_text().strip()
+    )
+    assert receipt["validation_result"] == "stale"
+    assert receipt["fallback"] == "incumbent_fallback"
+
+
+@pytest.mark.parametrize("mutation", ["catalog", "model", "circuit"])
+def test_call_site_rechecks_catalog_and_model(enabled, monkeypatch, tmp_path, mutation):
+    from types import SimpleNamespace
+
+    import src.config
+
+    monkeypatch.setattr(
+        src.config,
+        "get_config",
+        lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
+    )
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS.copy()))
+    primitives = _FakePrimitives()
+    circuit = {"available": True}
+    if mutation == "circuit":
+        primitives.server_urls = {ROLE: "http://selector.invalid"}
+        primitives.health_tracker = SimpleNamespace(is_available=lambda url: circuit["available"])
+    repl = _make_repl(primitives, registry)
+
+    def _mutating_choice(tool_name):
+        if mutation == "catalog":
+            registry._tools[tool_name].parameters = {"changed": {"type": "string"}}
+        elif mutation == "model":
+            primitives.llm_call = None
+        else:
+            circuit["available"] = False
+        return {"mode": "safe", "dry_run": True}
+
+    monkeypatch.setattr(repl, "_typed_tool_arguments", _mutating_choice)
+    assert repl._dispatch_tool("deploy", mode="fast", dry_run=False) == "tool-result"
+    assert registry.invocations[0]["kwargs"] == {"mode": "fast", "dry_run": False}
+    receipt = json.loads(
+        (tmp_path / "typed_decisions" / "decision_receipts.jsonl").read_text().strip()
+    )
+    assert receipt["validation_result"] == (
+        "stale" if mutation == "catalog" else "model_unavailable"
+    )
+    assert receipt["fallback"] == "incumbent_fallback"
+
+
+def test_call_site_selection_cannot_authorize_tool(enabled, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    import src.config
+
+    monkeypatch.setattr(
+        src.config,
+        "get_config",
+        lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
+    )
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    repl = _make_repl(_FakePrimitives(), registry)
+
+    def _revoked_choice(tool_name):
+        registry.allowed = False
+        return {"mode": "safe", "dry_run": True}
+
+    monkeypatch.setattr(repl, "_typed_tool_arguments", _revoked_choice)
+    with pytest.raises(PermissionError, match="tool denied"):
+        repl._dispatch_tool("deploy", mode="fast", dry_run=False)
+    assert registry.invocations == []
+    receipt = json.loads(
+        (tmp_path / "typed_decisions" / "decision_receipts.jsonl").read_text().strip()
+    )
+    assert receipt["validation_result"] == "unauthorized"
+    assert receipt["authorization_result"] == "denied"
+    assert receipt["fallback"] == "incumbent_fallback"
+    assert receipt["observed_downstream_outcome"]["detail"] == "PermissionError"

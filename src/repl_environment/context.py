@@ -525,6 +525,8 @@ class _ContextMixin:
 
     def _dispatch_tool(self, tool_name: str, **kwargs) -> Any:
         """Dispatch a tool call. Telemetry is captured by _invoke_tool."""
+        import time
+
         # Task-manager-specialized tools (stateful, request-local).
         if tool_name in {"task_create", "task_update", "task_list", "budget_override"}:
             from orchestration.tools.task_management import set_active_task_manager
@@ -569,28 +571,126 @@ class _ContextMixin:
         # TD-4: closed-set typed argument selection (flag
         # ``typed_decisions_tool_args``, default off). Fail-open: None keeps
         # the model-provided kwargs and the existing validation path.
-        typed_arguments = self._typed_tool_arguments(tool_name)
-        if typed_arguments is not None:
-            kwargs = typed_arguments
+        from src.features import features
+
+        decision_started = time.perf_counter()
+        prepared = None
+        typed_enabled = features().typed_decisions_tool_args
+        if typed_enabled:
+            from src.typed_decisions.prepared_action import prepare_action
+
+            catalog, read_set, revision = self._tool_decision_snapshot()
+            offered = self._eligible_tool_choices(catalog, caller_type)
+            if offered:
+                prepared = prepare_action(
+                    task_revision=revision,
+                    catalog=catalog,
+                    read_set=read_set,
+                    expires_at_ns=time.time_ns() + 60_000_000_000,
+                    offered_choices=offered,
+                    requested_model=f"role:{self.role}",
+                )
+        typed_arguments = (
+            self._typed_tool_arguments(tool_name)
+            if prepared is not None or not typed_enabled
+            else None
+        )
+        selection_ms = (time.perf_counter() - decision_started) * 1000
+        validation = None
+        authorized = False
+        validation_started = time.perf_counter()
+        if prepared is not None:
+            from dataclasses import replace
+
+            from src.typed_decisions.prepared_action import validate_prepared_action
+
+            primitives = getattr(self, "llm_primitives", None)
+            get_meta = getattr(primitives, "get_last_inference_meta", None)
+            try:
+                meta = get_meta() if callable(get_meta) else None
+            except Exception:
+                meta = None
+            if typed_arguments is not None and isinstance(meta, dict):
+                model_name = meta.get("model")
+                prepared = replace(
+                    prepared,
+                    resolved_model=model_name if isinstance(model_name, str) else None,
+                )
+            catalog, read_set, revision = self._tool_decision_snapshot()
+            current_offered = self._eligible_tool_choices(catalog, caller_type)
+            authorized = tool_name in current_offered
+            validation = validate_prepared_action(
+                prepared,
+                selected_id=tool_name if typed_arguments is not None else None,
+                current_task_revision=revision,
+                current_catalog=catalog,
+                current_read_set=read_set,
+                current_offered_choices=current_offered,
+                authorized=authorized,
+                model_available=self._selector_model_available(),
+            )
+            if validation.status == "accepted":
+                kwargs = typed_arguments
+        validation_ms = (time.perf_counter() - validation_started) * 1000
 
         # Fall back to REPL globals for tools like run_python_code that are
         # registered as direct REPL functions, not in the tool registry.
+        dispatch_started = time.perf_counter()
+        outcome = {"status": "error", "detail": "not_dispatched"}
         try:
-            result = self.tool_registry.invoke(
-                tool_name,
-                self.role,
-                caller_type=caller_type,
-                chain_id=chain_id,
-                chain_index=chain_index,
-                context=getattr(self, "tool_context", None),
-                **kwargs,
-            )
-        except ValueError:
-            repl_globals = getattr(self, "_globals", None)
-            if repl_globals and tool_name in repl_globals and callable(repl_globals[tool_name]):
-                result = repl_globals[tool_name](**kwargs)
-            else:
-                raise
+            try:
+                result = self.tool_registry.invoke(
+                    tool_name,
+                    self.role,
+                    caller_type=caller_type,
+                    chain_id=chain_id,
+                    chain_index=chain_index,
+                    context=getattr(self, "tool_context", None),
+                    **kwargs,
+                )
+            except ValueError:
+                repl_globals = getattr(self, "_globals", None)
+                if repl_globals and tool_name in repl_globals and callable(repl_globals[tool_name]):
+                    result = repl_globals[tool_name](**kwargs)
+                else:
+                    raise
+            if prepared is not None:
+                from src.registry.tool_registry import ToolOutput
+
+                if isinstance(result, ToolOutput):
+                    outcome = {"status": result.status, "detail": "ToolOutput"}
+                else:
+                    outcome = {"status": "returned", "detail": type(result).__name__}
+        except Exception as exc:
+            outcome = {"status": "error", "detail": type(exc).__name__}
+            raise
+        finally:
+            if prepared is not None and validation is not None:
+                from src.config import get_config
+                from src.typed_decisions.prepared_action import append_receipt, make_receipt
+
+                receipt = make_receipt(
+                    prepared,
+                    validation,
+                    authorization_result="allowed" if authorized else "denied",
+                    component_timing_ms={
+                        "selection": selection_ms,
+                        "validation": validation_ms,
+                        "dispatch": (time.perf_counter() - dispatch_started) * 1000,
+                    },
+                    total_timing_ms=(time.perf_counter() - decision_started) * 1000,
+                    observed_downstream_outcome=outcome,
+                )
+                self._last_decision_receipt = receipt
+                try:
+                    append_receipt(
+                        get_config().paths.artifacts_dir
+                        / "typed_decisions"
+                        / "decision_receipts.jsonl",
+                        receipt,
+                    )
+                except Exception:
+                    log.exception("could not persist decision receipt")
         if chain_id:
             self._active_tool_chain_index = chain_index + 1
 
@@ -608,6 +708,84 @@ class _ContextMixin:
                 pass  # Silently ignore research tracking failures
 
         return result
+
+    def _tool_decision_snapshot(self) -> tuple[dict[str, Any], dict[str, str], str]:
+        """Capture the live tool catalogue and task inputs for dispatch recheck."""
+        from src.typed_decisions.prepared_action import fingerprint
+
+        registry = getattr(self, "tool_registry", None)
+        tools = getattr(registry, "_tools", None)
+        catalog = {
+            name: {
+                "parameters": getattr(tool, "parameters", None),
+                "allowed_callers": getattr(tool, "allowed_callers", None),
+                "code_hash": getattr(tool, "code_hash", None),
+                "handler_identity": id(getattr(tool, "handler", None)),
+                "side_effects": getattr(tool, "side_effects", None),
+                "destructive": getattr(tool, "destructive", False),
+            }
+            for name, tool in (tools.items() if isinstance(tools, dict) else ())
+        }
+        manager = getattr(self, "_task_manager", None)
+        task_id = getattr(manager, "current_task_id", None)
+        try:
+            task = manager.get(task_id) if task_id is not None else None
+        except (AttributeError, KeyError):
+            task = None
+        revision = fingerprint(
+            {
+                "context": str(getattr(self, "context", "")),
+                "task_revision": str(getattr(self, "_task_revision", "")),
+                "task_id": task_id,
+                "task_status": getattr(task, "status", None),
+                "task_subject": getattr(task, "subject", None),
+                "task_description": getattr(task, "description", None),
+            }
+        )
+        budget = manager.current_task_budget() if manager is not None else None
+        primitives = getattr(self, "llm_primitives", None)
+        urls = getattr(primitives, "server_urls", None)
+        read_set = {
+            "role": str(getattr(self, "role", "")),
+            "tool_context": repr(getattr(self, "tool_context", None)),
+            "selector_instance": str(id(primitives)),
+            "selector_backend_url": str(urls.get(str(self.role))) if isinstance(urls, dict) else "",
+            "budget_remaining": budget.remaining_summary() if budget is not None else "",
+        }
+        return catalog, read_set, revision
+
+    def _eligible_tool_choices(self, catalog: dict[str, Any], caller_type: str) -> tuple[str, ...]:
+        """Read current tool existence and policy; never infer permission from selection."""
+        registry = getattr(self, "tool_registry", None)
+        can_use = getattr(registry, "can_use_tool", None)
+        if not callable(can_use):
+            return ()
+        choices = []
+        for name in catalog:
+            tool = registry._tools[name]
+            if caller_type not in (getattr(tool, "allowed_callers", None) or [caller_type]):
+                continue
+            try:
+                if can_use(self.role, name, context=getattr(self, "tool_context", None)):
+                    choices.append(name)
+            except Exception:
+                continue
+        return tuple(sorted(choices))
+
+    def _selector_model_available(self) -> bool:
+        """Recheck the selector seam and any configured backend circuit."""
+        primitives = getattr(self, "llm_primitives", None)
+        if not callable(getattr(primitives, "llm_call", None)):
+            return False
+        urls = getattr(primitives, "server_urls", None)
+        backend_url = urls.get(str(self.role)) if isinstance(urls, dict) else None
+        tracker = getattr(primitives, "health_tracker", None)
+        if backend_url and tracker is not None:
+            try:
+                return bool(tracker.is_available(backend_url))
+            except Exception:
+                return False
+        return True
 
     def _typed_tool_arguments(self, tool_name: str) -> dict[str, Any] | None:
         """Closed-set typed arguments for one tool call (TD-4), or ``None``.
