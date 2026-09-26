@@ -34,7 +34,8 @@ Mode preference
 ---------------
 ``mode="native"`` (the default) attempts native candidate scoring first: it
 is the measured speed arm (id_only cue 11.98x vs JSON at 15/16 agreement,
-``bench-cue-sweep-worker.json``) and it fails a question closed when a label
+``bench-cue-sweep-worker.json``, n=1; the 2026-09-18 n=4 re-measurement gives
+9.60x, contested pending TD-1d.0) and it fails a question closed when a label
 is not natively eligible or the tokenizer is unavailable. Eligibility is a
 runtime property of the tokenizer, so instead of pre-computing it this module
 reruns the catalogue in ``"json"`` mode when the native pass reports a

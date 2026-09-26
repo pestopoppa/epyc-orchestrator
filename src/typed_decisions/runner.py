@@ -156,7 +156,8 @@ def run_typed_decisions(
             ``None``. Forwarded to the native runner in native mode (where
             the default is exactly one token per native-capable question).
         cue_style: Native-mode cue style (TD-1d): ``"id_only"`` (the default
-            since TD-6; cue sweep 11.98x at 15/16 agreement), ``"full"`` or
+            since TD-6; cue sweep 11.98x at 15/16 agreement, n=1; 9.60x at
+            n=4, contested pending TD-1d.0), ``"full"`` or
             ``"short"``, or the ``native.CueStyle`` enum. Forwarded to the
             native runner, which replays that cue before each answer token.
             IGNORED by the JSON arm, which replays no cue. The default is the

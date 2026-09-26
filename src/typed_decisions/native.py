@@ -35,7 +35,9 @@ TD-1d — cue styles (speed at parity):
     JSON). ``CueStyle`` selects how much of that cue is replayed: ``FULL`` is
     the TD-1c layout; ``SHORT`` replays ``Q <id>: <first six words>``;
     ``ID_ONLY`` replays ``<id>: `` alone and is the default since TD-6 (cue
-    sweep: 11.98x at 15/16 agreement, ``bench-cue-sweep-worker.json``). The
+    sweep: 11.98x at 15/16 agreement, ``bench-cue-sweep-worker.json``; n=1
+    and contested — the 2026-09-18 n=4 re-measurement gives 9.60x, 6.40x per
+    decision, below the 10x bar, pending TD-1d.0). The
     numbered catalogue rendered by ``build_native_prompt`` is byte-identical
     across styles — the prompt carries the grounding, the cue only re-conditions
     the answer position — so a sweep varies exactly one thing: which cue tokens
@@ -256,7 +258,8 @@ class CueStyle(str, Enum):
 
     ``ID_ONLY`` — ``"\\n<id>: "``; the prompt's numbered catalogue carries the
     grounding. **Native default since TD-6**: the cue sweep measured 11.98x at
-    15/16 agreement vs the JSON arm (``bench-cue-sweep-worker.json``).
+    15/16 agreement vs the JSON arm (``bench-cue-sweep-worker.json``; n=1,
+    contested: 9.60x at n=4 on 2026-09-18, pending TD-1d.0).
     ``FULL``    — ``"\\nQ <id>: <text>\\nAnswer (one of: ...): "`` (TD-1c;
     selectable, still the cue a ``full`` request replays).
     ``SHORT``   — ``"\\nQ <id>: <first _SHORT_CUE_WORDS words>\\n"``.
@@ -415,7 +418,8 @@ def run_typed_decisions_native(
             Values below 1 raise ``ValueError``.
         cue_style: Which cue text is replayed before each answer token (TD-1d;
             see ``CueStyle``). ``CueStyle.ID_ONLY`` is the default since TD-6
-            (cue sweep: 11.98x at 15/16 agreement); "full" and "short" remain
+            (cue sweep: 11.98x at 15/16 agreement, n=1; 9.60x at n=4 —
+            contested, pending TD-1d.0); "full" and "short" remain
             selectable via the value strings "full"/"short"/"id_only". Unknown
             values raise ``ValueError``. The prompt, grammar shape, probability
             slicing and failure contracts do not depend on the style — only the

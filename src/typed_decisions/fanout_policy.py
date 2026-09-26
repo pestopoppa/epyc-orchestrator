@@ -12,6 +12,14 @@ The rule:
   label cannot be bound to one token, and the TD-1d cue sweep measured the
   ``id_only`` cue at **11.98x** vs JSON mode (1.61 s vs 19.32 s) with **15/16**
   agreement on the pairs both arms resolved (``bench-cue-sweep-worker.json``).
+  **Contested (n=1):** that figure is one run per arm. The 2026-09-18 n=4
+  re-measurement on the same GPU model and catalogue (root
+  ``artifacts/typed_decisions/run_20260918/summary-td1d.json``) puts id_only
+  at **9.60x** (1.46 s vs 14.02 s mean) and **6.40x** per decision (native
+  decides 16/24, JSON 24/24), both below the TD-1d 10x bar; the n=1 JSON
+  baseline sample sat above all four re-measured ones. Acceptance is re-open
+  as TD-1d.0 in ``handoffs/active/typed-decision-plane.md``; the policy rule
+  does not depend on the ratio, only on native being the exactness arm.
   Each answer is conditioned on its own question's replayed cue, so the
   questions are isolated from each other's answers.
 * ``not exactness_required and question_count >= 8 and
@@ -31,7 +39,9 @@ The rule:
 Receipts (all local, 2026-09-17, under
 ``artifacts/typed_decisions/run_20260917/`` in the intake worktree):
     * ``bench-cue-sweep-worker.json`` - TD-1d cue sweep (full/short/id_only):
-      id_only 11.98x at 15/16 agreement; full 2.66x.
+      id_only 11.98x at 15/16 agreement; full 2.66x. n=1 per arm and
+      contested: the 2026-09-18 n=4 re-measurement gives 9.60x (6.40x per
+      decision), below the 10x bar, pending TD-1d.0.
     * ``fanout-provided-worker.json`` - TD-3b batched vs singleton on the real
       24-question catalogue: 2.2x at 87.5% agreement.
     * ``fanout-lfm.json`` - TD-3 small-state fan-out (4 questions x 3 states):
@@ -101,7 +111,10 @@ MEASURED_CONSTANTS: tuple[FanoutConstant, ...] = (
         "x wall vs JSON mode",
         "TD-1d cue sweep 2026-09-17, bench-cue-sweep-worker.json: id_only cue "
         "1.61 s vs JSON 19.32 s on the 24-question catalogue (16 natively "
-        "eligible)",
+        "eligible); n=1 per arm and CONTESTED: the 2026-09-18 n=4 "
+        "re-measurement (root artifacts/typed_decisions/run_20260918/"
+        "summary-td1d.json) gives 9.60x (6.40x per decision), below the 10x "
+        "bar; acceptance re-open as TD-1d.0",
     ),
     FanoutConstant(
         "native_per_question_agreement",
