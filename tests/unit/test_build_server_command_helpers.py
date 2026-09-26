@@ -1550,8 +1550,12 @@ def test_start_server_embedding_candidate_reports_recipe_model_path(
     monkeypatch.setattr(oss, "_write_llama_marker", lambda *a, **kw: None)
     monkeypatch.setattr(oss, "wait_for_health", lambda *a, **kw: True)
     monkeypatch.setattr(oss, "build_launch_env", lambda *a, **kw: {})
+    # UFH-12 Phase 0: :8096 now has a declared placement, so the spawn is
+    # `numactl --membind=2 -- taskset -c 152-167 llama-server ...`. The bench
+    # guard is stubbed so the test never reads a live bench claim from /proc.
     with (
         patch.object(oss, "_numa_prefix", return_value=[]),
+        patch.object(oss, "enforce_placement", return_value=None),
         patch.object(oss.subprocess, "Popen", return_value=fake_proc) as popen,
     ):
         info = oss.start_server(
@@ -1563,7 +1567,9 @@ def test_start_server_embedding_candidate_reports_recipe_model_path(
 
     assert info is not None
     assert info.model_path.endswith("granite-embedding-97m-multilingual-r2-Q8_0.gguf")
-    assert popen.call_args.args[0][0].endswith("llama-server")
+    argv = popen.call_args.args[0]
+    assert argv[:6] == ["numactl", "--membind=2", "--", "taskset", "-c", "152-167"]
+    assert argv[6].endswith("llama-server")
     _assert_detached_popen(popen)
 
 

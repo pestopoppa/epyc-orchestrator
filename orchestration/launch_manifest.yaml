@@ -49,7 +49,8 @@ schema_version: launch_manifest.v1
 # =============================================================================
 # Port assignments by role (primary ports — full-speed 1×96t instances)
 # Pre-warm (2026-03-29): primary port is the full-speed instance.
-# Quarter instances on offset ports (808x, 818x, 828x, 838x).
+# Sub-full instances on offset ports: since the 2026-07-30 half-fleet cutover
+# these are the two HALVES 8080/8180 (2x48t); the 8280/8380 quarters are retired.
 # =============================================================================
 # KEPT (phase 2, option b): master declares `server_mode.<role>.port` for 11 of
 # the 28 rows below — every serving role and alias, but none of the embedder
@@ -60,12 +61,12 @@ schema_version: launch_manifest.v1
 # the half that IS doubly declared cannot drift.
 port_map:
   worker: 8070
-  frontdoor: 8070          # Full-speed 1×96t (quarters: 8080, 8180, 8280, 8380)
+  frontdoor: 8070          # Full-speed 1×96t (halves: 8080, 8180 — quarters 8280/8380 retired 2026-07-30)
   # 2026-08-01 W1 CUTOVER: coder_escalation LEFT frontdoor's :8070 35B process.
   # It is now an alias on architect_general's :8083 MI210 27B dense Q8 — a
   # DIFFERENT model on a DIFFERENT device, so the coder chain is a real
   # escalation for the first time since the 2026-05-09 consolidation.
-  coder_escalation: 8083   # Alias -> architect_general shared Qwen3.6-27B GPU server
+  coder_escalation: 8083   # Alias -> architect_general shared Qwen3.8-27B GPU server (Qwen3.6-27B until 2026-08-20)
   worker_summarize: 8070   # Alias -> frontdoor shared Qwen3.6 server (its ONLY alias now)
   worker_general: 8070     # Alias -> frontdoor shared Qwen3.6-35B-A3B server (gemma4 retired 2026-09-22; halves 8080/8180)
   worker_explore: 8070     # Alias -> frontdoor (legacy name; pre-2026-03-19)
@@ -78,8 +79,9 @@ port_map:
   worker_fast: 8102        # Fast worker (1.5B, WARM, 4 slots) — DEPRECATED (worker_pool)
   # Specialists (no pre-warm — already multi-instance or too large for quarters)
   architect_general: 8083
-  # 2026-08-01 W1 CUTOVER: architect_critic is the 122B UD-Q4_K_M that vacated
-  # architect_general, on the SAME full CPU instance it was measured on.
+  # 2026-08-01 W1 CUTOVER: architect_critic took the full CPU instance the 122B
+  # UD-Q4_K_M vacated in architect_general. Since the 2026-09-22 lineup change the
+  # critic serves Qwen3.8-Flash-Next UD-IQ4_XS on that same instance (122B retired).
   # Port 8074 is deliberate: 8084 and 8071 belonged to the removed
   # architect_coding role and stack_change_guard.py L326/L346 reject them.
   architect_critic: 8074
@@ -188,7 +190,9 @@ serial_roles:
 #
 # Adding a new role now requires editing TWO places consistently:
 #   a) Add the role's NUMA wiring in stack_topology.yaml numa_config (or set
-#      `no_numa: true` here if the role doesn't need NUMA pinning, e.g. embedders).
+#      `no_numa: true` here if the role takes no numa_config wiring, e.g.
+#      worker_fast; the embedder pool is no_numa but pinned per port by
+#      `embedding.placement`).
 #   b) Add a role_launch_meta entry with tier/mode/aliases.
 # A consistency check (`_validate_role_classification()` in stack_manifest.py)
 # catches common mismatches at module load time.
@@ -227,14 +231,17 @@ role_launch_meta:
   frontdoor:
     tier: hot
     mode: default
-  # 2026-08-01 W1 CUTOVER: architect_general is Qwen3.6-27B dense Q8 on MI210
-  # (ROCm0) and now HOSTS coder_escalation as an alias on its :8083 process.
+  # 2026-08-01 W1 CUTOVER: architect_general moved to a dense 27B Q8 on MI210
+  # (ROCm0) and HOSTS coder_escalation as an alias on its :8083 process. Model:
+  # Qwen3.6-27B from 2026-08-01, Qwen3.8-27B-Q8_0 since 2026-08-20. Since the
+  # 2026-09-22 lineup change it also hosts ingest_long_context.
   architect_general:
     tier: hot
     mode: default
-    # aliases DERIVED: server_mode.architect_general.shared_with -> [coder_escalation]
-  # architect_critic — NEW 2026-08-01. The 122B UD-Q4_K_M on the full CPU
-  # instance architect_general vacated, port 8074, tier hot per OPERATOR D1.
+    # aliases DERIVED: server_mode.architect_general.shared_with -> [coder_escalation, ingest_long_context]
+  # architect_critic — NEW 2026-08-01 on the full CPU instance architect_general
+  # vacated, port 8074, tier hot per OPERATOR D1. Model: the 122B UD-Q4_K_M until
+  # 2026-09-22, Qwen3.8-Flash-Next UD-IQ4_XS since.
   architect_critic:
     tier: hot
     mode: default
@@ -245,7 +252,10 @@ role_launch_meta:
     mode: vision
     vision_type: worker
     # aliases DERIVED: server_mode.worker_vision.shared_with -> [vision_escalation]
-  # Embedders — no NUMA pinning, fixed single port each
+  # Embedders — not in numa_config (no region locks, no contention-matrix
+  # cells), fixed single port each. `no_numa` means exactly that and no more:
+  # they ARE pinned, by the per-port `embedding.placement` cpusets below, not
+  # by stack_topology.yaml (UFH-12 Phase 0, 2026-09-26).
   embedder:   {tier: hot, mode: embedding, no_numa: true, port: 8090}
   embedder_1: {tier: hot, mode: embedding, no_numa: true, port: 8091}
   embedder_2: {tier: hot, mode: embedding, no_numa: true, port: 8092}
@@ -340,11 +350,71 @@ embedding:
   pool_ports: [8090, 8091, 8092, 8093, 8094, 8095]
   pool_recipe:
     model_name: BGE-large-en-v1.5 (embeddings)
-    context_tokens: 512
+    # 2026-09-26 UFH-12 Phase 0 (REPL-EMB-0.1): 512 -> 2048. With -np 4 the
+    # per-slot context was 512/4 = 256 tokens, half of BGE-large's 512-token
+    # training window, and every launch logged the n_ctx_seq WARN
+    # (wiki/kv-cache.md "Rollout candidates" #2). 2048/4 = 512 per slot = the
+    # model's window. BGE is an encoder with no KV cache, so an input that
+    # already fit is expected to embed identically (proof P6 in the package
+    # checks it); only 257-512-token inputs change, from a server error to an
+    # embedding.
+    context_tokens: 2048
     threads: 4
     slots: 4
     pooling: cls
     flash_attn: true
+    # 2026-09-26 UFH-12 Phase 0: private weights so the per-instance membind
+    # below is REAL. Under shared mmap the GGUF's pages sit wherever the first
+    # instance (or the page cache) put them and a membind is accepted and
+    # silently does nothing (stack_topology.yaml, the cross-role mmap note).
+    # Cost: 6 x 0.62 GiB = 3.7 GiB private RAM, inside capacity.host_os_reserve_gib.
+    no_mmap: true
+  # ── 2026-09-26 UFH-12 Phase 0 — DECLARED PLACEMENT (REPL-EMB-0.1) ─────────
+  # Until this block existed the pool had NO placement: `no_numa: true` plus an
+  # empty spawn prefix, and the canonical OMP env (OMP_PROC_BIND=spread,
+  # OMP_PLACES=cores) then bound all six servers' 4 compute threads to the SAME
+  # four core places, 0/96 32/128 48/144 88/184 (read from /proc/<pid>/task/*/
+  # status on 2026-09-26). Six servers delivered one server's compute, from
+  # inside frontdoor's 0-95.
+  #
+  # One cpuset per port, honoured EXACTLY: the launcher wraps the spawn in
+  # `numactl --membind=<node> -- taskset -c <cpuset>`, where <node> is the one
+  # NPS4 node the cpuset lies in (derived, never declared). The bench guard may
+  # REFUSE a declared cpuset; it may never re-pin it (same contract as the aux
+  # services' `cpuset`). stack_manifest asserts at import that every pool port
+  # is declared, the cpusets are pairwise disjoint, each lies in ONE NPS4 node,
+  # `threads` equals the cpuset size, and none SMT-folds onto the speech
+  # services' cpusets or the GPU host lane.
+  #
+  # WHY SMT SIBLINGS. No logical CPU on this host lacks a physical sibling in
+  # 0-95 (kernel-verified 2026-09-07), so "free cores" do not exist; the choice
+  # is only WHO pays. Siblings charge frontdoor/critic only while an embedder
+  # computes (KMP_BLOCKTIME=10 releases idle teams); carving physical cores out
+  # of 0-95 would charge every decode forever and re-shape NUMA_FULL. The cost
+  # is a MEASUREMENT GATE (G1 in the package), not an assumption.
+  #   96-119  siblings of whisper 0-23  -> excluded (speech hangs on
+  #   120-135 siblings of tts 24-39     -> excluded  unmeasured layouts)
+  #   184-191 GPU host lane             -> excluded
+  #
+  # NEXT TO EACH SERVING MODEL (operator D1, 2026-09-26). The node is what the
+  # scheduler's "instance sharing the requesting model's hardware" reads:
+  #   node 1 (136-143) -> half A :8080 (nodes 0,1)
+  #   node 2 (144-151) -> half B :8180 (nodes 2,3)
+  #   node 3 (176-183) -> the GPU host lane 184-191 (:8083 27B, :8086 VL), and half B
+  #   full :8070 / critic :8074 span all four nodes, so every instance is adjacent.
+  placement:
+    8090: {cpuset: "136-139"}   # node 1, siblings of 40-43
+    8091: {cpuset: "140-143"}   # node 1, siblings of 44-47
+    8092: {cpuset: "144-147"}   # node 2, siblings of 48-51
+    8093: {cpuset: "148-151"}   # node 2, siblings of 52-55
+    8094: {cpuset: "176-179"}   # node 3, siblings of 80-83
+    8095: {cpuset: "180-183"}   # node 3, siblings of 84-87
+    # Warm Phase-B candidate (UFH-12 D1 leading model). NOT a model switch:
+    # 8096 stays warm/default-off; this only stops it landing on 0-191 when the
+    # Phase-2 offline eval launches it. 16 logical cpus = its recipe's -t 16.
+    8096: {cpuset: "152-167"}   # node 2, siblings of 56-71
+    # 168-175 (node 3, siblings of 72-79) deliberately left unallocated.
+    # 8097 / 8098 (warm e5 / bge-m3) stay undeclared: default affinity, as today.
   extra_recipes:
     8096:
       model_path: /mnt/raid0/llm/models/granite-embedding-97m-multilingual-r2-Q8_0.gguf
