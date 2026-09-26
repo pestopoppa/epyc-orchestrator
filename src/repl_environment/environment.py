@@ -750,7 +750,9 @@ class REPLEnvironment(
             f'grep("<pattern>", file_path="{spill_path}") to inspect.'
         )
 
-        # 2. Try worker summary (Qwen2.5-7B, ~44 t/s, <1s for short summaries)
+        # 2. Try worker summary. role="worker" resolves to worker_general, an alias
+        #    on frontdoor's :8070 fleet (Qwen3.6-35B-A3B MTP Q8, CPU) since the
+        #    2026-09-22 lineup cutover; it shares that server with frontdoor traffic.
         if self.llm_primitives is not None:
             try:
                 # Rolling summary: previous summary + new tail

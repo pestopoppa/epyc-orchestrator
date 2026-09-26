@@ -135,9 +135,15 @@ class Role(str, Enum):
     ARCHITECT_CRITIC = "architect_critic"
     """Adversarial plan critic — the terminal rung of the escalation ladder.
 
-    Added 2026-08-01 (W1 cutover). Serves the Qwen3.5-122B-A10B UD-Q4_K_M that
-    ``architect_general`` vacated when it moved to the MI210 27B, on the same full
-    CPU instance, port 8074.
+    Added 2026-08-01 (W1 cutover) on the full CPU instance, port 8074, that
+    ``architect_general`` vacated when it moved to the MI210 (originally serving
+    the Qwen3.5-122B-A10B UD-Q4_K_M). Since the 2026-09-22 lineup cutover it
+    serves Qwen3.8-Flash-Next UD-IQ4_XS on that same CPU instance (:8074).
+
+    "Terminal rung" holds for ``Role.escalates_to()`` / EscalationPolicy only.
+    The pydantic-graph never escalates to this role: ``src/graph/nodes.py`` has
+    no critic node and ``_ROLE_TO_NODE`` has no ARCHITECT_CRITIC entry
+    (``select_start_node`` falls back to FrontdoorNode).
 
     THIS MEMBER IS LOAD-BEARING, not documentation. ``stack_priors.py:325`` emits
     the arm into the live action space via
