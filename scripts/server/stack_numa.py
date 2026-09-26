@@ -163,6 +163,36 @@ NUMA_Q1B = ("72-95,168-191", 48)
 # (matches the canonical bench recipe used by Probe B 2026-05-04).
 NUMA_FULL = ("0-95", 96)
 
+# ── NUMA_FULL_T48 (operator-ruled 2026-09-22, lineup-change C3: "add the needed cpu shape";
+#    landed 2026-09-26 by the DAR-LAT-3h stack-change package) ─────────────────────────
+# The SAME cpuset as NUMA_FULL: all 96 physical cores, all four NPS4 nodes, hence the same
+# {q0,q1,q2,q3} region set and the same all-four-region lock. Only the OMP thread count
+# differs (48). Pair it with numactl_policy="interleave=all", exactly as NUMA_FULL is paired.
+# Under OMP_PROC_BIND=spread / OMP_PLACES=cores the 48 threads land one per two cores across
+# all 12 CCDs, all four nodes and all 12 memory channels.
+#
+# WHAT IT IS FOR: Qwen3.8-Flash-Next (architect_critic). Its codified recipe
+# (epyc-inference-research scripts/lib/qwen38_flash_next_recipe.py) serves at -t 48 on
+# taskset 0-95 + numactl --interleave=all, and every champion served headline was taken there.
+# WHAT BACKS THE 48 (read before citing it): a served -t 48 vs -t 96 comparison did NOT exist
+# when C3 was ruled. The 48 came from pre-BIOS bare llama-bench sweeps (D4/C5, 2026-09-02:
+# tg128 t48 10.09 vs t96 9.67). The DAR-LAT-3h package's gate G1 is the served ABA that
+# decides it on the production kernel; its receipt is the citation, not this comment.
+#
+# ⚠ A DELIBERATE UNDER-SUBSCRIPTION, NOT AN OVERSUBSCRIPTION, which is why it needs the
+# registration below rather than a waiver. _assert_instance_invariants exists to catch SMT
+# OVERsubscription (threads beyond the cpuset's physical cores; measured -13% per-stream,
+# -8.5% aggregate at np=4). It used to enforce that with an EQUALITY, which also rejected the
+# honest case of leaving cores idle on purpose. It is now split: `threads > phys` stays fatal
+# for EVERY shape, and `threads < phys` stays fatal unless the shape is listed in
+# _UNDERSUBSCRIBED_SHAPES.
+NUMA_FULL_T48 = ("0-95", 48)
+
+# Shapes whose thread count is BELOW their cpuset's physical-core count ON PURPOSE.
+# Membership is the opt-in and the only thing that relaxes the equality; an under-subscribed
+# instance under any unlisted shape name still fails at import.
+_UNDERSUBSCRIBED_SHAPES: frozenset[str] = frozenset({"NUMA_FULL_T48"})
+
 # ── GPU HOST LANE (operator-ratified 2026-08-01) ─────────────────────────────
 # The 8 host threads a VRAM-resident role needs for tokenising, sampling and
 # request marshalling. NOT a decode instance — see _assert_instance_invariants.
@@ -252,13 +282,25 @@ def _nodes_touched(spec: str) -> list[int]:
     return sorted(n for n, s in _NPS4_NODES.items() if cpus & _parse_cpus(s))
 
 
-def _assert_instance_invariants() -> None:
-    """Fail loudly at import if any instance contradicts its own cpuset."""
+def _assert_instance_invariants(
+    config: dict[str, dict] | None = None,
+    shape_names_by_role: dict[str, tuple[str, ...]] | None = None,
+) -> None:
+    """Fail loudly at import if any instance contradicts its own cpuset.
+
+    Both arguments default to the module's loaded wiring; they exist so the
+    under-/over-subscription branches can be tested against a synthetic entry.
+    """
+    config = NUMA_CONFIG if config is None else config
+    shape_names_by_role = NUMA_INSTANCE_SHAPES if shape_names_by_role is None else shape_names_by_role
     problems: list[str] = []
-    for role, cfg in NUMA_CONFIG.items():
+    for role, cfg in config.items():
         per = cfg.get("numactl_policy_instances") or {}
         one = cfg.get("numactl_policy")
         gpu_lane = bool(cfg.get("gpu_host_lane"))
+        # The SHAPE NAMES behind this role's instances, index-aligned with `instances`,
+        # so the under-subscription branch can ask which shape it is looking at.
+        shape_names = shape_names_by_role.get(role, ())
         for idx, (cpus, port, threads) in enumerate(cfg.get("instances", [])):
             phys = len([c for c in _parse_cpus(cpus) if c < 96])
             if gpu_lane:
@@ -286,11 +328,22 @@ def _assert_instance_invariants() -> None:
                         f"{role}[{idx}] :{port} -t {threads} exceeds the {len(_parse_cpus(cpus))} "
                         f"logical cores in GPU host lane {cpus!r}"
                     )
-            elif threads != phys:
+            elif threads > phys:
                 problems.append(
                     f"{role}[{idx}] :{port} -t {threads} but cpuset {cpus!r} holds "
                     f"{phys} PHYSICAL cores — SMT oversubscription"
                 )
+            elif threads < phys:
+                shape = shape_names[idx] if idx < len(shape_names) else None
+                if shape not in _UNDERSUBSCRIBED_SHAPES:
+                    # Under-subscription is not the defect this check was written for,
+                    # but it is almost always a typo, so it stays fatal unless the SHAPE
+                    # says it is deliberate.
+                    problems.append(
+                        f"{role}[{idx}] :{port} -t {threads} leaves {phys - threads} of the "
+                        f"{phys} PHYSICAL cores in cpuset {cpus!r} idle, and its shape "
+                        f"{shape!r} is not registered in _UNDERSUBSCRIBED_SHAPES"
+                    )
             nodes = _nodes_touched(cpus)
             if len(nodes) > 1 and not (per.get(idx) or one):
                 problems.append(
@@ -329,6 +382,7 @@ _CPU_SHAPES: dict[str, tuple[str, int]] = {
     "NUMA_Q1A": NUMA_Q1A,
     "NUMA_Q1B": NUMA_Q1B,
     "NUMA_FULL": NUMA_FULL,
+    "NUMA_FULL_T48": NUMA_FULL_T48,   # same cpuset as NUMA_FULL, -t 48 (under-subscribed on purpose)
     "NUMA_HALF_A": NUMA_HALF_A,
     "NUMA_HALF_B": NUMA_HALF_B,
     "GPU_HOST_LANE": GPU_HOST_LANE,
@@ -354,6 +408,8 @@ _SHAPE_CLASSES: dict[str, str] = {
     "NUMA_Q1A": "quarter",
     "NUMA_Q1B": "quarter",
     "NUMA_FULL": "full",
+    "NUMA_FULL_T48": "full",          # same cpuset => same region set => same class. A class
+                                      # restates the shape's SIZE; the thread count is not part of it.
     "NUMA_HALF_A": "half",
     "NUMA_HALF_B": "half",
     "GPU_HOST_LANE": "gpu_host_lane",
