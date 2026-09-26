@@ -98,18 +98,23 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
     # WITH THE MODEL to architect_critic. architect_general is now Qwen3.6-27B dense
     # Q8 on MI210 (ROCm0) — a CPU NUMA repack setting applied to a ROCm process is
     # at best inert and at worst misleading provenance.
-    "architect_critic": {
-        "GGML_NUMA_REPACK_INTERLEAVE": "0",
-    },
+    # 2026-09-26 DEAD KNOB REMOVED: GGML_NUMA_REPACK_INTERLEAVE is not compiled into
+    # production v10 (ffc1bac82eec) or the AutoKernel champion. `git grep` finds no
+    # NUMA_REPACK in either tree, `strings libggml-cpu.so` finds 0 hits in both builds,
+    # and the feature commits (a7b0e9644 CPU_REPACK mbind interleave, kill-switch
+    # b1dec7ae9) survive only on the v5 lineage. Setting it was a no-op, and the
+    # critic is now Qwen3.8-Flash-Next, not the 122B the Probe-B tuning measured.
+    # Re-porting the interleave is a kernel-lineage question (AutoKernel DS41 inbox
+    # AK-H-NRI-1), not a stack_env setting.
+    "architect_critic": {},
     # Hybrid SSM dense (Nemotron-9B-v2-class) — c3 = CPU1 stack + mbind off.
     # Activate when a hybrid_ssm_dense model is rostered.
     # 2026-06-26 v6 cutover: removed GGML_CCD_POOLS / GGML_CCD_WORK_DIST /
     # GGML_BARRIER_LOCAL_BETWEEN_OPS — CCD code is #ifndef GGML_USE_OPENMP, so the
     # OpenMP-ON v6 build compiles it out (vestigial no-ops). GGML_NUMA_REPACK_INTERLEAVE
-    # (not CCD-gated) is retained.
-    "hybrid_ssm_dense": {
-        "GGML_NUMA_REPACK_INTERLEAVE": "0",
-    },
+    # was retained here until 2026-09-26, when it was removed as a dead knob (see the
+    # architect_critic note above): the v10 and champion kernels never read it.
+    "hybrid_ssm_dense": {},
     # Hybrid SSM MoE (Qwen3-Next-80B-A3B-class) — default v5 (c3 +1.7% noise floor).
     "hybrid_ssm_moe": {},
     # Dense Q8 (Qwen3.6-27B Q8) — DEFAULT v5; CPU1 stack actively HURTS.
