@@ -511,8 +511,21 @@ _FALLBACK_MAP: dict[Role, list[Role]] = {
     Role.ARCHITECT_CRITIC: [Role.ARCHITECT_GENERAL],
     # Still valid: frontdoor is a separate CPU process with a separate GGUF.
     Role.CODER_ESCALATION: [Role.FRONTDOOR],
-    Role.WORKER_MATH: [Role.WORKER_GENERAL],
-    Role.INGEST_LONG_CONTEXT: [Role.ARCHITECT_GENERAL],
+    # 2026-09-22 LINEUP CUTOVER (orchestrator 860b0b2d), same defect class as the
+    # 2026-08-01 fix above. The registry's server_mode now puts worker_math and
+    # worker_general in frontdoor's :8070 shared_with, and makes
+    # ingest_long_context an alias_of architect_general (:8083). The old edges
+    # WORKER_MATH -> WORKER_GENERAL and INGEST_LONG_CONTEXT -> ARCHITECT_GENERAL
+    # both retried the process whose circuit had just opened. Each role now falls
+    # back to a different serving process:
+    #   * worker_math -> architect_general: a different model on a different
+    #     device (MI210). It is also the process worker_math already escalates to,
+    #     through the coder_escalation alias.
+    #   * ingest_long_context -> architect_critic: its host's own real fallback.
+    # tests/unit/test_concept_integration.py guards the whole table against
+    # same-GGUF edges, using the registry.
+    Role.WORKER_MATH: [Role.ARCHITECT_GENERAL],
+    Role.INGEST_LONG_CONTEXT: [Role.ARCHITECT_CRITIC],
     Role.FRONTDOOR: [],  # Always-on, no fallback
     Role.WORKER_VISION: [],  # Hardware-specific, no fallback
 }

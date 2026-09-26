@@ -273,8 +273,20 @@ class TestFallbackMap:
         assert roles == []
 
     def test_ingest_fallback(self):
+        """ingest_long_context falls back to a real process of its own.
+
+        This asserted ``ARCHITECT_GENERAL in roles`` until the operator-signed
+        2026-09-22 cutover (orchestrator 860b0b2d) made ingest_long_context an
+        alias on architect_general's :8083 process, which turned that edge into a
+        retry of the backend whose circuit had just opened. Asserted against the
+        registry instead of by naming a role.
+        """
         roles = get_fallback_roles(Role.INGEST_LONG_CONTEXT)
-        assert Role.ARCHITECT_GENERAL in roles
+        assert roles, "ingest_long_context must declare a real fallback"
+        for target in roles:
+            assert _registry_model_path(target) != _registry_model_path(
+                Role.INGEST_LONG_CONTEXT
+            ), f"ingest_long_context -> {target.value} serves the same GGUF"
 
     def test_string_role(self):
         roles = get_fallback_roles("coder_escalation")

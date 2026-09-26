@@ -79,6 +79,19 @@ def _fleet_state(tmp_path: Path):
 
 
 @pytest.fixture()
+def same_fleet_edge(monkeypatch):
+    """Inject the historical same-fleet edge worker_math -> worker_general.
+
+    Case 5 exercises the compiler's same-fleet elision. The live map carried this
+    edge until 2026-09-26, when it was replaced by a cross-process fallback because
+    a same-process fallback is useless (the class this compiler exists to remove).
+    The live map therefore has no same-fleet edge left to elide, so the mechanism
+    is tested on an injected one.
+    """
+    monkeypatch.setitem(_FALLBACK_MAP, Role.WORKER_MATH, [Role.WORKER_GENERAL])
+
+
+@pytest.fixture()
 def fleet_on(monkeypatch, tmp_path):
     state = _fleet_state(tmp_path)
     monkeypatch.setattr(fleet_mod, "get_fleets_and_bindings", lambda: state)
@@ -110,7 +123,7 @@ def test_flag_off_fallback_map_unchanged(monkeypatch):
     assert get_fallback_roles("not_a_role") == []
 
 
-def test_case5_same_fleet_edges_compiled_to_noops(fleet_on):
+def test_case5_same_fleet_edges_compiled_to_noops(same_fleet_edge, fleet_on):
     # worker_math → worker_general: same gemma4 fleet → elided.
     assert get_fallback_roles(Role.WORKER_MATH) == []
     # coder_escalation → frontdoor: same Qwen fleet → elided.
@@ -152,14 +165,17 @@ def test_case6_cross_fleet_edges_stay_real(fleet_on):
     _assert_cross_fleet_edges_kept(Role.ARCHITECT_GENERAL, bindings)
     # …and the reverse edge, which the W1 cutover also declares.
     _assert_cross_fleet_edges_kept(Role.ARCHITECT_CRITIC, bindings)
-    # ingest fleet → architect fleet: distinct → kept.
+    # ingest fleet → its declared cross-process target: distinct → kept.
     _assert_cross_fleet_edges_kept(Role.INGEST_LONG_CONTEXT, bindings)
+    # worker_math's live edge (a different process since 2026-09-26) survives too.
+    _assert_cross_fleet_edges_kept(Role.WORKER_MATH, bindings)
 
 
 def test_fleet_build_unavailable_falls_back_to_legacy_map(monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_FLEET_LAYER", "1")
     monkeypatch.setattr(fleet_mod, "get_fleets_and_bindings", lambda: None)
-    assert get_fallback_roles(Role.WORKER_MATH) == [Role.WORKER_GENERAL]
+    assert _FALLBACK_MAP[Role.WORKER_MATH], "worker_math declares no fallback — vacuous"
+    assert get_fallback_roles(Role.WORKER_MATH) == list(_FALLBACK_MAP[Role.WORKER_MATH])
 
 
 # ── Inference-level: fail fast, churn 0 / cross-fleet succeeds ──────────────
@@ -186,7 +202,9 @@ def prims(monkeypatch):
     return LLMPrimitives(mock_mode=False)
 
 
-def test_case5_forced_worker_math_fails_fast_zero_churn(fleet_on, prims, monkeypatch):
+def test_case5_forced_worker_math_fails_fast_zero_churn(
+    same_fleet_edge, fleet_on, prims, monkeypatch
+):
     """Fleet circuit open on the shared gemma4 fleet: worker_math gets NO
     worker_general retry (identical physical backend + identical open
     circuit). One attempt, zero fallback churn — the 90x class is dead at
@@ -206,7 +224,7 @@ def test_case5_forced_worker_math_fails_fast_zero_churn(fleet_on, prims, monkeyp
     assert calls == ["worker_math"]  # no same-fleet retry → churn counter 0
 
 
-def test_case5_flag_off_control_shows_legacy_churn(prims, monkeypatch):
+def test_case5_flag_off_control_shows_legacy_churn(same_fleet_edge, prims, monkeypatch):
     """Flag-off control for the same scenario: the legacy map DOES retry
     worker_general (the churn the fleet layer removes)."""
     monkeypatch.delenv("ORCHESTRATOR_FLEET_LAYER", raising=False)
