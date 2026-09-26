@@ -111,6 +111,12 @@ async def test_idle_scoring_loop_respects_the_hold(monkeypatch):
     Q.finish(carrier)
     monkeypatch.setenv(Q.HOLD_AFTER_ENV, "0")
     Q.finish(carrier)
+    # The hold deadline is persisted as f"{t:.3f}" (quiescence._write_hold), so a 0 s
+    # hold can round UP by <=0.5 ms, and the patched loop re-checks within microseconds.
+    # Let wall time pass the rounded deadline so the hold is genuinely expired
+    # (was ~1-in-3 flaky without this). time.sleep is real; asyncio.sleep is patched.
+    time.sleep(0.005)
+    assert not Q.quiet_active()
     ticks["n"] = 0
     await memrl.background_cleanup(state)
     assert len(calls) == 2

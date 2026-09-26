@@ -145,8 +145,12 @@ def test_load_explicit_read_only_tools_includes_registry_annotations() -> None:
         "statistics",
         "matrix_solve",
         "read_file",
-        "archive_search",
     }.issubset(read_only_tools)
+    # archive_search was a registry entry until 2026-09-17 (0c03e658, NIB2-79): its
+    # handler never existed, and it is a stateful REPL builtin
+    # (src/repl_environment/archive_tools.py), not a registry tool. It must not
+    # resurface as a registry-annotated read-only tool.
+    assert "archive_search" not in read_only_tools
     assert "python_eval" not in read_only_tools
     assert "calculate" not in read_only_tools
     assert "embed_text" not in read_only_tools

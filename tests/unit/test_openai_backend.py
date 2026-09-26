@@ -238,8 +238,18 @@ class TestOpenAIBackendPayload:
     def test_build_payload_omits_chat_template_kwargs_when_absent(
         self, mock_config: ExternalAPIConfig
     ) -> None:
-        """Absence of chat_template_kwargs leaves the key out of payload."""
-        with patch("httpx.Client"):
+        """Absence of chat_template_kwargs leaves the key out of payload.
+
+        "Absent" means both no per-request override AND no registry default for
+        the role. The J12 registry fallback is pinned to None so this does not
+        depend on the live registry: since the 2026-09-22 lineup cutover the
+        default role ("worker") is a frontdoor alias that declares
+        enable_thinking=false, which J12 correctly injects.
+        """
+        with patch("httpx.Client"), patch(
+            "src.registry.registry_loader.chat_template_kwargs_for_role",
+            return_value=None,
+        ):
             backend = OpenAIBackend(mock_config)
             request = InferenceRequest(prompt="test", max_tokens=100)
             payload = backend._build_payload(request)

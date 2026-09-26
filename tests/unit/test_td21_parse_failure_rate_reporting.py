@@ -26,6 +26,7 @@ from eval_tower import (  # noqa: E402
     EvalTower,
     QuestionResult,
     _load_orchestrator_debug_scorer,
+    score_answer_or_error,
 )
 
 _scorer = _load_orchestrator_debug_scorer()
@@ -51,13 +52,22 @@ def _row(qid: str, *, correct: bool, eval_batch_id: str = "") -> QuestionResult:
 def _score_unparseable(arm_key: str) -> None:
     """Drive one real model-side parse failure through debug_scorer, bucketed
     under `arm_key` — exactly what `_score_generation` does in production via
-    `scoring_config["_eval_batch_id"]`."""
-    _scorer.score_answer(
-        "no letter anywhere in this reply",
-        "B",
-        "multiple_choice",
-        {"_eval_batch_id": arm_key},
+    `scoring_config["_eval_batch_id"]`, through the same `score_answer_or_error`
+    wrapper. With the ratified EXCLUDE_UNPARSEABLE_ANSWERS=True (E19, re-enabled
+    15e1b35a) the scorer RAISES AnswerParseError after recording the failure and
+    the wrapper turns that into an EXCLUDED row; with the flag off it is scored
+    wrong. The counter must be bumped either way."""
+    verdict, reason = score_answer_or_error(
+        answer="no letter anywhere in this reply",
+        expected="B",
+        scoring_method="multiple_choice",
+        scoring_config={"_eval_batch_id": arm_key},
     )
+    if _scorer.EXCLUDE_UNPARSEABLE_ANSWERS:
+        assert verdict is None
+        assert reason is not None and "answer_parse_failed[multiple_choice]" in reason
+    else:
+        assert verdict is False and reason is None
 
 
 _ARM_KEYS = ("td21-arm-one", "td21-arm-two", None)
@@ -101,8 +111,8 @@ def test_parse_failure_rate_reported_beside_accuracy_for_one_arm() -> None:
     tower = EvalTower()
     agg = tower._aggregate(results, tier=1)
 
-    # accuracy/quality is unaffected — parse failures are additive, not a
-    # denominator change (EXCLUDE_UNPARSEABLE_ANSWERS default False).
+    # accuracy/quality over the rows handed to _aggregate is unaffected — the
+    # parse-failure rate is reported additively beside it, not folded into it.
     assert agg.quality == (3 / 4) * 3.0
     # ...and the rate is reported right beside it.
     assert agg.details["parse_failure_count"] == 2
