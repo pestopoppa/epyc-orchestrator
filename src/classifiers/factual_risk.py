@@ -222,13 +222,50 @@ def _stack_prior_role_tiers(
     return _role_tiers_from_stack_priors(stack_priors_path)
 
 
-def _degraded_role_tier(role_name: str) -> str | None:
-    """Return the explicit degraded role tier for a canonical role name.
+# Degraded tier per SERVING PROCESS (a registry server_mode host row), plus the
+# legacy role names the registry does not declare. Used only when stack priors
+# are unavailable. Roles that ride another role's process (shared_with /
+# alias_of) are NOT listed: they resolve to their host through the registry in
+# _degraded_serving_host, which is what the live derivation does too (a stack-
+# prior record carries its host process's mem_gb).
+_DEGRADED_PROCESS_TIERS: dict[str, str] = {
+    "architect_critic": "tier_1",
+    "thinking_exploration": "tier_1",
+    "architect_general": "tier_2",
+    "coder_general": "tier_2",
+    "frontdoor": "tier_2",
+    "worker_vision": "tier_3",
+}
 
-    Used ONLY when generated stack priors are unavailable, so it cannot itself be
-    derived — it is a hand table and therefore has to be kept in agreement with
-    the live derivation (``_tier_from_model_mem`` over stack-prior ``mem_gb``).
-    ``tests/unit/test_factual_risk.py`` guards that agreement.
+_SERVING_HOST_BY_ROLE_CACHE: dict[str, str] | None = None
+
+
+def _degraded_serving_host(role_name: str) -> str:
+    """The registry ``server_mode`` host whose process serves ``role_name``.
+
+    Returns ``role_name`` itself when it is a host, unknown to the registry, or
+    the registry is unreadable (an alias then gets no degraded tier, which
+    scores it as tier_3, with no discount).
+    """
+    global _SERVING_HOST_BY_ROLE_CACHE
+    if _SERVING_HOST_BY_ROLE_CACHE is None:
+        try:
+            from src.registry.registry_loader import load_server_mode, serving_host_by_role
+
+            _SERVING_HOST_BY_ROLE_CACHE = serving_host_by_role(load_server_mode())
+        except Exception:
+            _SERVING_HOST_BY_ROLE_CACHE = {}
+    return _SERVING_HOST_BY_ROLE_CACHE.get(role_name, role_name)
+
+
+def _degraded_role_tier(role_name: str) -> str | None:
+    """Return the degraded role tier for a canonical role name.
+
+    Used ONLY when generated stack priors are unavailable, so it cannot be derived
+    from them. The per-process tier is a hand table (``_DEGRADED_PROCESS_TIERS``)
+    and has to agree with the live derivation (``_tier_from_model_mem`` over
+    stack-prior ``mem_gb``); which process serves a role is read from the
+    registry. ``tests/unit/test_factual_risk.py`` guards the agreement.
 
     2026-08-01 W1 cutover corrections (all three previously disagreed with the
     live derivation, so the degraded path scored these roles differently from the
@@ -240,27 +277,15 @@ def _degraded_role_tier(role_name: str) -> str | None:
         STRONGEST model in the fleet no risk discount at all.
       * ``vision_escalation`` tier_2 -> tier_3 — it is an alias on the 17.3 GB
         worker_vision process, which is below ``_TIER_2_MIN_MODEL_MEM_GB``.
+
+    2026-09-26: the hand table still held worker_general, worker_math and
+    toolrunner at tier_3 after the operator-signed 2026-09-22 cutover
+    (orchestrator 860b0b2d) put them on frontdoor's 35B-A3B :8070 process, which
+    live priors score tier_2. Alias rows are no longer restated here; they are
+    resolved to their host through the registry.
     """
-    if role_name in {"architect_critic", "thinking_exploration"}:
-        return "tier_1"
-    if role_name in {
-        "architect_general",
-        "coder_escalation",
-        "coder_general",
-        "frontdoor",
-        "ingest_long_context",
-        "worker_summarize",
-    }:
-        return "tier_2"
-    if role_name in {
-        "worker_general",
-        "worker_math",
-        "worker_vision",
-        "vision_escalation",
-        "toolrunner",
-    }:
-        return "tier_3"
-    return None
+    host = _degraded_serving_host(role_name)
+    return _DEGRADED_PROCESS_TIERS.get(host) or _DEGRADED_PROCESS_TIERS.get(role_name)
 
 
 def _role_tier_for_role(

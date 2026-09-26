@@ -299,8 +299,18 @@ roles:
         missing = tmp_path / "missing_stack_priors.yaml"
 
         assert _role_tier_for_role("frontdoor", missing) == "tier_2"
-        assert _role_tier_for_role("worker_explore", missing) == "tier_3"
-        assert _role_tier_for_role("worker_fast", missing) == "tier_3"
+        # A role that rides another role's process takes its host's degraded tier.
+        # worker_explore and worker_fast (both canonicalize to worker_general)
+        # pinned tier_3 here until the operator-signed 2026-09-22 cutover
+        # (orchestrator 860b0b2d) put worker_general on frontdoor's :8070
+        # process; live priors now score it tier_2, so the degraded path agrees.
+        for role in ("worker_explore", "worker_fast"):
+            assert _role_tier_for_role(role, missing) == _role_tier_for_role(role), role
+            assert _role_tier_for_role(role, missing) == _role_tier_for_role(
+                "frontdoor", missing
+            ), role
+        # A role neither the degraded table nor the registry knows gets no discount.
+        assert _role_tier_for_role("unknown_new_role", missing) == "tier_3"
 
     def test_unknown_role_defaults_tier_3(self):
         assert _role_adjustment("unknown_new_role") == 1.0
