@@ -24,6 +24,7 @@ correct and a local literal won anyway. Data does not invite that.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -31,8 +32,11 @@ import yaml
 
 from scripts.server.stack_numa import (
     CPU_SHAPE_CLASSES,
+    GPU_HOST_LANE,
     NUMA_CONFIG,
     NUMA_INSTANCE_SHAPE_CLASSES,
+    _nodes_touched,
+    _parse_cpus,
     instance_shape_class,
 )
 from scripts.server.stack_paths import LLAMA_MATH_TOOLS, _V2_ROLES, _PATHS
@@ -517,6 +521,112 @@ EMBEDDING_SERVER_RECIPES: dict[int, dict[str, str | int | bool]] = {
 }
 EMBEDDING_SERVER_RECIPES.update(
     {int(port): dict(recipe) for port, recipe in _EMBEDDING["extra_recipes"].items()}
+)
+
+
+# ── Embedder placement (UFH-12 Phase 0, 2026-09-26) ─────────────────────────
+# Declared per port in launch_manifest.yaml `embedding.placement`. Until this
+# existed the pool had no placement at all and the canonical OMP env bound all
+# six servers' compute threads to the same four core places. The NUMA node is
+# DERIVED from the cpuset (never declared beside it), and every invariant below
+# is recomputed from the declarations, so none of them can drift from a copy.
+class EmbedderPlacement(NamedTuple):
+    cpuset: str
+    numa_node: int
+
+
+_EMBED_CPUSET_RE = re.compile(r"\d+(-\d+)?(,\d+(-\d+)?)*")
+_HOST_LOGICAL_CPUS = 192
+_HOST_PHYSICAL_CORES = 96
+
+
+def _smt_fold(cpus: set[int]) -> set[int]:
+    """Logical cpus -> the physical cores they run on (sibling of c is c +/- 96)."""
+    return {c % _HOST_PHYSICAL_CORES for c in cpus}
+
+
+def _load_embedding_placement(
+    declared: Any,
+    *,
+    recipes: dict[int, dict[str, Any]],
+    pool_ports: list[int],
+    aux_services: dict[str, "AuxService"],
+) -> dict[int, EmbedderPlacement]:
+    """Validate `embedding.placement` and return {port: EmbedderPlacement}.
+
+    Raises ValueError listing EVERY violation at once:
+      * every pool port is declared (an undeclared pool port is the old defect);
+      * a declared port has a recipe, and its cpuset is a cpu list on this host;
+      * the cpuset lies in exactly ONE NPS4 node (membind target is derived);
+      * the recipe's `threads` equals the cpuset's logical-cpu count;
+      * cpusets are pairwise disjoint AFTER SMT folding (two instances on the
+        two siblings of one core would contend exactly as the old layout did);
+      * no cpuset SMT-folds onto an aux service's declared cpuset (whisper.cpp
+        hangs on unmeasured layouts) or onto the GPU host lane.
+    """
+    if declared is None:
+        declared = {}
+    if not isinstance(declared, dict):
+        raise ValueError("launch_manifest: embedding.placement must be a mapping of port -> {cpuset}")
+    problems: list[str] = []
+    out: dict[int, EmbedderPlacement] = {}
+    folded_by_port: dict[int, set[int]] = {}
+    for raw_port, entry in declared.items():
+        port = int(raw_port)
+        if port not in recipes:
+            problems.append(f":{port} has a placement but no embedding recipe")
+            continue
+        if not isinstance(entry, dict) or set(entry) != {"cpuset"}:
+            problems.append(f":{port} placement must be exactly {{cpuset: <cpu list>}}, got {entry!r}")
+            continue
+        cpuset = str(entry["cpuset"]).strip()
+        if not _EMBED_CPUSET_RE.fullmatch(cpuset):
+            problems.append(f":{port} cpuset {cpuset!r} is not a cpu list")
+            continue
+        cpus = _parse_cpus(cpuset)
+        if max(cpus) >= _HOST_LOGICAL_CPUS:
+            problems.append(f":{port} cpuset {cpuset!r} names a cpu beyond 0-{_HOST_LOGICAL_CPUS - 1}")
+            continue
+        nodes = _nodes_touched(cpuset)
+        if len(nodes) != 1:
+            problems.append(f":{port} cpuset {cpuset!r} spans NPS4 nodes {nodes}; an embedder must sit in one")
+            continue
+        threads = int(recipes[port].get("threads", 0))
+        if threads != len(cpus):
+            problems.append(
+                f":{port} recipe -t {threads} but cpuset {cpuset!r} holds {len(cpus)} logical cpus"
+            )
+        folded_by_port[port] = _smt_fold(cpus)
+        out[port] = EmbedderPlacement(cpuset=cpuset, numa_node=nodes[0])
+    missing = sorted(set(pool_ports) - set(out) - {int(p) for p in declared})
+    if missing:
+        problems.append(f"pool ports without a declared placement: {missing}")
+    ports = sorted(folded_by_port)
+    for i, a in enumerate(ports):
+        for b in ports[i + 1:]:
+            shared = folded_by_port[a] & folded_by_port[b]
+            if shared:
+                problems.append(f":{a} and :{b} share physical cores {sorted(shared)} after SMT folding")
+    fenced = {"GPU host lane": GPU_HOST_LANE[0]}
+    fenced.update({f"aux {name}": svc.cpuset for name, svc in aux_services.items() if svc.cpuset})
+    for label, spec in fenced.items():
+        fence = _smt_fold(_parse_cpus(spec))
+        for port in ports:
+            shared = folded_by_port[port] & fence
+            if shared:
+                problems.append(f":{port} SMT-folds onto the {label} ({spec}) at cores {sorted(shared)}")
+    if problems:
+        raise ValueError(
+            "launch_manifest: embedding.placement is incoherent:\n  " + "\n  ".join(problems)
+        )
+    return out
+
+
+EMBEDDING_PLACEMENT: dict[int, EmbedderPlacement] = _load_embedding_placement(
+    _EMBEDDING.get("placement"),
+    recipes=EMBEDDING_SERVER_RECIPES,
+    pool_ports=EMBEDDER_PORTS,
+    aux_services=AUX_SERVICES,
 )
 
 # Worker pool models (FIXED paths to existing files)

@@ -100,6 +100,7 @@ from scripts.server.stack_manifest import (
     DEFAULT_UBATCH_TOKENS,
     EMBEDDER_PORTS,
     EMBEDDING_MODEL_PATH,
+    EMBEDDING_PLACEMENT,
     EMBEDDING_SERVER_RECIPES,
     EXPLORE_DRAFT_MODEL,
     GPU_SHADOW_LANE_DEVICE,
@@ -960,6 +961,10 @@ def _build_embedding_command(port: int) -> list[str]:
     ]
     if recipe.get("flash_attn"):
         cmd.extend(["--flash-attn", "on"])
+    # UFH-12 Phase 0: private weights, so the placement's membind is real
+    # (a membind over shared-mmap pages is accepted and does nothing).
+    if recipe.get("no_mmap"):
+        cmd.append("--no-mmap")
     return cmd
 
 
@@ -1737,12 +1742,20 @@ def start_server(
     # all; a live bench's real core claim refuses overlapping placements or
     # pins default-affinity spawns off the claim. `bench_force` mirrors
     # --allow-during-bench.
-    spawn_prefix = _bench_guarded_numa_prefix(
-        roles[0] if roles else None,
-        numa_instance,
-        bench_force=bench_force,
-        label=f"llama-server for {'/'.join(roles) or '?'}",
-    )
+    declared_embedding = EMBEDDING_PLACEMENT.get(port) if embedding_mode else None
+    if declared_embedding is not None:
+        # UFH-12 Phase 0: an embedder with a DECLARED placement is pinned to
+        # exactly that cpuset (refuse-never-re-pin, like a declared aux cpuset).
+        spawn_prefix = _embedding_spawn_prefix(port, declared_embedding, bench_force=bench_force)
+        if spawn_prefix is None:
+            return None
+    else:
+        spawn_prefix = _bench_guarded_numa_prefix(
+            roles[0] if roles else None,
+            numa_instance,
+            bench_force=bench_force,
+            label=f"llama-server for {'/'.join(roles) or '?'}",
+        )
 
     # P-BENCH-3/A7 warm eval-batch lane: dedicated frontdoor-model server
     # used only when explicitly started and when EVAL_BATCH_SERVING routes
@@ -2673,6 +2686,36 @@ def _aux_spawn_prefix(service: Any, *, bench_force: bool) -> list[str] | None:
         )
         return None
     return ["taskset", "-c", cpuset]
+
+
+def _embedding_spawn_prefix(
+    port: int, placement: Any, *, bench_force: bool
+) -> list[str] | None:
+    """Spawn prefix for an embedder with a declared placement; None = refuse.
+
+    `numactl --membind=<node> -- taskset -c <cpuset>`: the node is the single
+    NPS4 node stack_manifest derived from the cpuset. The bench guard may
+    REFUSE the declared cpuset (overlap with a live bench's claim;
+    `--allow-during-bench` bypasses) but may never RE-PIN it: a re-pinned
+    embedder would land back on cores other instances or the fleet own, which
+    is the defect the declaration exists to remove.
+    """
+    label = f"embedder :{port}"
+    pinned = enforce_placement(placement.cpuset, force=bench_force, label=label)
+    if pinned is not None and pinned != placement.cpuset:
+        print(
+            f"    [FAIL] {label}: bench guard wanted to re-pin the declared cpuset "
+            f"{placement.cpuset} to {pinned}; refusing (declared placements are not re-pinned)"
+        )
+        return None
+    return [
+        "numactl",
+        f"--membind={placement.numa_node}",
+        "--",
+        "taskset",
+        "-c",
+        placement.cpuset,
+    ]
 
 
 def start_aux_service(name: str, bench_force: bool = False) -> ProcessInfo | None:

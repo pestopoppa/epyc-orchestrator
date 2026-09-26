@@ -88,8 +88,8 @@ VISION_SUITES = {"vl"}
 # Token budget per prompt. BGE-large accepts at most 512 tokens, but the
 # llama-server pool splits -c across -np slots and rejects (HTTP 400,
 # exceed_context_size_error) any input longer than ONE slot. The live pool
-# (8090-8095) runs -c 512 -np 4 => n_ctx 256 per slot (verified 2026-09-26 via
-# /props). The old fixed cap of 1400 chars was sized for -c 2048 -np 4 (512
+# (8090-8095) ran -c 512 -np 4 => n_ctx 256 per slot (verified 2026-09-26 via
+# /props); UFH-12 Phase 0 restores -c 2048 -np 4 => 512 per slot. The old fixed cap of 1400 chars was sized for -c 2048 -np 4 (512
 # tokens/slot) and could reach ~518 tokens, so dense prompts overflowed the
 # 256-token slot and the per-item fallback silently substituted ZERO VECTORS.
 #

@@ -104,10 +104,12 @@ realized_shape:
 # current instances satisfy both.
 # -----------------------------------------------------------------------------
 numa_config:
-  # Qwen3.5-35B-A3B Q4_K_M (19 GB) — pre-warm: 1×96t full-speed + 4×48t concurrent
-  # Benchmark (2026-03-24): moe6 = 12.7 t/s at 48t. 96t TBD (expect higher per-request).
-  # Pre-warm strategy (2026-03-29): 5 instances total, +19 GB (95 GB total for frontdoor).
-  # Concurrency router: single session → full (96t), concurrent → quarter (48t) instances.
+  # LIVE (verified 2026-09-26): Qwen3.6-35B-A3B-MTP-Q8_0 (35.2 GB), 1 full (:8070)
+  # + 2 halves (:8080, :8180), --mlock --no-mmap. The four lines that stood here
+  # described the 2026-03 Qwen3.5-35B-A3B Q4_K_M (19 GB) five-instance pre-warm;
+  # both the model and the quarters are retired. Historical figures (2026-03-24,
+  # moe6 = 12.7 t/s at 48t) belong to that model and are NOT re-attributable.
+  # Concurrency router: single session → full (96t), concurrent → half (48t) instances.
   frontdoor:
     # 2026-07-30 HALF FLEET. Quarters retired; 1 full + 2 halves.
     # Superseded the 2026-05-24 revert, whose justification (an April
@@ -167,6 +169,10 @@ numa_config:
   # If a separate coder server is ever rostered again on a different model,
   # restore here with that model's tuned spec params.
 
+  # LIVE (verified 2026-09-26): Qwen3.8-Flash-Next UD-IQ4_XS (87.25 GiB, 3 shards)
+  # + its shared-Q8_0 MTP head via -md, since the 2026-09-22 lineup change. The
+  # placement below was measured on its predecessor, which the rest of this
+  # paragraph describes and whose figures are NOT re-attributable to it:
   # Qwen3.5-122B-A10B Q4_K_M (69 GB) — 1×96t canonical (Probe B 2026-05-04)
   # Switched 2026-05-04 from 2× cross-NUMA (4.3 t/s/instance, 8.6 t/s agg) to
   # 1× full-machine canonical with numactl --interleave=all + GGML_NUMA_REPACK_INTERLEAVE=0
@@ -189,7 +195,8 @@ numa_config:
   # Its single full instance on 0-95 holds ALL FOUR region locks, so while it
   # runs it serializes the entire CPU NUMA topology. That is INHERENT AND
   # ACCEPTED for this role, not a defect: there is no sub-full shape to demote
-  # to, and a 122B at Q4_K_M has nothing smaller to be. Do not "fix" it by
+  # to, and the critic model (the 122B at Q4_K_M when this was written,
+  # Qwen3.8-Flash-Next UD-IQ4_XS since 2026-09-22) has nothing smaller to be. Do not "fix" it by
   # adding a placement_policy — the other roles' burst_prefer_* exists because
   # they HAVE splits; this one does not.
   #
@@ -205,11 +212,15 @@ numa_config:
   # scalar. Land that telemetry BEFORE exposing any routing knob for this role.
   #
   # ── 2026-08-01 W1 CUTOVER ────────────────────────────────────────────────
-  # architect_general VACATED this full CPU instance. The role now serves
-  # Qwen3.6-27B dense Q8 on MI210 (ROCm0) and takes the shared GPU host lane
+  # architect_general VACATED this full CPU instance. The role then served
+  # Qwen3.6-27B dense Q8 on MI210 (ROCm0) and took the shared GPU host lane
   # below; the 122B UD-Q4_K_M that used to live here moved WHOLESALE to the new
   # architect_critic role on :8074, keeping the identical placement it was
   # measured under. Only the ROLE NAME on this instance changed.
+  # LATER (verified live 2026-09-26): architect_general serves Qwen3.8-27B-Q8_0
+  # on the MI210 (:8083) since 2026-08-20, and architect_critic serves
+  # Qwen3.8-Flash-Next UD-IQ4_XS on this instance (:8074) since 2026-09-22.
+  # The 122B is retired from the lineup.
   architect_critic:
     instances:
       - {cpu_shape: NUMA_FULL, port: 8074}   # 1×96t physical cores, all 4 NUMA nodes
