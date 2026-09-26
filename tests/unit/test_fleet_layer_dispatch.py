@@ -1,15 +1,26 @@
 """WP-12 fleet layer — one CAB per fleet: shared object, placement, locks.
 
 Acceptance plan coverage (wp12-fleet-layer-design.md §6):
-  * case 2 — worker_math 4-wide lands on 4 disjoint busy quarters of the
-    SHARED gemma4 fleet under REAL region-lock identity (fixes WP-10);
-    mirror: frontdoor 4-wide → 4 quarters, half0 idle
+  * case 2 — worker_math N-wide lands on N disjoint busy sibling instances of
+    the SHARED host fleet under REAL region-lock identity (fixes WP-10);
+    mirror: the host role itself N-wide → N siblings, full idle
   * case 7 — mode-exclusivity policies (full_disabled / burst_prefer_split
     / solo_prefer_full) hold against the one-CAB-per-fleet object
 
-House patterns: real NUMA_CONFIG topology + real placement policies, mocked
-cross-process lock seam (src.runtime.cpu_region_lock), stub/offline backends.
-No sockets, no inference, no processes.
+House patterns: real NUMA_CONFIG topology + real registry server_mode + real
+placement policies, mocked cross-process lock seam (src.runtime.cpu_region_lock),
+stub/offline backends. No sockets, no inference, no processes.
+
+Lineup-independence (2026-09-26): this file used to restate the fleets as
+literals — a separate gemma ``worker`` server on :8072 hosting worker_general /
+worker_math / toolrunner, plus a multi-instance ingest_long_context on :8085.
+The operator-signed 2026-09-22 lineup cutover (orchestrator 860b0b2d) made
+worker_general and ingest_long_context ALIASES (of frontdoor's :8070 fleet and
+architect_general's :8083 GPU process respectively) and deleted their
+NUMA_CONFIG entries, so collection died on ``KeyError: 'worker_general'``.
+Every fleet fact below is now DERIVED: the host of worker_math is read from
+``orchestration/model_registry.yaml`` server_mode, and its ports/regions from
+NUMA_CONFIG, so the next lineup change moves the expectation with it.
 """
 
 from __future__ import annotations
@@ -23,13 +34,44 @@ import yaml
 import src.fleet as fleet_mod
 from src.llm_primitives.backend import BackendMixin
 
-# The synthetic fleets below are dispatched against the REAL region-lock model
+ROOT = Path(__file__).resolve().parents[2]
+
+# The fleets below are dispatched against the REAL region-lock model
 # (`_real_regions_model` -> `get_instance_regions()`), so their port sets must
-# describe the same machine. When they did not — the literals here pinned the
-# retired 4-quarter lineup — the extra ports resolved to NO topology index,
-# picked up EMPTY region sets, and therefore could never conflict: dispatch
-# handed out one quarter twice and the test read that as a double-booking
-# defect. Derive both from NUMA_CONFIG so fixture and lock model agree.
+# describe the same machine. When they did not — the literals here pinned a
+# retired lineup — the extra ports resolved to NO topology index, picked up
+# EMPTY region sets, and therefore could never conflict: dispatch handed out
+# one instance twice and the test read that as a double-booking defect. Derive
+# both from NUMA_CONFIG so fixture and lock model agree.
+
+
+def _registry_server_mode() -> dict:
+    return yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )["server_mode"]
+
+
+SERVER_MODE = _registry_server_mode()
+
+
+def _host_fleet_of(role: str) -> str:
+    """The server_mode row that physically hosts ``role`` (shared_with/alias_of)."""
+    for host, row in SERVER_MODE.items():
+        if row.get("alias_of"):
+            continue
+        if host == role or role in (row.get("shared_with") or []):
+            return host
+    raise AssertionError(f"registry declares no host fleet for {role!r}")
+
+
+def _bound_roles(host: str) -> list[str]:
+    """Roles the registry binds onto ``host``'s fleet, in declaration order."""
+    row = SERVER_MODE[host]
+    bound = [host] + list(row.get("shared_with") or [])
+    bound += [k for k, v in SERVER_MODE.items() if v.get("alias_of") == host and k not in bound]
+    # `worker` is a server_mode ROW name (canonicalized to worker_general by the
+    # fleet builder), not a role with a backend of its own.
+    return [r for r in bound if r != "worker"]
 
 
 def _topology_ports(role: str) -> tuple[int, list[int]]:
@@ -60,27 +102,12 @@ def _regions_for(role: str, idxs: list[int]) -> set[str]:
     return out
 
 
-WG_FULL, WG_QUARTERS = _topology_ports("worker_general")
-FD_FULL, FD_QUARTERS = _topology_ports("frontdoor")
-_ING_FULL, _ING_QUARTERS = _topology_ports("ingest_long_context")
-ING_ALL = [_ING_FULL, *_ING_QUARTERS]
-
-WG_Q_IDXS = _topology_idxs("worker_general", WG_QUARTERS)
-FD_Q_IDXS = _topology_idxs("frontdoor", FD_QUARTERS)
-
-SERVER_MODE = {
-    "frontdoor": {
-        "port": 8070,
-        "model_role": "qwen36_q8_0",
-        "shared_with": ["coder_escalation", "worker_summarize"],
-    },
-    "worker": {
-        "port": 8072,
-        "model_role": "worker_general",
-        "shared_with": ["worker_math", "toolrunner"],
-    },
-    "ingest_long_context": {"port": 8085, "model_role": "ingest_long_context"},
-}
+# worker_math (the EV-11c serialization-incident role) and its physical host.
+WM = "worker_math"
+HOST = _host_fleet_of(WM)
+HOST_BOUND = _bound_roles(HOST)
+HOST_FULL, HOST_SIBLINGS = _topology_ports(HOST)
+HOST_SIB_IDXS = _topology_idxs(HOST, HOST_SIBLINGS)
 
 
 def _write_priors(tmp_path: Path, ports_by_role: dict[str, list[int]]) -> Path:
@@ -98,23 +125,13 @@ def _write_priors(tmp_path: Path, ports_by_role: dict[str, list[int]]) -> Path:
     return path
 
 
-def _fleet_state(
-    tmp_path: Path,
-    *,
-    wg_ports: list[int] = WG_QUARTERS,
-    fd_ports: list[int] = FD_QUARTERS,
-    ing_ports: list[int] | None = None,
-):
-    ports = {
-        "worker_general": wg_ports,
-        "worker_math": wg_ports,
-        "toolrunner": wg_ports,
-        "frontdoor": fd_ports,
-        "coder_escalation": fd_ports,
-        "worker_summarize": fd_ports,
-    }
-    if ing_ports:
-        ports["ingest_long_context"] = ing_ports
+def _fleet_state(tmp_path: Path, *, host_ports: list[int] = HOST_SIBLINGS):
+    ports: dict[str, list[int]] = {role: host_ports for role in HOST_BOUND}
+    # Every other physical fleet realized at its registry port, so the build
+    # does not fall back to degraded literals for them.
+    for key, row in SERVER_MODE.items():
+        if key != HOST and not row.get("alias_of") and row.get("port"):
+            ports.setdefault(key, [int(row["port"])])
     return fleet_mod.build_fleets_and_bindings(
         registry_server_mode=SERVER_MODE,
         priors_path=_write_priors(tmp_path, ports),
@@ -135,17 +152,12 @@ def _url_str(ports: list[int], full_port: int | None = None) -> str:
 
 
 def _default_urls() -> dict[str, str]:
-    wg = _url_str(WG_QUARTERS, full_port=WG_FULL)
-    fd = _url_str(FD_QUARTERS, full_port=FD_FULL)
-    return {
-        "worker_general": wg,
-        # Stale 2-endpoint copy — the EV-11c serialization incident class.
-        "worker_math": "http://localhost:8082,http://localhost:8182",
-        "toolrunner": wg,
-        "frontdoor": fd,
-        "coder_escalation": fd,
-        "worker_summarize": fd,
-    }
+    host = _url_str(HOST_SIBLINGS, full_port=HOST_FULL)
+    urls = {role: host for role in HOST_BOUND}
+    # Stale 2-endpoint copy — the EV-11c serialization incident class (ports of
+    # the retired gemma worker quarters, which no longer resolve anywhere).
+    urls[WM] = "http://localhost:8082,http://localhost:8182"
+    return urls
 
 
 def _build_host(monkeypatch, tmp_path, *, state=None, urls=None, tracker=None):
@@ -232,20 +244,19 @@ def _real_regions_model() -> _RegionMutexModel:
 def test_case2_shared_roles_share_one_backend_object(monkeypatch, tmp_path):
     host, _urls, _st = _build_host(monkeypatch, tmp_path)
 
-    wg = host._backends["worker_general"]
-    assert host._backends["worker_math"] is wg
-    assert host._backends["toolrunner"] is wg
-    assert wg._role == "worker_general"
-    assert wg._topology_role == "worker_general"
-    # Realized quarters-only: no full backend, quarters at TRUE topology idxs.
-    assert wg._full is None
-    assert wg._quarter_topology_idx == WG_Q_IDXS
+    # Non-vacuity: the host fleet must still carry the aliases this case exists
+    # to protect (worker_math + at least one other co-hosted role).
+    assert WM in HOST_BOUND and len(HOST_BOUND) >= 3, HOST_BOUND
 
-    fd = host._backends["frontdoor"]
-    assert host._backends["coder_escalation"] is fd
-    assert host._backends["worker_summarize"] is fd
-    assert fd._topology_role == "frontdoor"
-    assert fd._full is None  # 8070 not realized in the quarters-only lineup
+    cab = host._backends[HOST]
+    for role in HOST_BOUND:
+        assert host._backends[role] is cab, role
+    assert cab._role == HOST
+    # Lock identity is the PHYSICAL fleet, never a phantom per-alias topology.
+    assert cab._topology_role == HOST
+    # Realized siblings-only: no full backend, siblings at TRUE topology idxs.
+    assert cab._full is None  # aligned full port not realized in this state
+    assert cab._quarter_topology_idx == HOST_SIB_IDXS
 
 
 def test_case2_stale_role_copy_is_healed_by_fleet_truth(monkeypatch, tmp_path):
@@ -254,25 +265,23 @@ def test_case2_stale_role_copy_is_healed_by_fleet_truth(monkeypatch, tmp_path):
     backend both become the fleet fact (§3 one-fact invariant at runtime)."""
     host, server_urls, st = _build_host(monkeypatch, tmp_path)
     fleets, _bindings = st
-    assert server_urls["worker_math"] == fleets["worker_general"].url_value
-    assert server_urls["worker_math"] == server_urls["worker_general"]
-    assert host._backends["worker_math"] is host._backends["worker_general"]
+    assert server_urls[WM] == fleets[HOST].url_value
+    assert server_urls[WM] == server_urls[HOST]
+    assert host._backends[WM] is host._backends[HOST]
 
 
-def test_case2_worker_math_four_wide_four_disjoint_quarters_real_locks(
-    monkeypatch, tmp_path
-):
-    """4 concurrent requests through the shared gemma4 fleet (as worker_math
-    dispatches them) land on 4 DISJOINT busy quarters, full idle, and every
-    placement holds the REAL region-lock identity of the physical fleet
-    (topology role worker_general — worker_math holds real locks, WP-10)."""
+def test_case2_worker_math_n_wide_disjoint_siblings_real_locks(monkeypatch, tmp_path):
+    """N concurrent requests through the shared host fleet (as worker_math
+    dispatches them) land on N DISJOINT busy sibling instances, full idle, and
+    every placement holds the REAL region-lock identity of the physical fleet
+    (topology role = the host, never worker_math — WP-10)."""
     host, _urls, _st = _build_host(monkeypatch, tmp_path)
-    cab = host._backends["worker_math"]
+    cab = host._backends[WM]
 
     model = _real_regions_model()
     _wire(monkeypatch, model)
 
-    width = len(WG_QUARTERS)
+    width = len(HOST_SIBLINGS)
     assert width >= 2, "fixture can no longer express concurrent disjoint placement"
 
     chosen: list[tuple[int, bool]] = []
@@ -283,29 +292,29 @@ def test_case2_worker_math_four_wide_four_disjoint_quarters_real_locks(
             )
             chosen.append((idx, is_full))
 
-        # N disjoint busy quarters; the full (all-region) shape never placed.
+        # N disjoint busy siblings; the full (all-region) shape never placed.
         assert all(not is_full for _idx, is_full in chosen)
         idxs = [idx for idx, _ in chosen]
         # No double-booking: N concurrent requests occupy N DISTINCT slots.
         assert sorted(idxs) == list(range(width))
         # Real lock identity: every acquisition under the fleet's ONE
-        # topology role, at the quarters' true topology idxs.
-        assert {role for role, _ in model.acquired} == {"worker_general"}
-        assert sorted(idx for _, idx in model.acquired) == sorted(WG_Q_IDXS)
+        # topology role, at the siblings' true topology idxs.
+        assert {role for role, _ in model.acquired} == {HOST}
+        assert sorted(idx for _, idx in model.acquired) == sorted(HOST_SIB_IDXS)
         # Every atomic region those instances cover is busy — physically
         # disjoint placements, no region held twice.
-        assert set(model.owner) == _regions_for("worker_general", WG_Q_IDXS)
+        assert set(model.owner) == _regions_for(HOST, HOST_SIB_IDXS)
     assert model.owner == {}
 
 
-def test_case2_mirror_frontdoor_four_wide_quarters_half_idle(monkeypatch, tmp_path):
+def test_case2_mirror_host_role_n_wide_siblings_full_idle(monkeypatch, tmp_path):
     host, _urls, _st = _build_host(monkeypatch, tmp_path)
-    cab = host._backends["frontdoor"]
+    cab = host._backends[HOST]
 
     model = _real_regions_model()
     _wire(monkeypatch, model)
 
-    width = len(FD_QUARTERS)
+    width = len(HOST_SIBLINGS)
     assert width >= 2, "fixture can no longer express concurrent disjoint placement"
     with contextlib.ExitStack() as stack:
         chosen = [
@@ -314,8 +323,8 @@ def test_case2_mirror_frontdoor_four_wide_quarters_half_idle(monkeypatch, tmp_pa
         ]
         assert all(not is_full for _idx, is_full in chosen)
         assert sorted(idx for idx, _ in chosen) == list(range(width))
-        assert {role for role, _ in model.acquired} == {"frontdoor"}
-        assert sorted(idx for _, idx in model.acquired) == sorted(FD_Q_IDXS)
+        assert {role for role, _ in model.acquired} == {HOST}
+        assert sorted(idx for _, idx in model.acquired) == sorted(HOST_SIB_IDXS)
         # full idle: the all-region idx-0 lock is never acquired.
         assert 0 not in {idx for _, idx in model.acquired}
 
@@ -324,40 +333,46 @@ def test_case2_mirror_frontdoor_four_wide_quarters_half_idle(monkeypatch, tmp_pa
 
 
 def test_case7_full_disabled_never_emits_full(monkeypatch, tmp_path):
-    """FULL_DISABLED policy (synthetic since the 2026-07-23 lineup restoration
-    reverted worker_general's live policy to burst_prefer_split): even with
-    a realized full endpoint, the fleet CAB never places the all-region full."""
+    """FULL_DISABLED policy (synthetic — no live role carries it): even with a
+    realized full endpoint, the fleet CAB never places the all-region full."""
     import scripts.server.stack_numa as _stack_numa
 
     monkeypatch.setitem(
-        _stack_numa.NUMA_CONFIG["worker_general"], "placement_policy", "full_disabled"
+        _stack_numa.NUMA_CONFIG[HOST], "placement_policy", "full_disabled"
     )
-    state = _fleet_state(tmp_path, wg_ports=[WG_FULL] + WG_QUARTERS)
+    state = _fleet_state(tmp_path, host_ports=[HOST_FULL] + HOST_SIBLINGS)
     host, _urls, _st = _build_host(monkeypatch, tmp_path, state=state)
-    cab = host._backends["worker_general"]
+    cab = host._backends[WM]
     assert cab._full is not None  # mixed-mode fleet: full realized
-    assert cab._full_port == WG_FULL
+    assert cab._full_port == HOST_FULL
 
     model = _real_regions_model()
     _wire(monkeypatch, model)
 
     with cab._dispatch(session_id="solo") as (_backend, idx, is_full):
         assert not is_full
-        assert model.acquired == [("worker_general", cab._quarter_topology_idx[idx])]
-        assert ("worker_general", 0) not in model.acquired
+        assert model.acquired == [(HOST, cab._quarter_topology_idx[idx])]
+        assert (HOST, 0) not in model.acquired
 
 
 def test_case7_burst_prefer_split_full_first_solo_abandoned_under_load(
     monkeypatch, tmp_path
 ):
-    """frontdoor (burst_prefer_split): solo keeps full first for peak
-    latency; the moment a self-role holder exists the full is abandoned and
-    placement goes to a disjoint quarter."""
-    state = _fleet_state(tmp_path, fd_ports=[FD_FULL] + FD_QUARTERS)
+    """The host fleet (live policy burst_prefer_split): solo keeps full first
+    for peak latency; the moment a self-role holder exists the full is
+    abandoned and placement goes to a disjoint sibling."""
+    from scripts.server.stack_numa import NUMA_CONFIG
+    from src.runtime.instance_topology import get_instance_regions
+
+    assert NUMA_CONFIG[HOST].get("placement_policy") == "burst_prefer_split", (
+        f"{HOST} no longer carries burst_prefer_split — re-point this case at the "
+        "role that does"
+    )
+    state = _fleet_state(tmp_path, host_ports=[HOST_FULL] + HOST_SIBLINGS)
     host, _urls, _st = _build_host(monkeypatch, tmp_path, state=state)
-    cab = host._backends["frontdoor"]
+    cab = host._backends[HOST]
     assert cab._full is not None
-    assert cab._full_port == FD_FULL
+    assert cab._full_port == HOST_FULL
 
     model = _real_regions_model()
     _wire(monkeypatch, model)
@@ -365,32 +380,36 @@ def test_case7_burst_prefer_split_full_first_solo_abandoned_under_load(
     # Solo: full first (single-request max throughput).
     with cab._dispatch(session_id="solo") as (_b, _idx, is_full):
         assert is_full
-        assert model.acquired[-1] == ("frontdoor", 0)
+        assert model.acquired[-1] == (HOST, 0)
     assert model.owner == {}
 
-    # A self-role quarter holder exists (q3 busy) → burst mode: full
-    # abandoned, placement lands on a quarter disjoint from the holder.
-    model.owner["q3"] = ("frontdoor", FD_Q_IDXS[-1])
+    # A self-role sibling holder exists (one region of the LAST sibling busy)
+    # → burst mode: full abandoned, placement lands on a sibling disjoint from
+    # the holder.
+    busy_region = sorted(get_instance_regions()[(HOST, HOST_SIB_IDXS[-1])])[-1]
+    model.owner[busy_region] = (HOST, HOST_SIB_IDXS[-1])
     with cab._dispatch(session_id="burst") as (_b, idx, is_full):
         assert not is_full
         topo = cab._quarter_topology_idx[idx]
         assert topo != 0
-        from src.runtime.instance_topology import get_instance_regions
-
-        placed_regions = get_instance_regions()[("frontdoor", topo)]
-        assert not (placed_regions & {"q3"})
+        placed_regions = get_instance_regions()[(HOST, topo)]
+        assert busy_region not in placed_regions
 
 
 def test_case7_solo_prefer_full_keeps_full_at_concurrency_one(monkeypatch, tmp_path):
-    """ingest_long_context has no placement_policy override → default
-    solo_prefer_full: concurrency 1 places the full/half instance first."""
-    state = _fleet_state(tmp_path, ing_ports=ING_ALL)
-    urls = dict(_default_urls())
-    urls["ingest_long_context"] = _url_str(ING_ALL[1:], full_port=ING_ALL[0])
-    host, _urls, _st = _build_host(monkeypatch, tmp_path, state=state, urls=urls)
-    cab = host._backends["ingest_long_context"]
+    """A fleet with NO placement_policy key → default solo_prefer_full:
+    concurrency 1 places the full instance first. No live multi-instance fleet
+    runs on the default today (ingest_long_context, which did, became a GPU
+    alias at the 2026-09-22 cutover), so the host's override is removed to
+    exercise the default-resolution path itself."""
+    import scripts.server.stack_numa as _stack_numa
+
+    monkeypatch.delitem(_stack_numa.NUMA_CONFIG[HOST], "placement_policy", raising=False)
+    state = _fleet_state(tmp_path, host_ports=[HOST_FULL] + HOST_SIBLINGS)
+    host, _urls, _st = _build_host(monkeypatch, tmp_path, state=state)
+    cab = host._backends[HOST]
     assert cab._full is not None
-    assert cab._full_port == _ING_FULL
+    assert cab._full_port == HOST_FULL
 
     model = _real_regions_model()
     _wire(monkeypatch, model)
@@ -398,7 +417,7 @@ def test_case7_solo_prefer_full_keeps_full_at_concurrency_one(monkeypatch, tmp_p
     with cab._dispatch(session_id="solo") as (_b, idx, is_full):
         assert is_full
         assert idx == -1
-        assert model.acquired == [("ingest_long_context", 0)]
+        assert model.acquired == [(HOST, 0)]
 
 
 # ── Flag-off byte-identity of the builder path ──────────────────────────────
@@ -421,8 +440,12 @@ def test_flag_off_builds_legacy_per_role_backends(monkeypatch, tmp_path):
     host._init_caching_backends(urls, num_slots=1)
 
     assert urls == before  # no fleet rewrite
-    assert host._backends["worker_general"] is not host._backends["toolrunner"]
-    assert host._backends["frontdoor"] is not host._backends["coder_escalation"]
+    others = [r for r in HOST_BOUND if r not in (HOST, WM)]
+    assert others, HOST_BOUND
+    for role in others:
+        # Same URL list as the host, yet an independent object flag-off.
+        assert urls[role] == urls[HOST]
+        assert host._backends[role] is not host._backends[HOST], role
 
 
 def test_request_specific_urls_keep_legacy_build(monkeypatch, tmp_path):
@@ -437,4 +460,4 @@ def test_request_specific_urls_keep_legacy_build(monkeypatch, tmp_path):
     before = dict(urls)
     host._init_caching_backends(urls, num_slots=1)
     assert urls == before
-    assert host._backends["worker_general"] is not host._backends["worker_math"]
+    assert host._backends[HOST] is not host._backends[WM]

@@ -1,20 +1,24 @@
 """DISPATCH-A2: misaligned-`full:` demotion into the quarters pool.
 
 When the endpoint wired as `full:` is NOT the topology idx-0 port (a quarter
-impersonating the 96-core full — the live worker_general/frontdoor wiring), the
+impersonating the 96-core full — the live frontdoor-fleet wiring), the
 construction site demotes it into the quarters pool at its TRUE topology index
 (port-resolved) instead of stranding it. This restores the N-way concurrency
 ceiling AND makes every quarter's region lock match the server's physical cores
 (killing the q0-lock-on-q1-cores cross-role collision hazard).
 
-Uses the REAL worker_general topology (read from NUMA_CONFIG, never restated)
-so the idx→port→cpuset consistency is asserted against the live truth. Port
-literals are deliberately absent: the fleet shape has changed twice (2026-07-23
-big+quarters restoration, 2026-07-30 quarters retirement to 1 full + 2 halves)
-and a hardcoded fixture both fails the tests that assert it and — worse —
-silently passes the ones that do not, because dispatch fails OPEN on a port it
-cannot resolve to a topology index (an unresolvable endpoint gets an EMPTY
-region set, so its lock can never conflict).
+Uses the REAL topology of the fleet that hosts worker_general (host read from
+the registry's server_mode, instances from NUMA_CONFIG — never restated) so the
+idx→port→cpuset consistency is asserted against the live truth. Port literals
+are deliberately absent: the fleet shape has changed three times (2026-07-23
+big+quarters restoration, 2026-07-30 quarters retirement to 1 full + 2 halves,
+2026-09-22 lineup cutover making worker_general an ALIAS of frontdoor with no
+NUMA_CONFIG entry of its own) and a hardcoded fixture both fails the tests that
+assert it and — worse — silently passes the ones that do not, because dispatch
+fails OPEN on a port it cannot resolve to a topology index (an unresolvable
+endpoint gets an EMPTY region set, so its lock can never conflict). The
+2026-09-22 change is what broke collection here (``KeyError: 'worker_general'``
+from ``NUMA_CONFIG[WG]``); the fix derives the host instead of naming it.
 """
 
 from __future__ import annotations
@@ -99,17 +103,21 @@ def _registry_aliases_of(host: str) -> list[str]:
     return sorted(a for a, h in _registry_alias_to_host().items() if h == host)
 
 
-WG_FULL, WG_SIBLINGS = _topology_ports(WG)
+# The physical fleet serving worker_general (and worker_math, which shares it).
+# worker_general has NO NUMA_CONFIG entry of its own since the 2026-09-22 lineup
+# cutover; its topology — ports, instance idxs, lock regions — is its HOST's.
+WG_HOST = _registry_alias_to_host().get(WG, WG)
+
+HOST_FULL, HOST_SIBLINGS = _topology_ports(WG_HOST)
 FD_FULL, FD_SIBLINGS = _topology_ports(FD)
-WG_SIBLING_IDXS = [topology_idx_for_port(WG, p) for p in WG_SIBLINGS]
+HOST_SIBLING_IDXS = [topology_idx_for_port(WG_HOST, p) for p in HOST_SIBLINGS]
 FD_SIBLING_IDXS = [topology_idx_for_port(FD, p) for p in FD_SIBLINGS]
 
-# The canonical worker_general default (aligned idx-0 full + every sibling
-# instance). worker_math shares worker_general's physical gemma server, so its
-# default URL list must carry the SAME shape or its ConcurrencyAwareBackend
-# serializes on a single instance (live EV-11c incident: ~3 q/min instead of the
-# fanned-out ~7).
-_WG_DEFAULT = _fleet_default(WG)
+# The canonical worker_general default (its host's aligned idx-0 full + every
+# sibling instance). worker_math shares that physical server, so its default URL
+# list must carry the SAME shape or its ConcurrencyAwareBackend serializes on a
+# single instance (live EV-11c incident: ~3 q/min instead of the fanned-out ~7).
+_WG_DEFAULT = _fleet_default(WG_HOST)
 
 # The canonical frontdoor default (aligned idx-0 full + every sibling instance).
 # The frontdoor-fleet aliases the registry declares via
@@ -164,26 +172,26 @@ class _LockCtx:
 
 def _demoted_worker_urls() -> str:
     """`full:` marks the FIRST sibling instance — a half impersonating the full."""
-    return _urls(WG_SIBLINGS[0], tuple(WG_SIBLINGS[1:]))
+    return _urls(HOST_SIBLINGS[0], tuple(HOST_SIBLINGS[1:]))
 
 
 def test_misaligned_full_demoted_into_quarters_pool() -> None:
     """Live shape: `full:` marks a sibling instance, not the aligned idx-0 full.
     It is demoted → no full served, EVERY sibling dispatchable at its true idx."""
-    backends = _build({WG: _demoted_worker_urls()})
-    be = backends[WG]
+    backends = _build({WG_HOST: _demoted_worker_urls()})
+    be = backends[WG_HOST]
     assert isinstance(be, ca_mod.ConcurrencyAwareBackend)
     assert be._full is None                       # misaligned full demoted → none served
     # N-way ceiling restored: every realized sibling instance, none stranded.
-    assert len(be._quarters) == len(WG_SIBLINGS)
-    assert be._quarter_topology_idx == WG_SIBLING_IDXS
-    assert [_port(q) for q in be._quarters] == WG_SIBLINGS
+    assert len(be._quarters) == len(HOST_SIBLINGS)
+    assert be._quarter_topology_idx == HOST_SIBLING_IDXS
+    assert [_port(q) for q in be._quarters] == HOST_SIBLINGS
     # Every idx is a REAL topology index — a stale port would resolve to None
     # and get a positional idx with an empty (never-conflicting) region set.
     assert all(idx is not None for idx in be._quarter_topology_idx)
     assert be._full_slot_aligned is True          # no full slot → vacuously aligned
     assert (
-        be.max_concurrency() >= len(WG_SIBLINGS)
+        be.max_concurrency() >= len(HOST_SIBLINGS)
         if hasattr(be, "max_concurrency")
         else True
     )
@@ -193,32 +201,32 @@ def test_demoted_region_locks_match_physical_cores() -> None:
     """idx → port → cpuset consistency (the anti-shift invariant): the region the
     dispatcher LOCKS for each quarter equals the physical cpuset of the server at
     that port, per NUMA_CONFIG."""
-    backends = _build({WG: _demoted_worker_urls()})
-    be = backends[WG]
+    backends = _build({WG_HOST: _demoted_worker_urls()})
+    be = backends[WG_HOST]
     ir = get_instance_regions()
-    port_to_cpulist = {int(e[1]): e[0] for e in NUMA_CONFIG[WG]["instances"]}
+    port_to_cpulist = {int(e[1]): e[0] for e in NUMA_CONFIG[WG_HOST]["instances"]}
 
     for i, q in enumerate(be._quarters):
         topo = be._quarter_topology_idx[i]
         port = _port(q)
-        locked_regions = ir[(WG, topo)]                      # what the lock covers
+        locked_regions = ir[(WG_HOST, topo)]                 # what the lock covers
         physical_regions = cpu_list_to_regions(port_to_cpulist[port])  # server's real cores
         assert locked_regions == physical_regions, (
             f"quarter {i} (port {port}) locks {sorted(locked_regions)} "
             f"but physically runs on {sorted(physical_regions)}"
         )
-        assert topology_idx_for_port(WG, port) == topo
+        assert topology_idx_for_port(WG_HOST, port) == topo
 
 
 def test_demoted_endpoint_dispatchable_and_locks_true_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The demoted endpoint (8082 → topo idx 1 → region q0) is reachable, and the
+    """The demoted endpoint (first sibling → its true topo idx) is reachable, and the
     dispatcher locks the topology index matching the chosen backend's port."""
     monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
     monkeypatch.setenv("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "1")
-    backends = _build({WG: _demoted_worker_urls()})
-    be = backends[WG]
+    backends = _build({WG_HOST: _demoted_worker_urls()})
+    be = backends[WG_HOST]
 
     attempted: list[int] = []
 
@@ -232,30 +240,30 @@ def test_demoted_endpoint_dispatchable_and_locks_true_region(
 
     with be._dispatch(session_id="d0") as (_bk, idx, is_full):
         assert is_full is False
-        assert 0 <= idx < len(WG_SIBLINGS)
+        assert 0 <= idx < len(HOST_SIBLINGS)
         # The locked topology idx is the chosen quarter's TRUE (port-resolved) idx,
         # never the all-region idx 0.
         assert attempted[-1] == be._quarter_topology_idx[idx]
-        assert attempted[-1] in WG_SIBLING_IDXS
+        assert attempted[-1] in HOST_SIBLING_IDXS
         assert 0 not in attempted
     # The demoted endpoint occupies internal slot 0 at its own topology idx.
-    assert be._quarter_topology_idx[0] == WG_SIBLING_IDXS[0]
-    assert _port(be._quarters[0]) == WG_SIBLINGS[0]
+    assert be._quarter_topology_idx[0] == HOST_SIBLING_IDXS[0]
+    assert _port(be._quarters[0]) == HOST_SIBLINGS[0]
 
 
 # ── construction: a REAL full (port == idx-0) is preserved unchanged ──────────
 
 def test_aligned_full_preserved() -> None:
     """When `full:` IS the topology idx-0 port (a real 96-core full deployed),
-    the full slot is served exactly as before and quarters keep idxs 1..4."""
-    backends = _build({WG: _urls(WG_FULL, tuple(WG_SIBLINGS))})
-    be = backends[WG]
+    the full slot is served exactly as before and siblings keep their true idxs."""
+    backends = _build({WG_HOST: _urls(HOST_FULL, tuple(HOST_SIBLINGS))})
+    be = backends[WG_HOST]
     assert be._full is not None                    # real full served
-    assert be._full_port == WG_FULL
+    assert be._full_port == HOST_FULL
     assert be._full_slot_aligned is True
-    assert len(be._quarters) == len(WG_SIBLINGS)
-    assert be._quarter_topology_idx == WG_SIBLING_IDXS
-    assert [_port(q) for q in be._quarters] == WG_SIBLINGS
+    assert len(be._quarters) == len(HOST_SIBLINGS)
+    assert be._quarter_topology_idx == HOST_SIBLING_IDXS
+    assert [_port(q) for q in be._quarters] == HOST_SIBLINGS
 
 
 def test_aligned_full_emits_full_candidate_on_solo(
@@ -263,8 +271,8 @@ def test_aligned_full_emits_full_candidate_on_solo(
 ) -> None:
     """Real full + a SOLO_PREFER_FULL role → solo dispatch routes to the full
     instance (idx 0), proving the explicit-topology-idx change did not disturb
-    the aligned full path. (worker_general is FULL_DISABLED, so use frontdoor's
-    aligned idx-0 port 8070 via direct construction.)"""
+    the aligned full path. (Synthetic 1 full + 4 quarters frontdoor shape via
+    direct construction, with regions and locks mocked.)"""
     monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
     monkeypatch.setenv("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "1")
 
@@ -308,15 +316,16 @@ def test_aligned_full_emits_full_candidate_on_solo(
         assert attempted[-1] == 0  # topology idx 0 (the real full) locked
 
 
-# ── worker_math shares worker_general's gemma fleet: default URL parity ───────
+# ── worker_math shares worker_general's host fleet: default URL parity ─────
 #
-# worker_math has NO NUMA_CONFIG entry of its own; it dispatches on
-# worker_general's physical 4-quarter gemma server (registry
-# server_mode.worker.shared_with). Its default URL list must therefore carry
-# worker_general's FULL shape (aligned full 8072 + the four quarters) so its
-# ConcurrencyAwareBackend fans out 4-wide instead of serializing on a single
-# quarter (EV-11c live incident: the worker_math arm ran ~3 q/min instead of the
-# 4-wide ~7 because its default carried only ONE quarter, 8082).
+# worker_math has NO NUMA_CONFIG entry of its own; it dispatches on the same
+# physical server as worker_general (since the 2026-09-22 lineup cutover both
+# are declared in server_mode.frontdoor.shared_with — the Qwen3.6-35B-A3B
+# frontdoor fleet; before it, the gemma `worker` server). Its default URL list
+# must therefore carry that host's FULL shape (aligned full + every sibling) so
+# its ConcurrencyAwareBackend fans out instead of serializing on a single
+# instance (EV-11c live incident: the worker_math arm ran ~3 q/min instead of
+# the fanned-out ~7 because its default carried only ONE quarter, 8082).
 
 
 def _fallback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -334,126 +343,121 @@ def _fallback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 def test_worker_math_default_url_list_matches_worker_general_shape(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """(a)+(c): worker_math's default URL list = the aligned idx-0 full plus
-    EVERY sibling instance the topology declares, byte-for-byte identical to
-    worker_general's default. The shape is derived from NUMA_CONFIG, so a
-    topology change updates the expectation while a config-only drift (the
-    EV-11c failure: worker_math narrowed to one endpoint) still fails here."""
+    """(a)+(c): worker_math's default URL list = the host's aligned idx-0 full
+    plus EVERY sibling instance the topology declares, byte-for-byte identical
+    to worker_general's (and the host's own) default. The shape is derived from
+    the registry + NUMA_CONFIG, so a topology change updates the expectation
+    while a config-only drift (the EV-11c failure: worker_math narrowed to one
+    endpoint) still fails here."""
     _fallback_env(monkeypatch, tmp_path)
     try:
         cfg = ServerURLsConfig()
         # The fan-out this guard exists to protect must be real, not a 1-endpoint
         # fleet that would make the parity assertions vacuous.
-        assert len(WG_SIBLINGS) >= 2
-        # (c) worker_general default matches the realized topology.
+        assert len(HOST_SIBLINGS) >= 2
+        # (c) worker_general default matches its host's realized topology.
         assert cfg.worker_general == _WG_DEFAULT
+        assert cfg.worker_general == getattr(cfg, WG_HOST)
         # (a) worker_math yields the same full + siblings shape.
         assert cfg.worker_math == _WG_DEFAULT
         assert cfg.worker_math == cfg.worker_general
         parts = cfg.worker_math.split(",")
-        assert parts[0] == f"full:http://localhost:{WG_FULL}"   # aligned idx-0 full
-        assert parts[1:] == [f"http://localhost:{p}" for p in WG_SIBLINGS]
+        assert parts[0] == f"full:http://localhost:{HOST_FULL}"   # aligned idx-0 full
+        assert parts[1:] == [f"http://localhost:{p}" for p in HOST_SIBLINGS]
     finally:
         reset_stack_prior_server_url_cache()
 
 
-def test_worker_math_backend_builds_four_quarters_under_worker_general_topology(
+def test_worker_math_backend_builds_siblings_under_host_topology(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """(b): the shipped worker_math default constructs a CA backend whose
-    topology/lock role is worker_general, with the aligned idx-0 full served (not
-    demoted) and EVERY gemma sibling instance at its TRUE (port-resolved)
-    topology idx. Regression: the old single-quarter default built only ONE
-    quarter and serialized dispatch."""
+    """(b): the shipped worker_math / worker_general defaults construct CA
+    backends whose topology/lock role is the HOST fleet, with the aligned idx-0
+    full served (not demoted) and EVERY sibling instance at its TRUE
+    (port-resolved) topology idx. Regression: the old single-quarter default
+    built only ONE quarter and serialized dispatch."""
     _fallback_env(monkeypatch, tmp_path)
     try:
         cfg = ServerURLsConfig()
-        # worker_general MUST be co-present so worker_math's topology role is
-        # resolvable by matching (full-stripped) URL lists.
-        backends = _build({WG: cfg.worker_general, WM: cfg.worker_math})
+        # The host MUST be co-present so the aliases' topology role is
+        # resolvable by matching (full-stripped) URL lists — as it always is in
+        # the live server_urls map.
+        backends = _build(
+            {WG_HOST: getattr(cfg, WG_HOST), WG: cfg.worker_general, WM: cfg.worker_math}
+        )
     finally:
         reset_stack_prior_server_url_cache()
 
-    be = backends[WM]
-    assert isinstance(be, ca_mod.ConcurrencyAwareBackend)
-    # Topology/lock role aliases onto worker_general (shared physical fleet), so
-    # region locks collide correctly with worker_general instead of a phantom
-    # empty "worker_math" topology.
-    assert be._topology_role == WG
-    assert be._role == WM
-    # Aligned full (worker_general idx-0 port) → served, not demoted.
-    assert be._full is not None
-    assert be._full_port == WG_FULL
-    assert be._full_slot_aligned is True
-    # Every gemma sibling at its TRUE (port-resolved) topology idx — the
-    # anti-serialization tooth is that the pool width equals the topology's
-    # sibling count, never 1.
-    assert len(WG_SIBLINGS) >= 2
-    assert len(be._quarters) == len(WG_SIBLINGS)
-    assert be._quarter_topology_idx == WG_SIBLING_IDXS
-    assert [_port(q) for q in be._quarters] == WG_SIBLINGS
-    # Sanity: those idxs are the NUMA_CONFIG[worker_general] indices by port.
-    for topo, port in zip(be._quarter_topology_idx, WG_SIBLINGS):
-        assert topology_idx_for_port(WG, port) == topo
+    assert len(HOST_SIBLINGS) >= 2
+    for role in (WM, WG):
+        be = backends[role]
+        assert isinstance(be, ca_mod.ConcurrencyAwareBackend), role
+        # Topology/lock role is the physical host fleet, so region locks
+        # collide correctly with it instead of a phantom empty per-alias
+        # topology.
+        assert be._topology_role == WG_HOST, role
+        assert be._role == role
+        # Aligned full (host idx-0 port) → served, not demoted.
+        assert be._full is not None, role
+        assert be._full_port == HOST_FULL, role
+        assert be._full_slot_aligned is True, role
+        # Every sibling at its TRUE (port-resolved) topology idx — the
+        # anti-serialization tooth is that the pool width equals the topology's
+        # sibling count, never 1.
+        assert len(be._quarters) == len(HOST_SIBLINGS), role
+        assert be._quarter_topology_idx == HOST_SIBLING_IDXS, role
+        assert [_port(q) for q in be._quarters] == HOST_SIBLINGS, role
+        for topo, port in zip(be._quarter_topology_idx, HOST_SIBLINGS):
+            assert topology_idx_for_port(WG_HOST, port) == topo
 
-    # worker_general itself unchanged: same aligned full + sibling-pool shape.
-    wg_be = backends[WG]
-    assert isinstance(wg_be, ca_mod.ConcurrencyAwareBackend)
-    assert wg_be._topology_role == WG
-    assert len(wg_be._quarters) == len(WG_SIBLINGS)
-    assert wg_be._quarter_topology_idx == WG_SIBLING_IDXS
+    # The host itself: same aligned full + sibling-pool shape.
+    host_be = backends[WG_HOST]
+    assert isinstance(host_be, ca_mod.ConcurrencyAwareBackend)
+    assert host_be._topology_role == WG_HOST
+    assert host_be._quarter_topology_idx == HOST_SIBLING_IDXS
 
 
 def test_shared_worker_fleet_url_defaults_do_not_drift() -> None:
-    """DRIFT GUARD: every role the registry declares as sharing the worker
-    server fleet (server_mode.worker.shared_with) that ALSO carries its OWN
-    literal URL default must keep that literal identical to the host fleet's.
-    Interim guard until backends are derived from server_mode directly — a
-    future edit to one but not the other fails here, naming the shared-fleet
-    relationship and the denormalization site."""
-    import yaml
-
+    """DRIFT GUARD: worker_general, worker_math and every other role the registry
+    declares on the same host fleet that ALSO carries its OWN literal URL default
+    must keep that literal identical to the host's. Interim guard until backends
+    are derived from server_mode directly — a future edit to one but not the
+    other fails here, naming the shared-fleet relationship and the
+    denormalization site."""
     from src.config.models import _LEGACY_SERVER_URL_FALLBACKS as FB
 
-    registry = yaml.safe_load(
-        (ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    alias_to_host = _registry_alias_to_host()
+    # The registry links the guard depends on must stay intact.
+    assert alias_to_host.get(WM) == WG_HOST, (
+        f"worker_math is no longer declared on {WG_HOST!r} (worker_general's "
+        f"host) — got {alias_to_host.get(WM)!r}; the two no longer share a fleet "
+        "and this guard must be re-derived."
     )
-    worker_fleet = registry["server_mode"]["worker"]
-    host_role = worker_fleet["model_role"]
-    shared_with = list(worker_fleet.get("shared_with") or [])
+    # The legacy `worker` server_mode row canonicalizes to worker_general in the
+    # fleet builder, so it must name the same host or the builder double-binds.
+    if "worker" in alias_to_host:
+        assert alias_to_host["worker"] == WG_HOST
 
-    # The registry link the guard depends on must stay intact.
-    assert host_role == WG, (
-        f"server_mode.worker.model_role changed to {host_role!r}; re-point the "
-        "shared-fleet drift guard at the new host role."
-    )
-    assert WM in shared_with, (
-        "server_mode.worker.shared_with no longer lists worker_math — the guard "
-        "would silently stop protecting the role most prone to URL drift."
-    )
-
-    host_default = FB[host_role]
-
-    # Parity set = registry-shared roles that ALSO denormalize their own literal
-    # default. toolrunner shares the fleet but has NO own literal (its
-    # ServerURLsConfig field calls _server_url_default("worker_general")
-    # directly), so it cannot drift and is absent here. worker_explore is a
-    # canonical alias and is NOT in server_mode.worker.shared_with, so the
-    # registry's own rule ("iff shared_with") excludes it.
-    parity_roles = [r for r in shared_with if r in FB]
-    assert WM in parity_roles, (
-        "worker_math lost its own default in _LEGACY_SERVER_URL_FALLBACKS; the "
-        "drift guard is now vacuous — restore the literal or update the guard."
-    )
+    shared = _registry_aliases_of(WG_HOST)
+    # Parity set = roles on the host fleet that ALSO denormalize their own
+    # literal default (worker_explore / worker have none, so they cannot drift).
+    parity_roles = [r for r in shared if r in FB]
+    for anchor in (WG, WM):
+        assert anchor in parity_roles, (
+            f"{anchor} lost its own default in _LEGACY_SERVER_URL_FALLBACKS (or its "
+            "registry declaration); the drift guard is now vacuous — restore the "
+            "literal or update the guard."
+        )
+    host_default = FB[WG_HOST]
     for role in parity_roles:
         assert FB[role] == host_default, (
-            f"shared-fleet URL drift: role {role!r} shares the {host_role!r} "
-            f"gemma server (server_mode.worker.shared_with in "
+            f"shared-fleet URL drift: role {role!r} shares the {WG_HOST!r} server "
+            f"(server_mode.{WG_HOST}.shared_with / alias_of in "
             f"orchestration/model_registry.yaml) but its default URL list in "
             f"_LEGACY_SERVER_URL_FALLBACKS (src/config/models.py) diverges from "
             f"the host fleet:\n"
             f"    {role}: {FB[role]!r}\n"
-            f"    {host_role}: {host_default!r}\n"
+            f"    {WG_HOST}: {host_default!r}\n"
             f"Shared-fleet roles MUST carry an identical URL list (edit BOTH or "
             f"neither) until backends are derived from server_mode directly."
         )
