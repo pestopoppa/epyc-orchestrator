@@ -7,8 +7,52 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import yaml
+
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
+from src.roles import Role
 from scripts.autopilot import preflight_audit as _MOD
+
+_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _registry_server_mode() -> dict[str, Any]:
+    return yaml.safe_load(
+        (_ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )["server_mode"]
+
+
+def _canonical(role: str) -> str:
+    """Canonical role name, exactly as the preflight fallback spells it."""
+    return str(Role.from_string(role) or role)
+
+
+def _registry_host_of(role: str) -> str:
+    """The server_mode row that physically hosts ``role`` (shared_with / alias_of)."""
+    server_mode = _registry_server_mode()
+    for host, row in server_mode.items():
+        if row.get("alias_of"):
+            continue
+        if host == role or role in (row.get("shared_with") or []):
+            return host
+    raise AssertionError(f"registry declares no host server for {role!r}")
+
+
+def _registry_host_groups() -> dict[int, str]:
+    """port -> '/'-joined canonical role group of every physical host row.
+
+    A host row's group is the host itself, its ``shared_with`` roles and every
+    ``alias_of`` row pointing at it — i.e. every role that one process serves.
+    """
+    server_mode = _registry_server_mode()
+    groups: dict[int, str] = {}
+    for host, row in server_mode.items():
+        if row.get("alias_of") or not row.get("port"):
+            continue
+        members = {host, *(row.get("shared_with") or [])}
+        members |= {k for k, v in server_mode.items() if v.get("alias_of") == host}
+        groups[int(row["port"])] = "/".join(sorted({_canonical(m) for m in members}))
+    return groups
 
 
 def _journal_row(
@@ -98,25 +142,38 @@ def test_model_server_targets_fallback_is_current(tmp_path: Path) -> None:
     """Drift canary: with no stack_priors, preflight probes the DECLARED launch
     manifest, so this asserts the fallback still describes the current stack.
 
-    Deliberately literal (unlike the monkeypatched sibling tests below, which
-    prove the derivation logic): a test that recomputed the ports from the same
-    manifest could not detect drift at all. Update it when the lineup changes,
-    with the manifest as evidence.
+    The fallback reads ``orchestration/launch_manifest.yaml`` (HOT/WARM_SERVERS);
+    the expectation is derived from an INDEPENDENT source, the registry's
+    ``server_mode`` (each physical host row plus its ``shared_with`` roles and
+    ``alias_of`` rows), so a manifest/registry disagreement still fails here
+    while a ratified lineup change moves both sides together. (It used to be a
+    literal list; the operator-signed 2026-09-22 cutover, orchestrator 860b0b2d,
+    folded worker_general/worker_math/toolrunner onto frontdoor's :8070 fleet and
+    ingest_long_context onto architect_general's :8083, and every literal went
+    stale at once.)
 
-    2026-08-01 W1 cutover: `vision_escalation` no longer has its own :8087 7B
-    server — it is an ALIAS on `worker_vision`'s :8086 process
-    (orchestration/launch_manifest.yaml:73-74), so the two roles must collapse
-    onto ONE target and :8087 must not be probed at all.
+    Retired ports stay literal on purpose: they are history, not topology —
+    :8071, the 2026-08-01 :8087 vision_escalation server (now an alias on
+    worker_vision's :8086), and the 2026-09-22 :8072 worker server.
     """
     targets = _MOD._model_server_targets(tmp_path / "missing.yaml", "http://localhost:8002")
     health_urls = {health_url for _, health_url in targets}
 
     assert ("API", "http://localhost:8002/health") in targets
-    assert "http://localhost:8071/health" not in health_urls
-    assert ("vision_escalation/worker_vision", "http://localhost:8086/health") in targets
-    assert "http://localhost:8087/health" not in health_urls
-    # architect_general moved to the MI210 :8083 and coder_escalation aliases onto it.
-    assert ("architect_general/coder_escalation", "http://localhost:8083/health") in targets
+
+    host_groups = _registry_host_groups()
+    # Non-vacuity: the registry must still declare the hosts this canary is about.
+    for role in ("frontdoor", "architect_general", "worker_vision", "worker_general"):
+        assert int(_registry_server_mode()[_registry_host_of(role)]["port"]) in host_groups
+    for port, group in host_groups.items():
+        assert (group, f"http://localhost:{port}/health") in targets, (
+            f"fallback does not probe registry host :{port} as {group!r}"
+        )
+    # Alias collapse: worker_general shares frontdoor's process (one target, not two).
+    assert _registry_host_of("worker_general") == _registry_host_of("frontdoor")
+
+    for retired_port in (8071, 8072, 8087):
+        assert f"http://localhost:{retired_port}/health" not in health_urls
     # embedding-mode roles are excluded from health probing.
     assert "http://localhost:8090/health" not in health_urls
 
@@ -243,9 +300,15 @@ roles:
     targets = _MOD._model_server_targets(priors, "http://localhost:8002")
     health_urls = {health_url for _, health_url in targets}
 
+    # Both live records are unusable, so preflight must fall back to the declared
+    # topology and still probe the process that serves each of them. The ports
+    # are the registry's (worker_general is hosted on frontdoor's fleet since the
+    # 2026-09-22 cutover; it used to be a literal :8072).
     assert ("API", "http://localhost:8002/health") in targets
-    assert "http://localhost:8070/health" in health_urls
-    assert "http://localhost:8072/health" in health_urls
+    server_mode = _registry_server_mode()
+    for role in ("frontdoor", "worker_general"):
+        port = int(server_mode[_registry_host_of(role)]["port"])
+        assert f"http://localhost:{port}/health" in health_urls, role
     assert "http://not-a-url/health" not in health_urls
     assert "http://localhost:8090/health" not in health_urls
 

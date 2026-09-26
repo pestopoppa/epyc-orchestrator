@@ -252,11 +252,25 @@ class TestNodeRouting:
         # roles silently start at the frontdoor node — the defect that left
         # architect_critic (the terminal 122B rung) and vision_escalation
         # misrouted after the 2026-08-01 W1 cutover.
+        #
+        # Stack priors also publish legacy server_mode ROW names that are not
+        # Roles: since the 2026-09-22 cutover (orchestrator 860b0b2d) the
+        # ``worker`` row is an ``alias_of: frontdoor`` row listed in
+        # frontdoor.shared_with, so it appears as a live record. Production
+        # canonicalizes such row names through one table
+        # (src.config.models._CANONICAL_SERVER_URL_ALIASES, worker ->
+        # worker_general); apply that same table here instead of restating it,
+        # and still require every canonicalized name to be a real Role.
+        from src.config.models import _CANONICAL_SERVER_URL_ALIASES
+
         live_roles = set(live_stack_role_records())
         assert live_roles, "live stack priors produced no roles"
         for raw_role in sorted(live_roles):
-            resolved = Role.from_string(raw_role)
-            assert resolved is not None, f"live role {raw_role!r} is not a Role"
+            canonical = _CANONICAL_SERVER_URL_ALIASES.get(raw_role, raw_role)
+            resolved = Role.from_string(canonical)
+            assert resolved is not None, (
+                f"live role {raw_role!r} (canonical {canonical!r}) is not a Role"
+            )
             assert str(resolved) in ROLE_TO_LG_NODE, (
                 f"live role {raw_role!r} has no ROLE_TO_LG_NODE entry — it would "
                 f"silently start at the frontdoor node"

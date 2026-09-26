@@ -248,7 +248,18 @@ class TestRoleAdjustment:
         assert _role_adjustment("coder_escalation") == pytest.approx(0.824178)
 
     def test_worker_is_tier_3(self):
-        assert _role_adjustment("worker_general") == 1.0
+        """The weakest live tier gets no risk discount (factor exactly 1.0).
+
+        This pinned ``worker_general`` until the operator-signed 2026-09-22
+        cutover (orchestrator 860b0b2d) made it an alias on frontdoor's 35B-A3B
+        fleet, which the live derivation legitimately puts in tier_2. The tier-3
+        exemplars are now derived from stack priors like the tier-1 ones above.
+        """
+        tier_3_roles = _live_roles_by_tier().get("tier_3", [])
+        assert tier_3_roles, "no live role falls in tier_3 — check is vacuous"
+        for role in tier_3_roles:
+            assert _role_tier_for_role(role) == "tier_3", role
+            assert _role_adjustment(role) == 1.0, role
 
     def test_frontdoor_uses_live_stack_prior_model_tier(self):
         assert _role_tier_for_role("frontdoor") == "tier_2"
@@ -372,11 +383,25 @@ class TestAssessRisk:
         assert result.risk_features["has_date_question"] == 1.0
 
     def test_role_adjustment_reduces_score(self):
+        """A stronger-tier role discounts the same prompt more than a weaker one.
+
+        The strong/weak pair is derived from live stack priors (strongest and
+        weakest live tiers) instead of pinning worker_general vs
+        architect_general, which the 2026-09-22 cutover put in the same tier_2.
+        """
+        by_tier = _live_roles_by_tier()
+        strong_tier = next(t for t in ("tier_1", "tier_2", "tier_3") if by_tier.get(t))
+        weak_tier = next(t for t in ("tier_3", "tier_2", "tier_1") if by_tier.get(t))
+        assert strong_tier != weak_tier, f"live stack collapsed to one tier: {by_tier}"
+        strong_role = sorted(by_tier[strong_tier])[0]
+        weak_role = sorted(by_tier[weak_tier])[0]
+
         prompt = "What is the population of Tokyo?"
-        r_worker = assess_risk(prompt, role="worker_general", config={"mode": "shadow"})
-        r_arch = assess_risk(prompt, role="architect_general", config={"mode": "shadow"})
-        assert r_arch.adjusted_risk_score <= r_worker.adjusted_risk_score
-        assert r_arch.role_adjustment < r_worker.role_adjustment
+        r_weak = assess_risk(prompt, role=weak_role, config={"mode": "shadow"})
+        r_strong = assess_risk(prompt, role=strong_role, config={"mode": "shadow"})
+        assert r_weak.risk_score > 0.0, "prompt carries no risk — comparison is vacuous"
+        assert r_strong.adjusted_risk_score <= r_weak.adjusted_risk_score
+        assert r_strong.role_adjustment < r_weak.role_adjustment
 
     def test_no_role_means_no_adjustment(self):
         result = assess_risk("Who founded Microsoft?", config={"mode": "shadow"})

@@ -4,10 +4,51 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from src import cli_orch
 from src.cli_orch import _fallback_status_targets, _stack_status_targets
+from src.roles import Role
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _registry_server_mode() -> dict:
+    return yaml.safe_load(
+        (_ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )["server_mode"]
+
+
+def _registry_host_groups() -> dict[str, tuple[str, int]]:
+    """host row -> (canonical '/'-joined role group, port) for each physical host.
+
+    Derived from the registry's ``server_mode`` — an INDEPENDENT source from the
+    launch manifest the fallback reads — so a registry/manifest disagreement
+    still fails while a ratified lineup change moves both sides together. A
+    host's group is the host, its ``shared_with`` roles and every ``alias_of``
+    row pointing at it, canonicalized the way the fallback spells them
+    (``Role.from_string``; e.g. worker_explore -> worker_general).
+    """
+    server_mode = _registry_server_mode()
+    groups: dict[str, tuple[str, int]] = {}
+    for host, row in server_mode.items():
+        if row.get("alias_of") or not row.get("port"):
+            continue
+        members = {host, *(row.get("shared_with") or [])}
+        members |= {k for k, v in server_mode.items() if v.get("alias_of") == host}
+        canonical = {str(Role.from_string(m) or m) for m in members}
+        groups[host] = ("/".join(sorted(canonical)), int(row["port"]))
+    return groups
+
+
+def _host_of(role: str) -> str:
+    for host, row in _registry_server_mode().items():
+        if row.get("alias_of"):
+            continue
+        if host == role or role in (row.get("shared_with") or []):
+            return host
+    raise AssertionError(f"registry declares no host row for {role!r}")
 
 
 def test_stack_status_targets_group_live_roles_by_port(tmp_path: Path) -> None:
@@ -53,33 +94,38 @@ def test_stack_status_targets_fallback_excludes_retired_ports(tmp_path: Path) ->
     targets = _stack_status_targets(tmp_path / "missing.yaml")
 
     assert (_RETIRED_ARCHITECT_ROLE, 8084) not in targets
-    # 2026-08-01 W1 cutover: was ("coder_escalation/frontdoor/worker_summarize",
-    # 8070). coder_escalation left frontdoor's :8070 process for
-    # architect_general's :8083, leaving worker_summarize as frontdoor's only alias.
-    assert ("frontdoor/worker_summarize", 8070) in targets
-    assert ("architect_general/coder_escalation", 8083) in targets
-    # architect_critic is the NEW 122B role on the full CPU instance, port 8074.
-    assert ("architect_critic", 8074) in targets
-    # Port 8087 retired: vision_escalation is an alias on worker_vision's :8086.
-    assert ("vision_escalation/worker_vision", 8086) in targets
-    assert all(port != 8087 for _, port in targets)
-    assert all(port != 8090 for _, port in targets)
+    groups = _registry_host_groups()
+    # frontdoor's :8070 fleet hosts the worker lane since the 2026-09-22 cutover
+    # (orchestrator 860b0b2d); architect_general's :8083 hosts coder_escalation
+    # and ingest_long_context; architect_critic has its own :8074 process;
+    # vision_escalation is an alias on worker_vision's :8086.
+    for host in ("frontdoor", "architect_general", "architect_critic", "worker_vision"):
+        assert groups[host] in targets, host
+    # Retired ports (history, deliberately literal): the :8087 vision_escalation
+    # server (2026-08-01) and the :8072 worker server (2026-09-22). The embedder
+    # :8090 is excluded by mode.
+    assert all(port not in (8072, 8087, 8090) for _, port in targets)
 
 
 def test_fallback_status_targets_derive_alias_groups_from_manifest() -> None:
-    targets = _fallback_status_targets()
+    """Every registry host row's alias group is one fallback status target.
 
-    # 2026-08-01 W1 cutover: same alias-group reshaping as the test above —
-    # coder_escalation moved 8070 -> 8083, vision_escalation 8087 -> 8086,
-    # architect_critic added on 8074.
-    assert ("frontdoor/worker_summarize", 8070) in targets
-    assert ("toolrunner/worker_general/worker_math", 8072) in targets
-    assert ("architect_general/coder_escalation", 8083) in targets
-    assert ("architect_critic", 8074) in targets
-    assert ("vision_escalation/worker_vision", 8086) in targets
+    Was a literal list pinned to the 2026-08-01 lineup (incl. a separate
+    ``toolrunner/worker_general/worker_math`` server on :8072); now derived from
+    registry server_mode so it survives the next ratified cutover.
+    """
+    targets = _fallback_status_targets()
+    groups = _registry_host_groups()
+
+    # Non-vacuity: the roles this test is about must still be registry-hosted.
+    assert len(groups) >= 4
+    for role in ("worker_general", "worker_math", "toolrunner", "coder_escalation"):
+        assert groups[_host_of(role)][0].split("/").count(role) == 1, role
+    for host, target in groups.items():
+        assert target in targets, f"{host}: {target} missing from {targets}"
+    # worker_explore is canonicalized, never surfaced under its alias name.
     assert all("worker_explore" not in name for name, _ in targets)
-    assert all(port != 8087 for _, port in targets)
-    assert all(port != 8090 for _, port in targets)
+    assert all(port not in (8072, 8087, 8090) for _, port in targets)
 
 
 def test_fallback_status_targets_follow_manifest_without_literal_port_list(

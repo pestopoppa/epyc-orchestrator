@@ -20,6 +20,44 @@ render_stack_summary = importlib.import_module("scripts.registry.render_stack_su
 LEGACY_ARCHITECT_ROLE = "architect" "_coding"
 
 
+def _load_server_mode(registry_path: Path) -> dict:
+    import yaml
+
+    return yaml.safe_load(registry_path.read_text(encoding="utf-8"))["server_mode"]
+
+
+def _live_host_of(role: str) -> str:
+    """The LIVE registry server_mode row that physically serves ``role``.
+
+    Follows the repository's own ``orchestration/model_registry.yaml`` (host row
+    itself, ``model_role`` or ``shared_with``), never an alias row.
+    """
+    server_mode = _load_server_mode(ROOT / "orchestration" / "model_registry.yaml")
+    for host, row in server_mode.items():
+        if row.get("alias_of"):
+            continue
+        if host == role or row.get("model_role") == role or role in (row.get("shared_with") or []):
+            return host
+    raise AssertionError(f"live registry declares no host row for {role!r}")
+
+
+def _compiled_fallback_port(tmp_path: Path, role: str) -> int:
+    """Port the compiled fallback must publish for ``role`` in the fixture tree.
+
+    The fixture registry deliberately binds nothing to ``worker_general`` (its
+    ``worker`` row is a bare legacy row with no ``model_role``/``shared_with``),
+    so the compiler resolves the role through the LIVE stack manifest's alias for
+    it and projects the FIXTURE row of that host. Until the operator-signed
+    2026-09-22 cutover (orchestrator 860b0b2d) the live host was the ``worker``
+    row (fixture :8072); it is now frontdoor's fleet (fixture :8070). Derived
+    from the live registry so the next lineup change moves the expectation too.
+    """
+    host = _live_host_of(role)
+    fixture = _load_server_mode(tmp_path / "orchestration" / "model_registry.yaml")
+    assert host in fixture, f"fixture registry lacks the live host row {host!r} of {role!r}"
+    return int(fixture[host]["port"])
+
+
 def _write_minimal_root(tmp_path: Path) -> None:
     orchestration = tmp_path / "orchestration"
     orchestration.mkdir()
@@ -232,8 +270,9 @@ def test_system_card_compiles_fallback_rows_when_stack_priors_missing(tmp_path: 
         "| frontdoor | 8070 | "
         "frontdoor-compiled.gguf |"
     ) in card
+    wg_port = _compiled_fallback_port(tmp_path, "worker_general")
     assert (
-        "| worker_general | 8072 | "
+        f"| worker_general | {wg_port} | "
         "worker-compiled.gguf |"
     ) in card
     assert "worker.gguf" not in card
@@ -260,8 +299,9 @@ def test_renderer_compiles_fallback_rows_when_stack_priors_missing(tmp_path: Pat
         "| frontdoor | 8070 | "
         "frontdoor-compiled.gguf |"
     ) in summary
+    wg_port = _compiled_fallback_port(tmp_path, "worker_general")
     assert (
-        "| worker_general | 8072 | "
+        f"| worker_general | {wg_port} | "
         "worker-compiled.gguf |"
     ) in summary
     assert "worker.gguf" not in summary

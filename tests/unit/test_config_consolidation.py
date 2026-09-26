@@ -92,6 +92,34 @@ def _registry_serving_port(role: str) -> int:
     raise AssertionError(f"role {role!r} has no resolvable server_mode port")
 
 
+def _registry_host(role: str) -> str:
+    """The server_mode row whose process physically serves ``role``.
+
+    Same resolution as :func:`_registry_serving_port` (``alias_of`` then
+    ``shared_with``), returning the host ROW instead of its port, so fleet facts
+    (NUMA_CONFIG instances) can be looked up under the name the topology keys on.
+    """
+    server_mode = _registry_server_mode()
+    seen: set[str] = set()
+    while role not in seen:
+        seen.add(role)
+        entry = server_mode.get(role)
+        if entry is not None:
+            target = entry.get("alias_of")
+            if target and target not in seen:
+                role = target
+                continue
+            return role
+        hosts = [
+            host
+            for host, row in server_mode.items()
+            if role in (row.get("shared_with") or [])
+        ]
+        assert len(hosts) == 1, f"role {role!r} is not hosted by exactly one row: {hosts}"
+        role = hosts[0]
+    raise AssertionError(f"role {role!r} has no resolvable server_mode host")
+
+
 def _topology_fleet_ports(role: str) -> tuple[int, list[int]]:
     """Return (full_port, sibling_ports) for a quarterable role."""
     from scripts.server.stack_numa import NUMA_CONFIG
@@ -275,13 +303,29 @@ class TestServerURLsDefaults:
         for port in fd_siblings:
             assert f"http://localhost:{port}" in cfg.frontdoor
 
-        wg_full, wg_siblings = _topology_fleet_ports("worker_general")
+        # 2026-09-22 cutover (orchestrator 860b0b2d): worker_general has no fleet
+        # of its own any more — it is co-hosted on a registry host row, and its
+        # NUMA_CONFIG entry was deleted. Look the fleet up under the HOST.
+        wg_host = _registry_host("worker_general")
+        assert wg_host != "worker_general", "worker_general regained its own row"
+        wg_full, wg_siblings = _topology_fleet_ports(wg_host)
+        assert wg_siblings, f"{wg_host} fleet has no siblings — check is vacuous"
         for port in (wg_full, *wg_siblings):
             assert f"http://localhost:{port}" in cfg.worker_explore
         assert cfg.worker_explore == cfg.worker_general
+        # An alias carries its host's whole fleet string, not a copy of part of it.
+        assert cfg.worker_general == getattr(cfg, wg_host)
 
-        ing_full, _ = _topology_fleet_ports("ingest_long_context")
-        assert cfg.ingest_long_context.startswith(f"full:http://localhost:{ing_full}")
+        # ingest_long_context became an `alias_of` row (architect_general's MI210
+        # process at the cutover): it must carry its host's URL string verbatim,
+        # which includes the registry port of that host.
+        ing_host = _registry_host("ingest_long_context")
+        assert ing_host != "ingest_long_context", "ingest regained its own server"
+        assert (
+            f"http://localhost:{_registry_serving_port('ingest_long_context')}"
+            in cfg.ingest_long_context
+        )
+        assert cfg.ingest_long_context == getattr(cfg, ing_host)
 
         # Single-process roles keep simple URLs; each is pinned to the port the
         # registry declares for the process that actually serves it (following
