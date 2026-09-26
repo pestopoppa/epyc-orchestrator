@@ -20,7 +20,12 @@ Output NPZ fields:
 Usage:
     python3 scripts/graph_router/embed_soft_label_dataset.py \
         [--soft-labels PATH] [--pool PATH] [--output PATH] \
-        [--base-port 8090] [--servers 4] [--batch-size 64]
+        [--base-port 8090] [--servers 4] [--batch-size 64] [--slot-ctx-tokens N]
+
+Every prompt is fitted to the embedder's PER-SLOT context (read from the live
+servers' /props n_ctx, default 256) using the server's own /tokenize, and any
+prompt that still cannot be embedded aborts the run. A prompt is never replaced
+by a zero vector.
 """
 
 from __future__ import annotations
@@ -80,14 +85,102 @@ SUITE_TO_TASK_TYPE = {
 
 VISION_SUITES = {"vl"}
 
-# BGE-large max context is 512 tokens. The cap below was sized for embedder
-# servers at -c 2048 -np 4 (=> 512 tokens/slot): ~1400 chars at worst-case ~2.7
-# chars/token => ~512 tokens. The live pool (8090-8095) runs -c 512 -np 4, i.e.
-# only 256 tokens/slot (verified 2026-09-26 via /props n_ctx=256), so a
-# dense-tokenizing prompt (code, tables) near the cap can exceed its slot. The
-# embed call falls back to per-item on batch failure, substituting a zero vector
-# for any single prompt that still exceeds the limit. CLS uses the leading gist.
-_MAX_PROMPT_CHARS = 1400
+# Token budget per prompt. BGE-large accepts at most 512 tokens, but the
+# llama-server pool splits -c across -np slots and rejects (HTTP 400,
+# exceed_context_size_error) any input longer than ONE slot. The live pool
+# (8090-8095) runs -c 512 -np 4 => n_ctx 256 per slot (verified 2026-09-26 via
+# /props). The old fixed cap of 1400 chars was sized for -c 2048 -np 4 (512
+# tokens/slot) and could reach ~518 tokens, so dense prompts overflowed the
+# 256-token slot and the per-item fallback silently substituted ZERO VECTORS.
+#
+# Now: the slot size is read from /props at runtime (DEFAULT_SLOT_CTX_TOKENS if
+# no server answers), each prompt is pre-truncated by characters and then fitted
+# EXACTLY with the server's /tokenize, and an input that still fails raises.
+BGE_MAX_TOKENS = 512
+DEFAULT_SLOT_CTX_TOKENS = 256
+# [CLS] + [SEP] are added at embed time but not counted by /tokenize (live: 400
+# words -> /tokenize 400, /embedding n_prompt_tokens 402).
+_SPECIAL_TOKEN_RESERVE = 2
+# Coarse pre-truncation only (keeps /tokenize requests small); the exact fit is
+# done with /tokenize. ~2.5 chars/token is dense (code/tables) BGE text.
+_PRETRUNC_CHARS_PER_TOKEN = 2.5
+_FIT_MAX_ROUNDS = 8
+
+
+class EmbeddingInputTooLong(RuntimeError):
+    """A prompt exceeds the embedder slot and could not be fitted to it."""
+
+
+class EmbeddingFailed(RuntimeError):
+    """A prompt could not be embedded on any server. Never zero-filled."""
+
+
+def token_budget(slot_ctx_tokens: int) -> int:
+    """Max /tokenize count that fits one slot once [CLS]/[SEP] are added."""
+    budget = min(int(slot_ctx_tokens), BGE_MAX_TOKENS) - _SPECIAL_TOKEN_RESERVE
+    if budget <= 0:
+        raise ValueError(f"slot_ctx_tokens={slot_ctx_tokens} leaves no token budget")
+    return budget
+
+
+def max_prompt_chars(slot_ctx_tokens: int) -> int:
+    """Character pre-truncation cap for a slot (coarse; exact fit follows)."""
+    return int(token_budget(slot_ctx_tokens) * _PRETRUNC_CHARS_PER_TOKEN)
+
+
+def probe_slot_ctx_tokens(
+    ports: list[int], default: int = DEFAULT_SLOT_CTX_TOKENS, timeout: float = 5.0
+) -> int:
+    """Smallest per-slot n_ctx across the pool (from /props), capped at 512.
+
+    Falls back to ``default`` when no server answers, so the budget is never
+    larger than the live slot on a reachable pool.
+    """
+    seen: list[int] = []
+    for port in ports:
+        try:
+            resp = requests.get(f"http://127.0.0.1:{port}/props", timeout=timeout)
+            resp.raise_for_status()
+            n_ctx = resp.json()["default_generation_settings"]["n_ctx"]
+            seen.append(int(n_ctx))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read /props n_ctx from port %d: %s", port, exc)
+    if not seen:
+        logger.warning("No embedder /props answered; assuming %d tokens/slot", default)
+        return min(int(default), BGE_MAX_TOKENS)
+    if len(set(seen)) > 1:
+        logger.warning("Embedder pool has mixed slot sizes %s; using the smallest", seen)
+    return min(min(seen), BGE_MAX_TOKENS)
+
+
+def _count_tokens(text: str, port: int) -> int:
+    resp = requests.post(
+        f"http://127.0.0.1:{port}/tokenize", json={"content": text}, timeout=60
+    )
+    resp.raise_for_status()
+    return len(resp.json()["tokens"])
+
+
+def fit_to_token_budget(text: str, port: int, budget: int) -> str:
+    """Truncate ``text`` until the server's /tokenize count is <= ``budget``.
+
+    Raises EmbeddingInputTooLong if it cannot be fitted in _FIT_MAX_ROUNDS.
+    """
+    n_tokens = _count_tokens(text, port)
+    rounds = 0
+    while n_tokens > budget and rounds < _FIT_MAX_ROUNDS:
+        keep = max(1, int(len(text) * budget / n_tokens * 0.95))
+        if keep >= len(text):
+            keep = len(text) - 1
+        text = text[:keep]
+        n_tokens = _count_tokens(text, port)
+        rounds += 1
+    if n_tokens > budget:
+        raise EmbeddingInputTooLong(
+            f"prompt still {n_tokens} tokens (> budget {budget}) after {rounds} "
+            f"truncation rounds ({len(text)} chars)"
+        )
+    return text
 
 
 def _stable_qid(suite: str, prompt: str) -> str:
@@ -132,6 +225,9 @@ def _embed_batch(texts: list[str], port: int) -> np.ndarray:
     """Embed a batch via the llama-server /embedding endpoint (CLS pooling)."""
     url = f"http://127.0.0.1:{port}/embedding"
     resp = requests.post(url, json={"content": texts}, timeout=120)
+    if resp.status_code == 400 and "exceed_context_size" in (resp.text or ""):
+        # Same slot size on every port — retrying elsewhere cannot help.
+        raise EmbeddingInputTooLong(f"port {port}: {resp.text[:300]}")
     resp.raise_for_status()
     data = resp.json()
     out = []
@@ -157,9 +253,10 @@ def _embed_batch(texts: list[str], port: int) -> np.ndarray:
 def _embed_indexed(batch_idx: int, texts: list[str], ports: list[int]) -> tuple[int, np.ndarray]:
     """Embed a batch, round-robin retrying across ports.
 
-    On whole-batch failure, fall back to per-item embedding so one bad prompt
-    doesn't drop the rest; a single item that still fails gets a zero vector
-    (logged) rather than aborting the run.
+    On whole-batch failure, fall back to per-item embedding so a transient
+    batch error does not drop the rest. A single item that still fails on every
+    port RAISES (EmbeddingInputTooLong / EmbeddingFailed): a zero vector is a
+    structurally valid feature row that silently poisons training data.
     """
     primary = ports[batch_idx % len(ports)]
     order = [ports[(ports.index(primary) + o) % len(ports)] for o in range(len(ports))]
@@ -172,19 +269,49 @@ def _embed_indexed(batch_idx: int, texts: list[str], ports: list[int]) -> tuple[
     # Per-item fallback.
     logger.warning("Batch %d: falling back to per-item embedding", batch_idx)
     rows: list[np.ndarray] = []
-    for text in texts:
+    for item_idx, text in enumerate(texts):
         emb = None
+        last_exc: Exception | None = None
         for cand in order:
             try:
                 emb = _embed_batch([text], cand)[0]
                 break
-            except Exception:  # noqa: BLE001
+            except EmbeddingInputTooLong:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
                 continue
         if emb is None:
-            logger.warning("Batch %d: zero-vector substituted for an unembeddable prompt", batch_idx)
-            emb = np.zeros(1024, dtype=np.float32)
+            raise EmbeddingFailed(
+                f"batch {batch_idx} item {item_idx} ({len(text)} chars) could not be "
+                f"embedded on any of ports {order}: {last_exc}"
+            )
         rows.append(emb)
     return batch_idx, np.vstack(rows).astype(np.float32)
+
+
+def _assert_embeddings_valid(emb_matrix: np.ndarray) -> None:
+    """Refuse zero / non-finite rows: they are silent corruption, not data."""
+    if not np.all(np.isfinite(emb_matrix)):
+        raise EmbeddingFailed("non-finite values in embedding matrix")
+    zero_rows = np.flatnonzero(~np.any(emb_matrix != 0.0, axis=1))
+    if zero_rows.size:
+        raise EmbeddingFailed(
+            f"{zero_rows.size} all-zero embedding row(s), first at index {int(zero_rows[0])}"
+        )
+
+
+def fit_prompts(prompts: list[str], ports: list[int], slot_ctx_tokens: int) -> list[str]:
+    """Pre-truncate by chars, then fit each prompt exactly with /tokenize."""
+    budget = token_budget(slot_ctx_tokens)
+    cap = max_prompt_chars(slot_ctx_tokens)
+    pre = [p[:cap] for p in prompts]
+
+    def _fit(i: int) -> str:
+        return fit_to_token_budget(pre[i], ports[i % len(ports)], budget)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(ports)) as ex:
+        return list(ex.map(_fit, range(len(pre))))
 
 
 def build_dataset(
@@ -194,6 +321,7 @@ def build_dataset(
     base_port: int,
     servers: int,
     batch_size: int,
+    slot_ctx_tokens: int | None = None,
 ) -> dict:
     logger.info("Loading soft labels from %s", soft_labels_path)
     records = []
@@ -218,12 +346,17 @@ def build_dataset(
     if not resolved:
         raise SystemExit("No records resolved to pool text — aborting.")
 
-    # Embed prompts in batches across the BGE server pool. BGE-large has a
-    # 512-token max context; truncate long prompts by characters (~4 chars/token,
-    # cap well under 512 tokens). The CLS embedding captures the leading-prompt
-    # gist, which is what routing needs.
-    prompts = [hit["prompt"][:_MAX_PROMPT_CHARS] for _, hit in resolved]
+    # Embed prompts in batches across the BGE server pool. Each prompt is fitted
+    # to ONE server slot (see DEFAULT_SLOT_CTX_TOKENS); the CLS embedding
+    # captures the leading-prompt gist, which is what routing needs.
     ports = list(range(base_port, base_port + servers))
+    if slot_ctx_tokens is None:
+        slot_ctx_tokens = probe_slot_ctx_tokens(ports)
+    logger.info(
+        "Embedder slot: %d tokens (budget %d, pre-truncation %d chars)",
+        slot_ctx_tokens, token_budget(slot_ctx_tokens), max_prompt_chars(slot_ctx_tokens),
+    )
+    prompts = fit_prompts([hit["prompt"] for _, hit in resolved], ports, slot_ctx_tokens)
     logger.info("Embedding %d prompts across ports %s", len(prompts), ports)
 
     # Batches keyed by ordinal position so reassembly is order-stable.
@@ -245,6 +378,7 @@ def build_dataset(
         )
     if emb_matrix.shape[1] != 1024:
         raise SystemExit(f"Expected 1024-d BGE, got {emb_matrix.shape[1]}-d")
+    _assert_embeddings_valid(emb_matrix)
 
     # Build the 1031-d feature matrix + targets.
     X_rows, soft_rows, hard_rows, corr_rows, qids, suites = [], [], [], [], [], []
@@ -311,6 +445,13 @@ def main() -> None:
     parser.add_argument("--base-port", type=int, default=8090)
     parser.add_argument("--servers", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument(
+        "--slot-ctx-tokens",
+        type=int,
+        default=None,
+        help="Per-slot embedder context; default: read /props n_ctx from the pool "
+        f"(fallback {DEFAULT_SLOT_CTX_TOKENS}).",
+    )
     args = parser.parse_args()
 
     summary = build_dataset(
@@ -320,6 +461,7 @@ def main() -> None:
         base_port=args.base_port,
         servers=args.servers,
         batch_size=args.batch_size,
+        slot_ctx_tokens=args.slot_ctx_tokens,
     )
 
     print("\n=== Embed Summary ===")
