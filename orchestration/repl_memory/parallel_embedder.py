@@ -486,6 +486,14 @@ class ParallelEmbedderClient:
             self._sync_pool.shutdown(wait=False)
             self._sync_pool = None
 
+    async def __aenter__(self) -> "ParallelEmbedderClient":
+        """Enter the async context manager (``async with ParallelEmbedderClient()``)."""
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        """Close the HTTP client on context exit; never suppresses exceptions."""
+        await self.close()
+
     @property
     def embedding_dim(self) -> int:
         """Return embedding dimension."""
@@ -519,7 +527,3 @@ async def embed_text_async(text: str) -> np.ndarray:
     async with ParallelEmbedderClient() as client:
         return await client.embed_async(text)
 
-
-# Make ParallelEmbedderClient usable as async context manager
-ParallelEmbedderClient.__aenter__ = lambda self: asyncio.coroutine(lambda: self)()
-ParallelEmbedderClient.__aexit__ = lambda self, *args: self.close()

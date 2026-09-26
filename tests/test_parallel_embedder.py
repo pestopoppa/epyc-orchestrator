@@ -360,3 +360,92 @@ class TestIntegrationWithFAISSStore:
         assert store.count == 3
         assert store.dim == 1024
         assert client.embedding_dim == 1024
+
+
+class TestParallelEmbedderAsyncContextManager:
+    """Regression: ``async with ParallelEmbedderClient()`` on Python 3.11+.
+
+    The context-manager dunders used to be monkeypatched onto the class via
+    ``asyncio.coroutine``, which was removed in Python 3.11, so every
+    ``async with`` (and therefore ``embed_text_async``) raised AttributeError.
+    HTTP is served by ``httpx.MockTransport`` -- no live servers are contacted.
+    """
+
+    @staticmethod
+    def _install_mock_transport(monkeypatch, calls):
+        import httpx
+
+        vec = [3.0, 4.0] + [0.0] * 1022  # norm 5 -> normalized [0.6, 0.8, 0, ...]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append((request.method, str(request.url)))
+            if request.url.path == "/health":
+                return httpx.Response(200, json={"status": "ok"})
+            if request.url.path == "/embedding":
+                return httpx.Response(200, json=[{"index": 0, "embedding": [vec]}])
+            return httpx.Response(404)
+
+        real_async_client = httpx.AsyncClient
+
+        def fake_async_client(*args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            return real_async_client(*args, **kwargs)
+
+        monkeypatch.setattr(httpx, "AsyncClient", fake_async_client)
+
+    @pytest.mark.asyncio
+    async def test_async_with_returns_client_and_closes(self, monkeypatch):
+        from orchestration.repl_memory.parallel_embedder import (
+            EmbedderPoolConfig,
+            ParallelEmbedderClient,
+        )
+
+        calls: list = []
+        self._install_mock_transport(monkeypatch, calls)
+        config = EmbedderPoolConfig(server_urls=["http://mock-embed:9999"])
+
+        outer = ParallelEmbedderClient(config=config)
+        async with outer as client:
+            assert client is outer
+            vec = await client.embed_async("hello")
+            assert client._http_client is not None
+
+        assert vec.shape == (1024,)
+        np.testing.assert_allclose(vec[:2], [0.6, 0.8], rtol=1e-6)
+        assert outer._http_client is None
+        assert outer._closed is True
+        assert ("POST", "http://mock-embed:9999/embedding") in calls
+
+    @pytest.mark.asyncio
+    async def test_async_with_propagates_exception_and_still_closes(self, monkeypatch):
+        from orchestration.repl_memory.parallel_embedder import (
+            EmbedderPoolConfig,
+            ParallelEmbedderClient,
+        )
+
+        self._install_mock_transport(monkeypatch, [])
+        client = ParallelEmbedderClient(
+            config=EmbedderPoolConfig(server_urls=["http://mock-embed:9999"])
+        )
+
+        with pytest.raises(ValueError, match="boom"):
+            async with client:
+                await client.embed_async("hello")
+                raise ValueError("boom")
+
+        assert client._http_client is None
+        assert client._closed is True
+
+    @pytest.mark.asyncio
+    async def test_embed_text_async_convenience_function(self, monkeypatch):
+        from orchestration.repl_memory.parallel_embedder import embed_text_async
+
+        calls: list = []
+        self._install_mock_transport(monkeypatch, calls)
+
+        vec = await embed_text_async("hello")
+
+        assert vec.shape == (1024,)
+        np.testing.assert_allclose(np.linalg.norm(vec), 1.0, rtol=1e-6)
+        np.testing.assert_allclose(vec[:2], [0.6, 0.8], rtol=1e-6)
+        assert any(m == "POST" and u.endswith("/embedding") for m, u in calls)
